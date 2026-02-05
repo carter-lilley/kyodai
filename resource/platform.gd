@@ -1,0 +1,19 @@
+class_name PlatformResource
+extends Resource
+
+@export var id: String
+@export var slug: String
+@export var name: String
+@export var romm_id: int
+@export var icon_url: String
+@export var icon_path: String
+@export var emulator_path: String
+@export var extensions: Array[String] = []
+
+func get_icon() -> Texture2D:
+	if icon_path and FileAccess.file_exists(icon_path):
+		var img = Image.new()
+		var error = img.load(icon_path)
+		if error == OK:
+			return ImageTexture.create_from_image(img)
+	return null
