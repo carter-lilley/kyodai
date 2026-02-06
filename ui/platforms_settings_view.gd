@@ -249,6 +249,11 @@ func _on_sync_pressed():
 		_platforms_container.add_child(result_label)
 	)
 
+func on_view_show():
+	# Refresh platform list every time the view is shown
+	_fetch_platforms()
+	super.on_view_show()
+
 func on_view_hide():
 	_save_settings()
 	super.on_view_hide()
