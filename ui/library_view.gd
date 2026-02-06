@@ -10,6 +10,11 @@ extends View
 var _game_cards: Array[GameCard] = []
 var _current_platform: String = ""
 
+# Batched card addition during sync
+var _pending_games: Array[GameResource] = []
+var _is_processing_pending: bool = false
+var _card_batch_size: int = 3  # Add 3 cards at a time to reduce image queue pressure
+
 func _ready():
 	# Setup UI
 	search_line_edit.text_changed.connect(_on_search_changed)
@@ -20,6 +25,7 @@ func _ready():
 	DataManager.game_added.connect(_on_game_added)
 	DataManager.game_updated.connect(_on_game_updated)
 	DataManager.sync_completed.connect(_on_sync_completed)
+	DataManager.sync_progress.connect(_on_sync_progress)
 	
 	# Connect to network manager for downloads
 	NetworkManager.download_progress_update.connect(_on_download_progress)
@@ -51,10 +57,24 @@ func _load_games():
 	else:
 		games = DataManager.get_games_by_platform(_current_platform)
 	
-	for game in games:
-		_add_game_card(game)
+	status_label.text = "Loading %d games..." % games.size()
 	
-	status_label.text = "Showing %d games" % games.size()
+	# Add cards in batches to prevent UI freeze and image queue overflow
+	_add_game_cards_batch(games, 0)
+
+func _add_game_cards_batch(games: Array[GameResource], index: int):
+	var batch_size = 5
+	var end_index = mini(index + batch_size, games.size())
+	
+	for i in range(index, end_index):
+		_add_game_card(games[i])
+	
+	if end_index < games.size():
+		# Schedule next batch
+		status_label.text = "Loading games... %d/%d" % [end_index, games.size()]
+		call_deferred("_add_game_cards_batch", games, end_index)
+	else:
+		status_label.text = "Showing %d games" % games.size()
 
 func _add_game_card(game: GameResource):
 	var card_scene = preload("res://ui/components/game_card.tscn")
@@ -92,7 +112,10 @@ func _on_database_ready():
 	_load_games()
 
 func _on_game_added(game: GameResource):
-	_add_game_card(game)
+	# Queue the game for batched UI addition
+	_pending_games.append(game)
+	if not _is_processing_pending:
+		_process_pending_cards()
 
 func _on_game_updated(game: GameResource):
 	# Find and update the card
@@ -100,6 +123,23 @@ func _on_game_updated(game: GameResource):
 		if card.game and card.game.romm_id == game.romm_id:
 			card.game = game
 			break
+
+func _process_pending_cards():
+	_is_processing_pending = true
+	
+	# Process a batch of pending games
+	var batch_count = mini(_card_batch_size, _pending_games.size())
+	for i in range(batch_count):
+		_add_game_card(_pending_games[0])
+		_pending_games.remove_at(0)
+	
+	# If more pending, schedule next batch with a small delay
+	if _pending_games.size() > 0:
+		await get_tree().create_timer(0.05).timeout  # 50ms delay between batches
+		_process_pending_cards()
+	else:
+		_is_processing_pending = false
+		status_label.text = "Showing %d games" % _game_cards.size()
 
 func _on_download_requested(game: GameResource):
 	if NetworkManager.queue_game_download(game):
@@ -117,8 +157,14 @@ func _on_download_finished(game_id: int, success: bool, file_path: String):
 	else:
 		status_label.text = "Download failed"
 
+func _on_sync_progress(percent: float, current: int, total: int):
+	status_label.text = "Syncing... %d/%d games (%.0f%%)" % [current, total, percent]
+
 func _on_sync_completed(success: bool, message: String):
-	# Refresh the entire games list and platforms after sync
-	# This ensures removed games are cleared from the view
+	# Clear any pending cards that haven't been processed yet
+	_pending_games.clear()
+	_is_processing_pending = false
+	# Don't reload all games - cards were already added incrementally during sync
+	# Just refresh the platforms list in case new ones were added
 	_load_platforms()
-	_load_games()
+	status_label.text = "Showing %d games" % _game_cards.size()

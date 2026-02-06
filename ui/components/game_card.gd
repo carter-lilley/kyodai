@@ -16,6 +16,7 @@ signal download_requested(game: GameResource)
 
 var _loading_texture: Texture2D = preload("res://icon.svg")  # Placeholder
 var _is_downloading: bool = false
+var _image_loaded: bool = false
 
 func _ready():
 	_update_display()
@@ -52,22 +53,32 @@ func _update_display():
 	_load_cover()
 
 func _load_cover():
-	if not game or game.cover_url == "":
+	if not game:
 		cover_texture.texture = _loading_texture
 		return
 	
-	# Validate URL starts with http
-	if not game.cover_url.begins_with("http"):
-		cover_texture.texture = _loading_texture
+	_image_loaded = true  # Mark as attempted
+	
+	# Try local cover path first (from Romm)
+	if game.cover_path != "" and FileAccess.file_exists(game.cover_path):
+		var img = Image.new()
+		var err = img.load(game.cover_path)
+		if err == OK:
+			cover_texture.texture = ImageTexture.create_from_image(img)
+			return
+	
+	# Try external URL (from metadata)
+	if game.cover_url != "" and game.cover_url.begins_with("http"):
+		DataManager.load_image(game.cover_url, func(texture):
+			if texture and is_instance_valid(cover_texture):
+				cover_texture.texture = texture
+			elif is_instance_valid(cover_texture):
+				cover_texture.texture = _loading_texture
+		)
 		return
 	
-	# Use DataManager to load image (handles caching)
-	DataManager.load_image(game.cover_url, func(texture):
-		if texture:
-			cover_texture.texture = texture
-		else:
-			cover_texture.texture = _loading_texture
-	)
+	# No cover available
+	cover_texture.texture = _loading_texture
 
 func _on_download_pressed():
 	if not game:
