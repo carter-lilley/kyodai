@@ -23,6 +23,15 @@ func _build_settings_view():
 		var tab = _create_settings_tab(subgroup_name, settings_vars)
 		_settings_container.add_child(tab)
 		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, subgroup_name)
+	
+	# Add Platforms tab
+	var platforms_tab = _create_platforms_tab()
+	_settings_container.add_child(platforms_tab)
+	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Platforms")
+
+func _create_platforms_tab() -> Control:
+	var platforms_view = preload("res://ui/platforms_settings_view.gd").new()
+	return platforms_view
 
 func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	var scroll = ScrollContainer.new()

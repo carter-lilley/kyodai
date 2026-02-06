@@ -56,6 +56,11 @@ func _load_cover():
 		cover_texture.texture = _loading_texture
 		return
 	
+	# Validate URL starts with http
+	if not game.cover_url.begins_with("http"):
+		cover_texture.texture = _loading_texture
+		return
+	
 	# Use DataManager to load image (handles caching)
 	DataManager.load_image(game.cover_url, func(texture):
 		if texture:

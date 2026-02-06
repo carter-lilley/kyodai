@@ -31,14 +31,6 @@ placeholder_text = "Search games..."
 [node name="PlatformOption" type="OptionButton" parent="VBoxContainer/Toolbar" unique_id=530374401]
 layout_mode = 2
 
-[node name="SyncButton" type="Button" parent="VBoxContainer/Toolbar" unique_id=1358589176]
-layout_mode = 2
-text = "Sync Games"
-
-[node name="TestSyncButton" type="Button" parent="VBoxContainer/Toolbar" unique_id=1358589177]
-layout_mode = 2
-text = "Test Sync Game"
-
 [node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer" unique_id=806442112]
 layout_mode = 2
 size_flags_vertical = 3

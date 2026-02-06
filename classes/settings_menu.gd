@@ -14,8 +14,12 @@ func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVa
 	menu_name_label.text = subgroup
 	add_child(menu_name_label)
 	for settingsvar in settingsvars:
-		if not settingsvar.state == State.INTERNAL:
+		print("[SettingsMenu] Processing setting: ", settingsvar.display_name, " state: ", settingsvar.state, " INTERNAL?: ", settingsvar.state == State.INTERNAL)
+		if settingsvar.state != State.INTERNAL:
+			print("[SettingsMenu]   -> Adding to menu")
 			match_var_type(settingsvar)
+		else:
+			print("[SettingsMenu]   -> SKIPPING (INTERNAL)")
 
 var controls: Dictionary[String, Control] = {}
 func match_var_type(settingsvar : SettingsVar):

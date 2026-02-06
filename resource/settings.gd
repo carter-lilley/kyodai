@@ -31,3 +31,6 @@ const Type = SettingsVar.SettingType
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
 @export_subgroup("Storage")
 @export var games_root_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Games Folder")
+
+# Internal platform sync settings (not displayed in auto-generated menu)
+@export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")

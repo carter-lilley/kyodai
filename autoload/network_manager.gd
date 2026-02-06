@@ -150,7 +150,7 @@ func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0
 	
 	var endpoint = "/roms?offset=%d&limit=%d" % [offset, limit]
 	if platform_slug != "":
-		endpoint += "&platform_id=" + platform_slug
+		endpoint += "&platform_ids=" + platform_slug
 	
 	make_request(endpoint, func(data, error):
 		var success = error == ""
