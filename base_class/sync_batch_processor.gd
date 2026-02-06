@@ -3,7 +3,7 @@ extends RefCounted
 class_name SyncBatchProcessor
 
 signal batch_complete(success_count: int)
-signal all_complete(total_success: int)
+signal all_complete(total_success: int, cover_urls: Array)
 
 var _items: Array
 var _platform_slug: String
@@ -15,6 +15,7 @@ var _processed_in_current_chunk: int = 0
 var _current_chunk_size: int = 0
 var _mutex: Mutex
 var _is_processing: bool = false
+var _cover_urls: Array = []  # Collect cover URLs during sync
 
 func _init(items: Array, platform_slug: String = ""):
 	_items = items
@@ -102,11 +103,17 @@ func _process_single_game(game_data: Dictionary, on_complete: Callable):
 		rating = avg_rating if avg_rating != null else 0.0
 	game.rating = rating
 	
+	# Collect cover URL for download
+	var cover_url = game_data.get("url_cover", "") if game_data.get("url_cover") != null else ""
+	
 	DataManager.add_game(game, func(success: bool):
 		_mutex.lock()
 		_completed_count += 1
 		if success:
 			_success_count += 1
+			# Store cover URL if successful and has cover
+			if cover_url != "" and cover_url.begins_with("http"):
+				_cover_urls.append(cover_url)
 		_mutex.unlock()
 		on_complete.call()
 	)
@@ -118,10 +125,10 @@ func _check_complete():
 	_mutex.unlock()
 	
 	if is_complete:
-		print("[SyncBatchProcessor] Batch complete! Success: ", success_count, "/", _items.size())
+		print("[SyncBatchProcessor] Batch complete! Success: ", success_count, "/", _items.size(), ", Covers collected: ", _cover_urls.size())
 		_is_processing = false
 		batch_complete.emit(success_count)
-		all_complete.emit(success_count)
+		all_complete.emit(success_count, _cover_urls)
 
 func stop():
 	_is_processing = false

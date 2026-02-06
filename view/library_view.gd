@@ -13,6 +13,7 @@ var _current_platform: String = ""
 # Batched card addition during sync
 var _pending_games: Array[GameResource] = []
 var _is_processing_pending: bool = false
+var _is_loading_games: bool = false
 var _card_batch_size: int = 3  # Add 3 cards at a time to reduce image queue pressure
 
 func _ready():
@@ -45,6 +46,11 @@ func _load_platforms():
 		platform_option.set_item_metadata(platform_option.get_item_count() - 1, platform.slug)
 
 func _load_games():
+	# Prevent concurrent loading
+	if _is_loading_games:
+		return
+	_is_loading_games = true
+	
 	# Wait for any pending card processing to complete
 	while _is_processing_pending:
 		await get_tree().process_frame
@@ -82,6 +88,7 @@ func _add_game_cards_batch(games: Array[GameResource], index: int):
 		call_deferred("_add_game_cards_batch", games, end_index)
 	else:
 		status_label.text = "Showing %d games" % games.size()
+		_is_loading_games = false
 
 func _add_game_card(game: GameResource):
 	var card_scene = preload("res://components/game_card.tscn")

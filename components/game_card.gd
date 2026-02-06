@@ -25,6 +25,9 @@ func _ready():
 	# Connect to high-level manager signals
 	NetworkManager.download_progress_update.connect(_on_download_progress)
 	NetworkManager.download_finished.connect(_on_download_completed)
+	
+	# Listen for cover downloads to refresh if our cover was just downloaded
+	DataManager.image_loaded.connect(_on_cover_loaded)
 
 func _update_display():
 	if not game:
@@ -108,3 +111,8 @@ func _on_download_completed(game_id: int, success: bool, file_path: String):
 			status_label.text = "Failed"
 			status_label.modulate = Color.RED
 		_update_display()
+
+func _on_cover_loaded(url: String, texture: Texture2D):
+	# If this card's cover was just downloaded, update it
+	if game and game.cover_url == url and texture and is_instance_valid(cover_texture):
+		cover_texture.texture = texture

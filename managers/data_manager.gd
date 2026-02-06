@@ -25,6 +25,14 @@ var _current_sync_progress: float = 0.0
 var _current_sync_total: int = 0
 var _sync_notification_id: int = -1
 
+# Cover download tracking
+const MAX_CONCURRENT_COVER_DOWNLOADS = 10
+var _cover_download_queue: Array[String] = []
+var _active_cover_downloads: int = 0
+var _cover_download_total: int = 0
+var _cover_download_completed: int = 0
+var _cover_downloads_finished: bool = false
+
 func _ready():
 	# Initialize ThreadManager first
 	_ensure_thread_manager()
@@ -407,6 +415,11 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 	# Create sync progress notification
 	_current_sync_progress = 0.0
 	_current_sync_total = 0
+	_cover_download_queue.clear()
+	_cover_download_total = 0
+	_cover_download_completed = 0
+	_cover_downloads_finished = false
+	_active_cover_downloads = 0
 	_sync_notification_id = NotificationManager.show_notification(
 		"Syncing games...",
 		Notification.Type.INFO,
@@ -627,8 +640,12 @@ func _process_batch_async(items: Array, platform_slug: String, complete_callback
 	var processor = SyncBatchProcessor.new(items, platform_slug)
 	
 	# Only emit progress at batch completion, not individual games
-	processor.all_complete.connect(func(success_count: int):
-		print("[DataManager] Batch processed: ", success_count, "/", items.size(), " games")
+	processor.all_complete.connect(func(success_count: int, cover_urls: Array):
+		print("[DataManager] Batch processed: ", success_count, "/", items.size(), " games, Covers collected: ", cover_urls.size())
+		# Add collected cover URLs to download queue
+		for url in cover_urls:
+			if url is String and url != "" and url.begins_with("http"):
+				_cover_download_queue.append(url)
 		complete_callback.call(success_count)
 	)
 	
@@ -683,8 +700,17 @@ func _process_game_batch(items: Array, platform_slug: String = "", callback: Cal
 	return count
 
 func _update_sync_notification_text(current: int, total: int) -> void:
-	if _sync_notification_id != -1:
-		var percent = int(float(current) / float(total) * 100.0)
+	if _sync_notification_id == -1:
+		return
+	
+	var percent = 0
+	if total > 0:
+		percent = int(float(current) / float(total) * 100.0)
+	
+	# Check if we're in cover download phase
+	if _cover_download_total > 0:
+		NotificationManager.update_notification_text(_sync_notification_id, "Downloading covers %d/%d (%d%%)" % [current, total, percent])
+	else:
 		NotificationManager.update_notification_text(_sync_notification_id, "Syncing games %d/%d (%d%%)" % [current, total, percent])
 
 func _finish_sync(total_synced: int, total_games: int, callback: Callable):
@@ -695,7 +721,76 @@ func _finish_sync(total_synced: int, total_games: int, callback: Callable):
 	sync_completed.emit(true, "Synced " + str(total_synced) + " games")
 	if callback.is_valid():
 		callback.call(true, "", total_synced, total_games)
-	_sync_notification_id = -1
+	
+	# Start cover downloads if we have any queued
+	if _cover_download_queue.size() > 0:
+		print("[DataManager] Starting cover downloads: ", _cover_download_queue.size(), " covers")
+		_cover_download_total = _cover_download_queue.size()
+		_cover_download_completed = 0
+		_sync_notification_id = NotificationManager.show_notification(
+			"Downloading covers...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			func() -> float: 
+				if _cover_download_total == 0:
+					return 1.0
+				return float(_cover_download_completed) / float(_cover_download_total)
+		)
+		_process_cover_download_queue()
+	else:
+		_sync_notification_id = -1
+
+func _process_cover_download_queue():
+	# Start up to MAX_CONCURRENT_COVER_DOWNLOADS downloads
+	while _active_cover_downloads < MAX_CONCURRENT_COVER_DOWNLOADS and _cover_download_queue.size() > 0:
+		var url = _cover_download_queue.pop_front()
+		_active_cover_downloads += 1
+		_download_single_cover(url)
+	
+	# Update notification text with current progress
+	_update_sync_notification_text(_cover_download_completed, _cover_download_total)
+	
+	# Check if we're done (only print once)
+	if _active_cover_downloads == 0 and _cover_download_queue.size() == 0 and not _cover_downloads_finished:
+		_cover_downloads_finished = true
+		print("[DataManager] All cover downloads complete: ", _cover_download_completed, "/", _cover_download_total)
+		_sync_notification_id = -1
+
+func _download_single_cover(url: String):
+	var cache_path = get_cached_image_path(url)
+	
+	# Skip if already cached
+	if FileAccess.file_exists(cache_path):
+		_active_cover_downloads -= 1
+		_cover_download_completed += 1
+		call_deferred("_process_cover_download_queue")
+		return
+	
+	# Download the image
+	NetworkManager.download_image(url, func(body: PackedByteArray):
+		_active_cover_downloads -= 1
+		
+		if body.is_empty():
+			push_warning("[DataManager] Failed to download cover: ", url)
+		else:
+			# Process and save on image thread
+			ThreadManager.queue_image_task(
+				func():
+					var texture = _load_texture_from_memory(body)
+					if texture:
+						var file = FileAccess.open(cache_path, FileAccess.WRITE)
+						if file:
+							file.store_buffer(body)
+							file.close()
+							call_deferred("_update_cache_after_save", cache_path, body.size())
+					return texture,
+			func(texture: Texture2D):
+				_cover_download_completed += 1
+				_emit_image_callbacks(url, texture)
+				call_deferred("_process_cover_download_queue")
+		)
+	)
 
 func add_platform(platform: PlatformResource) -> bool:
 	if not _is_db_ready:
