@@ -48,9 +48,6 @@ func _build_view():
 	var spacer2 = Control.new()
 	spacer2.custom_minimum_size = Vector2(0, 20)
 	_platforms_container.add_child(spacer2)
-	
-	# Fetch platforms
-	_fetch_platforms()
 
 func _fetch_platforms():
 	# Clear existing checkboxes and buttons (keep info label and sync button)
@@ -76,6 +73,7 @@ func _fetch_platforms():
 		
 		if error != "":
 			push_error("[PlatformsSettingsView] Failed to fetch platforms: " + error)
+			NotificationManager.show_notification("Failed to fetch platforms: " + error, Notification.Type.ERROR)
 			
 			var error_label = Label.new()
 			error_label.text = "Failed to fetch platforms from RomM. Check connection settings."
@@ -226,6 +224,7 @@ func _on_sync_pressed():
 		error_label.text = "Not connected to RomM - check settings"
 		error_label.modulate = Color.RED
 		_platforms_container.add_child(error_label)
+		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
 		return
 	
 	var sync_button: Button = _platforms_container.get_node("SyncButton")

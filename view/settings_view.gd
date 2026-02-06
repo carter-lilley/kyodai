@@ -12,6 +12,7 @@ func _build_settings_view():
 	# Create sub-TabContainer for settings groups
 	_settings_container = TabContainer.new()
 	_settings_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_settings_container.tab_changed.connect(_on_settings_tab_changed)
 	add_child(_settings_container)
 	
 	# Get settings by subgroup from SettingsManager
@@ -86,11 +87,14 @@ func _test_connection(indicator: Indicator):
 	NetworkManager.test_connection(func(online: bool):
 		if online:
 			indicator.set_status(Indicator.StatusEnum.CONNECTED, "Connected and authenticated")
+			NotificationManager.show_notification("Connected to RomM successfully", Notification.Type.SUCCESS)
 		else:
 			if not NetworkManager.is_configured():
 				indicator.set_status(Indicator.StatusEnum.NOT_CONFIGURED, "Not configured (check URL, username, password)")
+				NotificationManager.show_notification("RomM not configured - check URL, username, password", Notification.Type.ERROR)
 			else:
 				indicator.set_status(Indicator.StatusEnum.DISCONNECTED, "Connection failed - check credentials")
+				NotificationManager.show_notification("Connection failed - check credentials", Notification.Type.ERROR)
 	)
 
 func _update_connection_status(indicator: Indicator):
@@ -107,3 +111,9 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 func on_view_hide():
 	SettingsManager.save_settings()
 	super.on_view_hide()
+
+func _on_settings_tab_changed(tab_idx: int):
+	# Call on_view_show on the newly selected tab
+	var tab = _settings_container.get_tab_control(tab_idx)
+	if tab and tab.has_method("on_view_show"):
+		tab.on_view_show()

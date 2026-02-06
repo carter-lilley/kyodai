@@ -264,7 +264,7 @@ func download_rom(game_id: int, file_name: String, destination_path: String, pro
 
 func queue_game_download(game: GameResource) -> bool:
 	if not _is_online:
-		push_warning("Cannot download: not connected")
+		NotificationManager.show_notification("Cannot download: not connected", Notification.Type.ERROR)
 		return false
 	
 	return DownloadManager.queue_download(game)

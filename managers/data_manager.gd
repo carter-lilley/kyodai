@@ -21,6 +21,9 @@ var _is_db_ready: bool = false
 var _loading_images: Dictionary = {}
 var _cache_size: int = 0
 var _cache_access_count: Dictionary = {}
+var _current_sync_progress: float = 0.0
+var _current_sync_total: int = 0
+var _sync_notification_id: int = -1
 
 func _ready():
 	# Initialize ThreadManager first
@@ -401,6 +404,17 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 			callback.call(false, "Database not ready", 0, 0)
 		return
 	
+	# Create sync progress notification
+	_current_sync_progress = 0.0
+	_current_sync_total = 0
+	_sync_notification_id = NotificationManager.show_notification(
+		"Syncing games...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		func() -> float: return _current_sync_progress / 100.0
+	)
+	
 	var enabled_platforms = _get_enabled_platforms_setting()
 	
 	print("[DataManager] Starting sync for enabled platforms")
@@ -440,9 +454,10 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 	
 	if platforms_to_sync.size() == 0:
 		print("[DataManager] No platforms enabled for sync")
-		sync_completed.emit(true, "No platforms enabled")
-		if callback.is_valid():
-			callback.call(true, "", 0, 0)
+		# Complete immediately with 0/0 progress
+		_current_sync_progress = 100.0
+		_update_sync_notification_text(0, 0)
+		_finish_sync(0, 0, callback)
 		return
 	
 	_sync_platforms_sequential(platforms_to_sync, 0, 0, 0, callback)
@@ -547,6 +562,9 @@ func sync_platform_games(platform_id: int, platform_slug: String, callback: Call
 		var first_batch_items = first_batch_data.get("items", [])
 		_process_batch_async(first_batch_items, platform_slug, func(batch_count: int):
 			var first_batch_total = batch_count
+			_current_sync_progress = 0.0
+			_current_sync_total = total_games
+			_update_sync_notification_text(first_batch_total, total_games)
 			sync_progress.emit(0.0, first_batch_total, total_games)
 			
 			# If we got all games in first batch, we're done
@@ -588,6 +606,9 @@ func _fetch_remaining_batches(platform_id: String, platform_slug: String, offset
 			var new_total = total_synced + batch_count
 			
 			var percent = float(new_total) / float(total_games) * 100.0
+			_current_sync_progress = percent
+			_current_sync_total = total_games
+			_update_sync_notification_text(new_total, total_games)
 			sync_progress.emit(percent, new_total, total_games)
 			print("[DataManager] Progress: ", new_total, "/", total_games, " (", int(percent), "%) ")
 			
@@ -661,12 +682,20 @@ func _process_game_batch(items: Array, platform_slug: String = "", callback: Cal
 	
 	return count
 
+func _update_sync_notification_text(current: int, total: int) -> void:
+	if _sync_notification_id != -1:
+		var percent = int(float(current) / float(total) * 100.0)
+		NotificationManager.update_notification_text(_sync_notification_id, "Syncing games %d/%d (%d%%)" % [current, total, percent])
+
 func _finish_sync(total_synced: int, total_games: int, callback: Callable):
 	print("[DataManager] Sync complete - Total synced: ", total_synced, "/", total_games)
 	set_last_sync_time(Time.get_datetime_string_from_system())
+	_current_sync_progress = 100.0
+	_update_sync_notification_text(total_synced, total_games)
 	sync_completed.emit(true, "Synced " + str(total_synced) + " games")
 	if callback.is_valid():
 		callback.call(true, "", total_synced, total_games)
+	_sync_notification_id = -1
 
 func add_platform(platform: PlatformResource) -> bool:
 	if not _is_db_ready:
@@ -804,9 +833,8 @@ func load_image(url: String, callback: Callable = Callable()):
 				callback.call(null)
 		return
 	
-	# Not cached - return null (images should be cached from sync)
-	if callback.is_valid():
-		callback.call(null)
+	# Not cached - download it
+	_download_image(url, cache_path, callback)
 
 func _download_image(url: String, cache_path: String, callback: Callable = Callable()):
 	# Use NetworkManager for all HTTP requests (async)

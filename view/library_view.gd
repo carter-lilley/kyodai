@@ -45,9 +45,16 @@ func _load_platforms():
 		platform_option.set_item_metadata(platform_option.get_item_count() - 1, platform.slug)
 
 func _load_games():
-	# Clear existing cards
-	for card in _game_cards:
-		card.queue_free()
+	# Wait for any pending card processing to complete
+	while _is_processing_pending:
+		await get_tree().process_frame
+	
+	# Clear any leftover pending games
+	_pending_games.clear()
+	
+	# Clear existing cards from grid
+	for child in games_grid.get_children():
+		child.queue_free()
 	_game_cards.clear()
 	
 	var games: Array[GameResource]
@@ -161,10 +168,7 @@ func _on_sync_progress(percent: float, current: int, total: int):
 	status_label.text = "Syncing... %d/%d games (%.0f%%)" % [current, total, percent]
 
 func _on_sync_completed(success: bool, message: String):
-	# Clear any pending cards that haven't been processed yet
-	_pending_games.clear()
-	_is_processing_pending = false
-	# Don't reload all games - cards were already added incrementally during sync
-	# Just refresh the platforms list in case new ones were added
+	# Refresh platforms list and reload all games (in case games were removed)
 	_load_platforms()
+	await _load_games()
 	status_label.text = "Showing %d games" % _game_cards.size()
