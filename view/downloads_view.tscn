@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://downloadsview1"]
+[gd_scene load_steps=2 format=3 uid="uid://yfhykr8xf463"]
 
-[ext_resource type="Script" path="res://ui/downloads_view.gd" id="1_dlview"]
+[ext_resource type="Script" uid="uid://dfrsu3jtihfl6" path="res://view/downloads_view.gd" id="1_dlview"]
 
 [node name="DownloadsView" type="Control"]
 layout_mode = 3

@@ -29,7 +29,7 @@ func _setup_library_tab():
 		child.queue_free()
 	
 	# Add LibraryView (load scene to get UI nodes)
-	var library_scene = preload("res://ui/library_view.tscn")
+	var library_scene = preload("res://view/library_view.tscn")
 	var library_view = library_scene.instantiate()
 	library_view.view_name = "Library"
 	library_tab.add_child(library_view)
@@ -48,7 +48,7 @@ func _setup_downloads_tab():
 		child.queue_free()
 	
 	# Add DownloadsView (load scene to get UI nodes)
-	var downloads_scene = preload("res://ui/downloads_view.tscn")
+	var downloads_scene = preload("res://view/downloads_view.tscn")
 	var downloads_view = downloads_scene.instantiate()
 	downloads_view.view_name = "Downloads"
 	downloads_tab.add_child(downloads_view)

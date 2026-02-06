@@ -30,7 +30,7 @@ func _build_settings_view():
 	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Platforms")
 
 func _create_platforms_tab() -> Control:
-	var platforms_view = preload("res://ui/platforms_settings_view.gd").new()
+	var platforms_view = preload("res://view/platforms_settings_view.gd").new()
 	return platforms_view
 
 func _create_settings_tab(name: String, settings_vars: Array) -> Control:

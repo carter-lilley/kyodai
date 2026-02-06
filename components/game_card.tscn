@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://gamecard0001"]
 
-[ext_resource type="Script" path="res://ui/components/game_card.gd" id="1_gamecard"]
+[ext_resource type="Script" uid="uid://dxxbtr4c6pxjf" path="res://components/game_card.gd" id="1_gamecard"]
 
 [node name="GameCard" type="PanelContainer"]
 custom_minimum_size = Vector2(200, 280)

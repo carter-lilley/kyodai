@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://djryygss138q3"]
 
-[ext_resource type="Script" uid="uid://bfusgr7caldoo" path="res://ui/library_view.gd" id="1_libview"]
+[ext_resource type="Script" uid="uid://bfusgr7caldoo" path="res://view/library_view.gd" id="1_libview"]
 
 [node name="LibraryView" type="Control" unique_id=575533095]
 layout_mode = 3

@@ -41,7 +41,7 @@ func _add_download_item(item: DownloadManager.DownloadItem):
 	if _download_items.has(item.game.romm_id):
 		return
 	
-	var item_scene = preload("res://ui/components/download_item.tscn")
+	var item_scene = preload("res://components/download_item.tscn")
 	var ui_item = item_scene.instantiate()
 	ui_item.set_download_item(item)
 	downloads_list.add_child(ui_item)

@@ -77,7 +77,7 @@ func _add_game_cards_batch(games: Array[GameResource], index: int):
 		status_label.text = "Showing %d games" % games.size()
 
 func _add_game_card(game: GameResource):
-	var card_scene = preload("res://ui/components/game_card.tscn")
+	var card_scene = preload("res://components/game_card.tscn")
 	var card = card_scene.instantiate()
 	card.game = game
 	card.download_requested.connect(_on_download_requested)

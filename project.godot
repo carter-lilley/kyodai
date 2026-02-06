@@ -11,19 +11,19 @@ config_version=5
 [application]
 
 config/name="kyodai"
-run/main_scene="res://ui/main.tscn"
+run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.6", "Mobile")
 config/icon="res://icon.svg"
 
 [autoload]
 
-SettingsManager="*res://autoload/settings_manager.gd"
-UIManager="*res://autoload/ui_manager.gd"
-DisplayManager="*res://autoload/display_manager.gd"
-PlatformManager="*res://autoload/platform_manager.gd"
-DataManager="*res://autoload/data_manager.gd"
-NetworkManager="*res://autoload/network_manager.gd"
-DownloadManager="*res://autoload/download_manager.gd"
+SettingsManager="*res://managers/settings_manager.gd"
+UIManager="*res://managers/ui_manager.gd"
+DisplayManager="*res://managers/display_manager.gd"
+PlatformManager="*res://managers/platform_manager.gd"
+DataManager="*res://managers/data_manager.gd"
+NetworkManager="*res://managers/network_manager.gd"
+DownloadManager="*res://managers/download_manager.gd"
 
 [physics]
 
