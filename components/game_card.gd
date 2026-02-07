@@ -116,3 +116,10 @@ func _on_cover_loaded(url: String, texture: Texture2D):
 	# If this card's cover was just downloaded, update it
 	if game and game.cover_url == url and texture and is_instance_valid(cover_texture):
 		cover_texture.texture = texture
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			# Right-click to show context menu
+			if game:
+				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())

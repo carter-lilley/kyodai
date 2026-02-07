@@ -6,7 +6,7 @@ extends Manager
 enum StackDirection { UPWARD, DOWNWARD }
 
 # Set to true to show debug visualization
-const DEBUG_MODE: bool = true
+const DEBUG_MODE: bool = false
 
 signal notification_shown(id: int)
 signal notification_dismissed(id: int)

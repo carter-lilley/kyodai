@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3 uid="uid://yfhykr8xf463"]
+[gd_scene format=3 uid="uid://yfhykr8xf463"]
 
 [ext_resource type="Script" uid="uid://dfrsu3jtihfl6" path="res://view/downloads_view.gd" id="1_dlview"]
 
-[node name="DownloadsView" type="Control"]
+[node name="DownloadsView" type="Control" unique_id=791533624]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -11,7 +11,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_dlview")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1436043367]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -19,23 +19,23 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Toolbar" type="HBoxContainer" parent="VBoxContainer"]
+[node name="Toolbar" type="HBoxContainer" parent="VBoxContainer" unique_id=289811589]
 layout_mode = 2
 
-[node name="ClearCompletedButton" type="Button" parent="VBoxContainer/Toolbar"]
+[node name="ClearCompletedButton" type="Button" parent="VBoxContainer/Toolbar" unique_id=345674842]
 layout_mode = 2
 text = "Clear Completed"
 
-[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
+[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer" unique_id=791962861]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="DownloadsList" type="VBoxContainer" parent="VBoxContainer/ScrollContainer"]
+[node name="DownloadsList" type="VBoxContainer" parent="VBoxContainer/ScrollContainer" unique_id=970865423]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
-[node name="StatusLabel" type="Label" parent="VBoxContainer"]
+[node name="StatusLabel" type="Label" parent="VBoxContainer" unique_id=771749151]
 layout_mode = 2
 text = "No active downloads"
 horizontal_alignment = 1

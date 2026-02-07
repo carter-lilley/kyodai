@@ -518,14 +518,57 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 		return
 	
 	print("[DataManager] Removing all games for platform: ", platform_slug)
+	
+	# First, collect all cover URLs for games being removed
+	var cover_urls_to_remove: Array[String] = []
+	_db.query("SELECT cover_url FROM games WHERE platform_slug = '%s'" % platform_slug)
+	for row in _db.query_result:
+		var url = row.get("cover_url", "")
+		if url != "":
+			cover_urls_to_remove.append(url)
+	
 	ThreadManager.queue_db_task(
 		func():
 			return _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug),
 		func(success: bool):
 			print("[DataManager] Removed games for platform: ", platform_slug, " success: ", success)
+			
+			if success and cover_urls_to_remove.size() > 0:
+				# Clean up orphaned cache files
+				call_deferred("_cleanup_orphaned_cache_files", cover_urls_to_remove)
+			
 			if callback.is_valid():
 				callback.call(success)
 	)
+
+func _cleanup_orphaned_cache_files(cover_urls: Array[String]):
+	print("[DataManager] Checking ", cover_urls.size(), " cover URLs for orphaned cache files")
+	
+	var removed_count = 0
+	for url in cover_urls:
+		# Check if any other games still reference this URL
+		_db.query("SELECT COUNT(*) as count FROM games WHERE cover_url = '%s'" % _escape_sql(url))
+		var still_referenced = false
+		if _db.query_result.size() > 0:
+			still_referenced = _db.query_result[0].get("count", 0) > 0
+		
+		if not still_referenced:
+			# Safe to remove from cache
+			var cache_path = get_cached_image_path(url)
+			if FileAccess.file_exists(cache_path):
+				var file = FileAccess.open(cache_path, FileAccess.READ)
+				var file_size = 0
+				if file:
+					file_size = file.get_length()
+					file.close()
+				
+				DirAccess.remove_absolute(cache_path)
+				_cache_size = max(0, _cache_size - file_size)
+				_cache_access_count.erase(cache_path)
+				removed_count += 1
+				print("[DataManager] Removed orphaned cache file: ", cache_path)
+	
+	print("[DataManager] Cache cleanup complete - removed ", removed_count, " orphaned files")
 
 func _get_enabled_platforms_setting() -> Dictionary:
 	var setting = SettingsManager.get_setting("enabled_platforms")
