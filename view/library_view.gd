@@ -32,6 +32,9 @@ func _ready():
 	NetworkManager.download_progress_update.connect(_on_download_progress)
 	NetworkManager.download_finished.connect(_on_download_finished)
 	
+	# Connect to UIManager modal signals
+	UIManager.modal_item_selected.connect(_on_modal_item_selected)
+	
 	# Initial load
 	_load_platforms()
 	_load_games()
@@ -179,3 +182,18 @@ func _on_sync_completed(success: bool, message: String):
 	_load_platforms()
 	await _load_games()
 	status_label.text = "Showing %d games" % _game_cards.size()
+
+func _on_modal_item_selected(item_id: String, context: Dictionary):
+	"""Handle modal item selection."""
+	var romm_id = context.get("romm_id", 0)
+	
+	match item_id:
+		"details":
+			# Show game details view
+			UIManager.show_game_details(romm_id)
+		"launch":
+			# Launch game logic (not implemented yet)
+			print("[LibraryView] Launch requested for game: ", romm_id)
+		"hide":
+			# Hide game logic (not implemented yet)
+			print("[LibraryView] Hide requested for game: ", romm_id)

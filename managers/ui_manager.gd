@@ -14,6 +14,10 @@ var _root_control: Control = null
 var _modal_backdrop: ColorRect = null
 var _is_dismissing: bool = false
 
+# Game details tab
+var _details_tab_idx: int = -1
+var _game_details_view: View = null
+
 # Signals
 signal modal_shown(modal_id: String)
 signal modal_dismissed(modal_id: String)
@@ -222,3 +226,29 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_modal_open() and event.is_action_pressed("ui_cancel"):
 		dismiss_modal()
 		get_viewport().set_input_as_handled()
+
+# ==================== GAME DETAILS VIEW ====================
+
+func show_game_details(romm_id: int) -> void:
+	"""Show the game details view for a specific game."""
+	var game = DataManager.get_game_by_id(romm_id)
+	if not game:
+		push_warning("[UIManager] Cannot show details - game not found: ", romm_id)
+		return
+	
+	# Create details tab if it doesn't exist
+	if _details_tab_idx == -1:
+		var details_scene = preload("res://view/game_details_view.tscn")
+		_game_details_view = details_scene.instantiate()
+		_game_details_view.view_name = "Details"
+		
+		_tab_container.add_child(_game_details_view)
+		_details_tab_idx = _tab_container.get_tab_count() - 1
+		_tab_container.set_tab_title(_details_tab_idx, "Details")
+		_views["Details"] = _game_details_view
+	
+	# Set the game data
+	_game_details_view.set_game(game)
+	
+	# Switch to the details tab
+	_tab_container.current_tab = _details_tab_idx
