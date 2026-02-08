@@ -184,6 +184,9 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
 	
+	_pending_db_operations += 1
+	print("[DataManager] update_game queued. Pending DB operations: ", _pending_db_operations)
+	
 	ThreadManager.queue_db_task(
 		func():
 			var query = """
@@ -220,10 +223,13 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 			]
 			return _db.query(query),
 		func(success: bool):
+			_pending_db_operations -= 1
+			print("[DataManager] update_game complete. Pending DB operations: ", _pending_db_operations)
 			if success:
 				game_updated.emit(game)
 			if callback.is_valid():
 				callback.call(success)
+			_check_batch_completion()
 	)
 	return true
 
@@ -564,8 +570,13 @@ func _sync_platforms_sequential(platforms: Array, index: int, total_synced: int,
 			total_synced += synced
 			total_games += games
 		
-		# Sync next platform
-		_sync_platforms_sequential(platforms, index + 1, total_synced, total_games, callback)
+		# Wait for all thread operations to complete before moving to next platform
+		print("[DataManager] Platform ", platform_slug, " complete. Waiting for thread operations...")
+		_batch_completion_callback = func():
+			print("[DataManager] All thread operations complete for platform ", platform_slug, ". Moving to next platform.")
+			_sync_platforms_sequential(platforms, index + 1, total_synced, total_games, callback)
+		
+		_check_batch_completion()
 	)
 
 func _get_game_platform_slugs() -> Array[String]:
@@ -590,18 +601,15 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 	
 	print("[DataManager] Removing all games for platform: ", platform_slug)
 	
-	# First, collect all cover URLs for games being removed
-	var cover_urls_to_remove: Array[String] = []
-	_db.query("SELECT cover_url FROM games WHERE platform_slug = '%s'" % platform_slug)
-	for row in _db.query_result:
-		var url = row.get("cover_url", "")
-		if url != "":
-			cover_urls_to_remove.append(url)
+	_pending_db_operations += 1
+	print("[DataManager] remove_platform_games queued. Pending DB operations: ", _pending_db_operations)
 	
 	ThreadManager.queue_db_task(
 		func():
 			return _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug),
 		func(success: bool):
+			_pending_db_operations -= 1
+			print("[DataManager] remove_platform_games complete. Pending DB operations: ", _pending_db_operations)
 			print("[DataManager] Removed games for platform: ", platform_slug, " success: ", success)
 			
 			if success:
@@ -610,6 +618,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 			
 			if callback.is_valid():
 				callback.call(success)
+			_check_batch_completion()
 	)
 
 func _get_enabled_platforms_setting() -> Dictionary:
@@ -681,15 +690,19 @@ func sync_platform_games(platform_id: int, platform_slug: String, platform_name:
 				var next_offset = batch_size
 				_fetch_remaining_batches(platform_id_str, platform_slug, platform_name, next_offset, batch_size, total_games, first_batch_total, callback)
 			
-			# Check if we can proceed immediately (no pending operations)
-			_check_batch_completion()
+			# Don't check immediately - let the operations start first
+			# _check_batch_completion() will be called when operations complete
 		)
 	)
 
-func _fetch_batch(platform_slug: String, offset: int, limit: int, callback: Callable):
+func _fetch_batch(platform_id: String, offset: int, limit: int, callback: Callable):
+	print("[DataManager] Fetching batch for platform_id: ", platform_id, " offset: ", offset, " limit: ", limit)
 	NetworkManager.fetch_games(func(data, error):
+		if error == "" and data is Dictionary:
+			var total = data.get("total", 0)
+			print("[DataManager] Fetched batch with total: ", total, " items")
 		callback.call(data, error)
-	, platform_slug, offset, limit)
+	, platform_id, offset, limit)
 
 func _fetch_remaining_batches(platform_id: String, platform_slug: String, platform_name: String, offset: int, batch_size: int, total_games: int, total_synced: int, callback: Callable):
 	print("[DataManager] Fetching batch at offset: ", offset, ", total_synced so far: ", total_synced, ", cumulative: ", _cumulative_sync_current)
@@ -706,10 +719,6 @@ func _fetch_remaining_batches(platform_id: String, platform_slug: String, platfo
 		
 		var items = batch_data.get("items", [])
 		print("[DataManager] Fetched ", items.size(), " items at offset ", offset)
-		
-		# Reset pending operation counters for this batch
-		_pending_db_operations = 0
-		_pending_image_operations = 0
 		
 		_process_batch_async(items, platform_slug, func(batch_count: int):
 			var new_total = total_synced + batch_count
@@ -729,9 +738,6 @@ func _fetch_remaining_batches(platform_id: String, platform_slug: String, platfo
 				# Continue with next batch
 				var new_offset = offset + batch_size
 				_fetch_remaining_batches(platform_id, platform_slug, platform_name, new_offset, batch_size, total_games, new_total, callback)
-			
-			# Check if we can proceed immediately (no pending operations)
-			_check_batch_completion()
 		)
 	)
 
