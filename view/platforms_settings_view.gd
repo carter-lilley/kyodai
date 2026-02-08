@@ -38,21 +38,32 @@ func _build_view():
 	spacer.custom_minimum_size = Vector2(0, 10)
 	_platforms_container.add_child(spacer)
 	
-	# Add sync button at the top
+	# Add select all/deselect all button
+	var select_all_button = Button.new()
+	select_all_button.text = "Select All"
+	select_all_button.name = "SelectAllButton"
+	select_all_button.pressed.connect(_on_select_all_pressed)
+	_platforms_container.add_child(select_all_button)
+	
+	var spacer2 = Control.new()
+	spacer2.custom_minimum_size = Vector2(0, 10)
+	_platforms_container.add_child(spacer2)
+	
+	# Add sync button
 	var sync_button = Button.new()
 	sync_button.text = "Sync Enabled Platforms"
 	sync_button.name = "SyncButton"
 	sync_button.pressed.connect(_on_sync_pressed)
 	_platforms_container.add_child(sync_button)
 	
-	var spacer2 = Control.new()
-	spacer2.custom_minimum_size = Vector2(0, 20)
-	_platforms_container.add_child(spacer2)
+	var spacer3 = Control.new()
+	spacer3.custom_minimum_size = Vector2(0, 20)
+	_platforms_container.add_child(spacer3)
 
 func _fetch_platforms():
-	# Clear existing checkboxes and buttons (keep info label and sync button)
+	# Clear existing checkboxes and buttons (keep info label, sync button, and select all button)
 	for child in _platforms_container.get_children():
-		if child.name == "InfoLabel" or child.name == "SyncButton":
+		if child.name == "InfoLabel" or child.name == "SyncButton" or child.name == "SelectAllButton":
 			continue
 		if child is CheckBox or child is Button or child is Label:
 			child.queue_free()
@@ -122,6 +133,7 @@ func _fetch_platforms():
 			checkbox.button_pressed = is_enabled
 			checkbox.toggled.connect(func(checked: bool):
 				_set_platform_enabled(slug, romm_id, checked)
+				_update_select_all_button_text()
 			)
 			
 			_platforms_container.add_child(checkbox)
@@ -129,6 +141,9 @@ func _fetch_platforms():
 		
 		# Remove platforms that no longer exist on RomM
 		_remove_deleted_platforms(fetched_slugs)
+		
+		# Update select all button text
+		_update_select_all_button_text()
 	)
 
 func _remove_deleted_platforms(current_slugs: Array[String]):
@@ -159,9 +174,9 @@ func _load_platforms_from_database():
 	var platforms = DataManager.get_all_platforms()
 	var enabled_platforms = _get_enabled_platforms()
 	
-	# Clear existing checkboxes and buttons (keep info label and sync button)
+	# Clear existing checkboxes and buttons (keep info label, sync button, and select all button)
 	for child in _platforms_container.get_children():
-		if child.name == "InfoLabel" or child.name == "SyncButton":
+		if child.name == "InfoLabel" or child.name == "SyncButton" or child.name == "SelectAllButton":
 			continue
 		if child is CheckBox or child is Button or child is Label:
 			child.queue_free()
@@ -247,6 +262,61 @@ func _on_sync_pressed():
 			result_label.modulate = Color.RED
 		_platforms_container.add_child(result_label)
 	)
+
+func _update_select_all_button_text():
+	var select_all_button: Button = _platforms_container.get_node("SelectAllButton")
+	if not select_all_button:
+		return
+	
+	# Check if all platforms are currently selected
+	var all_selected = true
+	var has_platforms = false
+	for checkbox in _checkboxes.values():
+		has_platforms = true
+		if not checkbox.button_pressed:
+			all_selected = false
+			break
+	
+	if not has_platforms:
+		select_all_button.text = "Select All"
+		return
+	
+	select_all_button.text = "Deselect All" if all_selected else "Select All"
+
+func _on_select_all_pressed():
+	var select_all_button: Button = _platforms_container.get_node("SelectAllButton")
+	if not select_all_button:
+		return
+	
+	# Check if all platforms are currently selected
+	var all_selected = true
+	var has_platforms = false
+	for checkbox in _checkboxes.values():
+		has_platforms = true
+		if not checkbox.button_pressed:
+			all_selected = false
+			break
+	
+	if not has_platforms:
+		return
+	
+	# Toggle all checkboxes
+	var new_state = not all_selected
+	for slug in _checkboxes.keys():
+		var checkbox: CheckBox = _checkboxes[slug]
+		checkbox.button_pressed = new_state
+		
+		# Find the platform ID
+		var platform_id = 0
+		for platform_data in _platforms_data:
+			if platform_data.get("slug", "") == slug:
+				platform_id = platform_data.get("id", 0)
+				break
+		
+		_set_platform_enabled(slug, platform_id, new_state)
+	
+	# Update button text
+	select_all_button.text = "Deselect All" if new_state else "Select All"
 
 func on_view_show():
 	# Refresh platform list every time the view is shown

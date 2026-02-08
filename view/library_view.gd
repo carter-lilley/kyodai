@@ -25,6 +25,7 @@ func _ready():
 	DataManager.database_ready.connect(_on_database_ready)
 	DataManager.game_added.connect(_on_game_added)
 	DataManager.game_updated.connect(_on_game_updated)
+	DataManager.games_removed.connect(_on_games_removed)
 	DataManager.sync_completed.connect(_on_sync_completed)
 	DataManager.sync_progress.connect(_on_sync_progress)
 	
@@ -141,6 +142,11 @@ func _on_game_updated(game: GameResource):
 			card.game = game
 			break
 
+func _on_games_removed(platform_slug: String):
+	print("[LibraryView] Games removed from platform: ", platform_slug, " - refreshing view")
+	# Reload games to reflect the removal
+	_load_games()
+
 func _process_pending_cards():
 	_is_processing_pending = true
 	
@@ -178,10 +184,18 @@ func _on_sync_progress(percent: float, current: int, total: int):
 	status_label.text = "Syncing... %d/%d games (%.0f%%)" % [current, total, percent]
 
 func _on_sync_completed(success: bool, message: String):
-	# Refresh platforms list and reload all games (in case games were removed)
-	_load_platforms()
-	await _load_games()
-	status_label.text = "Showing %d games" % _game_cards.size()
+	if success:
+		status_label.text = "Sync complete. Refreshing library..."
+		
+		# Small delay to allow any pending operations to settle
+		await get_tree().create_timer(0.5).timeout
+		
+		# Refresh platforms list and reload all games (in case games were removed)
+		_load_platforms()
+		await _load_games()
+		status_label.text = "Showing %d games" % _game_cards.size()
+	else:
+		status_label.text = "Sync failed: " + message
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
 	"""Handle modal item selection."""

@@ -135,6 +135,37 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 	if queue_size % 10 == 0:
 		print("[ThreadManager] Queued image task, queue size: ", queue_size, " | Caller Thread: ", OS.get_thread_caller_id())
 
+static func get_db_queue_size() -> int:
+	if _instance == null:
+		return 0
+	_instance._db_mutex.lock()
+	var size = _instance._db_queue.size()
+	_instance._db_mutex.unlock()
+	return size
+
+static func has_pending_tasks() -> bool:
+	"""Check if ThreadManager has any pending work (queued tasks or active processing)"""
+	if _instance == null:
+		return false
+	
+	_instance._db_mutex.lock()
+	var db_pending = _instance._db_queue.size()
+	_instance._db_mutex.unlock()
+	
+	_instance._image_mutex.lock()
+	var image_pending = _instance._image_queue.size()
+	_instance._image_mutex.unlock()
+	
+	return db_pending > 0 or image_pending > 0
+
+static func get_image_queue_size() -> int:
+	if _instance == null:
+		return 0
+	_instance._image_mutex.lock()
+	var size = _instance._image_queue.size()
+	_instance._image_mutex.unlock()
+	return size
+
 static func shutdown():
 	if _instance == null:
 		return

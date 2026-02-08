@@ -2,77 +2,33 @@
 extends RefCounted
 class_name SyncBatchProcessor
 
-signal batch_complete(success_count: int)
-signal all_complete(total_success: int, cover_urls: Array)
+signal all_complete(success_count: int)
+signal game_fully_processed(game_id: String, success: bool)
 
 var _items: Array
 var _platform_slug: String
 var _success_count: int = 0
 var _completed_count: int = 0
-var _current_index: int = 0
-var _chunk_size: int = 3  # Process 3 games at a time to prevent callback flooding
-var _processed_in_current_chunk: int = 0
-var _current_chunk_size: int = 0
-var _mutex: Mutex
-var _is_processing: bool = false
-var _cover_urls: Array = []  # Collect cover URLs during sync
+var _total_count: int = 0
 
 func _init(items: Array, platform_slug: String = ""):
 	_items = items
 	_platform_slug = platform_slug
-	_mutex = Mutex.new()
+	_total_count = items.size()
 
 func start():
 	_success_count = 0
 	_completed_count = 0
-	_current_index = 0
-	_is_processing = true
-	print("[SyncBatchProcessor] Starting batch processing for ", _items.size(), " games with chunk size ", _chunk_size)
-	_process_next_chunk()
+	
+	print("[SyncBatchProcessor] Starting batch of ", _total_count, " games")
+	
+	# Start all games simultaneously
+	for item in _items:
+		_process_single_game(item)
 
-func _process_next_chunk():
-	print("[SyncBatchProcessor] _process_next_chunk called, current_index: ", _current_index, ", total: ", _items.size())
-	
-	if not _is_processing:
-		print("[SyncBatchProcessor] Not processing (stopped)")
-		return
-	
-	if _current_index >= _items.size():
-		print("[SyncBatchProcessor] Reached end, checking completion")
-		_check_complete()
-		return
-	
-	var end_index = mini(_current_index + _chunk_size, _items.size())
-	var chunk = _items.slice(_current_index, end_index)
-	_current_chunk_size = chunk.size()
-	_processed_in_current_chunk = 0
-	
-	print("[SyncBatchProcessor] Processing chunk ", _current_index, " to ", end_index, " (", _current_chunk_size, " games)")
-	
-	for game_data in chunk:
-		_process_single_game(game_data, func():
-			_mutex.lock()
-			_processed_in_current_chunk += 1
-			var chunk_progress = _processed_in_current_chunk
-			var chunk_total = _current_chunk_size
-			var should_continue = _processed_in_current_chunk >= _current_chunk_size
-			_mutex.unlock()
-			
-			print("[SyncBatchProcessor] Game completed in chunk: ", chunk_progress, "/", chunk_total)
-			
-			if should_continue:
-				print("[SyncBatchProcessor] Chunk complete! Scheduling next chunk")
-				# Chunk complete, schedule next chunk
-				_current_index = end_index
-				call_deferred("_process_next_chunk")
-		)
-
-func _process_single_game(game_data: Dictionary, on_complete: Callable):
-	if not game_data is Dictionary:
-		on_complete.call()
-		return
-	
+func _process_single_game(game_data: Dictionary):
 	var game = GameResource.new()
+	
 	game.id = str(game_data.get("id", ""))
 	game.romm_id = game_data.get("id", 0)
 	game.title = game_data.get("name", "") if game_data.get("name") != null else ""
@@ -103,42 +59,82 @@ func _process_single_game(game_data: Dictionary, on_complete: Callable):
 		rating = avg_rating if avg_rating != null else 0.0
 	game.rating = rating
 	
-	# Collect cover URL for download
-	var cover_url = game_data.get("url_cover", "") if game_data.get("url_cover") != null else ""
+	var game_id = str(game_data.get("id", ""))
+	var db_success = false
 	
-	DataManager.add_game(game, func(success: bool):
-		_mutex.lock()
-		_completed_count += 1
-		if success:
-			_success_count += 1
-			# Store cover URL if successful and has cover
-			if cover_url != "" and cover_url.begins_with("http"):
-				_cover_urls.append(cover_url)
-		_mutex.unlock()
-		on_complete.call()
-	)
-
-func _check_complete():
-	_mutex.lock()
-	var is_complete = _completed_count >= _items.size()
-	var success_count = _success_count
-	_mutex.unlock()
-	
-	if is_complete:
-		print("[SyncBatchProcessor] Batch complete! Success: ", success_count, "/", _items.size(), ", Covers collected: ", _cover_urls.size())
-		_is_processing = false
-		batch_complete.emit(success_count)
-		all_complete.emit(success_count, _cover_urls)
-
-func stop():
-	_is_processing = false
-
-func get_progress() -> Dictionary:
-	_mutex.lock()
-	var result = {
-		"completed": _completed_count,
-		"total": _items.size(),
-		"success": _success_count
+	# Use a Dictionary to track operations (passed by reference)
+	var tracker = {
+		"operations_remaining": 2,  # DB + Cover
+		"db_success": false
 	}
-	_mutex.unlock()
-	return result
+	
+	var check_complete = func():
+		tracker.operations_remaining -= 1
+		print("[SyncBatchProcessor] Game ", game_id, " operation done, remaining: ", tracker.operations_remaining)
+		if tracker.operations_remaining <= 0:
+			_completed_count += 1
+			if tracker.db_success:
+				_success_count += 1
+			
+			print("[SyncBatchProcessor] Game ", game_id, " complete (", _completed_count, "/", _total_count, ")")
+			game_fully_processed.emit(game_id, tracker.db_success)
+			
+			if _completed_count >= _total_count:
+				print("[SyncBatchProcessor] All ", _total_count, " games complete")
+				all_complete.emit(_success_count)
+	
+	# Start DB write
+	DataManager.add_game(game, func(success: bool):
+		tracker.db_success = success
+		check_complete.call()
+	)
+	
+	# Start cover download (if we have a URL)
+	var cover_url = game_data.get("url_cover", "") if game_data.get("url_cover") != null else ""
+	if cover_url != "" and cover_url.begins_with("http"):
+		_download_cover(cover_url, func(_success: bool):
+			check_complete.call()
+		)
+	else:
+		# No cover to download - mark as done immediately
+		check_complete.call()
+
+func _download_cover(url: String, on_complete: Callable):
+	var cache_path = DataManager.get_cached_image_path(url)
+	
+	# Skip if already cached
+	if FileAccess.file_exists(cache_path):
+		# No actual image operation needed, just call completion
+		on_complete.call(true)
+		return
+	
+	# Download the image
+	# Track this image operation in DataManager
+	DataManager._pending_image_operations += 1
+	print("[SyncBatchProcessor] Queued cover download. Pending images: ", DataManager._pending_image_operations)
+	
+	NetworkManager.download_image(url, func(body: PackedByteArray):
+		if body.is_empty():
+			DataManager._pending_image_operations -= 1
+			print("[SyncBatchProcessor] Cover download failed. Pending images: ", DataManager._pending_image_operations)
+			on_complete.call(false)
+			DataManager._check_batch_completion()
+			return
+		
+		# Process and save on image thread
+		ThreadManager.queue_image_task(
+			func():
+				var texture = DataManager._load_texture_from_memory(body)
+				if texture:
+					var file = FileAccess.open(cache_path, FileAccess.WRITE)
+					if file:
+						file.store_buffer(body)
+						file.close()
+				return texture,
+			func(texture: Texture2D):
+				DataManager._pending_image_operations -= 1
+				print("[SyncBatchProcessor] Cover processing complete. Pending images: ", DataManager._pending_image_operations)
+				on_complete.call(texture != null)
+				DataManager._check_batch_completion()
+		)
+	)
