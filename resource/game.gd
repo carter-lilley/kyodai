@@ -17,6 +17,11 @@ extends Resource
 @export var genres: Array[String] = []
 @export var rating: float = 0.0
 
+# Transient fields for sync tracking (not persisted)
+var _sync_db_done: bool = false
+var _sync_cover_done: bool = false
+var _sync_db_success: bool = false
+
 func get_display_name() -> String:
 	return title if title else file_name
 

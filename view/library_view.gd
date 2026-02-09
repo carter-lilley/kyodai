@@ -143,9 +143,8 @@ func _on_game_updated(game: GameResource):
 			break
 
 func _on_games_removed(platform_slug: String):
-	print("[LibraryView] Games removed from platform: ", platform_slug, " - refreshing view")
-	# Reload games to reflect the removal
-	_load_games()
+	print("[LibraryView] Games removed from platform: ", platform_slug)
+	# Note: We refresh once at the end of all removals, not after each one
 
 func _process_pending_cards():
 	_is_processing_pending = true

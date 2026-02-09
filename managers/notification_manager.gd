@@ -17,8 +17,10 @@ class NotificationEntry:
 	var created_at: float
 	var min_duration: float
 	var progress_callable: Callable  # Optional: func() -> float (0.0-1.0)
+	var text_formatter: Callable  # Optional: func(progress: float) -> String
 	var is_progress_linked: bool = false
 	var fade_out_started: bool = false
+	var base_text: String = ""
 
 var _stack_control: Control
 var _notification_container: VBoxContainer
@@ -117,23 +119,27 @@ func set_debug_mode(enabled: bool) -> void:
 			_debug_panel = null
 
 func show_notification(
-	text: String, 
-	type: Notification.Type = Notification.Type.INFO, 
+	text: String,
+	type: Notification.Type = Notification.Type.INFO,
 	icon: Texture2D = null,
 	min_duration: float = 3.0,
-	progress_callable: Callable = Callable()  # Optional: func() -> float (0.0-1.0)
+	progress_callable: Callable = Callable(),  # Optional: func() -> float (0.0-1.0)
+	text_formatter: Callable = Callable()  # Optional: func(progress: float) -> String
 ) -> int:
-	"""Show a notification. If progress_callable is provided, updates progress bar and fades at 100%."""
+	"""Show a notification. If progress_callable is provided, updates progress bar and fades at 100%.
+	If text_formatter is provided, it's called with progress to format text. Otherwise, percentage is auto-appended."""
 	var notification = _create_notification(text, type, icon)
-	
+
 	var entry = NotificationEntry.new()
 	entry.id = _notification_id_counter
 	entry.notification = notification
 	entry.created_at = Time.get_unix_time_from_system()
 	entry.min_duration = min_duration
 	entry.progress_callable = progress_callable
+	entry.text_formatter = text_formatter
+	entry.base_text = text
 	entry.is_progress_linked = not progress_callable.is_null()
-	
+
 	if entry.is_progress_linked:
 		notification.show_progress(true)
 	
@@ -195,7 +201,16 @@ func _check_notifications() -> void:
 		if entry.is_progress_linked and is_instance_valid(entry.notification):
 			var progress = entry.progress_callable.call()
 			if progress is float or progress is int:
-				entry.notification.set_progress(float(progress))
+				var progress_f = float(progress)
+				entry.notification.set_progress(progress_f)
+
+				# Update text based on formatter or auto-append percentage
+				if entry.text_formatter.is_valid():
+					entry.notification.set_text(entry.text_formatter.call(progress_f))
+				else:
+					var percent = int(progress_f * 100)
+					entry.notification.set_text(entry.base_text + " (" + str(percent) + "%)")
+
 				if progress >= 1.0:
 					_start_fade_out(entry)
 					continue

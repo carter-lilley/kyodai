@@ -18,37 +18,38 @@ const CACHE_FOLDER = "user://cache/covers/"
 var _db: SQLite = null
 var _is_db_ready: bool = false
 var _loading_images: Dictionary = {}
-var _current_sync_progress: float = 0.0
-var _current_sync_total: int = 0
 var _sync_notification_id: int = -1
 
-# Cumulative sync tracking across all platforms
-var _cumulative_sync_total: int = 0
-var _cumulative_sync_current: int = 0
-var _current_platform_name: String = ""
+# Logging control
+var _verbose_sql: bool = false  # Set to true to see SQL queries
 
-# Thread operation tracking - counts pending DB and image operations
-var _pending_db_operations: int = 0
-var _pending_image_operations: int = 0
-var _batch_completion_callback: Callable = Callable()
+# Sync state
+var _sync_current: int = 0
+var _sync_total: int = 0
+var _sync_platform: String = ""
+var _sync_platform_index: int = 0  # Current platform number (1-based)
+var _sync_platform_count: int = 0  # Total platforms
+var _sync_platform_total: int = 0  # Total games in current platform
+
+# Batch processing state
+var _batch_remaining: int = 0
+var _batch_callback: Callable = Callable()
+var _batch_success_count: int = 0
+
+# Pre-calculation state (avoid closures)
+var _precalc_pending: int = 0
+var _precalc_total: int = 0
+var _precalc_callback: Callable = Callable()
 
 func _ready():
-	# Initialize ThreadManager first
 	_ensure_thread_manager()
-	
 	_initialize_database()
 	_ensure_cache_folder()
 
 func _ensure_thread_manager():
 	if ThreadManager._instance == null:
-		print("[DataManager] Creating ThreadManager instance")
 		var tm = ThreadManager.new()
 		add_child(tm)
-		print("[DataManager] ThreadManager instance created and added")
-	else:
-		print("[DataManager] ThreadManager already exists")
-
-# ==================== DATABASE INITIALIZATION ====================
 
 func _initialize_database():
 	var dir = DirAccess.open("user://")
@@ -57,19 +58,14 @@ func _initialize_database():
 	
 	_db = SQLite.new()
 	_db.path = DB_PATH
-	_db.verbosity_level = SQLite.VERBOSE
+	_db.verbosity_level = SQLite.QUIET if not _verbose_sql else SQLite.VERBOSE
 	
-	var success = _db.open_db()
-	if not success:
-		push_error("Failed to open database")
-		return
-	
-	_create_tables()
-	_is_db_ready = true
-	database_ready.emit()
+	if _db.open_db():
+		_create_tables()
+		_is_db_ready = true
+		database_ready.emit()
 
 func _create_tables():
-	# Games table
 	_db.query("""
 		CREATE TABLE IF NOT EXISTS games (
 			id TEXT PRIMARY KEY,
@@ -90,7 +86,6 @@ func _create_tables():
 		)
 	""")
 	
-	# Platforms table
 	_db.query("""
 		CREATE TABLE IF NOT EXISTS platforms (
 			id TEXT PRIMARY KEY,
@@ -104,35 +99,338 @@ func _create_tables():
 		)
 	""")
 	
-	# Cache metadata table
-	_db.query("""
-		CREATE TABLE IF NOT EXISTS cache_metadata (
-			key TEXT PRIMARY KEY,
-			value TEXT
-		)
-	""")
-	
-	# Create indexes
 	_db.query("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
 	_db.query("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
-	_db.query("CREATE INDEX IF NOT EXISTS idx_games_local ON games(has_local_copy)")
 
 func is_database_ready() -> bool:
 	return _is_db_ready
 
-# ==================== GAME CRUD OPERATIONS ====================
-
 func _escape_sql(text: String) -> String:
-	# Escape single quotes by doubling them (SQL standard)
 	return text.replace("'", "''")
+
+# ==================== SYNC ====================
+
+func sync_enabled_platforms(callback: Callable = Callable()) -> void:
+	if not _is_db_ready:
+		if callback.is_valid():
+			callback.call(false, "Database not ready", 0, 0)
+		return
+	
+	_sync_current = 0
+	_sync_total = 0
+	_sync_platform = ""
+	
+	var enabled = _get_enabled_platforms()
+	# Get all platforms that currently have games in the database
+	var db_platforms = _get_db_platform_slugs()
+	var enabled_slugs = enabled.map(func(p): return p.slug)
+	
+	# Find platforms that have games but are now disabled
+	var disabled_platforms: Array[String] = []
+	for slug in db_platforms:
+		if not slug in enabled_slugs:
+			disabled_platforms.append(slug)
+	
+	if disabled_platforms.size() > 0:
+		print("[DataManager] Removing ", disabled_platforms.size(), " disabled platforms")
+		_remove_disabled_platforms(disabled_platforms, enabled, callback)
+	else:
+		_start_sync(enabled, callback)
+
+func _remove_disabled_platforms(platforms: Array[String], enabled_platforms: Array, final_callback: Callable):
+	"""Remove games from disabled platforms one by one, then start sync"""
+	_remove_next_disabled(platforms, 0, enabled_platforms, final_callback)
+
+func _remove_next_disabled(platforms: Array[String], index: int, enabled_platforms: Array, final_callback: Callable):
+	if index >= platforms.size():
+		# All disabled platforms removed, start the sync
+		_start_sync(enabled_platforms, final_callback)
+		return
+	
+	var platform_slug = platforms[index]
+	
+	remove_platform_games(platform_slug, func(_success):
+		# Continue to next platform regardless of success
+		_remove_next_disabled(platforms, index + 1, enabled_platforms, final_callback)
+	)
+
+func _get_db_platform_slugs() -> Array[String]:
+	"""Get list of platform slugs that have games in the database"""
+	var slugs: Array[String] = []
+	if not _is_db_ready:
+		return slugs
+	
+	_db.query("SELECT DISTINCT platform_slug FROM games")
+	for row in _db.query_result:
+		var slug = row.get("platform_slug", "")
+		if slug != "":
+			slugs.append(slug)
+	
+	return slugs
+
+func _start_sync(enabled: Array, callback: Callable):
+	"""Start the actual sync after cleaning up disabled platforms"""
+	if enabled.size() == 0:
+		# Emit sync_completed so LibraryView refreshes even if no platforms to sync
+		sync_completed.emit(true, "No platforms enabled")
+		if callback.is_valid():
+			callback.call(true, "", 0, 0)
+		return
+	
+	print("[DataManager] Syncing ", enabled.size(), " platforms")
+	
+	# Reset sync state
+	_sync_current = 0
+	_sync_platform_index = 0
+	_sync_platform_count = enabled.size()
+	
+	# Pre-calculate total games across all platforms
+	_precalculate_totals(enabled, func(grand_total: int):
+		_sync_total = grand_total
+		print("[DataManager] Total games to sync: ", grand_total)
+		
+		# Show notification with grand total
+		_sync_notification_id = NotificationManager.show_notification(
+			"Syncing...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			func() -> float:
+				if _sync_total == 0:
+					return 0.0
+				return float(_sync_current) / float(_sync_total),
+			func(progress: float) -> String:
+				var pct = int(progress * 100)
+				if _sync_platform != "":
+					return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
+				return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct]
+		)
+		
+		_sync_platforms(enabled, 0, 0, callback)
+	)
+
+func _precalculate_totals(platforms: Array, callback: Callable):
+	"""Fetch total game count for all platforms upfront using instance vars (no closures)"""
+	_precalc_pending = platforms.size()
+	_precalc_total = 0
+	_precalc_callback = callback
+	
+	if _precalc_pending == 0:
+		callback.call(0)
+		return
+	
+	for platform in platforms:
+		# Fetch just the total count (offset=0, limit=1)
+		_fetch_batch(str(platform.id), 0, 1, func(data, error):
+			if error == "" and data is Dictionary:
+				_precalc_total += int(data.get("total", 0))
+			
+			_precalc_pending -= 1
+			if _precalc_pending <= 0:
+				var cb = _precalc_callback
+				_precalc_callback = Callable()
+				cb.call(_precalc_total)
+		)
+
+func _get_enabled_platforms() -> Array:
+	var result = []
+	var setting = SettingsManager.get_setting("enabled_platforms")
+	if not setting or not setting.value is Dictionary:
+		return result
+	
+	for slug in setting.value.keys():
+		var data = setting.value[slug]
+		var enabled = false
+		var id = 0
+		var name = slug.capitalize()
+		
+		if data is bool:
+			enabled = data
+		elif data is Dictionary:
+			enabled = data.get("enabled", false)
+			id = data.get("id", 0)
+			name = data.get("name", slug.capitalize())
+		
+		if enabled and id > 0:
+			result.append({"slug": slug, "id": id, "name": name})
+	
+	return result
+
+func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: Callable):
+	if index >= platforms.size():
+		print("[DataManager] Sync complete: ", total_synced, " games")
+		sync_completed.emit(true, "Synced " + str(total_synced) + " games")
+		if callback.is_valid():
+			callback.call(true, "", total_synced, 0)
+		return
+	
+	var platform = platforms[index]
+	_sync_platform = platform.name
+	_sync_platform_index = index + 1  # 1-based index for display
+	
+	sync_platform_games(platform.id, platform.slug, platform.name, func(success, msg, synced, total):
+		if success:
+			total_synced += synced
+		_sync_platforms(platforms, index + 1, total_synced, callback)
+	)
+
+func sync_platform_games(platform_id: int, platform_slug: String, platform_name: String, callback: Callable):
+	if not _is_db_ready:
+		if callback.is_valid():
+			callback.call(false, "Database not ready", 0, 0)
+		return
+	
+	var batch_size = 15
+	
+	# Fetch first batch
+	_fetch_batch(str(platform_id), 0, batch_size, func(data, error):
+		if error != "" or not data is Dictionary:
+			if callback.is_valid():
+				callback.call(false, error if error else "Invalid data", 0, 0)
+			return
+		
+		var total = int(data.get("total", 0))
+		var items = data.get("items", [])
+		
+		if total == 0:
+			if callback.is_valid():
+				callback.call(true, "", 0, 0)
+			return
+		
+		_process_batch(items, platform_slug, func(succeeded):
+			if succeeded >= total:
+				# All games in one batch
+				if callback.is_valid():
+					callback.call(true, "", succeeded, total)
+			else:
+				# Need more batches
+				_fetch_more_batches(platform_id, platform_slug, batch_size, total, succeeded, batch_size, callback)
+		)
+	)
+
+func _fetch_more_batches(platform_id: int, platform_slug: String, batch_size: int, total: int, synced: int, offset: int, callback: Callable):
+	_fetch_batch(str(platform_id), offset, batch_size, func(data, error):
+		if error != "" or not data is Dictionary:
+			if callback.is_valid():
+				callback.call(true, "", synced, total)
+			return
+		
+		var items = data.get("items", [])
+		if items.size() == 0:
+			if callback.is_valid():
+				callback.call(true, "", synced, total)
+			return
+		
+		_process_batch(items, platform_slug, func(succeeded):
+			var new_synced = synced + succeeded
+			if new_synced >= total:
+				if callback.is_valid():
+					callback.call(true, "", new_synced, total)
+			else:
+				_fetch_more_batches(platform_id, platform_slug, batch_size, total, new_synced, offset + batch_size, callback)
+		)
+	)
+
+func _fetch_batch(platform_id: String, offset: int, limit: int, callback: Callable):
+	NetworkManager.fetch_games(callback, platform_id, offset, limit)
+
+func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
+	"""Process a batch of games. Calls on_complete with success count when all done."""
+	var total = items.size()
+	if total == 0:
+		on_complete.call(0)
+		return
+	
+	# Reset batch tracking state
+	_batch_remaining = total
+	_batch_callback = on_complete
+	_batch_success_count = 0
+	
+	# Process each game
+	for game_data in items:
+		_process_game(game_data, platform_slug)
+
+func _process_game(game_data: Dictionary, platform_slug: String):
+	"""Process a single game - DB + cover in parallel."""
+	var game = _create_game_from_data(game_data, platform_slug)
+	
+	# Reset sync tracking fields
+	game._sync_db_done = false
+	game._sync_cover_done = false
+	game._sync_db_success = false
+	
+	print("[DataManager] Processing: ", game.title)
+	
+	# DB callback
+	add_game(game, func(success: bool):
+		game._sync_db_done = true
+		game._sync_db_success = success
+		_check_game_complete(game)
+	)
+	
+	# Cover callback
+	var cover_url = game.cover_url
+	if cover_url != "" and cover_url.begins_with("http"):
+		_download_cover(cover_url, func(_ok: bool):
+			game._sync_cover_done = true
+			_check_game_complete(game)
+		)
+	else:
+		game._sync_cover_done = true
+		_check_game_complete(game)
+
+func _check_game_complete(game: GameResource):
+	if not (game._sync_db_done and game._sync_cover_done):
+		return
+	
+	_batch_remaining -= 1
+	if game._sync_db_success:
+		_sync_current += 1
+		_batch_success_count += 1
+	
+	print("[DataManager] Complete: ", game.title)
+	
+	if _batch_remaining <= 0 and _batch_callback.is_valid():
+		print("[DataManager] Batch complete: ", _batch_success_count, " games")
+		var cb = _batch_callback
+		_batch_callback = Callable()
+		cb.call(_batch_success_count)
+
+func _create_game_from_data(data: Dictionary, platform_slug: String) -> GameResource:
+	var game = GameResource.new()
+	game.id = str(data.get("id", ""))
+	game.romm_id = data.get("id", 0)
+	game.title = str(data.get("name", ""))
+	game.platform = str(data.get("platform_display_name", ""))
+	game.platform_slug = platform_slug if platform_slug != "" else str(data.get("platform_slug", ""))
+	game.cover_url = str(data.get("url_cover", ""))
+	game.cover_path = str(data.get("path_cover_large", ""))
+	game.file_name = str(data.get("fs_name", ""))
+	game.file_path = str(data.get("full_path", ""))
+	game.file_size = data.get("fs_size_bytes", 0)
+	game.has_local_copy = false
+	game.last_updated = str(data.get("updated_at", ""))
+	game.description = str(data.get("summary", ""))
+	
+	var genres: Array[String] = []
+	if data.has("metadatum") and data["metadatum"] is Dictionary:
+		if data["metadatum"].has("genres") and data["metadatum"]["genres"] is Array:
+			for g in data["metadatum"]["genres"]:
+				if g is String:
+					genres.append(g)
+	game.genres = genres
+	
+	if data.has("metadatum") and data["metadatum"] is Dictionary:
+		var rating_val = data["metadatum"].get("average_rating", 0.0)
+		game.rating = rating_val if rating_val != null else 0.0
+	
+	return game
+
+# ==================== DATABASE OPERATIONS ====================
 
 func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
-	
-	print("[DataManager] Queuing add_game for: ", game.title, " | Thread: ", OS.get_thread_caller_id())
-	_pending_db_operations += 1
-	print("[DataManager] Pending DB operations: ", _pending_db_operations)
 	
 	ThreadManager.queue_db_task(
 		func():
@@ -161,31 +459,16 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 			]
 			return _db.query(query),
 		func(success: bool):
-			_pending_db_operations -= 1
-			print("[DataManager] DB operation complete. Pending: ", _pending_db_operations)
 			if success:
 				game_added.emit(game)
 			if callback.is_valid():
 				callback.call(success)
-			_check_batch_completion()
 	)
 	return true
-
-func _check_batch_completion():
-	"""Check if all pending operations are complete and call the batch completion callback"""
-	if _pending_db_operations == 0 and _pending_image_operations == 0:
-		print("[DataManager] All thread operations complete")
-		if _batch_completion_callback.is_valid():
-			var callback = _batch_completion_callback
-			_batch_completion_callback = Callable()  # Clear it
-			callback.call()
 
 func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
-	
-	_pending_db_operations += 1
-	print("[DataManager] update_game queued. Pending DB operations: ", _pending_db_operations)
 	
 	ThreadManager.queue_db_task(
 		func():
@@ -223,20 +506,16 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 			]
 			return _db.query(query),
 		func(success: bool):
-			_pending_db_operations -= 1
-			print("[DataManager] update_game complete. Pending DB operations: ", _pending_db_operations)
 			if success:
 				game_updated.emit(game)
 			if callback.is_valid():
 				callback.call(success)
-			_check_batch_completion()
 	)
 	return true
 
 func get_game_by_id(romm_id: int) -> GameResource:
 	if not _is_db_ready:
 		return null
-	
 	_db.query("SELECT * FROM games WHERE romm_id = %d" % romm_id)
 	if _db.query_result.size() > 0:
 		return _row_to_game(_db.query_result[0])
@@ -244,39 +523,20 @@ func get_game_by_id(romm_id: int) -> GameResource:
 
 func get_all_games() -> Array[GameResource]:
 	var games: Array[GameResource] = []
-	
 	if not _is_db_ready:
 		return games
-	
 	_db.query("SELECT * FROM games ORDER BY title")
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
-	
 	return games
 
 func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	var games: Array[GameResource] = []
-	
 	if not _is_db_ready:
 		return games
-	
 	_db.query("SELECT * FROM games WHERE platform_slug = '%s' ORDER BY title" % platform_slug)
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
-	
-	return games
-
-func search_games(query: String) -> Array[GameResource]:
-	var games: Array[GameResource] = []
-	
-	if not _is_db_ready:
-		return games
-	
-	var search_term = "%%" + query + "%%"
-	_db.query("SELECT * FROM games WHERE title LIKE '%s' ORDER BY title" % search_term)
-	for row in _db.query_result:
-		games.append(_row_to_game(row))
-	
 	return games
 
 func _row_to_game(row: Dictionary) -> GameResource:
@@ -294,41 +554,116 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	game.has_local_copy = row["has_local_copy"] == 1
 	game.last_updated = row["last_updated"]
 	game.description = row["description"]
-	var genres_array: Array[String] = []
+	var genres: Array[String] = []
 	if row["genres"] and row["genres"] != "":
-		for genre in row["genres"].split(","):
-			genres_array.append(genre)
-	game.genres = genres_array
+		for g in row["genres"].split(","):
+			genres.append(g)
+	game.genres = genres
 	game.rating = row["rating"]
 	return game
 
-# ==================== PLATFORM OPERATIONS ====================
+# ==================== COVER DOWNLOAD ====================
 
-func sync_platforms_from_romm(callback: Callable = Callable()) -> void:
+func _download_cover(url: String, callback: Callable):
+	var cache_path = get_cached_image_path(url)
+	
+	if FileAccess.file_exists(cache_path):
+		callback.call(true)
+		return
+	
+	NetworkManager.download_image(url, func(body: PackedByteArray):
+		if body.is_empty():
+			callback.call(false)
+			return
+		
+		ThreadManager.queue_image_task(
+			func():
+				var texture = _load_texture_from_memory(body)
+				if texture:
+					var file = FileAccess.open(cache_path, FileAccess.WRITE)
+					if file:
+						file.store_buffer(body)
+						file.close()
+				return texture,
+			func(texture: Texture2D):
+				callback.call(texture != null)
+		)
+	)
+
+func get_cached_image_path(url: String) -> String:
+	return CACHE_FOLDER + url.md5_text() + ".jpg"
+
+func _load_texture_from_memory(buffer: PackedByteArray) -> Texture2D:
+	if buffer.size() < 16:
+		return null
+	
+	var image = Image.new()
+	var err = FAILED
+	
+	# Check magic bytes
+	if buffer[0] == 0xFF and buffer[1] == 0xD8:
+		err = image.load_jpg_from_buffer(buffer)
+	elif buffer[0] == 0x89 and buffer[1] == 0x50:
+		err = image.load_png_from_buffer(buffer)
+	else:
+		err = image.load_webp_from_buffer(buffer)
+	
+	if err == OK:
+		return ImageTexture.create_from_image(image)
+	return null
+
+func load_image(url: String, callback: Callable = Callable()):
+	if url == "" or not url.begins_with("http"):
+		if callback.is_valid():
+			callback.call(null)
+		return
+	
+	var cache_path = get_cached_image_path(url)
+	
+	# Try cache first
+	if FileAccess.file_exists(cache_path):
+		var file = FileAccess.open(cache_path, FileAccess.READ)
+		if file:
+			var buffer = file.get_buffer(file.get_length())
+			file.close()
+			var texture = _load_texture_from_memory(buffer)
+			if texture:
+				if callback.is_valid():
+					callback.call(texture)
+				image_loaded.emit(url, texture)
+				return
+	
+	# Download
+	_download_cover(url, func(_ok):
+		var file = FileAccess.open(cache_path, FileAccess.READ)
+		if file:
+			var buffer = file.get_buffer(file.get_length())
+			file.close()
+			var texture = _load_texture_from_memory(buffer)
+			if callback.is_valid():
+				callback.call(texture)
+			if texture:
+				image_loaded.emit(url, texture)
+		else:
+			if callback.is_valid():
+				callback.call(null)
+	)
+
+# ==================== PLATFORMS ====================
+
+func sync_platforms_from_romm(callback: Callable = Callable()):
 	if not _is_db_ready:
-		push_error("[DataManager] Database not ready for sync")
 		if callback.is_valid():
 			callback.call(false, "Database not ready")
 		return
 	
-	print("[DataManager] Starting platform sync from RomM...")
 	NetworkManager.fetch_platforms(func(data, error):
-		if error != "":
-			push_error("[DataManager] Failed to fetch platforms: " + error)
+		if error != "" or not data is Array:
 			if callback.is_valid():
-				callback.call(false, error)
+				callback.call(false, error if error else "Invalid data")
 			return
 		
-		if not data is Array:
-			push_error("[DataManager] Unexpected platform data format")
-			if callback.is_valid():
-				callback.call(false, "Invalid data format")
-			return
-		
-		print("[DataManager] Received ", data.size(), " platforms from RomM")
-		var success_count = 0
-		var fail_count = 0
-		
+		var count = 0
 		for platform_data in data:
 			var platform = PlatformResource.new()
 			platform.id = str(platform_data.get("id", ""))
@@ -336,499 +671,13 @@ func sync_platforms_from_romm(callback: Callable = Callable()) -> void:
 			platform.name = platform_data.get("name", "")
 			platform.slug = platform_data.get("slug", "")
 			platform.icon_url = platform_data.get("url_logo", "")
-			platform.icon_path = ""
-			platform.emulator_path = ""
-			platform.extensions = Array([], TYPE_STRING, &"", null)
-			
-			if add_platform(platform):
-				success_count += 1
-			else:
-				fail_count += 1
+			add_platform(platform)
+			count += 1
 		
-		print("[DataManager] Platform sync complete - Success: ", success_count, " Failed: ", fail_count)
-		
-		# Update last sync time
-		set_last_sync_time(Time.get_datetime_string_from_system())
-		
-		sync_completed.emit(true, "Synced " + str(success_count) + " platforms")
+		sync_completed.emit(true, "Synced " + str(count) + " platforms")
 		if callback.is_valid():
 			callback.call(true, "")
 	)
-
-func test_sync_single_game(game_id: int, callback: Callable = Callable()) -> void:
-	if not _is_db_ready:
-		push_error("[DataManager] Database not ready for sync")
-		if callback.is_valid():
-			callback.call(false, "Database not ready")
-		return
-	
-	print("[DataManager] Starting single game sync for ID: ", game_id)
-	NetworkManager.fetch_game_details(game_id, func(data, error):
-		if error != "":
-			push_error("[DataManager] Failed to fetch game: " + error)
-			if callback.is_valid():
-				callback.call(false, error)
-			return
-		
-		if not data is Dictionary:
-			push_error("[DataManager] Unexpected game data format")
-			if callback.is_valid():
-				callback.call(false, "Invalid data format")
-			return
-		
-		print("[DataManager] Received game data for ID: ", game_id)
-		
-		var game = GameResource.new()
-		game.id = str(data.get("id", ""))
-		game.romm_id = data.get("id", 0)
-		game.title = data.get("name", "") if data.get("name") != null else ""
-		game.platform = data.get("platform_display_name", "") if data.get("platform_display_name") != null else ""
-		game.platform_slug = data.get("platform_slug", "") if data.get("platform_slug") != null else ""
-		game.cover_url = data.get("url_cover", "") if data.get("url_cover") != null else ""
-		game.cover_path = data.get("path_cover_large", "") if data.get("path_cover_large") != null else ""
-		game.file_name = data.get("fs_name", "") if data.get("fs_name") != null else ""
-		game.file_path = data.get("full_path", "") if data.get("full_path") != null else ""
-		game.file_size = data.get("fs_size_bytes", 0)
-		game.has_local_copy = false  # Always false initially - must download first
-		var updated = data.get("updated_at", "")
-		game.last_updated = updated if updated != null else ""
-		var summary = data.get("summary", "")
-		game.description = summary if summary != null else ""
-		
-		var genres_array: Array[String] = []
-		if data.has("metadatum") and data["metadatum"] != null and data["metadatum"] is Dictionary:
-			if data["metadatum"].has("genres") and data["metadatum"]["genres"] != null and data["metadatum"]["genres"] is Array:
-				for genre in data["metadatum"]["genres"]:
-					if genre is String:
-						genres_array.append(genre)
-		game.genres = genres_array
-		
-		var rating = 0.0
-		if data.has("metadatum") and data["metadatum"] != null and data["metadatum"] is Dictionary:
-			var avg_rating = data["metadatum"].get("average_rating", 0.0)
-			rating = avg_rating if avg_rating != null else 0.0
-		game.rating = rating
-		
-		print("[DataManager] Saving game: ", game.title, " (", game.platform, ")")
-		
-		add_game(game, func(success: bool):
-			if success:
-				print("[DataManager] Game synced successfully")
-				sync_completed.emit(true, "Synced game: " + game.title)
-				if callback.is_valid():
-					callback.call(true, "")
-			else:
-				push_error("[DataManager] Failed to save game")
-				if callback.is_valid():
-					callback.call(false, "Failed to save game")
-		)
-	)
-
-func sync_enabled_platforms(callback: Callable = Callable()) -> void:
-	if not _is_db_ready:
-		push_error("[DataManager] Database not ready for sync")
-		if callback.is_valid():
-			callback.call(false, "Database not ready", 0, 0)
-		return
-	
-	# Reset sync tracking
-	_current_sync_progress = 0.0
-	_current_sync_total = 0
-	_cumulative_sync_total = 0
-	_cumulative_sync_current = 0
-	_current_platform_name = ""
-	
-	var enabled_platforms = _get_enabled_platforms_setting()
-	
-	print("[DataManager] Starting sync for enabled platforms")
-	print("[DataManager] Enabled platforms from settings: ", enabled_platforms)
-	
-	# Get list of enabled platform IDs from settings
-	var platforms_to_sync: Array = []  # Array of {slug, id, name} dictionaries
-	for slug in enabled_platforms.keys():
-		var platform_data = enabled_platforms.get(slug)
-		var is_enabled = false
-		var platform_id = 0
-		var platform_name = slug.capitalize()
-		
-		if platform_data is bool:
-			is_enabled = platform_data
-		elif platform_data is Dictionary:
-			is_enabled = platform_data.get("enabled", false)
-			platform_id = platform_data.get("id", 0)
-			platform_name = platform_data.get("name", slug.capitalize())
-		
-		print("[DataManager] Platform ", slug, " enabled: ", is_enabled, " id: ", platform_id)
-		if is_enabled and platform_id > 0:
-			platforms_to_sync.append({"slug": slug, "id": platform_id, "name": platform_name})
-	
-	print("[DataManager] Platforms to sync: ", platforms_to_sync.map(func(p): return p.slug))
-	
-	# Get list of enabled slugs for filtering
-	var enabled_slugs = platforms_to_sync.map(func(p): return p.slug)
-	
-	# Get all platform slugs that have games in the database
-	var db_platform_slugs = _get_game_platform_slugs()
-	print("[DataManager] Platform slugs with games in DB: ", db_platform_slugs)
-	
-	# Remove games from disabled platforms (platforms with games in DB but not enabled)
-	# Collect platforms to remove
-	var platforms_to_remove: Array[String] = []
-	for platform_slug in db_platform_slugs:
-		if not platform_slug in enabled_slugs:
-			platforms_to_remove.append(platform_slug)
-	
-	if platforms_to_remove.size() > 0:
-		print("[DataManager] Removing games from ", platforms_to_remove.size(), " disabled platforms")
-		_remove_disabled_platforms(platforms_to_remove, platforms_to_sync, callback)
-	else:
-		# No platforms to remove, proceed directly to sync
-		_proceed_with_sync(platforms_to_sync, callback)
-
-func _remove_disabled_platforms(platforms: Array[String], platforms_to_sync: Array, final_callback: Callable):
-	"""Remove games from disabled platforms sequentially, then proceed with sync"""
-	_remove_next_disabled_platform(platforms, 0, platforms_to_sync, final_callback)
-
-func _remove_next_disabled_platform(platforms: Array[String], index: int, platforms_to_sync: Array, final_callback: Callable):
-	if index >= platforms.size():
-		# All disabled platforms removed, proceed with sync
-		_proceed_with_sync(platforms_to_sync, final_callback)
-		return
-	
-	var platform_slug = platforms[index]
-	print("[DataManager] Removing games from disabled platform: ", platform_slug)
-	
-	remove_platform_games(platform_slug, func(success: bool):
-		# Continue with next platform regardless of success
-		_remove_next_disabled_platform(platforms, index + 1, platforms_to_sync, final_callback)
-	)
-
-func _proceed_with_sync(platforms_to_sync: Array, callback: Callable):
-	"""Proceed with sync after disabled platforms have been removed"""
-	if platforms_to_sync.size() == 0:
-		print("[DataManager] No platforms enabled for sync")
-		# Complete immediately with 0/0 progress
-		_current_sync_progress = 100.0
-		_update_sync_notification_text(0, 0)
-		_finish_sync(0, 0, callback)
-		return
-	
-	# Start sync immediately - we'll count as we go
-	_cumulative_sync_total = 0  # Will be updated as we fetch batches
-	_cumulative_sync_current = 0
-	
-	# Create the notification
-	_sync_notification_id = NotificationManager.show_notification(
-		"Syncing games...",
-		Notification.Type.INFO,
-		null,
-		0.0,
-		func() -> float: 
-			if _cumulative_sync_total == 0:
-				return 0.0
-			return float(_cumulative_sync_current) / float(_cumulative_sync_total)
-	)
-	
-	# Start syncing platforms
-	_sync_platforms_sequential(platforms_to_sync, 0, 0, 0, callback)
-
-func _sync_platforms_sequential(platforms: Array, index: int, total_synced: int, total_games: int, callback: Callable):
-	if index >= platforms.size():
-		print("[DataManager] All platforms synced - Total: ", total_synced)
-		print("[DataManager] Final pending operations - DB: ", _pending_db_operations, ", Images: ", _pending_image_operations)
-		
-		# Ensure all thread operations are complete before declaring sync done
-		_batch_completion_callback = func():
-			print("[DataManager] All thread operations complete. Sync finished.")
-			set_last_sync_time(Time.get_datetime_string_from_system())
-			_current_sync_progress = 100.0
-			_update_sync_notification_text(_cumulative_sync_current, _cumulative_sync_total)
-			sync_completed.emit(true, "Synced " + str(total_synced) + " games")
-			if callback.is_valid():
-				callback.call(true, "", total_synced, total_games)
-			
-			# All done - sync complete (covers downloaded inline with games)
-			_sync_notification_id = -1
-		
-		# Check if we can complete immediately
-		_check_batch_completion()
-		return
-	
-	var platform_info = platforms[index]
-	var platform_id = platform_info.id
-	var platform_slug = platform_info.slug
-	var platform_name = platform_info.get("name", platform_slug.capitalize())
-	_current_platform_name = platform_name
-	
-	print("[DataManager] Syncing platform: ", platform_slug, " (ID: ", platform_id, ")")
-	
-	# Update notification to show current platform
-	_update_sync_notification_text(_cumulative_sync_current, _cumulative_sync_total)
-	
-	sync_platform_games(platform_id, platform_slug, platform_name, func(success: bool, message: String, synced: int, games: int):
-		if success:
-			total_synced += synced
-			total_games += games
-		
-		# Wait for all thread operations to complete before moving to next platform
-		print("[DataManager] Platform ", platform_slug, " complete. Waiting for thread operations...")
-		_batch_completion_callback = func():
-			print("[DataManager] All thread operations complete for platform ", platform_slug, ". Moving to next platform.")
-			_sync_platforms_sequential(platforms, index + 1, total_synced, total_games, callback)
-		
-		_check_batch_completion()
-	)
-
-func _get_game_platform_slugs() -> Array[String]:
-	var slugs: Array[String] = []
-	if not _is_db_ready:
-		return slugs
-	
-	# Query distinct platform_slugs from games table
-	_db.query("SELECT DISTINCT platform_slug FROM games")
-	for row in _db.query_result:
-		var slug = row.get("platform_slug", "")
-		if slug != "":
-			slugs.append(slug)
-	
-	return slugs
-
-func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
-	if not _is_db_ready:
-		if callback.is_valid():
-			callback.call(false)
-		return
-	
-	print("[DataManager] Removing all games for platform: ", platform_slug)
-	
-	_pending_db_operations += 1
-	print("[DataManager] remove_platform_games queued. Pending DB operations: ", _pending_db_operations)
-	
-	ThreadManager.queue_db_task(
-		func():
-			return _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug),
-		func(success: bool):
-			_pending_db_operations -= 1
-			print("[DataManager] remove_platform_games complete. Pending DB operations: ", _pending_db_operations)
-			print("[DataManager] Removed games for platform: ", platform_slug, " success: ", success)
-			
-			if success:
-				# Notify listeners that games were removed
-				games_removed.emit(platform_slug)
-			
-			if callback.is_valid():
-				callback.call(success)
-			_check_batch_completion()
-	)
-
-func _get_enabled_platforms_setting() -> Dictionary:
-	var setting = SettingsManager.get_setting("enabled_platforms")
-	if setting and setting.value is Dictionary:
-		return setting.value
-	return {}
-
-func sync_platform_games(platform_id: int, platform_slug: String, platform_name: String = "", callback: Callable = Callable()) -> void:
-	if not _is_db_ready:
-		push_error("[DataManager] Database not ready for sync")
-		if callback.is_valid():
-			callback.call(false, "Database not ready", 0, 0)
-		return
-	
-	print("[DataManager] Starting batch game sync for platform: ", platform_slug, " (ID: ", platform_id, ")")
-	
-	var batch_size = 15  # Reduced from 100 to prevent UI flooding
-	var offset = 0
-	var total_games = 0
-	
-	# First fetch to get total count - use platform_id for API
-	var platform_id_str = str(platform_id)
-	_fetch_batch(platform_id_str, offset, batch_size, func(first_batch_data, first_batch_error):
-		if first_batch_error != "":
-			push_error("[DataManager] Failed to fetch first batch: " + first_batch_error)
-			if callback.is_valid():
-				callback.call(false, first_batch_error, 0, 0)
-			return
-		
-		if not first_batch_data is Dictionary or not first_batch_data.has("items"):
-			push_error("[DataManager] Unexpected response format")
-			if callback.is_valid():
-				callback.call(false, "Invalid response format", 0, 0)
-			return
-		
-		total_games = first_batch_data.get("total", 0)
-		print("[DataManager] Total games to sync: ", total_games)
-		
-		if total_games == 0:
-			print("[DataManager] No games found for platform: ", platform_slug)
-			if callback.is_valid():
-				callback.call(true, "", 0, 0)
-			return
-		
-		# Process first batch asynchronously
-		var first_batch_items = first_batch_data.get("items", [])
-		_cumulative_sync_total += total_games  # Accumulate across platforms
-		
-		# Reset pending operation counters for this batch
-		_pending_db_operations = 0
-		_pending_image_operations = 0
-		
-		_process_batch_async(first_batch_items, platform_slug, func(batch_count: int):
-			var first_batch_total = batch_count
-			
-			# Set the completion callback - it will be called when all thread operations finish
-			_batch_completion_callback = func():
-				print("[DataManager] All thread operations complete for first batch")
-				
-				# If we got all games in first batch, we're done
-				if first_batch_total >= total_games:
-					print("[DataManager] Platform sync complete - Total synced: ", first_batch_total)
-					if callback.is_valid():
-						callback.call(true, "", first_batch_total, total_games)
-					return
-				
-				# Continue fetching remaining batches
-				var next_offset = batch_size
-				_fetch_remaining_batches(platform_id_str, platform_slug, platform_name, next_offset, batch_size, total_games, first_batch_total, callback)
-			
-			# Don't check immediately - let the operations start first
-			# _check_batch_completion() will be called when operations complete
-		)
-	)
-
-func _fetch_batch(platform_id: String, offset: int, limit: int, callback: Callable):
-	print("[DataManager] Fetching batch for platform_id: ", platform_id, " offset: ", offset, " limit: ", limit)
-	NetworkManager.fetch_games(func(data, error):
-		if error == "" and data is Dictionary:
-			var total = data.get("total", 0)
-			print("[DataManager] Fetched batch with total: ", total, " items")
-		callback.call(data, error)
-	, platform_id, offset, limit)
-
-func _fetch_remaining_batches(platform_id: String, platform_slug: String, platform_name: String, offset: int, batch_size: int, total_games: int, total_synced: int, callback: Callable):
-	print("[DataManager] Fetching batch at offset: ", offset, ", total_synced so far: ", total_synced, ", cumulative: ", _cumulative_sync_current)
-	_fetch_batch(platform_id, offset, batch_size, func(batch_data, batch_error):
-		if batch_error != "":
-			push_error("[DataManager] Batch fetch error at offset " + str(offset) + ": " + batch_error)
-			_finish_sync(total_synced, total_games, callback)
-			return
-		
-		if not batch_data is Dictionary or not batch_data.has("items"):
-			push_error("[DataManager] Invalid batch data at offset " + str(offset))
-			_finish_sync(total_synced, total_games, callback)
-			return
-		
-		var items = batch_data.get("items", [])
-		print("[DataManager] Fetched ", items.size(), " items at offset ", offset)
-		
-		_process_batch_async(items, platform_slug, func(batch_count: int):
-			var new_total = total_synced + batch_count
-			
-			# Progress is now tracked incrementally via game_fully_processed signal
-			print("[DataManager] Batch processor reports complete: ", batch_count, " games, total synced: ", new_total, "/", total_games)
-			
-			# Set the completion callback - it will be called when all thread operations finish
-			_batch_completion_callback = func():
-				print("[DataManager] All thread operations complete for batch")
-				
-				# Check if we're done with this platform
-				if new_total >= total_games or batch_count == 0:
-					_finish_sync(new_total, total_games, callback)
-					return
-				
-				# Continue with next batch
-				var new_offset = offset + batch_size
-				_fetch_remaining_batches(platform_id, platform_slug, platform_name, new_offset, batch_size, total_games, new_total, callback)
-		)
-	)
-
-func _process_batch_async(items: Array, platform_slug: String, complete_callback: Callable):
-	var processor = SyncBatchProcessor.new(items, platform_slug)
-	
-	# Emit progress as each game is fully processed
-	processor.game_fully_processed.connect(func(game_id: String, success: bool):
-		print("[DataManager] Game fully processed: ", game_id, " success: ", success)
-		if success:
-			_cumulative_sync_current += 1
-			_current_sync_progress = float(_cumulative_sync_current) / float(_cumulative_sync_total) * 100.0 if _cumulative_sync_total > 0 else 0.0
-			_update_sync_notification_text(_cumulative_sync_current, _cumulative_sync_total)
-			sync_progress.emit(_current_sync_progress, _cumulative_sync_current, _cumulative_sync_total)
-	)
-	
-	processor.all_complete.connect(func(success_count: int):
-		print("[DataManager] Batch complete: ", success_count, " games")
-		complete_callback.call(success_count)
-	)
-	
-	processor.start()
-
-func _process_game_batch(items: Array, platform_slug: String = "", callback: Callable = Callable()) -> int:
-	# Legacy sync version - just queue all games and return immediately
-	# For async processing, use _process_batch_async instead
-	var count = 0
-	for game_data in items:
-		if not game_data is Dictionary:
-			continue
-		
-		var game = GameResource.new()
-		game.id = str(game_data.get("id", ""))
-		game.romm_id = game_data.get("id", 0)
-		game.title = game_data.get("name", "") if game_data.get("name") != null else ""
-		game.platform = game_data.get("platform_display_name", "") if game_data.get("platform_display_name") != null else ""
-		# Use the provided platform_slug instead of the one from API (which might be different)
-		game.platform_slug = platform_slug if platform_slug != "" else (game_data.get("platform_slug", "") if game_data.get("platform_slug") != null else "")
-		game.cover_url = game_data.get("url_cover", "") if game_data.get("url_cover") != null else ""
-		game.cover_path = game_data.get("path_cover_large", "") if game_data.get("path_cover_large") != null else ""
-		game.file_name = game_data.get("fs_name", "") if game_data.get("fs_name") != null else ""
-		game.file_path = game_data.get("full_path", "") if game_data.get("full_path") != null else ""
-		game.file_size = game_data.get("fs_size_bytes", 0)
-		game.has_local_copy = false
-		var updated_at = game_data.get("updated_at", "")
-		game.last_updated = updated_at if updated_at != null else ""
-		var desc = game_data.get("summary", "")
-		game.description = desc if desc != null else ""
-		
-		var genres_array: Array[String] = []
-		if game_data.has("metadatum") and game_data["metadatum"] != null and game_data["metadatum"] is Dictionary:
-			if game_data["metadatum"].has("genres") and game_data["metadatum"]["genres"] != null and game_data["metadatum"]["genres"] is Array:
-				for genre in game_data["metadatum"]["genres"]:
-					if genre is String:
-						genres_array.append(genre)
-		game.genres = genres_array
-		
-		var rating = 0.0
-		if game_data.has("metadatum") and game_data["metadatum"] != null and game_data["metadatum"] is Dictionary:
-			var avg_rating = game_data["metadatum"].get("average_rating", 0.0)
-			rating = avg_rating if avg_rating != null else 0.0
-		game.rating = rating
-		
-		add_game(game)
-		count += 1
-	
-	if callback.is_valid():
-		callback.call(count)
-	
-	return count
-
-func _update_sync_notification_text(current: int, total: int) -> void:
-	if _sync_notification_id == -1:
-		return
-	
-	var percent = 0
-	if total > 0:
-		percent = int(float(current) / float(total) * 100.0)
-	
-	# Show current platform in the sync message
-	var platform_text = _current_platform_name
-	if platform_text != "":
-		NotificationManager.update_notification_text(_sync_notification_id, "Syncing %s %d/%d (%d%%)" % [platform_text, current, total, percent])
-	else:
-		NotificationManager.update_notification_text(_sync_notification_id, "Syncing games %d/%d (%d%%)" % [current, total, percent])
-
-func _finish_sync(total_synced: int, total_games: int, callback: Callable):
-	print("[DataManager] Platform sync complete - Total synced: ", total_synced, "/", total_games)
-	# Don't reset _sync_notification_id here - it should persist until all platforms finish
-	if callback.is_valid():
-		callback.call(true, "", total_synced, total_games)
 
 func add_platform(platform: PlatformResource) -> bool:
 	if not _is_db_ready:
@@ -853,7 +702,6 @@ func add_platform(platform: PlatformResource) -> bool:
 
 func get_all_platforms() -> Array[PlatformResource]:
 	var platforms: Array[PlatformResource] = []
-	
 	if not _is_db_ready:
 		return platforms
 	
@@ -873,32 +721,71 @@ func get_all_platforms() -> Array[PlatformResource]:
 	
 	return platforms
 
-func get_platform_by_slug(slug: String) -> PlatformResource:
+func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
 	if not _is_db_ready:
-		return null
+		if callback.is_valid():
+			callback.call(false)
+		return
 	
-	_db.query("SELECT * FROM platforms WHERE slug = '%s'" % slug)
-	if _db.query_result.size() > 0:
-		var row = _db.query_result[0]
-		var platform = PlatformResource.new()
-		platform.id = row["id"]
-		platform.romm_id = row["romm_id"]
-		platform.name = row["name"]
-		platform.slug = row["slug"]
-		platform.icon_url = row["icon_url"]
-		platform.icon_path = row["icon_path"]
-		platform.emulator_path = row["emulator_path"]
-		var ext_array2 = row["extensions"].split(",") if row["extensions"] else []
-		platform.extensions = Array(ext_array2, TYPE_STRING, &"", null)
-		return platform
-	return null
+	# Get all games for this platform to delete their covers
+	var games_to_remove = get_games_by_platform(platform_slug)
+	
+	# Delete cover cache files
+	var covers_deleted = 0
+	for game in games_to_remove:
+		if game.cover_url != "":
+			var cache_path = get_cached_image_path(game.cover_url)
+			if FileAccess.file_exists(cache_path):
+				DirAccess.remove_absolute(cache_path)
+				covers_deleted += 1
+	
+	# Delete games from database
+	ThreadManager.queue_db_task(
+		func():
+			return _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug),
+		func(success: bool):
+			if success:
+				print("[DataManager] Removed ", games_to_remove.size(), " games from ", platform_slug)
+				games_removed.emit(platform_slug)
+			if callback.is_valid():
+				callback.call(success)
+	)
 
-# ==================== SYNC METADATA ====================
+# ==================== CACHE ====================
+
+func _ensure_cache_folder():
+	var dir = DirAccess.open("user://")
+	if not dir.dir_exists("cache"):
+		dir.make_dir("cache")
+	if not dir.dir_exists("cache/covers"):
+		dir.make_dir("cache/covers")
+
+func clear_cache():
+	var dir = DirAccess.open(CACHE_FOLDER)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				dir.remove(file_name)
+			file_name = dir.get_next()
+	cache_cleared.emit()
+
+func get_cache_size() -> int:
+	var total_size = 0
+	var dir = DirAccess.open(CACHE_FOLDER)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				total_size += dir.get_space_left()
+			file_name = dir.get_next()
+	return total_size
 
 func get_last_sync_time() -> String:
 	if not _is_db_ready:
 		return ""
-	
 	_db.query("SELECT value FROM cache_metadata WHERE key = 'last_sync'")
 	if _db.query_result.size() > 0:
 		return _db.query_result[0]["value"]
@@ -907,185 +794,4 @@ func get_last_sync_time() -> String:
 func set_last_sync_time(timestamp: String):
 	if not _is_db_ready:
 		return
-	
-	_db.query("""
-		INSERT OR REPLACE INTO cache_metadata (key, value) 
-		VALUES ('last_sync', '%s')
-	""" % timestamp)
-
-# ==================== IMAGE CACHE OPERATIONS ====================
-
-func _ensure_cache_folder():
-	var dir = DirAccess.open("user://")
-	if not dir.dir_exists("cache"):
-		dir.make_dir("cache")
-	
-	dir = DirAccess.open("user://cache")
-	if not dir.dir_exists("covers"):
-		dir.make_dir("covers")
-
-func get_cached_image_path(url: String) -> String:
-	var hash = url.md5_text()
-	return CACHE_FOLDER + hash + ".jpg"
-
-func load_image(url: String, callback: Callable = Callable()):
-	if url == "" or not url.begins_with("http"):
-		if callback.is_valid():
-			callback.call(null)
-		return
-	
-	var cache_path = get_cached_image_path(url)
-	
-	# Check if cached locally - load directly (no thread needed for file read)
-	if FileAccess.file_exists(cache_path):
-		var texture = _load_texture_from_disk(cache_path)
-		if texture:
-			if callback.is_valid():
-				callback.call(texture)
-			image_loaded.emit(url, texture)
-			return
-		else:
-			# Cache exists but failed to load - remove and re-download
-			push_warning("[DataManager] Cached cover failed to load, re-downloading: ", url)
-			if FileAccess.file_exists(cache_path):
-				DirAccess.remove_absolute(cache_path)
-			# Fall through to download
-	
-	# Not cached or cache failed - download it
-	_download_image(url, cache_path, callback)
-
-func _download_image(url: String, cache_path: String, callback: Callable = Callable()):
-	# Use NetworkManager for all HTTP requests (async)
-	NetworkManager.download_image(url, func(body: PackedByteArray):
-		if body.is_empty():
-			push_warning("[DataManager] Empty image body from: ", url)
-			_emit_image_callbacks(url, null)
-			return
-		
-		print("[DataManager] Downloaded image, processing on image thread: ", url)
-		_pending_image_operations += 1
-		print("[DataManager] Pending image operations: ", _pending_image_operations)
-		
-		# Process image on image thread (save + create texture)
-		ThreadManager.queue_image_task(
-			func():
-				# Verify it's a valid image
-				var texture = _load_texture_from_memory(body)
-				if texture == null:
-					push_warning("[DataManager] Invalid image data from: ", url, " (size: ", body.size(), ")")
-					return null
-				
-				# Save to cache on image thread
-				var file = FileAccess.open(cache_path, FileAccess.WRITE)
-				if file:
-					file.store_buffer(body)
-					file.close()
-					print("[DataManager] Saved image to cache: ", cache_path)
-				
-				return texture,
-			func(texture: Texture2D):
-				_pending_image_operations -= 1
-				print("[DataManager] Image operation complete. Pending: ", _pending_image_operations)
-				if texture:
-					print("[DataManager] Image processed successfully: ", url)
-					_emit_image_callbacks(url, texture)
-				else:
-					push_warning("[DataManager] Failed to process image: ", url)
-					_emit_image_callbacks(url, null)
-				_check_batch_completion()
-		)
-	)
-
-func _load_texture_from_disk(path: String) -> Texture2D:
-	var file = FileAccess.open(path, FileAccess.READ)
-	if not file:
-		return null
-	
-	var buffer = file.get_buffer(file.get_length())
-	file.close()
-	
-	var texture = _load_texture_from_memory(buffer)
-	
-	# If loading failed, don't delete immediately - might be temporary issue
-	# Only delete if file is obviously corrupted (too small)
-	if texture == null:
-		if buffer.size() < 100:
-			push_warning("[DataManager] Deleting corrupted cache file (too small): ", path, " size: ", buffer.size())
-			DirAccess.remove_absolute(path)
-	
-	return texture
-
-func _load_texture_from_memory(buffer: PackedByteArray) -> Texture2D:
-	# Check if buffer is large enough to be a valid image
-	if buffer.size() < 16:
-		return null
-	
-	# Check file signature to determine format
-	var is_jpg = buffer[0] == 0xFF and buffer[1] == 0xD8 and buffer[2] == 0xFF
-	var is_png = buffer[0] == 0x89 and buffer[1] == 0x50 and buffer[2] == 0x4E and buffer[3] == 0x47
-	
-	var image = Image.new()
-	var err = FAILED
-	
-	if is_jpg:
-		err = image.load_jpg_from_buffer(buffer)
-	elif is_png:
-		err = image.load_png_from_buffer(buffer)
-	else:
-		# Try webp as fallback (some images might be webp)
-		err = image.load_webp_from_buffer(buffer)
-	
-	if err == OK:
-		return ImageTexture.create_from_image(image)
-	
-	# Unknown format or failed to load
-	return null
-
-func _emit_image_callbacks(url: String, texture: Texture2D):
-	if _loading_images.has(url):
-		for callback in _loading_images[url]:
-			if callback.is_valid():
-				callback.call(texture)
-		_loading_images.erase(url)
-	
-
-
-# ==================== UTILITY ====================
-
-func get_downloaded_games() -> Array[GameResource]:
-	var all_games = get_all_games()
-	var downloaded: Array[GameResource] = []
-	for game in all_games:
-		if game.has_local_copy:
-			downloaded.append(game)
-	return downloaded
-
-func get_undownloaded_games() -> Array[GameResource]:
-	var all_games = get_all_games()
-	var undownloaded: Array[GameResource] = []
-	for game in all_games:
-		if not game.has_local_copy:
-			undownloaded.append(game)
-	return undownloaded
-
-func ensure_game_folder_structure(root_path: String) -> bool:
-	if root_path == "":
-		return false
-	
-	var dir = DirAccess.open(root_path)
-	if not dir:
-		return false
-	
-	var platforms = get_all_platforms()
-	for platform in platforms:
-		if not dir.dir_exists(platform.slug):
-			var error = dir.make_dir(platform.slug)
-			if error != OK:
-				push_warning("Failed to create folder: " + platform.slug)
-	
-	return true
-
-func get_game_file_path(game: GameResource, root_folder: String) -> String:
-	if game.platform_slug == "" or game.file_name == "":
-		return ""
-	return root_folder + "/" + game.platform_slug + "/" + game.file_name
+	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('last_sync', '%s')" % timestamp)

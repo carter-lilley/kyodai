@@ -30,8 +30,6 @@ func _init():
 		
 		_db_thread.start(_db_worker)
 		_image_thread.start(_image_worker)
-		
-		print("[ThreadManager] Threads initialized")
 
 static func _db_worker():
 	while not _instance._exit_flag:
@@ -46,13 +44,10 @@ static func _db_worker():
 		_instance._db_mutex.unlock()
 		
 		if task:
-			print("[ThreadManager] DB worker processing task, remaining in queue: ", remaining, " | Thread ID: ", OS.get_thread_caller_id())
 			var result = task.callable.call()
-			print("[ThreadManager] DB task completed, result: ", result)
 			
 			# Call callback on main thread
 			if task.callback.is_valid():
-				print("[ThreadManager] Scheduling callback on main thread")
 				_instance.call_deferred("_execute_callback", task.callback, result)
 
 static func _image_worker():
@@ -68,19 +63,14 @@ static func _image_worker():
 		_instance._image_mutex.unlock()
 		
 		if task:
-			print("[ThreadManager] Image worker processing task, remaining: ", remaining, " | Thread ID: ", OS.get_thread_caller_id())
 			var result = task.callable.call()
-			print("[ThreadManager] Image task completed")
 			
 			# Call callback on main thread
 			if task.callback.is_valid():
-				print("[ThreadManager] Scheduling image callback on main thread")
 				_instance.call_deferred("_execute_callback", task.callback, result)
 
 func _execute_callback(callback: Callable, result):
-	print("[ThreadManager] Executing callback on main thread | Thread ID: ", OS.get_thread_caller_id())
 	callback.call(result)
-	print("[ThreadManager] Callback completed")
 
 static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
@@ -90,25 +80,16 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	_instance._db_mutex.lock()
 	var current_size = _instance._db_queue.size()
 	
-	# If queue is critically full, wait a bit or drop
+	# If queue is critically full, wait a bit
 	if current_size >= MAX_DB_QUEUE_SIZE:
 		_instance._db_mutex.unlock()
-		print("[ThreadManager] DB queue critical (", current_size, "/", MAX_DB_QUEUE_SIZE, "), throttling...")
-		# Simple throttle: delay slightly before queuing
 		OS.delay_msec(10)
 		_instance._db_mutex.lock()
 		current_size = _instance._db_queue.size()
-		# If still full after delay, proceed anyway but warn
-		if current_size >= MAX_DB_QUEUE_SIZE:
-			print("[ThreadManager] DB queue still full, queuing anyway")
 	
 	_instance._db_queue.append({"callable": callable, "callback": callback})
-	var queue_size = _instance._db_queue.size()
 	_instance._db_mutex.unlock()
 	_instance._db_semaphore.post()
-	
-	if queue_size % 10 == 0 or queue_size > MAX_DB_QUEUE_SIZE - 5:
-		print("[ThreadManager] Queued DB task, queue size: ", queue_size, " | Caller Thread: ", OS.get_thread_caller_id())
 
 static func queue_image_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
@@ -121,19 +102,15 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 	# If queue is full, drop this task to prevent memory issues
 	if current_size >= MAX_IMAGE_QUEUE_SIZE:
 		_instance._image_mutex.unlock()
-		print("[ThreadManager] Dropping image task - queue full (", current_size, "/", MAX_IMAGE_QUEUE_SIZE, ")")
+		push_warning("[ThreadManager] Dropping image task - queue full")
 		# Still call callback with null so UI doesn't hang
 		if callback.is_valid():
 			callback.call_deferred(null)
 		return
 	
 	_instance._image_queue.append({"callable": callable, "callback": callback})
-	var queue_size = _instance._image_queue.size()
 	_instance._image_mutex.unlock()
 	_instance._image_semaphore.post()
-	
-	if queue_size % 10 == 0:
-		print("[ThreadManager] Queued image task, queue size: ", queue_size, " | Caller Thread: ", OS.get_thread_caller_id())
 
 static func get_db_queue_size() -> int:
 	if _instance == null:
