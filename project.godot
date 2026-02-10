@@ -25,6 +25,7 @@ DataManager="*res://managers/data_manager.gd"
 NetworkManager="*res://managers/network_manager.gd"
 DownloadManager="*res://managers/download_manager.gd"
 NotificationManager="*uid://igtredd7pthk"
+LaunchManager="*res://managers/launch_manager.gd"
 
 [physics]
 

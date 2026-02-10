@@ -2,67 +2,93 @@
 extends Control
 class_name Indicator
 
-enum StatusEnum { NOT_CONFIGURED, CONNECTED, DISCONNECTED, TESTING }
+## A generic status indicator with a colored dot and optional text label
+## Can be configured for various use cases (network, downloads, emulator status, etc.)
 
-signal test_requested()
+enum Status { NEUTRAL, SUCCESS, ERROR, WARNING }
+
+@export var dot_size: Vector2 = Vector2(12, 12):
+	set(value):
+		dot_size = value
+		if _status_dot:
+			_status_dot.custom_minimum_size = dot_size
+
+@export var show_text: bool = true:
+	set(value):
+		show_text = value
+		if _status_label:
+			_status_label.visible = show_text
+
+@export var text_prefix: String = ""
 
 var _status_dot: ColorRect
 var _status_label: Label
-var _test_button: Button
+var _spacer: Control
 
 func _ready() -> void:
+	_build_ui()
+	set_status(Status.NEUTRAL)
+
+func _build_ui() -> void:
 	var hbox = HBoxContainer.new()
 	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(hbox)
 	
 	# Status dot
 	_status_dot = ColorRect.new()
-	_status_dot.custom_minimum_size = Vector2(12, 12)
+	_status_dot.custom_minimum_size = dot_size
 	_status_dot.color = Color.GRAY
 	hbox.add_child(_status_dot)
 	
 	# Spacer
-	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(8, 0)
-	hbox.add_child(spacer)
+	_spacer = Control.new()
+	_spacer.custom_minimum_size = Vector2(8, 0)
+	hbox.add_child(_spacer)
 	
 	# Status label
 	_status_label = Label.new()
-	_status_label.text = "Not configured"
+	_status_label.visible = show_text
 	hbox.add_child(_status_label)
-	
-	# Test button (hidden by default)
-	_test_button = Button.new()
-	_test_button.text = "Test"
-	_test_button.pressed.connect(func():
-		test_requested.emit()
-	)
-	_test_button.hide()
-	hbox.add_child(_test_button)
 
-func show_test_button(show: bool = true) -> void:
-	if _test_button:
-		_test_button.visible = show
-
-func set_status(status: StatusEnum, message: String = "") -> void:
+func set_status(status: Status, message: String = "", tooltip: String = "") -> void:
 	if not is_node_ready():
 		return
+	
 	match status:
-		StatusEnum.NOT_CONFIGURED:
+		Status.NEUTRAL:
 			_status_dot.color = Color.GRAY
-			_status_label.text = message if not message.is_empty() else "Not configured"
-		StatusEnum.CONNECTED:
+			_status_label.text = text_prefix + (message if not message.is_empty() else "Not configured")
+		Status.SUCCESS:
 			_status_dot.color = Color.GREEN
-			_status_label.text = message if not message.is_empty() else "Connected"
-		StatusEnum.DISCONNECTED:
+			_status_label.text = text_prefix + (message if not message.is_empty() else "Ready")
+		Status.ERROR:
 			_status_dot.color = Color.RED
-			_status_label.text = message if not message.is_empty() else "Disconnected"
-		StatusEnum.TESTING:
+			_status_label.text = text_prefix + (message if not message.is_empty() else "Error")
+		Status.WARNING:
 			_status_dot.color = Color.YELLOW
-			_status_label.text = message if not message.is_empty() else "Testing..."
+			_status_label.text = text_prefix + (message if not message.is_empty() else "Warning")
+	
+	if not tooltip.is_empty():
+		_tooltip_text = tooltip
+		_status_dot.tooltip_text = tooltip
+		_status_label.tooltip_text = tooltip
 
-func get_status_text() -> String:
-	return _status_label.text
+func set_custom_color(color: Color) -> void:
+	if _status_dot:
+		_status_dot.color = color
 
 func set_status_text(text: String) -> void:
-	_status_label.text = text
+	if _status_label:
+		_status_label.text = text_prefix + text
+
+func get_status_text() -> String:
+	return _status_label.text if _status_label else ""
+
+func set_tooltip(tooltip: String) -> void:
+	_tooltip_text = tooltip
+	if _status_dot:
+		_status_dot.tooltip_text = tooltip
+	if _status_label:
+		_status_label.tooltip_text = tooltip
+
+var _tooltip_text: String = ""

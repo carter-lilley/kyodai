@@ -64,46 +64,61 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	
 	return scroll
 
+# Network connection status enum (local to this view)
+enum ConnectionStatus { NOT_CONFIGURED, CONNECTED, DISCONNECTED, TESTING }
+
 func _create_connection_status_ui() -> Control:
+	# Create a container to hold the indicator and test button
+	var container = HBoxContainer.new()
+	container.custom_minimum_size = Vector2(0, 30)
+	
+	# Create indicator
 	var indicator = Indicator.new()
-	indicator.custom_minimum_size = Vector2(0, 30)
+	indicator.name = "ConnectionIndicator"
+	indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.add_child(indicator)
+	
+	# Create test button
+	var test_button = Button.new()
+	test_button.name = "TestButton"
+	test_button.text = "Test"
+	container.add_child(test_button)
 	
 	# Connect to ready signal to set initial status after node is initialized
-	indicator.ready.connect(func():
-		indicator.show_test_button(true)
+	container.ready.connect(func():
 		_update_connection_status(indicator)
 	)
 	
 	# Connect test button signal
-	indicator.test_requested.connect(func():
+	test_button.pressed.connect(func():
 		_test_connection(indicator)
 	)
 	
-	return indicator
+	return container
 
 func _test_connection(indicator: Indicator):
-	indicator.set_status(Indicator.StatusEnum.TESTING, "Testing connection...")
+	indicator.set_status(Indicator.Status.WARNING, "Testing connection...")
 	
 	NetworkManager.test_connection(func(online: bool):
 		if online:
-			indicator.set_status(Indicator.StatusEnum.CONNECTED, "Connected and authenticated")
+			indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
 			NotificationManager.show_notification("Connected to RomM successfully", Notification.Type.SUCCESS)
 		else:
 			if not NetworkManager.is_configured():
-				indicator.set_status(Indicator.StatusEnum.NOT_CONFIGURED, "Not configured (check URL, username, password)")
+				indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
 				NotificationManager.show_notification("RomM not configured - check URL, username, password", Notification.Type.ERROR)
 			else:
-				indicator.set_status(Indicator.StatusEnum.DISCONNECTED, "Connection failed - check credentials")
+				indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
 				NotificationManager.show_notification("Connection failed - check credentials", Notification.Type.ERROR)
 	)
 
 func _update_connection_status(indicator: Indicator):
 	if NetworkManager.is_online():
-		indicator.set_status(Indicator.StatusEnum.CONNECTED, "Connected and authenticated")
+		indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
 	elif not NetworkManager.is_configured():
-		indicator.set_status(Indicator.StatusEnum.NOT_CONFIGURED, "Not configured")
+		indicator.set_status(Indicator.Status.NEUTRAL, "Not configured")
 	else:
-		indicator.set_status(Indicator.StatusEnum.DISCONNECTED, "Disconnected")
+		indicator.set_status(Indicator.Status.ERROR, "Disconnected")
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	SettingsManager.set_setting(value, setting)

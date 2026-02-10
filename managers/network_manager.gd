@@ -262,6 +262,62 @@ func download_rom(game_id: int, file_name: String, destination_path: String, pro
 	
 	return http
 
+# ==================== GENERIC FILE DOWNLOAD ====================
+
+func download_file(url: String, destination_path: String, progress_callback: Callable, completion_callback: Callable) -> HTTPRequest:
+	var http = HTTPRequest.new()
+	add_child(http)
+	
+	print("[NetworkManager] Downloading file from: " + url)
+	
+	var error = http.request(url)
+	
+	if error != OK:
+		completion_callback.call(false, "Failed to start download: " + str(error))
+		http.queue_free()
+		return null
+	
+	# Track download progress
+	var last_bytes = 0
+	
+	# Use a timer to periodically check download progress
+	var progress_timer = Timer.new()
+	progress_timer.wait_time = 0.5
+	progress_timer.autostart = true
+	add_child(progress_timer)
+	
+	progress_timer.timeout.connect(func():
+		if http and is_instance_valid(http):
+			var body_size = http.get_body_size()
+			var downloaded_bytes = http.get_downloaded_bytes()
+			if body_size > 0:
+				progress_callback.call(downloaded_bytes, body_size)
+	)
+	
+	http.request_completed.connect(func(result, response_code, headers, body):
+		progress_timer.stop()
+		progress_timer.queue_free()
+		http.queue_free()
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			completion_callback.call(false, "Download failed: " + str(result))
+			return
+		
+		if response_code != 200:
+			completion_callback.call(false, "HTTP error: " + str(response_code))
+			return
+		
+		var file = FileAccess.open(destination_path, FileAccess.WRITE)
+		if file:
+			file.store_buffer(body)
+			file.close()
+			completion_callback.call(true, destination_path)
+		else:
+			completion_callback.call(false, "Failed to write file")
+	)
+	
+	return http
+
 func queue_game_download(game: GameResource) -> bool:
 	if not _is_online:
 		NotificationManager.show_notification("Cannot download: not connected", Notification.Type.ERROR)

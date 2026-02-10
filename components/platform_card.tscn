@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://dd5sm7gkln3hk"]
+
+[ext_resource type="Script" uid="uid://platformcardscript" path="res://components/platform_card.gd" id="1_platformcard"]
+
+[node name="PlatformCard" type="PanelContainer"]
+custom_minimum_size = Vector2(400, 80)
+script = ExtResource("1_platformcard")

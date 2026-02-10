@@ -4,11 +4,21 @@ extends View
 
 var _platforms_container: VBoxContainer
 var _platforms_data: Array = []
-var _checkboxes: Dictionary = {}
+var _platform_cards: Dictionary = {}  # slug -> PlatformCard
 
 func _ready():
 	view_name = "Platforms"
 	_build_view()
+	
+	# Connect to download manager signals to refresh UI when downloads complete
+	DownloadManager.emulator_download_completed.connect(_on_emulator_download_completed)
+	DownloadManager.emulator_download_progress.connect(_on_emulator_download_progress)
+	
+	# Connect to launch manager signals for extraction
+	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
+	LaunchManager.emulator_extraction_progress.connect(_on_emulator_extraction_progress)
+	LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
+	
 	super._ready()
 
 func _build_view():
@@ -26,12 +36,14 @@ func _build_view():
 	
 	_platforms_container = VBoxContainer.new()
 	_platforms_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_platforms_container.add_theme_constant_override("separation", 10)
 	margin.add_child(_platforms_container)
 	
 	# Add info label
 	var info_label = Label.new()
-	info_label.text = "Select platforms to sync. Disabled platforms will have their games removed."
+	info_label.text = "Configure platform sync and emulators. Disabled platforms will have their games removed."
 	info_label.name = "InfoLabel"
+	info_label.add_theme_font_size_override("font_size", 14)
 	_platforms_container.add_child(info_label)
 	
 	var spacer = Control.new()
@@ -61,13 +73,13 @@ func _build_view():
 	_platforms_container.add_child(spacer3)
 
 func _fetch_platforms():
-	# Clear existing checkboxes and buttons (keep info label, sync button, and select all button)
+	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name == "InfoLabel" or child.name == "SyncButton" or child.name == "SelectAllButton":
+		if child.name in ["InfoLabel", "SyncButton", "SelectAllButton"]:
 			continue
-		if child is CheckBox or child is Button or child is Label:
+		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
-	_checkboxes.clear()
+	_platform_cards.clear()
 	
 	# Show loading indicator
 	var loading_label = Label.new()
@@ -87,6 +99,7 @@ func _fetch_platforms():
 			NotificationManager.show_notification("Failed to fetch platforms: " + error, Notification.Type.ERROR)
 			
 			var error_label = Label.new()
+			error_label.name = "ErrorLabel"
 			error_label.text = "Failed to fetch platforms from RomM. Check connection settings."
 			error_label.modulate = Color.RED
 			_platforms_container.add_child(error_label)
@@ -114,30 +127,17 @@ func _fetch_platforms():
 			var slug = platform_data.get("slug", "")
 			var name = platform_data.get("name", slug)
 			var romm_id = platform_data.get("id", 0)
+			var icon_url = platform_data.get("icon_url", "")
 			
 			if slug == "" or romm_id == 0:
 				continue
 			
 			fetched_slugs.append(slug)
 			
-			# Create checkbox
-			var checkbox = CheckBox.new()
-			checkbox.text = name
-			# Check if enabled (look for either old format bool or new format dict)
-			var is_enabled = false
-			var existing = enabled_platforms.get(slug)
-			if existing is bool:
-				is_enabled = existing
-			elif existing is Dictionary:
-				is_enabled = existing.get("enabled", false)
-			checkbox.button_pressed = is_enabled
-			checkbox.toggled.connect(func(checked: bool):
-				_set_platform_enabled(slug, romm_id, checked)
-				_update_select_all_button_text()
-			)
-			
-			_platforms_container.add_child(checkbox)
-			_checkboxes[slug] = checkbox
+			# Create platform card
+			var card = _create_platform_card(slug, name, romm_id, icon_url, enabled_platforms)
+			_platforms_container.add_child(card)
+			_platform_cards[slug] = card
 		
 		# Remove platforms that no longer exist on RomM
 		_remove_deleted_platforms(fetched_slugs)
@@ -145,6 +145,94 @@ func _fetch_platforms():
 		# Update select all button text
 		_update_select_all_button_text()
 	)
+
+func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: String, enabled_platforms: Dictionary) -> PlatformCard:
+	var card = PlatformCard.new()
+	card.platform_slug = slug
+	card.platform_name = name
+	
+	# Set sync enabled status
+	var platform_config = enabled_platforms.get(slug, {})
+	var is_enabled = false
+	if platform_config is bool:
+		is_enabled = platform_config
+	elif platform_config is Dictionary:
+		is_enabled = platform_config.get("enabled", false)
+	card.is_sync_enabled = is_enabled
+	
+	# Set selected emulator
+	var emulator_id = ""
+	if platform_config is Dictionary:
+		emulator_id = platform_config.get("emulator_id", "")
+	card.selected_emulator = emulator_id
+	
+	# Load available emulators for this platform
+	var available_emulators = LaunchManager.get_emulators_for_platform(slug)
+	card.set_available_emulators(available_emulators)
+	
+	# Set install status for each emulator
+	var install_status = {}
+	for emulator in available_emulators:
+		var emu_id = emulator.get("id", "")
+		if emu_id != "":
+			install_status[emu_id] = LaunchManager.is_emulator_installed(emu_id)
+	card.set_emulator_install_status(install_status)
+	
+	# Connect signals
+	card.sync_toggled.connect(func(enabled: bool):
+		_set_platform_enabled(slug, romm_id, enabled)
+		_update_select_all_button_text()
+	)
+	
+	card.emulator_changed.connect(func(emu_id: String):
+		_set_platform_emulator(slug, emu_id)
+	)
+	
+	# Connect download button
+	card.download_requested.connect(func(emu_id: String):
+		_on_emulator_download_requested(emu_id, card)
+	)
+	
+	return card
+
+func _load_platforms_from_database():
+	# Remove loading label if exists
+	for child in _platforms_container.get_children():
+		if child.name == "LoadingLabel":
+			child.queue_free()
+			break
+	
+	var platforms = DataManager.get_all_platforms()
+	var enabled_platforms = _get_enabled_platforms()
+	
+	# Clear existing cards
+	for child in _platforms_container.get_children():
+		if child.name in ["InfoLabel", "SyncButton", "SelectAllButton"]:
+			continue
+		if child is PlatformCard:
+			child.queue_free()
+	_platform_cards.clear()
+	
+	for platform in platforms:
+		var slug = platform.slug
+		var name = platform.name
+		var icon_url = platform.icon_url
+		
+		if slug == "":
+			continue
+		
+		# Create offline card (no romm_id available)
+		var card = _create_platform_card(slug, name, 0, icon_url, enabled_platforms)
+		card.disabled = true
+		card.tooltip_text = "Connect to RomM to configure this platform"
+		_platforms_container.add_child(card)
+		_platform_cards[slug] = card
+	
+	if platforms.size() == 0:
+		var no_platforms_label = Label.new()
+		no_platforms_label.name = "NoPlatformsLabel"
+		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
+		_platforms_container.add_child(no_platforms_label)
 
 func _remove_deleted_platforms(current_slugs: Array[String]):
 	var enabled_platforms = _get_enabled_platforms()
@@ -164,54 +252,6 @@ func _remove_deleted_platforms(current_slugs: Array[String]):
 	if setting:
 		SettingsManager.set_setting(enabled_platforms, setting)
 
-func _load_platforms_from_database():
-	# Remove loading label if exists
-	for child in _platforms_container.get_children():
-		if child.name == "LoadingLabel":
-			child.queue_free()
-			break
-	
-	var platforms = DataManager.get_all_platforms()
-	var enabled_platforms = _get_enabled_platforms()
-	
-	# Clear existing checkboxes and buttons (keep info label, sync button, and select all button)
-	for child in _platforms_container.get_children():
-		if child.name == "InfoLabel" or child.name == "SyncButton" or child.name == "SelectAllButton":
-			continue
-		if child is CheckBox or child is Button or child is Label:
-			child.queue_free()
-	_checkboxes.clear()
-	
-	for platform in platforms:
-		var slug = platform.slug
-		var name = platform.name
-		
-		if slug == "":
-			continue
-		
-		# Check if enabled (look for either old format bool or new format dict)
-		var is_enabled = false
-		var existing = enabled_platforms.get(slug)
-		if existing is bool:
-			is_enabled = existing
-		elif existing is Dictionary:
-			is_enabled = existing.get("enabled", false)
-		
-		var checkbox = CheckBox.new()
-		checkbox.text = name
-		checkbox.button_pressed = is_enabled
-		# Disable checkbox when offline since we don't have the platform ID
-		checkbox.disabled = true
-		checkbox.tooltip_text = "Connect to RomM to enable/disable platforms"
-		
-		_platforms_container.add_child(checkbox)
-		_checkboxes[slug] = checkbox
-	
-	if platforms.size() == 0:
-		var no_platforms_label = Label.new()
-		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
-		_platforms_container.add_child(no_platforms_label)
-
 func _get_enabled_platforms() -> Dictionary:
 	var setting = SettingsManager.get_setting("enabled_platforms")
 	if setting and setting.value is Dictionary:
@@ -220,11 +260,49 @@ func _get_enabled_platforms() -> Dictionary:
 
 func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 	var enabled_platforms = _get_enabled_platforms()
-	# Store as dictionary with id and enabled status
-	enabled_platforms[slug] = {
-		"id": platform_id,
-		"enabled": enabled
-	}
+	
+	# Get existing config or create new
+	var config = enabled_platforms.get(slug, {})
+	if config is bool:
+		# Migrate old format
+		config = {"id": platform_id, "enabled": config, "emulator_id": ""}
+	elif config is Dictionary:
+		config["enabled"] = enabled
+	else:
+		config = {"id": platform_id, "enabled": enabled, "emulator_id": ""}
+	
+	# Preserve emulator_id if it exists
+	if not config.has("emulator_id"):
+		config["emulator_id"] = ""
+	if not config.has("id"):
+		config["id"] = platform_id
+	
+	enabled_platforms[slug] = config
+	
+	var setting = SettingsManager.get_setting("enabled_platforms")
+	if setting:
+		SettingsManager.set_setting(enabled_platforms, setting)
+
+func _set_platform_emulator(slug: String, emulator_id: String):
+	var enabled_platforms = _get_enabled_platforms()
+	
+	# Get existing config or create new
+	var config = enabled_platforms.get(slug, {})
+	if config is bool:
+		# Migrate old format
+		config = {"id": 0, "enabled": config, "emulator_id": emulator_id}
+	elif config is Dictionary:
+		config["emulator_id"] = emulator_id
+	else:
+		config = {"id": 0, "enabled": false, "emulator_id": emulator_id}
+	
+	# Preserve other fields
+	if not config.has("enabled"):
+		config["enabled"] = false
+	if not config.has("id"):
+		config["id"] = 0
+	
+	enabled_platforms[slug] = config
 	
 	var setting = SettingsManager.get_setting("enabled_platforms")
 	if setting:
@@ -233,12 +311,48 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 func _save_settings():
 	SettingsManager.save_settings()
 
+func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
+	# Start the download
+	var success = LaunchManager.download_emulator(emulator_id)
+	if success:
+		# Refresh the card to show "Downloading..." state
+		card.refresh_ui()
+
+func _on_emulator_download_progress(emulator_id: String, progress: float):
+	# Progress is handled by notification, but we could update UI here if needed
+	pass
+
+func _on_emulator_download_completed(emulator_id: String, success: bool, message: String):
+	# Refresh all cards that use this emulator
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		if card.selected_emulator == emulator_id:
+			card.refresh_ui()
+
+func _on_emulator_extraction_started(emulator_id: String):
+	# Refresh UI to show "Installing..." state
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		if card.selected_emulator == emulator_id:
+			card.refresh_ui()
+
+func _on_emulator_extraction_progress(emulator_id: String, progress: float):
+	# Progress is handled by notification
+	pass
+
+func _on_emulator_extraction_completed(emulator_id: String, success: bool):
+	# Refresh all cards that use this emulator
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		if card.selected_emulator == emulator_id:
+			# Update install status
+			var is_installed = LaunchManager.is_emulator_installed(emulator_id)
+			var install_status = {emulator_id: is_installed}
+			card.set_emulator_install_status(install_status)
+			card.refresh_ui()
+
 func _on_sync_pressed():
 	if not NetworkManager.is_online():
-		var error_label = Label.new()
-		error_label.text = "Not connected to RomM - check settings"
-		error_label.modulate = Color.RED
-		_platforms_container.add_child(error_label)
 		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
 		return
 	
@@ -253,14 +367,10 @@ func _on_sync_pressed():
 			sync_button.disabled = false
 			sync_button.text = "Sync Enabled Platforms"
 		
-		var result_label = Label.new()
 		if success:
-			result_label.text = "Sync complete! Synced %d games" % synced
-			result_label.modulate = Color.GREEN
+			NotificationManager.show_notification("Sync complete! Synced %d games" % synced, Notification.Type.SUCCESS)
 		else:
-			result_label.text = "Sync failed: %s" % message
-			result_label.modulate = Color.RED
-		_platforms_container.add_child(result_label)
+			NotificationManager.show_notification("Sync failed: %s" % message, Notification.Type.ERROR)
 	)
 
 func _update_select_all_button_text():
@@ -271,9 +381,9 @@ func _update_select_all_button_text():
 	# Check if all platforms are currently selected
 	var all_selected = true
 	var has_platforms = false
-	for checkbox in _checkboxes.values():
+	for card in _platform_cards.values():
 		has_platforms = true
-		if not checkbox.button_pressed:
+		if not card.is_sync_enabled:
 			all_selected = false
 			break
 	
@@ -291,20 +401,20 @@ func _on_select_all_pressed():
 	# Check if all platforms are currently selected
 	var all_selected = true
 	var has_platforms = false
-	for checkbox in _checkboxes.values():
+	for card in _platform_cards.values():
 		has_platforms = true
-		if not checkbox.button_pressed:
+		if not card.is_sync_enabled:
 			all_selected = false
 			break
 	
 	if not has_platforms:
 		return
 	
-	# Toggle all checkboxes
+	# Toggle all cards
 	var new_state = not all_selected
-	for slug in _checkboxes.keys():
-		var checkbox: CheckBox = _checkboxes[slug]
-		checkbox.button_pressed = new_state
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		card.is_sync_enabled = new_state
 		
 		# Find the platform ID
 		var platform_id = 0

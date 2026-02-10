@@ -1,0 +1,49 @@
+{
+  "_meta": {
+	"version": "1.0",
+	"description": "Emulator registry for Kyodai launcher",
+	"note": "Add emulator entries here. See retroarch example for structure."
+  },
+  "retroarch": {
+	"name": "RetroArch",
+	"platforms": ["snes", "nes", "genesis", "gb", "gba", "n64", "psx"],
+	"github_repo": "libretro/RetroArch",
+	"asset_patterns": {
+	  "windows": "RetroArch-.*-win64.7z",
+	  "linux": "RetroArch-.*-Linux-x86_64.AppImage",
+	  "android": "RetroArch-.*-arm64-v8a.apk"
+	},
+	"executable_names": {
+	  "windows": "retroarch.exe",
+	  "linux": "RetroArch-Linux-x86_64.AppImage",
+	  "android": "com.retroarch"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "-L", "cores/{core}_libretro.dll", "{rom}"],
+	  "linux": ["{exe}", "-L", "cores/{core}_libretro.so", "{rom}"],
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "com.retroarch",
+		"class": "com.retroarch.browser.retroactivity.RetroActivityFuture",
+		"extras": {
+		  "ROM": "{rom}",
+		  "LIBRETRO": "{core}"
+		}
+	  }
+	},
+"core_mappings": {
+	  "snes": "snes9x",
+	  "nes": "nestopia",
+	  "genesis": "genesis_plus_gx",
+	  "gb": "gambatte",
+	  "gba": "mgba",
+	  "n64": "mupen64plus_next",
+	  "psx": "pcsx_rearmed"
+	},
+	"download_urls": {
+	  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
+	  "linux": "",
+	  "android": ""
+	}
+  }
+}

@@ -17,6 +17,9 @@ extends Resource
 @export var genres: Array[String] = []
 @export var rating: float = 0.0
 
+## Per-game emulator override (optional)
+@export var preferred_emulator_id: String = ""
+
 # Transient fields for sync tracking (not persisted)
 var _sync_db_done: bool = false
 var _sync_cover_done: bool = false
