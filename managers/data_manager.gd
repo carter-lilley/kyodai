@@ -41,6 +41,9 @@ var _precalc_pending: int = 0
 var _precalc_total: int = 0
 var _precalc_callback: Callable = Callable()
 
+# Cover download deduplication - tracks in-flight downloads across entire sync
+var _active_downloads: Dictionary = {}  # url -> {callbacks: Array[Callable], completed: bool, success: bool}
+
 func _ready():
 	_ensure_thread_manager()
 	_initialize_database()
@@ -259,6 +262,8 @@ func _get_enabled_platforms() -> Array:
 func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: Callable):
 	if index >= platforms.size():
 		print("[DataManager] Sync complete: ", total_synced, " games")
+		# Clean up download tracking to free memory
+		_active_downloads.clear()
 		sync_completed.emit(true, "Synced " + str(total_synced) + " games")
 		if callback.is_valid():
 			callback.call(true, "", total_synced, 0)
@@ -567,13 +572,37 @@ func _row_to_game(row: Dictionary) -> GameResource:
 func _download_cover(url: String, callback: Callable):
 	var cache_path = get_cached_image_path(url)
 	
+	# Check if already cached
 	if FileAccess.file_exists(cache_path):
 		callback.call(true)
 		return
 	
+	# Check if already downloading (deduplication)
+	if _active_downloads.has(url):
+		var download_state = _active_downloads[url]
+		if download_state.completed:
+			# Download finished while we were checking - use cached result
+			callback.call(download_state.success)
+		else:
+			# Still downloading - queue this callback
+			download_state.callbacks.append(callback)
+		return
+	
+	# Start new download
+	_active_downloads[url] = {
+		"callbacks": [callback],
+		"completed": false,
+		"success": false
+	}
+	
 	NetworkManager.download_image(url, func(body: PackedByteArray):
 		if body.is_empty():
-			callback.call(false)
+			# Download failed - notify all waiting callbacks
+			var state = _active_downloads[url]
+			state.completed = true
+			state.success = false
+			for cb in state.callbacks:
+				cb.call(false)
 			return
 		
 		ThreadManager.queue_image_task(
@@ -586,7 +615,16 @@ func _download_cover(url: String, callback: Callable):
 						file.close()
 				return texture,
 			func(texture: Texture2D):
-				callback.call(texture != null)
+				var success = texture != null
+				# Notify all waiting callbacks
+				var state = _active_downloads[url]
+				state.completed = true
+				state.success = success
+				for cb in state.callbacks:
+					cb.call(success)
+				# Clean up after a short delay to allow any late callbacks
+				await get_tree().create_timer(5.0).timeout
+				_active_downloads.erase(url)
 		)
 	)
 
