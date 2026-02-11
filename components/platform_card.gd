@@ -151,7 +151,7 @@ func _update_status_indicator():
 			_download_button.visible = false
 		return
 	
-	var is_installed = _emulator_install_status.get(selected_emulator, false)
+	var is_installed = LaunchManager.is_emulator_installed(selected_emulator) if LaunchManager else false
 	var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
 	var is_downloading = LaunchManager.is_emulator_downloading(selected_emulator) if LaunchManager else false
 	var is_queued = LaunchManager.is_emulator_queued(selected_emulator) if LaunchManager else false
