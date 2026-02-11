@@ -19,8 +19,8 @@
 	  "android": "com.retroarch"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "-L", "cores/{core}_libretro.dll", "{rom}"],
-	  "linux": ["{exe}", "-L", "cores/{core}_libretro.so", "{rom}"],
+	  "windows": ["{exe}", "-L", "{core}", "{rom}"],
+	  "linux": ["{exe}", "-L", "{core}", "{rom}"],
 	  "android": {
 		"action": "android.intent.action.VIEW",
 		"package": "com.retroarch",
@@ -40,10 +40,25 @@
 	  "n64": "mupen64plus_next",
 	  "psx": "pcsx_rearmed"
 	},
-	"download_urls": {
+"download_urls": {
 	  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
 	  "linux": "",
 	  "android": ""
+	},
+	"post_install": {
+	  "type": "cores",
+	  "windows": {
+		"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
+		"filename": "RetroArch_cores.7z"
+	  },
+	  "linux": {
+		"url": "",
+		"filename": ""
+	  },
+	  "android": {
+		"url": "",
+		"filename": ""
+	  }
 	}
   }
 }

@@ -205,8 +205,13 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			# Show game details view
 			UIManager.show_game_details(romm_id)
 		"launch":
-			# Launch game logic (not implemented yet)
+			# Launch the game using LaunchManager
 			print("[LibraryView] Launch requested for game: ", romm_id)
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				LaunchManager.launch_game(game)
+			else:
+				print("[LibraryView] Game not found: ", romm_id)
 		"hide":
 			# Hide game logic (not implemented yet)
 			print("[LibraryView] Hide requested for game: ", romm_id)

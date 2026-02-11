@@ -475,23 +475,6 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
 	
-	# Capture all game data locally to avoid race condition with worker thread
-	# This prevents CowData errors when the Resource is modified on main thread
-	var game_id = game.romm_id
-	var game_title = game.title
-	var game_platform = game.platform
-	var game_platform_slug = game.platform_slug
-	var game_cover_url = game.cover_url
-	var game_cover_path = game.cover_path
-	var game_file_name = game.file_name
-	var game_file_path = game.file_path
-	var game_file_size = game.file_size
-	var game_has_local_copy = game.has_local_copy
-	var game_last_updated = game.last_updated
-	var game_description = game.description
-	var game_genres = game.genres.duplicate()
-	var game_rating = game.rating
-	
 	ThreadManager.queue_db_task(
 		func():
 			var query = """
@@ -511,20 +494,20 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					rating = %f
 				WHERE romm_id = %d
 			""" % [
-				_escape_sql(game_title),
-				_escape_sql(game_platform),
-				_escape_sql(game_platform_slug),
-				_escape_sql(game_cover_url),
-				_escape_sql(game_cover_path),
-				_escape_sql(game_file_name),
-				_escape_sql(game_file_path),
-				game_file_size,
-				1 if game_has_local_copy else 0,
-				_escape_sql(game_last_updated),
-				_escape_sql(game_description),
-				_escape_sql(",".join(game_genres)),
-				game_rating,
-				game_id
+				_escape_sql(game.title),
+				_escape_sql(game.platform),
+				_escape_sql(game.platform_slug),
+				_escape_sql(game.cover_url),
+				_escape_sql(game.cover_path),
+				_escape_sql(game.file_name),
+				_escape_sql(game.file_path),
+				game.file_size,
+				1 if game.has_local_copy else 0,
+				_escape_sql(game.last_updated),
+				_escape_sql(game.description),
+				_escape_sql(",".join(game.genres)),
+				game.rating,
+				game.romm_id
 			]
 			return _db.query(query),
 		func(success: bool):

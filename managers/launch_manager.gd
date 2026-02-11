@@ -12,6 +12,10 @@ var _platform_defaults: Dictionary = {}
 # Track ongoing extractions
 var _active_extractions: Array[String] = []
 
+# Track pending launches waiting for emulator installation
+# emulator_id -> {game: GameResource, callback: Callable}
+var _pending_launches: Dictionary = {}
+
 # Signals
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
@@ -491,20 +495,153 @@ func _finalize_extraction(emulator_id: String, success: bool):
 	_active_extractions.erase(emulator_id)
 	
 	if success:
-		# Set progress to 100% so notification auto-dismisses
-		_extraction_progress[emulator_id] = 1.0
-		
 		# Delete archive
 		var dir = DirAccess.open("user://")
 		if dir:
 			dir.remove(archive_path.trim_prefix("user://"))
-		print("[LaunchManager] 7z extraction successful")
-		# Notification will auto-dismiss at 100% due to progress callable
+		print("[LaunchManager] Main extraction successful for: " + emulator_id)
+		
+		# Check for post-install steps
+		var emulator = get_emulator(emulator_id)
+		if emulator.has("post_install"):
+			var post_install = emulator["post_install"]
+			var platform_name = PlatformManager.get_platform_name().to_lower()
+			
+			if post_install["type"] == "cores":
+				var platform_config = post_install.get(platform_name, {})
+				var cores_url = platform_config.get("url", "")
+				var cores_filename = platform_config.get("filename", "")
+				
+				if cores_url != "" and cores_filename != "":
+					print("[LaunchManager] Starting cores download for: " + emulator_id)
+					NotificationManager.update_notification_text(notification_id, "Downloading " + emulator.get("name", emulator_id) + " cores...")
+					_download_cores(emulator_id, emulator, cores_url, cores_filename, notification_id)
+					return
+				else:
+					print("[LaunchManager] No cores URL configured for platform: " + platform_name)
+			
+			# Add other post-install types here in the future
+		
+		# No post-install or config missing - complete normally
+		_extraction_progress[emulator_id] = 1.0
+		print("[LaunchManager] Installation complete: " + emulator_id)
 	else:
 		NotificationManager.update_notification_text(notification_id, "Installation failed")
 		_extraction_progress.erase(emulator_id)
+		emulator_extraction_completed.emit(emulator_id, false)
+
+## Downloads and extracts cores for an emulator
+func _download_cores(emulator_id: String, emulator: Dictionary, cores_url: String, cores_filename: String, notification_id: int):
+	var emulator_name = emulator.get("name", emulator_id)
+	var destination_path = EMULATORS_DIR + emulator_id + "/" + cores_filename
 	
-	emulator_extraction_completed.emit(emulator_id, success)
+	print("[LaunchManager] Downloading cores from: " + cores_url)
+	print("[LaunchManager] Cores will be saved to: " + destination_path)
+	
+	# Start cores download via NetworkManager
+	NetworkManager.download_file(
+		cores_url,
+		destination_path,
+		func(bytes_received: int, total_bytes: int):
+			if total_bytes > 0:
+				var progress = float(bytes_received) / float(total_bytes)
+				var pct = int(progress * 100)
+				NotificationManager.update_notification_text(notification_id, "Downloading " + emulator_name + " cores: " + str(pct) + "%"),
+		func(success: bool, message: String):
+			if success:
+				print("[LaunchManager] Cores download complete, extracting...")
+				NotificationManager.update_notification_text(notification_id, "Extracting " + emulator_name + " cores...")
+				_extract_cores(emulator_id, destination_path, notification_id)
+			else:
+				push_error("[LaunchManager] Failed to download cores: " + message)
+				NotificationManager.update_notification_text(notification_id, "Failed to download " + emulator_name + " cores")
+				_extraction_progress[emulator_id] = 1.0
+				emulator_extraction_completed.emit(emulator_id, true)  # Still mark success since main emulator works
+	)
+
+## Extracts cores archive to emulator directory
+func _extract_cores(emulator_id: String, cores_archive_path: String, notification_id: int):
+	var emulator = get_emulator(emulator_id)
+	var emulator_name = emulator.get("name", emulator_id)
+	var extract_dir = EMULATORS_DIR + emulator_id + "/"
+	
+	print("[LaunchManager] Extracting cores to: " + extract_dir)
+	
+	var success = false
+	if cores_archive_path.ends_with(".zip"):
+		success = _extract_zip_simple(cores_archive_path, extract_dir)
+	elif cores_archive_path.ends_with(".7z"):
+		success = _extract_7z_simple(cores_archive_path, extract_dir)
+	
+	# Clean up cores archive
+	var dir = DirAccess.open("user://")
+	if dir and FileAccess.file_exists(cores_archive_path):
+		dir.remove(cores_archive_path.trim_prefix("user://"))
+	
+	if success:
+		print("[LaunchManager] Cores extraction successful")
+		NotificationManager.update_notification_text(notification_id, emulator_name + " installation complete!")
+		_extraction_progress[emulator_id] = 1.0
+	else:
+		push_error("[LaunchManager] Failed to extract cores")
+		NotificationManager.update_notification_text(notification_id, emulator_name + " installed, but cores extraction failed")
+		_extraction_progress[emulator_id] = 1.0
+	
+	emulator_extraction_completed.emit(emulator_id, true)
+
+## Simple ZIP extraction for cores (no progress tracking)
+func _extract_zip_simple(archive_path: String, extract_dir: String) -> bool:
+	var reader = ZIPReader.new()
+	var err = reader.open(archive_path)
+	
+	if err != OK:
+		push_error("[LaunchManager] Failed to open cores ZIP: " + str(err))
+		return false
+	
+	var files = reader.get_files()
+	var extracted_count = 0
+	
+	for file in files:
+		var dest_path = extract_dir + file
+		
+		if file.ends_with("/"):
+			var dir = DirAccess.open("user://")
+			if dir:
+				dir.make_dir_recursive(dest_path.trim_prefix("user://"))
+			continue
+		
+		var buffer = reader.read_file(file)
+		if buffer.size() > 0:
+			var file_dir = dest_path.get_base_dir()
+			var dir = DirAccess.open("user://")
+			if dir:
+				dir.make_dir_recursive(file_dir.trim_prefix("user://"))
+			
+			var f = FileAccess.open(dest_path, FileAccess.WRITE)
+			if f:
+				f.store_buffer(buffer)
+				f.close()
+				extracted_count += 1
+	
+	reader.close()
+	return extracted_count > 0
+
+## Simple 7z extraction for cores (no progress tracking)
+func _extract_7z_simple(archive_path: String, extract_dir: String) -> bool:
+	var binary_path = _get_7z_binary_path()
+	
+	if not FileAccess.file_exists(binary_path):
+		push_error("[LaunchManager] 7z binary not found for cores extraction")
+		return false
+	
+	var abs_archive_path = ProjectSettings.globalize_path(archive_path)
+	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
+	
+	var args = ["x", abs_archive_path, "-o" + abs_extract_dir, "-y"]
+	var output = []
+	var exit_code = OS.execute(binary_path, args, output, true)
+	
+	return exit_code == 0
 
 ## Gets the path to the bundled 7z binary
 func _get_7z_binary_path() -> String:
@@ -630,10 +767,25 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var template = templates.get(platform_name, [])
 		var install_path = get_emulator_install_path(intent.emulator_id)
 		
+		# Convert paths to absolute system paths for OS.execute
+		var global_install_path = ProjectSettings.globalize_path(install_path)
+		var global_rom_path = ProjectSettings.globalize_path(intent.rom_path)
+		
+		# Normalize paths to remove double slashes
+		global_install_path = global_install_path.replace("//", "/")
+		global_rom_path = global_rom_path.replace("//", "/")
+		
+		# Build absolute core path
+		var install_dir = global_install_path.get_base_dir()
+		install_dir = install_dir.replace("//", "/")
+		var core_extension = "_libretro.dll" if PlatformManager.is_windows() else "_libretro.so"
+		var global_core_path = install_dir + "/cores/" + intent.core_name + core_extension
+		global_core_path = global_core_path.replace("//", "/")
+		
 		for arg in template:
-			var formatted_arg = arg.replace("{exe}", install_path)
-			formatted_arg = formatted_arg.replace("{rom}", intent.rom_path)
-			formatted_arg = formatted_arg.replace("{core}", intent.core_name)
+			var formatted_arg = arg.replace("{exe}", global_install_path)
+			formatted_arg = formatted_arg.replace("{rom}", global_rom_path)
+			formatted_arg = formatted_arg.replace("{core}", global_core_path)
 			intent.launch_args.append(formatted_arg)
 
 ## Executes a launch intent
@@ -663,6 +815,10 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
 	
+	# Debug: Print the full command
+	var full_command = exe_path + " " + " ".join(arguments)
+	print("[LaunchManager] Full launch command: " + full_command)
+	
 	# Use OS.create_process for non-blocking launch
 	var pid = OS.create_process(exe_path, arguments, false)
 	
@@ -674,6 +830,85 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	print("[LaunchManager] Launched process with PID: " + str(pid))
 	launch_completed.emit(true, "Game launched successfully")
 	return true
+
+## Main entry point for launching a game
+func launch_game(game: GameResource) -> void:
+	if not game.has_local_copy or game.file_path == "":
+		NotificationManager.show_notification("Game file not downloaded", Notification.Type.ERROR)
+		return
+	
+	# Determine which emulator to use
+	var emulator_id = resolve_emulator_for_game(game)
+	
+	# Check if this game is already pending launch (waiting for emulator install)
+	if _pending_launches.has(emulator_id):
+		var pending_game: GameResource = _pending_launches[emulator_id]
+		if pending_game.romm_id == game.romm_id:
+			NotificationManager.show_notification("Game already pending launch! Waiting for emulator installation...", Notification.Type.WARNING)
+			return
+	
+	if emulator_id == "":
+		NotificationManager.show_notification("No emulator configured for platform: " + game.platform_slug, Notification.Type.ERROR)
+		return
+	
+	var emulator = get_emulator(emulator_id)
+	var emulator_name = emulator.get("name", emulator_id)
+	
+	# Check if emulator is installed
+	if not is_emulator_installed(emulator_id):
+		print("[LaunchManager] Emulator not installed, auto-downloading: " + emulator_id)
+		NotificationManager.show_notification("Downloading " + emulator_name + "...", Notification.Type.INFO)
+		
+		# Queue download - this will auto-extract when complete
+		var download_success = download_emulator(emulator_id)
+		
+		if download_success:
+			NotificationManager.show_notification(emulator_name + " downloading... Will auto-launch when ready.", Notification.Type.INFO)
+			
+			# Store this launch as pending - it will be retried when extraction completes
+			_pending_launches[emulator_id] = game
+			
+			# Connect to extraction completion signal if not already connected
+			if not emulator_extraction_completed.is_connected(_on_emulator_installed_for_launch):
+				emulator_extraction_completed.connect(_on_emulator_installed_for_launch)
+		else:
+			NotificationManager.show_notification("Failed to queue " + emulator_name + " download", Notification.Type.ERROR)
+		return
+	
+	# Emulator is already installed, launch immediately
+	_launch_game_internal(game, emulator_id)
+
+## Handler for when emulator extraction completes - retries pending launches
+func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
+	if not success:
+		return
+	
+	# Check if we have a pending launch for this emulator
+	if _pending_launches.has(emulator_id):
+		var game: GameResource = _pending_launches[emulator_id]
+		_pending_launches.erase(emulator_id)
+		
+		print("[LaunchManager] Emulator " + emulator_id + " installed, auto-launching: " + game.get_display_name())
+		NotificationManager.show_notification("Launching " + game.get_display_name() + "...", Notification.Type.INFO)
+		
+		# Give a small delay for file system to settle
+		await get_tree().create_timer(0.5).timeout
+		
+		# Retry the launch
+		_launch_game_internal(game, emulator_id)
+
+## Internal function to actually launch the game (emulator must be installed)
+func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
+	var intent = create_launch_intent(game)
+	
+	if not intent:
+		NotificationManager.show_notification("Failed to create launch intent", Notification.Type.ERROR)
+		return
+	
+	var success = execute_launch(intent)
+	
+	if not success:
+		NotificationManager.show_notification("Failed to launch " + game.get_display_name(), Notification.Type.ERROR)
 
 func _execute_android(intent: LaunchIntent) -> bool:
 	# TODO: Implement Android intent launching

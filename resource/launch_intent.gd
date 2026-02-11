@@ -25,6 +25,9 @@ var core_name: String = ""
 ## Platform-specific launch arguments (already formatted)
 var launch_args: Array[String] = []
 
+## For Desktop: working directory for the process
+var working_directory: String = ""
+
 ## For Android: intent action
 var android_action: String = ""
 

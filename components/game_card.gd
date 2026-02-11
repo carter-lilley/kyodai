@@ -88,8 +88,9 @@ func _on_download_pressed():
 		return
 	
 	if game.has_local_copy:
-		# Launch game (not implemented yet)
-		print("Launch game: " + game.get_display_name())
+		# Launch the game using LaunchManager
+		print("[GameCard] Launch requested for game: ", game.romm_id)
+		LaunchManager.launch_game(game)
 	else:
 		download_requested.emit(game)
 
