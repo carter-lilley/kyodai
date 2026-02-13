@@ -42,6 +42,7 @@ func _update_display():
 	# Update download button state
 	if game.has_local_copy:
 		download_button.text = "Play"
+		download_button.disabled = false
 		status_label.text = "Ready"
 		status_label.modulate = Color.GREEN
 	elif _is_downloading:

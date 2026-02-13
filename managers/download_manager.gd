@@ -338,8 +338,8 @@ func _start_extraction(item: QueueItem):
 	if not _active_items.has(item.id):
 		_active_items[item.id] = item
 	
-	# Show extraction notification - using pulsing progress (indeterminate)
-	# Close old notification and create new one with pulsing progress
+	# Show extraction notification with pulsing progress (indeterminate)
+	# Dismiss old notification first, then create new one
 	if item.notification_id != -1:
 		NotificationManager.dismiss_notification(item.notification_id)
 	
@@ -348,12 +348,9 @@ func _start_extraction(item: QueueItem):
 		Notification.Type.INFO,
 		null,
 		0.0,
-		func() -> float:
-			# Pulsing progress for extraction (no exact percentage)
-			var pulse = (Time.get_ticks_msec() % 2000) / 2000.0
-			return pulse,
-		func(progress: float) -> String:
-			return "Extracting " + item.name + "..."
+		Callable(),  # No progress callable - using pulsing
+		Callable(),  # No text formatter
+		true  # pulsing = true
 	)
 	
 	extraction_started.emit(item.id)
@@ -429,7 +426,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		if success:
 			item.status = "completed"
 			item.progress = 1.0
-			NotificationManager.update_notification_text(item.notification_id, item.name + " ready!")
+			NotificationManager.dismiss_notification(item.notification_id)
 			_cleanup_item(item)
 			_active_items.erase(item.id)
 			
@@ -440,7 +437,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		else:
 			item.status = "failed"
 			item.error_message = "Extraction failed"
-			NotificationManager.update_notification_text(item.notification_id, "Extraction failed: " + item.name)
+			NotificationManager.dismiss_notification(item.notification_id)
 			_cleanup_item(item)
 			_active_items.erase(item.id)
 			extraction_completed.emit(item.id, false, item.error_message)
@@ -454,16 +451,13 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 	if not FileAccess.file_exists(binary_path):
 		item.status = "failed"
 		item.error_message = "7z binary not found"
-		NotificationManager.update_notification_text(item.notification_id, "Extractor not found: " + item.name)
+		NotificationManager.dismiss_notification(item.notification_id)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
 		extraction_completed.emit(item.id, false, item.error_message)
 		queue_changed.emit()
 		_process_queue()
 		return
-	
-	# Show extraction notification immediately
-	NotificationManager.update_notification_text(item.notification_id, "Extracting " + item.name + "...")
 	
 	var abs_archive_path = ProjectSettings.globalize_path(archive_path)
 	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
@@ -491,7 +485,7 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 		if success:
 			item.status = "completed"
 			item.progress = 1.0
-			NotificationManager.update_notification_text(item.notification_id, item.name + " ready!")
+			NotificationManager.dismiss_notification(item.notification_id)
 			_cleanup_item(item)
 			_active_items.erase(item.id)
 			
@@ -502,7 +496,7 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 		else:
 			item.status = "failed"
 			item.error_message = "Extraction failed"
-			NotificationManager.update_notification_text(item.notification_id, "Extraction failed: " + item.name)
+			NotificationManager.dismiss_notification(item.notification_id)
 			_cleanup_item(item)
 			_active_items.erase(item.id)
 			extraction_completed.emit(item.id, false, item.error_message)

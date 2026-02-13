@@ -19,6 +19,7 @@ class NotificationEntry:
 	var progress_callable: Callable  # Optional: func() -> float (0.0-1.0)
 	var text_formatter: Callable  # Optional: func(progress: float) -> String
 	var is_progress_linked: bool = false
+	var is_pulsing: bool = false  # NEW: For indeterminate progress animations
 	var fade_out_started: bool = false
 	var base_text: String = ""
 
@@ -124,7 +125,8 @@ func show_notification(
 	icon: Texture2D = null,
 	min_duration: float = 3.0,
 	progress_callable: Callable = Callable(),  # Optional: func() -> float (0.0-1.0)
-	text_formatter: Callable = Callable()  # Optional: func(progress: float) -> String
+	text_formatter: Callable = Callable(),  # Optional: func(progress: float) -> String
+	pulsing: bool = false  # NEW: Enable indeterminate pulsing progress
 ) -> int:
 	"""Show a notification. If progress_callable is provided, updates progress bar and fades at 100%.
 	If text_formatter is provided, it's called with progress to format text. Otherwise, percentage is auto-appended."""
@@ -138,7 +140,8 @@ func show_notification(
 	entry.progress_callable = progress_callable
 	entry.text_formatter = text_formatter
 	entry.base_text = text
-	entry.is_progress_linked = not progress_callable.is_null()
+	entry.is_pulsing = pulsing
+	entry.is_progress_linked = not progress_callable.is_null() or pulsing
 
 	if entry.is_progress_linked:
 		notification.show_progress(true)
@@ -197,23 +200,33 @@ func _check_notifications() -> void:
 		if entry.fade_out_started:
 			continue
 		
-		# Update progress if using a callable
+		# Update progress if using a callable or pulsing
 		if entry.is_progress_linked and is_instance_valid(entry.notification):
-			var progress = entry.progress_callable.call()
-			if progress is float or progress is int:
-				var progress_f = float(progress)
+			var progress_f: float
+			
+			if entry.is_pulsing:
+				# Pulsing animation: 2 second cycle
+				progress_f = (Time.get_ticks_msec() % 2000) / 2000.0
 				entry.notification.set_progress(progress_f)
+				# Pulsing notifications don't auto-dismiss based on progress
+				# And don't update text with percentage
+			else:
+				# Regular progress callable
+				var progress = entry.progress_callable.call()
+				if progress is float or progress is int:
+					progress_f = float(progress)
+					entry.notification.set_progress(progress_f)
 
-				# Update text based on formatter or auto-append percentage
-				if entry.text_formatter.is_valid():
-					entry.notification.set_text(entry.text_formatter.call(progress_f))
-				else:
-					var percent = int(progress_f * 100)
-					entry.notification.set_text(entry.base_text + " (" + str(percent) + "%)")
+					# Update text based on formatter or auto-append percentage
+					if entry.text_formatter.is_valid():
+						entry.notification.set_text(entry.text_formatter.call(progress_f))
+					else:
+						var percent = int(progress_f * 100)
+						entry.notification.set_text(entry.base_text + " (" + str(percent) + "%)")
 
-				if progress >= 1.0:
-					_start_fade_out(entry)
-					continue
+					if progress >= 1.0:
+						_start_fade_out(entry)
+						continue
 			
 		# Check if simple notification has expired
 		if not entry.is_progress_linked:

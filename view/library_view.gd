@@ -144,7 +144,17 @@ func _on_game_updated(game: GameResource):
 
 func _on_games_removed(platform_slug: String):
 	print("[LibraryView] Games removed from platform: ", platform_slug)
-	# Note: We refresh once at the end of all removals, not after each one
+	# Remove cards for this platform immediately
+	var cards_to_remove = []
+	for card in _game_cards:
+		if card.game and card.game.platform_slug == platform_slug:
+			cards_to_remove.append(card)
+	
+	for card in cards_to_remove:
+		_game_cards.erase(card)
+		card.queue_free()
+	
+	status_label.text = "Showing %d games" % _game_cards.size()
 
 func _process_pending_cards():
 	_is_processing_pending = true
