@@ -47,17 +47,20 @@
 	},
 	"post_install": {
 	  "type": "cores",
-	  "windows": {
-		"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
-		"filename": "RetroArch_cores.7z"
+	  "cores_url": {
+		"windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
+		"linux": "",
+		"android": ""
 	  },
-	  "linux": {
-		"url": "",
-		"filename": ""
+	  "cores_filename": {
+		"windows": "RetroArch_cores.7z",
+		"linux": "",
+		"android": ""
 	  },
-	  "android": {
-		"url": "",
-		"filename": ""
+	  "validation": {
+		"type": "cores_directory",
+		"path": "RetroArch-Win64/cores",
+		"file_pattern": "*.dll"
 	  }
 	}
   }

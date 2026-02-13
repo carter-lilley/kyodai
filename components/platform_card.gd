@@ -43,6 +43,15 @@ var _emulator_install_status: Dictionary = {}  # emulator_id -> bool
 func _ready():
 	_build_ui()
 	_update_display()
+	
+	# Connect to scan completion signal to refresh state
+	if LaunchManager:
+		if not LaunchManager.emulator_installations_scanned.is_connected(_on_installations_scanned):
+			LaunchManager.emulator_installations_scanned.connect(_on_installations_scanned)
+
+func _on_installations_scanned():
+	# Refresh UI when disk scan completes
+	refresh_ui()
 
 func _build_ui():
 	var margin = MarginContainer.new()
@@ -151,45 +160,62 @@ func _update_status_indicator():
 			_download_button.visible = false
 		return
 	
-	var is_installed = LaunchManager.is_emulator_installed(selected_emulator) if LaunchManager else false
-	var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
-	var is_downloading = LaunchManager.is_emulator_downloading(selected_emulator) if LaunchManager else false
-	var is_queued = LaunchManager.is_emulator_queued(selected_emulator) if LaunchManager else false
-	var is_extracting = LaunchManager.is_emulator_extracting(selected_emulator) if LaunchManager else false
+	# Get current install state
+	var install_state = LaunchManager.get_emulator_install_state(selected_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
+	var progress_text = LaunchManager.get_emulator_install_progress(selected_emulator) if LaunchManager else ""
 	
-	if is_installed:
-		# Fully installed - green status, no button
-		_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed", "Emulator is ready to use")
-		if _download_button:
-			_download_button.visible = false
-	elif is_extracting:
-		# Currently extracting/installing
-		_status_indicator.set_status(Indicator.Status.WARNING, "Installing...", "Extracting emulator files")
-		if _download_button:
-			_download_button.visible = true
-			_download_button.disabled = true
-			_download_button.text = "Installing..."
-	elif is_downloading or is_queued:
-		# Currently downloading
-		_status_indicator.set_status(Indicator.Status.WARNING, "Downloading...", "Emulator is being downloaded")
-		if _download_button:
-			_download_button.visible = true
-			_download_button.disabled = true
-			_download_button.text = "Downloading..." if is_downloading else "Queued"
-	elif not is_installed and is_downloaded:
-		# Downloaded but not extracted - show Install button
-		_status_indicator.set_status(Indicator.Status.WARNING, "Downloaded", "Ready to install")
-		if _download_button:
-			_download_button.visible = true
-			_download_button.disabled = false
-			_download_button.text = "Install"
-	else:
-		# Not downloaded - show Download button
-		_status_indicator.set_status(Indicator.Status.ERROR, "Not downloaded", "Click Download to get the emulator")
-		if _download_button:
-			_download_button.visible = true
-			_download_button.disabled = false
-			_download_button.text = "Download"
+	match install_state:
+		LaunchManager.InstallState.INSTALLED:
+			_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed", "Emulator is ready to use")
+			if _download_button:
+				_download_button.visible = false
+		
+		LaunchManager.InstallState.DOWNLOADING:
+			var display_text = progress_text if progress_text != "" else "Downloading..."
+			_status_indicator.set_status(Indicator.Status.WARNING, display_text, "Emulator is being downloaded")
+			if _download_button:
+				_download_button.visible = true
+				_download_button.disabled = true
+				_download_button.text = "Downloading..."
+		
+		LaunchManager.InstallState.EXTRACTING:
+			var extract_text = progress_text if progress_text != "" else "Extracting..."
+			_status_indicator.set_status(Indicator.Status.WARNING, extract_text, "Extracting emulator files")
+			if _download_button:
+				_download_button.visible = true
+				_download_button.disabled = true
+				_download_button.text = "Installing..."
+		
+		LaunchManager.InstallState.NEEDS_POST_INSTALL:
+			_status_indicator.set_status(Indicator.Status.WARNING, "Needs post-install", "Main emulator installed but cores/extras missing")
+			if _download_button:
+				_download_button.visible = true
+				_download_button.disabled = false
+				_download_button.text = "Complete Install"
+		
+		LaunchManager.InstallState.ENACTING_POST_INSTALL:
+			var post_text = progress_text if progress_text != "" else "Completing installation..."
+			_status_indicator.set_status(Indicator.Status.WARNING, post_text, "Installing additional components")
+			if _download_button:
+				_download_button.visible = true
+				_download_button.disabled = true
+				_download_button.text = "Installing..."
+		
+		_:  # NOT_INSTALLED or any other state
+			# Check if downloaded but not installed (legacy check)
+			var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
+			if is_downloaded:
+				_status_indicator.set_status(Indicator.Status.WARNING, "Downloaded", "Ready to install")
+				if _download_button:
+					_download_button.visible = true
+					_download_button.disabled = false
+					_download_button.text = "Install"
+			else:
+				_status_indicator.set_status(Indicator.Status.ERROR, "Not downloaded", "Click Download to get the emulator")
+				if _download_button:
+					_download_button.visible = true
+					_download_button.disabled = false
+					_download_button.text = "Download"
 
 func set_available_emulators(emulators: Array[Dictionary]):
 	_available_emulators = emulators
@@ -207,19 +233,39 @@ func _on_sync_toggled(enabled: bool):
 func _on_emulator_selected(index: int):
 	var emulator_id = _emulator_dropdown.get_item_metadata(index)
 	selected_emulator = emulator_id
+	
+	# Force disk check for this emulator to ensure accurate state
+	if LaunchManager and emulator_id != "":
+		LaunchManager.check_emulator_disk_state(emulator_id)
+	
 	emulator_changed.emit(emulator_id)
+	refresh_ui()
 
 func _on_download_pressed():
-	if selected_emulator != "":
-		var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
-		var is_installed = _emulator_install_status.get(selected_emulator, false)
-		
-		if is_downloaded and not is_installed:
-			# Install the downloaded archive
-			LaunchManager.extract_emulator(selected_emulator)
+	if selected_emulator == "":
+		return
+	
+	var install_state = LaunchManager.get_emulator_install_state(selected_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
+	
+	match install_state:
+		LaunchManager.InstallState.NEEDS_POST_INSTALL:
+			# Trigger post-install completion
+			print("[PlatformCard] Completing post-install for: " + selected_emulator)
+			LaunchManager.complete_post_install(selected_emulator)
 			refresh_ui()
-		else:
-			# Download the emulator
+		
+		LaunchManager.InstallState.NOT_INSTALLED:
+			var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
+			if is_downloaded:
+				# Extract downloaded archive
+				LaunchManager.extract_emulator(selected_emulator)
+				refresh_ui()
+			else:
+				# Download the emulator
+				download_requested.emit(selected_emulator)
+		
+		_:
+			# For any other state, just request download
 			download_requested.emit(selected_emulator)
 
 func refresh_ui():

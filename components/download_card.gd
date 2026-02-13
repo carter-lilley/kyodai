@@ -1,4 +1,4 @@
-class_name DownloadItemUI
+class_name DownloadCard
 extends PanelContainer
 
 @onready var title_label: Label = $MarginContainer/VBoxContainer/HBoxContainer/TitleLabel
@@ -7,7 +7,7 @@ extends PanelContainer
 @onready var status_label: Label = $MarginContainer/VBoxContainer/StatusLabel
 @onready var cancel_button: Button = $MarginContainer/VBoxContainer/HBoxContainer/CancelButton
 
-var download_item: DownloadManager.DownloadItem
+var download_item = null  # Will be set to DownloadManager.QueueItem
 
 func _ready():
 	cancel_button.pressed.connect(_on_cancel_pressed)
@@ -16,8 +16,10 @@ func _ready():
 	# Connect to download manager signals
 	DownloadManager.download_progress.connect(_on_download_progress)
 	DownloadManager.download_completed.connect(_on_download_completed)
+	DownloadManager.extraction_progress.connect(_on_extraction_progress)
+	DownloadManager.extraction_completed.connect(_on_extraction_completed)
 
-func set_download_item(item: DownloadManager.DownloadItem):
+func set_download_item(item):
 	download_item = item
 	_update_display()
 
@@ -25,8 +27,13 @@ func _update_display():
 	if not download_item or not is_node_ready():
 		return
 	
-	title_label.text = download_item.game.get_display_name()
-	platform_label.text = download_item.game.platform if download_item.game.platform else "Unknown"
+	# Use game resource for display info if available
+	if download_item.game_resource:
+		title_label.text = download_item.game_resource.get_display_name()
+		platform_label.text = download_item.game_resource.platform if download_item.game_resource.platform else "Unknown"
+	else:
+		title_label.text = download_item.name
+		platform_label.text = download_item.type.capitalize()
 	
 	match download_item.status:
 		"queued":
@@ -37,6 +44,11 @@ func _update_display():
 		"downloading":
 			status_label.text = "Downloading..."
 			status_label.modulate = Color.YELLOW
+			progress_bar.value = download_item.progress * 100
+			cancel_button.text = "Cancel"
+		"extract_pending", "extracting":
+			status_label.text = "Extracting..."
+			status_label.modulate = Color.ORANGE
 			progress_bar.value = download_item.progress * 100
 			cancel_button.text = "Cancel"
 		"completed":
@@ -50,14 +62,22 @@ func _update_display():
 			progress_bar.value = 0
 			cancel_button.text = "Remove"
 
-func _on_download_progress(game_id: int, bytes_received: int, total_bytes: int):
-	if download_item and download_item.game.romm_id == game_id:
-		if total_bytes > 0:
-			progress_bar.value = (float(bytes_received) / float(total_bytes)) * 100
+func _on_download_progress(item_id: String, progress: float):
+	if download_item and download_item.id == item_id:
+		progress_bar.value = progress * 100
 		_update_display()
 
-func _on_download_completed(game_id: int, success: bool, message: String):
-	if download_item and download_item.game.romm_id == game_id:
+func _on_download_completed(item_id: String, success: bool, message: String):
+	if download_item and download_item.id == item_id:
+		_update_display()
+
+func _on_extraction_progress(item_id: String, progress: float):
+	if download_item and download_item.id == item_id:
+		progress_bar.value = progress * 100
+		_update_display()
+
+func _on_extraction_completed(item_id: String, success: bool, message: String):
+	if download_item and download_item.id == item_id:
 		_update_display()
 
 func _on_cancel_pressed():
@@ -69,5 +89,5 @@ func _on_cancel_pressed():
 		queue_free()
 	else:
 		# Cancel download
-		DownloadManager.cancel_download(download_item.game.romm_id)
+		DownloadManager.cancel(download_item.id)
 		queue_free()

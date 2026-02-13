@@ -595,8 +595,8 @@ func _download_cover(url: String, callback: Callable):
 		"success": false
 	}
 	
-	NetworkManager.download_image(url, func(body: PackedByteArray):
-		if body.is_empty():
+	DownloadManager.download_image(url, cache_path, func(success: bool):
+		if not success:
 			# Download failed - notify all waiting callbacks
 			var state = _active_downloads[url]
 			state.completed = true
@@ -605,23 +605,23 @@ func _download_cover(url: String, callback: Callable):
 				cb.call(false)
 			return
 		
+		# Load the cached image
 		ThreadManager.queue_image_task(
 			func():
-				var texture = _load_texture_from_memory(body)
-				if texture:
-					var file = FileAccess.open(cache_path, FileAccess.WRITE)
-					if file:
-						file.store_buffer(body)
-						file.close()
-				return texture,
+				var file = FileAccess.open(cache_path, FileAccess.READ)
+				if not file:
+					return null
+				var buffer = file.get_buffer(file.get_length())
+				file.close()
+				return _load_texture_from_memory(buffer),
 			func(texture: Texture2D):
-				var success = texture != null
+				var load_success = texture != null
 				# Notify all waiting callbacks
 				var state = _active_downloads[url]
 				state.completed = true
-				state.success = success
+				state.success = load_success
 				for cb in state.callbacks:
-					cb.call(success)
+					cb.call(load_success)
 				# Clean up after a short delay to allow any late callbacks
 				await get_tree().create_timer(5.0).timeout
 				_active_downloads.erase(url)

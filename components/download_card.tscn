@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://yfhykrxvcea3"]
+[gd_scene format=3 uid="uid://yfhykrxvcea3"]
 
-[ext_resource type="Script" uid="uid://c6fdu2uy8b25j" path="res://components/download_item.gd" id="1_dlitem"]
+[ext_resource type="Script" uid="uid://c6fdu2uy8b25j" path="res://components/download_card.gd" id="1_dlitem"]
 
 [node name="DownloadItem" type="PanelContainer" unique_id=372194613]
 custom_minimum_size = Vector2(0, 80)

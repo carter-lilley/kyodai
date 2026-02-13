@@ -1,12 +1,11 @@
 extends Manager
 
-# NetworkManager - Unified network operations manager
-# Handles all HTTP requests: RomM API, image downloads, ROM downloads
+# NetworkManager - Basic HTTP operations only
+# Handles all HTTP requests: RomM API calls, returns raw responses
+# All download logic moved to DownloadManager
 
 signal network_status_changed(online: bool)
 signal authentication_failed()
-signal download_progress_update(game_id: int, progress_percent: float)
-signal download_finished(game_id: int, success: bool, file_path: String)
 signal api_request_completed(endpoint: String, success: bool, data: Variant)
 
 var _base_url: String = ""
@@ -184,174 +183,58 @@ func fetch_game_details(game_id: int, callback: Callable):
 		callback.call(data, error)
 	)
 
-# ==================== DOWNLOAD OPERATIONS ====================
+# ==================== BASIC HTTP OPERATIONS ====================
 
-func download_image(url: String, callback: Callable):
-	# Image downloads don't need authentication
+## Makes a generic HTTP GET request - returns body bytes and status via callback
+## callback(success: bool, body: PackedByteArray, status_code: int, error_message: String)
+func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
 	var http = HTTPRequest.new()
 	add_child(http)
 	
-	var error = http.request(url)
+	print("[NetworkManager] HTTP GET: " + url)
+	
+	var error = http.request(url, headers)
 	
 	if error != OK:
-		callback.call(PackedByteArray())
+		print("[NetworkManager] Failed to start request: " + str(error))
+		if callback.is_valid():
+			callback.call(false, PackedByteArray(), 0, "Failed to start request: " + str(error))
 		http.queue_free()
-		return http
+		return null
 	
-	http.request_completed.connect(func(result, response_code, headers, body):
+	http.request_completed.connect(func(result, response_code, response_headers, body):
 		http.queue_free()
 		
-		if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-			callback.call(PackedByteArray())
+		if not callback.is_valid():
 			return
 		
-		callback.call(body)
+		if result != HTTPRequest.RESULT_SUCCESS:
+			callback.call(false, PackedByteArray(), response_code, "Request failed: " + str(result))
+			return
+		
+		if response_code >= 400:
+			if response_code == 401:
+				authentication_failed.emit()
+			callback.call(false, body, response_code, "HTTP error: " + str(response_code))
+			return
+		
+		callback.call(true, body, response_code, "")
 	)
 	
 	return http
 
-func download_rom(game_id: int, file_name: String, destination_path: String, progress_callback: Callable, completion_callback: Callable):
-	if not _is_online:
-		completion_callback.call(false, "Not connected")
-		return null
-	
-	var http = HTTPRequest.new()
-	add_child(http)
-	
-	# RomM download endpoint: /api/roms/{id}/content/{file_name}
+## Gets the RomM download URL for a game (DownloadManager will handle the actual download)
+func get_romm_download_url(game_id: int, file_name: String) -> String:
 	var encoded_filename = file_name.uri_encode()
-	var url = _base_url.rstrip("/") + "/api/roms/" + str(game_id) + "/content/" + encoded_filename
-	
-	print("[NetworkManager] Downloading from: ", url)
-	
-	var error = http.request(url, ["Authorization: " + _get_auth_header()], HTTPClient.METHOD_GET)
-	
-	if error != OK:
-		completion_callback.call(false, "Failed to start download: " + str(error))
-		http.queue_free()
-		return http
-	
-	download_progress_update.emit(game_id, 0.0)
-	
-	http.request_completed.connect(func(result, response_code, headers, body):
-		http.queue_free()
-		
-		if response_code == 401:
-			authentication_failed.emit()
-			completion_callback.call(false, "Authentication failed")
-			return
-		
-		if result != HTTPRequest.RESULT_SUCCESS:
-			completion_callback.call(false, "Download failed: " + str(result))
-			return
-		
-		if response_code != 200:
-			completion_callback.call(false, "HTTP error: " + str(response_code))
-			return
-		
-		var file = FileAccess.open(destination_path, FileAccess.WRITE)
-		if file:
-			file.store_buffer(body)
-			file.close()
-			completion_callback.call(true, destination_path)
-		else:
-			completion_callback.call(false, "Failed to write file")
-		
-		download_finished.emit(game_id, result == HTTPRequest.RESULT_SUCCESS and response_code == 200, destination_path)
-	)
-	
-	return http
+	return _base_url.rstrip("/") + "/api/roms/" + str(game_id) + "/content/" + encoded_filename
 
-# ==================== GENERIC FILE DOWNLOAD ====================
+## Returns the authentication header for RomM requests
+func get_auth_header() -> String:
+	return _get_auth_header()
 
-func download_file(url: String, destination_path: String, progress_callback: Callable, completion_callback: Callable) -> HTTPRequest:
-	var http = HTTPRequest.new()
-	add_child(http)
-	
-	print("[NetworkManager] Downloading file from: " + url)
-	
-	var error = http.request(url)
-	
-	if error != OK:
-		completion_callback.call(false, "Failed to start download: " + str(error))
-		http.queue_free()
-		return null
-	
-	# Track download progress
-	var last_bytes = 0
-	
-	# Use a timer to periodically check download progress
-	var progress_timer = Timer.new()
-	progress_timer.wait_time = 0.5
-	progress_timer.autostart = true
-	add_child(progress_timer)
-	
-	progress_timer.timeout.connect(func():
-		if http and is_instance_valid(http):
-			var body_size = http.get_body_size()
-			var downloaded_bytes = http.get_downloaded_bytes()
-			if body_size > 0:
-				progress_callback.call(downloaded_bytes, body_size)
-	)
-	
-	http.request_completed.connect(func(result, response_code, headers, body):
-		progress_timer.stop()
-		progress_timer.queue_free()
-		http.queue_free()
-		
-		if result != HTTPRequest.RESULT_SUCCESS:
-			completion_callback.call(false, "Download failed: " + str(result))
-			return
-		
-		if response_code != 200:
-			completion_callback.call(false, "HTTP error: " + str(response_code))
-			return
-		
-		var file = FileAccess.open(destination_path, FileAccess.WRITE)
-		if file:
-			file.store_buffer(body)
-			file.close()
-			completion_callback.call(true, destination_path)
-		else:
-			completion_callback.call(false, "Failed to write file")
-	)
-	
-	return http
-
-func queue_game_download(game: GameResource) -> bool:
-	if not _is_online:
-		NotificationManager.show_notification("Cannot download: not connected", Notification.Type.ERROR)
-		return false
-	
-	return DownloadManager.queue_download(game)
-
-func cancel_game_download(game_id: int) -> bool:
-	return DownloadManager.cancel_download(game_id)
-
-func is_game_downloading(game_id: int) -> bool:
-	return DownloadManager.is_downloading(game_id)
-
-func is_game_queued(game_id: int) -> bool:
-	return DownloadManager.is_queued(game_id)
-
-func get_active_downloads() -> Array:
-	return DownloadManager.get_active_downloads()
-
-func get_queued_downloads() -> Array:
-	return DownloadManager.get_queued_downloads()
-
-func get_download_queue_size() -> int:
-	return DownloadManager.get_queued_downloads().size() + DownloadManager.get_active_downloads().size()
-
-func cancel_all_downloads():
-	var active = DownloadManager.get_active_downloads()
-	var queued = DownloadManager.get_queued_downloads()
-	
-	for item in active:
-		DownloadManager.cancel_download(item.game.romm_id)
-	
-	for item in queued:
-		DownloadManager.cancel_download(item.game.romm_id)
+## Returns true if connected to RomM
+func is_romm_connected() -> bool:
+	return _is_online
 
 # ==================== UTILITY ====================
 

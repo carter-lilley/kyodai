@@ -22,9 +22,9 @@ func _ready():
 	_update_display()
 	download_button.pressed.connect(_on_download_pressed)
 	
-	# Connect to high-level manager signals
-	NetworkManager.download_progress_update.connect(_on_download_progress)
-	NetworkManager.download_finished.connect(_on_download_completed)
+	# Connect to download manager signals
+	DownloadManager.download_progress.connect(_on_download_progress)
+	DownloadManager.download_completed.connect(_on_download_completed)
 	
 	# Listen for cover downloads to refresh if our cover was just downloaded
 	DataManager.image_loaded.connect(_on_cover_loaded)
@@ -94,18 +94,22 @@ func _on_download_pressed():
 	else:
 		download_requested.emit(game)
 
-func _on_download_progress(game_id: int, progress_percent: float):
-	if game and game.romm_id == game_id:
+func _on_download_progress(item_id: String, progress: float):
+	# Check if this download is for our game
+	var item = DownloadManager.get_item(item_id)
+	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
 		_is_downloading = true
-		status_label.text = "Downloading: %d%%" % int(progress_percent)
+		status_label.text = "Downloading: %d%%" % int(progress * 100)
 		_update_display()
 
-func _on_download_completed(game_id: int, success: bool, file_path: String):
-	if game and game.romm_id == game_id:
+func _on_download_completed(item_id: String, success: bool, message: String):
+	# Check if this download is for our game
+	var item = DownloadManager.get_item(item_id)
+	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
 		_is_downloading = false
 		if success:
 			# Refresh game data from DataManager
-			var updated = DataManager.get_game_by_id(game_id)
+			var updated = DataManager.get_game_by_id(game.romm_id)
 			if updated:
 				game = updated
 		else:

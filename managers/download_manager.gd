@@ -1,260 +1,592 @@
 extends Manager
 
-signal download_started(game_id: int)
-signal download_progress(game_id: int, bytes_received: int, total_bytes: int)
-signal download_completed(game_id: int, success: bool, message: String)
-signal download_queue_changed()
+# DownloadManager - Unified download and extraction queue
+# Handles all file downloads: games, emulators, cores, images, etc.
+# Also handles archive extraction with progress notifications
 
-# Emulator download signals
-signal emulator_download_started(emulator_id: String)
-signal emulator_download_progress(emulator_id: String, progress: float)
-signal emulator_download_completed(emulator_id: String, success: bool, message: String)
+signal download_started(item_id: String)
+signal download_progress(item_id: String, progress: float)
+signal download_completed(item_id: String, success: bool, message: String)
+signal extraction_started(item_id: String)
+signal extraction_progress(item_id: String, progress: float)
+signal extraction_completed(item_id: String, success: bool, message: String)
+signal queue_changed()
 
-class DownloadItem:
-	var game: GameResource
-	var status: String = "queued"  # queued, downloading, completed, failed
-	var progress: float = 0.0
-	var error_message: String = ""
-	var http_request: HTTPRequest = null
-
-class EmulatorDownloadItem:
-	var emulator_id: String
-	var emulator_name: String
-	var download_url: String
+class QueueItem:
+	var id: String
+	var url: String
 	var destination_path: String
-	var status: String = "queued"  # queued, downloading, completed, failed
-	var progress: float = 0.0
-	var error_message: String = ""
+	var type: String  # "game", "emulator", "cores", "image", etc.
+	var name: String  # Display name for notifications
+	var status: String = "queued"  # queued, downloading, extract_pending, extracting, completed, failed
+	var progress: float = 0.0  # 0.0 - 1.0
+	var auto_extract: bool = false
+	var extract_dir: String = ""
 	var http_request: HTTPRequest = null
 	var notification_id: int = -1
+	var error_message: String = ""
+	var game_resource: GameResource = null  # Optional: for game downloads
+	var callbacks: Dictionary = {}  # Optional custom callbacks
 
-var _download_queue: Array[DownloadItem] = []
-var _active_downloads: Dictionary = {}
-var _max_concurrent: int = 3
+# Unified queue
+var _queue: Array[QueueItem] = []
+var _active_items: Dictionary = {}  # id -> QueueItem
+var _max_concurrent: int = 2
 
-# Emulator downloads
-var _emulator_download_queue: Array[EmulatorDownloadItem] = []
-var _active_emulator_downloads: Dictionary = {}  # emulator_id -> EmulatorDownloadItem
-var _completed_emulator_downloads: Array[String] = []  # Track downloaded emulators
+# Progress timer for downloads
+var _progress_timers: Dictionary = {}  # item_id -> Timer
 
-func queue_download(game: GameResource) -> bool:
-	if game.file_name == "":
-		download_completed.emit(game.romm_id, false, "Game has no file")
-		return false
+## Queues a download with optional auto-extraction
+## Returns the item ID or empty string if failed
+func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}) -> String:
+	# Generate unique ID
+	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
-	# Check if already in queue or downloading
-	for item in _download_queue:
-		if item.game.romm_id == game.romm_id:
-			return false
+	# Check if already downloading this URL
+	for item in _queue:
+		if item.url == url:
+			print("[DownloadManager] Already queued: " + url)
+			return ""
 	
-	if _active_downloads.has(game.romm_id):
-		return false
+	if _active_items.has(item_id):
+		print("[DownloadManager] Already active: " + item_id)
+		return ""
 	
-	var item = DownloadItem.new()
-	item.game = game
-	_download_queue.append(item)
-	download_queue_changed.emit()
+	# Create item
+	var item = QueueItem.new()
+	item.id = item_id
+	item.url = url
+	item.destination_path = destination
+	item.type = type
+	item.name = name if name != "" else item_id
+	item.auto_extract = auto_extract
+	item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
+	item.game_resource = game
+	item.callbacks = callbacks
 	
+	# Ensure destination directory exists
+	var dir = DirAccess.open("user://")
+	var dest_dir = destination.get_base_dir().trim_prefix("user://")
+	if dir and not dir.dir_exists(dest_dir):
+		var result = dir.make_dir_recursive(dest_dir)
+		if result != OK:
+			print("[DownloadManager] Failed to create directory: " + dest_dir)
+			return ""
+	
+	_queue.append(item)
+	print("[DownloadManager] Queued download: " + item_id + " (" + type + ") - " + url)
+	
+	queue_changed.emit()
 	_process_queue()
-	return true
+	
+	return item_id
 
-func cancel_download(game_id: int) -> bool:
+## Queues an extraction task (for already-downloaded archives)
+func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", name: String = "") -> String:
+	var item_id = "extract_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
+	
+	# Check if already extracting this archive
+	for item in _queue:
+		if item.destination_path == archive_path and item.status == "extract_pending":
+			print("[DownloadManager] Already queued for extraction: " + archive_path)
+			return ""
+	
+	var item = QueueItem.new()
+	item.id = item_id
+	item.url = ""  # No URL, already have file
+	item.destination_path = archive_path
+	item.type = type
+	item.name = name if name != "" else "Archive"
+	item.status = "extract_pending"
+	item.auto_extract = false  # Already an extraction task
+	item.extract_dir = extract_dir
+	
+	_queue.append(item)
+	print("[DownloadManager] Queued extraction: " + item_id + " - " + archive_path)
+	
+	queue_changed.emit()
+	_process_queue()
+	
+	return item_id
+
+## Cancels a queued or active download
+func cancel(item_id: String) -> bool:
 	# Cancel if in queue
-	for i in range(_download_queue.size()):
-		if _download_queue[i].game.romm_id == game_id:
-			_download_queue.remove_at(i)
-			download_queue_changed.emit()
+	for i in range(_queue.size()):
+		if _queue[i].id == item_id:
+			var item = _queue[i]
+			_cleanup_item(item)
+			_queue.remove_at(i)
+			queue_changed.emit()
+			print("[DownloadManager] Cancelled queued: " + item_id)
 			return true
 	
 	# Cancel if active
-	if _active_downloads.has(game_id):
-		var item = _active_downloads[game_id]
+	if _active_items.has(item_id):
+		var item = _active_items[item_id]
 		if item.http_request:
 			item.http_request.cancel_request()
-			item.http_request.queue_free()
-		_active_downloads.erase(game_id)
-		download_completed.emit(game_id, false, "Download cancelled")
+		item.http_request = null
+		_cleanup_item(item)
+		_active_items.erase(item_id)
+		queue_changed.emit()
+		download_completed.emit(item_id, false, "Cancelled")
+		print("[DownloadManager] Cancelled active: " + item_id)
 		_process_queue()
 		return true
 	
 	return false
 
-func _process_queue():
-	while _active_downloads.size() < _max_concurrent and _download_queue.size() > 0:
-		var item = _download_queue.pop_front()
-		_start_download(item)
-		download_queue_changed.emit()
+## Gets the current progress of an item
+func get_progress(item_id: String) -> float:
+	if _active_items.has(item_id):
+		return _active_items[item_id].progress
+	for item in _queue:
+		if item.id == item_id:
+			return item.progress
+	return 0.0
 
-func _start_download(item: DownloadItem):
-	var root_folder = SettingsManager.get_setting("games_root_folder")
-	if not root_folder or root_folder.value == "":
-		item.status = "failed"
-		item.error_message = "Games folder not set"
-		download_completed.emit(item.game.romm_id, false, item.error_message)
-		_process_queue()
-		return
-	
-	# Build destination path
-	var platform_folder = item.game.platform_slug
-	var destination_folder = root_folder.value + "/" + platform_folder
-	var destination_path = destination_folder + "/" + item.game.file_name
-	
-	# Ensure folder exists
-	var dir = DirAccess.open(root_folder.value)
-	if dir and not dir.dir_exists(platform_folder):
-		dir.make_dir(platform_folder)
-	
-	item.status = "downloading"
-	item.game.file_path = destination_path
-	_active_downloads[item.game.romm_id] = item
-	
-	download_started.emit(item.game.romm_id)
-	
-	# Start download via NetworkManager
-	item.http_request = NetworkManager.download_rom(
-		item.game.romm_id,
-		item.game.file_name,
-		destination_path,
-		func(bytes_received, total_bytes):
-			if total_bytes > 0:
-				item.progress = float(bytes_received) / float(total_bytes)
-				download_progress.emit(item.game.romm_id, bytes_received, total_bytes),
-		func(success, message):
-			_active_downloads.erase(item.game.romm_id)
-			
-			if success:
-				item.status = "completed"
-				item.game.has_local_copy = true
-				item.game.file_path = destination_path
-				DataManager.update_game(item.game)
-			else:
-				item.status = "failed"
-				item.error_message = message
-			
-			download_completed.emit(item.game.romm_id, success, message)
-			_process_queue()
-	)
+## Gets the status of an item
+func get_status(item_id: String) -> String:
+	if _active_items.has(item_id):
+		return _active_items[item_id].status
+	for item in _queue:
+		if item.id == item_id:
+			return item.status
+	return "unknown"
 
-func get_queued_downloads() -> Array[DownloadItem]:
-	var result: Array[DownloadItem] = []
-	result.append_array(_download_queue)
-	return result
+## Checks if an item is currently downloading
+func is_downloading(item_id: String) -> bool:
+	if _active_items.has(item_id):
+		return _active_items[item_id].status == "downloading"
+	return false
 
-func get_active_downloads() -> Array[DownloadItem]:
-	var result: Array[DownloadItem] = []
-	result.append_array(_active_downloads.values())
-	return result
-
-func is_downloading(game_id: int) -> bool:
-	return _active_downloads.has(game_id)
-
-func is_queued(game_id: int) -> bool:
-	for item in _download_queue:
-		if item.game.romm_id == game_id:
+## Checks if an item is in the queue
+func is_queued(item_id: String) -> bool:
+	for item in _queue:
+		if item.id == item_id:
 			return true
 	return false
 
-# ==================== EMULATOR DOWNLOADS ====================
+## Gets all queued items
+func get_queued() -> Array[QueueItem]:
+	var result: Array[QueueItem] = []
+	result.append_array(_queue)
+	return result
 
-func queue_emulator_download(emulator_id: String, emulator_name: String, download_url: String, destination_path: String) -> bool:
-	# Check if already downloaded
-	if emulator_id in _completed_emulator_downloads:
-		print("[DownloadManager] Emulator already downloaded: " + emulator_id)
-		return false
-	
-	# Check if already in queue or downloading
-	for item in _emulator_download_queue:
-		if item.emulator_id == emulator_id:
-			return false
-	
-	if _active_emulator_downloads.has(emulator_id):
-		return false
-	
-	var item = EmulatorDownloadItem.new()
-	item.emulator_id = emulator_id
-	item.emulator_name = emulator_name
-	item.download_url = download_url
-	item.destination_path = destination_path
-	
-	_emulator_download_queue.append(item)
+## Gets all active items
+func get_active() -> Array[QueueItem]:
+	var result: Array[QueueItem] = []
+	result.append_array(_active_items.values())
+	return result
+
+## Checks if any item in the queue matches a predicate
+func has_item(predicate: Callable) -> bool:
+	for item in _queue:
+		if predicate.call(item):
+			return true
+	for item in _active_items.values():
+		if predicate.call(item):
+			return true
+	return false
+
+## Gets an item by ID
+func get_item(item_id: String) -> QueueItem:
+	if _active_items.has(item_id):
+		return _active_items[item_id]
+	for item in _queue:
+		if item.id == item_id:
+			return item
+	return null
+
+# ==================== INTERNAL METHODS ====================
+
+func _process_queue():
+	while _active_items.size() < _max_concurrent and _queue.size() > 0:
+		var item = _queue.pop_front()
+		
+		if item.status == "extract_pending":
+			# This is an extraction-only task
+			_start_extraction(item)
+		else:
+			# This is a download task
+			_start_download(item)
+		
+		queue_changed.emit()
+
+func _start_download(item: QueueItem):
+	item.status = "downloading"
+	item.progress = 0.0
+	_active_items[item.id] = item
 	
 	# Show notification with progress
 	item.notification_id = NotificationManager.show_notification(
-		"Downloading " + emulator_name + "...",
+		"Downloading " + item.name + "...",
 		Notification.Type.INFO,
 		null,
-		0.0,  # No timeout
+		0.0,
 		func() -> float:
 			return item.progress,
 		func(progress: float) -> String:
-			return "Downloading " + emulator_name + ": %d%%" % int(progress * 100)
+			return "Downloading " + item.name + ": %d%%" % int(progress * 100)
 	)
 	
-	_process_emulator_queue()
-	return true
-
-func _process_emulator_queue():
-	while _active_emulator_downloads.size() < 1 and _emulator_download_queue.size() > 0:  # Only 1 concurrent emulator download
-		var item = _emulator_download_queue.pop_front()
-		_start_emulator_download(item)
-
-func _start_emulator_download(item: EmulatorDownloadItem):
-	# Ensure destination folder exists
-	var dir_path = item.destination_path.get_base_dir()
-	var dir = DirAccess.open("user://")
-	if dir and not dir.dir_exists(dir_path.trim_prefix("user://")):
-		var make_dir_result = dir.make_dir_recursive(dir_path.trim_prefix("user://"))
-		if make_dir_result != OK:
-			item.status = "failed"
-			item.error_message = "Failed to create directory"
-			_emulator_download_completed(item, false, "Failed to create directory")
-			return
+	download_started.emit(item.id)
+	print("[DownloadManager] Starting download: " + item.id + " - " + item.url)
 	
-	item.status = "downloading"
-	_active_emulator_downloads[item.emulator_id] = item
+	# Make HTTP request through NetworkManager
+	var headers = []
+	if item.type == "game":
+		headers = ["Authorization: " + NetworkManager.get_auth_header()]
 	
-	emulator_download_started.emit(item.emulator_id)
+	item.http_request = NetworkManager.http_get(
+		item.url,
+		headers,
+		func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
+			_on_download_complete(item, success, body, error_msg)
+	)
 	
-	# Start download via NetworkManager
-	item.http_request = NetworkManager.download_file(
-		item.download_url,
-		item.destination_path,
-		func(bytes_received: int, total_bytes: int):
-			if total_bytes > 0:
-				item.progress = float(bytes_received) / float(total_bytes)
-				emulator_download_progress.emit(item.emulator_id, item.progress),
-		func(success: bool, message: String):
-			_emulator_download_completed(item, success, message)
+	if item.http_request == null:
+		# Failed to start
+		item.status = "failed"
+		item.error_message = "Failed to start download"
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Setup progress timer
+	_progress_timers[item.id] = Timer.new()
+	_progress_timers[item.id].wait_time = 0.5
+	_progress_timers[item.id].autostart = true
+	add_child(_progress_timers[item.id])
+	
+	_progress_timers[item.id].timeout.connect(func():
+		if item.http_request and is_instance_valid(item.http_request):
+			var body_size = item.http_request.get_body_size()
+			var downloaded = item.http_request.get_downloaded_bytes()
+			if body_size > 0:
+				item.progress = float(downloaded) / float(body_size)
+				download_progress.emit(item.id, item.progress)
 	)
 
-func _emulator_download_completed(item: EmulatorDownloadItem, success: bool, message: String):
-	_active_emulator_downloads.erase(item.emulator_id)
+func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray, error_msg: String):
+	# Stop progress timer
+	if _progress_timers.has(item.id):
+		_progress_timers[item.id].stop()
+		_progress_timers[item.id].queue_free()
+		_progress_timers.erase(item.id)
 	
-	if success:
+	item.http_request = null
+	
+	if not success:
+		item.status = "failed"
+		item.error_message = error_msg
+		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, error_msg)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Write file
+	var file = FileAccess.open(item.destination_path, FileAccess.WRITE)
+	if not file:
+		item.status = "failed"
+		item.error_message = "Failed to write file"
+		NotificationManager.update_notification_text(item.notification_id, "Failed to save: " + item.name)
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, "Failed to write file")
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	file.store_buffer(body)
+	file.close()
+	
+	print("[DownloadManager] Download complete: " + item.id + " -> " + item.destination_path)
+	
+	# Update game resource if applicable
+	if item.game_resource:
+		item.game_resource.has_local_copy = true
+		item.game_resource.file_path = item.destination_path
+		DataManager.update_game(item.game_resource)
+	
+	# Call custom callback if provided
+	if item.callbacks.has("on_complete"):
+		item.callbacks.on_complete.call(true, item.destination_path)
+	
+	# Auto-extract if requested
+	if item.auto_extract:
+		item.status = "extract_pending"
+		item.progress = 0.0
+		_start_extraction(item)
+	else:
 		item.status = "completed"
-		item.progress = 1.0  # Set to 100% so notification auto-dismisses
-		_completed_emulator_downloads.append(item.emulator_id)
-		print("[DownloadManager] Emulator download completed: " + item.emulator_id)
-		
-		# Start extraction automatically
-		print("[DownloadManager] Starting extraction for: " + item.emulator_id)
-		LaunchManager.extract_emulator(item.emulator_id)
+		item.progress = 1.0
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, true, item.destination_path)
+		queue_changed.emit()
+		_process_queue()
+
+func _start_extraction(item: QueueItem):
+	item.status = "extracting"
+	if not _active_items.has(item.id):
+		_active_items[item.id] = item
+	
+	# Show extraction notification - using pulsing progress (indeterminate)
+	# Close old notification and create new one with pulsing progress
+	if item.notification_id != -1:
+		NotificationManager.dismiss_notification(item.notification_id)
+	
+	item.notification_id = NotificationManager.show_notification(
+		"Extracting " + item.name + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			# Pulsing progress for extraction (no exact percentage)
+			var pulse = (Time.get_ticks_msec() % 2000) / 2000.0
+			return pulse,
+		func(progress: float) -> String:
+			return "Extracting " + item.name + "..."
+	)
+	
+	extraction_started.emit(item.id)
+	print("[DownloadManager] Starting extraction: " + item.id + " - " + item.destination_path)
+	
+	# Determine format and extract
+	var archive_path = item.destination_path
+	var extract_dir = item.extract_dir
+	
+	if archive_path.ends_with(".zip"):
+		_extract_zip(item, archive_path, extract_dir)
+	elif archive_path.ends_with(".7z"):
+		_extract_7z(item, archive_path, extract_dir)
 	else:
 		item.status = "failed"
-		item.error_message = message
-		print("[DownloadManager] Emulator download failed: " + item.emulator_id + " - " + message)
+		item.error_message = "Unknown archive format"
+		NotificationManager.update_notification_text(item.notification_id, "Unknown format: " + item.name)
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		extraction_completed.emit(item.id, false, "Unknown archive format")
+		queue_changed.emit()
+		_process_queue()
+
+func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
+	# Show extraction notification immediately
+	NotificationManager.update_notification_text(item.notification_id, "Extracting " + item.name + "...")
 	
-	emulator_download_completed.emit(item.emulator_id, success, message)
-	_process_emulator_queue()
+	# Create extraction callable for ThreadManager
+	var extraction_callable = func() -> bool:
+		var reader = ZIPReader.new()
+		var err = reader.open(archive_path)
+		
+		if err != OK:
+			print("[DownloadManager] Failed to open ZIP: " + str(err))
+			return false
+		
+		var files = reader.get_files()
+		
+		for file in files:
+			var dest_path = extract_dir + "/" + file
+			
+			# Create directory if needed
+			if file.ends_with("/"):
+				var dir = DirAccess.open("user://")
+				if dir:
+					dir.make_dir_recursive(dest_path.trim_prefix("user://"))
+				continue
+			
+			# Extract file
+			var buffer = reader.read_file(file)
+			if buffer.size() > 0:
+				var file_dir = dest_path.get_base_dir()
+				var dir = DirAccess.open("user://")
+				if dir:
+					dir.make_dir_recursive(file_dir.trim_prefix("user://"))
+				
+				var f = FileAccess.open(dest_path, FileAccess.WRITE)
+				if f:
+					f.store_buffer(buffer)
+					f.close()
+		
+		reader.close()
+		
+		# Clean up archive
+		var dir = DirAccess.open("user://")
+		if dir:
+			dir.remove(archive_path.trim_prefix("user://"))
+		
+		return true
+	
+	# Queue extraction to ThreadManager
+	ThreadManager.queue_extraction_task(extraction_callable, func(success: bool):
+		if success:
+			item.status = "completed"
+			item.progress = 1.0
+			NotificationManager.update_notification_text(item.notification_id, item.name + " ready!")
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			
+			print("[DownloadManager] Extraction complete: " + item.id)
+			extraction_completed.emit(item.id, true, extract_dir)
+			queue_changed.emit()
+			_process_queue()
+		else:
+			item.status = "failed"
+			item.error_message = "Extraction failed"
+			NotificationManager.update_notification_text(item.notification_id, "Extraction failed: " + item.name)
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			extraction_completed.emit(item.id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
+	)
 
-func is_emulator_downloading(emulator_id: String) -> bool:
-	return _active_emulator_downloads.has(emulator_id)
+func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
+	var binary_path = _get_7z_binary_path()
+	
+	if not FileAccess.file_exists(binary_path):
+		item.status = "failed"
+		item.error_message = "7z binary not found"
+		NotificationManager.update_notification_text(item.notification_id, "Extractor not found: " + item.name)
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		extraction_completed.emit(item.id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Show extraction notification immediately
+	NotificationManager.update_notification_text(item.notification_id, "Extracting " + item.name + "...")
+	
+	var abs_archive_path = ProjectSettings.globalize_path(archive_path)
+	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
+	
+	# Create extraction callable for ThreadManager
+	var extraction_callable = func() -> bool:
+		# Start extraction process (blocking in thread)
+		var args = ["x", abs_archive_path, "-o" + abs_extract_dir, "-y"]
+		var output = []
+		var exit_code = OS.execute(binary_path, args, output, true)
+		
+		if exit_code != 0:
+			print("[DownloadManager] 7z extraction failed with exit code: " + str(exit_code))
+			return false
+		
+		# Clean up archive
+		var dir = DirAccess.open("user://")
+		if dir:
+			dir.remove(archive_path.trim_prefix("user://"))
+		
+		return true
+	
+	# Queue extraction to ThreadManager
+	ThreadManager.queue_extraction_task(extraction_callable, func(success: bool):
+		if success:
+			item.status = "completed"
+			item.progress = 1.0
+			NotificationManager.update_notification_text(item.notification_id, item.name + " ready!")
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			
+			print("[DownloadManager] 7z extraction complete: " + item.id)
+			extraction_completed.emit(item.id, true, extract_dir)
+			queue_changed.emit()
+			_process_queue()
+		else:
+			item.status = "failed"
+			item.error_message = "Extraction failed"
+			NotificationManager.update_notification_text(item.notification_id, "Extraction failed: " + item.name)
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			extraction_completed.emit(item.id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
+	)
 
-func is_emulator_queued(emulator_id: String) -> bool:
-	for item in _emulator_download_queue:
-		if item.emulator_id == emulator_id:
-			return true
-	return false
+func _get_7z_binary_path() -> String:
+	var platform_name = ""
+	match PlatformManager.current_platform:
+		PlatformManager.Platform.WINDOWS:
+			platform_name = "windows"
+		PlatformManager.Platform.LINUX:
+			platform_name = "linux"
+		_:
+			return ""
+	
+	var binary_name = "7za.exe" if PlatformManager.is_windows() else "7z"
+	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
 
-func has_emulator_been_downloaded(emulator_id: String) -> bool:
-	return emulator_id in _completed_emulator_downloads
+func _cleanup_item(item: QueueItem):
+	if item.notification_id != -1:
+		# Let notification auto-dismiss on completion/failure
+		pass
+
+# ==================== IMAGE DOWNLOADS (NO QUEUE) ====================
+
+# Track active image downloads for deduplication
+var _active_image_downloads: Dictionary = {}  # url -> {callbacks: [], completed: bool, success: bool}
+
+## Downloads an image immediately (no queue) with caching and deduplication
+## callback(success: bool)
+func download_image(url: String, cache_path: String, callback: Callable) -> bool:
+	# Check if already cached
+	if FileAccess.file_exists(cache_path):
+		callback.call(true)
+		return true
+	
+	# Check if already downloading (deduplication)
+	if _active_image_downloads.has(url):
+		var state = _active_image_downloads[url]
+		if state.completed:
+			callback.call(state.success)
+		else:
+			state.callbacks.append(callback)
+		return true
+	
+	# Start new download
+	_active_image_downloads[url] = {
+		"callbacks": [callback],
+		"completed": false,
+		"success": false
+	}
+	
+	# Make HTTP request
+	NetworkManager.http_get(url, [], func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
+		if not success or body.is_empty():
+			# Download failed
+			var state = _active_image_downloads[url]
+			state.completed = true
+			state.success = false
+			for cb in state.callbacks:
+				cb.call(false)
+			# Clean up after delay
+			await get_tree().create_timer(5.0).timeout
+			_active_image_downloads.erase(url)
+			return
+		
+		# Save to cache
+		var file = FileAccess.open(cache_path, FileAccess.WRITE)
+		if file:
+			file.store_buffer(body)
+			file.close()
+		
+		# Notify callbacks
+		var state = _active_image_downloads[url]
+		state.completed = true
+		state.success = true
+		for cb in state.callbacks:
+			cb.call(true)
+		
+		# Clean up after delay
+		await get_tree().create_timer(5.0).timeout
+		_active_image_downloads.erase(url)
+	)
+	
+	return true

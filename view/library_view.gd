@@ -29,9 +29,9 @@ func _ready():
 	DataManager.sync_completed.connect(_on_sync_completed)
 	DataManager.sync_progress.connect(_on_sync_progress)
 	
-	# Connect to network manager for downloads
-	NetworkManager.download_progress_update.connect(_on_download_progress)
-	NetworkManager.download_finished.connect(_on_download_finished)
+	# Connect to download manager for downloads
+	DownloadManager.download_progress.connect(_on_download_progress)
+	DownloadManager.download_completed.connect(_on_download_completed)
 	
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
@@ -164,20 +164,29 @@ func _process_pending_cards():
 		status_label.text = "Showing %d games" % _game_cards.size()
 
 func _on_download_requested(game: GameResource):
-	if NetworkManager.queue_game_download(game):
+	var download_url = NetworkManager.get_romm_download_url(game.romm_id, game.file_name)
+	var root_folder = SettingsManager.get_setting("games_root_folder")
+	if not root_folder or root_folder.value == "":
+		status_label.text = "Error: Games folder not set"
+		return
+	
+	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + game.file_name
+	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game)
+	
+	if item_id != "":
 		status_label.text = "Queued: " + game.get_display_name()
 	else:
 		status_label.text = "Failed to queue download"
 
-func _on_download_progress(game_id: int, progress_percent: float):
+func _on_download_progress(item_id: String, progress: float):
 	# Update UI if needed (game cards handle their own progress display)
 	pass
 
-func _on_download_finished(game_id: int, success: bool, file_path: String):
+func _on_download_completed(item_id: String, success: bool, message: String):
 	if success:
 		status_label.text = "Download completed"
 	else:
-		status_label.text = "Download failed"
+		status_label.text = "Download failed: " + message
 
 func _on_sync_progress(percent: float, current: int, total: int):
 	status_label.text = "Syncing... %d/%d games (%.0f%%)" % [current, total, percent]

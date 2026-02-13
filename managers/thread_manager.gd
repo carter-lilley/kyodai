@@ -4,16 +4,21 @@ class_name ThreadManager
 
 var _db_thread: Thread
 var _image_thread: Thread
+var _extraction_thread: Thread
 var _db_queue: Array = []
 var _image_queue: Array = []
+var _extraction_queue: Array = []
 var _db_mutex: Mutex
 var _image_mutex: Mutex
+var _extraction_mutex: Mutex
 var _db_semaphore: Semaphore
 var _image_semaphore: Semaphore
+var _extraction_semaphore: Semaphore
 var _exit_flag: bool = false
 
 const MAX_IMAGE_QUEUE_SIZE = 30
 const MAX_DB_QUEUE_SIZE = 50
+const MAX_EXTRACTION_QUEUE_SIZE = 5
 
 static var _instance: ThreadManager = null
 
@@ -22,14 +27,18 @@ func _init():
 		_instance = self
 		_db_mutex = Mutex.new()
 		_image_mutex = Mutex.new()
+		_extraction_mutex = Mutex.new()
 		_db_semaphore = Semaphore.new()
 		_image_semaphore = Semaphore.new()
+		_extraction_semaphore = Semaphore.new()
 		
 		_db_thread = Thread.new()
 		_image_thread = Thread.new()
+		_extraction_thread = Thread.new()
 		
 		_db_thread.start(_db_worker)
 		_image_thread.start(_image_worker)
+		_extraction_thread.start(_extraction_worker)
 
 static func _db_worker():
 	while not _instance._exit_flag:
@@ -61,6 +70,25 @@ static func _image_worker():
 		var task = _instance._image_queue.pop_front()
 		var remaining = _instance._image_queue.size()
 		_instance._image_mutex.unlock()
+		
+		if task:
+			var result = task.callable.call()
+			
+			# Call callback on main thread
+			if task.callback.is_valid():
+				_instance.call_deferred("_execute_callback", task.callback, result)
+
+static func _extraction_worker():
+	while not _instance._exit_flag:
+		_instance._extraction_semaphore.wait()
+		
+		if _instance._exit_flag:
+			break
+		
+		_instance._extraction_mutex.lock()
+		var task = _instance._extraction_queue.pop_front()
+		var remaining = _instance._extraction_queue.size()
+		_instance._extraction_mutex.unlock()
 		
 		if task:
 			var result = task.callable.call()
@@ -112,6 +140,27 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 	_instance._image_mutex.unlock()
 	_instance._image_semaphore.post()
 
+static func queue_extraction_task(callable: Callable, callback: Callable = Callable()):
+	if _instance == null:
+		push_error("[ThreadManager] Not initialized - cannot queue extraction task")
+		return
+	
+	_instance._extraction_mutex.lock()
+	var current_size = _instance._extraction_queue.size()
+	
+	# If queue is full, reject this task
+	if current_size >= MAX_EXTRACTION_QUEUE_SIZE:
+		_instance._extraction_mutex.unlock()
+		push_error("[ThreadManager] Extraction queue full - cannot queue task")
+		# Still call callback with failure so UI doesn't hang
+		if callback.is_valid():
+			callback.call_deferred(false)
+		return
+	
+	_instance._extraction_queue.append({"callable": callable, "callback": callback})
+	_instance._extraction_mutex.unlock()
+	_instance._extraction_semaphore.post()
+
 static func get_db_queue_size() -> int:
 	if _instance == null:
 		return 0
@@ -133,7 +182,11 @@ static func has_pending_tasks() -> bool:
 	var image_pending = _instance._image_queue.size()
 	_instance._image_mutex.unlock()
 	
-	return db_pending > 0 or image_pending > 0
+	_instance._extraction_mutex.lock()
+	var extraction_pending = _instance._extraction_queue.size()
+	_instance._extraction_mutex.unlock()
+	
+	return db_pending > 0 or image_pending > 0 or extraction_pending > 0
 
 static func get_image_queue_size() -> int:
 	if _instance == null:
@@ -150,8 +203,10 @@ static func shutdown():
 	_instance._exit_flag = true
 	_instance._db_semaphore.post()
 	_instance._image_semaphore.post()
+	_instance._extraction_semaphore.post()
 	_instance._db_thread.wait_to_finish()
 	_instance._image_thread.wait_to_finish()
+	_instance._extraction_thread.wait_to_finish()
 	print("[ThreadManager] Threads shut down")
 	_instance = null
 

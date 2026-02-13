@@ -10,10 +10,6 @@ func _ready():
 	view_name = "Platforms"
 	_build_view()
 	
-	# Connect to download manager signals to refresh UI when downloads complete
-	DownloadManager.emulator_download_completed.connect(_on_emulator_download_completed)
-	DownloadManager.emulator_download_progress.connect(_on_emulator_download_progress)
-	
 	# Connect to launch manager signals for extraction
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
 	LaunchManager.emulator_extraction_progress.connect(_on_emulator_extraction_progress)
@@ -317,17 +313,6 @@ func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	if success:
 		# Refresh the card to show "Downloading..." state
 		card.refresh_ui()
-
-func _on_emulator_download_progress(emulator_id: String, progress: float):
-	# Progress is handled by notification, but we could update UI here if needed
-	pass
-
-func _on_emulator_download_completed(emulator_id: String, success: bool, message: String):
-	# Refresh all cards that use this emulator
-	for slug in _platform_cards.keys():
-		var card: PlatformCard = _platform_cards[slug]
-		if card.selected_emulator == emulator_id:
-			card.refresh_ui()
 
 func _on_emulator_extraction_started(emulator_id: String):
 	# Refresh UI to show "Installing..." state
