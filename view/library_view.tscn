@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://djryygss138q3"]
+[gd_scene load_steps=3 format=3 uid="uid://djryygss138q3"]
 
 [ext_resource type="Script" uid="uid://bfusgr7caldoo" path="res://view/library_view.gd" id="1_libview"]
+[ext_resource type="Script" uid="uid://dmbm4ebefwgyf" path="res://base_class/virtual_scroll_grid_container.gd" id="2_vscroll"]
 
 [node name="LibraryView" type="Control" unique_id=575533095]
 layout_mode = 3
@@ -19,28 +20,16 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Toolbar" type="HBoxContainer" parent="VBoxContainer" unique_id=51520235]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="SearchLineEdit" type="LineEdit" parent="VBoxContainer/Toolbar" unique_id=545555831]
+[node name="VirtualScrollGridContainer" type="Control" parent="VBoxContainer" unique_id=806442112]
 layout_mode = 2
 size_flags_horizontal = 3
-placeholder_text = "Search games..."
-
-[node name="PlatformOption" type="OptionButton" parent="VBoxContainer/Toolbar" unique_id=530374401]
-layout_mode = 2
-
-[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer" unique_id=806442112]
-layout_mode = 2
 size_flags_vertical = 3
-
-[node name="GamesGrid" type="GridContainer" parent="VBoxContainer/ScrollContainer" unique_id=700407242]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/h_separation = 10
-theme_override_constants/v_separation = 10
-columns = 5
+script = ExtResource("2_vscroll")
+card_scene = null
+grid_columns = 5
+item_height = 240.0
+buffer_page_count = 3
+min_scroll_threshold = 60.0
 
 [node name="StatusLabel" type="Label" parent="VBoxContainer" unique_id=456298261]
 layout_mode = 2

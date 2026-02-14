@@ -1,25 +1,19 @@
 class_name LibraryView
 extends View
 
-@onready var search_line_edit: LineEdit = $VBoxContainer/Toolbar/SearchLineEdit
-@onready var platform_option: OptionButton = $VBoxContainer/Toolbar/PlatformOption
-@onready var scroll_container: ScrollContainer = $VBoxContainer/ScrollContainer
-@onready var games_grid: GridContainer = $VBoxContainer/ScrollContainer/GamesGrid
+@onready var games_grid: VirtualScrollGridContainer = $VBoxContainer/VirtualScrollGridContainer
 @onready var status_label: Label = $VBoxContainer/StatusLabel
 
-var _game_cards: Array[GameCard] = []
-var _current_platform: String = ""
-
-# Batched card addition during sync
-var _pending_games: Array[GameResource] = []
-var _is_processing_pending: bool = false
-var _is_loading_games: bool = false
-var _card_batch_size: int = 3  # Add 3 cards at a time to reduce image queue pressure
+var _total_games: int = 0
+var _is_loading: bool = false
 
 func _ready():
-	# Setup UI
-	search_line_edit.text_changed.connect(_on_search_changed)
-	platform_option.item_selected.connect(_on_platform_selected)
+	# Setup VirtualScrollGridContainer
+	var card_scene = preload("res://components/game_card.tscn")
+	games_grid.setup(card_scene, 0, 5)
+	games_grid.items_requested.connect(_on_items_requested)
+	games_grid.visible_range_changed.connect(_on_visible_range_changed)
+	games_grid.item_created.connect(_on_card_created)
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
@@ -37,141 +31,53 @@ func _ready():
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
 	
 	# Initial load
-	_load_platforms()
-	_load_games()
+	_load_total_count()
 
-func _load_platforms():
-	platform_option.clear()
-	platform_option.add_item("All Platforms")
+func _load_total_count():
+	"""Get total game count for virtual scrolling setup."""
+	_is_loading = true
+	status_label.text = "Loading library..."
 	
-	var platforms = DataManager.get_all_platforms()
-	for platform in platforms:
-		platform_option.add_item(platform.name)
-		platform_option.set_item_metadata(platform_option.get_item_count() - 1, platform.slug)
+	# Query total count asynchronously
+	ThreadManager.queue_db_task(
+		func():
+			var count = DataManager.get_total_games_count()
+			print("[LibraryView] Total games count: %d" % count)
+			return count,
+		func(count: int):
+			_total_games = count
+			print("[LibraryView] Setting total count: %d" % count)
+			games_grid.set_total_count(count)
+			status_label.text = "Showing 0-0 of %d games" % count
+			_is_loading = false
+	)
 
-func _load_games():
-	# Prevent concurrent loading
-	if _is_loading_games:
-		return
-	_is_loading_games = true
-	
-	# Wait for any pending card processing to complete
-	while _is_processing_pending:
-		await get_tree().process_frame
-	
-	# Clear any leftover pending games
-	_pending_games.clear()
-	
-	# Clear existing cards from grid
-	for child in games_grid.get_children():
-		child.queue_free()
-	_game_cards.clear()
-	
-	var games: Array[GameResource]
-	
-	if _current_platform == "":
-		games = DataManager.get_all_games()
+func _on_items_requested(offset: int, limit: int):
+	"""Handle database query requests from VirtualScrollGridContainer."""
+	print("[LibraryView] Items requested: offset=%d, limit=%d" % [offset, limit])
+	ThreadManager.queue_db_task(
+		func():
+			var games = DataManager.get_games_paginated(offset, limit, "title", true)
+			print("[LibraryView] DB query complete: got %d games" % games.size())
+			return games,
+		func(games: Array[GameResource]):
+			print("[LibraryView] Calling on_items_loaded with %d games at offset %d" % [games.size(), offset])
+			games_grid.on_items_loaded(games, offset)
+	)
+
+func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
+	"""Update status label with current visible range."""
+	if total_count == 0:
+		status_label.text = "No games found"
 	else:
-		games = DataManager.get_games_by_platform(_current_platform)
-	
-	status_label.text = "Loading %d games..." % games.size()
-	
-	# Add cards in batches to prevent UI freeze and image queue overflow
-	_add_game_cards_batch(games, 0)
+		var start_num = start_index + 1
+		var end_num = mini(end_index, total_count)
+		status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, total_count]
 
-func _add_game_cards_batch(games: Array[GameResource], index: int):
-	var batch_size = 5
-	var end_index = mini(index + batch_size, games.size())
-	
-	for i in range(index, end_index):
-		_add_game_card(games[i])
-	
-	if end_index < games.size():
-		# Schedule next batch
-		status_label.text = "Loading games... %d/%d" % [end_index, games.size()]
-		call_deferred("_add_game_cards_batch", games, end_index)
-	else:
-		status_label.text = "Showing %d games" % games.size()
-		_is_loading_games = false
-
-func _add_game_card(game: GameResource):
-	var card_scene = preload("res://components/game_card.tscn")
-	var card = card_scene.instantiate()
-	card.game = game
-	card.download_requested.connect(_on_download_requested)
-	games_grid.add_child(card)
-	_game_cards.append(card)
-
-func _on_search_changed(text: String):
-	if text == "":
-		_load_games()
-		return
-	
-	# Clear existing
-	for card in _game_cards:
-		card.queue_free()
-	_game_cards.clear()
-	
-	var games = DataManager.search_games(text)
-	for game in games:
-		_add_game_card(game)
-	
-	status_label.text = "Found %d games" % games.size()
-
-func _on_platform_selected(index: int):
-	if index == 0:
-		_current_platform = ""
-	else:
-		_current_platform = platform_option.get_item_metadata(index)
-	_load_games()
-
-func _on_database_ready():
-	_load_platforms()
-	_load_games()
-
-func _on_game_added(game: GameResource):
-	# Queue the game for batched UI addition
-	_pending_games.append(game)
-	if not _is_processing_pending:
-		_process_pending_cards()
-
-func _on_game_updated(game: GameResource):
-	# Find and update the card
-	for card in _game_cards:
-		if card.game and card.game.romm_id == game.romm_id:
-			card.game = game
-			break
-
-func _on_games_removed(platform_slug: String):
-	print("[LibraryView] Games removed from platform: ", platform_slug)
-	# Remove cards for this platform immediately
-	var cards_to_remove = []
-	for card in _game_cards:
-		if card.game and card.game.platform_slug == platform_slug:
-			cards_to_remove.append(card)
-	
-	for card in cards_to_remove:
-		_game_cards.erase(card)
-		card.queue_free()
-	
-	status_label.text = "Showing %d games" % _game_cards.size()
-
-func _process_pending_cards():
-	_is_processing_pending = true
-	
-	# Process a batch of pending games
-	var batch_count = mini(_card_batch_size, _pending_games.size())
-	for i in range(batch_count):
-		_add_game_card(_pending_games[0])
-		_pending_games.remove_at(0)
-	
-	# If more pending, schedule next batch with a small delay
-	if _pending_games.size() > 0:
-		await get_tree().create_timer(0.05).timeout  # 50ms delay between batches
-		_process_pending_cards()
-	else:
-		_is_processing_pending = false
-		status_label.text = "Showing %d games" % _game_cards.size()
+func _on_card_created(card: Control, index: int):
+	"""Connect signals to newly created cards."""
+	if card is GameCard:
+		card.download_requested.connect(_on_download_requested)
 
 func _on_download_requested(game: GameResource):
 	var download_url = NetworkManager.get_romm_download_url(game.romm_id, game.file_name)
@@ -189,7 +95,6 @@ func _on_download_requested(game: GameResource):
 		status_label.text = "Failed to queue download"
 
 func _on_download_progress(item_id: String, progress: float):
-	# Update UI if needed (game cards handle their own progress display)
 	pass
 
 func _on_download_completed(item_id: String, success: bool, message: String):
@@ -198,33 +103,48 @@ func _on_download_completed(item_id: String, success: bool, message: String):
 	else:
 		status_label.text = "Download failed: " + message
 
+func _on_database_ready():
+	_load_total_count()
+
+func _on_game_added(game: GameResource):
+	# Refresh total count and grid
+	_load_total_count()
+
+func _on_game_updated(game: GameResource):
+	# Find and update any visible cards for this game
+	var range_info = games_grid.get_visible_range()
+	for i in range(range_info.buffer_start, range_info.buffer_start + range_info.buffer_size):
+		var card = games_grid.get_card_at_index(i)
+		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
+			card.game = game
+			break
+
+func _on_games_removed(platform_slug: String):
+	print("[LibraryView] Games removed from platform: ", platform_slug)
+	_reload_after_change()
+
+func _reload_after_change():
+	"""Reload after games added/removed."""
+	_load_total_count()
+
 func _on_sync_progress(percent: float, current: int, total: int):
 	status_label.text = "Syncing... %d/%d games (%.0f%%)" % [current, total, percent]
 
 func _on_sync_completed(success: bool, message: String):
 	if success:
-		status_label.text = "Sync complete. Refreshing library..."
-		
-		# Small delay to allow any pending operations to settle
+		status_label.text = "Sync complete. Refreshing..."
 		await get_tree().create_timer(0.5).timeout
-		
-		# Refresh platforms list and reload all games (in case games were removed)
-		_load_platforms()
-		await _load_games()
-		status_label.text = "Showing %d games" % _game_cards.size()
+		_load_total_count()
 	else:
 		status_label.text = "Sync failed: " + message
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
-	"""Handle modal item selection."""
 	var romm_id = context.get("romm_id", 0)
 	
 	match item_id:
 		"details":
-			# Show game details view
 			UIManager.show_game_details(romm_id)
 		"launch":
-			# Launch the game using LaunchManager
 			print("[LibraryView] Launch requested for game: ", romm_id)
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
@@ -232,5 +152,4 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			else:
 				print("[LibraryView] Game not found: ", romm_id)
 		"hide":
-			# Hide game logic (not implemented yet)
 			print("[LibraryView] Hide requested for game: ", romm_id)

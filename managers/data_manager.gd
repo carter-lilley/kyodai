@@ -544,6 +544,30 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 		games.append(_row_to_game(row))
 	return games
 
+func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true) -> Array[GameResource]:
+	var games: Array[GameResource] = []
+	if not _is_db_ready:
+		print("[DataManager] DB not ready for pagination query")
+		return games
+	
+	var order = "ASC" if ascending else "DESC"
+	var query = "SELECT * FROM games ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+	print("[DataManager] Executing query: %s" % query)
+	_db.query(query)
+	print("[DataManager] Query returned %d rows" % _db.query_result.size())
+	
+	for row in _db.query_result:
+		games.append(_row_to_game(row))
+	return games
+
+func get_total_games_count() -> int:
+	if not _is_db_ready:
+		return 0
+	_db.query("SELECT COUNT(*) as count FROM games")
+	if _db.query_result.size() > 0:
+		return _db.query_result[0]["count"]
+	return 0
+
 func _row_to_game(row: Dictionary) -> GameResource:
 	var game = GameResource.new()
 	game.id = row["id"]
