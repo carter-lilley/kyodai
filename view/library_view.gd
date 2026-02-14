@@ -52,17 +52,17 @@ func _load_total_count():
 			_is_loading = false
 	)
 
-func _on_items_requested(offset: int, limit: int):
+func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
-	print("[LibraryView] Items requested: offset=%d, limit=%d" % [offset, limit])
+	print("[LibraryView] Items requested: offset=%d, limit=%d, preload=%s" % [offset, limit, is_preload])
 	ThreadManager.queue_db_task(
 		func():
 			var games = DataManager.get_games_paginated(offset, limit, "title", true)
 			print("[LibraryView] DB query complete: got %d games" % games.size())
 			return games,
 		func(games: Array[GameResource]):
-			print("[LibraryView] Calling on_items_loaded with %d games at offset %d" % [games.size(), offset])
-			games_grid.on_items_loaded(games, offset)
+			print("[LibraryView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
+			games_grid.on_items_loaded(games, offset, is_preload)
 	)
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
