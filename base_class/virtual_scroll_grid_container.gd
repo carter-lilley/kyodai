@@ -15,7 +15,9 @@ signal item_created(item, index)
 
 # Smooth Scrolling
 @export var smooth_scrolling: bool = true
-@export var smooth_scroll_duration: float = 1.0  # Duration of smooth scroll in seconds
+@export var smooth_scroll_duration: float = 2.0  # Duration of smooth scroll in seconds
+@export var smooth_scroll_big_jump_threshold: float = 3500.0  # Distance (pixels) where we slow down big jumps
+@export var smooth_scroll_big_jump_multiplier: float = 3.0  # How much to slow down big jumps (2x = twice as slow)
 
 # Internal nodes
 var _scroll_container: ScrollContainer
@@ -633,13 +635,23 @@ func _start_smooth_scroll():
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
 	
+	var start_value = float(_scroll_container.scroll_vertical)
+	var target_value = _target_scroll_y
+	
+	# Calculate distance and adjust duration for big jumps
+	var distance = abs(target_value - start_value)
+	var duration = smooth_scroll_duration
+	
+	# For massive jumps (like A-Z), slow down to hide loading boundaries
+	if distance > smooth_scroll_big_jump_threshold:
+		var extra_distance = distance - smooth_scroll_big_jump_threshold
+		var extra_duration = (extra_distance / smooth_scroll_big_jump_threshold) * (smooth_scroll_duration * (smooth_scroll_big_jump_multiplier - 1.0))
+		duration = smooth_scroll_duration + extra_duration
+	
 	# Create new tween for smooth scrolling
 	_scroll_tween = create_tween()
 	_scroll_tween.set_trans(Tween.TRANS_EXPO)
 	_scroll_tween.set_ease(Tween.EASE_OUT)
-	
-	var start_value = float(_scroll_container.scroll_vertical)
-	var target_value = _target_scroll_y
 	
 	# Use tween_method to interpolate scroll position
 	_scroll_tween.tween_method(
@@ -648,7 +660,7 @@ func _start_smooth_scroll():
 				_scroll_container.scroll_vertical = int(val),
 			start_value,
 			target_value,
-			smooth_scroll_duration
+			duration
 		)
 	
 	_is_smooth_scrolling = true
