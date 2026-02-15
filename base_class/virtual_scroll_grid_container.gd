@@ -9,9 +9,13 @@ signal item_created(item, index)
 @export var card_scene: PackedScene
 @export var grid_columns: int = 5
 @export var item_height: float = 240.0
-@export var buffer_size: int = 50  # Total cards in circular buffer
+@export var buffer_size: int = 75  # Total cards in circular buffer
 @export var preload_distance: int = 25  # Items from edge to trigger preload (6 rows)
 @export var debug_mode: bool = false  # Enable visual debugging
+
+# Smooth Scrolling
+@export var smooth_scrolling: bool = true
+@export var smooth_scroll_duration: float = 1.0  # Duration of smooth scroll in seconds
 
 # Internal nodes
 var _scroll_container: ScrollContainer
@@ -37,6 +41,16 @@ var _pending_loads: Dictionary = {}  # offset -> bool
 # Loading state
 var _is_loading: bool = false
 
+# Smooth scrolling state
+var _target_scroll_y: float = 0.0
+var _scroll_tween: Tween
+var _is_smooth_scrolling: bool = false
+
+# Scrollbar drag smoothing
+var _is_dragging_scrollbar: bool = false
+var _scrollbar_drag_start_mouse_y: float = 0.0
+var _scrollbar_drag_start_value: float = 0.0
+
 func _ready():
 	_setup_ui()
 
@@ -56,6 +70,12 @@ func _setup_ui():
 	var v_scrollbar = _scroll_container.get_v_scroll_bar()
 	if v_scrollbar:
 		v_scrollbar.value_changed.connect(_on_scroll_value_changed)
+	
+	# Connect to gui_input to intercept scroll wheel events for smooth scrolling
+	if smooth_scrolling:
+		_scroll_container.gui_input.connect(_on_scroll_container_input)
+		# Also connect to scrollbar for drag smoothing
+		v_scrollbar.gui_input.connect(_on_scrollbar_input)
 	
 	_grid_container = GridContainer.new()
 	_grid_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -128,6 +148,12 @@ func _on_scroll_value_changed(value: float):
 	"""Handle scroll position changes via scrollbar signal."""
 	if _total_items == 0 or not _scroll_container:
 		return
+	
+	# Sync target value when scroll changes from non-smooth sources
+	# (touch pan, keyboard navigation, etc.) but NOT during scrollbar drag
+	# or smooth scrolling animations
+	if smooth_scrolling and not _is_smooth_scrolling and not _is_dragging_scrollbar:
+		_target_scroll_y = value
 	
 	var scroll_pos = int(value)
 	var viewport_height = _scroll_container.size.y
@@ -482,6 +508,12 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 	# Request data for the new range
 	_request_data(new_start, new_end - new_start + 1)
 
+func get_target_scroll() -> float:
+	"""Get the target scroll value for smooth scrolling."""
+	if smooth_scrolling:
+		return _target_scroll_y
+	return float(_scroll_container.scroll_vertical) if _scroll_container else 0.0
+
 func get_visible_range() -> Dictionary:
 	var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 	var viewport_height = _scroll_container.size.y if _scroll_container else 600
@@ -503,12 +535,124 @@ func get_card_at_index(index: int) -> Control:
 			return card
 	return null
 
-func scroll_to_index(index: int):
+func scroll_to_index(index: int, animate: bool = false):
 	if _scroll_container:
 		var row = index / grid_columns
 		var target_y = row * item_height
-		_scroll_container.scroll_vertical = target_y
+		
+		if animate and smooth_scrolling:
+			_target_scroll_y = target_y
+			_start_smooth_scroll()
+		else:
+			_scroll_container.scroll_vertical = target_y
 		# The value_changed signal will trigger _on_scroll_value_changed automatically
+
+func _on_scroll_container_input(event: InputEvent):
+	if not smooth_scrolling:
+		return
+	
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			# Intercept wheel events for smooth scrolling
+			var scrollbar = _scroll_container.get_v_scroll_bar()
+			if not scrollbar:
+				return
+			
+			# Calculate scroll step (same logic as ScrollContainer)
+			var step = scrollbar.custom_step
+			if step <= 0:
+				# Default step: scrollbar page / 10
+				step = scrollbar.page / 10.0
+			
+			# Accumulate into target value instead of setting directly
+			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				_target_scroll_y -= step
+			else:
+				_target_scroll_y += step
+			
+			# Clamp to valid range
+			_target_scroll_y = clampf(_target_scroll_y, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+			
+			# Start smooth scroll tween
+			_start_smooth_scroll()
+			
+			# Accept the event to prevent ScrollContainer from handling it
+			_scroll_container.accept_event()
+
+func _on_scrollbar_input(event: InputEvent):
+	if not smooth_scrolling:
+		return
+	
+	var scrollbar = _scroll_container.get_v_scroll_bar()
+	if not scrollbar:
+		return
+	
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				# Start dragging - capture initial state
+				_is_dragging_scrollbar = true
+				_scrollbar_drag_start_mouse_y = event.global_position.y
+				_scrollbar_drag_start_value = _target_scroll_y
+				
+				# Kill any existing tween to allow immediate response to drag
+				if _scroll_tween and _scroll_tween.is_valid():
+					_scroll_tween.kill()
+				_is_smooth_scrolling = false
+			else:
+				# Release drag
+				_is_dragging_scrollbar = false
+	
+	elif event is InputEventMouseMotion and _is_dragging_scrollbar:
+		# Calculate drag delta
+		var mouse_delta = event.global_position.y - _scrollbar_drag_start_mouse_y
+		
+		# Convert mouse movement to scroll value
+		# The ratio depends on how much content is scrollable vs scrollbar size
+		var scrollable_range = scrollbar.max_value - scrollbar.min_value - scrollbar.page
+		var scrollbar_track_height = scrollbar.size.y - scrollbar.get_combined_minimum_size().y
+		
+		if scrollbar_track_height > 0 and scrollable_range > 0:
+			var scroll_delta = (mouse_delta / scrollbar_track_height) * scrollable_range
+			_target_scroll_y = _scrollbar_drag_start_value + scroll_delta
+			
+			# Clamp to valid range
+			_target_scroll_y = clampf(_target_scroll_y, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+			
+			# Start smooth scroll - the scrollbar thumb will lag behind mouse
+			_start_smooth_scroll()
+			
+			# Accept event to prevent native scrollbar handling
+			scrollbar.accept_event()
+
+func _start_smooth_scroll():
+	if not _scroll_container:
+		return
+	
+	# Kill any existing tween
+	if _scroll_tween and _scroll_tween.is_valid():
+		_scroll_tween.kill()
+	
+	# Create new tween for smooth scrolling
+	_scroll_tween = create_tween()
+	_scroll_tween.set_trans(Tween.TRANS_EXPO)
+	_scroll_tween.set_ease(Tween.EASE_OUT)
+	
+	var start_value = float(_scroll_container.scroll_vertical)
+	var target_value = _target_scroll_y
+	
+	# Use tween_method to interpolate scroll position
+	_scroll_tween.tween_method(
+		func(val: float): 
+			if _scroll_container:
+				_scroll_container.scroll_vertical = int(val),
+			start_value,
+			target_value,
+			smooth_scroll_duration
+		)
+	
+	_is_smooth_scrolling = true
+	_scroll_tween.finished.connect(func(): _is_smooth_scrolling = false)
 
 func _setup_debug_camera():
 	"""Setup a simple Camera2D to zoom out and see more cards."""
