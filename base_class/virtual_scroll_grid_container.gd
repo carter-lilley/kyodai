@@ -9,8 +9,8 @@ signal item_created(item, index)
 @export var card_scene: PackedScene
 @export var grid_columns: int = 5
 @export var item_height: float = 240.0
-@export var buffer_size: int = 100  # Total cards in circular buffer
-@export var preload_distance: int = 30  # Items from edge to trigger preload (6 rows)
+@export var buffer_size: int = 50  # Total cards in circular buffer
+@export var preload_distance: int = 25  # Items from edge to trigger preload (6 rows)
 @export var debug_mode: bool = false  # Enable visual debugging
 
 # Internal nodes
@@ -39,7 +39,6 @@ var _is_loading: bool = false
 
 func _ready():
 	_setup_ui()
-	set_process(true)
 
 func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -50,7 +49,13 @@ func _setup_ui():
 	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll_container.scroll_vertical = 0
 	add_child(_scroll_container)
+	
+	# Connect to scrollbar value changes for efficient scroll detection
+	var v_scrollbar = _scroll_container.get_v_scroll_bar()
+	if v_scrollbar:
+		v_scrollbar.value_changed.connect(_on_scroll_value_changed)
 	
 	_grid_container = GridContainer.new()
 	_grid_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -119,11 +124,12 @@ func _initial_load():
 	_update_spacer()
 	_request_data(0, _virtual_end + 1)
 
-func _process(_delta):
+func _on_scroll_value_changed(value: float):
+	"""Handle scroll position changes via scrollbar signal."""
 	if _total_items == 0 or not _scroll_container:
 		return
 	
-	var scroll_pos = _scroll_container.scroll_vertical
+	var scroll_pos = int(value)
 	var viewport_height = _scroll_container.size.y
 	
 	# Calculate visible range
@@ -502,6 +508,7 @@ func scroll_to_index(index: int):
 		var row = index / grid_columns
 		var target_y = row * item_height
 		_scroll_container.scroll_vertical = target_y
+		# The value_changed signal will trigger _on_scroll_value_changed automatically
 
 func _setup_debug_camera():
 	"""Setup a simple Camera2D to zoom out and see more cards."""
