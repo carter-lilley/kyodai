@@ -9,7 +9,7 @@ signal batch_progress_changed(progress: float)  # 0.0 to 1.0 progress through cu
 # Configuration
 @export var card_scene: PackedScene
 @export var grid_columns: int = 5
-@export var item_height: float = 240.0
+@export var item_height: float = 290.0  # 280px card + 10px v_separation
 @export var buffer_size: int = 75  # Total cards in circular buffer
 @export var preload_distance: int = 25  # Items from edge to trigger preload (6 rows)
 @export var debug_mode: bool = false  # Enable visual debugging
