@@ -4,6 +4,7 @@ extends Control
 signal items_requested(offset, limit)
 signal visible_range_changed(start, end, total)
 signal item_created(item, index)
+signal batch_progress_changed(progress: float)  # 0.0 to 1.0 progress through current batch
 
 # Configuration
 @export var card_scene: PackedScene
@@ -30,6 +31,9 @@ var _total_items: int = 0
 var _virtual_start: int = 0  # Virtual index of first visible card
 var _virtual_end: int = 0    # Virtual index of last visible card
 var _card_scene: PackedScene
+
+# Batch progress tracking
+var batch_progress: float = 0.0  # 0.0 to 1.0 progress through current batch
 
 # Card pool and tracking
 var _card_pool: Array[Control] = []
@@ -266,6 +270,16 @@ func _on_scroll_value_changed(value: float):
 	# Update visible range signal
 	visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
 	
+	# Calculate batch progress (0.0 to 1.0 within each row update)
+	# Progress resets every time spacer updates (each row = 240px)
+	var batch_rows = 1  # Reset every 1 row when spacer updates
+	var batch_height_pixels = batch_rows * item_height  # 240px per cycle
+	var new_batch_progress = fmod(scroll_pos, batch_height_pixels) / batch_height_pixels
+	
+	if abs(new_batch_progress - batch_progress) > 0.001:
+		batch_progress = clampf(new_batch_progress, 0.0, 1.0)
+		batch_progress_changed.emit(batch_progress)
+	
 	# Update debug visuals if enabled
 	if debug_mode:
 		_update_debug_visuals(visible_start_idx, visible_end_idx)
@@ -368,6 +382,7 @@ func _disconnect_card_signals(card: Control):
 			card.disconnect("button_up", conn["callable"])
 
 func _update_spacer():
+	print(batch_progress)
 	if _spacer and _active_cards.size() > 0:
 		var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 		var rows_before = first_idx / grid_columns
