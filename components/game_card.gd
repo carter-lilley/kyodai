@@ -123,6 +123,24 @@ func _on_cover_loaded(url: String, texture: Texture2D):
 	if game and game.cover_url == url and texture and is_instance_valid(cover_texture):
 		cover_texture.texture = texture
 
+func set_placeholder(is_placeholder: bool):
+	"""Set placeholder state for incremental loading."""
+	if is_placeholder:
+		# Show placeholder/loading state
+		if is_instance_valid(title_label):
+			title_label.text = "Loading..."
+		if is_instance_valid(platform_label):
+			platform_label.text = ""
+		if is_instance_valid(cover_texture):
+			cover_texture.texture = _loading_texture
+		if is_instance_valid(download_button):
+			download_button.visible = false
+	else:
+		# Show actual game data
+		_update_display()
+		if is_instance_valid(download_button):
+			download_button.visible = true
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:

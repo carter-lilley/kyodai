@@ -785,8 +785,14 @@ func increment_total_count(amount: int = 1) -> int:
 	var start_index = _total_items
 	_total_items += amount
 	
-	# Only update scrollbar height, no card rebuild
+	# Only update scrollbar height
 	_update_layout()
+	
+	# If we went from 0 to >0, trigger initial load to create cards
+	if start_index == 0 and _active_cards.size() == 0 and _total_items > 0:
+		print("[VScrollGrid] Library went from empty to %d items, triggering initial load" % _total_items)
+		_initial_load_from_increment()
+		return start_index
 	
 	# Emit range update for status display
 	var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
@@ -799,6 +805,39 @@ func increment_total_count(amount: int = 1) -> int:
 	
 	return start_index
 
+func _initial_load_from_increment():
+	"""Initial load variant for when library goes from empty to having items.
+	Creates placeholder cards that will be populated when data is cached."""
+	_virtual_start = 0
+	_virtual_end = min(buffer_size, _total_items) - 1
+	
+	print("[VScrollGrid] Creating initial %d cards for %d total items" % [_virtual_end + 1, _total_items])
+	
+	# Create initial cards as placeholders (no data request - data is cached incrementally)
+	for i in range(_virtual_end + 1):
+		var card = _acquire_card()
+		if card:
+			card.set_meta("virtual_index", i)
+			_active_cards.append(card)
+			_grid_container.add_child(card)
+			
+			# If we have data cached for this index, populate it immediately
+			if _data_cache.has(i):
+				card.game = _data_cache[i]
+				if card.has_method("set_placeholder"):
+					card.set_placeholder(false)
+				if card.has_method("update_display"):
+					card.update_display()
+			elif card.has_method("set_placeholder"):
+				# Show placeholder - data will arrive later
+				card.set_placeholder(true)
+			
+			item_created.emit(card, i)
+	
+	_update_spacer()
+	
+	# Don't request data - in incremental mode, data arrives via cache_items_at_offset
+
 ## Cache items at a specific offset without displaying them
 ## Games will appear when user scrolls to them via _data_cache
 func cache_items_at_offset(items: Array[GameResource], offset: int):
@@ -808,6 +847,22 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 	
 	if items.size() > 0:
 		print("[VScrollGrid] Cached %d items at offset %d" % [items.size(), offset])
+		
+		# Check if any active cards need this data (for incremental loading)
+		var updated_count = 0
+		for card in _active_cards:
+			var idx = card.get_meta("virtual_index", -1)
+			if idx >= offset and idx < offset + items.size():
+				if _data_cache.has(idx):
+					card.game = _data_cache[idx]
+					if card.has_method("set_placeholder"):
+						card.set_placeholder(false)
+					if card.has_method("update_display"):
+						card.update_display()
+					updated_count += 1
+					
+		if updated_count > 0:
+			print("[VScrollGrid] Populated %d cards with cached data" % updated_count)
 
 ## Only refresh cards if they fall within the current visible buffer
 ## Updates data for visible cards only, no structural changes

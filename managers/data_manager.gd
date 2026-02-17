@@ -43,7 +43,7 @@ var _sync_batch_mode: bool = false
 var _sync_batch_pending: Array[GameResource] = []
 var _sync_batch_timer: Timer = null
 var _sync_batch_last_emit_time: int = 0
-const BATCH_EMIT_INTERVAL_MS: int = 500  # Emit every 500ms during sync
+const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 500ms during sync
 
 # Batch processing state
 var _batch_remaining: int = 0
@@ -319,7 +319,7 @@ func sync_platform_games(platform_id: int, platform_slug: String, platform_name:
 			callback.call(false, "Database not ready", 0, 0)
 		return
 	
-	var batch_size = 15
+	var batch_size = 100
 	
 	# Fetch first batch
 	_fetch_batch(str(platform_id), 0, batch_size, func(data, error):
