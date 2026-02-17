@@ -41,8 +41,12 @@ var _active_cards: Array[Control] = []  # Currently displayed cards in order
 var _max_pool_size: int = 120
 
 # Data cache
-var _data_cache: Dictionary = {}  # offset -> Array[GameResource]
+var _data_cache: Dictionary = {}  # offset -> GameResource
 var _pending_loads: Dictionary = {}  # offset -> bool
+
+# LRU cache management
+const MAX_CACHE_SIZE: int = 2000  # Maximum cached game entries
+var _cache_access_order: Array[int] = []  # Tracks LRU order (oldest at front, newest at back)
 
 # Loading state
 var _is_loading: bool = false
@@ -124,10 +128,16 @@ func _instantiate_card_pool():
 		card.set_meta("virtual_index", -1)
 		_card_pool.append(card)
 
-func set_total_count(count: int):
+func set_total_count(count: int, preserve_cache: bool = false):
 	_total_items = count
 	_update_layout()
-	_refresh_buffer()
+	
+	if preserve_cache:
+		# Just update the scrollbar size without clearing cache or cards
+		# The existing cards and cache remain intact
+		pass
+	else:
+		_refresh_buffer()
 
 func _update_layout():
 	var rows = ceili(float(_total_items) / grid_columns) if grid_columns > 0 else 0
@@ -319,6 +329,7 @@ func _add_card_at_end(virtual_index: int):
 	# Try to load data from cache
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
+		_update_cache_access_order(virtual_index)
 		if card.has_method("update_display"):
 			card.update_display()
 	else:
@@ -342,6 +353,7 @@ func _add_card_at_start(virtual_index: int):
 	# Try to load data from cache
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
+		_update_cache_access_order(virtual_index)
 		if card.has_method("update_display"):
 			card.update_display()
 	else:
@@ -465,9 +477,16 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	if items.is_empty():
 		return
 	
-	# Cache the data
+	# Cache the data with LRU management
 	for i in range(items.size()):
-		_data_cache[offset + i] = items[i]
+		var cache_key = offset + i
+		
+		# Evict oldest items if cache is full and this is a new entry
+		if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
+			_evict_oldest_cache_entries(items.size())
+		
+		_data_cache[cache_key] = items[i]
+		_update_cache_access_order(cache_key)
 	
 	# Update any visible cards that need this data
 	for card in _active_cards:
@@ -476,6 +495,7 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 			var data_idx = idx - offset
 			if data_idx < items.size():
 				card.game = items[data_idx]
+				_update_cache_access_order(idx)
 				if card.has_method("set_placeholder"):
 					card.set_placeholder(false)
 				if card.has_method("update_display"):
@@ -487,6 +507,7 @@ func _refresh_buffer():
 		_recycle_card_at_index(0)
 	
 	_data_cache.clear()
+	_cache_access_order.clear()
 	_pending_loads.clear()
 	_spacer.custom_minimum_size.y = 0
 	_virtual_start = 0
@@ -843,7 +864,14 @@ func _initial_load_from_increment():
 func cache_items_at_offset(items: Array[GameResource], offset: int):
 	for i in range(items.size()):
 		if offset + i < _total_items:
-			_data_cache[offset + i] = items[i]
+			var cache_key = offset + i
+			
+			# Evict oldest items if cache is full and this is a new entry
+			if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
+				_evict_oldest_cache_entries(items.size())
+			
+			_data_cache[cache_key] = items[i]
+			_update_cache_access_order(cache_key)
 	
 	if items.size() > 0:
 		print("[VScrollGrid] Cached %d items at offset %d" % [items.size(), offset])
@@ -855,6 +883,7 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 			if idx >= offset and idx < offset + items.size():
 				if _data_cache.has(idx):
 					card.game = _data_cache[idx]
+					_update_cache_access_order(idx)
 					if card.has_method("set_placeholder"):
 						card.set_placeholder(false)
 					if card.has_method("update_display"):
@@ -884,6 +913,7 @@ func refresh_if_visible(start_index: int, end_index: int):
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
 				card.game = _data_cache[idx]
+				_update_cache_access_order(idx)
 				if card.has_method("set_placeholder"):
 					card.set_placeholder(false)
 				if card.has_method("update_display"):
@@ -892,3 +922,28 @@ func refresh_if_visible(start_index: int, end_index: int):
 		
 		if updated_count > 0:
 			print("[VScrollGrid] Updated %d visible cards in range %d-%d" % [updated_count, overlap_start, overlap_end])
+
+# ==================== LRU CACHE MANAGEMENT ====================
+
+func _update_cache_access_order(cache_key: int):
+	"""Update the access order list for LRU tracking."""
+	# Remove if exists (will be added to end as most recent)
+	var idx = _cache_access_order.find(cache_key)
+	if idx != -1:
+		_cache_access_order.remove_at(idx)
+	
+	# Add to end as most recently used
+	_cache_access_order.append(cache_key)
+
+func _evict_oldest_cache_entries(count: int):
+	"""Evict the oldest entries from the cache when it exceeds max size."""
+	var to_evict = mini(count, _cache_access_order.size())
+	if to_evict <= 0:
+		return
+	
+	print("[VScrollGrid] Evicting %d oldest cache entries (cache size: %d/%d)" % [to_evict, _data_cache.size(), MAX_CACHE_SIZE])
+	
+	for i in range(to_evict):
+		var oldest_key = _cache_access_order.pop_front()
+		if _data_cache.has(oldest_key):
+			_data_cache.erase(oldest_key)

@@ -103,7 +103,8 @@ func _create_tables():
 			siblings TEXT DEFAULT '[]',
 			selected_sibling_id INTEGER DEFAULT 0,
 			is_master_entry INTEGER DEFAULT 1,
-			downloaded_sibling_ids TEXT DEFAULT '[]'
+			downloaded_sibling_ids TEXT DEFAULT '[]',
+			has_cover_art INTEGER DEFAULT 1
 		)
 	""")
 	
@@ -285,7 +286,7 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 	if index >= platforms.size():
 		print("[DataManager] Sync complete: ", total_synced, " games")
 		if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			print("[DataManager] DEBUG: Skipped ", _sync_skipped_no_cover, " games without cover art")
+			print("[DataManager] DEBUG: ", _sync_skipped_no_cover, " games hidden (no cover art)")
 		
 		# Flush any remaining batch notifications before stopping
 		_flush_batch_notifications()
@@ -297,7 +298,7 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 		_active_downloads.clear()
 		var completion_msg = "Synced " + str(total_synced) + " games"
 		if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			completion_msg += " (skipped " + str(_sync_skipped_no_cover) + " without covers)"
+			completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
 		sync_completed.emit(true, completion_msg)
 		if callback.is_valid():
 			callback.call(true, "", total_synced, 0)
@@ -393,12 +394,10 @@ func _process_game(game_data: Dictionary, platform_slug: String):
 	"""Process a single game - DB + cover in parallel."""
 	var game = _create_game_from_data(game_data, platform_slug)
 	
-	# Check if game was skipped (null returned from _create_game_from_data)
 	if game == null:
+		push_error("[DataManager] Failed to create game from data")
 		_batch_remaining -= 1
-		print("[DataManager] Skipped game (no cover), batch remaining: ", _batch_remaining)
 		if _batch_remaining <= 0 and _batch_callback.is_valid():
-			print("[DataManager] Batch complete: ", _batch_success_count, " games")
 			var cb = _batch_callback
 			_batch_callback = Callable()
 			cb.call(_batch_success_count)
@@ -427,11 +426,16 @@ func _process_game(game_data: Dictionary, platform_slug: String):
 		)
 	else:
 		game._sync_cover_done = true
-		_check_game_complete(game)
+		# Don't call _check_game_complete here - let the DB callback handle it
 
 func _check_game_complete(game: GameResource):
 	if not (game._sync_db_done and game._sync_cover_done):
 		return
+	
+	# Guard against double-processing
+	if game._sync_processed:
+		return
+	game._sync_processed = true
 	
 	_batch_remaining -= 1
 	if game._sync_db_success:
@@ -544,13 +548,13 @@ func _create_game_from_data(data: Dictionary, platform_slug: String) -> GameReso
 	# A game is a master if none of its siblings already exist in our database
 	game.is_master_entry = not _has_sibling_in_database(game.romm_id, siblings)
 	
-	# Debug: Skip games without cover art if toggle is enabled
+	# Debug: Mark games without cover art as hidden if toggle is enabled
 	if _DEBUG_HIDE_GAMES_WITHOUT_COVERS:
 		print("[DataManager] DEBUG: Checking cover for '%s' - cover_url: '%s'" % [game.title, game.cover_url])
 		if game.cover_url == "" or game.cover_url == "null" or game.cover_url == "<null>" or game.cover_url == "None":
-			print("[DataManager] DEBUG: Skipping game '%s' (ID: %d) - no cover art" % [game.title, game.romm_id])
+			print("[DataManager] DEBUG: Marking game '%s' (ID: %d) as hidden - no cover art" % [game.title, game.romm_id])
+			game.has_cover_art = false
 			_sync_skipped_no_cover += 1
-			return null
 	
 	return game
 
@@ -594,8 +598,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				INSERT OR REPLACE INTO games 
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 				 file_name, file_path, file_size, has_local_copy, last_updated, 
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids)
-				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s')
+				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art)
+				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d)
 			""" % [
 				_escape_sql(game.id),
 				game.romm_id,
@@ -615,14 +619,17 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				_escape_sql(JSON.stringify(game.siblings)),
 				game.selected_sibling_id,
 				1 if game.is_master_entry else 0,
-				_escape_sql(JSON.stringify(game.downloaded_sibling_ids))
+				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
+				1 if game.has_cover_art else 0
 			]
 			return _db.query(query),
 		func(success: bool):
 			if success:
 				# Use batch notification during sync, individual during normal operations
+				# Only notify for games with cover art (games without covers are hidden)
 				if _sync_batch_mode:
-					_queue_batch_notification(game)
+					if game.has_cover_art:
+						_queue_batch_notification(game)
 				else:
 					game_added.emit(game)
 			if callback.is_valid():
@@ -654,7 +661,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					siblings = '%s',
 					selected_sibling_id = %d,
 					is_master_entry = %d,
-					downloaded_sibling_ids = '%s'
+					downloaded_sibling_ids = '%s',
+					has_cover_art = %d
 				WHERE romm_id = %d
 			""" % [
 				_escape_sql(game.title),
@@ -674,6 +682,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.selected_sibling_id,
 				1 if game.is_master_entry else 0,
 				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
+				1 if game.has_cover_art else 0,
 				game.romm_id
 			]
 			return _db.query(query),
@@ -697,7 +706,7 @@ func get_all_games() -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1 ORDER BY title")
+	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY title")
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -706,7 +715,7 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1 ORDER BY title" % platform_slug)
+	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1 AND has_cover_art = 1 ORDER BY title" % platform_slug)
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -718,7 +727,7 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 		return games
 	
 	var order = "ASC" if ascending else "DESC"
-	var query = "SELECT * FROM games WHERE is_master_entry = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+	var query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
 	print("[DataManager] Executing query: %s" % query)
 	_db.query(query)
 	print("[DataManager] Query returned %d rows" % _db.query_result.size())
@@ -730,7 +739,7 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 func get_total_games_count() -> int:
 	if not _is_db_ready:
 		return 0
-	_db.query("SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1")
+	_db.query("SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1")
 	if _db.query_result.size() > 0:
 		return _db.query_result[0]["count"]
 	return 0
@@ -783,6 +792,12 @@ func _row_to_game(row: Dictionary) -> GameResource:
 		game.is_master_entry = row["is_master_entry"] == 1
 	else:
 		game.is_master_entry = true
+	
+	# Restore has_cover_art flag
+	if row.has("has_cover_art"):
+		game.has_cover_art = row["has_cover_art"] == 1
+	else:
+		game.has_cover_art = true
 	
 	# Restore downloaded sibling IDs
 	if row.has("downloaded_sibling_ids") and row["downloaded_sibling_ids"] != "":

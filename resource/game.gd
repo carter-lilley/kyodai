@@ -27,6 +27,9 @@ extends Resource
 ## Whether this is the "master" entry shown in the library view
 @export var is_master_entry: bool = true
 
+## Whether this game has cover art (used to hide games without covers from library view)
+@export var has_cover_art: bool = true
+
 ## Tracks which sibling IDs have been downloaded locally
 ## Array of sibling IDs that have local copies
 @export var downloaded_sibling_ids: Array[int] = []
@@ -35,6 +38,7 @@ extends Resource
 var _sync_db_done: bool = false
 var _sync_cover_done: bool = false
 var _sync_db_success: bool = false
+var _sync_processed: bool = false  # Guard to prevent double-processing
 
 ## Returns the ID of the game/sibling that should be used (for downloads, etc.)
 func get_active_game_id() -> int:

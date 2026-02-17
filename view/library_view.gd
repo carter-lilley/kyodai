@@ -36,7 +36,7 @@ func _ready():
 	# Initial load
 	_load_total_count()
 
-func _load_total_count():
+func _load_total_count(preserve_cache: bool = false):
 	"""Get total game count for virtual scrolling setup."""
 	_is_loading = true
 	status_label.text = "Loading library..."
@@ -49,8 +49,8 @@ func _load_total_count():
 			return count,
 		func(count: int):
 			_total_games = count
-			print("[LibraryView] Setting total count: %d" % count)
-			games_grid.set_total_count(count)
+			print("[LibraryView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
+			games_grid.set_total_count(count, preserve_cache)
 			status_label.text = "Showing 0-0 of %d games" % count
 			_is_loading = false
 	)
@@ -119,16 +119,25 @@ func _on_game_added(game: GameResource):
 
 func _on_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
 	"""Handle batch game additions during sync without full grid rebuild."""
-	print("[LibraryView] Batch added %d games from %s at index %d" % [games.size(), platform_slug, start_index])
+	# Filter out games without cover art
+	var filtered_games: Array[GameResource] = []
+	for game in games:
+		if game.has_cover_art:
+			filtered_games.append(game)
+	
+	if filtered_games.size() == 0:
+		return
+	
+	print("[LibraryView] Batch added %d games from %s at index %d" % [filtered_games.size(), platform_slug, start_index])
 	
 	# Increment total count without rebuilding buffer
-	var actual_start = games_grid.increment_total_count(games.size())
+	var actual_start = games_grid.increment_total_count(filtered_games.size())
 	
 	# Cache games for when user scrolls to them
-	games_grid.cache_items_at_offset(games, actual_start)
+	games_grid.cache_items_at_offset(filtered_games, actual_start)
 	
 	# Only refresh visible cards if they fall within current viewport
-	games_grid.refresh_if_visible(actual_start, actual_start + games.size() - 1)
+	games_grid.refresh_if_visible(actual_start, actual_start + filtered_games.size() - 1)
 	
 	# Update status label with current counts
 	var range_info = games_grid.get_visible_range()
@@ -165,7 +174,8 @@ func _on_sync_completed(success: bool, message: String):
 		await get_tree().create_timer(0.7).timeout  # Slightly over the 500ms batch interval
 		
 		# Final consistency check - reload total count from database
-		_load_total_count()
+		# Preserve cache to avoid stuttering when scrolling to previously loaded pages
+		_load_total_count(true)
 		
 		status_label.text = message
 	else:
