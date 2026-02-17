@@ -12,6 +12,9 @@ signal games_removed(platform_slug: String)
 signal image_loaded(url: String, texture: Texture2D)
 signal cache_cleared()
 
+# NEW: Batch notification signals for efficient UI updates
+signal games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource])
+
 const DB_PATH = "user://database/kyodai.db"
 const CACHE_FOLDER = "user://cache/covers/"
 
@@ -34,6 +37,13 @@ var _sync_platform: String = ""
 var _sync_platform_index: int = 0  # Current platform number (1-based)
 var _sync_platform_count: int = 0  # Total platforms
 var _sync_platform_total: int = 0  # Total games in current platform
+
+# NEW: Batch notification system for incremental UI updates
+var _sync_batch_mode: bool = false
+var _sync_batch_pending: Array[GameResource] = []
+var _sync_batch_timer: Timer = null
+var _sync_batch_last_emit_time: int = 0
+const BATCH_EMIT_INTERVAL_MS: int = 500  # Emit every 500ms during sync
 
 # Batch processing state
 var _batch_remaining: int = 0
@@ -196,6 +206,9 @@ func _start_sync(enabled: Array, callback: Callable):
 	_sync_platform_count = enabled.size()
 	_sync_skipped_no_cover = 0  # Reset skipped games counter
 	
+	# Start batch mode for efficient UI updates
+	_start_sync_batch_mode()
+	
 	# Pre-calculate total games across all platforms
 	_precalculate_totals(enabled, func(grand_total: int):
 		_sync_total = grand_total
@@ -273,6 +286,13 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 		print("[DataManager] Sync complete: ", total_synced, " games")
 		if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
 			print("[DataManager] DEBUG: Skipped ", _sync_skipped_no_cover, " games without cover art")
+		
+		# Flush any remaining batch notifications before stopping
+		_flush_batch_notifications()
+		
+		# Stop batch mode
+		_stop_sync_batch_mode()
+		
 		# Clean up download tracking to free memory
 		_active_downloads.clear()
 		var completion_msg = "Synced " + str(total_synced) + " games"
@@ -426,6 +446,48 @@ func _check_game_complete(game: GameResource):
 		_batch_callback = Callable()
 		cb.call(_batch_success_count)
 
+# ==================== BATCH NOTIFICATION SYSTEM ====================
+
+func _start_sync_batch_mode():
+	"""Start batching game_added signals for efficient UI updates."""
+	_sync_batch_mode = true
+	_sync_batch_pending.clear()
+	_sync_batch_last_emit_time = Time.get_ticks_msec()
+	print("[DataManager] Batch mode started")
+
+func _stop_sync_batch_mode():
+	"""Stop batch mode and flush any remaining notifications."""
+	_sync_batch_mode = false
+	if _sync_batch_pending.size() > 0:
+		_flush_batch_notifications()
+	if _sync_batch_timer:
+		_sync_batch_timer.queue_free()
+		_sync_batch_timer = null
+	print("[DataManager] Batch mode stopped")
+
+func _queue_batch_notification(game: GameResource):
+	"""Queue a game notification during batch mode."""
+	_sync_batch_pending.append(game)
+	
+	# Check if we should emit now
+	var current_time = Time.get_ticks_msec()
+	if current_time - _sync_batch_last_emit_time >= BATCH_EMIT_INTERVAL_MS:
+		_flush_batch_notifications()
+
+func _flush_batch_notifications():
+	"""Emit batched games and clear the pending list."""
+	if _sync_batch_pending.size() == 0:
+		return
+	
+	var games = _sync_batch_pending.duplicate()
+	var start_index = _sync_current - games.size()
+	
+	print("[DataManager] Emitting batch of %d games for %s" % [games.size(), _sync_platform])
+	games_batch_added.emit(_sync_platform, start_index, games)
+	
+	_sync_batch_pending.clear()
+	_sync_batch_last_emit_time = Time.get_ticks_msec()
+
 func _create_game_from_data(data: Dictionary, platform_slug: String) -> GameResource:
 	var game = GameResource.new()
 	game.id = str(data.get("id", ""))
@@ -558,7 +620,11 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 			return _db.query(query),
 		func(success: bool):
 			if success:
-				game_added.emit(game)
+				# Use batch notification during sync, individual during normal operations
+				if _sync_batch_mode:
+					_queue_batch_notification(game)
+				else:
+					game_added.emit(game)
 			if callback.is_valid():
 				callback.call(success)
 	)

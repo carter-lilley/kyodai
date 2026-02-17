@@ -23,6 +23,9 @@ func _ready():
 	DataManager.sync_completed.connect(_on_sync_completed)
 	DataManager.sync_progress.connect(_on_sync_progress)
 	
+	# NEW: Connect to batch updates for efficient UI during sync
+	DataManager.games_batch_added.connect(_on_games_batch_added)
+	
 	# Connect to download manager for downloads
 	DownloadManager.download_progress.connect(_on_download_progress)
 	DownloadManager.download_completed.connect(_on_download_completed)
@@ -111,8 +114,28 @@ func _on_database_ready():
 	_load_total_count()
 
 func _on_game_added(game: GameResource):
-	# Refresh total count and grid
+	# Refresh total count and grid (for individual additions outside sync)
 	_load_total_count()
+
+func _on_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
+	"""Handle batch game additions during sync without full grid rebuild."""
+	print("[LibraryView] Batch added %d games from %s at index %d" % [games.size(), platform_slug, start_index])
+	
+	# Increment total count without rebuilding buffer
+	var actual_start = games_grid.increment_total_count(games.size())
+	
+	# Cache games for when user scrolls to them
+	games_grid.cache_items_at_offset(games, actual_start)
+	
+	# Only refresh visible cards if they fall within current viewport
+	games_grid.refresh_if_visible(actual_start, actual_start + games.size() - 1)
+	
+	# Update status label with current counts
+	var range_info = games_grid.get_visible_range()
+	if range_info.total > 0:
+		var start_num = range_info.start + 1
+		var end_num = mini(range_info.end, range_info.total)
+		status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, range_info.total]
 
 func _on_game_updated(game: GameResource):
 	# Find and update any visible cards for this game
@@ -136,9 +159,15 @@ func _on_sync_progress(percent: float, current: int, total: int):
 
 func _on_sync_completed(success: bool, message: String):
 	if success:
-		status_label.text = "Sync complete. Refreshing..."
-		await get_tree().create_timer(0.5).timeout
+		status_label.text = "Sync complete. Finalizing..."
+		
+		# Wait for any final batch emissions to complete
+		await get_tree().create_timer(0.7).timeout  # Slightly over the 500ms batch interval
+		
+		# Final consistency check - reload total count from database
 		_load_total_count()
+		
+		status_label.text = message
 	else:
 		status_label.text = "Sync failed: " + message
 

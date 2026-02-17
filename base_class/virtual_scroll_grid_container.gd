@@ -773,3 +773,67 @@ func toggle_debug_mode():
 			var debug_panel = card.get_node_or_null("_debug_panel")
 			if debug_panel:
 				debug_panel.queue_free()
+
+# ==================== INCREMENTAL UPDATE API ====================
+
+## Increment total count without rebuilding the entire buffer
+## Returns the starting index of the newly added items
+func increment_total_count(amount: int = 1) -> int:
+	if amount <= 0:
+		return _total_items
+	
+	var start_index = _total_items
+	_total_items += amount
+	
+	# Only update scrollbar height, no card rebuild
+	_update_layout()
+	
+	# Emit range update for status display
+	var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+	var viewport_height = _scroll_container.size.y if _scroll_container else 600
+	var visible_rows = ceili(viewport_height / item_height) + 1
+	var visible_start = int(scroll_pos / item_height) * grid_columns
+	var visible_end = min(visible_start + (visible_rows * grid_columns), _total_items)
+	
+	visible_range_changed.emit(visible_start, visible_end, _total_items)
+	
+	return start_index
+
+## Cache items at a specific offset without displaying them
+## Games will appear when user scrolls to them via _data_cache
+func cache_items_at_offset(items: Array[GameResource], offset: int):
+	for i in range(items.size()):
+		if offset + i < _total_items:
+			_data_cache[offset + i] = items[i]
+	
+	if items.size() > 0:
+		print("[VScrollGrid] Cached %d items at offset %d" % [items.size(), offset])
+
+## Only refresh cards if they fall within the current visible buffer
+## Updates data for visible cards only, no structural changes
+func refresh_if_visible(start_index: int, end_index: int):
+	if _active_cards.size() == 0:
+		return
+	
+	var current_first = _active_cards[0].get_meta("virtual_index", 0)
+	var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
+	
+	# Check if ranges overlap
+	var overlap_start = max(start_index, current_first)
+	var overlap_end = min(end_index, current_last)
+	
+	if overlap_start <= overlap_end:
+		# Some items are visible, update only those cards
+		var updated_count = 0
+		for card in _active_cards:
+			var idx = card.get_meta("virtual_index", -1)
+			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
+				card.game = _data_cache[idx]
+				if card.has_method("set_placeholder"):
+					card.set_placeholder(false)
+				if card.has_method("update_display"):
+					card.update_display()
+				updated_count += 1
+		
+		if updated_count > 0:
+			print("[VScrollGrid] Updated %d visible cards in range %d-%d" % [updated_count, overlap_start, overlap_end])
