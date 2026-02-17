@@ -382,7 +382,7 @@ func _disconnect_card_signals(card: Control):
 			card.disconnect("button_up", conn["callable"])
 
 func _update_spacer():
-	print(batch_progress)
+	#print(batch_progress)
 	if _spacer and _active_cards.size() > 0:
 		var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 		var rows_before = first_idx / grid_columns

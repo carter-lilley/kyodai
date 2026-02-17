@@ -27,6 +27,7 @@ class QueueItem:
 	var error_message: String = ""
 	var game_resource: GameResource = null  # Optional: for game downloads
 	var callbacks: Dictionary = {}  # Optional custom callbacks
+	var romm_id: int = 0  # The actual RomM ID being downloaded (could be a sibling)
 
 # Unified queue
 var _queue: Array[QueueItem] = []
@@ -38,7 +39,7 @@ var _progress_timers: Dictionary = {}  # item_id -> Timer
 
 ## Queues a download with optional auto-extraction
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}) -> String:
+func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
@@ -63,6 +64,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
 	item.game_resource = game
 	item.callbacks = callbacks
+	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
 	
 	# Ensure destination directory exists
 	var dir = DirAccess.open("user://")
@@ -312,7 +314,8 @@ func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray
 	
 	# Update game resource if applicable
 	if item.game_resource:
-		item.game_resource.has_local_copy = true
+		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
+		item.game_resource.mark_sibling_downloaded(downloaded_id)
 		item.game_resource.file_path = item.destination_path
 		DataManager.update_game(item.game_resource)
 	

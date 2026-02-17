@@ -80,14 +80,18 @@ func _on_card_created(card: Control, index: int):
 		card.download_requested.connect(_on_download_requested)
 
 func _on_download_requested(game: GameResource):
-	var download_url = NetworkManager.get_romm_download_url(game.romm_id, game.file_name)
+	# Use the selected sibling's ID and file name if one is selected
+	var active_game_id = game.get_active_game_id()
+	var active_file_name = game.get_active_file_name()
+	
+	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
 		status_label.text = "Error: Games folder not set"
 		return
 	
-	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + game.file_name
-	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game)
+	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
+	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
 	
 	if item_id != "":
 		status_label.text = "Queued: " + game.get_display_name()

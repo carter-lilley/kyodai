@@ -6,7 +6,7 @@
   },
   "retroarch": {
 	"name": "RetroArch",
-	"platforms": ["snes", "nes", "genesis", "gb", "gba", "n64", "psx"],
+	"platforms": ["3do", "arcade", "atari2600", "lynx", "atomiswave", "c64", "dos", "dc", "fds", "g-and-w", "gb", "gba", "gbc", "msx", "naomi", "naomi2", "neogeoaes", "neo-geo-pocket-color", "3ds", "n64", "nds", "nes", "ngc", "win3x", "pico8", "psx", "ps2", "psp", "sega32", "segacd", "gamegear", "sms", "genesis", "saturn", "sg1000", "snes", "tg16", "turbografx-cd", "virtualboy", "wii"],
 	"github_repo": "libretro/RetroArch",
 	"asset_patterns": {
 	  "windows": "RetroArch-.*-win64.7z",

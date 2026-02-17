@@ -92,6 +92,9 @@ theme_override_font_sizes/font_size = 16
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
 
+[node name="SiblingDropdown" type="OptionButton" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/InfoVBox"]
+layout_mode = 2
+
 [node name="HSeparator2" type="HSeparator" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
 layout_mode = 2
 

@@ -40,7 +40,7 @@ func _update_display():
 	platform_label.text = game.platform if game.platform else "Unknown Platform"
 	
 	# Update download button state
-	if game.has_local_copy:
+	if game.is_active_variant_downloaded():
 		download_button.text = "Play"
 		download_button.disabled = false
 		status_label.text = "Ready"

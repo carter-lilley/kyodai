@@ -20,10 +20,70 @@ extends Resource
 ## Per-game emulator override (optional)
 @export var preferred_emulator_id: String = ""
 
+## Sibling ROMs - variants of the same game (different regions, versions, etc.)
+@export var siblings: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
+@export var selected_sibling_id: int = 0  # 0 means use this game itself
+
+## Whether this is the "master" entry shown in the library view
+@export var is_master_entry: bool = true
+
+## Tracks which sibling IDs have been downloaded locally
+## Array of sibling IDs that have local copies
+@export var downloaded_sibling_ids: Array[int] = []
+
 # Transient fields for sync tracking (not persisted)
 var _sync_db_done: bool = false
 var _sync_cover_done: bool = false
 var _sync_db_success: bool = false
+
+## Returns the ID of the game/sibling that should be used (for downloads, etc.)
+func get_active_game_id() -> int:
+	if selected_sibling_id != 0:
+		return selected_sibling_id
+	return romm_id
+
+## Returns the file name of the active game/sibling
+func get_active_file_name() -> String:
+	if selected_sibling_id != 0:
+		for sibling in siblings:
+			if sibling.get("id", 0) == selected_sibling_id:
+				return sibling.get("file_name", file_name)
+	return file_name
+
+## Returns the file size of the active game/sibling
+func get_active_file_size() -> int:
+	if selected_sibling_id != 0:
+		for sibling in siblings:
+			if sibling.get("id", 0) == selected_sibling_id:
+				return sibling.get("file_size", file_size)
+	return file_size
+
+## Returns true if the currently selected sibling (or main game) has been downloaded
+func is_active_variant_downloaded() -> bool:
+	var active_id = get_active_game_id()
+	if active_id == romm_id:
+		return has_local_copy
+	return active_id in downloaded_sibling_ids
+
+## Marks a specific sibling as downloaded
+func mark_sibling_downloaded(sibling_id: int):
+	if sibling_id == romm_id:
+		has_local_copy = true
+	elif not sibling_id in downloaded_sibling_ids:
+		downloaded_sibling_ids.append(sibling_id)
+
+## Returns the file path for a specific sibling (constructs it based on current file_path pattern)
+func get_sibling_file_path(sibling_id: int, root_folder: String) -> String:
+	if sibling_id == romm_id:
+		return file_path
+	
+	for sibling in siblings:
+		if sibling.get("id", 0) == sibling_id:
+			var sibling_file_name = sibling.get("file_name", "")
+			if sibling_file_name != "":
+				return root_folder + "/" + platform_slug + "/" + sibling_file_name
+	
+	return file_path
 
 func get_display_name() -> String:
 	return title if title else file_name

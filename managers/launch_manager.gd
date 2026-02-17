@@ -668,13 +668,18 @@ func resolve_emulator_for_game(game: GameResource) -> String:
 
 ## Creates a launch intent for a game
 func create_launch_intent(game: GameResource) -> LaunchIntent:
-	if not game.has_local_copy or game.file_path == "":
+	if not game.is_active_variant_downloaded():
 		push_error("[LaunchManager] Cannot launch game without local copy: " + game.get_display_name())
 		return null
 	
 	var intent = LaunchIntent.new()
 	intent.game = game
-	intent.rom_path = game.file_path
+	
+	# Get the correct file path for the active variant
+	var active_id = game.get_active_game_id()
+	var root_folder = SettingsManager.get_setting("games_root_folder")
+	var root_path = root_folder.value if root_folder else "user://games"
+	intent.rom_path = game.get_sibling_file_path(active_id, root_path)
 	intent.platform_slug = game.platform_slug
 	
 	# Resolve emulator
@@ -776,7 +781,7 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource) -> void:
-	if not game.has_local_copy or game.file_path == "":
+	if not game.is_active_variant_downloaded():
 		NotificationManager.show_notification("Game file not downloaded", Notification.Type.ERROR)
 		return
 	
