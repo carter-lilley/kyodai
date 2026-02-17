@@ -18,6 +18,11 @@ var _loading_texture: Texture2D = preload("res://icon.svg")  # Placeholder
 var _is_downloading: bool = false
 var _image_loaded: bool = false
 
+# Track which game we're currently loading an image for (prevents wrong texture on recycled cards)
+var _loading_game_id: String = ""
+var _image_retry_count: int = 0
+const MAX_IMAGE_RETRIES: int = 3
+
 func _ready():
 	_update_display()
 	download_button.pressed.connect(_on_download_pressed)
@@ -62,40 +67,91 @@ func _load_cover():
 		return
 	
 	_image_loaded = true  # Mark as attempted
+	_loading_game_id = game.id  # Track which game this load is for
+	_image_retry_count = 0  # Reset retry count
 	
 	# Try local cover path first (from Romm) - using background thread
 	if game.cover_path != "" and FileAccess.file_exists(game.cover_path):
-		# Load image on background thread to avoid blocking main thread
-		ThreadManager.queue_image_task(
-			func():
-				var img = Image.new()
-				var err = img.load(game.cover_path)
-				if err == OK:
-					return ImageTexture.create_from_image(img)
-				return null,
-			func(texture):
-				if texture and is_instance_valid(cover_texture):
-					cover_texture.texture = texture
-				elif is_instance_valid(cover_texture):
-					# Local file failed, try external URL as fallback
-					_load_cover_from_url()
-		)
+		_load_local_cover()
 		return
 	
 	# Try external URL (from metadata)
 	_load_cover_from_url()
 
-func _load_cover_from_url():
-	if game.cover_url != "" and game.cover_url.begins_with("http"):
-		DataManager.load_image(game.cover_url, func(texture):
+func _load_local_cover():
+	"""Load cover from local file path using background thread."""
+	var target_game_id = _loading_game_id
+	
+	ThreadManager.queue_image_task(
+		func():
+			var img = Image.new()
+			var err = img.load(game.cover_path)
+			if err == OK:
+				return ImageTexture.create_from_image(img)
+			return null,
+		func(texture):
+			# Validate card still shows the same game and is still valid
+			if not is_instance_valid(self):
+				print("[GameCard] Callback for %s ignored - card no longer valid" % target_game_id)
+				return
+			if not game or game.id != target_game_id:
+				var current_title = game.title if game else "null"
+				print("[GameCard] Callback for %s ignored - card now showing %s" % [target_game_id, current_title])
+				return  # Card was recycled to different game
+			
 			if texture and is_instance_valid(cover_texture):
 				cover_texture.texture = texture
-			elif is_instance_valid(cover_texture):
-				cover_texture.texture = _loading_texture
+			else:
+				# Task may have been dropped (queue full) or load failed
+				# Retry with exponential backoff
+				_image_retry_count += 1
+				if _image_retry_count < MAX_IMAGE_RETRIES:
+					print("[GameCard] Image load failed for %s (retry %d/%d), will retry..." % [game.title, _image_retry_count, MAX_IMAGE_RETRIES])
+					await get_tree().create_timer(0.1 * _image_retry_count).timeout
+					if is_instance_valid(self) and game and game.id == target_game_id:
+						_load_local_cover()
+				else:
+					# Max retries reached, try external URL as fallback
+					print("[GameCard] Max retries reached for local cover of %s, falling back to URL" % game.title)
+					_load_cover_from_url()
+	)
+
+func _load_cover_from_url():
+	if game.cover_url != "" and game.cover_url.begins_with("http"):
+		var target_game_id = _loading_game_id
+		var current_retry = _image_retry_count
+		
+		DataManager.load_image(game.cover_url, func(texture):
+			# Validate card still shows the same game and is still valid
+			if not is_instance_valid(self):
+				print("[GameCard] URL callback for %s ignored - card no longer valid" % target_game_id)
+				return
+			if not game or game.id != target_game_id:
+				var current_title = game.title if game else "null"
+				print("[GameCard] URL callback for %s ignored - card now showing %s" % [target_game_id, current_title])
+				return  # Card was recycled to different game
+			
+			if texture and is_instance_valid(cover_texture):
+				cover_texture.texture = texture
+			else:
+				# Task may have been dropped (queue full) or load failed
+				# Retry with exponential backoff
+				_image_retry_count = current_retry + 1
+				if _image_retry_count < MAX_IMAGE_RETRIES:
+					print("[GameCard] URL image load failed for %s (retry %d/%d), will retry..." % [game.title, _image_retry_count, MAX_IMAGE_RETRIES])
+					await get_tree().create_timer(0.1 * _image_retry_count).timeout
+					if is_instance_valid(self) and game and game.id == target_game_id:
+						_load_cover_from_url()
+				else:
+					# Max retries reached, show placeholder
+					print("[GameCard] All retries exhausted for %s, showing placeholder" % game.title)
+					if is_instance_valid(cover_texture):
+						cover_texture.texture = _loading_texture
 		)
 	else:
 		# No cover available
-		cover_texture.texture = _loading_texture
+		if is_instance_valid(cover_texture):
+			cover_texture.texture = _loading_texture
 
 func _on_download_pressed():
 	if not game:
@@ -133,7 +189,10 @@ func _on_download_completed(item_id: String, success: bool, message: String):
 
 func _on_cover_loaded(url: String, texture: Texture2D):
 	# If this card's cover was just downloaded, update it
-	if game and game.cover_url == url and texture and is_instance_valid(cover_texture):
+	# Only apply if we're still showing the same game (card wasn't recycled)
+	if not is_instance_valid(self) or not game:
+		return
+	if game.cover_url == url and texture and is_instance_valid(cover_texture):
 		cover_texture.texture = texture
 
 func set_placeholder(is_placeholder: bool):

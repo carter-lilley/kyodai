@@ -16,7 +16,7 @@ var _image_semaphore: Semaphore
 var _extraction_semaphore: Semaphore
 var _exit_flag: bool = false
 
-const MAX_IMAGE_QUEUE_SIZE = 30
+const MAX_IMAGE_QUEUE_SIZE = 100
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 
@@ -130,7 +130,8 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 	# If queue is full, drop this task to prevent memory issues
 	if current_size >= MAX_IMAGE_QUEUE_SIZE:
 		_instance._image_mutex.unlock()
-		push_warning("[ThreadManager] Dropping image task - queue full")
+		push_warning("[ThreadManager] Dropping image task - queue full (%d/%d)" % [current_size, MAX_IMAGE_QUEUE_SIZE])
+		print("[ThreadManager] DEBUG: Image queue overloaded! Dropping task. Queue: %d/%d" % [current_size, MAX_IMAGE_QUEUE_SIZE])
 		# Still call callback with null so UI doesn't hang
 		if callback.is_valid():
 			callback.call_deferred(null)

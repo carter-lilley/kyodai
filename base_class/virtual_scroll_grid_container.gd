@@ -12,7 +12,7 @@ signal batch_progress_changed(progress: float)  # 0.0 to 1.0 progress through cu
 @export var item_height: float = 290.0  # 280px card + 10px v_separation
 @export var buffer_size: int = 75  # Total cards in circular buffer
 @export var preload_distance: int = 25  # Items from edge to trigger preload (6 rows)
-@export var debug_mode: bool = false  # Enable visual debugging
+@export var debug_mode: bool = true  # Enable visual debugging
 
 # Smooth Scrolling
 @export var smooth_scrolling: bool = true
@@ -299,6 +299,9 @@ func _recycle_card_at_index(index: int):
 		return
 	
 	var card = _active_cards[index]
+	var old_game_title = ""
+	if "game" in card and card.game:
+		old_game_title = card.game.title
 	_active_cards.remove_at(index)
 	
 	if is_instance_valid(card):
@@ -308,6 +311,8 @@ func _recycle_card_at_index(index: int):
 		card.set_meta("virtual_index", -1)
 		
 		if "game" in card:
+			if card.game:
+				print("[VScrollGrid] Recycling card '%s' back to pool" % old_game_title)
 			card.game = null
 		if card.has_method("reset"):
 			card.reset()
@@ -329,6 +334,8 @@ func _add_card_at_end(virtual_index: int):
 	# Try to load data from cache
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
+		if card.game:
+			print("[VScrollGrid] Assigned game '%s' to card at index %d" % [card.game.title, virtual_index])
 		_update_cache_access_order(virtual_index)
 		if card.has_method("update_display"):
 			card.update_display()
@@ -353,6 +360,8 @@ func _add_card_at_start(virtual_index: int):
 	# Try to load data from cache
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
+		if card.game:
+			print("[VScrollGrid] Assigned game '%s' to card at index %d (at start)" % [card.game.title, virtual_index])
 		_update_cache_access_order(virtual_index)
 		if card.has_method("update_display"):
 			card.update_display()
