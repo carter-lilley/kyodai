@@ -907,33 +907,53 @@ func load_image(url: String, callback: Callable = Callable()):
 	
 	var cache_path = get_cached_image_path(url)
 	
-	# Try cache first
+	# Try cache first - using background thread
 	if FileAccess.file_exists(cache_path):
-		var file = FileAccess.open(cache_path, FileAccess.READ)
-		if file:
-			var buffer = file.get_buffer(file.get_length())
-			file.close()
-			var texture = _load_texture_from_memory(buffer)
-			if texture:
-				if callback.is_valid():
-					callback.call(texture)
-				image_loaded.emit(url, texture)
-				return
+		ThreadManager.queue_image_task(
+			func():
+				var file = FileAccess.open(cache_path, FileAccess.READ)
+				if file:
+					var buffer = file.get_buffer(file.get_length())
+					file.close()
+					return _load_texture_from_memory(buffer)
+				return null,
+			func(texture):
+				if texture:
+					if callback.is_valid():
+						callback.call(texture)
+					image_loaded.emit(url, texture)
+				else:
+					# Cache file exists but failed to load, try downloading fresh
+					_load_image_from_network(url, cache_path, callback)
+		)
+		return
 	
-	# Download
+	# Download if not cached
+	_load_image_from_network(url, cache_path, callback)
+
+func _load_image_from_network(url: String, cache_path: String, callback: Callable):
+	"""Download and load image from network using background thread."""
 	_download_cover(url, func(_ok):
-		var file = FileAccess.open(cache_path, FileAccess.READ)
-		if file:
-			var buffer = file.get_buffer(file.get_length())
-			file.close()
-			var texture = _load_texture_from_memory(buffer)
-			if callback.is_valid():
-				callback.call(texture)
-			if texture:
-				image_loaded.emit(url, texture)
-		else:
+		# Check if file was downloaded successfully
+		if not FileAccess.file_exists(cache_path):
 			if callback.is_valid():
 				callback.call(null)
+			return
+		
+		ThreadManager.queue_image_task(
+			func():
+				var file = FileAccess.open(cache_path, FileAccess.READ)
+				if file:
+					var buffer = file.get_buffer(file.get_length())
+					file.close()
+					return _load_texture_from_memory(buffer)
+				return null,
+			func(texture):
+				if callback.is_valid():
+					callback.call(texture)
+				if texture:
+					image_loaded.emit(url, texture)
+		)
 	)
 
 # ==================== PLATFORMS ====================

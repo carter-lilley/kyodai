@@ -63,15 +63,29 @@ func _load_cover():
 	
 	_image_loaded = true  # Mark as attempted
 	
-	# Try local cover path first (from Romm)
+	# Try local cover path first (from Romm) - using background thread
 	if game.cover_path != "" and FileAccess.file_exists(game.cover_path):
-		var img = Image.new()
-		var err = img.load(game.cover_path)
-		if err == OK:
-			cover_texture.texture = ImageTexture.create_from_image(img)
-			return
+		# Load image on background thread to avoid blocking main thread
+		ThreadManager.queue_image_task(
+			func():
+				var img = Image.new()
+				var err = img.load(game.cover_path)
+				if err == OK:
+					return ImageTexture.create_from_image(img)
+				return null,
+			func(texture):
+				if texture and is_instance_valid(cover_texture):
+					cover_texture.texture = texture
+				elif is_instance_valid(cover_texture):
+					# Local file failed, try external URL as fallback
+					_load_cover_from_url()
+		)
+		return
 	
 	# Try external URL (from metadata)
+	_load_cover_from_url()
+
+func _load_cover_from_url():
 	if game.cover_url != "" and game.cover_url.begins_with("http"):
 		DataManager.load_image(game.cover_url, func(texture):
 			if texture and is_instance_valid(cover_texture):
@@ -79,10 +93,9 @@ func _load_cover():
 			elif is_instance_valid(cover_texture):
 				cover_texture.texture = _loading_texture
 		)
-		return
-	
-	# No cover available
-	cover_texture.texture = _loading_texture
+	else:
+		# No cover available
+		cover_texture.texture = _loading_texture
 
 func _on_download_pressed():
 	if not game:
