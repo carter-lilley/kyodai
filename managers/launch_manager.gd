@@ -268,10 +268,19 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 			
 			var base_dir = emulator_path.get_base_dir()
 			
-			for file_path in files:
-				var full_path = base_dir + "/" + file_path
+			for file_entry in files:
+				var file_name = ""
+				if typeof(file_entry) == TYPE_STRING:
+					file_name = file_entry
+				elif typeof(file_entry) == TYPE_DICTIONARY:
+					file_name = file_entry.get("name", "")
+				
+				if file_name == "":
+					continue
+				
+				var full_path = base_dir + "/" + file_name
 				if not FileAccess.file_exists(full_path):
-					print("[LaunchManager] Post-install validation failed: file not found - " + file_path)
+					print("[LaunchManager] Post-install validation failed: file not found - " + file_name)
 					return false
 			
 			print("[LaunchManager] Post-install validation passed: all files exist for " + emulator_id)
@@ -731,14 +740,28 @@ func _start_files_post_install(emulator_id: String, emulator: Dictionary, post_i
 	
 	var base_dir = emulator_path.get_base_dir()
 	
-	for file_path in files:
-		var full_path = base_dir + "/" + file_path
+	for file_entry in files:
+		var file_name = ""
+		var file_content = []
+		
+		if typeof(file_entry) == TYPE_STRING:
+			file_name = file_entry
+		elif typeof(file_entry) == TYPE_DICTIONARY:
+			file_name = file_entry.get("name", "")
+			file_content = file_entry.get("content", [])
+		
+		if file_name == "":
+			continue
+		
+		var full_path = base_dir + "/" + file_name
 		
 		if not FileAccess.file_exists(full_path):
 			var file = FileAccess.open(full_path, FileAccess.WRITE)
 			if file == null:
 				push_error("[LaunchManager] Failed to create file: " + full_path + " (error: " + str(FileAccess.get_open_error()) + ")")
 			else:
+				for line in file_content:
+					file.store_line(line)
 				file.close()
 				print("[LaunchManager] Created file: " + full_path)
 		else:
@@ -1199,6 +1222,8 @@ func download_emulator(emulator_id: String) -> bool:
 			_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 			_emulator_install_progress[emulator_id] = "Fetching release info..."
 			
+			var release_tag = emulator.get("release_tag", "")
+			
 			NetworkManager.fetch_github_latest_release(
 				github_repo,
 				asset_pattern,
@@ -1207,8 +1232,8 @@ func download_emulator(emulator_id: String) -> bool:
 						push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
 						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 						return
-					
-					_queue_emulator_download(emulator_id, emulator_name, url)
+					_queue_emulator_download(emulator_id, emulator_name, url),
+				release_tag
 			)
 			return true
 		

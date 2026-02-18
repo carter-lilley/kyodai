@@ -284,7 +284,7 @@
   },
   "vita3k": {
 	"name": "Vita3K",
-	"platforms": ["vita"],
+	"platforms": ["psvita"],
 	"download_source": "github",
 	"github_repo": "Vita3K/Vita3K",
 	"asset_patterns": {
@@ -307,24 +307,114 @@
 	  }
 	},
 	"post_install": {
-	  "type": "edit_file",
-	  "file": "config.yml",
-	  "edits": [
+	  "type": "create_files",
+	  "files": [
 		{
-		  "key": "pref-path",
-		  "value": ".\\"
+		  "name": "config.yml",
+		  "content": ["pref-path: .\\"]
 		}
 	  ],
 	  "validation": {
-		"type": "edit_file",
-		"file": "config.yml",
-		"edits": [
-		  {
-			"key": "pref-path",
-			"value": ".\\"
-		  }
-		]
+		"type": "files",
+		"files": ["config.yml"]
 	  }
+	}
+  },
+  "xemu": {
+	"name": "Xemu",
+	"platforms": ["xbox"],
+	"download_source": "github",
+	"github_repo": "xemu-project/xemu",
+	"asset_patterns": {
+	  "windows": "xemu-.*-windows-x86_64\\.zip",
+	  "linux": "xemu-.*-x86_64\\.AppImage"
+	},
+	"executable_names": {
+	  "windows": "xemu.exe",
+	  "linux": "xemu"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "-dvd_path", "{rom}"],
+	  "linux": ["{exe}", "-dvd_path", "{rom}"]
+	},
+	"post_install": {
+	  "type": "create_files",
+	  "files": ["xemu.toml"],
+	  "validation": {
+		"type": "files",
+		"files": ["xemu.toml"]
+	  }
+	}
+  },
+  "xenia": {
+	"name": "Xenia",
+	"platforms": ["xbox360"],
+	"download_source": "github",
+	"github_repo": "xenia-canary/xenia-canary-releases",
+	"release_tag": "canary_experimental",
+	"asset_patterns": {
+	  "windows": "xenia_canary_windows\\.zip",
+	  "linux": "xenia_canary_linux\\.tar\\.xz"
+	},
+	"executable_names": {
+	  "windows": "xenia_canary.exe",
+	  "linux": "xenia_canary"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": ["{exe}", "{rom}"]
+	},
+	"post_install": {
+	  "type": "create_files",
+	  "files": ["portable.txt"],
+	  "validation": {
+		"type": "files",
+		"files": ["portable.txt"]
+	  }
+	}
+  },
+  "pcsx2": {
+	"name": "PCSX2",
+	"platforms": ["ps2"],
+	"download_source": "github",
+	"github_repo": "PCSX2/pcsx2",
+	"asset_patterns": {
+	  "windows": "pcsx2-.*-windows-x64-Qt\\.7z",
+	  "linux": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
+	},
+	"executable_names": {
+	  "windows": "pcsx2-qt.exe",
+	  "linux": "pcsx2-qt"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "-batch", "{rom}"],
+	  "linux": ["{exe}", "-batch", "{rom}"]
+	},
+	"post_install": {
+	  "type": "create_files",
+	  "files": ["portable.txt"],
+	  "validation": {
+		"type": "files",
+		"files": ["portable.txt"]
+	  }
+	}
+  },
+  "melonds": {
+	"name": "melonDS",
+	"platforms": ["nds"],
+	"download_source": "github",
+	"github_repo": "melonDS-emu/melonDS",
+	"asset_patterns": {
+	  "windows": "melonDS-.*-windows-x86_64\\.zip",
+	  "linux": "melonDS-.*-appimage-x86_64\\.zip"
+	},
+	"executable_names": {
+	  "windows": "melonDS.exe",
+	  "linux": "melonDS"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": ["{exe}", "{rom}"]
 	}
   }
 }
