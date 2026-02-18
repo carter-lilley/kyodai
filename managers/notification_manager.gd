@@ -38,13 +38,20 @@ func _ready() -> void:
 	# Create the stack control for positioning
 	_stack_control = Control.new()
 	_stack_control.name = "NotificationStack"
+	# Use full viewport height with top margin
 	_stack_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_stack_control.position = Vector2(-_notification_width - 20, 20)
-	_stack_control.size = Vector2(_notification_width, 600)  # Fixed height for visibility
+	_stack_control.anchor_bottom = 1.0
+	_stack_control.offset_left = -_notification_width - 20
+	_stack_control.offset_top = 20
+	_stack_control.offset_right = -20
+	_stack_control.offset_bottom = -20
 	_stack_control.custom_minimum_size = Vector2(_notification_width, 200)
 	_stack_control.top_level = true
 	_stack_control.z_index = 100
 	add_child(_stack_control)
+	
+	# Connect to viewport resize to update positioning
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	
 	# Setup container for stacking notifications
 	_notification_container = VBoxContainer.new()
@@ -69,13 +76,11 @@ func _ready() -> void:
 func initialize(parent: Control) -> void:
 	"""Call this to position the manager in a corner of your UI"""
 	parent.add_child(self)
-	_stack_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_stack_control.position = Vector2(-_notification_width - 20, 20)
 
 func set_notification_width(width: float) -> void:
 	_notification_width = width
 	if _stack_control:
-		_stack_control.size.x = width
+		_stack_control.offset_left = -_notification_width - 20
 
 func set_max_notifications(max_count: int) -> void:
 	_max_notifications = max_count
@@ -95,6 +100,11 @@ func _apply_stack_direction() -> void:
 	else:
 		# Newest at top, stack grows downward
 		_notification_container.alignment = BoxContainer.ALIGNMENT_BEGIN
+
+func _on_viewport_size_changed() -> void:
+	# The anchors handle resizing automatically, but we can update width if needed
+	if _stack_control:
+		_stack_control.offset_left = -_notification_width - 20
 
 func set_fade_duration(duration: float) -> void:
 	_fade_duration = duration

@@ -1,5 +1,5 @@
 class_name GameCard
-extends PanelContainer
+extends TextureButton
 
 signal download_requested(game: GameResource)
 
@@ -8,15 +8,13 @@ signal download_requested(game: GameResource)
 		game = value
 		_update_display()
 
-@onready var cover_texture: TextureRect = $MarginContainer/VBoxContainer/CoverTexture
-@onready var title_label: Label = $MarginContainer/VBoxContainer/TitleLabel
-@onready var platform_label: Label = $MarginContainer/VBoxContainer/PlatformLabel
-@onready var download_button: Button = $MarginContainer/VBoxContainer/DownloadButton
-@onready var status_label: Label = $MarginContainer/VBoxContainer/StatusLabel
+@onready var status_icon: TextureRect = $StatusBadge/StatusIcon
+@onready var status_badge: Panel = $StatusBadge
 
 var _loading_texture: Texture2D = preload("res://icon.svg")  # Placeholder
+var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
+var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
-var _image_loaded: bool = false
 
 # Track which game we're currently loading an image for (prevents wrong texture on recycled cards)
 var _loading_game_id: String = ""
@@ -25,7 +23,9 @@ const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
 	_update_display()
-	download_button.pressed.connect(_on_download_pressed)
+	
+	# Connect pressed signal for click handling
+	pressed.connect(_on_card_pressed)
 	
 	# Connect to download manager signals
 	DownloadManager.download_progress.connect(_on_download_progress)
@@ -41,32 +41,38 @@ func _update_display():
 	if not is_node_ready():
 		return
 	
-	title_label.text = game.get_display_name()
-	platform_label.text = game.platform if game.platform else "Unknown Platform"
-	
-	# Update download button state
-	if game.is_active_variant_downloaded():
-		download_button.text = "Play"
-		download_button.disabled = false
-		status_label.text = "Ready"
-		status_label.modulate = Color.GREEN
-	elif _is_downloading:
-		download_button.text = "Downloading..."
-		download_button.disabled = true
-	else:
-		download_button.text = "Download"
-		download_button.disabled = false
-		status_label.text = ""
+	# Update status icon based on game state
+	_update_status_icon()
 	
 	# Load cover image
 	_load_cover()
 
-func _load_cover():
+func _update_status_icon():
 	if not game:
-		cover_texture.texture = _loading_texture
+		status_icon.visible = false
+		status_badge.visible = false
 		return
 	
-	_image_loaded = true  # Mark as attempted
+	if game.is_active_variant_downloaded():
+		status_icon.texture = _play_icon
+		status_icon.visible = true
+		status_icon.modulate = Color(1, 1, 1, 1)
+		status_badge.visible = true
+	elif _is_downloading:
+		# Hide icon during download (could show progress later)
+		status_icon.visible = false
+		status_badge.visible = false
+	else:
+		status_icon.texture = _download_icon
+		status_icon.visible = true
+		status_icon.modulate = Color(1, 1, 1, 0.8)
+		status_badge.visible = true
+
+func _load_cover():
+	if not game:
+		self.texture_normal = _loading_texture
+		return
+	
 	_loading_game_id = game.id  # Track which game this load is for
 	_image_retry_count = 0  # Reset retry count
 	
@@ -99,8 +105,8 @@ func _load_local_cover():
 				print("[GameCard] Callback for %s ignored - card now showing %s" % [target_game_id, current_title])
 				return  # Card was recycled to different game
 			
-			if texture and is_instance_valid(cover_texture):
-				cover_texture.texture = texture
+			if texture:
+				self.texture_normal = texture
 			else:
 				# Task may have been dropped (queue full) or load failed
 				# Retry with exponential backoff
@@ -131,8 +137,8 @@ func _load_cover_from_url():
 				print("[GameCard] URL callback for %s ignored - card now showing %s" % [target_game_id, current_title])
 				return  # Card was recycled to different game
 			
-			if texture and is_instance_valid(cover_texture):
-				cover_texture.texture = texture
+			if texture:
+				self.texture_normal = texture
 			else:
 				# Task may have been dropped (queue full) or load failed
 				# Retry with exponential backoff
@@ -145,15 +151,13 @@ func _load_cover_from_url():
 				else:
 					# Max retries reached, show placeholder
 					print("[GameCard] All retries exhausted for %s, showing placeholder" % game.title)
-					if is_instance_valid(cover_texture):
-						cover_texture.texture = _loading_texture
+					self.texture_normal = _loading_texture
 		)
 	else:
 		# No cover available
-		if is_instance_valid(cover_texture):
-			cover_texture.texture = _loading_texture
+		self.texture_normal = _loading_texture
 
-func _on_download_pressed():
+func _on_card_pressed():
 	if not game:
 		return
 	
@@ -169,8 +173,7 @@ func _on_download_progress(item_id: String, progress: float):
 	var item = DownloadManager.get_item(item_id)
 	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
 		_is_downloading = true
-		status_label.text = "Downloading: %d%%" % int(progress * 100)
-		_update_display()
+		_update_status_icon()
 
 func _on_download_completed(item_id: String, success: bool, message: String):
 	# Check if this download is for our game
@@ -183,35 +186,28 @@ func _on_download_completed(item_id: String, success: bool, message: String):
 			if updated:
 				game = updated
 		else:
-			status_label.text = "Failed"
-			status_label.modulate = Color.RED
-		_update_display()
+			# Show error state - could modulate red or show error icon
+			pass
+		_update_status_icon()
 
 func _on_cover_loaded(url: String, texture: Texture2D):
 	# If this card's cover was just downloaded, update it
 	# Only apply if we're still showing the same game (card wasn't recycled)
 	if not is_instance_valid(self) or not game:
 		return
-	if game.cover_url == url and texture and is_instance_valid(cover_texture):
-		cover_texture.texture = texture
+	if game.cover_url == url and texture:
+		self.texture_normal = texture
 
 func set_placeholder(is_placeholder: bool):
 	"""Set placeholder state for incremental loading."""
 	if is_placeholder:
 		# Show placeholder/loading state
-		if is_instance_valid(title_label):
-			title_label.text = "Loading..."
-		if is_instance_valid(platform_label):
-			platform_label.text = ""
-		if is_instance_valid(cover_texture):
-			cover_texture.texture = _loading_texture
-		if is_instance_valid(download_button):
-			download_button.visible = false
+		self.texture_normal = _loading_texture
+		status_icon.visible = false
+		status_badge.visible = false
 	else:
 		# Show actual game data
 		_update_display()
-		if is_instance_valid(download_button):
-			download_button.visible = true
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
