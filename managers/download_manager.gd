@@ -381,7 +381,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 	# Show extraction notification immediately
 	NotificationManager.update_notification_text(item.notification_id, "Extracting " + item.name + "...")
 	
-	# Create extraction callable for ThreadManager
+	# Create extraction callable for MemoryManager
 	var extraction_callable = func() -> bool:
 		var reader = ZIPReader.new()
 		var err = reader.open(archive_path)
@@ -424,8 +424,8 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		return true
 	
-	# Queue extraction to ThreadManager
-	ThreadManager.queue_extraction_task(extraction_callable, func(success: bool):
+	# Queue extraction to MemoryManager
+	MemoryManager.queue_extraction_task(extraction_callable, func(success: bool):
 		if success:
 			item.status = "completed"
 			item.progress = 1.0
@@ -465,7 +465,7 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 	var abs_archive_path = ProjectSettings.globalize_path(archive_path)
 	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
 	
-	# Create extraction callable for ThreadManager
+	# Create extraction callable for MemoryManager
 	var extraction_callable = func() -> bool:
 		# Start extraction process (blocking in thread)
 		var args = ["x", abs_archive_path, "-o" + abs_extract_dir, "-y"]
@@ -483,8 +483,8 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		return true
 	
-	# Queue extraction to ThreadManager
-	ThreadManager.queue_extraction_task(extraction_callable, func(success: bool):
+	# Queue extraction to MemoryManager
+	MemoryManager.queue_extraction_task(extraction_callable, func(success: bool):
 		if success:
 			item.status = "completed"
 			item.progress = 1.0

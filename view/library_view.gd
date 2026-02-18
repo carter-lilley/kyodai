@@ -46,7 +46,7 @@ func _load_total_count(preserve_cache: bool = false):
 	status_label.text = "Loading library..."
 	
 	# Query total count asynchronously
-	ThreadManager.queue_db_task(
+	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count()
 			print("[LibraryView] Total games count: %d" % count)
@@ -62,7 +62,7 @@ func _load_total_count(preserve_cache: bool = false):
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
 	print("[LibraryView] Items requested: offset=%d, limit=%d, preload=%s" % [offset, limit, is_preload])
-	ThreadManager.queue_db_task(
+	MemoryManager.queue_db_task(
 		func():
 			var games = DataManager.get_games_paginated(offset, limit, "title", true)
 			print("[LibraryView] DB query complete: got %d games" % games.size())

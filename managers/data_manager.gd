@@ -41,6 +41,7 @@ var _sync_platform_total: int = 0  # Total games in current platform
 # NEW: Batch notification system for incremental UI updates
 var _sync_batch_mode: bool = false
 var _sync_batch_pending: Array[GameResource] = []
+var _sync_batch_pending_mutex: Mutex = Mutex.new()  # Thread-safe access
 var _sync_batch_timer: Timer = null
 var _sync_batch_last_emit_time: int = 0
 const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 500ms during sync
@@ -57,16 +58,17 @@ var _precalc_callback: Callable = Callable()
 
 # Cover download deduplication - tracks in-flight downloads across entire sync
 var _active_downloads: Dictionary = {}  # url -> {callbacks: Array[Callable], completed: bool, success: bool}
+var _active_downloads_mutex: Mutex = Mutex.new()  # Thread-safe access to _active_downloads
 
 func _ready():
-	_ensure_thread_manager()
+	_ensure_memory_manager()
 	_initialize_database()
 	_ensure_cache_folder()
 
-func _ensure_thread_manager():
-	if ThreadManager._instance == null:
-		var tm = ThreadManager.new()
-		add_child(tm)
+func _ensure_memory_manager():
+	if MemoryManager._instance == null:
+		var mm = MemoryManager.new()
+		add_child(mm)
 
 func _initialize_database():
 	var dir = DirAccess.open("user://")
@@ -375,80 +377,166 @@ func _fetch_batch(platform_id: String, offset: int, limit: int, callback: Callab
 	NetworkManager.fetch_games(callback, platform_id, offset, limit)
 
 func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
-	"""Process a batch of games. Calls on_complete with success count when all done."""
+	"""Process a batch of games using the MemoryManager batch scheduler."""
 	var total = items.size()
 	if total == 0:
 		on_complete.call(0)
 		return
 	
-	# Reset batch tracking state
-	_batch_remaining = total
-	_batch_callback = on_complete
-	_batch_success_count = 0
+	# Phase 1: Create GameResources (fast, on main thread)
+	var games: Array[GameResource] = []
+	var sibling_check_data: Array[Dictionary] = []
 	
-	# Process each game
-	for game_data in items:
-		_process_game(game_data, platform_slug)
-
-func _process_game(game_data: Dictionary, platform_slug: String):
-	"""Process a single game - DB + cover in parallel."""
-	var game = _create_game_from_data(game_data, platform_slug)
+	for i in range(items.size()):
+		var game_data = items[i]
+		var game = _create_game_from_data(game_data, platform_slug, false)  # false = don't check siblings yet
+		
+		if game != null:
+			games.append(game)
+			sibling_check_data.append({
+				"index": i,
+				"romm_id": game.romm_id,
+				"siblings": game.siblings
+			})
 	
-	if game == null:
-		push_error("[DataManager] Failed to create game from data")
-		_batch_remaining -= 1
-		if _batch_remaining <= 0 and _batch_callback.is_valid():
-			var cb = _batch_callback
-			_batch_callback = Callable()
-			cb.call(_batch_success_count)
+	if games.is_empty():
+		on_complete.call(0)
 		return
 	
-	# Reset sync tracking fields
-	game._sync_db_done = false
-	game._sync_cover_done = false
-	game._sync_db_success = false
+	print("[DataManager] Processing batch of %d games with batched sibling checks..." % games.size())
 	
-	print("[DataManager] Processing: ", game.title)
-	
-	# DB callback
-	add_game(game, func(success: bool):
-		game._sync_db_done = true
-		game._sync_db_success = success
-		_check_game_complete(game)
+	# Phase 2: Batch sibling checks (async, spread across frames)
+	var sibling_batch_id = MemoryManager.start_batch(
+		sibling_check_data,
+		func(item: Dictionary, _idx: int) -> bool:
+			return _check_siblings_in_db(item["romm_id"], item["siblings"]),
+		MemoryManager.BatchMode.DB_THREAD,
+		5,  # 5 sibling checks per frame
+		func(processed: int, total_count: int):
+			print("[DataManager] Sibling checks: %d/%d" % [processed, total_count]),
+		func(sibling_results: Array):
+			# Apply sibling results to games
+			for i in range(sibling_results.size()):
+				if i < games.size():
+					var has_sibling = sibling_results[i]
+					games[i].is_master_entry = not has_sibling
+			
+			print("[DataManager] Sibling checks complete, starting DB inserts...")
+			
+			# Phase 3: Batch DB inserts (async, spread across frames)
+			_db_insert_batch(games, on_complete)
 	)
-	
-	# Cover callback
-	var cover_url = game.cover_url
-	if cover_url != "" and cover_url.begins_with("http"):
-		_download_cover(cover_url, func(_ok: bool):
-			game._sync_cover_done = true
-			_check_game_complete(game)
-		)
-	else:
-		game._sync_cover_done = true
-		# Don't call _check_game_complete here - let the DB callback handle it
 
-func _check_game_complete(game: GameResource):
-	if not (game._sync_db_done and game._sync_cover_done):
+func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
+	"""Batch insert games into DB."""
+	# Use a thread-safe container for collecting games with covers
+	var games_with_covers_mutex = Mutex.new()
+	var games_with_covers: Array[GameResource] = []
+	
+	var db_batch_id = MemoryManager.start_batch(
+		games,
+		func(game: GameResource, _idx: int) -> bool:
+			if game == null:
+				return false
+			
+			var query = _build_insert_query(game)
+			var success = _db.query(query)
+			
+			if success and game.has_cover_art:
+				# Collect for cover downloads (thread-safe)
+				games_with_covers_mutex.lock()
+				games_with_covers.append(game)
+				games_with_covers_mutex.unlock()
+				
+				# Queue for UI notification on main thread
+				if _sync_batch_mode:
+					call_deferred("_queue_batch_notification", game)
+				else:
+					call_deferred("emit_signal", "game_added", game)
+			
+			if success:
+				_sync_current += 1
+			
+			return success,
+		MemoryManager.BatchMode.DB_THREAD,
+		10,  # 10 DB inserts per frame
+		func(processed: int, total_count: int):
+			print("[DataManager] DB inserts: %d/%d" % [processed, total_count]),
+		func(_results: Array):
+			print("[DataManager] DB inserts complete, starting cover downloads...")
+			
+			# Phase 4: Batch cover downloads (async, spread across frames)
+			_cover_download_batch(games_with_covers, on_complete)
+	)
+
+func _cover_download_batch(games: Array[GameResource], on_complete: Callable):
+	"""Batch download covers."""
+	var cover_data: Array[Dictionary] = []
+	for game in games:
+		if game.cover_url != "" and game.cover_url.begins_with("http"):
+			cover_data.append({
+				"url": game.cover_url,
+				"cache_path": get_cached_image_path(game.cover_url)
+			})
+	
+	if cover_data.is_empty():
+		print("[DataManager] No covers to download")
+		on_complete.call(games.size())
 		return
 	
-	# Guard against double-processing
-	if game._sync_processed:
-		return
-	game._sync_processed = true
+	var completed_count: int = 0
 	
-	_batch_remaining -= 1
-	if game._sync_db_success:
-		_sync_current += 1
-		_batch_success_count += 1
+	var cover_batch_id = MemoryManager.start_batch(
+		cover_data,
+		func(item: Dictionary, _idx: int) -> bool:
+			# Queue download via DownloadManager
+			var success = false
+			_download_cover_sync(item["url"], item["cache_path"])
+			return success,
+		MemoryManager.BatchMode.SYNC,  # Downloads are already async via DownloadManager
+		5,  # 5 covers queued per frame
+		func(processed: int, total_count: int):
+			print("[DataManager] Cover downloads queued: %d/%d" % [processed, total_count]),
+		func(_results: Array):
+			print("[DataManager] Cover downloads complete")
+			on_complete.call(games.size())
+	)
+
+func _download_cover_sync(url: String, cache_path: String) -> bool:
+	"""Synchronous wrapper for cover download - actually queues async download."""
+	# Check if already cached
+	if FileAccess.file_exists(cache_path):
+		return true
 	
-	print("[DataManager] Complete: ", game.title)
+	# This is a placeholder - actual download happens via _download_cover
+	# which uses DownloadManager
+	_download_cover(url, func(_ok): pass)
+	return true  # Return true to indicate download was initiated
+
+func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
+	"""Check if any sibling exists in DB - to be run on DB thread."""
+	if _db == null:
+		return false
 	
-	if _batch_remaining <= 0 and _batch_callback.is_valid():
-		print("[DataManager] Batch complete: ", _batch_success_count, " games")
-		var cb = _batch_callback
-		_batch_callback = Callable()
-		cb.call(_batch_success_count)
+	# Build list of all IDs to check (self + siblings)
+	var ids_to_check = [romm_id]
+	for sibling in siblings:
+		var sid = sibling.get("id", 0)
+		if sid != 0:
+			ids_to_check.append(sid)
+	
+	if ids_to_check.is_empty():
+		return false
+	
+	# Check if any of these IDs already exist as master entries
+	var id_list = ", ".join(ids_to_check.map(func(id): return str(id)))
+	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % id_list
+	
+	var success = _db.query(query)
+	if success and _db.query_result.size() > 0:
+		return _db.query_result[0]["count"] > 0
+	
+	return false
 
 # ==================== BATCH NOTIFICATION SYSTEM ====================
 
@@ -457,42 +545,67 @@ func _start_sync_batch_mode():
 	_sync_batch_mode = true
 	_sync_batch_pending.clear()
 	_sync_batch_last_emit_time = Time.get_ticks_msec()
-	print("[DataManager] Batch mode started")
+	
+	# Create timer to periodically flush notifications
+	if _sync_batch_timer:
+		_sync_batch_timer.queue_free()
+	_sync_batch_timer = Timer.new()
+	_sync_batch_timer.wait_time = BATCH_EMIT_INTERVAL_MS / 1000.0  # Convert ms to seconds
+	_sync_batch_timer.one_shot = false
+	_sync_batch_timer.timeout.connect(_flush_batch_notifications)
+	add_child(_sync_batch_timer)
+	_sync_batch_timer.start()
+	
+	print("[DataManager] Batch mode started with timer")
 
 func _stop_sync_batch_mode():
 	"""Stop batch mode and flush any remaining notifications."""
 	_sync_batch_mode = false
-	if _sync_batch_pending.size() > 0:
-		_flush_batch_notifications()
+	
+	# Stop the timer first
 	if _sync_batch_timer:
+		_sync_batch_timer.stop()
 		_sync_batch_timer.queue_free()
 		_sync_batch_timer = null
+	
+	# Flush any remaining notifications
+	_sync_batch_pending_mutex.lock()
+	var has_pending = _sync_batch_pending.size() > 0
+	_sync_batch_pending_mutex.unlock()
+	
+	if has_pending:
+		_flush_batch_notifications()
+	
 	print("[DataManager] Batch mode stopped")
 
 func _queue_batch_notification(game: GameResource):
-	"""Queue a game notification during batch mode."""
+	"""Queue a game notification during batch mode. Called via call_deferred from DB thread."""
+	_sync_batch_pending_mutex.lock()
 	_sync_batch_pending.append(game)
+	var current_size = _sync_batch_pending.size()
+	_sync_batch_pending_mutex.unlock()
 	
-	# Check if we should emit now
-	var current_time = Time.get_ticks_msec()
-	if current_time - _sync_batch_last_emit_time >= BATCH_EMIT_INTERVAL_MS:
-		_flush_batch_notifications()
+	print("[DataManager] Queued game for batch notification: %s (pending: %d)" % [game.title, current_size])
 
 func _flush_batch_notifications():
 	"""Emit batched games and clear the pending list."""
+	_sync_batch_pending_mutex.lock()
 	if _sync_batch_pending.size() == 0:
+		_sync_batch_pending_mutex.unlock()
 		return
 	
 	var games = _sync_batch_pending.duplicate()
+	_sync_batch_pending.clear()
+	_sync_batch_pending_mutex.unlock()
+	
 	var start_index = _sync_current - games.size()
 	
 	print("[DataManager] Emitting batch of %d games for %s" % [games.size(), _sync_platform])
 	games_batch_added.emit(_sync_platform, start_index, games)
 	
-	_sync_batch_pending.clear()
 	_sync_batch_last_emit_time = Time.get_ticks_msec()
 
-func _create_game_from_data(data: Dictionary, platform_slug: String) -> GameResource:
+func _create_game_from_data(data: Dictionary, platform_slug: String, check_siblings: bool = true) -> GameResource:
 	var game = GameResource.new()
 	game.id = str(data.get("id", ""))
 	game.romm_id = data.get("id", 0)
@@ -542,11 +655,16 @@ func _create_game_from_data(data: Dictionary, platform_slug: String) -> GameReso
 	game.siblings = siblings
 	
 	if siblings.size() > 0:
-		print("[DataManager] Stored %d siblings for game '%s' (ID: %d), is_master will be: %s" % [siblings.size(), game.title, game.romm_id, str(not _has_sibling_in_database(game.romm_id, siblings))])
+		print("[DataManager] Stored %d siblings for game '%s' (ID: %d)" % [siblings.size(), game.title, game.romm_id])
 	
 	# Determine if this should be a master entry
 	# A game is a master if none of its siblings already exist in our database
-	game.is_master_entry = not _has_sibling_in_database(game.romm_id, siblings)
+	# This will be checked in batch during sync, or set to true for individual adds
+	if check_siblings:
+		game.is_master_entry = not _has_sibling_in_database(game.romm_id, siblings)
+	else:
+		# During batch sync, we'll check siblings separately
+		game.is_master_entry = true  # Default, will be updated by batch check
 	
 	# Debug: Mark games without cover art as hidden if toggle is enabled
 	if _DEBUG_HIDE_GAMES_WITHOUT_COVERS:
@@ -586,13 +704,44 @@ func _has_sibling_in_database(romm_id: int, siblings: Array[Dictionary]) -> bool
 	print("[DataManager] No existing master entries found")
 	return false
 
+func _build_insert_query(game: GameResource) -> String:
+	"""Build SQL INSERT query for a game - used for batch processing."""
+	return """
+		INSERT OR REPLACE INTO games 
+		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
+		 file_name, file_path, file_size, has_local_copy, last_updated, 
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art)
+		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d)
+	""" % [
+		_escape_sql(game.id),
+		game.romm_id,
+		_escape_sql(game.title),
+		_escape_sql(game.platform),
+		_escape_sql(game.platform_slug),
+		_escape_sql(game.cover_url),
+		_escape_sql(game.cover_path),
+		_escape_sql(game.file_name),
+		_escape_sql(game.file_path),
+		game.file_size,
+		1 if game.has_local_copy else 0,
+		_escape_sql(game.last_updated),
+		_escape_sql(game.description),
+		_escape_sql(",".join(game.genres)),
+		game.rating,
+		_escape_sql(JSON.stringify(game.siblings)),
+		game.selected_sibling_id,
+		1 if game.is_master_entry else 0,
+		_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
+		1 if game.has_cover_art else 0
+	]
+
 # ==================== DATABASE OPERATIONS ====================
 
 func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
 	
-	ThreadManager.queue_db_task(
+	MemoryManager.queue_db_task(
 		func():
 			var query = """
 				INSERT OR REPLACE INTO games 
@@ -641,7 +790,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
 	
-	ThreadManager.queue_db_task(
+	MemoryManager.queue_db_task(
 		func():
 			var query = """
 				UPDATE games SET
@@ -826,16 +975,24 @@ func _download_cover(url: String, callback: Callable):
 		callback.call(true)
 		return
 	
-	# Check if already downloading (deduplication)
+	# Check if already downloading (deduplication) - thread-safe
+	_active_downloads_mutex.lock()
+	var should_return = false
+	var download_state = null
+	
 	if _active_downloads.has(url):
-		var download_state = _active_downloads[url]
+		download_state = _active_downloads[url]
 		if download_state.completed:
 			# Download finished while we were checking - use cached result
-			callback.call(download_state.success)
+			var result = download_state.success
+			_active_downloads_mutex.unlock()
+			callback.call(result)
+			return
 		else:
 			# Still downloading - queue this callback
 			download_state.callbacks.append(callback)
-		return
+			_active_downloads_mutex.unlock()
+			return
 	
 	# Start new download
 	_active_downloads[url] = {
@@ -843,19 +1000,27 @@ func _download_cover(url: String, callback: Callable):
 		"completed": false,
 		"success": false
 	}
+	_active_downloads_mutex.unlock()
 	
 	DownloadManager.download_image(url, cache_path, func(success: bool):
 		if not success:
 			# Download failed - notify all waiting callbacks
-			var state = _active_downloads[url]
-			state.completed = true
-			state.success = false
-			for cb in state.callbacks:
-				cb.call(false)
+			_active_downloads_mutex.lock()
+			if _active_downloads.has(url):
+				var state = _active_downloads[url]
+				state.completed = true
+				state.success = false
+				var callbacks = state.callbacks.duplicate()
+				_active_downloads_mutex.unlock()
+				
+				for cb in callbacks:
+					cb.call(false)
+			else:
+				_active_downloads_mutex.unlock()
 			return
 		
 		# Load the cached image
-		ThreadManager.queue_image_task(
+		MemoryManager.queue_image_task(
 			func():
 				var file = FileAccess.open(cache_path, FileAccess.READ)
 				if not file:
@@ -865,15 +1030,26 @@ func _download_cover(url: String, callback: Callable):
 				return _load_texture_from_memory(buffer),
 			func(texture: Texture2D):
 				var load_success = texture != null
-				# Notify all waiting callbacks
-				var state = _active_downloads[url]
-				state.completed = true
-				state.success = load_success
-				for cb in state.callbacks:
-					cb.call(load_success)
-				# Clean up after a short delay to allow any late callbacks
-				await get_tree().create_timer(5.0).timeout
-				_active_downloads.erase(url)
+				# Notify all waiting callbacks - thread-safe
+				_active_downloads_mutex.lock()
+				if _active_downloads.has(url):
+					var state = _active_downloads[url]
+					state.completed = true
+					state.success = load_success
+					var callbacks = state.callbacks.duplicate()
+					_active_downloads_mutex.unlock()
+					
+					for cb in callbacks:
+						cb.call(load_success)
+					
+					# Clean up after a short delay to allow any late callbacks
+					await get_tree().create_timer(5.0).timeout
+					
+					_active_downloads_mutex.lock()
+					_active_downloads.erase(url)
+					_active_downloads_mutex.unlock()
+				else:
+					_active_downloads_mutex.unlock()
 		)
 	)
 
@@ -909,7 +1085,7 @@ func load_image(url: String, callback: Callable = Callable()):
 	
 	# Try cache first - using background thread
 	if FileAccess.file_exists(cache_path):
-		ThreadManager.queue_image_task(
+		MemoryManager.queue_image_task(
 			func():
 				var file = FileAccess.open(cache_path, FileAccess.READ)
 				if file:
@@ -940,7 +1116,7 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				callback.call(null)
 			return
 		
-		ThreadManager.queue_image_task(
+		MemoryManager.queue_image_task(
 			func():
 				var file = FileAccess.open(cache_path, FileAccess.READ)
 				if file:
@@ -1047,7 +1223,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				covers_deleted += 1
 	
 	# Delete games from database
-	ThreadManager.queue_db_task(
+	MemoryManager.queue_db_task(
 		func():
 			return _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug),
 		func(success: bool):

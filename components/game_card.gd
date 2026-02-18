@@ -98,7 +98,7 @@ func _load_local_cover():
 	"""Load cover from local file path using background thread."""
 	var target_game_id = _loading_game_id
 	
-	ThreadManager.queue_image_task(
+	MemoryManager.queue_image_task(
 		func():
 			var img = Image.new()
 			var err = img.load(game.cover_path)
