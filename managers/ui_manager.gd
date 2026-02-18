@@ -13,6 +13,7 @@ var _modal_context: Dictionary = {}
 var _root_control: Control = null
 var _modal_backdrop: ColorRect = null
 var _is_dismissing: bool = false
+var _focus_indicator: FocusIndicator = null
 
 # Game details tab
 var _details_tab_idx: int = -1
@@ -39,6 +40,9 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 	
 	# Setup modal input handling
 	_setup_modal_input_handling()
+	
+	# Setup focus indicator
+	_setup_focus_indicator()
 
 func _setup_library_tab():
 	var library_idx = _get_tab_index("Library")
@@ -129,6 +133,12 @@ func switch_to_tab(tab_name: String):
 		_tab_container.current_tab = idx
 
 # ==================== MODAL MANAGEMENT ====================
+
+func _setup_focus_indicator() -> void:
+	"""Create and add the global focus indicator."""
+	_focus_indicator = FocusIndicator.new()
+	_focus_indicator.name = "FocusIndicator"
+	_root_control.add_child(_focus_indicator)
 
 func show_context_menu(items: Array[Dictionary], position: Vector2, context: Dictionary = {}) -> String:
 	"""Show a context menu modal at the specified position. Returns modal ID."""
