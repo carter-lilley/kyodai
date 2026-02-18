@@ -207,13 +207,11 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 			
 			var full_path = EMULATORS_DIR + emulator_id + "/" + relative_path
 			
-			# Check if directory exists
 			var dir = DirAccess.open(full_path)
 			if not dir:
 				print("[LaunchManager] Post-install validation failed: directory not found - " + full_path)
 				return false
 			
-			# Count files matching pattern
 			var file_count = 0
 			dir.list_dir_begin()
 			var file_name = dir.get_next()
@@ -232,9 +230,114 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 			
 			print("[LaunchManager] Post-install validation passed: found " + str(file_count) + " files in " + full_path)
 			return true
-		
+		"folders":
+			var folders = validation.get("folders", [])
+			
+			if folders.is_empty():
+				return true
+			
+			var emulator_path = get_emulator_install_path(emulator_id)
+			if emulator_path == "":
+				print("[LaunchManager] Post-install validation failed: emulator not found - " + emulator_id)
+				return false
+			
+			var base_dir = emulator_path.get_base_dir()
+			var dir = DirAccess.open(base_dir)
+			
+			if not dir:
+				print("[LaunchManager] Post-install validation failed: cannot access base dir - " + base_dir)
+				return false
+			
+			for folder_path in folders:
+				if not dir.dir_exists(folder_path):
+					print("[LaunchManager] Post-install validation failed: folder not found - " + folder_path)
+					return false
+			
+			print("[LaunchManager] Post-install validation passed: all folders exist for " + emulator_id)
+			return true
+		"files":
+			var files = validation.get("files", [])
+			
+			if files.is_empty():
+				return true
+			
+			var emulator_path = get_emulator_install_path(emulator_id)
+			if emulator_path == "":
+				print("[LaunchManager] Post-install validation failed: emulator not found - " + emulator_id)
+				return false
+			
+			var base_dir = emulator_path.get_base_dir()
+			
+			for file_path in files:
+				var full_path = base_dir + "/" + file_path
+				if not FileAccess.file_exists(full_path):
+					print("[LaunchManager] Post-install validation failed: file not found - " + file_path)
+					return false
+			
+			print("[LaunchManager] Post-install validation passed: all files exist for " + emulator_id)
+			return true
+		"edit_file":
+			var config_file = validation.get("file", "")
+			var edits = validation.get("edits", [])
+			
+			if config_file == "":
+				return true
+			
+			var emulator_path = get_emulator_install_path(emulator_id)
+			if emulator_path == "":
+				print("[LaunchManager] Post-install validation failed: emulator not found - " + emulator_id)
+				return false
+			
+			var base_dir = emulator_path.get_base_dir()
+			var full_path = base_dir + "/" + config_file
+			
+			if not FileAccess.file_exists(full_path):
+				print("[LaunchManager] Post-install validation failed: config file not found - " + config_file)
+				return false
+			
+			if edits.is_empty():
+				print("[LaunchManager] Post-install validation passed: config file exists for " + emulator_id)
+				return true
+			
+			var file = FileAccess.open(full_path, FileAccess.READ)
+			if file == null:
+				print("[LaunchManager] Post-install validation failed: cannot read config file - " + config_file)
+				return false
+			
+			var content = file.get_as_text()
+			file.close()
+			
+			for edit in edits:
+				var key = edit.get("key", "")
+				var expected_value = edit.get("value", "").replace("{emulator_dir}", base_dir)
+				
+				if key == "":
+					continue
+				
+				var patterns = [
+					"(?m)^" + key.regex_escape() + "\\s*:\\s*(.+)$",
+					"(?m)^" + key.regex_escape() + "\\s*=\\s*(.+)$"
+				]
+				
+				var found = false
+				for pattern in patterns:
+					var regex = RegEx.new()
+					regex.compile(pattern)
+					var match_result = regex.search(content)
+					if match_result:
+						var actual_value = match_result.get_string(1).strip_edges()
+						if actual_value == expected_value:
+							found = true
+							break
+				
+				if not found:
+					print("[LaunchManager] Post-install validation failed: " + key + " not set correctly in " + config_file)
+					return false
+			
+			print("[LaunchManager] Post-install validation passed: config edits verified for " + emulator_id)
+			return true
 		_:
-			# Unknown validation type, assume valid
+			print("[LaunchManager] Unknown validation type: " + validation_type)
 			return true
 
 ## Legacy function - checks if main executable exists (deprecated, use validate_emulator_installation)
@@ -549,8 +652,13 @@ func _start_post_install(emulator_id: String, emulator: Dictionary):
 	match install_type:
 		"cores":
 			_start_cores_post_install(emulator_id, emulator, post_install)
+		"create_folders":
+			_start_folders_post_install(emulator_id, emulator, post_install)
+		"create_files":
+			_start_files_post_install(emulator_id, emulator, post_install)
+		"edit_file":
+			_start_edit_file_post_install(emulator_id, emulator, post_install)
 		_:
-			# Unknown post-install type - validate and mark as installed if valid
 			print("[LaunchManager] Unknown post-install type '" + install_type + "', validating: " + emulator_id)
 			if validate_emulator_installation(emulator_id):
 				_emulator_install_states[emulator_id] = InstallState.INSTALLED
@@ -562,6 +670,169 @@ func _start_post_install(emulator_id: String, emulator: Dictionary):
 				_emulator_install_progress[emulator_id] = "Validation failed"
 				push_error("[LaunchManager] Validation failed after extraction: " + emulator_id)
 				emulator_extraction_completed.emit(emulator_id, false)
+
+func _start_folders_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
+	var folders = post_install.get("folders", [])
+	
+	if folders.is_empty():
+		print("[LaunchManager] No folders to create for: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		_emulator_install_progress[emulator_id] = ""
+		emulator_extraction_completed.emit(emulator_id, true)
+		return
+	
+	var emulator_path = get_emulator_install_path(emulator_id)
+	if emulator_path == "":
+		push_error("[LaunchManager] Cannot find emulator path for folder creation: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Could not find emulator path"
+		emulator_extraction_completed.emit(emulator_id, false)
+		return
+	
+	var base_dir = emulator_path.get_base_dir()
+	
+	for folder_path in folders:
+		var full_path = base_dir + "/" + folder_path
+		var dir = DirAccess.open(base_dir)
+		
+		if dir and not dir.dir_exists(folder_path):
+			var error = dir.make_dir_recursive(folder_path)
+			if error != OK:
+				push_error("[LaunchManager] Failed to create folder: " + full_path + " (error: " + str(error) + ")")
+			else:
+				print("[LaunchManager] Created folder: " + full_path)
+		elif not dir:
+			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
+		else:
+			print("[LaunchManager] Folder already exists: " + full_path)
+	
+	_emulator_install_states[emulator_id] = InstallState.INSTALLED
+	_emulator_install_progress[emulator_id] = ""
+	print("[LaunchManager] Folder creation complete for: " + emulator_id)
+	emulator_extraction_completed.emit(emulator_id, true)
+
+func _start_files_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
+	var files = post_install.get("files", [])
+	
+	if files.is_empty():
+		print("[LaunchManager] No files to create for: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		_emulator_install_progress[emulator_id] = ""
+		emulator_extraction_completed.emit(emulator_id, true)
+		return
+	
+	var emulator_path = get_emulator_install_path(emulator_id)
+	if emulator_path == "":
+		push_error("[LaunchManager] Cannot find emulator path for file creation: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Could not find emulator path"
+		emulator_extraction_completed.emit(emulator_id, false)
+		return
+	
+	var base_dir = emulator_path.get_base_dir()
+	
+	for file_path in files:
+		var full_path = base_dir + "/" + file_path
+		
+		if not FileAccess.file_exists(full_path):
+			var file = FileAccess.open(full_path, FileAccess.WRITE)
+			if file == null:
+				push_error("[LaunchManager] Failed to create file: " + full_path + " (error: " + str(FileAccess.get_open_error()) + ")")
+			else:
+				file.close()
+				print("[LaunchManager] Created file: " + full_path)
+		else:
+			print("[LaunchManager] File already exists: " + full_path)
+	
+	_emulator_install_states[emulator_id] = InstallState.INSTALLED
+	_emulator_install_progress[emulator_id] = ""
+	print("[LaunchManager] File creation complete for: " + emulator_id)
+	emulator_extraction_completed.emit(emulator_id, true)
+
+func _start_edit_file_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
+	var config_file = post_install.get("file", "")
+	var edits = post_install.get("edits", [])
+	
+	if config_file == "" or edits.is_empty():
+		print("[LaunchManager] No config file or edits specified for: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		_emulator_install_progress[emulator_id] = ""
+		emulator_extraction_completed.emit(emulator_id, true)
+		return
+	
+	var emulator_path = get_emulator_install_path(emulator_id)
+	if emulator_path == "":
+		push_error("[LaunchManager] Cannot find emulator path for file edit: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Could not find emulator path"
+		emulator_extraction_completed.emit(emulator_id, false)
+		return
+	
+	var base_dir = emulator_path.get_base_dir()
+	var full_path = base_dir + "/" + config_file
+	
+	if not FileAccess.file_exists(full_path):
+		push_error("[LaunchManager] Config file not found: " + full_path)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Config file not found"
+		emulator_extraction_completed.emit(emulator_id, false)
+		return
+	
+	var file = FileAccess.open(full_path, FileAccess.READ)
+	if file == null:
+		push_error("[LaunchManager] Failed to open config file: " + full_path)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Failed to open config file"
+		emulator_extraction_completed.emit(emulator_id, false)
+		return
+	
+	var content = file.get_as_text()
+	file.close()
+	
+	for edit in edits:
+		var key = edit.get("key", "")
+		var value = edit.get("value", "")
+		
+		if key == "":
+			continue
+		
+		value = value.replace("{emulator_dir}", base_dir)
+		
+		var patterns = [
+			"(?m)^(" + key.regex_escape() + ")\\s*:\\s*.*$",
+			"(?m)^(" + key.regex_escape() + ")\\s*=\\s*.*$"
+		]
+		
+		var replaced = false
+		for pattern in patterns:
+			var regex = RegEx.new()
+			regex.compile(pattern)
+			var new_content = regex.sub(content, "$1: " + value, true)
+			if new_content != content:
+				content = new_content
+				replaced = true
+				print("[LaunchManager] Updated " + key + " in " + config_file)
+				break
+		
+		if not replaced:
+			content += "\n" + key + ": " + value
+			print("[LaunchManager] Added " + key + " to " + config_file)
+	
+	file = FileAccess.open(full_path, FileAccess.WRITE)
+	if file == null:
+		push_error("[LaunchManager] Failed to write config file: " + full_path)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Failed to write config file"
+		emulator_extraction_completed.emit(emulator_id, false)
+		return
+	
+	file.store_string(content)
+	file.close()
+	
+	_emulator_install_states[emulator_id] = InstallState.INSTALLED
+	_emulator_install_progress[emulator_id] = ""
+	print("[LaunchManager] Config edit complete for: " + emulator_id)
+	emulator_extraction_completed.emit(emulator_id, true)
 
 ## Handles cores-type post-install (download and extract cores)
 func _start_cores_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
@@ -880,63 +1151,119 @@ func _get_enabled_platforms() -> Dictionary:
 # ==================== EMULATOR DOWNLOAD ====================
 
 func download_emulator(emulator_id: String) -> bool:
-	"""Queue an emulator for download. Returns true if queued, false if already downloaded/queued."""
-	
 	var current_state = get_emulator_install_state(emulator_id)
 	
-	# Check if already installed or in progress
 	if current_state == InstallState.INSTALLED:
 		print("[LaunchManager] Emulator already installed: " + emulator_id)
 		return false
 	
-	# Check if already downloading (any state that indicates active download)
 	if current_state in [InstallState.DOWNLOADING, InstallState.EXTRACTING, 
 						InstallState.ENACTING_POST_INSTALL]:
 		print("[LaunchManager] Emulator already downloading/installing: " + emulator_id)
 		return false
 	
-	# Get emulator info
 	var emulator = get_emulator(emulator_id)
 	if emulator.is_empty():
 		push_error("[LaunchManager] Unknown emulator: " + emulator_id)
 		return false
 	
 	var emulator_name = emulator.get("name", emulator_id)
-	
-	# Get download URL for current platform
 	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var download_urls = emulator.get("download_urls", {})
-	var download_url = download_urls.get(platform_name, "")
+	var download_source = emulator.get("download_source", "hardcoded")
 	
-	if download_url == "":
-		push_error("[LaunchManager] No download URL for platform: " + platform_name)
-		return false
-	
-	# Build destination path
+	match download_source:
+		"hardcoded":
+			var download_urls = emulator.get("download_urls", {})
+			var download_url = download_urls.get(platform_name, "")
+			
+			if download_url == "":
+				push_error("[LaunchManager] No download URL for platform: " + platform_name)
+				return false
+			
+			_queue_emulator_download(emulator_id, emulator_name, download_url)
+			return true
+		
+		"github":
+			var github_repo = emulator.get("github_repo", "")
+			if github_repo == "":
+				push_error("[LaunchManager] No github_repo specified for github source: " + emulator_id)
+				return false
+			
+			var asset_patterns = emulator.get("asset_patterns", {})
+			var asset_pattern = asset_patterns.get(platform_name, "")
+			
+			if asset_pattern == "":
+				push_error("[LaunchManager] No asset pattern for platform: " + platform_name)
+				return false
+			
+			_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+			_emulator_install_progress[emulator_id] = "Fetching release info..."
+			
+			NetworkManager.fetch_github_latest_release(
+				github_repo,
+				asset_pattern,
+				func(url: String, error: String):
+					if error != "":
+						push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
+						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+						return
+					
+					_queue_emulator_download(emulator_id, emulator_name, url)
+			)
+			return true
+		
+		"scraped":
+			var scrape_config = emulator.get("scrape_config", {})
+			var scrape_url = scrape_config.get("scrape_url", "")
+			var version_pattern = scrape_config.get("version_pattern", "")
+			var url_templates = scrape_config.get("url_templates", {})
+			var url_template = url_templates.get(platform_name, "")
+			
+			if scrape_url == "" or version_pattern == "" or url_template == "":
+				push_error("[LaunchManager] Invalid scrape config for: " + emulator_id)
+				return false
+			
+			_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+			_emulator_install_progress[emulator_id] = "Fetching release info..."
+			
+			NetworkManager.fetch_scraped_release(
+				scrape_url,
+				version_pattern,
+				url_template,
+				func(url: String, error: String):
+					if error != "":
+						push_error("[LaunchManager] Failed to scrape release: " + error)
+						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+						return
+					
+					_queue_emulator_download(emulator_id, emulator_name, url)
+			)
+			return true
+		
+		_:
+			push_error("[LaunchManager] Unknown download_source: " + download_source)
+			return false
+
+func _queue_emulator_download(emulator_id: String, emulator_name: String, download_url: String):
 	var filename = download_url.get_file()
 	var destination_path = EMULATORS_DIR + emulator_id + "/" + filename
 	
-	# Set state to DOWNLOADING
 	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = "Downloading " + emulator_name + "..."
 	
 	print("[LaunchManager] Queueing emulator download: " + emulator_id + " from " + download_url)
 	
-	# Queue the download via DownloadManager (with auto-extract)
 	var item_id = DownloadManager.queue_download(
 		download_url,
 		destination_path,
 		"emulator",
 		emulator_name,
-		true,  # auto_extract
+		true,
 		EMULATORS_DIR + emulator_id + "/"
 	)
 	
 	if item_id == "":
 		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		return false
-	
-	return true
 
 ## Completes post-install for an emulator that's in NEEDS_POST_INSTALL state
 ## Call this when user clicks "Complete Install" on a partially installed emulator

@@ -265,3 +265,101 @@ func format_bytes(bytes: int) -> String:
 		return str(bytes / (1024 * 1024)) + " MB"
 	else:
 		return str(bytes / (1024 * 1024 * 1024)) + " GB"
+
+func fetch_github_latest_release(repo: String, asset_pattern: String, callback: Callable):
+	var url = "https://api.github.com/repos/" + repo + "/releases/latest"
+	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
+	
+	var http = HTTPRequest.new()
+	add_child(http)
+	
+	print("[NetworkManager] Fetching GitHub release: " + url)
+	
+	var error = http.request(url, headers)
+	
+	if error != OK:
+		print("[NetworkManager] Failed to fetch GitHub release: " + str(error))
+		callback.call("", "Failed to start request: " + str(error))
+		http.queue_free()
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, body):
+		http.queue_free()
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			callback.call("", "Request failed: " + str(result))
+			return
+		
+		if response_code != 200:
+			callback.call("", "HTTP error: " + str(response_code))
+			return
+		
+		var body_text = body.get_string_from_utf8()
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		
+		if parse_result != OK:
+			callback.call("", "Failed to parse JSON: " + json.get_error_message())
+			return
+		
+		var data = json.data
+		if not data.has("assets"):
+			callback.call("", "No assets in release")
+			return
+		
+		var regex = RegEx.new()
+		regex.compile(asset_pattern)
+		
+		for asset in data.assets:
+			var name = asset.get("name", "")
+			if regex.search(name) != null:
+				var download_url = asset.get("browser_download_url", "")
+				print("[NetworkManager] Found matching asset: " + name + " -> " + download_url)
+				callback.call(download_url, "")
+				return
+		
+		callback.call("", "No asset matched pattern: " + asset_pattern)
+	)
+
+func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable):
+	var http = HTTPRequest.new()
+	add_child(http)
+	
+	print("[NetworkManager] Scraping release from: " + scrape_url)
+	
+	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
+	
+	if error != OK:
+		print("[NetworkManager] Failed to scrape page: " + str(error))
+		callback.call("", "Failed to start request: " + str(error))
+		http.queue_free()
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, body):
+		http.queue_free()
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			callback.call("", "Request failed: " + str(result))
+			return
+		
+		if response_code != 200:
+			callback.call("", "HTTP error: " + str(response_code))
+			return
+		
+		var body_text = body.get_string_from_utf8()
+		
+		var regex = RegEx.new()
+		regex.compile(version_pattern)
+		
+		var match_result = regex.search(body_text)
+		
+		if match_result == null:
+			callback.call("", "Could not find version pattern in page")
+			return
+		
+		var version = match_result.get_string(1)
+		var download_url = url_template.replace("{version}", version)
+		
+		print("[NetworkManager] Found version: " + version + " -> " + download_url)
+		callback.call(download_url, "")
+	)

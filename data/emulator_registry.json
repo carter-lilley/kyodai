@@ -1,17 +1,17 @@
 {
   "_meta": {
-	"version": "1.0",
+	"version": "2.0",
 	"description": "Emulator registry for Kyodai launcher",
 	"note": "Add emulator entries here. See retroarch example for structure."
   },
   "retroarch": {
 	"name": "RetroArch",
 	"platforms": ["3do", "arcade", "atari2600", "lynx", "atomiswave", "c64", "dos", "dc", "fds", "g-and-w", "gb", "gba", "gbc", "msx", "naomi", "naomi2", "neogeoaes", "neo-geo-pocket-color", "3ds", "n64", "nds", "nes", "ngc", "win3x", "pico8", "psx", "ps2", "psp", "sega32", "segacd", "gamegear", "sms", "genesis", "saturn", "sg1000", "snes", "tg16", "turbografx-cd", "virtualboy", "wii"],
-	"github_repo": "libretro/RetroArch",
-	"asset_patterns": {
-	  "windows": "RetroArch-.*-win64.7z",
-	  "linux": "RetroArch-.*-Linux-x86_64.AppImage",
-	  "android": "RetroArch-.*-arm64-v8a.apk"
+	"download_source": "hardcoded",
+	"download_urls": {
+	  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
+	  "linux": "",
+	  "android": ""
 	},
 	"executable_names": {
 	  "windows": "retroarch.exe",
@@ -31,52 +31,47 @@
 		}
 	  }
 	},
-"core_mappings": {
-  "3do": "opera",
-  "arcade": "fbneo",
-  "atari2600": "stella",
-  "lynx": "handy",
-  "atomiswave": "flycast",
-  "c64": "vice_x64",
-  "dos": "dosbox_pure",
-  "dc": "flycast",
-  "fds": "nestopia",
-  "g-and-w": "gw",
-  "gb": "gambatte",
-  "gba": "mgba",
-  "gbc": "gambatte",
-  "msx": "bluemsx",
-  "naomi": "flycast",
-  "naomi2": "flycast",
-  "neogeoaes": "fbneo",
-  "neo-geo-pocket-color": "mednafen_ngp",
-  "3ds": "citra",
-  "n64": "mupen64plus_next",
-  "nds": "melonds",
-  "nes": "nestopia",
-  "ngc": "dolphin",
-  "win3x": "dosbox_pure",
-  "pico8": "",
-  "psx": "pcsx_rearmed",
-  "ps2": "pcsx2",
-  "psp": "ppsspp",
-  "sega32": "picodrive",
-  "segacd": "genesis_plus_gx",
-  "gamegear": "genesis_plus_gx",
-  "sms": "genesis_plus_gx",
-  "genesis": "genesis_plus_gx",
-  "saturn": "yabause",
-  "sg1000": "genesis_plus_gx",
-  "snes": "snes9x",
-  "tg16": "mednafen_pce",
-  "turbografx-cd": "mednafen_pce",
-  "virtualboy": "mednafen_vb",
-  "wii": "dolphin",
-},
-"download_urls": {
-	  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
-	  "linux": "",
-	  "android": ""
+	"core_mappings": {
+	  "3do": "opera",
+	  "arcade": "fbneo",
+	  "atari2600": "stella",
+	  "lynx": "handy",
+	  "atomiswave": "flycast",
+	  "c64": "vice_x64",
+	  "dos": "dosbox_pure",
+	  "dc": "flycast",
+	  "fds": "nestopia",
+	  "g-and-w": "gw",
+	  "gb": "gambatte",
+	  "gba": "mgba",
+	  "gbc": "gambatte",
+	  "msx": "bluemsx",
+	  "naomi": "flycast",
+	  "naomi2": "flycast",
+	  "neogeoaes": "fbneo",
+	  "neo-geo-pocket-color": "mednafen_ngp",
+	  "3ds": "citra",
+	  "n64": "mupen64plus_next",
+	  "nds": "melonds",
+	  "nes": "nestopia",
+	  "ngc": "dolphin",
+	  "win3x": "dosbox_pure",
+	  "pico8": "",
+	  "psx": "pcsx_rearmed",
+	  "ps2": "pcsx2",
+	  "psp": "ppsspp",
+	  "sega32": "picodrive",
+	  "segacd": "genesis_plus_gx",
+	  "gamegear": "genesis_plus_gx",
+	  "sms": "genesis_plus_gx",
+	  "genesis": "genesis_plus_gx",
+	  "saturn": "yabause",
+	  "sg1000": "genesis_plus_gx",
+	  "snes": "snes9x",
+	  "tg16": "mednafen_pce",
+	  "turbografx-cd": "mednafen_pce",
+	  "virtualboy": "mednafen_vb",
+	  "wii": "dolphin"
 	},
 	"post_install": {
 	  "type": "cores",
@@ -94,6 +89,241 @@
 		"type": "cores_directory",
 		"path": "RetroArch-Win64/cores",
 		"file_pattern": "*.dll"
+	  }
+	}
+  },
+  "azahar": {
+	"name": "Azahar",
+	"platforms": ["3ds"],
+	"download_source": "github",
+	"github_repo": "azahar-emu/azahar",
+	"asset_patterns": {
+	  "windows": "azahar-.*-windows-msvc\\.zip",
+	  "linux": "azahar\\.AppImage",
+	  "android": "azahar-.*-android-vanilla\\.apk"
+	},
+	"executable_names": {
+	  "windows": "azahar.exe",
+	  "linux": "azahar.AppImage",
+	  "android": "org.azahar.emu"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": ["{exe}", "{rom}"],
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "org.azahar.emu",
+		"class": "org.azahar.emu.ui.EmulationActivity"
+	  }
+	},
+	"post_install": {
+	  "type": "create_folders",
+	  "folders": ["user"],
+	  "validation": {
+		"type": "folders",
+		"folders": ["user"]
+	  }
+	}
+  },
+  "cemu": {
+	"name": "Cemu",
+	"platforms": ["wiiu"],
+	"download_source": "github",
+	"github_repo": "cemu-project/Cemu",
+	"asset_patterns": {
+	  "windows": "cemu-.*-windows-x64\\.zip",
+	  "linux": ""
+	},
+	"executable_names": {
+	  "windows": "Cemu.exe",
+	  "linux": ""
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "-g", "{rom}"],
+	  "linux": []
+	},
+	"post_install": {
+	  "type": "create_folders",
+	  "folders": ["portable"],
+	  "validation": {
+		"type": "folders",
+		"folders": ["portable"]
+	  }
+	}
+  },
+  "dolphin": {
+	"name": "Dolphin",
+	"platforms": ["ngc", "wii"],
+	"download_source": "scraped",
+	"scrape_config": {
+	  "scrape_url": "https://dolphin-emu.org/download/",
+	  "version_pattern": "/download/release/([0-9a-z]+)/",
+	  "url_templates": {
+		"windows": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z",
+		"linux": ""
+	  }
+	},
+	"executable_names": {
+	  "windows": "Dolphin.exe",
+	  "linux": ""
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "-e", "{rom}"],
+	  "linux": []
+	},
+	"post_install": {
+	  "type": "create_files",
+	  "files": ["portable.txt"],
+	  "validation": {
+		"type": "files",
+		"files": ["portable.txt"]
+	  }
+	}
+  },
+  "eden": {
+	"name": "Eden",
+	"platforms": ["switch"],
+	"download_source": "github",
+	"github_repo": "eden-emulator/Releases",
+	"asset_patterns": {
+	  "windows": "Eden-Windows-.*-amd64-msvc.*\\.zip",
+	  "linux": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage",
+	  "android": "Eden-Android-.*-standard\\.apk"
+	},
+	"executable_names": {
+	  "windows": "eden.exe",
+	  "linux": "",
+	  "android": ""
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": [],
+	  "android": []
+	},
+	"post_install": {
+	  "type": "create_folders",
+	  "folders": ["user"],
+	  "validation": {
+		"type": "folders",
+		"folders": ["user"]
+	  }
+	}
+  },
+  "ppsspp": {
+	"name": "PPSSPP",
+	"platforms": ["psp"],
+	"download_source": "scraped",
+	"scrape_config": {
+	  "scrape_url": "https://www.ppsspp.org/downloads.html",
+	  "version_pattern": "/files/([0-9_]+)/ppsspp_win\\.zip",
+	  "url_templates": {
+		"windows": "https://www.ppsspp.org/files/{version}/ppsspp_win.zip",
+		"linux": ""
+	  }
+	},
+	"executable_names": {
+	  "windows": "PPSSPPWindows64.exe",
+	  "linux": ""
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": []
+	},
+	"post_install": {
+	  "type": "create_files",
+	  "files": ["portable.txt"],
+	  "validation": {
+		"type": "files",
+		"files": ["portable.txt"]
+	  }
+	}
+  },
+  "rpcs3": {
+	"name": "RPCS3",
+	"platforms": ["ps3"],
+	"download_source": "github",
+	"github_repo": "RPCS3/rpcs3-binaries-win",
+	"asset_patterns": {
+	  "windows": "rpcs3-.*_win64_msvc\\.7z",
+	  "linux": ""
+	},
+	"executable_names": {
+	  "windows": "rpcs3.exe",
+	  "linux": ""
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": []
+	}
+  },
+  "shadps4": {
+	"name": "shadPS4",
+	"platforms": ["ps4"],
+	"download_source": "github",
+	"github_repo": "shadps4-emu/shadPS4",
+	"asset_patterns": {
+	  "windows": "shadps4-win64-sdl-.*\\.zip",
+	  "linux": "shadps4-linux-sdl-.*\\.zip"
+	},
+	"executable_names": {
+	  "windows": "shadPS4.exe",
+	  "linux": "shadPS4"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "-g", "{rom}"],
+	  "linux": ["{exe}", "-g", "{rom}"]
+	},
+	"post_install": {
+	  "type": "create_folders",
+	  "folders": ["user"],
+	  "validation": {
+		"type": "folders",
+		"folders": ["user"]
+	  }
+	}
+  },
+  "vita3k": {
+	"name": "Vita3K",
+	"platforms": ["vita"],
+	"download_source": "github",
+	"github_repo": "Vita3K/Vita3K",
+	"asset_patterns": {
+	  "windows": "windows-latest\\.zip",
+	  "linux": "ubuntu-latest\\.zip",
+	  "android": "android-latest\\.apk"
+	},
+	"executable_names": {
+	  "windows": "Vita3K.exe",
+	  "linux": "Vita3K",
+	  "android": "org.vita3k.emulator"
+	},
+	"launch_templates": {
+	  "windows": ["{exe}", "{rom}"],
+	  "linux": ["{exe}", "{rom}"],
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "org.vita3k.emulator",
+		"class": "org.vita3k.emulator.EmulatorActivity"
+	  }
+	},
+	"post_install": {
+	  "type": "edit_file",
+	  "file": "config.yml",
+	  "edits": [
+		{
+		  "key": "pref-path",
+		  "value": ".\\"
+		}
+	  ],
+	  "validation": {
+		"type": "edit_file",
+		"file": "config.yml",
+		"edits": [
+		  {
+			"key": "pref-path",
+			"value": ".\\"
+		  }
+		]
 	  }
 	}
   }
