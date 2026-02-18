@@ -16,12 +16,22 @@ var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
 var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
+const BASE_WIDTH: float = 200.0
+const BASE_HEIGHT: float = 280.0
+const BASE_BADGE_SIZE: float = 32.0
+const BASE_BADGE_CORNER: int = 23
+const BASE_ICON_SIZE: float = 22.0
+const BASE_BADGE_MARGIN: float = 8.0
+
+var _current_zoom: float = 1.0
+
 # Track which game we're currently loading an image for (prevents wrong texture on recycled cards)
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
 const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
+	set_card_zoom(_current_zoom)
 	_update_display()
 	
 	# Connect pressed signal for click handling
@@ -212,6 +222,38 @@ func set_placeholder(is_placeholder: bool):
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			# Right-click to show context menu
 			if game:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
+
+func set_card_zoom(new_zoom: float) -> void:
+	_current_zoom = new_zoom
+	
+	var card_width = BASE_WIDTH * new_zoom
+	var card_height = BASE_HEIGHT * new_zoom
+	custom_minimum_size = Vector2(card_width, card_height)
+	
+	var badge_size = BASE_BADGE_SIZE * new_zoom
+	var badge_margin = BASE_BADGE_MARGIN * new_zoom
+	var badge_corner = int(BASE_BADGE_CORNER * new_zoom)
+	
+	status_badge.offset_left = -badge_size - badge_margin
+	status_badge.offset_top = -badge_size - badge_margin
+	status_badge.offset_right = -badge_margin
+	status_badge.offset_bottom = -badge_margin
+	
+	var new_style = StyleBoxFlat.new()
+	new_style.bg_color = Color(0, 0, 0, 0.6)
+	new_style.corner_radius_top_left = badge_corner
+	new_style.corner_radius_top_right = badge_corner
+	new_style.corner_radius_bottom_left = badge_corner
+	new_style.corner_radius_bottom_right = badge_corner
+	status_badge.add_theme_stylebox_override("panel", new_style)
+	
+	var icon_size = BASE_ICON_SIZE * new_zoom / 2.0
+	status_icon.offset_left = -icon_size
+	status_icon.offset_top = -icon_size
+	status_icon.offset_right = icon_size
+	status_icon.offset_bottom = icon_size
+
+func get_current_zoom() -> float:
+	return _current_zoom

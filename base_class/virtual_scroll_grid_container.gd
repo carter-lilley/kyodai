@@ -8,12 +8,25 @@ signal batch_progress_changed(progress: float)
 
 @export var card_scene: PackedScene
 @export var grid_columns: int = 5
-@export var item_height: float = 290.0
 @export var buffer_size: int = 75
 @export var preload_distance: int = 25
 @export var debug_mode: bool = false
 
+const BASE_CARD_WIDTH: float = 200.0
+const BASE_CARD_HEIGHT: float = 280.0
+const GRID_SEPARATION: int = 10
+
+var zoom: float = 1.0:
+	set(value):
+		var new_zoom = clampf(value, 0.5, 2.0)
+		if not is_equal_approx(zoom, new_zoom):
+			zoom = new_zoom
+			_on_zoom_changed()
+
+var item_height: float = 290.0
+
 var _scroll_container: SmoothScrollContainer
+var _margin_container: MarginContainer
 var _grid_container: GridContainer
 var _spacer: Control
 var _debug_camera: Camera2D
@@ -39,6 +52,44 @@ var _is_loading: bool = false
 
 func _ready():
 	_setup_ui()
+	resized.connect(_on_resized)
+
+func _on_resized():
+	_recalculate_columns()
+
+func _recalculate_columns():
+	if not _grid_container:
+		return
+	
+	var card_width = BASE_CARD_WIDTH * zoom
+	var available_width = size.x
+	var new_columns = max(1, int(available_width / (card_width + GRID_SEPARATION)))
+	
+	if new_columns != grid_columns:
+		grid_columns = new_columns
+		_grid_container.columns = grid_columns
+		_update_layout()
+		_update_spacer()
+		_on_scroll_value_changed(_scroll_container.scroll_vertical if _scroll_container else 0.0)
+	
+	_center_grid()
+
+func _center_grid():
+	if not _grid_container or not _scroll_container or not _margin_container:
+		return
+	
+	var card_width = BASE_CARD_WIDTH * zoom
+	var total_grid_width = (grid_columns * card_width) + ((grid_columns - 1) * GRID_SEPARATION)
+	var available_width = _scroll_container.size.x
+	var extra_space = available_width - total_grid_width
+	
+	if extra_space > 0:
+		var left_margin = int(extra_space / 2.0)
+		_margin_container.add_theme_constant_override("margin_left", left_margin)
+		_margin_container.add_theme_constant_override("margin_right", left_margin)
+	else:
+		_margin_container.add_theme_constant_override("margin_left", 0)
+		_margin_container.add_theme_constant_override("margin_right", 0)
 
 func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -54,26 +105,47 @@ func _setup_ui():
 	
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
 	
+	_margin_container = MarginContainer.new()
+	_margin_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll_container.add_child(_margin_container)
+	
 	_grid_container = GridContainer.new()
 	_grid_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_grid_container.add_theme_constant_override("h_separation", 10)
-	_grid_container.add_theme_constant_override("v_separation", 10)
+	_grid_container.add_theme_constant_override("h_separation", GRID_SEPARATION)
+	_grid_container.add_theme_constant_override("v_separation", GRID_SEPARATION)
 	_grid_container.columns = grid_columns
-	_scroll_container.add_child(_grid_container)
+	_margin_container.add_child(_grid_container)
 	
 	_spacer = Control.new()
 	_spacer.custom_minimum_size = Vector2(1, 0)
 	_grid_container.add_child(_spacer)
+	
+	_recalculate_dimensions()
+
+func _recalculate_dimensions():
+	item_height = (BASE_CARD_HEIGHT * zoom) + GRID_SEPARATION
+
+func _on_zoom_changed():
+	_recalculate_dimensions()
+	_recalculate_columns()
+	_update_layout()
+	
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_card_zoom"):
+			card.set_card_zoom(zoom)
+	
+	if _spacer:
+		_update_spacer()
 
 func setup(card_scene_resource: PackedScene, total_items: int, columns: int = 5):
 	_card_scene = card_scene_resource
-	grid_columns = columns
-	_grid_container.columns = grid_columns
 	_total_items = total_items
 	
 	_instantiate_card_pool()
-	_update_layout()
 	_initial_load()
+	
+	await get_tree().process_frame
+	_recalculate_columns()
 	
 	if debug_mode:
 		_setup_debug_camera()

@@ -3,6 +3,7 @@ extends View
 
 @onready var games_grid: VirtualScrollGridContainer = $VBoxContainer/VirtualScrollGridContainer
 @onready var status_label: Label = $VBoxContainer/StatusLabel
+@onready var zoom_slider: HSlider = $VBoxContainer/BottomBar/ZoomSlider
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -14,6 +15,9 @@ func _ready():
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
+	
+	# Setup zoom slider
+	zoom_slider.value_changed.connect(_on_zoom_changed)
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
@@ -81,6 +85,7 @@ func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
 		card.download_requested.connect(_on_download_requested)
+		card.set_card_zoom(games_grid.zoom)
 
 func _on_download_requested(game: GameResource):
 	# Use the selected sibling's ID and file name if one is selected
@@ -196,3 +201,6 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				print("[LibraryView] Game not found: ", romm_id)
 		"hide":
 			print("[LibraryView] Hide requested for game: ", romm_id)
+
+func _on_zoom_changed(value: float) -> void:
+	games_grid.zoom = value
