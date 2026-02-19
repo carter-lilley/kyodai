@@ -7,7 +7,7 @@ uniform vec2 card_size = vec2(200.0, 280.0);
 uniform float corner_radius_pixels = 12.0;
 
 // === Layer 2: Game texture ===
-uniform sampler2D game_texture;
+uniform sampler2D game_texture : filter_linear, repeat_disable;
 
 // === Layer 3: Border ===
 uniform bool border_enabled = false;
@@ -28,10 +28,23 @@ float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 }
 
 vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
-	vec2 card_aspect = card / min(card.x, card.y);
-	vec2 tex_aspect = tex / min(tex.x, tex.y);
-	vec2 scale = card_aspect / tex_aspect;
-	return (uv - 0.5) * max(scale.x, scale.y) + 0.5;
+	// CSS "cover" mode: scale texture to fill card, maintain aspect ratio, crop edges
+	float card_aspect = card.x / card.y;
+	float tex_aspect = tex.x / tex.y;
+	
+	// Calculate UV scale factor (always <= 1.0 for cover mode)
+	// We zoom in by sampling a smaller region of the texture
+	float scale;
+	if (card_aspect > tex_aspect) {
+		// Card is wider relative to height: scale based on height
+		scale = tex_aspect / card_aspect;
+	} else {
+		// Texture is wider relative to height: scale based on width  
+		scale = card_aspect / tex_aspect;
+	}
+	
+	// Scale UVs toward center (multiply, not divide, to zoom in)
+	return (uv - 0.5) * scale + 0.5;
 }
 
 void fragment() {
@@ -46,9 +59,10 @@ void fragment() {
 		discard;
 	}
 	
-	// Layer 2: Game texture with aspect ratio covered
+	// Layer 2: Game texture - cover mode (fill card, maintain aspect ratio, crop edges)
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
 	vec2 tex_uv = aspect_covered_uv(UV, card_size, tex_size);
+	
 	vec4 tex_color = texture(game_texture, tex_uv);
 	
 	// Layer 3: Border (adapted from original flat-border-ui-box shader)
