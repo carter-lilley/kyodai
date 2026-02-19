@@ -257,18 +257,19 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 	http.body_size_limit = -1  # No limit
 	
 	# Dynamic chunk size based on expected file size
+	# Note: download_file is only used for large files (games), images use http_get
 	if expected_size > 1024 * 1024 * 1024:  # > 1GB
-		http.download_chunk_size = 512 * 1024  # 512KB chunks
-		print("[NetworkManager] Using 512KB chunks (large file)")
+		http.download_chunk_size = 2 * 1024 * 1024  # 2MB chunks
+		print("[NetworkManager] Using 2MB chunks (>1GB file)")
 	elif expected_size > 100 * 1024 * 1024:  # > 100MB
-		http.download_chunk_size = 256 * 1024  # 256KB chunks
-		print("[NetworkManager] Using 256KB chunks (medium file)")
+		http.download_chunk_size = 1024 * 1024  # 1MB chunks
+		print("[NetworkManager] Using 1MB chunks (100MB-1GB file)")
 	elif expected_size > 10 * 1024 * 1024:  # > 10MB
-		http.download_chunk_size = 64 * 1024  # 64KB chunks
-		print("[NetworkManager] Using 64KB chunks (small file)")
+		http.download_chunk_size = 256 * 1024  # 256KB chunks
+		print("[NetworkManager] Using 256KB chunks (10-100MB file)")
 	else:
-		http.download_chunk_size = 16 * 1024  # 16KB chunks
-		print("[NetworkManager] Using 16KB chunks (tiny file)")
+		http.download_chunk_size = 64 * 1024  # 64KB chunks
+		print("[NetworkManager] Using 64KB chunks (<10MB file)")
 	
 	var error = http.request(url, headers)
 	
@@ -291,29 +292,39 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 	
 	http.request_completed.connect(func(request_result, response_code, response_headers, body):
 		print("[NetworkManager] Download request_completed fired - result: " + str(request_result) + ", code: " + str(response_code))
-		result.completed = true
 		
+		# Check callback validity first
 		if not callback.is_valid():
+			print("[NetworkManager] WARNING: Callback is not valid!")
 			http.queue_free()
 			return
 		
 		if request_result != HTTPRequest.RESULT_SUCCESS:
-			callback.call(false, response_code, "Download failed: " + str(request_result))
+			print("[NetworkManager] Download failed - calling callback with error")
+			result["error"] = "Download failed: " + str(request_result)
+			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
 		
 		if response_code >= 400:
+			print("[NetworkManager] HTTP error %d - calling callback with error" % response_code)
 			if response_code == 401:
 				authentication_failed.emit()
-			callback.call(false, response_code, "HTTP error: " + str(response_code))
+			result["error"] = "HTTP error: " + str(response_code)
+			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
 		
 		if not FileAccess.file_exists(normalized_path):
-			callback.call(false, response_code, "Download file not created")
+			print("[NetworkManager] File not created - calling callback with error")
+			result["error"] = "Download file not created"
+			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
 		
+		# Only mark as completed on success
+		print("[NetworkManager] Download success - calling callback")
+		result.completed = true
 		callback.call(true, response_code, "")
 		http.queue_free()
 	)

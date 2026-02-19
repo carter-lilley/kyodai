@@ -84,16 +84,29 @@ func _load_registry():
 	emulator_registry_loaded.emit(true)
 
 func _build_platform_defaults():
-	# Build a map of platform -> default emulator
 	_platform_defaults.clear()
 	
+	# First, check for explicit platform defaults in registry
+	if _emulator_registry.has("_platform_defaults"):
+		var explicit_defaults = _emulator_registry["_platform_defaults"]
+		if explicit_defaults is Dictionary:
+			for platform in explicit_defaults.keys():
+				var emulator_id = explicit_defaults[platform]
+				if _emulator_registry.has(emulator_id):
+					_platform_defaults[platform] = emulator_id
+					print("[LaunchManager] Explicit default for %s: %s" % [platform, emulator_id])
+	
+	# Then, for any platforms not explicitly set, use first available emulator
 	for emulator_id in _emulator_registry.keys():
+		if emulator_id.begins_with("_"):
+			continue
 		var emulator = _emulator_registry[emulator_id]
 		var platforms = emulator.get("platforms", [])
 		
 		for platform in platforms:
 			if not _platform_defaults.has(platform):
 				_platform_defaults[platform] = emulator_id
+				print("[LaunchManager] Implicit default for %s: %s" % [platform, emulator_id])
 
 func _ensure_emulators_directory():
 	var dir = DirAccess.open("user://")
@@ -956,13 +969,13 @@ func get_core_for_platform(emulator_id: String, platform_slug: String) -> String
 	return core_mappings.get(platform_slug, "")
 
 ## Resolves which emulator to use for a game
-## Priority: 1. Game override, 2. Platform default, 3. First available
+## Priority: 1. Game override, 2. User platform setting, 3. Registry default
 func resolve_emulator_for_game(game: GameResource) -> String:
 	# 1. Check game override
 	if game.preferred_emulator_id != "":
 		return game.preferred_emulator_id
 	
-	# 2. Check platform settings
+	# 2. Check user platform settings (empty = use registry default)
 	var enabled_platforms = _get_enabled_platforms()
 	var platform_config = enabled_platforms.get(game.platform_slug, {})
 	var platform_emulator = platform_config.get("emulator_id", "")
@@ -970,7 +983,7 @@ func resolve_emulator_for_game(game: GameResource) -> String:
 	if platform_emulator != "":
 		return platform_emulator
 	
-	# 3. Use registry default
+	# 3. Use registry default (from _platform_defaults or first available)
 	return get_default_emulator_for_platform(game.platform_slug)
 
 ## Creates a launch intent for a game

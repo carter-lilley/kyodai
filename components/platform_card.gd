@@ -30,6 +30,12 @@ signal download_requested(emulator_id: String)
 		selected_emulator = value
 		_update_display()
 
+var registry_default_emulator: String = "":
+	set(value):
+		registry_default_emulator = value
+		if is_node_ready():
+			_update_emulator_dropdown()
+
 var _available_emulators: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}  # emulator_id -> bool
 
@@ -132,11 +138,25 @@ func _update_emulator_dropdown():
 		return
 	_emulator_dropdown.clear()
 	
-	# Add "Not Configured" option
-	_emulator_dropdown.add_item("Not Configured", 0)
-	_emulator_dropdown.set_item_metadata(0, "")
-	
+	# Determine effective emulator (what's actually being used)
+	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
 	var selected_index = 0
+	
+	# Add "Auto" option if we have a registry default
+	if registry_default_emulator != "":
+		var default_emu_name = _get_emulator_name(registry_default_emulator)
+		var auto_text = "Auto (%s)" % default_emu_name
+		_emulator_dropdown.add_item(auto_text, 0)
+		_emulator_dropdown.set_item_metadata(0, "")  # Empty = use registry default
+		
+		if selected_emulator == "":
+			selected_index = 0
+	else:
+		# No registry default - add "Not Configured" option
+		_emulator_dropdown.add_item("Not Configured", 0)
+		_emulator_dropdown.set_item_metadata(0, "")
+	
+	# Add available emulators
 	for i in range(_available_emulators.size()):
 		var emulator = _available_emulators[i]
 		var emulator_id = emulator.get("id", "")
@@ -151,22 +171,36 @@ func _update_emulator_dropdown():
 	_emulator_dropdown.select(selected_index)
 	_update_status_indicator()
 
+func _get_emulator_name(emulator_id: String) -> String:
+	for emu in _available_emulators:
+		if emu.get("id", "") == emulator_id:
+			return emu.get("name", emulator_id)
+	return emulator_id
+
 func _update_status_indicator():
 	if not _status_indicator:
 		return
-	if selected_emulator == "":
+	
+	# Determine effective emulator (what's actually being used)
+	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	
+	if effective_emulator == "":
 		_status_indicator.set_status(Indicator.Status.NEUTRAL, "Not configured", "Select an emulator to use for this platform")
 		if _download_button:
 			_download_button.visible = false
 		return
 	
+	# Show whether this is using auto or manual selection
+	var is_auto = selected_emulator == ""
+	var mode_text = " (auto)" if is_auto else ""
+	
 	# Get current install state
-	var install_state = LaunchManager.get_emulator_install_state(selected_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
-	var progress_text = LaunchManager.get_emulator_install_progress(selected_emulator) if LaunchManager else ""
+	var install_state = LaunchManager.get_emulator_install_state(effective_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
+	var progress_text = LaunchManager.get_emulator_install_progress(effective_emulator) if LaunchManager else ""
 	
 	match install_state:
 		LaunchManager.InstallState.INSTALLED:
-			_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed", "Emulator is ready to use")
+			_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed%s" % mode_text, "Emulator is ready to use")
 			if _download_button:
 				_download_button.visible = false
 		
@@ -203,7 +237,7 @@ func _update_status_indicator():
 		
 		_:  # NOT_INSTALLED or any other state
 			# Check if downloaded but not installed (legacy check)
-			var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
+			var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
 			if is_downloaded:
 				_status_indicator.set_status(Indicator.Status.WARNING, "Downloaded", "Ready to install")
 				if _download_button:
@@ -235,38 +269,40 @@ func _on_emulator_selected(index: int):
 	selected_emulator = emulator_id
 	
 	# Force disk check for this emulator to ensure accurate state
-	if LaunchManager and emulator_id != "":
-		LaunchManager.check_emulator_disk_state(emulator_id)
+	var effective_emu = emulator_id if emulator_id != "" else registry_default_emulator
+	if LaunchManager and effective_emu != "":
+		LaunchManager.check_emulator_disk_state(effective_emu)
 	
 	emulator_changed.emit(emulator_id)
 	refresh_ui()
 
 func _on_download_pressed():
-	if selected_emulator == "":
+	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	if effective_emulator == "":
 		return
 	
-	var install_state = LaunchManager.get_emulator_install_state(selected_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
+	var install_state = LaunchManager.get_emulator_install_state(effective_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
 	
 	match install_state:
 		LaunchManager.InstallState.NEEDS_POST_INSTALL:
 			# Trigger post-install completion
-			print("[PlatformCard] Completing post-install for: " + selected_emulator)
-			LaunchManager.complete_post_install(selected_emulator)
+			print("[PlatformCard] Completing post-install for: " + effective_emulator)
+			LaunchManager.complete_post_install(effective_emulator)
 			refresh_ui()
 		
 		LaunchManager.InstallState.NOT_INSTALLED:
-			var is_downloaded = LaunchManager.is_emulator_downloaded(selected_emulator) if LaunchManager else false
+			var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
 			if is_downloaded:
 				# Extract downloaded archive
-				LaunchManager.extract_emulator(selected_emulator)
+				LaunchManager.extract_emulator(effective_emulator)
 				refresh_ui()
 			else:
 				# Download the emulator
-				download_requested.emit(selected_emulator)
+				download_requested.emit(effective_emulator)
 		
 		_:
 			# For any other state, just request download
-			download_requested.emit(selected_emulator)
+			download_requested.emit(effective_emulator)
 
 func refresh_ui():
 	# Called by parent to refresh button states (e.g., when download starts/completes)

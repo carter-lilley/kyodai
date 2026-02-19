@@ -7,13 +7,13 @@ how to split important siblings
 	controller nav
 	horizontal scroll. flex grid?
 	sort by plaform, recent, search
-	auto-view downloaded games (filters > recent, downloaded, etc.)
+	auto-view already downloaded games 
+	filters > recent, downloaded, etc.
 ## performance:
 	card image retries & priority management.
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single
 ## launch:
-	confirm download, post install, & launch behavior in library view
+	launch intents
 ## registry:
 	platform download/launch diffs (Linux/windows/android)
-	launch intents

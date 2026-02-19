@@ -156,11 +156,15 @@ func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: S
 		is_enabled = platform_config.get("enabled", false)
 	card.is_sync_enabled = is_enabled
 	
-	# Set selected emulator
+	# Set selected emulator (user override only - empty means use registry default)
 	var emulator_id = ""
 	if platform_config is Dictionary:
 		emulator_id = platform_config.get("emulator_id", "")
 	card.selected_emulator = emulator_id
+	
+	# Set registry default emulator for "Auto" display
+	var registry_default = LaunchManager.get_default_emulator_for_platform(slug)
+	card.registry_default_emulator = registry_default
 	
 	# Load available emulators for this platform
 	var available_emulators = LaunchManager.get_emulators_for_platform(slug)
@@ -311,14 +315,17 @@ func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	# Start the download
 	var success = LaunchManager.download_emulator(emulator_id)
 	if success:
-		# Refresh the card to show "Downloading..." state
+		# Update install status for the emulator
+		var install_status = {emulator_id: LaunchManager.get_emulator_install_state(emulator_id)}
+		card.set_emulator_install_status(install_status)
 		card.refresh_ui()
 
 func _on_emulator_extraction_started(emulator_id: String):
-	# Refresh UI to show "Installing..." state
+	# Refresh UI to show "Installing..." state for all cards using this emulator
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
-		if card.selected_emulator == emulator_id:
+		var effective_emu = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
+		if effective_emu == emulator_id:
 			card.refresh_ui()
 
 func _on_emulator_extraction_progress(emulator_id: String, progress: float):
@@ -326,10 +333,11 @@ func _on_emulator_extraction_progress(emulator_id: String, progress: float):
 	pass
 
 func _on_emulator_extraction_completed(emulator_id: String, success: bool):
-	# Refresh all cards that use this emulator
+	# Refresh all cards that use this emulator (either explicitly or via auto)
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
-		if card.selected_emulator == emulator_id:
+		var effective_emu = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
+		if effective_emu == emulator_id:
 			# Update install status
 			var is_installed = LaunchManager.is_emulator_installed(emulator_id)
 			var install_status = {emulator_id: is_installed}

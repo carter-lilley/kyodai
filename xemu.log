@@ -1,0 +1,15 @@
+Created QEMU launch parameters: C:\Users\carter\AppData\Roaming\Godot\app_userdata\kyodai\emulators\xemu\xemu.exe -machine xbox,kernel-irqchip=off,avpack=hdtv -device smbus-storage,file=C:\Users\carter\AppData\Roaming\Godot\app_userdata\kyodai\emulators\xemu\eeprom.bin -m 64 -drive index=1,media=cdrom,file=D:/Emulation/roms/xbox/007 - Agent Under Fire (USA).iso -display xemu -device usb-hub,port=1,ports=4 
+xemu_version: 0.8.133
+xemu_commit: 26fcbe54f17e496bdf530dad9f237e74e2f943fc
+xemu_date: Tue Jan 20 07:24:40 UTC 2026
+xemu_settings_get_base_path: base path: C:\Users\carter\AppData\Roaming\Godot\app_userdata\kyodai\emulators\xemu\
+xemu_settings_get_path: config path: C:\Users\carter\AppData\Roaming\Godot\app_userdata\kyodai\emulators\xemu\xemu.toml
+nvapi: Saved settings
+CPU: Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz
+OS_Version:  25H2
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 3090/PCIe/SSE2
+GL_VERSION: 4.0.0 NVIDIA 591.74
+GL_SHADING_LANGUAGE_VERSION: 4.00 NVIDIA via Cg compiler
+GL geometry shader winding: 0, 0, 0, 0
+Failed to load BIOS '(null)'

@@ -293,6 +293,7 @@ func _start_download(item: QueueItem):
 			item.destination_path,
 			headers,
 			func(success: bool, status_code: int, error_msg: String):
+				print("[DownloadManager] Callback fired for %s - success: %s, code: %d, error: %s" % [item.name, str(success), status_code, error_msg])
 				_on_file_download_complete(item, success, error_msg),
 			item.expected_file_size
 		)
@@ -380,6 +381,13 @@ func _update_download_progress(item: QueueItem):
 		if item.download_info.get("completed", false):
 			print("[DownloadManager] Download request completed for: " + item.name)
 			_on_file_download_complete(item, true, "")
+			return
+		
+		# Check if download had an error
+		if item.download_info.has("error"):
+			var error_msg = item.download_info.get("error", "Unknown error")
+			print("[DownloadManager] Download failed for %s: %s" % [item.name, error_msg])
+			_on_file_download_complete(item, false, error_msg)
 			return
 		
 		download_progress.emit(item.id, item.progress)
