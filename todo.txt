@@ -13,7 +13,7 @@ how to split important siblings
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single
 ## launch:
-	fix folding sibling entries together
+	~~fix folding sibling entries together~~ - Fixed: Implemented consistent master selection by lowest ID in batch
 	test sibling downloads
 	confirm download, post install, & launch behavior in library view
 ## registry:

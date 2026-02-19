@@ -421,6 +421,10 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 					var has_sibling = sibling_results[i]
 					games[i].is_master_entry = not has_sibling
 			
+			# Apply consistent master selection by lowest ID within the batch
+			# This handles the case where multiple siblings are processed in the same batch
+			_ensure_consistent_masters_in_batch(games)
+			
 			print("[DataManager] Sibling checks complete, starting DB inserts...")
 			
 			# Phase 3: Batch DB inserts (async, spread across frames)
@@ -448,11 +452,13 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 				games_with_covers.append(game)
 				games_with_covers_mutex.unlock()
 				
-				# Queue for UI notification on main thread
-				if _sync_batch_mode:
-					call_deferred("_queue_batch_notification", game)
-				else:
-					call_deferred("emit_signal", "game_added", game)
+				# Queue for UI notification on main thread - ONLY for master entries
+				# This prevents sibling ROMs from showing in library during progressive sync
+				if game.is_master_entry:
+					if _sync_batch_mode:
+						call_deferred("_queue_batch_notification", game)
+					else:
+						call_deferred("emit_signal", "game_added", game)
 			
 			if success:
 				_sync_current += 1
@@ -537,6 +543,58 @@ func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
 		return _db.query_result[0]["count"] > 0
 	
 	return false
+
+func _ensure_consistent_masters_in_batch(games: Array[GameResource]):
+	"""Ensure that only the game with the lowest ID in each sibling group is marked as master.
+	
+	This handles the race condition where multiple siblings from the same group are processed
+	in the same batch and all pass the database sibling check."""
+	
+	# Build a map of sibling group IDs to the lowest ID in that group within this batch
+	var sibling_group_lowest: Dictionary = {}
+	
+	for game in games:
+		# Build list of all IDs in this sibling group (including the game itself)
+		var all_ids_in_group = [game.romm_id]
+		for sibling in game.siblings:
+			var sid = sibling.get("id", 0)
+			if sid != 0:
+				all_ids_in_group.append(sid)
+		
+		# Find the lowest ID in this group
+		var lowest_id = all_ids_in_group.min()
+		
+		# Use a unique key for this sibling group (sorted IDs to ensure consistency)
+		all_ids_in_group.sort()
+		var group_key = ",".join(all_ids_in_group.map(func(id): return str(id)))
+		
+		# Track the lowest ID for this group
+		if not sibling_group_lowest.has(group_key):
+			sibling_group_lowest[group_key] = lowest_id
+		else:
+			sibling_group_lowest[group_key] = min(sibling_group_lowest[group_key], lowest_id)
+	
+	# Now apply consistent master selection
+	for game in games:
+		# Skip if already marked as non-master due to DB check
+		if not game.is_master_entry:
+			continue
+		
+		# Build the same group key
+		var all_ids_in_group = [game.romm_id]
+		for sibling in game.siblings:
+			var sid = sibling.get("id", 0)
+			if sid != 0:
+				all_ids_in_group.append(sid)
+		
+		all_ids_in_group.sort()
+		var group_key = ",".join(all_ids_in_group.map(func(id): return str(id)))
+		
+		# Only keep as master if this game has the lowest ID in its group
+		var lowest_id = sibling_group_lowest.get(group_key, game.romm_id)
+		if game.romm_id != lowest_id:
+			print("[DataManager] Marking game '%s' (ID: %d) as non-master - sibling with lower ID (%d) exists in batch" % [game.title, game.romm_id, lowest_id])
+			game.is_master_entry = false
 
 # ==================== BATCH NOTIFICATION SYSTEM ====================
 
@@ -776,8 +834,9 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 			if success:
 				# Use batch notification during sync, individual during normal operations
 				# Only notify for games with cover art (games without covers are hidden)
+				# Only notify for master entries (sibling ROMs are hidden from library view)
 				if _sync_batch_mode:
-					if game.has_cover_art:
+					if game.has_cover_art and game.is_master_entry:
 						_queue_batch_notification(game)
 				else:
 					game_added.emit(game)
@@ -888,26 +947,28 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 func get_total_games_count() -> int:
 	if not _is_db_ready:
 		return 0
-	_db.query("SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1")
-	if _db.query_result.size() > 0:
-		return _db.query_result[0]["count"]
+	var success = _db.query("SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1")
+	if success and _db.query_result.size() > 0:
+		var row = _db.query_result[0]
+		if row.has("count"):
+			return int(row["count"])
 	return 0
 
 func _row_to_game(row: Dictionary) -> GameResource:
 	var game = GameResource.new()
-	game.id = row["id"]
-	game.romm_id = row["romm_id"]
-	game.title = row["title"]
-	game.platform = row["platform"]
-	game.platform_slug = row["platform_slug"]
-	game.cover_url = row["cover_url"]
-	game.cover_path = row["cover_path"]
-	game.file_name = row["file_name"]
-	game.file_path = row["file_path"]
-	game.file_size = row["file_size"]
-	game.has_local_copy = row["has_local_copy"] == 1
-	game.last_updated = row["last_updated"]
-	game.description = row["description"]
+	game.id = row.get("id", "")
+	game.romm_id = row.get("romm_id", 0)
+	game.title = row.get("title", "")
+	game.platform = row.get("platform", "")
+	game.platform_slug = row.get("platform_slug", "")
+	game.cover_url = row.get("cover_url", "")
+	game.cover_path = row.get("cover_path", "")
+	game.file_name = row.get("file_name", "")
+	game.file_path = row.get("file_path", "")
+	game.file_size = row.get("file_size", 0)
+	game.has_local_copy = row.get("has_local_copy", 0) == 1
+	game.last_updated = row.get("last_updated", "")
+	game.description = row.get("description", "")
 	var genres: Array[String] = []
 	if row["genres"] and row["genres"] != "":
 		for g in row["genres"].split(","):
@@ -1210,26 +1271,43 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 			callback.call(false)
 		return
 	
-	# Get all games for this platform to delete their covers
-	var games_to_remove = get_games_by_platform(platform_slug)
-	
-	# Delete cover cache files
-	var covers_deleted = 0
-	for game in games_to_remove:
-		if game.cover_url != "":
-			var cache_path = get_cached_image_path(game.cover_url)
-			if FileAccess.file_exists(cache_path):
-				DirAccess.remove_absolute(cache_path)
-				covers_deleted += 1
-	
-	# Delete games from database
+	# Queue all database operations on the DB thread to avoid race conditions
 	MemoryManager.queue_db_task(
 		func():
-			return _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug),
-		func(success: bool):
+			# First, get all games for this platform to delete their covers
+			_db.query("SELECT cover_url FROM games WHERE platform_slug = '%s'" % platform_slug)
+			var cover_urls: Array[String] = []
+			for row in _db.query_result:
+				var url = row.get("cover_url", "")
+				if url != "":
+					cover_urls.append(url)
+			
+			# Delete games from database and get the count
+			var count_before = _db.query_result.size()
+			var success = _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug)
+			
+			return {
+				"success": success,
+				"cover_urls": cover_urls,
+				"count": count_before
+			},
+		func(result: Dictionary):
+			var success = result.get("success", false)
+			var cover_urls = result.get("cover_urls", [])
+			var count = result.get("count", 0)
+			
 			if success:
-				print("[DataManager] Removed ", games_to_remove.size(), " games from ", platform_slug)
+				# Delete cover cache files on main thread (file system access)
+				var covers_deleted = 0
+				for url in cover_urls:
+					var cache_path = get_cached_image_path(url)
+					if FileAccess.file_exists(cache_path):
+						DirAccess.remove_absolute(cache_path)
+						covers_deleted += 1
+				
+				print("[DataManager] Removed ", count, " games from ", platform_slug, ", deleted ", covers_deleted, " covers")
 				games_removed.emit(platform_slug)
+			
 			if callback.is_valid():
 				callback.call(success)
 	)
