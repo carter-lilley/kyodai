@@ -392,18 +392,12 @@ func _acquire_card() -> Control:
 	return null
 
 func _disconnect_card_signals(card: Control):
+	# Only disconnect signals that are connected by external code (e.g., LibraryView)
+	# Internal signals like 'pressed' should NOT be disconnected as they are
+	# connected in the card's _ready() function, which only runs once
 	if card.has_signal("download_requested"):
 		for conn in card.get_signal_connection_list("download_requested"):
 			card.disconnect("download_requested", conn["callable"])
-	if card.has_signal("pressed"):
-		for conn in card.get_signal_connection_list("pressed"):
-			card.disconnect("pressed", conn["callable"])
-	if card.has_signal("button_down"):
-		for conn in card.get_signal_connection_list("button_down"):
-			card.disconnect("button_down", conn["callable"])
-	if card.has_signal("button_up"):
-		for conn in card.get_signal_connection_list("button_up"):
-			card.disconnect("button_up", conn["callable"])
 
 func _update_spacer():
 	if _spacer and _active_cards.size() > 0:

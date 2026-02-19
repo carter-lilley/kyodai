@@ -102,3 +102,8 @@ layout_mode = 2
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
 autowrap_mode = 3
+
+[node name="ActionButton" type="Button" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+

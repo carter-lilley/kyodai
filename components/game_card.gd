@@ -171,7 +171,20 @@ func _on_card_pressed():
 	if not game:
 		return
 	
-	if game.has_local_copy:
+	if game.is_active_variant_downloaded():
+		# Check if the file actually exists before launching
+		var root_folder = SettingsManager.get_setting("games_root_folder")
+		if root_folder and root_folder.value != "":
+			var active_id = game.get_active_game_id()
+			var file_path = game.get_sibling_file_path(active_id, root_folder.value)
+			
+			if not FileAccess.file_exists(file_path):
+				# File is marked as downloaded but doesn't exist - redownload
+				print("[GameCard] File not found for game %d at %s, requesting redownload" % [game.romm_id, file_path])
+				NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
+				download_requested.emit(game)
+				return
+		
 		# Launch the game using LaunchManager
 		print("[GameCard] Launch requested for game: ", game.romm_id)
 		LaunchManager.launch_game(game)

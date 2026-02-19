@@ -695,16 +695,21 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	var siblings: Array[Dictionary] = []
 	if data.has("siblings") and data["siblings"] is Array:
 		print("[DataManager] Found siblings array for game '%s' (ID: %d) with %d items" % [game.title, game.romm_id, data["siblings"].size()])
+		
 		for sibling_data in data["siblings"]:
 			if sibling_data is Dictionary:
+				# Note: Sibling data from API only has basic info (id, name, fs_name_no_ext, etc.)
+				# Full details (including proper file name with extension) will be fetched on-demand
+				# when the user selects the sibling in the game details view
+				
 				var sibling = {
 					"id": sibling_data.get("id", 0),
 					"name": str(sibling_data.get("name", "")),
-					"file_name": str(sibling_data.get("fs_name_no_ext", "")),
+					"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
 					"file_size": sibling_data.get("fs_size_bytes", 0)
 				}
 				siblings.append(sibling)
-				print("[DataManager]   Sibling: id=%d, name='%s', file='%s'" % [sibling.id, sibling.name, sibling.file_name])
+				print("[DataManager]   Sibling: id=%d, name='%s' (details will be fetched on-demand)" % [sibling.id, sibling.name])
 	else:
 		if data.has("siblings"):
 			print("[DataManager] Game '%s' has siblings field but it's not an array (type: %s)" % [game.title, typeof(data["siblings"])])
