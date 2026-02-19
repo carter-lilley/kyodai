@@ -32,18 +32,18 @@ vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
 	float card_aspect = card.x / card.y;
 	float tex_aspect = tex.x / tex.y;
 	
-	// Calculate UV scale factor (always <= 1.0 for cover mode)
+	// Calculate UV scale factors (separate for X and Y)
 	// We zoom in by sampling a smaller region of the texture
-	float scale;
+	vec2 scale;
 	if (card_aspect > tex_aspect) {
-		// Card is wider relative to height: scale based on height
-		scale = tex_aspect / card_aspect;
+		// Card is wider than texture: fit to width, crop top/bottom
+		scale = vec2(1.0, tex_aspect / card_aspect);
 	} else {
-		// Texture is wider relative to height: scale based on width  
-		scale = card_aspect / tex_aspect;
+		// Card is narrower than texture: fit to height, crop left/right
+		scale = vec2(card_aspect / tex_aspect, 1.0);
 	}
 	
-	// Scale UVs toward center (multiply, not divide, to zoom in)
+	// Scale UVs toward center (multiply to zoom in)
 	return (uv - 0.5) * scale + 0.5;
 }
 
