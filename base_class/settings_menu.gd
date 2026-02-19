@@ -151,6 +151,21 @@ func match_var_type(settingsvar : SettingsVar):
 			rangeslider.value_changed.connect(func(value: Vector2):
 				emit_signal("setting_changed", value, settingsvar)
 			)
+		
+		Type.COLOR:
+			var color_label = Label.new()
+			color_label.text = settingsvar.display_name
+			add_child(color_label)
+			
+			var color_picker = ColorPickerButton.new()
+			color_picker.color = settingsvar.value if settingsvar.value is Color else Color.WHITE
+			color_picker.disabled = settingsvar.state != 0
+			add_child(color_picker)
+			controls[settingsvar.property_name] = color_picker
+			color_picker.color_changed.connect(func(color: Color):
+				emit_signal("setting_changed", color, settingsvar)
+			)
+		
 		_:
 			var button = Button.new()
 			button.text = settingsvar.display_name

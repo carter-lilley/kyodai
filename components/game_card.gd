@@ -1,5 +1,5 @@
 class_name GameCard
-extends TextureButton
+extends ColorRect
 
 signal download_requested(game: GameResource)
 
@@ -8,10 +8,11 @@ signal download_requested(game: GameResource)
 		game = value
 		_update_display()
 
-@onready var status_icon: TextureRect = $StatusBadge/StatusIcon
-@onready var status_badge: Panel = $StatusBadge
+@onready var card_input: Button = $CardInput
+@onready var status_icon: TextureRect = $CardInput/StatusBadge/StatusIcon
+@onready var status_badge: Panel = $CardInput/StatusBadge
 
-var _loading_texture: Texture2D = preload("res://icon.svg")  # Placeholder
+var _loading_texture: Texture2D = preload("res://icon.svg")
 var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
 var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
@@ -24,25 +25,29 @@ const BASE_ICON_SIZE: float = 22.0
 const BASE_BADGE_MARGIN: float = 8.0
 
 var _current_zoom: float = 1.0
+var _current_texture: Texture2D = null
 
-# Track which game we're currently loading an image for (prevents wrong texture on recycled cards)
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
 const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
+	if material:
+		material = material.duplicate()
+	
 	set_card_zoom(_current_zoom)
+	_update_shader_params()
 	_update_display()
 	
-	# Connect pressed signal for click handling
-	pressed.connect(_on_card_pressed)
+	card_input.pressed.connect(_on_card_pressed)
+	card_input.gui_input.connect(_on_card_gui_input)
 	
-	# Connect to download manager signals
 	DownloadManager.download_progress.connect(_on_download_progress)
 	DownloadManager.download_completed.connect(_on_download_completed)
 	
-	# Listen for cover downloads to refresh if our cover was just downloaded
 	DataManager.image_loaded.connect(_on_cover_loaded)
+	
+	SettingsManager.setting_changed.connect(_on_setting_changed)
 
 func _update_display():
 	if not game:
@@ -51,10 +56,7 @@ func _update_display():
 	if not is_node_ready():
 		return
 	
-	# Update status icon based on game state
 	_update_status_icon()
-	
-	# Load cover image
 	_load_cover()
 
 func _update_status_icon():
@@ -69,7 +71,6 @@ func _update_status_icon():
 		status_icon.modulate = Color(1, 1, 1, 1)
 		status_badge.visible = true
 	elif _is_downloading:
-		# Hide icon during download (could show progress later)
 		status_icon.visible = false
 		status_badge.visible = false
 	else:
@@ -80,22 +81,19 @@ func _update_status_icon():
 
 func _load_cover():
 	if not game:
-		self.texture_normal = _loading_texture
+		_set_texture(_loading_texture)
 		return
 	
-	_loading_game_id = game.id  # Track which game this load is for
-	_image_retry_count = 0  # Reset retry count
+	_loading_game_id = game.id
+	_image_retry_count = 0
 	
-	# Try local cover path first (from Romm) - using background thread
 	if game.cover_path != "" and FileAccess.file_exists(game.cover_path):
 		_load_local_cover()
 		return
 	
-	# Try external URL (from metadata)
 	_load_cover_from_url()
 
 func _load_local_cover():
-	"""Load cover from local file path using background thread."""
 	var target_game_id = _loading_game_id
 	
 	MemoryManager.queue_image_task(
@@ -106,29 +104,20 @@ func _load_local_cover():
 				return ImageTexture.create_from_image(img)
 			return null,
 		func(texture):
-			# Validate card still shows the same game and is still valid
 			if not is_instance_valid(self):
-				print("[GameCard] Callback for %s ignored - card no longer valid" % target_game_id)
 				return
 			if not game or game.id != target_game_id:
-				var current_title = game.title if game else "null"
-				print("[GameCard] Callback for %s ignored - card now showing %s" % [target_game_id, current_title])
-				return  # Card was recycled to different game
+				return
 			
 			if texture:
-				self.texture_normal = texture
+				_set_texture(texture)
 			else:
-				# Task may have been dropped (queue full) or load failed
-				# Retry with exponential backoff
 				_image_retry_count += 1
 				if _image_retry_count < MAX_IMAGE_RETRIES:
-					print("[GameCard] Image load failed for %s (retry %d/%d), will retry..." % [game.title, _image_retry_count, MAX_IMAGE_RETRIES])
 					await get_tree().create_timer(0.1 * _image_retry_count).timeout
 					if is_instance_valid(self) and game and game.id == target_game_id:
 						_load_local_cover()
 				else:
-					# Max retries reached, try external URL as fallback
-					print("[GameCard] Max retries reached for local cover of %s, falling back to URL" % game.title)
 					_load_cover_from_url()
 	)
 
@@ -138,105 +127,85 @@ func _load_cover_from_url():
 		var current_retry = _image_retry_count
 		
 		DataManager.load_image(game.cover_url, func(texture):
-			# Validate card still shows the same game and is still valid
 			if not is_instance_valid(self):
-				print("[GameCard] URL callback for %s ignored - card no longer valid" % target_game_id)
 				return
 			if not game or game.id != target_game_id:
-				var current_title = game.title if game else "null"
-				print("[GameCard] URL callback for %s ignored - card now showing %s" % [target_game_id, current_title])
-				return  # Card was recycled to different game
+				return
 			
 			if texture:
-				self.texture_normal = texture
+				_set_texture(texture)
 			else:
-				# Task may have been dropped (queue full) or load failed
-				# Retry with exponential backoff
 				_image_retry_count = current_retry + 1
 				if _image_retry_count < MAX_IMAGE_RETRIES:
-					print("[GameCard] URL image load failed for %s (retry %d/%d), will retry..." % [game.title, _image_retry_count, MAX_IMAGE_RETRIES])
 					await get_tree().create_timer(0.1 * _image_retry_count).timeout
 					if is_instance_valid(self) and game and game.id == target_game_id:
 						_load_cover_from_url()
 				else:
-					# Max retries reached, show placeholder
-					print("[GameCard] All retries exhausted for %s, showing placeholder" % game.title)
-					self.texture_normal = _loading_texture
+					_set_texture(_loading_texture)
 		)
 	else:
-		# No cover available
-		self.texture_normal = _loading_texture
+		_set_texture(_loading_texture)
+
+func _set_texture(tex: Texture2D) -> void:
+	_current_texture = tex
+	var mat = material as ShaderMaterial
+	if mat:
+		mat.set_shader_parameter("game_texture", tex)
 
 func _on_card_pressed():
 	if not game:
 		return
 	
 	if game.is_active_variant_downloaded():
-		# Check if the file actually exists before launching
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		if root_folder and root_folder.value != "":
 			var active_id = game.get_active_game_id()
 			var file_path = game.get_sibling_file_path(active_id, root_folder.value)
 			
 			if not FileAccess.file_exists(file_path):
-				# File is marked as downloaded but doesn't exist - redownload
-				print("[GameCard] File not found for game %d at %s, requesting redownload" % [game.romm_id, file_path])
 				NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
 				download_requested.emit(game)
 				return
 		
-		# Launch the game using LaunchManager
-		print("[GameCard] Launch requested for game: ", game.romm_id)
 		LaunchManager.launch_game(game)
 	else:
 		download_requested.emit(game)
 
+func _on_card_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			if game:
+				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
+
 func _on_download_progress(item_id: String, progress: float):
-	# Check if this download is for our game
 	var item = DownloadManager.get_item(item_id)
 	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
 		_is_downloading = true
 		_update_status_icon()
 
 func _on_download_completed(item_id: String, success: bool, message: String):
-	# Check if this download is for our game
 	var item = DownloadManager.get_item(item_id)
 	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
 		_is_downloading = false
 		if success:
-			# Refresh game data from DataManager
 			var updated = DataManager.get_game_by_id(game.romm_id)
 			if updated:
 				game = updated
-		else:
-			# Show error state - could modulate red or show error icon
-			pass
 		_update_status_icon()
 
 func _on_cover_loaded(url: String, texture: Texture2D):
-	# If this card's cover was just downloaded, update it
-	# Only apply if we're still showing the same game (card wasn't recycled)
 	if not is_instance_valid(self) or not game:
 		return
 	if game.cover_url == url and texture:
-		self.texture_normal = texture
+		_set_texture(texture)
 
 func set_placeholder(is_placeholder: bool):
-	"""Set placeholder state for incremental loading."""
 	if is_placeholder:
-		# Show placeholder/loading state
-		self.texture_normal = _loading_texture
+		_set_texture(_loading_texture)
 		status_icon.visible = false
 		status_badge.visible = false
 	else:
-		# Show actual game data
 		_update_display()
-
-func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			if game:
-				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
 
 func set_card_zoom(new_zoom: float) -> void:
 	_current_zoom = new_zoom
@@ -267,6 +236,55 @@ func set_card_zoom(new_zoom: float) -> void:
 	status_icon.offset_top = -icon_size
 	status_icon.offset_right = icon_size
 	status_icon.offset_bottom = icon_size
+	
+	_update_shader_params()
 
 func get_current_zoom() -> float:
 	return _current_zoom
+
+func _update_shader_params() -> void:
+	var mat = material as ShaderMaterial
+	if not mat:
+		return
+	
+	var corner_setting = SettingsManager.get_setting("corner_radius")
+	var border_enabled_setting = SettingsManager.get_setting("border_enabled")
+	var border_size_setting = SettingsManager.get_setting("border_size")
+	var border_fade_in_setting = SettingsManager.get_setting("border_fade_in")
+	var border_fade_out_setting = SettingsManager.get_setting("border_fade_out")
+	var border_color_setting = SettingsManager.get_setting("border_color")
+	
+	var corner_val = corner_setting.value if corner_setting else 12
+	var enabled_val = border_enabled_setting.value if border_enabled_setting else false
+	var size_val = border_size_setting.value if border_size_setting else 0.05
+	var fade_in_val = border_fade_in_setting.value if border_fade_in_setting else 0.0
+	var fade_out_val = border_fade_out_setting.value if border_fade_out_setting else 0.0
+	var color_val = border_color_setting.value if border_color_setting else Color.WHITE
+	
+	# Corner radius scales with zoom for consistent visual
+	var corner_pixels = corner_val * _current_zoom
+	
+	# Border values in pixels (settings are proportional 0.0-0.5)
+	var border_pixels = size_val * BASE_WIDTH * 2.0 * _current_zoom
+	var fade_in_pixels = fade_in_val * BASE_WIDTH * 2.0 * _current_zoom
+	var fade_out_pixels = fade_out_val * BASE_WIDTH * 2.0 * _current_zoom
+	
+	# Calculate actual card size
+	var actual_width = BASE_WIDTH * _current_zoom
+	var actual_height = BASE_HEIGHT * _current_zoom
+	
+	mat.set_shader_parameter("card_size", Vector2(actual_width, actual_height))
+	mat.set_shader_parameter("corner_radius_pixels", corner_pixels)
+	mat.set_shader_parameter("border_width_pixels", border_pixels if enabled_val else 0.0)
+	mat.set_shader_parameter("border_fade_in_pixels", fade_in_pixels)
+	mat.set_shader_parameter("border_fade_out_pixels", fade_out_pixels)
+	mat.set_shader_parameter("border_enabled", enabled_val)
+	mat.set_shader_parameter("border_color", color_val)
+	mat.set_shader_parameter("game_texture", _current_texture)
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	if setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_fade_out", "border_color"]:
+		_update_shader_params()
+
+func update_display() -> void:
+	_update_display()

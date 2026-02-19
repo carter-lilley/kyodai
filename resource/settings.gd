@@ -34,3 +34,11 @@ const Type = SettingsVar.SettingType
 
 # Internal platform sync settings (not displayed in auto-generated menu)
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
+
+@export_subgroup("Card Appearance")
+@export var corner_radius := SettingsVar.new(Type.INT, 12, State.ENABLED, "Corner Radius", "", 0.0, 50.0, 1.0)
+@export var border_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Show Border")
+@export var border_size := SettingsVar.new(Type.FLOAT, 0.05, State.ENABLED, "Border Size", "", 0.0, 0.5, 0.01)
+@export var border_fade_in := SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Border Fade In", "", 0.0, 10.0, 0.1)
+@export var border_fade_out := SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Border Fade Out", "", 0.0, 10.0, 0.1)
+@export var border_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Border Color")
