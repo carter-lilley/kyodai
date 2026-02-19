@@ -30,6 +30,10 @@ var _emulator_install_progress: Dictionary = {}  # emulator_id -> progress text 
 # emulator_id -> {game: GameResource, callback: Callable}
 var _pending_launches: Dictionary = {}
 
+# Track pending launches waiting for game download
+# item_id -> GameResource
+var _pending_game_downloads: Dictionary = {}
+
 # Signals
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
@@ -45,6 +49,7 @@ func _ready():
 	# Connect to DownloadManager signals
 	DownloadManager.extraction_started.connect(_on_download_manager_extraction_started)
 	DownloadManager.extraction_completed.connect(_on_download_manager_extraction_completed)
+	DownloadManager.download_completed.connect(_on_download_manager_download_completed)
 	
 	# Scan existing installations to detect partial installs
 	# Wait a frame to ensure everything is initialized
@@ -653,6 +658,14 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 				emulator_extraction_completed.emit(emulator_id, false)
 			return
 
+## Called when DownloadManager completes a download
+## Cleans up pending game downloads tracking
+func _on_download_manager_download_completed(item_id: String, success: bool, message: String):
+	if _pending_game_downloads.has(item_id):
+		_pending_game_downloads.erase(item_id)
+		if not success:
+			print("[LaunchManager] Pending game download failed: " + item_id + " - " + message)
+
 ## Starts the post-install process for an emulator
 func _start_post_install(emulator_id: String, emulator: Dictionary):
 	var post_install = emulator.get("post_install", {})
@@ -1075,10 +1088,58 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource) -> void:
+	# If game is not downloaded, queue the download first then proceed
 	if not game.is_active_variant_downloaded():
-		NotificationManager.show_notification("Game file not downloaded", Notification.Type.ERROR)
+		_queue_game_download_then_launch(game)
 		return
 	
+	# Game is downloaded, proceed with launch
+	_launch_with_emulator_check(game)
+	
+## If game is not downloaded, queue the download first then proceed
+func _queue_game_download_then_launch(game: GameResource) -> void:
+	var active_game_id = game.get_active_game_id()
+	var active_file_name = game.get_active_file_name()
+	
+	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
+	var root_folder = SettingsManager.get_setting("games_root_folder")
+	if not root_folder or root_folder.value == "":
+		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
+		return
+	
+	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
+	
+	NotificationManager.show_notification("Downloading " + game.get_display_name() + "...", Notification.Type.INFO)
+	
+	# Define callback for when download completes
+	var on_download_complete = func(success: bool, _path: String):
+		if success:
+			var updated_game = DataManager.get_game_by_id(game.romm_id)
+			if updated_game:
+				_launch_with_emulator_check(updated_game)
+			else:
+				_launch_with_emulator_check(game)
+		else:
+			NotificationManager.show_notification("Download failed for " + game.get_display_name(), Notification.Type.ERROR)
+	
+	# Queue download with callback to continue launch flow
+	var item_id = DownloadManager.queue_download(
+		download_url,
+		destination_path,
+		"game",
+		game.get_display_name(),
+		false,
+		"",
+		game,
+		{"on_complete": on_download_complete},
+		active_game_id
+	)
+	
+	if item_id == "":
+		NotificationManager.show_notification("Failed to queue download", Notification.Type.ERROR)
+
+## Check emulator status and launch game (game must be downloaded)
+func _launch_with_emulator_check(game: GameResource) -> void:
 	# Determine which emulator to use
 	var emulator_id = resolve_emulator_for_game(game)
 	

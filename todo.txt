@@ -13,7 +13,6 @@ how to split important siblings
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single
 ## launch:
-	test sibling downloads
 	confirm download, post install, & launch behavior in library view
 ## registry:
 	platform download/launch diffs (Linux/windows/android)

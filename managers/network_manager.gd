@@ -223,6 +223,103 @@ func http_get(url: String, headers: Array = [], callback: Callable = Callable())
 	
 	return http
 
+## Downloads a large file directly to disk - avoids memory issues with big files
+## Uses HTTPRequest's download_file property for streaming downloads
+## callback(success: bool, status_code: int, error_message: String)
+## Returns: Dictionary with download info {http, callback, path, completed}
+func http_download_file(url: String, destination_path: String, headers: Array = [], callback: Callable = Callable(), expected_size: int = 0) -> Dictionary:
+	var http = HTTPRequest.new()
+	add_child(http)
+	
+	# Normalize path separators for the platform
+	var normalized_path = destination_path.replace("\\", "/")
+	
+	print("[NetworkManager] HTTP DOWNLOAD: " + url)
+	print("[NetworkManager] Destination: " + normalized_path)
+	
+	# Verify directory exists before starting download
+	var dest_dir = normalized_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dest_dir):
+		print("[NetworkManager] Creating directory: " + dest_dir)
+		var err = DirAccess.make_dir_recursive_absolute(dest_dir)
+		if err != OK:
+			print("[NetworkManager] Failed to create directory: " + dest_dir + " (error: " + str(err) + ")")
+			if callback.is_valid():
+				callback.call(false, 0, "Failed to create destination directory")
+			http.queue_free()
+			return {}
+	
+	# Configure HTTPRequest for large file downloads
+	http.download_file = normalized_path
+	http.timeout = 0.0  # Never timeout - let DownloadManager handle this
+	http.use_threads = true  # Use background thread for better performance
+	http.accept_gzip = false  # Disable compression to get accurate file sizes
+	http.body_size_limit = -1  # No limit
+	
+	# Dynamic chunk size based on expected file size
+	if expected_size > 1024 * 1024 * 1024:  # > 1GB
+		http.download_chunk_size = 512 * 1024  # 512KB chunks
+		print("[NetworkManager] Using 512KB chunks (large file)")
+	elif expected_size > 100 * 1024 * 1024:  # > 100MB
+		http.download_chunk_size = 256 * 1024  # 256KB chunks
+		print("[NetworkManager] Using 256KB chunks (medium file)")
+	elif expected_size > 10 * 1024 * 1024:  # > 10MB
+		http.download_chunk_size = 64 * 1024  # 64KB chunks
+		print("[NetworkManager] Using 64KB chunks (small file)")
+	else:
+		http.download_chunk_size = 16 * 1024  # 16KB chunks
+		print("[NetworkManager] Using 16KB chunks (tiny file)")
+	
+	var error = http.request(url, headers)
+	
+	if error != OK:
+		print("[NetworkManager] Failed to start download: " + str(error))
+		if callback.is_valid():
+			callback.call(false, 0, "Failed to start download: " + str(error))
+		http.queue_free()
+		return {}
+	
+	print("[NetworkManager] Download request started successfully (threaded, no timeout)")
+	
+	# Store callback for later use (DownloadManager will poll for completion)
+	var result = {
+		"http": http,
+		"callback": callback,
+		"path": normalized_path,
+		"completed": false
+	}
+	
+	http.request_completed.connect(func(request_result, response_code, response_headers, body):
+		print("[NetworkManager] Download request_completed fired - result: " + str(request_result) + ", code: " + str(response_code))
+		result.completed = true
+		
+		if not callback.is_valid():
+			http.queue_free()
+			return
+		
+		if request_result != HTTPRequest.RESULT_SUCCESS:
+			callback.call(false, response_code, "Download failed: " + str(request_result))
+			http.queue_free()
+			return
+		
+		if response_code >= 400:
+			if response_code == 401:
+				authentication_failed.emit()
+			callback.call(false, response_code, "HTTP error: " + str(response_code))
+			http.queue_free()
+			return
+		
+		if not FileAccess.file_exists(normalized_path):
+			callback.call(false, response_code, "Download file not created")
+			http.queue_free()
+			return
+		
+		callback.call(true, response_code, "")
+		http.queue_free()
+	)
+	
+	return result
+
 ## Gets the RomM download URL for a game (DownloadManager will handle the actual download)
 func get_romm_download_url(game_id: int, file_name: String) -> String:
 	var encoded_filename = file_name.uri_encode()

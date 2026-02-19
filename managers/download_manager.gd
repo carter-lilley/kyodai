@@ -28,14 +28,24 @@ class QueueItem:
 	var game_resource: GameResource = null  # Optional: for game downloads
 	var callbacks: Dictionary = {}  # Optional custom callbacks
 	var romm_id: int = 0  # The actual RomM ID being downloaded (could be a sibling)
+	var download_info: Dictionary = {}  # For file-based downloads: {http, callback, path, completed}
+	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
 
 # Unified queue
 var _queue: Array[QueueItem] = []
 var _active_items: Dictionary = {}  # id -> QueueItem
-var _max_concurrent: int = 2
+var _max_concurrent: int = 3  # Increased from 2 for better throughput
 
 # Progress timer for downloads
 var _progress_timers: Dictionary = {}  # item_id -> Timer
+
+# Timeout tracking
+var _download_start_times: Dictionary = {}  # item_id -> start_time_msec
+var _last_progress_times: Dictionary = {}  # item_id -> last_progress_time_msec
+var _last_downloaded_bytes: Dictionary = {}  # item_id -> bytes at last check
+const DOWNLOAD_TIMEOUT_MS: int = 30 * 60 * 1000  # 30 minutes max
+const STALL_TIMEOUT_MS: int = 120 * 1000  # 120 seconds with no progress = stall
+const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at start
 
 ## Queues a download with optional auto-extraction
 ## Returns the item ID or empty string if failed
@@ -43,10 +53,15 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
-	# Check if already downloading this URL
+	# Check if already downloading this URL (in queue OR active)
 	for item in _queue:
 		if item.url == url:
 			print("[DownloadManager] Already queued: " + url)
+			return ""
+	
+	for active_id in _active_items:
+		if _active_items[active_id].url == url:
+			print("[DownloadManager] Already downloading: " + url)
 			return ""
 	
 	if _active_items.has(item_id):
@@ -66,14 +81,32 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.callbacks = callbacks
 	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
 	
+	# Store expected file size for progress tracking
+	if game:
+		item.expected_file_size = game.get_active_file_size()
+	
 	# Ensure destination directory exists
-	var dir = DirAccess.open("user://")
-	var dest_dir = destination.get_base_dir().trim_prefix("user://")
-	if dir and not dir.dir_exists(dest_dir):
-		var result = dir.make_dir_recursive(dest_dir)
-		if result != OK:
-			print("[DownloadManager] Failed to create directory: " + dest_dir)
-			return ""
+	var dest_dir = destination.get_base_dir()
+	var dir: DirAccess
+	
+	# Handle absolute vs relative paths
+	if dest_dir.begins_with("user://") or dest_dir.begins_with("res://"):
+		dir = DirAccess.open(dest_dir.get_base_dir())
+		if dir and not dir.dir_exists(dest_dir.get_file()):
+			var result = dir.make_dir_recursive(dest_dir.get_file())
+			if result != OK:
+				print("[DownloadManager] Failed to create directory: " + dest_dir)
+				return ""
+	else:
+		# Absolute path (e.g., D:/Emulation/roms/switch)
+		dir = DirAccess.open(dest_dir)
+		if dir == null:
+			# Directory doesn't exist, try to create it using OS
+			var global_path = ProjectSettings.globalize_path(dest_dir) if dest_dir.begins_with("res://") else dest_dir
+			var result = DirAccess.make_dir_recursive_absolute(global_path)
+			if result != OK:
+				print("[DownloadManager] Failed to create directory: " + global_path + " (error: " + str(result) + ")")
+				return ""
 	
 	_queue.append(item)
 	print("[DownloadManager] Queued download: " + item_id + " (" + type + ") - " + url)
@@ -221,6 +254,11 @@ func _start_download(item: QueueItem):
 	item.progress = 0.0
 	_active_items[item.id] = item
 	
+	# Track start time for timeout detection
+	_download_start_times[item.id] = Time.get_ticks_msec()
+	_last_progress_times[item.id] = Time.get_ticks_msec()
+	_last_downloaded_bytes[item.id] = 0
+	
 	# Show notification with progress
 	item.notification_id = NotificationManager.show_notification(
 		"Downloading " + item.name + "...",
@@ -230,6 +268,10 @@ func _start_download(item: QueueItem):
 		func() -> float:
 			return item.progress,
 		func(progress: float) -> String:
+			if item.expected_file_size > 0:
+				var mb_downloaded = int(item.expected_file_size * progress / (1024 * 1024))
+				var mb_total = int(item.expected_file_size / (1024 * 1024))
+				return "Downloading %s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
 			return "Downloading " + item.name + ": %d%%" % int(progress * 100)
 	)
 	
@@ -241,15 +283,40 @@ func _start_download(item: QueueItem):
 	if item.type == "game":
 		headers = ["Authorization: " + NetworkManager.get_auth_header()]
 	
-	item.http_request = NetworkManager.http_get(
-		item.url,
-		headers,
-		func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
-			_on_download_complete(item, success, body, error_msg)
-	)
+	# Use file-based download for large files (games)
+	# Note: HTTPRequest.download_file streams directly to disk
+	if item.type == "game":
+		print("[DownloadManager] Using file-based download for: " + item.name)
+		print("[DownloadManager] Expected file size: " + str(item.expected_file_size) + " bytes (" + str(item.expected_file_size / (1024*1024)) + " MB)")
+		item.download_info = NetworkManager.http_download_file(
+			item.url,
+			item.destination_path,
+			headers,
+			func(success: bool, status_code: int, error_msg: String):
+				_on_file_download_complete(item, success, error_msg),
+			item.expected_file_size
+		)
+		
+		if item.download_info.is_empty():
+			item.status = "failed"
+			item.error_message = "Failed to start download"
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			download_completed.emit(item.id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		item.http_request = item.download_info.get("http", null)
+	else:
+		item.http_request = NetworkManager.http_get(
+			item.url,
+			headers,
+			func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
+				_on_download_complete(item, success, body, error_msg)
+		)
 	
 	if item.http_request == null:
-		# Failed to start
 		item.status = "failed"
 		item.error_message = "Failed to start download"
 		_cleanup_item(item)
@@ -261,25 +328,80 @@ func _start_download(item: QueueItem):
 	
 	# Setup progress timer
 	_progress_timers[item.id] = Timer.new()
-	_progress_timers[item.id].wait_time = 0.5
+	_progress_timers[item.id].wait_time = 1.0  # Check every second
 	_progress_timers[item.id].autostart = true
 	add_child(_progress_timers[item.id])
 	
 	_progress_timers[item.id].timeout.connect(func():
+		_update_download_progress(item)
+		_check_download_timeout(item.id)
+	)
+
+func _update_download_progress(item: QueueItem):
+	if item.http_request == null and item.download_info.is_empty():
+		return
+	
+	# For file-based downloads, check actual file on disk to avoid 32-bit overflow
+	if item.type == "game" and not item.download_info.is_empty():
+		var file_path = item.download_info.get("path", item.destination_path)
+		
+		# Check file size on disk (64-bit, no overflow)
+		if FileAccess.file_exists(file_path):
+			var file = FileAccess.open(file_path, FileAccess.READ)
+			if file:
+				var current_size = file.get_length()
+				file.close()
+				
+				# Use expected_file_size from game data for accurate progress
+				if item.expected_file_size > 0:
+					item.progress = float(current_size) / float(item.expected_file_size)
+					if item.progress > 0.99:
+						item.progress = 0.99
+				else:
+					# No expected size, cap at 99%
+					item.progress = 0.5  # Unknown progress
+				
+				# Log progress periodically (every 50MB change)
+				var last_bytes = _last_downloaded_bytes.get(item.id, 0)
+				if abs(current_size - last_bytes) > 50 * 1024 * 1024:
+					var mb_downloaded = current_size / (1024 * 1024)
+					if item.expected_file_size > 0:
+						var mb_total = item.expected_file_size / (1024 * 1024)
+						print("[DownloadManager] %s: %d/%d MB (%.1f%%)" % [item.name, mb_downloaded, mb_total, item.progress * 100])
+					else:
+						print("[DownloadManager] %s: %d MB downloaded" % [item.name, mb_downloaded])
+					_last_downloaded_bytes[item.id] = current_size
+				
+				# Update stall time if making progress
+				if current_size > 0 and current_size != last_bytes:
+					_last_progress_times[item.id] = Time.get_ticks_msec()
+		
+		# Check if download completed via request_completed callback
+		if item.download_info.get("completed", false):
+			print("[DownloadManager] Download request completed for: " + item.name)
+			_on_file_download_complete(item, true, "")
+			return
+		
+		download_progress.emit(item.id, item.progress)
+	else:
+		# For non-game downloads, use HTTPRequest progress
 		if item.http_request and is_instance_valid(item.http_request):
 			var body_size = item.http_request.get_body_size()
 			var downloaded = item.http_request.get_downloaded_bytes()
+			
 			if body_size > 0:
 				item.progress = float(downloaded) / float(body_size)
 				download_progress.emit(item.id, item.progress)
-	)
+			
+			# Update stall time if making progress
+			var last_bytes = _last_downloaded_bytes.get(item.id, -1)
+			if downloaded > 0 and downloaded != last_bytes:
+				_last_progress_times[item.id] = Time.get_ticks_msec()
+				_last_downloaded_bytes[item.id] = downloaded
 
 func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray, error_msg: String):
-	# Stop progress timer
-	if _progress_timers.has(item.id):
-		_progress_timers[item.id].stop()
-		_progress_timers[item.id].queue_free()
-		_progress_timers.erase(item.id)
+	# Stop progress timer and cleanup timeout tracking
+	_cleanup_download_tracking(item.id)
 	
 	item.http_request = null
 	
@@ -335,6 +457,134 @@ func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray
 		download_completed.emit(item.id, true, item.destination_path)
 		queue_changed.emit()
 		_process_queue()
+
+func _on_file_download_complete(item: QueueItem, success: bool, error_msg: String):
+	# Guard against double-calls
+	if item.status != "downloading":
+		return
+	
+	# Stop progress timer and cleanup timeout tracking
+	_cleanup_download_tracking(item.id)
+	
+	item.http_request = null
+	
+	if not success:
+		item.status = "failed"
+		item.error_message = error_msg
+		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, error_msg)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	print("[DownloadManager] File download complete: " + item.id + " -> " + item.destination_path)
+	
+	# Verify file exists and has content
+	if not FileAccess.file_exists(item.destination_path):
+		item.status = "failed"
+		item.error_message = "Download file not found"
+		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, "Download file not found")
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Get final file size for logging
+	var file = FileAccess.open(item.destination_path, FileAccess.READ)
+	if file:
+		var final_size = file.get_length()
+		file.close()
+		print("[DownloadManager] Final file size: " + str(final_size) + " bytes (" + str(final_size / (1024*1024)) + " MB)")
+	
+	# Update game resource if applicable
+	if item.game_resource:
+		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
+		item.game_resource.mark_sibling_downloaded(downloaded_id)
+		item.game_resource.file_path = item.destination_path
+		DataManager.update_game(item.game_resource)
+	
+	# Call custom callback if provided
+	if item.callbacks.has("on_complete"):
+		item.callbacks.on_complete.call(true, item.destination_path)
+	
+	# Auto-extract if requested
+	if item.auto_extract:
+		item.status = "extract_pending"
+		item.progress = 0.0
+		_start_extraction(item)
+	else:
+		item.status = "completed"
+		item.progress = 1.0
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, true, item.destination_path)
+		queue_changed.emit()
+		_process_queue()
+
+func _cleanup_download_tracking(item_id: String):
+	# Stop progress timer
+	if _progress_timers.has(item_id):
+		_progress_timers[item_id].stop()
+		_progress_timers[item_id].queue_free()
+		_progress_timers.erase(item_id)
+	
+	# Clean up timeout tracking
+	_download_start_times.erase(item_id)
+	_last_progress_times.erase(item_id)
+	_last_downloaded_bytes.erase(item_id)
+
+func _check_download_timeout(item_id: String):
+	if not _active_items.has(item_id):
+		return
+	
+	var current_time = Time.get_ticks_msec()
+	var start_time = _download_start_times.get(item_id, current_time)
+	var last_progress = _last_progress_times.get(item_id, current_time)
+	
+	var item = _active_items[item_id]
+	var elapsed_since_start = current_time - start_time
+	
+	# Check for overall timeout
+	if elapsed_since_start > DOWNLOAD_TIMEOUT_MS:
+		print("[DownloadManager] Download timed out (max duration): " + item_id)
+		_fail_download(item_id, "Download timed out")
+		return
+	
+	# Don't check for stall during initial grace period
+	if elapsed_since_start < INITIAL_GRACE_PERIOD_MS:
+		return
+	
+	# Check for stall (no progress for too long after grace period)
+	if current_time - last_progress > STALL_TIMEOUT_MS:
+		print("[DownloadManager] Download stalled (no progress for %d sec): " % [(current_time - last_progress) / 1000] + item_id)
+		_fail_download(item_id, "Download stalled - no progress")
+		return
+
+func _fail_download(item_id: String, error_msg: String):
+	if not _active_items.has(item_id):
+		return
+	
+	var item = _active_items[item_id]
+	
+	# Cancel the HTTP request
+	if item.http_request and is_instance_valid(item.http_request):
+		item.http_request.cancel_request()
+	
+	item.http_request = null
+	item.status = "failed"
+	item.error_message = error_msg
+	
+	_cleanup_download_tracking(item_id)
+	_cleanup_item(item)
+	_active_items.erase(item_id)
+	
+	NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
+	download_completed.emit(item_id, false, error_msg)
+	queue_changed.emit()
+	_process_queue()
 
 func _start_extraction(item: QueueItem):
 	item.status = "extracting"
