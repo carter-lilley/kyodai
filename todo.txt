@@ -6,11 +6,14 @@ how to split important siblings
 	unify views (all views are fullpage screens - invisible tabs?)
 	controller nav
 	horizontal scroll. flex grid?
+	sort by plaform, recent, search
+	auto-view downloaded games
 ## performance:
 	card image retries & priority management.
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single
 ## launch:
+	fix folding sibling entries together
 	test sibling downloads
 	confirm download, post install, & launch behavior in library view
 ## registry:
