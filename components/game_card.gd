@@ -366,40 +366,6 @@ func _update_shader_params() -> void:
 	mat.set_shader_parameter("border_enabled", enabled_val)
 	mat.set_shader_parameter("border_color", color_val)
 	mat.set_shader_parameter("game_texture", _current_texture)
-	
-	# Fluid Glass parameters
-	var fluid_enabled_val = false
-	var fluid_chromatic_val = 0.2
-	var fluid_bend_val = 0.4
-	var fluid_curve_light_val = 0.5
-	var fluid_rim_light_val = 0.8
-	var fluid_noise_val = 0.05
-	var fluid_edge_falloff_val = 50.0
-	
-	if SettingsManager:
-		var fluid_enabled_setting = SettingsManager.get_setting("fluid_glass_enabled")
-		var fluid_chromatic_setting = SettingsManager.get_setting("fluid_chromatic_shift")
-		var fluid_bend_setting = SettingsManager.get_setting("fluid_bend_amount")
-		var fluid_curve_light_setting = SettingsManager.get_setting("fluid_curve_light")
-		var fluid_rim_light_setting = SettingsManager.get_setting("fluid_rim_light")
-		var fluid_noise_setting = SettingsManager.get_setting("fluid_noise_amount")
-		var fluid_edge_falloff_setting = SettingsManager.get_setting("fluid_edge_falloff")
-		
-		fluid_enabled_val = fluid_enabled_setting.value if fluid_enabled_setting else false
-		fluid_chromatic_val = fluid_chromatic_setting.value if fluid_chromatic_setting else 0.2
-		fluid_bend_val = fluid_bend_setting.value if fluid_bend_setting else 0.4
-		fluid_curve_light_val = fluid_curve_light_setting.value if fluid_curve_light_setting else 0.5
-		fluid_rim_light_val = fluid_rim_light_setting.value if fluid_rim_light_setting else 0.8
-		fluid_noise_val = fluid_noise_setting.value if fluid_noise_setting else 0.05
-		fluid_edge_falloff_val = fluid_edge_falloff_setting.value if fluid_edge_falloff_setting else 50.0
-	
-	mat.set_shader_parameter("fluid_glass_enabled", fluid_enabled_val)
-	mat.set_shader_parameter("fluid_chromatic_shift", fluid_chromatic_val)
-	mat.set_shader_parameter("fluid_bend_amount", fluid_bend_val)
-	mat.set_shader_parameter("fluid_curve_light", fluid_curve_light_val)
-	mat.set_shader_parameter("fluid_rim_light", fluid_rim_light_val)
-	mat.set_shader_parameter("fluid_noise_amount", fluid_noise_val)
-	mat.set_shader_parameter("fluid_edge_falloff", fluid_edge_falloff_val)
 
 func _get_base_dimensions() -> Vector2:
 	if SettingsManager:
@@ -423,8 +389,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# Also rebuild the grid layout for non-preview cards
 		if not preview_mode and UIManager:
 			UIManager.rebuild_game_grid()
-	elif setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_fade_out", "border_color",
-		"fluid_glass_enabled", "fluid_chromatic_shift", "fluid_bend_amount", "fluid_curve_light", "fluid_rim_light", "fluid_noise_amount", "fluid_edge_falloff"]:
+	elif setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_fade_out", "border_color"]:
 		_update_shader_params()
 
 func update_display() -> void:

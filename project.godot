@@ -35,3 +35,5 @@ LaunchManager="*res://managers/launch_manager.gd"
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+anti_aliasing/quality/msaa_2d=3
+anti_aliasing/quality/screen_space_aa=1
