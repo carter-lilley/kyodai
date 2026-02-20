@@ -28,7 +28,6 @@ var item_height: float = 280.0
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
 var _grid_container: GridContainer
-var _spacer: Control
 var _debug_camera: Camera2D
 
 var _total_items: int = 0
@@ -70,7 +69,7 @@ func _recalculate_columns():
 		grid_columns = new_columns
 		_grid_container.columns = grid_columns
 		_update_layout()
-		_update_spacer()
+		_update_top_margin()
 		_on_scroll_value_changed(_scroll_container.scroll_vertical if _scroll_container else 0.0)
 	
 	_center_grid()
@@ -118,10 +117,6 @@ func _setup_ui():
 	_grid_container.columns = grid_columns
 	_margin_container.add_child(_grid_container)
 	
-	_spacer = Control.new()
-	_spacer.custom_minimum_size = Vector2(1, 0)
-	_grid_container.add_child(_spacer)
-	
 	_recalculate_dimensions()
 
 func _get_base_dimensions() -> Vector2:
@@ -153,8 +148,7 @@ func refresh_dimensions() -> void:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(zoom)
 	
-	if _spacer:
-		_update_spacer()
+	_update_top_margin()
 
 func _on_zoom_changed():
 	_recalculate_dimensions()
@@ -165,8 +159,7 @@ func _on_zoom_changed():
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(zoom)
 	
-	if _spacer:
-		_update_spacer()
+	_update_top_margin()
 
 func setup(card_scene_resource: PackedScene, total_items: int, columns: int = 5):
 	_card_scene = card_scene_resource
@@ -223,7 +216,7 @@ func _initial_load():
 			_grid_container.add_child(card)
 			item_created.emit(card, i)
 	
-	_update_spacer()
+	_update_top_margin()
 	_request_data(0, _virtual_end + 1)
 
 func _on_scroll_value_changed(value: float):
@@ -264,7 +257,7 @@ func _on_scroll_value_changed(value: float):
 			if _debug_camera:
 				_debug_camera.position = Vector2(0, scroll_pos)
 			
-			_update_spacer()
+			_update_top_margin()
 			_check_preload_needed()
 			visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
 			
@@ -318,7 +311,7 @@ func _on_scroll_value_changed(value: float):
 	if _debug_camera:
 		_debug_camera.position = Vector2(0, scroll_pos)
 	
-	_update_spacer()
+	_update_top_margin()
 	_check_preload_needed()
 	
 	visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
@@ -392,7 +385,7 @@ func _add_card_at_start(virtual_index: int):
 	card.set_meta("virtual_index", virtual_index)
 	_active_cards.insert(0, card)
 	_grid_container.add_child(card)
-	_grid_container.move_child(card, 1)
+	_grid_container.move_child(card, 0)
 	
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
@@ -430,12 +423,14 @@ func _disconnect_card_signals(card: Control):
 		for conn in card.get_signal_connection_list("download_requested"):
 			card.disconnect("download_requested", conn["callable"])
 
-func _update_spacer():
-	if _spacer and _active_cards.size() > 0:
+func _update_top_margin():
+	if _active_cards.size() > 0:
 		var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 		var rows_before = first_idx / grid_columns
-		var spacer_height = rows_before * item_height
-		_spacer.custom_minimum_size.y = spacer_height
+		var margin_height = rows_before * item_height
+		_margin_container.add_theme_constant_override("margin_top", int(margin_height))
+	else:
+		_margin_container.add_theme_constant_override("margin_top", 0)
 
 func _request_missing_data():
 	if _is_loading or _active_cards.size() == 0:
@@ -535,7 +530,7 @@ func _refresh_buffer():
 	_data_cache.clear()
 	_cache_access_order.clear()
 	_pending_loads.clear()
-	_spacer.custom_minimum_size.y = 0
+	_margin_container.add_theme_constant_override("margin_top", 0)
 	_virtual_start = 0
 	_virtual_end = 0
 	_initial_load()
@@ -562,7 +557,7 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 	
 	_virtual_start = new_start
 	_virtual_end = new_end
-	_update_spacer()
+	_update_top_margin()
 	
 	_request_data(new_start, new_end - new_start + 1)
 
@@ -723,7 +718,7 @@ func _initial_load_from_increment():
 			
 			item_created.emit(card, i)
 	
-	_update_spacer()
+	_update_top_margin()
 
 func cache_items_at_offset(items: Array[GameResource], offset: int):
 	for i in range(items.size()):
