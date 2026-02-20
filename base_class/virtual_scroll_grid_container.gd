@@ -205,8 +205,13 @@ func _update_layout():
 	_grid_container.custom_minimum_size.y = total_height
 
 func _initial_load():
+	var viewport_height = _scroll_container.size.y if _scroll_container else 600
+	var visible_rows = ceili(viewport_height / item_height)
+	var visible_count = visible_rows * grid_columns
+	var initial_buffer = min(buffer_size, visible_count + grid_columns * 2)
+	
 	_virtual_start = 0
-	_virtual_end = min(buffer_size, _total_items) - 1
+	_virtual_end = min(initial_buffer, _total_items) - 1
 	
 	for i in range(_virtual_end + 1):
 		var card = _acquire_card()
@@ -695,8 +700,13 @@ func increment_total_count(amount: int = 1) -> int:
 	return start_index
 
 func _initial_load_from_increment():
+	var viewport_height = _scroll_container.size.y if _scroll_container else 600
+	var visible_rows = ceili(viewport_height / item_height)
+	var visible_count = visible_rows * grid_columns
+	var initial_buffer = min(buffer_size, visible_count + grid_columns * 2)
+	
 	_virtual_start = 0
-	_virtual_end = min(buffer_size, _total_items) - 1
+	_virtual_end = min(initial_buffer, _total_items) - 1
 	
 	print("[VScrollGrid] Creating initial %d cards for %d total items" % [_virtual_end + 1, _total_items])
 	
