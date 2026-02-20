@@ -81,6 +81,13 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 		var end_num = mini(end_index, total_count)
 		status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, total_count]
 
+func rebuild_grid() -> void:
+	"""Rebuild the grid to reflect card size/orientation changes."""
+	# Refresh dimensions based on current orientation
+	games_grid.refresh_dimensions()
+	# Force grid to recalculate layout
+	_load_total_count(true)
+
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:

@@ -1349,6 +1349,24 @@ func get_cache_size() -> int:
 			file_name = dir.get_next()
 	return total_size
 
+func get_random_cached_cover_path() -> String:
+	"""Get a random cover image from the cache folder."""
+	var dir = DirAccess.open(CACHE_FOLDER)
+	if not dir:
+		return ""
+	
+	var image_files: Array[String] = []
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir() and (file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg")):
+			image_files.append(CACHE_FOLDER + file_name)
+		file_name = dir.get_next()
+	
+	if image_files.size() > 0:
+		return image_files[randi() % image_files.size()]
+	return ""
+
 func get_last_sync_time() -> String:
 	if not _is_db_ready:
 		return ""

@@ -19,12 +19,18 @@ var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
 var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
-const BASE_WIDTH: float = 200.0
-const BASE_HEIGHT: float = 280.0
 const BASE_BADGE_SIZE: float = 32.0
 const BASE_BADGE_CORNER: int = 23
 const BASE_ICON_SIZE: float = 22.0
 const BASE_BADGE_MARGIN: float = 8.0
+
+# Default dimensions for vertical orientation (202x270)
+const VERTICAL_WIDTH: float = 202.0
+const VERTICAL_HEIGHT: float = 270.0
+const HORIZONTAL_WIDTH: float = 270.0
+const HORIZONTAL_HEIGHT: float = 202.0
+const SQUARE_WIDTH: float = 256.0
+const SQUARE_HEIGHT: float = 256.0
 
 var _current_zoom: float = 1.0
 var _current_texture: Texture2D = null
@@ -63,7 +69,22 @@ func _ready():
 func _setup_preview_mode():
 	set_card_zoom(_current_zoom)
 	_update_shader_params()
-	_set_texture(_loading_texture)
+	
+	# Load a random image from cache for the preview
+	if DataManager:
+		var random_cover = DataManager.get_random_cached_cover_path()
+		if random_cover != "" and FileAccess.file_exists(random_cover):
+			var image = Image.new()
+			var err = image.load(random_cover)
+			if err == OK:
+				var texture = ImageTexture.create_from_image(image)
+				_set_texture(texture)
+			else:
+				_set_texture(_loading_texture)
+		else:
+			_set_texture(_loading_texture)
+	else:
+		_set_texture(_loading_texture)
 	
 	if status_badge:
 		status_badge.visible = false
@@ -253,9 +274,17 @@ func set_placeholder(is_placeholder: bool):
 func set_card_zoom(new_zoom: float) -> void:
 	_current_zoom = new_zoom
 	
-	var card_width = BASE_WIDTH * new_zoom
-	var card_height = BASE_HEIGHT * new_zoom
+	var base_dims = _get_base_dimensions()
+	var card_width = base_dims.x * new_zoom
+	var card_height = base_dims.y * new_zoom
+	
+	# Set both custom_minimum_size and size to ensure GridContainer respects our dimensions
 	custom_minimum_size = Vector2(card_width, card_height)
+	size = Vector2(card_width, card_height)
+	
+	# Prevent GridContainer from stretching the card
+	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
 	if status_badge:
 		var badge_size = BASE_BADGE_SIZE * new_zoom
@@ -297,6 +326,10 @@ func _update_shader_params() -> void:
 	var size_val = 0.05
 	var color_val = Color.WHITE
 	
+	var base_dims = _get_base_dimensions()
+	var base_width = base_dims.x
+	var base_height = base_dims.y
+	
 	if SettingsManager:
 		var corner_setting = SettingsManager.get_setting("corner_radius")
 		var border_enabled_setting = SettingsManager.get_setting("border_enabled")
@@ -312,8 +345,8 @@ func _update_shader_params() -> void:
 		var fade_out_val = border_fade_out_setting.value if border_fade_out_setting else 0.0
 		color_val = border_color_setting.value if border_color_setting else Color.WHITE
 		
-		var fade_in_pixels = fade_in_val * BASE_WIDTH * 2.0 * _current_zoom
-		var fade_out_pixels = fade_out_val * BASE_WIDTH * 2.0 * _current_zoom
+		var fade_in_pixels = fade_in_val * base_width * 2.0 * _current_zoom
+		var fade_out_pixels = fade_out_val * base_width * 2.0 * _current_zoom
 		mat.set_shader_parameter("border_fade_in_pixels", fade_in_pixels)
 		mat.set_shader_parameter("border_fade_out_pixels", fade_out_pixels)
 	
@@ -321,11 +354,11 @@ func _update_shader_params() -> void:
 	var corner_pixels = corner_val * _current_zoom
 	
 	# Border values in pixels (settings are proportional 0.0-0.5)
-	var border_pixels = size_val * BASE_WIDTH * 2.0 * _current_zoom
+	var border_pixels = size_val * base_width * 2.0 * _current_zoom
 	
 	# Calculate actual card size
-	var actual_width = BASE_WIDTH * _current_zoom
-	var actual_height = BASE_HEIGHT * _current_zoom
+	var actual_width = base_width * _current_zoom
+	var actual_height = base_height * _current_zoom
 	
 	mat.set_shader_parameter("card_size", Vector2(actual_width, actual_height))
 	mat.set_shader_parameter("corner_radius_pixels", corner_pixels)
@@ -333,9 +366,65 @@ func _update_shader_params() -> void:
 	mat.set_shader_parameter("border_enabled", enabled_val)
 	mat.set_shader_parameter("border_color", color_val)
 	mat.set_shader_parameter("game_texture", _current_texture)
+	
+	# Fluid Glass parameters
+	var fluid_enabled_val = false
+	var fluid_chromatic_val = 0.2
+	var fluid_bend_val = 0.4
+	var fluid_curve_light_val = 0.5
+	var fluid_rim_light_val = 0.8
+	var fluid_noise_val = 0.05
+	var fluid_edge_falloff_val = 50.0
+	
+	if SettingsManager:
+		var fluid_enabled_setting = SettingsManager.get_setting("fluid_glass_enabled")
+		var fluid_chromatic_setting = SettingsManager.get_setting("fluid_chromatic_shift")
+		var fluid_bend_setting = SettingsManager.get_setting("fluid_bend_amount")
+		var fluid_curve_light_setting = SettingsManager.get_setting("fluid_curve_light")
+		var fluid_rim_light_setting = SettingsManager.get_setting("fluid_rim_light")
+		var fluid_noise_setting = SettingsManager.get_setting("fluid_noise_amount")
+		var fluid_edge_falloff_setting = SettingsManager.get_setting("fluid_edge_falloff")
+		
+		fluid_enabled_val = fluid_enabled_setting.value if fluid_enabled_setting else false
+		fluid_chromatic_val = fluid_chromatic_setting.value if fluid_chromatic_setting else 0.2
+		fluid_bend_val = fluid_bend_setting.value if fluid_bend_setting else 0.4
+		fluid_curve_light_val = fluid_curve_light_setting.value if fluid_curve_light_setting else 0.5
+		fluid_rim_light_val = fluid_rim_light_setting.value if fluid_rim_light_setting else 0.8
+		fluid_noise_val = fluid_noise_setting.value if fluid_noise_setting else 0.05
+		fluid_edge_falloff_val = fluid_edge_falloff_setting.value if fluid_edge_falloff_setting else 50.0
+	
+	mat.set_shader_parameter("fluid_glass_enabled", fluid_enabled_val)
+	mat.set_shader_parameter("fluid_chromatic_shift", fluid_chromatic_val)
+	mat.set_shader_parameter("fluid_bend_amount", fluid_bend_val)
+	mat.set_shader_parameter("fluid_curve_light", fluid_curve_light_val)
+	mat.set_shader_parameter("fluid_rim_light", fluid_rim_light_val)
+	mat.set_shader_parameter("fluid_noise_amount", fluid_noise_val)
+	mat.set_shader_parameter("fluid_edge_falloff", fluid_edge_falloff_val)
+
+func _get_base_dimensions() -> Vector2:
+	if SettingsManager:
+		var orientation_setting = SettingsManager.get_setting("card_orientation")
+		if orientation_setting:
+			# Array settings store the index, not the string
+			var orientation_idx = orientation_setting.value
+			match orientation_idx:
+				1: # Horizontal
+					return Vector2(HORIZONTAL_WIDTH, HORIZONTAL_HEIGHT)
+				2: # Square
+					return Vector2(SQUARE_WIDTH, SQUARE_HEIGHT)
+				_: # 0 = Vertical (default)
+					return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
+	return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_fade_out", "border_color"]:
+	if setting.property_name == "card_orientation":
+		# Orientation changed - update card size for preview cards
+		set_card_zoom(_current_zoom)
+		# Also rebuild the grid layout for non-preview cards
+		if not preview_mode and UIManager:
+			UIManager.rebuild_game_grid()
+	elif setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_fade_out", "border_color",
+		"fluid_glass_enabled", "fluid_chromatic_shift", "fluid_bend_amount", "fluid_curve_light", "fluid_rim_light", "fluid_noise_amount", "fluid_edge_falloff"]:
 		_update_shader_params()
 
 func update_display() -> void:

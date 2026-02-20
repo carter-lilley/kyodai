@@ -122,6 +122,13 @@ func _on_tab_changed(tab_idx: int):
 func get_current_view() -> View:
 	return _current_view
 
+func rebuild_game_grid() -> void:
+	"""Rebuild the library view to reflect card size changes."""
+	if _views.has("Library"):
+		var library_view = _views["Library"]
+		if library_view.has_method("rebuild_grid"):
+			library_view.rebuild_grid()
+
 func get_view(view_name: String) -> View:
 	if _views.has(view_name):
 		return _views[view_name]

@@ -12,8 +12,8 @@ signal batch_progress_changed(progress: float)
 @export var preload_distance: int = 25
 @export var debug_mode: bool = false
 
-const BASE_CARD_WIDTH: float = 200.0
-const BASE_CARD_HEIGHT: float = 280.0
+const BASE_CARD_WIDTH: float = 202.0
+const BASE_CARD_HEIGHT: float = 270.0
 const GRID_SEPARATION: int = 10
 
 var zoom: float = 1.0:
@@ -23,7 +23,7 @@ var zoom: float = 1.0:
 			zoom = new_zoom
 			_on_zoom_changed()
 
-var item_height: float = 290.0
+var item_height: float = 280.0
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
@@ -61,7 +61,8 @@ func _recalculate_columns():
 	if not _grid_container:
 		return
 	
-	var card_width = BASE_CARD_WIDTH * zoom
+	var base_dims = _get_base_dimensions()
+	var card_width = base_dims.x * zoom
 	var available_width = size.x
 	var new_columns = max(1, int(available_width / (card_width + GRID_SEPARATION)))
 	
@@ -78,7 +79,8 @@ func _center_grid():
 	if not _grid_container or not _scroll_container or not _margin_container:
 		return
 	
-	var card_width = BASE_CARD_WIDTH * zoom
+	var base_dims = _get_base_dimensions()
+	var card_width = base_dims.x * zoom
 	var total_grid_width = (grid_columns * card_width) + ((grid_columns - 1) * GRID_SEPARATION)
 	var available_width = _scroll_container.size.x
 	var extra_space = available_width - total_grid_width
@@ -122,8 +124,37 @@ func _setup_ui():
 	
 	_recalculate_dimensions()
 
+func _get_base_dimensions() -> Vector2:
+	if SettingsManager:
+		var orientation_setting = SettingsManager.get_setting("card_orientation")
+		if orientation_setting:
+			# Array settings store the index, not the string
+			var orientation_idx = orientation_setting.value
+			match orientation_idx:
+				1: # Horizontal
+					return Vector2(270.0, 202.0)
+				2: # Square
+					return Vector2(256.0, 256.0)
+				_: # 0 = Vertical (default)
+					return Vector2(202.0, 270.0)
+	return Vector2(202.0, 270.0)
+
 func _recalculate_dimensions():
-	item_height = (BASE_CARD_HEIGHT * zoom) + GRID_SEPARATION
+	var base_dims = _get_base_dimensions()
+	item_height = (base_dims.y * zoom) + GRID_SEPARATION
+
+func refresh_dimensions() -> void:
+	"""Recalculate dimensions and refresh layout (call after orientation change)."""
+	_recalculate_dimensions()
+	_recalculate_columns()
+	_update_layout()
+	
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_card_zoom"):
+			card.set_card_zoom(zoom)
+	
+	if _spacer:
+		_update_spacer()
 
 func _on_zoom_changed():
 	_recalculate_dimensions()

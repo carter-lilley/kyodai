@@ -36,9 +36,18 @@ const Type = SettingsVar.SettingType
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
 
 @export_subgroup("Card Appearance")
+@export var card_orientations: Array[String] = ["Vertical", "Horizontal", "Square"]
+@export var card_orientation := SettingsVar.new(Type.ARRAY, card_orientations[0], State.ENABLED, "Card Orientation", "", 0.0, 1.0, 0.1, card_orientations)
 @export var corner_radius := SettingsVar.new(Type.INT, 12, State.ENABLED, "Corner Radius", "", 0.0, 50.0, 1.0)
 @export var border_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Show Border")
 @export var border_size := SettingsVar.new(Type.FLOAT, 0.05, State.ENABLED, "Border Size", "", 0.0, 0.5, 0.01)
 @export var border_fade_in := SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Border Fade In", "", 0.0, 10.0, 0.1)
 @export var border_fade_out := SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Border Fade Out", "", 0.0, 10.0, 0.1)
 @export var border_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Border Color")
+@export var fluid_glass_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fluid Glass Effect")
+@export var fluid_chromatic_shift := SettingsVar.new(Type.FLOAT, 0.2, State.ENABLED, "Fluid Glass Chromatic", "", 0.0, 1.0, 0.01)
+@export var fluid_bend_amount := SettingsVar.new(Type.FLOAT, 0.4, State.ENABLED, "Fluid Glass Bend", "", 0.0, 1.0, 0.05)
+@export var fluid_curve_light := SettingsVar.new(Type.FLOAT, 0.5, State.ENABLED, "Fluid Glass Curve Light", "", 0.0, 1.0, 0.05)
+@export var fluid_rim_light := SettingsVar.new(Type.FLOAT, 0.8, State.ENABLED, "Fluid Glass Rim Light", "", 0.0, 1.0, 0.05)
+@export var fluid_noise_amount := SettingsVar.new(Type.FLOAT, 0.05, State.ENABLED, "Fluid Glass Noise", "", 0.0, 1.0, 0.01)
+@export var fluid_edge_falloff := SettingsVar.new(Type.FLOAT, 50.0, State.ENABLED, "Fluid Glass Edge Falloff", "", 10.0, 200.0, 5.0)
