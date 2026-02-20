@@ -7,12 +7,16 @@ signal scroll_value_changed(value: float)
 @export var smooth_scroll_duration: float = 2.0
 @export var smooth_scroll_big_jump_threshold: float = 3500.0
 @export var smooth_scroll_big_jump_multiplier: float = 3.0
+@export var vertical: bool = true:
+	set(value):
+		vertical = value
+		_target_scroll = 0.0
 
-var _target_scroll_y: float = 0.0
+var _target_scroll: float = 0.0
 var _scroll_tween: Tween
 var _is_smooth_scrolling: bool = false
 var _is_dragging_scrollbar: bool = false
-var _scrollbar_drag_start_mouse_y: float = 0.0
+var _scrollbar_drag_start_mouse_pos: float = 0.0
 var _scrollbar_drag_start_value: float = 0.0
 
 var _pre_focus_scroll: float = -1.0
@@ -23,14 +27,31 @@ func _ready():
 	
 	await get_tree().process_frame
 	
-	var v_scrollbar = get_v_scroll_bar()
-	if v_scrollbar:
-		v_scrollbar.value_changed.connect(_on_internal_scroll_changed)
+	_connect_scrollbar()
 	
 	if smooth_scrolling:
 		gui_input.connect(_on_gui_input)
+		_connect_scrollbar_input()
+
+func _connect_scrollbar():
+	if vertical:
+		var v_scrollbar = get_v_scroll_bar()
+		if v_scrollbar:
+			v_scrollbar.value_changed.connect(_on_internal_scroll_changed)
+	else:
+		var h_scrollbar = get_h_scroll_bar()
+		if h_scrollbar:
+			h_scrollbar.value_changed.connect(_on_internal_scroll_changed)
+
+func _connect_scrollbar_input():
+	if vertical:
+		var v_scrollbar = get_v_scroll_bar()
 		if v_scrollbar:
 			v_scrollbar.gui_input.connect(_on_scrollbar_input)
+	else:
+		var h_scrollbar = get_h_scroll_bar()
+		if h_scrollbar:
+			h_scrollbar.gui_input.connect(_on_scrollbar_input)
 
 func _input(event: InputEvent):
 	if not smooth_scrolling:
@@ -44,8 +65,20 @@ func _input(event: InputEvent):
 	   event.is_action("ui_focus_next") or event.is_action("ui_focus_prev"):
 		var focused = get_viewport().gui_get_focus_owner()
 		if focused and is_ancestor_of(focused):
-			_pre_focus_scroll = scroll_vertical
+			_pre_focus_scroll = _get_current_scroll()
 			_focus_key_pressed = true
+
+func _get_current_scroll() -> float:
+	return scroll_vertical if vertical else scroll_horizontal
+
+func _set_current_scroll(value: float):
+	if vertical:
+		scroll_vertical = int(value)
+	else:
+		scroll_horizontal = int(value)
+
+func _get_scrollbar():
+	return get_v_scroll_bar() if vertical else get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
 	if _focus_key_pressed and _pre_focus_scroll >= 0:
@@ -58,13 +91,13 @@ func _on_internal_scroll_changed(value: float):
 				_scroll_tween.kill()
 			_is_smooth_scrolling = false
 			
-			scroll_vertical = int(pre_scroll)
+			_set_current_scroll(int(pre_scroll))
 			
 			var focused = get_viewport().gui_get_focus_owner()
 			if focused and is_ancestor_of(focused):
-				_target_scroll_y = _get_centered_scroll_for_control(focused)
+				_target_scroll = _get_centered_scroll_for_control(focused)
 			else:
-				_target_scroll_y = value
+				_target_scroll = value
 			
 			call_deferred("_start_smooth_scroll")
 			return
@@ -75,17 +108,28 @@ func _get_centered_scroll_for_control(p_control: Control) -> float:
 	var control_rect = p_control.get_global_rect()
 	var scroll_rect = get_global_rect()
 	
-	var control_center_y = control_rect.position.y + control_rect.size.y / 2.0
-	var viewport_center_y = scroll_rect.position.y + scroll_rect.size.y / 2.0
-	
-	var diff = control_center_y - viewport_center_y
-	var target_scroll = scroll_vertical + diff
-	
-	var scrollbar = get_v_scroll_bar()
-	if scrollbar:
-		target_scroll = clampf(target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
-	
-	return target_scroll
+	if vertical:
+		var control_center = control_rect.position.y + control_rect.size.y / 2.0
+		var viewport_center = scroll_rect.position.y + scroll_rect.size.y / 2.0
+		var diff = control_center - viewport_center
+		var target = _get_current_scroll() + diff
+		
+		var scrollbar = _get_scrollbar()
+		if scrollbar:
+			target = clampf(target, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+		
+		return target
+	else:
+		var control_center = control_rect.position.x + control_rect.size.x / 2.0
+		var viewport_center = scroll_rect.position.x + scroll_rect.size.x / 2.0
+		var diff = control_center - viewport_center
+		var target = _get_current_scroll() + diff
+		
+		var scrollbar = _get_scrollbar()
+		if scrollbar:
+			target = clampf(target, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+		
+		return target
 
 func _on_gui_input(event: InputEvent):
 	if not smooth_scrolling:
@@ -93,7 +137,7 @@ func _on_gui_input(event: InputEvent):
 	
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			var scrollbar = get_v_scroll_bar()
+			var scrollbar = _get_scrollbar()
 			if not scrollbar:
 				return
 			
@@ -102,11 +146,11 @@ func _on_gui_input(event: InputEvent):
 				step = scrollbar.page / 10.0
 			
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				_target_scroll_y -= step
+				_target_scroll -= step
 			else:
-				_target_scroll_y += step
+				_target_scroll += step
 			
-			_target_scroll_y = clampf(_target_scroll_y, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
 			_start_smooth_scroll()
 			accept_event()
 
@@ -114,7 +158,7 @@ func _on_scrollbar_input(event: InputEvent):
 	if not smooth_scrolling:
 		return
 	
-	var scrollbar = get_v_scroll_bar()
+	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
 	
@@ -122,8 +166,8 @@ func _on_scrollbar_input(event: InputEvent):
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				_is_dragging_scrollbar = true
-				_scrollbar_drag_start_mouse_y = event.global_position.y
-				_scrollbar_drag_start_value = _target_scroll_y
+				_scrollbar_drag_start_mouse_pos = event.global_position.y if vertical else event.global_position.x
+				_scrollbar_drag_start_value = _target_scroll
 				
 				if _scroll_tween and _scroll_tween.is_valid():
 					_scroll_tween.kill()
@@ -132,29 +176,31 @@ func _on_scrollbar_input(event: InputEvent):
 				_is_dragging_scrollbar = false
 	
 	elif event is InputEventMouseMotion and _is_dragging_scrollbar:
-		var mouse_delta = event.global_position.y - _scrollbar_drag_start_mouse_y
+		var mouse_delta = (event.global_position.y if vertical else event.global_position.x) - _scrollbar_drag_start_mouse_pos
 		
 		var scrollable_range = scrollbar.max_value - scrollbar.min_value - scrollbar.page
-		var scrollbar_track_height = scrollbar.size.y - scrollbar.get_combined_minimum_size().y
+		var scrollbar_track_size = scrollbar.size.y if vertical else scrollbar.size.x
+		var scrollbar_min_size = scrollbar.get_combined_minimum_size().y if vertical else scrollbar.get_combined_minimum_size().x
+		var scrollbar_track_length = scrollbar_track_size - scrollbar_min_size
 		
-		if scrollbar_track_height > 0 and scrollable_range > 0:
-			var scroll_delta = (mouse_delta / scrollbar_track_height) * scrollable_range
-			_target_scroll_y = _scrollbar_drag_start_value + scroll_delta
+		if scrollbar_track_length > 0 and scrollable_range > 0:
+			var scroll_delta = (mouse_delta / scrollbar_track_length) * scrollable_range
+			_target_scroll = _scrollbar_drag_start_value + scroll_delta
 			
-			_target_scroll_y = clampf(_target_scroll_y, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
 func _start_smooth_scroll():
-	var scrollbar = get_v_scroll_bar()
+	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
 	
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
 	
-	var start_value = float(scroll_vertical)
-	var target_value = _target_scroll_y
+	var start_value = _get_current_scroll()
+	var target_value = _target_scroll
 	
 	var distance = abs(target_value - start_value)
 	var duration = smooth_scroll_duration
@@ -172,7 +218,7 @@ func _start_smooth_scroll():
 	
 	_scroll_tween.tween_method(
 		func(val: float): 
-			scroll_vertical = int(val),
+			_set_current_scroll(val),
 		start_value,
 		target_value,
 		duration
@@ -184,12 +230,12 @@ func _start_smooth_scroll():
 
 func get_target_scroll() -> float:
 	if smooth_scrolling:
-		return _target_scroll_y
-	return float(scroll_vertical)
+		return _target_scroll
+	return _get_current_scroll()
 
-func scroll_to(target_y: float, animate: bool = true):
+func scroll_to(target: float, animate: bool = true):
 	if animate and smooth_scrolling:
-		_target_scroll_y = target_y
+		_target_scroll = target
 		_start_smooth_scroll()
 	else:
-		scroll_vertical = target_y
+		_set_current_scroll(target)

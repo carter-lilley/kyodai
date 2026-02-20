@@ -9,15 +9,19 @@ signal batch_progress_changed(progress: float)
 @export var card_scene: PackedScene
 @export var buffer_size: int = 75
 @export var preload_distance: int = 25
-@export var debug_mode: bool = true
+@export var debug_mode: bool = false:
+	set(value):
+		if debug_mode != value:
+			debug_mode = value
+			_update_debug_mode()
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:
 			vertical = value
 			if _flow_container:
-				# FlowContainer.vertical = false means left-to-right flow (rows)
-				# FlowContainer.vertical = true means top-to-bottom flow (columns)
 				_flow_container.vertical = not vertical
+			if _scroll_container:
+				_scroll_container.vertical = vertical
 			_recalculate_layout()
 			_refresh_buffer()
 
@@ -37,8 +41,10 @@ var item_width: float = 212.0
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
+var _center_container: CenterContainer
 var _flow_container: FlowContainer
 var _debug_camera: Camera2D
+var _debug_flow_panel: Panel
 
 var _total_items: int = 0
 var _virtual_start: int = 0
@@ -99,6 +105,7 @@ func _setup_ui():
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
 	_scroll_container = SmoothScrollContainer.new()
+	_scroll_container.vertical = vertical
 	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -112,16 +119,22 @@ func _setup_ui():
 	_margin_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.add_child(_margin_container)
 	
+	_center_container = CenterContainer.new()
+	_center_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_center_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_margin_container.add_child(_center_container)
+	
 	_flow_container = FlowContainer.new()
-	# FlowContainer.vertical = false means left-to-right flow (rows) - for vertical scrolling
-	# FlowContainer.vertical = true means top-to-bottom flow (columns) - for horizontal scrolling
 	_flow_container.vertical = not vertical
-	# FlowContainer needs to expand in both directions to properly wrap items
-	_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if vertical:
+		_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	else:
+		_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_flow_container.add_theme_constant_override("h_separation", GRID_SEPARATION)
 	_flow_container.add_theme_constant_override("v_separation", GRID_SEPARATION)
-	_margin_container.add_child(_flow_container)
+	_center_container.add_child(_flow_container)
 	
 	if debug_mode:
 		_setup_debug_camera()
@@ -218,10 +231,16 @@ func _update_layout():
 	var lines = ceili(float(_total_items) / items_per_line) if items_per_line > 0 else 0
 	if vertical:
 		var total_height = lines * item_height
+		var card_width = item_width - GRID_SEPARATION
+		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * GRID_SEPARATION
 		_flow_container.custom_minimum_size.y = total_height
+		_flow_container.custom_minimum_size.x = row_width
 	else:
 		var total_width = lines * item_width
+		var card_height = item_height - GRID_SEPARATION
+		var col_height = items_per_line * card_height + max(0, items_per_line - 1) * GRID_SEPARATION
 		_flow_container.custom_minimum_size.x = total_width
+		_flow_container.custom_minimum_size.y = col_height
 
 func _initial_load():
 	print("[VScrollGrid] _initial_load CALLED - active_cards=%d" % _active_cards.size())
@@ -738,16 +757,19 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 			var status = "DATA" if has_data else "LOADING"
 			var location = "VISIBLE" if is_visible else "BUFFER"
 			label.text = "#%d\n%s\n%s" % [idx, status, location]
-
-func toggle_debug_mode():
-	debug_mode = not debug_mode
 	
-	print("[VScrollGrid] Toggle debug mode: %s, scroll_pos=%d, virtual_start=%d, active_cards=%d" % [debug_mode, _scroll_container.scroll_vertical if _scroll_container else 0, _virtual_start, _active_cards.size()])
+	_update_debug_flow_panel_position()
+
+func _update_debug_mode():
+	if not is_inside_tree():
+		return
+	
+	print("[VScrollGrid] Debug mode: %s, scroll_pos=%d, virtual_start=%d, active_cards=%d" % [debug_mode, _scroll_container.scroll_vertical if _scroll_container else 0, _virtual_start, _active_cards.size()])
 	
 	if debug_mode:
 		_scroll_container.clip_contents = false
 		_setup_debug_camera()
-		# Update debug visuals for all existing cards
+		_setup_debug_flow_panel()
 		if _active_cards.size() > 0:
 			var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 			var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
@@ -759,6 +781,9 @@ func toggle_debug_mode():
 		if _debug_camera:
 			_debug_camera.queue_free()
 			_debug_camera = null
+		if _debug_flow_panel:
+			_debug_flow_panel.queue_free()
+			_debug_flow_panel = null
 		for card in _active_cards:
 			var debug_panel = card.get_node_or_null("_debug_panel")
 			if debug_panel:
@@ -778,6 +803,30 @@ func _update_debug_camera_position():
 	if not _debug_camera or not _scroll_container:
 		return
 	_debug_camera.position = _scroll_container.position + _scroll_container.size / 2.0
+
+func _setup_debug_flow_panel():
+	if _debug_flow_panel:
+		return
+	
+	_debug_flow_panel = Panel.new()
+	_debug_flow_panel.name = "_debug_flow_panel"
+	_debug_flow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_debug_flow_panel.z_index = -1
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 0.0, 0.0, 0.2)
+	style.border_color = Color(1.0, 0.0, 0.0, 0.8)
+	style.set_border_width_all(2)
+	_debug_flow_panel.add_theme_stylebox_override("panel", style)
+	_margin_container.add_child(_debug_flow_panel)
+	_update_debug_flow_panel_position()
+
+func _update_debug_flow_panel_position():
+	if not _debug_flow_panel or not _flow_container:
+		return
+	var flow_pos = _flow_container.global_position
+	var parent_pos = _margin_container.global_position
+	_debug_flow_panel.position = flow_pos - parent_pos
+	_debug_flow_panel.size = _flow_container.size
 
 func increment_total_count(amount: int = 1) -> int:
 	if amount <= 0:
