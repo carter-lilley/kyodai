@@ -7,10 +7,19 @@ signal item_created(item, index)
 signal batch_progress_changed(progress: float)
 
 @export var card_scene: PackedScene
-@export var grid_columns: int = 5
 @export var buffer_size: int = 75
 @export var preload_distance: int = 25
-@export var debug_mode: bool = false
+@export var debug_mode: bool = true
+@export var vertical: bool = true:
+	set(value):
+		if vertical != value:
+			vertical = value
+			if _flow_container:
+				# FlowContainer.vertical = false means left-to-right flow (rows)
+				# FlowContainer.vertical = true means top-to-bottom flow (columns)
+				_flow_container.vertical = not vertical
+			_recalculate_layout()
+			_refresh_buffer()
 
 const BASE_CARD_WIDTH: float = 202.0
 const BASE_CARD_HEIGHT: float = 270.0
@@ -24,10 +33,11 @@ var zoom: float = 1.0:
 			_on_zoom_changed()
 
 var item_height: float = 280.0
+var item_width: float = 212.0
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
-var _grid_container: GridContainer
+var _flow_container: FlowContainer
 var _debug_camera: Camera2D
 
 var _total_items: int = 0
@@ -54,43 +64,34 @@ func _ready():
 	resized.connect(_on_resized)
 
 func _on_resized():
-	_recalculate_columns()
+	_recalculate_layout()
 
-func _recalculate_columns():
-	if not _grid_container:
+func _recalculate_layout():
+	if not _flow_container or not _scroll_container:
 		return
 	
 	var base_dims = _get_base_dimensions()
-	var card_width = base_dims.x * zoom
-	var available_width = size.x
-	var new_columns = max(1, int(available_width / (card_width + GRID_SEPARATION)))
+	item_width = (base_dims.x * zoom) + GRID_SEPARATION
+	item_height = (base_dims.y * zoom) + GRID_SEPARATION
 	
-	if new_columns != grid_columns:
-		grid_columns = new_columns
-		_grid_container.columns = grid_columns
-		_update_layout()
-		_update_top_margin()
-		_on_scroll_value_changed(_scroll_container.scroll_vertical if _scroll_container else 0.0)
-	
-	_center_grid()
+	_update_layout()
+	_update_margin()
+	if _scroll_container:
+		if vertical:
+			_on_scroll_value_changed(_scroll_container.scroll_vertical)
+		else:
+			_on_scroll_value_changed(_scroll_container.scroll_horizontal)
 
-func _center_grid():
-	if not _grid_container or not _scroll_container or not _margin_container:
-		return
+func _get_items_per_line() -> int:
+	if not _scroll_container:
+		return 1
 	
-	var base_dims = _get_base_dimensions()
-	var card_width = base_dims.x * zoom
-	var total_grid_width = (grid_columns * card_width) + ((grid_columns - 1) * GRID_SEPARATION)
-	var available_width = _scroll_container.size.x
-	var extra_space = available_width - total_grid_width
-	
-	if extra_space > 0:
-		var left_margin = int(extra_space / 2.0)
-		_margin_container.add_theme_constant_override("margin_left", left_margin)
-		_margin_container.add_theme_constant_override("margin_right", left_margin)
+	var result: int
+	if vertical:
+		result = max(1, int(size.x / item_width))
 	else:
-		_margin_container.add_theme_constant_override("margin_left", 0)
-		_margin_container.add_theme_constant_override("margin_right", 0)
+		result = max(1, int(size.y / item_height))
+	return result
 
 func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -108,14 +109,25 @@ func _setup_ui():
 	
 	_margin_container = MarginContainer.new()
 	_margin_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_margin_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.add_child(_margin_container)
 	
-	_grid_container = GridContainer.new()
-	_grid_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_grid_container.add_theme_constant_override("h_separation", GRID_SEPARATION)
-	_grid_container.add_theme_constant_override("v_separation", GRID_SEPARATION)
-	_grid_container.columns = grid_columns
-	_margin_container.add_child(_grid_container)
+	_flow_container = FlowContainer.new()
+	# FlowContainer.vertical = false means left-to-right flow (rows) - for vertical scrolling
+	# FlowContainer.vertical = true means top-to-bottom flow (columns) - for horizontal scrolling
+	_flow_container.vertical = not vertical
+	# FlowContainer needs to expand in both directions to properly wrap items
+	_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_flow_container.add_theme_constant_override("h_separation", GRID_SEPARATION)
+	_flow_container.add_theme_constant_override("v_separation", GRID_SEPARATION)
+	_margin_container.add_child(_flow_container)
+	
+	if debug_mode:
+		_setup_debug_camera()
+		_scroll_container.clip_contents = false
+	else:
+		_scroll_container.clip_contents = true
 	
 	_recalculate_dimensions()
 
@@ -136,43 +148,45 @@ func _get_base_dimensions() -> Vector2:
 
 func _recalculate_dimensions():
 	var base_dims = _get_base_dimensions()
+	item_width = (base_dims.x * zoom) + GRID_SEPARATION
 	item_height = (base_dims.y * zoom) + GRID_SEPARATION
 
 func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change)."""
 	_recalculate_dimensions()
-	_recalculate_columns()
-	_update_layout()
+	_recalculate_layout()
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(zoom)
 	
-	_update_top_margin()
+	_update_margin()
 
 func _on_zoom_changed():
 	_recalculate_dimensions()
-	_recalculate_columns()
-	_update_layout()
+	_recalculate_layout()
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(zoom)
 	
-	_update_top_margin()
+	_update_margin()
 
-func setup(card_scene_resource: PackedScene, total_items: int, columns: int = 5):
+func setup(card_scene_resource: PackedScene, total_items: int):
 	_card_scene = card_scene_resource
 	_total_items = total_items
 	
 	_instantiate_card_pool()
-	_initial_load()
 	
+	# Wait for container sizing before initial load
 	await get_tree().process_frame
-	_recalculate_columns()
-	
-	if debug_mode:
-		_setup_debug_camera()
+	await get_tree().process_frame
+	_recalculate_layout()
+	# Only run initial load if it hasn't already been triggered (e.g., by set_total_count)
+	if _active_cards.size() == 0:
+		_initial_load()
+	else:
+		print("[VScrollGrid] setup skipped _initial_load, cards already exist: %d" % _active_cards.size())
 
 func _instantiate_card_pool():
 	if not _card_scene:
@@ -200,28 +214,48 @@ func set_total_count(count: int, preserve_cache: bool = false):
 		_refresh_buffer()
 
 func _update_layout():
-	var rows = ceili(float(_total_items) / grid_columns) if grid_columns > 0 else 0
-	var total_height = rows * item_height
-	_grid_container.custom_minimum_size.y = total_height
+	var items_per_line = _get_items_per_line()
+	var lines = ceili(float(_total_items) / items_per_line) if items_per_line > 0 else 0
+	if vertical:
+		var total_height = lines * item_height
+		_flow_container.custom_minimum_size.y = total_height
+	else:
+		var total_width = lines * item_width
+		_flow_container.custom_minimum_size.x = total_width
 
 func _initial_load():
-	var viewport_height = _scroll_container.size.y if _scroll_container else 600
-	var visible_rows = ceili(viewport_height / item_height)
-	var visible_count = visible_rows * grid_columns
-	var initial_buffer = min(buffer_size, visible_count + grid_columns * 2)
+	print("[VScrollGrid] _initial_load CALLED - active_cards=%d" % _active_cards.size())
+	print("[VScrollGrid] _initial_load - vertical: %s, flow_container.vertical: %s" % [vertical, _flow_container.vertical if _flow_container else "null"])
+	print("[VScrollGrid] _initial_load - viewport size: %s, flow_container size: %s" % [size, _flow_container.size if _flow_container else "null"])
+	var items_per_line = _get_items_per_line()
+	print("[VScrollGrid] _initial_load - items_per_line: %d" % items_per_line)
+	var visible_count: int
+	if vertical:
+		var viewport_height = size.y
+		var visible_rows = ceili(viewport_height / item_height)
+		visible_count = visible_rows * items_per_line
+	else:
+		var viewport_width = size.x
+		var visible_cols = ceili(viewport_width / item_width)
+		visible_count = visible_cols * items_per_line
+	
+	var initial_buffer = min(buffer_size, visible_count + items_per_line * 2)
+	print("[VScrollGrid] _initial_load - visible_count: %d, initial_buffer: %d, total_items: %d" % [visible_count, initial_buffer, _total_items])
 	
 	_virtual_start = 0
 	_virtual_end = min(initial_buffer, _total_items) - 1
+	print("[VScrollGrid] _initial_load - creating cards %d to %d" % [_virtual_start, _virtual_end])
 	
 	for i in range(_virtual_end + 1):
 		var card = _acquire_card()
 		if card:
 			card.set_meta("virtual_index", i)
 			_active_cards.append(card)
-			_grid_container.add_child(card)
+			_flow_container.add_child(card)
 			item_created.emit(card, i)
 	
-	_update_top_margin()
+	print("[VScrollGrid] _initial_load - created %d cards, requesting data 0 to %d" % [_active_cards.size(), _virtual_end])
+	_update_margin()
 	_request_data(0, _virtual_end + 1)
 
 func _on_scroll_value_changed(value: float):
@@ -229,15 +263,29 @@ func _on_scroll_value_changed(value: float):
 		return
 	
 	var scroll_pos = int(value)
-	var viewport_height = _scroll_container.size.y
+	var items_per_line = _get_items_per_line()
 	
-	var top_row = int(scroll_pos / item_height)
-	var visible_rows = ceili(viewport_height / item_height)
-	var visible_start_idx = top_row * grid_columns
-	var visible_end_idx = min(visible_start_idx + (visible_rows + 1) * grid_columns, _total_items - 1)
+	var visible_start_idx: int
+	var visible_end_idx: int
+	var target_start: int
+	var target_end: int
 	
-	var target_start = max(0, visible_start_idx - grid_columns * 2)
-	var target_end = min(_total_items - 1, visible_end_idx + grid_columns * 2)
+	if vertical:
+		var viewport_height = size.y
+		var top_row = int(scroll_pos / item_height)
+		var visible_rows = ceili(viewport_height / item_height)
+		visible_start_idx = top_row * items_per_line
+		visible_end_idx = min(visible_start_idx + (visible_rows + 1) * items_per_line, _total_items - 1)
+		target_start = max(0, visible_start_idx - items_per_line * 2)
+		target_end = min(_total_items - 1, visible_end_idx + items_per_line * 2)
+	else:
+		var viewport_width = size.x
+		var left_col = int(scroll_pos / item_width)
+		var visible_cols = ceili(viewport_width / item_width)
+		visible_start_idx = left_col * items_per_line
+		visible_end_idx = min(visible_start_idx + (visible_cols + 1) * items_per_line, _total_items - 1)
+		target_start = max(0, visible_start_idx - items_per_line * 2)
+		target_end = min(_total_items - 1, visible_end_idx + items_per_line * 2)
 	
 	var changes_made = false
 	var recycled_top = 0
@@ -259,10 +307,7 @@ func _on_scroll_value_changed(value: float):
 				_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
 				_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 			
-			if _debug_camera:
-				_debug_camera.position = Vector2(0, scroll_pos)
-			
-			_update_top_margin()
+			_update_margin()
 			_check_preload_needed()
 			visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
 			
@@ -313,21 +358,27 @@ func _on_scroll_value_changed(value: float):
 	
 	_request_missing_data()
 	
-	if _debug_camera:
-		_debug_camera.position = Vector2(0, scroll_pos)
-	
-	_update_top_margin()
+	_update_margin()
 	_check_preload_needed()
 	
 	visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
 	
-	var batch_rows = 1
-	var batch_height_pixels = batch_rows * item_height
-	var new_batch_progress = fmod(scroll_pos, batch_height_pixels) / batch_height_pixels
-	
-	if abs(new_batch_progress - batch_progress) > 0.001:
-		batch_progress = clampf(new_batch_progress, 0.0, 1.0)
-		batch_progress_changed.emit(batch_progress)
+	if vertical:
+		var batch_rows = 1
+		var batch_height_pixels = batch_rows * item_height
+		var new_batch_progress = fmod(scroll_pos, batch_height_pixels) / batch_height_pixels
+		
+		if abs(new_batch_progress - batch_progress) > 0.001:
+			batch_progress = clampf(new_batch_progress, 0.0, 1.0)
+			batch_progress_changed.emit(batch_progress)
+	else:
+		var batch_cols = 1
+		var batch_width_pixels = batch_cols * item_width
+		var new_batch_progress = fmod(scroll_pos, batch_width_pixels) / batch_width_pixels
+		
+		if abs(new_batch_progress - batch_progress) > 0.001:
+			batch_progress = clampf(new_batch_progress, 0.0, 1.0)
+			batch_progress_changed.emit(batch_progress)
 	
 	if debug_mode:
 		_update_debug_visuals(visible_start_idx, visible_end_idx)
@@ -355,8 +406,8 @@ func _recycle_card_at_index(index: int):
 		if card.has_method("reset"):
 			card.reset()
 		
-		if card.get_parent() == _grid_container:
-			_grid_container.remove_child(card)
+		if card.get_parent() == _flow_container:
+			_flow_container.remove_child(card)
 		
 		_card_pool.append(card)
 
@@ -367,7 +418,7 @@ func _add_card_at_end(virtual_index: int):
 	
 	card.set_meta("virtual_index", virtual_index)
 	_active_cards.append(card)
-	_grid_container.add_child(card)
+	_flow_container.add_child(card)
 	
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
@@ -389,8 +440,8 @@ func _add_card_at_start(virtual_index: int):
 	
 	card.set_meta("virtual_index", virtual_index)
 	_active_cards.insert(0, card)
-	_grid_container.add_child(card)
-	_grid_container.move_child(card, 0)
+	_flow_container.add_child(card)
+	_flow_container.move_child(card, 0)
 	
 	if _data_cache.has(virtual_index):
 		card.game = _data_cache[virtual_index]
@@ -411,6 +462,10 @@ func _acquire_card() -> Control:
 		if is_instance_valid(card):
 			card.set_meta("pooled", false)
 			card.visible = true
+			# Reset game data when reusing from pool
+			if "game" in card:
+				card.game = null
+			card.queue_redraw()
 			return card
 	
 	if _card_scene:
@@ -428,14 +483,25 @@ func _disconnect_card_signals(card: Control):
 		for conn in card.get_signal_connection_list("download_requested"):
 			card.disconnect("download_requested", conn["callable"])
 
-func _update_top_margin():
-	if _active_cards.size() > 0:
-		var first_idx = _active_cards[0].get_meta("virtual_index", 0)
-		var rows_before = first_idx / grid_columns
-		var margin_height = rows_before * item_height
+func _update_margin():
+	if _active_cards.size() == 0:
+		if vertical:
+			_margin_container.add_theme_constant_override("margin_top", 0)
+		else:
+			_margin_container.add_theme_constant_override("margin_left", 0)
+		return
+	
+	var first_idx = _active_cards[0].get_meta("virtual_index", 0)
+	var items_per_line = _get_items_per_line()
+	
+	if vertical:
+		var lines_before = first_idx / items_per_line
+		var margin_height = lines_before * item_height
 		_margin_container.add_theme_constant_override("margin_top", int(margin_height))
 	else:
-		_margin_container.add_theme_constant_override("margin_top", 0)
+		var lines_before = first_idx / items_per_line
+		var margin_width = lines_before * item_width
+		_margin_container.add_theme_constant_override("margin_left", int(margin_width))
 
 func _request_missing_data():
 	if _is_loading or _active_cards.size() == 0:
@@ -500,11 +566,12 @@ func _request_data(offset: int, limit: int):
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
-	print("[VScrollGrid] Items loaded: %d items at offset %d" % [items.size(), offset])
+	print("[VScrollGrid] Items loaded: %d items at offset %d (active_cards: %d)" % [items.size(), offset, _active_cards.size()])
 	_is_loading = false
 	_pending_loads.erase(offset)
 	
 	if items.is_empty():
+		print("[VScrollGrid] WARNING: Empty items array received")
 		return
 	
 	for i in range(items.size()):
@@ -516,6 +583,7 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 		_data_cache[cache_key] = items[i]
 		_update_cache_access_order(cache_key)
 	
+	var updated_count = 0
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx >= offset and idx < offset + items.size():
@@ -527,6 +595,10 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 					card.set_placeholder(false)
 				if card.has_method("update_display"):
 					card.update_display()
+				updated_count += 1
+				print("[VScrollGrid] Updated card at index %d with game '%s'" % [idx, items[data_idx].title if items[data_idx] else "null"])
+	
+	print("[VScrollGrid] Updated %d cards with loaded data" % updated_count)
 
 func _refresh_buffer():
 	while _active_cards.size() > 0:
@@ -546,9 +618,10 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 	var visible_count = visible_end - visible_start + 1
 	var target_buffer_size = min(buffer_size, _total_items)
 	
+	var items_per_line = _get_items_per_line()
 	var new_start = visible_start - (target_buffer_size - visible_count) / 2
 	new_start = max(0, min(new_start, _total_items - target_buffer_size))
-	new_start = (new_start / grid_columns) * grid_columns
+	new_start = (new_start / items_per_line) * items_per_line
 	
 	var new_end = min(new_start + target_buffer_size - 1, _total_items - 1)
 	
@@ -562,7 +635,7 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 	
 	_virtual_start = new_start
 	_virtual_end = new_end
-	_update_top_margin()
+	_update_margin()
 	
 	_request_data(new_start, new_end - new_start + 1)
 
@@ -570,19 +643,36 @@ func get_target_scroll() -> float:
 	return _scroll_container.get_target_scroll() if _scroll_container else 0.0
 
 func get_visible_range() -> Dictionary:
-	var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
-	var viewport_height = _scroll_container.size.y if _scroll_container else 600
-	var visible_rows = ceili(viewport_height / item_height) + 1
-	var visible_start = int(scroll_pos / item_height) * grid_columns
-	var visible_end = min(visible_start + (visible_rows * grid_columns), _total_items)
+	var items_per_line = _get_items_per_line()
 	
-	return {
-		"start": visible_start,
-		"end": visible_end,
-		"total": _total_items,
-		"buffer_start": _virtual_start,
-		"buffer_size": _active_cards.size()
-	}
+	if vertical:
+		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+		var viewport_height = size.y
+		var visible_rows = ceili(viewport_height / item_height) + 1
+		var visible_start = int(scroll_pos / item_height) * items_per_line
+		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
+		
+		return {
+			"start": visible_start,
+			"end": visible_end,
+			"total": _total_items,
+			"buffer_start": _virtual_start,
+			"buffer_size": _active_cards.size()
+		}
+	else:
+		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
+		var viewport_width = size.x
+		var visible_cols = ceili(viewport_width / item_width) + 1
+		var visible_start = int(scroll_pos / item_width) * items_per_line
+		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
+		
+		return {
+			"start": visible_start,
+			"end": visible_end,
+			"total": _total_items,
+			"buffer_start": _virtual_start,
+			"buffer_size": _active_cards.size()
+		}
 
 func get_card_at_index(index: int) -> Control:
 	for card in _active_cards:
@@ -592,26 +682,16 @@ func get_card_at_index(index: int) -> Control:
 
 func scroll_to_index(index: int, animate: bool = false):
 	if _scroll_container:
-		var row = index / grid_columns
-		var target_y = row * item_height
-		_scroll_container.scroll_to(target_y, animate)
-
-func _setup_debug_camera():
-	if _debug_camera:
-		return
-	
-	print("[VScrollGrid] Setting up debug camera")
-	
-	_scroll_container.clip_contents = false
-	
-	_debug_camera = Camera2D.new()
-	_debug_camera.name = "_debug_camera"
-	_debug_camera.anchor_mode = Camera2D.ANCHOR_MODE_FIXED_TOP_LEFT
-	_debug_camera.zoom = Vector2(0.4, 0.4)
-	_grid_container.add_child(_debug_camera)
-	_debug_camera.make_current()
-	
-	print("[VScrollGrid] Debug camera active - zoom: 0.4x")
+		var items_per_line = _get_items_per_line()
+		if vertical:
+			var line = index / items_per_line
+			var target_y = line * item_height
+			_scroll_container.scroll_to(target_y, animate)
+		else:
+			var line = index / items_per_line
+			var target_x = line * item_width
+			# SmoothScrollContainer might need scroll_to support for horizontal
+			_scroll_container.scroll_to(target_x, animate)
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 	for card in _active_cards:
@@ -662,18 +742,42 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 func toggle_debug_mode():
 	debug_mode = not debug_mode
 	
+	print("[VScrollGrid] Toggle debug mode: %s, scroll_pos=%d, virtual_start=%d, active_cards=%d" % [debug_mode, _scroll_container.scroll_vertical if _scroll_container else 0, _virtual_start, _active_cards.size()])
+	
 	if debug_mode:
+		_scroll_container.clip_contents = false
 		_setup_debug_camera()
+		# Update debug visuals for all existing cards
+		if _active_cards.size() > 0:
+			var first_idx = _active_cards[0].get_meta("virtual_index", 0)
+			var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
+			_update_debug_visuals(first_idx, last_idx)
+		print("[VScrollGrid] Debug camera position: %s" % _debug_camera.position)
+		print("[VScrollGrid] First card position: %s" % (_active_cards[0].global_position if _active_cards.size() > 0 else "N/A"))
 	else:
+		_scroll_container.clip_contents = true
 		if _debug_camera:
 			_debug_camera.queue_free()
 			_debug_camera = null
-		_scroll_container.clip_contents = true
-		
 		for card in _active_cards:
 			var debug_panel = card.get_node_or_null("_debug_panel")
 			if debug_panel:
 				debug_panel.queue_free()
+
+func _setup_debug_camera():
+	if _debug_camera:
+		return
+	
+	_debug_camera = Camera2D.new()
+	_debug_camera.zoom = Vector2(0.5, 0.5)
+	_debug_camera.enabled = true
+	add_child(_debug_camera)
+	_update_debug_camera_position()
+
+func _update_debug_camera_position():
+	if not _debug_camera or not _scroll_container:
+		return
+	_debug_camera.position = _scroll_container.position + _scroll_container.size / 2.0
 
 func increment_total_count(amount: int = 1) -> int:
 	if amount <= 0:
@@ -689,21 +793,41 @@ func increment_total_count(amount: int = 1) -> int:
 		_initial_load_from_increment()
 		return start_index
 	
-	var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
-	var viewport_height = _scroll_container.size.y if _scroll_container else 600
-	var visible_rows = ceili(viewport_height / item_height) + 1
-	var visible_start = int(scroll_pos / item_height) * grid_columns
-	var visible_end = min(visible_start + (visible_rows * grid_columns), _total_items)
+	var items_per_line = _get_items_per_line()
 	
-	visible_range_changed.emit(visible_start, visible_end, _total_items)
+	if vertical:
+		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+		var viewport_height = size.y
+		var visible_rows = ceili(viewport_height / item_height) + 1
+		var visible_start = int(scroll_pos / item_height) * items_per_line
+		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
+		
+		visible_range_changed.emit(visible_start, visible_end, _total_items)
+	else:
+		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
+		var viewport_width = size.x
+		var visible_cols = ceili(viewport_width / item_width) + 1
+		var visible_start = int(scroll_pos / item_width) * items_per_line
+		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
+		
+		visible_range_changed.emit(visible_start, visible_end, _total_items)
 	
 	return start_index
 
 func _initial_load_from_increment():
-	var viewport_height = _scroll_container.size.y if _scroll_container else 600
-	var visible_rows = ceili(viewport_height / item_height)
-	var visible_count = visible_rows * grid_columns
-	var initial_buffer = min(buffer_size, visible_count + grid_columns * 2)
+	var items_per_line = _get_items_per_line()
+	var visible_count: int
+	
+	if vertical:
+		var viewport_height = size.y if size.y > 0 else 600
+		var visible_rows = ceili(viewport_height / item_height)
+		visible_count = visible_rows * items_per_line
+	else:
+		var viewport_width = size.x if size.x > 0 else 800
+		var visible_cols = ceili(viewport_width / item_width)
+		visible_count = visible_cols * items_per_line
+	
+	var initial_buffer = min(buffer_size, visible_count + items_per_line * 2)
 	
 	_virtual_start = 0
 	_virtual_end = min(initial_buffer, _total_items) - 1
@@ -715,7 +839,7 @@ func _initial_load_from_increment():
 		if card:
 			card.set_meta("virtual_index", i)
 			_active_cards.append(card)
-			_grid_container.add_child(card)
+			_flow_container.add_child(card)
 			
 			if _data_cache.has(i):
 				card.game = _data_cache[i]
@@ -728,7 +852,7 @@ func _initial_load_from_increment():
 			
 			item_created.emit(card, i)
 	
-	_update_top_margin()
+	_update_margin()
 
 func cache_items_at_offset(items: Array[GameResource], offset: int):
 	for i in range(items.size()):

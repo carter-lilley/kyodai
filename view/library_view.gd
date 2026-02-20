@@ -11,7 +11,7 @@ var _is_loading: bool = false
 func _ready():
 	# Setup VirtualScrollGridContainer
 	var card_scene = preload("res://components/game_card.tscn")
-	games_grid.setup(card_scene, 0, 5)
+	games_grid.setup(card_scene, 0)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
