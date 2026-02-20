@@ -9,8 +9,11 @@ signal scroll_value_changed(value: float)
 @export var smooth_scroll_big_jump_multiplier: float = 3.0
 @export var vertical: bool = true:
 	set(value):
-		vertical = value
-		_target_scroll = 0.0
+		if vertical != value:
+			vertical = value
+			_target_scroll = 0.0
+			if is_inside_tree():
+				_reconnect_scrollbars()
 
 var _target_scroll: float = 0.0
 var _scroll_tween: Tween
@@ -52,6 +55,22 @@ func _connect_scrollbar_input():
 		var h_scrollbar = get_h_scroll_bar()
 		if h_scrollbar:
 			h_scrollbar.gui_input.connect(_on_scrollbar_input)
+
+func _disconnect_scrollbar_signals(scrollbar: ScrollBar):
+	if scrollbar and scrollbar.value_changed.is_connected(_on_internal_scroll_changed):
+		scrollbar.value_changed.disconnect(_on_internal_scroll_changed)
+	if scrollbar and scrollbar.gui_input.is_connected(_on_scrollbar_input):
+		scrollbar.gui_input.disconnect(_on_scrollbar_input)
+
+func _reconnect_scrollbars():
+	var v_scrollbar = get_v_scroll_bar()
+	var h_scrollbar = get_h_scroll_bar()
+	
+	_disconnect_scrollbar_signals(v_scrollbar)
+	_disconnect_scrollbar_signals(h_scrollbar)
+	
+	_connect_scrollbar()
+	_connect_scrollbar_input()
 
 func _input(event: InputEvent):
 	if not smooth_scrolling:
