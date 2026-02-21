@@ -1349,6 +1349,17 @@ func get_cache_size() -> int:
 			file_name = dir.get_next()
 	return total_size
 
+func get_random_game() -> GameResource:
+	"""Get a random game from the database."""
+	if not _is_db_ready:
+		return null
+	
+	# Get a random game that has a cover and is a master entry
+	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY RANDOM() LIMIT 1")
+	if _db.query_result.size() > 0:
+		return _row_to_game(_db.query_result[0])
+	return null
+
 func get_random_cached_cover_path() -> String:
 	"""Get a random cover image from the cache folder."""
 	var dir = DirAccess.open(CACHE_FOLDER)

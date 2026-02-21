@@ -1,5 +1,6 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 970.1 363.1">
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(0.000000, 160.181425) scale(0.527781)">
+
   <defs>
     <style>
       .cls-1 {
@@ -18,5 +19,7 @@
         <path id="path5553-8-2" data-name="path5553-8" class="cls-1" d="M536.2,54l129.7,56.7L970.1,0h-286.3l-147.6,54Z"/>
       </g>
     </g>
+  </g>
+
   </g>
 </svg>

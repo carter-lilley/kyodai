@@ -1,6 +1,9 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1192.8 656.6">
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(0.000000, 115.079812) scale(0.429242)">
+
   <g id="Layer_1-2" data-name="Layer 1">
     <polygon points="1126.1 294.6 0 294.6 0 656.6 66.8 656.6 66.8 361.1 1192.8 361.1 1192.8 0 0 0 0 66.9 1126.1 66.9 1126.1 294.6"/>
+  </g>
+
   </g>
 </svg>

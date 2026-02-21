@@ -1,7 +1,10 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 605.4 605.4">
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(0.000000, 0.000000) scale(0.845722)">
+
   <g id="Layer_1-2" data-name="Layer 1">
     <rect x="273" y="320.1" width="193.4" height="82.9"/>
     <path d="M302.7,0C135.5,0,0,135.5,0,302.7s135.5,302.7,302.7,302.7,302.7-135.5,302.7-302.7S469.9,0,302.7,0ZM205.8,437.6h-101.4v-34.6h32.4v-200.5h-32.4v-34.6h69.1v235.1h32.4v34.6h-.1ZM501,234.9h-34.6v-32.4h-193.4v82.9h202.1l25.9,25.9v100.4l-25.9,25.9h-210.8l-25.9-25.9v-91.7h0v-34.6h0v-91.7l25.9-25.9h210.8l25.9,25.9v41.2Z"/>
+  </g>
+
   </g>
 </svg>

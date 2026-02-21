@@ -5,10 +5,13 @@ how to split important siblings
 ## UI
 	unify views (all views are fullpage screens - invisible tabs?)
 	controller nav
-	horizontal scroll. flex grid?
 	sort by plaform, recent, search
 	auto-view already downloaded games 
 	filters > recent, downloaded, etc.
+	sobel cropping
+	namecard type icons
+	layer system strokes/shadows/fades
+	sane defaults
 ## performance:
 	card image retries & priority management.
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start

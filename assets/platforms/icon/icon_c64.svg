@@ -1,10 +1,13 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 566.3 531.6">
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(0.000000, 15.686385) scale(0.904114)">
+
   <g id="Layer_1-2" data-name="Layer 1">
     <path d="M334.5,388.8c-20.4,11.4-43.8,18-68.8,18-77.7,0-141-63.2-141-141s63.2-141,141-141c25,0,48.4,6.5,68.8,18V9c-21.9-5.9-45-9-68.8-9C119,0,0,119,0,265.8s119,265.8,265.8,265.8c23.8,0,46.8-3.2,68.8-9l-.1-133.8h0Z"/>
     <rect x="334.5" y="149.8" width="111.5" height="106.4"/>
     <polygon points="566.3 149.8 459.9 256.1 410.9 256.1 410.9 149.8 566.3 149.8"/>
     <rect x="334.5" y="275.5" width="111.5" height="106.4"/>
     <polygon points="566.3 381.8 459.9 275.5 410.9 275.5 410.9 381.8 566.3 381.8"/>
+  </g>
+
   </g>
 </svg>

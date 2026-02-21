@@ -13,6 +13,7 @@ signal download_requested(game: GameResource)
 @onready var card_input: Button = $CardInput
 @onready var status_icon: TextureRect = $CardInput/StatusBadge/StatusIcon
 @onready var status_badge: Panel = $CardInput/StatusBadge
+@onready var platform_icon: TextureRect = $CardInput/PlatformIcon
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
 var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
@@ -70,17 +71,12 @@ func _setup_preview_mode():
 	set_card_zoom(_current_zoom)
 	_update_shader_params()
 	
-	# Load a random image from cache for the preview
+	# Load a random game for the preview
 	if DataManager:
-		var random_cover = DataManager.get_random_cached_cover_path()
-		if random_cover != "" and FileAccess.file_exists(random_cover):
-			var image = Image.new()
-			var err = image.load(random_cover)
-			if err == OK:
-				var texture = ImageTexture.create_from_image(image)
-				_set_texture(texture)
-			else:
-				_set_texture(_loading_texture)
+		var random_game = DataManager.get_random_game()
+		if random_game:
+			self.game = random_game
+			_load_cover()
 		else:
 			_set_texture(_loading_texture)
 	else:
@@ -88,6 +84,9 @@ func _setup_preview_mode():
 	
 	if status_badge:
 		status_badge.visible = false
+	
+	# Note: _update_platform_badge() will be called automatically via the game setter
+	# which handles checking the platform_badge setting and loading the correct icon
 	
 	if card_input:
 		card_input.disabled = true
@@ -101,6 +100,7 @@ func _update_display():
 		return
 	
 	_update_status_icon()
+	_update_platform_badge()
 	_load_cover()
 
 func _update_status_icon():
@@ -125,6 +125,35 @@ func _update_status_icon():
 		status_icon.visible = true
 		status_icon.modulate = Color(1, 1, 1, 0.8)
 		status_badge.visible = true
+
+func _update_platform_badge():
+	if not game:
+		_update_shader_platform_params(null)
+		_update_platform_icon_rect(null)
+		return
+	
+	# Check if platform badge is enabled
+	var show_badge = false
+	if SettingsManager:
+		var badge_setting = SettingsManager.get_setting("platform_badge")
+		if badge_setting:
+			show_badge = badge_setting.value
+	
+	if not show_badge:
+		_update_shader_platform_params(null)
+		_update_platform_icon_rect(null)
+		return
+	
+	# Load platform icon and pass to shader
+	var platform_slug = game.platform_slug
+	var icon_texture: Texture2D = null
+	if platform_slug:
+		var icon_path = "res://assets/platforms/icon/icon_%s.svg" % platform_slug
+		if FileAccess.file_exists(icon_path):
+			icon_texture = load(icon_path)
+	
+	_update_shader_platform_params(icon_texture)
+	_update_platform_icon_rect(icon_texture)
 
 func _load_cover():
 	if not game:
@@ -268,6 +297,10 @@ func set_placeholder(is_placeholder: bool):
 			status_icon.visible = false
 		if status_badge:
 			status_badge.visible = false
+		# Disable platform badge in shader for placeholders
+		var mat = material as ShaderMaterial
+		if mat:
+			mat.set_shader_parameter("platform_badge_enabled", false)
 	else:
 		_update_display()
 
@@ -312,6 +345,7 @@ func set_card_zoom(new_zoom: float) -> void:
 		status_icon.offset_bottom = icon_size
 	
 	_update_shader_params()
+	_update_platform_badge()  # Reload platform icon with new zoom scale
 
 func get_current_zoom() -> float:
 	return _current_zoom
@@ -335,20 +369,16 @@ func _update_shader_params() -> void:
 		var border_enabled_setting = SettingsManager.get_setting("border_enabled")
 		var border_size_setting = SettingsManager.get_setting("border_size")
 		var border_fade_in_setting = SettingsManager.get_setting("border_fade_in")
-		var border_fade_out_setting = SettingsManager.get_setting("border_fade_out")
 		var border_color_setting = SettingsManager.get_setting("border_color")
 		
 		corner_val = corner_setting.value if corner_setting else 12
 		enabled_val = border_enabled_setting.value if border_enabled_setting else false
 		size_val = border_size_setting.value if border_size_setting else 0.05
 		var fade_in_val = border_fade_in_setting.value if border_fade_in_setting else 0.0
-		var fade_out_val = border_fade_out_setting.value if border_fade_out_setting else 0.0
 		color_val = border_color_setting.value if border_color_setting else Color.WHITE
 		
 		var fade_in_pixels = fade_in_val * base_width * 2.0 * _current_zoom
-		var fade_out_pixels = fade_out_val * base_width * 2.0 * _current_zoom
 		mat.set_shader_parameter("border_fade_in_pixels", fade_in_pixels)
-		mat.set_shader_parameter("border_fade_out_pixels", fade_out_pixels)
 	
 	# Corner radius scales with zoom for consistent visual
 	var corner_pixels = corner_val * _current_zoom
@@ -366,6 +396,131 @@ func _update_shader_params() -> void:
 	mat.set_shader_parameter("border_enabled", enabled_val)
 	mat.set_shader_parameter("border_color", color_val)
 	mat.set_shader_parameter("game_texture", _current_texture)
+
+func _update_shader_platform_params(icon_texture: Texture2D) -> void:
+	var mat = material as ShaderMaterial
+	if not mat:
+		return
+	
+	var show_badge = false
+	if SettingsManager:
+		var badge_setting = SettingsManager.get_setting("platform_badge")
+		if badge_setting:
+			show_badge = badge_setting.value
+	
+	# Show badge if setting is enabled (icon is optional for now)
+	mat.set_shader_parameter("platform_badge_enabled", show_badge)
+	if icon_texture:
+		mat.set_shader_parameter("platform_badge_icon", icon_texture)
+	
+	# Set badge size scale - multiply by zoom to keep proportional to card
+	var badge_size = 1.0
+	if SettingsManager:
+		var badge_size_setting = SettingsManager.get_setting("platform_badge_size")
+		if badge_size_setting:
+			badge_size = badge_size_setting.value
+	# Scale badge size with card zoom to maintain proportions
+	mat.set_shader_parameter("platform_badge_size", badge_size * _current_zoom)
+	
+	# Set inner corner radius
+	var inner_radius = 0.0
+	if SettingsManager:
+		var inner_radius_setting = SettingsManager.get_setting("platform_badge_inner_radius")
+		if inner_radius_setting:
+			inner_radius = inner_radius_setting.value
+	mat.set_shader_parameter("platform_badge_inner_radius", inner_radius)
+	
+	# Set icon padding
+	var icon_padding = 0.5
+	if SettingsManager:
+		var icon_padding_setting = SettingsManager.get_setting("platform_badge_icon_padding")
+		if icon_padding_setting:
+			icon_padding = icon_padding_setting.value
+	mat.set_shader_parameter("platform_badge_icon_padding", icon_padding)
+	
+	# Set icon color
+	var icon_color = Color.WHITE
+	if SettingsManager:
+		var icon_color_setting = SettingsManager.get_setting("platform_badge_icon_color")
+		if icon_color_setting:
+			icon_color = icon_color_setting.value
+	# Icon is now rendered via TextureRect, no need to pass to shader
+
+func _update_platform_icon_rect(icon_texture: Texture2D) -> void:
+	if not platform_icon:
+		return
+	
+	if not icon_texture:
+		platform_icon.visible = false
+		return
+	
+	# Get all the values we need (same as shader)
+	var badge_size_setting = 1.0
+	var icon_padding_setting = 0.5
+	var inner_radius_setting = 0.0
+	var corner_radius = 12
+	var icon_color = Color.WHITE
+	
+	if SettingsManager:
+		var badge_size_var = SettingsManager.get_setting("platform_badge_size")
+		if badge_size_var:
+			badge_size_setting = badge_size_var.value
+		
+		var icon_padding_var = SettingsManager.get_setting("platform_badge_icon_padding")
+		if icon_padding_var:
+			icon_padding_setting = icon_padding_var.value
+		
+		var inner_radius_var = SettingsManager.get_setting("platform_badge_inner_radius")
+		if inner_radius_var:
+			inner_radius_setting = inner_radius_var.value
+		
+		var corner_var = SettingsManager.get_setting("corner_radius")
+		if corner_var:
+			corner_radius = corner_var.value
+		
+		var icon_color_setting = SettingsManager.get_setting("platform_badge_icon_color")
+		if icon_color_setting:
+			icon_color = icon_color_setting.value
+	
+	# Calculate badge size (same formula as shader)
+	var base_badge_size = 32.0 * badge_size_setting * _current_zoom
+	var badge_size = max(base_badge_size, corner_radius * _current_zoom)
+	
+	# Calculate padding (same formula as shader)
+	var base_padding = 8.0 * badge_size_setting * _current_zoom * icon_padding_setting
+	var outer_padding = corner_radius * _current_zoom * 0.3 * icon_padding_setting
+	var total_padding = base_padding + outer_padding
+	
+	# Calculate available size for icon
+	var available_size = badge_size - total_padding * 2.0
+	available_size = max(available_size, badge_size * 0.4)
+	
+	# Calculate max inner radius
+	var max_inner_radius = max(0.0, badge_size)
+	var inner_radius = max_inner_radius * clamp(inner_radius_setting, 0.0, 1.0)
+	
+	# Calculate shifts (same formula as shader)
+	var outer_shift = corner_radius * _current_zoom * 0.15
+	var inner_shift = inner_radius * 0.15
+	
+	# Calculate position
+	var padding_left = total_padding + outer_shift - inner_shift
+	var padding_top = total_padding + outer_shift - inner_shift
+	
+	# Position and size the TextureRect
+	platform_icon.visible = true
+	platform_icon.texture = icon_texture
+	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	platform_icon.offset_left = padding_left
+	platform_icon.offset_top = padding_top
+	platform_icon.offset_right = padding_left + available_size
+	platform_icon.offset_bottom = padding_top + available_size
+	
+	# Apply icon color using custom shader material
+	var shader_material = ShaderMaterial.new()
+	shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")
+	shader_material.set_shader_parameter("icon_color", icon_color)
+	platform_icon.material = shader_material
 
 func _get_base_dimensions() -> Vector2:
 	if SettingsManager:
@@ -389,8 +544,13 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# Also rebuild the grid layout for non-preview cards
 		if not preview_mode and UIManager:
 			UIManager.rebuild_game_grid()
-	elif setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_fade_out", "border_color"]:
+	elif setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_color"]:
 		_update_shader_params()
+		_update_platform_badge()
+	elif setting.property_name == "platform_badge":
+		_update_platform_badge()
+	elif setting.property_name in ["platform_badge_size", "platform_badge_inner_radius", "platform_badge_icon_padding", "platform_badge_icon_color"]:
+		_update_platform_badge()
 
 func update_display() -> void:
 	_update_display()
