@@ -120,18 +120,19 @@ func _setup_ui():
 	_scroll_container.add_child(_margin_container)
 	
 	_center_container = CenterContainer.new()
-	_center_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_center_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if vertical:
+		_center_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_center_container.size_flags_vertical = Control.SIZE_FILL
+	else:
+		_center_container.size_flags_horizontal = Control.SIZE_FILL
+		_center_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_margin_container.add_child(_center_container)
 	
 	_flow_container = FlowContainer.new()
 	_flow_container.vertical = not vertical
-	if vertical:
-		_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	else:
-		_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	# FlowContainer shrinks to fit its content (active cards only)
+	_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_flow_container.add_theme_constant_override("h_separation", GRID_SEPARATION)
 	_flow_container.add_theme_constant_override("v_separation", GRID_SEPARATION)
 	_center_container.add_child(_flow_container)
@@ -228,19 +229,16 @@ func set_total_count(count: int, preserve_cache: bool = false):
 
 func _update_layout():
 	var items_per_line = _get_items_per_line()
-	var lines = ceili(float(_total_items) / items_per_line) if items_per_line > 0 else 0
 	if vertical:
-		var total_height = lines * item_height
 		var card_width = item_width - GRID_SEPARATION
 		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * GRID_SEPARATION
-		_flow_container.custom_minimum_size.y = total_height
 		_flow_container.custom_minimum_size.x = row_width
+		# Height will be set in _update_margin based on active cards
 	else:
-		var total_width = lines * item_width
 		var card_height = item_height - GRID_SEPARATION
 		var col_height = items_per_line * card_height + max(0, items_per_line - 1) * GRID_SEPARATION
-		_flow_container.custom_minimum_size.x = total_width
 		_flow_container.custom_minimum_size.y = col_height
+		# Width will be set in _update_margin based on active cards
 
 func _initial_load():
 	print("[VScrollGrid] _initial_load CALLED - active_cards=%d" % _active_cards.size())
@@ -506,21 +504,57 @@ func _update_margin():
 	if _active_cards.size() == 0:
 		if vertical:
 			_margin_container.add_theme_constant_override("margin_top", 0)
+			_margin_container.add_theme_constant_override("margin_bottom", 0)
+			_flow_container.custom_minimum_size.y = 0
 		else:
 			_margin_container.add_theme_constant_override("margin_left", 0)
+			_margin_container.add_theme_constant_override("margin_right", 0)
+			_flow_container.custom_minimum_size.x = 0
 		return
 	
 	var first_idx = _active_cards[0].get_meta("virtual_index", 0)
+	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	var items_per_line = _get_items_per_line()
 	
 	if vertical:
+		var card_height = item_height - GRID_SEPARATION
+		
+		# Calculate virtual space before first card
 		var lines_before = first_idx / items_per_line
-		var margin_height = lines_before * item_height
-		_margin_container.add_theme_constant_override("margin_top", int(margin_height))
+		var margin_top = lines_before * card_height + max(0, lines_before - 1) * GRID_SEPARATION
+		
+		# Calculate space for active cards
+		var active_lines = ceili(float(_active_cards.size()) / items_per_line)
+		var flow_height = active_lines * card_height + max(0, active_lines - 1) * GRID_SEPARATION
+		
+		# Calculate virtual space after last card
+		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
+		var margin_bottom = lines_after * card_height + max(0, lines_after - 1) * GRID_SEPARATION
+		
+		_margin_container.add_theme_constant_override("margin_top", int(margin_top))
+		_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
+		_flow_container.custom_minimum_size.y = flow_height
+		
+		if debug_mode:
+			print("[VScrollGrid] _update_margin: margin_top=%d, flow_height=%d, margin_bottom=%d, total=%d" % [margin_top, flow_height, margin_bottom, margin_top + flow_height + margin_bottom])
 	else:
+		var card_width = item_width - GRID_SEPARATION
+		
+		# Calculate virtual space before first card
 		var lines_before = first_idx / items_per_line
-		var margin_width = lines_before * item_width
-		_margin_container.add_theme_constant_override("margin_left", int(margin_width))
+		var margin_left = lines_before * card_width + max(0, lines_before - 1) * GRID_SEPARATION
+		
+		# Calculate space for active cards
+		var active_lines = ceili(float(_active_cards.size()) / items_per_line)
+		var flow_width = active_lines * card_width + max(0, active_lines - 1) * GRID_SEPARATION
+		
+		# Calculate virtual space after last card
+		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
+		var margin_right = lines_after * card_width + max(0, lines_after - 1) * GRID_SEPARATION
+		
+		_margin_container.add_theme_constant_override("margin_left", int(margin_left))
+		_margin_container.add_theme_constant_override("margin_right", int(margin_right))
+		_flow_container.custom_minimum_size.x = flow_width
 
 func _request_missing_data():
 	if _is_loading or _active_cards.size() == 0:
@@ -627,6 +661,10 @@ func _refresh_buffer():
 	_cache_access_order.clear()
 	_pending_loads.clear()
 	_margin_container.add_theme_constant_override("margin_top", 0)
+	_margin_container.add_theme_constant_override("margin_bottom", 0)
+	_margin_container.add_theme_constant_override("margin_left", 0)
+	_margin_container.add_theme_constant_override("margin_right", 0)
+	_flow_container.custom_minimum_size = Vector2(0, 0)
 	_virtual_start = 0
 	_virtual_end = 0
 	_initial_load()
