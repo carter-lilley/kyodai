@@ -7,8 +7,9 @@ signal item_created(item, index)
 signal batch_progress_changed(progress: float)
 
 @export var card_scene: PackedScene
-@export var buffer_size: int = 75
-@export var preload_distance: int = 25
+@export var data_buffer_size: int = 150
+@export var data_preload_distance: int = 75
+@export var visual_buffer_lines: int = 3
 @export var debug_mode: bool = false:
 	set(value):
 		if debug_mode != value:
@@ -256,7 +257,7 @@ func _initial_load():
 		var visible_cols = ceili(viewport_width / item_width)
 		visible_count = visible_cols * items_per_line
 	
-	var initial_buffer = min(buffer_size, visible_count + items_per_line * 2)
+	var initial_buffer = min(data_buffer_size, visible_count + items_per_line * visual_buffer_lines)
 	print("[VScrollGrid] _initial_load - visible_count: %d, initial_buffer: %d, total_items: %d" % [visible_count, initial_buffer, _total_items])
 	
 	_virtual_start = 0
@@ -293,16 +294,16 @@ func _on_scroll_value_changed(value: float):
 		var visible_rows = ceili(viewport_height / item_height)
 		visible_start_idx = top_row * items_per_line
 		visible_end_idx = min(visible_start_idx + (visible_rows + 1) * items_per_line, _total_items - 1)
-		target_start = max(0, visible_start_idx - items_per_line * 2)
-		target_end = min(_total_items - 1, visible_end_idx + items_per_line * 2)
+		target_start = max(0, visible_start_idx - items_per_line * visual_buffer_lines)
+		target_end = min(_total_items - 1, visible_end_idx + items_per_line * visual_buffer_lines)
 	else:
 		var viewport_width = size.x
 		var left_col = int(scroll_pos / item_width)
 		var visible_cols = ceili(viewport_width / item_width)
 		visible_start_idx = left_col * items_per_line
 		visible_end_idx = min(visible_start_idx + (visible_cols + 1) * items_per_line, _total_items - 1)
-		target_start = max(0, visible_start_idx - items_per_line * 2)
-		target_end = min(_total_items - 1, visible_end_idx + items_per_line * 2)
+		target_start = max(0, visible_start_idx - items_per_line * visual_buffer_lines)
+		target_end = min(_total_items - 1, visible_end_idx + items_per_line * visual_buffer_lines)
 	
 	var changes_made = false
 	var recycled_top = 0
@@ -593,19 +594,19 @@ func _check_preload_needed():
 	
 	if _virtual_end < _total_items - 1:
 		var distance_to_end = _total_items - 1 - _virtual_end
-		if distance_to_end > 0 and distance_to_end <= preload_distance:
+		if distance_to_end > 0 and distance_to_end <= data_preload_distance:
 			var next_batch_start = _virtual_end + 1
 			if not _pending_loads.has(next_batch_start) and not _data_cache.has(next_batch_start):
 				print("[VScrollGrid] Preload forward: offset %d (distance %d)" % [next_batch_start, distance_to_end])
-				_request_data(next_batch_start, min(buffer_size, _total_items - next_batch_start))
+				_request_data(next_batch_start, min(data_buffer_size, _total_items - next_batch_start))
 	
 	if _virtual_start > 0:
 		var distance_to_start = _virtual_start
-		if distance_to_start > 0 and distance_to_start <= preload_distance:
-			var prev_batch_start = max(0, _virtual_start - buffer_size)
+		if distance_to_start > 0 and distance_to_start <= data_preload_distance:
+			var prev_batch_start = max(0, _virtual_start - data_buffer_size)
 			if not _pending_loads.has(prev_batch_start) and not _data_cache.has(prev_batch_start):
 				print("[VScrollGrid] Preload backward: offset %d (distance %d)" % [prev_batch_start, distance_to_start])
-				_request_data(prev_batch_start, min(buffer_size, _virtual_start - prev_batch_start))
+				_request_data(prev_batch_start, min(data_buffer_size, _virtual_start - prev_batch_start))
 
 func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
@@ -673,14 +674,14 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 	print("[VScrollGrid] Reloading buffer around visible range %d-%d" % [visible_start, visible_end])
 	
 	var visible_count = visible_end - visible_start + 1
-	var target_buffer_size = min(buffer_size, _total_items)
+	var target_data_buffer_size = min(data_buffer_size, _total_items)
 	
 	var items_per_line = _get_items_per_line()
-	var new_start = visible_start - (target_buffer_size - visible_count) / 2
-	new_start = max(0, min(new_start, _total_items - target_buffer_size))
+	var new_start = visible_start - (target_data_buffer_size - visible_count) / 2
+	new_start = max(0, min(new_start, _total_items - target_data_buffer_size))
 	new_start = (new_start / items_per_line) * items_per_line
 	
-	var new_end = min(new_start + target_buffer_size - 1, _total_items - 1)
+	var new_end = min(new_start + target_data_buffer_size - 1, _total_items - 1)
 	
 	print("[VScrollGrid] New buffer range: %d-%d" % [new_start, new_end])
 	
@@ -714,7 +715,7 @@ func get_visible_range() -> Dictionary:
 			"end": visible_end,
 			"total": _total_items,
 			"buffer_start": _virtual_start,
-			"buffer_size": _active_cards.size()
+			"data_buffer_size": _active_cards.size()
 		}
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
@@ -728,7 +729,7 @@ func get_visible_range() -> Dictionary:
 			"end": visible_end,
 			"total": _total_items,
 			"buffer_start": _virtual_start,
-			"buffer_size": _active_cards.size()
+			"data_buffer_size": _active_cards.size()
 		}
 
 func get_card_at_index(index: int) -> Control:
@@ -914,7 +915,7 @@ func _initial_load_from_increment():
 		var visible_cols = ceili(viewport_width / item_width)
 		visible_count = visible_cols * items_per_line
 	
-	var initial_buffer = min(buffer_size, visible_count + items_per_line * 2)
+	var initial_buffer = min(data_buffer_size, visible_count + items_per_line * visual_buffer_lines)
 	
 	_virtual_start = 0
 	_virtual_end = min(initial_buffer, _total_items) - 1
