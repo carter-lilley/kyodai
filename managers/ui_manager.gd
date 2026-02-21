@@ -43,6 +43,10 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 	
 	# Setup focus indicator
 	_setup_focus_indicator()
+	
+	# Setup library appearance (background color)
+	_setup_library_appearance()
+	SettingsManager.setting_changed.connect(_on_setting_changed)
 
 func _setup_library_tab():
 	var library_idx = _get_tab_index("Library")
@@ -106,6 +110,23 @@ func _get_tab_index(tab_title: String) -> int:
 		if _tab_container.get_tab_title(i) == tab_title:
 			return i
 	return -1
+
+func _setup_library_appearance() -> void:
+	"""Apply library background color to the main TabContainer."""
+	var bg_color = Color(0.1, 0.1, 0.1, 1.0)  # Default dark gray
+	if SettingsManager:
+		var color_setting = SettingsManager.get_setting("library_background_color")
+		if color_setting:
+			bg_color = color_setting.value
+	
+	# Apply background color to the TabContainer using style override
+	var style = StyleBoxFlat.new()
+	style.bg_color = bg_color
+	_tab_container.add_theme_stylebox_override("panel", style)
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	if setting.property_name == "library_background_color":
+		_setup_library_appearance()
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)

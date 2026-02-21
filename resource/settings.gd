@@ -48,3 +48,7 @@ const Type = SettingsVar.SettingType
 @export var platform_badge_inner_radius := SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Badge Inner Corner", "", 0.0, 1.0, 0.1)
 @export var platform_badge_icon_padding := SettingsVar.new(Type.FLOAT, 0.5, State.ENABLED, "Icon Padding", "", 0.0, 1.0, 0.1)
 @export var platform_badge_icon_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Icon Color")
+
+@export_subgroup("Library Appearance")
+@export var library_background_color := SettingsVar.new(Type.COLOR, Color(0.1, 0.1, 0.1, 1.0), State.ENABLED, "Background Color")
+@export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")

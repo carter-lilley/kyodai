@@ -19,6 +19,10 @@ func _ready():
 	# Setup zoom slider
 	zoom_slider.value_changed.connect(_on_zoom_changed)
 	
+	# Setup vertical layout from settings
+	_update_grid_orientation()
+	SettingsManager.setting_changed.connect(_on_setting_changed)
+	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
 	DataManager.game_added.connect(_on_game_added)
@@ -211,3 +215,13 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 
 func _on_zoom_changed(value: float) -> void:
 	games_grid.zoom = value
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	if setting.property_name == "library_vertical_layout":
+		_update_grid_orientation()
+
+func _update_grid_orientation() -> void:
+	if SettingsManager:
+		var vertical_setting = SettingsManager.get_setting("library_vertical_layout")
+		if vertical_setting:
+			games_grid.vertical = vertical_setting.value
