@@ -293,7 +293,7 @@ func _on_scroll_value_changed(value: float):
 		var top_row = int(scroll_pos / item_height)
 		var visible_rows = ceili(viewport_height / item_height)
 		visible_start_idx = top_row * items_per_line
-		visible_end_idx = min(visible_start_idx + (visible_rows + 1) * items_per_line, _total_items - 1)
+		visible_end_idx = min(visible_start_idx + (visible_rows + 1) * items_per_line, _total_items - 1) -1
 		target_start = max(0, visible_start_idx - items_per_line * visual_buffer_lines)
 		target_end = min(_total_items - 1, visible_end_idx + items_per_line * visual_buffer_lines)
 	else:
@@ -301,7 +301,7 @@ func _on_scroll_value_changed(value: float):
 		var left_col = int(scroll_pos / item_width)
 		var visible_cols = ceili(viewport_width / item_width)
 		visible_start_idx = left_col * items_per_line
-		visible_end_idx = min(visible_start_idx + (visible_cols + 1) * items_per_line, _total_items - 1)
+		visible_end_idx = min(visible_start_idx + (visible_cols + 1) * items_per_line, _total_items - 1) -1
 		target_start = max(0, visible_start_idx - items_per_line * visual_buffer_lines)
 		target_end = min(_total_items - 1, visible_end_idx + items_per_line * visual_buffer_lines)
 	
