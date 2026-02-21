@@ -64,8 +64,7 @@ func _ready():
 		DownloadManager.download_progress.connect(_on_download_progress)
 		DownloadManager.download_completed.connect(_on_download_completed)
 	
-	if DataManager:
-		DataManager.image_loaded.connect(_on_cover_loaded)
+
 
 func _setup_preview_mode():
 	set_card_zoom(_current_zoom)
@@ -163,13 +162,20 @@ func _load_cover():
 	_loading_game_id = game.id
 	_image_retry_count = 0
 	
-	if game.cover_path != "" and FileAccess.file_exists(game.cover_path):
-		_load_local_cover()
-		return
+	# Check for cached cover using the URL hash
+	if game.cover_url != "" and game.cover_url.begins_with("http"):
+		var cache_path = _get_cached_cover_path(game.cover_url)
+		if FileAccess.file_exists(cache_path):
+			_load_cached_cover(cache_path)
+			return
 	
-	_load_cover_from_url()
+	_set_texture(_loading_texture)
 
-func _load_local_cover():
+func _get_cached_cover_path(url: String) -> String:
+	const CACHE_FOLDER = "user://cache/covers/"
+	return CACHE_FOLDER + url.md5_text() + ".jpg"
+
+func _load_cached_cover(cache_path: String):
 	var target_game_id = _loading_game_id
 	
 	if not MemoryManager:
@@ -178,10 +184,11 @@ func _load_local_cover():
 	
 	MemoryManager.queue_image_task(
 		func():
-			var img = Image.new()
-			var err = img.load(game.cover_path)
-			if err == OK:
-				return ImageTexture.create_from_image(img)
+			var file = FileAccess.open(cache_path, FileAccess.READ)
+			if file:
+				var buffer = file.get_buffer(file.get_length())
+				file.close()
+				return _load_texture_from_buffer(buffer)
 			return null,
 		func(texture):
 			if not is_instance_valid(self):
@@ -196,39 +203,27 @@ func _load_local_cover():
 				if _image_retry_count < MAX_IMAGE_RETRIES:
 					await get_tree().create_timer(0.1 * _image_retry_count).timeout
 					if is_instance_valid(self) and game and game.id == target_game_id:
-						_load_local_cover()
-				else:
-					_load_cover_from_url()
+						_load_cached_cover(cache_path)
 	)
 
-func _load_cover_from_url():
-	if not DataManager:
-		_set_texture(_loading_texture)
-		return
+func _load_texture_from_buffer(buffer: PackedByteArray) -> Texture2D:
+	if buffer.size() < 16:
+		return null
 	
-	if game.cover_url != "" and game.cover_url.begins_with("http"):
-		var target_game_id = _loading_game_id
-		var current_retry = _image_retry_count
-		
-		DataManager.load_image(game.cover_url, func(texture):
-			if not is_instance_valid(self):
-				return
-			if not game or game.id != target_game_id:
-				return
-			
-			if texture:
-				_set_texture(texture)
-			else:
-				_image_retry_count = current_retry + 1
-				if _image_retry_count < MAX_IMAGE_RETRIES:
-					await get_tree().create_timer(0.1 * _image_retry_count).timeout
-					if is_instance_valid(self) and game and game.id == target_game_id:
-						_load_cover_from_url()
-				else:
-					_set_texture(_loading_texture)
-		)
+	var image = Image.new()
+	var err = FAILED
+	
+	# Check magic bytes
+	if buffer[0] == 0xFF and buffer[1] == 0xD8:
+		err = image.load_jpg_from_buffer(buffer)
+	elif buffer[0] == 0x89 and buffer[1] == 0x50:
+		err = image.load_png_from_buffer(buffer)
 	else:
-		_set_texture(_loading_texture)
+		err = image.load_webp_from_buffer(buffer)
+	
+	if err == OK:
+		return ImageTexture.create_from_image(image)
+	return null
 
 func _set_texture(tex: Texture2D) -> void:
 	_current_texture = tex
@@ -283,12 +278,6 @@ func _on_download_completed(item_id: String, success: bool, message: String):
 				if updated:
 					game = updated
 		_update_status_icon()
-
-func _on_cover_loaded(url: String, texture: Texture2D):
-	if not is_instance_valid(self) or not game:
-		return
-	if game.cover_url == url and texture:
-		_set_texture(texture)
 
 func set_placeholder(is_placeholder: bool):
 	if is_placeholder:
