@@ -6,6 +6,9 @@ uniform float corner_radius_pixels = 12.0;
 uniform float border_width_pixels = 4.0;
 uniform float border_fade_in_pixels = 0.0;
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform bool use_gradient = false;
+uniform sampler2D gradient_texture;
+uniform int gradient_direction = 0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 	vec2 half_size = size * 0.5;
@@ -39,10 +42,25 @@ void fragment() {
 		
 		float solid_border_end = (border_fade_in_pixels + border_width_pixels) / total_border;
 		
-		if (rel_d < solid_border_end) {
-			final_color = vec4(border_color.rgb, border_color.a * border_alpha * inner_aa_alpha);
+		vec4 color;
+		if (use_gradient) {
+			float gradient_t;
+			if (gradient_direction == 0) {
+				gradient_t = UV.x;
+			} else if (gradient_direction == 1) {
+				gradient_t = UV.y;
+			} else {
+				gradient_t = (UV.x + UV.y) * 0.5;
+			}
+			color = texture(gradient_texture, vec2(gradient_t, 0.0));
 		} else {
-			final_color = vec4(border_color.rgb, border_color.a * border_alpha);
+			color = border_color;
+		}
+		
+		if (rel_d < solid_border_end) {
+			final_color = vec4(color.rgb, color.a * border_alpha * inner_aa_alpha);
+		} else {
+			final_color = vec4(color.rgb, color.a * border_alpha);
 		}
 	}
 	

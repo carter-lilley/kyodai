@@ -217,6 +217,21 @@ func match_var_type(settingsvar : SettingsVar):
 				emit_signal("setting_changed", color, settingsvar)
 			)
 		
+		Type.GRADIENT:
+			var gradient_label = Label.new()
+			gradient_label.text = settingsvar.display_name
+			add_child(gradient_label)
+			
+			var gradient_edit = GradientEdit.new()
+			if settingsvar.value is Gradient:
+				gradient_edit.set_gradient(settingsvar.value)
+			gradient_edit.custom_minimum_size = Vector2(0, 24)
+			add_child(gradient_edit)
+			controls[settingsvar.property_name] = gradient_edit
+			gradient_edit.gradient_changed.connect(func(gradient: Gradient):
+				emit_signal("setting_changed", gradient, settingsvar)
+			)
+		
 		_:
 			var button = Button.new()
 			button.text = settingsvar.display_name

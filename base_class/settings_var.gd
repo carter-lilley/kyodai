@@ -4,7 +4,7 @@ class_name SettingsVar
 
 ## Represents a single setting entry with metadata for menus, validation, etc.
 
-enum SettingType { FLOAT, INT, BOOL, STRING, PATH, CURVE, VECTOR2, ENUM, ARRAY, DICTIONARY, INPUTACTIONLIST, COLOR }
+enum SettingType { FLOAT, INT, BOOL, STRING, PATH, CURVE, VECTOR2, ENUM, ARRAY, DICTIONARY, INPUTACTIONLIST, COLOR, GRADIENT }
 enum SettingState { ENABLED, DISABLED, INTERNAL }
 
 var property_name: String = ""

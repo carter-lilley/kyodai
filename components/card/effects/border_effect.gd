@@ -1,6 +1,8 @@
 class_name BorderEffect
 extends CardEffect
 
+var _gradient_texture: ImageTexture = null
+
 func _ready():
 	super._ready()
 	effect_name = "Border"
@@ -19,7 +21,8 @@ func _update_shader_params() -> void:
 	
 	var border_size = _settings.get("border_size", 0.05)
 	var border_fade_in = _settings.get("border_fade_in", 0.0)
-	var border_color = _settings.get("border_color", Color.WHITE)
+	var border_gradient = _settings.get("border_gradient")
+	var gradient_direction = _settings.get("gradient_direction", 0)
 	
 	var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
 	var fade_in_pixels = border_fade_in * _card_state.base_width * 2.0 * _card_state.zoom_level
@@ -28,7 +31,23 @@ func _update_shader_params() -> void:
 	_set_shader_param("corner_radius_pixels", _card_state.corner_radius)
 	_set_shader_param("border_width_pixels", border_pixels)
 	_set_shader_param("border_fade_in_pixels", fade_in_pixels)
-	_set_shader_param("border_color", border_color)
+	_set_shader_param("gradient_direction", gradient_direction)
+	
+	if border_gradient is Gradient:
+		_gradient_texture = _gradient_to_texture(border_gradient)
+		_set_shader_param("gradient_texture", _gradient_texture)
+		_set_shader_param("use_gradient", true)
+	else:
+		var border_color = _settings.get("border_color", Color.WHITE)
+		_set_shader_param("border_color", border_color)
+		_set_shader_param("use_gradient", false)
+
+func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
+	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
+	for i in range(256):
+		var color = gradient.sample(i / 255.0)
+		image.set_pixel(i, 0, color)
+	return ImageTexture.create_from_image(image)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
@@ -43,8 +62,15 @@ func get_settings_schema() -> Array[SettingsVar]:
 	fade_var.property_name = "border_fade_in"
 	schema.append(fade_var)
 	
-	var color_var = SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Border Color")
-	color_var.property_name = "border_color"
-	schema.append(color_var)
+	var gradient = Gradient.new()
+	gradient.add_point(0.0, Color.WHITE)
+	gradient.add_point(1.0, Color.WHITE)
+	var gradient_var = SettingsVar.new(Type.GRADIENT, gradient, State.ENABLED, "Border Gradient")
+	gradient_var.property_name = "border_gradient"
+	schema.append(gradient_var)
+	
+	var direction_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Gradient Direction", "", 0.0, 0.0, 0.0, ["Horizontal", "Vertical", "Diagonal"])
+	direction_var.property_name = "gradient_direction"
+	schema.append(direction_var)
 	
 	return schema
