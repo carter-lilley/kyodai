@@ -5,9 +5,12 @@ uniform float corner_radius_pixels = 12.0;
 
 uniform bool hide_background = false;
 uniform float badge_size = 1.0;
+uniform vec2 badge_dimensions = vec2(32.0, 32.0);
 uniform float badge_inner_radius = 0.0;
 uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float border_width = 0.0;
+uniform float safe_outer = 0.0;
+uniform float safe_inner = 0.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 	vec2 half_size = size * 0.5;
@@ -27,34 +30,39 @@ void fragment() {
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
-	float base_badge_size = 32.0 * badge_size;
-	float actual_badge_size = max(base_badge_size, corner_radius_pixels);
+	float badge_width = badge_dimensions.x;
+	float badge_height = badge_dimensions.y;
 	
-	if (pixel_pos.x < actual_badge_size && pixel_pos.y < actual_badge_size) {
-		float max_inner_radius = max(0.0, actual_badge_size - border_width);
-		float inner_radius = max_inner_radius * clamp(badge_inner_radius, 0.0, 1.0);
-		
+	if (pixel_pos.x < badge_width && pixel_pos.y < badge_height) {
 		float dist_left = pixel_pos.x;
 		float dist_top = pixel_pos.y;
 		
-		vec2 inner_corner_center = vec2(actual_badge_size - inner_radius);
-		bool in_inner_corner = pixel_pos.x > actual_badge_size - inner_radius && pixel_pos.y > actual_badge_size - inner_radius;
-		float inner_dist = 0.0;
-		if (in_inner_corner && inner_radius > 0.0) {
-			inner_dist = length(pixel_pos - inner_corner_center) - inner_radius;
-		}
-		
-		bool outside_badge = pixel_pos.x > actual_badge_size || pixel_pos.y > actual_badge_size;
+		bool outside_badge = pixel_pos.x > badge_width || pixel_pos.y > badge_height;
 		
 		float alpha_left = smoothstep(-aa_width, 0.0, dist_left);
 		float alpha_top = smoothstep(-aa_width, 0.0, dist_top);
-		float inner_alpha = 1.0;
-		if (in_inner_corner && inner_radius > 0.0) {
-			inner_alpha = 1.0 - smoothstep(-aa_width, 0.0, inner_dist);
-		}
 		float bounds_alpha = outside_badge ? 0.0 : 1.0;
 		
-		float badge_alpha = min(min(alpha_left, alpha_top), min(inner_alpha, bounds_alpha));
+		float badge_alpha = min(min(alpha_left, alpha_top), bounds_alpha);
+		
+		if (badge_inner_radius > 0.0) {
+			float min_dimension = min(badge_width, badge_height);
+			float max_radius = max(0.0, min_dimension * 0.5 - border_width);
+			float inner_radius = max_radius * clamp(badge_inner_radius, 0.0, 1.0);
+			
+			vec2 corner_center = vec2(badge_width - inner_radius, badge_height - inner_radius);
+			bool in_corner_region = pixel_pos.x > badge_width - inner_radius && pixel_pos.y > badge_height - inner_radius;
+			
+			if (in_corner_region && inner_radius > 0.0) {
+				float dist_from_center = length(pixel_pos - corner_center);
+				if (dist_from_center > inner_radius) {
+					badge_alpha = 0.0;
+				} else {
+					float edge_alpha = 1.0 - smoothstep(inner_radius - aa_width, inner_radius, dist_from_center);
+					badge_alpha *= edge_alpha;
+				}
+			}
+		}
 		
 		final_color = vec4(badge_color.rgb, badge_color.a * badge_alpha);
 	}
@@ -62,6 +70,25 @@ void fragment() {
 	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_pixels);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, edge_dist);
 	final_color.a *= edge_alpha;
+	
+	if (safe_outer > 0.0 || safe_inner > 0.0) {
+		float safe_x = safe_outer;
+		float safe_y = safe_outer;
+		float safe_w = badge_width - safe_outer - safe_inner;
+		float safe_h = badge_height - safe_outer - safe_inner;
+		
+		if (pixel_pos.x >= safe_x && pixel_pos.x <= safe_x + safe_w &&
+			pixel_pos.y >= safe_y && pixel_pos.y <= safe_y + safe_h) {
+			float edge_dist_safe = 2.0;
+			bool near_edge = (pixel_pos.x < safe_x + edge_dist_safe || 
+							  pixel_pos.x > safe_x + safe_w - edge_dist_safe ||
+							  pixel_pos.y < safe_y + edge_dist_safe || 
+							  pixel_pos.y > safe_y + safe_h - edge_dist_safe);
+			if (near_edge) {
+				final_color = vec4(1.0, 0.0, 0.0, 0.8);
+			}
+		}
+	}
 	
 	if (final_color.a <= 0.0) {
 		discard;

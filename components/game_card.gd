@@ -240,7 +240,7 @@ func _update_platform_badge():
 	var platform_slug = game.platform_slug
 	var icon_texture: Texture2D = null
 	if platform_slug:
-		var icon_path = "res://assets/platforms/icon/icon_%s.svg" % platform_slug
+		var icon_path = "res://assets/platforms/icon/icon_%s.png" % platform_slug
 		if FileAccess.file_exists(icon_path):
 			icon_texture = load(icon_path)
 	
@@ -264,35 +264,70 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	
 	var badge_size_setting = settings.get("badge_size", 1.0)
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
-	var icon_padding = settings.get("icon_padding", 0.5)
-	var corner_radius = _card_state.corner_radius / _current_zoom
 	var icon_color = settings.get("icon_color", Color.WHITE)
+	var card_corner = _card_state.corner_radius / _current_zoom
 	
-	var base_badge_size = 32.0 * badge_size_setting * _current_zoom
-	var badge_size = max(base_badge_size, corner_radius * _current_zoom)
+	var base_badge_size = 32.0
+	var icon_size = icon_texture.get_size()
+	var icon_aspect = icon_size.x / icon_size.y if icon_size.y > 0 else 1.0
 	
-	var base_padding = 8.0 * badge_size_setting * _current_zoom * icon_padding
-	var outer_padding = corner_radius * _current_zoom * 0.3 * icon_padding
-	var total_padding = base_padding + outer_padding
+	var badge_width: float
+	var badge_height: float
+	if icon_aspect >= 1.0:
+		badge_width = base_badge_size * icon_aspect
+		badge_height = base_badge_size
+	else:
+		badge_width = base_badge_size
+		badge_height = base_badge_size / icon_aspect
 	
-	var available_size = badge_size - total_padding * 2.0
-	available_size = max(available_size, badge_size * 0.4)
+	var base_min_dim = min(badge_width, badge_height)
+	var base_inner_corner = (base_min_dim * 0.5) * clamp(inner_radius_setting, 0.0, 1.0)
 	
-	var max_inner_radius = max(0.0, badge_size)
-	var inner_radius = max_inner_radius * clamp(inner_radius_setting, 0.0, 1.0)
-	var outer_shift = corner_radius * _current_zoom * 0.15
-	var inner_shift = inner_radius * 0.15
+	var scale = badge_size_setting * _current_zoom
+	var scaled_width = badge_width * scale
+	var scaled_height = badge_height * scale
 	
-	var padding_left = total_padding + outer_shift - inner_shift
-	var padding_top = total_padding + outer_shift - inner_shift
+	var scaled_min_dim = min(scaled_width, scaled_height)
+	
+	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
+	var scaled_outer = _card_state.corner_radius * corner_midpoint_factor
+	var scaled_inner = base_inner_corner * scale * corner_midpoint_factor
+	var max_outer = scaled_min_dim * 0.4
+	scaled_outer = min(scaled_outer, max_outer)
+	
+	if _badge_effect:
+		_badge_effect.set_badge_dimensions(Vector2(scaled_width, scaled_height))
+		_badge_effect.set_safe_rect(scaled_outer, scaled_inner)
+	
+	var safe_x = scaled_outer
+	var safe_y = scaled_outer
+	var safe_width = scaled_width - scaled_outer - scaled_inner
+	var safe_height = scaled_height - scaled_outer - scaled_inner
+	safe_width = max(safe_width, 1.0)
+	safe_height = max(safe_height, 1.0)
+	
+	var icon_draw_width: float
+	var icon_draw_height: float
+	var safe_aspect = safe_width / safe_height
+	
+	if icon_aspect > safe_aspect:
+		icon_draw_width = safe_width
+		icon_draw_height = safe_width / icon_aspect
+	else:
+		icon_draw_height = safe_height
+		icon_draw_width = safe_height * icon_aspect
+	
+	var icon_offset_x = safe_x + (safe_width - icon_draw_width) * 0.5
+	var icon_offset_y = safe_y + (safe_height - icon_draw_height) * 0.5
 	
 	platform_icon.visible = true
 	platform_icon.texture = icon_texture
 	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	platform_icon.offset_left = padding_left
-	platform_icon.offset_top = padding_top
-	platform_icon.offset_right = padding_left + available_size
-	platform_icon.offset_bottom = padding_top + available_size
+	platform_icon.offset_left = icon_offset_x
+	platform_icon.offset_top = icon_offset_y
+	platform_icon.offset_right = icon_offset_x + icon_draw_width
+	platform_icon.offset_bottom = icon_offset_y + icon_draw_height
+	platform_icon.modulate = Color.WHITE
 	
 	var shader_material = ShaderMaterial.new()
 	shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")

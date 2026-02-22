@@ -1,0 +1,9 @@
+{
+  "name": "icon-converter",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.0",
+    "sharp": "^0.33.0"
+  }
+}
