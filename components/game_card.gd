@@ -245,7 +245,6 @@ func _update_platform_badge():
 			icon_texture = load(icon_path)
 	
 	if icon_texture:
-		_badge_effect.set_platform_icon(icon_texture)
 		_update_platform_icon_rect(icon_texture)
 	else:
 		if platform_icon:
@@ -265,14 +264,15 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	
 	var badge_size_setting = settings.get("badge_size", 1.0)
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
+	var icon_padding = settings.get("icon_padding", 0.5)
 	var corner_radius = _card_state.corner_radius / _current_zoom
 	var icon_color = settings.get("icon_color", Color.WHITE)
 	
 	var base_badge_size = 32.0 * badge_size_setting * _current_zoom
 	var badge_size = max(base_badge_size, corner_radius * _current_zoom)
 	
-	var base_padding = 8.0 * badge_size_setting * _current_zoom * 0.5
-	var outer_padding = corner_radius * _current_zoom * 0.3 * 0.5
+	var base_padding = 8.0 * badge_size_setting * _current_zoom * icon_padding
+	var outer_padding = corner_radius * _current_zoom * 0.3 * icon_padding
 	var total_padding = base_padding + outer_padding
 	
 	var available_size = badge_size - total_padding * 2.0

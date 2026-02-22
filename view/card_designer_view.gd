@@ -228,9 +228,11 @@ func _on_add_effect(id: int):
 			new_effect = {
 				"effect_id": "badge",
 				"settings": {
+					"hide_background": false,
 					"badge_size": 1.0,
 					"badge_inner_radius": 0.0,
 					"badge_color": Color.WHITE,
+					"icon_padding": 0.5,
 					"icon_color": Color.WHITE
 				}
 			}

@@ -3,11 +3,10 @@ shader_type canvas_item;
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_pixels = 12.0;
 
+uniform bool hide_background = false;
 uniform float badge_size = 1.0;
 uniform float badge_inner_radius = 0.0;
 uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform vec4 icon_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform sampler2D badge_icon : filter_linear, repeat_disable;
 uniform float border_width = 0.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
@@ -17,6 +16,10 @@ float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 }
 
 void fragment() {
+	if (hide_background) {
+		discard;
+	}
+	
 	vec2 pixel_pos = UV * card_size;
 	
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
@@ -54,13 +57,6 @@ void fragment() {
 		float badge_alpha = min(min(alpha_left, alpha_top), min(inner_alpha, bounds_alpha));
 		
 		final_color = vec4(badge_color.rgb, badge_color.a * badge_alpha);
-		
-		vec2 icon_uv = pixel_pos / actual_badge_size;
-		vec4 icon_tex_color = texture(badge_icon, icon_uv);
-		icon_tex_color.rgb *= icon_color.rgb;
-		
-		float icon_alpha = icon_tex_color.a * badge_alpha;
-		final_color = mix(final_color, icon_tex_color, icon_alpha);
 	}
 	
 	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_pixels);
