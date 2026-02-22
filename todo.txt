@@ -13,7 +13,10 @@ how to split important siblings
 	layer system strokes/shadows/fades
 	sane defaults
 ## performance:
-	card image retries & priority management.
+	furhter card image retries & priority management.
+	batched image/data loads? are we doing this?
+	performance.add_custom_monitor for everything
+## sync
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single
 ## launch:

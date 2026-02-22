@@ -181,17 +181,24 @@ func _load_cover(high_priority: bool = false):
 	_loading_game_id = game.id
 	_image_retry_count = 0
 	
+	var cache_path = ""
 	if game.cover_path and FileAccess.file_exists(game.cover_path):
-		_load_cached_cover(game.cover_path, high_priority)
+		cache_path = game.cover_path
+	elif game.cover_url != "" and game.cover_url.begins_with("http"):
+		cache_path = _get_cached_cover_path(game.cover_url)
+		if not FileAccess.file_exists(cache_path):
+			cache_path = ""
+	
+	if cache_path == "":
+		_set_texture(_loading_texture)
 		return
 	
-	if game.cover_url != "" and game.cover_url.begins_with("http"):
-		var cache_path = _get_cached_cover_path(game.cover_url)
-		if FileAccess.file_exists(cache_path):
-			_load_cached_cover(cache_path, high_priority)
-			return
+	var cached_tex = MemoryManager.get_cached_texture(cache_path)
+	if cached_tex:
+		_set_texture(cached_tex)
+		return
 	
-	_set_texture(_loading_texture)
+	_load_cached_cover(cache_path, high_priority)
 
 func _get_cached_cover_path(url: String) -> String:
 	const CACHE_FOLDER = "user://cache/covers/"
@@ -223,6 +230,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 			return
 		
 		if texture:
+			MemoryManager.cache_texture(cache_path, texture)
 			_set_texture(texture)
 		else:
 			_image_retry_count += 1

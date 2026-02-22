@@ -23,6 +23,11 @@ var _exit_flag: bool = false
 var _image_task_counter: int = 0
 var _image_tasks: Dictionary = {}
 
+var _texture_cache: Dictionary = {}
+var _texture_cache_order: Array[String] = []
+var _texture_cache_mutex: Mutex
+const MAX_TEXTURE_CACHE_SIZE: int = 800
+
 const IMAGE_THREAD_COUNT: int = 12
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
@@ -86,6 +91,7 @@ func _initialize_threads():
 	_db_mutex = Mutex.new()
 	_image_mutex = Mutex.new()
 	_extraction_mutex = Mutex.new()
+	_texture_cache_mutex = Mutex.new()
 	_db_semaphore = Semaphore.new()
 	_image_semaphore = Semaphore.new()
 	_extraction_semaphore = Semaphore.new()
@@ -287,7 +293,6 @@ static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 	_instance._image_mutex.lock()
 	
 	if not _instance._image_tasks.has(task_id):
-		print("[MemoryManager] Priority update failed - task %d not found" % task_id)
 		_instance._image_mutex.unlock()
 		return false
 	
@@ -310,11 +315,47 @@ static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 		if from_queue[i].id == task_id:
 			from_queue.remove_at(i)
 			to_queue.append(task)
-			print("[MemoryManager] Task %d priority changed to %s (high=%d, low=%d)" % [task_id, "HIGH" if high_priority else "LOW", _instance._image_high_priority_queue.size(), _instance._image_low_priority_queue.size()])
 			break
 	
 	_instance._image_mutex.unlock()
 	return true
+
+static func get_cached_texture(cache_key: String) -> Texture2D:
+	if _instance == null or cache_key == "":
+		return null
+	
+	_instance._texture_cache_mutex.lock()
+	if _instance._texture_cache.has(cache_key):
+		var tex = _instance._texture_cache[cache_key]
+		var idx = _instance._texture_cache_order.find(cache_key)
+		if idx != -1:
+			_instance._texture_cache_order.remove_at(idx)
+			_instance._texture_cache_order.append(cache_key)
+		_instance._texture_cache_mutex.unlock()
+		return tex
+	_instance._texture_cache_mutex.unlock()
+	return null
+
+static func cache_texture(cache_key: String, texture: Texture2D) -> void:
+	if _instance == null or cache_key == "" or texture == null:
+		return
+	
+	_instance._texture_cache_mutex.lock()
+	
+	if _instance._texture_cache.has(cache_key):
+		_instance._texture_cache_mutex.unlock()
+		return
+	
+	if _instance._texture_cache.size() >= MAX_TEXTURE_CACHE_SIZE:
+		var to_evict = _instance._texture_cache.size() - MAX_TEXTURE_CACHE_SIZE + 1
+		for i in range(to_evict):
+			if _instance._texture_cache_order.size() > 0:
+				var oldest_key = _instance._texture_cache_order.pop_front()
+				_instance._texture_cache.erase(oldest_key)
+	
+	_instance._texture_cache[cache_key] = texture
+	_instance._texture_cache_order.append(cache_key)
+	_instance._texture_cache_mutex.unlock()
 
 static func queue_extraction_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
