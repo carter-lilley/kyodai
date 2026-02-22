@@ -9,8 +9,6 @@ uniform vec2 badge_dimensions = vec2(32.0, 32.0);
 uniform float badge_inner_radius = 0.0;
 uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float border_width = 0.0;
-uniform float safe_outer = 0.0;
-uniform float safe_inner = 0.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 	vec2 half_size = size * 0.5;
@@ -70,25 +68,6 @@ void fragment() {
 	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_pixels);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, edge_dist);
 	final_color.a *= edge_alpha;
-	
-	if (safe_outer > 0.0 || safe_inner > 0.0) {
-		float safe_x = safe_outer;
-		float safe_y = safe_outer;
-		float safe_w = badge_width - safe_outer - safe_inner;
-		float safe_h = badge_height - safe_outer - safe_inner;
-		
-		if (pixel_pos.x >= safe_x && pixel_pos.x <= safe_x + safe_w &&
-			pixel_pos.y >= safe_y && pixel_pos.y <= safe_y + safe_h) {
-			float edge_dist_safe = 2.0;
-			bool near_edge = (pixel_pos.x < safe_x + edge_dist_safe || 
-							  pixel_pos.x > safe_x + safe_w - edge_dist_safe ||
-							  pixel_pos.y < safe_y + edge_dist_safe || 
-							  pixel_pos.y > safe_y + safe_h - edge_dist_safe);
-			if (near_edge) {
-				final_color = vec4(1.0, 0.0, 0.0, 0.8);
-			}
-		}
-	}
 	
 	if (final_color.a <= 0.0) {
 		discard;

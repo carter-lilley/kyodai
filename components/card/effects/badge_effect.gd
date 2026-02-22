@@ -24,8 +24,6 @@ func _update_shader_params() -> void:
 	var badge_inner_radius = _settings.get("badge_inner_radius", 0.0)
 	var badge_color = _settings.get("badge_color", Color.WHITE)
 	var badge_dimensions = _settings.get("badge_dimensions", Vector2(32.0, 32.0))
-	var safe_outer = _settings.get("safe_outer", 0.0)
-	var safe_inner = _settings.get("safe_inner", 0.0)
 	
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_pixels", _card_state.corner_radius)
@@ -35,8 +33,6 @@ func _update_shader_params() -> void:
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
 	_set_shader_param("border_width", _border_width)
-	_set_shader_param("safe_outer", safe_outer)
-	_set_shader_param("safe_inner", safe_inner)
 
 func set_border_width(width: float) -> void:
 	_border_width = width
@@ -44,11 +40,6 @@ func set_border_width(width: float) -> void:
 
 func set_badge_dimensions(dimensions: Vector2) -> void:
 	_settings["badge_dimensions"] = dimensions
-	_update_shader_params()
-
-func set_safe_rect(outer_corner: float, inner_corner: float) -> void:
-	_settings["safe_outer"] = outer_corner
-	_settings["safe_inner"] = inner_corner
 	_update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
