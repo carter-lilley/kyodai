@@ -29,6 +29,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_pixels", _card_state.corner_radius)
 	_set_shader_param("game_texture", _card_state.game_texture)
+	_set_shader_param("border_inset", _card_state.border_inset)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_current_texture = texture

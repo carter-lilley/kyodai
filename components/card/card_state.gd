@@ -7,7 +7,8 @@ var game_texture: Texture2D = null
 var zoom_level: float = 1.0
 var base_width: float = 202.0
 var base_height: float = 270.0
-var orientation: int = 0  # 0=vertical, 1=horizontal, 2=square
+var orientation: int = 0
+var border_inset: float = 0.0  # 0=vertical, 1=horizontal, 2=square
 
 var effect_settings: Array = []
 
@@ -46,5 +47,6 @@ func duplicate() -> CardState:
 	new_state.base_width = base_width
 	new_state.base_height = base_height
 	new_state.orientation = orientation
+	new_state.border_inset = border_inset
 	new_state.effect_settings = effect_settings.duplicate(true)
 	return new_state

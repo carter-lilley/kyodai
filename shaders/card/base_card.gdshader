@@ -3,6 +3,7 @@ shader_type canvas_item;
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_pixels = 12.0;
 uniform sampler2D game_texture : filter_linear, repeat_disable;
+uniform float border_inset = 0.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 	vec2 half_size = size * 0.5;
@@ -30,6 +31,9 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
+	vec2 inner_size = card_size - vec2(border_inset * 2.0);
+	vec2 inner_offset = vec2(border_inset);
+	
 	float dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_pixels);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 	
@@ -37,8 +41,15 @@ void fragment() {
 		discard;
 	}
 	
+	vec2 inner_pixel_pos = pixel_pos - inner_offset;
+	vec2 inner_uv = inner_pixel_pos / inner_size;
+	
+	if (inner_uv.x < 0.0 || inner_uv.x > 1.0 || inner_uv.y < 0.0 || inner_uv.y > 1.0) {
+		discard;
+	}
+	
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
-	vec2 tex_uv = aspect_covered_uv(UV, card_size, tex_size);
+	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
 	vec4 tex_color = texture(game_texture, tex_uv);
 	
 	tex_color.a *= edge_alpha;

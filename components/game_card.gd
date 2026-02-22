@@ -135,6 +135,7 @@ func _rebuild_effects():
 	_base_effect = null
 	_border_effect = null
 	_badge_effect = null
+	_card_state.border_inset = 0.0
 	
 	_base_effect = BaseCardEffect.new()
 	_base_effect.name = "BaseEffect"
@@ -151,6 +152,12 @@ func _rebuild_effects():
 		_border_effect.anchor_bottom = 1.0
 		add_child(_border_effect)
 		_border_effect.initialize(_card_state, border_config.get("settings", {}))
+		
+		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
+		var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
+		_card_state.border_inset = border_pixels
+		if _base_effect:
+			_base_effect.update_state(_card_state)
 	
 	var badge_config = _get_effect_config("badge")
 	if badge_config:
