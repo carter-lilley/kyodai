@@ -28,6 +28,10 @@ var _texture_cache_order: Array[String] = []
 var _texture_cache_mutex: Mutex
 const MAX_TEXTURE_CACHE_SIZE: int = 800
 
+var _lp_callbacks: Array = []
+var _lp_callback_mutex: Mutex
+const MAX_LP_CALLBACKS_PER_FRAME: int = 15
+
 const IMAGE_THREAD_COUNT: int = 12
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
@@ -92,6 +96,7 @@ func _initialize_threads():
 	_image_mutex = Mutex.new()
 	_extraction_mutex = Mutex.new()
 	_texture_cache_mutex = Mutex.new()
+	_lp_callback_mutex = Mutex.new()
 	_db_semaphore = Semaphore.new()
 	_image_semaphore = Semaphore.new()
 	_extraction_semaphore = Semaphore.new()
@@ -115,6 +120,21 @@ func _exit_tree():
 
 func _process(_delta):
 	_process_batches()
+	_drain_lp_callbacks()
+
+func _drain_lp_callbacks():
+	if _lp_callbacks.is_empty():
+		return
+	
+	_lp_callback_mutex.lock()
+	var to_process = mini(_lp_callbacks.size(), MAX_LP_CALLBACKS_PER_FRAME)
+	var batch = _lp_callbacks.slice(0, to_process)
+	_lp_callbacks = _lp_callbacks.slice(to_process)
+	_lp_callback_mutex.unlock()
+	
+	for item in batch:
+		if item.callback.is_valid():
+			item.callback.call(item.result)
 
 # ============================================================================
 # THREAD WORKERS
@@ -173,7 +193,14 @@ static func _image_worker():
 			_instance._image_mutex.unlock()
 			
 			if task.callback.is_valid() and not task.cancelled:
-				_instance.call_deferred("_execute_callback", task.callback, result)
+				if task.high_priority:
+					# High priority: immediate callback
+					_instance.call_deferred("_execute_callback", task.callback, result)
+				else:
+					# Low priority: batch for smooth processing
+					_instance._lp_callback_mutex.lock()
+					_instance._lp_callbacks.append({"callback": task.callback, "result": result})
+					_instance._lp_callback_mutex.unlock()
 
 static func _extraction_worker():
 	while not _instance._exit_flag:

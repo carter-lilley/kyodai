@@ -771,6 +771,7 @@ func get_visible_range() -> Dictionary:
 			"end": visible_end,
 			"total": _total_items,
 			"buffer_start": _virtual_start,
+			"buffer_size": _active_cards.size(),
 			"active_cards_count": _active_cards.size()
 		}
 	else:
@@ -785,6 +786,7 @@ func get_visible_range() -> Dictionary:
 			"end": visible_end,
 			"total": _total_items,
 			"buffer_start": _virtual_start,
+			"buffer_size": _active_cards.size(),
 			"active_cards_count": _active_cards.size()
 		}
 

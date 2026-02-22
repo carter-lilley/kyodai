@@ -16,6 +16,8 @@ how to split important siblings
 	furhter card image retries & priority management.
 	batched image/data loads? are we doing this?
 	performance.add_custom_monitor for everything
+	are sync db actions and load db actions the same?
+	move max_cache_size to memory manager?
 ## sync
 	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single

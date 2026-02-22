@@ -78,10 +78,10 @@ expand_mode = 1
 stretch_mode = 5
 
 [node name="PlatformIcon" type="TextureRect" parent="CardInput" unique_id=816665265]
+texture_filter = 3
 layout_mode = 1
 offset_right = 32.0
 offset_bottom = 32.0
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
-texture_filter = 3
