@@ -7,10 +7,11 @@ class_name MemoryManager
 # ============================================================================
 
 var _db_thread: Thread
-var _image_thread: Thread
+var _image_threads: Array[Thread] = []
 var _extraction_thread: Thread
 var _db_queue: Array = []
-var _image_queue: Array = []
+var _image_high_priority_queue: Array = []
+var _image_low_priority_queue: Array = []
 var _extraction_queue: Array = []
 var _db_mutex: Mutex
 var _image_mutex: Mutex
@@ -19,8 +20,11 @@ var _db_semaphore: Semaphore
 var _image_semaphore: Semaphore
 var _extraction_semaphore: Semaphore
 var _exit_flag: bool = false
+var _image_task_counter: int = 0
+var _image_tasks: Dictionary = {}
 
-const MAX_IMAGE_QUEUE_SIZE = 100
+const IMAGE_THREAD_COUNT: int = 12
+const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 
@@ -87,11 +91,14 @@ func _initialize_threads():
 	_extraction_semaphore = Semaphore.new()
 	
 	_db_thread = Thread.new()
-	_image_thread = Thread.new()
-	_extraction_thread = Thread.new()
-	
 	_db_thread.start(_db_worker)
-	_image_thread.start(_image_worker)
+	
+	for i in range(IMAGE_THREAD_COUNT):
+		var thread = Thread.new()
+		thread.start(_image_worker)
+		_image_threads.append(thread)
+	
+	_extraction_thread = Thread.new()
 	_extraction_thread.start(_extraction_worker)
 
 func _ready():
@@ -125,6 +132,7 @@ static func _db_worker():
 				_instance.call_deferred("_execute_callback", task.callback, result)
 
 static func _image_worker():
+	var high_count = 0
 	while not _instance._exit_flag:
 		_instance._image_semaphore.wait()
 		
@@ -132,13 +140,33 @@ static func _image_worker():
 			break
 		
 		_instance._image_mutex.lock()
-		var task = _instance._image_queue.pop_front()
+		var task = null
+		
+		var high_size = _instance._image_high_priority_queue.size()
+		var low_size = _instance._image_low_priority_queue.size()
+		
+		if high_size > 0 and (low_size == 0 or high_count < 2):
+			task = _instance._image_high_priority_queue.pop_front()
+			high_count += 1
+		elif low_size > 0:
+			task = _instance._image_low_priority_queue.pop_front()
+			high_count = 0
+		
+		if task and task.has("cancelled") and task.cancelled:
+			_instance._image_tasks.erase(task.id)
+			_instance._image_mutex.unlock()
+			continue
+		
 		_instance._image_mutex.unlock()
 		
 		if task:
 			var result = task.callable.call()
 			
-			if task.callback.is_valid():
+			_instance._image_mutex.lock()
+			_instance._image_tasks.erase(task.id)
+			_instance._image_mutex.unlock()
+			
+			if task.callback.is_valid() and not task.cancelled:
 				_instance.call_deferred("_execute_callback", task.callback, result)
 
 static func _extraction_worker():
@@ -183,24 +211,110 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	_instance._db_mutex.unlock()
 	_instance._db_semaphore.post()
 
-static func queue_image_task(callable: Callable, callback: Callable = Callable()):
+static func queue_image_task(callable: Callable, callback: Callable = Callable(), high_priority: bool = false) -> int:
 	if _instance == null:
 		push_error("[MemoryManager] Not initialized - cannot queue image task")
-		return
+		return -1
 	
 	_instance._image_mutex.lock()
-	var current_size = _instance._image_queue.size()
+	var total_size = _instance._image_high_priority_queue.size() + _instance._image_low_priority_queue.size()
 	
-	if current_size >= MAX_IMAGE_QUEUE_SIZE:
-		_instance._image_mutex.unlock()
-		push_warning("[MemoryManager] Dropping image task - queue full (%d/%d)" % [current_size, MAX_IMAGE_QUEUE_SIZE])
-		if callback.is_valid():
-			callback.call_deferred(null)
-		return
+	if total_size >= MAX_IMAGE_QUEUE_SIZE:
+		if _instance._image_low_priority_queue.size() > 0 and high_priority:
+			var evicted = _instance._image_low_priority_queue.pop_front()
+			if _instance._image_tasks.has(evicted.id):
+				evicted.cancelled = true
+				_instance._image_tasks.erase(evicted.id)
+				if evicted.callback.is_valid():
+					_instance.call_deferred("_execute_callback", evicted.callback, null)
+		elif not high_priority:
+			_instance._image_mutex.unlock()
+			return -1
+		else:
+			_instance._image_mutex.unlock()
+			return -1
 	
-	_instance._image_queue.append({"callable": callable, "callback": callback})
+	_instance._image_task_counter += 1
+	var task_id = _instance._image_task_counter
+	
+	var task = {
+		"id": task_id,
+		"callable": callable,
+		"callback": callback,
+		"cancelled": false,
+		"high_priority": high_priority
+	}
+	
+	_instance._image_tasks[task_id] = task
+	
+	if high_priority:
+		_instance._image_high_priority_queue.append(task)
+	else:
+		_instance._image_low_priority_queue.append(task)
+	
 	_instance._image_mutex.unlock()
 	_instance._image_semaphore.post()
+	
+	return task_id
+
+static func cancel_image_task(task_id: int) -> bool:
+	if _instance == null or task_id <= 0:
+		return false
+	
+	_instance._image_mutex.lock()
+	
+	if _instance._image_tasks.has(task_id):
+		var task = _instance._image_tasks[task_id]
+		task.cancelled = true
+		_instance._image_tasks.erase(task_id)
+		
+		var queue = _instance._image_high_priority_queue if task.high_priority else _instance._image_low_priority_queue
+		for i in range(queue.size()):
+			if queue[i].id == task_id:
+				queue.remove_at(i)
+				break
+		
+		_instance._image_mutex.unlock()
+		return true
+	
+	_instance._image_mutex.unlock()
+	return false
+
+static func update_image_priority(task_id: int, high_priority: bool) -> bool:
+	if _instance == null or task_id <= 0:
+		return false
+	
+	_instance._image_mutex.lock()
+	
+	if not _instance._image_tasks.has(task_id):
+		print("[MemoryManager] Priority update failed - task %d not found" % task_id)
+		_instance._image_mutex.unlock()
+		return false
+	
+	var task = _instance._image_tasks[task_id]
+	
+	if task.cancelled:
+		_instance._image_mutex.unlock()
+		return false
+	
+	if task.high_priority == high_priority:
+		_instance._image_mutex.unlock()
+		return true
+	
+	task.high_priority = high_priority
+	
+	var from_queue = _instance._image_high_priority_queue if not high_priority else _instance._image_low_priority_queue
+	var to_queue = _instance._image_high_priority_queue if high_priority else _instance._image_low_priority_queue
+	
+	for i in range(from_queue.size()):
+		if from_queue[i].id == task_id:
+			from_queue.remove_at(i)
+			to_queue.append(task)
+			print("[MemoryManager] Task %d priority changed to %s (high=%d, low=%d)" % [task_id, "HIGH" if high_priority else "LOW", _instance._image_high_priority_queue.size(), _instance._image_low_priority_queue.size()])
+			break
+	
+	_instance._image_mutex.unlock()
+	return true
 
 static func queue_extraction_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
@@ -233,7 +347,7 @@ static func get_image_queue_size() -> int:
 	if _instance == null:
 		return 0
 	_instance._image_mutex.lock()
-	var size = _instance._image_queue.size()
+	var size = _instance._image_high_priority_queue.size() + _instance._image_low_priority_queue.size()
 	_instance._image_mutex.unlock()
 	return size
 
@@ -261,10 +375,12 @@ static func shutdown():
 	print("[MemoryManager] Shutting down threads...")
 	_instance._exit_flag = true
 	_instance._db_semaphore.post()
-	_instance._image_semaphore.post()
 	_instance._extraction_semaphore.post()
+	for i in range(IMAGE_THREAD_COUNT):
+		_instance._image_semaphore.post()
 	_instance._db_thread.wait_to_finish()
-	_instance._image_thread.wait_to_finish()
+	for thread in _instance._image_threads:
+		thread.wait_to_finish()
 	_instance._extraction_thread.wait_to_finish()
 	print("[MemoryManager] Threads shut down")
 	_instance = null

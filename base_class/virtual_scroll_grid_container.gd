@@ -7,9 +7,9 @@ signal item_created(item, index)
 signal batch_progress_changed(progress: float)
 
 @export var card_scene: PackedScene
-@export var data_buffer_multiplier: int = 3
-@export var data_preload_multiplier: int = 1
-@export var visual_buffer_lines: int = 3
+@export var data_buffer_multiplier: int = 5
+@export var data_preload_multiplier: int = 3
+@export var visual_buffer_lines: int = 6
 @export var debug_mode: bool = false:
 	set(value):
 		if debug_mode != value:
@@ -61,10 +61,8 @@ var _max_pool_size: int = 120
 var _data_cache: Dictionary = {}
 var _pending_loads: Dictionary = {}
 
-const MAX_CACHE_SIZE: int = 2000
+const MAX_CACHE_SIZE: int = 5000
 var _cache_access_order: Array[int] = []
-
-var _is_loading: bool = false
 
 func _ready():
 	_setup_ui()
@@ -105,11 +103,11 @@ func _get_visible_count() -> int:
 	if vertical:
 		var viewport_height = size.y
 		var visible_rows = ceili(viewport_height / item_height)
-		return visible_rows * items_per_line
+		return (visible_rows * items_per_line)+1
 	else:
 		var viewport_width = size.x
 		var visible_cols = ceili(viewport_width / item_width)
-		return visible_cols * items_per_line
+		return (visible_cols * items_per_line)+1
 
 func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -208,11 +206,8 @@ func setup(card_scene_resource: PackedScene, total_items: int):
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_recalculate_layout()
-	# Only run initial load if it hasn't already been triggered (e.g., by set_total_count)
 	if _active_cards.size() == 0:
 		_initial_load()
-	else:
-		print("[VScrollGrid] setup skipped _initial_load, cards already exist: %d" % _active_cards.size())
 
 func _instantiate_card_pool():
 	if not _card_scene:
@@ -253,11 +248,7 @@ func _update_layout():
 		# Width will be set in _update_margin based on active cards
 
 func _initial_load():
-	print("[VScrollGrid] _initial_load CALLED - active_cards=%d" % _active_cards.size())
-	print("[VScrollGrid] _initial_load - vertical: %s, flow_container.vertical: %s" % [vertical, _flow_container.vertical if _flow_container else "null"])
-	print("[VScrollGrid] _initial_load - viewport size: %s, flow_container size: %s" % [size, _flow_container.size if _flow_container else "null"])
 	var items_per_line = _get_items_per_line()
-	print("[VScrollGrid] _initial_load - items_per_line: %d" % items_per_line)
 	var visible_count: int
 	if vertical:
 		var viewport_height = size.y
@@ -270,11 +261,9 @@ func _initial_load():
 	
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 	var card_count = min(total_card_count, _total_items)
-	print("[VScrollGrid] _initial_load - visible_count: %d, total_card_count: %d, creating: %d, total_items: %d" % [visible_count, total_card_count, card_count, _total_items])
 	
 	_virtual_start = 0
 	_virtual_end = card_count - 1
-	print("[VScrollGrid] _initial_load - creating cards %d to %d" % [_virtual_start, _virtual_end])
 	
 	for i in range(card_count):
 		var card = _acquire_card()
@@ -284,7 +273,6 @@ func _initial_load():
 			_flow_container.add_child(card)
 			item_created.emit(card, i)
 	
-	print("[VScrollGrid] _initial_load - created %d cards, requesting data 0 to %d" % [_active_cards.size(), card_count])
 	_update_margin()
 	_request_data(0, card_count)
 
@@ -308,7 +296,7 @@ func _on_scroll_value_changed(value: float):
 		visible_start_idx = top_row * items_per_line
 		visible_end_idx = min(visible_start_idx + (visible_rows) * items_per_line, _total_items)-1
 		
-		var visible_count = visible_end_idx - visible_start_idx
+		var visible_count = _get_visible_count()
 		total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 		
 		var half_buffer = (total_card_count - visible_count) / 2
@@ -324,7 +312,7 @@ func _on_scroll_value_changed(value: float):
 		visible_start_idx = left_col * items_per_line
 		visible_end_idx = min(visible_start_idx + (visible_cols) * items_per_line, _total_items)-1
 		
-		var visible_count = visible_end_idx - visible_start_idx
+		var visible_count = _get_visible_count()
 		total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 		
 		var half_buffer = (total_card_count - visible_count) / 2
@@ -346,7 +334,6 @@ func _on_scroll_value_changed(value: float):
 		buffer_overlaps = (current_first < target_end) and (current_last >= target_start)
 		
 		if not buffer_overlaps:
-			print("[VScrollGrid] Large jump detected - reloading buffer. Current: %d-%d, Target: %d-%d" % [current_first, current_last, target_start, target_end])
 			_reload_buffer_around_target(visible_start_idx, visible_end_idx)
 			changes_made = true
 			
@@ -407,6 +394,7 @@ func _on_scroll_value_changed(value: float):
 	
 	_update_margin()
 	_check_preload_needed()
+	_update_card_priorities(visible_start_idx, visible_end_idx)
 	
 	visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
 	
@@ -446,12 +434,10 @@ func _recycle_card_at_index(index: int):
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
 		
-		if "game" in card:
-			if card.game:
-				print("[VScrollGrid] Recycling card '%s' back to pool" % old_game_title)
-			card.game = null
 		if card.has_method("reset"):
 			card.reset()
+		elif "game" in card:
+			card.game = null
 		
 		if card.get_parent() == _flow_container:
 			_flow_container.remove_child(card)
@@ -468,12 +454,12 @@ func _add_card_at_end(virtual_index: int):
 	_flow_container.add_child(card)
 	
 	if _data_cache.has(virtual_index):
-		card.game = _data_cache[virtual_index]
-		if card.game:
-			print("[VScrollGrid] Assigned game '%s' to card at index %d" % [card.game.title, virtual_index])
+		var is_visible = _is_index_visible(virtual_index)
+		if card.has_method("set_game_with_priority"):
+			card.set_game_with_priority(_data_cache[virtual_index], is_visible)
+		else:
+			card.game = _data_cache[virtual_index]
 		_update_cache_access_order(virtual_index)
-		if card.has_method("update_display"):
-			card.update_display()
 	else:
 		if card.has_method("set_placeholder"):
 			card.set_placeholder(true)
@@ -491,17 +477,37 @@ func _add_card_at_start(virtual_index: int):
 	_flow_container.move_child(card, 0)
 	
 	if _data_cache.has(virtual_index):
-		card.game = _data_cache[virtual_index]
-		if card.game:
-			print("[VScrollGrid] Assigned game '%s' to card at index %d (at start)" % [card.game.title, virtual_index])
+		var is_visible = _is_index_visible(virtual_index)
+		if card.has_method("set_game_with_priority"):
+			card.set_game_with_priority(_data_cache[virtual_index], is_visible)
+		else:
+			card.game = _data_cache[virtual_index]
 		_update_cache_access_order(virtual_index)
-		if card.has_method("update_display"):
-			card.update_display()
 	else:
 		if card.has_method("set_placeholder"):
 			card.set_placeholder(true)
 	
 	item_created.emit(card, virtual_index)
+
+func _is_index_visible(idx: int) -> bool:
+	var items_per_line = _get_items_per_line()
+	var visible_start_idx: int
+	var visible_end_idx: int
+	
+	if vertical:
+		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+		var viewport_height = size.y
+		var visible_rows = ceili(viewport_height / item_height)
+		visible_start_idx = int(scroll_pos / item_height) * items_per_line
+		visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
+	else:
+		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
+		var viewport_width = size.x
+		var visible_cols = ceili(viewport_width / item_width)
+		visible_start_idx = int(scroll_pos / item_width) * items_per_line
+		visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
+	
+	return idx >= visible_start_idx and idx < visible_end_idx
 
 func _acquire_card() -> Control:
 	while _card_pool.size() > 0:
@@ -509,9 +515,8 @@ func _acquire_card() -> Control:
 		if is_instance_valid(card):
 			card.set_meta("pooled", false)
 			card.visible = true
-			# Reset game data when reusing from pool
-			if "game" in card:
-				card.game = null
+			if card.has_method("reset"):
+				card.reset()
 			card.queue_redraw()
 			return card
 	
@@ -587,7 +592,7 @@ func _update_margin():
 		_flow_container.custom_minimum_size.x = flow_width
 
 func _request_missing_data():
-	if _is_loading or _active_cards.size() == 0:
+	if _active_cards.size() == 0:
 		return
 	
 	var missing_indices: Array[int] = []
@@ -618,9 +623,6 @@ func _request_missing_data():
 			_request_data(offset, limit)
 
 func _check_preload_needed():
-	if _is_loading:
-		return
-	
 	var visible_count = _get_visible_count()
 	var preload_distance = visible_count * data_preload_multiplier
 	var buffer_size = visible_count * data_buffer_multiplier
@@ -630,7 +632,6 @@ func _check_preload_needed():
 		if distance_to_end > 0 and distance_to_end <= preload_distance:
 			var next_batch_start = _virtual_end + 1
 			if not _pending_loads.has(next_batch_start) and not _data_cache.has(next_batch_start):
-				print("[VScrollGrid] Preload forward: offset %d (distance %d)" % [next_batch_start, distance_to_end])
 				_request_data(next_batch_start, min(buffer_size, _total_items - next_batch_start))
 	
 	if _virtual_start > 0:
@@ -638,8 +639,18 @@ func _check_preload_needed():
 		if distance_to_start > 0 and distance_to_start <= preload_distance:
 			var prev_batch_start = max(0, _virtual_start - buffer_size)
 			if not _pending_loads.has(prev_batch_start) and not _data_cache.has(prev_batch_start):
-				print("[VScrollGrid] Preload backward: offset %d (distance %d)" % [prev_batch_start, distance_to_start])
 				_request_data(prev_batch_start, min(buffer_size, _virtual_start - prev_batch_start))
+
+func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
+	for card in _active_cards:
+		var idx = card.get_meta("virtual_index", -1)
+		if idx < 0:
+			continue
+		
+		var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+		
+		if card.has_method("set_image_priority"):
+			card.set_image_priority(is_visible)
 
 func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
@@ -647,18 +658,13 @@ func _request_data(offset: int, limit: int):
 	
 	limit = min(limit, _total_items - offset)
 	_pending_loads[offset] = true
-	_is_loading = true
 	
-	print("[VScrollGrid] Requesting data: offset=%d, limit=%d" % [offset, limit])
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
-	print("[VScrollGrid] Items loaded: %d items at offset %d (active_cards: %d)" % [items.size(), offset, _active_cards.size()])
-	_is_loading = false
 	_pending_loads.erase(offset)
 	
 	if items.is_empty():
-		print("[VScrollGrid] WARNING: Empty items array received")
 		return
 	
 	for i in range(items.size()):
@@ -670,22 +676,40 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 		_data_cache[cache_key] = items[i]
 		_update_cache_access_order(cache_key)
 	
+	var items_per_line = _get_items_per_line()
+	var visible_start_idx: int
+	var visible_end_idx: int
+	
+	if vertical:
+		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+		var viewport_height = size.y
+		var visible_rows = ceili(viewport_height / item_height)
+		visible_start_idx = int(scroll_pos / item_height) * items_per_line
+		visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
+	else:
+		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
+		var viewport_width = size.x
+		var visible_cols = ceili(viewport_width / item_width)
+		visible_start_idx = int(scroll_pos / item_width) * items_per_line
+		visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
+	
 	var updated_count = 0
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx >= offset and idx < offset + items.size():
 			var data_idx = idx - offset
 			if data_idx < items.size():
-				card.game = items[data_idx]
+				var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+				if card.has_method("set_game_with_priority"):
+					card.set_game_with_priority(items[data_idx], is_visible)
+				else:
+					card.game = items[data_idx]
 				_update_cache_access_order(idx)
 				if card.has_method("set_placeholder"):
 					card.set_placeholder(false)
-				if card.has_method("update_display"):
-					card.update_display()
 				updated_count += 1
-				print("[VScrollGrid] Updated card at index %d with game '%s'" % [idx, items[data_idx].title if items[data_idx] else "null"])
 	
-	print("[VScrollGrid] Updated %d cards with loaded data" % updated_count)
+	_update_card_priorities(visible_start_idx, visible_end_idx)
 
 func _refresh_buffer():
 	while _active_cards.size() > 0:
@@ -704,8 +728,6 @@ func _refresh_buffer():
 	_initial_load()
 
 func _reload_buffer_around_target(visible_start: int, visible_end: int):
-	print("[VScrollGrid] Reloading buffer around visible range %d-%d" % [visible_start, visible_end])
-	
 	var items_per_line = _get_items_per_line()
 	var visible_count = visible_end - visible_start
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
@@ -718,8 +740,6 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 		new_start = max(0, _total_items - total_card_count)
 	
 	new_start = (new_start / items_per_line) * items_per_line
-	
-	print("[VScrollGrid] New buffer range: %d-%d" % [new_start, new_end])
 	
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)
@@ -913,7 +933,6 @@ func increment_total_count(amount: int = 1) -> int:
 	_update_layout()
 	
 	if start_index == 0 and _active_cards.size() == 0 and _total_items > 0:
-		print("[VScrollGrid] Library went from empty to %d items, triggering initial load" % _total_items)
 		_initial_load_from_increment()
 		return start_index
 	
@@ -957,8 +976,6 @@ func _initial_load_from_increment():
 	_virtual_start = 0
 	_virtual_end = card_count - 1
 	
-	print("[VScrollGrid] Creating initial %d cards for %d total items" % [card_count, _total_items])
-	
 	for i in range(card_count):
 		var card = _acquire_card()
 		if card:
@@ -967,7 +984,11 @@ func _initial_load_from_increment():
 			_flow_container.add_child(card)
 			
 			if _data_cache.has(i):
-				card.game = _data_cache[i]
+				var is_visible = i < visible_count
+				if card.has_method("set_game_with_priority"):
+					card.set_game_with_priority(_data_cache[i], is_visible)
+				else:
+					card.game = _data_cache[i]
 				if card.has_method("set_placeholder"):
 					card.set_placeholder(false)
 				if card.has_method("update_display"):
@@ -991,23 +1012,37 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 			_update_cache_access_order(cache_key)
 	
 	if items.size() > 0:
-		print("[VScrollGrid] Cached %d items at offset %d" % [items.size(), offset])
+		var items_per_line = _get_items_per_line()
+		var visible_start_idx: int
+		var visible_end_idx: int
 		
-		var updated_count = 0
+		if vertical:
+			var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+			var viewport_height = size.y
+			var visible_rows = ceili(viewport_height / item_height)
+			visible_start_idx = int(scroll_pos / item_height) * items_per_line
+			visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
+		else:
+			var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
+			var viewport_width = size.x
+			var visible_cols = ceili(viewport_width / item_width)
+			visible_start_idx = int(scroll_pos / item_width) * items_per_line
+			visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
+		
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= offset and idx < offset + items.size():
 				if _data_cache.has(idx):
-					card.game = _data_cache[idx]
+					var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+					if card.has_method("set_game_with_priority"):
+						card.set_game_with_priority(_data_cache[idx], is_visible)
+					else:
+						card.game = _data_cache[idx]
 					_update_cache_access_order(idx)
 					if card.has_method("set_placeholder"):
 						card.set_placeholder(false)
 					if card.has_method("update_display"):
 						card.update_display()
-					updated_count += 1
-		
-		if updated_count > 0:
-			print("[VScrollGrid] Populated %d cards with cached data" % updated_count)
 
 func refresh_if_visible(start_index: int, end_index: int):
 	if _active_cards.size() == 0:
@@ -1020,20 +1055,38 @@ func refresh_if_visible(start_index: int, end_index: int):
 	var overlap_end = min(end_index, current_last)
 	
 	if overlap_start <= overlap_end:
+		var items_per_line = _get_items_per_line()
+		var visible_start_idx: int
+		var visible_end_idx: int
+		
+		if vertical:
+			var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
+			var viewport_height = size.y
+			var visible_rows = ceili(viewport_height / item_height)
+			visible_start_idx = int(scroll_pos / item_height) * items_per_line
+			visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
+		else:
+			var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
+			var viewport_width = size.x
+			var visible_cols = ceili(viewport_width / item_width)
+			visible_start_idx = int(scroll_pos / item_width) * items_per_line
+			visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
+		
 		var updated_count = 0
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
-				card.game = _data_cache[idx]
+				var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+				if card.has_method("set_game_with_priority"):
+					card.set_game_with_priority(_data_cache[idx], is_visible)
+				else:
+					card.game = _data_cache[idx]
 				_update_cache_access_order(idx)
 				if card.has_method("set_placeholder"):
 					card.set_placeholder(false)
 				if card.has_method("update_display"):
 					card.update_display()
 				updated_count += 1
-		
-		if updated_count > 0:
-			print("[VScrollGrid] Updated %d visible cards in range %d-%d" % [updated_count, overlap_start, overlap_end])
 
 func _update_cache_access_order(cache_key: int):
 	var idx = _cache_access_order.find(cache_key)
@@ -1045,8 +1098,6 @@ func _evict_oldest_cache_entries(count: int):
 	var to_evict = mini(count, _cache_access_order.size())
 	if to_evict <= 0:
 		return
-	
-	print("[VScrollGrid] Evicting %d oldest cache entries (cache size: %d/%d)" % [to_evict, _data_cache.size(), MAX_CACHE_SIZE])
 	
 	for i in range(to_evict):
 		var oldest_key = _cache_access_order.pop_front()

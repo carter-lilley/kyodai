@@ -8,6 +8,10 @@ signal download_requested(game: GameResource)
 		game = value
 		_update_display()
 
+func set_game_with_priority(value: GameResource, high_priority: bool):
+	game = value
+	_update_display_with_priority(high_priority)
+
 @export var preview_mode: bool = false
 
 @onready var card_input: Button = $CardInput
@@ -38,6 +42,7 @@ var _current_texture: Texture2D = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
+var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
@@ -100,7 +105,21 @@ func _update_display():
 	
 	_update_status_icon()
 	_update_platform_badge()
-	_load_cover()
+	_load_cover(false)
+
+func _update_display_with_priority(high_priority: bool):
+	if not game:
+		return
+	
+	if not is_node_ready():
+		return
+	
+	_update_status_icon()
+	_update_platform_badge()
+	_load_cover(high_priority)
+
+func load_cover_with_priority(high_priority: bool = false):
+	_load_cover(high_priority)
 
 func _update_status_icon():
 	if not status_icon or not status_badge:
@@ -154,7 +173,7 @@ func _update_platform_badge():
 	_update_shader_platform_params(icon_texture)
 	_update_platform_icon_rect(icon_texture)
 
-func _load_cover():
+func _load_cover(high_priority: bool = false):
 	if not game:
 		_set_texture(_loading_texture)
 		return
@@ -162,11 +181,14 @@ func _load_cover():
 	_loading_game_id = game.id
 	_image_retry_count = 0
 	
-	# Check for cached cover using the URL hash
+	if game.cover_path and FileAccess.file_exists(game.cover_path):
+		_load_cached_cover(game.cover_path, high_priority)
+		return
+	
 	if game.cover_url != "" and game.cover_url.begins_with("http"):
 		var cache_path = _get_cached_cover_path(game.cover_url)
 		if FileAccess.file_exists(cache_path):
-			_load_cached_cover(cache_path)
+			_load_cached_cover(cache_path, high_priority)
 			return
 	
 	_set_texture(_loading_texture)
@@ -175,36 +197,41 @@ func _get_cached_cover_path(url: String) -> String:
 	const CACHE_FOLDER = "user://cache/covers/"
 	return CACHE_FOLDER + url.md5_text() + ".jpg"
 
-func _load_cached_cover(cache_path: String):
+func _load_cached_cover(cache_path: String, high_priority: bool = false):
 	var target_game_id = _loading_game_id
 	
 	if not MemoryManager:
 		_set_texture(_loading_texture)
 		return
 	
-	MemoryManager.queue_image_task(
-		func():
-			var file = FileAccess.open(cache_path, FileAccess.READ)
-			if file:
-				var buffer = file.get_buffer(file.get_length())
-				file.close()
-				return _load_texture_from_buffer(buffer)
-			return null,
-		func(texture):
-			if not is_instance_valid(self):
-				return
-			if not game or game.id != target_game_id:
-				return
-			
-			if texture:
-				_set_texture(texture)
-			else:
-				_image_retry_count += 1
-				if _image_retry_count < MAX_IMAGE_RETRIES:
-					await get_tree().create_timer(0.1 * _image_retry_count).timeout
-					if is_instance_valid(self) and game and game.id == target_game_id:
-						_load_cached_cover(cache_path)
-	)
+	if _current_image_task_id > 0:
+		MemoryManager.cancel_image_task(_current_image_task_id)
+	
+	var load_callable = func():
+		var file = FileAccess.open(cache_path, FileAccess.READ)
+		if file:
+			var buffer = file.get_buffer(file.get_length())
+			file.close()
+			return _load_texture_from_buffer(buffer)
+		return null
+	
+	var callback_callable = func(texture):
+		_current_image_task_id = -1
+		if not is_instance_valid(self):
+			return
+		if not game or game.id != target_game_id:
+			return
+		
+		if texture:
+			_set_texture(texture)
+		else:
+			_image_retry_count += 1
+			if _image_retry_count < MAX_IMAGE_RETRIES:
+				await get_tree().create_timer(0.1 * _image_retry_count).timeout
+				if is_instance_valid(self) and game and game.id == target_game_id:
+					_load_cached_cover(cache_path, high_priority)
+	
+	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority)
 
 func _load_texture_from_buffer(buffer: PackedByteArray) -> Texture2D:
 	if buffer.size() < 16:
@@ -213,7 +240,6 @@ func _load_texture_from_buffer(buffer: PackedByteArray) -> Texture2D:
 	var image = Image.new()
 	var err = FAILED
 	
-	# Check magic bytes
 	if buffer[0] == 0xFF and buffer[1] == 0xD8:
 		err = image.load_jpg_from_buffer(buffer)
 	elif buffer[0] == 0x89 and buffer[1] == 0x50:
@@ -286,12 +312,26 @@ func set_placeholder(is_placeholder: bool):
 			status_icon.visible = false
 		if status_badge:
 			status_badge.visible = false
-		# Disable platform badge in shader for placeholders
 		var mat = material as ShaderMaterial
 		if mat:
 			mat.set_shader_parameter("platform_badge_enabled", false)
 	else:
 		_update_display()
+
+func reset():
+	if _current_image_task_id > 0:
+		MemoryManager.cancel_image_task(_current_image_task_id)
+		_current_image_task_id = -1
+	_loading_game_id = ""
+	_image_retry_count = 0
+	game = null
+	_set_texture(_loading_texture)
+
+func set_image_priority(high_priority: bool):
+	if _current_image_task_id > 0:
+		MemoryManager.update_image_priority(_current_image_task_id, high_priority)
+	elif high_priority and game:
+		_load_cover(true)
 
 func set_card_zoom(new_zoom: float) -> void:
 	_current_zoom = new_zoom
