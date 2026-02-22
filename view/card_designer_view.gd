@@ -179,12 +179,6 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	remove_btn.pressed.connect(func(): _on_remove_effect(index))
 	hbox.add_child(remove_btn)
 	
-	var enabled_check = CheckBox.new()
-	enabled_check.text = "Enabled"
-	enabled_check.button_pressed = effect_data.get("enabled", false)
-	enabled_check.toggled.connect(func(pressed): _on_effect_enabled_changed(index, pressed))
-	vbox.add_child(enabled_check)
-	
 	if effect_data.get("effect_id") == "border":
 		var border_effect = BorderEffect.new()
 		var schema = border_effect.get_settings_schema()
@@ -224,9 +218,7 @@ func _on_add_effect(id: int):
 		0:
 			new_effect = {
 				"effect_id": "border",
-				"enabled": true,
 				"settings": {
-					"border_enabled": true,
 					"border_size": 0.05,
 					"border_fade_in": 0.0,
 					"border_color": Color.WHITE
@@ -235,9 +227,7 @@ func _on_add_effect(id: int):
 		1:
 			new_effect = {
 				"effect_id": "badge",
-				"enabled": true,
 				"settings": {
-					"badge_enabled": true,
 					"badge_size": 1.0,
 					"badge_inner_radius": 0.0,
 					"badge_color": Color.WHITE,
@@ -260,12 +250,6 @@ func _on_remove_effect(index: int):
 		_current_config["effects"] = effects
 		_card_state.effect_settings = effects
 		_rebuild_effects_ui()
-		_update_preview()
-
-func _on_effect_enabled_changed(index: int, enabled: bool):
-	var effects = _current_config.get("effects", [])
-	if index >= 0 and index < effects.size():
-		effects[index]["enabled"] = enabled
 		_update_preview()
 
 func _on_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):

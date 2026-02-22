@@ -147,7 +147,7 @@ func _rebuild_effects():
 	_base_effect.initialize(_card_state, {})
 	
 	var border_config = _get_effect_config("border")
-	if border_config and border_config.get("enabled", false):
+	if border_config:
 		_border_effect = BorderEffect.new()
 		_border_effect.name = "BorderEffect"
 		_border_effect.anchor_right = 1.0
@@ -156,7 +156,7 @@ func _rebuild_effects():
 		_border_effect.initialize(_card_state, border_config.get("settings", {}))
 	
 	var badge_config = _get_effect_config("badge")
-	if badge_config and badge_config.get("enabled", false):
+	if badge_config:
 		_badge_effect = BadgeEffect.new()
 		_badge_effect.name = "BadgeEffect"
 		_badge_effect.anchor_right = 1.0

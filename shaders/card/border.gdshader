@@ -3,7 +3,6 @@ shader_type canvas_item;
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_pixels = 12.0;
 
-uniform bool border_enabled = false;
 uniform float border_width_pixels = 4.0;
 uniform float border_fade_in_pixels = 0.0;
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
@@ -24,28 +23,26 @@ void fragment() {
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
-	if (border_enabled) {
-		float total_border = border_width_pixels + border_fade_in_pixels;
+	float total_border = border_width_pixels + border_fade_in_pixels;
+	
+	if (total_border > 0.0 && dist >= -total_border && dist <= 0.0) {
+		float rel_d = (dist + total_border) / total_border;
+		float inner_aa_alpha = smoothstep(0.0, aa_width / total_border, rel_d);
 		
-		if (total_border > 0.0 && dist >= -total_border && dist <= 0.0) {
-			float rel_d = (dist + total_border) / total_border;
-			float inner_aa_alpha = smoothstep(0.0, aa_width / total_border, rel_d);
-			
-			float fade_in_factor = border_fade_in_pixels / total_border;
-			float border_alpha = 1.0;
-			
-			if (fade_in_factor > 0.001) {
-				border_alpha = min(border_alpha, rel_d / fade_in_factor);
-			}
-			border_alpha = clamp(border_alpha, 0.0, 1.0);
-			
-			float solid_border_end = (border_fade_in_pixels + border_width_pixels) / total_border;
-			
-			if (rel_d < solid_border_end) {
-				final_color = vec4(border_color.rgb, border_color.a * border_alpha * inner_aa_alpha);
-			} else {
-				final_color = vec4(border_color.rgb, border_color.a * border_alpha);
-			}
+		float fade_in_factor = border_fade_in_pixels / total_border;
+		float border_alpha = 1.0;
+		
+		if (fade_in_factor > 0.001) {
+			border_alpha = min(border_alpha, rel_d / fade_in_factor);
+		}
+		border_alpha = clamp(border_alpha, 0.0, 1.0);
+		
+		float solid_border_end = (border_fade_in_pixels + border_width_pixels) / total_border;
+		
+		if (rel_d < solid_border_end) {
+			final_color = vec4(border_color.rgb, border_color.a * border_alpha * inner_aa_alpha);
+		} else {
+			final_color = vec4(border_color.rgb, border_color.a * border_alpha);
 		}
 	}
 	
