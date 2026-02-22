@@ -29,7 +29,6 @@ const BASE_BADGE_CORNER: int = 23
 const BASE_ICON_SIZE: float = 22.0
 const BASE_BADGE_MARGIN: float = 8.0
 
-# Default dimensions for vertical orientation (202x270)
 const VERTICAL_WIDTH: float = 202.0
 const VERTICAL_HEIGHT: float = 270.0
 const HORIZONTAL_WIDTH: float = 270.0
@@ -39,6 +38,11 @@ const SQUARE_HEIGHT: float = 256.0
 
 var _current_zoom: float = 1.0
 var _current_texture: Texture2D = null
+var _card_state: CardState = CardState.new()
+
+var _base_effect: BaseCardEffect = null
+var _border_effect: BorderEffect = null
+var _badge_effect: BadgeEffect = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -46,10 +50,6 @@ var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
-	if material:
-		material = material.duplicate()
-	
-	# Always connect to settings changes (needed for preview mode too)
 	if SettingsManager:
 		SettingsManager.setting_changed.connect(_on_setting_changed)
 	
@@ -57,8 +57,9 @@ func _ready():
 		_setup_preview_mode()
 		return
 	
+	_update_card_state_from_settings()
+	_rebuild_effects()
 	set_card_zoom(_current_zoom)
-	_update_shader_params()
 	_update_display()
 	
 	if card_input:
@@ -68,19 +69,16 @@ func _ready():
 	if DownloadManager:
 		DownloadManager.download_progress.connect(_on_download_progress)
 		DownloadManager.download_completed.connect(_on_download_completed)
-	
-
 
 func _setup_preview_mode():
+	_update_card_state_from_settings()
+	_rebuild_effects()
 	set_card_zoom(_current_zoom)
-	_update_shader_params()
 	
-	# Load a random game for the preview
 	if DataManager:
 		var random_game = DataManager.get_random_game()
 		if random_game:
 			self.game = random_game
-			_load_cover()
 		else:
 			_set_texture(_loading_texture)
 	else:
@@ -89,20 +87,107 @@ func _setup_preview_mode():
 	if status_badge:
 		status_badge.visible = false
 	
-	# Note: _update_platform_badge() will be called automatically via the game setter
-	# which handles checking the platform_badge setting and loading the correct icon
-	
 	if card_input:
 		card_input.disabled = true
 		card_input.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+func set_card_state(state: CardState) -> void:
+	_card_state = state.duplicate()
+	_rebuild_effects()
+	if _base_effect:
+		_base_effect.update_state(_card_state)
+	if _border_effect:
+		_border_effect.update_state(_card_state)
+	if _badge_effect:
+		_badge_effect.update_state(_card_state)
+	set_card_zoom(_card_state.zoom_level)
+
+func get_card_state() -> CardState:
+	return _card_state
+
+func _update_card_state_from_settings():
+	_card_state.zoom_level = _current_zoom
+	_card_state.orientation = _get_orientation_index()
+	_card_state.corner_radius = _get_corner_radius_from_settings()
+	_card_state.update_from_zoom(_current_zoom)
+	
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			_card_state.effect_settings = config_setting.value.get("effects", [])
+
+func _get_orientation_index() -> int:
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			return config_setting.value.get("card_orientation", 0)
+	return 0
+
+func _get_corner_radius_from_settings() -> float:
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			return config_setting.value.get("corner_radius", 12.0)
+	return 12.0
+
+func _rebuild_effects():
+	for child in get_children():
+		if child is CardEffect:
+			child.queue_free()
+	
+	_base_effect = null
+	_border_effect = null
+	_badge_effect = null
+	
+	_base_effect = BaseCardEffect.new()
+	_base_effect.name = "BaseEffect"
+	_base_effect.anchor_right = 1.0
+	_base_effect.anchor_bottom = 1.0
+	add_child(_base_effect)
+	_base_effect.initialize(_card_state, {})
+	
+	var border_config = _get_effect_config("border")
+	if border_config and border_config.get("enabled", false):
+		_border_effect = BorderEffect.new()
+		_border_effect.name = "BorderEffect"
+		_border_effect.anchor_right = 1.0
+		_border_effect.anchor_bottom = 1.0
+		add_child(_border_effect)
+		_border_effect.initialize(_card_state, border_config.get("settings", {}))
+	
+	var badge_config = _get_effect_config("badge")
+	if badge_config and badge_config.get("enabled", false):
+		_badge_effect = BadgeEffect.new()
+		_badge_effect.name = "BadgeEffect"
+		_badge_effect.anchor_right = 1.0
+		_badge_effect.anchor_bottom = 1.0
+		add_child(_badge_effect)
+		_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
+		
+		if _border_effect:
+			var border_size = border_config.get("settings", {}).get("border_size", 0.05)
+			var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
+			_badge_effect.set_border_width(border_pixels)
+	
+	if card_input:
+		move_child(card_input, -1)
+	
+	if _current_texture:
+		_set_texture(_current_texture)
+	
+	_update_platform_badge()
+
+func _get_effect_config(effect_id: String) -> Dictionary:
+	for effect_data in _card_state.effect_settings:
+		if effect_data.get("effect_id") == effect_id:
+			return effect_data
+	return {}
+
 func _update_display():
 	if not game:
 		return
-	
 	if not is_node_ready():
 		return
-	
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(false)
@@ -110,10 +195,8 @@ func _update_display():
 func _update_display_with_priority(high_priority: bool):
 	if not game:
 		return
-	
 	if not is_node_ready():
 		return
-	
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(high_priority)
@@ -124,7 +207,6 @@ func load_cover_with_priority(high_priority: bool = false):
 func _update_status_icon():
 	if not status_icon or not status_badge:
 		return
-	
 	if not game:
 		status_icon.visible = false
 		status_badge.visible = false
@@ -145,24 +227,16 @@ func _update_status_icon():
 		status_badge.visible = true
 
 func _update_platform_badge():
+	if not _badge_effect:
+		if platform_icon:
+			platform_icon.visible = false
+		return
+	
 	if not game:
-		_update_shader_platform_params(null)
-		_update_platform_icon_rect(null)
+		if platform_icon:
+			platform_icon.visible = false
 		return
 	
-	# Check if platform badge is enabled
-	var show_badge = false
-	if SettingsManager:
-		var badge_setting = SettingsManager.get_setting("platform_badge")
-		if badge_setting:
-			show_badge = badge_setting.value
-	
-	if not show_badge:
-		_update_shader_platform_params(null)
-		_update_platform_icon_rect(null)
-		return
-	
-	# Load platform icon and pass to shader
 	var platform_slug = game.platform_slug
 	var icon_texture: Texture2D = null
 	if platform_slug:
@@ -170,8 +244,60 @@ func _update_platform_badge():
 		if FileAccess.file_exists(icon_path):
 			icon_texture = load(icon_path)
 	
-	_update_shader_platform_params(icon_texture)
-	_update_platform_icon_rect(icon_texture)
+	if icon_texture:
+		_badge_effect.set_platform_icon(icon_texture)
+		_update_platform_icon_rect(icon_texture)
+	else:
+		if platform_icon:
+			platform_icon.visible = false
+
+func _update_platform_icon_rect(icon_texture: Texture2D):
+	if not platform_icon:
+		return
+	if not icon_texture:
+		platform_icon.visible = false
+		return
+	
+	platform_icon.visible = true
+	
+	var badge_config = _get_effect_config("badge")
+	var settings = badge_config.get("settings", {})
+	
+	var badge_size_setting = settings.get("badge_size", 1.0)
+	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
+	var corner_radius = _card_state.corner_radius / _current_zoom
+	var icon_color = settings.get("icon_color", Color.WHITE)
+	
+	var base_badge_size = 32.0 * badge_size_setting * _current_zoom
+	var badge_size = max(base_badge_size, corner_radius * _current_zoom)
+	
+	var base_padding = 8.0 * badge_size_setting * _current_zoom * 0.5
+	var outer_padding = corner_radius * _current_zoom * 0.3 * 0.5
+	var total_padding = base_padding + outer_padding
+	
+	var available_size = badge_size - total_padding * 2.0
+	available_size = max(available_size, badge_size * 0.4)
+	
+	var max_inner_radius = max(0.0, badge_size)
+	var inner_radius = max_inner_radius * clamp(inner_radius_setting, 0.0, 1.0)
+	var outer_shift = corner_radius * _current_zoom * 0.15
+	var inner_shift = inner_radius * 0.15
+	
+	var padding_left = total_padding + outer_shift - inner_shift
+	var padding_top = total_padding + outer_shift - inner_shift
+	
+	platform_icon.visible = true
+	platform_icon.texture = icon_texture
+	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	platform_icon.offset_left = padding_left
+	platform_icon.offset_top = padding_top
+	platform_icon.offset_right = padding_left + available_size
+	platform_icon.offset_bottom = padding_top + available_size
+	
+	var shader_material = ShaderMaterial.new()
+	shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")
+	shader_material.set_shader_parameter("icon_color", icon_color)
+	platform_icon.material = shader_material
 
 func _load_cover(high_priority: bool = false):
 	if not game:
@@ -261,9 +387,9 @@ func _load_texture_from_buffer(buffer: PackedByteArray) -> Texture2D:
 
 func _set_texture(tex: Texture2D) -> void:
 	_current_texture = tex
-	var mat = material as ShaderMaterial
-	if mat:
-		mat.set_shader_parameter("game_texture", tex)
+	if _base_effect:
+		_base_effect.set_game_texture(tex)
+	_card_state.game_texture = tex
 
 func _on_card_pressed():
 	if not game:
@@ -320,9 +446,6 @@ func set_placeholder(is_placeholder: bool):
 			status_icon.visible = false
 		if status_badge:
 			status_badge.visible = false
-		var mat = material as ShaderMaterial
-		if mat:
-			mat.set_shader_parameter("platform_badge_enabled", false)
 	else:
 		_update_display()
 
@@ -348,11 +471,9 @@ func set_card_zoom(new_zoom: float) -> void:
 	var card_width = base_dims.x * new_zoom
 	var card_height = base_dims.y * new_zoom
 	
-	# Set both custom_minimum_size and size to ensure GridContainer respects our dimensions
 	custom_minimum_size = Vector2(card_width, card_height)
 	size = Vector2(card_width, card_height)
 	
-	# Prevent GridContainer from stretching the card
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
@@ -381,213 +502,39 @@ func set_card_zoom(new_zoom: float) -> void:
 		status_icon.offset_right = icon_size
 		status_icon.offset_bottom = icon_size
 	
-	_update_shader_params()
-	_update_platform_badge()  # Reload platform icon with new zoom scale
+	_card_state.update_from_zoom(new_zoom)
+	
+	if _base_effect:
+		_base_effect.update_state(_card_state)
+	if _border_effect:
+		_border_effect.update_state(_card_state)
+	if _badge_effect:
+		_badge_effect.update_state(_card_state)
+	
+	_update_platform_badge()
 
 func get_current_zoom() -> float:
 	return _current_zoom
 
-func _update_shader_params() -> void:
-	var mat = material as ShaderMaterial
-	if not mat:
-		return
-	
-	var corner_val = 12
-	var enabled_val = false
-	var size_val = 0.05
-	var color_val = Color.WHITE
-	
-	var base_dims = _get_base_dimensions()
-	var base_width = base_dims.x
-	var base_height = base_dims.y
-	
-	if SettingsManager:
-		var corner_setting = SettingsManager.get_setting("corner_radius")
-		var border_enabled_setting = SettingsManager.get_setting("border_enabled")
-		var border_size_setting = SettingsManager.get_setting("border_size")
-		var border_fade_in_setting = SettingsManager.get_setting("border_fade_in")
-		var border_color_setting = SettingsManager.get_setting("border_color")
-		
-		corner_val = corner_setting.value if corner_setting else 12
-		enabled_val = border_enabled_setting.value if border_enabled_setting else false
-		size_val = border_size_setting.value if border_size_setting else 0.05
-		var fade_in_val = border_fade_in_setting.value if border_fade_in_setting else 0.0
-		color_val = border_color_setting.value if border_color_setting else Color.WHITE
-		
-		var fade_in_pixels = fade_in_val * base_width * 2.0 * _current_zoom
-		mat.set_shader_parameter("border_fade_in_pixels", fade_in_pixels)
-	
-	# Corner radius scales with zoom for consistent visual
-	var corner_pixels = corner_val * _current_zoom
-	
-	# Border values in pixels (settings are proportional 0.0-0.5)
-	var border_pixels = size_val * base_width * 2.0 * _current_zoom
-	
-	# Calculate actual card size
-	var actual_width = base_width * _current_zoom
-	var actual_height = base_height * _current_zoom
-	
-	mat.set_shader_parameter("card_size", Vector2(actual_width, actual_height))
-	mat.set_shader_parameter("corner_radius_pixels", corner_pixels)
-	mat.set_shader_parameter("border_width_pixels", border_pixels if enabled_val else 0.0)
-	mat.set_shader_parameter("border_enabled", enabled_val)
-	mat.set_shader_parameter("border_color", color_val)
-	mat.set_shader_parameter("game_texture", _current_texture)
-
-func _update_shader_platform_params(icon_texture: Texture2D) -> void:
-	var mat = material as ShaderMaterial
-	if not mat:
-		return
-	
-	var show_badge = false
-	if SettingsManager:
-		var badge_setting = SettingsManager.get_setting("platform_badge")
-		if badge_setting:
-			show_badge = badge_setting.value
-	
-	# Show badge if setting is enabled (icon is optional for now)
-	mat.set_shader_parameter("platform_badge_enabled", show_badge)
-	if icon_texture:
-		mat.set_shader_parameter("platform_badge_icon", icon_texture)
-	
-	# Set badge size scale - multiply by zoom to keep proportional to card
-	var badge_size = 1.0
-	if SettingsManager:
-		var badge_size_setting = SettingsManager.get_setting("platform_badge_size")
-		if badge_size_setting:
-			badge_size = badge_size_setting.value
-	# Scale badge size with card zoom to maintain proportions
-	mat.set_shader_parameter("platform_badge_size", badge_size * _current_zoom)
-	
-	# Set inner corner radius
-	var inner_radius = 0.0
-	if SettingsManager:
-		var inner_radius_setting = SettingsManager.get_setting("platform_badge_inner_radius")
-		if inner_radius_setting:
-			inner_radius = inner_radius_setting.value
-	mat.set_shader_parameter("platform_badge_inner_radius", inner_radius)
-	
-	# Set icon padding
-	var icon_padding = 0.5
-	if SettingsManager:
-		var icon_padding_setting = SettingsManager.get_setting("platform_badge_icon_padding")
-		if icon_padding_setting:
-			icon_padding = icon_padding_setting.value
-	mat.set_shader_parameter("platform_badge_icon_padding", icon_padding)
-	
-	# Set icon color
-	var icon_color = Color.WHITE
-	if SettingsManager:
-		var icon_color_setting = SettingsManager.get_setting("platform_badge_icon_color")
-		if icon_color_setting:
-			icon_color = icon_color_setting.value
-	# Icon is now rendered via TextureRect, no need to pass to shader
-
-func _update_platform_icon_rect(icon_texture: Texture2D) -> void:
-	if not platform_icon:
-		return
-	
-	if not icon_texture:
-		platform_icon.visible = false
-		return
-	
-	# Get all the values we need (same as shader)
-	var badge_size_setting = 1.0
-	var icon_padding_setting = 0.5
-	var inner_radius_setting = 0.0
-	var corner_radius = 12
-	var icon_color = Color.WHITE
-	
-	if SettingsManager:
-		var badge_size_var = SettingsManager.get_setting("platform_badge_size")
-		if badge_size_var:
-			badge_size_setting = badge_size_var.value
-		
-		var icon_padding_var = SettingsManager.get_setting("platform_badge_icon_padding")
-		if icon_padding_var:
-			icon_padding_setting = icon_padding_var.value
-		
-		var inner_radius_var = SettingsManager.get_setting("platform_badge_inner_radius")
-		if inner_radius_var:
-			inner_radius_setting = inner_radius_var.value
-		
-		var corner_var = SettingsManager.get_setting("corner_radius")
-		if corner_var:
-			corner_radius = corner_var.value
-		
-		var icon_color_setting = SettingsManager.get_setting("platform_badge_icon_color")
-		if icon_color_setting:
-			icon_color = icon_color_setting.value
-	
-	# Calculate badge size (same formula as shader)
-	var base_badge_size = 32.0 * badge_size_setting * _current_zoom
-	var badge_size = max(base_badge_size, corner_radius * _current_zoom)
-	
-	# Calculate padding (same formula as shader)
-	var base_padding = 8.0 * badge_size_setting * _current_zoom * icon_padding_setting
-	var outer_padding = corner_radius * _current_zoom * 0.3 * icon_padding_setting
-	var total_padding = base_padding + outer_padding
-	
-	# Calculate available size for icon
-	var available_size = badge_size - total_padding * 2.0
-	available_size = max(available_size, badge_size * 0.4)
-	
-	# Calculate max inner radius
-	var max_inner_radius = max(0.0, badge_size)
-	var inner_radius = max_inner_radius * clamp(inner_radius_setting, 0.0, 1.0)
-	
-	# Calculate shifts (same formula as shader)
-	var outer_shift = corner_radius * _current_zoom * 0.15
-	var inner_shift = inner_radius * 0.15
-	
-	# Calculate position
-	var padding_left = total_padding + outer_shift - inner_shift
-	var padding_top = total_padding + outer_shift - inner_shift
-	
-	# Position and size the TextureRect
-	platform_icon.visible = true
-	platform_icon.texture = icon_texture
-	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	platform_icon.offset_left = padding_left
-	platform_icon.offset_top = padding_top
-	platform_icon.offset_right = padding_left + available_size
-	platform_icon.offset_bottom = padding_top + available_size
-	
-	# Apply icon color using custom shader material
-	var shader_material = ShaderMaterial.new()
-	shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")
-	shader_material.set_shader_parameter("icon_color", icon_color)
-	platform_icon.material = shader_material
-
 func _get_base_dimensions() -> Vector2:
-	if SettingsManager:
-		var orientation_setting = SettingsManager.get_setting("card_orientation")
-		if orientation_setting:
-			# Array settings store the index, not the string
-			var orientation_idx = orientation_setting.value
-			match orientation_idx:
-				1: # Horizontal
-					return Vector2(HORIZONTAL_WIDTH, HORIZONTAL_HEIGHT)
-				2: # Square
-					return Vector2(SQUARE_WIDTH, SQUARE_HEIGHT)
-				_: # 0 = Vertical (default)
-					return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
-	return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
+	match _card_state.orientation:
+		1: return Vector2(HORIZONTAL_WIDTH, HORIZONTAL_HEIGHT)
+		2: return Vector2(SQUARE_WIDTH, SQUARE_HEIGHT)
+		_: return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if setting.property_name == "card_orientation":
-		# Orientation changed - update card size for preview cards
+	if setting.property_name == "card_effect_config":
+		var old_orientation = _card_state.orientation
+		var new_orientation = _get_orientation_index()
+		
+		if old_orientation != new_orientation:
+			_card_state.orientation = new_orientation
+			if not preview_mode and UIManager:
+				UIManager.rebuild_game_grid()
+				return
+		
+		_rebuild_effects()
 		set_card_zoom(_current_zoom)
-		# Also rebuild the grid layout for non-preview cards
-		if not preview_mode and UIManager:
-			UIManager.rebuild_game_grid()
-	elif setting.property_name in ["corner_radius", "border_enabled", "border_size", "border_fade_in", "border_color"]:
-		_update_shader_params()
-		_update_platform_badge()
-	elif setting.property_name == "platform_badge":
-		_update_platform_badge()
-	elif setting.property_name in ["platform_badge_size", "platform_badge_inner_radius", "platform_badge_icon_padding", "platform_badge_icon_color"]:
-		_update_platform_badge()
 
 func update_display() -> void:
 	_update_display()

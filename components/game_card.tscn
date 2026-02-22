@@ -1,21 +1,6 @@
 [gd_scene format=3 uid="uid://gamecard0001"]
 
-[ext_resource type="Script" uid="uid://dxxbtr4c6pxjf" path="res://components/game_card.gd" id="1_gamecard"]
-[ext_resource type="Shader" uid="uid://bhmuuv0p3td8j" path="res://shaders/card_shader.gdshader" id="4_shader"]
-
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_card"]
-shader = ExtResource("4_shader")
-shader_parameter/card_size = Vector2(202, 270)
-shader_parameter/corner_radius_pixels = 12.0
-shader_parameter/border_enabled = false
-shader_parameter/border_width_pixels = 4.0
-shader_parameter/border_fade_in_pixels = 0.0
-shader_parameter/border_color = Color(1, 1, 1, 1)
-shader_parameter/platform_badge_enabled = false
-shader_parameter/platform_badge_size = 32.0
-shader_parameter/platform_badge_inner_radius = 0.0
-shader_parameter/platform_badge_icon_padding = 0.5
-shader_parameter/platform_badge_icon_color = Color(1, 1, 1, 1)
+[ext_resource type="Script" path="res://components/game_card.gd" id="1_gamecard"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_button"]
 
@@ -27,7 +12,7 @@ corner_radius_bottom_right = 23
 corner_radius_bottom_left = 23
 
 [node name="GameCard" type="ColorRect" unique_id=1413667875]
-material = SubResource("ShaderMaterial_card")
+color = Color(0, 0, 0, 0)
 custom_minimum_size = Vector2(202, 270)
 script = ExtResource("1_gamecard")
 

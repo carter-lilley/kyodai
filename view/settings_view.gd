@@ -29,6 +29,16 @@ func _build_settings_view():
 	var platforms_tab = _create_platforms_tab()
 	_settings_container.add_child(platforms_tab)
 	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Platforms")
+	
+	# Add Card Designer tab
+	var designer_tab = _create_card_designer_tab()
+	_settings_container.add_child(designer_tab)
+	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Card Designer")
+
+func _create_card_designer_tab() -> Control:
+	var designer = preload("res://view/card_designer_view.tscn").instantiate()
+	designer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	return designer
 
 func _create_platforms_tab() -> Control:
 	var platforms_view = preload("res://view/platforms_settings_view.gd").new()
@@ -45,31 +55,6 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	margin.add_theme_constant_override("margin_right", 20)
 	margin.add_theme_constant_override("margin_bottom", 20)
 	
-	# Special layout for Card Appearance: side-by-side with preview
-	if name == "Card Appearance":
-		var hbox = HBoxContainer.new()
-		hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-		
-		# Left side: settings
-		var settings_vbox = VBoxContainer.new()
-		settings_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		
-		var menu = SettingsMenu.new()
-		menu.initialize_settings_menu(name, settings_vars)
-		menu.setting_changed.connect(_on_setting_changed)
-		
-		settings_vbox.add_child(menu)
-		hbox.add_child(settings_vbox)
-		
-		# Right side: preview
-		var preview_vbox = _create_card_preview_ui()
-		hbox.add_child(preview_vbox)
-		
-		margin.add_child(hbox)
-		scroll.add_child(margin)
-		return scroll
-	
-	# Standard layout for other tabs
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	
@@ -79,7 +64,6 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	
 	vbox.add_child(menu)
 	
-	# Add connection status UI for RomM Connection tab
 	if name == "RomM Connection":
 		var status_ui = _create_connection_status_ui()
 		vbox.add_child(status_ui)
@@ -91,31 +75,6 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 
 # Network connection status enum (local to this view)
 enum ConnectionStatus { NOT_CONFIGURED, CONNECTED, DISCONNECTED, TESTING }
-
-func _create_card_preview_ui() -> Control:
-	var container = VBoxContainer.new()
-	container.custom_minimum_size.x = 240
-	
-	# Header
-	var header = Label.new()
-	header.text = "Preview"
-	header.add_theme_font_size_override("font_size", 18)
-	container.add_child(header)
-	
-	# Spacer
-	var spacer = Control.new()
-	spacer.custom_minimum_size.y = 10
-	container.add_child(spacer)
-	
-	# Preview card
-	var preview_card = preload("res://components/game_card.tscn").instantiate()
-	preview_card.name = "PreviewCard"
-	preview_card.preview_mode = true
-	preview_card.set_card_zoom(1.0)
-	
-	container.add_child(preview_card)
-	
-	return container
 
 func _create_connection_status_ui() -> Control:
 	# Create a container to hold the indicator and test button

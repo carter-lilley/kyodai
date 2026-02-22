@@ -13,6 +13,15 @@ func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVa
 	var menu_name_label = Label.new()
 	menu_name_label.text = subgroup
 	add_child(menu_name_label)
+	build_controls_from_settingsvars(settingsvars)
+
+func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: String = "") -> void:
+	if title:
+		var title_label = Label.new()
+		title_label.text = title
+		title_label.add_theme_font_size_override("font_size", 16)
+		add_child(title_label)
+	
 	for settingsvar in settingsvars:
 		print("[SettingsMenu] Processing setting: ", settingsvar.display_name, " state: ", settingsvar.state, " INTERNAL?: ", settingsvar.state == State.INTERNAL)
 		if settingsvar.state != State.INTERNAL:
@@ -20,6 +29,48 @@ func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVa
 			match_var_type(settingsvar)
 		else:
 			print("[SettingsMenu]   -> SKIPPING (INTERNAL)")
+
+func update_control_value(property_name: String, value: Variant) -> void:
+	var control = controls.get(property_name)
+	if not control:
+		return
+	
+	if control is CheckBox:
+		control.button_pressed = value
+	elif control is OptionButton:
+		control.select(value)
+	elif control is HSlider:
+		control.value = value
+	elif control is LineEdit:
+		control.text = str(value)
+	elif control is ColorPickerButton:
+		control.color = value
+	elif control is RangeSlider:
+		control.set_range(value.x, value.y)
+
+func get_control_value(property_name: String) -> Variant:
+	var control = controls.get(property_name)
+	if not control:
+		return null
+	
+	if control is CheckBox:
+		return control.button_pressed
+	elif control is OptionButton:
+		return control.selected
+	elif control is HSlider:
+		return control.value
+	elif control is LineEdit:
+		return control.text
+	elif control is ColorPickerButton:
+		return control.color
+	elif control is RangeSlider:
+		return Vector2(control.range_start, control.range_end)
+	return null
+
+func clear_controls() -> void:
+	for child in get_children():
+		child.queue_free()
+	controls.clear()
 
 var controls: Dictionary[String, Control] = {}
 func match_var_type(settingsvar : SettingsVar):
