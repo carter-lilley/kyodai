@@ -292,6 +292,6 @@ func _on_save():
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting:
-			config_setting.value = _current_config.duplicate(true)
+			SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
 			SettingsManager.save_settings()
 			NotificationManager.show_notification("Card design saved", Notification.Type.SUCCESS)

@@ -67,9 +67,16 @@ var _cache_access_order: Array[int] = []
 func _ready():
 	_setup_ui()
 	resized.connect(_on_resized)
+	if SettingsManager:
+		SettingsManager.settings_saved.connect(_on_settings_saved)
 
 func _on_resized():
 	_recalculate_layout()
+
+func _on_settings_saved():
+	_recalculate_dimensions()
+	_refresh_buffer()
+	call_deferred("_recalculate_layout")
 
 func _recalculate_layout():
 	if not _flow_container or not _scroll_container:
@@ -157,10 +164,9 @@ func _setup_ui():
 
 func _get_base_dimensions() -> Vector2:
 	if SettingsManager:
-		var orientation_setting = SettingsManager.get_setting("card_orientation")
-		if orientation_setting:
-			# Array settings store the index, not the string
-			var orientation_idx = orientation_setting.value
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			var orientation_idx = config_setting.value.get("card_orientation", 0)
 			match orientation_idx:
 				1: # Horizontal
 					return Vector2(270.0, 202.0)
@@ -271,6 +277,8 @@ func _initial_load():
 			card.set_meta("virtual_index", i)
 			_active_cards.append(card)
 			_flow_container.add_child(card)
+			if card.has_method("refresh_settings"):
+				card.refresh_settings()
 			item_created.emit(card, i)
 	
 	_update_margin()
@@ -453,6 +461,9 @@ func _add_card_at_end(virtual_index: int):
 	_active_cards.append(card)
 	_flow_container.add_child(card)
 	
+	if card.has_method("refresh_settings"):
+		card.refresh_settings()
+	
 	if _data_cache.has(virtual_index):
 		var is_visible = _is_index_visible(virtual_index)
 		if card.has_method("set_game_with_priority"):
@@ -475,6 +486,9 @@ func _add_card_at_start(virtual_index: int):
 	_active_cards.insert(0, card)
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
+	
+	if card.has_method("refresh_settings"):
+		card.refresh_settings()
 	
 	if _data_cache.has(virtual_index):
 		var is_visible = _is_index_visible(virtual_index)

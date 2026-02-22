@@ -50,9 +50,6 @@ var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
-	if SettingsManager:
-		SettingsManager.setting_changed.connect(_on_setting_changed)
-	
 	if preview_mode:
 		_setup_preview_mode()
 		return
@@ -288,6 +285,10 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var scaled_width = badge_width * scale
 	var scaled_height = badge_height * scale
 	
+	var min_badge_size = _card_state.corner_radius
+	scaled_width = max(scaled_width, min_badge_size)
+	scaled_height = max(scaled_height, min_badge_size)
+	
 	var scaled_min_dim = min(scaled_width, scaled_height)
 	
 	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
@@ -501,6 +502,11 @@ func reset():
 	game = null
 	_set_texture(_loading_texture)
 
+func refresh_settings():
+	_update_card_state_from_settings()
+	_rebuild_effects()
+	set_card_zoom(_current_zoom)
+
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:
 		MemoryManager.update_image_priority(_current_image_task_id, high_priority)
@@ -564,20 +570,6 @@ func _get_base_dimensions() -> Vector2:
 		1: return Vector2(HORIZONTAL_WIDTH, HORIZONTAL_HEIGHT)
 		2: return Vector2(SQUARE_WIDTH, SQUARE_HEIGHT)
 		_: return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
-
-func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if setting.property_name == "card_effect_config":
-		var old_orientation = _card_state.orientation
-		var new_orientation = _get_orientation_index()
-		
-		if old_orientation != new_orientation:
-			_card_state.orientation = new_orientation
-			if not preview_mode and UIManager:
-				UIManager.rebuild_game_grid()
-				return
-		
-		_rebuild_effects()
-		set_card_zoom(_current_zoom)
 
 func update_display() -> void:
 	_update_display()

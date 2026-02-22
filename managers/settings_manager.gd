@@ -117,6 +117,7 @@ func save_settings() -> void:
 			push_error("Failed to save preferences: %s" % err)
 		else:
 			print("[SettingsManager]: Preferences saved.")
+			emit_signal("settings_saved")
 
 const PASSWORD_KEY = "kyodai_v1"
 
