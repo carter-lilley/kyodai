@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://gamecard0001"]
 
-[ext_resource type="Script" path="res://components/game_card.gd" id="1_gamecard"]
+[ext_resource type="Script" uid="uid://dxxbtr4c6pxjf" path="res://components/game_card.gd" id="1_gamecard"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_button"]
 
@@ -12,8 +12,8 @@ corner_radius_bottom_right = 23
 corner_radius_bottom_left = 23
 
 [node name="GameCard" type="ColorRect" unique_id=1413667875]
-color = Color(0, 0, 0, 0)
 custom_minimum_size = Vector2(202, 270)
+color = Color(0, 0, 0, 0)
 script = ExtResource("1_gamecard")
 
 [node name="CardInput" type="Button" parent="." unique_id=796224510]

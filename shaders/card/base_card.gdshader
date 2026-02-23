@@ -6,8 +6,14 @@ uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset = 0.0;
 uniform bool debug_sobel = false;
 uniform bool debug_logo_row = true;
+uniform bool debug_thirds = true;
 uniform bool smart_crop_enabled = true;
-uniform float logo_blend_factor = 1.0;
+uniform float logo_blend_factor = -1.0;
+uniform float detection_window_ratio = 0.15;
+uniform float edge_threshold = 0.4;
+
+const int ROW_SAMPLES = 16;
+const int COL_SAMPLES = 16;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 	vec2 half_size = size * 0.5;
@@ -58,41 +64,41 @@ float sobel_edge_detection(vec2 uv, sampler2D tex) {
 	return clamp(edge_strength * 2.0, 0.0, 1.0);
 }
 
-float horizontal_edge_density(vec2 uv, sampler2D tex, int samples) {
-	vec2 tex_size = vec2(textureSize(tex, 0));
-	float density = 0.0;
+float find_max_density_region(sampler2D tex, float window_ratio, float threshold) {
+	int window_rows = max(1, int(float(ROW_SAMPLES) * window_ratio));
+	int num_windows = ROW_SAMPLES - window_rows + 1;
+	float max_hits = 0.0;
+	float best_center_y = 0.5;
 	
-	for (int i = 0; i < samples; i++) {
-		float t = float(i) / float(samples - 1);
-		vec2 sample_uv = vec2(t, uv.y);
-		density += sobel_edge_detection(sample_uv, tex);
+	for (int w = 0; w < ROW_SAMPLES; w++) {
+		if (w >= num_windows) break;
+		
+		float hits = 0.0;
+		
+		for (int r = 0; r < ROW_SAMPLES; r++) {
+			if (r >= window_rows) break;
+			
+			int row = w + r;
+			float y = float(row) / float(ROW_SAMPLES - 1);
+			
+			for (int c = 0; c < COL_SAMPLES; c++) {
+				float x = float(c) / float(COL_SAMPLES - 1);
+				vec2 sample_uv = vec2(x, y);
+				float edge = sobel_edge_detection(sample_uv, tex);
+				
+				if (edge > threshold) {
+					hits += 1.0;
+				}
+			}
+		}
+		
+		if (hits > max_hits) {
+			max_hits = hits;
+			best_center_y = (float(w) + float(window_rows) * 0.5) / float(ROW_SAMPLES);
+		}
 	}
 	
-	return density / float(samples);
-}
-
-float find_max_density_row(sampler2D tex, int row_samples, int col_samples) {
-	float max_density = 0.0;
-	float max_row_y = 0.5;
-	
-	for (int row = 0; row < row_samples; row++) {
-		float y = float(row) / float(row_samples - 1);
-		float density = 0.0;
-		
-		for (int col = 0; col < col_samples; col++) {
-			float x = float(col) / float(col_samples - 1);
-			vec2 sample_uv = vec2(x, y);
-			density += sobel_edge_detection(sample_uv, tex);
-		}
-		density /= float(col_samples);
-		
-		if (density > max_density) {
-			max_density = density;
-			max_row_y = y;
-		}
-	}
-	
-	return max_row_y;
+	return best_center_y;
 }
 
 void fragment() {
@@ -123,22 +129,44 @@ void fragment() {
 	float vertical_offset = 0.0;
 	float logo_y = 0.5;
 	
-	if (smart_crop_enabled) {
-		float card_aspect = inner_size.x / inner_size.y;
-		float tex_aspect = tex_size.x / tex_size.y;
+	float card_aspect = inner_size.x / inner_size.y;
+	float tex_aspect = tex_size.x / tex_size.y;
+	
+	if (tex_aspect < card_aspect && (smart_crop_enabled || debug_logo_row)) {
+		logo_y = find_max_density_region(game_texture, detection_window_ratio, edge_threshold);
+	}
+	
+	if (smart_crop_enabled && tex_aspect < card_aspect) {
+		// Calculate visible region in texture space
+		float scale_y = tex_aspect / card_aspect;
+		float visible_top = 0.5 - scale_y * 0.5;
+		float visible_height = scale_y;
 		
-		if (tex_aspect < card_aspect) {
-			logo_y = find_max_density_row(game_texture, 32, 32);
-			float blended_y = mix(logo_y, 0.5, logo_blend_factor);
-			
-			float scale_y = tex_aspect / card_aspect;
-			float visible_portion = scale_y;
-			float hidden_portion = 1.0 - visible_portion;
-			float max_offset = hidden_portion * 0.5;
-			
-			float desired_offset = blended_y - 0.5;
-			vertical_offset = clamp(desired_offset, -max_offset, max_offset);
+		// Quarters within visible region
+		float third1 = visible_top + visible_height * 0.25;
+		float center = 0.5;
+		float third2 = visible_top + visible_height * 0.75;
+		
+		// Find nearest third line to logo_y
+		float dist1 = abs(logo_y - third1);
+		float dist2 = abs(logo_y - center);
+		float dist3 = abs(logo_y - third2);
+		
+		float nearest_target = center;
+		if (dist1 < dist2 && dist1 < dist3) {
+			nearest_target = third1;
+		} else if (dist3 < dist2) {
+			nearest_target = third2;
 		}
+		
+		// Blend factor: 0 = no change, 1 = fully align to target
+		float target_offset = nearest_target - logo_y;
+		float blended_offset = mix(0.0, target_offset, logo_blend_factor);
+		
+		float hidden_portion = 1.0 - scale_y;
+		float max_offset = hidden_portion * 0.5;
+		
+		vertical_offset = clamp(blended_offset, -max_offset, max_offset);
 	}
 	
 	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
@@ -150,14 +178,74 @@ void fragment() {
 		tex_color = vec4(vec3(edge), 1.0);
 	}
 	
+	if (debug_thirds) {
+		float line_thickness = 3.0 / tex_size.y;
+		
+		// Calculate visible region in texture space
+		float scale_y_calc = 1.0;
+		if (tex_aspect < card_aspect) {
+			scale_y_calc = tex_aspect / card_aspect;
+		}
+		float visible_top = 0.5 - scale_y_calc * 0.5;
+		
+		// Quarters divide the VISIBLE region
+		float tex_third1 = visible_top + scale_y_calc * 0.25;
+		float tex_center = 0.5;
+		float tex_third2 = visible_top + scale_y_calc * 0.75;
+		
+		vec2 base_tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
+		
+		if (abs(base_tex_uv.y - tex_third1) < line_thickness || 
+		    abs(base_tex_uv.y - tex_third2) < line_thickness ||
+		    abs(base_tex_uv.y - tex_center) < line_thickness) {
+			tex_color = vec4(0.5, 0.0, 0.5, 1.0);
+		}
+	}
+	
 	if (debug_logo_row) {
 		float line_thickness = 3.0 / tex_size.y;
-		if (abs(tex_uv.y - logo_y) < line_thickness) {
+		
+		// Quarters in texture space (same as debug_thirds)
+		vec2 base_tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
+		
+		// Convert quarters to texture space based on visible region
+		float scale_y_calc = 1.0;
+		if (tex_aspect < card_aspect) {
+			scale_y_calc = tex_aspect / card_aspect;
+		}
+		float visible_top = 0.5 - scale_y_calc * 0.5;
+		float tex_third1 = visible_top + scale_y_calc * 0.25;
+		float tex_third2 = visible_top + scale_y_calc * 0.75;
+		float tex_center = 0.5;
+		
+		// Draw cyan line showing the target third we're blending toward
+		if (smart_crop_enabled && tex_aspect < card_aspect) {
+			float dist1 = abs(logo_y - tex_third1);
+			float dist2 = abs(logo_y - tex_center);
+			float dist3 = abs(logo_y - tex_third2);
+			
+			float nearest_target = tex_center;
+			if (dist1 < dist2 && dist1 < dist3) {
+				nearest_target = tex_third1;
+			} else if (dist3 < dist2) {
+				nearest_target = tex_third2;
+			}
+			
+			if (abs(base_tex_uv.y - nearest_target) < line_thickness * 1.5) {
+				tex_color = vec4(0.0, 1.0, 1.0, 1.0);
+			}
+		}
+		
+		// Draw detected window bounds (red) and center (green)
+		float window_half = detection_window_ratio * 0.5;
+		float window_top = logo_y - window_half;
+		float window_bottom = logo_y + window_half;
+		
+		if (abs(tex_uv.y - window_top) < line_thickness || abs(tex_uv.y - window_bottom) < line_thickness) {
 			tex_color = vec4(1.0, 0.0, 0.0, 1.0);
 		}
 		
-		float blend_line_y = mix(logo_y, 0.5, logo_blend_factor);
-		if (abs(tex_uv.y - blend_line_y) < line_thickness * 0.5) {
+		if (abs(tex_uv.y - logo_y) < line_thickness * 0.5) {
 			tex_color = vec4(0.0, 1.0, 0.0, 1.0);
 		}
 	}
