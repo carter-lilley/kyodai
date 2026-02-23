@@ -485,6 +485,10 @@ func _add_card_at_end(virtual_index: int):
 	_active_cards.append(card)
 	_flow_container.add_child(card)
 	
+	# Ensure card has correct zoom immediately
+	if card.has_method("set_card_zoom"):
+		card.set_card_zoom(_calculate_zoom())
+	
 	if card.has_method("refresh_settings"):
 		card.refresh_settings()
 	
@@ -510,6 +514,10 @@ func _add_card_at_start(virtual_index: int):
 	_active_cards.insert(0, card)
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
+	
+	# Ensure card has correct zoom immediately
+	if card.has_method("set_card_zoom"):
+		card.set_card_zoom(_calculate_zoom())
 	
 	if card.has_method("refresh_settings"):
 		card.refresh_settings()

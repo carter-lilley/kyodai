@@ -7,6 +7,7 @@ signal scroll_value_changed(value: float)
 @export var smooth_scroll_duration: float = 2.0
 @export var smooth_scroll_big_jump_threshold: float = 3500.0
 @export var smooth_scroll_big_jump_multiplier: float = 3.0
+@export var smooth_scroll_max_duration: float = 3.0
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:
@@ -186,11 +187,13 @@ func _on_scrollbar_input(event: InputEvent):
 			if event.pressed:
 				_is_dragging_scrollbar = true
 				_scrollbar_drag_start_mouse_pos = event.global_position.y if vertical else event.global_position.x
-				_scrollbar_drag_start_value = _target_scroll
 				
 				if _scroll_tween and _scroll_tween.is_valid():
 					_scroll_tween.kill()
 				_is_smooth_scrolling = false
+				
+				_target_scroll = _get_current_scroll()
+				_scrollbar_drag_start_value = _target_scroll
 			else:
 				_is_dragging_scrollbar = false
 	

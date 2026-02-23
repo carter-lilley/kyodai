@@ -10,8 +10,7 @@ how to split important siblings
 	filters > recent, downloaded, etc.
 	namecard type icons
 	layer system strokes/shadows/fades
-	sane defaults
-	fix scrolling stuck
+	sane defaulTS
 	add letters to big library 
 ## performance:
 	cache image colors and cropping data on sync
