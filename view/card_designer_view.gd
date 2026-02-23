@@ -125,7 +125,9 @@ func _load_current_config():
 	_corner_slider.value = _current_config.get("corner_radius", 12.0)
 	
 	_card_state.orientation = _current_config.get("card_orientation", 0)
-	_card_state.corner_radius = _current_config.get("corner_radius", 12.0)
+	# Convert corner radius from pixels to ratio
+	var corner_pixels = _current_config.get("corner_radius", 12.0)
+	_card_state.corner_radius_ratio = corner_pixels / 202.0
 	_card_state.effect_settings = _current_config.get("effects", [])
 
 func _get_default_config() -> Dictionary:
@@ -141,10 +143,11 @@ func _setup_preview_card():
 	
 	var state = CardState.new()
 	state.orientation = _current_config.get("card_orientation", 0)
-	state.corner_radius = _current_config.get("corner_radius", 12.0)
+	# Convert corner radius from pixels to ratio
+	var corner_pixels = _current_config.get("corner_radius", 12.0)
+	state.corner_radius_ratio = corner_pixels / 202.0
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
 	state.zoom_level = 1.5
-	state.update_from_zoom(1.5)
 	
 	_preview_card.set_card_state(state)
 
@@ -265,13 +268,13 @@ func _on_effect_setting_changed(effect_index: int, setting_name: String, value: 
 func _on_orientation_changed(index: int):
 	_current_config["card_orientation"] = index
 	_card_state.orientation = index
-	_card_state.update_from_zoom(1.5)
+	_card_state.zoom_level = 1.5
 	_update_preview()
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
-	_card_state.corner_radius = value
-	_card_state.update_from_zoom(1.5)
+	_card_state.corner_radius_ratio = value / 202.0
+	_card_state.zoom_level = 1.5
 	_update_preview()
 
 func _update_preview():
@@ -280,11 +283,12 @@ func _update_preview():
 	
 	var state = CardState.new()
 	state.orientation = _current_config.get("card_orientation", 0)
-	state.corner_radius = _current_config.get("corner_radius", 12.0)
+	# Convert corner radius from pixels to ratio
+	var corner_pixels = _current_config.get("corner_radius", 12.0)
+	state.corner_radius_ratio = corner_pixels / 202.0
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
 	state.zoom_level = 1.5
 	state.game_texture = _preview_card._current_texture
-	state.update_from_zoom(1.5)
 	
 	_preview_card.set_card_state(state)
 

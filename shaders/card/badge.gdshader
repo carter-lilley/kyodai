@@ -1,17 +1,18 @@
 shader_type canvas_item;
 
 uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_pixels = 12.0;
+uniform float corner_radius_ratio = 0.06;  // 0.0 to 1.0, relative to card width
 
 uniform bool hide_background = false;
-uniform float badge_size = 1.0;
-uniform vec2 badge_dimensions = vec2(32.0, 32.0);
-uniform float badge_inner_radius = 0.0;
+uniform float badge_size_ratio = 0.16;  // Badge size as ratio of card width (was 32px at 202px width)
+uniform vec2 badge_aspect_ratio = vec2(1.0, 1.0);  // Badge aspect ratio (width/height)
+uniform float badge_inner_radius = 0.0;  // 0.0 to 1.0 for inner corner roundness
 uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform float border_width = 0.0;
+uniform float border_width_ratio = 0.0;  // Border width as ratio of card width
 
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
+float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
+	float radius = radius_ratio * size.x;  // Radius as ratio of width
 	vec2 d = abs(pos - half_size) - (half_size - radius);
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
@@ -28,8 +29,12 @@ void fragment() {
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
-	float badge_width = badge_dimensions.x;
-	float badge_height = badge_dimensions.y;
+	// Convert ratios to pixels
+	float badge_size_pixels = badge_size_ratio * card_size.x;
+	float border_width_pixels = border_width_ratio * card_size.x;
+	
+	float badge_width = badge_size_pixels * badge_aspect_ratio.x;
+	float badge_height = badge_size_pixels * badge_aspect_ratio.y;
 	
 	if (pixel_pos.x < badge_width && pixel_pos.y < badge_height) {
 		float dist_left = pixel_pos.x;
@@ -45,7 +50,7 @@ void fragment() {
 		
 		if (badge_inner_radius > 0.0) {
 			float min_dimension = min(badge_width, badge_height);
-			float max_radius = max(0.0, min_dimension * 0.5 - border_width);
+			float max_radius = max(0.0, min_dimension * 0.5 - border_width_pixels);
 			float inner_radius = max_radius * clamp(badge_inner_radius, 0.0, 1.0);
 			
 			vec2 corner_center = vec2(badge_width - inner_radius, badge_height - inner_radius);
@@ -65,7 +70,7 @@ void fragment() {
 		final_color = vec4(badge_color.rgb, badge_color.a * badge_alpha);
 	}
 	
-	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_pixels);
+	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, edge_dist);
 	final_color.a *= edge_alpha;
 	

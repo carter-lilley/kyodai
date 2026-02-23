@@ -1,9 +1,9 @@
 shader_type canvas_item;
 
 uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_pixels = 12.0;
+uniform float corner_radius_ratio = 0.06;  // 0.0 to 1.0, relative to card width
 uniform sampler2D game_texture : filter_linear, repeat_disable;
-uniform float border_inset = 0.0;
+uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool debug_sobel = false;
 uniform bool debug_sobel_density = false;
 uniform bool debug_blend_vls = false;
@@ -17,8 +17,9 @@ uniform float smart_crop_overshoot = 0.15;
 const int ROW_SAMPLES = 8;
 const int COL_SAMPLES = 8;
 
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
+float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
+	float radius = radius_ratio * size.x;  // Radius as ratio of width
 	vec2 d = abs(pos - half_size) - (half_size - radius);
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
@@ -179,10 +180,13 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	vec2 inner_size = card_size - vec2(border_inset * 2.0);
-	vec2 inner_offset = vec2(border_inset);
+	// Convert ratio to pixels
+	float border_inset_pixels = border_inset_ratio * card_size.x;
 	
-	float dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_pixels);
+	vec2 inner_size = card_size - vec2(border_inset_pixels * 2.0);
+	vec2 inner_offset = vec2(border_inset_pixels);
+	
+	float dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 	
 	if (edge_alpha <= 0.0) {

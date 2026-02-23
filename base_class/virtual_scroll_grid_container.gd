@@ -30,12 +30,20 @@ const BASE_CARD_WIDTH: float = 202.0
 const BASE_CARD_HEIGHT: float = 270.0
 const GRID_SEPARATION: int = 10
 
-var zoom: float = 1.0:
+# Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
+var target_card_width_ratio: float = 0.15:
 	set(value):
-		var new_zoom = clampf(value, 0.5, 2.0)
-		if not is_equal_approx(zoom, new_zoom):
-			zoom = new_zoom
-			_on_zoom_changed()
+		var clamped = clampf(value, 0.05, 0.5)
+		if not is_equal_approx(target_card_width_ratio, clamped):
+			target_card_width_ratio = clamped
+			_recalculate_layout()
+
+# Computed zoom based on viewport size
+var zoom: float = 1.0:
+	get:
+		return _calculate_zoom()
+	set(value):
+		push_warning("VirtualScrollGridContainer: Cannot set zoom directly. Set target_card_width_ratio instead.")
 
 var item_height: float = 280.0
 var item_width: float = 212.0
@@ -73,6 +81,13 @@ func _ready():
 func _on_resized():
 	_recalculate_layout()
 
+func _calculate_zoom() -> float:
+	var base_dims = _get_base_dimensions()
+	if vertical:
+		return (size.x * target_card_width_ratio) / base_dims.x
+	else:
+		return (size.y * target_card_width_ratio) / base_dims.y
+
 func _on_settings_saved():
 	_recalculate_dimensions()
 	_refresh_buffer()
@@ -82,9 +97,10 @@ func _recalculate_layout():
 	if not _flow_container or not _scroll_container:
 		return
 	
+	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions()
-	item_width = (base_dims.x * zoom) + GRID_SEPARATION
-	item_height = (base_dims.y * zoom) + GRID_SEPARATION
+	item_width = (base_dims.x * current_zoom) + GRID_SEPARATION
+	item_height = (base_dims.y * current_zoom) + GRID_SEPARATION
 	
 	_update_layout()
 	_update_margin()
@@ -93,6 +109,11 @@ func _recalculate_layout():
 			_on_scroll_value_changed(_scroll_container.scroll_vertical)
 		else:
 			_on_scroll_value_changed(_scroll_container.scroll_horizontal)
+	
+	# Update zoom on all active cards
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_card_zoom"):
+			card.set_card_zoom(current_zoom)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -177,28 +198,31 @@ func _get_base_dimensions() -> Vector2:
 	return Vector2(202.0, 270.0)
 
 func _recalculate_dimensions():
+	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions()
-	item_width = (base_dims.x * zoom) + GRID_SEPARATION
-	item_height = (base_dims.y * zoom) + GRID_SEPARATION
+	item_width = (base_dims.x * current_zoom) + GRID_SEPARATION
+	item_height = (base_dims.y * current_zoom) + GRID_SEPARATION
 
 func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change)."""
+	var current_zoom = _calculate_zoom()
 	_recalculate_dimensions()
 	_recalculate_layout()
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
-			card.set_card_zoom(zoom)
+			card.set_card_zoom(current_zoom)
 	
 	_update_margin()
 
 func _on_zoom_changed():
+	var current_zoom = _calculate_zoom()
 	_recalculate_dimensions()
 	_recalculate_layout()
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
-			card.set_card_zoom(zoom)
+			card.set_card_zoom(current_zoom)
 	
 	_update_margin()
 

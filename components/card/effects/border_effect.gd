@@ -24,13 +24,10 @@ func _update_shader_params() -> void:
 	var border_gradient = _settings.get("border_gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
 	
-	var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
-	var fade_in_pixels = border_fade_in * _card_state.base_width * 2.0 * _card_state.zoom_level
-	
 	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_pixels", _card_state.corner_radius * _card_state.zoom_level)
-	_set_shader_param("border_width_pixels", border_pixels)
-	_set_shader_param("border_fade_in_pixels", fade_in_pixels)
+	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	_set_shader_param("border_width_ratio", border_size)
+	_set_shader_param("border_fade_in_ratio", border_fade_in)
 	_set_shader_param("gradient_direction", gradient_direction)
 	
 	if border_gradient is Gradient:

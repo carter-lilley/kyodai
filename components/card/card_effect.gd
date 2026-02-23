@@ -19,9 +19,12 @@ func initialize(card_state: CardState, settings: Dictionary) -> void:
 	_settings = settings.duplicate()
 	_setup_shader()
 	_apply_settings()
+	_connect_card_state_signals()
 
 func update_state(card_state: CardState) -> void:
+	_disconnect_card_state_signals()
 	_card_state = card_state
+	_connect_card_state_signals()
 	_update_shader_params()
 
 func update_settings(settings: Dictionary) -> void:
@@ -44,3 +47,32 @@ func _set_shader_param(param: String, value: Variant) -> void:
 	var mat = material as ShaderMaterial
 	if mat:
 		mat.set_shader_parameter(param, value)
+
+# Reactive signal connections
+func _connect_card_state_signals() -> void:
+	if not _card_state:
+		return
+	_card_state.zoom_changed.connect(_on_zoom_changed)
+	_card_state.orientation_changed.connect(_on_orientation_changed)
+	_card_state.corner_radius_changed.connect(_on_corner_radius_changed)
+	_card_state.border_inset_changed.connect(_on_border_inset_changed)
+
+func _disconnect_card_state_signals() -> void:
+	if not _card_state:
+		return
+	_card_state.zoom_changed.disconnect(_on_zoom_changed)
+	_card_state.orientation_changed.disconnect(_on_orientation_changed)
+	_card_state.corner_radius_changed.disconnect(_on_corner_radius_changed)
+	_card_state.border_inset_changed.disconnect(_on_border_inset_changed)
+
+func _on_zoom_changed(_new_zoom: float) -> void:
+	_update_shader_params()
+
+func _on_orientation_changed(_new_orientation: int) -> void:
+	_update_shader_params()
+
+func _on_corner_radius_changed(_new_ratio: float) -> void:
+	_update_shader_params()
+
+func _on_border_inset_changed(_new_ratio: float) -> void:
+	_update_shader_params()

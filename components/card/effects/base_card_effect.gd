@@ -1,13 +1,6 @@
 class_name BaseCardEffect
 extends CardEffect
 
-const VERTICAL_WIDTH: float = 202.0
-const VERTICAL_HEIGHT: float = 270.0
-const HORIZONTAL_WIDTH: float = 270.0
-const HORIZONTAL_HEIGHT: float = 202.0
-const SQUARE_WIDTH: float = 256.0
-const SQUARE_HEIGHT: float = 256.0
-
 var _current_texture: Texture2D = null
 
 func _ready():
@@ -27,9 +20,9 @@ func _update_shader_params() -> void:
 		return
 	
 	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_pixels", _card_state.corner_radius * _card_state.zoom_level)
+	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
 	_set_shader_param("game_texture", _card_state.game_texture)
-	_set_shader_param("border_inset", _card_state.border_inset)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_current_texture = texture

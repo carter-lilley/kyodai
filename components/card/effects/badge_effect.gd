@@ -23,24 +23,27 @@ func _update_shader_params() -> void:
 	var badge_size = _settings.get("badge_size", 1.0)
 	var badge_inner_radius = _settings.get("badge_inner_radius", 0.0)
 	var badge_color = _settings.get("badge_color", Color.WHITE)
-	var badge_dimensions = _settings.get("badge_dimensions", Vector2(32.0, 32.0))
+	var badge_aspect = _settings.get("badge_aspect", Vector2(1.0, 1.0))
 	
 	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_pixels", _card_state.corner_radius * _card_state.zoom_level)
+	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("hide_background", hide_background)
-	_set_shader_param("badge_size", badge_size * _card_state.zoom_level)
-	_set_shader_param("badge_dimensions", badge_dimensions)
+	_set_shader_param("badge_size_ratio", badge_size * 0.16)  # 0.16 is base ratio (32px/202px)
+	_set_shader_param("badge_aspect_ratio", badge_aspect)
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
-	_set_shader_param("border_width", _border_width)
+	_set_shader_param("border_width_ratio", _border_width)
 
 func set_border_width(width: float) -> void:
 	_border_width = width
 	_update_shader_params()
 
 func set_badge_dimensions(dimensions: Vector2) -> void:
-	_settings["badge_dimensions"] = dimensions
-	_update_shader_params()
+	# Convert dimensions to aspect ratio
+	var max_dim = max(dimensions.x, dimensions.y)
+	if max_dim > 0:
+		_settings["badge_aspect"] = Vector2(dimensions.x / max_dim, dimensions.y / max_dim)
+		_update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

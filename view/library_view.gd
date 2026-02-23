@@ -16,7 +16,12 @@ func _ready():
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
 	
-	# Setup zoom slider
+	# Setup zoom slider (now controls card width ratio)
+	# Min 0.10 = ~10 cards visible (prevents too many shaders running)
+	zoom_slider.min_value = 0.10
+	zoom_slider.max_value = 0.35
+	zoom_slider.step = 0.01
+	zoom_slider.value = games_grid.target_card_width_ratio
 	zoom_slider.value_changed.connect(_on_zoom_changed)
 	
 	# Setup vertical layout from settings
@@ -96,7 +101,6 @@ func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
 		card.download_requested.connect(_on_download_requested)
-		card.set_card_zoom(games_grid.zoom)
 
 func _on_download_requested(game: GameResource):
 	# Use the selected sibling's ID and file name if one is selected
@@ -215,7 +219,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			print("[LibraryView] Hide requested for game: ", romm_id)
 
 func _on_zoom_changed(value: float) -> void:
-	games_grid.zoom = value
+	games_grid.target_card_width_ratio = value
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name == "library_vertical_layout":

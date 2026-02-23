@@ -24,19 +24,12 @@ var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
 var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
-const BASE_BADGE_SIZE: float = 32.0
-const BASE_BADGE_CORNER: int = 23
-const BASE_ICON_SIZE: float = 22.0
-const BASE_BADGE_MARGIN: float = 8.0
+# Ratio-based constants (as fraction of card width)
+const BADGE_SIZE_RATIO: float = 0.16  # ~32px at default width
+const BADGE_MARGIN_RATIO: float = 0.04  # ~8px at default width
+const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
+const ICON_SIZE_RATIO: float = 0.11  # ~22px at default width
 
-const VERTICAL_WIDTH: float = 202.0
-const VERTICAL_HEIGHT: float = 270.0
-const HORIZONTAL_WIDTH: float = 270.0
-const HORIZONTAL_HEIGHT: float = 202.0
-const SQUARE_WIDTH: float = 256.0
-const SQUARE_HEIGHT: float = 256.0
-
-var _current_zoom: float = 1.0
 var _current_texture: Texture2D = null
 var _card_state: CardState = CardState.new()
 
@@ -54,9 +47,12 @@ func _ready():
 		_setup_preview_mode()
 		return
 	
+	# Connect to CardState signals for reactivity
+	_card_state.zoom_changed.connect(_on_zoom_changed)
+	_card_state.orientation_changed.connect(_on_orientation_changed)
+	
 	_update_card_state_from_settings()
 	_rebuild_effects()
-	set_card_zoom(_current_zoom)
 	_update_display()
 	
 	if card_input:
@@ -70,7 +66,6 @@ func _ready():
 func _setup_preview_mode():
 	_update_card_state_from_settings()
 	_rebuild_effects()
-	set_card_zoom(_current_zoom)
 	
 	if DataManager:
 		var random_game = DataManager.get_random_game()
@@ -89,43 +84,41 @@ func _setup_preview_mode():
 		card_input.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func set_card_state(state: CardState) -> void:
+	# Disconnect old signals
+	if _card_state:
+		_card_state.zoom_changed.disconnect(_on_zoom_changed)
+		_card_state.orientation_changed.disconnect(_on_orientation_changed)
+	
 	_card_state = state.duplicate()
 	_rebuild_effects()
-	if _base_effect:
-		_base_effect.update_state(_card_state)
-	if _border_effect:
-		_border_effect.update_state(_card_state)
-	if _badge_effect:
-		_badge_effect.update_state(_card_state)
-	set_card_zoom(_card_state.zoom_level)
+	
+	# Reconnect signals
+	_card_state.zoom_changed.connect(_on_zoom_changed)
+	_card_state.orientation_changed.connect(_on_orientation_changed)
+	
+	# Trigger updates
+	_on_zoom_changed(_card_state.zoom_level)
+	_on_orientation_changed(_card_state.orientation)
 
 func get_card_state() -> CardState:
 	return _card_state
 
 func _update_card_state_from_settings():
-	_card_state.zoom_level = _current_zoom
-	_card_state.orientation = _get_orientation_index()
-	_card_state.corner_radius = _get_corner_radius_from_settings()
-	_card_state.update_from_zoom(_current_zoom)
-	
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
+			_card_state.orientation = config_setting.value.get("card_orientation", 0)
 			_card_state.effect_settings = config_setting.value.get("effects", [])
+			# Corner radius as ratio (0.0 to 0.5) - convert from pixels if needed
+			var corner_pixels = config_setting.value.get("corner_radius", 12.0)
+			# Default card width is 202, so 12px / 202 = ~0.06
+			_card_state.corner_radius_ratio = corner_pixels / 202.0
 
-func _get_orientation_index() -> int:
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting and config_setting.value is Dictionary:
-			return config_setting.value.get("card_orientation", 0)
-	return 0
-
-func _get_corner_radius_from_settings() -> float:
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting and config_setting.value is Dictionary:
-			return config_setting.value.get("corner_radius", 12.0)
-	return 12.0
+func _get_effect_config(effect_id: String) -> Dictionary:
+	for effect_data in _card_state.effect_settings:
+		if effect_data.get("effect_id") == effect_id:
+			return effect_data
+	return {}
 
 func _rebuild_effects():
 	for child in get_children():
@@ -135,7 +128,7 @@ func _rebuild_effects():
 	_base_effect = null
 	_border_effect = null
 	_badge_effect = null
-	_card_state.border_inset = 0.0
+	_card_state.border_inset_ratio = 0.0
 	
 	_base_effect = BaseCardEffect.new()
 	_base_effect.name = "BaseEffect"
@@ -153,11 +146,9 @@ func _rebuild_effects():
 		add_child(_border_effect)
 		_border_effect.initialize(_card_state, border_config.get("settings", {}))
 		
+		# Calculate border inset as ratio (border extends half inside, half outside)
 		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
-		var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
-		_card_state.border_inset = border_pixels * 0.5
-		if _base_effect:
-			_base_effect.update_state(_card_state)
+		_card_state.border_inset_ratio = border_size * 0.5
 	
 	var badge_config = _get_effect_config("badge")
 	if badge_config:
@@ -169,9 +160,7 @@ func _rebuild_effects():
 		_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
 		
 		if _border_effect:
-			var border_size = border_config.get("settings", {}).get("border_size", 0.05)
-			var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
-			_badge_effect.set_border_width(border_pixels)
+			_badge_effect.set_border_width(_card_state.border_inset_ratio)
 	
 	if card_input:
 		move_child(card_input, -1)
@@ -181,11 +170,47 @@ func _rebuild_effects():
 	
 	_update_platform_badge()
 
-func _get_effect_config(effect_id: String) -> Dictionary:
-	for effect_data in _card_state.effect_settings:
-		if effect_data.get("effect_id") == effect_id:
-			return effect_data
-	return {}
+func _on_zoom_changed(_new_zoom: float) -> void:
+	var card_size = _card_state.card_size
+	custom_minimum_size = card_size
+	size = card_size
+	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	
+	_update_status_badge_layout()
+	_update_platform_badge()
+
+func _on_orientation_changed(_new_orientation: int) -> void:
+	_on_zoom_changed(_card_state.zoom_level)
+
+func _update_status_badge_layout():
+	if not status_badge:
+		return
+	
+	var card_width = _card_state.card_size.x
+	var badge_size = BADGE_SIZE_RATIO * card_width
+	var badge_margin = BADGE_MARGIN_RATIO * card_width
+	var badge_corner = int(BADGE_CORNER_RATIO * card_width)
+	
+	status_badge.offset_left = -badge_size - badge_margin
+	status_badge.offset_top = -badge_size - badge_margin
+	status_badge.offset_right = -badge_margin
+	status_badge.offset_bottom = -badge_margin
+	
+	var new_style = StyleBoxFlat.new()
+	new_style.bg_color = Color(0, 0, 0, 0.6)
+	new_style.corner_radius_top_left = badge_corner
+	new_style.corner_radius_top_right = badge_corner
+	new_style.corner_radius_bottom_left = badge_corner
+	new_style.corner_radius_bottom_right = badge_corner
+	status_badge.add_theme_stylebox_override("panel", new_style)
+	
+	if status_icon:
+		var icon_size = ICON_SIZE_RATIO * card_width * 0.5
+		status_icon.offset_left = -icon_size
+		status_icon.offset_top = -icon_size
+		status_icon.offset_right = icon_size
+		status_icon.offset_bottom = icon_size
 
 func _update_display():
 	if not game:
@@ -270,9 +295,12 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
 	var icon_padding = settings.get("icon_padding", 0.5)
 	var icon_color = settings.get("icon_color", Color.WHITE)
-	var card_corner = _card_state.corner_radius / _current_zoom
 	
-	var base_badge_size = 32.0
+	var card_width = _card_state.card_size.x
+	var corner_radius_pixels = _card_state.corner_radius_ratio * card_width
+	
+	# Base badge size as ratio of card width
+	var base_badge_size = BADGE_SIZE_RATIO * card_width
 	var icon_size = icon_texture.get_size()
 	var icon_aspect = icon_size.x / icon_size.y if icon_size.y > 0 else 1.0
 	
@@ -288,18 +316,19 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var base_min_dim = min(badge_width, badge_height)
 	var base_inner_corner = (base_min_dim * 0.5) * clamp(inner_radius_setting, 0.0, 1.0)
 	
-	var scale = badge_size_setting * _current_zoom
+	var scale = badge_size_setting
 	var scaled_width = badge_width * scale
 	var scaled_height = badge_height * scale
 	
-	var min_badge_size = _card_state.corner_radius * _current_zoom
+	# Minimum size based on corner radius
+	var min_badge_size = corner_radius_pixels
 	scaled_width = max(scaled_width, min_badge_size)
 	scaled_height = max(scaled_height, min_badge_size)
 	
 	var scaled_min_dim = min(scaled_width, scaled_height)
 	
 	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-	var scaled_outer = _card_state.corner_radius * _current_zoom * corner_midpoint_factor
+	var scaled_outer = corner_radius_pixels * corner_midpoint_factor
 	var scaled_inner = base_inner_corner * scale * corner_midpoint_factor
 	var max_outer = scaled_min_dim * 0.4
 	scaled_outer = min(scaled_outer, max_outer)
@@ -512,7 +541,6 @@ func reset():
 func refresh_settings():
 	_update_card_state_from_settings()
 	_rebuild_effects()
-	set_card_zoom(_current_zoom)
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:
@@ -520,71 +548,9 @@ func set_image_priority(high_priority: bool):
 	elif high_priority and game:
 		_load_cover(true)
 
+# Called by VirtualScrollGridContainer when zoom changes
 func set_card_zoom(new_zoom: float) -> void:
-	_current_zoom = new_zoom
-	
-	var base_dims = _get_base_dimensions()
-	var card_width = base_dims.x * new_zoom
-	var card_height = base_dims.y * new_zoom
-	
-	custom_minimum_size = Vector2(card_width, card_height)
-	size = Vector2(card_width, card_height)
-	
-	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	
-	if status_badge:
-		var badge_size = BASE_BADGE_SIZE * new_zoom
-		var badge_margin = BASE_BADGE_MARGIN * new_zoom
-		var badge_corner = int(BASE_BADGE_CORNER * new_zoom)
-		
-		status_badge.offset_left = -badge_size - badge_margin
-		status_badge.offset_top = -badge_size - badge_margin
-		status_badge.offset_right = -badge_margin
-		status_badge.offset_bottom = -badge_margin
-		
-		var new_style = StyleBoxFlat.new()
-		new_style.bg_color = Color(0, 0, 0, 0.6)
-		new_style.corner_radius_top_left = badge_corner
-		new_style.corner_radius_top_right = badge_corner
-		new_style.corner_radius_bottom_left = badge_corner
-		new_style.corner_radius_bottom_right = badge_corner
-		status_badge.add_theme_stylebox_override("panel", new_style)
-	
-	if status_icon:
-		var icon_size = BASE_ICON_SIZE * new_zoom / 2.0
-		status_icon.offset_left = -icon_size
-		status_icon.offset_top = -icon_size
-		status_icon.offset_right = icon_size
-		status_icon.offset_bottom = icon_size
-	
-	_card_state.update_from_zoom(new_zoom)
-	
-	var border_config = _get_effect_config("border")
-	if border_config:
-		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
-		var border_pixels = border_size * _card_state.base_width * 2.0 * new_zoom
-		_card_state.border_inset = border_pixels * 0.5
-	else:
-		_card_state.border_inset = 0.0
-	
-	if _base_effect:
-		_base_effect.update_state(_card_state)
-	if _border_effect:
-		_border_effect.update_state(_card_state)
-	if _badge_effect:
-		_badge_effect.update_state(_card_state)
-	
-	_update_platform_badge()
+	_card_state.zoom_level = new_zoom
 
 func get_current_zoom() -> float:
-	return _current_zoom
-
-func _get_base_dimensions() -> Vector2:
-	match _card_state.orientation:
-		1: return Vector2(HORIZONTAL_WIDTH, HORIZONTAL_HEIGHT)
-		2: return Vector2(SQUARE_WIDTH, SQUARE_HEIGHT)
-		_: return Vector2(VERTICAL_WIDTH, VERTICAL_HEIGHT)
-
-func update_display() -> void:
-	_update_display()
+	return _card_state.zoom_level
