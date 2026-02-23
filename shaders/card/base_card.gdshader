@@ -5,14 +5,17 @@ uniform float corner_radius_pixels = 12.0;
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset = 0.0;
 uniform bool debug_sobel = false;
-uniform bool debug_sobel_density = true;
-uniform bool debug_thirds = true;
-uniform bool smart_crop_enabled = false;
+uniform bool debug_sobel_density = false;
+uniform bool debug_blend_vls = false;
+uniform bool debug_thirds = false;
+uniform bool smart_crop_enabled = true;
+uniform float blend_outlier_threshold = 0.15;
 uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
+uniform float smart_crop_overshoot = 0.15;
 
-const int ROW_SAMPLES = 16;
-const int COL_SAMPLES = 16;
+const int ROW_SAMPLES = 8;
+const int COL_SAMPLES = 8;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius) {
 	vec2 half_size = size * 0.5;
@@ -37,6 +40,13 @@ vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
 float get_luminance(vec4 col) {
 	vec3 luminance_weights = vec3(0.2126, 0.725152, 0.0722);
 	return dot(col.rgb, luminance_weights);
+}
+
+float get_saturation(vec4 col) {
+	float max_val = max(max(col.r, col.g), col.b);
+	float min_val = min(min(col.r, col.g), col.b);
+	if (max_val <= 0.0) return 0.0;
+	return (max_val - min_val) / max_val;
 }
 
 float sobel_edge_detection(vec2 uv, sampler2D tex) {
@@ -100,6 +110,69 @@ float find_max_density_region(sampler2D tex, float window_ratio, float threshold
 	return best_center_y;
 }
 
+float find_max_variance_region(sampler2D tex, float band_height_ratio, bool use_saturation) {
+	int band_rows = max(1, int(float(ROW_SAMPLES) * band_height_ratio));
+	int num_bands = ROW_SAMPLES - band_rows + 1;
+	
+	float max_variance = -1.0;
+	float best_center_y = 0.5;
+	
+	for (int b = 0; b < ROW_SAMPLES; b++) {
+		if (b >= num_bands) break;
+		
+		float sum = 0.0;
+		float sum_sq = 0.0;
+		int count = 0;
+		
+		for (int r = 0; r < ROW_SAMPLES; r++) {
+			if (r >= band_rows) break;
+			
+			int row = b + r;
+			float y = float(row) / float(ROW_SAMPLES - 1);
+			
+			for (int c = 0; c < COL_SAMPLES; c++) {
+				float x = float(c) / float(COL_SAMPLES - 1);
+				vec2 sample_uv = vec2(x, y);
+				float val = use_saturation ? get_saturation(texture(tex, sample_uv)) : get_luminance(texture(tex, sample_uv));
+				
+				sum += val;
+				sum_sq += val * val;
+				count++;
+			}
+		}
+		
+		float mean = sum / float(count);
+		float variance = (sum_sq / float(count)) - (mean * mean);
+		
+		if (variance > max_variance) {
+			max_variance = variance;
+			best_center_y = (float(b) + float(band_rows) * 0.5) / float(ROW_SAMPLES);
+		}
+	}
+	
+	return best_center_y;
+}
+
+float find_blend_vls(sampler2D tex, float window_ratio, float threshold, float outlier_threshold) {
+	float sobel_y = find_max_density_region(tex, window_ratio, threshold);
+	float luminance_y = find_max_variance_region(tex, window_ratio, false);
+	float saturation_y = find_max_variance_region(tex, window_ratio, true);
+	
+	float anchor = (sobel_y + luminance_y) * 0.5;
+	float sat_distance = abs(saturation_y - anchor);
+	
+	if (sat_distance > outlier_threshold) {
+		return anchor;
+	}
+	
+	float sat_weight = 2.0;
+	float sobel_weight = 1.0;
+	float lum_weight = 1.0;
+	float total_weight = sat_weight + sobel_weight + lum_weight;
+	
+	return (saturation_y * sat_weight + sobel_y * sobel_weight + luminance_y * lum_weight) / total_weight;
+}
+
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
@@ -132,7 +205,7 @@ void fragment() {
 	float tex_aspect = tex_size.x / tex_size.y;
 	
 	if (tex_aspect < card_aspect && (smart_crop_enabled || debug_sobel_density)) {
-		logo_y = find_max_density_region(game_texture, detection_window_ratio, edge_threshold);
+		logo_y = find_blend_vls(game_texture, detection_window_ratio, edge_threshold, blend_outlier_threshold);
 	}
 	
 	if (smart_crop_enabled && tex_aspect < card_aspect) {
@@ -158,11 +231,21 @@ void fragment() {
 			nearest_target = third3;
 		}
 		
-		vertical_offset = nearest_target - logo_y;
+		float snap_offset = nearest_target - logo_y;
+		
+		if (nearest_target == third2) {
+			vertical_offset = snap_offset;
+		} else {
+			float max_slide = visible_top;
+			float overshoot_offset = (nearest_target < 0.5) ? max_slide : -max_slide;
+			vertical_offset = mix(snap_offset, overshoot_offset, smart_crop_overshoot);
+		}
+		
+		vertical_offset = clamp(vertical_offset, -visible_top, visible_top);
 	}
 	
 	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
-	tex_uv.y += vertical_offset;
+	tex_uv.y -= vertical_offset;
 	vec4 tex_color = texture(game_texture, tex_uv);
 	
 	if (debug_sobel) {
@@ -191,6 +274,22 @@ void fragment() {
 		    abs(base_tex_uv.y - tex_third2) < line_thickness ||
 		    abs(base_tex_uv.y - tex_third3) < line_thickness) {
 			tex_color = vec4(0.5, 0.0, 0.5, 1.0);
+		}
+	}
+	
+	if (debug_blend_vls) {
+		float blend_y = find_blend_vls(game_texture, detection_window_ratio, edge_threshold, blend_outlier_threshold);
+		float display_y = blend_y;
+		
+		if (smart_crop_enabled && tex_aspect < card_aspect) {
+			display_y = blend_y + vertical_offset;
+		}
+		
+		float line_thickness = 3.0 / tex_size.y;
+		vec2 base_tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
+		
+		if (abs(base_tex_uv.y - display_y) < line_thickness * 6.0) {
+			tex_color = vec4(1.0, 1.0, 0.0, 1.0);
 		}
 	}
 	
@@ -223,9 +322,7 @@ void fragment() {
 				nearest_target = tex_third3;
 			}
 			
-			float display_y = nearest_target + vertical_offset;
-			
-			if (abs(base_tex_uv.y - display_y) < line_thickness * 1.5) {
+			if (abs(base_tex_uv.y - nearest_target) < line_thickness * 1.5) {
 				tex_color = vec4(0.0, 1.0, 1.0, 1.0);
 			}
 		}

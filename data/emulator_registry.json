@@ -157,7 +157,7 @@
 	  "android": "org.azahar.emu"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
+	  "windows": ["{exe}","-nogui","-fullscreen", "{rom}"],
 	  "linux": ["{exe}", "{rom}"],
 	  "android": {
 		"action": "android.intent.action.VIEW",
@@ -188,7 +188,7 @@
 	  "linux": ""
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "-g", "{rom}"],
+	  "windows": ["{exe}", "-g", "{rom}", "-f"],
 	  "linux": []
 	},
 	"post_install": {
@@ -217,7 +217,7 @@
 	  "linux": ""
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "-e", "{rom}"],
+	  "windows": ["{exe}", "-e", "{rom}", "--batch" ,"--config" , "Dolphin.Display.Fullscreen=True","--config" , "Dolphin.Interface.ConfirmStop=False"],
 	  "linux": []
 	},
 	"post_install": {
@@ -245,7 +245,7 @@
 	  "android": ""
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
+	  "windows": ["{exe}", "{rom}","-fullscreen"],
 	  "linux": [],
 	  "android": []
 	},
@@ -275,7 +275,7 @@
 	  "linux": ""
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
+	  "windows": ["{exe}", "{rom}","--fullscreen"],
 	  "linux": []
 	},
 	"post_install": {
@@ -383,7 +383,7 @@
 	  "linux": "xemu"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "-dvd_path", "{rom}"],
+	  "windows": ["{exe}","-full-screen", "-dvd_path", "{rom}"],
 	  "linux": ["{exe}", "-dvd_path", "{rom}"]
 	},
 	"post_install": {
@@ -410,7 +410,7 @@
 	  "linux": "xenia_canary"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
+	  "windows": ["{exe}", "{rom}","--fullscreen"],
 	  "linux": ["{exe}", "{rom}"]
 	},
 	"post_install": {
@@ -436,7 +436,7 @@
 	  "linux": "pcsx2-qt"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "-batch", "{rom}"],
+	  "windows": ["{exe}", "-nogui", "-fullscreen", "{rom}"],
 	  "linux": ["{exe}", "-batch", "{rom}"]
 	},
 	"post_install": {
@@ -462,7 +462,7 @@
 	  "linux": "melonDS"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
+	  "windows": ["{exe}", "{rom}","--fullscreen"],
 	  "linux": ["{exe}", "{rom}"]
 	}
   }
