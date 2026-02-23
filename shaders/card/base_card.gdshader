@@ -5,10 +5,9 @@ uniform float corner_radius_pixels = 12.0;
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset = 0.0;
 uniform bool debug_sobel = false;
-uniform bool debug_logo_row = true;
+uniform bool debug_sobel_density = true;
 uniform bool debug_thirds = true;
-uniform bool smart_crop_enabled = true;
-uniform float logo_blend_factor = -1.0;
+uniform bool smart_crop_enabled = false;
 uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
 
@@ -36,7 +35,7 @@ vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
 }
 
 float get_luminance(vec4 col) {
-	vec3 luminance_weights = vec3(0.2126, 0.7152, 0.0722);
+	vec3 luminance_weights = vec3(0.2126, 0.725152, 0.0722);
 	return dot(col.rgb, luminance_weights);
 }
 
@@ -132,7 +131,7 @@ void fragment() {
 	float card_aspect = inner_size.x / inner_size.y;
 	float tex_aspect = tex_size.x / tex_size.y;
 	
-	if (tex_aspect < card_aspect && (smart_crop_enabled || debug_logo_row)) {
+	if (tex_aspect < card_aspect && (smart_crop_enabled || debug_sobel_density)) {
 		logo_y = find_max_density_region(game_texture, detection_window_ratio, edge_threshold);
 	}
 	
@@ -142,31 +141,24 @@ void fragment() {
 		float visible_top = 0.5 - scale_y * 0.5;
 		float visible_height = scale_y;
 		
-		// Quarters within visible region
-		float third1 = visible_top + visible_height * 0.25;
-		float center = 0.5;
-		float third2 = visible_top + visible_height * 0.75;
+		// Thirds within visible region: .33, .5, .66
+		float third1 = visible_top + visible_height * 0.275;
+		float third2 = visible_top + visible_height * 0.5;
+		float third3 = visible_top + visible_height * 0.725;
 		
 		// Find nearest third line to logo_y
 		float dist1 = abs(logo_y - third1);
-		float dist2 = abs(logo_y - center);
-		float dist3 = abs(logo_y - third2);
+		float dist2 = abs(logo_y - third2);
+		float dist3 = abs(logo_y - third3);
 		
-		float nearest_target = center;
+		float nearest_target = third2;
 		if (dist1 < dist2 && dist1 < dist3) {
 			nearest_target = third1;
 		} else if (dist3 < dist2) {
-			nearest_target = third2;
+			nearest_target = third3;
 		}
 		
-		// Blend factor: 0 = no change, 1 = fully align to target
-		float target_offset = nearest_target - logo_y;
-		float blended_offset = mix(0.0, target_offset, logo_blend_factor);
-		
-		float hidden_portion = 1.0 - scale_y;
-		float max_offset = hidden_portion * 0.5;
-		
-		vertical_offset = clamp(blended_offset, -max_offset, max_offset);
+		vertical_offset = nearest_target - logo_y;
 	}
 	
 	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
@@ -188,61 +180,54 @@ void fragment() {
 		}
 		float visible_top = 0.5 - scale_y_calc * 0.5;
 		
-		// Quarters divide the VISIBLE region
-		float tex_third1 = visible_top + scale_y_calc * 0.25;
-		float tex_center = 0.5;
-		float tex_third2 = visible_top + scale_y_calc * 0.75;
+		// Thirds divide the VISIBLE region: .33, .5, .66
+		float tex_third1 = visible_top + scale_y_calc * 0.275;
+		float tex_third2 = visible_top + scale_y_calc * 0.5;
+		float tex_third3 = visible_top + scale_y_calc * 0.725;
 		
 		vec2 base_tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
 		
 		if (abs(base_tex_uv.y - tex_third1) < line_thickness || 
 		    abs(base_tex_uv.y - tex_third2) < line_thickness ||
-		    abs(base_tex_uv.y - tex_center) < line_thickness) {
+		    abs(base_tex_uv.y - tex_third3) < line_thickness) {
 			tex_color = vec4(0.5, 0.0, 0.5, 1.0);
 		}
 	}
 	
-	if (debug_logo_row) {
+	if (debug_sobel_density) {
 		float line_thickness = 3.0 / tex_size.y;
 		
-		// Quarters in texture space (same as debug_thirds)
+		// Thirds in texture space
 		vec2 base_tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
 		
-		// Convert quarters to texture space based on visible region
+		// Convert thirds to texture space based on visible region
 		float scale_y_calc = 1.0;
 		if (tex_aspect < card_aspect) {
 			scale_y_calc = tex_aspect / card_aspect;
 		}
 		float visible_top = 0.5 - scale_y_calc * 0.5;
-		float tex_third1 = visible_top + scale_y_calc * 0.25;
-		float tex_third2 = visible_top + scale_y_calc * 0.75;
-		float tex_center = 0.5;
+		float tex_third1 = visible_top + scale_y_calc * 0.275;
+		float tex_third2 = visible_top + scale_y_calc * 0.5;
+		float tex_third3 = visible_top + scale_y_calc * 0.725;
 		
 		// Draw cyan line showing the target third we're blending toward
 		if (smart_crop_enabled && tex_aspect < card_aspect) {
 			float dist1 = abs(logo_y - tex_third1);
-			float dist2 = abs(logo_y - tex_center);
-			float dist3 = abs(logo_y - tex_third2);
+			float dist2 = abs(logo_y - tex_third2);
+			float dist3 = abs(logo_y - tex_third3);
 			
-			float nearest_target = tex_center;
+			float nearest_target = tex_third2;
 			if (dist1 < dist2 && dist1 < dist3) {
 				nearest_target = tex_third1;
 			} else if (dist3 < dist2) {
-				nearest_target = tex_third2;
+				nearest_target = tex_third3;
 			}
 			
-			if (abs(base_tex_uv.y - nearest_target) < line_thickness * 1.5) {
+			float display_y = nearest_target + vertical_offset;
+			
+			if (abs(base_tex_uv.y - display_y) < line_thickness * 1.5) {
 				tex_color = vec4(0.0, 1.0, 1.0, 1.0);
 			}
-		}
-		
-		// Draw detected window bounds (red) and center (green)
-		float window_half = detection_window_ratio * 0.5;
-		float window_top = logo_y - window_half;
-		float window_bottom = logo_y + window_half;
-		
-		if (abs(tex_uv.y - window_top) < line_thickness || abs(tex_uv.y - window_bottom) < line_thickness) {
-			tex_color = vec4(1.0, 0.0, 0.0, 1.0);
 		}
 		
 		if (abs(tex_uv.y - logo_y) < line_thickness * 0.5) {
