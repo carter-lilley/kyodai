@@ -28,7 +28,7 @@ func _update_shader_params() -> void:
 	var fade_in_pixels = border_fade_in * _card_state.base_width * 2.0 * _card_state.zoom_level
 	
 	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_pixels", _card_state.corner_radius)
+	_set_shader_param("corner_radius_pixels", _card_state.corner_radius * _card_state.zoom_level)
 	_set_shader_param("border_width_pixels", border_pixels)
 	_set_shader_param("border_fade_in_pixels", fade_in_pixels)
 	_set_shader_param("gradient_direction", gradient_direction)

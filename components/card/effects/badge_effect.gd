@@ -26,7 +26,7 @@ func _update_shader_params() -> void:
 	var badge_dimensions = _settings.get("badge_dimensions", Vector2(32.0, 32.0))
 	
 	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_pixels", _card_state.corner_radius)
+	_set_shader_param("corner_radius_pixels", _card_state.corner_radius * _card_state.zoom_level)
 	_set_shader_param("hide_background", hide_background)
 	_set_shader_param("badge_size", badge_size * _card_state.zoom_level)
 	_set_shader_param("badge_dimensions", badge_dimensions)

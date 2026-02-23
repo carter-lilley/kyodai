@@ -155,7 +155,7 @@ func _rebuild_effects():
 		
 		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
 		var border_pixels = border_size * _card_state.base_width * 2.0 * _card_state.zoom_level
-		_card_state.border_inset = border_pixels
+		_card_state.border_inset = border_pixels * 0.5
 		if _base_effect:
 			_base_effect.update_state(_card_state)
 	
@@ -292,14 +292,14 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var scaled_width = badge_width * scale
 	var scaled_height = badge_height * scale
 	
-	var min_badge_size = _card_state.corner_radius
+	var min_badge_size = _card_state.corner_radius * _current_zoom
 	scaled_width = max(scaled_width, min_badge_size)
 	scaled_height = max(scaled_height, min_badge_size)
 	
 	var scaled_min_dim = min(scaled_width, scaled_height)
 	
 	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-	var scaled_outer = _card_state.corner_radius * corner_midpoint_factor
+	var scaled_outer = _card_state.corner_radius * _current_zoom * corner_midpoint_factor
 	var scaled_inner = base_inner_corner * scale * corner_midpoint_factor
 	var max_outer = scaled_min_dim * 0.4
 	scaled_outer = min(scaled_outer, max_outer)
@@ -559,6 +559,14 @@ func set_card_zoom(new_zoom: float) -> void:
 		status_icon.offset_bottom = icon_size
 	
 	_card_state.update_from_zoom(new_zoom)
+	
+	var border_config = _get_effect_config("border")
+	if border_config:
+		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
+		var border_pixels = border_size * _card_state.base_width * 2.0 * new_zoom
+		_card_state.border_inset = border_pixels * 0.5
+	else:
+		_card_state.border_inset = 0.0
 	
 	if _base_effect:
 		_base_effect.update_state(_card_state)
