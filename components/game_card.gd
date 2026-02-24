@@ -337,9 +337,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var max_outer = scaled_min_dim * 0.4
 	scaled_outer = min(scaled_outer, max_outer)
 	
-	if _badge_effect:
-		_badge_effect.set_badge_dimensions(Vector2(scaled_width, scaled_height))
-	
+	# Calculate safe zone (before padding)
 	var safe_x = scaled_outer
 	var safe_y = scaled_outer
 	var safe_width = scaled_width - scaled_outer - scaled_inner
@@ -347,6 +345,22 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	safe_width = max(safe_width, 1.0)
 	safe_height = max(safe_height, 1.0)
 	
+	# Debug: print values for DS/3DS which seem to have issues
+	if game and (game.platform_slug == "nds" or game.platform_slug == "3ds"):
+		print("Platform: ", game.platform_slug)
+		print("  icon_size: ", icon_texture.get_size())
+		print("  icon_aspect: ", icon_aspect)
+		print("  badge_width: ", badge_width, " badge_height: ", badge_height)
+		print("  scaled_width: ", scaled_width, " scaled_height: ", scaled_height)
+		print("  scaled_outer: ", scaled_outer, " scaled_inner: ", scaled_inner)
+		print("  safe_zone: ", safe_x, safe_y, safe_width, safe_height)
+	
+	if _badge_effect:
+		_badge_effect.set_badge_dimensions(Vector2(scaled_width, scaled_height))
+		# Pass safe zone to shader for debugging (set last param to true to show debug)
+		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, true)
+	
+	# Apply padding to safe zone for icon placement
 	var padding = min(safe_width, safe_height) * icon_padding * 0.25
 	safe_x += padding
 	safe_y += padding
@@ -372,8 +386,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	platform_icon.visible = true
 	platform_icon.texture = icon_texture
 	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	# Use scene defaults: expand_mode=1 (FIT_WIDTH), stretch_mode=5 (KEEP_ASPECT_CENTERED)
-	# These are already set in game_card.tscn, don't override them
+	# Use manual offsets (scene has expand_mode=1, stretch_mode=5)
 	platform_icon.offset_left = icon_offset_x
 	platform_icon.offset_top = icon_offset_y
 	platform_icon.offset_right = icon_offset_x + icon_draw_width

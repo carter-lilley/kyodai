@@ -4,6 +4,8 @@ extends CardEffect
 var _border_width: float = 0.0
 var _badge_width: float = 0.0
 var _badge_height: float = 0.0
+var _safe_zone: Vector4 = Vector4(0, 0, 0, 0)
+var _show_safe_zone: bool = false
 
 func _ready():
 	super._ready()
@@ -29,18 +31,24 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("hide_background", hide_background)
-	# Use actual badge width passed from GameCard (already includes badge_size and aspect)
+	# Calculate proper shader params
+	# badge_size_ratio should be based on MAX dimension to match GameCard logic
 	var card_width = _card_state.card_size.x
-	if _badge_width > 0:
-		_set_shader_param("badge_size_ratio", _badge_width / card_width)
+	if _badge_width > 0 and _badge_height > 0:
+		var max_dim = max(_badge_width, _badge_height)
+		_set_shader_param("badge_size_ratio", max_dim / card_width)
+		# aspect_ratio should be actual dimensions normalized by max
+		_set_shader_param("badge_aspect_ratio", Vector2(_badge_width / max_dim, _badge_height / max_dim))
 	else:
-		# Fallback if dimensions not set yet
+		# Fallback: square badge
 		var badge_size = _settings.get("badge_size", 1.0)
 		_set_shader_param("badge_size_ratio", badge_size * 0.16)
-	_set_shader_param("badge_aspect_ratio", badge_aspect)
+		_set_shader_param("badge_aspect_ratio", Vector2(1.0, 1.0))
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
 	_set_shader_param("border_width_ratio", _border_width)
+	_set_shader_param("show_safe_zone", _show_safe_zone)
+	_set_shader_param("safe_zone", Vector4(_safe_zone.x, _safe_zone.y, _safe_zone.z, _safe_zone.w))
 
 func set_border_width(width: float) -> void:
 	_border_width = width
@@ -56,6 +64,11 @@ func set_badge_dimensions(dimensions: Vector2) -> void:
 	if max_dim > 0:
 		_settings["badge_aspect"] = Vector2(dimensions.x / max_dim, dimensions.y / max_dim)
 		_update_shader_params()
+
+func set_safe_zone(safe_x: float, safe_y: float, safe_width: float, safe_height: float, show_debug: bool = false) -> void:
+	_safe_zone = Vector4(safe_x, safe_y, safe_width, safe_height)
+	_show_safe_zone = show_debug
+	_update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
