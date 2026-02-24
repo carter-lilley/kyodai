@@ -18,17 +18,15 @@ how to split important siblings
 ## sync
 	batch DB adds instead of single
 ## launch:
-	fix xemu launch intent bug
 	all: controllers, hotkeys, graphics settings, confirm on exit, etc?
+	named post install notifs (and toggle for system downloading)
 	cemu:
 		title keys
 	xemu:
-		bios (mpc, xcow, etc)
+		bios (mpc, xcow, etc) <- alsoi SHOW WELCOME FALSE
 	dolphin:
 		game profiles
 	rpcs3
 		zip extraction>??
-	vita3k
-		firmware
 ## registry:
 	platform download/launch diffs (Linux/windows/android)

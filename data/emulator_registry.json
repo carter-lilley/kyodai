@@ -507,6 +507,7 @@
   "xemu": {
 	"name": "Xemu",
 	"platforms": ["xbox"],
+	"requires_working_dir": true,
 	"download": {
 	  "type": "download_repo",
 	  "github_repo": "xemu-project/xemu",
@@ -528,6 +529,35 @@
 	  {
 		"type": "create_files",
 		"files": ["xemu.toml"],
+		"validation": {
+		  "type": "files",
+		  "files": ["xemu.toml"]
+		}
+	  },
+	  {
+		"type": "download_url",
+		"urls": {
+		  "windows": "https://files.lilley.video/other_assets/xemu_bios.zip",
+		  "linux": "https://files.lilley.video/other_assets/xemu_bios.zip",
+		  "android": ""
+		},
+		"filename": "xemu_bios.zip",
+		"extract_to": ".",
+		"strip_top_directory": true,
+		"flatten_target": "xemu_bios",
+		"validation": {
+		  "type": "files",
+		  "files": ["mcpx_1.0.bin", "Complex_4627.bin"]
+		}
+	  },
+	  {
+		"type": "edit_file",
+		"file": "xemu.toml",
+		"edits": [
+		  {
+			"content": "[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.qcow2'"
+		  }
+		],
 		"validation": {
 		  "type": "files",
 		  "files": ["xemu.toml"]
@@ -570,6 +600,7 @@
   "pcsx2": {
 	"name": "PCSX2",
 	"platforms": ["ps2"],
+	"requires_native_paths": true,
 	"download": {
 	  "type": "download_repo",
 	  "github_repo": "PCSX2/pcsx2",

@@ -1031,6 +1031,17 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 	file.close()
 	
 	for edit in edits:
+		# Check if this is a raw content edit (for TOML sections, etc.)
+		var raw_content = edit.get("content", "")
+		if raw_content != "":
+			raw_content = raw_content.replace("{emulator_dir}", base_dir)
+			# Check if this content already exists
+			if not content.contains(raw_content.strip_edges()):
+				content += "\n" + raw_content
+				print("[LaunchManager] Added content section to " + config_file)
+			continue
+		
+		# Otherwise, treat as key-value edit
 		var key = edit.get("key", "")
 		var value = edit.get("value", "")
 		
@@ -1188,12 +1199,22 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		global_install_path = global_install_path.replace("//", "/")
 		global_rom_path = global_rom_path.replace("//", "/")
 		
+		# On Windows, some emulators require native backslash paths
+		if PlatformManager.is_windows() and emulator.get("requires_native_paths", false):
+			global_install_path = global_install_path.replace("/", "\\")
+			global_rom_path = global_rom_path.replace("/", "\\")
+		
 		# Build absolute core path
 		var install_dir = global_install_path.get_base_dir()
 		install_dir = install_dir.replace("//", "/")
 		var core_extension = "_libretro.dll" if PlatformManager.is_windows() else "_libretro.so"
-		var global_core_path = install_dir + "/cores/" + intent.core_name + core_extension
+		var core_separator = "\\" if PlatformManager.is_windows() else "/"
+		var global_core_path = install_dir + core_separator + "cores" + core_separator + intent.core_name + core_extension
 		global_core_path = global_core_path.replace("//", "/")
+		
+		# Set working directory only if emulator requires it (e.g., xemu)
+		if emulator.get("requires_working_dir", false):
+			intent.working_directory = install_dir
 		
 		for arg in template:
 			var formatted_arg = arg.replace("{exe}", global_install_path)
@@ -1231,9 +1252,40 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	# Debug: Print the full command
 	var full_command = exe_path + " " + " ".join(arguments)
 	print("[LaunchManager] Full launch command: " + full_command)
+	print("[LaunchManager] Working directory: " + intent.working_directory)
 	
-	# Use OS.create_process for non-blocking launch
-	var pid = OS.create_process(exe_path, arguments, false)
+	var pid: int
+	
+	# If working directory is specified, use shell wrapper to change directory first
+	if intent.working_directory != "":
+		# Build the command with proper quoting for each argument
+		# Wrap each argument in quotes and escape any existing quotes
+		var quoted_args = []
+		for arg in arguments:
+			var escaped = arg.replace('"', '\\"')
+			quoted_args.append('"' + escaped + '"')
+		
+		if PlatformManager.is_windows():
+			# Windows: use cmd /c "cd /d WORKING_DIR && exe args"
+			var inner_cmd = 'cd /d "%s" && "%s" %s' % [
+				intent.working_directory,
+				exe_path,
+				" ".join(quoted_args)
+			]
+			print("[LaunchManager] Shell command: cmd /c \"" + inner_cmd + "\"")
+			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
+		else:
+			# Linux/macOS: use sh -c "cd WORKING_DIR && exe args"
+			var inner_cmd = 'cd "%s" && "%s" %s' % [
+				intent.working_directory,
+				exe_path,
+				" ".join(quoted_args)
+			]
+			print("[LaunchManager] Shell command: sh -c \"" + inner_cmd + "\"")
+			pid = OS.create_process("sh", ["-c", inner_cmd], false)
+	else:
+		# No working directory specified, launch directly
+		pid = OS.create_process(exe_path, arguments, false)
 	
 	if pid == -1:
 		push_error("[LaunchManager] Failed to launch process: " + exe_path)
