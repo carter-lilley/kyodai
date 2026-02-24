@@ -26,6 +26,11 @@ var _emulator_install_progress: Dictionary = {}  # emulator_id -> progress text 
 # Track ongoing extractions
 
 
+# Track post-install task sequences
+var _emulator_post_install_task_index: Dictionary = {}  # emulator_id -> current task index
+var _pending_cores_task: Dictionary = {}  # emulator_id -> task_index (waiting for cores extraction)
+var _pending_download_task: Dictionary = {}  # item_id -> {emulator_id, task_index, destination_path} (waiting for download without extraction)
+
 # Track pending launches waiting for emulator installation
 # emulator_id -> {game: GameResource, callback: Callable}
 var _pending_launches: Dictionary = {}
@@ -183,13 +188,14 @@ func validate_emulator_installation(emulator_id: String) -> bool:
 	if install_path == "" or not FileAccess.file_exists(install_path):
 		return false
 	
-	# Check post-install validation if configured
-	var post_install = emulator.get("post_install", {})
-	if not post_install.is_empty():
-		var validation = post_install.get("validation", {})
-		if not validation.is_empty():
-			if not _validate_post_install(emulator_id, validation):
-				return false
+	# Check post-install tasks validation if configured
+	var post_install_tasks = emulator.get("post_install_tasks", [])
+	if not post_install_tasks.is_empty():
+		for task in post_install_tasks:
+			var validation = task.get("validation", {})
+			if not validation.is_empty():
+				if not _validate_post_install(emulator_id, validation, false):
+					return false
 	
 	return true
 
@@ -213,7 +219,8 @@ func validate_emulator_executable(emulator_id: String) -> bool:
 	return true
 
 ## Validates post-install requirements (e.g., cores directory)
-func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool:
+## @param quiet: If true, suppresses "passed" log messages (only logs failures)
+func _validate_post_install(emulator_id: String, validation: Dictionary, quiet: bool = false) -> bool:
 	var validation_type = validation.get("type", "")
 	
 	match validation_type:
@@ -247,7 +254,8 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 				print("[LaunchManager] Post-install validation failed: no files matching " + file_pattern + " in " + full_path)
 				return false
 			
-			print("[LaunchManager] Post-install validation passed: found " + str(file_count) + " files in " + full_path)
+			if not quiet:
+				print("[LaunchManager] Post-install validation passed: found " + str(file_count) + " files in " + full_path)
 			return true
 		"folders":
 			var folders = validation.get("folders", [])
@@ -272,7 +280,8 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 					print("[LaunchManager] Post-install validation failed: folder not found - " + folder_path)
 					return false
 			
-			print("[LaunchManager] Post-install validation passed: all folders exist for " + emulator_id)
+			if not quiet:
+				print("[LaunchManager] Post-install validation passed: all folders exist for " + emulator_id)
 			return true
 		"files":
 			var files = validation.get("files", [])
@@ -302,7 +311,8 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 					print("[LaunchManager] Post-install validation failed: file not found - " + file_name)
 					return false
 			
-			print("[LaunchManager] Post-install validation passed: all files exist for " + emulator_id)
+			if not quiet:
+				print("[LaunchManager] Post-install validation passed: all files exist for " + emulator_id)
 			return true
 		"edit_file":
 			var config_file = validation.get("file", "")
@@ -324,7 +334,8 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 				return false
 			
 			if edits.is_empty():
-				print("[LaunchManager] Post-install validation passed: config file exists for " + emulator_id)
+				if not quiet:
+					print("[LaunchManager] Post-install validation passed: config file exists for " + emulator_id)
 				return true
 			
 			var file = FileAccess.open(full_path, FileAccess.READ)
@@ -362,7 +373,8 @@ func _validate_post_install(emulator_id: String, validation: Dictionary) -> bool
 					print("[LaunchManager] Post-install validation failed: " + key + " not set correctly in " + config_file)
 					return false
 			
-			print("[LaunchManager] Post-install validation passed: config edits verified for " + emulator_id)
+			if not quiet:
+				print("[LaunchManager] Post-install validation passed: config edits verified for " + emulator_id)
 			return true
 		_:
 			print("[LaunchManager] Unknown validation type: " + validation_type)
@@ -436,16 +448,17 @@ func _check_emulator_disk_state_internal(emulator_id: String, skip_if_active: bo
 		return
 	
 	# Executable exists - check if post-install is needed
-	var post_install = emulator.get("post_install", {})
-	if not post_install.is_empty():
-		var validation = post_install.get("validation", {})
-		if not validation.is_empty():
-			if not _validate_post_install(emulator_id, validation):
-				# Executable exists but post-install validation failed
-				_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
-				_emulator_install_progress[emulator_id] = "Post-install required"
-				print("[LaunchManager] Disk check: " + emulator_id + " - executable found but post-install needed")
-				return
+	var post_install_tasks = emulator.get("post_install_tasks", [])
+	if not post_install_tasks.is_empty():
+		for task in post_install_tasks:
+			var validation = task.get("validation", {})
+			if not validation.is_empty():
+				if not _validate_post_install(emulator_id, validation, true):
+					# Executable exists but post-install validation failed
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Post-install required"
+					print("[LaunchManager] Disk check: " + emulator_id + " - executable found but post-install needed")
+					return
 	
 	# All validation passed - fully installed
 	_emulator_install_states[emulator_id] = InstallState.INSTALLED
@@ -565,15 +578,15 @@ func _on_download_manager_extraction_started(item_id: String):
 	if item == null:
 		return
 	
-	# Check if this is a cores extraction
-	if item.type == "cores":
-		# Find the emulator this cores download belongs to
+	# Check if this is a cores or download_release extraction
+	if item.type == "cores" or item.type == "download_release":
+		# Find the emulator this download belongs to
 		for emulator_id in _emulator_install_states.keys():
 			if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
 				var current_state = get_emulator_install_state(emulator_id)
 				if current_state == InstallState.NEEDS_POST_INSTALL:
 					_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
-					print("[LaunchManager] Cores extraction started for: " + emulator_id)
+					print("[LaunchManager] " + item.type + " extraction started for: " + emulator_id)
 				return
 	else:
 		# Check if this is an emulator extraction
@@ -599,18 +612,40 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 				var emulator = get_emulator(emulator_id)
 				
 				if current_state == InstallState.ENACTING_POST_INSTALL:
-					# Cores extraction just completed - check validation
+					# Cores extraction just completed - validate this specific task
 					# Wait for filesystem to settle
 					await get_tree().create_timer(0.5).timeout
-					if validate_emulator_installation(emulator_id):
-						_emulator_install_states[emulator_id] = InstallState.INSTALLED
-						_emulator_install_progress[emulator_id] = ""
-						print("[LaunchManager] Post-install complete, emulator fully installed: " + emulator_id)
-						emulator_extraction_completed.emit(emulator_id, true)
-					else:
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-						_emulator_install_progress[emulator_id] = "Post-install validation failed"
-						emulator_extraction_completed.emit(emulator_id, false)
+					
+					# Get the task that was just completed
+					var task_index = _pending_cores_task.get(emulator_id, -1)
+					_pending_cores_task.erase(emulator_id)
+					
+					var post_install_tasks = emulator.get("post_install_tasks", [])
+					var all_tasks_valid = true
+					
+					if task_index >= 0 and task_index < post_install_tasks.size():
+						var task = post_install_tasks[task_index]
+						
+						# Flatten directory structure BEFORE validation if needed
+						if task.get("strip_top_directory", false):
+							var extract_to = task.get("extract_to", "")
+							if extract_to != "":
+								_flatten_extracted_directory(emulator_id, extract_to)
+						
+						var validation = task.get("validation", {})
+						
+						if not validation.is_empty():
+							if not _validate_post_install(emulator_id, validation):
+								# This task failed validation - mark as needing post-install again
+								_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+								_emulator_install_progress[emulator_id] = "Task %d validation failed" % (task_index + 1)
+								print("[LaunchManager] Task %d validation failed for: " % (task_index + 1) + emulator_id)
+								emulator_extraction_completed.emit(emulator_id, false)
+								return
+					
+					# This task validated successfully - continue to next task
+					print("[LaunchManager] Task %d validated successfully for: " % (task_index + 1) + emulator_id)
+					_continue_post_install_sequence(emulator_id, emulator)
 				elif current_state == InstallState.EXTRACTING:
 					# Main emulator extraction just completed
 					# Wait for filesystem to settle
@@ -626,33 +661,39 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 					
 					print("[LaunchManager] Validation passed - executable found for: " + emulator_id)
 					
-					# Check for post-install
-					if emulator.has("post_install"):
-						# Validate post-install requirements
-						var post_install = emulator.get("post_install", {})
-						var validation = post_install.get("validation", {})
+					# Check for post-install tasks
+					var post_install_tasks = emulator.get("post_install_tasks", [])
+					if not post_install_tasks.is_empty():
+						# Validate all post-install tasks to see if any are needed
+						var all_tasks_valid = true
+						var first_invalid_task = -1
 						
-						if not validation.is_empty():
-							if _validate_post_install(emulator_id, validation):
-								# Post-install already complete
-								_emulator_install_states[emulator_id] = InstallState.INSTALLED
-								_emulator_install_progress[emulator_id] = ""
-								print("[LaunchManager] Installation complete (post-install already done): " + emulator_id)
-								emulator_extraction_completed.emit(emulator_id, true)
-							else:
-								# Need to do post-install - set state and trigger it
-								_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
-								_emulator_install_progress[emulator_id] = "Post-install required"
-								print("[LaunchManager] Main extraction complete, post-install needed: " + emulator_id)
-								emulator_extraction_completed.emit(emulator_id, true)
-								# Auto-trigger post-install
-								_start_post_install(emulator_id, emulator)
-						else:
-							# No validation configured, mark as installed
+						for i in range(post_install_tasks.size()):
+							var task = post_install_tasks[i]
+							var validation = task.get("validation", {})
+							
+							if not validation.is_empty():
+								if not _validate_post_install(emulator_id, validation, true):
+									all_tasks_valid = false
+									if first_invalid_task == -1:
+										first_invalid_task = i
+									break
+						
+						if all_tasks_valid:
+							# Post-install already complete
 							_emulator_install_states[emulator_id] = InstallState.INSTALLED
 							_emulator_install_progress[emulator_id] = ""
-							print("[LaunchManager] Installation complete: " + emulator_id)
+							print("[LaunchManager] Installation complete (post-install already done): " + emulator_id)
 							emulator_extraction_completed.emit(emulator_id, true)
+						else:
+							# Need to do post-install - set state and trigger it
+							_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+							_emulator_install_progress[emulator_id] = "Post-install required"
+							print("[LaunchManager] Main extraction complete, post-install needed: " + emulator_id)
+							emulator_extraction_completed.emit(emulator_id, true)
+							# Auto-trigger post-install starting from first invalid task
+							_start_post_install(emulator_id, emulator, first_invalid_task)
+						return
 					else:
 						# No post-install needed
 						_emulator_install_states[emulator_id] = InstallState.INSTALLED
@@ -675,55 +716,273 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 ## Called when DownloadManager completes a download
 ## Cleans up pending game downloads tracking
 func _on_download_manager_download_completed(item_id: String, success: bool, message: String):
+	# Handle game downloads
 	if _pending_game_downloads.has(item_id):
 		_pending_game_downloads.erase(item_id)
 		if not success:
 			print("[LaunchManager] Pending game download failed: " + item_id + " - " + message)
+		return
+	
+	# Handle post-install downloads without extraction
+	if _pending_download_task.has(item_id):
+		var task_info = _pending_download_task[item_id]
+		_pending_download_task.erase(item_id)
+		
+		var emulator_id = task_info.emulator_id
+		var task_index = task_info.task_index
+		
+		if not success:
+			push_error("[LaunchManager] Post-install download failed for " + emulator_id + ": " + message)
+			_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+			_emulator_install_progress[emulator_id] = "Task %d download failed" % (task_index + 1)
+			emulator_extraction_completed.emit(emulator_id, false)
+			return
+		
+		# Download succeeded - get emulator and continue
+		var emulator = get_emulator(emulator_id)
+		if emulator.is_empty():
+			push_error("[LaunchManager] Emulator not found: " + emulator_id)
+			_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+			emulator_extraction_completed.emit(emulator_id, false)
+			return
+		
+		# Get the task that was completed
+		var post_install_tasks = emulator.get("post_install_tasks", [])
+		if task_index >= 0 and task_index < post_install_tasks.size():
+			var task = post_install_tasks[task_index]
+			
+			# For non-extracted downloads, just verify the file exists
+			if not task.get("extract", true):
+				var destination_path = task_info.destination_path
+				if not FileAccess.file_exists(destination_path):
+					print("[LaunchManager] Task %d download file not found: " % (task_index + 1) + destination_path)
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Task %d file not found" % (task_index + 1)
+					emulator_extraction_completed.emit(emulator_id, false)
+					return
+				
+				print("[LaunchManager] Task %d download verified for: " % (task_index + 1) + emulator_id)
+				_continue_post_install_sequence(emulator_id, emulator)
+				return
+			
+			# For extracted downloads, use normal validation
+			# Strip top directory if needed
+			if task.get("strip_top_directory", false):
+				var extract_to = task.get("extract_to", "")
+				if extract_to != "":
+					_flatten_extracted_directory(emulator_id, extract_to)
+			
+			# Validate this task
+			var validation = task.get("validation", {})
+			if not validation.is_empty():
+				if not _validate_post_install(emulator_id, validation):
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Task %d validation failed" % (task_index + 1)
+					print("[LaunchManager] Task %d validation failed for: " % (task_index + 1) + emulator_id)
+					emulator_extraction_completed.emit(emulator_id, false)
+					return
+			
+			# Task validated successfully - continue to next task
+			print("[LaunchManager] Task %d validated successfully for: " % (task_index + 1) + emulator_id)
+			_continue_post_install_sequence(emulator_id, emulator)
 
 ## Starts the post-install process for an emulator
-func _start_post_install(emulator_id: String, emulator: Dictionary):
-	var post_install = emulator.get("post_install", {})
-	var install_type = post_install.get("type", "")
+## @param start_task_index: Index of the first task to execute (default 0)
+func _start_post_install(emulator_id: String, emulator: Dictionary, start_task_index: int = 0):
+	var post_install_tasks = emulator.get("post_install_tasks", [])
 	
-	match install_type:
-		"cores":
-			_start_cores_post_install(emulator_id, emulator, post_install)
-		"create_folders":
-			_start_folders_post_install(emulator_id, emulator, post_install)
-		"create_files":
-			_start_files_post_install(emulator_id, emulator, post_install)
-		"edit_file":
-			_start_edit_file_post_install(emulator_id, emulator, post_install)
-		_:
-			print("[LaunchManager] Unknown post-install type '" + install_type + "', validating: " + emulator_id)
-			if validate_emulator_installation(emulator_id):
-				_emulator_install_states[emulator_id] = InstallState.INSTALLED
-				_emulator_install_progress[emulator_id] = ""
-				print("[LaunchManager] Validation passed, marking as installed: " + emulator_id)
-				emulator_extraction_completed.emit(emulator_id, true)
-			else:
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-				_emulator_install_progress[emulator_id] = "Validation failed"
-				push_error("[LaunchManager] Validation failed after extraction: " + emulator_id)
-				emulator_extraction_completed.emit(emulator_id, false)
-
-func _start_folders_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
-	var folders = post_install.get("folders", [])
-	
-	if folders.is_empty():
-		print("[LaunchManager] No folders to create for: " + emulator_id)
+	if post_install_tasks.is_empty():
+		print("[LaunchManager] No post-install tasks for: " + emulator_id)
 		_emulator_install_states[emulator_id] = InstallState.INSTALLED
 		_emulator_install_progress[emulator_id] = ""
 		emulator_extraction_completed.emit(emulator_id, true)
 		return
 	
+	# Store the starting task index
+	_emulator_post_install_task_index[emulator_id] = start_task_index
+	
+	# Start executing tasks from the specified index
+	_execute_post_install_task(emulator_id, emulator, start_task_index)
+
+## Executes a specific post-install task and handles the sequence
+func _execute_post_install_task(emulator_id: String, emulator: Dictionary, task_index: int):
+	var post_install_tasks = emulator.get("post_install_tasks", [])
+	
+	if task_index >= post_install_tasks.size():
+		# All tasks completed successfully
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		_emulator_install_progress[emulator_id] = ""
+		_emulator_post_install_task_index.erase(emulator_id)
+		print("[LaunchManager] All post-install tasks complete for: " + emulator_id)
+		emulator_extraction_completed.emit(emulator_id, true)
+		return
+	
+	var task = post_install_tasks[task_index]
+	var task_type = task.get("type", "")
+	var total_tasks = post_install_tasks.size()
+	
+	# Update UI progress
+	var task_description = _get_task_description(task_type)
+	_emulator_install_progress[emulator_id] = "Post-install task %d of %d: %s" % [task_index + 1, total_tasks, task_description]
+	print("[LaunchManager] Starting task %d of %d (%s) for: " % [task_index + 1, total_tasks, task_type] + emulator_id)
+	
+	# Execute the task based on type
+	var task_success = false
+	
+	match task_type:
+		"cores":
+			task_success = await _execute_cores_task(emulator_id, emulator, task, task_index)
+			# Note: cores task handles its own async completion via _pending_cores_task
+			return
+		"download_release":
+			task_success = await _execute_download_release_task(emulator_id, emulator, task, task_index)
+			# Note: download_release task handles its own async completion via _pending_cores_task
+			return
+		"download_scraped":
+			task_success = await _execute_download_scraped_task(emulator_id, emulator, task, task_index)
+			# Note: download_scraped task handles its own async completion via _pending_cores_task
+			return
+		"create_folders":
+			task_success = _execute_create_folders_task(emulator_id, emulator, task)
+		"create_files":
+			task_success = _execute_create_files_task(emulator_id, emulator, task)
+		"edit_file":
+			task_success = _execute_edit_file_task(emulator_id, emulator, task)
+		_:
+			print("[LaunchManager] Unknown post-install task type '" + task_type + "' for: " + emulator_id)
+			task_success = true  # Unknown types are treated as no-op
+	
+	# Handle task completion (for non-async tasks)
+	if task_success:
+		_continue_post_install_sequence(emulator_id, emulator)
+	else:
+		# Task failed - mark as needing post-install again
+		_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+		_emulator_install_progress[emulator_id] = "Task %d failed" % (task_index + 1)
+		print("[LaunchManager] Task %d failed for: " % (task_index + 1) + emulator_id)
+		emulator_extraction_completed.emit(emulator_id, false)
+
+## Continues the post-install sequence after a task completes
+func _continue_post_install_sequence(emulator_id: String, emulator: Dictionary):
+	var current_index = _emulator_post_install_task_index.get(emulator_id, 0)
+	var post_install_tasks = emulator.get("post_install_tasks", [])
+	
+	if current_index < post_install_tasks.size():
+		var task = post_install_tasks[current_index]
+		var validation = task.get("validation", {})
+		
+		# Check if we need to strip the top directory from extracted files
+		if task.get("strip_top_directory", false):
+			var extract_to = task.get("extract_to", "")
+			if extract_to != "":
+				_flatten_extracted_directory(emulator_id, extract_to)
+		
+		# Validate this specific task
+		if not validation.is_empty():
+			if not _validate_post_install(emulator_id, validation, true):
+				# Validation failed - mark as needing post-install again
+				_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+				_emulator_install_progress[emulator_id] = "Task %d validation failed" % (current_index + 1)
+				print("[LaunchManager] Task %d validation failed for: " % (current_index + 1) + emulator_id)
+				emulator_extraction_completed.emit(emulator_id, false)
+				return
+		
+		print("[LaunchManager] Task %d validated successfully for: " % (current_index + 1) + emulator_id)
+	
+	# Move to next task
+	_emulator_post_install_task_index[emulator_id] = current_index + 1
+	_execute_post_install_task(emulator_id, emulator, current_index + 1)
+
+## Flattens an extracted directory by moving contents of a single top-level subdirectory up one level
+## This handles zips that extract to a nested directory like "Archive-1.0/file.txt" -> "file.txt"
+func _flatten_extracted_directory(emulator_id: String, extract_to: String):
+	var extract_path = EMULATORS_DIR + emulator_id + "/" + extract_to
+	
+	var dir = DirAccess.open(extract_path)
+	if not dir:
+		print("[LaunchManager] Cannot open extract path for flattening: " + extract_path)
+		return
+	
+	# List all entries in the extract directory
+	var entries = []
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	while file_name != "":
+		if file_name != "." and file_name != "..":
+			entries.append(file_name)
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	
+	# If there's exactly one entry and it's a directory, flatten it
+	if entries.size() == 1:
+		var single_entry = entries[0]
+		var single_entry_path = extract_path + "/" + single_entry
+		
+		# Check if the single entry is a directory
+		if dir.dir_exists(single_entry):
+			print("[LaunchManager] Flattening directory: " + single_entry + " -> " + extract_to)
+			
+			var subdir = DirAccess.open(single_entry_path)
+			if not subdir:
+				print("[LaunchManager] Warning: Cannot open subdirectory for flattening: " + single_entry_path)
+				return
+			
+			# Move all contents from the subdirectory to the parent
+			subdir.list_dir_begin()
+			var item_name = subdir.get_next()
+			while item_name != "":
+				if item_name != "." and item_name != "..":
+					var source_path = single_entry_path + "/" + item_name
+					var dest_path = extract_path + "/" + item_name
+					
+					# Check if destination already exists
+					if dir.file_exists(item_name) or dir.dir_exists(item_name):
+						print("[LaunchManager] Warning: Cannot flatten - destination exists: " + item_name)
+					else:
+						var error = dir.rename(source_path, dest_path)
+						if error != OK:
+							print("[LaunchManager] Warning: Failed to move " + item_name + " during flattening")
+				
+				item_name = subdir.get_next()
+			subdir.list_dir_end()
+			
+			# Remove the now-empty subdirectory
+			var remove_error = subdir.remove(single_entry_path)
+			if remove_error != OK:
+				print("[LaunchManager] Warning: Failed to remove empty directory after flattening: " + single_entry_path)
+			else:
+				print("[LaunchManager] Successfully flattened directory structure")
+
+## Gets a human-readable description for a task type
+func _get_task_description(task_type: String) -> String:
+	match task_type:
+		"cores":
+			return "Downloading cores..."
+		"download_release":
+			return "Downloading firmware..."
+		"download_scraped":
+			return "Downloading keys..."
+		"create_folders":
+			return "Creating folders..."
+		"create_files":
+			return "Creating files..."
+		"edit_file":
+			return "Editing configuration..."
+		_:
+			return "Setting up..."
+
+## Executes a create_folders task - returns true if successful
+func _execute_create_folders_task(emulator_id: String, emulator: Dictionary, task: Dictionary) -> bool:
+	var folders = task.get("folders", [])
+	
+	if folders.is_empty():
+		print("[LaunchManager] No folders to create for: " + emulator_id)
+		return true
+	
 	var emulator_path = get_emulator_install_path(emulator_id)
 	if emulator_path == "":
 		push_error("[LaunchManager] Cannot find emulator path for folder creation: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Could not find emulator path"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	var base_dir = emulator_path.get_base_dir()
 	
@@ -735,35 +994,30 @@ func _start_folders_post_install(emulator_id: String, emulator: Dictionary, post
 			var error = dir.make_dir_recursive(folder_path)
 			if error != OK:
 				push_error("[LaunchManager] Failed to create folder: " + full_path + " (error: " + str(error) + ")")
+				return false
 			else:
 				print("[LaunchManager] Created folder: " + full_path)
 		elif not dir:
 			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
+			return false
 		else:
 			print("[LaunchManager] Folder already exists: " + full_path)
 	
-	_emulator_install_states[emulator_id] = InstallState.INSTALLED
-	_emulator_install_progress[emulator_id] = ""
 	print("[LaunchManager] Folder creation complete for: " + emulator_id)
-	emulator_extraction_completed.emit(emulator_id, true)
+	return true
 
-func _start_files_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
-	var files = post_install.get("files", [])
+## Executes a create_files task - returns true if successful
+func _execute_create_files_task(emulator_id: String, emulator: Dictionary, task: Dictionary) -> bool:
+	var files = task.get("files", [])
 	
 	if files.is_empty():
 		print("[LaunchManager] No files to create for: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.INSTALLED
-		_emulator_install_progress[emulator_id] = ""
-		emulator_extraction_completed.emit(emulator_id, true)
-		return
+		return true
 	
 	var emulator_path = get_emulator_install_path(emulator_id)
 	if emulator_path == "":
 		push_error("[LaunchManager] Cannot find emulator path for file creation: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Could not find emulator path"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	var base_dir = emulator_path.get_base_dir()
 	
@@ -786,6 +1040,7 @@ func _start_files_post_install(emulator_id: String, emulator: Dictionary, post_i
 			var file = FileAccess.open(full_path, FileAccess.WRITE)
 			if file == null:
 				push_error("[LaunchManager] Failed to create file: " + full_path + " (error: " + str(FileAccess.get_open_error()) + ")")
+				return false
 			else:
 				for line in file_content:
 					file.store_line(line)
@@ -794,47 +1049,34 @@ func _start_files_post_install(emulator_id: String, emulator: Dictionary, post_i
 		else:
 			print("[LaunchManager] File already exists: " + full_path)
 	
-	_emulator_install_states[emulator_id] = InstallState.INSTALLED
-	_emulator_install_progress[emulator_id] = ""
 	print("[LaunchManager] File creation complete for: " + emulator_id)
-	emulator_extraction_completed.emit(emulator_id, true)
+	return true
 
-func _start_edit_file_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
-	var config_file = post_install.get("file", "")
-	var edits = post_install.get("edits", [])
+## Executes an edit_file task - returns true if successful
+func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Dictionary) -> bool:
+	var config_file = task.get("file", "")
+	var edits = task.get("edits", [])
 	
 	if config_file == "" or edits.is_empty():
 		print("[LaunchManager] No config file or edits specified for: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.INSTALLED
-		_emulator_install_progress[emulator_id] = ""
-		emulator_extraction_completed.emit(emulator_id, true)
-		return
+		return true
 	
 	var emulator_path = get_emulator_install_path(emulator_id)
 	if emulator_path == "":
 		push_error("[LaunchManager] Cannot find emulator path for file edit: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Could not find emulator path"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	var base_dir = emulator_path.get_base_dir()
 	var full_path = base_dir + "/" + config_file
 	
 	if not FileAccess.file_exists(full_path):
 		push_error("[LaunchManager] Config file not found: " + full_path)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Config file not found"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	var file = FileAccess.open(full_path, FileAccess.READ)
 	if file == null:
 		push_error("[LaunchManager] Failed to open config file: " + full_path)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Failed to open config file"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	var content = file.get_as_text()
 	file.close()
@@ -871,31 +1113,26 @@ func _start_edit_file_post_install(emulator_id: String, emulator: Dictionary, po
 	file = FileAccess.open(full_path, FileAccess.WRITE)
 	if file == null:
 		push_error("[LaunchManager] Failed to write config file: " + full_path)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Failed to write config file"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	file.store_string(content)
 	file.close()
 	
-	_emulator_install_states[emulator_id] = InstallState.INSTALLED
-	_emulator_install_progress[emulator_id] = ""
 	print("[LaunchManager] Config edit complete for: " + emulator_id)
-	emulator_extraction_completed.emit(emulator_id, true)
+	return true
 
-## Handles cores-type post-install (download and extract cores)
-func _start_cores_post_install(emulator_id: String, emulator: Dictionary, post_install: Dictionary):
+## Executes a cores task - returns true if download queued successfully (async completion)
+## Note: This is an async function that returns when download is queued, but actual
+## completion is handled via _pending_cores_task and _on_download_manager_extraction_completed
+func _execute_cores_task(emulator_id: String, emulator: Dictionary, task: Dictionary, task_index: int) -> bool:
 	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var cores_url = post_install.get("cores_url", {}).get(platform_name, "")
-	var cores_filename = post_install.get("cores_filename", {}).get(platform_name, "")
+	var cores_url = task.get("cores_url", {}).get(platform_name, "")
+	var cores_filename = task.get("cores_filename", {}).get(platform_name, "")
+	var should_extract = task.get("extract", true)
 	
 	if cores_url == "":
 		push_error("[LaunchManager] No cores URL for platform: " + platform_name)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Post-install configuration error"
-		emulator_extraction_completed.emit(emulator_id, false)
-		return
+		return false
 	
 	var emulator_name = emulator.get("name", emulator_id)
 	
@@ -905,28 +1142,281 @@ func _start_cores_post_install(emulator_id: String, emulator: Dictionary, post_i
 	
 	var destination_path = EMULATORS_DIR + emulator_id + "/" + cores_filename
 	
-	print("[LaunchManager] Starting cores post-install for: " + emulator_id)
+	print("[LaunchManager] Starting cores task for: " + emulator_id)
 	print("[LaunchManager] Cores URL: " + cores_url)
+	print("[LaunchManager] Extract: " + str(should_extract))
 	
 	# Set state to enacting post-install
 	_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
-	_emulator_install_progress[emulator_id] = "Downloading " + emulator_name + " cores..."
 	
-	# Queue cores download via DownloadManager (with auto-extract)
-	var item_id = DownloadManager.queue_download(
-		cores_url,
-		destination_path,
-		"cores",
-		emulator_name + " cores",
-		true,  # auto_extract
-		EMULATORS_DIR + emulator_id + "/"
+	if should_extract:
+		# Store the task index so we know which task to continue from when extraction completes
+		_pending_cores_task[emulator_id] = task_index
+		
+		# Queue cores download via DownloadManager (with auto-extract)
+		var item_id = DownloadManager.queue_download(
+			cores_url,
+			destination_path,
+			"cores",
+			emulator_name + " cores",
+			true,  # auto_extract
+			EMULATORS_DIR + emulator_id + "/"
+		)
+		
+		if item_id == "":
+			push_error("[LaunchManager] Failed to queue cores download: " + emulator_id)
+			_pending_cores_task.erase(emulator_id)
+			return false
+		
+		# Return true to indicate download was queued successfully
+		# The actual completion will be handled by _on_download_manager_extraction_completed
+		return true
+	else:
+		# Queue download without extraction
+		var item_id = DownloadManager.queue_download(
+			cores_url,
+			destination_path,
+			"cores",
+			emulator_name + " cores",
+			false  # auto_extract = false
+		)
+		
+		if item_id == "":
+			push_error("[LaunchManager] Failed to queue cores download: " + emulator_id)
+			return false
+		
+		# Track this download for completion handling
+		_pending_download_task[item_id] = {
+			"emulator_id": emulator_id,
+			"task_index": task_index,
+			"destination_path": destination_path
+		}
+		
+		# Return true to indicate download was queued successfully
+		# The actual completion will be handled by _on_download_manager_download_completed
+		return true
+
+## Executes a download_release task - downloads from GitHub releases and optionally extracts
+## Similar to cores task but for general GitHub release downloads
+func _execute_download_release_task(emulator_id: String, emulator: Dictionary, task: Dictionary, task_index: int) -> bool:
+	var platform_name = PlatformManager.get_platform_name().to_lower()
+	var github_repo = task.get("github_repo", "")
+	var asset_pattern = task.get("asset_pattern", "")
+	var release_tag = task.get("release_tag", "")
+	var extract_to = task.get("extract_to", "")
+	var filename = task.get("filename", "")
+	var should_extract = task.get("extract", true)
+	
+	if github_repo == "":
+		push_error("[LaunchManager] No github_repo specified for download_release task: " + emulator_id)
+		return false
+	
+	if asset_pattern == "":
+		push_error("[LaunchManager] No asset_pattern specified for download_release task: " + emulator_id)
+		return false
+	
+	if extract_to == "" and should_extract:
+		push_error("[LaunchManager] No extract_to specified for download_release task: " + emulator_id)
+		return false
+	
+	var emulator_name = emulator.get("name", emulator_id)
+	
+	print("[LaunchManager] Starting download_release task for: " + emulator_id)
+	print("[LaunchManager] GitHub repo: " + github_repo)
+	print("[LaunchManager] Asset pattern: " + asset_pattern)
+	print("[LaunchManager] Extract: " + str(should_extract))
+	
+	# Set state to enacting post-install
+	_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
+	
+	# Fetch the release URL first
+	NetworkManager.fetch_github_latest_release(
+		github_repo,
+		asset_pattern,
+		func(download_url: String, error: String):
+			if error != "":
+				push_error("[LaunchManager] Failed to fetch GitHub release for " + emulator_id + ": " + error)
+				_pending_cores_task.erase(emulator_id)
+				_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+				_emulator_install_progress[emulator_id] = "Failed to fetch release info"
+				emulator_extraction_completed.emit(emulator_id, false)
+				return
+			
+			# Use provided filename or extract from URL
+			var download_filename = filename
+			if download_filename == "":
+				download_filename = download_url.get_file()
+			
+			var destination_path = EMULATORS_DIR + emulator_id + "/" + download_filename
+			
+			print("[LaunchManager] Download URL: " + download_url)
+			
+			if should_extract:
+				var extract_destination = EMULATORS_DIR + emulator_id + "/" + extract_to
+				print("[LaunchManager] Extracting to: " + extract_destination)
+				
+				# Store the task index so we know which task to continue from when extraction completes
+				_pending_cores_task[emulator_id] = task_index
+				
+				# Queue download via DownloadManager (with auto-extract)
+				var item_id = DownloadManager.queue_download(
+					download_url,
+					destination_path,
+					"download_release",
+					emulator_name + " firmware",
+					true,  # auto_extract
+					extract_destination
+				)
+				
+				if item_id == "":
+					push_error("[LaunchManager] Failed to queue download: " + emulator_id)
+					_pending_cores_task.erase(emulator_id)
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Failed to queue download"
+					emulator_extraction_completed.emit(emulator_id, false)
+			else:
+				print("[LaunchManager] Download only (no extraction)")
+				
+				# Queue download without extraction
+				var item_id = DownloadManager.queue_download(
+					download_url,
+					destination_path,
+					"download_release",
+					emulator_name + " firmware",
+					false  # auto_extract = false
+				)
+				
+				if item_id == "":
+					push_error("[LaunchManager] Failed to queue download: " + emulator_id)
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Failed to queue download"
+					emulator_extraction_completed.emit(emulator_id, false)
+					return
+				
+				# Track this download for completion handling
+				_pending_download_task[item_id] = {
+					"emulator_id": emulator_id,
+					"task_index": task_index,
+					"destination_path": destination_path
+				},
+		release_tag
 	)
 	
-	if item_id == "":
-		push_error("[LaunchManager] Failed to queue cores download: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "Failed to queue cores download"
-		emulator_extraction_completed.emit(emulator_id, false)
+	# Return true to indicate we're processing (actual completion handled by callback)
+	return true
+
+## Executes a download_scraped task - scrapes a webpage to find download URL
+## Similar to download_release but scrapes webpage for version first
+func _execute_download_scraped_task(emulator_id: String, emulator: Dictionary, task: Dictionary, task_index: int) -> bool:
+	var scrape_url = task.get("scrape_url", "")
+	var version_pattern = task.get("version_pattern", "")
+	var url_template = task.get("url_template", "")
+	var extract_to = task.get("extract_to", "")
+	var filename = task.get("filename", "")
+	var should_extract = task.get("extract", true)
+	
+	if scrape_url == "":
+		push_error("[LaunchManager] No scrape_url specified for download_scraped task: " + emulator_id)
+		return false
+	
+	if version_pattern == "":
+		push_error("[LaunchManager] No version_pattern specified for download_scraped task: " + emulator_id)
+		return false
+	
+	if url_template == "":
+		push_error("[LaunchManager] No url_template specified for download_scraped task: " + emulator_id)
+		return false
+	
+	if extract_to == "" and should_extract:
+		push_error("[LaunchManager] No extract_to specified for download_scraped task: " + emulator_id)
+		return false
+	
+	var emulator_name = emulator.get("name", emulator_id)
+	
+	print("[LaunchManager] Starting download_scraped task for: " + emulator_id)
+	print("[LaunchManager] Scraping URL: " + scrape_url)
+	print("[LaunchManager] Version pattern: " + version_pattern)
+	print("[LaunchManager] Extract: " + str(should_extract))
+	
+	# Set state to enacting post-install
+	_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
+	
+	# Fetch the scraped URL
+	NetworkManager.fetch_scraped_release(
+		scrape_url,
+		version_pattern,
+		url_template,
+		func(download_url: String, error: String):
+			if error != "":
+				push_error("[LaunchManager] Failed to scrape release for " + emulator_id + ": " + error)
+				_pending_cores_task.erase(emulator_id)
+				_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+				_emulator_install_progress[emulator_id] = "Failed to scrape release info"
+				emulator_extraction_completed.emit(emulator_id, false)
+				return
+			
+			# Use provided filename or extract from URL
+			var download_filename = filename
+			if download_filename == "":
+				download_filename = download_url.get_file()
+			
+			var destination_path = EMULATORS_DIR + emulator_id + "/" + download_filename
+			
+			print("[LaunchManager] Download URL: " + download_url)
+			
+			if should_extract:
+				var extract_destination = EMULATORS_DIR + emulator_id + "/" + extract_to
+				print("[LaunchManager] Extracting to: " + extract_destination)
+				
+				# Store the task index so we know which task to continue from when extraction completes
+				_pending_cores_task[emulator_id] = task_index
+				
+				# Queue download via DownloadManager (with auto-extract)
+				var item_id = DownloadManager.queue_download(
+					download_url,
+					destination_path,
+					"download_release",
+					emulator_name + " keys",
+					true,  # auto_extract
+					extract_destination
+				)
+				
+				if item_id == "":
+					push_error("[LaunchManager] Failed to queue download: " + emulator_id)
+					_pending_cores_task.erase(emulator_id)
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Failed to queue download"
+					emulator_extraction_completed.emit(emulator_id, false)
+			else:
+				print("[LaunchManager] Download only (no extraction)")
+				
+				# Queue download without extraction
+				var item_id = DownloadManager.queue_download(
+					download_url,
+					destination_path,
+					"download_release",
+					emulator_name + " keys",
+					false  # auto_extract = false
+				)
+				
+				if item_id == "":
+					push_error("[LaunchManager] Failed to queue download: " + emulator_id)
+					_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
+					_emulator_install_progress[emulator_id] = "Failed to queue download"
+					emulator_extraction_completed.emit(emulator_id, false)
+					return
+				
+				# Track this download for completion handling
+				_pending_download_task[item_id] = {
+					"emulator_id": emulator_id,
+					"task_index": task_index,
+					"destination_path": destination_path
+				}
+	)
+	
+	# Return true to indicate we're processing (actual completion handled by callback)
+	return true
+
 ## Gets the install path for an emulator (searches recursively)
 func get_emulator_install_path(emulator_id: String) -> String:
 	var emulator = get_emulator(emulator_id)
@@ -1397,12 +1887,26 @@ func complete_post_install(emulator_id: String) -> bool:
 		push_error("[LaunchManager] Unknown emulator: " + emulator_id)
 		return false
 	
-	if not emulator.has("post_install"):
+	var post_install_tasks = emulator.get("post_install_tasks", [])
+	if post_install_tasks.is_empty():
 		print("[LaunchManager] No post-install configured for: " + emulator_id)
 		return false
 	
 	print("[LaunchManager] Completing post-install for: " + emulator_id)
-	_start_post_install(emulator_id, emulator)
+	
+	# Find the first task that needs to be run (validation fails)
+	var first_invalid_task = 0
+	for i in range(post_install_tasks.size()):
+		var task = post_install_tasks[i]
+		var validation = task.get("validation", {})
+		
+		if not validation.is_empty():
+			if not _validate_post_install(emulator_id, validation, true):
+				first_invalid_task = i
+				break
+			first_invalid_task = i + 1
+	
+	_start_post_install(emulator_id, emulator, first_invalid_task)
 	return true
 
 ## Checks if an emulator is currently downloading or extracting

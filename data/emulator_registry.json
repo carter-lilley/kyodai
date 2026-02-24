@@ -1,6 +1,6 @@
 {
   "_meta": {
-	"version": "2.1",
+	"version": "2.2",
 	"description": "Emulator registry for Kyodai launcher",
 	"note": "Add emulator entries here. See retroarch example for structure."
   },
@@ -122,24 +122,26 @@
 	  "virtualboy": "mednafen_vb",
 	  "wii": "dolphin"
 	},
-	"post_install": {
-	  "type": "cores",
-	  "cores_url": {
-		"windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
-		"linux": "",
-		"android": ""
-	  },
-	  "cores_filename": {
-		"windows": "RetroArch_cores.7z",
-		"linux": "",
-		"android": ""
-	  },
-	  "validation": {
-		"type": "cores_directory",
-		"path": "RetroArch-Win64/cores",
-		"file_pattern": "*.dll"
+	"post_install_tasks": [
+	  {
+		"type": "cores",
+		"cores_url": {
+		  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
+		  "linux": "",
+		  "android": ""
+		},
+		"cores_filename": {
+		  "windows": "RetroArch_cores.7z",
+		  "linux": "",
+		  "android": ""
+		},
+		"validation": {
+		  "type": "cores_directory",
+		  "path": "RetroArch-Win64/cores",
+		  "file_pattern": "*.dll"
+		}
 	  }
-	}
+	]
   },
   "azahar": {
 	"name": "Azahar",
@@ -165,14 +167,16 @@
 		"class": "org.azahar.emu.ui.EmulationActivity"
 	  }
 	},
-	"post_install": {
-	  "type": "create_folders",
-	  "folders": ["user"],
-	  "validation": {
-		"type": "folders",
-		"folders": ["user"]
+	"post_install_tasks": [
+	  {
+		"type": "create_folders",
+		"folders": ["user"],
+		"validation": {
+		  "type": "folders",
+		  "folders": ["user"]
+		}
 	  }
-	}
+	]
   },
   "cemu": {
 	"name": "Cemu",
@@ -191,14 +195,16 @@
 	  "windows": ["{exe}", "-g", "{rom}", "-f"],
 	  "linux": []
 	},
-	"post_install": {
-	  "type": "create_folders",
-	  "folders": ["portable"],
-	  "validation": {
-		"type": "folders",
-		"folders": ["portable"]
+	"post_install_tasks": [
+	  {
+		"type": "create_folders",
+		"folders": ["portable"],
+		"validation": {
+		  "type": "folders",
+		  "folders": ["portable"]
+		}
 	  }
-	}
+	]
   },
   "dolphin": {
 	"name": "Dolphin",
@@ -220,14 +226,16 @@
 	  "windows": ["{exe}", "-e", "{rom}", "--batch" ,"--config" , "Dolphin.Display.Fullscreen=True","--config" , "Dolphin.Interface.ConfirmStop=False"],
 	  "linux": []
 	},
-	"post_install": {
-	  "type": "create_files",
-	  "files": ["portable.txt"],
-	  "validation": {
-		"type": "files",
-		"files": ["portable.txt"]
+	"post_install_tasks": [
+	  {
+		"type": "create_files",
+		"files": ["portable.txt"],
+		"validation": {
+		  "type": "files",
+		  "files": ["portable.txt"]
+		}
 	  }
-	}
+	]
   },
   "eden": {
 	"name": "Eden",
@@ -245,18 +253,52 @@
 	  "android": ""
 	},
 	"launch_templates": {
-	  "windows": ["{exe}", "{rom}","-fullscreen"],
+	  "windows": ["{exe}", "{rom}","-f"],
 	  "linux": [],
 	  "android": []
 	},
-	"post_install": {
-	  "type": "create_folders",
-	  "folders": ["user"],
-	  "validation": {
-		"type": "folders",
-		"folders": ["user"]
+	"post_install_tasks": [
+	  {
+		"type": "create_folders",
+		"folders": ["user", "user/nand/system/Contents/registered"],
+		"validation": {
+		  "type": "folders",
+		  "folders": ["user", "user/nand/system/Contents/registered"]
+		}
+	  },
+	  {
+		"type": "download_release",
+		"github_repo": "THZoria/NX_Firmware",
+		"asset_pattern": "Firmware.*\\.zip",
+		"extract_to": "user/nand/system/Contents/registered",
+		"extract": true,
+		"validation": {
+		  "type": "folders",
+		  "folders": ["user/nand/system/Contents/registered"]
+		}
+	  },
+	  {
+		"type": "create_folders",
+		"folders": ["user/keys"],
+		"validation": {
+		  "type": "folders",
+		  "folders": ["user/keys"]
+		}
+	  },
+	  {
+		"type": "download_scraped",
+		"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
+		"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
+		"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip",
+		"extract_to": "user/keys",
+		"extract": true,
+		"strip_top_directory": true,
+		"validation": {
+		  "type": "files",
+		  "files": ["user/keys/prod.keys", "user/keys/title.keys"]
+		}
 	  }
-	}
+	]
   },
   "ppsspp": {
 	"name": "PPSSPP",
@@ -278,14 +320,16 @@
 	  "windows": ["{exe}", "{rom}","--fullscreen"],
 	  "linux": []
 	},
-	"post_install": {
-	  "type": "create_files",
-	  "files": ["portable.txt"],
-	  "validation": {
-		"type": "files",
-		"files": ["portable.txt"]
+	"post_install_tasks": [
+	  {
+		"type": "create_files",
+		"files": ["portable.txt"],
+		"validation": {
+		  "type": "files",
+		  "files": ["portable.txt"]
+		}
 	  }
-	}
+	]
   },
   "rpcs3": {
 	"name": "RPCS3",
@@ -322,14 +366,16 @@
 	  "windows": ["{exe}", "-g", "{rom}"],
 	  "linux": ["{exe}", "-g", "{rom}"]
 	},
-	"post_install": {
-	  "type": "create_folders",
-	  "folders": ["user"],
-	  "validation": {
-		"type": "folders",
-		"folders": ["user"]
+	"post_install_tasks": [
+	  {
+		"type": "create_folders",
+		"folders": ["user"],
+		"validation": {
+		  "type": "folders",
+		  "folders": ["user"]
+		}
 	  }
-	}
+	]
   },
   "vita3k": {
 	"name": "Vita3K",
@@ -355,19 +401,21 @@
 		"class": "org.vita3k.emulator.EmulatorActivity"
 	  }
 	},
-	"post_install": {
-	  "type": "create_files",
-	  "files": [
-		{
-		  "name": "config.yml",
-		  "content": ["pref-path: .\\"]
+	"post_install_tasks": [
+	  {
+		"type": "create_files",
+		"files": [
+		  {
+			"name": "config.yml",
+			"content": ["pref-path: .\\"]
+		  }
+		],
+		"validation": {
+		  "type": "files",
+		  "files": ["config.yml"]
 		}
-	  ],
-	  "validation": {
-		"type": "files",
-		"files": ["config.yml"]
 	  }
-	}
+	]
   },
   "xemu": {
 	"name": "Xemu",
@@ -386,14 +434,16 @@
 	  "windows": ["{exe}","-full-screen", "-dvd_path", "{rom}"],
 	  "linux": ["{exe}", "-dvd_path", "{rom}"]
 	},
-	"post_install": {
-	  "type": "create_files",
-	  "files": ["xemu.toml"],
-	  "validation": {
-		"type": "files",
-		"files": ["xemu.toml"]
+	"post_install_tasks": [
+	  {
+		"type": "create_files",
+		"files": ["xemu.toml"],
+		"validation": {
+		  "type": "files",
+		  "files": ["xemu.toml"]
+		}
 	  }
-	}
+	]
   },
   "xenia": {
 	"name": "Xenia",
@@ -413,14 +463,16 @@
 	  "windows": ["{exe}", "{rom}","--fullscreen"],
 	  "linux": ["{exe}", "{rom}"]
 	},
-	"post_install": {
-	  "type": "create_files",
-	  "files": ["portable.txt"],
-	  "validation": {
-		"type": "files",
-		"files": ["portable.txt"]
+	"post_install_tasks": [
+	  {
+		"type": "create_files",
+		"files": ["portable.txt"],
+		"validation": {
+		  "type": "files",
+		  "files": ["portable.txt"]
+		}
 	  }
-	}
+	]
   },
   "pcsx2": {
 	"name": "PCSX2",
@@ -439,14 +491,16 @@
 	  "windows": ["{exe}", "-nogui", "-fullscreen", "{rom}"],
 	  "linux": ["{exe}", "-batch", "{rom}"]
 	},
-	"post_install": {
-	  "type": "create_files",
-	  "files": ["portable.txt"],
-	  "validation": {
-		"type": "files",
-		"files": ["portable.txt"]
+	"post_install_tasks": [
+	  {
+		"type": "create_files",
+		"files": ["portable.txt"],
+		"validation": {
+		  "type": "files",
+		  "files": ["portable.txt"]
+		}
 	  }
-	}
+	]
   },
   "melonds": {
 	"name": "melonDS",
