@@ -301,43 +301,62 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var icon_color = settings.get("icon_color", Color.WHITE)
 	var badge_type = settings.get("badge_type", 0)
 	
+	# For top bar mode, use wordmark instead of icon
+	var texture_to_use = icon_texture
+	if badge_type == 1 and game and game.platform_slug:
+		var wordmark_path = "res://assets/platforms/wordmark/wordmark_" + game.platform_slug + ".png"
+		if FileAccess.file_exists(wordmark_path):
+			var wordmark_tex = load(wordmark_path)
+			if wordmark_tex:
+				texture_to_use = wordmark_tex
+	
 	var card_width = _card_state.card_size.x
 	var corner_radius_pixels = _card_state.corner_radius_ratio * card_width
 	
 	# Base badge size as ratio of card width
 	var base_badge_size = BADGE_SIZE_RATIO * card_width
-	var icon_size = icon_texture.get_size()
-	var icon_aspect = icon_size.x / icon_size.y if icon_size.y > 0 else 1.0
+	var texture_size = texture_to_use.get_size()
+	var texture_aspect = texture_size.x / texture_size.y if texture_size.y > 0 else 1.0
 	
-	# Clamp all icons to square for testing
-	icon_aspect = 1.0
+	# Clamp aspect ratio for corner badge mode only
+	if badge_type != 1:
+		texture_aspect = clampf(texture_aspect, 0.75, 1.5)
 	
 	# Handle top bar badge type differently
 	if badge_type == 1:
 		# Top bar: full width, height based on badge size
 		var bar_height = base_badge_size * badge_size_setting
-		var icon_draw_width: float
-		var icon_draw_height: float
-		var icon_max_size = bar_height * 0.8  # 80% of bar height with padding
 		
-		if icon_aspect >= 1.0:
-			icon_draw_height = icon_max_size
-			icon_draw_width = icon_max_size * icon_aspect
-		else:
-			icon_draw_width = icon_max_size
-			icon_draw_height = icon_max_size / icon_aspect
+		# Calculate horizontal safe zone based on corner radius
+		var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
+		var corner_margin = corner_radius_pixels * corner_midpoint_factor
+		var max_wordmark_width = card_width - (corner_margin * 2.0)
+		var safe_x = corner_margin
 		
-		# Center icon in top bar
-		var icon_offset_x = (card_width - icon_draw_width) * 0.5
-		var icon_offset_y = (bar_height - icon_draw_height) * 0.5
+		# Padding slider: 0 = 60% height (minimum), 1 = 30% height (maximum padding)
+		# Range: 60% down to 30% of bar height
+		var available_height = bar_height * (0.6 - icon_padding * 0.3)
+		
+		# Calculate wordmark dimensions
+		var draw_height = available_height
+		var draw_width = available_height * texture_aspect
+		
+		# Clamp width to fit within safe zone between corners
+		if draw_width > max_wordmark_width:
+			draw_width = max_wordmark_width
+			draw_height = draw_width / texture_aspect
+		
+		# Center horizontally within safe zone
+		var offset_x = safe_x + (max_wordmark_width - draw_width) * 0.5
+		var offset_y = (bar_height - draw_height) * 0.5
 		
 		platform_icon.visible = true
-		platform_icon.texture = icon_texture
+		platform_icon.texture = texture_to_use
 		platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-		platform_icon.offset_left = icon_offset_x
-		platform_icon.offset_top = icon_offset_y
-		platform_icon.offset_right = icon_offset_x + icon_draw_width
-		platform_icon.offset_bottom = icon_offset_y + icon_draw_height
+		platform_icon.offset_left = offset_x
+		platform_icon.offset_top = offset_y
+		platform_icon.offset_right = offset_x + draw_width
+		platform_icon.offset_bottom = offset_y + draw_height
 		platform_icon.modulate = Color.WHITE
 		
 		var shader_material = ShaderMaterial.new()
@@ -348,19 +367,19 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		if _badge_effect:
 			# For top bar, pass full card width and bar height
 			_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
-			_badge_effect.set_safe_zone(icon_offset_x, icon_offset_y, icon_draw_width, icon_draw_height, false)
+			_badge_effect.set_safe_zone(offset_x, offset_y, draw_width, draw_height, false)
 		
 		return
 	
 	
 	var badge_width: float
 	var badge_height: float
-	if icon_aspect >= 1.0:
-		badge_width = base_badge_size * icon_aspect
+	if texture_aspect >= 1.0:
+		badge_width = base_badge_size * texture_aspect
 		badge_height = base_badge_size
 	else:
 		badge_width = base_badge_size
-		badge_height = base_badge_size / icon_aspect
+		badge_height = base_badge_size / texture_aspect
 	
 	var base_min_dim = min(badge_width, badge_height)
 	var base_inner_corner = (base_min_dim * 0.5) * clamp(inner_radius_setting, 0.0, 1.0)
@@ -393,8 +412,8 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	# Debug: print values for DS/3DS which seem to have issues
 	if game and (game.platform_slug == "nds" or game.platform_slug == "3ds"):
 		print("Platform: ", game.platform_slug)
-		print("  icon_size: ", icon_texture.get_size())
-		print("  icon_aspect: ", icon_aspect)
+		print("  texture_size: ", texture_to_use.get_size())
+		print("  texture_aspect: ", texture_aspect)
 		print("  badge_width: ", badge_width, " badge_height: ", badge_height)
 		print("  scaled_width: ", scaled_width, " scaled_height: ", scaled_height)
 		print("  scaled_outer: ", scaled_outer, " scaled_inner: ", scaled_inner)
@@ -418,18 +437,18 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var icon_draw_height: float
 	var safe_aspect = safe_width / safe_height
 	
-	if icon_aspect > safe_aspect:
+	if texture_aspect > safe_aspect:
 		icon_draw_width = safe_width
-		icon_draw_height = safe_width / icon_aspect
+		icon_draw_height = safe_width / texture_aspect
 	else:
 		icon_draw_height = safe_height
-		icon_draw_width = safe_height * icon_aspect
+		icon_draw_width = safe_height * texture_aspect
 	
 	var icon_offset_x = safe_x + (safe_width - icon_draw_width) * 0.5
 	var icon_offset_y = safe_y + (safe_height - icon_draw_height) * 0.5
 	
 	platform_icon.visible = true
-	platform_icon.texture = icon_texture
+	platform_icon.texture = texture_to_use
 	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	# Use manual offsets (scene has expand_mode=1, stretch_mode=5)
 	platform_icon.offset_left = icon_offset_x
