@@ -308,6 +308,9 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var icon_size = icon_texture.get_size()
 	var icon_aspect = icon_size.x / icon_size.y if icon_size.y > 0 else 1.0
 	
+	# Clamp all icons to square for testing
+	icon_aspect = 1.0
+	
 	var badge_width: float
 	var badge_height: float
 	if icon_aspect >= 1.0:
@@ -358,7 +361,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	if _badge_effect:
 		_badge_effect.set_badge_dimensions(Vector2(scaled_width, scaled_height))
 		# Pass safe zone to shader for debugging (set last param to true to show debug)
-		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, true)
+		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 	
 	# Apply padding to safe zone for icon placement
 	var padding = min(safe_width, safe_height) * icon_padding * 0.25

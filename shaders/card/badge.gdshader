@@ -11,7 +11,7 @@ uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float border_width_ratio = 0.0;
 
 // Safe zone uniforms (set by GameCard for debugging)
-uniform bool show_safe_zone = true;
+uniform bool show_safe_zone = false;
 uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
