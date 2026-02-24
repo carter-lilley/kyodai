@@ -27,18 +27,26 @@ func _update_shader_params() -> void:
 	var badge_inner_radius = _settings.get("badge_inner_radius", 0.0)
 	var badge_color = _settings.get("badge_color", Color.WHITE)
 	var badge_aspect = _settings.get("badge_aspect", Vector2(1.0, 1.0))
+	var badge_type = _settings.get("badge_type", 0)
 	
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("hide_background", hide_background)
+	_set_shader_param("badge_type", badge_type)
 	# Calculate proper shader params
-	# badge_size_ratio should be based on MAX dimension to match GameCard logic
 	var card_width = _card_state.card_size.x
 	if _badge_width > 0 and _badge_height > 0:
-		var max_dim = max(_badge_width, _badge_height)
-		_set_shader_param("badge_size_ratio", max_dim / card_width)
-		# aspect_ratio should be actual dimensions normalized by max
-		_set_shader_param("badge_aspect_ratio", Vector2(_badge_width / max_dim, _badge_height / max_dim))
+		if badge_type == 1:
+			# Top bar mode: width is card width, height is the bar height
+			# Pass height directly as ratio
+			_set_shader_param("badge_size_ratio", _badge_height / card_width)
+			_set_shader_param("badge_aspect_ratio", Vector2(_badge_width / _badge_height, 1.0))
+		else:
+			# Corner badge: based on MAX dimension to match GameCard logic
+			var max_dim = max(_badge_width, _badge_height)
+			_set_shader_param("badge_size_ratio", max_dim / card_width)
+			# aspect_ratio should be actual dimensions normalized by max
+			_set_shader_param("badge_aspect_ratio", Vector2(_badge_width / max_dim, _badge_height / max_dim))
 	else:
 		# Fallback: square badge
 		var badge_size = _settings.get("badge_size", 1.0)
@@ -74,6 +82,10 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
 	var Type = SettingsVar.SettingType
 	var State = SettingsVar.SettingState
+	
+	var badge_type_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Badge Type", "", 0, 0, 0, ["Corner Badge", "Top Bar"])
+	badge_type_var.property_name = "badge_type"
+	schema.append(badge_type_var)
 	
 	var hide_bg_var = SettingsVar.new(Type.BOOL, false, State.ENABLED, "Hide Background")
 	hide_bg_var.property_name = "hide_background"

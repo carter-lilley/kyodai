@@ -299,6 +299,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
 	var icon_padding = settings.get("icon_padding", 0.5)
 	var icon_color = settings.get("icon_color", Color.WHITE)
+	var badge_type = settings.get("badge_type", 0)
 	
 	var card_width = _card_state.card_size.x
 	var corner_radius_pixels = _card_state.corner_radius_ratio * card_width
@@ -310,6 +311,47 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	
 	# Clamp all icons to square for testing
 	icon_aspect = 1.0
+	
+	# Handle top bar badge type differently
+	if badge_type == 1:
+		# Top bar: full width, height based on badge size
+		var bar_height = base_badge_size * badge_size_setting
+		var icon_draw_width: float
+		var icon_draw_height: float
+		var icon_max_size = bar_height * 0.8  # 80% of bar height with padding
+		
+		if icon_aspect >= 1.0:
+			icon_draw_height = icon_max_size
+			icon_draw_width = icon_max_size * icon_aspect
+		else:
+			icon_draw_width = icon_max_size
+			icon_draw_height = icon_max_size / icon_aspect
+		
+		# Center icon in top bar
+		var icon_offset_x = (card_width - icon_draw_width) * 0.5
+		var icon_offset_y = (bar_height - icon_draw_height) * 0.5
+		
+		platform_icon.visible = true
+		platform_icon.texture = icon_texture
+		platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		platform_icon.offset_left = icon_offset_x
+		platform_icon.offset_top = icon_offset_y
+		platform_icon.offset_right = icon_offset_x + icon_draw_width
+		platform_icon.offset_bottom = icon_offset_y + icon_draw_height
+		platform_icon.modulate = Color.WHITE
+		
+		var shader_material = ShaderMaterial.new()
+		shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")
+		shader_material.set_shader_parameter("icon_color", icon_color)
+		platform_icon.material = shader_material
+		
+		if _badge_effect:
+			# For top bar, pass full card width and bar height
+			_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
+			_badge_effect.set_safe_zone(icon_offset_x, icon_offset_y, icon_draw_width, icon_draw_height, false)
+		
+		return
+	
 	
 	var badge_width: float
 	var badge_height: float

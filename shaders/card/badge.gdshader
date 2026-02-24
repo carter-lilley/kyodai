@@ -9,6 +9,7 @@ uniform vec2 badge_aspect_ratio = vec2(1.0, 1.0);
 uniform float badge_inner_radius = 0.0;
 uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float border_width_ratio = 0.0;
+uniform int badge_type = 0; // 0 = corner badge, 1 = top bar
 
 // Safe zone uniforms (set by GameCard for debugging)
 uniform bool show_safe_zone = false;
@@ -38,35 +39,84 @@ void fragment() {
 	float badge_width = badge_size_pixels * badge_aspect_ratio.x;
 	float badge_height = badge_size_pixels * badge_aspect_ratio.y;
 	
-	// Draw badge background
-	if (pixel_pos.x < badge_width && pixel_pos.y < badge_height) {
-		float dist_left = pixel_pos.x;
-		float dist_top = pixel_pos.y;
-		bool outside_badge = pixel_pos.x > badge_width || pixel_pos.y > badge_height;
-		float alpha_left = smoothstep(-aa_width, 0.0, dist_left);
-		float alpha_top = smoothstep(-aa_width, 0.0, dist_top);
-		float bounds_alpha = outside_badge ? 0.0 : 1.0;
-		float badge_alpha = min(min(alpha_left, alpha_top), bounds_alpha);
-		
-		if (badge_inner_radius > 0.0) {
-			float min_dimension = min(badge_width, badge_height);
-			float max_radius = max(0.0, min_dimension * 0.5 - border_width_pixels);
-			float inner_radius = max_radius * clamp(badge_inner_radius, 0.0, 1.0);
-			vec2 corner_center = vec2(badge_width - inner_radius, badge_height - inner_radius);
-			bool in_corner_region = pixel_pos.x > badge_width - inner_radius && pixel_pos.y > badge_height - inner_radius;
+	// Draw badge based on type
+	if (badge_type == 0) {
+		// Corner badge (original implementation)
+		if (pixel_pos.x < badge_width && pixel_pos.y < badge_height) {
+			float dist_left = pixel_pos.x;
+			float dist_top = pixel_pos.y;
+			bool outside_badge = pixel_pos.x > badge_width || pixel_pos.y > badge_height;
+			float alpha_left = smoothstep(-aa_width, 0.0, dist_left);
+			float alpha_top = smoothstep(-aa_width, 0.0, dist_top);
+			float bounds_alpha = outside_badge ? 0.0 : 1.0;
+			float badge_alpha = min(min(alpha_left, alpha_top), bounds_alpha);
 			
-			if (in_corner_region && inner_radius > 0.0) {
-				float dist_from_center = length(pixel_pos - corner_center);
-				if (dist_from_center > inner_radius) {
-					badge_alpha = 0.0;
-				} else {
-					float edge_alpha = 1.0 - smoothstep(inner_radius - aa_width, inner_radius, dist_from_center);
-					badge_alpha *= edge_alpha;
+			if (badge_inner_radius > 0.0) {
+				float min_dimension = min(badge_width, badge_height);
+				float max_radius = max(0.0, min_dimension * 0.5 - border_width_pixels);
+				float inner_radius = max_radius * clamp(badge_inner_radius, 0.0, 1.0);
+				vec2 corner_center = vec2(badge_width - inner_radius, badge_height - inner_radius);
+				bool in_corner_region = pixel_pos.x > badge_width - inner_radius && pixel_pos.y > badge_height - inner_radius;
+				
+				if (in_corner_region && inner_radius > 0.0) {
+					float dist_from_center = length(pixel_pos - corner_center);
+					if (dist_from_center > inner_radius) {
+						badge_alpha = 0.0;
+					} else {
+						float edge_alpha = 1.0 - smoothstep(inner_radius - aa_width, inner_radius, dist_from_center);
+						badge_alpha *= edge_alpha;
+					}
 				}
 			}
+			
+			final_color = vec4(badge_color.rgb, badge_color.a * badge_alpha);
 		}
-		
-		final_color = vec4(badge_color.rgb, badge_color.a * badge_alpha);
+	} else {
+		// Top bar badge - full width at top
+		float bar_height = badge_size_pixels;
+		float card_width_pixels = card_size.x;
+		if (pixel_pos.y < bar_height) {
+			// Top edge fade
+			float alpha_top = smoothstep(-aa_width, 0.0, pixel_pos.y);
+			// Bottom edge fade
+			float alpha_bottom = 1.0 - smoothstep(bar_height - aa_width, bar_height, pixel_pos.y);
+			float badge_alpha = min(alpha_top, alpha_bottom);
+			
+			// Apply rounded corners to bottom of bar
+			if (badge_inner_radius > 0.0) {
+				float max_radius = max(0.0, bar_height * 0.5);
+				float corner_radius = max_radius * clamp(badge_inner_radius, 0.0, 1.0);
+				
+				// Bottom left corner
+				vec2 bl_corner_center = vec2(corner_radius, bar_height - corner_radius);
+				// Bottom right corner
+				vec2 br_corner_center = vec2(card_width_pixels - corner_radius, bar_height - corner_radius);
+				
+				// Check if in bottom left corner region
+				if (pixel_pos.x < corner_radius && pixel_pos.y > bar_height - corner_radius) {
+					float dist_bl = length(pixel_pos - bl_corner_center);
+					if (dist_bl > corner_radius) {
+						badge_alpha = 0.0;
+					} else {
+						float edge_alpha = 1.0 - smoothstep(corner_radius - aa_width, corner_radius, dist_bl);
+						badge_alpha *= edge_alpha;
+					}
+				}
+				
+				// Check if in bottom right corner region
+				if (pixel_pos.x > card_width_pixels - corner_radius && pixel_pos.y > bar_height - corner_radius) {
+					float dist_br = length(pixel_pos - br_corner_center);
+					if (dist_br > corner_radius) {
+						badge_alpha = 0.0;
+					} else {
+						float edge_alpha = 1.0 - smoothstep(corner_radius - aa_width, corner_radius, dist_br);
+						badge_alpha *= edge_alpha;
+					}
+				}
+			}
+			
+			final_color = vec4(badge_color.rgb, badge_color.a * badge_alpha);
+		}
 	}
 	
 	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
