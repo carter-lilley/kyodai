@@ -2,6 +2,8 @@ class_name BadgeEffect
 extends CardEffect
 
 var _border_width: float = 0.0
+var _badge_width: float = 0.0
+var _badge_height: float = 0.0
 
 func _ready():
 	super._ready()
@@ -20,7 +22,6 @@ func _update_shader_params() -> void:
 		return
 	
 	var hide_background = _settings.get("hide_background", false)
-	var badge_size = _settings.get("badge_size", 1.0)
 	var badge_inner_radius = _settings.get("badge_inner_radius", 0.0)
 	var badge_color = _settings.get("badge_color", Color.WHITE)
 	var badge_aspect = _settings.get("badge_aspect", Vector2(1.0, 1.0))
@@ -28,7 +29,14 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("hide_background", hide_background)
-	_set_shader_param("badge_size_ratio", badge_size * 0.16)  # 0.16 is base ratio (32px/202px)
+	# Use actual badge width passed from GameCard (already includes badge_size and aspect)
+	var card_width = _card_state.card_size.x
+	if _badge_width > 0:
+		_set_shader_param("badge_size_ratio", _badge_width / card_width)
+	else:
+		# Fallback if dimensions not set yet
+		var badge_size = _settings.get("badge_size", 1.0)
+		_set_shader_param("badge_size_ratio", badge_size * 0.16)
 	_set_shader_param("badge_aspect_ratio", badge_aspect)
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
@@ -39,6 +47,10 @@ func set_border_width(width: float) -> void:
 	_update_shader_params()
 
 func set_badge_dimensions(dimensions: Vector2) -> void:
+	# Store actual dimensions passed from GameCard
+	_badge_width = dimensions.x
+	_badge_height = dimensions.y
+	
 	# Convert dimensions to aspect ratio
 	var max_dim = max(dimensions.x, dimensions.y)
 	if max_dim > 0:

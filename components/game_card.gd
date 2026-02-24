@@ -28,6 +28,9 @@ var _is_downloading: bool = false
 const BADGE_SIZE_RATIO: float = 0.16  # ~32px at default width
 const BADGE_MARGIN_RATIO: float = 0.04  # ~8px at default width
 const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
+
+# Debug
+var _debug_safe_area: ColorRect = null
 const ICON_SIZE_RATIO: float = 0.11  # ~22px at default width
 
 var _current_texture: Texture2D = null
@@ -84,9 +87,10 @@ func _setup_preview_mode():
 		card_input.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func set_card_state(state: CardState) -> void:
-	# Disconnect old signals
-	if _card_state:
+	# Disconnect old signals safely
+	if _card_state and _card_state.zoom_changed.is_connected(_on_zoom_changed):
 		_card_state.zoom_changed.disconnect(_on_zoom_changed)
+	if _card_state and _card_state.orientation_changed.is_connected(_on_orientation_changed):
 		_card_state.orientation_changed.disconnect(_on_orientation_changed)
 	
 	_card_state = state.duplicate()
@@ -368,6 +372,8 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	platform_icon.visible = true
 	platform_icon.texture = icon_texture
 	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	# Use scene defaults: expand_mode=1 (FIT_WIDTH), stretch_mode=5 (KEEP_ASPECT_CENTERED)
+	# These are already set in game_card.tscn, don't override them
 	platform_icon.offset_left = icon_offset_x
 	platform_icon.offset_top = icon_offset_y
 	platform_icon.offset_right = icon_offset_x + icon_draw_width

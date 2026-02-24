@@ -60,10 +60,14 @@ func _connect_card_state_signals() -> void:
 func _disconnect_card_state_signals() -> void:
 	if not _card_state:
 		return
-	_card_state.zoom_changed.disconnect(_on_zoom_changed)
-	_card_state.orientation_changed.disconnect(_on_orientation_changed)
-	_card_state.corner_radius_changed.disconnect(_on_corner_radius_changed)
-	_card_state.border_inset_changed.disconnect(_on_border_inset_changed)
+	if _card_state.zoom_changed.is_connected(_on_zoom_changed):
+		_card_state.zoom_changed.disconnect(_on_zoom_changed)
+	if _card_state.orientation_changed.is_connected(_on_orientation_changed):
+		_card_state.orientation_changed.disconnect(_on_orientation_changed)
+	if _card_state.corner_radius_changed.is_connected(_on_corner_radius_changed):
+		_card_state.corner_radius_changed.disconnect(_on_corner_radius_changed)
+	if _card_state.border_inset_changed.is_connected(_on_border_inset_changed):
+		_card_state.border_inset_changed.disconnect(_on_border_inset_changed)
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	_update_shader_params()

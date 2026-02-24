@@ -83,10 +83,16 @@ func _on_resized():
 
 func _calculate_zoom() -> float:
 	var base_dims = _get_base_dimensions()
-	if vertical:
-		return (size.x * target_card_width_ratio) / base_dims.x
-	else:
-		return (size.y * target_card_width_ratio) / base_dims.y
+	var base_area = base_dims.x * base_dims.y
+	var viewport_area = size.x * size.y
+	
+	# target_card_width_ratio represents "fraction of viewport area occupied by one card"
+	# For example, 0.15 = card takes up ~2.25% of viewport area (0.15^2)
+	var target_card_area = viewport_area * target_card_width_ratio * target_card_width_ratio
+	
+	# Solve: (base_width * zoom) * (base_height * zoom) = target_card_area
+	# zoom^2 = target_card_area / base_area
+	return sqrt(target_card_area / base_area)
 
 func _on_settings_saved():
 	_recalculate_dimensions()

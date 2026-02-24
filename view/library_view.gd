@@ -16,10 +16,12 @@ func _ready():
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
 	
-	# Setup zoom slider (now controls card width ratio)
-	# Min 0.10 = ~10 cards visible (prevents too many shaders running)
-	zoom_slider.min_value = 0.10
-	zoom_slider.max_value = 0.35
+	# Setup zoom slider (now controls card area ratio)
+	# Slider value represents sqrt of viewport area fraction
+	# 0.15 = card takes ~2% of viewport area
+	# 0.50 = card takes ~25% of viewport area
+	zoom_slider.min_value = 0.15
+	zoom_slider.max_value = 0.50
 	zoom_slider.step = 0.01
 	zoom_slider.value = games_grid.target_card_width_ratio
 	zoom_slider.value_changed.connect(_on_zoom_changed)

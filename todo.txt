@@ -6,20 +6,19 @@ how to split important siblings
 	unify views (all views are fullpage screens - invisible tabs?)
 	controller nav
 	sort by plaform, recent, search
-	auto-view already downloaded games 
+	auto-view already downloaded games (home)
 	filters > recent, downloaded, etc.
 	namecard type icons
 	layer system strokes/shadows/fades
-	sane defaulTS
-	add letters to big library 
+	sane defaults
+	add letters to library navigation 
 ## performance:
-	cache image colors and cropping data on sync
-	furhter card image retries & priority management.
+	cache image colors, and cropping data, and sibiling lookup on sync
+	further card image retries & priority management.
 	performance.add_custom_monitor for everything
 	are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
 ## sync
-	Cache Sibling Lookups - Pre-fetch existing game IDs at sync start
 	batch DB adds instead of single
 ## launch:
 	fix xemu launch intent bug
