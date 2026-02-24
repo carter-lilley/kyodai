@@ -1231,6 +1231,20 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	
 	if not success:
 		NotificationManager.show_notification("Failed to launch " + game.get_display_name(), Notification.Type.ERROR)
+		return
+	
+	# Update last_played timestamp on successful launch
+	_update_last_played(game)
+
+## Update the last_played timestamp for a game
+func _update_last_played(game: GameResource) -> void:
+	var timestamp = Time.get_datetime_string_from_system(false, true)  # UTC format
+	game.last_played = timestamp
+	
+	# Update in database
+	DataManager.update_game_last_played(game.romm_id, timestamp)
+	
+	print("[LaunchManager] Updated last_played for '%s' to %s" % [game.get_display_name(), timestamp])
 
 func _execute_android(intent: LaunchIntent) -> bool:
 	# TODO: Implement Android intent launching

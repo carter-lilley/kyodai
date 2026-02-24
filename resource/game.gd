@@ -30,6 +30,9 @@ extends Resource
 ## Whether this game has cover art (used to hide games without covers from library view)
 @export var has_cover_art: bool = true
 
+## Timestamp of when this game was last played (ISO format)
+@export var last_played: String = ""
+
 ## Tracks which sibling IDs have been downloaded locally
 ## Array of sibling IDs that have local copies
 @export var downloaded_sibling_ids: Array[int] = []

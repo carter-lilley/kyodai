@@ -8,7 +8,6 @@ how to split important siblings
 	sort by plaform, recent, search
 	auto-view already downloaded games (home)
 	filters > recent, downloaded, etc.
-	namecard type icons
 	layer system strokes/shadows/fades
 	sane defaults
 	add letters to library navigation 

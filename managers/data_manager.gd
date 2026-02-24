@@ -106,7 +106,8 @@ func _create_tables():
 			selected_sibling_id INTEGER DEFAULT 0,
 			is_master_entry INTEGER DEFAULT 1,
 			downloaded_sibling_ids TEXT DEFAULT '[]',
-			has_cover_art INTEGER DEFAULT 1
+			has_cover_art INTEGER DEFAULT 1,
+			last_played TEXT DEFAULT ''
 		)
 	""")
 	
@@ -773,8 +774,8 @@ func _build_insert_query(game: GameResource) -> String:
 		INSERT OR REPLACE INTO games 
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 		 file_name, file_path, file_size, has_local_copy, last_updated, 
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art)
-		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played)
+		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s')
 	""" % [
 		_escape_sql(game.id),
 		game.romm_id,
@@ -795,7 +796,8 @@ func _build_insert_query(game: GameResource) -> String:
 		game.selected_sibling_id,
 		1 if game.is_master_entry else 0,
 		_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
-		1 if game.has_cover_art else 0
+		1 if game.has_cover_art else 0,
+		_escape_sql(game.last_played)
 	]
 
 # ==================== DATABASE OPERATIONS ====================
@@ -810,8 +812,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				INSERT OR REPLACE INTO games 
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 				 file_name, file_path, file_size, has_local_copy, last_updated, 
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art)
-				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d)
+				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played)
+				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s')
 			""" % [
 				_escape_sql(game.id),
 				game.romm_id,
@@ -832,7 +834,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.selected_sibling_id,
 				1 if game.is_master_entry else 0,
 				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
-				1 if game.has_cover_art else 0
+				1 if game.has_cover_art else 0,
+				_escape_sql(game.last_played)
 			]
 			return _db.query(query),
 		func(success: bool):
@@ -875,7 +878,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					selected_sibling_id = %d,
 					is_master_entry = %d,
 					downloaded_sibling_ids = '%s',
-					has_cover_art = %d
+					has_cover_art = %d,
+					last_played = '%s'
 				WHERE romm_id = %d
 			""" % [
 				_escape_sql(game.title),
@@ -896,6 +900,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.is_master_entry else 0,
 				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
 				1 if game.has_cover_art else 0,
+				_escape_sql(game.last_played),
 				game.romm_id
 			]
 			return _db.query(query),
@@ -958,6 +963,83 @@ func get_total_games_count() -> int:
 		if row.has("count"):
 			return int(row["count"])
 	return 0
+
+func get_downloaded_games_count() -> int:
+	"""Get count of downloaded games from synced platforms."""
+	if not _is_db_ready:
+		return 0
+	
+	var enabled_slugs = _get_enabled_platform_slugs()
+	if enabled_slugs.size() == 0:
+		return 0
+	
+	var slug_list = "'" + "','".join(enabled_slugs) + "'"
+	var query = """
+		SELECT COUNT(*) as count FROM games 
+		WHERE is_master_entry = 1 
+		AND has_cover_art = 1
+		AND platform_slug IN (%s)
+		AND (
+			has_local_copy = 1 
+			OR downloaded_sibling_ids != '[]'
+		)
+	""" % slug_list
+	
+	var success = _db.query(query)
+	if success and _db.query_result.size() > 0:
+		var row = _db.query_result[0]
+		if row.has("count"):
+			return int(row["count"])
+	return 0
+
+func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResource]:
+	"""Get downloaded games from synced platforms, sorted by most recently played."""
+	var games: Array[GameResource] = []
+	if not _is_db_ready:
+		return games
+	
+	var enabled_slugs = _get_enabled_platform_slugs()
+	if enabled_slugs.size() == 0:
+		return games
+	
+	var slug_list = "'" + "','".join(enabled_slugs) + "'"
+	var query = """
+		SELECT * FROM games 
+		WHERE is_master_entry = 1 
+		AND has_cover_art = 1
+		AND platform_slug IN (%s)
+		AND (
+			has_local_copy = 1 
+			OR downloaded_sibling_ids != '[]'
+		)
+		ORDER BY last_played DESC, title ASC
+		LIMIT %d OFFSET %d
+	""" % [slug_list, limit, offset]
+	
+	_db.query(query)
+	for row in _db.query_result:
+		games.append(_row_to_game(row))
+	return games
+
+func _get_enabled_platform_slugs() -> Array[String]:
+	"""Get list of platform slugs that are currently enabled for sync."""
+	var slugs: Array[String] = []
+	var enabled = _get_enabled_platforms()
+	for platform in enabled:
+		slugs.append(platform.slug)
+	return slugs
+
+func update_game_last_played(romm_id: int, timestamp: String) -> bool:
+	"""Update the last_played timestamp for a game."""
+	if not _is_db_ready:
+		return false
+	
+	var query = """
+		UPDATE games SET last_played = '%s'
+		WHERE romm_id = %d
+	""" % [_escape_sql(timestamp), romm_id]
+	
+	return _db.query(query)
 
 func _row_to_game(row: Dictionary) -> GameResource:
 	var game = GameResource.new()
@@ -1028,6 +1110,12 @@ func _row_to_game(row: Dictionary) -> GameResource:
 			game.downloaded_sibling_ids = []
 	else:
 		game.downloaded_sibling_ids = []
+	
+	# Restore last_played timestamp
+	if row.has("last_played"):
+		game.last_played = row.get("last_played", "")
+	else:
+		game.last_played = ""
 	
 	return game
 

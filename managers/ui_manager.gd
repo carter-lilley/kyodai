@@ -34,6 +34,7 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 		_root_control = tab_container.get_parent_control()
 	
 	# Setup existing tabs
+	_setup_home_tab()
 	_setup_library_tab()
 	_setup_downloads_tab()
 	_setup_settings_tab()
@@ -47,6 +48,25 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 	# Setup library appearance (background color)
 	_setup_library_appearance()
 	SettingsManager.setting_changed.connect(_on_setting_changed)
+
+func _setup_home_tab():
+	var home_idx = _get_tab_index("Home")
+	if home_idx == -1:
+		push_warning("[UIManager]: Home tab not found")
+		return
+	
+	var home_tab = _tab_container.get_tab_control(home_idx)
+	
+	# Clear existing content
+	for child in home_tab.get_children():
+		child.queue_free()
+	
+	# Add HomeView (load scene to get UI nodes)
+	var home_scene = preload("res://view/home_view.tscn")
+	var home_view = home_scene.instantiate()
+	home_view.view_name = "Home"
+	home_tab.add_child(home_view)
+	_views["Home"] = home_view
 
 func _setup_library_tab():
 	var library_idx = _get_tab_index("Library")

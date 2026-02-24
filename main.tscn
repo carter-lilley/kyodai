@@ -25,19 +25,24 @@ grow_horizontal = 2
 grow_vertical = 2
 current_tab = 0
 
-[node name="Library" type="Control" parent="TabContainer" unique_id=1091986298]
+[node name="Home" type="Control" parent="TabContainer" unique_id=1091986297]
 layout_mode = 2
 metadata/_tab_index = 0
 
-[node name="Downloads" type="Control" parent="TabContainer" unique_id=366562689]
+[node name="Library" type="Control" parent="TabContainer" unique_id=1091986298]
 visible = false
 layout_mode = 2
 metadata/_tab_index = 1
 
-[node name="Settings" type="Control" parent="TabContainer" unique_id=2107145751]
+[node name="Downloads" type="Control" parent="TabContainer" unique_id=366562689]
 visible = false
 layout_mode = 2
 metadata/_tab_index = 2
+
+[node name="Settings" type="Control" parent="TabContainer" unique_id=2107145751]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 3
 
 [node name="AntiAliasingLayer" type="CanvasLayer" parent="." unique_id=999999999]
 layer = 999

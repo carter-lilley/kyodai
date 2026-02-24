@@ -675,8 +675,8 @@ static func _build_insert_query(game) -> String:
 		INSERT OR REPLACE INTO games 
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 		 file_name, file_path, file_size, has_local_copy, last_updated, 
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art)
-		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played)
+		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s')
 	""" % [
 		escape_sql.call(game.id),
 		game.romm_id,
@@ -697,7 +697,8 @@ static func _build_insert_query(game) -> String:
 		game.selected_sibling_id,
 		1 if game.is_master_entry else 0,
 		escape_sql.call(JSON.stringify(game.downloaded_sibling_ids)),
-		1 if game.has_cover_art else 0
+		1 if game.has_cover_art else 0,
+		escape_sql.call(game.last_played)
 	]
 
 ## Process a batch of image downloads
