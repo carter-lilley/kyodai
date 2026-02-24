@@ -230,8 +230,9 @@ func _on_action_button_pressed() -> void:
 		# Check if the file actually exists before launching
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		if root_folder and root_folder.value != "":
-			var active_id = _current_game.get_active_game_id()
-			var file_path = _current_game.get_sibling_file_path(active_id, root_folder.value)
+			# Construct the full file path from known components (don't rely on file_path which may be relative)
+			var active_file_name = _current_game.get_active_file_name()
+			var file_path = root_folder.value + "/" + _current_game.platform_slug + "/" + active_file_name
 			
 			if not FileAccess.file_exists(file_path):
 				# File is marked as downloaded but doesn't exist - redownload

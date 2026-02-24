@@ -1478,3 +1478,189 @@ func set_last_sync_time(timestamp: String):
 	if not _is_db_ready:
 		return
 	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('last_sync', '%s')" % timestamp)
+
+# ==================== DOWNLOADED GAMES SCAN ====================
+
+signal scan_for_downloaded_games_completed(found_count: int)
+
+func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
+	"""Scan the games folder for downloaded ROMs and update database entries.
+	
+	Matches files against database entries by file_name and platform_slug.
+	Updates has_local_copy and downloaded_sibling_ids for matched games.
+	"""
+	if not _is_db_ready:
+		print("[DataManager] Cannot scan - database not ready")
+		if callback.is_valid():
+			callback.call(0)
+		return
+	
+	var root_folder_setting = SettingsManager.get_setting("games_root_folder")
+	if not root_folder_setting or root_folder_setting.value == "":
+		print("[DataManager] Cannot scan - games_root_folder not set")
+		if callback.is_valid():
+			callback.call(0)
+		return
+	
+	var root_folder = root_folder_setting.value
+	print("[DataManager] Scanning for downloaded games in: " + root_folder)
+	
+	# Get all games from database to match against
+	var all_games = get_all_games()
+	if all_games.size() == 0:
+		print("[DataManager] No games in database to match against")
+		if callback.is_valid():
+			callback.call(0)
+		return
+	
+	# Build lookup dictionary: file_name -> game
+	var game_lookup: Dictionary = {}
+	for game in all_games:
+		# Add main game file
+		if game.file_name != "":
+			var key = game.platform_slug + "/" + game.file_name.to_lower()
+			game_lookup[key] = game
+		
+		# Add sibling files
+		for sibling in game.siblings:
+			var sibling_file_name = sibling.get("file_name", "")
+			if sibling_file_name != "":
+				var sibling_key = game.platform_slug + "/" + sibling_file_name.to_lower()
+				game_lookup[sibling_key] = game
+	
+	print("[DataManager] Built lookup with %d game entries" % game_lookup.size())
+	
+	# Scan filesystem
+	var found_files: Array[String] = []
+	_scan_games_directory(root_folder, "", found_files)
+	
+	print("[DataManager] Found %d files in games directory" % found_files.size())
+	
+	# Match files to games
+	var matched_games: Dictionary = {}  # romm_id -> {game, matched_siblings: [], file_path: ""}
+	var matched_count: int = 0
+	
+	for file_path in found_files:
+		var parts = file_path.split("/", false, 1)
+		if parts.size() < 2:
+			continue
+		
+		var platform_slug = parts[0]
+		var file_name = parts[1]
+		var lookup_key = platform_slug + "/" + file_name.to_lower()
+		
+		if game_lookup.has(lookup_key):
+			var game = game_lookup[lookup_key]
+			
+			if not matched_games.has(game.romm_id):
+				matched_games[game.romm_id] = {
+					"game": game,
+					"matched_siblings": [],
+					"file_path": ""
+				}
+			
+			var full_file_path = root_folder + "/" + file_path
+			
+			# Check if it's the main game file or a sibling
+			if file_name.to_lower() == game.file_name.to_lower():
+				# It's the main game file - update file_path
+				matched_games[game.romm_id].file_path = full_file_path
+			else:
+				# It's a sibling - find the sibling ID
+				for sibling in game.siblings:
+					var sibling_file = sibling.get("file_name", "")
+					if sibling_file.to_lower() == file_name.to_lower():
+						var sibling_id = sibling.get("id", 0)
+						if sibling_id != 0 and not matched_games[game.romm_id].matched_siblings.has(sibling_id):
+							matched_games[game.romm_id].matched_siblings.append(sibling_id)
+							break
+			
+			matched_count += 1
+			print("[DataManager] Matched file: %s -> %s" % [file_path, game.title])
+	
+	print("[DataManager] Matched %d files to %d unique games" % [matched_count, matched_games.size()])
+	
+	# Update database for matched games
+	if matched_games.size() > 0:
+		_update_matched_games_in_db(matched_games, callback)
+	else:
+		if callback.is_valid():
+			callback.call(0)
+
+func _scan_games_directory(root_path: String, sub_path: String, results: Array[String]) -> void:
+	"""Recursively scan the games directory for ROM files."""
+	var full_path = root_path
+	if sub_path != "":
+		full_path = root_path + "/" + sub_path
+	
+	var dir = DirAccess.open(full_path)
+	if not dir:
+		return
+	
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	
+	while file_name != "":
+		if file_name == "." or file_name == "..":
+			file_name = dir.get_next()
+			continue
+		
+		var current_path = sub_path
+		if current_path != "":
+			current_path += "/"
+		current_path += file_name
+		
+		if dir.current_is_dir():
+			# Recurse into subdirectory
+			_scan_games_directory(root_path, current_path, results)
+		else:
+			# It's a file - add to results
+			results.append(current_path)
+		
+		file_name = dir.get_next()
+
+func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
+	"""Update database entries for matched games."""
+	MemoryManager.queue_db_task(
+		func():
+			var updated_count: int = 0
+			
+			for romm_id in matched_games.keys():
+				var match_data = matched_games[romm_id]
+				var game: GameResource = match_data.game
+				var matched_siblings: Array = match_data.matched_siblings
+				var new_file_path: String = match_data.file_path
+				
+				# Update game object
+				game.has_local_copy = true
+				if new_file_path != "":
+					game.file_path = new_file_path
+				for sibling_id in matched_siblings:
+					if not sibling_id in game.downloaded_sibling_ids:
+						game.downloaded_sibling_ids.append(sibling_id)
+				
+				# Update database
+				var downloaded_ids_json = JSON.stringify(game.downloaded_sibling_ids)
+				var query = """
+					UPDATE games SET
+						has_local_copy = 1,
+						file_path = '%s',
+						downloaded_sibling_ids = '%s'
+					WHERE romm_id = %d
+				""" % [_escape_sql(new_file_path), _escape_sql(downloaded_ids_json), romm_id]
+				
+				print("[DataManager] Updating game %d (%s): file_path=%s, has_local_copy=1" % [romm_id, game.title, new_file_path])
+				
+				if _db.query(query):
+					updated_count += 1
+					print("[DataManager] Successfully updated game %d" % romm_id)
+				else:
+					print("[DataManager] FAILED to update game %d" % romm_id)
+			
+			return updated_count,
+		func(updated_count: int):
+			print("[DataManager] Updated %d games as downloaded" % updated_count)
+			scan_for_downloaded_games_completed.emit(updated_count)
+			if callback.is_valid():
+				callback.call(updated_count)
+	)

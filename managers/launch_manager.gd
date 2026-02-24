@@ -41,6 +41,7 @@ signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_progress(emulator_id: String, progress: float)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
 signal emulator_installations_scanned()  # Emitted after disk scan completes
+signal game_launched(game: GameResource)  # Emitted when a game is successfully launched
 
 func _ready():
 	_load_registry()
@@ -996,10 +997,11 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	intent.game = game
 	
 	# Get the correct file path for the active variant
-	var active_id = game.get_active_game_id()
+	var active_file_name = game.get_active_file_name()
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	var root_path = root_folder.value if root_folder else "user://games"
-	intent.rom_path = game.get_sibling_file_path(active_id, root_path)
+	# Construct the full file path from known components (don't rely on file_path which may be relative)
+	intent.rom_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 	intent.platform_slug = game.platform_slug
 	
 	# Resolve emulator
@@ -1245,6 +1247,9 @@ func _update_last_played(game: GameResource) -> void:
 	DataManager.update_game_last_played(game.romm_id, timestamp)
 	
 	print("[LaunchManager] Updated last_played for '%s' to %s" % [game.get_display_name(), timestamp])
+	
+	# Notify views that game was launched (so they can re-sort)
+	game_launched.emit(game)
 
 func _execute_android(intent: LaunchIntent) -> bool:
 	# TODO: Implement Android intent launching

@@ -561,8 +561,11 @@ func _on_card_pressed():
 	if game.is_active_variant_downloaded():
 		var root_folder = SettingsManager.get_setting("games_root_folder") if SettingsManager else null
 		if root_folder and root_folder.value != "":
-			var active_id = game.get_active_game_id()
-			var file_path = game.get_sibling_file_path(active_id, root_folder.value)
+			# Construct the full file path from known components (don't rely on file_path which may be relative)
+			var active_file_name = game.get_active_file_name()
+			var file_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
+			
+			print("[GameCard] Checking file exists: %s (game: %s, has_local_copy: %s)" % [file_path, game.title, game.has_local_copy])
 			
 			if not FileAccess.file_exists(file_path):
 				if NotificationManager:

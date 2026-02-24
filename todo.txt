@@ -5,9 +5,7 @@ how to split important siblings
 ## UI
 	unify views (all views are fullpage screens - invisible tabs?)
 	controller nav
-	sort by plaform, recent, search
-	auto-view already downloaded games (home)
-	filters > recent, downloaded, etc.
+	sort by plaform, search
 	layer system strokes/shadows/fades
 	sane defaults
 	add letters to library navigation 

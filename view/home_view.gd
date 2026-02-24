@@ -30,17 +30,21 @@ func _ready():
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
 	DataManager.game_updated.connect(_on_game_updated)
+	DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
 	
 	# Connect to download manager for download status updates
 	DownloadManager.download_completed.connect(_on_download_completed)
 	
+	# Connect to LaunchManager for game launch events (to resort by last_played)
+	LaunchManager.game_launched.connect(_on_game_launched)
+	
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
 	
-	# Initial load
+	# Initial load (will trigger scan if no games found)
 	_load_total_count()
 
-func _load_total_count(preserve_cache: bool = false):
+func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
 	"""Get total downloaded game count for virtual scrolling setup."""
 	_is_loading = true
 	status_label.text = "Loading recent games..."
@@ -57,10 +61,31 @@ func _load_total_count(preserve_cache: bool = false):
 			games_grid.set_total_count(count, preserve_cache)
 			if count == 0:
 				status_label.text = "No downloaded games found"
+				# Trigger scan if no games found (may have been wiped from DB but files exist)
+				if trigger_scan_if_empty:
+					_scan_for_downloaded_games()
 			else:
 				status_label.text = "Showing 0-0 of %d games" % count
 			_is_loading = false
 	)
+
+func _scan_for_downloaded_games():
+	"""Trigger scan to detect downloaded games in filesystem."""
+	status_label.text = "Scanning for downloaded games..."
+	print("[HomeView] Scanning for downloaded games...")
+	DataManager.scan_for_downloaded_games(func(found_count: int):
+		print("[HomeView] Scan complete, found %d games" % found_count)
+		if found_count > 0:
+			# Force complete grid refresh (don't preserve cache - we need fresh data from DB)
+			_load_total_count(false, false)
+		else:
+			status_label.text = "No downloaded games found"
+	)
+
+func _on_scan_completed(found_count: int):
+	"""Called when scan for downloaded games completes."""
+	if found_count > 0:
+		NotificationManager.show_notification("Found %d downloaded games" % found_count, Notification.Type.SUCCESS)
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
@@ -69,6 +94,8 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 		func():
 			var games = DataManager.get_downloaded_games_paginated(offset, limit)
 			print("[HomeView] DB query complete: got %d games" % games.size())
+			for game in games:
+				print("[HomeView] Loaded game: %s (has_local_copy=%s, file_path=%s)" % [game.title, game.has_local_copy, game.file_path])
 			return games,
 		func(games: Array[GameResource]):
 			print("[HomeView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
@@ -117,7 +144,8 @@ func _on_download_requested(game: GameResource):
 func _on_download_completed(item_id: String, success: bool, message: String):
 	# Refresh when a download completes (game may now show in home view)
 	if success:
-		_load_total_count()
+		# Rebuild grid to ensure layout transforms are recalculated
+		rebuild_grid()
 
 func _on_database_ready():
 	_load_total_count()
@@ -130,6 +158,47 @@ func _on_game_updated(game: GameResource):
 		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
 			card.game = game
 			break
+
+func _on_game_launched(game: GameResource):
+	"""Called when a game is launched - refresh grid to resort by last_played."""
+	print("[HomeView] Game launched, refreshing grid to resort by last_played")
+	# Reload data to get new sort order (don't preserve cache), then refresh dimensions
+	_load_total_count_with_callback(false, func():
+		games_grid.refresh_dimensions()
+	)
+
+func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
+	"""Get total downloaded game count and call callback when complete."""
+	_is_loading = true
+	status_label.text = "Refreshing..."
+	
+	MemoryManager.queue_db_task(
+		func():
+			return DataManager.get_downloaded_games_count(),
+		func(count: int):
+			_total_games = count
+			games_grid.set_total_count(count, preserve_cache)
+			if count == 0:
+				status_label.text = "No downloaded games found"
+			else:
+				var range_info = games_grid.get_visible_range()
+				var start_num = range_info.start + 1
+				var end_num = mini(range_info.end, count)
+				status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, count]
+			_is_loading = false
+			
+			if on_complete.is_valid():
+				on_complete.call()
+	)
+
+func on_view_show():
+	view_shown.emit()
+	# Refresh the view when shown (in case downloads happened while away)
+	if not _is_loading:
+		_load_total_count(true, false)
+
+func on_view_hide():
+	view_hidden.emit()
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
 	var romm_id = context.get("romm_id", 0)
