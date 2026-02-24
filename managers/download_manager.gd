@@ -279,9 +279,10 @@ func _start_download(item: QueueItem):
 	print("[DownloadManager] Starting download: " + item.id + " - " + item.url)
 	
 	# Make HTTP request through NetworkManager
-	var headers = []
+	# Always include User-Agent to prevent blocking (archive.org requires this)
+	var headers = ["User-Agent: Kyodai-Launcher/1.0"]
 	if item.type == "game":
-		headers = ["Authorization: " + NetworkManager.get_auth_header()]
+		headers.append("Authorization: " + NetworkManager.get_auth_header())
 	
 	# Use file-based download for large files (games)
 	# Note: HTTPRequest.download_file streams directly to disk

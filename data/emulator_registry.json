@@ -56,11 +56,16 @@
   "retroarch": {
 	"name": "RetroArch",
 	"platforms": ["3do", "arcade", "atari2600", "lynx", "atomiswave", "c64", "dos", "dc", "fds", "g-and-w", "gb", "gba", "gbc", "msx", "naomi", "naomi2", "neogeoaes", "neo-geo-pocket-color", "3ds", "n64", "nds", "nes", "ngc", "win3x", "pico8", "psx", "ps2", "psp", "sega32", "segacd", "gamegear", "sms", "genesis", "saturn", "sg1000", "snes", "tg16", "turbografx-cd", "virtualboy", "wii"],
-	"download_source": "hardcoded",
-	"download_urls": {
-	  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
-	  "linux": "",
-	  "android": ""
+	"download": {
+	  "type": "download_url",
+	  "urls": {
+		"windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
+		"linux": "",
+		"android": ""
+	  },
+	  "extract": true,
+	  "extract_to": ".",
+	  "strip_top_directory": true
 	},
 	"executable_names": {
 	  "windows": "retroarch.exe",
@@ -124,21 +129,35 @@
 	},
 	"post_install_tasks": [
 	  {
-		"type": "cores",
-		"cores_url": {
+		"type": "download_url",
+		"urls": {
 		  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
 		  "linux": "",
 		  "android": ""
 		},
-		"cores_filename": {
-		  "windows": "RetroArch_cores.7z",
-		  "linux": "",
-		  "android": ""
+		"filenames": {
+		  "windows": "RetroArch_cores.7z"
 		},
+		"extract_to": ".",
+		"strip_top_directory": true,
+		"flatten_target": "RetroArch-Win64",
 		"validation": {
-		  "type": "cores_directory",
-		  "path": "RetroArch-Win64/cores",
-		  "file_pattern": "*.dll"
+		  "type": "files",
+		  "path": "cores",
+		  "pattern": "*.dll"
+		}
+	  },
+	  {
+		"type": "download_repo",
+		"github_repo": "Abdess/retroarch_system",
+		"asset_pattern": ".*\\.(7z|zip|rar)$",
+		"extract_to": "system",
+		"extract": true,
+		"strip_top_directory": true,
+		"flatten_target": "bios",
+		"validation": {
+		  "type": "files",
+		  "path": "system"
 		}
 	  }
 	]
@@ -146,12 +165,17 @@
   "azahar": {
 	"name": "Azahar",
 	"platforms": ["3ds"],
-	"download_source": "github",
-	"github_repo": "azahar-emu/azahar",
-	"asset_patterns": {
-	  "windows": "azahar-.*-windows-msvc\\.zip",
-	  "linux": "azahar\\.AppImage",
-	  "android": "azahar-.*-android-vanilla\\.apk"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "azahar-emu/azahar",
+	  "asset_patterns": {
+		"windows": "azahar-.*-windows-msvc\\.zip",
+		"linux": "azahar\\.AppImage",
+		"android": "azahar-.*-android-vanilla\\.apk"
+	  },
+	  "extract": true,
+	  "extract_to": ".",
+	  "strip_top_directory": true
 	},
 	"executable_names": {
 	  "windows": "azahar.exe",
@@ -181,11 +205,14 @@
   "cemu": {
 	"name": "Cemu",
 	"platforms": ["wiiu"],
-	"download_source": "github",
-	"github_repo": "cemu-project/Cemu",
-	"asset_patterns": {
-	  "windows": "cemu-.*-windows-x64\\.zip",
-	  "linux": ""
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "cemu-project/Cemu",
+	  "asset_patterns": {
+		"windows": "cemu-.*-windows-x64\\.zip",
+		"linux": ""
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "Cemu.exe",
@@ -209,14 +236,17 @@
   "dolphin": {
 	"name": "Dolphin",
 	"platforms": ["ngc", "wii"],
-	"download_source": "scraped",
-	"scrape_config": {
+	"download": {
+	  "type": "download_scrape",
 	  "scrape_url": "https://dolphin-emu.org/download/",
 	  "version_pattern": "/download/release/([0-9a-z]+)/",
 	  "url_templates": {
 		"windows": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z",
 		"linux": ""
-	  }
+	  },
+	  "extract": true,
+	  "extract_to": ".",
+	  "strip_top_directory": true
 	},
 	"executable_names": {
 	  "windows": "Dolphin.exe",
@@ -240,12 +270,17 @@
   "eden": {
 	"name": "Eden",
 	"platforms": ["switch"],
-	"download_source": "github",
-	"github_repo": "eden-emulator/Releases",
-	"asset_patterns": {
-	  "windows": "Eden-Windows-.*-amd64-msvc.*\\.zip",
-	  "linux": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage",
-	  "android": "Eden-Android-.*-standard\\.apk"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "eden-emulator/Releases",
+	  "asset_patterns": {
+		"windows": "Eden-Windows-.*-amd64-msvc.*\\.zip",
+		"linux": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage",
+		"android": "Eden-Android-.*-standard\\.apk"
+	  },
+	  "extract": true,
+	  "extract_to": ".",
+	  "strip_top_directory": true
 	},
 	"executable_names": {
 	  "windows": "eden.exe",
@@ -267,7 +302,7 @@
 		}
 	  },
 	  {
-		"type": "download_release",
+		"type": "download_repo",
 		"github_repo": "THZoria/NX_Firmware",
 		"asset_pattern": "Firmware.*\\.zip",
 		"extract_to": "user/nand/system/Contents/registered",
@@ -286,7 +321,7 @@
 		}
 	  },
 	  {
-		"type": "download_scraped",
+		"type": "download_scrape",
 		"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
 		"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
 		"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip",
@@ -303,14 +338,15 @@
   "ppsspp": {
 	"name": "PPSSPP",
 	"platforms": ["psp"],
-	"download_source": "scraped",
-	"scrape_config": {
+	"download": {
+	  "type": "download_scrape",
 	  "scrape_url": "https://www.ppsspp.org/downloads.html",
 	  "version_pattern": "/files/([0-9_]+)/ppsspp_win\\.zip",
 	  "url_templates": {
 		"windows": "https://www.ppsspp.org/files/{version}/ppsspp_win.zip",
 		"linux": ""
-	  }
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "PPSSPPWindows64.exe",
@@ -334,11 +370,14 @@
   "rpcs3": {
 	"name": "RPCS3",
 	"platforms": ["ps3"],
-	"download_source": "github",
-	"github_repo": "RPCS3/rpcs3-binaries-win",
-	"asset_patterns": {
-	  "windows": "rpcs3-.*_win64_msvc\\.7z",
-	  "linux": ""
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "RPCS3/rpcs3-binaries-win",
+	  "asset_patterns": {
+		"windows": "rpcs3-.*_win64_msvc\\.7z",
+		"linux": ""
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "rpcs3.exe",
@@ -352,11 +391,14 @@
   "shadps4": {
 	"name": "shadPS4",
 	"platforms": ["ps4"],
-	"download_source": "github",
-	"github_repo": "shadps4-emu/shadPS4",
-	"asset_patterns": {
-	  "windows": "shadps4-win64-sdl-.*\\.zip",
-	  "linux": "shadps4-linux-sdl-.*\\.zip"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "shadps4-emu/shadPS4",
+	  "asset_patterns": {
+		"windows": "shadps4-win64-sdl-.*\\.zip",
+		"linux": "shadps4-linux-sdl-.*\\.zip"
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "shadPS4.exe",
@@ -380,12 +422,15 @@
   "vita3k": {
 	"name": "Vita3K",
 	"platforms": ["psvita"],
-	"download_source": "github",
-	"github_repo": "Vita3K/Vita3K",
-	"asset_patterns": {
-	  "windows": "windows-latest\\.zip",
-	  "linux": "ubuntu-latest\\.zip",
-	  "android": "android-latest\\.apk"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "Vita3K/Vita3K",
+	  "asset_patterns": {
+		"windows": "windows-latest\\.zip",
+		"linux": "ubuntu-latest\\.zip",
+		"android": "android-latest\\.apk"
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "Vita3K.exe",
@@ -414,17 +459,62 @@
 		  "type": "files",
 		  "files": ["config.yml"]
 		}
+	  },
+	  {
+		"type": "download_url",
+		"urls": {
+		  "windows": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP?dest=us",
+		  "linux": "",
+		  "android": ""
+		},
+		"filename": "PSP2UPDAT_pre.pup",
+		"extract": false,
+		"validation": {
+		  "type": "files",
+		  "files": ["PSP2UPDAT_pre.pup"]
+		}
+	  },
+	  {
+		"type": "download_url",
+		"urls": {
+		  "windows": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
+		  "linux": "",
+		  "android": ""
+		},
+		"filename": "PSVUPDAT.pup",
+		"extract": false,
+		"validation": {
+		  "type": "files",
+		  "files": ["PSVUPDAT.pup"]
+		}
+	  },
+	  {
+		"type": "download_url",
+		"urls": {
+		  "windows": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP?dest=us",
+		  "linux": "",
+		  "android": ""
+		},
+		"filename": "PSP2UPDAT_sd.pup",
+		"extract": false,
+		"validation": {
+		  "type": "files",
+		  "files": ["PSP2UPDAT_sd.pup"]
+		}
 	  }
 	]
   },
   "xemu": {
 	"name": "Xemu",
 	"platforms": ["xbox"],
-	"download_source": "github",
-	"github_repo": "xemu-project/xemu",
-	"asset_patterns": {
-	  "windows": "xemu-.*-windows-x86_64\\.zip",
-	  "linux": "xemu-.*-x86_64\\.AppImage"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "xemu-project/xemu",
+	  "asset_patterns": {
+		"windows": "xemu-.*-windows-x86_64\\.zip",
+		"linux": "xemu-.*-x86_64\\.AppImage"
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "xemu.exe",
@@ -448,12 +538,15 @@
   "xenia": {
 	"name": "Xenia",
 	"platforms": ["xbox360"],
-	"download_source": "github",
-	"github_repo": "xenia-canary/xenia-canary-releases",
-	"release_tag": "canary_experimental",
-	"asset_patterns": {
-	  "windows": "xenia_canary_windows\\.zip",
-	  "linux": "xenia_canary_linux\\.tar\\.xz"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "xenia-canary/xenia-canary-releases",
+	  "release_tag": "canary_experimental",
+	  "asset_patterns": {
+		"windows": "xenia_canary_windows\\.zip",
+		"linux": "xenia_canary_linux\\.tar\\.xz"
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "xenia_canary.exe",
@@ -477,11 +570,16 @@
   "pcsx2": {
 	"name": "PCSX2",
 	"platforms": ["ps2"],
-	"download_source": "github",
-	"github_repo": "PCSX2/pcsx2",
-	"asset_patterns": {
-	  "windows": "pcsx2-.*-windows-x64-Qt\\.7z",
-	  "linux": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "PCSX2/pcsx2",
+	  "asset_patterns": {
+		"windows": "pcsx2-.*-windows-x64-Qt\\.7z",
+		"linux": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
+	  },
+	  "extract": true,
+	  "extract_to": ".",
+	  "strip_top_directory": true
 	},
 	"executable_names": {
 	  "windows": "pcsx2-qt.exe",
@@ -499,17 +597,34 @@
 		  "type": "files",
 		  "files": ["portable.txt"]
 		}
+	  },
+	  {
+		"type": "download_url",
+		"urls": {
+		  "windows": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+		  "linux": ""
+		},
+		"extract_to": ".",
+		"strip_top_directory": false,
+		"flatten_target": "",
+		"validation": {
+		  "type": "files",
+		  "path": "bios"
+		}
 	  }
 	]
   },
   "melonds": {
 	"name": "melonDS",
 	"platforms": ["nds"],
-	"download_source": "github",
-	"github_repo": "melonDS-emu/melonDS",
-	"asset_patterns": {
-	  "windows": "melonDS-.*-windows-x86_64\\.zip",
-	  "linux": "melonDS-.*-appimage-x86_64\\.zip"
+	"download": {
+	  "type": "download_repo",
+	  "github_repo": "melonDS-emu/melonDS",
+	  "asset_patterns": {
+		"windows": "melonDS-.*-windows-x86_64\\.zip",
+		"linux": "melonDS-.*-appimage-x86_64\\.zip"
+	  },
+	  "extract": true
 	},
 	"executable_names": {
 	  "windows": "melonDS.exe",

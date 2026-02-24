@@ -19,23 +19,15 @@ how to split important siblings
 	batch DB adds instead of single
 ## launch:
 	fix xemu launch intent bug
-	all: controllers, hotkeys, graphics settings?
-	retroarch:
-		bios
+	all: controllers, hotkeys, graphics settings, confirm on exit, etc?
 	cemu:
 		title keys
 	xemu:
 		bios (mpc, xcow, etc)
 	dolphin:
 		game profiles
-	azahar
-		confirm on exit
-	eden
-		keys
 	rpcs3
 		zip extraction>??
-	pcsx2
-		bios
 	vita3k
 		firmware
 ## registry:
