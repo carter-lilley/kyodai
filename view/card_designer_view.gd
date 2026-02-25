@@ -4,6 +4,46 @@ extends Control
 var _card_state: CardState = CardState.new()
 var _current_config: Dictionary = {}
 
+# Godot adds invisible default points when deserializing Gradients.
+# Remove only the first black@0.0 and white@1.0 (Godot's defaults), 
+# preserving any user-defined points at those positions.
+func _clean_gradient(gradient: Gradient) -> Gradient:
+	var cleaned = Gradient.new()
+	# Remove Godot's default points from the new gradient
+	if cleaned.get_point_count() > 0:
+		cleaned.remove_point(0)
+	if cleaned.get_point_count() > 0:
+		cleaned.remove_point(0)
+	
+	# Track if we've removed Godot's defaults
+	var removed_black_at_0 = false
+	var removed_white_at_1 = false
+	var last_offset = -1.0
+	
+	# Copy points, skipping Godot's defaults (first occurrence only) and duplicates
+	for i in range(gradient.get_point_count()):
+		var offset = gradient.get_offset(i)
+		var color = gradient.get_color(i)
+		
+		# Skip Godot's default black at 0.0 (only first occurrence)
+		if not removed_black_at_0 and offset == 0.0 and color == Color.BLACK:
+			removed_black_at_0 = true
+			continue
+		
+		# Skip Godot's default white at 1.0 (only first occurrence)
+		if not removed_white_at_1 and offset == 1.0 and color == Color.WHITE:
+			removed_white_at_1 = true
+			continue
+		
+		# Skip duplicates at the same offset
+		if i > 0 and abs(offset - last_offset) < 0.0001:
+			continue
+		
+		cleaned.add_point(offset, color)
+		last_offset = offset
+	
+	return cleaned
+
 var _preview_card: GameCard
 var _effects_list: VBoxContainer
 var _add_effect_button: MenuButton
@@ -112,14 +152,29 @@ func _setup_ui():
 	preview_container.add_child(_preview_card)
 
 func _load_current_config():
+	print("[CardDesigner] Loading config...")
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_current_config = config_setting.value.duplicate(true)
+			print("[CardDesigner] Loaded config with ", _current_config.get("effects", []).size(), " effects")
+			# Debug: print all gradient points in loaded config
+			for i in range(_current_config.get("effects", []).size()):
+				var effect = _current_config["effects"][i]
+				var settings = effect.get("settings", {})
+				for key in settings.keys():
+					if settings[key] is Gradient:
+						var grad = settings[key]
+						var points_str = ""
+						for j in range(grad.get_point_count()):
+							points_str += "(" + str(grad.get_offset(j)) + ":" + str(grad.get_color(j)) + ") "
+						print("[CardDesigner] Effect ", i, " - ", key, " points: ", points_str)
 		else:
 			_current_config = _get_default_config()
+			print("[CardDesigner] Using default config")
 	else:
 		_current_config = _get_default_config()
+		print("[CardDesigner] No SettingsManager, using default")
 	
 	_orientation_btn.select(_current_config.get("card_orientation", 0))
 	_corner_slider.value = _current_config.get("corner_radius", 12.0)
@@ -182,9 +237,29 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		content.add_child(settings_menu)
 		
 		var current_settings = effect_data.get("settings", {})
+		print("[CardDesigner] Creating border effect UI, settings keys: ", current_settings.keys())
+		var schema_props = []
+		for s in schema:
+			schema_props.append(s.property_name)
+		print("[CardDesigner] Schema properties: ", schema_props)
 		for setting in schema:
+			print("[CardDesigner] Checking setting: ", setting.property_name, " in settings? ", current_settings.has(setting.property_name))
 			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
+				var saved_value = current_settings[setting.property_name]
+				if saved_value is Gradient:
+					print("[CardDesigner] Loading gradient '", setting.property_name, "' with ", saved_value.get_point_count(), " points BEFORE cleaning")
+					var points_str = ""
+					for i in range(saved_value.get_point_count()):
+						points_str += "(" + str(saved_value.get_offset(i)) + ":" + str(saved_value.get_color(i)) + ") "
+					print("[CardDesigner]   Before: ", points_str)
+					var cleaned = _clean_gradient(saved_value)
+					var cleaned_str = ""
+					for i in range(cleaned.get_point_count()):
+						cleaned_str += "(" + str(cleaned.get_offset(i)) + ":" + str(cleaned.get_color(i)) + ") "
+					print("[CardDesigner]   After:  ", cleaned_str)
+					setting.value = cleaned
+				else:
+					setting.value = saved_value
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
@@ -200,7 +275,11 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		var current_settings = effect_data.get("settings", {})
 		for setting in schema:
 			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
+				var saved_value = current_settings[setting.property_name]
+				if saved_value is Gradient:
+					setting.value = _clean_gradient(saved_value)
+				else:
+					setting.value = saved_value
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
@@ -249,6 +328,13 @@ func _on_remove_effect(index: int):
 		_update_preview()
 
 func _on_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):
+	print("[CardDesigner] Setting changed: effect=", effect_index, " name=", setting_name, " type=", typeof(value))
+	if value is Gradient:
+		var points_str = ""
+		for i in range(value.get_point_count()):
+			points_str += "(" + str(value.get_offset(i)) + ":" + str(value.get_color(i)) + ") "
+		print("[CardDesigner]   Gradient points: ", points_str)
+	
 	var effects = _current_config.get("effects", [])
 	if effect_index >= 0 and effect_index < effects.size():
 		if not effects[effect_index].has("settings"):
@@ -284,9 +370,23 @@ func _update_preview():
 	_preview_card.set_card_state(state)
 
 func _on_save():
+	print("[CardDesigner] Saving config...")
+	# Debug: print all gradient points before saving
+	for i in range(_current_config.get("effects", []).size()):
+		var effect = _current_config["effects"][i]
+		var settings = effect.get("settings", {})
+		for key in settings.keys():
+			if settings[key] is Gradient:
+				var grad = settings[key]
+				var points_str = ""
+				for j in range(grad.get_point_count()):
+					points_str += "(" + str(grad.get_offset(j)) + ":" + str(grad.get_color(j)) + ") "
+				print("[CardDesigner] Saving Effect ", i, " - ", key, " points: ", points_str)
+	
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting:
 			SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
 			SettingsManager.save_settings()
 			NotificationManager.show_notification("Card design saved", Notification.Type.SUCCESS)
+			print("[CardDesigner] Config saved successfully")

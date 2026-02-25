@@ -35,8 +35,6 @@ func _update_shader_params() -> void:
 	_set_shader_param("border_width_ratio", border_size)
 	_set_shader_param("border_fade_in_ratio", border_fade_in)
 	_set_shader_param("gradient_direction", gradient_direction)
-	_set_shader_param("inner_stroke_width_ratio", inner_stroke_width)
-	_set_shader_param("outer_stroke_width_ratio", outer_stroke_width)
 	
 	if inner_stroke_gradient is Gradient:
 		_inner_stroke_gradient_texture = _gradient_to_texture(inner_stroke_gradient)
@@ -44,6 +42,7 @@ func _update_shader_params() -> void:
 		_set_shader_param("use_inner_stroke_gradient", true)
 	else:
 		_set_shader_param("use_inner_stroke_gradient", false)
+	_set_shader_param("inner_stroke_width_ratio", inner_stroke_width)
 	
 	if outer_stroke_gradient is Gradient:
 		_outer_stroke_gradient_texture = _gradient_to_texture(outer_stroke_gradient)
@@ -51,6 +50,7 @@ func _update_shader_params() -> void:
 		_set_shader_param("use_outer_stroke_gradient", true)
 	else:
 		_set_shader_param("use_outer_stroke_gradient", false)
+	_set_shader_param("outer_stroke_width_ratio", outer_stroke_width)
 	
 	if border_gradient is Gradient:
 		_gradient_texture = _gradient_to_texture(border_gradient)
@@ -63,9 +63,16 @@ func _update_shader_params() -> void:
 
 func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
 	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
+	var debug_str = "[BorderEffect] Generating texture from gradient with " + str(gradient.get_point_count()) + " points: "
+	for i in range(gradient.get_point_count()):
+		debug_str += "(" + str(gradient.get_offset(i)) + ":" + str(gradient.get_color(i)) + ") "
+	print(debug_str)
+	
 	for i in range(256):
-		var color = gradient.sample(i / 255.0)
+		var t = i / 255.0  # Sample at pixel edges: 0.0 to 1.0 inclusive
+		var color = gradient.sample(t)
 		image.set_pixel(i, 0, color)
+	
 	return ImageTexture.create_from_image(image)
 
 func get_settings_schema() -> Array[SettingsVar]:
@@ -82,8 +89,14 @@ func get_settings_schema() -> Array[SettingsVar]:
 	schema.append(fade_var)
 	
 	var gradient = Gradient.new()
-	gradient.add_point(0.0, Color.WHITE)
-	gradient.add_point(1.0, Color.WHITE)
+	# Add our point first, then remove Godot's defaults
+	# (Must add before removing to avoid "points.size() <= 1" error)
+	#gradient.add_point(0.5, Color.WHITE)
+	#gradient.add_point(0.5, Color.WHITE)
+	#gradient.remove_point(0)  # Remove default black at 0.0
+	#gradient.remove_point(0)  # Remove default white at 1.0 (now at index 0)
+	print("[BorderEffect] Created gradient with ", gradient.get_point_count(), " point(s): ", gradient.offsets)
+	
 	var gradient_var = SettingsVar.new(Type.GRADIENT, gradient, State.ENABLED, "Border Gradient")
 	gradient_var.property_name = "border_gradient"
 	schema.append(gradient_var)
@@ -97,8 +110,6 @@ func get_settings_schema() -> Array[SettingsVar]:
 	schema.append(inner_stroke_width_var)
 	
 	var inner_stroke_gradient = Gradient.new()
-	inner_stroke_gradient.add_point(0.0, Color.WHITE)
-	inner_stroke_gradient.add_point(1.0, Color.WHITE)
 	var inner_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, inner_stroke_gradient, State.ENABLED, "Inner Stroke Gradient")
 	inner_stroke_gradient_var.property_name = "inner_stroke_gradient"
 	schema.append(inner_stroke_gradient_var)
@@ -108,8 +119,6 @@ func get_settings_schema() -> Array[SettingsVar]:
 	schema.append(outer_stroke_width_var)
 	
 	var outer_stroke_gradient = Gradient.new()
-	outer_stroke_gradient.add_point(0.0, Color.WHITE)
-	outer_stroke_gradient.add_point(1.0, Color.WHITE)
 	var outer_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, outer_stroke_gradient, State.ENABLED, "Outer Stroke Gradient")
 	outer_stroke_gradient_var.property_name = "outer_stroke_gradient"
 	schema.append(outer_stroke_gradient_var)

@@ -7,16 +7,16 @@ uniform float border_width_ratio = 0.04;  // 0.0 to 1.0, relative to card width
 uniform float border_fade_in_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform bool use_gradient = false;
-uniform sampler2D gradient_texture;
+uniform sampler2D gradient_texture : filter_linear, repeat_disable;
 uniform int gradient_direction = 0;
 
 uniform float inner_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool use_inner_stroke_gradient = false;
-uniform sampler2D inner_stroke_gradient_texture;
+uniform sampler2D inner_stroke_gradient_texture : filter_linear, repeat_disable;
 uniform vec4 inner_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float outer_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool use_outer_stroke_gradient = false;
-uniform sampler2D outer_stroke_gradient_texture;
+uniform sampler2D outer_stroke_gradient_texture : filter_linear, repeat_disable;
 uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
@@ -67,6 +67,8 @@ void fragment() {
 			} else {
 				gradient_t = (UV.x + UV.y) * 0.5;
 			}
+			// Clamp UV to valid range - repeat_disable in sampler ensures edge pixels are used
+			gradient_t = clamp(gradient_t, 0.0, 1.0);
 			color = texture(gradient_texture, vec2(gradient_t, 0.0));
 		} else {
 			color = border_color;
@@ -78,7 +80,7 @@ void fragment() {
 			final_color = vec4(color.rgb, color.a * border_alpha);
 		}
 		
-		// Inner stroke at the boundary between fade-in and solid border
+		// Inner stroke
 		float inner_stroke_width_pixels = inner_stroke_width_ratio * card_size.x;
 		if (inner_stroke_width_pixels > 0.0) {
 			float inner_stroke_pos = fade_in_factor;
@@ -96,6 +98,7 @@ void fragment() {
 					} else {
 						gradient_t = (UV.x + UV.y) * 0.5;
 					}
+					gradient_t = clamp(gradient_t, 0.0, 1.0);
 					stroke_color = texture(inner_stroke_gradient_texture, vec2(gradient_t, 0.0));
 				} else {
 					stroke_color = inner_stroke_color;
@@ -105,7 +108,7 @@ void fragment() {
 			}
 		}
 		
-		// Outer stroke at the outer edge of the border (dist = 0, which is rel_d = 1.0)
+		// Outer stroke
 		float outer_stroke_width_pixels = outer_stroke_width_ratio * card_size.x;
 		if (outer_stroke_width_pixels > 0.0) {
 			float outer_stroke_pos = 1.0;
@@ -123,6 +126,7 @@ void fragment() {
 					} else {
 						gradient_t = (UV.x + UV.y) * 0.5;
 					}
+					gradient_t = clamp(gradient_t, 0.0, 1.0);
 					stroke_color = texture(outer_stroke_gradient_texture, vec2(gradient_t, 0.0));
 				} else {
 					stroke_color = outer_stroke_color;

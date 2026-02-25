@@ -118,8 +118,14 @@ func _gui_input(event: InputEvent):
 				"offset": new_offset,
 				"color": new_color
 			}
+			print("[GradientEdit] Adding new point at offset ", new_offset, " - points count before: ", points.size())
 			points.append(new_point)
 			_sort_points()
+			print("[GradientEdit] After adding point - points count: ", points.size())
+			var pts_str = ""
+			for p in points:
+				pts_str += "(" + str(p.offset) + ") "
+			print("[GradientEdit] Current points: ", pts_str)
 			for i in range(points.size()):
 				if abs(points[i].offset - new_offset) < 0.0001:
 					grabbed = i
@@ -161,6 +167,7 @@ func _gui_input(event: InputEvent):
 		
 		if valid and grabbed != -1:
 			points[grabbed].offset = new_offset
+			print("[GradientEdit] Handle dragged to offset: ", new_offset, " color: ", points[grabbed].color)
 			_sort_points()
 			for i in range(points.size()):
 				if abs(points[i].offset - new_offset) < 0.0001:
@@ -331,19 +338,49 @@ func _get_minimum_size() -> Vector2:
 
 func set_gradient(gradient: Gradient):
 	points.clear()
+	print("[GradientEdit] set_gradient() called with ", gradient.get_point_count(), " points")
+	
 	for i in range(gradient.get_point_count()):
 		points.append({
 			"offset": gradient.get_offset(i),
 			"color": gradient.get_color(i)
 		})
+	var pts_str = ""
+	for p in points:
+		pts_str += "(" + str(p.offset) + ") "
+	print("[GradientEdit] Points after set_gradient(): ", pts_str)
 	queue_redraw()
 
 func get_gradient() -> Gradient:
-	var gradient = Gradient.new()
 	_sort_points()
+	
+	# Build arrays directly to avoid Godot's auto-add behavior
+	var offsets = []
+	var colors = []
+	var last_offset = -1.0
+	
 	for i in range(points.size()):
-		gradient.add_point(points[i].offset, points[i].color)
+		var offset = points[i].offset
+		var color = points[i].color
+		# Skip duplicates at same offset
+		if i > 0 and abs(offset - last_offset) < 0.0001:
+			print("[GradientEdit] Skipping duplicate point at offset ", offset)
+			continue
+		offsets.append(offset)
+		colors.append(color)
+		last_offset = offset
+	
+	# Create gradient and set arrays directly (bypasses Godot's 2-point minimum enforcement)
+	var gradient = Gradient.new()
+	gradient.offsets = offsets
+	gradient.colors = colors
+	
 	return gradient
 
 func _emit_gradient_changed():
-	gradient_changed.emit(get_gradient())
+	var grad = get_gradient()
+	var points_str = ""
+	for i in range(grad.get_point_count()):
+		points_str += "(" + str(grad.get_offset(i)) + ":" + str(grad.get_color(i)) + ") "
+	print("[GradientEdit] Emitting gradient with ", grad.get_point_count(), " points: ", points_str)
+	gradient_changed.emit(grad)
