@@ -2,8 +2,7 @@ class_name LibraryView
 extends View
 
 @onready var games_grid: VirtualScrollGridContainer = $VBoxContainer/VirtualScrollGridContainer
-@onready var status_label: Label = $VBoxContainer/StatusLabel
-@onready var zoom_slider: HSlider = $VBoxContainer/BottomBar/ZoomSlider
+@onready var hero_image: HeroImage = $HeroImage
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -15,16 +14,6 @@ func _ready():
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
-	
-	# Setup zoom slider (now controls card area ratio)
-	# Slider value represents sqrt of viewport area fraction
-	# 0.15 = card takes ~2% of viewport area
-	# 0.50 = card takes ~25% of viewport area
-	zoom_slider.min_value = 0.15
-	zoom_slider.max_value = 0.50
-	zoom_slider.step = 0.01
-	zoom_slider.value = games_grid.target_card_width_ratio
-	zoom_slider.value_changed.connect(_on_zoom_changed)
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
@@ -48,13 +37,16 @@ func _ready():
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
 	
+	# Connect to focus changes for hero image
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
 	# Initial load
 	_load_total_count()
 
 func _load_total_count(preserve_cache: bool = false):
 	"""Get total game count for virtual scrolling setup."""
 	_is_loading = true
-	status_label.text = "Loading library..."
+	_update_status("Loading library...")
 	
 	# Query total count asynchronously
 	MemoryManager.queue_db_task(
@@ -66,9 +58,25 @@ func _load_total_count(preserve_cache: bool = false):
 			_total_games = count
 			print("[LibraryView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
 			games_grid.set_total_count(count, preserve_cache)
-			status_label.text = "Showing 0-0 of %d games" % count
+			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 	)
+
+func _update_status(text: String):
+	# Emit signal to update global status bar
+	var main = get_tree().get_root().get_node_or_null("Main")
+	if main and main.has_method("set_status_text"):
+		main.set_status_text(text)
+
+func _on_focus_changed(control: Control):
+	# Check if focused control is a button inside a GameCard
+	var card = control.get_parent() if control is Button else control
+	if card is GameCard:
+		if hero_image:
+			hero_image.set_game(card.game)
+	else:
+		if hero_image:
+			hero_image.clear()
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
@@ -86,11 +94,11 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
 	"""Update status label with current visible range."""
 	if total_count == 0:
-		status_label.text = "No games found"
+		_update_status("No games found")
 	else:
 		var start_num = start_index + 1
 		var end_num = mini(end_index, total_count)
-		status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, total_count]
+		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
 
 func rebuild_grid() -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
@@ -112,7 +120,7 @@ func _on_download_requested(game: GameResource):
 	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
-		status_label.text = "Error: Games folder not set"
+		_update_status("Error: Games folder not set")
 		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
 		return
 	
@@ -120,18 +128,18 @@ func _on_download_requested(game: GameResource):
 	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
 	
 	if item_id != "":
-		status_label.text = "Queued: " + game.get_display_name()
+		_update_status("Queued: " + game.get_display_name())
 	else:
-		status_label.text = "Failed to queue download"
+		_update_status("Failed to queue download")
 
 func _on_download_progress(item_id: String, progress: float):
 	pass
 
 func _on_download_completed(item_id: String, success: bool, message: String):
 	if success:
-		status_label.text = "Download completed"
+		_update_status("Download completed")
 	else:
-		status_label.text = "Download failed: " + message
+		_update_status("Download failed: " + message)
 
 func _on_database_ready():
 	_load_total_count()
@@ -167,7 +175,7 @@ func _on_games_batch_added(platform_slug: String, start_index: int, games: Array
 	if range_info.total > 0:
 		var start_num = range_info.start + 1
 		var end_num = mini(range_info.end, range_info.total)
-		status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, range_info.total]
+		_update_status("Showing %d-%d of %d games" % [start_num, end_num, range_info.total])
 
 func _on_game_updated(game: GameResource):
 	# Find and update any visible cards for this game
@@ -187,11 +195,11 @@ func _reload_after_change():
 	_load_total_count()
 
 func _on_sync_progress(percent: float, current: int, total: int):
-	status_label.text = "Syncing... %d/%d games (%.0f%%)" % [current, total, percent]
+	_update_status("Syncing... %d/%d games (%.0f%%)" % [current, total, percent])
 
 func _on_sync_completed(success: bool, message: String):
 	if success:
-		status_label.text = "Sync complete. Finalizing..."
+		_update_status("Sync complete. Finalizing...")
 		
 		# Wait for any final batch emissions to complete
 		await get_tree().create_timer(0.7).timeout  # Slightly over the 500ms batch interval
@@ -200,9 +208,9 @@ func _on_sync_completed(success: bool, message: String):
 		# Preserve cache to avoid stuttering when scrolling to previously loaded pages
 		_load_total_count(true)
 		
-		status_label.text = message
+		_update_status(message)
 	else:
-		status_label.text = "Sync failed: " + message
+		_update_status("Sync failed: " + message)
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
 	var romm_id = context.get("romm_id", 0)
@@ -219,9 +227,6 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				print("[LibraryView] Game not found: ", romm_id)
 		"hide":
 			print("[LibraryView] Hide requested for game: ", romm_id)
-
-func _on_zoom_changed(value: float) -> void:
-	games_grid.target_card_width_ratio = value
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name == "library_vertical_layout":

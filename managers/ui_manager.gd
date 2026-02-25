@@ -23,6 +23,7 @@ var _game_details_view: View = null
 signal modal_shown(modal_id: String)
 signal modal_dismissed(modal_id: String)
 signal modal_item_selected(item_id: String, context: Dictionary)
+signal tab_changed(view_name: String)
 
 func initialize(tab_container: TabContainer, root_control: Control = null):
 	_tab_container = tab_container
@@ -38,6 +39,14 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 	_setup_library_tab()
 	_setup_downloads_tab()
 	_setup_settings_tab()
+	
+	# Set initial current view based on current tab
+	var current_tab_idx = _tab_container.current_tab
+	var current_tab_title = _tab_container.get_tab_title(current_tab_idx)
+	if _views.has(current_tab_title):
+		_current_view = _views[current_tab_title]
+		_current_view.on_view_show()
+		print("[UIManager] Initial view set to: ", current_tab_title)
 	
 	# Setup modal input handling
 	_setup_modal_input_handling()
@@ -159,6 +168,9 @@ func _on_tab_changed(tab_idx: int):
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
 		_current_view.on_view_show()
+		
+		# Emit tab changed signal for global UI updates
+		tab_changed.emit(tab_title)
 
 func get_current_view() -> View:
 	return _current_view

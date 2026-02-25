@@ -1,0 +1,28 @@
+[gd_scene format=3 uid="uid://heroimage001"]
+
+[ext_resource type="Script" uid="uid://dalq3pfawheix" path="res://components/hero_image.gd" id="1_heroscript"]
+[ext_resource type="Shader" uid="uid://m11c65ukqpui" path="res://shaders/hero_image.gdshader" id="2_heroshader"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_hero"]
+shader = ExtResource("2_heroshader")
+shader_parameter/hero_size = Vector2(1920, 640)
+shader_parameter/shadow_color = Color(1, 1, 1, 1)
+shader_parameter/shadow_intensity = 0.5290000251275
+shader_parameter/corner_radius = 0.0
+
+[node name="HeroImage" type="Control" unique_id=1194449376]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_heroscript")
+
+[node name="ColorRect" type="ColorRect" parent="." unique_id=472766740]
+material = SubResource("ShaderMaterial_hero")
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2

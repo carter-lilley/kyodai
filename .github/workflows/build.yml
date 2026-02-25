@@ -1,0 +1,117 @@
+name: Build Logo Detector
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.2"
+  OPENCV_VERSION: "4.9.0"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install SCons
+        run: pip install scons
+
+      - name: Cache godot-cpp
+        id: cache-godot-cpp
+        uses: actions/cache@v4
+        with:
+          path: godot-cpp
+          key: godot-cpp-${{ env.GODOT_VERSION }}-${{ runner.os }}-${{ hashFiles('src/logo_detector/SConstruct') }}
+
+      - name: Clone godot-cpp
+        if: steps.cache-godot-cpp.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.GODOT_VERSION }} https://github.com/godotengine/godot-cpp.git
+          cd godot-cpp
+          git submodule update --init --recursive
+
+      - name: Build godot-cpp library
+        if: steps.cache-godot-cpp.outputs.cache-hit != 'true'
+        run: |
+          cd godot-cpp
+          # Build the library (also generates bindings) with dynamic runtime to match our extension
+          scons platform=windows target=template_debug -j4
+
+      - name: Cache OpenCV
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          path: C:\opencv
+          key: opencv-${{ env.OPENCV_VERSION }}-windows
+
+      - name: Download OpenCV
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/opencv/opencv/releases/download/${{ env.OPENCV_VERSION }}/opencv-${{ env.OPENCV_VERSION }}-windows.exe" -OutFile opencv.exe
+          7z x opencv.exe -oC:\opencv -y | Out-Null
+
+      - name: Debug OpenCV Structure
+        shell: pwsh
+        run: |
+          Write-Host "OpenCV directory structure:"
+          Get-ChildItem -Path "C:\opencv" -Recurse -Depth 2 | Select-Object FullName
+
+      - name: List godot-cpp library files
+        shell: pwsh
+        run: |
+          Write-Host "godot-cpp bin directory:"
+          Get-ChildItem -Path "godot-cpp\bin" | Select-Object Name
+
+      - name: Build Extension
+        shell: pwsh
+        run: |
+          $env:Path = "C:\opencv\build\x64\vc16\bin;" + $env:Path
+          cd src/logo_detector
+          # Clean old build artifacts
+          if (Test-Path "*.obj") { Remove-Item "*.obj" }
+          if (Test-Path "*.dll") { Remove-Item "*.dll" }
+          if (Test-Path "*.lib") { Remove-Item "*.lib" }
+          if (Test-Path "*.exp") { Remove-Item "*.exp" }
+          scons target=template_debug -j4
+
+      - name: Create bin directory
+        shell: pwsh
+        run: |
+          if (!(Test-Path "addons/logo_detector/bin")) {
+            New-Item -ItemType Directory -Path "addons/logo_detector/bin" -Force
+          }
+
+      - name: Copy Extension DLL
+        run: cp src/logo_detector/*.dll addons/logo_detector/bin/
+
+      - name: Copy OpenCV DLL
+        shell: pwsh
+        run: |
+          $opencvPath = "C:\opencv\build\x64\vc16\bin\opencv_world490.dll"
+          if (Test-Path $opencvPath) {
+            Copy-Item $opencvPath "addons/logo_detector/bin/"
+            Write-Host "Copied OpenCV DLL"
+          } else {
+            $opencvPath2 = "C:\opencv\opencv\build\x64\vc16\bin\opencv_world490.dll"
+            if (Test-Path $opencvPath2) {
+              Copy-Item $opencvPath2 "addons/logo_detector/bin/"
+              Write-Host "Copied OpenCV DLL from alternate location"
+            }
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dll
+          path: addons/logo_detector/bin/*.dll

@@ -2,8 +2,7 @@ class_name HomeView
 extends View
 
 @onready var games_grid: VirtualScrollGridContainer = $VBoxContainer/VirtualScrollGridContainer
-@onready var status_label: Label = $VBoxContainer/StatusLabel
-@onready var zoom_slider: HSlider = $VBoxContainer/BottomBar/ZoomSlider
+@onready var hero_image: HeroImage = $HeroImage
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -16,12 +15,7 @@ func _ready():
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
 	
-	# Setup zoom slider
-	zoom_slider.min_value = 0.15
-	zoom_slider.max_value = 0.50
-	zoom_slider.step = 0.01
-	zoom_slider.value = games_grid.target_card_width_ratio
-	zoom_slider.value_changed.connect(_on_zoom_changed)
+	print("[HomeView] HeroImage node: ", hero_image)
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
@@ -41,13 +35,16 @@ func _ready():
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
 	
+	# Connect to focus changes for hero image
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
 	# Initial load (will trigger scan if no games found)
 	_load_total_count()
 
 func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
 	"""Get total downloaded game count for virtual scrolling setup."""
 	_is_loading = true
-	status_label.text = "Loading recent games..."
+	_update_status("Loading recent games...")
 	
 	# Query total count asynchronously
 	MemoryManager.queue_db_task(
@@ -60,18 +57,39 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			print("[HomeView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
 			games_grid.set_total_count(count, preserve_cache)
 			if count == 0:
-				status_label.text = "No downloaded games found"
+				_update_status("No downloaded games found")
 				# Trigger scan if no games found (may have been wiped from DB but files exist)
 				if trigger_scan_if_empty:
 					_scan_for_downloaded_games()
 			else:
-				status_label.text = "Showing 0-0 of %d games" % count
+				_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 	)
 
+func _update_status(text: String):
+	# Emit signal to update global status bar
+	# Find the main node and update its status
+	var main = get_tree().get_root().get_node_or_null("Main")
+	if main and main.has_method("set_status_text"):
+		main.set_status_text(text)
+
+func _on_focus_changed(control: Control):
+	print("[HomeView] Focus changed to: ", control.name if control else "null")
+	# Check if focused control is a button inside a GameCard
+	var card = control.get_parent() if control is Button else control
+	if card is GameCard:
+		print("[HomeView] Focus on GameCard: ", card.game.get_display_name() if card.game else "no game")
+		if hero_image:
+			print("[HomeView] Calling hero_image.set_game()")
+			hero_image.set_game(card.game)
+	else:
+		print("[HomeView] Focus not on GameCard, clearing hero")
+		if hero_image:
+			hero_image.clear()
+
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
-	status_label.text = "Scanning for downloaded games..."
+	_update_status("Scanning for downloaded games...")
 	print("[HomeView] Scanning for downloaded games...")
 	DataManager.scan_for_downloaded_games(func(found_count: int):
 		print("[HomeView] Scan complete, found %d games" % found_count)
@@ -79,7 +97,7 @@ func _scan_for_downloaded_games():
 			# Force complete grid refresh (don't preserve cache - we need fresh data from DB)
 			_load_total_count(false, false)
 		else:
-			status_label.text = "No downloaded games found"
+			_update_status("No downloaded games found")
 	)
 
 func _on_scan_completed(found_count: int):
@@ -105,11 +123,11 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
 	"""Update status label with current visible range."""
 	if total_count == 0:
-		status_label.text = "No downloaded games found"
+		_update_status("No downloaded games found")
 	else:
 		var start_num = start_index + 1
 		var end_num = mini(end_index, total_count)
-		status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, total_count]
+		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
 
 func rebuild_grid() -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
@@ -129,7 +147,7 @@ func _on_download_requested(game: GameResource):
 	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
-		status_label.text = "Error: Games folder not set"
+		_update_status("Error: Games folder not set")
 		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
 		return
 	
@@ -137,9 +155,9 @@ func _on_download_requested(game: GameResource):
 	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
 	
 	if item_id != "":
-		status_label.text = "Queued: " + game.get_display_name()
+		_update_status("Queued: " + game.get_display_name())
 	else:
-		status_label.text = "Failed to queue download"
+		_update_status("Failed to queue download")
 
 func _on_download_completed(item_id: String, success: bool, message: String):
 	# Refresh when a download completes (game may now show in home view)
@@ -170,7 +188,7 @@ func _on_game_launched(game: GameResource):
 func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
 	"""Get total downloaded game count and call callback when complete."""
 	_is_loading = true
-	status_label.text = "Refreshing..."
+	_update_status("Refreshing...")
 	
 	MemoryManager.queue_db_task(
 		func():
@@ -179,12 +197,12 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 			_total_games = count
 			games_grid.set_total_count(count, preserve_cache)
 			if count == 0:
-				status_label.text = "No downloaded games found"
+				_update_status("No downloaded games found")
 			else:
 				var range_info = games_grid.get_visible_range()
 				var start_num = range_info.start + 1
 				var end_num = mini(range_info.end, count)
-				status_label.text = "Showing %d-%d of %d games" % [start_num, end_num, count]
+				_update_status("Showing %d-%d of %d games" % [start_num, end_num, count])
 			_is_loading = false
 			
 			if on_complete.is_valid():
@@ -215,9 +233,6 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				print("[HomeView] Game not found: ", romm_id)
 		"hide":
 			print("[HomeView] Hide requested for game: ", romm_id)
-
-func _on_zoom_changed(value: float) -> void:
-	games_grid.target_card_width_ratio = value
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name == "library_vertical_layout":

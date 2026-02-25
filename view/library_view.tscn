@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3 uid="uid://djryygss138q3"]
+[gd_scene load_steps=4 format=3 uid="uid://djryygss138q3"]
 
 [ext_resource type="Script" uid="uid://bfusgr7caldoo" path="res://view/library_view.gd" id="1_libview"]
 [ext_resource type="Script" uid="uid://dmbm4ebefwgyf" path="res://base_class/virtual_scroll_grid_container.gd" id="2_vscroll"]
+[ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/hero_image.tscn" id="3_heroimage"]
 
 [node name="LibraryView" type="Control" unique_id=575533095]
 layout_mode = 3
@@ -12,9 +13,18 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_libview")
 
+[node name="HeroImage" parent="." instance=ExtResource("3_heroimage")]
+unique_id = 999999002
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+anchor_bottom = 0.333
+grow_horizontal = 2
+
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1258343894]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 0.333
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
@@ -26,23 +36,3 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("2_vscroll")
 card_scene = null
-
-[node name="BottomBar" type="HBoxContainer" parent="VBoxContainer"]
-layout_mode = 2
-
-[node name="ZoomLabel" type="Label" parent="VBoxContainer/BottomBar"]
-layout_mode = 2
-text = "Zoom:"
-
-[node name="ZoomSlider" type="HSlider" parent="VBoxContainer/BottomBar"]
-layout_mode = 2
-size_flags_horizontal = 3
-min_value = 0.5
-max_value = 2.0
-step = 0.1
-value = 1.0
-
-[node name="StatusLabel" type="Label" parent="VBoxContainer" unique_id=456298261]
-layout_mode = 2
-text = "Loading..."
-horizontal_alignment = 1

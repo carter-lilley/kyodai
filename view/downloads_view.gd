@@ -4,7 +4,6 @@ extends View
 @onready var scroll_container: ScrollContainer = $VBoxContainer/ScrollContainer
 @onready var downloads_list: VBoxContainer = $VBoxContainer/ScrollContainer/DownloadsList
 @onready var clear_completed_button: Button = $VBoxContainer/Toolbar/ClearCompletedButton
-@onready var status_label: Label = $VBoxContainer/StatusLabel
 
 var _download_items: Dictionary = {}  # item_id -> DownloadCard
 
@@ -105,9 +104,15 @@ func _update_status():
 	var queued = DownloadManager.get_queued().size()
 	var active = DownloadManager.get_active().size()
 	
+	var status_text: String
 	if active > 0:
-		status_label.text = "Downloading: %d active, %d queued" % [active, queued]
+		status_text = "Downloading: %d active, %d queued" % [active, queued]
 	elif queued > 0:
-		status_label.text = "Queued: %d downloads" % queued
+		status_text = "Queued: %d downloads" % queued
 	else:
-		status_label.text = "No active downloads"
+		status_text = "No active downloads"
+	
+	# Update global status bar
+	var main = get_tree().get_root().get_node_or_null("Main")
+	if main and main.has_method("set_status_text"):
+		main.set_status_text(status_text)
