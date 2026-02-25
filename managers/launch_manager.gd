@@ -1034,7 +1034,9 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 		# Check if this is a raw content edit (for TOML sections, etc.)
 		var raw_content = edit.get("content", "")
 		if raw_content != "":
-			raw_content = raw_content.replace("{emulator_dir}", base_dir)
+			# Globalize the path for native compatibility
+			var global_base_dir = ProjectSettings.globalize_path(base_dir)
+			raw_content = raw_content.replace("{emulator_dir}", global_base_dir)
 			# Check if this content already exists
 			if not content.contains(raw_content.strip_edges()):
 				content += "\n" + raw_content
@@ -1048,7 +1050,9 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 		if key == "":
 			continue
 		
-		value = value.replace("{emulator_dir}", base_dir)
+		# Globalize the path for native compatibility
+		var global_base_dir = ProjectSettings.globalize_path(base_dir)
+		value = value.replace("{emulator_dir}", global_base_dir)
 		
 		var patterns = [
 			"(?m)^(" + key.regex_escape() + ")\\s*:\\s*.*$",

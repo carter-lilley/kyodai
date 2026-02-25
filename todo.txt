@@ -22,8 +22,6 @@ how to split important siblings
 	named post install notifs (and toggle for system downloading)
 	cemu:
 		title keys
-	xemu:
-		bios (mpc, xcow, etc) <- alsoi SHOW WELCOME FALSE
 	dolphin:
 		game profiles
 	rpcs3

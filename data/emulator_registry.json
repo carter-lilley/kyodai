@@ -555,6 +555,9 @@
 		"file": "xemu.toml",
 		"edits": [
 		  {
+			"content": "[general]\nshow_welcome = false"
+		  },
+		  {
 			"content": "[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.qcow2'"
 		  }
 		],

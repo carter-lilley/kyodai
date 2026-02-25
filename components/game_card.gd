@@ -318,9 +318,9 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var texture_size = texture_to_use.get_size()
 	var texture_aspect = texture_size.x / texture_size.y if texture_size.y > 0 else 1.0
 	
-	# Clamp aspect ratio for corner badge mode only
+	# Clamp aspect ratio to square
 	if badge_type != 1:
-		texture_aspect = clampf(texture_aspect, 0.75, 1.5)
+		texture_aspect = 1.0
 	
 	# Handle top bar badge type differently
 	if badge_type == 1:
