@@ -131,6 +131,7 @@ func _setup_ui():
 	var popup = _add_effect_button.get_popup()
 	popup.add_item("Border", 0)
 	popup.add_item("Platform Badge", 1)
+	popup.add_item("Drop Shadow", 2)
 	popup.id_pressed.connect(_on_add_effect)
 	
 	left_vbox.add_child(HSeparator.new())
@@ -283,6 +284,22 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
+	elif effect_data.get("effect_id") == "drop_shadow":
+		var drop_shadow_effect = DropShadowEffect.new()
+		var schema = drop_shadow_effect.get_settings_schema()
+		drop_shadow_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -307,6 +324,17 @@ func _on_add_effect(id: int):
 					"badge_color": Color.WHITE,
 					"icon_padding": 0.5,
 					"icon_color": Color.WHITE
+				}
+			}
+		2:
+			new_effect = {
+				"effect_id": "drop_shadow",
+				"settings": {
+					"shadow_color": Color(0, 0, 0, 0.5),
+					"shadow_offset_x": 0.0,
+					"shadow_offset_y": 10.0,
+					"shadow_softness": 8.0,
+					"shadow_spread": 0.0
 				}
 			}
 	

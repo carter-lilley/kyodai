@@ -39,6 +39,7 @@ var _card_state: CardState = CardState.new()
 var _base_effect: BaseCardEffect = null
 var _border_effect: BorderEffect = null
 var _badge_effect: BadgeEffect = null
+var _drop_shadow_effect: DropShadowEffect = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -46,6 +47,11 @@ var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
 func _ready():
+	# Allow effects (like drop shadow) to render outside card bounds
+	clip_contents = false
+	# Cards render above UI backgrounds, shadows at -1 stay behind card but above backgrounds
+	z_index = 10
+	
 	if preview_mode:
 		_setup_preview_mode()
 		return
@@ -132,6 +138,7 @@ func _rebuild_effects():
 	_base_effect = null
 	_border_effect = null
 	_badge_effect = null
+	_drop_shadow_effect = null
 	_card_state.border_inset_ratio = 0.0
 	
 	_base_effect = BaseCardEffect.new()
@@ -150,9 +157,11 @@ func _rebuild_effects():
 		add_child(_border_effect)
 		_border_effect.initialize(_card_state, border_config.get("settings", {}))
 		
-		# Calculate border inset as ratio (border extends half inside, half outside)
+		# Calculate border inset to match inner edge of border
+		# Border extends inward by (fade_in + width), so inset image to that edge
 		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
-		_card_state.border_inset_ratio = border_size * 0.5
+		var fade_in = border_config.get("settings", {}).get("border_fade_in", 0.0)
+		_card_state.border_inset_ratio = border_size + fade_in
 	
 	var badge_config = _get_effect_config("badge")
 	if badge_config:
@@ -165,6 +174,16 @@ func _rebuild_effects():
 		
 		if _border_effect:
 			_badge_effect.set_border_width(_card_state.border_inset_ratio)
+	
+	var drop_shadow_config = _get_effect_config("drop_shadow")
+	if drop_shadow_config:
+		_drop_shadow_effect = DropShadowEffect.new()
+		_drop_shadow_effect.name = "DropShadowEffect"
+		# Use anchors like border but with negative offsets to extend beyond card
+		add_child(_drop_shadow_effect)
+		_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
+		# Move drop shadow to back (behind card)
+		move_child(_drop_shadow_effect, 0)
 	
 	if card_input:
 		move_child(card_input, -1)

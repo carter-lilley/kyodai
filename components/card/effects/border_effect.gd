@@ -89,12 +89,11 @@ func get_settings_schema() -> Array[SettingsVar]:
 	schema.append(fade_var)
 	
 	var gradient = Gradient.new()
-	# Add our point first, then remove Godot's defaults
-	# (Must add before removing to avoid "points.size() <= 1" error)
-	#gradient.add_point(0.5, Color.WHITE)
-	#gradient.add_point(0.5, Color.WHITE)
-	#gradient.remove_point(0)  # Remove default black at 0.0
-	#gradient.remove_point(0)  # Remove default white at 1.0 (now at index 0)
+	# Godot's Gradient.new() creates 2 default points (black@0.0, white@1.0)
+	# We need to replace them with our own points by using direct array assignment
+	# This bypasses Godot's auto-add behavior
+	gradient.offsets = [0.0, 1.0]
+	gradient.colors = [Color.WHITE, Color.BLACK]
 	print("[BorderEffect] Created gradient with ", gradient.get_point_count(), " point(s): ", gradient.offsets)
 	
 	var gradient_var = SettingsVar.new(Type.GRADIENT, gradient, State.ENABLED, "Border Gradient")
@@ -110,6 +109,8 @@ func get_settings_schema() -> Array[SettingsVar]:
 	schema.append(inner_stroke_width_var)
 	
 	var inner_stroke_gradient = Gradient.new()
+	inner_stroke_gradient.offsets = [0.0, 1.0]
+	inner_stroke_gradient.colors = [Color.WHITE, Color.BLACK]
 	var inner_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, inner_stroke_gradient, State.ENABLED, "Inner Stroke Gradient")
 	inner_stroke_gradient_var.property_name = "inner_stroke_gradient"
 	schema.append(inner_stroke_gradient_var)
@@ -119,6 +120,8 @@ func get_settings_schema() -> Array[SettingsVar]:
 	schema.append(outer_stroke_width_var)
 	
 	var outer_stroke_gradient = Gradient.new()
+	outer_stroke_gradient.offsets = [0.0, 1.0]
+	outer_stroke_gradient.colors = [Color.WHITE, Color.BLACK]
 	var outer_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, outer_stroke_gradient, State.ENABLED, "Outer Stroke Gradient")
 	outer_stroke_gradient_var.property_name = "outer_stroke_gradient"
 	schema.append(outer_stroke_gradient_var)

@@ -370,6 +370,16 @@ func get_gradient() -> Gradient:
 		colors.append(color)
 		last_offset = offset
 	
+	# Godot requires minimum 2 points in a gradient
+	# If we only have 0 or 1 point, add a duplicate to satisfy the requirement
+	if offsets.size() == 0:
+		offsets = [0.0, 1.0]
+		colors = [Color.WHITE, Color.WHITE]
+	elif offsets.size() == 1:
+		# Duplicate the single point at both ends
+		offsets = [0.0, 1.0]
+		colors = [colors[0], colors[0]]
+	
 	# Create gradient and set arrays directly (bypasses Godot's 2-point minimum enforcement)
 	var gradient = Gradient.new()
 	gradient.offsets = offsets
