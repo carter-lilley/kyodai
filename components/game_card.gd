@@ -148,6 +148,16 @@ func _rebuild_effects():
 	add_child(_base_effect)
 	_base_effect.initialize(_card_state, {})
 	
+	# Add badge BEFORE border so it renders underneath
+	var badge_config = _get_effect_config("badge")
+	if badge_config:
+		_badge_effect = BadgeEffect.new()
+		_badge_effect.name = "BadgeEffect"
+		_badge_effect.anchor_right = 1.0
+		_badge_effect.anchor_bottom = 1.0
+		add_child(_badge_effect)
+		_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
+	
 	var border_config = _get_effect_config("border")
 	if border_config:
 		_border_effect = BorderEffect.new()
@@ -163,17 +173,10 @@ func _rebuild_effects():
 		var fade_in = border_config.get("settings", {}).get("border_fade_in", 0.0)
 		_card_state.border_inset_ratio = border_size + fade_in
 	
-	var badge_config = _get_effect_config("badge")
-	if badge_config:
-		_badge_effect = BadgeEffect.new()
-		_badge_effect.name = "BadgeEffect"
-		_badge_effect.anchor_right = 1.0
-		_badge_effect.anchor_bottom = 1.0
-		add_child(_badge_effect)
-		_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
-		
-		if _border_effect:
-			_badge_effect.set_border_width(_card_state.border_inset_ratio)
+	# Configure badge with border info (or 0 if no border)
+	if _badge_effect:
+		_badge_effect.set_border_width(_card_state.border_inset_ratio)
+		_badge_effect.set_border_inset_pixels(_card_state.border_inset_ratio * _card_state.card_size.x)
 	
 	var drop_shadow_config = _get_effect_config("drop_shadow")
 	if drop_shadow_config:
@@ -331,6 +334,10 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	
 	var card_width = _card_state.card_size.x
 	var corner_radius_pixels = _card_state.corner_radius_ratio * card_width
+	var border_inset_pixels = _card_state.border_inset_ratio * card_width
+	
+	# Effective corner radius at the inset position
+	var effective_corner_radius = max(0, corner_radius_pixels - border_inset_pixels)
 	
 	# Base badge size as ratio of card width
 	var base_badge_size = BADGE_SIZE_RATIO * card_width
@@ -346,11 +353,11 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		# Top bar: full width, height based on badge size
 		var bar_height = base_badge_size * badge_size_setting
 		
-		# Calculate horizontal safe zone based on corner radius
+		# Calculate horizontal safe zone based on corner radius (at inset position)
 		var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-		var corner_margin = corner_radius_pixels * corner_midpoint_factor
-		var max_wordmark_width = card_width - (corner_margin * 2.0)
-		var safe_x = corner_margin
+		var corner_margin = effective_corner_radius * corner_midpoint_factor
+		var max_wordmark_width = (card_width - border_inset_pixels * 2) - (corner_margin * 2)
+		var safe_x = border_inset_pixels + corner_margin
 		
 		# Padding slider: 0 = 60% height (minimum), 1 = 30% height (maximum padding)
 		# Range: 60% down to 30% of bar height
@@ -367,7 +374,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		
 		# Center horizontally within safe zone
 		var offset_x = safe_x + (max_wordmark_width - draw_width) * 0.5
-		var offset_y = (bar_height - draw_height) * 0.5
+		var offset_y = border_inset_pixels + (bar_height - draw_height) * 0.5
 		
 		platform_icon.visible = true
 		platform_icon.texture = texture_to_use
@@ -386,6 +393,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		if _badge_effect:
 			# For top bar, pass full card width and bar height
 			_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
+			_badge_effect.set_border_inset_pixels(border_inset_pixels)
 			_badge_effect.set_safe_zone(offset_x, offset_y, draw_width, draw_height, false)
 		
 		return
@@ -408,21 +416,21 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var scaled_height = badge_height * scale
 	
 	# Minimum size based on corner radius
-	var min_badge_size = corner_radius_pixels
+	var min_badge_size = effective_corner_radius
 	scaled_width = max(scaled_width, min_badge_size)
 	scaled_height = max(scaled_height, min_badge_size)
 	
 	var scaled_min_dim = min(scaled_width, scaled_height)
 	
 	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-	var scaled_outer = corner_radius_pixels * corner_midpoint_factor
+	var scaled_outer = effective_corner_radius * corner_midpoint_factor
 	var scaled_inner = base_inner_corner * scale * corner_midpoint_factor
 	var max_outer = scaled_min_dim * 0.4
 	scaled_outer = min(scaled_outer, max_outer)
 	
-	# Calculate safe zone (before padding)
-	var safe_x = scaled_outer
-	var safe_y = scaled_outer
+	# Calculate safe zone (before padding), offset by border inset
+	var safe_x = border_inset_pixels + scaled_outer
+	var safe_y = border_inset_pixels + scaled_outer
 	var safe_width = scaled_width - scaled_outer - scaled_inner
 	var safe_height = scaled_height - scaled_outer - scaled_inner
 	safe_width = max(safe_width, 1.0)
@@ -440,6 +448,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	
 	if _badge_effect:
 		_badge_effect.set_badge_dimensions(Vector2(scaled_width, scaled_height))
+		_badge_effect.set_border_inset_pixels(border_inset_pixels)
 		# Pass safe zone to shader for debugging (set last param to true to show debug)
 		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 	

@@ -208,6 +208,12 @@ func _setup_preview_card():
 	_preview_card.set_card_state(state)
 
 func _rebuild_effects_ui():
+	# Save collapsed states before rebuilding
+	var collapsed_states: Dictionary = {}
+	for child in _effects_list.get_children():
+		if child is CollapsableVBoxContainer:
+			collapsed_states[child.title] = child.collapsed
+	
 	for child in _effects_list.get_children():
 		child.queue_free()
 	
@@ -215,6 +221,11 @@ func _rebuild_effects_ui():
 	for i in range(effects.size()):
 		var effect_data = effects[i]
 		_create_effect_ui(effect_data, i)
+	
+	# Restore collapsed states after rebuilding
+	for child in _effects_list.get_children():
+		if child is CollapsableVBoxContainer and collapsed_states.has(child.title):
+			child.collapsed = collapsed_states[child.title]
 
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()

@@ -2,6 +2,7 @@ class_name BadgeEffect
 extends CardEffect
 
 var _border_width: float = 0.0
+var _border_inset_pixels: float = 0.0
 var _badge_width: float = 0.0
 var _badge_height: float = 0.0
 var _safe_zone: Vector4 = Vector4(0, 0, 0, 0)
@@ -55,11 +56,16 @@ func _update_shader_params() -> void:
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
 	_set_shader_param("border_width_ratio", _border_width)
+	_set_shader_param("border_inset_pixels", _border_inset_pixels)
 	_set_shader_param("show_safe_zone", _show_safe_zone)
 	_set_shader_param("safe_zone", Vector4(_safe_zone.x, _safe_zone.y, _safe_zone.z, _safe_zone.w))
 
 func set_border_width(width: float) -> void:
 	_border_width = width
+	_update_shader_params()
+
+func set_border_inset_pixels(pixels: float) -> void:
+	_border_inset_pixels = pixels
 	_update_shader_params()
 
 func set_badge_dimensions(dimensions: Vector2) -> void:
