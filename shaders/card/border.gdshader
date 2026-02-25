@@ -10,6 +10,15 @@ uniform bool use_gradient = false;
 uniform sampler2D gradient_texture;
 uniform int gradient_direction = 0;
 
+uniform float inner_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
+uniform bool use_inner_stroke_gradient = false;
+uniform sampler2D inner_stroke_gradient_texture;
+uniform vec4 inner_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float outer_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
+uniform bool use_outer_stroke_gradient = false;
+uniform sampler2D outer_stroke_gradient_texture;
+uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
 	float radius = radius_ratio * size.x;  // Radius as ratio of width
@@ -67,6 +76,60 @@ void fragment() {
 			final_color = vec4(color.rgb, color.a * border_alpha * inner_aa_alpha);
 		} else {
 			final_color = vec4(color.rgb, color.a * border_alpha);
+		}
+		
+		// Inner stroke at the boundary between fade-in and solid border
+		float inner_stroke_width_pixels = inner_stroke_width_ratio * card_size.x;
+		if (inner_stroke_width_pixels > 0.0) {
+			float inner_stroke_pos = fade_in_factor;
+			float inner_stroke_half = (inner_stroke_width_pixels / total_border) * 0.5;
+			if (abs(rel_d - inner_stroke_pos) < inner_stroke_half) {
+				float stroke_alpha = smoothstep(inner_stroke_half, inner_stroke_half - aa_width / total_border, abs(rel_d - inner_stroke_pos));
+				
+				vec4 stroke_color;
+				if (use_inner_stroke_gradient) {
+					float gradient_t;
+					if (gradient_direction == 0) {
+						gradient_t = UV.x;
+					} else if (gradient_direction == 1) {
+						gradient_t = UV.y;
+					} else {
+						gradient_t = (UV.x + UV.y) * 0.5;
+					}
+					stroke_color = texture(inner_stroke_gradient_texture, vec2(gradient_t, 0.0));
+				} else {
+					stroke_color = inner_stroke_color;
+				}
+				
+				final_color = mix(final_color, stroke_color, stroke_alpha * stroke_color.a);
+			}
+		}
+		
+		// Outer stroke at the outer edge of the border (dist = 0, which is rel_d = 1.0)
+		float outer_stroke_width_pixels = outer_stroke_width_ratio * card_size.x;
+		if (outer_stroke_width_pixels > 0.0) {
+			float outer_stroke_pos = 1.0;
+			float outer_stroke_half = (outer_stroke_width_pixels / total_border) * 0.5;
+			if (abs(rel_d - outer_stroke_pos) < outer_stroke_half) {
+				float stroke_alpha = smoothstep(outer_stroke_half, outer_stroke_half - aa_width / total_border, abs(rel_d - outer_stroke_pos));
+				
+				vec4 stroke_color;
+				if (use_outer_stroke_gradient) {
+					float gradient_t;
+					if (gradient_direction == 0) {
+						gradient_t = UV.x;
+					} else if (gradient_direction == 1) {
+						gradient_t = UV.y;
+					} else {
+						gradient_t = (UV.x + UV.y) * 0.5;
+					}
+					stroke_color = texture(outer_stroke_gradient_texture, vec2(gradient_t, 0.0));
+				} else {
+					stroke_color = outer_stroke_color;
+				}
+				
+				final_color = mix(final_color, stroke_color, stroke_alpha * stroke_color.a);
+			}
 		}
 	}
 	

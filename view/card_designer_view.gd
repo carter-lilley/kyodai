@@ -161,26 +161,17 @@ func _rebuild_effects_ui():
 		_create_effect_ui(effect_data, i)
 
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
-	var container = PanelContainer.new()
-	container.custom_minimum_size = Vector2(0, 100)
+	var container = CollapsableVBoxContainer.new()
+	container.title = effect_data.get("effect_id", "Unknown").capitalize()
+	container.collapsed = false  # Start expanded
 	_effects_list.add_child(container)
-	
-	var vbox = VBoxContainer.new()
-	container.add_child(vbox)
-	
-	var hbox = HBoxContainer.new()
-	vbox.add_child(hbox)
-	
-	var name_label = Label.new()
-	name_label.text = effect_data.get("effect_id", "Unknown").capitalize()
-	hbox.add_child(name_label)
-	
-	hbox.add_spacer(false)
 	
 	var remove_btn = Button.new()
 	remove_btn.text = "X"
 	remove_btn.pressed.connect(func(): _on_remove_effect(index))
-	hbox.add_child(remove_btn)
+	container.add_header_button(remove_btn)
+	
+	var content = container.get_content_container()
 	
 	if effect_data.get("effect_id") == "border":
 		var border_effect = BorderEffect.new()
@@ -188,7 +179,7 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		border_effect.queue_free()
 		
 		var settings_menu = SettingsMenu.new()
-		vbox.add_child(settings_menu)
+		content.add_child(settings_menu)
 		
 		var current_settings = effect_data.get("settings", {})
 		for setting in schema:
@@ -204,7 +195,7 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		badge_effect.queue_free()
 		
 		var settings_menu = SettingsMenu.new()
-		vbox.add_child(settings_menu)
+		content.add_child(settings_menu)
 		
 		var current_settings = effect_data.get("settings", {})
 		for setting in schema:

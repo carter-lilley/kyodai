@@ -274,8 +274,11 @@ func _draw():
 		var col = points[i].color.lerp(points[i].color.inverted(), 0.5)
 		col.a = 0.9
 		
-		draw_line(Vector2(points[i].offset * total_w, 0), Vector2(points[i].offset * total_w, h / 2.0), col)
-		var rect = Rect2(points[i].offset * total_w - POINT_WIDTH / 2.0, h / 2.0, POINT_WIDTH, h / 2.0)
+		var actual_x = points[i].offset * total_w
+		var handle_x = clamp(actual_x, POINT_WIDTH / 2.0, total_w - POINT_WIDTH / 2.0)
+		
+		draw_line(Vector2(actual_x, 0), Vector2(actual_x, h / 2.0), col)
+		var rect = Rect2(handle_x - POINT_WIDTH / 2.0, h / 2.0, POINT_WIDTH, h / 2.0)
 		draw_rect(rect, points[i].color, true)
 		draw_rect(rect, col, false)
 		

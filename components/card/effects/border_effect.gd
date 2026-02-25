@@ -2,6 +2,8 @@ class_name BorderEffect
 extends CardEffect
 
 var _gradient_texture: ImageTexture = null
+var _inner_stroke_gradient_texture: ImageTexture = null
+var _outer_stroke_gradient_texture: ImageTexture = null
 
 func _ready():
 	super._ready()
@@ -23,12 +25,32 @@ func _update_shader_params() -> void:
 	var border_fade_in = _settings.get("border_fade_in", 0.0)
 	var border_gradient = _settings.get("border_gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
+	var inner_stroke_width = _settings.get("inner_stroke_width", 0.0)
+	var inner_stroke_gradient = _settings.get("inner_stroke_gradient")
+	var outer_stroke_width = _settings.get("outer_stroke_width", 0.0)
+	var outer_stroke_gradient = _settings.get("outer_stroke_gradient")
 	
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("border_width_ratio", border_size)
 	_set_shader_param("border_fade_in_ratio", border_fade_in)
 	_set_shader_param("gradient_direction", gradient_direction)
+	_set_shader_param("inner_stroke_width_ratio", inner_stroke_width)
+	_set_shader_param("outer_stroke_width_ratio", outer_stroke_width)
+	
+	if inner_stroke_gradient is Gradient:
+		_inner_stroke_gradient_texture = _gradient_to_texture(inner_stroke_gradient)
+		_set_shader_param("inner_stroke_gradient_texture", _inner_stroke_gradient_texture)
+		_set_shader_param("use_inner_stroke_gradient", true)
+	else:
+		_set_shader_param("use_inner_stroke_gradient", false)
+	
+	if outer_stroke_gradient is Gradient:
+		_outer_stroke_gradient_texture = _gradient_to_texture(outer_stroke_gradient)
+		_set_shader_param("outer_stroke_gradient_texture", _outer_stroke_gradient_texture)
+		_set_shader_param("use_outer_stroke_gradient", true)
+	else:
+		_set_shader_param("use_outer_stroke_gradient", false)
 	
 	if border_gradient is Gradient:
 		_gradient_texture = _gradient_to_texture(border_gradient)
@@ -69,5 +91,27 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var direction_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Gradient Direction", "", 0.0, 0.0, 0.0, ["Horizontal", "Vertical", "Diagonal"])
 	direction_var.property_name = "gradient_direction"
 	schema.append(direction_var)
+	
+	var inner_stroke_width_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Inner Stroke Width", "", 0.0, 0.1, 0.001)
+	inner_stroke_width_var.property_name = "inner_stroke_width"
+	schema.append(inner_stroke_width_var)
+	
+	var inner_stroke_gradient = Gradient.new()
+	inner_stroke_gradient.add_point(0.0, Color.WHITE)
+	inner_stroke_gradient.add_point(1.0, Color.WHITE)
+	var inner_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, inner_stroke_gradient, State.ENABLED, "Inner Stroke Gradient")
+	inner_stroke_gradient_var.property_name = "inner_stroke_gradient"
+	schema.append(inner_stroke_gradient_var)
+	
+	var outer_stroke_width_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Outer Stroke Width", "", 0.0, 0.1, 0.001)
+	outer_stroke_width_var.property_name = "outer_stroke_width"
+	schema.append(outer_stroke_width_var)
+	
+	var outer_stroke_gradient = Gradient.new()
+	outer_stroke_gradient.add_point(0.0, Color.WHITE)
+	outer_stroke_gradient.add_point(1.0, Color.WHITE)
+	var outer_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, outer_stroke_gradient, State.ENABLED, "Outer Stroke Gradient")
+	outer_stroke_gradient_var.property_name = "outer_stroke_gradient"
+	schema.append(outer_stroke_gradient_var)
 	
 	return schema
