@@ -179,7 +179,7 @@ func _rebuild_effects():
 	if drop_shadow_config:
 		_drop_shadow_effect = DropShadowEffect.new()
 		_drop_shadow_effect.name = "DropShadowEffect"
-		# Use anchors like border but with negative offsets to extend beyond card
+		_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
 		add_child(_drop_shadow_effect)
 		_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
 		# Move drop shadow to back (behind card)

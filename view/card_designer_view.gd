@@ -332,9 +332,10 @@ func _on_add_effect(id: int):
 				"settings": {
 					"shadow_color": Color(0, 0, 0, 0.5),
 					"shadow_offset_x": 0.0,
-					"shadow_offset_y": 10.0,
-					"shadow_softness": 8.0,
-					"shadow_spread": 0.0
+					"shadow_offset_y": 0.05,
+					"shadow_softness": 0.04,
+					"shadow_spread": 0.0,
+					"shadow_expand": 0.02
 				}
 			}
 	

@@ -66,7 +66,7 @@ func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
 	var debug_str = "[BorderEffect] Generating texture from gradient with " + str(gradient.get_point_count()) + " points: "
 	for i in range(gradient.get_point_count()):
 		debug_str += "(" + str(gradient.get_offset(i)) + ":" + str(gradient.get_color(i)) + ") "
-	print(debug_str)
+	#print(debug_str)
 	
 	for i in range(256):
 		var t = i / 255.0  # Sample at pixel edges: 0.0 to 1.0 inclusive
@@ -94,7 +94,7 @@ func get_settings_schema() -> Array[SettingsVar]:
 	# This bypasses Godot's auto-add behavior
 	gradient.offsets = [0.0, 1.0]
 	gradient.colors = [Color.WHITE, Color.BLACK]
-	print("[BorderEffect] Created gradient with ", gradient.get_point_count(), " point(s): ", gradient.offsets)
+	#print("[BorderEffect] Created gradient with ", gradient.get_point_count(), " point(s): ", gradient.offsets)
 	
 	var gradient_var = SettingsVar.new(Type.GRADIENT, gradient, State.ENABLED, "Border Gradient")
 	gradient_var.property_name = "border_gradient"
