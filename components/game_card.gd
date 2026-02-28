@@ -627,11 +627,22 @@ func _on_card_pressed():
 	else:
 		download_requested.emit(game)
 
+func _get_show_delete() -> bool:
+	# Check if we're in the home view by traversing up the tree
+	var parent = get_parent()
+	while parent:
+		if parent is HomeView:
+			return true
+		elif parent is LibraryView:
+			return false
+		parent = parent.get_parent()
+	return false
+
 func _on_card_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if game and UIManager:
-				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
+				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position(), _get_show_delete())
 
 func _input(event: InputEvent) -> void:
 	# Handle ui_select (gamepad top button/Space) to open context menu
@@ -643,7 +654,7 @@ func _input(event: InputEvent) -> void:
 			if AudioManager:
 				AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 			var center_pos = global_position + (size / 2)
-			UIManager.show_game_context_menu(game.romm_id, center_pos)
+			UIManager.show_game_context_menu(game.romm_id, center_pos, _get_show_delete())
 			get_viewport().set_input_as_handled()
 
 func _on_focus_entered() -> void:

@@ -255,6 +255,8 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 							var main = get_tree().get_root().get_node_or_null("Main")
 							if main and main.has_method("reset_focus_to_home_button"):
 								main.reset_focus_to_home_button()
+							if AudioManager:
+								AudioManager.play_sfx("error")
 						)
 					else:
 						NotificationManager.show_notification("Failed to delete " + game.title, Notification.Type.ERROR)
