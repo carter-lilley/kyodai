@@ -25,7 +25,7 @@ var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
 # Ratio-based constants (as fraction of card width)
-const BADGE_SIZE_RATIO: float = 0.16  # ~32px at default width
+const BADGE_SIZE_RATIO: float = 0.12  # ~24px at default width (reduced from 0.16)
 const BADGE_MARGIN_RATIO: float = 0.04  # ~8px at default width
 const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 
@@ -112,6 +112,12 @@ func set_card_state(state: CardState) -> void:
 
 func get_card_state() -> CardState:
 	return _card_state
+
+func get_focus_shape_params() -> Dictionary:
+	return {
+		"shape_size": _card_state.card_size,
+		"corner_radius_ratio": _card_state.corner_radius_ratio
+	}
 
 func _update_card_state_from_settings():
 	if SettingsManager:
@@ -217,14 +223,16 @@ func _update_status_badge_layout():
 	var badge_size = BADGE_SIZE_RATIO * card_width
 	var badge_margin = BADGE_MARGIN_RATIO * card_width
 	var badge_corner = int(BADGE_CORNER_RATIO * card_width)
+	var border_inset_pixels = _card_state.border_inset_ratio * card_width
 	
-	status_badge.offset_left = -badge_size - badge_margin
-	status_badge.offset_top = -badge_size - badge_margin
-	status_badge.offset_right = -badge_margin
-	status_badge.offset_bottom = -badge_margin
+	# Account for border inset so badge doesn't overlap the border
+	status_badge.offset_left = -badge_size - badge_margin - border_inset_pixels
+	status_badge.offset_top = -badge_size - badge_margin - border_inset_pixels
+	status_badge.offset_right = -badge_margin - border_inset_pixels
+	status_badge.offset_bottom = -badge_margin - border_inset_pixels
 	
 	var new_style = StyleBoxFlat.new()
-	new_style.bg_color = Color(0, 0, 0, 0.6)
+	new_style.bg_color = Color(0, 0, 0, 0.4)
 	new_style.corner_radius_top_left = badge_corner
 	new_style.corner_radius_top_right = badge_corner
 	new_style.corner_radius_bottom_left = badge_corner
