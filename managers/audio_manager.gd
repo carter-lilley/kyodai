@@ -81,6 +81,7 @@ func _load_sfx_library() -> void:
 		"loading_2": "res://assets/sfx/loading_2.wav",
 		"error": "res://assets/sfx/error.wav",
 		"closing": "res://assets/sfx/closing.wav",
+		"return": "res://assets/sfx/return.wav",
 		"sfx": "res://assets/sfx/sfx.wav"
 	}
 	

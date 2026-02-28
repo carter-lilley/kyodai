@@ -3,7 +3,17 @@ extends Control
 @onready var tab_container: TabContainer = $VBoxContainer/TabContainer
 @onready var bottom_bar: BottomBar = $VBoxContainer/BottomBar
 
+# Auto-repeat navigation
+var _held_dir: String = ""
+var _delay_timer: Timer
+var _repeat_timer: Timer
+const INITIAL_DELAY: float = 0.5
+const REPEAT_DELAY: float = 0.1
+var _last_press: int = 0
+
 func _ready():
+	_setup_repeat()
+	
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 	
@@ -61,3 +71,66 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 
 func set_status_text(text: String):
 	bottom_bar.set_status_text(text)
+
+func _setup_repeat():
+	_delay_timer = Timer.new()
+	_delay_timer.wait_time = INITIAL_DELAY
+	_delay_timer.one_shot = true
+	_delay_timer.timeout.connect(_on_delay_timeout)
+	add_child(_delay_timer)
+	
+	_repeat_timer = Timer.new()
+	_repeat_timer.wait_time = REPEAT_DELAY
+	_repeat_timer.timeout.connect(_on_repeat)
+	add_child(_repeat_timer)
+
+func _input(event: InputEvent):
+	var dirs = ["ui_left", "ui_right", "ui_up", "ui_down"]
+	
+	for dir in dirs:
+		if event.is_action_pressed(dir):
+			if event is InputEventKey:
+				var now = Time.get_ticks_msec()
+				if now - _last_press < 80:
+					return
+				_last_press = now
+			
+			_held_dir = dir
+			_delay_timer.start()
+			return
+		
+		if event.is_action_released(dir) and _held_dir == dir:
+			_held_dir = ""
+			_delay_timer.stop()
+			_repeat_timer.stop()
+			return
+	
+	# Handle ui_cancel to go back to Home
+	if event.is_action_pressed("ui_cancel"):
+		# Play return sound
+		if AudioManager:
+			AudioManager.play_sfx("return")
+		# Switch to Home view
+		UIManager.switch_to_tab("Home")
+		# Set focus to Home button
+		if bottom_bar and bottom_bar.has_node("NavButtons/HomeButton"):
+			var home_button = bottom_bar.get_node("NavButtons/HomeButton")
+			if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+				home_button.grab_focus()
+		return
+
+func _on_delay_timeout():
+	if _held_dir != "":
+		_repeat_timer.start()
+		_resend()
+
+func _on_repeat():
+	if _held_dir != "":
+		_resend()
+
+func _resend():
+	if _held_dir != "":
+		var e = InputEventAction.new()
+		e.action = _held_dir
+		e.pressed = true
+		Input.parse_input_event(e)

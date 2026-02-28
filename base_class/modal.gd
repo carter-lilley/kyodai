@@ -124,6 +124,15 @@ func set_item_enabled(id: String, enabled: bool) -> void:
 
 func popup_at_position(pos: Vector2) -> void:
 	popup(Rect2i(pos.x, pos.y, 0, 0))
+	# Grab focus on the first item after showing
+	call_deferred("_grab_first_item_focus")
+
+func _grab_first_item_focus() -> void:
+	# Find the first button and grab focus
+	for child in _items_container.get_children():
+		if child is Button and not child.disabled:
+			child.grab_focus()
+			break
 
 func popup_at_mouse() -> void:
 	popup_at_position(get_viewport().get_mouse_position())

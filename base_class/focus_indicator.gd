@@ -23,6 +23,9 @@ var _custom_corner_radius_ratio: float = 0.0
 var _use_custom_shape: bool = false
 var _was_using_custom_shape: bool = false
 
+# Track if this is the first focus change (to skip sound on app start)
+var _is_first_focus: bool = true
+
 # Target position and size for tweening
 var _target_position: Vector2 = Vector2.ZERO
 var _target_size: Vector2 = Vector2.ZERO
@@ -99,12 +102,15 @@ func _on_focus_changed(control: Control) -> void:
 	var transitioning_to_card = _use_custom_shape and not _was_using_custom_shape
 	_was_using_custom_shape = _use_custom_shape
 	
-	# Play appropriate sound for focus change
-	if not _use_custom_shape:
+	# Play appropriate sound for focus change (skip on initial app start)
+	if not _use_custom_shape and not _is_first_focus:
 		# Non-game card focus - play generic click sound
 		if AudioManager:
 			AudioManager.play_sfx("click_00")
 	# Note: Game cards (_use_custom_shape) handle their own sound in game_card.gd
+	
+	# Mark that we've had our first focus
+	_is_first_focus = false
 	
 	if transitioning_to_card:
 		# Skip tween - snap immediately to correct position/size

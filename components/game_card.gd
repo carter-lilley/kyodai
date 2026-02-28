@@ -633,6 +633,19 @@ func _on_card_gui_input(event: InputEvent) -> void:
 			if game and UIManager:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
 
+func _input(event: InputEvent) -> void:
+	# Handle ui_select (gamepad top button/Space) to open context menu
+	if event.is_action_pressed("ui_select"):
+		# Check if any child of this card has focus (the button gets focus, not the card)
+		var focused = get_viewport().gui_get_focus_owner()
+		if focused and is_ancestor_of(focused) and game and UIManager:
+			# Play click_03 modulated up by a quarter octave (~1.03)
+			if AudioManager:
+				AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
+			var center_pos = global_position + (size / 2)
+			UIManager.show_game_context_menu(game.romm_id, center_pos)
+			get_viewport().set_input_as_handled()
+
 func _on_focus_entered() -> void:
 	# Play focus sound with slight pitch variation
 	if AudioManager:

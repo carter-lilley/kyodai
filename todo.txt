@@ -3,6 +3,7 @@
 how to split important siblings
 
 ## UI
+	load animation
 	font! rodin?
 	focus glow
 	controller nav (zoom, text on bottom, details, modals)
