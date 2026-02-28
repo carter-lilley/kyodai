@@ -1302,6 +1302,10 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource) -> void:
+	# Play launch sound
+	if AudioManager:
+		AudioManager.play_sfx("affirm_00")
+	
 	# If game is not downloaded, queue the download first then proceed
 	if not game.is_active_variant_downloaded():
 		_queue_game_download_then_launch(game)

@@ -72,11 +72,79 @@ var _pending_loads: Dictionary = {}
 const MAX_CACHE_SIZE: int = 5000
 var _cache_access_order: Array[int] = []
 
+# Auto-repeat navigation for gamepad/keyboard
+var _repeat_timer: Timer
+var _initial_delay_timer: Timer
+var _held_direction: String = ""
+var _is_repeating: bool = false
+const INITIAL_REPEAT_DELAY: float = 0.4  # 400ms before repeat starts
+const REPEAT_INTERVAL: float = 0.08  # 80ms between repeats
+
 func _ready():
 	_setup_ui()
+	_setup_repeat_timers()
 	resized.connect(_on_resized)
 	if SettingsManager:
 		SettingsManager.settings_saved.connect(_on_settings_saved)
+
+func _setup_repeat_timers():
+	_initial_delay_timer = Timer.new()
+	_initial_delay_timer.wait_time = INITIAL_REPEAT_DELAY
+	_initial_delay_timer.one_shot = true
+	_initial_delay_timer.timeout.connect(_on_initial_delay_timeout)
+	add_child(_initial_delay_timer)
+	
+	_repeat_timer = Timer.new()
+	_repeat_timer.wait_time = REPEAT_INTERVAL
+	_repeat_timer.timeout.connect(_on_repeat_timeout)
+	add_child(_repeat_timer)
+
+func _on_initial_delay_timeout():
+	_is_repeating = true
+	_repeat_timer.start()
+	_move_focus_in_direction(_held_direction)
+
+func _on_repeat_timeout():
+	_move_focus_in_direction(_held_direction)
+
+func _move_focus_in_direction(direction: String):
+	var focused = get_viewport().gui_get_focus_owner()
+	if not focused:
+		return
+	
+	var next_control: Control = null
+	
+	match direction:
+		"ui_up":
+			next_control = focused.find_prev_valid_focus()
+		"ui_down":
+			next_control = focused.find_next_valid_focus()
+		"ui_left":
+			next_control = focused.find_prev_valid_focus()
+		"ui_right":
+			next_control = focused.find_next_valid_focus()
+	
+	if next_control and next_control != focused:
+		next_control.grab_focus()
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Handle direction presses for auto-repeat
+	var directions = ["ui_up", "ui_down", "ui_left", "ui_right"]
+	
+	for direction in directions:
+		if event.is_action_pressed(direction):
+			_held_direction = direction
+			_is_repeating = false
+			_initial_delay_timer.start()
+			# Don't consume - let Godot handle the initial move
+			return
+		
+		if event.is_action_released(direction) and _held_direction == direction:
+			_held_direction = ""
+			_is_repeating = false
+			_initial_delay_timer.stop()
+			_repeat_timer.stop()
+			return
 
 func _on_resized():
 	_recalculate_layout()

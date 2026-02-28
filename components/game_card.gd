@@ -634,6 +634,10 @@ func _on_card_gui_input(event: InputEvent) -> void:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
 
 func _on_focus_entered() -> void:
+	# Play focus sound with slight pitch variation
+	if AudioManager:
+		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
+	
 	# Scale up when focused
 	if _focus_tween:
 		_focus_tween.kill()

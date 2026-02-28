@@ -95,9 +95,16 @@ func _on_focus_changed(control: Control) -> void:
 	_update_shader_params()
 	visible = true
 	
-	# Check if we're transitioning from non-card to card
+	# Check if we're transitioning between card and non-card
 	var transitioning_to_card = _use_custom_shape and not _was_using_custom_shape
 	_was_using_custom_shape = _use_custom_shape
+	
+	# Play appropriate sound for focus change
+	if not _use_custom_shape:
+		# Non-game card focus - play generic click sound
+		if AudioManager:
+			AudioManager.play_sfx("click_00")
+	# Note: Game cards (_use_custom_shape) handle their own sound in game_card.gd
 	
 	if transitioning_to_card:
 		# Skip tween - snap immediately to correct position/size
@@ -209,6 +216,14 @@ func _process(_delta: float) -> void:
 		# If target moved significantly, update the tween
 		if target_rect.position.distance_to(_target_position) > 1.0 or target_rect.size.distance_to(_target_size) > 1.0:
 			_tween_to_target()
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Play click_03 when ui_accept is pressed on non-game card elements
+	if event.is_action_pressed("ui_accept"):
+		if _target_control and is_instance_valid(_target_control) and not _use_custom_shape:
+			# Non-game card element activated - play activation sound
+			if AudioManager:
+				AudioManager.play_sfx("click_03")
 
 func set_border_color(color: Color) -> void:
 	border_color = color

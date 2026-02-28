@@ -57,6 +57,9 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 	# Setup library appearance (background color)
 	_setup_library_appearance()
 	SettingsManager.setting_changed.connect(_on_setting_changed)
+	
+	# Set initial focus to Home tab
+	_set_initial_focus()
 
 func _setup_home_tab():
 	var home_idx = _get_tab_index("Home")
@@ -139,6 +142,40 @@ func _get_tab_index(tab_title: String) -> int:
 		if _tab_container.get_tab_title(i) == tab_title:
 			return i
 	return -1
+
+func _set_initial_focus() -> void:
+	"""Set initial focus to the Home button in the bottom bar."""
+	# Wait a frame for the UI to be fully ready
+	await get_tree().process_frame
+	
+	# Try to find the bottom bar from the root control
+	if _root_control:
+		var bottom_bar = _root_control.get_node_or_null("VBoxContainer/BottomBar")
+		if bottom_bar and bottom_bar.has_node("NavButtons/HomeButton"):
+			var home_button = bottom_bar.get_node("NavButtons/HomeButton")
+			if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+				home_button.grab_focus()
+				print("[UIManager] Set initial focus to Home button in bottom bar")
+				return
+	
+	# Fallback: try to focus the first focusable element in the root control
+	if _root_control:
+		var first_focusable = _find_first_focusable(_root_control)
+		if first_focusable:
+			first_focusable.grab_focus()
+			print("[UIManager] Set initial focus to: " + first_focusable.name)
+
+func _find_first_focusable(node: Node) -> Control:
+	"""Find the first focusable Control in the node tree."""
+	if node is Control and node.focus_mode != Control.FOCUS_NONE:
+		return node
+	
+	for child in node.get_children():
+		var result = _find_first_focusable(child)
+		if result:
+			return result
+	
+	return null
 
 func _setup_library_appearance() -> void:
 	"""Apply library background color to the main TabContainer."""

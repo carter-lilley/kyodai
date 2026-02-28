@@ -4,8 +4,7 @@ how to split important siblings
 
 ## UI
 	font! rodin?
-	sound manager 0.05
-	focus glow + scale
+	focus glow
 	controller nav (zoom, text on bottom, details, modals)
 	sort by plaform, search
 	layer system inner shadow / glows/fades?

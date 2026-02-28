@@ -278,6 +278,17 @@ func _start_download(item: QueueItem):
 	download_started.emit(item.id)
 	print("[DownloadManager] Starting download: " + item.id + " - " + item.url)
 	
+	# Start looping sound while downloading
+	if AudioManager:
+		print("[DownloadManager] Starting audio loop for item: " + item.id + " with status: " + item.status)
+		var audio_started = AudioManager.play_loop_while("loading_2", func(): 
+			var still_active = item.status == "downloading"
+			return still_active
+		)
+		print("[DownloadManager] Audio loop started: " + str(audio_started))
+	else:
+		print("[DownloadManager] AudioManager not available!")
+	
 	# Make HTTP request through NetworkManager
 	# Always include User-Agent to prevent blocking (archive.org requires this)
 	var headers = ["User-Agent: Kyodai-Launcher/1.0"]
