@@ -61,6 +61,23 @@ func _update_shader_params() -> void:
 		_set_shader_param("border_color", border_color)
 		_set_shader_param("use_gradient", false)
 
+func set_border_size(size: float) -> void:
+	_settings["border_size"] = size
+	_update_shader_params()
+
+func tween_border_size(target_size: float, duration: float = 0.15) -> Tween:
+	var tween = create_tween()
+	tween.set_trans(Tween.TRANS_QUAD)
+	tween.set_ease(Tween.EASE_OUT)
+	
+	var start_size = _settings.get("border_size", 0.05)
+	tween.tween_method(func(t): 
+		var current_size = lerp(start_size, target_size, t)
+		set_border_size(current_size)
+	, 0.0, 1.0, duration)
+	
+	return tween
+
 func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
 	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
 	var debug_str = "[BorderEffect] Generating texture from gradient with " + str(gradient.get_point_count()) + " points: "

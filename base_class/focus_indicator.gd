@@ -1,16 +1,16 @@
 class_name FocusIndicator
 extends ColorRect
 
-@export var border_color: Color = Color(1, 1, 1, 0.8)
+@export var border_color: Color = Color(0.0, 0.757, 0.757, 0.8)
 @export var border_width: float = 6.0
-@export var padding: float = 2.0
+@export var padding: float = 0.0
 
-@export var chase_speed: float = 0.65
-@export var gap_size: float = 0.04
-@export var fade_length: float = 0.35
+@export var chase_speed: float = 0.375
+@export var gap_size: float = 0.03
+@export var fade_length: float = 0.65
 
-@export var tween_duration: float = 0.12
-@export var tween_trans: Tween.TransitionType = Tween.TRANS_QUINT
+@export var tween_duration: float = 0.15
+@export var tween_trans: Tween.TransitionType = Tween.TRANS_QUART
 @export var tween_ease: Tween.EaseType = Tween.EASE_OUT
 
 var _target_control: Control
@@ -21,6 +21,7 @@ var _current_tween: Tween
 var _custom_shape_size: Vector2 = Vector2.ZERO
 var _custom_corner_radius_ratio: float = 0.0
 var _use_custom_shape: bool = false
+var _was_using_custom_shape: bool = false
 
 # Target position and size for tweening
 var _target_position: Vector2 = Vector2.ZERO
@@ -94,8 +95,16 @@ func _on_focus_changed(control: Control) -> void:
 	_update_shader_params()
 	visible = true
 	
-	# Start tweening to new target
-	_tween_to_target()
+	# Check if we're transitioning from non-card to card
+	var transitioning_to_card = _use_custom_shape and not _was_using_custom_shape
+	_was_using_custom_shape = _use_custom_shape
+	
+	if transitioning_to_card:
+		# Skip tween - snap immediately to correct position/size
+		_snap_to_target()
+	else:
+		# Normal tween for card→card or non-card→non-card
+		_tween_to_target()
 
 func _get_target_global_rect(control: Control) -> Rect2:
 	var global_pos = control.global_position
@@ -105,7 +114,7 @@ func _get_target_global_rect(control: Control) -> Rect2:
 	if _use_custom_shape and control.get_parent() and control.get_parent().has_method("get_focus_shape_params"):
 		var parent = control.get_parent()
 		global_pos = parent.global_position
-		ctrl_size = parent.size
+		ctrl_size = parent.size * parent.scale
 	
 	return Rect2(
 		global_pos.x - border_width - padding,
@@ -142,6 +151,28 @@ func _tween_to_target() -> void:
 	_current_tween.finished.connect(_on_tween_finished)
 
 func _on_tween_step(_idx: int) -> void:
+	_update_shader_params()
+
+func _snap_to_target() -> void:
+	if not _target_control or not is_instance_valid(_target_control):
+		return
+	
+	var target_rect = _get_target_global_rect(_target_control)
+	
+	# Kill any existing tween
+	if _current_tween:
+		_current_tween.kill()
+		_current_tween = null
+	
+	# Snap immediately to target position and size
+	global_position = target_rect.position
+	size = target_rect.size
+	
+	# Update target values so _process doesn't re-tween
+	_target_position = target_rect.position
+	_target_size = target_rect.size
+	
+	# Update shader params
 	_update_shader_params()
 
 func _on_tween_finished() -> void:
@@ -187,6 +218,7 @@ func hide_indicator() -> void:
 	visible = false
 	_target_control = null
 	_use_custom_shape = false
+	_was_using_custom_shape = false
 	if _current_tween:
 		_current_tween.kill()
 		_current_tween = null

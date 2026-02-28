@@ -46,11 +46,20 @@ var _image_retry_count: int = 0
 var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
+const FOCUSED_SCALE: float = 1.08
+const FOCUS_TWEEN_DURATION: float = 0.12
+const FOCUSED_BORDER_MULTIPLIER: float = 0.85  # Border is 65% of normal size when focused (smaller)
+var _focus_tween: Tween = null
+var _original_border_size: float = 0.05  # Default border size, will be set from config
+
 func _ready():
 	# Allow effects (like drop shadow) to render outside card bounds
 	clip_contents = false
 	# Cards render above UI backgrounds, shadows at -1 stay behind card but above backgrounds
 	z_index = 10
+	
+	# Set pivot to center for proper scaling
+	pivot_offset = size / 2
 	
 	if preview_mode:
 		_setup_preview_mode()
@@ -67,6 +76,8 @@ func _ready():
 	if card_input:
 		card_input.pressed.connect(_on_card_pressed)
 		card_input.gui_input.connect(_on_card_gui_input)
+		card_input.focus_entered.connect(_on_focus_entered)
+		card_input.focus_exited.connect(_on_focus_exited)
 	
 	if DownloadManager:
 		DownloadManager.download_progress.connect(_on_download_progress)
@@ -176,6 +187,7 @@ func _rebuild_effects():
 		# Calculate border inset to match inner edge of border
 		# Border extends inward by (fade_in + width), so inset image to that edge
 		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
+		_original_border_size = border_size  # Store for focus effects
 		var fade_in = border_config.get("settings", {}).get("border_fade_in", 0.0)
 		_card_state.border_inset_ratio = border_size + fade_in
 	
@@ -206,6 +218,7 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
 	custom_minimum_size = card_size
 	size = card_size
+	pivot_offset = card_size / 2
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
@@ -619,6 +632,60 @@ func _on_card_gui_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if game and UIManager:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position())
+
+func _on_focus_entered() -> void:
+	# Scale up when focused
+	if _focus_tween:
+		_focus_tween.kill()
+	_focus_tween = create_tween()
+	_focus_tween.set_trans(Tween.TRANS_BACK)
+	_focus_tween.set_ease(Tween.EASE_OUT)
+	_focus_tween.tween_property(self, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
+	
+	# Reduce border size when focused
+	if _border_effect:
+		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
+		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
+		var original_inset = _original_border_size + fade_in
+		var focused_inset = focused_border_size + fade_in
+		
+		# Tween border size and inset together
+		var border_tween = _border_effect.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
+		border_tween.parallel().tween_method(func(t):
+			var current_inset = lerp(original_inset, focused_inset, t)
+			_card_state.border_inset_ratio = current_inset
+			# Update badge with new inset
+			if _badge_effect:
+				_badge_effect.set_border_width(current_inset)
+				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
+		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
+
+func _on_focus_exited() -> void:
+	# Scale back to normal when unfocused
+	if _focus_tween:
+		_focus_tween.kill()
+	_focus_tween = create_tween()
+	_focus_tween.set_trans(Tween.TRANS_QUAD)
+	_focus_tween.set_ease(Tween.EASE_OUT)
+	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	
+	# Restore original border size and inset
+	if _border_effect:
+		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
+		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
+		var focused_inset = focused_border_size + fade_in
+		var original_inset = _original_border_size + fade_in
+		
+		# Tween border size and inset together
+		var border_tween = _border_effect.tween_border_size(_original_border_size, FOCUS_TWEEN_DURATION)
+		border_tween.parallel().tween_method(func(t):
+			var current_inset = lerp(focused_inset, original_inset, t)
+			_card_state.border_inset_ratio = current_inset
+			# Update badge with restored inset
+			if _badge_effect:
+				_badge_effect.set_border_width(current_inset)
+				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
+		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 
 func _on_download_progress(item_id: String, progress: float):
 	if not DownloadManager:
