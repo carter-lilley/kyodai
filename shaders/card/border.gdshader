@@ -100,11 +100,11 @@ void fragment() {
 					}
 					gradient_t = clamp(gradient_t, 0.0, 1.0);
 					stroke_color = texture(inner_stroke_gradient_texture, vec2(gradient_t, 0.0));
-				} else {
-					stroke_color = inner_stroke_color;
-				}
-				
-				final_color = mix(final_color, stroke_color, stroke_alpha * stroke_color.a);
+			} else {
+				stroke_color = inner_stroke_color;
+			}
+			
+				final_color = mix(final_color, stroke_color, stroke_alpha * stroke_color.a * inner_aa_alpha);
 			}
 		}
 		

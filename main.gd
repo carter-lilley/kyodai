@@ -107,6 +107,9 @@ func _input(event: InputEvent):
 			return
 		
 		if event.is_action_released(dir) and _held_dir == dir:
+			# Ignore synthetic release events from our repeat system
+			if event is InputEventAction:
+				return
 			_held_dir = ""
 			_delay_timer.stop()
 			_repeat_timer.stop()
@@ -137,7 +140,14 @@ func _on_repeat():
 
 func _resend():
 	if _held_dir != "":
-		var e = InputEventAction.new()
-		e.action = _held_dir
-		e.pressed = true
-		Input.parse_input_event(e)
+		# Send press event
+		var press = InputEventAction.new()
+		press.action = _held_dir
+		press.pressed = true
+		Input.parse_input_event(press)
+		
+		# Send release event to reset action state (allows analog sticks to work)
+		var release = InputEventAction.new()
+		release.action = _held_dir
+		release.pressed = false
+		Input.parse_input_event(release)

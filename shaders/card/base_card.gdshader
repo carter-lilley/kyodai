@@ -183,8 +183,13 @@ void fragment() {
 	// Convert ratio to pixels
 	float border_inset_pixels = border_inset_ratio * card_size.x;
 	
-	vec2 inner_size = card_size - vec2(border_inset_pixels * 2.0);
-	vec2 inner_offset = vec2(border_inset_pixels);
+	// Subtract padding to make base card sit deeper under the border
+	// (negative padding = larger card, extending further under the border edge)
+	float padding_pixels = 5.0;
+	float effective_border_inset = max(0.0, border_inset_pixels - padding_pixels);
+	
+	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
+	vec2 inner_offset = vec2(effective_border_inset);
 	
 	float dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);

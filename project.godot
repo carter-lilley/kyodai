@@ -28,11 +28,6 @@ NotificationManager="*uid://igtredd7pthk"
 LaunchManager="*res://managers/launch_manager.gd"
 AudioManager="*res://managers/audio_manager.gd"
 
-[display]
-
-window/size/viewport_width=1280
-window/size/viewport_height=720
-
 [input]
 
 ui_accept={

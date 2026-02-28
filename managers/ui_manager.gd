@@ -212,6 +212,26 @@ func _on_tab_changed(tab_idx: int):
 func get_current_view() -> View:
 	return _current_view
 
+func is_current_view(view_name: String) -> bool:
+	"""Check if a view by name is the currently active view."""
+	if _current_view == null:
+		return false
+	return _current_view.view_name == view_name
+
+func is_node_in_current_view(node: Node) -> bool:
+	"""Check if a node belongs to the currently active view."""
+	if _current_view == null or node == null:
+		return false
+	
+	# Traverse up the tree to find if this node is a child of the current view
+	var current = node
+	while current != null:
+		if current == _current_view:
+			return true
+		current = current.get_parent()
+	
+	return false
+
 func rebuild_game_grid() -> void:
 	"""Rebuild the library view to reflect card size changes."""
 	if _views.has("Library"):

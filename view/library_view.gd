@@ -6,7 +6,6 @@ extends View
 
 var _total_games: int = 0
 var _is_loading: bool = false
-var _is_current_view: bool = false
 
 func _ready():
 	# Setup VirtualScrollGridContainer
@@ -233,16 +232,14 @@ func _on_sync_completed(success: bool, message: String):
 		_update_status("Sync failed: " + message)
 
 func on_view_show():
-	_is_current_view = true
 	view_shown.emit()
 
 func on_view_hide():
-	_is_current_view = false
 	view_hidden.emit()
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
 	# Only handle modal actions if this view is currently active
-	if not _is_current_view:
+	if not UIManager.is_current_view(view_name):
 		return
 	
 	var romm_id = context.get("romm_id", 0)
