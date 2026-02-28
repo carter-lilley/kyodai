@@ -45,3 +45,4 @@ const Type = SettingsVar.SettingType
 @export_subgroup("Library Appearance")
 @export var library_background_color := SettingsVar.new(Type.COLOR, Color(0.1, 0.1, 0.1, 1.0), State.ENABLED, "Background Color")
 @export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")
+@export var library_bottom_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Bottom Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])

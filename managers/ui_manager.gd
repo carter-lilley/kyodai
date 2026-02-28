@@ -7,10 +7,21 @@ var _tab_container: TabContainer
 var _views: Dictionary[String, View] = {}
 var _current_view: View
 
+# Layout management
+var _root_control: Control = null
+var _layout_container: BoxContainer = null
+var _bottom_bar: BottomBar = null
+var _current_bar_position: String = "bottom"
+
+# Position index mapping
+const BAR_POSITIONS = ["bottom", "top", "left", "right"]
+
+# Bar sizing constant (7.5% of viewport dimension)
+const BAR_SIZE_RATIO = 0.075
+
 # Modal management
 var _active_modal: Modal = null
 var _modal_context: Dictionary = {}
-var _root_control: Control = null
 var _modal_backdrop: ColorRect = null
 var _is_dismissing: bool = false
 var _focus_indicator: FocusIndicator = null
@@ -24,15 +35,18 @@ signal modal_shown(modal_id: String)
 signal modal_dismissed(modal_id: String)
 signal modal_item_selected(item_id: String, context: Dictionary)
 signal tab_changed(view_name: String)
+signal layout_changed(position: String)
 
-func initialize(tab_container: TabContainer, root_control: Control = null):
+func initialize(tab_container: TabContainer, layout_container: BoxContainer, bottom_bar: BottomBar = null):
 	_tab_container = tab_container
 	_tab_container.tab_changed.connect(_on_tab_changed)
 	
-	if root_control:
-		_root_control = root_control
-	else:
-		_root_control = tab_container.get_parent_control()
+	_layout_container = layout_container
+	_root_control = layout_container.get_parent()
+	_bottom_bar = bottom_bar
+	
+	# Setup layout based on current setting
+	_setup_layout()
 	
 	# Setup existing tabs
 	_setup_home_tab()
@@ -58,8 +72,139 @@ func initialize(tab_container: TabContainer, root_control: Control = null):
 	_setup_library_appearance()
 	SettingsManager.setting_changed.connect(_on_setting_changed)
 	
-	# Set initial focus to Home tab
+	# Set initial focus
 	_set_initial_focus()
+
+func _get_bar_position_string(index: int) -> String:
+	"""Convert position index to string."""
+	if index >= 0 and index < BAR_POSITIONS.size():
+		return BAR_POSITIONS[index]
+	return "bottom"
+
+func _get_bar_position_index(position: String) -> int:
+	"""Convert position string to index."""
+	return BAR_POSITIONS.find(position)
+
+func _connect_viewport_resize() -> void:
+	"""Connect to viewport resize signal to update bar size."""
+	if is_inside_tree():
+		var viewport = get_viewport()
+		if viewport:
+			if viewport.size_changed.is_connected(_on_viewport_resized):
+				viewport.size_changed.disconnect(_on_viewport_resized)
+			viewport.size_changed.connect(_on_viewport_resized)
+
+func _on_viewport_resized() -> void:
+	"""Handle viewport resize to update bar dimensions."""
+	_update_bar_size()
+
+func _update_bar_size() -> void:
+	"""Update the bottom bar size based on viewport and orientation."""
+	if not _bottom_bar or not is_inside_tree():
+		return
+	
+	var viewport_size = get_viewport().size
+	var is_horizontal = _current_bar_position in ["top", "bottom"]
+	
+	if is_horizontal:
+		# Horizontal bar: fixed height, full width
+		var target_height = viewport_size.y * BAR_SIZE_RATIO
+		_bottom_bar.custom_minimum_size = Vector2(0, target_height)
+		_bottom_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_bottom_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	else:
+		# Vertical bar: fixed width, full height
+		var target_width = viewport_size.x * BAR_SIZE_RATIO
+		_bottom_bar.custom_minimum_size = Vector2(target_width, 0)
+		_bottom_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_bottom_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+func _setup_layout() -> void:
+	"""Setup the layout container based on the bottom bar position setting."""
+	# Get current position setting (stored as index)
+	var position_setting = SettingsManager.get_setting("library_bottom_bar_position")
+	if position_setting:
+		_current_bar_position = _get_bar_position_string(position_setting.value)
+	
+	# Determine if we need horizontal or vertical layout
+	var is_horizontal = _current_bar_position in ["top", "bottom"]
+	
+	# Store references to children before swapping container type
+	var tab_container_ref = _tab_container
+	var bottom_bar_ref = _bottom_bar
+	
+	# Remove children from current container
+	for child in _layout_container.get_children():
+		_layout_container.remove_child(child)
+	
+	# Determine if we need to swap container type
+	var need_hbox = not is_horizontal
+	var current_is_hbox = _layout_container is HBoxContainer
+	
+	if need_hbox != current_is_hbox:
+		# Need to swap container type
+		var old_container = _layout_container
+		var new_container: BoxContainer
+		
+		if need_hbox:
+			new_container = HBoxContainer.new()
+		else:
+			new_container = VBoxContainer.new()
+		
+		new_container.name = "LayoutContainer"
+		new_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+		
+		# Replace in tree
+		_root_control.add_child(new_container)
+		_root_control.move_child(new_container, old_container.get_index())
+		
+		# Update references
+		_layout_container = new_container
+		
+		# Remove old container
+		old_container.queue_free()
+	
+	# Configure bottom bar orientation
+	if _bottom_bar:
+		if is_horizontal:
+			_bottom_bar.set_orientation(BottomBar.BarOrientation.HORIZONTAL)
+		else:
+			_bottom_bar.set_orientation(BottomBar.BarOrientation.VERTICAL)
+	
+	# Add children in correct order based on position
+	match _current_bar_position:
+		"top", "left":
+			if bottom_bar_ref:
+				_layout_container.add_child(bottom_bar_ref)
+			_layout_container.add_child(tab_container_ref)
+		"bottom", "right", _:
+			_layout_container.add_child(tab_container_ref)
+			if bottom_bar_ref:
+				_layout_container.add_child(bottom_bar_ref)
+	
+	# Set size flags for tab container only (bottom bar manages its own)
+	tab_container_ref.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tab_container_ref.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	
+	# Update bar size and connect resize handler
+	_update_bar_size()
+	_connect_viewport_resize()
+	
+	print("[UIManager] Layout setup complete with bar position: ", _current_bar_position)
+
+func _rebuild_layout() -> void:
+	"""Rebuild the layout when bar position setting changes."""
+	# Store current tab
+	var current_tab = _tab_container.current_tab
+	
+	# Rebuild layout
+	_setup_layout()
+	
+	# Restore tab
+	_tab_container.current_tab = current_tab
+	
+	# Emit signal
+	layout_changed.emit(_current_bar_position)
 
 func _setup_home_tab():
 	var home_idx = _get_tab_index("Home")
@@ -148,15 +293,13 @@ func _set_initial_focus() -> void:
 	# Wait a frame for the UI to be fully ready
 	await get_tree().process_frame
 	
-	# Try to find the bottom bar from the root control
-	if _root_control:
-		var bottom_bar = _root_control.get_node_or_null("VBoxContainer/BottomBar")
-		if bottom_bar and bottom_bar.has_node("NavButtons/HomeButton"):
-			var home_button = bottom_bar.get_node("NavButtons/HomeButton")
-			if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-				home_button.grab_focus()
-				print("[UIManager] Set initial focus to Home button in bottom bar")
-				return
+	# Try to find the bottom bar
+	if _bottom_bar and _bottom_bar.has_node("NavButtons/HomeButton"):
+		var home_button = _bottom_bar.get_node("NavButtons/HomeButton")
+		if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+			home_button.grab_focus()
+			print("[UIManager] Set initial focus to Home button in bottom bar")
+			return
 	
 	# Fallback: try to focus the first focusable element in the root control
 	if _root_control:
@@ -193,6 +336,9 @@ func _setup_library_appearance() -> void:
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name == "library_background_color":
 		_setup_library_appearance()
+	elif setting.property_name == "library_bottom_bar_position":
+		_current_bar_position = _get_bar_position_string(setting.value)
+		_rebuild_layout()
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)
@@ -248,6 +394,10 @@ func switch_to_tab(tab_name: String):
 	var idx = _get_tab_index(tab_name)
 	if idx != -1:
 		_tab_container.current_tab = idx
+
+func get_bar_position() -> String:
+	"""Get the current bottom bar position."""
+	return _current_bar_position
 
 # ==================== MODAL MANAGEMENT ====================
 

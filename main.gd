@@ -1,5 +1,6 @@
 extends Control
 
+@onready var layout_container: BoxContainer = $VBoxContainer
 @onready var tab_container: TabContainer = $VBoxContainer/TabContainer
 @onready var bottom_bar: BottomBar = $VBoxContainer/BottomBar
 
@@ -17,8 +18,8 @@ func _ready():
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 	
-	# Initialize UIManager with the tab container
-	UIManager.initialize(tab_container, self)
+	# Initialize UIManager with the tab container, layout container, and bottom bar
+	UIManager.initialize(tab_container, layout_container, bottom_bar)
 	
 	# Connect bottom bar signals
 	if bottom_bar:

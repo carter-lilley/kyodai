@@ -5,9 +5,10 @@ how to split important siblings
 ## UI
 	load animation
 	placeholder icons
+	scale icon animation bug when scrolling
 	font! rodin?
 	focus glow
-	controller nav (zoom, text on bottom, details, modals)
+	controller nav (zoom, text on bottom)
 	sort by plaform, search
 	layer system inner shadow / glows/fades?
 	add letters to library navigation 
