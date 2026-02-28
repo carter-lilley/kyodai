@@ -72,6 +72,13 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 func set_status_text(text: String):
 	bottom_bar.set_status_text(text)
 
+func reset_focus_to_home_button() -> void:
+	"""Reset focus to the Home button in the bottom bar."""
+	if bottom_bar and bottom_bar.has_node("NavButtons/HomeButton"):
+		var home_button = bottom_bar.get_node("NavButtons/HomeButton")
+		if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+			home_button.grab_focus()
+
 func _setup_repeat():
 	_delay_timer = Timer.new()
 	_delay_timer.wait_time = INITIAL_DELAY

@@ -912,6 +912,103 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	)
 	return true
 
+func delete_game_download(game: GameResource, callback: Callable = Callable()) -> bool:
+	"""Delete a downloaded game file and update the database."""
+	if not _is_db_ready or not game:
+		push_error("[DataManager] Cannot delete: DB not ready or game is null")
+		if callback.is_valid():
+			callback.call(false)
+		return false
+	
+	# Get the file path to delete - construct it from components (like launch_manager does)
+	var active_id = game.get_active_game_id()
+	var active_file_name = ""
+	
+	if active_id == game.romm_id:
+		active_file_name = game.file_name
+	else:
+		# Get sibling file name
+		for sibling in game.siblings:
+			if sibling.get("id", 0) == active_id:
+				active_file_name = sibling.get("file_name", "")
+				break
+	
+	if active_file_name == "":
+		push_error("[DataManager] Cannot delete: empty file name")
+		if callback.is_valid():
+			callback.call(false)
+		return false
+	
+	# Construct the full path (same as launch_manager.gd line 1162)
+	var root_folder = SettingsManager.get_setting("games_root_folder")
+	var root_path = root_folder.value if root_folder else "user://games"
+	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
+	
+	print("[DataManager] Deleting file at constructed path: " + abs_path)
+	
+	# Check if file exists
+	if not FileAccess.file_exists(abs_path):
+		push_error("[DataManager] File does not exist: " + abs_path)
+		if callback.is_valid():
+			callback.call(false)
+		return false
+	
+	# Attempt to delete the file
+	var file_deleted = false
+	var error_msg = ""
+	
+	# Method 1: Try using DirAccess with the parent directory
+	var parent_dir = abs_path.get_base_dir()
+	var file_name = abs_path.get_file()
+	var dir = DirAccess.open(parent_dir)
+	
+	if dir:
+		var err = dir.remove(file_name)
+		if err == OK:
+			file_deleted = true
+			print("[DataManager] Successfully deleted file using DirAccess: " + abs_path)
+		else:
+			error_msg = "DirAccess.remove failed with error: " + str(err)
+	else:
+		error_msg = "Failed to open directory: " + parent_dir
+	
+	# Method 2: If first method failed, try remove_absolute
+	if not file_deleted:
+		print("[DataManager] Trying remove_absolute for: " + abs_path)
+		var err = DirAccess.remove_absolute(abs_path)
+		if err == OK:
+			file_deleted = true
+			print("[DataManager] Successfully deleted file using remove_absolute: " + abs_path)
+		else:
+			error_msg += " | remove_absolute failed with error: " + str(err)
+	
+	# If file deletion failed, don't update the database
+	if not file_deleted:
+		push_error("[DataManager] Failed to delete file: " + abs_path + " | " + error_msg)
+		if callback.is_valid():
+			callback.call(false)
+		return false
+	
+	# Verify file was actually deleted
+	if FileAccess.file_exists(abs_path):
+		push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
+		if callback.is_valid():
+			callback.call(false)
+		return false
+	
+	# Update game state only after successful deletion
+	print("[DataManager] Updating game state after successful deletion")
+	if active_id == game.romm_id:
+		# Main game
+		game.has_local_copy = false
+		game.file_path = ""
+	else:
+		# Sibling - remove from downloaded list
+		game.downloaded_sibling_ids.erase(active_id)
+	
+	# Persist to database
+	return update_game(game, callback)
+
 func get_game_by_id(romm_id: int) -> GameResource:
 	if not _is_db_ready:
 		return null

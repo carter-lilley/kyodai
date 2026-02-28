@@ -6,6 +6,7 @@ extends View
 
 var _total_games: int = 0
 var _is_loading: bool = false
+var _is_current_view: bool = false
 
 func _ready():
 	# Setup VirtualScrollGridContainer
@@ -60,6 +61,25 @@ func _load_total_count(preserve_cache: bool = false):
 			games_grid.set_total_count(count, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
+	)
+
+func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
+	"""Get total game count and call callback when complete."""
+	_is_loading = true
+	_update_status("Loading library...")
+	
+	MemoryManager.queue_db_task(
+		func():
+			var count = DataManager.get_total_games_count()
+			print("[LibraryView] Total games count: %d" % count)
+			return count,
+		func(count: int):
+			_total_games = count
+			games_grid.set_total_count(count, preserve_cache)
+			_update_status("Showing 0-0 of %d games" % count)
+			_is_loading = false
+			if on_complete.is_valid():
+				on_complete.call()
 	)
 
 func _update_status(text: String):
@@ -212,7 +232,19 @@ func _on_sync_completed(success: bool, message: String):
 	else:
 		_update_status("Sync failed: " + message)
 
+func on_view_show():
+	_is_current_view = true
+	view_shown.emit()
+
+func on_view_hide():
+	_is_current_view = false
+	view_hidden.emit()
+
 func _on_modal_item_selected(item_id: String, context: Dictionary):
+	# Only handle modal actions if this view is currently active
+	if not _is_current_view:
+		return
+	
 	var romm_id = context.get("romm_id", 0)
 	
 	match item_id:

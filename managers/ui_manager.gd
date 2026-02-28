@@ -268,9 +268,15 @@ func show_game_context_menu(romm_id: int, position: Vector2) -> String:
 	"""Show the standard game context menu."""
 	var items: Array[Dictionary] = [
 		{"id": "launch", "text": "Launch"},
-		{"id": "details", "text": "Details"},
-		{"id": "hide", "text": "Hide"}
+		{"id": "details", "text": "Details"}
 	]
+	
+	# Add delete option only if game is downloaded
+	var game = DataManager.get_game_by_id(romm_id)
+	if game and game.is_active_variant_downloaded():
+		items.append({"id": "delete", "text": "Delete"})
+	
+	items.append({"id": "hide", "text": "Hide"})
 	return show_context_menu(items, position, {"romm_id": romm_id})
 
 func dismiss_modal() -> void:

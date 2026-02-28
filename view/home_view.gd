@@ -6,6 +6,7 @@ extends View
 
 var _total_games: int = 0
 var _is_loading: bool = false
+var _is_current_view: bool = false
 
 func _ready():
 	# Setup VirtualScrollGridContainer
@@ -210,15 +211,21 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	)
 
 func on_view_show():
+	_is_current_view = true
 	view_shown.emit()
 	# Refresh the view when shown (in case downloads happened while away)
 	if not _is_loading:
 		_load_total_count(true, false)
 
 func on_view_hide():
+	_is_current_view = false
 	view_hidden.emit()
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
+	# Only handle modal actions if this view is currently active
+	if not _is_current_view:
+		return
+	
 	var romm_id = context.get("romm_id", 0)
 	
 	match item_id:
@@ -231,6 +238,30 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				LaunchManager.launch_game(game)
 			else:
 				print("[HomeView] Game not found: ", romm_id)
+		"delete":
+			print("[HomeView] Delete requested for game: ", romm_id)
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				# Show deleting notification
+				NotificationManager.show_notification("Deleting " + game.title + "...", Notification.Type.INFO)
+				# Delete the game
+				DataManager.delete_game_download(game, func(success: bool):
+					if success:
+						NotificationManager.show_notification(game.title + " deleted", Notification.Type.SUCCESS)
+						# Force refresh the grid (don't preserve cache to remove the deleted game)
+						_load_total_count_with_callback(false, func():
+							games_grid.refresh_dimensions()
+							# Reset focus to home button
+							var main = get_tree().get_root().get_node_or_null("Main")
+							if main and main.has_method("reset_focus_to_home_button"):
+								main.reset_focus_to_home_button()
+						)
+					else:
+						NotificationManager.show_notification("Failed to delete " + game.title, Notification.Type.ERROR)
+						# Play error sound
+						if AudioManager:
+							AudioManager.play_sfx("error")
+				)
 		"hide":
 			print("[HomeView] Hide requested for game: ", romm_id)
 
