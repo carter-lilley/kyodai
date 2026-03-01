@@ -1,11 +1,22 @@
 [gd_scene format=3 uid="uid://c8yvxg3ulq3a8"]
 
 [ext_resource type="Script" path="res://components/library_background.gd" id="1_8jkrp"]
-[ext_resource type="Shader" path="res://shaders/library_background.gdshader" id="2_x1n4s"]
+[ext_resource type="Shader" path="res://shaders/library_background_xmb.gdshader" id="2_x1n4s"]
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_8jkrp"]
+
+[sub_resource type="NoiseTexture2D" id="NoiseTexture2D_8jkrp"]
+width = 1024
+height = 1024
+noise = SubResource("FastNoiseLite_8jkrp")
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_8jkrp"]
 shader = ExtResource("2_x1n4s")
-shader_parameter/background_color = Color(0.1, 0.1, 0.1, 1)
+shader_parameter/time_scale = 1.0
+shader_parameter/show_dust = true
+shader_parameter/wave_intensity = 1.0
+shader_parameter/star_threshold = 0.99
+shader_parameter/noise_texture = SubResource("NoiseTexture2D_8jkrp")
 
 [node name="LibraryBackground" type="Control"]
 layout_mode = 3

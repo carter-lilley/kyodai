@@ -1201,6 +1201,17 @@ func refresh_if_visible(start_index: int, end_index: int):
 					card.update_display()
 				updated_count += 1
 
+func refresh_all_card_effects() -> void:
+	"""Refresh effects on all active cards (call when card settings change)."""
+	if _active_cards.size() == 0:
+		return
+	
+	print("[VScrollGrid] Refreshing effects on %d active cards" % _active_cards.size())
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("refresh_settings"):
+			card.refresh_settings()
+	print("[VScrollGrid] Card effects refreshed")
+
 func _update_cache_access_order(cache_key: int):
 	var idx = _cache_access_order.find(cache_key)
 	if idx != -1:

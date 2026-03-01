@@ -200,16 +200,10 @@ func _setup_library_background() -> void:
 
 func _update_library_background_color() -> void:
 	"""Update the library background color from settings."""
-	if not _library_background:
-		return
-	
-	var bg_color = Color(0.1, 0.1, 0.1, 1.0)  # Default dark gray
-	if SettingsManager:
-		var color_setting = SettingsManager.get_setting("library_background_color")
-		if color_setting:
-			bg_color = color_setting.value
-	
-	_library_background.set_background_color(bg_color)
+	# Note: The XMB shader has its own built-in colors (reddish gradient)
+	# and doesn't use the background_color parameter.
+	# The old library_background.gdshader is still available if you want to switch back.
+	pass
 
 func _setup_layout() -> void:
 	"""Setup the layout container based on the bottom bar position setting."""
@@ -561,16 +555,17 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 				library_view.mark_for_rebuild("Vertical layout changed")
 	elif setting.property_name == "card_effect_config":
 		# Rebuild visible views immediately, mark hidden views for rebuild
+		# Pass true to refresh effects on cards
 		if _views.has("Home"):
 			var home_view = _views["Home"]
 			if is_current_view("Home"):
-				home_view.rebuild_grid()
+				home_view.rebuild_grid(true)
 			else:
 				home_view.mark_for_rebuild("Card effects changed")
 		if _views.has("Library"):
 			var library_view = _views["Library"]
 			if is_current_view("Library"):
-				library_view.rebuild_grid()
+				library_view.rebuild_grid(true)
 			else:
 				library_view.mark_for_rebuild("Card effects changed")
 	elif setting.property_name == "library_grid_padding":

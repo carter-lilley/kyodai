@@ -134,12 +134,21 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 		var end_num = mini(end_index, total_count)
 		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
 
-func rebuild_grid() -> void:
+func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
-	print("[HomeView] rebuild_grid() called")
+	print("[HomeView] rebuild_grid() called, refresh_effects=%s" % refresh_effects)
 	_update_grid_orientation()
 	games_grid.refresh_dimensions()
-	_load_total_count(true)
+	
+	# If refreshing effects, don't preserve cache so cards get recreated with new effects
+	if refresh_effects:
+		print("[HomeView] Rebuilding grid with effect refresh")
+		_load_total_count(false)
+		# Also refresh existing cards
+		games_grid.refresh_all_card_effects()
+	else:
+		# Force grid to recalculate layout, preserve cache for performance
+		_load_total_count(true)
 
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
@@ -279,22 +288,34 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"hide":
 			print("[HomeView] Hide requested for game: ", romm_id)
 
+func check_and_rebuild_if_needed() -> void:
+	"""Override: Capture reason before it's cleared, then defer rebuild."""
+	print("[HomeView] check_and_rebuild_if_needed() called, needs_rebuild=%s" % str(needs_rebuild))
+	if needs_rebuild:
+		var reason = needs_rebuild_reason
+		print("[HomeView] Rebuilding due to: %s" % reason)
+		# Clear flags now since we're handling the rebuild
+		needs_rebuild = false
+		needs_rebuild_reason = ""
+		# Pass the captured reason to the deferred rebuild
+		call_deferred("_do_rebuild", reason)
+	else:
+		print("[HomeView] No rebuild needed")
+
 func perform_rebuild() -> void:
 	"""Override: Perform the actual grid rebuild when view becomes visible."""
-	print("[HomeView] perform_rebuild() called, deferring to ensure valid size...")
-	print("[HomeView] Current size: ", size)
-	print("[HomeView] Visible: ", visible)
-	call_deferred("_do_rebuild")
+	# This is called by the base class, but we handle the deferred rebuild in check_and_rebuild_if_needed
+	pass
 
-func _do_rebuild() -> void:
-	print("[HomeView] _do_rebuild() executing")
+func _do_rebuild(reason: String = "") -> void:
+	print("[HomeView] _do_rebuild() executing, reason: '%s'" % reason)
 	print("[HomeView] Size now: ", size)
 	print("[HomeView] Visible now: ", visible)
 	
 	# Ensure we have valid dimensions before rebuilding
 	if size.x <= 0 or size.y <= 0:
 		print("[HomeView] WARNING: Invalid size detected, deferring again...")
-		call_deferred("_do_rebuild")
+		call_deferred("_do_rebuild", reason)
 		return
 	
 	if games_grid:
@@ -303,7 +324,10 @@ func _do_rebuild() -> void:
 		# Force a layout recalculation with the new valid size
 		games_grid.queue_redraw()
 	
-	rebuild_grid()
+	# Check if rebuild is due to card effects change
+	var refresh_effects = reason == "Card effects changed"
+	print("[HomeView] refresh_effects=%s (reason: '%s')" % [refresh_effects, reason])
+	rebuild_grid(refresh_effects)
 	print("[HomeView] Rebuild complete")
 
 func _update_grid_orientation() -> void:
