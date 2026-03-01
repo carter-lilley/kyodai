@@ -92,11 +92,11 @@ func match_var_type(settingsvar : SettingsVar):
 			var id = 0
 			for option in settingsvar.options:
 				option_button.add_item(str(option), id)
-				# For enums (ints), match by index
-				if settingsvar.type == Type.ENUM and settingsvar.value == id:
+				# For enums (ints) OR arrays with int values (index-based), match by index
+				if settingsvar.value is int and settingsvar.value == id:
 					option_button.select(id)
-				# For arrays, match by actual value (string or Vector2)
-				elif settingsvar.type == Type.ARRAY and str(option) == str(settingsvar.value):
+				# For arrays with non-int values (Vector2, string, etc.), match by string comparison
+				elif not settingsvar.value is int and str(option) == str(settingsvar.value):
 					option_button.select(id)
 				id += 1
 			add_child(option_label)

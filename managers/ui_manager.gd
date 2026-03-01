@@ -66,7 +66,11 @@ func initialize(tab_container: TabContainer, layout_container: BoxContainer, bot
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
-		print("[UIManager] Initial view set to: ", current_tab_title)
+		print("[UIManager DEBUG] Initial view set to: ", current_tab_title, " calling _update_hero_visibility")
+		# Apply hero image visibility based on saved setting
+		_update_hero_visibility(current_tab_title)
+	else:
+		print("[UIManager DEBUG] No view found for tab: ", current_tab_title)
 	
 	# Setup modal input handling
 	_setup_modal_input_handling()
@@ -158,6 +162,15 @@ func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
 		print("[UIManager] HeroImage added to root control temporarily")
 	
 	_update_hero_size()
+	
+	# Check if hero should be hidden by default
+	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
+	print("[UIManager DEBUG] _setup_hero_image - hide_hero_setting: ", hide_hero_setting, " value: ", hide_hero_setting.value if hide_hero_setting else "null")
+	if hide_hero_setting and hide_hero_setting.value:
+		_hero_image.visible = false
+		print("[UIManager DEBUG] HeroImage set to hidden in _setup_hero_image")
+	else:
+		print("[UIManager DEBUG] HeroImage left visible (setting: ", hide_hero_setting.value if hide_hero_setting else "no setting", ")")
 	
 	print("[UIManager] HeroImage setup complete")
 
@@ -496,14 +509,18 @@ func _on_tab_changed(tab_idx: int):
 func _update_hero_visibility(view_name: String) -> void:
 	"""Show/hide hero image based on current view and settings."""
 	if not _hero_image:
+		print("[UIManager DEBUG] _update_hero_visibility - no _hero_image!")
 		return
 	
 	# Check if hero image is disabled in settings
 	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
 	var hide_hero = hide_hero_setting and hide_hero_setting.value
 	
+	print("[UIManager DEBUG] _update_hero_visibility - view_name: ", view_name, " hide_hero_setting: ", hide_hero_setting, " hide_hero: ", hide_hero)
+	
 	# Show hero for Home and Library views (unless disabled), hide for Downloads and Settings
 	var show_hero = (view_name in ["Home", "Library"]) and not hide_hero
+	print("[UIManager DEBUG] _update_hero_visibility - setting visible to: ", show_hero, " (was: ", _hero_image.visible, ")")
 	_hero_image.visible = show_hero
 	
 	if show_hero:
@@ -519,6 +536,8 @@ func _on_hero_game_changed(game: GameResource) -> void:
 	
 	# Only update hero image if we're in Home or Library view
 	var current_view_name = _current_view.view_name if _current_view else ""
+	print("[UIManager DEBUG] _on_hero_game_changed - game: ", game.get_display_name() if game else "null", " current_view: ", current_view_name)
+	
 	if current_view_name not in ["Home", "Library"]:
 		return
 	

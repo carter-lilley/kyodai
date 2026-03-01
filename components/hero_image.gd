@@ -49,13 +49,14 @@ func _ready():
 
 func _notification(what: int) -> void:
 	# Handle visibility changes to catch layout updates when becoming visible
-	if what == NOTIFICATION_VISIBILITY_CHANGED and visible:
-		print("[HeroImage] NOTIFICATION_VISIBILITY_CHANGED - visible: ", visible)
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		print("[HeroImage DEBUG] NOTIFICATION_VISIBILITY_CHANGED - visible changed to: ", visible)
 		
 		# Wait for layout to settle after visibility change
-		await _safe_process_frames(2)
-		if is_inside_tree():
-			_update_shader_size_with_validation("visibility_changed")
+		if visible:
+			await _safe_process_frames(2)
+			if is_inside_tree():
+				_update_shader_size_with_validation("visibility_changed")
 	
 	# Handle when parent layout changes
 	if what == NOTIFICATION_PARENTED:
@@ -192,11 +193,11 @@ func _set_texture(tex: Texture2D):
 		_material.set_shader_parameter("game_texture", tex)
 
 func clear():
-	print("[HeroImage] clear() called")
+	print("[HeroImage DEBUG] clear() called - current visible: ", visible)
 	_current_game = null
 	if _gray_texture:
 		_set_texture(_gray_texture)
-	visible = true
+	# Only set color_rect visibility, don't override parent's visibility control
 	if color_rect:
 		color_rect.visible = true
 
