@@ -191,6 +191,10 @@ func _on_library_effect_selected(index: int) -> void:
 				"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
 				"wave_blend_color": Color.WHITE
 			}
+		"motes":
+			_library_appearance_config["settings"] = {}
+		"osdsys":
+			_library_appearance_config["settings"] = {}
 	
 	# Save the config change
 	var config_setting = SettingsManager.get_setting("library_background_config")

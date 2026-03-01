@@ -70,6 +70,10 @@ func _create_effect(effect_id: String) -> BackgroundEffect:
 			return SolidBackgroundEffect.new()
 		"xmb":
 			return XmbBackgroundEffect.new()
+		"motes":
+			return MotesBackgroundEffect.new()
+		"osdsys":
+			return OsdSysBackgroundEffect.new()
 		_:
 			return XmbBackgroundEffect.new()
 
@@ -111,13 +115,15 @@ func set_background_color(_color: Color) -> void:
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:
-	return ["solid", "xmb"]
+	return ["solid", "xmb", "motes", "osdsys"]
 
 # Get effect display name
 static func get_effect_display_name(effect_id: String) -> String:
 	match effect_id:
 		"solid": return "Solid Color"
 		"xmb": return "XMB Animated"
+		"motes": return "Motes"
+		"osdsys": return "OSDSYS"
 		_: return "Unknown"
 
 # Get settings schema for an effect
@@ -128,6 +134,10 @@ static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 			effect = SolidBackgroundEffect.new()
 		"xmb":
 			effect = XmbBackgroundEffect.new()
+		"motes":
+			effect = MotesBackgroundEffect.new()
+		"osdsys":
+			effect = OsdSysBackgroundEffect.new()
 		_:
 			effect = XmbBackgroundEffect.new()
 	
