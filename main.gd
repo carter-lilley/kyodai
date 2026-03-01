@@ -66,19 +66,35 @@ func _on_zoom_changed(value: float):
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Safely get the games grid from a view
-	if view.has_node("VBoxContainer/VirtualScrollGridContainer"):
-		return view.get_node("VBoxContainer/VirtualScrollGridContainer")
+	if view.has_node("VirtualScrollGridContainer"):
+		return view.get_node("VirtualScrollGridContainer")
 	return null
 
 func set_status_text(text: String):
-	bottom_bar.set_status_text(text)
+	if is_instance_valid(bottom_bar):
+		bottom_bar.set_status_text(text)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home button in the bottom bar."""
-	if bottom_bar and bottom_bar.has_node("NavButtons/HomeButton"):
-		var home_button = bottom_bar.get_node("NavButtons/HomeButton")
-		if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-			home_button.grab_focus()
+	if not is_instance_valid(bottom_bar):
+		return
+	
+	# Search recursively for HomeButton since it's in dynamic containers
+	var home_button = _find_node_by_name(bottom_bar, "HomeButton")
+	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+		home_button.grab_focus()
+
+func _find_node_by_name(node: Node, target_name: String) -> Node:
+	"""Recursively find a node by name."""
+	if node.name == target_name:
+		return node
+	
+	for child in node.get_children():
+		var result = _find_node_by_name(child, target_name)
+		if result:
+			return result
+	
+	return null
 
 func _setup_repeat():
 	_delay_timer = Timer.new()
@@ -123,11 +139,9 @@ func _input(event: InputEvent):
 			AudioManager.play_sfx("return")
 		# Switch to Home view
 		UIManager.switch_to_tab("Home")
-		# Set focus to Home button
-		if bottom_bar and bottom_bar.has_node("NavButtons/HomeButton"):
-			var home_button = bottom_bar.get_node("NavButtons/HomeButton")
-			if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-				home_button.grab_focus()
+		# Set focus to Home button (use UIManager's helper to find it)
+		await get_tree().process_frame
+		reset_focus_to_home_button()
 		return
 
 func _on_delay_timeout():

@@ -33,21 +33,12 @@ func _ready():
 			get_tree().root.size_changed.connect(_on_resized)
 			print("[HeroImage] Connected root.size_changed signal")
 		
-		# Check if we're in the current active view
-		if not _is_in_active_view():
-			print("[HeroImage] Not in active view, skipping initialization")
-			# Show gray initially but don't do size validation yet
-			clear()
-			return
-		
 		print("[HeroImage] In active view, proceeding with initialization")
 		print("[HeroImage] About to wait for process frames...")
 		# Wait for container layout to complete before setting initial shader size
-		if get_tree():
-			await get_tree().process_frame
-			print("[HeroImage] After first process_frame - color_rect.size: ", color_rect.size, " is_visible: ", is_visible_in_tree())
-			await get_tree().process_frame
-			print("[HeroImage] After second process_frame - color_rect.size: ", color_rect.size, " is_visible: ", is_visible_in_tree())
+		await _safe_process_frames(2)
+		if is_inside_tree():
+			print("[HeroImage] After process frames - color_rect.size: ", color_rect.size, " is_visible: ", is_visible_in_tree())
 			_update_shader_size_with_validation("_ready()")
 	else:
 		push_error("[HeroImage] No material found!")
@@ -56,39 +47,24 @@ func _ready():
 	print("[HeroImage] Calling clear() in _ready()")
 	clear()
 
-func _is_in_active_view() -> bool:
-	"""Check if this HeroImage belongs to the currently active view."""
-	if UIManager:
-		return UIManager.is_node_in_current_view(self)
-	return false
-
 func _notification(what: int) -> void:
 	# Handle visibility changes to catch layout updates when becoming visible
 	if what == NOTIFICATION_VISIBILITY_CHANGED and visible:
-		print("[HeroImage] NOTIFICATION_VISIBILITY_CHANGED - visible: ", visible, " in_active_view: ", _is_in_active_view())
+		print("[HeroImage] NOTIFICATION_VISIBILITY_CHANGED - visible: ", visible)
 		
-		# Only update if we're now in the active view
-		if _is_in_active_view():
-			print("[HeroImage] Now visible and in active view, updating shader size")
-			# Wait for layout to settle after visibility change
-			if get_tree():
-				await get_tree().process_frame
-				await get_tree().process_frame
-				_update_shader_size_with_validation("visibility_changed")
-		else:
-			print("[HeroImage] Visible but not in active view, skipping update")
+		# Wait for layout to settle after visibility change
+		await _safe_process_frames(2)
+		if is_inside_tree():
+			_update_shader_size_with_validation("visibility_changed")
 	
 	# Handle when parent layout changes
 	if what == NOTIFICATION_PARENTED:
 		print("[HeroImage] NOTIFICATION_PARENTED - parent: ", get_parent().name if get_parent() else "none")
-		# Only proceed if we're in the active view
-		if not _is_in_active_view():
-			print("[HeroImage] Parented but not in active view, skipping")
-			return
 		
 		# Connect to parent's resized signal when we're added to a new parent
-		if get_tree():
-			await get_tree().process_frame
+		await _safe_process_frames(1)
+		if not is_inside_tree():
+			return
 		var parent = get_parent()
 		if parent is Control:
 			print("[HeroImage] Parent is Control: ", parent.name, " connecting to resized signal")
@@ -102,28 +78,25 @@ func _enter_tree():
 func _exit_tree():
 	print("[HeroImage] _exit_tree() - name: ", name)
 
+func _safe_process_frames(count: int) -> void:
+	"""Safely await process frames, checking if still in tree."""
+	for i in range(count):
+		if not is_inside_tree() or not get_tree():
+			return
+		await get_tree().process_frame
+
 func _create_gray_texture():
-	var img = Image.new()
-	img.create(4, 4, false, Image.FORMAT_RGB8)
-	img.fill(Color(0.5, 0.5, 0.5))
-	_gray_texture = ImageTexture.create_from_image(img)
+	var img = Image.create(4, 4, false, Image.FORMAT_RGB8)
+	if img:
+		img.fill(Color(0.5, 0.5, 0.5))
+		_gray_texture = ImageTexture.create_from_image(img)
 
 func _on_resized():
-	print("[HeroImage] _on_resized() called - color_rect.size: ", color_rect.size if color_rect else "no color_rect", " in_active_view: ", _is_in_active_view())
-	
-	# Only process resize events if we're in the active view
-	if not _is_in_active_view():
-		print("[HeroImage] Not in active view, skipping resize")
-		return
-	
+	print("[HeroImage] _on_resized() called - color_rect.size: ", color_rect.size if color_rect else "no color_rect")
 	_update_shader_size_with_validation("_on_resized signal")
 
 func _update_shader_size_with_validation(source: String = ""):
-	print("[HeroImage] _update_shader_size_with_validation() called from: ", source, " in_active_view: ", _is_in_active_view())
-	
-	if not _is_in_active_view():
-		print("[HeroImage] Not in active view, aborting size update")
-		return
+	print("[HeroImage] _update_shader_size_with_validation() called from: ", source)
 	
 	if not _material:
 		print("[HeroImage] ERROR: No material!")
@@ -165,12 +138,7 @@ func _get_cache_path(game: GameResource) -> String:
 	return ""
 
 func set_game(game: GameResource):
-	print("[HeroImage] set_game() called with game: ", game.get_display_name() if game else "null", " in_active_view: ", _is_in_active_view())
-	
-	# Only update game if we're in the active view
-	if not _is_in_active_view():
-		print("[HeroImage] Not in active view, skipping set_game")
-		return
+	print("[HeroImage] set_game() called with game: ", game.get_display_name() if game else "null")
 	
 	if game == _current_game:
 		print("[HeroImage] Same game, skipping")

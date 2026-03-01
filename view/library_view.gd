@@ -1,14 +1,19 @@
 class_name LibraryView
 extends View
 
-@onready var games_grid: VirtualScrollGridContainer = $VBoxContainer/VirtualScrollGridContainer
-@onready var hero_image: HeroImage = $HeroImage
+signal hero_game_changed(game: GameResource)
+
+@onready var games_grid: VirtualScrollGridContainer = $VirtualScrollGridContainer
 
 var _total_games: int = 0
 var _is_loading: bool = false
 
 func _ready():
 	# Setup VirtualScrollGridContainer
+	if not games_grid:
+		push_error("[LibraryView] games_grid is null! Cannot initialize.")
+		return
+	
 	var card_scene = preload("res://components/game_card.tscn")
 	games_grid.setup(card_scene, 0)
 	games_grid.items_requested.connect(_on_items_requested)
@@ -55,6 +60,10 @@ func _load_total_count(preserve_cache: bool = false):
 			print("[LibraryView] Total games count: %d" % count)
 			return count,
 		func(count: int):
+			if not is_instance_valid(games_grid):
+				print("[LibraryView] games_grid no longer valid, skipping set_total_count")
+				_is_loading = false
+				return
 			_total_games = count
 			print("[LibraryView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
 			games_grid.set_total_count(count, preserve_cache)
@@ -73,6 +82,12 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 			print("[LibraryView] Total games count: %d" % count)
 			return count,
 		func(count: int):
+			if not is_instance_valid(games_grid):
+				print("[LibraryView] games_grid no longer valid, skipping set_total_count")
+				_is_loading = false
+				if on_complete.is_valid():
+					on_complete.call()
+				return
 			_total_games = count
 			games_grid.set_total_count(count, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
@@ -83,6 +98,8 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 
 func _update_status(text: String):
 	# Emit signal to update global status bar
+	if not is_inside_tree() or not get_tree():
+		return
 	var main = get_tree().get_root().get_node_or_null("Main")
 	if main and main.has_method("set_status_text"):
 		main.set_status_text(text)
@@ -91,11 +108,9 @@ func _on_focus_changed(control: Control):
 	# Check if focused control is a button inside a GameCard
 	var card = control.get_parent() if control is Button else control
 	if card is GameCard:
-		if hero_image:
-			hero_image.set_game(card.game)
+		hero_game_changed.emit(card.game)
 	else:
-		if hero_image:
-			hero_image.clear()
+		hero_game_changed.emit(null)
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""

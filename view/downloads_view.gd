@@ -113,6 +113,8 @@ func _update_status():
 		status_text = "No active downloads"
 	
 	# Update global status bar
+	if not is_inside_tree() or not get_tree():
+		return
 	var main = get_tree().get_root().get_node_or_null("Main")
 	if main and main.has_method("set_status_text"):
 		main.set_status_text(status_text)

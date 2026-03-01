@@ -1,21 +1,24 @@
 class_name HomeView
 extends View
 
-@onready var games_grid: VirtualScrollGridContainer = $VBoxContainer/VirtualScrollGridContainer
-@onready var hero_image: HeroImage = $HeroImage
+signal hero_game_changed(game: GameResource)
+
+@onready var games_grid: VirtualScrollGridContainer = $VirtualScrollGridContainer
 
 var _total_games: int = 0
 var _is_loading: bool = false
 
 func _ready():
 	# Setup VirtualScrollGridContainer
+	if not games_grid:
+		push_error("[HomeView] games_grid is null! Cannot initialize.")
+		return
+	
 	var card_scene = preload("res://components/game_card.tscn")
 	games_grid.setup(card_scene, 0)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
-	
-	print("[HomeView] HeroImage node: ", hero_image)
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
@@ -53,6 +56,10 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			print("[HomeView] Total downloaded games count: %d" % count)
 			return count,
 		func(count: int):
+			if not is_instance_valid(games_grid):
+				print("[HomeView] games_grid no longer valid, skipping set_total_count")
+				_is_loading = false
+				return
 			_total_games = count
 			print("[HomeView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
 			games_grid.set_total_count(count, preserve_cache)
@@ -69,6 +76,8 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 func _update_status(text: String):
 	# Emit signal to update global status bar
 	# Find the main node and update its status
+	if not is_inside_tree() or not get_tree():
+		return
 	var main = get_tree().get_root().get_node_or_null("Main")
 	if main and main.has_method("set_status_text"):
 		main.set_status_text(text)
@@ -79,13 +88,10 @@ func _on_focus_changed(control: Control):
 	var card = control.get_parent() if control is Button else control
 	if card is GameCard:
 		print("[HomeView] Focus on GameCard: ", card.game.get_display_name() if card.game else "no game")
-		if hero_image:
-			print("[HomeView] Calling hero_image.set_game()")
-			hero_image.set_game(card.game)
+		hero_game_changed.emit(card.game)
 	else:
 		print("[HomeView] Focus not on GameCard, clearing hero")
-		if hero_image:
-			hero_image.clear()
+		hero_game_changed.emit(null)
 
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
@@ -194,6 +200,12 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 		func():
 			return DataManager.get_downloaded_games_count(),
 		func(count: int):
+			if not is_instance_valid(games_grid):
+				print("[HomeView] games_grid no longer valid, skipping set_total_count")
+				_is_loading = false
+				if on_complete.is_valid():
+					on_complete.call()
+				return
 			_total_games = count
 			games_grid.set_total_count(count, preserve_cache)
 			if count == 0:
@@ -249,6 +261,8 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 						_load_total_count_with_callback(false, func():
 							games_grid.refresh_dimensions()
 							# Reset focus to home button
+							if not is_inside_tree() or not get_tree():
+								return
 							var main = get_tree().get_root().get_node_or_null("Main")
 							if main and main.has_method("reset_focus_to_home_button"):
 								main.reset_focus_to_home_button()

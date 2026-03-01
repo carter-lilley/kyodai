@@ -19,6 +19,12 @@ const BAR_POSITIONS = ["bottom", "top", "left", "right"]
 # Bar sizing constant (7.5% of viewport dimension)
 const BAR_SIZE_RATIO = 0.075
 
+# Hero image sizing constant (33% of viewport height)
+const HERO_SIZE_RATIO = 0.33
+
+# Hero image management
+var _hero_image: HeroImage = null
+
 # Modal management
 var _active_modal: Modal = null
 var _modal_context: Dictionary = {}
@@ -45,7 +51,7 @@ func initialize(tab_container: TabContainer, layout_container: BoxContainer, bot
 	_root_control = layout_container.get_parent()
 	_bottom_bar = bottom_bar
 	
-	# Setup layout based on current setting
+	# Setup layout based on current setting (this creates MainVBox)
 	_setup_layout()
 	
 	# Setup existing tabs
@@ -95,8 +101,9 @@ func _connect_viewport_resize() -> void:
 			viewport.size_changed.connect(_on_viewport_resized)
 
 func _on_viewport_resized() -> void:
-	"""Handle viewport resize to update bar dimensions."""
+	"""Handle viewport resize to update bar and hero dimensions."""
 	_update_bar_size()
+	_update_hero_size()
 
 func _update_bar_size() -> void:
 	"""Update the bottom bar size based on viewport and orientation."""
@@ -119,6 +126,41 @@ func _update_bar_size() -> void:
 		_bottom_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_bottom_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
+func _update_hero_size() -> void:
+	"""Update the hero image size based on viewport."""
+	if not _hero_image or not is_inside_tree():
+		return
+	
+	var viewport_size = get_viewport().size
+	var target_height = viewport_size.y * HERO_SIZE_RATIO
+	_hero_image.custom_minimum_size = Vector2(0, target_height)
+	_hero_image.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hero_image.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
+	"""Create and setup the shared HeroImage instance."""
+	if _hero_image:
+		return
+	
+	var hero_scene = preload("res://components/hero_image.tscn")
+	_hero_image = hero_scene.instantiate()
+	_hero_image.name = "HeroImage"
+	
+	# Add to main_content_vbox if provided
+	if main_content_vbox:
+		main_content_vbox.add_child(_hero_image)
+		main_content_vbox.move_child(_hero_image, 0)
+		print("[UIManager] HeroImage added to MainContentVBox at index 0")
+	else:
+		# Temporarily add to root control until layout is set up
+		_root_control.add_child(_hero_image)
+		_root_control.move_child(_hero_image, 0)
+		print("[UIManager] HeroImage added to root control temporarily")
+	
+	_update_hero_size()
+	
+	print("[UIManager] HeroImage setup complete")
+
 func _setup_layout() -> void:
 	"""Setup the layout container based on the bottom bar position setting."""
 	# Get current position setting (stored as index)
@@ -129,40 +171,93 @@ func _setup_layout() -> void:
 	# Determine if we need horizontal or vertical layout
 	var is_horizontal = _current_bar_position in ["top", "bottom"]
 	
-	# Store references to children before swapping container type
+	# Store references to children before reorganizing
 	var tab_container_ref = _tab_container
 	var bottom_bar_ref = _bottom_bar
 	
-	# Remove children from current container
+	# Remove BottomBar from wherever it currently is
+	if bottom_bar_ref and is_instance_valid(bottom_bar_ref) and bottom_bar_ref.get_parent():
+		print("[UIManager] Removing BottomBar from parent: ", bottom_bar_ref.get_parent().name)
+		bottom_bar_ref.get_parent().remove_child(bottom_bar_ref)
+	
+	# Remove children from current layout container so they can be reparented
 	for child in _layout_container.get_children():
 		_layout_container.remove_child(child)
 	
-	# Determine if we need to swap container type
+	# Create or get the RootLayout container (HBox or VBox based on bar position)
 	var need_hbox = not is_horizontal
-	var current_is_hbox = _layout_container is HBoxContainer
+	var root_layout: BoxContainer
 	
-	if need_hbox != current_is_hbox:
-		# Need to swap container type
-		var old_container = _layout_container
-		var new_container: BoxContainer
+	# Check if we need to create a new root layout or reuse existing
+	var existing_root = _root_control.get_node_or_null("RootLayout")
+	if existing_root and ((need_hbox and existing_root is HBoxContainer) or (not need_hbox and existing_root is VBoxContainer)):
+		# Reuse existing container of correct type
+		root_layout = existing_root
+		# Ensure it's properly attached and sized
+		if root_layout.get_parent() != _root_control:
+			if root_layout.get_parent():
+				root_layout.get_parent().remove_child(root_layout)
+			_root_control.add_child(root_layout)
+		root_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
+		# Clear all children from root_layout to prepare for rebuild
+		for child in root_layout.get_children():
+			root_layout.remove_child(child)
+	else:
+		# Create new root layout container
+		if existing_root:
+			# Make sure existing_root has no children before freeing
+			for child in existing_root.get_children():
+				existing_root.remove_child(child)
+			existing_root.queue_free()
 		
 		if need_hbox:
-			new_container = HBoxContainer.new()
+			root_layout = HBoxContainer.new()
 		else:
-			new_container = VBoxContainer.new()
+			root_layout = VBoxContainer.new()
 		
-		new_container.name = "LayoutContainer"
-		new_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+		root_layout.name = "RootLayout"
+		root_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_root_control.add_child(root_layout)
 		
-		# Replace in tree
-		_root_control.add_child(new_container)
-		_root_control.move_child(new_container, old_container.get_index())
-		
-		# Update references
-		_layout_container = new_container
-		
-		# Remove old container
-		old_container.queue_free()
+		# Move layout container from old parent to root control temporarily
+		if _layout_container and _layout_container.get_parent():
+			_layout_container.get_parent().remove_child(_layout_container)
+	
+	# Create MainContentVBox to hold HeroImage + TabContainer
+	var main_content_vbox = _root_control.get_node_or_null("MainContentVBox")
+	if not main_content_vbox:
+		main_content_vbox = VBoxContainer.new()
+		main_content_vbox.name = "MainContentVBox"
+		main_content_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+		# Note: Will be added to root_layout later
+	elif main_content_vbox.get_parent():
+		# Remove from old parent before re-adding
+		main_content_vbox.get_parent().remove_child(main_content_vbox)
+	
+	# Clear MainContentVBox children to rebuild
+	for child in main_content_vbox.get_children():
+		main_content_vbox.remove_child(child)
+	
+	# Setup hero image in MainContentVBox
+	if not _hero_image:
+		_setup_hero_image(main_content_vbox)
+	else:
+		if _hero_image.get_parent():
+			_hero_image.get_parent().remove_child(_hero_image)
+		main_content_vbox.add_child(_hero_image)
+	
+	# Add TabContainer to MainContentVBox
+	main_content_vbox.add_child(tab_container_ref)
+	
+	# Configure MainContentVBox sizing
+	main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	
+	# Remove separation between HeroImage and TabContainer
+	main_content_vbox.add_theme_constant_override("separation", 0)
+	
+	# Update _layout_container reference to MainContentVBox
+	_layout_container = main_content_vbox
 	
 	# Configure bottom bar orientation
 	if _bottom_bar:
@@ -171,18 +266,22 @@ func _setup_layout() -> void:
 		else:
 			_bottom_bar.set_orientation(BottomBar.BarOrientation.VERTICAL)
 	
-	# Add children in correct order based on position
+	# Add BottomBar and MainContent to RootLayout in correct order
 	match _current_bar_position:
 		"top", "left":
 			if bottom_bar_ref:
-				_layout_container.add_child(bottom_bar_ref)
-			_layout_container.add_child(tab_container_ref)
+				root_layout.add_child(bottom_bar_ref)
+			root_layout.add_child(main_content_vbox)
 		"bottom", "right", _:
-			_layout_container.add_child(tab_container_ref)
+			root_layout.add_child(main_content_vbox)
 			if bottom_bar_ref:
-				_layout_container.add_child(bottom_bar_ref)
+				root_layout.add_child(bottom_bar_ref)
 	
-	# Set size flags for tab container only (bottom bar manages its own)
+	# Set size flags for main content to fill remaining space
+	main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	
+	# TabContainer fills the MainContentVBox (below HeroImage)
 	tab_container_ref.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tab_container_ref.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
@@ -224,6 +323,10 @@ func _setup_home_tab():
 	home_view.view_name = "Home"
 	home_tab.add_child(home_view)
 	_views["Home"] = home_view
+	
+	# Connect hero image signal
+	if home_view.has_signal("hero_game_changed"):
+		home_view.hero_game_changed.connect(_on_hero_game_changed)
 
 func _setup_library_tab():
 	var library_idx = _get_tab_index("Library")
@@ -243,6 +346,10 @@ func _setup_library_tab():
 	library_view.view_name = "Library"
 	library_tab.add_child(library_view)
 	_views["Library"] = library_view
+	
+	# Connect hero image signal
+	if library_view.has_signal("hero_game_changed"):
+		library_view.hero_game_changed.connect(_on_hero_game_changed)
 
 func _setup_downloads_tab():
 	var downloads_idx = _get_tab_index("Downloads")
@@ -293,13 +400,12 @@ func _set_initial_focus() -> void:
 	# Wait a frame for the UI to be fully ready
 	await get_tree().process_frame
 	
-	# Try to find the bottom bar
-	if _bottom_bar and _bottom_bar.has_node("NavButtons/HomeButton"):
-		var home_button = _bottom_bar.get_node("NavButtons/HomeButton")
-		if home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-			home_button.grab_focus()
-			print("[UIManager] Set initial focus to Home button in bottom bar")
-			return
+	# Try to find the home button in the bottom bar (search recursively since buttons are in dynamic containers)
+	var home_button = _find_home_button()
+	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+		home_button.grab_focus()
+		print("[UIManager] Set initial focus to Home button in bottom bar")
+		return
 	
 	# Fallback: try to focus the first focusable element in the root control
 	if _root_control:
@@ -307,6 +413,26 @@ func _set_initial_focus() -> void:
 		if first_focusable:
 			first_focusable.grab_focus()
 			print("[UIManager] Set initial focus to: " + first_focusable.name)
+
+func _find_home_button() -> Control:
+	"""Find the Home button in the bottom bar."""
+	if not _bottom_bar:
+		return null
+	
+	# Search recursively for a button named HomeButton
+	return _find_node_by_name(_bottom_bar, "HomeButton")
+
+func _find_node_by_name(node: Node, target_name: String) -> Node:
+	"""Recursively find a node by name."""
+	if node.name == target_name:
+		return node
+	
+	for child in node.get_children():
+		var result = _find_node_by_name(child, target_name)
+		if result:
+			return result
+	
+	return null
 
 func _find_first_focusable(node: Node) -> Control:
 	"""Find the first focusable Control in the node tree."""
@@ -338,7 +464,16 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_setup_library_appearance()
 	elif setting.property_name == "library_bottom_bar_position":
 		_current_bar_position = _get_bar_position_string(setting.value)
+		# Store currently focused control before rebuild
+		var focused_control = get_viewport().gui_get_focus_owner()
 		_rebuild_layout()
+		# Restore focus after rebuild if control still exists
+		if focused_control and is_instance_valid(focused_control):
+			focused_control.grab_focus()
+	elif setting.property_name == "library_hide_hero_image":
+		# Update hero image visibility when setting changes
+		var current_view_name = _current_view.view_name if _current_view else ""
+		_update_hero_visibility(current_view_name)
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)
@@ -352,8 +487,50 @@ func _on_tab_changed(tab_idx: int):
 		_current_view = _views[tab_title]
 		_current_view.on_view_show()
 		
+		# Update hero image visibility based on view
+		_update_hero_visibility(tab_title)
+		
 		# Emit tab changed signal for global UI updates
 		tab_changed.emit(tab_title)
+
+func _update_hero_visibility(view_name: String) -> void:
+	"""Show/hide hero image based on current view and settings."""
+	if not _hero_image:
+		return
+	
+	# Check if hero image is disabled in settings
+	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
+	var hide_hero = hide_hero_setting and hide_hero_setting.value
+	
+	# Show hero for Home and Library views (unless disabled), hide for Downloads and Settings
+	var show_hero = (view_name in ["Home", "Library"]) and not hide_hero
+	_hero_image.visible = show_hero
+	
+	if show_hero:
+		# Clear hero when switching to a view that shows it
+		_hero_image.clear()
+	
+	print("[UIManager] HeroImage visibility set to: ", show_hero, " for view: ", view_name, " (hide_hero: ", hide_hero, ")")
+
+func _on_hero_game_changed(game: GameResource) -> void:
+	"""Handle hero game change from views."""
+	if not _hero_image:
+		return
+	
+	# Only update hero image if we're in Home or Library view
+	var current_view_name = _current_view.view_name if _current_view else ""
+	if current_view_name not in ["Home", "Library"]:
+		return
+	
+	# Check if hero image is disabled in settings
+	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
+	if hide_hero_setting and hide_hero_setting.value:
+		return
+	
+	if game:
+		_hero_image.set_game(game)
+	else:
+		_hero_image.clear()
 
 func get_current_view() -> View:
 	return _current_view
