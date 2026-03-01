@@ -10,6 +10,15 @@ uniform float wave_intensity : hint_range(0.0, 2.0) = 1.0;
 uniform float star_threshold : hint_range(0.9, 1.0) = 0.99;
 uniform sampler2D noise_texture : filter_linear, repeat_enable;
 
+// Gradient colors (4 corners)
+uniform vec4 color_top_left : source_color = vec4(0.7, 0.2, 0.2, 1.0);
+uniform vec4 color_top_right : source_color = vec4(0.4, 0.1, 0.1, 1.0);
+uniform vec4 color_bottom_left : source_color = vec4(0.45, 0.1, 0.1, 1.0);
+uniform vec4 color_bottom_right : source_color = vec4(0.8, 0.3, 0.5, 1.0);
+
+// Wave blend color (what the wave fades to)
+uniform vec4 wave_blend_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+
 const float THRESHOLD = 0.99;
 const float MIN_DIST = 0.13;
 const float MAX_DIST = 40.0;
@@ -171,15 +180,15 @@ void fragment() {
 	vec2 mg = raymarch(o, d, 1.2, time);
 	float m = mg.x * wave_intensity;
 	
-	// Simple reddish 4-point gradient
+	// 4-point gradient using uniforms
 	vec3 c = mix(
-		mix(vec3(0.7, 0.2, 0.2), vec3(0.4, 0.1, 0.1), uv.x),
-		mix(vec3(0.45, 0.1, 0.1), vec3(0.8, 0.3, 0.5), uv.x),
+		mix(color_top_left.rgb, color_top_right.rgb, uv.x),
+		mix(color_bottom_left.rgb, color_bottom_right.rgb, uv.x),
 		uv.y
 	);
 	
-	// Blend between color and white based on wave alpha
-	c = mix(c, vec3(1.0), m);
+	// Blend between gradient and wave blend color based on wave alpha
+	c = mix(c, wave_blend_color.rgb, m);
 	
 	// Add dust
 	if (show_dust) {

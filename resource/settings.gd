@@ -43,11 +43,29 @@ const Type = SettingsVar.SettingType
 }, State.INTERNAL, "Card Effect Configuration")
 
 @export_subgroup("Library Appearance")
-@export var library_background_color := SettingsVar.new(Type.COLOR, Color(0.1, 0.1, 0.1, 1.0), State.ENABLED, "Background Color")
+# General layout settings (always visible)
 @export var library_hide_hero_image := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Hide Hero Image")
 @export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")
 @export var library_bottom_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Bottom Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
-@export var library_grid_margin_x := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin X", "Left/right margin around the grid in pixels", 0.0, 300.0, 1.0)
-@export var library_grid_margin_y := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin Y", "Top/bottom margin around the grid in pixels", 0.0, 300.0, 1.0)
+@export var library_grid_margin_x := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin X", "Left/right margin around the grid in pixels", 0.0, 600.0, 1.0)
+@export var library_grid_margin_y := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin Y", "Top/bottom margin around the grid in pixels", 0.0, 600.0, 1.0)
 @export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.15, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
+@export var library_bar_color := SettingsVar.new(Type.COLOR, Color(0.12, 0.12, 0.12, 0.95), State.ENABLED, "Bar Color", "Background color of the navigation bar")
+@export var library_icon_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Icon Color", "Color of navigation icons")
+
+# Internal background effect configuration (managed by Library Appearance settings)
+@export var library_background_config := SettingsVar.new(Type.DICTIONARY, {
+	"effect_id": "xmb",
+	"settings": {
+		"time_scale": 1.0,
+		"show_dust": true,
+		"wave_intensity": 1.0,
+		"star_threshold": 0.99,
+		"color_top_left": Color(0.7, 0.2, 0.2, 1.0),
+		"color_top_right": Color(0.4, 0.1, 0.1, 1.0),
+		"color_bottom_left": Color(0.45, 0.1, 0.1, 1.0),
+		"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
+		"wave_blend_color": Color.WHITE
+	}
+}, State.INTERNAL, "Background Effect Configuration")

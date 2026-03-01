@@ -193,10 +193,35 @@ func _setup_library_background() -> void:
 	# Don't add to any parent yet - _setup_layout() will add it to ContentWrapper
 	print("[UIManager] LibraryBackground created (will be added to ContentWrapper in _setup_layout)")
 	
-	# Set initial background color from settings
-	_update_library_background_color()
+	# Set initial background config from settings
+	_apply_library_background_config()
 	
 	print("[UIManager] LibraryBackground setup complete")
+
+func _apply_library_background_config() -> void:
+	"""Apply the library background configuration from settings."""
+	if not _library_background:
+		return
+	
+	var config_setting = SettingsManager.get_setting("library_background_config")
+	if config_setting and config_setting.value is Dictionary:
+		_library_background.set_background_config(config_setting.value.duplicate())
+	else:
+		# Apply default config
+		_library_background.set_background_config({
+			"effect_id": "xmb",
+			"settings": {
+				"time_scale": 1.0,
+				"show_dust": true,
+				"wave_intensity": 1.0,
+				"star_threshold": 0.99,
+				"color_top_left": Color(0.7, 0.2, 0.2, 1.0),
+				"color_top_right": Color(0.4, 0.1, 0.1, 1.0),
+				"color_bottom_left": Color(0.45, 0.1, 0.1, 1.0),
+				"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
+				"wave_blend_color": Color.WHITE
+			}
+		})
 
 func _update_library_background_color() -> void:
 	"""Update the library background color from settings."""
@@ -243,6 +268,7 @@ func _setup_layout() -> void:
 				root_layout.get_parent().remove_child(root_layout)
 			_root_control.add_child(root_layout)
 		root_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
+		root_layout.add_theme_constant_override("separation", 0)
 		# Clear all children from root_layout to prepare for rebuild
 		for child in root_layout.get_children():
 			root_layout.remove_child(child)
@@ -261,6 +287,7 @@ func _setup_layout() -> void:
 		
 		root_layout.name = "RootLayout"
 		root_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
+		root_layout.add_theme_constant_override("separation", 0)
 		_root_control.add_child(root_layout)
 		
 		# Move layout container from old parent to root control temporarily
@@ -356,7 +383,33 @@ func _setup_layout() -> void:
 	_update_bar_size()
 	_connect_viewport_resize()
 	
+	# Apply bar and icon colors from settings (deferred to ensure BottomBar is fully ready)
+	call_deferred("_apply_bottom_bar_colors")
+	
 	print("[UIManager] Layout setup complete with bar position: ", _current_bar_position)
+
+func _apply_bottom_bar_colors() -> void:
+	"""Apply bar background and icon colors from settings."""
+	print("[UIManager] _apply_bottom_bar_colors called")
+	if not _bottom_bar:
+		print("[UIManager] _bottom_bar is null!")
+		return
+	
+	print("[UIManager] _bottom_bar is valid, applying colors...")
+	
+	var bar_color_setting = SettingsManager.get_setting("library_bar_color")
+	if bar_color_setting:
+		print("[UIManager] Applying bar color: ", bar_color_setting.value)
+		_bottom_bar.set_bar_background_color(bar_color_setting.value)
+	else:
+		print("[UIManager] library_bar_color setting not found!")
+	
+	var icon_color_setting = SettingsManager.get_setting("library_icon_color")
+	if icon_color_setting:
+		print("[UIManager] Applying icon color: ", icon_color_setting.value)
+		_bottom_bar.set_icon_color(icon_color_setting.value)
+	else:
+		print("[UIManager] library_icon_color setting not found!")
 
 func _rebuild_layout() -> void:
 	"""Rebuild the layout when bar position setting changes."""
@@ -514,9 +567,9 @@ func _find_first_focusable(node: Node) -> Control:
 	return null
 
 func _setup_library_appearance() -> void:
-	"""Apply library background color to the LibraryBackground shader."""
-	# Update the library background color from settings
-	_update_library_background_color()
+	"""Apply library background configuration to the LibraryBackground."""
+	# Update the library background configuration from settings
+	_apply_library_background_config()
 	
 	# Make TabContainer background transparent so we can see the LibraryBackground behind it
 	var transparent_style = StyleBoxFlat.new()
@@ -525,8 +578,10 @@ func _setup_library_appearance() -> void:
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	print("[UIManager] _on_setting_changed called for: %s with value: %s" % [setting.property_name, str(_value)])
-	if setting.property_name == "library_background_color":
-		_update_library_background_color()
+	if setting.property_name == "library_background_config":
+		# Update the library background with new effect configuration
+		if _library_background and _value is Dictionary:
+			_library_background.set_background_config(_value.duplicate())
 	elif setting.property_name == "library_bottom_bar_position":
 		_current_bar_position = _get_bar_position_string(setting.value)
 		# Store currently focused control before rebuild
@@ -592,6 +647,14 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 				print("[UIManager] Marking Library view for rebuild")
 				library_view.mark_for_rebuild("Grid padding changed")
 			print("[UIManager] Library view needs_rebuild after: %s" % str(library_view.needs_rebuild))
+	elif setting.property_name == "library_bar_color":
+		print("[UIManager] Bar color changed to: %s" % str(setting.value))
+		if _bottom_bar:
+			_bottom_bar.set_bar_background_color(setting.value)
+	elif setting.property_name == "library_icon_color":
+		print("[UIManager] Icon color changed to: %s" % str(setting.value))
+		if _bottom_bar:
+			_bottom_bar.set_icon_color(setting.value)
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)

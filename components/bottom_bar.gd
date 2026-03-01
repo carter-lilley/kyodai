@@ -35,11 +35,25 @@ var _v_zoom_slider: VSlider
 var _current_view: String = ""
 var _current_orientation: BarOrientation = BarOrientation.HORIZONTAL
 
+# Background color rect
+var _background_rect: ColorRect = null
+
 func _ready():
 	_find_scene_nodes()
 	_build_both_orientations()
+	_create_background_rect()
 	_connect_signals()
 	_update_nav_buttons()
+
+func _create_background_rect() -> void:
+	"""Create a background ColorRect that fills the entire bar."""
+	_background_rect = ColorRect.new()
+	_background_rect.name = "BackgroundRect"
+	_background_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_background_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Insert at index 0 so it's behind everything
+	add_child(_background_rect)
+	move_child(_background_rect, 0)
 
 func _find_scene_nodes():
 	# Find scene nodes but don't remove NavButtons yet - we'll repurpose them
@@ -307,3 +321,37 @@ func set_zoom_range(min_val: float, max_val: float, step: float):
 	_v_zoom_slider.min_value = min_val
 	_v_zoom_slider.max_value = max_val
 	_v_zoom_slider.step = step
+
+func set_bar_background_color(color: Color) -> void:
+	"""Set the background color of the bottom bar."""
+	print("[BottomBar] Setting bar background color to: ", color)
+	if _background_rect:
+		_background_rect.color = color
+	else:
+		print("[BottomBar] Background rect not ready yet!")
+
+func set_icon_color(color: Color) -> void:
+	"""Set the color for all navigation icons using a shader."""
+	print("[BottomBar] Setting icon color to: ", color)
+	var buttons = [home_button, library_button, downloads_button, settings_button]
+	for button in buttons:
+		if is_instance_valid(button):
+			_apply_icon_color_to_button(button, color)
+			print("[BottomBar] Applied icon color to button: ", button.name)
+		else:
+			print("[BottomBar] Button not valid: ", buttons.find(button))
+
+func _apply_icon_color_to_button(button: TextureButton, color: Color) -> void:
+	"""Apply icon color shader to a texture button."""
+	# Check if button already has our shader material
+	var existing_mat = button.material
+	if existing_mat is ShaderMaterial:
+		# Just update the color parameter
+		existing_mat.set_shader_parameter("icon_color", color)
+	else:
+		# Create new shader material
+		var shader = preload("res://shaders/icon_color.gdshader")
+		var mat = ShaderMaterial.new()
+		mat.shader = shader
+		mat.set_shader_parameter("icon_color", color)
+		button.material = mat

@@ -667,6 +667,44 @@
 	"launch_templates": {
 	  "windows": ["{exe}", "{rom}","--fullscreen"],
 	  "linux": ["{exe}", "{rom}"]
-	}
+	},
+  	"post_install_tasks": [
+  	  {
+  		"type": "download_url",
+  		"urls": {
+  		  "windows": "https://files.lilley.video/other_assets/melonds_bios.zip",
+  		  "linux": "https://files.lilley.video/other_assets/melonds_bios.zip",
+  		  "android": ""
+  		},
+  		"filename": "melonDS_bios.zip",
+  		"extract_to": ".",
+  		"strip_top_directory": false,
+  		"validation": {
+  		  "type": "files",
+  		  "files": ["bios7.bin"]
+  		}
+  	  },
+  	  {
+  		"type": "create_files",
+  		"files": ["melonDS.toml"],
+  		"validation": {
+  		  "type": "files",
+  		  "files": ["melonDS.toml"]
+  		}
+  	  },
+  	  {
+  		"type": "edit_file",
+  		"file": "melonDS.toml",
+  		"edits": [
+  		  {
+  			"content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/biosdsi9.bin\"\nBIOS7Path = \"{emulator_dir}/biosdsi7.bin\"\nNANDPath = \"{emulator_dir}/nand.bin\""
+  		  }
+  		],
+  		"validation": {
+  		  "type": "files",
+  		  "files": ["melonDS.toml"]
+  		}
+  	  }
+  	]
   }
 }

@@ -1,62 +1,136 @@
 class_name LibraryBackground
 extends Control
 
-@onready var color_rect: ColorRect = $ColorRect
-
-var _material: ShaderMaterial = null
-
-# XMB Shader Parameters (exposed for easy access)
-@export var time_scale: float = 1.0:
-	set(value):
-		time_scale = value
-		if _material:
-			_material.set_shader_parameter("time_scale", value)
-
-@export var show_dust: bool = true:
-	set(value):
-		show_dust = value
-		if _material:
-			_material.set_shader_parameter("show_dust", value)
-
-@export var wave_intensity: float = 1.0:
-	set(value):
-		wave_intensity = value
-		if _material:
-			_material.set_shader_parameter("wave_intensity", value)
-
-@export var star_threshold: float = 0.99:
-	set(value):
-		star_threshold = value
-		if _material:
-			_material.set_shader_parameter("star_threshold", value)
+var _current_effect: BackgroundEffect = null
+var _background_state: BackgroundState = null
 
 func _ready():
-	# Get the shader material
-	if color_rect and color_rect.material is ShaderMaterial:
-		_material = color_rect.material
-		# Apply initial values
-		_material.set_shader_parameter("time_scale", time_scale)
-		_material.set_shader_parameter("show_dust", show_dust)
-		_material.set_shader_parameter("wave_intensity", wave_intensity)
-		_material.set_shader_parameter("star_threshold", star_threshold)
-	else:
-		push_error("[LibraryBackground] No material found!")
+	# Wait for next frame to initialize
+	call_deferred("_initialize_background")
+	resized.connect(_on_resized)
 
-# Legacy method for backward compatibility with the solid color shader
-func set_background_color(color: Color) -> void:
-	# This method is kept for backward compatibility but doesn't apply to XMB shader
-	# The XMB shader has its own colors built-in
+func _on_resized() -> void:
+	# Update effect size when LibraryBackground resizes
+	if _current_effect:
+		_current_effect.size = size
+
+func _initialize_background() -> void:
+	# Get initial config from settings if available
+	var config = _get_initial_config()
+	_background_state = BackgroundState.new(config)
+	_background_state.effect_changed.connect(_on_effect_changed)
+	_background_state.setting_changed.connect(_on_setting_changed)
+	_apply_background_state()
+
+func _get_initial_config() -> Dictionary:
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("library_background_config")
+		if config_setting and config_setting.value is Dictionary:
+			return config_setting.value.duplicate()
+	
+	# Default config
+	return {
+		"effect_id": "xmb",
+		"settings": {
+			"time_scale": 1.0,
+			"show_dust": true,
+			"wave_intensity": 1.0,
+			"star_threshold": 0.99,
+			"color_top_left": Color(0.7, 0.2, 0.2, 1.0),
+			"color_top_right": Color(0.4, 0.1, 0.1, 1.0),
+			"color_bottom_left": Color(0.45, 0.1, 0.1, 1.0),
+			"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
+			"wave_blend_color": Color.WHITE
+		}
+	}
+
+func _apply_background_state() -> void:
+	if not _background_state:
+		return
+	
+	# Remove current effect if any
+	if _current_effect:
+		_current_effect.queue_free()
+		_current_effect = null
+	
+	# Create and add new effect
+	_current_effect = _create_effect(_background_state.effect_id)
+	if _current_effect:
+		add_child(_current_effect)
+		_current_effect.layout_mode = 1  # Required for anchors to work
+		_current_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_current_effect.visible = true
+		# Force size to match parent immediately
+		_current_effect.size = size
+		_current_effect.initialize(_background_state.effect_settings)
+
+func _create_effect(effect_id: String) -> BackgroundEffect:
+	match effect_id:
+		"solid":
+			return SolidBackgroundEffect.new()
+		"xmb":
+			return XmbBackgroundEffect.new()
+		_:
+			return XmbBackgroundEffect.new()
+
+func _on_effect_changed(_new_effect_id: String) -> void:
+	_apply_background_state()
+
+func _on_setting_changed(setting_name: String, value: Variant) -> void:
+	if _current_effect:
+		_current_effect.update_settings(_background_state.effect_settings)
+
+# Public API for updating background configuration
+func set_background_config(config: Dictionary) -> void:
+	if not _background_state:
+		_background_state = BackgroundState.new(config)
+		_background_state.effect_changed.connect(_on_effect_changed)
+		_background_state.setting_changed.connect(_on_setting_changed)
+		_apply_background_state()
+	else:
+		var old_effect_id = _background_state.effect_id
+		_background_state.effect_id = config.get("effect_id", "xmb")
+		_background_state.effect_settings = config.get("settings", {}).duplicate()
+		
+		if _background_state.effect_id != old_effect_id:
+			_apply_background_state()
+		else:
+			# Same effect, just update settings
+			if _current_effect:
+				_current_effect.update_settings(_background_state.effect_settings)
+
+func get_background_config() -> Dictionary:
+	if _background_state:
+		return _background_state.get_config()
+	return _get_initial_config()
+
+# Legacy method for backward compatibility
+func set_background_color(_color: Color) -> void:
+	# This is now handled by the solid background effect
 	pass
 
-# XMB-specific control methods
-func set_time_scale(value: float) -> void:
-	time_scale = value
+# Get available effect IDs for dropdown
+static func get_available_effects() -> Array[String]:
+	return ["solid", "xmb"]
 
-func set_show_dust(value: bool) -> void:
-	show_dust = value
+# Get effect display name
+static func get_effect_display_name(effect_id: String) -> String:
+	match effect_id:
+		"solid": return "Solid Color"
+		"xmb": return "XMB Animated"
+		_: return "Unknown"
 
-func set_wave_intensity(value: float) -> void:
-	wave_intensity = value
-
-func set_star_threshold(value: float) -> void:
-	star_threshold = value
+# Get settings schema for an effect
+static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
+	var effect: BackgroundEffect
+	match effect_id:
+		"solid":
+			effect = SolidBackgroundEffect.new()
+		"xmb":
+			effect = XmbBackgroundEffect.new()
+		_:
+			effect = XmbBackgroundEffect.new()
+	
+	var schema = effect.get_settings_schema()
+	effect.queue_free()
+	return schema
