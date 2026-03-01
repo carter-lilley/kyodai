@@ -3,6 +3,7 @@ extends MarginContainer
 
 signal nav_button_pressed(view_name: String)
 signal zoom_changed(value: float)
+signal zoom_changed_finished(value: float)
 
 enum BarOrientation {
 	HORIZONTAL,
@@ -186,6 +187,7 @@ func _setup_zoom_slider(slider: Slider):
 	slider.focus_mode = Control.FOCUS_NONE
 	# Size flags will be set by the calling function to match container needs
 	slider.value_changed.connect(_on_zoom_value_changed)
+	slider.drag_ended.connect(_on_zoom_drag_ended)
 
 func _reparent_buttons_to(container: BoxContainer):
 	var buttons = [home_button, library_button, downloads_button, settings_button]
@@ -221,12 +223,12 @@ func set_orientation(orientation: int) -> void:
 	_horizontal_container.visible = _current_orientation == BarOrientation.HORIZONTAL
 	_vertical_container.visible = _current_orientation == BarOrientation.VERTICAL
 	
-	# Sync zoom value before reparenting
+	# Sync zoom value before reparenting (without triggering signals)
 	if _current_orientation == BarOrientation.HORIZONTAL:
-		_h_zoom_slider.value = _v_zoom_slider.value
+		_h_zoom_slider.set_value_no_signal(_v_zoom_slider.value)
 		_reparent_buttons_to(_h_nav_buttons)
 	else:
-		_v_zoom_slider.value = _h_zoom_slider.value
+		_v_zoom_slider.set_value_no_signal(_h_zoom_slider.value)
 		_reparent_buttons_to(_v_nav_buttons)
 	
 	_update_zoom_visibility()
@@ -240,12 +242,21 @@ func _on_nav_pressed(view_name: String):
 		nav_button_pressed.emit(view_name)
 
 func _on_zoom_value_changed(value: float):
-	# Sync zoom values between orientations
+	# Sync zoom values between orientations (without triggering signals)
 	if _current_orientation == BarOrientation.HORIZONTAL:
-		_v_zoom_slider.value = value
+		_v_zoom_slider.set_value_no_signal(value)
 	else:
-		_h_zoom_slider.value = value
+		_h_zoom_slider.set_value_no_signal(value)
 	zoom_changed.emit(value)
+
+func _on_zoom_drag_ended(value_changed: bool):
+	if value_changed:
+		var final_value: float
+		if _current_orientation == BarOrientation.HORIZONTAL:
+			final_value = _h_zoom_slider.value
+		else:
+			final_value = _v_zoom_slider.value
+		zoom_changed_finished.emit(final_value)
 
 func set_current_view(view_name: String):
 	_current_view = view_name
@@ -280,8 +291,8 @@ func get_status_text() -> String:
 		return _v_status_label.text if _v_status_label else ""
 
 func set_zoom_value(value: float):
-	_h_zoom_slider.value = value
-	_v_zoom_slider.value = value
+	_h_zoom_slider.set_value_no_signal(value)
+	_v_zoom_slider.set_value_no_signal(value)
 
 func get_zoom_value() -> float:
 	if _current_orientation == BarOrientation.HORIZONTAL:

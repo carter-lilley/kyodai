@@ -22,7 +22,6 @@ func _ready():
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
-	SettingsManager.setting_changed.connect(_on_setting_changed)
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
@@ -137,6 +136,8 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 
 func rebuild_grid() -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
+	print("[HomeView] rebuild_grid() called")
+	_update_grid_orientation()
 	games_grid.refresh_dimensions()
 	_load_total_count(true)
 
@@ -222,7 +223,7 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	)
 
 func on_view_show():
-	view_shown.emit()
+	super.on_view_show()
 	# Refresh the view when shown (in case downloads happened while away)
 	if not _is_loading:
 		_load_total_count(true, false)
@@ -278,9 +279,32 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"hide":
 			print("[HomeView] Hide requested for game: ", romm_id)
 
-func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if setting.property_name == "library_vertical_layout":
-		_update_grid_orientation()
+func perform_rebuild() -> void:
+	"""Override: Perform the actual grid rebuild when view becomes visible."""
+	print("[HomeView] perform_rebuild() called, deferring to ensure valid size...")
+	print("[HomeView] Current size: ", size)
+	print("[HomeView] Visible: ", visible)
+	call_deferred("_do_rebuild")
+
+func _do_rebuild() -> void:
+	print("[HomeView] _do_rebuild() executing")
+	print("[HomeView] Size now: ", size)
+	print("[HomeView] Visible now: ", visible)
+	
+	# Ensure we have valid dimensions before rebuilding
+	if size.x <= 0 or size.y <= 0:
+		print("[HomeView] WARNING: Invalid size detected, deferring again...")
+		call_deferred("_do_rebuild")
+		return
+	
+	if games_grid:
+		print("[HomeView] games_grid size: ", games_grid.size)
+		print("[HomeView] games_grid visible: ", games_grid.visible)
+		# Force a layout recalculation with the new valid size
+		games_grid.queue_redraw()
+	
+	rebuild_grid()
+	print("[HomeView] Rebuild complete")
 
 func _update_grid_orientation() -> void:
 	if SettingsManager:

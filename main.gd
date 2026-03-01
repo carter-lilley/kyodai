@@ -26,6 +26,7 @@ func _ready():
 		print("[Main] BottomBar found, connecting signals")
 		bottom_bar.nav_button_pressed.connect(_on_nav_button_pressed)
 		bottom_bar.zoom_changed.connect(_on_zoom_changed)
+		bottom_bar.zoom_changed_finished.connect(_on_zoom_changed_finished)
 		print("[Main] Zoom signal connected: ", bottom_bar.zoom_changed.is_connected(_on_zoom_changed))
 	else:
 		push_error("[Main] BottomBar not found!")
@@ -35,12 +36,43 @@ func _ready():
 	
 	# Set initial view
 	_update_bottom_bar_for_view("Home")
+	
+	# Load and apply saved zoom setting (wait for views to be ready)
+	await get_tree().process_frame
+	_load_and_apply_saved_zoom()
 
 func _on_nav_button_pressed(view_name: String):
 	UIManager.switch_to_tab(view_name)
 
 func _on_tab_changed(view_name: String):
 	_update_bottom_bar_for_view(view_name)
+	
+	# Apply saved zoom to newly visible view (deferred to allow layout)
+	if view_name in ["Home", "Library"]:
+		_apply_zoom_to_view_deferred(view_name)
+
+func _apply_zoom_to_view_deferred(view_name: String) -> void:
+	var view = UIManager.get_view(view_name)
+	if not view:
+		return
+	
+	var grid = _get_view_grid(view)
+	if not grid or not SettingsManager:
+		return
+	
+	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+	if not zoom_setting:
+		return
+	
+	# Keep checking until grid has valid dimensions
+	if grid.size.x <= 0 or grid.size.y <= 0:
+		print("[Main] Grid for %s not ready yet (size: %s), deferring..." % [view_name, str(grid.size)])
+		await get_tree().process_frame
+		_apply_zoom_to_view_deferred(view_name)
+		return
+	
+	print("[Main] Applying saved zoom to %s: %s (grid size: %s)" % [view_name, zoom_setting.value, str(grid.size)])
+	grid.target_card_width_ratio = zoom_setting.value
 
 func _update_bottom_bar_for_view(view_name: String):
 	bottom_bar.set_current_view(view_name)
@@ -53,22 +85,63 @@ func _update_bottom_bar_for_view(view_name: String):
 			bottom_bar.set_zoom_value(games_grid.target_card_width_ratio)
 
 func _on_zoom_changed(value: float):
+	"""Called continuously while dragging - updates UI only."""
 	print("[Main] Zoom changed to: ", value)
-	# Apply zoom to current view's grid
+	# Apply zoom to current view's grid (real-time preview)
 	var current_view = UIManager.get_current_view()
-	print("[Main] Current view: ", current_view)
+	print("[Main] Current view from UIManager: ", current_view.view_name if current_view else "null")
 	if current_view:
 		var games_grid = _get_view_grid(current_view)
-		print("[Main] Games grid found: ", games_grid != null)
 		if games_grid:
-			print("[Main] Setting target_card_width_ratio to: ", value)
+			print("[Main] Setting target_card_width_ratio to: ", value, " for view: ", current_view.view_name)
 			games_grid.target_card_width_ratio = value
+
+func _on_zoom_changed_finished(value: float):
+	"""Called when drag ends - saves the setting."""
+	print("[Main] Zoom drag finished at: ", value)
+	# Save zoom to settings (only when drag ends)
+	if SettingsManager:
+		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+		if zoom_setting:
+			SettingsManager.set_setting(value, zoom_setting)
+			SettingsManager.save_settings()
+			print("[Main] Saved zoom setting: ", value)
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Safely get the games grid from a view
 	if view.has_node("VirtualScrollGridContainer"):
 		return view.get_node("VirtualScrollGridContainer")
 	return null
+
+func _load_and_apply_saved_zoom() -> void:
+	"""Load saved zoom from settings and apply to visible grids."""
+	print("[Main] _load_and_apply_saved_zoom() called")
+	
+	if not SettingsManager:
+		print("[Main] ERROR: SettingsManager is null!")
+		return
+	
+	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+	if not zoom_setting:
+		print("[Main] No saved zoom setting found, using default")
+		return
+	
+	var saved_zoom = zoom_setting.value
+	print("[Main] Loading saved zoom: ", saved_zoom)
+	
+	# Only apply to currently visible view (Home is initial view)
+	# Library will get zoom applied when it becomes visible
+	var home_view = UIManager.get_view("Home")
+	if home_view and home_view.visible:
+		var home_grid = _get_view_grid(home_view)
+		if home_grid:
+			print("[Main] Applying zoom to visible Home grid: ", saved_zoom)
+			home_grid.target_card_width_ratio = saved_zoom
+	
+	# Set bottom bar slider to saved value
+	if bottom_bar:
+		print("[Main] Setting bottom bar zoom slider to: ", saved_zoom)
+		bottom_bar.set_zoom_value(saved_zoom)
 
 func set_status_text(text: String):
 	if is_instance_valid(bottom_bar):

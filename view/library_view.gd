@@ -22,7 +22,6 @@ func _ready():
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
-	SettingsManager.setting_changed.connect(_on_setting_changed)
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
@@ -136,7 +135,7 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 
 func rebuild_grid() -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
-	# Refresh dimensions based on current orientation
+	_update_grid_orientation()
 	games_grid.refresh_dimensions()
 	# Force grid to recalculate layout
 	_load_total_count(true)
@@ -247,7 +246,7 @@ func _on_sync_completed(success: bool, message: String):
 		_update_status("Sync failed: " + message)
 
 func on_view_show():
-	view_shown.emit()
+	super.on_view_show()
 
 func on_view_hide():
 	view_hidden.emit()
@@ -272,9 +271,32 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"hide":
 			print("[LibraryView] Hide requested for game: ", romm_id)
 
-func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if setting.property_name == "library_vertical_layout":
-		_update_grid_orientation()
+func perform_rebuild() -> void:
+	"""Override: Perform the actual grid rebuild when view becomes visible."""
+	print("[LibraryView] perform_rebuild() called, deferring to ensure valid size...")
+	print("[LibraryView] Current size: ", size)
+	print("[LibraryView] Visible: ", visible)
+	call_deferred("_do_rebuild")
+
+func _do_rebuild() -> void:
+	print("[LibraryView] _do_rebuild() executing")
+	print("[LibraryView] Size now: ", size)
+	print("[LibraryView] Visible now: ", visible)
+	
+	# Ensure we have valid dimensions before rebuilding
+	if size.x <= 0 or size.y <= 0:
+		print("[LibraryView] WARNING: Invalid size detected, deferring again...")
+		call_deferred("_do_rebuild")
+		return
+	
+	if games_grid:
+		print("[LibraryView] games_grid size: ", games_grid.size)
+		print("[LibraryView] games_grid visible: ", games_grid.visible)
+		# Force a layout recalculation with the new valid size
+		games_grid.queue_redraw()
+	
+	rebuild_grid()
+	print("[LibraryView] Rebuild complete")
 
 func _update_grid_orientation() -> void:
 	if SettingsManager:

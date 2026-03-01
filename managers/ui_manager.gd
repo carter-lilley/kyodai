@@ -473,6 +473,7 @@ func _setup_library_appearance() -> void:
 	_tab_container.add_theme_stylebox_override("panel", style)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	print("[UIManager] _on_setting_changed called for: %s with value: %s" % [setting.property_name, str(_value)])
 	if setting.property_name == "library_background_color":
 		_setup_library_appearance()
 	elif setting.property_name == "library_bottom_bar_position":
@@ -487,17 +488,73 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# Update hero image visibility when setting changes
 		var current_view_name = _current_view.view_name if _current_view else ""
 		_update_hero_visibility(current_view_name)
+	elif setting.property_name == "library_vertical_layout":
+		# Rebuild visible views immediately, mark hidden views for rebuild
+		if _views.has("Home"):
+			var home_view = _views["Home"]
+			if is_current_view("Home"):
+				home_view.rebuild_grid()
+			else:
+				home_view.mark_for_rebuild("Vertical layout changed")
+		if _views.has("Library"):
+			var library_view = _views["Library"]
+			if is_current_view("Library"):
+				library_view.rebuild_grid()
+			else:
+				library_view.mark_for_rebuild("Vertical layout changed")
+	elif setting.property_name == "card_effect_config":
+		# Rebuild visible views immediately, mark hidden views for rebuild
+		if _views.has("Home"):
+			var home_view = _views["Home"]
+			if is_current_view("Home"):
+				home_view.rebuild_grid()
+			else:
+				home_view.mark_for_rebuild("Card effects changed")
+		if _views.has("Library"):
+			var library_view = _views["Library"]
+			if is_current_view("Library"):
+				library_view.rebuild_grid()
+			else:
+				library_view.mark_for_rebuild("Card effects changed")
+	elif setting.property_name == "library_grid_padding":
+		print("[UIManager] Grid padding changed to: %d" % setting.value)
+		print("[UIManager] Current view: %s" % (_current_view.view_name if _current_view else "none"))
+		# Rebuild visible views immediately, mark hidden views for rebuild
+		if _views.has("Home"):
+			var home_view = _views["Home"]
+			print("[UIManager] Home view needs_rebuild before: %s" % str(home_view.needs_rebuild))
+			if is_current_view("Home"):
+				print("[UIManager] Rebuilding Home view immediately")
+				home_view.rebuild_grid()
+			else:
+				print("[UIManager] Marking Home view for rebuild")
+				home_view.mark_for_rebuild("Grid padding changed")
+			print("[UIManager] Home view needs_rebuild after: %s" % str(home_view.needs_rebuild))
+		if _views.has("Library"):
+			var library_view = _views["Library"]
+			print("[UIManager] Library view needs_rebuild before: %s" % str(library_view.needs_rebuild))
+			if is_current_view("Library"):
+				print("[UIManager] Rebuilding Library view immediately")
+				library_view.rebuild_grid()
+			else:
+				print("[UIManager] Marking Library view for rebuild")
+				library_view.mark_for_rebuild("Grid padding changed")
+			print("[UIManager] Library view needs_rebuild after: %s" % str(library_view.needs_rebuild))
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)
+	print("[UIManager] _on_tab_changed called for tab: %s (index: %d)" % [tab_title, tab_idx])
 	
 	# Hide current view
 	if _current_view:
+		print("[UIManager] Hiding current view: %s" % _current_view.view_name)
 		_current_view.on_view_hide()
 	
 	# Show new view
 	if _views.has(tab_title):
+		print("[UIManager] Showing new view: %s" % tab_title)
 		_current_view = _views[tab_title]
+		print("[UIManager] Calling on_view_show() for: %s" % _current_view.view_name)
 		_current_view.on_view_show()
 		
 		# Update hero image visibility based on view

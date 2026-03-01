@@ -28,7 +28,9 @@ signal batch_progress_changed(progress: float)
 
 const BASE_CARD_WIDTH: float = 202.0
 const BASE_CARD_HEIGHT: float = 270.0
-const GRID_SEPARATION: int = 10
+
+# Grid separation (padding) - loaded from settings, defaults to 10
+var grid_separation: int = 10
 
 # Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
 var target_card_width_ratio: float = 0.15:
@@ -75,11 +77,38 @@ var _cache_access_order: Array[int] = []
 func _ready():
 	_setup_ui()
 	resized.connect(_on_resized)
-	if SettingsManager:
-		SettingsManager.settings_saved.connect(_on_settings_saved)
+	# Load initial grid separation from settings
+	# Use call_deferred to ensure SettingsManager is fully initialized
+	call_deferred("_update_grid_separation_from_settings")
+	call_deferred("_recalculate_layout")
 
 func _on_resized():
 	_recalculate_layout()
+
+func _update_grid_separation_from_settings() -> void:
+	if not SettingsManager:
+		print("[VScrollGrid] ERROR: SettingsManager not available")
+		return
+	var setting = SettingsManager.get_setting("library_grid_padding")
+	if setting:
+		print("[VScrollGrid] Got setting, value=%s, type=%s" % [str(setting.value), typeof(setting.value)])
+		if setting.value is int or setting.value is float:
+			grid_separation = int(setting.value)
+			print("[VScrollGrid] Loaded grid_separation: %d" % grid_separation)
+		else:
+			print("[VScrollGrid] WARNING: Setting value is not int or float, using default")
+			grid_separation = 10
+	else:
+		print("[VScrollGrid] ERROR: Setting 'library_grid_padding' not found, using default")
+		grid_separation = 10
+	
+	# Apply to FlowContainer if it exists
+	if _flow_container:
+		_flow_container.add_theme_constant_override("h_separation", grid_separation)
+		_flow_container.add_theme_constant_override("v_separation", grid_separation)
+		print("[VScrollGrid] Applied separation to FlowContainer: %d" % grid_separation)
+	else:
+		print("[VScrollGrid] WARNING: _flow_container is null")
 
 func _calculate_zoom() -> float:
 	var base_dims = _get_base_dimensions()
@@ -94,19 +123,27 @@ func _calculate_zoom() -> float:
 	# zoom^2 = target_card_area / base_area
 	return sqrt(target_card_area / base_area)
 
-func _on_settings_saved():
-	_recalculate_dimensions()
-	_refresh_buffer()
-	call_deferred("_recalculate_layout")
-
 func _recalculate_layout():
+	print("[VScrollGrid] _recalculate_layout() called")
+	print("[VScrollGrid] Container size: %s, visible: %s" % [str(size), visible])
+	
 	if not _flow_container or not _scroll_container:
+		print("[VScrollGrid] ERROR: Missing containers - _flow_container: %s, _scroll_container: %s" % [_flow_container != null, _scroll_container != null])
 		return
 	
 	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions()
-	item_width = (base_dims.x * current_zoom) + GRID_SEPARATION
-	item_height = (base_dims.y * current_zoom) + GRID_SEPARATION
+	item_width = (base_dims.x * current_zoom) + grid_separation
+	item_height = (base_dims.y * current_zoom) + grid_separation
+	
+	print("[VScrollGrid] Calculated item_width: %.2f, item_height: %.2f" % [item_width, item_height])
+	print("[VScrollGrid] Active cards: %d" % _active_cards.size())
+	
+	# Ensure FlowContainer separation is up to date
+	_flow_container.add_theme_constant_override("h_separation", grid_separation)
+	_flow_container.add_theme_constant_override("v_separation", grid_separation)
+	_flow_container.queue_sort()
+	print("[VScrollGrid] Updated FlowContainer separation to: %d" % grid_separation)
 	
 	_update_layout()
 	_update_margin()
@@ -177,8 +214,8 @@ func _setup_ui():
 	# FlowContainer shrinks to fit its content (active cards only)
 	_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_flow_container.add_theme_constant_override("h_separation", GRID_SEPARATION)
-	_flow_container.add_theme_constant_override("v_separation", GRID_SEPARATION)
+	_flow_container.add_theme_constant_override("h_separation", grid_separation)
+	_flow_container.add_theme_constant_override("v_separation", grid_separation)
 	_center_container.add_child(_flow_container)
 	
 	if debug_mode:
@@ -206,11 +243,17 @@ func _get_base_dimensions() -> Vector2:
 func _recalculate_dimensions():
 	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions()
-	item_width = (base_dims.x * current_zoom) + GRID_SEPARATION
-	item_height = (base_dims.y * current_zoom) + GRID_SEPARATION
+	item_width = (base_dims.x * current_zoom) + grid_separation
+	item_height = (base_dims.y * current_zoom) + grid_separation
 
 func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change)."""
+	print("[VScrollGrid] refresh_dimensions() called, current grid_separation: %d" % grid_separation)
+	
+	# Update grid separation from settings
+	_update_grid_separation_from_settings()
+	print("[VScrollGrid] After _update_grid_separation_from_settings(), grid_separation: %d" % grid_separation)
+	
 	var current_zoom = _calculate_zoom()
 	_recalculate_dimensions()
 	_recalculate_layout()
@@ -271,17 +314,27 @@ func set_total_count(count: int, preserve_cache: bool = false):
 		_refresh_buffer()
 
 func _update_layout():
+	print("[VScrollGrid] _update_layout() called")
 	var items_per_line = _get_items_per_line()
+	print("[VScrollGrid] items_per_line: %d" % items_per_line)
+	
 	if vertical:
-		var card_width = item_width - GRID_SEPARATION
-		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * GRID_SEPARATION
+		var card_width = item_width - grid_separation
+		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * grid_separation
 		_flow_container.custom_minimum_size.x = row_width
+		print("[VScrollGrid] Vertical layout - card_width: %.2f, row_width: %.2f" % [card_width, row_width])
+		print("[VScrollGrid] FlowContainer min_size.x set to: %.2f" % row_width)
 		# Height will be set in _update_margin based on active cards
 	else:
-		var card_height = item_height - GRID_SEPARATION
-		var col_height = items_per_line * card_height + max(0, items_per_line - 1) * GRID_SEPARATION
+		var card_height = item_height - grid_separation
+		var col_height = items_per_line * card_height + max(0, items_per_line - 1) * grid_separation
 		_flow_container.custom_minimum_size.y = col_height
+		print("[VScrollGrid] Horizontal layout - card_height: %.2f, col_height: %.2f" % [card_height, col_height])
+		print("[VScrollGrid] FlowContainer min_size.y set to: %.2f" % col_height)
 		# Width will be set in _update_margin based on active cards
+	
+	print("[VScrollGrid] FlowContainer child count: %d" % _flow_container.get_child_count())
+	print("[VScrollGrid] FlowContainer size: %s" % str(_flow_container.size))
 
 func _initial_load():
 	var items_per_line = _get_items_per_line()
@@ -604,19 +657,19 @@ func _update_margin():
 	var items_per_line = _get_items_per_line()
 	
 	if vertical:
-		var card_height = item_height - GRID_SEPARATION
+		var card_height = item_height - grid_separation
 		
 		# Calculate virtual space before first card
 		var lines_before = first_idx / items_per_line
-		var margin_top = lines_before * card_height + max(0, lines_before - 1) * GRID_SEPARATION
+		var margin_top = lines_before * card_height + max(0, lines_before - 1) * grid_separation
 		
 		# Calculate space for active cards
 		var active_lines = ceili(float(_active_cards.size()) / items_per_line)
-		var flow_height = active_lines * card_height + max(0, active_lines - 1) * GRID_SEPARATION
+		var flow_height = active_lines * card_height + max(0, active_lines - 1) * grid_separation
 		
 		# Calculate virtual space after last card
 		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
-		var margin_bottom = lines_after * card_height + max(0, lines_after - 1) * GRID_SEPARATION
+		var margin_bottom = lines_after * card_height + max(0, lines_after - 1) * grid_separation
 		
 		_margin_container.add_theme_constant_override("margin_top", int(margin_top))
 		_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
@@ -625,19 +678,19 @@ func _update_margin():
 		if debug_mode:
 			print("[VScrollGrid] _update_margin: margin_top=%d, flow_height=%d, margin_bottom=%d, total=%d" % [margin_top, flow_height, margin_bottom, margin_top + flow_height + margin_bottom])
 	else:
-		var card_width = item_width - GRID_SEPARATION
+		var card_width = item_width - grid_separation
 		
 		# Calculate virtual space before first card
 		var lines_before = first_idx / items_per_line
-		var margin_left = lines_before * card_width + max(0, lines_before - 1) * GRID_SEPARATION
+		var margin_left = lines_before * card_width + max(0, lines_before - 1) * grid_separation
 		
 		# Calculate space for active cards
 		var active_lines = ceili(float(_active_cards.size()) / items_per_line)
-		var flow_width = active_lines * card_width + max(0, active_lines - 1) * GRID_SEPARATION
+		var flow_width = active_lines * card_width + max(0, active_lines - 1) * grid_separation
 		
 		# Calculate virtual space after last card
 		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
-		var margin_right = lines_after * card_width + max(0, lines_after - 1) * GRID_SEPARATION
+		var margin_right = lines_after * card_width + max(0, lines_after - 1) * grid_separation
 		
 		_margin_container.add_theme_constant_override("margin_left", int(margin_left))
 		_margin_container.add_theme_constant_override("margin_right", int(margin_right))
