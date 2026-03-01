@@ -48,4 +48,6 @@ const Type = SettingsVar.SettingType
 @export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")
 @export var library_bottom_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Bottom Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
+@export var library_grid_margin_x := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin X", "Left/right margin around the grid in pixels", 0.0, 300.0, 1.0)
+@export var library_grid_margin_y := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin Y", "Top/bottom margin around the grid in pixels", 0.0, 300.0, 1.0)
 @export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.15, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)

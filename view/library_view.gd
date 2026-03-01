@@ -3,7 +3,8 @@ extends View
 
 signal hero_game_changed(game: GameResource)
 
-@onready var games_grid: VirtualScrollGridContainer = $VirtualScrollGridContainer
+@onready var games_grid: VirtualScrollGridContainer = $MarginContainer/VirtualScrollGridContainer
+@onready var margin_container: MarginContainer = $MarginContainer
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -22,6 +23,13 @@ func _ready():
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
+	
+	# Setup grid margins from settings
+	_update_grid_margins()
+	
+	# Connect to settings changes for grid margins
+	if SettingsManager:
+		SettingsManager.setting_changed.connect(_on_setting_changed)
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
@@ -326,3 +334,35 @@ func _update_grid_orientation() -> void:
 		var vertical_setting = SettingsManager.get_setting("library_vertical_layout")
 		if vertical_setting:
 			games_grid.vertical = vertical_setting.value
+
+func _update_grid_margins() -> void:
+	"""Update the grid margins from settings."""
+	if not margin_container:
+		return
+	
+	var margin_x = 0
+	var margin_y = 0
+	
+	if SettingsManager:
+		var margin_x_setting = SettingsManager.get_setting("library_grid_margin_x")
+		if margin_x_setting:
+			margin_x = int(margin_x_setting.value)
+		
+		var margin_y_setting = SettingsManager.get_setting("library_grid_margin_y")
+		if margin_y_setting:
+			margin_y = int(margin_y_setting.value)
+	
+	margin_container.add_theme_constant_override("margin_left", margin_x)
+	margin_container.add_theme_constant_override("margin_right", margin_x)
+	margin_container.add_theme_constant_override("margin_top", margin_y)
+	margin_container.add_theme_constant_override("margin_bottom", margin_y)
+	
+	print("[LibraryView] Grid margins updated: x=%d, y=%d" % [margin_x, margin_y])
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	"""Handle settings changes."""
+	if setting.property_name in ["library_grid_margin_x", "library_grid_margin_y"]:
+		print("[LibraryView] Grid margin setting changed, updating margins...")
+		_update_grid_margins()
+		# Also refresh the grid layout to recalculate with new margins
+		games_grid.refresh_dimensions()
