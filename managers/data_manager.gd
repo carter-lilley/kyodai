@@ -1154,7 +1154,7 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	game.last_updated = row.get("last_updated", "")
 	game.description = row.get("description", "")
 	var genres: Array[String] = []
-	if row["genres"] and row["genres"] != "":
+	if row.get("genres") and row.get("genres") != "":
 		for g in row["genres"].split(","):
 			genres.append(g)
 	game.genres = genres

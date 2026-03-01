@@ -254,6 +254,12 @@ func refresh_dimensions() -> void:
 	_update_grid_separation_from_settings()
 	print("[VScrollGrid] After _update_grid_separation_from_settings(), grid_separation: %d" % grid_separation)
 	
+	# Reset FlowContainer's custom_minimum_size to force recalculation with current viewport size
+	# This fixes issues where layout was calculated while view was hidden (size=0)
+	if _flow_container:
+		_flow_container.custom_minimum_size = Vector2(0, 0)
+		print("[VScrollGrid] Reset FlowContainer custom_minimum_size")
+	
 	var current_zoom = _calculate_zoom()
 	_recalculate_dimensions()
 	_recalculate_layout()

@@ -52,6 +52,7 @@ func _on_tab_changed(view_name: String):
 		_apply_zoom_to_view_deferred(view_name)
 
 func _apply_zoom_to_view_deferred(view_name: String) -> void:
+	"""Apply saved zoom to the specified view when it becomes visible."""
 	var view = UIManager.get_view(view_name)
 	if not view:
 		return
@@ -85,16 +86,16 @@ func _update_bottom_bar_for_view(view_name: String):
 			bottom_bar.set_zoom_value(games_grid.target_card_width_ratio)
 
 func _on_zoom_changed(value: float):
-	"""Called continuously while dragging - updates UI only."""
+	"""Called continuously while dragging - updates both views for parity."""
 	print("[Main] Zoom changed to: ", value)
-	# Apply zoom to current view's grid (real-time preview)
-	var current_view = UIManager.get_current_view()
-	print("[Main] Current view from UIManager: ", current_view.view_name if current_view else "null")
-	if current_view:
-		var games_grid = _get_view_grid(current_view)
-		if games_grid:
-			print("[Main] Setting target_card_width_ratio to: ", value, " for view: ", current_view.view_name)
-			games_grid.target_card_width_ratio = value
+	# Apply zoom to BOTH Home and Library grids for consistent zoom across views
+	for view_name in ["Home", "Library"]:
+		var view = UIManager.get_view(view_name)
+		if view:
+			var games_grid = _get_view_grid(view)
+			if games_grid:
+				print("[Main] Setting target_card_width_ratio to: ", value, " for view: ", view_name)
+				games_grid.target_card_width_ratio = value
 
 func _on_zoom_changed_finished(value: float):
 	"""Called when drag ends - saves the setting."""
@@ -114,7 +115,7 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	return null
 
 func _load_and_apply_saved_zoom() -> void:
-	"""Load saved zoom from settings and apply to visible grids."""
+	"""Load saved zoom from settings and apply to both grids for parity."""
 	print("[Main] _load_and_apply_saved_zoom() called")
 	
 	if not SettingsManager:
@@ -129,14 +130,14 @@ func _load_and_apply_saved_zoom() -> void:
 	var saved_zoom = zoom_setting.value
 	print("[Main] Loading saved zoom: ", saved_zoom)
 	
-	# Only apply to currently visible view (Home is initial view)
-	# Library will get zoom applied when it becomes visible
-	var home_view = UIManager.get_view("Home")
-	if home_view and home_view.visible:
-		var home_grid = _get_view_grid(home_view)
-		if home_grid:
-			print("[Main] Applying zoom to visible Home grid: ", saved_zoom)
-			home_grid.target_card_width_ratio = saved_zoom
+	# Apply to BOTH Home and Library views for consistent zoom across views
+	for view_name in ["Home", "Library"]:
+		var view = UIManager.get_view(view_name)
+		if view:
+			var grid = _get_view_grid(view)
+			if grid:
+				print("[Main] Applying zoom to %s grid: %s" % [view_name, saved_zoom])
+				grid.target_card_width_ratio = saved_zoom
 	
 	# Set bottom bar slider to saved value
 	if bottom_bar:
