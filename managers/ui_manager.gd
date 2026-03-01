@@ -25,6 +25,10 @@ const HERO_SIZE_RATIO = 0.33
 # Hero image management
 var _hero_image: HeroImage = null
 
+# Library background management
+var _library_background: LibraryBackground = null
+var _content_wrapper: Control = null
+
 # Modal management
 var _active_modal: Modal = null
 var _modal_context: Dictionary = {}
@@ -50,6 +54,9 @@ func initialize(tab_container: TabContainer, layout_container: BoxContainer, bot
 	_layout_container = layout_container
 	_root_control = layout_container.get_parent()
 	_bottom_bar = bottom_bar
+	
+	# Create LibraryBackground first (before layout setup)
+	_setup_library_background()
 	
 	# Setup layout based on current setting (this creates MainVBox)
 	_setup_layout()
@@ -174,6 +181,36 @@ func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
 	
 	print("[UIManager] HeroImage setup complete")
 
+func _setup_library_background() -> void:
+	"""Create and setup the shared LibraryBackground instance."""
+	if _library_background:
+		return
+	
+	var background_scene = preload("res://components/library_background.tscn")
+	_library_background = background_scene.instantiate()
+	_library_background.name = "LibraryBackground"
+	
+	# Don't add to any parent yet - _setup_layout() will add it to ContentWrapper
+	print("[UIManager] LibraryBackground created (will be added to ContentWrapper in _setup_layout)")
+	
+	# Set initial background color from settings
+	_update_library_background_color()
+	
+	print("[UIManager] LibraryBackground setup complete")
+
+func _update_library_background_color() -> void:
+	"""Update the library background color from settings."""
+	if not _library_background:
+		return
+	
+	var bg_color = Color(0.1, 0.1, 0.1, 1.0)  # Default dark gray
+	if SettingsManager:
+		var color_setting = SettingsManager.get_setting("library_background_color")
+		if color_setting:
+			bg_color = color_setting.value
+	
+	_library_background.set_background_color(bg_color)
+
 func _setup_layout() -> void:
 	"""Setup the layout container based on the bottom bar position setting."""
 	# Get current position setting (stored as index)
@@ -279,20 +316,43 @@ func _setup_layout() -> void:
 		else:
 			_bottom_bar.set_orientation(BottomBar.BarOrientation.VERTICAL)
 	
-	# Add BottomBar and MainContent to RootLayout in correct order
+	# Create ContentWrapper to hold both LibraryBackground and MainContentVBox
+	# This allows them to overlap (LibraryBackground behind, MainContentVBox on top)
+	if not _content_wrapper:
+		_content_wrapper = Control.new()
+		_content_wrapper.name = "ContentWrapper"
+	elif _content_wrapper.get_parent():
+		_content_wrapper.get_parent().remove_child(_content_wrapper)
+	
+	# Clear ContentWrapper children except LibraryBackground (which stays permanently)
+	for child in _content_wrapper.get_children():
+		if child != _library_background:
+			_content_wrapper.remove_child(child)
+	
+	# Add LibraryBackground to ContentWrapper if not already there
+	if _library_background.get_parent() == null:
+		_library_background.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_content_wrapper.add_child(_library_background)
+		print("[UIManager] LibraryBackground added to ContentWrapper")
+	
+	# Configure MainContentVBox to fill the content wrapper (on top of LibraryBackground)
+	main_content_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_content_wrapper.add_child(main_content_vbox)
+	
+	# ContentWrapper fills the available space in RootLayout
+	_content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	
+	# Add BottomBar and ContentWrapper to RootLayout in correct order
 	match _current_bar_position:
 		"top", "left":
 			if bottom_bar_ref:
 				root_layout.add_child(bottom_bar_ref)
-			root_layout.add_child(main_content_vbox)
+			root_layout.add_child(_content_wrapper)
 		"bottom", "right", _:
-			root_layout.add_child(main_content_vbox)
+			root_layout.add_child(_content_wrapper)
 			if bottom_bar_ref:
 				root_layout.add_child(bottom_bar_ref)
-	
-	# Set size flags for main content to fill remaining space
-	main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
 	# TabContainer fills the MainContentVBox (below HeroImage)
 	tab_container_ref.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -460,22 +520,19 @@ func _find_first_focusable(node: Node) -> Control:
 	return null
 
 func _setup_library_appearance() -> void:
-	"""Apply library background color to the main TabContainer."""
-	var bg_color = Color(0.1, 0.1, 0.1, 1.0)  # Default dark gray
-	if SettingsManager:
-		var color_setting = SettingsManager.get_setting("library_background_color")
-		if color_setting:
-			bg_color = color_setting.value
+	"""Apply library background color to the LibraryBackground shader."""
+	# Update the library background color from settings
+	_update_library_background_color()
 	
-	# Apply background color to the TabContainer using style override
-	var style = StyleBoxFlat.new()
-	style.bg_color = bg_color
-	_tab_container.add_theme_stylebox_override("panel", style)
+	# Make TabContainer background transparent so we can see the LibraryBackground behind it
+	var transparent_style = StyleBoxFlat.new()
+	transparent_style.bg_color = Color(0, 0, 0, 0)  # Transparent
+	_tab_container.add_theme_stylebox_override("panel", transparent_style)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	print("[UIManager] _on_setting_changed called for: %s with value: %s" % [setting.property_name, str(_value)])
 	if setting.property_name == "library_background_color":
-		_setup_library_appearance()
+		_update_library_background_color()
 	elif setting.property_name == "library_bottom_bar_position":
 		_current_bar_position = _get_bar_position_string(setting.value)
 		# Store currently focused control before rebuild
@@ -564,27 +621,37 @@ func _on_tab_changed(tab_idx: int):
 		tab_changed.emit(tab_title)
 
 func _update_hero_visibility(view_name: String) -> void:
-	"""Show/hide hero image based on current view and settings."""
+	"""Show/hide hero image and library background based on current view and settings."""
+	# Update hero image visibility
 	if not _hero_image:
 		print("[UIManager DEBUG] _update_hero_visibility - no _hero_image!")
-		return
+	else:
+		# Check if hero image is disabled in settings
+		var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
+		var hide_hero = hide_hero_setting and hide_hero_setting.value
+		
+		print("[UIManager DEBUG] _update_hero_visibility - view_name: ", view_name, " hide_hero_setting: ", hide_hero_setting, " hide_hero: ", hide_hero)
+		
+		# Show hero for Home and Library views (unless disabled), hide for Downloads and Settings
+		var show_hero = (view_name in ["Home", "Library"]) and not hide_hero
+		print("[UIManager DEBUG] _update_hero_visibility - setting hero visible to: ", show_hero, " (was: ", _hero_image.visible, ")")
+		_hero_image.visible = show_hero
+		
+		if show_hero:
+			# Clear hero when switching to a view that shows it
+			_hero_image.clear()
+		
+		print("[UIManager] HeroImage visibility set to: ", show_hero, " for view: ", view_name, " (hide_hero: ", hide_hero, ")")
 	
-	# Check if hero image is disabled in settings
-	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
-	var hide_hero = hide_hero_setting and hide_hero_setting.value
-	
-	print("[UIManager DEBUG] _update_hero_visibility - view_name: ", view_name, " hide_hero_setting: ", hide_hero_setting, " hide_hero: ", hide_hero)
-	
-	# Show hero for Home and Library views (unless disabled), hide for Downloads and Settings
-	var show_hero = (view_name in ["Home", "Library"]) and not hide_hero
-	print("[UIManager DEBUG] _update_hero_visibility - setting visible to: ", show_hero, " (was: ", _hero_image.visible, ")")
-	_hero_image.visible = show_hero
-	
-	if show_hero:
-		# Clear hero when switching to a view that shows it
-		_hero_image.clear()
-	
-	print("[UIManager] HeroImage visibility set to: ", show_hero, " for view: ", view_name, " (hide_hero: ", hide_hero, ")")
+	# Update library background visibility
+	if not _library_background:
+		print("[UIManager DEBUG] _update_hero_visibility - no _library_background!")
+	else:
+		# Show library background for Home and Library views, hide for Downloads and Settings
+		var show_background = view_name in ["Home", "Library"]
+		print("[UIManager DEBUG] _update_hero_visibility - setting library background visible to: ", show_background, " (was: ", _library_background.visible, ")")
+		_library_background.visible = show_background
+		print("[UIManager] LibraryBackground visibility set to: ", show_background, " for view: ", view_name)
 
 func _on_hero_game_changed(game: GameResource) -> void:
 	"""Handle hero game change from views."""

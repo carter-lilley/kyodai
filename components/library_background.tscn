@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://c8yvxg3ulq3a8"]
+
+[ext_resource type="Script" path="res://components/library_background.gd" id="1_8jkrp"]
+[ext_resource type="Shader" path="res://shaders/library_background.gdshader" id="2_x1n4s"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_8jkrp"]
+shader = ExtResource("2_x1n4s")
+shader_parameter/background_color = Color(0.1, 0.1, 0.1, 1)
+
+[node name="LibraryBackground" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_8jkrp")
+
+[node name="ColorRect" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+material = SubResource("ShaderMaterial_8jkrp")
