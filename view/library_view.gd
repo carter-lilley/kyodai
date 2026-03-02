@@ -15,6 +15,12 @@ var _platforms: Array[Dictionary] = []  # [{slug, name, count}, ...]
 var _current_platform_index: int = -1  # -1 = All Games, 0+ = specific platform
 var _current_platform_slug: String = ""  # Empty = All Games
 
+# Search state
+var _search_overlay: SearchOverlay = null
+var _search_query: String = ""
+var _is_search_active: bool = false
+var _pre_search_platform_index: int = -1  # Remember platform before search
+
 func _ready():
 	view_name = "Library"
 	
@@ -71,6 +77,92 @@ func _ready():
 	
 	# Initial load
 	_load_total_count()
+	
+	# Create search overlay
+	_setup_search_overlay()
+
+func _setup_search_overlay():
+	"""Create and setup the search overlay."""
+	_search_overlay = SearchOverlay.new()
+	_search_overlay.name = "SearchOverlay"
+	_search_overlay.visible = false
+	_search_overlay.search_submitted.connect(_on_search_submitted)
+	_search_overlay.search_cancelled.connect(_on_search_cancelled)
+	add_child(_search_overlay)
+
+func _show_search_overlay():
+	"""Show the search overlay."""
+	# Remember current platform before search
+	_pre_search_platform_index = _current_platform_index
+	_search_overlay.show_overlay()
+
+func _on_search_submitted(query: String):
+	"""Handle search submission."""
+	_search_query = query
+	_is_search_active = true
+	_search_overlay.hide_overlay()
+	
+	# Update platform indicator to show SEARCH
+	if platform_indicator:
+		platform_indicator.show_search_mode(query)
+	
+	# Reload grid with search results
+	_load_total_count_with_search()
+
+func _on_search_cancelled():
+	"""Handle search cancellation."""
+	_search_overlay.hide_overlay()
+	_search_query = ""
+
+func _clear_search():
+	"""Clear active search and return to normal platform view."""
+	if _is_search_active:
+		_is_search_active = false
+		_search_query = ""
+		
+		# Restore previous platform filter
+		if _pre_search_platform_index != -1:
+			_current_platform_index = _pre_search_platform_index
+			if _current_platform_index >= 0 and _current_platform_index < _platforms.size():
+				_current_platform_slug = _platforms[_current_platform_index].slug
+			else:
+				_current_platform_slug = ""
+				_current_platform_index = -1
+		
+		# Update platform indicator
+		if platform_indicator:
+			platform_indicator.update_display(_platforms, _current_platform_index)
+		
+		# Reload grid
+		_load_total_count_with_platform(false)
+
+func _load_total_count_with_search():
+	"""Load total count for search results."""
+	_is_loading = true
+	
+	MemoryManager.queue_db_task(
+		func():
+			var count = DataManager.get_search_results_count(_search_query)
+			print("[LibraryView] Search results count for '%s': %d" % [_search_query, count])
+			return count,
+		func(count: int):
+			if not is_instance_valid(games_grid):
+				_is_loading = false
+				return
+			_total_games = count
+			games_grid.set_total_count(count, false)
+			
+			# Reset scroll to top
+			games_grid.scroll_to_index(0, false)
+			
+			# Refresh dimensions
+			games_grid.refresh_dimensions()
+			
+			# Focus first card
+			call_deferred("_focus_first_card")
+			
+			_is_loading = false
+	)
 
 func _load_platforms_list() -> void:
 	"""Load platforms and initialize platform indicator."""
@@ -87,15 +179,26 @@ func _input(event: InputEvent) -> void:
 	if not UIManager.is_current_view(view_name):
 		return
 	
+	# Handle activate search
+	if event.is_action_pressed("activate_search"):
+		_show_search_overlay()
+		accept_event()
+		return
+	
+	# Handle platform cycling - clears search if active
 	if event.is_action_pressed("cycle_platform_next"):
+		_clear_search()
 		_cycle_platform(1)
 		accept_event()
 	elif event.is_action_pressed("cycle_platform_prev"):
+		_clear_search()
 		_cycle_platform(-1)
 		accept_event()
 
 func _focus_first_card() -> void:
 	"""Focus the first game card in the grid."""
+	if not visible:  # Don't try to focus if view is hidden
+		return
 	var first_card = games_grid.get_card_at_index(0)
 	if first_card and first_card is GameCard:
 		if first_card.card_input:
@@ -289,21 +392,35 @@ func _on_focus_changed(control: Control):
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
-	print("[LibraryView] Items requested: offset=%d, limit=%d, platform=%s, preload=%s" % [offset, limit, _current_platform_slug, is_preload])
-	MemoryManager.queue_db_task(
-		func():
-			var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
-			print("[LibraryView] DB query complete: got %d games" % games.size())
-			return games,
-		func(games: Array[GameResource]):
-			print("[LibraryView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
-			games_grid.on_items_loaded(games, offset, is_preload)
-	)
+	if _is_search_active:
+		print("[LibraryView] Search items requested: offset=%d, limit=%d, query='%s', preload=%s" % [offset, limit, _search_query, is_preload])
+		MemoryManager.queue_db_task(
+			func():
+				var games = DataManager.search_games_paginated(_search_query, offset, limit)
+				print("[LibraryView] Search query complete: got %d games" % games.size())
+				return games,
+			func(games: Array[GameResource]):
+				print("[LibraryView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
+				games_grid.on_items_loaded(games, offset, is_preload)
+		)
+	else:
+		print("[LibraryView] Items requested: offset=%d, limit=%d, platform=%s, preload=%s" % [offset, limit, _current_platform_slug, is_preload])
+		MemoryManager.queue_db_task(
+			func():
+				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
+				print("[LibraryView] DB query complete: got %d games" % games.size())
+				return games,
+			func(games: Array[GameResource]):
+				print("[LibraryView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
+				games_grid.on_items_loaded(games, offset, is_preload)
+		)
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
-	"""Update status label with current visible range and platform."""
+	"""Update status label with current visible range and platform/search."""
 	if total_count == 0:
-		if _current_platform_index == -1:
+		if _is_search_active:
+			_update_status("Search: No results found")
+		elif _current_platform_index == -1:
 			_update_status("No games found")
 		else:
 			var platform_name = _get_current_platform_name()
@@ -311,7 +428,9 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 	else:
 		var start_num = start_index + 1
 		var end_num = mini(end_index, total_count)
-		if _current_platform_index == -1:
+		if _is_search_active:
+			_update_status("Search: %d-%d of %d results" % [start_num, end_num, total_count])
+		elif _current_platform_index == -1:
 			_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
 		else:
 			var platform_name = _get_current_platform_name()
@@ -456,6 +575,8 @@ func on_view_show():
 	super.on_view_show()
 
 func on_view_hide():
+	# Clear search when leaving the view
+	_clear_search()
 	view_hidden.emit()
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):

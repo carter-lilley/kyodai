@@ -7,8 +7,7 @@ how to split important siblings
 	font! rodin?
 	'controls/info bar'
 	focus glow
-	search
-	layer system inner-shadow/glows/fades?
+	layer system inner-shadow
 	add letters to library navigation 
 	badge effect placement opts
 ## cards

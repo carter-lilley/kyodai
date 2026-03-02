@@ -130,6 +130,11 @@ func show():
 func hide():
 	_hide_keyboard()
 
+func reset_focus_tracking():
+	"""Reset focus tracking so keyboard will reopen on next LineEdit focus."""
+	_previous_focus_object = null
+	_active_line_edit = null
+
 var released = true
 var _previous_focus_object = null
 
@@ -158,6 +163,16 @@ func _update_auto_display_on_input(event):
 		if _active_line_edit != null:
 			_active_line_edit.grab_focus()
 		_hide_keyboard()
+	
+	# Handle ui_start (Start/Enter button) same as virtual keyboard Enter
+	if event.is_action_pressed("ui_start"):
+		if _active_line_edit is LineEdit:
+			_active_line_edit.text_submitted.emit(_active_line_edit.text)
+		# Return focus and hide keyboard
+		if _active_line_edit != null:
+			_active_line_edit.grab_focus()
+		_hide_keyboard()
+		get_viewport().set_input_as_handled()
 
 
 func _hide_keyboard(key_data=null):
@@ -167,6 +182,13 @@ func _hide_keyboard(key_data=null):
 		animate_position(Vector2(position.x, new_y_pos), true)
 	else:
 		change_visibility(false)
+
+
+func _on_hide_keyboard_clicked(key_data=null):
+	"""Handle click on hide keyboard button - return focus and hide."""
+	if _active_line_edit != null:
+		_active_line_edit.grab_focus()
+	_hide_keyboard()
 
 
 func _show_keyboard(key_data=null):
@@ -286,8 +308,14 @@ func _key_released(key_data):
 					_active_line_edit.caret_column = _active_line_edit.text.length()
 					_active_line_edit.text_changed.emit(_active_line_edit.text)
 			elif key_value == "Return" or key_value == "Enter":
-				# Enter is handled separately to close keyboard
-				pass
+				# Trigger submit/confirmation on the LineEdit
+				if _active_line_edit is LineEdit:
+					_active_line_edit.text_submitted.emit(_active_line_edit.text)
+				# Return focus and hide keyboard
+				if _active_line_edit != null:
+					_active_line_edit.grab_focus()
+				_hide_keyboard()
+				return  # Don't process caps lock after hiding
 			elif key_value == "Space":
 				_active_line_edit.text += " "
 				_active_line_edit.caret_column = _active_line_edit.text.length()
@@ -398,9 +426,9 @@ func _create_keyboard(layout_data):
 						new_key.toggle_mode = true
 						capslock_keys.push_back(new_key)
 						_set_key_style("normal",new_key, style_special_keys)
-					elif key.get("type") == "special-hide-keyboard":
-						new_key.released.connect(_hide_keyboard)
-						_set_key_style("normal",new_key, style_special_keys)
+				elif key.get("type") == "special-hide-keyboard":
+					new_key.released.connect(_on_hide_keyboard_clicked)
+					_set_key_style("normal",new_key, style_special_keys)
 
 				# SET ICONS
 				if key.has("display-icon"):

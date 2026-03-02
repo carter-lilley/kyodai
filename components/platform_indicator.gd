@@ -73,6 +73,9 @@ func _create_platform_button(index: int) -> Button:
 func update_display(platforms: Array[Dictionary], current_index: int):
 	_platforms = platforms
 	_current_index = current_index
+	# Make sure prev/next buttons are visible when not in search mode
+	_prev_button.visible = true
+	_next_button.visible = true
 	_refresh_labels()
 
 func _refresh_labels():
@@ -192,3 +195,52 @@ func _on_prev_clicked() -> void:
 func _on_next_clicked() -> void:
 	"""Handle click on next arrow."""
 	cycle_next_clicked.emit()
+
+func show_search_mode(query: String):
+	"""Show search mode with query text."""
+	if _platform_buttons.is_empty():
+		return
+	
+	# Hide prev/next buttons during search
+	_prev_button.visible = false
+	_next_button.visible = false
+	
+	# Show "SEARCH" in the center with query
+	for i in range(PLATFORM_COUNT):
+		var btn = _platform_buttons[i]
+		
+		if i == 2:  # Center button
+			btn.text = "SEARCH"
+			btn.disabled = false
+			# Highlight style
+			var pill_style = _create_highlight_style()
+			btn.add_theme_stylebox_override("normal", pill_style)
+			btn.add_theme_stylebox_override("hover", pill_style)
+			btn.add_theme_stylebox_override("pressed", pill_style)
+			btn.add_theme_stylebox_override("focus", pill_style)
+			btn.add_theme_color_override("font_color", Color.WHITE)
+			btn.add_theme_color_override("font_hover_color", Color.WHITE)
+			btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+			btn.add_theme_color_override("font_focus_color", Color.WHITE)
+			btn.add_theme_font_size_override("font_size", 18)
+		else:
+			# Show query text on side buttons if there's room
+			if i == 1 or i == 3:
+				var display_query = query
+				if display_query.length() > 12:
+					display_query = display_query.substr(0, 9) + "..."
+				btn.text = display_query
+			else:
+				btn.text = ""
+			btn.disabled = true
+			# Transparent style
+			var transparent_style = _create_transparent_style()
+			btn.add_theme_stylebox_override("normal", transparent_style)
+			btn.add_theme_stylebox_override("hover", transparent_style)
+			btn.add_theme_stylebox_override("pressed", transparent_style)
+			btn.add_theme_stylebox_override("focus", transparent_style)
+			btn.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.9))
+			btn.add_theme_color_override("font_hover_color", Color(0.7, 0.7, 0.7, 0.9))
+			btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.7, 0.7, 0.9))
+			btn.add_theme_color_override("font_focus_color", Color(0.7, 0.7, 0.7, 0.9))
+			btn.add_theme_font_size_override("font_size", 12)

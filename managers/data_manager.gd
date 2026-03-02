@@ -1110,6 +1110,54 @@ func get_total_games_count(platform_slug: String = "") -> int:
 			return int(row["count"])
 	return 0
 
+func search_games_paginated(query: String, offset: int, limit: int) -> Array[GameResource]:
+	"""Search games by title with pagination."""
+	var games: Array[GameResource] = []
+	if not _is_db_ready:
+		return games
+	
+	# Sanitize query to prevent SQL injection
+	var sanitized_query = query.replace("'", "''")
+	
+	var sql = """
+		SELECT * FROM games 
+		WHERE is_master_entry = 1 
+		AND has_cover_art = 1 
+		AND title LIKE '%%%s%%'
+		ORDER BY title ASC 
+		LIMIT %d OFFSET %d
+	""" % [sanitized_query, limit, offset]
+	
+	print("[DataManager] Executing search query: %s" % sql)
+	var success = _db.query(sql)
+	if success:
+		for row in _db.query_result:
+			games.append(_row_to_game(row))
+	
+	return games
+
+func get_search_results_count(query: String) -> int:
+	"""Get count of search results."""
+	if not _is_db_ready:
+		return 0
+	
+	# Sanitize query to prevent SQL injection
+	var sanitized_query = query.replace("'", "''")
+	
+	var sql = """
+		SELECT COUNT(*) as count FROM games 
+		WHERE is_master_entry = 1 
+		AND has_cover_art = 1 
+		AND title LIKE '%%%s%%'
+	""" % sanitized_query
+	
+	var success = _db.query(sql)
+	if success and _db.query_result.size() > 0:
+		var row = _db.query_result[0]
+		if row.has("count"):
+			return int(row["count"])
+	return 0
+
 func get_downloaded_games_count() -> int:
 	"""Get count of downloaded games from synced platforms."""
 	if not _is_db_ready:
