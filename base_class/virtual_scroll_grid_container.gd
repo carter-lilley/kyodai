@@ -355,7 +355,8 @@ func _initial_load():
 		visible_count = visible_cols * items_per_line
 	
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-	var card_count = min(total_card_count, _total_items)
+	# Cap card count to pool size to prevent creating too many cards
+	var card_count = min(total_card_count, _total_items, _max_pool_size)
 	
 	_virtual_start = 0
 	_virtual_end = card_count - 1
@@ -1084,7 +1085,8 @@ func _initial_load_from_increment():
 		visible_count = visible_cols * items_per_line
 	
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-	var card_count = min(total_card_count, _total_items)
+	# Cap card count to pool size to prevent creating too many cards
+	var card_count = min(total_card_count, _total_items, _max_pool_size)
 	
 	_virtual_start = 0
 	_virtual_end = card_count - 1

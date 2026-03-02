@@ -53,9 +53,10 @@ var _focus_tween: Tween = null
 var _original_border_size: float = 0.05  # Default border size, will be set from config
 
 # Enter animation constants
-const ENTER_START_SCALE: float = 1.25
-const ENTER_TWEEN_DURATION: float = 1.0
+const ENTER_START_SCALE: float = 3.0
+const ENTER_TWEEN_DURATION: float = 1.75
 var _enter_tween: Tween = null
+var _enter_tween_alpha: Tween = null
 
 func _ready():
 	# Allow effects (like drop shadow) to render outside card bounds
@@ -722,33 +723,38 @@ func _on_focus_exited() -> void:
 
 ## Plays the enter animation: scales from 125% to 100% while fading opacity from 0% to 100%
 func play_enter_animation() -> void:
-	# Kill any existing enter tween
+	# Kill any existing enter tweens
 	if _enter_tween:
 		_enter_tween.kill()
+	if _enter_tween_alpha:
+		_enter_tween_alpha.kill()
 	
 	# Set initial scale on self
 	scale = Vector2(ENTER_START_SCALE, ENTER_START_SCALE)
 	
-	# Create parallel tween for scale and opacity
+	# Tween for scale (bouncy/elastic feel)
 	_enter_tween = create_tween()
-	_enter_tween.set_trans(Tween.TRANS_QUAD)
+	_enter_tween.set_trans(Tween.TRANS_QUINT)
 	_enter_tween.set_ease(Tween.EASE_OUT)
+	_enter_tween.tween_property(self, "scale", Vector2.ONE, ENTER_TWEEN_DURATION)
 	
-	# Tween scale on self
-	_enter_tween.parallel().tween_property(self, "scale", Vector2.ONE, ENTER_TWEEN_DURATION)
+	# Separate tween for opacity (smooth fade)
+	_enter_tween_alpha = create_tween()
+	_enter_tween_alpha.set_trans(Tween.TRANS_CIRC)
+	#_enter_tween_alpha.set_ease(Tween.EASE_)
 	
 	# Tween alpha on base effect using the shader uniform
 	if _base_effect:
-		_enter_tween.parallel().tween_method(func(t): _base_effect.set_alpha(t), 0.0, 1.0, ENTER_TWEEN_DURATION)
+		_enter_tween_alpha.parallel().tween_method(func(t): _base_effect.set_alpha(t), 0.0, 1.0, ENTER_TWEEN_DURATION)
 	
 	# Tween opacity on card input (covers UI elements like status icons, platform icons)
 	if card_input:
-		_enter_tween.parallel().tween_property(card_input, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
+		_enter_tween_alpha.parallel().tween_property(card_input, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
 	
 	# Tween opacity on all CardEffect children (border, badge, drop shadow)
 	for child in get_children():
 		if child is CardEffect:
-			_enter_tween.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
+			_enter_tween_alpha.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
 
 ## Sets the card's alpha immediately (for initial state before animations)
 func set_card_alpha(alpha: float) -> void:

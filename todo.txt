@@ -3,23 +3,24 @@
 how to split important siblings
 
 ## UI
-	load animation
-	placeholder icons
+	placeholder cards
 	scale icon animation bug when scrolling
 	font! rodin?
 	focus glow
 	controller nav (zoom, text on bottom)
 	sort by plaform, search
-	layer system inner shadow / glows/fades?
+	layer system inner shadow /glows/fades?
 	add letters to library navigation 
 	badge effect placement opt
+## cards
+	try scaling cropping algo
 ## hero
-	hero placement/type opt
-	hero..background type
+	hero placement opt
+	hero IGDB opt
+	hero types? background/card?
 	hero fx (screenshots/cropping.shadows/etc)
 ## performance:
 	cache image colors,  cropping data, and sibiling lookup on sync
-	try scaling cropping algo
 	further card image retries & priority management.
 	performance.add_custom_monitor for everything
 	are sync db actions and load db actions the same?

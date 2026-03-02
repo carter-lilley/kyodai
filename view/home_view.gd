@@ -11,8 +11,15 @@ var _is_loading: bool = false
 var _is_initial_launch: bool = true
 
 # Animation timing controls
-@export var enter_animation_start_delay: float = 1.15  # Delay before first card animation starts
-@export var enter_animation_stagger: float = 0.03      # Delay between each card's animation
+@export var enter_animation_start_delay: float = .5  # Delay before first card animation starts
+@export var enter_animation_stagger: float = 0.05      # Delay between each card's animation
+
+# Animation mode
+enum AnimationMode { SEQUENTIAL, RANDOM }
+@export var enter_animation_mode: AnimationMode = AnimationMode.RANDOM
+
+# Delay pool for random mode
+var _delay_pool: Array[float] = []
 
 func _ready():
 	# Setup VirtualScrollGridContainer
@@ -166,6 +173,27 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 		# Force grid to recalculate layout, preserve cache for performance
 		_load_total_count(true)
 
+func _regenerate_delay_pool(count: int) -> void:
+	"""Generate a shuffled pool of animation delays for random mode."""
+	_delay_pool.clear()
+	for i in range(count):
+		_delay_pool.append(i * enter_animation_stagger)
+	_delay_pool.shuffle()
+
+func _get_animation_delay(index: int) -> float:
+	"""Calculate delay for a card based on current animation mode."""
+	match enter_animation_mode:
+		AnimationMode.SEQUENTIAL:
+			return enter_animation_start_delay + (index * enter_animation_stagger)
+		AnimationMode.RANDOM:
+			if _delay_pool.is_empty():
+				# Estimate visible cards and regenerate pool
+				var visible_range = games_grid.get_visible_range()
+				var visible_count = visible_range.buffer_size if visible_range else 20
+				_regenerate_delay_pool(visible_count)
+			return enter_animation_start_delay + _delay_pool.pop_front()
+	return enter_animation_start_delay
+
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
@@ -174,7 +202,7 @@ func _on_card_created(card: Control, index: int):
 		if _is_initial_launch:
 			# Start invisible immediately
 			card.set_card_alpha(0.0)
-			var delay = enter_animation_start_delay + (index * enter_animation_stagger)
+			var delay = _get_animation_delay(index)
 			await get_tree().create_timer(delay).timeout
 			if is_instance_valid(card):
 				card.play_enter_animation()
