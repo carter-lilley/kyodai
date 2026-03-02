@@ -92,15 +92,23 @@ func _setup_search_overlay():
 
 func _show_search_overlay():
 	"""Show the search overlay."""
+	print("[LIBRARY DEBUG] Showing search overlay")
 	# Remember current platform before search
 	_pre_search_platform_index = _current_platform_index
 	_search_overlay.show_overlay()
 
 func _on_search_submitted(query: String):
 	"""Handle search submission."""
+	print("[LIBRARY DEBUG] Search submitted: ", query)
 	_search_query = query
 	_is_search_active = true
+	print("[LIBRARY DEBUG] Hiding search overlay")
 	_search_overlay.hide_overlay()
+	
+	# Explicitly grab focus on the games grid to ensure keyboard closes and focus is set
+	if games_grid:
+		print("[LIBRARY DEBUG] Grabbing focus on games_grid")
+		games_grid.grab_focus()
 	
 	# Update platform indicator to show SEARCH
 	if platform_indicator:
@@ -111,8 +119,16 @@ func _on_search_submitted(query: String):
 
 func _on_search_cancelled():
 	"""Handle search cancellation."""
+	print("[LIBRARY DEBUG] Search cancelled")
 	_search_overlay.hide_overlay()
 	_search_query = ""
+	# Explicitly grab focus on the games grid
+	if games_grid:
+		print("[LIBRARY DEBUG] Grabbing focus on games_grid after cancel")
+		games_grid.grab_focus()
+	# Return focus to the first card in the grid
+	print("[LIBRARY DEBUG] Calling _focus_first_card deferred")
+	call_deferred("_focus_first_card")
 
 func _clear_search():
 	"""Clear active search and return to normal platform view."""
@@ -179,6 +195,10 @@ func _input(event: InputEvent) -> void:
 	if not UIManager.is_current_view(view_name):
 		return
 	
+	# Don't handle input if search overlay is active
+	if _search_overlay and _search_overlay.is_active():
+		return
+	
 	# Handle activate search
 	if event.is_action_pressed("activate_search"):
 		_show_search_overlay()
@@ -197,13 +217,24 @@ func _input(event: InputEvent) -> void:
 
 func _focus_first_card() -> void:
 	"""Focus the first game card in the grid."""
+	print("[LIBRARY DEBUG] _focus_first_card called, visible: ", visible)
 	if not visible:  # Don't try to focus if view is hidden
+		print("[LIBRARY DEBUG] View not visible, aborting focus")
+		return
+	if not UIManager.is_current_view(view_name):  # Don't focus if not current view
+		print("[LIBRARY DEBUG] Not current view, aborting focus")
 		return
 	var first_card = games_grid.get_card_at_index(0)
+	print("[LIBRARY DEBUG] First card: ", first_card)
 	if first_card and first_card is GameCard:
 		if first_card.card_input:
+			print("[LIBRARY DEBUG] Grabbing focus on first card")
 			first_card.card_input.grab_focus()
 			print("[LibraryView] Focused first card after platform switch")
+		else:
+			print("[LIBRARY DEBUG] First card has no card_input")
+	else:
+		print("[LIBRARY DEBUG] No first card or not a GameCard")
 
 func _cycle_platform(direction: int) -> void:
 	"""Cycle to next/previous platform filter."""
@@ -575,6 +606,7 @@ func on_view_show():
 	super.on_view_show()
 
 func on_view_hide():
+	print("[LIBRARY DEBUG] on_view_hide called")
 	# Clear search when leaving the view
 	_clear_search()
 	view_hidden.emit()

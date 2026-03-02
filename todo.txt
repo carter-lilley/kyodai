@@ -3,12 +3,14 @@
 how to split important siblings
 
 ## UI
+	colors
+	presets
 	placeholder cards
 	font! rodin?
 	'controls/info bar'
 	focus glow
 	layer system inner-shadow
-	add letters to library navigation 
+	add letters to library navigation?
 	badge effect placement opts
 ## cards
 	try scaling cropping algo

@@ -132,6 +132,7 @@ func hide():
 
 func reset_focus_tracking():
 	"""Reset focus tracking so keyboard will reopen on next LineEdit focus."""
+	print("[KEYBOARD DEBUG] reset_focus_tracking called")
 	_previous_focus_object = null
 	_active_line_edit = null
 
@@ -146,8 +147,10 @@ func _update_auto_display_on_input(event):
 	# Keyboard stays open until manually dismissed
 	var focus_object = get_viewport().gui_get_focus_owner()
 	if focus_object != _previous_focus_object:
+		print("[KEYBOARD DEBUG] Focus changed from ", _previous_focus_object, " to ", focus_object)
 		_previous_focus_object = focus_object
 		if focus_object != null and is_keyboard_focus_object(focus_object):
+			print("[KEYBOARD DEBUG] Opening keyboard for LineEdit: ", focus_object)
 			_active_line_edit = focus_object
 			_show_keyboard()
 
@@ -166,22 +169,27 @@ func _update_auto_display_on_input(event):
 	
 	# Handle ui_start (Start/Enter button) same as virtual keyboard Enter
 	if event.is_action_pressed("ui_start"):
+		print("[KEYBOARD DEBUG] ui_start pressed")
 		if _active_line_edit is LineEdit:
+			print("[KEYBOARD DEBUG] Emitting text_submitted for: ", _active_line_edit)
 			_active_line_edit.text_submitted.emit(_active_line_edit.text)
 		# Return focus and hide keyboard
 		if _active_line_edit != null:
+			print("[KEYBOARD DEBUG] Returning focus to LineEdit")
 			_active_line_edit.grab_focus()
 		_hide_keyboard()
-		get_viewport().set_input_as_handled()
 
 
 func _hide_keyboard(key_data=null):
+	print("[KEYBOARD DEBUG] Hiding keyboard, was active_line_edit: ", _active_line_edit)
 	_active_line_edit = null
+	_previous_focus_object = null  # Reset focus tracking when hiding
 	if animate:
 		var new_y_pos = get_viewport().get_visible_rect().size.y + 10
 		animate_position(Vector2(position.x, new_y_pos), true)
 	else:
 		change_visibility(false)
+	print("[KEYBOARD DEBUG] Keyboard hidden, visible: ", visible)
 
 
 func _on_hide_keyboard_clicked(key_data=null):
@@ -192,14 +200,17 @@ func _on_hide_keyboard_clicked(key_data=null):
 
 
 func _show_keyboard(key_data=null):
+	print("[KEYBOARD DEBUG] _show_keyboard called, visible: ", visible)
 	var was_hidden = not visible
 	change_visibility(true)
 	if animate:
 		var new_y_pos = get_viewport().get_visible_rect().size.y - size.y
 		animate_position(Vector2(position.x, new_y_pos))
-	# Only grab focus when first showing the keyboard
-	if was_hidden and keys.size() > 0:
+	# Always grab focus on first key when showing keyboard
+	if keys.size() > 0:
+		print("[KEYBOARD DEBUG] Grabbing focus on first key")
 		keys[0].grab_focus()
+	print("[KEYBOARD DEBUG] _show_keyboard complete, visible: ", visible)
 
 
 func animate_position(new_position, trigger_visibility:bool=false):
@@ -308,11 +319,14 @@ func _key_released(key_data):
 					_active_line_edit.caret_column = _active_line_edit.text.length()
 					_active_line_edit.text_changed.emit(_active_line_edit.text)
 			elif key_value == "Return" or key_value == "Enter":
+				print("[KEYBOARD DEBUG] Virtual Enter key pressed")
 				# Trigger submit/confirmation on the LineEdit
 				if _active_line_edit is LineEdit:
+					print("[KEYBOARD DEBUG] Emitting text_submitted for: ", _active_line_edit)
 					_active_line_edit.text_submitted.emit(_active_line_edit.text)
 				# Return focus and hide keyboard
 				if _active_line_edit != null:
+					print("[KEYBOARD DEBUG] Returning focus to LineEdit")
 					_active_line_edit.grab_focus()
 				_hide_keyboard()
 				return  # Don't process caps lock after hiding

@@ -242,12 +242,16 @@ func _input(event: InputEvent):
 	
 	# Handle ui_cancel to go back to Home (unless keyboard is open)
 	if event.is_action_pressed("ui_cancel"):
+		print("[MAIN DEBUG] ui_cancel pressed")
 		# Check if keyboard is visible - if so, let keyboard handle it
 		var keyboard = $AntiAliasingLayer/OnscreenKeyboard
+		print("[MAIN DEBUG] Keyboard visible: ", keyboard.visible if keyboard else "null")
 		if keyboard and keyboard.visible:
 			# Keyboard will handle ui_cancel to close itself
+			print("[MAIN DEBUG] Keyboard visible, returning early")
 			return
 		
+		print("[MAIN DEBUG] Switching to Home")
 		# Play return sound
 		if AudioManager:
 			AudioManager.play_sfx("return")
@@ -255,6 +259,7 @@ func _input(event: InputEvent):
 		UIManager.switch_to_tab("Home")
 		# Set focus to Home button (use UIManager's helper to find it)
 		await get_tree().process_frame
+		print("[MAIN DEBUG] Resetting focus to home button")
 		reset_focus_to_home_button()
 		return
 
