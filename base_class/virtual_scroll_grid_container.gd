@@ -84,6 +84,10 @@ func _ready():
 
 func _on_resized():
 	_recalculate_layout()
+	# If we have items but no active cards (e.g., view was hidden during setup), load them now
+	if _active_cards.size() == 0 and _total_items > 0 and size.x > 0 and size.y > 0:
+		print("[VScrollGrid] View resized with valid size and items but no cards, triggering initial load")
+		_initial_load()
 
 func _update_grid_separation_from_settings() -> void:
 	if not SettingsManager:
@@ -135,6 +139,12 @@ func _recalculate_layout():
 	var base_dims = _get_base_dimensions()
 	item_width = (base_dims.x * current_zoom) + grid_separation
 	item_height = (base_dims.y * current_zoom) + grid_separation
+	
+	# Guard against zero or negative item dimensions
+	if item_width <= 0 or item_height <= 0:
+		print("[VScrollGrid] WARNING: Invalid item dimensions (%.1f, %.1f), using defaults" % [item_width, item_height])
+		item_width = max(item_width, base_dims.x * 0.1 + grid_separation)
+		item_height = max(item_height, base_dims.y * 0.1 + grid_separation)
 	
 	print("[VScrollGrid] Calculated item_width: %.2f, item_height: %.2f" % [item_width, item_height])
 	print("[VScrollGrid] Active cards: %d" % _active_cards.size())
@@ -343,6 +353,19 @@ func _update_layout():
 	print("[VScrollGrid] FlowContainer size: %s" % str(_flow_container.size))
 
 func _initial_load():
+	# Guard against invalid size - don't load cards when view is not ready
+	# The resized signal will trigger recalculation when view becomes visible
+	if size.x <= 0 or size.y <= 0:
+		print("[VScrollGrid] WARNING: Invalid size in _initial_load (%.1f, %.1f), skipping load until visible" % [size.x, size.y])
+		return
+	
+	# Guard against invalid item dimensions (would happen if zoom calculation failed)
+	if item_width <= 0 or item_height <= 0:
+		print("[VScrollGrid] WARNING: Invalid item dimensions (%.1f, %.1f) in _initial_load, using defaults" % [item_width, item_height])
+		var base_dims = _get_base_dimensions()
+		item_width = max(item_width, base_dims.x * 0.1 + grid_separation)
+		item_height = max(item_height, base_dims.y * 0.1 + grid_separation)
+	
 	var items_per_line = _get_items_per_line()
 	var visible_count: int
 	if vertical:
@@ -370,6 +393,12 @@ func _initial_load():
 			if card.has_method("refresh_settings"):
 				card.refresh_settings()
 			item_created.emit(card, i)
+	
+	# Apply current zoom to all newly created cards
+	var current_zoom = _calculate_zoom()
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_card_zoom"):
+			card.set_card_zoom(current_zoom)
 	
 	_update_margin()
 	_request_data(0, card_count)
@@ -1072,6 +1101,13 @@ func increment_total_count(amount: int = 1) -> int:
 	return start_index
 
 func _initial_load_from_increment():
+	# Guard against invalid item dimensions (would happen if zoom calculation failed)
+	if item_width <= 0 or item_height <= 0:
+		print("[VScrollGrid] WARNING: Invalid item dimensions (%.1f, %.1f) in _initial_load_from_increment, using defaults" % [item_width, item_height])
+		var base_dims = _get_base_dimensions()
+		item_width = max(item_width, base_dims.x * 0.1 + grid_separation)
+		item_height = max(item_height, base_dims.y * 0.1 + grid_separation)
+	
 	var items_per_line = _get_items_per_line()
 	var visible_count: int
 	
@@ -1112,6 +1148,12 @@ func _initial_load_from_increment():
 				card.set_placeholder(true)
 			
 			item_created.emit(card, i)
+	
+	# Apply current zoom to all newly created cards
+	var current_zoom = _calculate_zoom()
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_card_zoom"):
+			card.set_card_zoom(current_zoom)
 	
 	_update_margin()
 
