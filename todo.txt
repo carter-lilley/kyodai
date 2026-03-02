@@ -4,7 +4,6 @@ how to split important siblings
 
 ## UI
 	placeholder cards
-	scale icon animation bug when scrolling
 	font! rodin?
 	'controls/info bar'
 	focus glow

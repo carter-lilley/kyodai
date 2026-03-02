@@ -16,7 +16,15 @@ custom_minimum_size = Vector2(202, 270)
 color = Color(0, 0, 0, 0)
 script = ExtResource("1_gamecard")
 
-[node name="CardInput" type="Button" parent="." unique_id=796224510]
+[node name="VisualContainer" type="Control" parent="." unique_id=1413667876]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="CardInput" type="Button" parent="VisualContainer" unique_id=796224510]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -29,7 +37,7 @@ theme_override_styles/hover = SubResource("StyleBoxEmpty_button")
 theme_override_styles/disabled = SubResource("StyleBoxEmpty_button")
 theme_override_styles/focus = SubResource("StyleBoxEmpty_button")
 
-[node name="StatusBadge" type="Panel" parent="CardInput" unique_id=689518864]
+[node name="StatusBadge" type="Panel" parent="VisualContainer/CardInput" unique_id=689518864]
 layout_mode = 1
 anchors_preset = 3
 anchor_left = 1.0
@@ -45,7 +53,7 @@ grow_vertical = 0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_badge")
 
-[node name="StatusIcon" type="TextureRect" parent="CardInput/StatusBadge" unique_id=916665265]
+[node name="StatusIcon" type="TextureRect" parent="VisualContainer/CardInput/StatusBadge" unique_id=916665265]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -62,7 +70,7 @@ mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
 
-[node name="PlatformIcon" type="TextureRect" parent="CardInput" unique_id=816665265]
+[node name="PlatformIcon" type="TextureRect" parent="VisualContainer/CardInput" unique_id=816665265]
 texture_filter = 3
 layout_mode = 1
 offset_right = 32.0

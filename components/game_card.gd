@@ -14,10 +14,11 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 
 @export var preview_mode: bool = false
 
-@onready var card_input: Button = $CardInput
-@onready var status_icon: TextureRect = $CardInput/StatusBadge/StatusIcon
-@onready var status_badge: Panel = $CardInput/StatusBadge
-@onready var platform_icon: TextureRect = $CardInput/PlatformIcon
+@onready var visual_container: Control = $VisualContainer
+@onready var card_input: Button = $VisualContainer/CardInput
+@onready var status_icon: TextureRect = $VisualContainer/CardInput/StatusBadge/StatusIcon
+@onready var status_badge: Panel = $VisualContainer/CardInput/StatusBadge
+@onready var platform_icon: TextureRect = $VisualContainer/CardInput/PlatformIcon
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
 var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
@@ -64,8 +65,10 @@ func _ready():
 	# Cards render above UI backgrounds, shadows at -1 stay behind card but above backgrounds
 	z_index = 10
 	
-	# Set pivot to center for proper scaling
-	pivot_offset = size / 2
+	# Set pivot to center for proper scaling on visual container
+	# Use custom_minimum_size as fallback since visual_container might not be laid out yet
+	var pivot_size = visual_container.size if visual_container.size.x > 0 else custom_minimum_size
+	visual_container.pivot_offset = pivot_size / 2
 	
 	if preview_mode:
 		_setup_preview_mode()
@@ -154,9 +157,11 @@ func _get_effect_config(effect_id: String) -> Dictionary:
 	return {}
 
 func _rebuild_effects():
-	for child in get_children():
-		if child is CardEffect:
-			child.queue_free()
+	# Clean up existing effects from VisualContainer
+	if visual_container:
+		for child in visual_container.get_children():
+			if child is CardEffect:
+				child.queue_free()
 	
 	_base_effect = null
 	_border_effect = null
@@ -164,11 +169,16 @@ func _rebuild_effects():
 	_drop_shadow_effect = null
 	_card_state.border_inset_ratio = 0.0
 	
+	# Add all effects to VisualContainer so they scale together with the card content
+	if not visual_container:
+		push_warning("GameCard: visual_container is null, cannot add effects")
+		return
+	
 	_base_effect = BaseCardEffect.new()
 	_base_effect.name = "BaseEffect"
 	_base_effect.anchor_right = 1.0
 	_base_effect.anchor_bottom = 1.0
-	add_child(_base_effect)
+	visual_container.add_child(_base_effect)
 	_base_effect.initialize(_card_state, {})
 	
 	# Add badge BEFORE border so it renders underneath
@@ -178,7 +188,7 @@ func _rebuild_effects():
 		_badge_effect.name = "BadgeEffect"
 		_badge_effect.anchor_right = 1.0
 		_badge_effect.anchor_bottom = 1.0
-		add_child(_badge_effect)
+		visual_container.add_child(_badge_effect)
 		_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
 	
 	var border_config = _get_effect_config("border")
@@ -187,7 +197,7 @@ func _rebuild_effects():
 		_border_effect.name = "BorderEffect"
 		_border_effect.anchor_right = 1.0
 		_border_effect.anchor_bottom = 1.0
-		add_child(_border_effect)
+		visual_container.add_child(_border_effect)
 		_border_effect.initialize(_card_state, border_config.get("settings", {}))
 		
 		# Calculate border inset to match inner edge of border
@@ -207,13 +217,15 @@ func _rebuild_effects():
 		_drop_shadow_effect = DropShadowEffect.new()
 		_drop_shadow_effect.name = "DropShadowEffect"
 		_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
-		add_child(_drop_shadow_effect)
+		visual_container.add_child(_drop_shadow_effect)
 		_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
 		# Move drop shadow to back (behind card)
-		move_child(_drop_shadow_effect, 0)
+		visual_container.move_child(_drop_shadow_effect, 0)
 	
+	# Move card_input to front so it's on top of all effects
+	# CardInput is inside VisualContainer and contains all interactive UI elements
 	if card_input:
-		move_child(card_input, -1)
+		visual_container.move_child(card_input, -1)
 	
 	if _current_texture:
 		_set_texture(_current_texture)
@@ -671,13 +683,16 @@ func _on_focus_entered() -> void:
 	# Vibrate controller for tactile feedback
 	Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
 	
-	# Scale up when focused
+	# Scale up visual container when focused (not self, to avoid layout issues)
+	# Ensure pivot is set to center for proper scaling
+	visual_container.pivot_offset = visual_container.size / 2
+	
 	if _focus_tween:
 		_focus_tween.kill()
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_BACK)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(self, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
+	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
 	
 	# Reduce border size when focused
 	if _border_effect:
@@ -698,13 +713,13 @@ func _on_focus_entered() -> void:
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 
 func _on_focus_exited() -> void:
-	# Scale back to normal when unfocused
+	# Scale visual container back to normal when unfocused
 	if _focus_tween:
 		_focus_tween.kill()
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
 	
 	# Restore original border size and inset
 	if _border_effect:
@@ -724,6 +739,38 @@ func _on_focus_exited() -> void:
 				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 
+## Restores the focus animation after layout changes (e.g., after queue_sort resets transforms)
+## Called by VirtualScrollGridContainer to re-apply focus scale without triggering full focus_entered logic
+func restore_focus_animation() -> void:
+	# Kill existing focus tween
+	if _focus_tween:
+		_focus_tween.kill()
+	
+	# Re-apply focus scale animation on visual container (not self)
+	# Ensure pivot is set to center for proper scaling
+	visual_container.pivot_offset = visual_container.size / 2
+	
+	_focus_tween = create_tween()
+	_focus_tween.set_trans(Tween.TRANS_BACK)
+	_focus_tween.set_ease(Tween.EASE_OUT)
+	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
+	
+	# Re-apply border size reduction
+	if _border_effect:
+		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
+		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
+		var original_inset = _original_border_size + fade_in
+		var focused_inset = focused_border_size + fade_in
+		
+		var border_tween = _border_effect.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
+		border_tween.parallel().tween_method(func(t):
+			var current_inset = lerp(original_inset, focused_inset, t)
+			_card_state.border_inset_ratio = current_inset
+			if _badge_effect:
+				_badge_effect.set_border_width(current_inset)
+				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
+		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
+
 ## Plays the enter animation: scales from 125% to 100% while fading opacity from 0% to 100%
 func play_enter_animation() -> void:
 	# Kill any existing enter tweens
@@ -732,14 +779,16 @@ func play_enter_animation() -> void:
 	if _enter_tween_alpha:
 		_enter_tween_alpha.kill()
 	
-	# Set initial scale on self
-	scale = Vector2(ENTER_START_SCALE, ENTER_START_SCALE)
+	# Set initial scale on visual container
+	# Ensure pivot is set to center for proper scaling
+	visual_container.pivot_offset = visual_container.size / 2
+	visual_container.scale = Vector2(ENTER_START_SCALE, ENTER_START_SCALE)
 	
 	# Tween for scale (bouncy/elastic feel)
 	_enter_tween = create_tween()
 	_enter_tween.set_trans(Tween.TRANS_QUINT)
 	_enter_tween.set_ease(Tween.EASE_OUT)
-	_enter_tween.tween_property(self, "scale", Vector2.ONE, ENTER_TWEEN_DURATION)
+	_enter_tween.tween_property(visual_container, "scale", Vector2.ONE, ENTER_TWEEN_DURATION)
 	
 	# Separate tween for opacity (smooth fade)
 	_enter_tween_alpha = create_tween()
@@ -812,6 +861,9 @@ func reset():
 	_image_retry_count = 0
 	game = null
 	_set_texture(_loading_texture)
+	# Reset visual container scale when card is recycled
+	if visual_container:
+		visual_container.scale = Vector2.ONE
 
 func refresh_settings():
 	_update_card_state_from_settings()

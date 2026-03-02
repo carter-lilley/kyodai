@@ -82,18 +82,26 @@ func _on_focus_changed(control: Control) -> void:
 		_custom_shape_size = params.get("shape_size", Vector2.ZERO)
 		_custom_corner_radius_ratio = params.get("corner_radius_ratio", 0.0)
 		_use_custom_shape = _custom_shape_size != Vector2.ZERO
-	# Check if parent has the method (e.g., Button inside GameCard)
-	elif control.get_parent() and control.get_parent().has_method("get_focus_shape_params"):
-		var parent = control.get_parent()
-		var params = parent.get_focus_shape_params()
-		_custom_shape_size = params.get("shape_size", Vector2.ZERO)
-		_custom_corner_radius_ratio = params.get("corner_radius_ratio", 0.0)
-		_use_custom_shape = _custom_shape_size != Vector2.ZERO
 	else:
-		# Use control's size with default corner radius
-		_custom_shape_size = control.size
-		_custom_corner_radius_ratio = 0.0
-		_use_custom_shape = false
+		# Traverse up the tree to find a node with get_focus_shape_params
+		# This handles nested structures like CardInput -> VisualContainer -> GameCard
+		var found_shape = false
+		var ancestor = control.get_parent()
+		while ancestor:
+			if ancestor.has_method("get_focus_shape_params"):
+				var params = ancestor.get_focus_shape_params()
+				_custom_shape_size = params.get("shape_size", Vector2.ZERO)
+				_custom_corner_radius_ratio = params.get("corner_radius_ratio", 0.0)
+				_use_custom_shape = _custom_shape_size != Vector2.ZERO
+				found_shape = true
+				break
+			ancestor = ancestor.get_parent()
+		
+		# Use control's size with default corner radius if no shape found
+		if not found_shape:
+			_custom_shape_size = control.size
+			_custom_corner_radius_ratio = 0.0
+			_use_custom_shape = false
 	
 	_update_shader_params()
 	visible = true
@@ -123,11 +131,23 @@ func _get_target_global_rect(control: Control) -> Rect2:
 	var global_pos = control.global_position
 	var ctrl_size = control.size
 	
-	# If using custom shape from parent, use parent's position and size
-	if _use_custom_shape and control.get_parent() and control.get_parent().has_method("get_focus_shape_params"):
-		var parent = control.get_parent()
-		global_pos = parent.global_position
-		ctrl_size = parent.size * parent.scale
+	# If using custom shape, traverse up to find the node with get_focus_shape_params
+	# This handles nested structures like CardInput -> VisualContainer -> GameCard
+	if _use_custom_shape:
+		var ancestor = control.get_parent()
+		while ancestor:
+			if ancestor.has_method("get_focus_shape_params"):
+				# For GameCards, check if there's a VisualContainer child that handles scaling
+				var visual_container = ancestor.get_node_or_null("VisualContainer")
+				if visual_container:
+					# Use VisualContainer's position and scaled size
+					global_pos = visual_container.global_position
+					ctrl_size = visual_container.size * visual_container.scale
+				else:
+					global_pos = ancestor.global_position
+					ctrl_size = ancestor.size * ancestor.scale
+				break
+			ancestor = ancestor.get_parent()
 	
 	return Rect2(
 		global_pos.x - border_width - padding,
