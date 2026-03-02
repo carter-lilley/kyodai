@@ -9,6 +9,11 @@ signal hero_game_changed(game: GameResource)
 var _total_games: int = 0
 var _is_loading: bool = false
 
+# Platform cycling state
+var _platforms: Array[Dictionary] = []  # [{slug, name, count}, ...]
+var _current_platform_index: int = -1  # -1 = All Games, 0+ = specific platform
+var _current_platform_slug: String = ""  # Empty = All Games
+
 func _ready():
 	# Setup VirtualScrollGridContainer
 	if not games_grid:
@@ -55,6 +60,77 @@ func _ready():
 	# Initial load
 	_load_total_count()
 
+func _input(event: InputEvent) -> void:
+	"""Handle platform cycling input using custom actions."""
+	# Only handle input when this view is active
+	if not UIManager.is_current_view(view_name):
+		return
+	
+	if event.is_action_pressed("cycle_platform_next"):
+		_cycle_platform(1)
+		accept_event()
+	elif event.is_action_pressed("cycle_platform_prev"):
+		_cycle_platform(-1)
+		accept_event()
+
+func _cycle_platform(direction: int) -> void:
+	"""Cycle to next/previous platform filter."""
+	if _is_loading:
+		return
+	
+	# Load platforms list if not already loaded
+	if _platforms.is_empty():
+		_platforms = DataManager.get_platforms_with_games()
+		print("[LibraryView] Loaded %d platforms" % _platforms.size())
+	
+	if _platforms.is_empty():
+		print("[LibraryView] No platforms with games found")
+		return
+	
+	# Calculate new index
+	var new_index = _current_platform_index + direction
+	
+	# Wrap around logic: -1 = All Games, 0+ = specific platforms
+	if new_index < -1:
+		new_index = _platforms.size() - 1
+	elif new_index >= _platforms.size():
+		new_index = -1
+	
+	_current_platform_index = new_index
+	
+	if _current_platform_index == -1:
+		_current_platform_slug = ""
+		_update_status("All Games - Loading...")
+		print("[LibraryView] Switched to: All Games")
+	else:
+		var platform = _platforms[_current_platform_index]
+		_current_platform_slug = platform.slug
+		_update_status("%s - Loading..." % platform.name)
+		print("[LibraryView] Switched to platform: %s (%d games)" % [platform.name, platform.count])
+	
+	# Reload the grid with new filter
+	_load_total_count_with_platform(false)
+
+func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
+	"""Get total game count for current platform filter."""
+	_is_loading = true
+	
+	MemoryManager.queue_db_task(
+		func():
+			var count = DataManager.get_total_games_count(_current_platform_slug)
+			print("[LibraryView] Total games count for platform '%s': %d" % [_current_platform_slug, count])
+			return count,
+		func(count: int):
+			if not is_instance_valid(games_grid):
+				print("[LibraryView] games_grid no longer valid, skipping set_total_count")
+				_is_loading = false
+				return
+			_total_games = count
+			print("[LibraryView] Setting total count: %d (preserve_cache=%s, platform=%s)" % [count, preserve_cache, _current_platform_slug])
+			games_grid.set_total_count(count, preserve_cache)
+			_is_loading = false
+	)
+
 func _load_total_count(preserve_cache: bool = false):
 	"""Get total game count for virtual scrolling setup."""
 	_is_loading = true
@@ -63,8 +139,8 @@ func _load_total_count(preserve_cache: bool = false):
 	# Query total count asynchronously
 	MemoryManager.queue_db_task(
 		func():
-			var count = DataManager.get_total_games_count()
-			print("[LibraryView] Total games count: %d" % count)
+			var count = DataManager.get_total_games_count(_current_platform_slug)
+			print("[LibraryView] Total games count: %d (platform: %s)" % [count, _current_platform_slug])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -72,21 +148,21 @@ func _load_total_count(preserve_cache: bool = false):
 				_is_loading = false
 				return
 			_total_games = count
-			print("[LibraryView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
+			print("[LibraryView] Setting total count: %d (preserve_cache=%s, platform=%s)" % [count, preserve_cache, _current_platform_slug])
 			games_grid.set_total_count(count, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 	)
 
 func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
-	"""Get total game count and call callback when complete."""
+	"""Get total game count for current platform filter and call callback when complete."""
 	_is_loading = true
 	_update_status("Loading library...")
 	
 	MemoryManager.queue_db_task(
 		func():
-			var count = DataManager.get_total_games_count()
-			print("[LibraryView] Total games count: %d" % count)
+			var count = DataManager.get_total_games_count(_current_platform_slug)
+			print("[LibraryView] Total games count: %d (platform: %s)" % [count, _current_platform_slug])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -121,10 +197,10 @@ func _on_focus_changed(control: Control):
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
-	print("[LibraryView] Items requested: offset=%d, limit=%d, preload=%s" % [offset, limit, is_preload])
+	print("[LibraryView] Items requested: offset=%d, limit=%d, platform=%s, preload=%s" % [offset, limit, _current_platform_slug, is_preload])
 	MemoryManager.queue_db_task(
 		func():
-			var games = DataManager.get_games_paginated(offset, limit, "title", true)
+			var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
 			print("[LibraryView] DB query complete: got %d games" % games.size())
 			return games,
 		func(games: Array[GameResource]):
@@ -133,13 +209,29 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	)
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
-	"""Update status label with current visible range."""
+	"""Update status label with current visible range and platform."""
 	if total_count == 0:
-		_update_status("No games found")
+		if _current_platform_index == -1:
+			_update_status("No games found")
+		else:
+			var platform_name = _get_current_platform_name()
+			_update_status("%s - No games" % platform_name)
 	else:
 		var start_num = start_index + 1
 		var end_num = mini(end_index, total_count)
-		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
+		if _current_platform_index == -1:
+			_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
+		else:
+			var platform_name = _get_current_platform_name()
+			_update_status("%s: %d-%d of %d" % [platform_name, start_num, end_num, total_count])
+
+func _get_current_platform_name() -> String:
+	"""Get the display name of the current platform."""
+	if _current_platform_index == -1:
+		return "All Games"
+	elif _current_platform_index >= 0 and _current_platform_index < _platforms.size():
+		return _platforms[_current_platform_index].get("name", "Unknown")
+	return "Unknown"
 
 func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
@@ -252,6 +344,9 @@ func _on_sync_completed(success: bool, message: String):
 		
 		# Wait for any final batch emissions to complete
 		await get_tree().create_timer(0.7).timeout  # Slightly over the 500ms batch interval
+		
+		# Clear platforms cache since new platforms may have been added
+		_platforms.clear()
 		
 		# Final consistency check - reload total count from database
 		# Preserve cache to avoid stuttering when scrolling to previously loaded pages

@@ -1035,14 +1035,20 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 		games.append(_row_to_game(row))
 	return games
 
-func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true) -> Array[GameResource]:
+func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "") -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		print("[DataManager] DB not ready for pagination query")
 		return games
 	
 	var order = "ASC" if ascending else "DESC"
-	var query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+	var query: String
+	
+	if platform_slug.is_empty():
+		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+	else:
+		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
+	
 	print("[DataManager] Executing query: %s" % query)
 	_db.query(query)
 	print("[DataManager] Query returned %d rows" % _db.query_result.size())
@@ -1051,10 +1057,53 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 		games.append(_row_to_game(row))
 	return games
 
-func get_total_games_count() -> int:
+func get_platforms_with_games() -> Array[Dictionary]:
+	"""Get list of platforms that have games, sorted alphabetically with game counts."""
+	var platforms: Array[Dictionary] = []
+	if not _is_db_ready:
+		return platforms
+	
+	# Query for platforms with their game counts, sorted alphabetically
+	var query = """
+		SELECT g.platform_slug, p.name, COUNT(*) as game_count
+		FROM games g
+		LEFT JOIN platforms p ON g.platform_slug = p.slug
+		WHERE g.is_master_entry = 1 AND g.has_cover_art = 1
+		GROUP BY g.platform_slug
+		HAVING game_count > 0
+		ORDER BY g.platform_slug ASC
+	"""
+	
+	var success = _db.query(query)
+	if success:
+		for row in _db.query_result:
+			var slug = row.get("platform_slug", "")
+			var name = row.get("name", "")
+			var count = int(row.get("game_count", 0))
+			
+			# Fallback to capitalized slug if no name in platforms table
+			if name == null or name == "":
+				name = slug.capitalize()
+			
+			platforms.append({
+				"slug": slug,
+				"name": name,
+				"count": count
+			})
+	
+	return platforms
+
+func get_total_games_count(platform_slug: String = "") -> int:
 	if not _is_db_ready:
 		return 0
-	var success = _db.query("SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1")
+	
+	var query: String
+	if platform_slug.is_empty():
+		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1"
+	else:
+		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND platform_slug = '%s'" % platform_slug
+	
+	var success = _db.query(query)
 	if success and _db.query_result.size() > 0:
 		var row = _db.query_result[0]
 		if row.has("count"):

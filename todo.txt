@@ -11,7 +11,7 @@ how to split important siblings
 	sort by plaform, search
 	layer system inner shadow /glows/fades?
 	add letters to library navigation 
-	badge effect placement opt
+	badge effect placement opt s
 ## cards
 	try scaling cropping algo
 ## hero
