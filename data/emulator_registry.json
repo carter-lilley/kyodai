@@ -183,7 +183,7 @@
 	  "android": "org.azahar.emu"
 	},
 	"launch_templates": {
-	  "windows": ["{exe}","-nogui","-fullscreen", "{rom}"],
+	  "windows": ["{exe}","-f", "{rom}"],
 	  "linux": ["{exe}", "{rom}"],
 	  "android": {
 		"action": "android.intent.action.VIEW",
