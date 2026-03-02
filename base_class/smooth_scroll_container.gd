@@ -256,6 +256,10 @@ func get_target_scroll() -> float:
 	return _get_current_scroll()
 
 func scroll_to(target: float, animate: bool = true):
+	# Kill any running tween first to prevent conflicts
+	if _scroll_tween and _scroll_tween.is_valid():
+		_scroll_tween.kill()
+	
 	if animate and smooth_scrolling:
 		_target_scroll = target
 		_start_smooth_scroll()

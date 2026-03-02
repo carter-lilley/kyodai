@@ -73,10 +73,22 @@ func _input(event: InputEvent) -> void:
 		_cycle_platform(-1)
 		accept_event()
 
+func _focus_first_card() -> void:
+	"""Focus the first game card in the grid."""
+	var first_card = games_grid.get_card_at_index(0)
+	if first_card and first_card is GameCard:
+		if first_card.card_input:
+			first_card.card_input.grab_focus()
+			print("[LibraryView] Focused first card after platform switch")
+
 func _cycle_platform(direction: int) -> void:
 	"""Cycle to next/previous platform filter."""
 	if _is_loading:
 		return
+	
+	# Play platform switch sound effect
+	if AudioManager:
+		AudioManager.play_sfx("snap")
 	
 	# Load platforms list if not already loaded
 	if _platforms.is_empty():
@@ -128,6 +140,17 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 			_total_games = count
 			print("[LibraryView] Setting total count: %d (preserve_cache=%s, platform=%s)" % [count, preserve_cache, _current_platform_slug])
 			games_grid.set_total_count(count, preserve_cache)
+			
+			# Reset scroll to top when switching platforms
+			games_grid.scroll_to_index(0, false)
+			
+			# Recalculate grid dimensions to fix layout after platform filter change
+			games_grid.refresh_dimensions()
+			
+			# Focus the first card after platform switch
+			# Use call_deferred to ensure cards are created and ready
+			call_deferred("_focus_first_card")
+			
 			_is_loading = false
 	)
 
@@ -461,3 +484,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_update_grid_margins()
 		# Also refresh the grid layout to recalculate with new margins
 		games_grid.refresh_dimensions()
+	elif setting.property_name == "card_effect_config":
+		print("[LibraryView] Card effect config changed, marking for rebuild...")
+		mark_for_rebuild("Card effects changed")

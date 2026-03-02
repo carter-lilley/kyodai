@@ -419,3 +419,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_update_grid_margins()
 		# Also refresh the grid layout to recalculate with new margins
 		games_grid.refresh_dimensions()
+	elif setting.property_name == "card_effect_config":
+		print("[HomeView] Card effect config changed, marking for rebuild...")
+		mark_for_rebuild("Card effects changed")
