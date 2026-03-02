@@ -6,9 +6,11 @@ how to split important siblings
 	placeholder cards
 	scale icon animation bug when scrolling
 	font! rodin?
+	'controls/info bar'
 	focus glow
-	controller nav (zoom, text on bottom)
-	sort by plaform, search
+	controller nav (text on bottom)
+	info bar?
+	sort by plaform for mouse, search
 	layer system inner shadow /glows/fades?
 	add letters to library navigation 
 	badge effect placement opt s

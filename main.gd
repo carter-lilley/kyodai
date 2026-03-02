@@ -12,6 +12,10 @@ const INITIAL_DELAY: float = 0.5
 const REPEAT_DELAY: float = 0.1
 var _last_press: int = 0
 
+# Zoom state tracking for analog triggers
+var _zoom_in_pressed: bool = false
+var _zoom_out_pressed: bool = false
+
 func _ready():
 	_setup_repeat()
 	
@@ -210,6 +214,23 @@ func _input(event: InputEvent):
 			_repeat_timer.stop()
 			return
 	
+	# Handle zoom in/out with triggers - only on press, not hold
+	if event.is_action_pressed("zoom_in") and not _zoom_in_pressed:
+		_zoom_in_pressed = true
+		_adjust_zoom(0.02)
+		return
+	elif event.is_action_released("zoom_in"):
+		_zoom_in_pressed = false
+		return
+	
+	if event.is_action_pressed("zoom_out") and not _zoom_out_pressed:
+		_zoom_out_pressed = true
+		_adjust_zoom(-0.02)
+		return
+	elif event.is_action_released("zoom_out"):
+		_zoom_out_pressed = false
+		return
+	
 	# Handle ui_cancel to go back to Home
 	if event.is_action_pressed("ui_cancel"):
 		# Play return sound
@@ -221,6 +242,30 @@ func _input(event: InputEvent):
 		await get_tree().process_frame
 		reset_focus_to_home_button()
 		return
+
+func _adjust_zoom(delta: float) -> void:
+	"""Adjust zoom level by delta and save to settings."""
+	if not bottom_bar:
+		return
+	
+	var current_zoom = bottom_bar.get_zoom_value()
+	var new_zoom = clampf(current_zoom + delta, 0.05, 0.5)
+	
+	# Only update if value actually changed
+	if not is_equal_approx(current_zoom, new_zoom):
+		# Update bottom bar slider (uses set_value_no_signal, so we need to manually trigger updates)
+		bottom_bar.set_zoom_value(new_zoom)
+		
+		# Manually trigger zoom update for grids (since set_zoom_value doesn't emit signals)
+		_on_zoom_changed(new_zoom)
+		
+		# Save to settings immediately
+		if SettingsManager:
+			var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+			if zoom_setting:
+				SettingsManager.set_setting(new_zoom, zoom_setting)
+				SettingsManager.save_settings()
+				print("[Main] Zoom adjusted to %.2f and saved" % new_zoom)
 
 func _on_delay_timeout():
 	if _held_dir != "":

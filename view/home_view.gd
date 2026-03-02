@@ -161,16 +161,20 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
 	print("[HomeView] rebuild_grid() called, refresh_effects=%s" % refresh_effects)
 	_update_grid_orientation()
-	games_grid.refresh_dimensions()
 	
-	# If refreshing effects, don't preserve cache so cards get recreated with new effects
+	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:
 		print("[HomeView] Rebuilding grid with effect refresh")
-		_load_total_count(false)
-		# Also refresh existing cards
-		games_grid.refresh_all_card_effects()
+		# Use callback version to ensure dimensions refresh AFTER data loads
+		_load_total_count_with_callback(false, func():
+			# Also refresh existing cards
+			games_grid.refresh_all_card_effects()
+			# Refresh dimensions AFTER data reload to get correct layout
+			games_grid.refresh_dimensions()
+		)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
+		games_grid.refresh_dimensions()
 		_load_total_count(true)
 
 func _regenerate_delay_pool(count: int) -> void:

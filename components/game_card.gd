@@ -668,6 +668,9 @@ func _on_focus_entered() -> void:
 	if AudioManager:
 		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
 	
+	# Vibrate controller for tactile feedback
+	Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
+	
 	# Scale up when focused
 	if _focus_tween:
 		_focus_tween.kill()

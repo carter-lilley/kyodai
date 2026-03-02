@@ -127,6 +127,17 @@ func _build_horizontal_layout() -> HBoxContainer:
 	_h_zoom_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_h_zoom_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
+	# L2 button icon (zoom out)
+	var h_l2_icon = TextureRect.new()
+	h_l2_icon.name = "L2Icon"
+	h_l2_icon.texture = preload("res://assets/ui/buttons/buttonL2.png")
+	h_l2_icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	h_l2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	h_l2_icon.custom_minimum_size = Vector2(24, 24)
+	h_l2_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	h_l2_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_h_zoom_container.add_child(h_l2_icon)
+	
 	_h_zoom_slider = HSlider.new()
 	_h_zoom_slider.name = "ZoomSlider"
 	_h_zoom_slider.custom_minimum_size = Vector2(150, 20)
@@ -134,6 +145,17 @@ func _build_horizontal_layout() -> HBoxContainer:
 	_h_zoom_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_setup_zoom_slider(_h_zoom_slider)
 	_h_zoom_container.add_child(_h_zoom_slider)
+	
+	# R2 button icon (zoom in)
+	var h_r2_icon = TextureRect.new()
+	h_r2_icon.name = "R2Icon"
+	h_r2_icon.texture = preload("res://assets/ui/buttons/buttonR2.png")
+	h_r2_icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	h_r2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	h_r2_icon.custom_minimum_size = Vector2(24, 24)
+	h_r2_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	h_r2_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_h_zoom_container.add_child(h_r2_icon)
 	
 	container.add_child(_h_zoom_container)
 	
@@ -168,6 +190,17 @@ func _build_vertical_layout() -> VBoxContainer:
 	_v_zoom_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_v_zoom_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
+	# R2 button icon (zoom in) - at top for vertical (up = zoom in)
+	var v_r2_icon = TextureRect.new()
+	v_r2_icon.name = "R2Icon"
+	v_r2_icon.texture = preload("res://assets/ui/buttons/buttonR2.png")
+	v_r2_icon.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
+	v_r2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	v_r2_icon.custom_minimum_size = Vector2(24, 24)
+	v_r2_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	v_r2_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_v_zoom_container.add_child(v_r2_icon)
+	
 	_v_zoom_slider = VSlider.new()
 	_v_zoom_slider.name = "ZoomSlider"
 	_v_zoom_slider.custom_minimum_size = Vector2(20, 150)
@@ -175,6 +208,17 @@ func _build_vertical_layout() -> VBoxContainer:
 	_v_zoom_slider.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_setup_zoom_slider(_v_zoom_slider)
 	_v_zoom_container.add_child(_v_zoom_slider)
+	
+	# L2 button icon (zoom out) - at bottom for vertical (down = zoom out)
+	var v_l2_icon = TextureRect.new()
+	v_l2_icon.name = "L2Icon"
+	v_l2_icon.texture = preload("res://assets/ui/buttons/buttonL2.png")
+	v_l2_icon.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
+	v_l2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	v_l2_icon.custom_minimum_size = Vector2(24, 24)
+	v_l2_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	v_l2_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_v_zoom_container.add_child(v_l2_icon)
 	
 	container.add_child(_v_zoom_container)
 	
