@@ -92,6 +92,7 @@ func _setup_ui():
 	popup.add_item("Border", 0)
 	popup.add_item("Platform Badge", 1)
 	popup.add_item("Drop Shadow", 2)
+	popup.add_item("Glow", 3)
 	popup.id_pressed.connect(_on_add_effect)
 	
 	left_vbox.add_child(HSeparator.new())
@@ -257,6 +258,22 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
+	elif effect_data.get("effect_id") == "glow":
+		var glow_effect = GlowEffect.new()
+		var schema = glow_effect.get_settings_schema()
+		glow_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -293,6 +310,17 @@ func _on_add_effect(id: int):
 					"shadow_softness": 0.04,
 					"shadow_spread": 0.0,
 					"shadow_expand": 0.02
+				}
+			}
+		3:
+			new_effect = {
+				"effect_id": "glow",
+				"settings": {
+					"glow_radius": 0.1,
+					"glow_intensity": 1.5,
+					"blur_amount": 12.0,
+					"threshold": 0.1,
+					"glow_spread": 0.05
 				}
 			}
 	

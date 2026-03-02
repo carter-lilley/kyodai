@@ -7,8 +7,6 @@ how to split important siblings
 	font! rodin?
 	'controls/info bar'
 	focus glow
-	controls/info bar?
-	sort by plaform for mouse 
 	search
 	layer system inner-shadow/glows/fades?
 	add letters to library navigation 

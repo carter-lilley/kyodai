@@ -41,6 +41,7 @@ var _base_effect: BaseCardEffect = null
 var _border_effect: BorderEffect = null
 var _badge_effect: BadgeEffect = null
 var _drop_shadow_effect: DropShadowEffect = null
+var _glow_effect: GlowEffect = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -167,6 +168,7 @@ func _rebuild_effects():
 	_border_effect = null
 	_badge_effect = null
 	_drop_shadow_effect = null
+	_glow_effect = null
 	_card_state.border_inset_ratio = 0.0
 	
 	# Add all effects to VisualContainer so they scale together with the card content
@@ -212,6 +214,16 @@ func _rebuild_effects():
 		_badge_effect.set_border_width(_card_state.border_inset_ratio)
 		_badge_effect.set_border_inset_pixels(_card_state.border_inset_ratio * _card_state.card_size.x)
 	
+	# Add glow effect first (will be behind everything)
+	var glow_config = _get_effect_config("glow")
+	if glow_config:
+		_glow_effect = GlowEffect.new()
+		_glow_effect.name = "GlowEffect"
+		_glow_effect.set_anchors_preset(Control.PRESET_CENTER)
+		visual_container.add_child(_glow_effect)
+		_glow_effect.initialize(_card_state, glow_config.get("settings", {}))
+		visual_container.move_child(_glow_effect, 0)
+	
 	var drop_shadow_config = _get_effect_config("drop_shadow")
 	if drop_shadow_config:
 		_drop_shadow_effect = DropShadowEffect.new()
@@ -219,8 +231,8 @@ func _rebuild_effects():
 		_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
 		visual_container.add_child(_drop_shadow_effect)
 		_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
-		# Move drop shadow to back (behind card)
-		visual_container.move_child(_drop_shadow_effect, 0)
+		# Move drop shadow to back (behind card but after glow)
+		visual_container.move_child(_drop_shadow_effect, 0 if _glow_effect == null else 1)
 	
 	# Move card_input to front so it's on top of all effects
 	# CardInput is inside VisualContainer and contains all interactive UI elements
@@ -620,6 +632,9 @@ func _set_texture(tex: Texture2D) -> void:
 	if _base_effect:
 		_base_effect.set_game_texture(tex)
 	_card_state.game_texture = tex
+	# Update glow effect texture if it exists
+	if _glow_effect:
+		_glow_effect.set_game_texture(tex)
 
 func _on_card_pressed():
 	if not game:
