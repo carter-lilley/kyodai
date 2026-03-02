@@ -10,10 +10,11 @@ how to split important siblings
 	focus glow
 	controller nav (text on bottom)
 	info bar?
-	sort by plaform for mouse, search
-	layer system inner shadow /glows/fades?
+	sort by plaform for mouse 
+	search
+	layer system inner-shadow/glows/fades?
 	add letters to library navigation 
-	badge effect placement opt s
+	badge effect placement opts
 ## cards
 	try scaling cropping algo
 ## hero
@@ -38,4 +39,5 @@ how to split important siblings
 	rpcs3
 		zip extraction>??
 ## registry:
-	platform download/launch diffs (Linux/windows/android)
+	hidden core systems toggle(?)
+	platform download/launch diffs (Linux/android)

@@ -3,8 +3,9 @@ extends View
 
 signal hero_game_changed(game: GameResource)
 
-@onready var games_grid: VirtualScrollGridContainer = $MarginContainer/VirtualScrollGridContainer
+@onready var games_grid: VirtualScrollGridContainer = $MarginContainer/VBoxContainer/VirtualScrollGridContainer
 @onready var margin_container: MarginContainer = $MarginContainer
+@onready var platform_indicator: PlatformIndicator = $MarginContainer/VBoxContainer/PlatformIndicator
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -57,8 +58,20 @@ func _ready():
 	# Connect to focus changes for hero image
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 	
+	# Load platforms list for indicator
+	_load_platforms_list()
+	
 	# Initial load
 	_load_total_count()
+
+func _load_platforms_list() -> void:
+	"""Load platforms and initialize platform indicator."""
+	_platforms = DataManager.get_platforms_with_games()
+	print("[LibraryView] Loaded %d platforms" % _platforms.size())
+	
+	# Initialize platform indicator with "All" selected
+	if platform_indicator:
+		platform_indicator.update_display(_platforms, _current_platform_index)
 
 func _input(event: InputEvent) -> void:
 	"""Handle platform cycling input using custom actions."""
@@ -90,10 +103,9 @@ func _cycle_platform(direction: int) -> void:
 	if AudioManager:
 		AudioManager.play_sfx("snap")
 	
-	# Load platforms list if not already loaded
+	# Ensure platforms are loaded
 	if _platforms.is_empty():
-		_platforms = DataManager.get_platforms_with_games()
-		print("[LibraryView] Loaded %d platforms" % _platforms.size())
+		_load_platforms_list()
 	
 	if _platforms.is_empty():
 		print("[LibraryView] No platforms with games found")
@@ -109,6 +121,10 @@ func _cycle_platform(direction: int) -> void:
 		new_index = -1
 	
 	_current_platform_index = new_index
+	
+	# Update platform indicator UI
+	if platform_indicator:
+		platform_indicator.update_display(_platforms, _current_platform_index)
 	
 	if _current_platform_index == -1:
 		_current_platform_slug = ""

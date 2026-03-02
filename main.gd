@@ -114,10 +114,13 @@ func _on_zoom_changed_finished(value: float):
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Safely get the games grid from a view
-	# After adding MarginContainer wrapper, grid is at MarginContainer/VirtualScrollGridContainer
-	if view.has_node("MarginContainer/VirtualScrollGridContainer"):
+	# New structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer (for platform indicator)
+	if view.has_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer"):
+		return view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer")
+	# Old structure: MarginContainer/VirtualScrollGridContainer
+	elif view.has_node("MarginContainer/VirtualScrollGridContainer"):
 		return view.get_node("MarginContainer/VirtualScrollGridContainer")
-	# Fallback to old path for backward compatibility
+	# Very old structure: VirtualScrollGridContainer
 	elif view.has_node("VirtualScrollGridContainer"):
 		return view.get_node("VirtualScrollGridContainer")
 	return null
