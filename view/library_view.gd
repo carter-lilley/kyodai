@@ -61,6 +61,12 @@ func _ready():
 	# Load platforms list for indicator
 	_load_platforms_list()
 	
+	# Connect platform indicator signals
+	if platform_indicator:
+		platform_indicator.platform_selected.connect(_on_platform_selected)
+		platform_indicator.cycle_prev_clicked.connect(_on_cycle_prev_clicked)
+		platform_indicator.cycle_next_clicked.connect(_on_cycle_next_clicked)
+	
 	# Initial load
 	_load_total_count()
 
@@ -169,6 +175,51 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 			
 			_is_loading = false
 	)
+
+func _on_platform_selected(platform_index: int) -> void:
+	"""Handle platform selection from indicator click."""
+	if _is_loading:
+		return
+	
+	# Play platform switch sound effect
+	if AudioManager:
+		AudioManager.play_sfx("snap")
+	
+	# Ensure platforms are loaded
+	if _platforms.is_empty():
+		_load_platforms_list()
+	
+	if _platforms.is_empty():
+		print("[LibraryView] No platforms with games found")
+		return
+	
+	# Set to the selected platform directly
+	_current_platform_index = platform_index
+	
+	# Update platform indicator UI
+	if platform_indicator:
+		platform_indicator.update_display(_platforms, _current_platform_index)
+	
+	if _current_platform_index == -1:
+		_current_platform_slug = ""
+		_update_status("All Games - Loading...")
+		print("[LibraryView] Switched to: All Games (via click)")
+	else:
+		var platform = _platforms[_current_platform_index]
+		_current_platform_slug = platform.slug
+		_update_status("%s - Loading..." % platform.name)
+		print("[LibraryView] Switched to platform: %s (%d games) (via click)" % [platform.name, platform.count])
+	
+	# Reload the grid with new filter
+	_load_total_count_with_platform(false)
+
+func _on_cycle_prev_clicked() -> void:
+	"""Handle click on previous arrow in platform indicator."""
+	_cycle_platform(-1)
+
+func _on_cycle_next_clicked() -> void:
+	"""Handle click on next arrow in platform indicator."""
+	_cycle_platform(1)
 
 func _load_total_count(preserve_cache: bool = false):
 	"""Get total game count for virtual scrolling setup."""

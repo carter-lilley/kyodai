@@ -8,8 +8,7 @@ how to split important siblings
 	font! rodin?
 	'controls/info bar'
 	focus glow
-	controller nav (text on bottom)
-	info bar?
+	controls/info bar?
 	sort by plaform for mouse 
 	search
 	layer system inner-shadow/glows/fades?
@@ -18,7 +17,7 @@ how to split important siblings
 ## cards
 	try scaling cropping algo
 ## hero
-	hero placement opt
+	hero placement opt -> '4 way container?'
 	hero IGDB opt
 	hero types? background/card?
 	hero fx (screenshots/cropping.shadows/etc)
