@@ -219,6 +219,9 @@ func _input(event: InputEvent):
 	
 	# Handle zoom in/out with triggers - only on press, not hold
 	if event.is_action_pressed("zoom_in") and not _zoom_in_pressed:
+	# Play sound effect when zooming (R2/L2)
+		if AudioManager:
+			AudioManager.play_sfx("click_04")
 		_zoom_in_pressed = true
 		_adjust_zoom(0.02)
 		return
@@ -227,6 +230,9 @@ func _input(event: InputEvent):
 		return
 	
 	if event.is_action_pressed("zoom_out") and not _zoom_out_pressed:
+	# Play sound effect when zooming (R2/L2)
+		if AudioManager:
+			AudioManager.play_sfx("click_04")
 		_zoom_out_pressed = true
 		_adjust_zoom(-0.02)
 		return

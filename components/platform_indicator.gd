@@ -136,17 +136,27 @@ func _refresh_labels():
 			btn.add_theme_color_override("font_focus_color", Color.WHITE)
 			btn.add_theme_font_size_override("font_size", 18)
 		else:
-			# Other platforms - visible but not highlighted
+			# Other platforms - visible but not highlighted, no background
 			btn.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.9))
 			btn.add_theme_color_override("font_hover_color", Color(0.7, 0.7, 0.7, 0.9))
 			btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.7, 0.7, 0.9))
 			btn.add_theme_color_override("font_focus_color", Color(0.7, 0.7, 0.7, 0.9))
 			btn.add_theme_font_size_override("font_size", 14)
-			# Remove any background styles
-			btn.remove_theme_stylebox_override("normal")
-			btn.remove_theme_stylebox_override("hover")
-			btn.remove_theme_stylebox_override("pressed")
-			btn.remove_theme_stylebox_override("focus")
+			# Set transparent background styles to override default button appearance
+			var transparent_style = _create_transparent_style()
+			btn.add_theme_stylebox_override("normal", transparent_style)
+			btn.add_theme_stylebox_override("hover", transparent_style)
+			btn.add_theme_stylebox_override("pressed", transparent_style)
+			btn.add_theme_stylebox_override("focus", transparent_style)
+
+func _create_transparent_style() -> StyleBoxFlat:
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0, 0, 0, 0)  # Fully transparent
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
+	return style
 
 func _create_highlight_style() -> StyleBoxFlat:
 	var style = StyleBoxFlat.new()

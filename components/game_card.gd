@@ -803,10 +803,11 @@ func play_enter_animation() -> void:
 	if card_input:
 		_enter_tween_alpha.parallel().tween_property(card_input, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
 	
-	# Tween opacity on all CardEffect children (border, badge, drop shadow)
-	for child in get_children():
-		if child is CardEffect:
-			_enter_tween_alpha.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
+	# Tween opacity on all CardEffect children inside VisualContainer (border, badge, drop shadow)
+	if visual_container:
+		for child in visual_container.get_children():
+			if child is CardEffect:
+				_enter_tween_alpha.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
 
 ## Sets the card's alpha immediately (for initial state before animations)
 func set_card_alpha(alpha: float) -> void:
@@ -817,10 +818,11 @@ func set_card_alpha(alpha: float) -> void:
 	if card_input:
 		card_input.modulate = Color(1, 1, 1, alpha)
 	
-	# Set opacity on all CardEffect children (border, badge, drop shadow)
-	for child in get_children():
-		if child is CardEffect:
-			child.modulate = Color(1, 1, 1, alpha)
+	# Set opacity on all CardEffect children inside VisualContainer (border, badge, drop shadow)
+	if visual_container:
+		for child in visual_container.get_children():
+			if child is CardEffect:
+				child.modulate = Color(1, 1, 1, alpha)
 
 func _on_download_progress(item_id: String, progress: float):
 	if not DownloadManager:

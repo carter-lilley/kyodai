@@ -305,6 +305,7 @@ func _on_zoom_value_changed(value: float):
 		_v_zoom_slider.set_value_no_signal(value)
 	else:
 		_h_zoom_slider.set_value_no_signal(value)
+	
 	zoom_changed.emit(value)
 
 func _on_zoom_drag_ended(value_changed: bool):
