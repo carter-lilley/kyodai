@@ -334,8 +334,9 @@ func _update_nav_buttons():
 
 func _update_zoom_visibility():
 	var show_zoom = _current_view in ["Home", "Library"]
-	_h_zoom_container.visible = show_zoom
-	_v_zoom_container.visible = show_zoom
+	# Use modulate alpha instead of visible to preserve layout space
+	_h_zoom_container.modulate.a = 1.0 if show_zoom else 0.0
+	_v_zoom_container.modulate.a = 1.0 if show_zoom else 0.0
 
 func set_status_text(text: String):
 	if _h_status_label:

@@ -296,3 +296,20 @@ func _on_settings_tab_changed(tab_idx: int):
 	var tab = _settings_container.get_tab_control(tab_idx)
 	if tab and tab.has_method("on_view_show"):
 		tab.on_view_show()
+
+func _input(event: InputEvent):
+	# Only handle input when this view is the current active view
+	if not UIManager.is_current_view(view_name):
+		return
+	
+	# Handle platform cycle actions to navigate between settings tabs
+	if event.is_action_pressed("cycle_platform_next"):
+		var current_tab = _settings_container.current_tab
+		var tab_count = _settings_container.get_tab_count()
+		_settings_container.current_tab = (current_tab + 1) % tab_count
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("cycle_platform_prev"):
+		var current_tab = _settings_container.current_tab
+		var tab_count = _settings_container.get_tab_count()
+		_settings_container.current_tab = (current_tab - 1 + tab_count) % tab_count
+		get_viewport().set_input_as_handled()

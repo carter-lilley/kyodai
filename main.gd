@@ -240,8 +240,14 @@ func _input(event: InputEvent):
 		_zoom_out_pressed = false
 		return
 	
-	# Handle ui_cancel to go back to Home
+	# Handle ui_cancel to go back to Home (unless keyboard is open)
 	if event.is_action_pressed("ui_cancel"):
+		# Check if keyboard is visible - if so, let keyboard handle it
+		var keyboard = $AntiAliasingLayer/OnscreenKeyboard
+		if keyboard and keyboard.visible:
+			# Keyboard will handle ui_cancel to close itself
+			return
+		
 		# Play return sound
 		if AudioManager:
 			AudioManager.play_sfx("return")

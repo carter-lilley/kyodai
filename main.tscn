@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://4p4i1nlgkicx" path="res://main.gd" id="1_main"]
 [ext_resource type="Shader" uid="uid://baurqkp6i412j" path="res://shaders/anti_aliasing_pp.gdshader" id="2_aashader"]
 [ext_resource type="PackedScene" uid="uid://b70vbph3l300i" path="res://components/bottom_bar.tscn" id="3_bottombar"]
+[ext_resource type="Script" uid="uid://uid_placeholder" path="res://addons/onscreenkeyboard/onscreen_keyboard.gd" id="4_onscreenkeyboard"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_aa"]
 shader = ExtResource("2_aashader")
@@ -69,3 +70,14 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
+
+[node name="OnscreenKeyboard" type="PanelContainer" parent="AntiAliasingLayer" unique_id=123456789]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -300.0
+grow_horizontal = 2
+grow_vertical = 0
+script = ExtResource("4_onscreenkeyboard")

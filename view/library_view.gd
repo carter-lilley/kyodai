@@ -16,6 +16,8 @@ var _current_platform_index: int = -1  # -1 = All Games, 0+ = specific platform
 var _current_platform_slug: String = ""  # Empty = All Games
 
 func _ready():
+	view_name = "Library"
+	
 	# Setup VirtualScrollGridContainer
 	if not games_grid:
 		push_error("[LibraryView] games_grid is null! Cannot initialize.")

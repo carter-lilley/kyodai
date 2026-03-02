@@ -1240,15 +1240,28 @@ func execute_launch(intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] Launching: " + intent.to_string())
 	
+	# Controller configuration temporarily disabled - need to solve SDL device index mapping
+	# TODO: Re-enable when SDL device index detection is implemented
+	# Configure controllers for this emulator before launching
+	# var should_continue = await _configure_emulator_controllers(intent)
+	# if not should_continue:
+	# 	print("[LaunchManager] Controller configuration cancelled, aborting launch")
+	# 	return false
+	
 	if PlatformManager.is_android():
 		return _execute_android(intent)
 	else:
+		print("[LaunchManager] Calling _execute_desktop")
 		return _execute_desktop(intent)
 
 func _execute_desktop(intent: LaunchIntent) -> bool:
+	print("[LaunchManager] _execute_desktop starting")
+	
 	if intent.launch_args.is_empty():
 		push_error("[LaunchManager] No launch arguments for desktop")
 		return false
+	
+	print("[LaunchManager] Got launch args: " + str(intent.launch_args.size()) + " arguments")
 	
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
@@ -1298,7 +1311,279 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] Launched process with PID: " + str(pid))
 	launch_completed.emit(true, "Game launched successfully")
+	print("[LaunchManager] _execute_desktop returning true")
 	return true
+
+## Configures controller settings for specific emulators before launch
+const CONTROLLER_REGISTRY_PATH := "res://data/controller_registry.json"
+
+var _controller_registry: Dictionary = {}
+
+func _get_controller_registry() -> Dictionary:
+	if _controller_registry.is_empty():
+		_load_controller_registry()
+	return _controller_registry
+
+func _load_controller_registry() -> void:
+	if not FileAccess.file_exists(CONTROLLER_REGISTRY_PATH):
+		print("[LaunchManager] Controller registry not found")
+		return
+	
+	var file = FileAccess.open(CONTROLLER_REGISTRY_PATH, FileAccess.READ)
+	if not file:
+		push_error("[LaunchManager] Failed to open controller registry")
+		return
+	
+	var json = JSON.new()
+	var error = json.parse(file.get_as_text())
+	file.close()
+	
+	if error != OK:
+		push_error("[LaunchManager] Failed to parse controller registry: " + json.get_error_message())
+		return
+	
+	_controller_registry = json.data
+
+func _configure_emulator_controllers(intent: LaunchIntent) -> bool:
+	var registry = _get_controller_registry()
+	if registry.is_empty():
+		return true
+	
+	var emulator_id = intent.emulator_id
+	if not registry.has(emulator_id):
+		return true
+	
+	var config = registry[emulator_id]
+	var tasks = config.get("tasks", [])
+	
+	var emulator_path = get_emulator_install_path(emulator_id)
+	if emulator_path == "":
+		return true
+	
+	# Get the directory containing the emulator (not the executable itself)
+	var install_path = emulator_path.get_base_dir()
+	
+	for task in tasks:
+		var should_continue = await _execute_controller_task(task, install_path)
+		if not should_continue:
+			return false
+	
+	return true
+
+func _execute_controller_task(task: Dictionary, install_path: String) -> bool:
+	var task_type = task.get("type", "")
+	
+	match task_type:
+		"create_folders":
+			_execute_controller_create_folders(task, install_path)
+			return true
+		"edit_file":
+			return await _execute_controller_edit_file(task, install_path)
+		_:
+			return true
+
+func _execute_controller_create_folders(task: Dictionary, install_path: String) -> void:
+	var folders = task.get("folders", [])
+	for folder in folders:
+		var path = install_path + "/" + folder
+		var dir = DirAccess.open(install_path)
+		if dir:
+			dir.make_dir_recursive(folder)
+
+func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bool:
+	var file_path = task.get("file", "")
+	var full_path = install_path + "/" + file_path
+	
+	# Validate existing config
+	var validate = task.get("validate", {})
+	if not validate.is_empty():
+		var is_valid = _validate_controller_config(full_path, validate)
+		if is_valid:
+			print("[LaunchManager] Controller config valid: " + file_path)
+			return true
+	
+	# Show user prompt
+	var emulator_name = _get_emulator_name_from_path(install_path)
+	
+	# Create and show dialog
+	var dialog = ConfirmationDialog.new()
+	dialog.title = "Controller Configuration"
+	dialog.dialog_text = "Controller configuration for " + emulator_name + " is missing or incorrect.\n\nUpdate it now?"
+	dialog.ok_button_text = "Yes"
+	dialog.cancel_button_text = "No"
+	dialog.min_size = Vector2(400, 150)
+	dialog.exclusive = true  # Block input to other windows
+	dialog.unresizable = true
+	
+	# Add to scene tree
+	get_tree().root.add_child(dialog)
+	
+	print("[LaunchManager] Controller config needs update: " + file_path)
+	print("[LaunchManager] Showing dialog for: " + emulator_name)
+	
+	# Use dictionary for reference semantics (lambdas capture by value)
+	var dialog_state = {"confirmed": false, "responded": false}
+	
+	var on_confirmed = func():
+		print("[LaunchManager] Dialog: User confirmed")
+		dialog_state.confirmed = true
+		dialog_state.responded = true
+	
+	var on_canceled = func():
+		print("[LaunchManager] Dialog: User canceled")
+		dialog_state.confirmed = false
+		dialog_state.responded = true
+	
+	dialog.confirmed.connect(on_confirmed)
+	dialog.canceled.connect(on_canceled)
+	
+	# Show dialog after signals are connected
+	dialog.popup_centered()
+	
+	print("[LaunchManager] Waiting for dialog response...")
+	
+	# Wait for response
+	while not dialog_state.responded:
+		await get_tree().process_frame
+	
+	print("[LaunchManager] Dialog closed, confirmed=" + str(dialog_state.confirmed))
+	
+	var confirmed = dialog_state.confirmed
+	
+	# Clean up
+	dialog.queue_free()
+	
+	if not confirmed:
+		print("[LaunchManager] User skipped controller update for: " + file_path)
+		return true  # Continue with launch
+	
+	# Apply edits
+	print("[LaunchManager] Applying controller config update for: " + file_path)
+	var edits = task.get("edits", [])
+	for edit in edits:
+		var content = edit.get("content", "")
+		if content != "":
+			_execute_controller_file_edit(full_path, content)
+	
+	return true
+
+func _validate_controller_config(file_path: String, validate: Dictionary) -> bool:
+	var validate_type = validate.get("type", "")
+	
+	match validate_type:
+		"section_contains":
+			return _validate_section_contains(file_path, validate)
+		_:
+			return false
+
+func _validate_section_contains(file_path: String, validate: Dictionary) -> bool:
+	if not FileAccess.file_exists(file_path):
+		return false
+	
+	var file = FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		return false
+	
+	var section = validate.get("section", "")
+	var pattern = validate.get("pattern", "")
+	
+	var content = file.get_as_text()
+	file.close()
+	
+	# Find the section
+	var section_start = content.find("[" + section + "]")
+	if section_start == -1:
+		return false
+	
+	# Find the next section or end of file
+	var next_section = content.find("[", section_start + 1)
+	var section_content = ""
+	if next_section == -1:
+		section_content = content.substr(section_start)
+	else:
+		section_content = content.substr(section_start, next_section - section_start)
+	
+	# Check if pattern exists in section
+	return section_content.find(pattern) != -1
+
+func _execute_controller_file_edit(file_path: String, content: String) -> void:
+	var existing_content = ""
+	
+	if FileAccess.file_exists(file_path):
+		var file = FileAccess.open(file_path, FileAccess.READ)
+		if file:
+			existing_content = file.get_as_text()
+			file.close()
+	
+	# Parse the new content to find sections we need to replace
+	var new_sections = _parse_ini_sections(content)
+	
+	# Replace or append sections in existing content
+	var final_content = existing_content
+	for section_name in new_sections.keys():
+		var section_content = new_sections[section_name]
+		final_content = _replace_or_append_section(final_content, section_name, section_content)
+	
+	var write_file = FileAccess.open(file_path, FileAccess.WRITE)
+	if not write_file:
+		push_error("[LaunchManager] Failed to write: " + file_path)
+		return
+	
+	write_file.store_string(final_content)
+	write_file.close()
+	
+	print("[LaunchManager] Updated controller config: " + file_path)
+
+## Parse INI content into sections dictionary
+func _parse_ini_sections(content: String) -> Dictionary:
+	var sections = {}
+	var current_section = ""
+	var current_content = ""
+	
+	for line in content.split("\n"):
+		var trimmed = line.strip_edges()
+		if trimmed.begins_with("[") and trimmed.ends_with("]"):
+			# Save previous section
+			if current_section != "":
+				sections[current_section] = current_content.strip_edges()
+			# Start new section
+			current_section = trimmed.substr(1, trimmed.length() - 2)
+			current_content = line + "\n"
+		elif current_section != "":
+			current_content += line + "\n"
+	
+	# Save last section
+	if current_section != "":
+		sections[current_section] = current_content.strip_edges()
+	
+	return sections
+
+## Replace a section in INI content or append if not exists
+func _replace_or_append_section(content: String, section_name: String, section_content: String) -> String:
+	var section_header = "[" + section_name + "]"
+	var section_start = content.find(section_header)
+	
+	if section_start == -1:
+		# Section doesn't exist, append it
+		return content + "\n\n" + section_content
+	
+	# Find the end of this section (start of next section or end of file)
+	var next_section = content.find("[", section_start + section_header.length())
+	
+	var before_section = content.substr(0, section_start)
+	var after_section = ""
+	if next_section != -1:
+		after_section = content.substr(next_section)
+	
+	# Combine: before + new section + after
+	return before_section + section_content + "\n\n" + after_section
+
+func _get_emulator_name_from_path(install_path: String) -> String:
+	# Extract emulator ID from path
+	var parts = install_path.split("/")
+	if parts.size() > 0:
+		return parts[-1]
+	return "emulator"
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource) -> void:
@@ -1432,7 +1717,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 		NotificationManager.show_notification("Failed to create launch intent", Notification.Type.ERROR)
 		return
 	
-	var success = execute_launch(intent)
+	var success = await execute_launch(intent)
 	
 	if not success:
 		NotificationManager.show_notification("Failed to launch " + game.get_display_name(), Notification.Type.ERROR)

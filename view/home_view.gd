@@ -22,6 +22,8 @@ enum AnimationMode { SEQUENTIAL, RANDOM }
 var _delay_pool: Array[float] = []
 
 func _ready():
+	view_name = "Home"
+	
 	# Setup VirtualScrollGridContainer
 	if not games_grid:
 		push_error("[HomeView] games_grid is null! Cannot initialize.")

@@ -26,6 +26,9 @@ how to split important siblings
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
+	check for updates
+	vita launching (not installing)
+	controller inis for pcsx2, dolphin, azahar, melonds
 	all: controllers, hotkeys, graphics settings, confirm on exit, etc?
 	named post install notifs (and toggle for core system downloading)
 	cemu:
