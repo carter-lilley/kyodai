@@ -13,7 +13,9 @@ how to split important siblings
 	layer system inner shadow / glows/fades?
 	add letters to library navigation 
 	badge effect placement opt
-	bottom bar + hero placement opt
+## hero
+	hero placement/type opt
+	hero..background type
 	hero fx (screenshots/cropping.shadows/etc)
 ## performance:
 	cache image colors,  cropping data, and sibiling lookup on sync

@@ -121,7 +121,7 @@ static func get_available_effects() -> Array[String]:
 static func get_effect_display_name(effect_id: String) -> String:
 	match effect_id:
 		"solid": return "Solid Color"
-		"xmb": return "XMB Animated"
+		"xmb": return "XMB"
 		"motes": return "Motes"
 		"osdsys": return "OSDSYS"
 		_: return "Unknown"

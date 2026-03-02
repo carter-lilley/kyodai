@@ -32,3 +32,6 @@ func set_game_texture(texture: Texture2D) -> void:
 
 func get_settings_schema() -> Array[SettingsVar]:
 	return []
+
+func set_alpha(value: float) -> void:
+	_set_shader_param("alpha", value)

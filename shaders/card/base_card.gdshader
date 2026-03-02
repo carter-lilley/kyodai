@@ -4,6 +4,7 @@ uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_ratio = 0.06;  // 0.0 to 1.0, relative to card width
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
+uniform float alpha = 1.0;  // Global alpha multiplier for fade animations
 uniform bool debug_sobel = false;
 uniform bool debug_sobel_density = false;
 uniform bool debug_blend_vls = false;
@@ -341,6 +342,6 @@ void fragment() {
 		}
 	}
 	
-	tex_color.a *= edge_alpha;
+	tex_color.a *= edge_alpha * alpha;
 	COLOR = tex_color;
 }

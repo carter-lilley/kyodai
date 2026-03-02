@@ -8,6 +8,11 @@ signal hero_game_changed(game: GameResource)
 
 var _total_games: int = 0
 var _is_loading: bool = false
+var _is_initial_launch: bool = true
+
+# Animation timing controls
+@export var enter_animation_start_delay: float = 1.15  # Delay before first card animation starts
+@export var enter_animation_stagger: float = 0.03      # Delay between each card's animation
 
 func _ready():
 	# Setup VirtualScrollGridContainer
@@ -131,6 +136,9 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 		func(games: Array[GameResource]):
 			print("[HomeView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
 			games_grid.on_items_loaded(games, offset, is_preload)
+			# Mark initial launch complete after first batch loads
+			if offset == 0 and _is_initial_launch:
+				_is_initial_launch = false
 	)
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
@@ -162,6 +170,14 @@ func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
 		card.download_requested.connect(_on_download_requested)
+		# Play enter animation with staggered delay on initial launch
+		if _is_initial_launch:
+			# Start invisible immediately
+			card.set_card_alpha(0.0)
+			var delay = enter_animation_start_delay + (index * enter_animation_stagger)
+			await get_tree().create_timer(delay).timeout
+			if is_instance_valid(card):
+				card.play_enter_animation()
 
 func _on_download_requested(game: GameResource):
 	# Use the selected sibling's ID and file name if one is selected
