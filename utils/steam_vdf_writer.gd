@@ -178,15 +178,29 @@ static func add_shortcut(shortcuts: Dictionary, game_data: Dictionary) -> Dictio
 	while shortcuts_list.has(str(next_index)):
 		next_index += 1
 	
-	# Generate AppID from exe path and name
-	var exe_path = game_data.get("exe", "")
-	var app_name = game_data.get("name", "Unknown")
-	var app_id := generate_app_id(exe_path, app_name)
+	# Generate AppID from the exe path (without quotes) + app name
+	# Formula: crc32("exe" + app_name) | 0x80000000
+	# Extract just the exe path from the full command (first quoted string, without quotes)
+	var full_exe: String = game_data.get("exe", "")
+	var exe_path: String = ""
+	if full_exe.begins_with("\""):
+		var second_quote := full_exe.find("\"", 1)
+		if second_quote > 0:
+			exe_path = full_exe.substr(1, second_quote - 1)  # Extract without quotes
+	else:
+		exe_path = full_exe
 	
-	# Create shortcut entry
+	var app_name: String = game_data.get("name", "Unknown")
+	
+	var result := generate_app_id(exe_path, app_name)
+	var app_id_64: int = result.app_id_64  # 64-bit for shortcuts.vdf
+	var app_id_32: int = result.app_id_32  # 32-bit for grid files
+	
+	# Create shortcut entry with 32-bit appid (Steam expects INT32, not UINT64)
 	var entry := {
-		"AppName": app_name,
-		"Exe": exe_path,
+		"appid": app_id_32,  # Use 32-bit here, Steam stores it as INT32
+		"AppName": game_data.get("name", "Unknown"),
+		"Exe": game_data.get("exe", ""),
 		"StartDir": game_data.get("start_dir", ""),
 		"icon": game_data.get("icon", ""),
 		"ShortcutPath": "",
@@ -207,39 +221,153 @@ static func add_shortcut(shortcuts: Dictionary, game_data: Dictionary) -> Dictio
 	
 	return {
 		"shortcuts": new_shortcuts,
-		"app_id": app_id
+		"app_id": app_id_32  # Return 32-bit for grid artwork
 	}
 
-## Generates a unique AppID for a non-Steam game
-## Steam uses CRC32 of "URL" + Exe path + game name (lowercase)
-static func generate_app_id(exe_path: String, app_name: String) -> int:
-	var input := "URL" + exe_path + app_name
-	input = input.to_lower()
+## Generates unique AppIDs for a non-Steam game
+## Returns both 64-bit (for shortcuts.vdf) and 32-bit (for grid files)
+## Formula: 
+##   32-bit: crc32(exe + name) | 0x80000000
+##   64-bit: (32-bit << 32) | 0x02000000
+static func generate_app_id(exe_path: String, app_name: String) -> Dictionary:
+	# Steam wraps exe path in quotes for the CRC calculation
+	var key := '"' + exe_path + '"' + app_name
 	
-	var crc := _crc32(input)
-	var app_id: int = (crc & 0xFFFFFFFF) | 0x10000000
-	return app_id
+	print("[SteamVDF] Key: '", key, "'")
+	print("[SteamVDF] Key bytes: ", key.to_utf8_buffer())
+	
+	# Test with known values for verification
+	var test_key := '"C:\\Users\\carter\\AppData\\Roaming\\Godot\\app_userdata\\kyodai\\emulators\\melonds\\melonDS.exe"Animal Crossing: Wild World'
+	var test_crc := _crc32(test_key)
+	print("[SteamVDF] Test CRC raw: ", test_crc)
+	print("[SteamVDF] Test CRC hex: ", "0x%08X" % (test_crc & 0xFFFFFFFF))
+	
+	var crc := _crc32(key)
+	# Mask to ensure unsigned 32-bit
+	var app_id_32: int = ((crc & 0xFFFFFFFF) | 0x80000000) & 0xFFFFFFFF
+	
+	# Construct 64-bit appid using PackedByteArray to avoid signed overflow
+	# Steam stores: Low 32 bits = app_id_32, High 32 bits = 0x02000000
+	# This means: app_id_64 = (0x02000000 << 32) | app_id_32
+	var bytes := PackedByteArray()
+	bytes.resize(8)
+	bytes.encode_u32(0, app_id_32)  # Low 32 bits at offset 0
+	bytes.encode_u32(4, 0x02000000)  # High 32 bits at offset 4
+	
+	# Decode as unsigned 64-bit int (little endian)
+	var app_id_64: int = bytes.decode_u64(0)
+	
+	return {
+		"app_id_32": app_id_32,
+		"app_id_64": app_id_64
+	}
 
-## CRC32 implementation
+## Debug function to calculate AppID
+static func debug_calculate_app_ids(full_command: String, app_name: String) -> void:
+	print("[SteamVDF] ===== AppID Calculation =====")
+	print("[SteamVDF] Game name: " + app_name)
+	print("[SteamVDF] Full command: " + full_command)
+	
+	# Extract exe path from full command (first quoted string, without quotes)
+	var exe_path: String = ""
+	if full_command.begins_with("\""):
+		var second_quote := full_command.find("\"", 1)
+		if second_quote > 0:
+			exe_path = full_command.substr(1, second_quote - 1)  # Without quotes
+	else:
+		exe_path = full_command
+	
+	print("[SteamVDF] Exe path (no quotes): " + exe_path)
+	print("")
+	
+	# Calculate AppIDs
+	var result := generate_app_id(exe_path, app_name)
+	print("[SteamVDF] 32-bit Grid AppID: " + str(result.app_id_32))
+	print("[SteamVDF] 64-bit VDF AppID: " + str(result.app_id_64))
+	print("[SteamVDF] Expected Grid AppID: 3195136880")
+	print("[SteamVDF] ===== End AppID Debug =====")
+
+static func _test_appid_variation(desc: String, exe_str: String, name_str: String, use_null: bool = true) -> void:
+	var input_str: String
+	if use_null:
+		# Steam may include null byte between exe and name
+		input_str = exe_str + char(0) + name_str
+	else:
+		# Direct concatenation
+		input_str = exe_str + name_str
+	
+	var crc := _crc32(input_str)
+	var app_id: int = (crc & 0xFFFFFFFF) | 0x80000000
+	print("[SteamVDF] " + desc + ":")
+	print("[SteamVDF]   Input: " + input_str)
+	print("[SteamVDF]   CRC32: " + str(crc))
+	print("[SteamVDF]   AppID: " + str(app_id))
+	print("")
+
+## CRC32 implementation using reversed polynomial (standard CRC32)
+## Standard CRC32: crc = (CRC32(exe + name) \u0026 0xFFFFFFFF) | 0x80000000
 static func _crc32(s: String) -> int:
 	var table: Array[int] = []
-	var polynomial: int = 0xEDB88320
+	var polynomial: int = 0xEDB88320  # Standard reversed CRC32 polynomial
 	
+	# Build CRC table
 	for i in range(256):
 		var crc: int = i
 		for _j in range(8):
 			if crc & 1:
-				crc = (crc >> 1) ^ polynomial
+				crc = ((crc >> 1) ^ polynomial) & 0xFFFFFFFF
 			else:
-				crc = crc >> 1
+				crc = (crc >> 1) & 0xFFFFFFFF
 		table.append(crc)
 	
+	# Calculate CRC32 on UTF-8 bytes
 	var crc: int = 0xFFFFFFFF
-	for i in range(s.length()):
-		var byte: int = s.unicode_at(i) & 0xFF
+	var bytes := s.to_utf8_buffer()
+	for byte in bytes:
 		crc = table[(crc ^ byte) & 0xFF] ^ (crc >> 8)
 	
 	return crc ^ 0xFFFFFFFF
+
+## Gets the path to shortcuts.vdf for a given Steam installation
+static func get_shortcuts_vdf_path(steam_path: String, user_id: String = "") -> String:
+	if user_id.is_empty():
+		# Try to find the first user ID
+		var userdata_path := steam_path.path_join("userdata")
+		if DirAccess.dir_exists_absolute(userdata_path):
+			var dir := DirAccess.open(userdata_path)
+			if dir:
+				dir.list_dir_begin()
+				var folder := dir.get_next()
+				while folder != "":
+					if dir.current_is_dir() and folder != "0" and folder != "ac":
+						user_id = folder
+						break
+					folder = dir.get_next()
+					dir.list_dir_end()
+	
+	if not user_id.is_empty():
+		return steam_path.path_join("userdata").path_join(user_id).path_join("config").path_join("shortcuts.vdf")
+	
+	return ""
+
+## Validates that a path points to a valid Steam installation
+static func is_valid_steam_path(path: String) -> bool:
+	if path.is_empty():
+		return false
+	
+	# Check for steam.exe on Windows
+	if FileAccess.file_exists(path.path_join("steam.exe")):
+		return true
+	
+	# Check for steam executable on Linux
+	if FileAccess.file_exists(path.path_join("steam")):
+		return true
+	
+	# Check for userdata folder (exists on both platforms)
+	if DirAccess.dir_exists_absolute(path.path_join("userdata")):
+		return true
+	
+	return false
 
 ## Gets the path to Steam's grid folder for artwork
 static func get_steam_grid_path(steam_path: String, user_id: String = "") -> String:
@@ -287,16 +415,50 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 	
 	var app_id_str := str(app_id)
 	
-	# Load and save the image
-	var image := Image.new()
-	var error := image.load(cover_path)
-	if error != OK:
-		push_warning("[SteamVDF] Failed to load image: " + cover_path)
+	# Read file bytes and detect format
+	var file := FileAccess.open(cover_path, FileAccess.READ)
+	if not file:
+		push_warning("[SteamVDF] Failed to open file: " + cover_path)
 		return false
 	
-	# Save as grid cover (600x900) - {appid}.jpg
-	var grid_cover_path := grid_path.path_join(app_id_str + ".jpg")
-	error = image.save_jpg(grid_cover_path, 0.9)
+	var bytes := file.get_buffer(file.get_length())
+	file.close()
+	
+	# Load image from buffer
+	var image := Image.new()
+	var error: int = ERR_INVALID_DATA
+	
+	# Try to detect format from magic bytes and load accordingly
+	if bytes.size() >= 8:
+		var magic := bytes.slice(0, 8)
+		# PNG magic: 89 50 4E 47 0D 0A 1A 0A
+		if magic[0] == 0x89 and magic[1] == 0x50 and magic[2] == 0x4E and magic[3] == 0x47:
+			error = image.load_png_from_buffer(bytes)
+			print("[SteamVDF] Detected PNG format")
+		# JPEG magic: FF D8 FF
+		elif magic[0] == 0xFF and magic[1] == 0xD8 and magic[2] == 0xFF:
+			error = image.load_jpg_from_buffer(bytes)
+			print("[SteamVDF] Detected JPEG format")
+		# WebP magic: 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
+		elif magic[0] == 0x52 and magic[1] == 0x49 and magic[2] == 0x46 and magic[3] == 0x46:
+			error = image.load_webp_from_buffer(bytes)
+			print("[SteamVDF] Detected WebP format")
+		else:
+			# Try generic load
+			error = image.load(cover_path)
+			print("[SteamVDF] Trying generic load for: " + cover_path)
+	
+	if error != OK:
+		push_warning("[SteamVDF] Failed to load image from buffer: " + cover_path + " (error: " + str(error) + ")")
+		return false
+	
+	# Resize to Steam's expected grid dimensions (600x900)
+	var grid_image := image.duplicate()
+	grid_image.resize(600, 900, Image.INTERPOLATE_LANCZOS)
+	
+	# Save as grid cover - Steam expects {appid}p.png (p = portrait/grid)
+	var grid_cover_path := grid_path.path_join(app_id_str + "p.png")
+	error = grid_image.save_png(grid_cover_path)
 	if error == OK:
 		print("[SteamVDF] Saved grid cover: " + grid_cover_path)
 	else:
@@ -304,44 +466,3 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 		return false
 	
 	return true
-
-## Gets the path to shortcuts.vdf for a given Steam installation
-static func get_shortcuts_vdf_path(steam_path: String, user_id: String = "") -> String:
-	if user_id.is_empty():
-		# Try to find the first user ID
-		var userdata_path := steam_path.path_join("userdata")
-		if DirAccess.dir_exists_absolute(userdata_path):
-			var dir := DirAccess.open(userdata_path)
-			if dir:
-				dir.list_dir_begin()
-				var folder := dir.get_next()
-				while folder != "":
-					if dir.current_is_dir() and folder != "0" and folder != "ac":
-						user_id = folder
-						break
-					folder = dir.get_next()
-				dir.list_dir_end()
-	
-	if not user_id.is_empty():
-		return steam_path.path_join("userdata").path_join(user_id).path_join("config").path_join("shortcuts.vdf")
-	
-	return ""
-
-## Validates that a path points to a valid Steam installation
-static func is_valid_steam_path(path: String) -> bool:
-	if path.is_empty():
-		return false
-	
-	# Check for steam.exe on Windows
-	if FileAccess.file_exists(path.path_join("steam.exe")):
-		return true
-	
-	# Check for steam executable on Linux
-	if FileAccess.file_exists(path.path_join("steam")):
-		return true
-	
-	# Check for userdata folder (exists on both platforms)
-	if DirAccess.dir_exists_absolute(path.path_join("userdata")):
-		return true
-	
-	return false

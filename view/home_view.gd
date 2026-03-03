@@ -523,6 +523,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 			cover_art_path = ProjectSettings.globalize_path(cover_art_path)
 	
 	# Build game data for Steam
+	# exe = full command with args (used as Steam target in VDF)
 	var game_data := {
 		"name": game.title,
 		"exe": full_command,
@@ -558,6 +559,9 @@ func _add_game_to_steam(game: GameResource) -> void:
 			if AudioManager:
 				AudioManager.play_sfx("error")
 			return
+	
+	# Debug: Calculate all possible AppIDs
+	SteamVDFWriter.debug_calculate_app_ids(game_data.exe, game.title)
 	
 	# Add the new shortcut
 	var result = SteamVDFWriter.add_shortcut(shortcuts, game_data)
