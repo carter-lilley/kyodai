@@ -823,6 +823,11 @@ func show_game_context_menu(romm_id: int, position: Vector2, show_delete: bool =
 	var game = DataManager.get_game_by_id(romm_id)
 	if show_delete and game and game.is_active_variant_downloaded():
 		items.append({"id": "delete", "text": "Delete"})
+		
+		# Add "Add to Steam" option if game is downloaded and Steam folder is configured
+		var steam_folder = SettingsManager.get_setting("steam_folder")
+		if steam_folder and not steam_folder.value.is_empty() and SteamVDFWriter.is_valid_steam_path(steam_folder.value):
+			items.append({"id": "add_to_steam", "text": "Add to Steam"})
 	
 	items.append({"id": "hide", "text": "Hide"})
 	return show_context_menu(items, position, {"romm_id": romm_id})
