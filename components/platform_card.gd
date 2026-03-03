@@ -236,20 +236,32 @@ func _update_status_indicator():
 				_download_button.text = "Installing..."
 		
 		_:  # NOT_INSTALLED or any other state
-			# Check if downloaded but not installed (legacy check)
-			var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
-			if is_downloaded:
-				_status_indicator.set_status(Indicator.Status.WARNING, "Downloaded", "Ready to install")
+			# Check for partial install progress using new step-based validation
+			var install_progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started", "completed_steps": 0, "total_steps": 0, "next_step_display": ""}
+			
+			if install_progress["status"] == "partial":
+				# Partial install - show resume option
+				var next_step = install_progress["next_step_display"]
+				_status_indicator.set_status(Indicator.Status.WARNING, "Resume: %s" % next_step, "Installation incomplete - click to continue")
 				if _download_button:
 					_download_button.visible = true
 					_download_button.disabled = false
-					_download_button.text = "Install"
-			else:
-				_status_indicator.set_status(Indicator.Status.ERROR, "Not downloaded", "Click Download to get the emulator")
-				if _download_button:
-					_download_button.visible = true
-					_download_button.disabled = false
-					_download_button.text = "Download"
+					_download_button.text = "Resume"
+			elif install_progress["status"] == "not_started":
+				# Check legacy downloaded state
+				var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
+				if is_downloaded:
+					_status_indicator.set_status(Indicator.Status.WARNING, "Downloaded", "Ready to install")
+					if _download_button:
+						_download_button.visible = true
+						_download_button.disabled = false
+						_download_button.text = "Install"
+				else:
+					_status_indicator.set_status(Indicator.Status.ERROR, "Not downloaded", "Click Download to get the emulator")
+					if _download_button:
+						_download_button.visible = true
+						_download_button.disabled = false
+						_download_button.text = "Download"
 
 func set_available_emulators(emulators: Array[Dictionary]):
 	_available_emulators = emulators
@@ -268,10 +280,10 @@ func _on_emulator_selected(index: int):
 	var emulator_id = _emulator_dropdown.get_item_metadata(index)
 	selected_emulator = emulator_id
 	
-	# Force disk check for this emulator to ensure accurate state
+	# Force step-based validation scan for this emulator
 	var effective_emu = emulator_id if emulator_id != "" else registry_default_emulator
 	if LaunchManager and effective_emu != "":
-		LaunchManager.check_emulator_disk_state(effective_emu)
+		LaunchManager.scan_emulator_install_state(effective_emu)
 	
 	emulator_changed.emit(emulator_id)
 	refresh_ui()
@@ -291,14 +303,24 @@ func _on_download_pressed():
 			refresh_ui()
 		
 		LaunchManager.InstallState.NOT_INSTALLED:
-			var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
-			if is_downloaded:
-				# Extract downloaded archive
-				LaunchManager.extract_emulator(effective_emulator)
+			# Check for partial install using step-based validation
+			var install_progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started"}
+			
+			if install_progress["status"] == "partial":
+				# Resume from first incomplete step
+				print("[PlatformCard] Resuming install from step %d for: %s" % [install_progress["next_step_index"], effective_emulator])
+				LaunchManager.download_emulator(effective_emulator)
 				refresh_ui()
 			else:
-				# Download the emulator
-				download_requested.emit(effective_emulator)
+				# Check legacy downloaded state
+				var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
+				if is_downloaded:
+					# Extract downloaded archive
+					LaunchManager.extract_emulator(effective_emulator)
+					refresh_ui()
+				else:
+					# Download the emulator
+					download_requested.emit(effective_emulator)
 		
 		_:
 			# For any other state, just request download
@@ -306,4 +328,9 @@ func _on_download_pressed():
 
 func refresh_ui():
 	# Called by parent to refresh button states (e.g., when download starts/completes)
+	# First, scan the install state to detect partial installs
+	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	if effective_emulator != "" and LaunchManager:
+		LaunchManager.scan_emulator_install_state(effective_emulator)
+	
 	_update_status_indicator()

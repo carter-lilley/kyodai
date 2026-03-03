@@ -2195,9 +2195,9 @@ func _get_step_display_name(step_name: String) -> String:
 	# Map step names to user-friendly display names
 	match step_name:
 		"download_emulator":
-			return "Downloading RetroArch"
+			return "Downloading Emulator"
 		"install_emulator":
-			return "Installing RetroArch"
+			return "Installing Emulator"
 		"download_cores":
 			return "Downloading Cores"
 		"install_cores":
@@ -2215,6 +2215,112 @@ func _get_step_display_name(step_name: String) -> String:
 					result += " "
 				result += word.capitalize()
 			return result
+
+## Validates a specific install step to check if it's complete
+## Returns true if the step validation passes (step is complete)
+func _validate_install_step(emulator_id: String, step_index: int, install_steps: Array) -> bool:
+	if step_index >= install_steps.size():
+		return true
+	
+	var step = install_steps[step_index]
+	var step_name = step.get("step", "")
+	var platforms = step.get("platforms", {})
+	
+	# Get platform config
+	var platform_name = PlatformManager.get_platform_name().to_lower()
+	var platform_config = platforms.get("all", {})
+	if platform_config.is_empty():
+		platform_config = platforms.get(platform_name, {})
+	
+	if platform_config.is_empty():
+		return false
+	
+	var action_type = platform_config.get("action_type", "")
+	var validate_config = platform_config.get("validate", {})
+	
+	# If no validation config, assume step needs to be run
+	if validate_config.is_empty():
+		return false
+	
+	# Run validation
+	var is_valid = _validate_step(emulator_id, validate_config)
+	print("[LaunchManager] Step validation '" + step_name + "' (index " + str(step_index) + "): " + str(is_valid))
+	return is_valid
+
+## Scans install steps and finds the first incomplete step
+## Returns a dictionary with progress info
+func get_install_progress(emulator_id: String) -> Dictionary:
+	var result = {
+		"total_steps": 0,
+		"completed_steps": 0,
+		"next_step_index": -1,
+		"next_step_name": "",
+		"next_step_display": "",
+		"status": "not_started",  # "not_started", "partial", "complete"
+		"is_installed": false
+	}
+	
+	var emulator = get_emulator(emulator_id)
+	if emulator.is_empty():
+		return result
+	
+	var install_steps = emulator.get("install", [])
+	result["total_steps"] = install_steps.size()
+	
+	if install_steps.is_empty():
+		# Legacy format - check old validation
+		result["is_installed"] = validate_emulator_installation(emulator_id)
+		result["status"] = "complete" if result["is_installed"] else "not_started"
+		return result
+	
+	# Scan each step
+	for i in range(install_steps.size()):
+		var step = install_steps[i]
+		var step_name = step.get("step", "")
+		
+		if _validate_install_step(emulator_id, i, install_steps):
+			result["completed_steps"] += 1
+		else:
+			# First incomplete step found
+			if result["next_step_index"] == -1:
+				result["next_step_index"] = i
+				result["next_step_name"] = step_name
+				result["next_step_display"] = _get_step_display_name(step_name)
+	
+	# Determine status
+	if result["completed_steps"] == 0:
+		result["status"] = "not_started"
+	elif result["completed_steps"] == result["total_steps"]:
+		result["status"] = "complete"
+		result["is_installed"] = true
+	else:
+		result["status"] = "partial"
+	
+	print("[LaunchManager] Install progress for '" + emulator_id + "': " + 
+		str(result["completed_steps"]) + "/" + str(result["total_steps"]) + 
+		" steps, next: " + result["next_step_display"])
+	
+	return result
+
+## Scans emulator installation and updates state based on step completion
+## Call this when opening platform page to refresh state
+func scan_emulator_install_state(emulator_id: String):
+	var progress = get_install_progress(emulator_id)
+	
+	if progress["status"] == "complete":
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		_emulator_install_progress[emulator_id] = ""
+	elif progress["status"] == "partial":
+		# Mark as partial - UI will show "Resume: [Step Name]"
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "Resume: " + progress["next_step_display"]
+	else:
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = ""
+	
+	print("[LaunchManager] Scanned '" + emulator_id + "': state=" + 
+		str(_emulator_install_states[emulator_id]) + 
+		", progress=" + _emulator_install_progress[emulator_id])
 
 ## Legacy unified download - kept for reference but not used
 func _queue_emulator_download(emulator_id: String, emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
