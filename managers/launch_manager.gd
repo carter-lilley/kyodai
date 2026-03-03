@@ -2164,15 +2164,22 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if package == "":
 				return true
 			
-			# On Android, we can check by attempting to query the package
-			# Try to launch the app with a view intent - if it opens, it's installed
 			if PlatformManager.is_android():
-				# Create a simple intent to check if package exists
-				var check_uri = "intent:#Intent;action=android.intent.action.MAIN;package=" + package + ";end"
-				var result = OS.shell_open(check_uri)
-				var is_installed = (result == Error.OK)
-				print("[LaunchManager] Validation: package_installed '" + package + "' = " + str(is_installed))
-				return is_installed
+				# Check if the APK file still exists in our downloads folder
+				# If it does, the app hasn't been installed yet
+				var apk_path = EMULATORS_DIR + "retroarch/RetroArch.apk"
+				if FileAccess.file_exists(apk_path):
+					print("[LaunchManager] Validation: package_installed '" + package + "' = false (APK still in downloads)")
+					return false
+				
+				# APK is gone - user likely installed it
+				# Also check if RetroArch data directory exists as confirmation
+				var retroarch_data_path = "/storage/emulated/0/RetroArch"
+				var dir = DirAccess.open(retroarch_data_path)
+				var data_exists = dir != null
+				
+				print("[LaunchManager] Validation: package_installed '" + package + "' = " + str(data_exists) + " (data dir exists: " + str(data_exists) + ")")
+				return data_exists
 			else:
 				# On desktop, always return true (package concept doesn't apply)
 				return true
