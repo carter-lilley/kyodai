@@ -56,35 +56,201 @@
   "retroarch": {
 	"name": "RetroArch",
 	"platforms": ["3do", "arcade", "atari2600", "lynx", "atomiswave", "c64", "dos", "dc", "fds", "g-and-w", "gb", "gba", "gbc", "msx", "naomi", "naomi2", "neogeoaes", "neo-geo-pocket-color", "3ds", "n64", "nds", "nes", "ngc", "win3x", "pico8", "psx", "ps2", "psp", "sega32", "segacd", "gamegear", "sms", "genesis", "saturn", "sg1000", "snes", "tg16", "turbografx-cd", "virtualboy", "wii"],
-	"download": {
-	  "type": "download_url",
-	  "urls": {
-		"windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
-		"linux": "",
-		"android": ""
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "RetroArch.7z"
+			}
+		  },
+		  "linux": {
+			"action_type": "download_url",
+			"url": "",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": ""
+			}
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "https://buildbot.libretro.com/stable/1.22.2/android/RetroArch.apk",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "RetroArch.apk"
+			}
+		  }
+		}
 	  },
-	  "extract": true,
-	  "extract_to": ".",
-	  "strip_top_directory": true
-	},
-	"executable_names": {
-	  "windows": "retroarch.exe",
-	  "linux": "RetroArch-Linux-x86_64.AppImage",
-	  "android": "com.retroarch"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "-L", "{core}", "{rom}"],
-	  "linux": ["{exe}", "-L", "{core}", "{rom}"],
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "com.retroarch",
-		"class": "com.retroarch.browser.retroactivity.RetroActivityFuture",
-		"extras": {
-		  "ROM": "{rom}",
-		  "LIBRETRO": "{core}"
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "retroarch.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "RetroArch-Linux-x86_64.AppImage"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "com.retroarch",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "com.retroarch"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_cores",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "RetroArch_cores.7z"
+			}
+		  },
+		  "linux": {
+			"action_type": "download_url",
+			"url": "",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": ""
+			}
+		  },
+		  "android": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "always_pass"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "install_cores",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"flatten_target": "RetroArch-Win64",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "cores",
+			  "pattern": "*.dll"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "cores",
+			  "pattern": "*.so"
+			}
+		  },
+		  "android": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "always_pass"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_system_files",
+		"platforms": {
+		  "all": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/retroarch_bios.zip",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "retroarch_bios.zip"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "install_system_files",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": "system",
+			"strip_top_directory": true,
+			"flatten_target": "bios",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "system"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": "system",
+			"strip_top_directory": true,
+			"flatten_target": "bios",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "system"
+			}
+		  },
+		  "android": {
+			"action_type": "extract",
+			"extract_to": "/storage/emulated/0/RetroArch/system",
+			"strip_top_directory": true,
+			"flatten_target": "bios",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "/storage/emulated/0/RetroArch/system"
+			}
+		  }
+		}
+	  }
+	],
+	
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "retroarch.exe",
+		  "template": ["{exe}", "-L", "{core}", "{rom}"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "RetroArch-Linux-x86_64.AppImage",
+		  "template": ["{exe}", "-L", "{core}", "{rom}"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.VIEW",
+		  "package": "com.retroarch",
+		  "class": "com.retroarch.browser.retroactivity.RetroActivityFuture",
+		  "extras": {
+			"ROM": "{rom}",
+			"LIBRETRO": "{core}"
+		  }
 		}
 	  }
 	},
+	
 	"core_mappings": {
 	  "3do": "opera",
 	  "arcade": "fbneo",
@@ -126,585 +292,6 @@
 	  "turbografx-cd": "mednafen_pce",
 	  "virtualboy": "mednafen_vb",
 	  "wii": "dolphin"
-	},
-	"post_install_tasks": [
-	  {
-		"type": "download_url",
-		"urls": {
-		  "windows": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
-		  "linux": "",
-		  "android": ""
-		},
-		"filenames": {
-		  "windows": "RetroArch_cores.7z"
-		},
-		"extract_to": ".",
-		"strip_top_directory": true,
-		"flatten_target": "RetroArch-Win64",
-		"validation": {
-		  "type": "files",
-		  "path": "cores",
-		  "pattern": "*.dll"
-		}
-	  },
-	  {
-		"type": "download_repo",
-		"github_repo": "Abdess/retroarch_system",
-		"asset_pattern": ".*\\.(7z|zip|rar)$",
-		"extract_to": "system",
-		"extract": true,
-		"strip_top_directory": true,
-		"flatten_target": "bios",
-		"validation": {
-		  "type": "files",
-		  "path": "system"
-		}
-	  }
-	]
-  },
-  "azahar": {
-	"name": "Azahar",
-	"platforms": ["3ds"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "azahar-emu/azahar",
-	  "asset_patterns": {
-		"windows": "azahar-.*-windows-msvc\\.zip",
-		"linux": "azahar\\.AppImage",
-		"android": "azahar-.*-android-vanilla\\.apk"
-	  },
-	  "extract": true,
-	  "extract_to": ".",
-	  "strip_top_directory": true
-	},
-	"executable_names": {
-	  "windows": "azahar.exe",
-	  "linux": "azahar.AppImage",
-	  "android": "org.azahar.emu"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}","-f", "{rom}"],
-	  "linux": ["{exe}", "{rom}"],
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "org.azahar.emu",
-		"class": "org.azahar.emu.ui.EmulationActivity"
-	  }
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_folders",
-		"folders": ["user"],
-		"validation": {
-		  "type": "folders",
-		  "folders": ["user"]
-		}
-	  }
-	]
-  },
-  "cemu": {
-	"name": "Cemu",
-	"platforms": ["wiiu"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "cemu-project/Cemu",
-	  "asset_patterns": {
-		"windows": "cemu-.*-windows-x64\\.zip",
-		"linux": ""
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "Cemu.exe",
-	  "linux": ""
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "-g", "{rom}", "-f"],
-	  "linux": []
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_folders",
-		"folders": ["portable"],
-		"validation": {
-		  "type": "folders",
-		  "folders": ["portable"]
-		}
-	  }
-	]
-  },
-  "dolphin": {
-	"name": "Dolphin",
-	"platforms": ["ngc", "wii"],
-	"download": {
-	  "type": "download_scrape",
-	  "scrape_url": "https://dolphin-emu.org/download/",
-	  "version_pattern": "/download/release/([0-9a-z]+)/",
-	  "url_templates": {
-		"windows": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z",
-		"linux": ""
-	  },
-	  "extract": true,
-	  "extract_to": ".",
-	  "strip_top_directory": true
-	},
-	"executable_names": {
-	  "windows": "Dolphin.exe",
-	  "linux": ""
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "-e", "{rom}", "--batch" ,"--config" , "Dolphin.Display.Fullscreen=True","--config" , "Dolphin.Interface.ConfirmStop=False"],
-	  "linux": []
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_files",
-		"files": ["portable.txt"],
-		"validation": {
-		  "type": "files",
-		  "files": ["portable.txt"]
-		}
-	  }
-	]
-  },
-  "eden": {
-	"name": "Eden",
-	"platforms": ["switch"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "eden-emulator/Releases",
-	  "asset_patterns": {
-		"windows": "Eden-Windows-.*-amd64-msvc.*\\.zip",
-		"linux": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage",
-		"android": "Eden-Android-.*-standard\\.apk"
-	  },
-	  "extract": true,
-	  "extract_to": ".",
-	  "strip_top_directory": true
-	},
-	"executable_names": {
-	  "windows": "eden.exe",
-	  "linux": "",
-	  "android": ""
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "{rom}","-f"],
-	  "linux": [],
-	  "android": []
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_folders",
-		"folders": ["user", "user/nand/system/Contents/registered"],
-		"validation": {
-		  "type": "folders",
-		  "folders": ["user", "user/nand/system/Contents/registered"]
-		}
-	  },
-	  {
-		"type": "download_repo",
-		"github_repo": "THZoria/NX_Firmware",
-		"asset_pattern": "Firmware.*\\.zip",
-		"extract_to": "user/nand/system/Contents/registered",
-		"extract": true,
-		"validation": {
-		  "type": "folders",
-		  "folders": ["user/nand/system/Contents/registered"]
-		}
-	  },
-	  {
-		"type": "create_folders",
-		"folders": ["user/keys"],
-		"validation": {
-		  "type": "folders",
-		  "folders": ["user/keys"]
-		}
-	  },
-	  {
-		"type": "download_scrape",
-		"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
-		"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-		"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip",
-		"extract_to": "user/keys",
-		"extract": true,
-		"strip_top_directory": true,
-		"validation": {
-		  "type": "files",
-		  "files": ["user/keys/prod.keys", "user/keys/title.keys"]
-		}
-	  }
-	]
-  },
-  "ppsspp": {
-	"name": "PPSSPP",
-	"platforms": ["psp"],
-	"download": {
-	  "type": "download_scrape",
-	  "scrape_url": "https://www.ppsspp.org/downloads.html",
-	  "version_pattern": "/files/([0-9_]+)/ppsspp_win\\.zip",
-	  "url_templates": {
-		"windows": "https://www.ppsspp.org/files/{version}/ppsspp_win.zip",
-		"linux": ""
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "PPSSPPWindows64.exe",
-	  "linux": ""
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "{rom}","--fullscreen"],
-	  "linux": []
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_files",
-		"files": ["portable.txt"],
-		"validation": {
-		  "type": "files",
-		  "files": ["portable.txt"]
-		}
-	  }
-	]
-  },
-  "rpcs3": {
-	"name": "RPCS3",
-	"platforms": ["ps3"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "RPCS3/rpcs3-binaries-win",
-	  "asset_patterns": {
-		"windows": "rpcs3-.*_win64_msvc\\.7z",
-		"linux": ""
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "rpcs3.exe",
-	  "linux": ""
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
-	  "linux": []
 	}
-  },
-  "shadps4": {
-	"name": "shadPS4",
-	"platforms": ["ps4"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "shadps4-emu/shadPS4",
-	  "asset_patterns": {
-		"windows": "shadps4-win64-sdl-.*\\.zip",
-		"linux": "shadps4-linux-sdl-.*\\.zip"
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "shadPS4.exe",
-	  "linux": "shadPS4"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "-g", "{rom}"],
-	  "linux": ["{exe}", "-g", "{rom}"]
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_folders",
-		"folders": ["user"],
-		"validation": {
-		  "type": "folders",
-		  "folders": ["user"]
-		}
-	  }
-	]
-  },
-  "vita3k": {
-	"name": "Vita3K",
-	"platforms": ["psvita"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "Vita3K/Vita3K",
-	  "asset_patterns": {
-		"windows": "windows-latest\\.zip",
-		"linux": "ubuntu-latest\\.zip",
-		"android": "android-latest\\.apk"
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "Vita3K.exe",
-	  "linux": "Vita3K",
-	  "android": "org.vita3k.emulator"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "{rom}"],
-	  "linux": ["{exe}", "{rom}"],
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "org.vita3k.emulator",
-		"class": "org.vita3k.emulator.EmulatorActivity"
-	  }
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_files",
-		"files": [
-		  {
-			"name": "config.yml",
-			"content": ["pref-path: .\\"]
-		  }
-		],
-		"validation": {
-		  "type": "files",
-		  "files": ["config.yml"]
-		}
-	  },
-	  {
-		"type": "download_url",
-		"urls": {
-		  "windows": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP?dest=us",
-		  "linux": "",
-		  "android": ""
-		},
-		"filename": "PSP2UPDAT_pre.pup",
-		"extract": false,
-		"validation": {
-		  "type": "files",
-		  "files": ["PSP2UPDAT_pre.pup"]
-		}
-	  },
-	  {
-		"type": "download_url",
-		"urls": {
-		  "windows": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
-		  "linux": "",
-		  "android": ""
-		},
-		"filename": "PSVUPDAT.pup",
-		"extract": false,
-		"validation": {
-		  "type": "files",
-		  "files": ["PSVUPDAT.pup"]
-		}
-	  },
-	  {
-		"type": "download_url",
-		"urls": {
-		  "windows": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP?dest=us",
-		  "linux": "",
-		  "android": ""
-		},
-		"filename": "PSP2UPDAT_sd.pup",
-		"extract": false,
-		"validation": {
-		  "type": "files",
-		  "files": ["PSP2UPDAT_sd.pup"]
-		}
-	  }
-	]
-  },
-  "xemu": {
-	"name": "Xemu",
-	"platforms": ["xbox"],
-	"requires_working_dir": true,
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "xemu-project/xemu",
-	  "asset_patterns": {
-		"windows": "xemu-.*-windows-x86_64\\.zip",
-		"linux": "xemu-.*-x86_64\\.AppImage"
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "xemu.exe",
-	  "linux": "xemu"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}","-full-screen", "-dvd_path", "{rom}"],
-	  "linux": ["{exe}", "-dvd_path", "{rom}"]
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_files",
-		"files": ["xemu.toml"],
-		"validation": {
-		  "type": "files",
-		  "files": ["xemu.toml"]
-		}
-	  },
-	  {
-		"type": "download_url",
-		"urls": {
-		  "windows": "https://files.lilley.video/other_assets/xemu_bios.zip",
-		  "linux": "https://files.lilley.video/other_assets/xemu_bios.zip",
-		  "android": ""
-		},
-		"filename": "xemu_bios.zip",
-		"extract_to": ".",
-		"strip_top_directory": true,
-		"flatten_target": "xemu_bios",
-		"validation": {
-		  "type": "files",
-		  "files": ["mcpx_1.0.bin", "Complex_4627.bin"]
-		}
-	  },
-	  {
-		"type": "edit_file",
-		"file": "xemu.toml",
-		"edits": [
-		  {
-			"content": "[general]\nshow_welcome = false"
-		  },
-		  {
-			"content": "[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.qcow2'"
-		  }
-		],
-		"validation": {
-		  "type": "files",
-		  "files": ["xemu.toml"]
-		}
-	  }
-	]
-  },
-  "xenia": {
-	"name": "Xenia",
-	"platforms": ["xbox360"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "xenia-canary/xenia-canary-releases",
-	  "release_tag": "canary_experimental",
-	  "asset_patterns": {
-		"windows": "xenia_canary_windows\\.zip",
-		"linux": "xenia_canary_linux\\.tar\\.xz"
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "xenia_canary.exe",
-	  "linux": "xenia_canary"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "{rom}","--fullscreen"],
-	  "linux": ["{exe}", "{rom}"]
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_files",
-		"files": ["portable.txt"],
-		"validation": {
-		  "type": "files",
-		  "files": ["portable.txt"]
-		}
-	  }
-	]
-  },
-  "pcsx2": {
-	"name": "PCSX2",
-	"platforms": ["ps2"],
-	"requires_native_paths": true,
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "PCSX2/pcsx2",
-	  "asset_patterns": {
-		"windows": "pcsx2-.*-windows-x64-Qt\\.7z",
-		"linux": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
-	  },
-	  "extract": true,
-	  "extract_to": ".",
-	  "strip_top_directory": true
-	},
-	"executable_names": {
-	  "windows": "pcsx2-qt.exe",
-	  "linux": "pcsx2-qt"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "-nogui", "-fullscreen", "{rom}"],
-	  "linux": ["{exe}", "-batch", "{rom}"]
-	},
-	"post_install_tasks": [
-	  {
-		"type": "create_files",
-		"files": ["portable.txt"],
-		"validation": {
-		  "type": "files",
-		  "files": ["portable.txt"]
-		}
-	  },
-	  {
-		"type": "download_url",
-		"urls": {
-		  "windows": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
-		  "linux": ""
-		},
-		"extract_to": ".",
-		"strip_top_directory": false,
-		"flatten_target": "",
-		"validation": {
-		  "type": "files",
-		  "path": "bios"
-		}
-	  }
-	]
-  },
-  "melonds": {
-	"name": "melonDS",
-	"platforms": ["nds"],
-	"download": {
-	  "type": "download_repo",
-	  "github_repo": "melonDS-emu/melonDS",
-	  "asset_patterns": {
-		"windows": "melonDS-.*-windows-x86_64\\.zip",
-		"linux": "melonDS-.*-appimage-x86_64\\.zip"
-	  },
-	  "extract": true
-	},
-	"executable_names": {
-	  "windows": "melonDS.exe",
-	  "linux": "melonDS"
-	},
-	"launch_templates": {
-	  "windows": ["{exe}", "{rom}","--fullscreen"],
-	  "linux": ["{exe}", "{rom}"]
-	},
-  	"post_install_tasks": [
-  	  {
-  		"type": "download_url",
-  		"urls": {
-  		  "windows": "https://files.lilley.video/other_assets/melonds_bios.zip",
-  		  "linux": "https://files.lilley.video/other_assets/melonds_bios.zip",
-  		  "android": ""
-  		},
-  		"filename": "melonDS_bios.zip",
-  		"extract_to": ".",
-  		"strip_top_directory": false,
-  		"validation": {
-  		  "type": "files",
-  		  "files": ["bios7.bin"]
-  		}
-  	  },
-  	  {
-  		"type": "create_files",
-  		"files": ["melonDS.toml"],
-  		"validation": {
-  		  "type": "files",
-  		  "files": ["melonDS.toml"]
-  		}
-  	  },
-  	  {
-  		"type": "edit_file",
-  		"file": "melonDS.toml",
-  		"edits": [
-  		  {
-  			"content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/biosdsi9.bin\"\nBIOS7Path = \"{emulator_dir}/biosdsi7.bin\"\nNANDPath = \"{emulator_dir}/nand.bin\""
-  		  }
-  		],
-  		"validation": {
-  		  "type": "files",
-  		  "files": ["melonDS.toml"]
-  		}
-  	  }
-  	]
   }
 }

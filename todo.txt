@@ -3,7 +3,6 @@
 how to split important siblings
 
 ## UI
-	add to steam images
 	colors
 	presets
 	placeholder cards

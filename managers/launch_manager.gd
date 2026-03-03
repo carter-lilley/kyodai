@@ -812,10 +812,29 @@ func _continue_post_install_sequence(emulator_id: String, emulator: Dictionary):
 func _flatten_extracted_directory(emulator_id: String, extract_to: String, target_folder: String = ""):
 	var extract_path = EMULATORS_DIR + emulator_id + "/" + extract_to
 	
+	print("[LaunchManager] Starting flatten for: " + emulator_id)
+	print("[LaunchManager]   extract_to: '" + extract_to + "'")
+	print("[LaunchManager]   extract_path: '" + extract_path + "'")
+	print("[LaunchManager]   target_folder: '" + target_folder + "'")
+	
 	var dir = DirAccess.open(extract_path)
 	if not dir:
 		print("[LaunchManager] Cannot open extract path for flattening: " + extract_path)
 		return
+	
+	# Debug: List what's in the directory
+	print("[LaunchManager] Contents of extract path:")
+	var debug_entries = []
+	dir.list_dir_begin()
+	var debug_file = dir.get_next()
+	while debug_file != "":
+		if debug_file != "." and debug_file != "..":
+			debug_entries.append(debug_file)
+			var is_dir = dir.dir_exists(debug_file)
+			print("[LaunchManager]   - " + debug_file + (" [DIR]" if is_dir else " [FILE]"))
+		debug_file = dir.get_next()
+	dir.list_dir_end()
+	print("[LaunchManager] Total entries: " + str(debug_entries.size()))
 	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
@@ -1771,212 +1790,464 @@ func download_emulator(emulator_id: String) -> bool:
 		push_error("[LaunchManager] Unknown emulator: " + emulator_id)
 		return false
 	
-	var emulator_name = emulator.get("name", emulator_id)
+	# Get install steps from new step-based format
+	var install_steps = emulator.get("install", [])
+	if install_steps.is_empty():
+		push_error("[LaunchManager] No install steps defined for: " + emulator_id)
+		return false
+	
+	return _execute_install_steps(emulator_id, emulator, install_steps)
+
+## Executes a single install step by index
+func _execute_install_step(emulator_id: String, step_index: int) -> bool:
+	var emulator = get_emulator(emulator_id)
+	if emulator.is_empty():
+		push_error("[LaunchManager] Unknown emulator: " + emulator_id)
+		return false
+	
 	var platform_name = PlatformManager.get_platform_name().to_lower()
+	var emulator_name = emulator.get("name", emulator_id)
+	var install_steps = emulator.get("install", [])
 	
-	# Check for new unified download format first
-	var download_config = emulator.get("download", {})
-	if not download_config.is_empty():
-		return _download_emulator_unified(emulator_id, emulator, download_config)
+	if step_index >= install_steps.size():
+		print("[LaunchManager] All install steps complete for: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		return true
 	
-	# Fall back to legacy format
-	var download_source = emulator.get("download_source", "hardcoded")
+	var step = install_steps[step_index]
+	var step_name = step.get("step", "")
+	var platforms = step.get("platforms", {})
 	
-	match download_source:
-		"hardcoded":
-			var download_urls = emulator.get("download_urls", {})
-			var download_url = download_urls.get(platform_name, "")
-			
-			if download_url == "":
-				push_error("[LaunchManager] No download URL for platform: " + platform_name)
-				return false
-			
-			_queue_emulator_download(emulator_id, emulator_name, download_url)
-			return true
+	print("[LaunchManager] Executing step " + str(step_index) + ": " + step_name)
+	
+	# Get platform config
+	var platform_config = platforms.get("all", {})
+	if platform_config.is_empty():
+		platform_config = platforms.get(platform_name, {})
+	
+	if platform_config.is_empty():
+		push_error("[LaunchManager] No platform config for step '" + step_name + "' on platform: " + platform_name)
+		return false
+	
+	var action_type = platform_config.get("action_type", "")
+	
+	# Handle download_url action
+	if action_type == "download_url":
+		var url = platform_config.get("url", "")
+		if url == "":
+			push_error("[LaunchManager] No download URL for step '" + step_name + "'")
+			return false
 		
-		"github":
-			var github_repo = emulator.get("github_repo", "")
-			if github_repo == "":
-				push_error("[LaunchManager] No github_repo specified for github source: " + emulator_id)
-				return false
-			
-			var asset_patterns = emulator.get("asset_patterns", {})
-			var asset_pattern = asset_patterns.get(platform_name, "")
-			
-			if asset_pattern == "":
-				push_error("[LaunchManager] No asset pattern for platform: " + platform_name)
-				return false
-			
-			_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
-			_emulator_install_progress[emulator_id] = "Fetching release info..."
-			
-			var release_tag = emulator.get("release_tag", "")
-			
-			NetworkManager.fetch_github_latest_release(
-				github_repo,
-				asset_pattern,
-				func(url: String, error: String):
-					if error != "":
-						push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-						return
-					_queue_emulator_download(emulator_id, emulator_name, url),
-				release_tag
-			)
-			return true
+		# Create step-specific display name for notifications
+		var step_display_name = _get_step_display_name(step_name)
+		_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
+		return true
+	
+	# Handle download_repo action
+	elif action_type == "download_repo":
+		var github_repo = platform_config.get("github_repo", "")
+		var asset_pattern = platform_config.get("asset_pattern", "")
 		
-		"scraped":
-			var scrape_config = emulator.get("scrape_config", {})
-			var scrape_url = scrape_config.get("scrape_url", "")
-			var version_pattern = scrape_config.get("version_pattern", "")
-			var url_templates = scrape_config.get("url_templates", {})
-			var url_template = url_templates.get(platform_name, "")
+		if github_repo == "" or asset_pattern == "":
+			push_error("[LaunchManager] Invalid download_repo config for step: " + step_name)
+			return false
+		
+		_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+		_emulator_install_progress[emulator_id] = "Fetching release info..."
+		
+		# Create step-specific display name for notifications
+		var step_display_name = _get_step_display_name(step_name)
+		
+		NetworkManager.fetch_github_latest_release(
+			github_repo,
+			asset_pattern,
+			func(url: String, error: String):
+				if error != "":
+					push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
+					_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+					return
+				_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
+		)
+		return true
+	
+	# Handle extract action
+	elif action_type == "extract":
+		return _execute_extract_step(emulator_id, step_index, platform_config)
+	
+	# Handle apk_install action (Android only)
+	elif action_type == "apk_install":
+		return _execute_apk_install_step(emulator_id, step_index, platform_config)
+	
+	# Handle none action (skip)
+	elif action_type == "none":
+		print("[LaunchManager] Skipping step '" + step_name + "' (action_type: none)")
+		return _execute_install_step(emulator_id, step_index + 1)
+	
+	push_error("[LaunchManager] Unknown action_type '" + action_type + "' for step: " + step_name)
+	return false
+
+## Executes APK install action for a step (Android only)
+func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config: Dictionary) -> bool:
+	print("[LaunchManager] Executing APK install step...")
+	
+	var package_name = apk_config.get("package_name", "")
+	
+	if package_name == "":
+		push_error("[LaunchManager] No package_name specified for apk_install")
+		return false
+	
+	print("[LaunchManager] APK install config:")
+	print("[LaunchManager]   - package_name: '" + package_name + "'")
+	
+	# Find the downloaded APK from the previous download step
+	var emulator = get_emulator(emulator_id)
+	var install_steps = emulator.get("install", [])
+	
+	# Get previous step (should be download)
+	if step_index == 0:
+		push_error("[LaunchManager] Cannot install APK - no previous download step")
+		return false
+	
+	var prev_step = install_steps[step_index - 1]
+	var prev_platforms = prev_step.get("platforms", {})
+	var platform_name = PlatformManager.get_platform_name().to_lower()
+	var prev_config = prev_platforms.get("all", {})
+	if prev_config.is_empty():
+		prev_config = prev_platforms.get(platform_name, {})
+	
+	var download_url = prev_config.get("url", "")
+	if download_url == "":
+		push_error("[LaunchManager] Cannot install APK - no download URL from previous step")
+		return false
+	
+	var filename = download_url.get_file()
+	var apk_path = EMULATORS_DIR + emulator_id + "/" + filename
+	
+	# Convert user:// path to absolute path for Android
+	var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
+	
+	print("[LaunchManager] Installing APK: " + apk_path)
+	print("[LaunchManager] Absolute path: " + absolute_apk_path)
+	
+	# Check if file exists
+	if not FileAccess.file_exists(apk_path):
+		push_error("[LaunchManager] APK file not found: " + apk_path)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		return false
+	
+	# Use OS.shell_open with proper Android intent format
+	# Try different approaches for Android
+	var uri = "file://" + absolute_apk_path
+	print("[LaunchManager] Opening APK with URI: " + uri)
+	
+	# Try to open the APK for installation
+	# Note: On Android, this requires:
+	# 1. Kyodai to have "Install unknown apps" permission in Android Settings
+	# 2. The install_packages permission in the manifest
+	var result = OS.shell_open(uri)
+	
+	if result != Error.OK:
+		print("[LaunchManager] Direct APK install failed with error: " + str(result))
+		print("[LaunchManager] This usually means Kyodai doesn't have permission to install APKs")
+		
+		# Show user-friendly message about manual installation
+		NotificationManager.show_notification(
+			"RetroArch APK downloaded!\nPlease install it manually from:\n" + absolute_apk_path,
+			Notification.Type.WARNING,
+			null,  # icon
+			10.0   # Show for 10 seconds
+		)
+		
+		# Try to open the folder so user can find the APK
+		var folder_path = ProjectSettings.globalize_path(EMULATORS_DIR + emulator_id)
+		print("[LaunchManager] Attempting to open folder: " + folder_path)
+		var folder_result = OS.shell_open(folder_path)
+		
+		if folder_result == Error.OK:
+			print("[LaunchManager] Opened folder containing APK")
+		else:
+			print("[LaunchManager] Could not open folder either: " + str(folder_result))
+		
+		# Mark as installed anyway - user will install manually
+		# Next time the app launches, validation will check if it's actually installed
+		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		print("[LaunchManager] Marked as installed - awaiting manual APK installation")
+		
+		# Progress to next step
+		_execute_install_step(emulator_id, step_index + 1)
+		return true
+	else:
+		print("[LaunchManager] APK installer opened successfully!")
+		print("[LaunchManager] User should see Android install dialog")
+	
+	# Mark as installing - user needs to complete the install via Android UI
+	_emulator_install_states[emulator_id] = InstallState.INSTALLED
+	
+	# Validate installation (check if package is installed)
+	var validate_config = apk_config.get("validate", {})
+	if not _validate_step(emulator_id, validate_config):
+		print("[LaunchManager] Warning: APK validation failed - package may not be installed yet")
+		# Don't fail here - user might still be installing
+	
+	# Progress to next step
+	_execute_install_step(emulator_id, step_index + 1)
+	return true
+
+## Executes extract action for a step
+func _execute_extract_step(emulator_id: String, step_index: int, extract_config: Dictionary) -> bool:
+	print("[LaunchManager] Executing extract step...")
+	
+	var extract_to = extract_config.get("extract_to", ".")
+	var strip_top = extract_config.get("strip_top_directory", false)
+	var flatten_target = extract_config.get("flatten_target", "")
+	
+	print("[LaunchManager] Extract config:")
+	print("[LaunchManager]   - extract_to: '" + extract_to + "'")
+	print("[LaunchManager]   - strip_top_directory: " + str(strip_top))
+	print("[LaunchManager]   - flatten_target: '" + flatten_target + "'")
+	
+	# Find the downloaded file from the previous download step
+	var emulator = get_emulator(emulator_id)
+	var install_steps = emulator.get("install", [])
+	
+	# Get previous step (should be download)
+	if step_index == 0:
+		push_error("[LaunchManager] Cannot extract - no previous download step")
+		return false
+	
+	var prev_step = install_steps[step_index - 1]
+	var prev_platforms = prev_step.get("platforms", {})
+	var prev_config = prev_platforms.get("all", {})
+	if prev_config.is_empty():
+		prev_config = prev_platforms.get(PlatformManager.get_platform_name().to_lower(), {})
+	
+	var download_url = prev_config.get("url", "")
+	if download_url == "":
+		push_error("[LaunchManager] Cannot extract - no download URL from previous step")
+		return false
+	
+	var filename = download_url.get_file()
+	var archive_path = EMULATORS_DIR + emulator_id + "/" + filename
+	
+	# Handle extract_to: absolute paths are used directly, relative paths are relative to emulator dir
+	var extract_dir: String
+	if extract_to.begins_with("/"):
+		# Absolute path (e.g., Android /storage/emulated/0/...)
+		extract_dir = extract_to
+	else:
+		# Relative path (default behavior for desktop)
+		extract_dir = EMULATORS_DIR + emulator_id + "/" + extract_to
+	
+	print("[LaunchManager] Extracting archive: " + archive_path)
+	print("[LaunchManager] Extract to: " + extract_dir)
+	
+	# Get step name from install_steps for display
+	var step_name = ""
+	if step_index < install_steps.size():
+		step_name = install_steps[step_index].get("step", "")
+	
+	var step_display_name = _get_step_display_name(step_name)
+	
+	_emulator_install_states[emulator_id] = InstallState.EXTRACTING
+	_emulator_install_progress[emulator_id] = step_display_name + "..."
+	
+	# Queue extraction via DownloadManager
+	var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name)
+	if item_id == "":
+		push_error("[LaunchManager] Failed to queue extraction for: " + emulator_id)
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		return false
+	
+	# Track extraction completion
+	_pending_emulator_downloads[item_id] = {
+		"emulator_id": emulator_id,
+		"context": "extraction",
+		"step_index": step_index,
+		"step_config": extract_config,
+		"callback": func(success: bool, message: String):
+			if not success:
+				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+				_emulator_install_progress[emulator_id] = "Extraction failed"
+				emulator_extraction_completed.emit(emulator_id, false)
+				return
 			
-			if scrape_url == "" or version_pattern == "" or url_template == "":
-				push_error("[LaunchManager] Invalid scrape config for: " + emulator_id)
+			# Handle post-extraction flattening
+			if strip_top:
+				print("[LaunchManager] Flattening directory...")
+				_flatten_extracted_directory(emulator_id, extract_to, flatten_target)
+			
+			# Validate extraction
+			var validate_config = extract_config.get("validate", {})
+			if not _validate_step(emulator_id, validate_config):
+				push_error("[LaunchManager] Validation failed after extraction: " + emulator_id)
+				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+				_emulator_install_progress[emulator_id] = "Validation failed"
+				emulator_extraction_completed.emit(emulator_id, false)
+				return
+			
+			print("[LaunchManager] Extraction complete and validated for: " + emulator_id)
+			
+			# Progress to next step
+			_execute_install_step(emulator_id, step_index + 1)
+	}
+	
+	return true
+
+## Validates a step result based on validation config
+## Resolves a path for validation - uses absolute paths directly, relative paths are relative to emulator dir
+func _resolve_validation_path(emulator_id: String, path: String) -> String:
+	if path.begins_with("/"):
+		# Absolute path - use as-is
+		return path
+	else:
+		# Relative path - prepend emulator directory
+		return EMULATORS_DIR + emulator_id + "/" + path
+
+func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
+	if validate_config.is_empty():
+		return true
+	
+	var action_type = validate_config.get("action_type", "")
+	
+	match action_type:
+		"file_exists":
+			var file_path = validate_config.get("file", "")
+			if file_path == "":
+				return true
+			var full_path = _resolve_validation_path(emulator_id, file_path)
+			var exists = FileAccess.file_exists(full_path)
+			print("[LaunchManager] Validation: file_exists '" + file_path + "' -> '" + full_path + "' = " + str(exists))
+			return exists
+		
+		"folder_exists":
+			var folder_path = validate_config.get("path", "")
+			if folder_path == "":
+				return true
+			var full_path = _resolve_validation_path(emulator_id, folder_path)
+			var dir = DirAccess.open(full_path)
+			var exists = dir != null
+			print("[LaunchManager] Validation: folder_exists '" + folder_path + "' -> '" + full_path + "' = " + str(exists))
+			return exists
+		
+		"files_exist":
+			var folder_path = validate_config.get("path", "")
+			var pattern = validate_config.get("pattern", "")
+			
+			if folder_path == "":
+				return true
+			
+			var full_path = _resolve_validation_path(emulator_id, folder_path)
+			var dir = DirAccess.open(full_path)
+			
+			if not dir:
+				print("[LaunchManager] Validation: files_exist '" + folder_path + "' - directory not found")
 				return false
 			
-			_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
-			_emulator_install_progress[emulator_id] = "Fetching release info..."
+			var found_files = false
+			dir.list_dir_begin()
+			var file_name = dir.get_next()
 			
-			NetworkManager.fetch_scraped_release(
-				scrape_url,
-				version_pattern,
-				url_template,
-				func(url: String, error: String):
-					if error != "":
-						push_error("[LaunchManager] Failed to scrape release: " + error)
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-						return
-					
-					_queue_emulator_download(emulator_id, emulator_name, url)
-			)
+			while file_name != "":
+				if file_name != "." and file_name != "..":
+					if pattern == "" or file_name.match(pattern):
+						found_files = true
+						break
+				file_name = dir.get_next()
+			
+			dir.list_dir_end()
+			print("[LaunchManager] Validation: files_exist '" + folder_path + "' -> '" + full_path + "' pattern '" + pattern + "' = " + str(found_files))
+			return found_files
+		
+		"package_installed":
+			# Check if an Android package is installed
+			var package = validate_config.get("package", "")
+			if package == "":
+				return true
+			
+			# On Android, we can check by attempting to query the package
+			# Try to launch the app with a view intent - if it opens, it's installed
+			if PlatformManager.is_android():
+				# Create a simple intent to check if package exists
+				var check_uri = "intent:#Intent;action=android.intent.action.MAIN;package=" + package + ";end"
+				var result = OS.shell_open(check_uri)
+				var is_installed = (result == Error.OK)
+				print("[LaunchManager] Validation: package_installed '" + package + "' = " + str(is_installed))
+				return is_installed
+			else:
+				# On desktop, always return true (package concept doesn't apply)
+				return true
+		
+		"always_pass":
 			return true
 		
 		_:
-			push_error("[LaunchManager] Unknown download_source: " + download_source)
+			print("[LaunchManager] Unknown validation action_type: " + action_type)
 			return false
 
-## Downloads emulator using unified download format
-func _download_emulator_unified(emulator_id: String, emulator: Dictionary, download_config: Dictionary) -> bool:
-	var download_type = download_config.get("type", "")
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var emulator_name = emulator.get("name", emulator_id)
-	
-	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
-	
-	match download_type:
-		"download_repo":
-			var github_repo = download_config.get("github_repo", "")
-			var asset_pattern = download_config.get("asset_pattern", "")
-			
-			# Try platform-specific pattern first
-			if asset_pattern == "":
-				var asset_patterns = download_config.get("asset_patterns", {})
-				asset_pattern = asset_patterns.get(platform_name, "")
-			
-			if github_repo == "" or asset_pattern == "":
-				push_error("[LaunchManager] Invalid download_repo config for: " + emulator_id)
-				return false
-			
-			_emulator_install_progress[emulator_id] = "Fetching release info..."
-			
-			var release_tag = download_config.get("release_tag", "")
-			
-			NetworkManager.fetch_github_latest_release(
-				github_repo,
-				asset_pattern,
-				func(url: String, error: String):
-					if error != "":
-						push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-						return
-					_queue_emulator_download(emulator_id, emulator_name, url, download_config),
-				release_tag
-			)
-			return true
-		
-		"download_scrape":
-			var scrape_url = download_config.get("scrape_url", "")
-			var version_pattern = download_config.get("version_pattern", "")
-			var url_template = download_config.get("url_template", "")
-			
-			# Try platform-specific template first
-			if url_template == "":
-				var url_templates = download_config.get("url_templates", {})
-				url_template = url_templates.get(platform_name, "")
-			
-			if scrape_url == "" or version_pattern == "" or url_template == "":
-				push_error("[LaunchManager] Invalid download_scrape config for: " + emulator_id)
-				return false
-			
-			_emulator_install_progress[emulator_id] = "Fetching release info..."
-			
-			NetworkManager.fetch_scraped_release(
-				scrape_url,
-				version_pattern,
-				url_template,
-				func(url: String, error: String):
-					if error != "":
-						push_error("[LaunchManager] Failed to scrape release: " + error)
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-						return
-					_queue_emulator_download(emulator_id, emulator_name, url, download_config)
-			)
-			return true
-		
-		"download_url":
-			var url = download_config.get("url", "")
-			
-			# Try platform-specific URL first
-			if url == "":
-				var urls = download_config.get("urls", {})
-				url = urls.get(platform_name, "")
-			
-			if url == "":
-				push_error("[LaunchManager] No URL specified for download_url: " + emulator_id)
-				return false
-			
-			_queue_emulator_download(emulator_id, emulator_name, url, download_config)
-			return true
-		
+## Executes install steps from new step-based format (entry point)
+func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:
+	print("[LaunchManager] Starting install flow for: " + emulator_id)
+	print("[LaunchManager] Total steps: " + str(install_steps.size()))
+	return _execute_install_step(emulator_id, 0)
+
+## Gets display name for a step based on step_name
+func _get_step_display_name(step_name: String) -> String:
+	# Map step names to user-friendly display names
+	match step_name:
+		"download_emulator":
+			return "Downloading RetroArch"
+		"install_emulator":
+			return "Installing RetroArch"
+		"download_cores":
+			return "Downloading Cores"
+		"install_cores":
+			return "Installing Cores"
+		"download_system_files":
+			return "Downloading System Files"
+		"install_system_files":
+			return "Installing System Files"
 		_:
-			push_error("[LaunchManager] Unknown download type: " + download_type)
-			return false
+			# Convert snake_case to Title Case with spaces
+			var words = step_name.split("_")
+			var result = ""
+			for word in words:
+				if result != "":
+					result += " "
+				result += word.capitalize()
+			return result
 
-func _queue_emulator_download(emulator_id: String, emulator_name: String, download_url: String, download_config: Dictionary = {}):
+## Legacy unified download - kept for reference but not used
+func _queue_emulator_download(emulator_id: String, emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
 	var filename = download_url.get_file()
 	var destination_path = EMULATORS_DIR + emulator_id + "/" + filename
 	
 	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
-	_emulator_install_progress[emulator_id] = "Downloading " + emulator_name + "..."
+	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
 	print("[LaunchManager] Queueing emulator download: " + emulator_id + " from " + download_url)
+	print("[LaunchManager] Step index: " + str(step_index))
+	print("[LaunchManager] Display name: " + step_display_name)
 	
-	var extract_to = download_config.get("extract_to", ".")
-	var strip_top = download_config.get("strip_top_directory", false)
-	var flatten_target = download_config.get("flatten_target", "")
-	
+	# Queue download WITHOUT auto-extract (extract is now a separate step)
 	var item_id = DownloadManager.queue_download(
 		download_url,
 		destination_path,
 		"emulator",
-		emulator_name,
-		true,
-		EMULATORS_DIR + emulator_id + "/" + extract_to
+		step_display_name,  # Use step-specific display name for notifications
+		false,  # auto_extract = false
+		""  # extract_to = empty, we'll handle extraction separately
 	)
 	
 	if item_id == "":
 		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		return
 	
-	# Track for unified handler (flattening, etc.)
+	# Track download with step info for sequential execution
 	_pending_emulator_downloads[item_id] = {
 		"emulator_id": emulator_id,
 		"context": "emulator",
-		"extract_to": extract_to,
-		"strip_top_directory": strip_top,
-		"flatten_target": flatten_target,
+		"step_index": step_index,
+		"step_config": step_config,
 		"callback": func(success: bool, message: String):
 			if not success:
 				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
@@ -2202,24 +2473,55 @@ func _execute_download_from_url(emulator_id: String, context: String, item_name:
 		
 		return true
 
-## Handles extraction completion for unified downloads
+## Handles download completion
+func _on_unified_download_completed(item_id: String, success: bool, message: String):
+	if _pending_emulator_downloads.has(item_id):
+		var task_info = _pending_emulator_downloads[item_id]
+		var emulator_id = task_info.emulator_id
+		var step_index = task_info.get("step_index", 0)
+		var step_config = task_info.get("step_config", {})
+		_pending_emulator_downloads.erase(item_id)
+		
+		if not success:
+			print("[LaunchManager] Download failed for: " + emulator_id)
+			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+			_emulator_install_progress[emulator_id] = "Download failed: " + message
+			emulator_extraction_completed.emit(emulator_id, false)
+			task_info.callback.call(false, message)
+			return
+		
+		print("[LaunchManager] Download completed for: " + emulator_id + " (step " + str(step_index) + ")")
+		
+		# Validate download if validation config exists
+		var validate_config = step_config.get("validate", {})
+		if not _validate_step(emulator_id, validate_config):
+			push_error("[LaunchManager] Download validation failed for: " + emulator_id)
+			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+			_emulator_install_progress[emulator_id] = "Download validation failed"
+			emulator_extraction_completed.emit(emulator_id, false)
+			task_info.callback.call(false, "Validation failed")
+			return
+		
+		print("[LaunchManager] Download validated, progressing to next step...")
+		
+		# Progress to next step
+		_execute_install_step(emulator_id, step_index + 1)
+		return
+
+## Handles extraction completion
 func _on_unified_extraction_completed(item_id: String, success: bool, extract_dir: String):
 	if _pending_emulator_downloads.has(item_id):
 		var task_info = _pending_emulator_downloads[item_id]
 		var emulator_id = task_info.emulator_id
-		_pending_emulator_downloads.erase(item_id)
+		var context = task_info.get("context", "")
 		
-		if not success:
-			task_info.callback.call(false, "Extraction failed")
+		if context == "extraction":
+			# Handled in the callback within _execute_extract_step
+			_pending_emulator_downloads.erase(item_id)
+			task_info.callback.call(success, "Extraction " + ("complete" if success else "failed"))
 			return
 		
-		# Wait for filesystem to settle
-		await get_tree().create_timer(0.5).timeout
-		
-		# Flatten if needed
-		if task_info.get("strip_top_directory", false) and task_info.extract_to != "":
-			var flatten_target = task_info.get("flatten_target", "")
-			_flatten_extracted_directory(emulator_id, task_info.extract_to, flatten_target)
+		_pending_emulator_downloads.erase(item_id)
 		
 		# Check if executable exists
 		if not validate_emulator_executable(emulator_id):
@@ -2319,41 +2621,4 @@ func _on_unified_extraction_completed(item_id: String, success: bool, extract_di
 			print("[LaunchManager] Task %d validated successfully for: " % (task_index + 1) + emulator_id)
 		
 		# Task completed and validated - continue to next task
-		_continue_post_install_sequence(emulator_id, emulator)
-
-## Handles download completion for unified downloads (no extraction)
-func _on_unified_download_completed(item_id: String, success: bool, message: String):
-	if _pending_emulator_downloads.has(item_id):
-		var task_info = _pending_emulator_downloads[item_id]
-		_pending_emulator_downloads.erase(item_id)
-		
-		if success and not FileAccess.file_exists(task_info.destination_path):
-			task_info.callback.call(false, "Downloaded file not found")
-			return
-		
-		task_info.callback.call(success, message)
-		return
-	
-	if _pending_post_install_downloads.has(item_id):
-		var task_info = _pending_post_install_downloads[item_id]
-		_pending_post_install_downloads.erase(item_id)
-		
-		var emulator_id = task_info.emulator_id
-		
-		if not success:
-			_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
-			emulator_extraction_completed.emit(emulator_id, false)
-			return
-		
-		if not FileAccess.file_exists(task_info.destination_path):
-			_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
-			emulator_extraction_completed.emit(emulator_id, false)
-			return
-		
-		var emulator = get_emulator(emulator_id)
-		if emulator.is_empty():
-			_emulator_install_states[emulator_id] = InstallState.NEEDS_POST_INSTALL
-			emulator_extraction_completed.emit(emulator_id, false)
-			return
-		
 		_continue_post_install_sequence(emulator_id, emulator)
