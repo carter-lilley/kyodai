@@ -2238,9 +2238,11 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 	var action_type = platform_config.get("action_type", "")
 	var validate_config = platform_config.get("validate", {})
 	
-	# If no validation config, assume step needs to be run
+	# If no validation config, consider step complete (just move on)
+	# This handles download steps where the file gets deleted after extraction
 	if validate_config.is_empty():
-		return false
+		print("[LaunchManager] Step '" + step_name + "' has no validation - skipping")
+		return true
 	
 	# Run validation
 	var is_valid = _validate_step(emulator_id, validate_config)
