@@ -17,6 +17,7 @@ import org.godotengine.godot.plugin.UsedByGodot;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.OutputStream;
+import java.net.URLDecoder;
 
 public class PackageCheckerPlugin extends GodotPlugin {
     
@@ -317,13 +318,21 @@ public class PackageCheckerPlugin extends GodotPlugin {
             
             // Add extras for RetroArch
             if (romUri != null && !romUri.isEmpty()) {
-                Uri romFileUri = Uri.parse(romUri);
-                intent.putExtra("ROM", romUri);
-                Log.d(TAG, "Added ROM extra: " + romUri);
+                String romPath = romUri;
                 
-                // Grant explicit URI permission to the target package
-                Log.d(TAG, "Granting URI permission to: " + packageName);
-                activity.grantUriPermission(packageName, romFileUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                // Convert content URI to file path if possible
+                if (romUri.startsWith("content://")) {
+                    String filePath = getFilePathFromContentUri(activity, romUri);
+                    if (filePath != null && !filePath.isEmpty()) {
+                        romPath = filePath;
+                        Log.d(TAG, "Converted content URI to file path: " + romPath);
+                    } else {
+                        Log.w(TAG, "Could not convert content URI to file path, using original: " + romUri);
+                    }
+                }
+                
+                intent.putExtra("ROM", romPath);
+                Log.d(TAG, "Added ROM extra: " + romPath);
             }
             if (coreName != null && !coreName.isEmpty()) {
                 intent.putExtra("LIBRETRO", coreName);
@@ -345,6 +354,132 @@ public class PackageCheckerPlugin extends GodotPlugin {
             Log.e(TAG, "Exception type: " + e.getClass().getName());
             return false;
         }
+    }
+    
+    /**
+     * Converts a content URI to a file path.
+     * This works for external storage documents and other common providers.
+     */
+    private String getFilePathFromContentUri(Activity activity, String contentUri) {
+        try {
+            // Handle external storage tree URIs (content://com.android.externalstorage.documents/tree/...)
+            if (contentUri.contains("com.android.externalstorage.documents") && contentUri.contains("/tree/")) {
+                // Parse tree URI format: content://.../tree/primary:path/to/file
+                int treePos = contentUri.lastIndexOf("/tree/");
+                if (treePos != -1) {
+                    String treePath = contentUri.substring(treePos + 6); // Skip "/tree/"
+                    // URL decode the path
+                    treePath = java.net.URLDecoder.decode(treePath, "UTF-8");
+                    
+                    // Parse format: "primary:path/to/file" or "XXXX-XXXX:path/to/file"
+                    int colonPos = treePath.indexOf(':');
+                    if (colonPos != -1) {
+                        String storage = treePath.substring(0, colonPos);
+                        String path = treePath.substring(colonPos + 1);
+                        
+                        if ("primary".equalsIgnoreCase(storage)) {
+                            return "/storage/emulated/0/" + path;
+                        } else {
+                            // For other storage volumes (SD cards, etc.)
+                            return "/storage/" + storage + "/" + path;
+                        }
+                    }
+                }
+            }
+            
+            // Handle external storage document URIs (content://com.android.externalstorage.documents/document/...)
+            if (contentUri.contains("com.android.externalstorage.documents") && contentUri.contains("/document/")) {
+                // Parse the document ID from the URI
+                // Format: content://.../document/primary:path/to/file
+                int docPos = contentUri.lastIndexOf("/document/");
+                if (docPos != -1) {
+                    String docId = contentUri.substring(docPos + 10); // Skip "/document/"
+                    // URL decode the docId
+                    docId = java.net.URLDecoder.decode(docId, "UTF-8");
+                    
+                    // Parse document ID format: "primary:path/to/file" or "home:path/to/file"
+                    int colonPos = docId.indexOf(':');
+                    if (colonPos != -1) {
+                        String storage = docId.substring(0, colonPos);
+                        String path = docId.substring(colonPos + 1);
+                        
+                        if ("primary".equalsIgnoreCase(storage)) {
+                            return "/storage/emulated/0/" + path;
+                        } else {
+                            // For other storage volumes
+                            return "/storage/" + storage + "/" + path;
+                        }
+                    }
+                }
+            }
+            
+            // Handle media documents (content://com.android.providers.media.documents/...)
+            if (contentUri.contains("com.android.providers.media.documents")) {
+                // Try to query the MediaStore for the file path
+                Uri uri = Uri.parse(contentUri);
+                String[] projection = {android.provider.MediaStore.MediaColumns.DATA};
+                try (android.database.Cursor cursor = activity.getContentResolver().query(uri, projection, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int columnIndex = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATA);
+                        return cursor.getString(columnIndex);
+                    }
+                }
+            }
+            
+            // For other content URIs, try a generic query
+            Uri uri = Uri.parse(contentUri);
+            String[] projection = {android.provider.MediaStore.MediaColumns.DATA};
+            try (android.database.Cursor cursor = activity.getContentResolver().query(uri, projection, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int columnIndex = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATA);
+                    return cursor.getString(columnIndex);
+                }
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error converting content URI to file path: " + e.getMessage());
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Converts a tree URI to a document URI.
+     * Tree URI format: content://authority/tree/treeEncodedId/path/to/file
+     * Document URI format: content://authority/document/treeEncodedId%2Fpath%2Fto%2Ffile
+     */
+    private String convertTreeUriToDocumentUri(String treeUri) {
+        if (treeUri == null || !treeUri.startsWith("content://")) {
+            return treeUri;
+        }
+        
+        // Check if it's already a document URI
+        if (treeUri.contains("/document/")) {
+            return treeUri;
+        }
+        
+        // Find the /tree/ position
+        int treePos = treeUri.indexOf("/tree/");
+        if (treePos == -1) {
+            return treeUri;
+        }
+        
+        // Extract parts
+        String base = treeUri.substring(0, treePos);
+        String afterTree = treeUri.substring(treePos + 6); // Skip "/tree/"
+        
+        // The tree ID is the first segment, rest is the path
+        int firstSlash = afterTree.indexOf("/");
+        if (firstSlash == -1) {
+            // Just a tree root
+            return base + "/document/" + afterTree;
+        }
+        
+        String treeId = afterTree.substring(0, firstSlash);
+        String path = afterTree.substring(firstSlash + 1);
+        
+        // Build document URI with encoded path
+        return base + "/document/" + treeId + "%2F" + path.replace("/", "%2F");
     }
     
     @UsedByGodot
