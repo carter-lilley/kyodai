@@ -28,6 +28,10 @@ NotificationManager="*uid://igtredd7pthk"
 LaunchManager="*res://managers/launch_manager.gd"
 AudioManager="*res://managers/audio_manager.gd"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/PackageChecker/plugin.cfg")
+
 [input]
 
 ui_accept={

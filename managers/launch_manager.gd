@@ -67,6 +67,29 @@ func _ready():
 	# Wait a frame to ensure everything is initialized
 	await get_tree().process_frame
 	scan_emulator_installations()
+	
+	# DEBUG: Test PackageChecker plugin
+	if OS.get_name() == "Android":
+		print("[DEBUG] Godot version: ", Engine.get_version_info())
+		print("[DEBUG] Checking PackageChecker plugin...")
+		print("[DEBUG] All singletons: ", Engine.get_singleton_list())
+		
+		# Try different variations of the name
+		var possible_names = ["PackageChecker", "packagechecker", "com.heckpoint.kyodai.PackageChecker"]
+		var found = false
+		for name in possible_names:
+			if Engine.has_singleton(name):
+				print("[DEBUG] Found plugin as: ", name)
+				var plugin = Engine.get_singleton(name)
+				print("[DEBUG] Plugin object: ", plugin)
+				found = true
+				break
+		
+		if not found:
+			print("[DEBUG] PackageChecker plugin NOT found with any name variant")
+			print("[DEBUG] Total singletons count: ", Engine.get_singleton_list().size())
+	else:
+		print("[DEBUG] Not on Android - plugin check skipped")
 
 func _load_registry():
 	if not FileAccess.file_exists(REGISTRY_PATH):
@@ -2159,27 +2182,13 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			return found_files
 		
 		"package_installed":
-			# Check if an Android package is installed
+			# Check if an Android package is installed using PackageManager
 			var package = validate_config.get("package", "")
 			if package == "":
 				return true
 			
 			if PlatformManager.is_android():
-				# Check if the APK file still exists in our downloads folder
-				# If it does, the app hasn't been installed yet
-				var apk_path = EMULATORS_DIR + "retroarch/RetroArch.apk"
-				if FileAccess.file_exists(apk_path):
-					print("[LaunchManager] Validation: package_installed '" + package + "' = false (APK still in downloads)")
-					return false
-				
-				# APK is gone - user likely installed it
-				# Also check if RetroArch data directory exists as confirmation
-				var retroarch_data_path = "/storage/emulated/0/RetroArch"
-				var dir = DirAccess.open(retroarch_data_path)
-				var data_exists = dir != null
-				
-				print("[LaunchManager] Validation: package_installed '" + package + "' = " + str(data_exists) + " (data dir exists: " + str(data_exists) + ")")
-				return data_exists
+				return _is_android_package_installed(package)
 			else:
 				# On desktop, always return true (package concept doesn't apply)
 				return true
@@ -2222,6 +2231,57 @@ func _get_step_display_name(step_name: String) -> String:
 					result += " "
 				result += word.capitalize()
 			return result
+
+## Checks if an Android package is installed using the PackageChecker plugin
+func _is_android_package_installed(package_name: String) -> bool:
+	print("[LaunchManager] ==========================================")
+	print("[LaunchManager] _is_android_package_installed() called")
+	print("[LaunchManager] Checking package: '" + package_name + "'")
+	
+	# Get the PackageChecker plugin singleton
+	print("[LaunchManager] Attempting to get PackageChecker singleton...")
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		print("[LaunchManager] ERROR: PackageChecker plugin singleton is NULL")
+		print("[LaunchManager] ==========================================")
+		return false
+	
+	print("[LaunchManager] SUCCESS: PackageChecker plugin singleton obtained")
+	print("[LaunchManager] Plugin object: " + str(plugin))
+	
+	# Check the main package name first
+	print("[LaunchManager] Calling plugin.isPackageInstalled('" + package_name + "')...")
+	var result = plugin.isPackageInstalled(package_name)
+	print("[LaunchManager] Result for '" + package_name + "': " + str(result))
+	
+	if result:
+		print("[LaunchManager] SUCCESS: Package '" + package_name + "' is INSTALLED")
+		print("[LaunchManager] ==========================================")
+		return true
+	
+	print("[LaunchManager] Package '" + package_name + "' not found, checking variants...")
+	
+	# For RetroArch, check common variants
+	if package_name == "com.retroarch":
+		var variants = ["com.retroarch.aarch64", "com.retroarch.ra32"]
+		print("[LaunchManager] Checking " + str(variants.size()) + " RetroArch variants: " + str(variants))
+		
+		for i in range(variants.size()):
+			var variant = variants[i]
+			print("[LaunchManager] Variant " + str(i + 1) + "/" + str(variants.size()) + ": Checking '" + variant + "'...")
+			result = plugin.isPackageInstalled(variant)
+			print("[LaunchManager] Variant '" + variant + "' result: " + str(result))
+			
+			if result:
+				print("[LaunchManager] SUCCESS: Variant '" + variant + "' is INSTALLED")
+				print("[LaunchManager] ==========================================")
+				return true
+		
+		print("[LaunchManager] No RetroArch variants found installed")
+	
+	print("[LaunchManager] FINAL: Package '" + package_name + "' is NOT installed")
+	print("[LaunchManager] ==========================================")
+	return false
 
 ## Validates a specific install step to check if it's complete
 ## Returns true if the step validation passes (step is complete)

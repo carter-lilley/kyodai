@@ -63,26 +63,10 @@
 		  "windows": {
 			"action_type": "download_url",
 			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "RetroArch.7z"
-			}
-		  },
-		  "linux": {
-			"action_type": "download_url",
-			"url": "",
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": ""
-			}
 		  },
 		  "android": {
 			"action_type": "download_url",
 			"url": "https://buildbot.libretro.com/stable/1.22.2/android/RetroArch.apk",
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "RetroArch.apk"
-			}
 		  }
 		}
 	  },
@@ -96,15 +80,6 @@
 			"validate": {
 			  "action_type": "file_exists",
 			  "file": "retroarch.exe"
-			}
-		  },
-		  "linux": {
-			"action_type": "extract",
-			"extract_to": ".",
-			"strip_top_directory": true,
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "RetroArch-Linux-x86_64.AppImage"
 			}
 		  },
 		  "android": {
@@ -123,24 +98,9 @@
 		  "windows": {
 			"action_type": "download_url",
 			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "RetroArch_cores.7z"
-			}
-		  },
-		  "linux": {
-			"action_type": "download_url",
-			"url": "",
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": ""
-			}
 		  },
 		  "android": {
 			"action_type": "none",
-			"validate": {
-			  "action_type": "always_pass"
-			}
 		  }
 		}
 	  },
@@ -158,16 +118,6 @@
 			  "pattern": "*.dll"
 			}
 		  },
-		  "linux": {
-			"action_type": "extract",
-			"extract_to": ".",
-			"strip_top_directory": true,
-			"validate": {
-			  "action_type": "files_exist",
-			  "path": "cores",
-			  "pattern": "*.so"
-			}
-		  },
 		  "android": {
 			"action_type": "none",
 			"validate": {
@@ -182,10 +132,6 @@
 		  "all": {
 			"action_type": "download_url",
 			"url": "https://files.lilley.video/other_assets/retroarch_bios.zip",
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "retroarch_bios.zip"
-			}
 		  }
 		}
 	  },
@@ -193,16 +139,6 @@
 		"step": "install_system_files",
 		"platforms": {
 		  "windows": {
-			"action_type": "extract",
-			"extract_to": "system",
-			"strip_top_directory": true,
-			"flatten_target": "bios",
-			"validate": {
-			  "action_type": "files_exist",
-			  "path": "system"
-			}
-		  },
-		  "linux": {
 			"action_type": "extract",
 			"extract_to": "system",
 			"strip_top_directory": true,
@@ -231,11 +167,6 @@
 		"windows": {
 		  "type": "command",
 		  "executable": "retroarch.exe",
-		  "template": ["{exe}", "-L", "{core}", "{rom}"]
-		},
-		"linux": {
-		  "type": "command",
-		  "executable": "RetroArch-Linux-x86_64.AppImage",
 		  "template": ["{exe}", "-L", "{core}", "{rom}"]
 		},
 		"android": {

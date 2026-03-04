@@ -41,3 +41,9 @@ how to split important siblings
 ## registry:
 	hidden core systems toggle(?)
 	platform download/launch diffs (Linux/android)
+	android -
+		[LaunchManager] Executing step 2: download_cores
+		[LaunchManager] Skipping step 'download_cores' (action_type: none)
+		[LaunchManager] Executing step 3: install_cores
+		[LaunchManager] Skipping step 'install_cores' (action_type: none)
+	Backport other implementations to multistep
