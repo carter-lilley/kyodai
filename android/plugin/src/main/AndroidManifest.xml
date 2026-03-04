@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+	package="com.heckpoint.kyodai">
+	
+	<!-- Permission to query all packages (Android 11+) -->
+	<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+	
+	<!-- Explicitly declare packages we want to query -->
+	<queries>
+		<package android:name="com.retroarch" />
+		<package android:name="com.retroarch.aarch64" />
+		<package android:name="com.retroarch.ra32" />
+	</queries>
+	
+	<application>
+		<meta-data 
+			android:name="org.godotengine.plugin.v2.PackageChecker" 
+			android:value="com.heckpoint.kyodai.PackageCheckerPlugin" />
+	</application>
+
+</manifest>

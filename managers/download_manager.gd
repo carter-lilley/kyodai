@@ -30,6 +30,8 @@ class QueueItem:
 	var romm_id: int = 0  # The actual RomM ID being downloaded (could be a sibling)
 	var download_info: Dictionary = {}  # For file-based downloads: {http, callback, path, completed}
 	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
+	var saf_destination: String = ""  # Original SAF URI if using SAF storage
+	var use_saf: bool = false  # Whether this download uses SAF
 
 # Unified queue
 var _queue: Array[QueueItem] = []
@@ -76,7 +78,6 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.type = type
 	item.name = name if name != "" else item_id
 	item.auto_extract = auto_extract
-	item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
 	item.game_resource = game
 	item.callbacks = callbacks
 	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
@@ -85,28 +86,81 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	if game:
 		item.expected_file_size = game.get_active_file_size()
 	
-	# Ensure destination directory exists
-	var dest_dir = destination.get_base_dir()
-	var dir: DirAccess
-	
-	# Handle absolute vs relative paths
-	if dest_dir.begins_with("user://") or dest_dir.begins_with("res://"):
-		dir = DirAccess.open(dest_dir.get_base_dir())
-		if dir and not dir.dir_exists(dest_dir.get_file()):
-			var result = dir.make_dir_recursive(dest_dir.get_file())
-			if result != OK:
-				print("[DownloadManager] Failed to create directory: " + dest_dir)
+	# Check if destination is a SAF (Storage Access Framework) path
+	if destination.begins_with("content://"):
+		print("[DownloadManager] Detected SAF path, using two-step download")
+		
+		# On Android, verify SAF permissions before starting download
+		if PlatformManager.is_android():
+			print("[DownloadManager] Checking SAF permissions for: " + destination)
+			var plugin = Engine.get_singleton("PackageChecker")
+			if plugin == null:
+				print("[DownloadManager] ERROR: PackageChecker plugin not available")
+				NotificationManager.show_notification("Download Error: Storage plugin not available", Notification.Type.ERROR, null, 5.0)
 				return ""
+			
+			# Check if we have permission for this directory
+			# Extract the base tree URI (up to /tree/.../), not including subdirectories
+			var tree_uri = _extract_saf_tree_uri(destination)
+			if tree_uri == "":
+				print("[DownloadManager] ERROR: Could not extract tree URI from: " + destination)
+				NotificationManager.show_notification("Download Error: Invalid storage path format.", Notification.Type.ERROR, null, 5.0)
+				return ""
+			
+			print("[DownloadManager] Checking permission for tree: " + tree_uri)
+			var has_permission = plugin.checkSafPermission(tree_uri)
+			if not has_permission:
+				print("[DownloadManager] ERROR: No permission for SAF tree: " + tree_uri)
+				print("[DownloadManager] Full destination was: " + destination)
+				NotificationManager.show_notification("Download Error: No permission for storage directory. Please re-select the folder in Settings > Storage.", Notification.Type.ERROR, null, 8.0)
+				return ""
+			
+			print("[DownloadManager] SAF permissions verified for tree: " + tree_uri)
+		
+		item.use_saf = true
+		item.saf_destination = destination
+		# Change destination to temp location
+		var file_name = destination.get_file()
+		var temp_dir = "user://downloads/saf_temp/" + item_id
+		item.destination_path = temp_dir + "/" + file_name
+		# Also set extract_dir to temp location if auto-extract is enabled
+		if item.auto_extract:
+			item.extract_dir = temp_dir + "/extracted"
+		else:
+			item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
+		print("[DownloadManager] SAF destination: " + destination)
+		print("[DownloadManager] Temp destination: " + item.destination_path)
+		print("[DownloadManager] Extract dir: " + item.extract_dir)
+		# Create temp directory
+		var result = DirAccess.make_dir_recursive_absolute(temp_dir)
+		if result != OK:
+			print("[DownloadManager] Failed to create temp directory: " + temp_dir)
+			return ""
 	else:
-		# Absolute path (e.g., D:/Emulation/roms/switch)
-		dir = DirAccess.open(dest_dir)
-		if dir == null:
-			# Directory doesn't exist, try to create it using OS
-			var global_path = ProjectSettings.globalize_path(dest_dir) if dest_dir.begins_with("res://") else dest_dir
-			var result = DirAccess.make_dir_recursive_absolute(global_path)
-			if result != OK:
-				print("[DownloadManager] Failed to create directory: " + global_path + " (error: " + str(result) + ")")
-				return ""
+		# Set extract_dir for regular paths
+		item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
+		# Ensure destination directory exists for regular paths
+		var dest_dir = destination.get_base_dir()
+		var dir: DirAccess
+		
+		# Handle absolute vs relative paths
+		if dest_dir.begins_with("user://") or dest_dir.begins_with("res://"):
+			dir = DirAccess.open(dest_dir.get_base_dir())
+			if dir and not dir.dir_exists(dest_dir.get_file()):
+				var result = dir.make_dir_recursive(dest_dir.get_file())
+				if result != OK:
+					print("[DownloadManager] Failed to create directory: " + dest_dir)
+					return ""
+		else:
+			# Absolute path (e.g., D:/Emulation/roms/switch)
+			dir = DirAccess.open(dest_dir)
+			if dir == null:
+				# Directory doesn't exist, try to create it using OS
+				var global_path = ProjectSettings.globalize_path(dest_dir) if dest_dir.begins_with("res://") else dest_dir
+				var result = DirAccess.make_dir_recursive_absolute(global_path)
+				if result != OK:
+					print("[DownloadManager] Failed to create directory: " + global_path + " (error: " + str(result) + ")")
+					return ""
 	
 	_queue.append(item)
 	print("[DownloadManager] Queued download: " + item_id + " (" + type + ") - " + url)
@@ -520,11 +574,102 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		file.close()
 		print("[DownloadManager] Final file size: " + str(final_size) + " bytes (" + str(final_size / (1024*1024)) + " MB)")
 	
+	# Handle SAF (Storage Access Framework) copy if needed
+	if item.use_saf:
+		print("[DownloadManager] Copying file to SAF location...")
+		print("[DownloadManager] Source: " + item.destination_path)
+		print("[DownloadManager] Destination: " + item.saf_destination)
+		NotificationManager.update_notification_text(item.notification_id, "Moving to storage: " + item.name + "...")
+		
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin == null:
+			print("[DownloadManager] ERROR: PackageChecker plugin not available for SAF copy")
+			item.status = "failed"
+			item.error_message = "Plugin not available"
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			download_completed.emit(item.id, false, "Plugin not available")
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		# Extract tree URI and file name from SAF destination
+		# SAF path format: content://authority/tree/tree_id/document_id
+		var saf_path = item.saf_destination
+		var file_name = item.destination_path.get_file()
+		
+		print("[DownloadManager] SAF destination: " + saf_path)
+		print("[DownloadManager] File name: " + file_name)
+		
+		# Extract the base tree URI (not including subdirectories)
+		var tree_uri = _extract_saf_tree_uri(saf_path)
+		if tree_uri == "":
+			print("[DownloadManager] ERROR: Could not extract tree URI from: " + saf_path)
+			item.status = "failed"
+			item.error_message = "Invalid SAF path format"
+			NotificationManager.update_notification_text(item.notification_id, "Failed: " + item.name + " - Invalid path")
+			NotificationManager.show_notification("Download failed: Invalid storage path format", Notification.Type.ERROR, null, 5.0)
+			_active_items.erase(item.id)
+			download_completed.emit(item.id, false, "Invalid SAF path format")
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		print("[DownloadManager] Tree base URI: " + tree_uri)
+		
+		# Extract subdirectory from the SAF path (e.g., "dc" from /tree/roms/dc/file.chd)
+		var subdir = ""
+		var tree_end_pos = saf_path.find("/", tree_uri.length() - 1)
+		if tree_end_pos != -1:
+			var file_name_pos = saf_path.rfind("/")
+			if file_name_pos > tree_end_pos:
+				subdir = saf_path.substr(tree_end_pos + 1, file_name_pos - tree_end_pos - 1)
+		
+		# Create subdirectory if needed
+		if subdir != "":
+			print("[DownloadManager] Creating subdirectory: " + subdir)
+			var dir_created = plugin.createSafDirectory(tree_uri, subdir)
+			if not dir_created:
+				print("[DownloadManager] WARNING: Could not create subdirectory (may already exist)")
+		
+		# Convert Godot user:// path to absolute path for Java
+		var absolute_path = ProjectSettings.globalize_path(item.destination_path)
+		print("[DownloadManager] Absolute path: " + absolute_path)
+		print("[DownloadManager] Target file: " + file_name + " in subdir: " + subdir)
+		
+		# Try to copy the file
+		var copy_success = plugin.copyFileToSaf(absolute_path, tree_uri, subdir + "/" + file_name if subdir != "" else file_name)
+		
+		if not copy_success:
+			print("[DownloadManager] ERROR: Failed to copy file to SAF location")
+			item.status = "failed"
+			item.error_message = "Failed to copy to storage - check permissions"
+			NotificationManager.update_notification_text(item.notification_id, "Failed: " + item.name + " - No storage permission")
+			NotificationManager.show_notification("Download failed: No permission to write to storage folder. Please re-select the folder in Settings.", Notification.Type.ERROR, null, 8.0)
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			download_completed.emit(item.id, false, "Failed to copy to storage - check permissions")
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		print("[DownloadManager] Successfully copied to SAF location")
+		
+		# Delete temp file
+		var temp_dir = item.destination_path.get_base_dir()
+		DirAccess.remove_absolute(item.destination_path)
+		DirAccess.remove_absolute(temp_dir)
+		print("[DownloadManager] Cleaned up temp files")
+	
 	# Update game resource if applicable
 	if item.game_resource:
 		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
 		item.game_resource.mark_sibling_downloaded(downloaded_id)
-		item.game_resource.file_path = item.destination_path
+		# Use SAF destination if available, otherwise use regular destination
+		if item.use_saf:
+			item.game_resource.file_path = item.saf_destination
+		else:
+			item.game_resource.file_path = item.destination_path
 		DataManager.update_game(item.game_resource)
 	
 	# Call custom callback if provided
@@ -540,7 +685,9 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		item.status = "completed"
 		item.progress = 1.0
 		_active_items.erase(item.id)
-		download_completed.emit(item.id, true, item.destination_path)
+		# Emit with SAF destination if available
+		var final_path = item.saf_destination if item.use_saf else item.destination_path
+		download_completed.emit(item.id, true, final_path)
 		queue_changed.emit()
 		_process_queue()
 
@@ -857,3 +1004,30 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 	)
 	
 	return true
+	return true
+
+## Extracts the base tree URI from a full SAF path
+## SAF format: content://authority/tree/<tree_id>/subdir1/subdir2/file
+## Returns: content://authority/tree/<tree_id> (no trailing slash)
+func _extract_saf_tree_uri(full_uri: String) -> String:
+	# Find the position of "/tree/"
+	var tree_pos = full_uri.find("/tree/")
+	if tree_pos == -1:
+		return ""
+	
+	# Find the next "/" after the tree ID (which marks the end of tree base)
+	# The tree ID is the segment immediately after /tree/
+	var after_tree = tree_pos + 6  # Length of "/tree/"
+	var next_slash = full_uri.find("/", after_tree)
+	
+	# If there's no slash after tree ID, the entire string is the tree base
+	if next_slash == -1:
+		# Remove trailing slash if present to match persistSafPermission format
+		if full_uri.ends_with("/"):
+			return full_uri.substr(0, full_uri.length() - 1)
+		return full_uri
+	
+	# Extract up to (but NOT including) the slash after tree ID
+	# This matches the format that persistSafPermission receives
+	var tree_base = full_uri.substr(0, next_slash)
+	return tree_base

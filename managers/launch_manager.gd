@@ -1198,10 +1198,19 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	
 	# Get the correct file path for the active variant
 	var active_file_name = game.get_active_file_name()
-	var root_folder = SettingsManager.get_setting("games_root_folder")
-	var root_path = root_folder.value if root_folder else "user://games"
-	# Construct the full file path from known components (don't rely on file_path which may be relative)
-	intent.rom_path = root_path + "/" + game.platform_slug + "/" + active_file_name
+	
+	# Use the actual file_path from game resource (contains content:// URI for SAF on Android)
+	# Only fall back to constructing path if file_path is empty
+	if game.file_path != "":
+		intent.rom_path = game.file_path
+		print("[LaunchManager] Using stored file_path: " + intent.rom_path)
+	else:
+		# Fallback: construct path from components (for legacy or if file_path not set)
+		var root_folder = SettingsManager.get_setting("games_root_folder")
+		var root_path = root_folder.value if root_folder else "user://games"
+		intent.rom_path = root_path + "/" + game.platform_slug + "/" + active_file_name
+		print("[LaunchManager] Constructed fallback path: " + intent.rom_path)
+	
 	intent.platform_slug = game.platform_slug
 	
 	# Resolve emulator
@@ -1223,11 +1232,19 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 
 func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var templates = emulator.get("launch_templates", {})
+	
+	# Get launch configuration (support both old and new registry formats)
+	var launch_config = emulator.get("launch", {})
+	var platforms = launch_config.get("platforms", {})
+	var templates = emulator.get("launch_templates", {})  # Legacy support
 	
 	if PlatformManager.is_android():
 		# Android uses intent-based launching
-		var android_template = templates.get("android", {})
+		# Check new format first (launch.platforms.android), then legacy (launch_templates.android)
+		var android_template = platforms.get("android", {})
+		if android_template.is_empty():
+			android_template = templates.get("android", {})
+		
 		intent.android_action = android_template.get("action", "")
 		intent.android_package = android_template.get("package", "")
 		intent.android_class = android_template.get("class", "")
@@ -1274,8 +1291,21 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] Invalid launch intent")
 		return false
 	
-	# Check if emulator is fully installed (including post-install steps)
-	if get_emulator_install_state(intent.emulator_id) != InstallState.INSTALLED:
+	# Check if emulator is fully installed using step validation (consistent across all platforms)
+	var emulator = get_emulator(intent.emulator_id)
+	var is_actually_installed = false
+	if emulator.has("install"):
+		var install_steps = emulator.get("install", [])
+		is_actually_installed = true
+		for i in range(install_steps.size()):
+			if not _validate_install_step(intent.emulator_id, i, install_steps):
+				is_actually_installed = false
+				break
+	else:
+		# Fallback for legacy emulators
+		is_actually_installed = get_emulator_install_state(intent.emulator_id) == InstallState.INSTALLED
+	
+	if not is_actually_installed:
 		push_error("[LaunchManager] Emulator not fully installed: " + intent.emulator_id)
 		NotificationManager.show_notification("Emulator not ready: " + intent.emulator_name, Notification.Type.ERROR)
 		return false
@@ -1702,8 +1732,22 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	var emulator = get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
 	
-	# Check if emulator is fully installed (including post-install steps)
-	if get_emulator_install_state(emulator_id) != InstallState.INSTALLED:
+	# Check if emulator is fully installed using step validation
+	# This works consistently across all platforms (Android, Windows, Linux, Mac)
+	var is_actually_installed = false
+	if emulator.has("install"):
+		# Use step validation for proper checking (package_installed, file_exists, etc.)
+		var install_steps = emulator.get("install", [])
+		is_actually_installed = true
+		for i in range(install_steps.size()):
+			if not _validate_install_step(emulator_id, i, install_steps):
+				is_actually_installed = false
+				break
+	else:
+		# Fallback to runtime state for legacy emulators without install steps
+		is_actually_installed = get_emulator_install_state(emulator_id) == InstallState.INSTALLED
+	
+	if not is_actually_installed:
 		print("[LaunchManager] Emulator not fully installed, auto-downloading: " + emulator_id)
 		NotificationManager.show_notification("Setting up " + emulator_name + "...", Notification.Type.INFO)
 		
@@ -1782,10 +1826,48 @@ func _update_last_played(game: GameResource) -> void:
 	game_launched.emit(game)
 
 func _execute_android(intent: LaunchIntent) -> bool:
-	# TODO: Implement Android intent launching
-	# This requires JNI calls or OS.shell_open with specific URI formats
-	push_error("[LaunchManager] Android launching not yet implemented")
-	return false
+	print("[LaunchManager] Executing Android launch...")
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_error("[LaunchManager] PackageChecker plugin not available for Android launch")
+		return false
+	
+	# Format the core path for RetroArch
+	# Use the actual installed package path (com.retroarch, not com.retroarch.aarch64)
+	var core_path = ""
+	if intent.core_name != "":
+		var core_filename = intent.core_name + "_libretro_android.so"
+		# Build core path using the actual package name from intent
+		var retroarch_package = intent.android_package
+		if retroarch_package != "":
+			core_path = "/data/data/" + retroarch_package + "/cores/" + core_filename
+		else:
+			# Fallback if package name is somehow empty
+			core_path = "/data/data/com.retroarch/cores/" + core_filename
+	
+	print("[LaunchManager] Launching with:")
+	print("  Action: " + intent.android_action)
+	print("  Package: " + intent.android_package)
+	print("  Class: " + intent.android_class)
+	print("  ROM: " + intent.rom_path)
+	print("  Core: " + core_path)
+	
+	# Launch the Android intent via plugin
+	var success = plugin.call("launchAndroidIntent", 
+		intent.android_action,
+		intent.android_package, 
+		intent.android_class,
+		intent.rom_path,
+		core_path
+	)
+	
+	if success:
+		print("[LaunchManager] Android intent launched successfully")
+	else:
+		push_error("[LaunchManager] Failed to launch Android intent")
+	
+	return success
 
 ## Helper: Get enabled platforms from settings
 func _get_enabled_platforms() -> Dictionary:

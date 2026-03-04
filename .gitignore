@@ -1,6 +1,12 @@
 # Godot 4+ specific ignores
 .godot/
-/android/
 
-# Android debug keystore
+# Android build artifacts and cache
+android/.gradle/
+android/**/build/
+android/**/.idea/
+android/**/local.properties
+android/**/*.iml
+
+# Android debug keystore (contains sensitive signing key)
 android/*.keystore

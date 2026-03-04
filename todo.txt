@@ -1,10 +1,10 @@
 #TODO.TXT
 
 how to split important siblings
-
+items dissapear on rescan?
 ## UI
-	colors
-	presets
+	color presets
+	theme presets
 	placeholder cards
 	font! rodin?
 	'controls/info bar'
@@ -15,11 +15,14 @@ how to split important siblings
 ## cards
 	try scaling cropping algo
 ## hero
+	postcard-style [[img] name ]
+	background style (disable other opts?)
+	card style
 	hero placement opt -> '4 way container?'
 	hero IGDB opt
-	hero types? background/card?
 	hero fx (screenshots/cropping.shadows/etc)
 ## performance:
+	XMB shader too heavy
 	cache image colors,  cropping data, and sibiling lookup on sync
 	further card image retries & priority management.
 	performance.add_custom_monitor for everything
@@ -37,7 +40,7 @@ how to split important siblings
 	dolphin:
 		game profiles
 	rpcs3
-		zip extraction>??
+		zip extraction??
 ## registry:
 	hidden core systems toggle(?)
 	platform download/launch diffs (Linux/android)

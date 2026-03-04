@@ -649,7 +649,22 @@ func _on_card_pressed():
 			
 			print("[GameCard] Checking file exists: %s (game: %s, has_local_copy: %s)" % [file_path, game.title, game.has_local_copy])
 			
-			if not FileAccess.file_exists(file_path):
+			var file_exists = false
+			
+			# On Android with SAF paths, use plugin to check file existence
+			if PlatformManager.is_android() and file_path.begins_with("content://"):
+				var plugin = Engine.get_singleton("PackageChecker")
+				if plugin:
+					file_exists = plugin.call("safFileExists", file_path)
+					print("[GameCard] SAF file check result: " + str(file_exists))
+				else:
+					print("[GameCard] WARNING: PackageChecker plugin not available for SAF file check")
+					file_exists = false
+			else:
+				# Standard file check for regular paths
+				file_exists = FileAccess.file_exists(file_path)
+			
+			if not file_exists:
 				if NotificationManager:
 					NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
 				download_requested.emit(game)

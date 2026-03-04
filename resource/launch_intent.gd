@@ -52,8 +52,26 @@ func _to_string() -> String:
 func is_valid() -> bool:
 	if not game:
 		return false
-	if rom_path == "" or not FileAccess.file_exists(rom_path):
+	
+	# Check ROM file exists (handle SAF paths on Android)
+	if rom_path == "":
 		return false
+	
+	# On Android, use plugin to check SAF file existence
+	# On desktop, use standard FileAccess
+	if PlatformManager.is_android():
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			if not plugin.call("safFileExists", rom_path):
+				return false
+		else:
+			print("[LaunchIntent] WARNING: PackageChecker plugin not available for SAF path check")
+			return false
+	else:
+		# Desktop platforms - use standard file check
+		if not FileAccess.file_exists(rom_path):
+			return false
+	
 	if emulator_id == "":
 		return false
 	if platform_slug == "":
