@@ -1834,17 +1834,27 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		return false
 	
 	# Format the core path for RetroArch
-	# Use the actual installed package path (com.retroarch, not com.retroarch.aarch64)
 	var core_path = ""
-	if intent.core_name != "":
-		var core_filename = intent.core_name + "_libretro_android.so"
-		# Build core path using the actual package name from intent
-		var retroarch_package = intent.android_package
-		if retroarch_package != "":
-			core_path = "/data/data/" + retroarch_package + "/cores/" + core_filename
-		else:
-			# Fallback if package name is somehow empty
-			core_path = "/data/data/com.retroarch/cores/" + core_filename
+	
+	# Check if using CoreSideloadActivity (for testing sideloaded cores)
+	if intent.android_class == "com.retroarch.browser.debug.CoreSideloadActivity":
+		# Use downloaded core from shared storage
+		if intent.core_name != "":
+			var core_filename = intent.core_name + "_libretro_android.so"
+			# Cores are downloaded to shared RetroArch directory
+			core_path = "/storage/emulated/0/RetroArch/cores/" + core_filename
+			print("[LaunchManager] Using sideloaded core from: " + core_path)
+	else:
+		# Regular RetroArch launch - use internal core path
+		if intent.core_name != "":
+			var core_filename = intent.core_name + "_libretro_android.so"
+			# Build core path using the actual package name from intent
+			var retroarch_package = intent.android_package
+			if retroarch_package != "":
+				core_path = "/data/data/" + retroarch_package + "/cores/" + core_filename
+			else:
+				# Fallback if package name is somehow empty
+				core_path = "/data/data/com.retroarch/cores/" + core_filename
 	
 	print("[LaunchManager] Launching with:")
 	print("  Action: " + intent.android_action)
@@ -2143,8 +2153,24 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		# Relative path (default behavior for desktop)
 		extract_dir = EMULATORS_DIR + emulator_id + "/" + extract_to
 	
-	print("[LaunchManager] Extracting archive: " + archive_path)
-	print("[LaunchManager] Extract to: " + extract_dir)
+	# NEW LOGIC: Check validation first (output files exist?)
+	print("[LaunchManager] Checking if extraction output already exists...")
+	if _validate_install_step(emulator_id, step_index, install_steps):
+		print("[LaunchManager] Extraction output already exists, skipping extraction")
+		_execute_install_step(emulator_id, step_index + 1)
+		return true
+	
+	print("[LaunchManager] Extraction output not found, checking for input archive...")
+	
+	# Check if input zip exists
+	if not FileAccess.file_exists(archive_path):
+		print("[LaunchManager] Archive not found: " + archive_path)
+		print("[LaunchManager] Going back to download step (index " + str(step_index - 1) + ")")
+		# Go back to download step
+		return _execute_install_step(emulator_id, step_index - 1)
+	
+	print("[LaunchManager] Archive found: " + archive_path)
+	print("[LaunchManager] Extracting to: " + extract_dir)
 	
 	# Get step name from install_steps for display
 	var step_name = ""
@@ -2286,7 +2312,18 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:
 	print("[LaunchManager] Starting install flow for: " + emulator_id)
 	print("[LaunchManager] Total steps: " + str(install_steps.size()))
-	return _execute_install_step(emulator_id, 0)
+	
+	# Find the first incomplete step to start from
+	var progress = get_install_progress(emulator_id)
+	var start_step = 0
+	
+	if progress["status"] == "partial" and progress["next_step_index"] >= 0:
+		start_step = progress["next_step_index"]
+		print("[LaunchManager] Resuming from step " + str(start_step) + ": " + progress["next_step_display"])
+	else:
+		print("[LaunchManager] Starting from beginning (step 0)")
+	
+	return _execute_install_step(emulator_id, start_step)
 
 ## Gets display name for a step based on step_name
 func _get_step_display_name(step_name: String) -> String:

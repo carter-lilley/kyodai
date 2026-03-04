@@ -100,7 +100,8 @@
 			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
 		  },
 		  "android": {
-			"action_type": "none",
+			"action_type": "download_url",
+			"url": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/gambatte_libretro_android.so.zip",
 		  }
 		}
 	  },
@@ -119,9 +120,11 @@
 			}
 		  },
 		  "android": {
-			"action_type": "none",
+			"action_type": "extract",
+			"extract_to": "/storage/emulated/0/RetroArch/cores",
 			"validate": {
-			  "action_type": "always_pass"
+			  "action_type": "file_exists",
+			  "file": "/storage/emulated/0/RetroArch/cores/gambatte_libretro_android.so"
 			}
 		  }
 		}
@@ -173,10 +176,10 @@
 		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
 		  "package": "com.retroarch",
-		  "class": "com.retroarch.browser.retroactivity.RetroActivityFuture",
+		  "class": "com.retroarch.browser.debug.CoreSideloadActivity",
 		  "extras": {
 			"ROM": "{rom}",
-			"LIBRETRO": "{core}"
+			"LIBRETRO": "{core_path}"
 		  }
 		}
 	  }
