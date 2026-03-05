@@ -588,14 +588,14 @@ func _on_sync_completed(success: bool, message: String):
 	if success:
 		_update_status("Sync complete. Finalizing...")
 		
-		# Wait for any final batch emissions to complete
-		await get_tree().create_timer(0.7).timeout  # Slightly over the 500ms batch interval
+		# Reload platforms list to pick up any new platforms
+		_load_platforms_list()
 		
-		# Clear platforms cache since new platforms may have been added
-		_platforms.clear()
+		# Reset to "All Games" view since platform order may have changed
+		_current_platform_index = -1
+		_current_platform_slug = ""
 		
 		# Final consistency check - reload total count from database
-		# Preserve cache to avoid stuttering when scrolling to previously loaded pages
 		_load_total_count(true)
 		
 		_update_status(message)

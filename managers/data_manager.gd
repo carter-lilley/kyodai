@@ -157,7 +157,7 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 			disabled_platforms.append(slug)
 	
 	if disabled_platforms.size() > 0:
-		print("[DataManager] Removing ", disabled_platforms.size(), " disabled platforms")
+		print("[DataManager] Removing ", disabled_platforms.size(), " disabled platforms: " + str(disabled_platforms))
 		_remove_disabled_platforms(disabled_platforms, enabled, callback)
 	else:
 		_start_sync(enabled, callback)
@@ -185,7 +185,7 @@ func _get_db_platform_slugs() -> Array[String]:
 	if not _is_db_ready:
 		return slugs
 	
-	_db.query("SELECT DISTINCT platform_slug FROM games")
+	_db.query("SELECT DISTINCT platform_slug FROM games ORDER BY platform_slug")
 	for row in _db.query_result:
 		var slug = row.get("platform_slug", "")
 		if slug != "":
@@ -280,7 +280,9 @@ func _get_enabled_platforms() -> Array:
 			id = data.get("id", 0)
 			name = data.get("name", slug.capitalize())
 		
-		if enabled and id > 0:
+		if enabled:
+			# Include all enabled platforms regardless of ID
+			# ID will be looked up during sync if needed
 			result.append({"slug": slug, "id": id, "name": name})
 	
 	return result
@@ -311,7 +313,21 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 	_sync_platform = platform.name
 	_sync_platform_index = index + 1  # 1-based index for display
 	
-	sync_platform_games(platform.id, platform.slug, platform.name, func(success, msg, synced, total):
+	# Look up platform ID if it's 0
+	var platform_id = platform.id
+	if platform_id == 0 and _is_db_ready:
+		var lookup_query = "SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform.slug)
+		if _db.query(lookup_query) and _db.query_result.size() > 0:
+			platform_id = _db.query_result[0].get("romm_id", 0)
+			print("[DataManager] Looked up platform ID for '%s': %d" % [platform.slug, platform_id])
+	
+	if platform_id == 0:
+		print("[DataManager] WARNING: Platform '%s' has no ID, skipping sync" % platform.slug)
+		# Skip this platform and continue to next
+		_sync_platforms(platforms, index + 1, total_synced, callback)
+		return
+	
+	sync_platform_games(platform_id, platform.slug, platform.name, func(success, msg, synced, total):
 		if success:
 			total_synced += synced
 		_sync_platforms(platforms, index + 1, total_synced, callback)
@@ -521,21 +537,21 @@ func _download_cover_sync(url: String, cache_path: String) -> bool:
 	return true  # Return true to indicate download was initiated
 
 func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
-	"""Check if any sibling exists in DB - to be run on DB thread."""
+	"""Check if any sibling (NOT including self) exists in DB - to be run on DB thread."""
 	if _db == null:
 		return false
 	
-	# Build list of all IDs to check (self + siblings)
-	var ids_to_check = [romm_id]
+	# Build list of sibling IDs to check (excluding self)
+	var ids_to_check = []
 	for sibling in siblings:
 		var sid = sibling.get("id", 0)
-		if sid != 0:
+		if sid != 0 and sid != romm_id:  # Exclude self
 			ids_to_check.append(sid)
 	
 	if ids_to_check.is_empty():
 		return false
 	
-	# Check if any of these IDs already exist as master entries
+	# Check if any siblings already exist as master entries
 	var id_list = ", ".join(ids_to_check.map(func(id): return str(id)))
 	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % id_list
 	
@@ -741,35 +757,61 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	return game
 
 func _has_sibling_in_database(romm_id: int, siblings: Array[Dictionary]) -> bool:
-	"""Check if any sibling (including self) already exists as a master entry in the database"""
+	"""Check if any sibling (NOT including self) already exists as a master entry in the database"""
 	if not _is_db_ready:
-		print("[DataManager] _has_sibling_in_database: DB not ready, returning false")
 		return false
 	
-	# Build list of all IDs to check (self + siblings)
-	var ids_to_check = [romm_id]
+	# Build list of sibling IDs to check (excluding self - we only want to check siblings)
+	var ids_to_check = []
 	for sibling in siblings:
 		var sid = sibling.get("id", 0)
-		if sid != 0:
+		if sid != 0 and sid != romm_id:  # Exclude self
 			ids_to_check.append(sid)
 	
-	print("[DataManager] Checking if any sibling exists in DB for IDs: " + str(ids_to_check))
+	# If no siblings to check, return false
+	if ids_to_check.size() == 0:
+		return false
 	
-	# Check if any of these IDs already exist as master entries
+	# Check if any siblings already exist as master entries
 	var id_list = ", ".join(ids_to_check.map(func(id): return str(id)))
 	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % id_list
 	_db.query(query)
 	
 	if _db.query_result.size() > 0:
 		var count = _db.query_result[0]["count"]
-		print("[DataManager] Found %d existing master entries for these IDs" % count)
 		return count > 0
 	
-	print("[DataManager] No existing master entries found")
 	return false
 
 func _build_insert_query(game: GameResource) -> String:
-	"""Build SQL INSERT query for a game - used for batch processing."""
+	"""Build SQL INSERT query for a game - used for batch processing.
+	
+	PRESERVES existing has_local_copy, downloaded_sibling_ids, and file_path 
+	if the game already exists in the database. This prevents downloaded games
+	from disappearing after a re-sync."""
+	
+	# Check if game already exists and preserve download status
+	var has_local_copy = 1 if game.has_local_copy else 0
+	var downloaded_sibling_ids = _escape_sql(JSON.stringify(game.downloaded_sibling_ids))
+	var file_path = _escape_sql(game.file_path)
+	
+	if _is_db_ready and game.romm_id > 0:
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path FROM games WHERE romm_id = %d" % game.romm_id
+		if _db.query(check_query) and _db.query_result.size() > 0:
+			var existing = _db.query_result[0]
+			# Preserve download status from existing record
+			if existing.get("has_local_copy", 0) == 1:
+				has_local_copy = 1
+				print("[DataManager] Preserving has_local_copy for existing game: %s (romm_id: %d)" % [game.title, game.romm_id])
+			# Preserve downloaded siblings
+			var existing_siblings = existing.get("downloaded_sibling_ids", "[]")
+			if existing_siblings != "[]" and existing_siblings != "":
+				downloaded_sibling_ids = _escape_sql(existing_siblings)
+			# Preserve file path
+			var existing_path = existing.get("file_path", "")
+			if existing_path != "":
+				file_path = _escape_sql(existing_path)
+	
 	return """
 		INSERT OR REPLACE INTO games 
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
@@ -785,9 +827,9 @@ func _build_insert_query(game: GameResource) -> String:
 		_escape_sql(game.cover_url),
 		_escape_sql(game.cover_path),
 		_escape_sql(game.file_name),
-		_escape_sql(game.file_path),
+		file_path,
 		game.file_size,
-		1 if game.has_local_copy else 0,
+		has_local_copy,
 		_escape_sql(game.last_updated),
 		_escape_sql(game.description),
 		_escape_sql(",".join(game.genres)),
@@ -795,7 +837,7 @@ func _build_insert_query(game: GameResource) -> String:
 		_escape_sql(JSON.stringify(game.siblings)),
 		game.selected_sibling_id,
 		1 if game.is_master_entry else 0,
-		_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
+		downloaded_sibling_ids,
 		1 if game.has_cover_art else 0,
 		_escape_sql(game.last_played)
 	]

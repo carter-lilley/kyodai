@@ -261,21 +261,33 @@ func _get_enabled_platforms() -> Dictionary:
 func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 	var enabled_platforms = _get_enabled_platforms()
 	
+	# Look up the actual platform ID from our data if not provided or is 0
+	var actual_platform_id = platform_id
+	if actual_platform_id == 0:
+		for platform_data in _platforms_data:
+			if platform_data.get("slug", "") == slug:
+				actual_platform_id = platform_data.get("id", 0)
+				break
+	
 	# Get existing config or create new
 	var config = enabled_platforms.get(slug, {})
 	if config is bool:
 		# Migrate old format
-		config = {"id": platform_id, "enabled": config, "emulator_id": ""}
+		config = {"id": actual_platform_id, "enabled": config, "emulator_id": ""}
 	elif config is Dictionary:
 		config["enabled"] = enabled
+		# Update ID if we found a valid one and current is 0
+		if config.get("id", 0) == 0 and actual_platform_id > 0:
+			config["id"] = actual_platform_id
 	else:
-		config = {"id": platform_id, "enabled": enabled, "emulator_id": ""}
+		config = {"id": actual_platform_id, "enabled": enabled, "emulator_id": ""}
 	
 	# Preserve emulator_id if it exists
 	if not config.has("emulator_id"):
 		config["emulator_id"] = ""
-	if not config.has("id"):
-		config["id"] = platform_id
+	# Ensure ID is set (fallback to looked-up ID)
+	if config.get("id", 0) == 0:
+		config["id"] = actual_platform_id
 	
 	enabled_platforms[slug] = config
 	
@@ -288,19 +300,32 @@ func _set_platform_emulator(slug: String, emulator_id: String):
 	
 	# Get existing config or create new
 	var config = enabled_platforms.get(slug, {})
+	
+	# Look up the actual platform ID from our data
+	var platform_id = 0
+	for platform_data in _platforms_data:
+		if platform_data.get("slug", "") == slug:
+			platform_id = platform_data.get("id", 0)
+			break
+	
 	if config is bool:
-		# Migrate old format
-		config = {"id": 0, "enabled": config, "emulator_id": emulator_id}
+		# Migrate old format - use looked-up ID
+		config = {"id": platform_id, "enabled": config, "emulator_id": emulator_id}
 	elif config is Dictionary:
 		config["emulator_id"] = emulator_id
+		# Ensure we have the correct ID
+		if config.get("id", 0) == 0 and platform_id > 0:
+			config["id"] = platform_id
 	else:
-		config = {"id": 0, "enabled": false, "emulator_id": emulator_id}
+		# Create new config with looked-up ID
+		config = {"id": platform_id, "enabled": false, "emulator_id": emulator_id}
 	
 	# Preserve other fields
 	if not config.has("enabled"):
 		config["enabled"] = false
-	if not config.has("id"):
-		config["id"] = 0
+	# Ensure ID is set (fallback to looked-up ID)
+	if config.get("id", 0) == 0:
+		config["id"] = platform_id
 	
 	enabled_platforms[slug] = config
 	

@@ -49,6 +49,7 @@ func _ready():
 	DataManager.database_ready.connect(_on_database_ready)
 	DataManager.game_updated.connect(_on_game_updated)
 	DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
+	DataManager.sync_completed.connect(_on_sync_completed)
 	
 	# Connect to download manager for download status updates
 	DownloadManager.download_completed.connect(_on_download_completed)
@@ -131,6 +132,12 @@ func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, Notification.Type.SUCCESS)
+
+func _on_sync_completed(success: bool, message: String):
+	"""Called when library sync completes."""
+	if success:
+		print("[HomeView] Sync completed, triggering scan for downloaded games")
+		_scan_for_downloaded_games()
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
