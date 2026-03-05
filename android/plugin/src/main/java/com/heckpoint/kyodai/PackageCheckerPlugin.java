@@ -18,6 +18,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.OutputStream;
 import java.net.URLDecoder;
+import java.util.ArrayList;
+import java.util.List;
 
 public class PackageCheckerPlugin extends GodotPlugin {
     
@@ -700,6 +702,79 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 return "application/x-nintendo-rom";
             default:
                 return "application/octet-stream";
+        }
+    }
+    
+    /**
+     * Recursively lists all files in a SAF tree directory and returns them as a JSON array.
+     * Format: ["platform/file1.ext", "platform/file2.ext", ...]
+     */
+    @UsedByGodot
+    public String listSafFiles(String treeUriString) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "listSafFiles() called");
+        Log.d(TAG, "Tree URI: " + treeUriString);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return "[]";
+        }
+        
+        try {
+            Uri treeUri = Uri.parse(treeUriString);
+            
+            // Check permissions
+            int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+            try {
+                activity.getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+            } catch (SecurityException e) {
+                Log.e(TAG, "ERROR: No permission for URI: " + e.getMessage());
+                return "[]";
+            }
+            
+            DocumentFile rootDir = DocumentFile.fromTreeUri(activity, treeUri);
+            if (rootDir == null || !rootDir.exists()) {
+                Log.e(TAG, "ERROR: Cannot access directory");
+                return "[]";
+            }
+            
+            List<String> fileList = new ArrayList<>();
+            enumerateFiles(rootDir, "", fileList);
+            
+            // Convert to JSON array string
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < fileList.size(); i++) {
+                if (i > 0) json.append(",");
+                json.append("\"").append(fileList.get(i)).append("\"");
+            }
+            json.append("]");
+            
+            Log.d(TAG, "Found " + fileList.size() + " files");
+            Log.d(TAG, "==========================================");
+            return json.toString();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR listing SAF files: " + e.getMessage());
+            return "[]";
+        }
+    }
+    
+    private void enumerateFiles(DocumentFile dir, String pathPrefix, List<String> results) {
+        DocumentFile[] files = dir.listFiles();
+        if (files == null) return;
+        
+        for (DocumentFile file : files) {
+            String currentPath = pathPrefix;
+            if (!currentPath.isEmpty()) {
+                currentPath += "/";
+            }
+            currentPath += file.getName();
+            
+            if (file.isDirectory()) {
+                enumerateFiles(file, currentPath, results);
+            } else {
+                results.add(currentPath);
+            }
         }
     }
 }

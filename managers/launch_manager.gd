@@ -1993,6 +1993,10 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	elif action_type == "apk_install":
 		return _execute_apk_install_step(emulator_id, step_index, platform_config)
 	
+	# Handle batch_url_download action for downloading multiple files
+	elif action_type == "batch_url_download":
+		return _execute_batch_url_download_step(emulator_id, step_index, platform_config)
+	
 	# Handle none action (skip)
 	elif action_type == "none":
 		print("[LaunchManager] Skipping step '" + step_name + "' (action_type: none)")
@@ -2106,6 +2110,122 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	
 	# Progress to next step
 	_execute_install_step(emulator_id, step_index + 1)
+	return true
+
+## Executes batch URL download action for downloading multiple files
+## Downloads all items in parallel and extracts them automatically
+func _execute_batch_url_download_step(emulator_id: String, step_index: int, batch_config: Dictionary) -> bool:
+	print("[LaunchManager] Executing batch URL download step...")
+	
+	# Get configuration
+	var base_url = batch_config.get("base_url", "")
+	var url_pattern = batch_config.get("url_pattern", "{name}")
+	var cores = batch_config.get("cores", [])
+	var extract_to = batch_config.get("extract_to", ".")
+	
+	if base_url == "":
+		push_error("[LaunchManager] No base_url specified for batch_url_download")
+		return false
+	
+	if cores.is_empty():
+		push_error("[LaunchManager] No cores specified for batch_url_download")
+		return false
+	
+	print("[LaunchManager] Batch download config:")
+	print("[LaunchManager]   - base_url: " + base_url)
+	print("[LaunchManager]   - url_pattern: " + url_pattern)
+	print("[LaunchManager]   - cores count: " + str(cores.size()))
+	print("[LaunchManager]   - extract_to: " + extract_to)
+	
+	var emulator = get_emulator(emulator_id)
+	var install_steps = emulator.get("install", [])
+	
+	# Get step name for display
+	var step_name = ""
+	if step_index < install_steps.size():
+		step_name = install_steps[step_index].get("step", "")
+	
+	var step_display_name = _get_step_display_name(step_name)
+	
+	# Track batch progress
+	var total_cores = cores.size()
+	var completed_cores = 0
+	var failed_cores = 0
+	var download_ids = []
+	
+	# Set state to downloading
+	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(total_cores) + ")"
+	
+	print("[LaunchManager] Starting batch download of " + str(total_cores) + " cores...")
+	
+	# Queue all downloads
+	for core_name in cores:
+		# Construct URL from pattern
+		var filename = url_pattern.replace("{name}", core_name)
+		var full_url = base_url + filename
+		
+		# Determine extract directory
+		var extract_dir: String
+		if extract_to.begins_with("/"):
+			extract_dir = extract_to
+		else:
+			extract_dir = EMULATORS_DIR + emulator_id + "/" + extract_to
+		
+		# Download to emulator directory (for extraction, then delete)
+		var destination_path = EMULATORS_DIR + emulator_id + "/" + filename
+		
+		print("[LaunchManager] Queueing download: " + core_name + " -> " + full_url)
+		
+		# Queue download with auto-extract
+		var item_id = DownloadManager.queue_download(
+			full_url,
+			destination_path,
+			"emulator_core",
+			core_name,
+			true,  # auto_extract
+			extract_dir
+		)
+		
+		if item_id == "":
+			print("[LaunchManager] WARNING: Failed to queue download for: " + core_name)
+			failed_cores += 1
+		else:
+			download_ids.append(item_id)
+			
+			# Create a callback that captures the current values
+			var callback = func(success: bool, message: String):
+				completed_cores += 1
+				if not success:
+					failed_cores += 1
+					print("[LaunchManager] FAILED: " + core_name + " - " + message)
+				else:
+					print("[LaunchManager] COMPLETED: " + core_name)
+				# Update progress
+				_emulator_install_progress[emulator_id] = step_display_name + " (" + str(completed_cores) + "/" + str(total_cores) + ")"
+				# Check if all downloads are complete
+				if completed_cores >= total_cores:
+					if failed_cores > 0:
+						push_error("[LaunchManager] Batch download failed: " + str(failed_cores) + "/" + str(total_cores) + " cores failed")
+						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+					else:
+						print("[LaunchManager] All " + str(total_cores) + " cores downloaded successfully!")
+						_execute_install_step(emulator_id, step_index + 1)
+			
+			# Track completion
+			_pending_emulator_downloads[item_id] = {
+				"emulator_id": emulator_id,
+				"context": "batch_download",
+				"step_index": step_index,
+				"core_name": core_name,
+				"callback": callback
+			}
+	
+	if download_ids.is_empty():
+		push_error("[LaunchManager] No downloads could be queued for batch_url_download")
+		return false
+	
+	print("[LaunchManager] Queued " + str(download_ids.size()) + "/" + str(total_cores) + " downloads")
 	return true
 
 ## Executes extract action for a step

@@ -1782,7 +1782,17 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 			callback.call(0)
 
 func _scan_games_directory(root_path: String, sub_path: String, results: Array[String]) -> void:
-	"""Recursively scan the games directory for ROM files."""
+	"""Recursively scan the games directory for ROM files.
+	
+	On Android with SAF (Storage Access Framework), uses the PackageChecker plugin
+	to enumerate files in content:// URIs. Falls back to DirAccess for file paths."""
+	
+	# Check if this is a SAF (Storage Access Framework) path on Android
+	if root_path.begins_with("content://") and PlatformManager.is_android():
+		_scan_saf_directory(root_path, results)
+		return
+	
+	# Standard file system scanning (desktop or Android file paths)
 	var full_path = root_path
 	if sub_path != "":
 		full_path = root_path + "/" + sub_path
@@ -1812,6 +1822,43 @@ func _scan_games_directory(root_path: String, sub_path: String, results: Array[S
 			results.append(current_path)
 		
 		file_name = dir.get_next()
+
+func _scan_saf_directory(tree_uri: String, results: Array[String]) -> void:
+	"""Scan a SAF (Storage Access Framework) directory using the PackageChecker plugin.
+	
+	The plugin returns a JSON array of file paths like: ["gb/game.gb", "snes/game.smc"]"""
+	print("[DataManager] Scanning SAF directory: " + tree_uri)
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_error("[DataManager] PackageChecker plugin not available for SAF scanning")
+		return
+	
+	# Call the plugin method to list files
+	var json_result = plugin.call("listSafFiles", tree_uri)
+	if json_result == null or json_result == "[]":
+		print("[DataManager] No files found in SAF directory or error occurred")
+		return
+	
+	# Parse the JSON array
+	var json = JSON.new()
+	var parse_result = json.parse(json_result)
+	if parse_result != OK:
+		push_error("[DataManager] Failed to parse SAF file list: " + json_result)
+		return
+	
+	var files = json.get_data()
+	if not files is Array:
+		push_error("[DataManager] SAF file list is not an array")
+		return
+	
+	print("[DataManager] Found " + str(files.size()) + " files via SAF")
+	
+	# Add all files to results
+	for file_path in files:
+		if file_path is String and file_path != "":
+			results.append(file_path)
+			print("[DataManager] SAF file: " + file_path)
 
 func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
 	"""Update database entries for matched games."""

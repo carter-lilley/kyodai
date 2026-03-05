@@ -100,8 +100,23 @@
 			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
 		  },
 		  "android": {
-			"action_type": "download_url",
-			"url": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/gambatte_libretro_android.so.zip",
+			"action_type": "batch_url_download",
+			"base_url": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/",
+			"url_pattern": "{name}_libretro_android.so.zip",
+			"cores": [
+			  "gambatte", "snes9x", "genesis_plus_gx", "mgba", "nestopia",
+			  "fbneo", "pcsx_rearmed", "ppsspp", "flycast", "dolphin",
+			  "melonds", "mupen64plus_next", "bluemsx", "mednafen_ngp",
+			  "citra", "vice_x64", "dosbox_pure", "gw", "picodrive",
+			  "yabause", "mednafen_pce", "mednafen_vb", "pcsx2",
+			  "stella", "handy", "opera"
+			],
+			"extract_to": "/storage/emulated/0/RetroArch/cores",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "/storage/emulated/0/RetroArch/cores",
+			  "pattern": "*_libretro_android.so"
+			}
 		  }
 		}
 	  },
@@ -123,8 +138,9 @@
 			"action_type": "extract",
 			"extract_to": "/storage/emulated/0/RetroArch/cores",
 			"validate": {
-			  "action_type": "file_exists",
-			  "file": "/storage/emulated/0/RetroArch/cores/gambatte_libretro_android.so"
+			  "action_type": "files_exist",
+			  "path": "/storage/emulated/0/RetroArch/cores",
+			  "pattern": "*_libretro_android.so"
 			}
 		  }
 		}

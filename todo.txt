@@ -2,6 +2,7 @@
 
 how to split important siblings
 items dissapear on rescan?
+system cores arent the same....
 ## UI
 	color presets
 	theme presets
