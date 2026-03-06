@@ -358,7 +358,430 @@
 		  "clear_task": true,
 		  "extras": []
 		}
-}
+	  }
+	}
+},
+  "cemu": {
+	"name": "Cemu",
+	"platforms": ["wiiu"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "cemu-project/Cemu",
+			"asset_pattern": "cemu-.*-windows-x64\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "cemu-project/Cemu",
+			"asset_pattern": "cemu-.*-linux\\.AppImage"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "SSimco/Cemu",
+			"asset_pattern": "Cemu-.*\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "Cemu.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "cemu.AppImage"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "info.cemu.cemu",
+			"expected_file": "Cemu-*.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "info.cemu.cemu"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "setup_portable_mode",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_folders",
+			"folders": ["portable"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "portable"
+			}
+		  },
+		  "linux": {
+			"action_type": "create_folders",
+			"folders": ["portable"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "portable"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "Cemu.exe",
+		  "template": ["{exe}", "-g", "{rom}", "-f"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "cemu.AppImage",
+		  "template": ["{exe}", "-g", "{rom}", "-f"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.VIEW",
+		  "package": "info.cemu.cemu",
+		  "rom_delivery": "intent_data",
+		  "mime_type": "application/octet-stream",
+		  "grant_uri_permission": true,
+		  "clear_task": true,
+		  "extras": []
+		}
+	  }
+	}
+  },
+  "dolphin": {
+	"name": "Dolphin",
+	"platforms": ["ngc", "wii"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://dolphin-emu.org/download/",
+			"version_pattern": "/download/release/([0-9a-z]+)/",
+			"url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z"
+		  },
+		  "linux": {
+			"action_type": "download_url",
+			"url": ""
+		  },
+		  "android": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://dolphin-emu.org/download/",
+			"version_pattern": "/download/release/([0-9a-z]+)/",
+			"url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "Dolphin.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": ""
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "org.dolphinemu.dolphinemu",
+			"expected_file": "dolphin-*.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "org.dolphinemu.dolphinemu"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "setup_portable_mode",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": ["portable.txt"],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["portable.txt"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "Dolphin.exe",
+		  "template": ["{exe}", "-e", "{rom}", "--batch", "--config", "Dolphin.Display.Fullscreen=True", "--config", "Dolphin.Interface.ConfirmStop=False"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "",
+		  "template": []
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.MAIN",
+		  "package": "org.dolphinemu.dolphinemu",
+		  "class": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
+		  "grant_uri_permission": true,
+		  "extras": [
+			{
+			  "key": "AutoStartFile",
+			  "value": "{rom}",
+			  "type": "content_uri"
+			}
+		  ]
+		}
+	  }
+	}
+  },
+  "vita3k": {
+	"name": "Vita3K",
+	"platforms": ["psvita"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "Vita3K/Vita3K",
+			"asset_pattern": "windows-latest\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "Vita3K/Vita3K",
+			"asset_pattern": "ubuntu-latest\\.zip"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "Vita3K/Vita3K",
+			"asset_pattern": "android-latest\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "Vita3K.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "Vita3K"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "org.vita3k.emulator",
+			"expected_file": "android-latest.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "org.vita3k.emulator"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_config",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "config.yml",
+				"content": "pref-path: .\\"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["config.yml"]
+			}
+		  },
+		  "linux": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "config.yml",
+				"content": "pref-path: ./"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["config.yml"]
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "create_vita3k_folder",
+		"platforms": {
+		  "windows": {
+			"action_type": "none"
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "create_folders",
+			"folders": ["/storage/emulated/0/Vita3K"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "/storage/emulated/0/Vita3K"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_firmware_pre",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP?dest=us",
+			"filename": "PSP2UPDAT_pre.pup",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["PSP2UPDAT_pre.pup"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP?dest=us",
+			"filename": "PSP2UPDAT_pre.pup",
+			"destination": "/storage/emulated/0/Vita3K",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["/storage/emulated/0/Vita3K/PSP2UPDAT_pre.pup"]
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_firmware_psv",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
+			"filename": "PSVUPDAT.pup",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["PSVUPDAT.pup"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
+			"filename": "PSVUPDAT.pup",
+			"destination": "/storage/emulated/0/Vita3K",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["/storage/emulated/0/Vita3K/PSVUPDAT.pup"]
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_firmware_sd",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP?dest=us",
+			"filename": "PSP2UPDAT_sd.pup",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["PSP2UPDAT_sd.pup"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP?dest=us",
+			"filename": "PSP2UPDAT_sd.pup",
+			"destination": "/storage/emulated/0/Vita3K",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["/storage/emulated/0/Vita3K/PSP2UPDAT_sd.pup"]
+			}
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "Vita3K.exe",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "Vita3K",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.VIEW",
+		  "package": "org.vita3k.emulator",
+		  "class": "org.vita3k.emulator.Emulator",
+		  "rom_delivery": "intent_data",
+		  "mime_type": "application/octet-stream",
+		  "grant_uri_permission": true,
+		  "clear_task": true,
+		  "extras": []
+		}
+	  }
+	}
   }
-}
 }

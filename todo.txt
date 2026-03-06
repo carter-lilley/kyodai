@@ -1,8 +1,12 @@
 #TODO.TXT
 
 how to split important siblings
-items dissapear on rescan?
-system cores arent the same....
+bug: retroarch system cores arent the same on android, check and fix
+bug: refresh platform card after install status flow
+bug: refresh home scan after download
+check: skip cover download if existing?
+check: merge siblings for same cover
+bug: user selectable storage paths on android (retroarch/vita3k)
 ## UI
 	color presets
 	theme presets
@@ -31,6 +35,7 @@ system cores arent the same....
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
+	vita3k: firmware config
 	check for updates
 	vita launching (not installing)
 	controller inis for pcsx2, dolphin, azahar, melonds

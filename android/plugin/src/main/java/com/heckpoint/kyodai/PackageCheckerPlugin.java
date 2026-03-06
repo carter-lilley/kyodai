@@ -523,8 +523,21 @@ public class PackageCheckerPlugin extends GodotPlugin {
                                 break;
                                 
                             case "content_uri":
-                                intent.putExtra(key, value);
-                                Log.d(TAG, "Added content URI extra: " + key + "=" + value);
+                                // Parse as actual Uri object (not string) for proper permission handling
+                                Uri contentUri = Uri.parse(value);
+                                intent.putExtra(key, contentUri);
+                                Log.d(TAG, "Added content URI extra: " + key + "=" + contentUri);
+                                // Also add to ClipData for permission grants
+                                if (grantUriPermission) {
+                                    ClipData clipData = intent.getClipData();
+                                    if (clipData == null) {
+                                        clipData = ClipData.newRawUri(null, contentUri);
+                                    } else {
+                                        clipData.addItem(new ClipData.Item(contentUri));
+                                    }
+                                    intent.setClipData(clipData);
+                                    Log.d(TAG, "Added content URI to ClipData for permission grant");
+                                }
                                 break;
                                 
                             case "file_uri":
