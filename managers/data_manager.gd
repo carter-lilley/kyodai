@@ -1147,9 +1147,11 @@ func get_total_games_count(platform_slug: String = "") -> int:
 	
 	var success = _db.query(query)
 	if success and _db.query_result.size() > 0:
-		var row = _db.query_result[0]
-		if row.has("count"):
-			return int(row["count"])
+		var result = _db.query_result
+		if result != null and result.size() > 0:
+			var row = result[0]
+			if row != null and row.has("count"):
+				return int(row["count"])
 	return 0
 
 func search_games_paginated(query: String, offset: int, limit: int) -> Array[GameResource]:

@@ -1,6 +1,9 @@
 package com.heckpoint.kyodai;
 
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
 import android.content.UriPermission;
 import android.content.pm.PackageManager;
@@ -9,8 +12,10 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Looper;
 import android.util.Log;
+import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
 import org.godotengine.godot.Godot;
+import org.godotengine.godot.Dictionary;
 import org.godotengine.godot.plugin.GodotPlugin;
 import org.godotengine.godot.plugin.UsedByGodot;
 
@@ -286,15 +291,49 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    /**
+     * NEW UNIFIED INTENT LAUNCHER
+     * 
+     * Supports multiple ways to deliver the ROM to the emulator:
+     * - "intent_data": ROM passed via intent.setDataAndType() as content:// URI
+     * - "extra_file_path": ROM path passed as string extra
+     * - "extra_file_uri": ROM URI passed as string extra (content://)
+     * - "extra_document_uri": ROM URI passed as document URI string
+     * - "none": No ROM delivery (just launch the emulator)
+     * 
+     * Extras can be configured with types:
+     * - "string": Literal string value
+     * - "file_path": File system path (replaces {rom} with ROM path)
+     * - "file_uri": content:// URI (replaces {rom} with content URI)
+     * - "document_uri": Document provider URI
+     * - "boolean": Boolean value
+     * 
+     * @param action Intent action (e.g., "android.intent.action.VIEW")
+     * @param packageName Target app package name
+     * @param className Target activity class name (can be null for package-only launch)
+     * @param romPath Absolute file path to the ROM
+     * @param romDelivery How to deliver the ROM (see above)
+     * @param extrasJson JSON array string of extras (format: [{"key": "name", "value": "val", "type": "string"}, ...])
+     * @param mimeType MIME type for intent data (default: "application/octet-stream")
+     * @param clearTask Whether to use FLAG_ACTIVITY_CLEAR_TASK
+     * @param grantUriPermission Whether to grant FLAG_GRANT_READ_URI_PERMISSION
+     */
     @UsedByGodot
-    public boolean launchAndroidIntent(String action, String packageName, String className, String romUri, String coreName) {
+    public boolean launchAndroidIntent(String action, String packageName, String className, String romPath,
+                                        String corePath, String romDelivery, String extrasJson, String mimeType,
+                                        boolean clearTask, boolean grantUriPermission) {
         Log.d(TAG, "==========================================");
-        Log.d(TAG, "launchAndroidIntent() called");
+        Log.d(TAG, "launchAndroidIntent() [UNIFIED] called");
         Log.d(TAG, "Action: " + action);
         Log.d(TAG, "Package: " + packageName);
         Log.d(TAG, "Class: " + className);
-        Log.d(TAG, "ROM URI: " + romUri);
-        Log.d(TAG, "Core: " + coreName);
+        Log.d(TAG, "ROM Path: " + romPath);
+        Log.d(TAG, "Core Path: " + corePath);
+        Log.d(TAG, "ROM Delivery: " + romDelivery);
+        Log.d(TAG, "Extras JSON: " + extrasJson);
+        Log.d(TAG, "MIME Type: " + mimeType);
+        Log.d(TAG, "Clear Task: " + clearTask);
+        Log.d(TAG, "Grant URI Permission: " + grantUriPermission);
         
         if (activity == null) {
             Log.e(TAG, "ERROR: Activity is null!");
@@ -304,58 +343,329 @@ public class PackageCheckerPlugin extends GodotPlugin {
         try {
             Intent intent = new Intent();
             
-            // Set component (package + class) - this is REQUIRED
-            if (packageName != null && !packageName.isEmpty() && className != null && !className.isEmpty()) {
-                intent.setClassName(packageName, className);
-                Log.d(TAG, "Set component: " + packageName + "/" + className);
+            // Set component if className provided, otherwise just set package
+            if (packageName != null && !packageName.isEmpty()) {
+                if (className != null && !className.isEmpty()) {
+                    intent.setClassName(packageName, className);
+                    Log.d(TAG, "Set component: " + packageName + "/" + className);
+                } else {
+                    intent.setPackage(packageName);
+                    Log.d(TAG, "Set package: " + packageName);
+                }
             } else {
-                Log.e(TAG, "ERROR: Package name and class name are required");
+                Log.e(TAG, "ERROR: Package name is required");
                 return false;
             }
             
-            // Set action
+            // Set action if provided
             if (action != null && !action.isEmpty()) {
                 intent.setAction(action);
+                Log.d(TAG, "Set action: " + action);
             }
             
-            // Add extras for RetroArch
-            if (romUri != null && !romUri.isEmpty()) {
-                String romPath = romUri;
+            // Add default category
+            intent.addCategory(Intent.CATEGORY_DEFAULT);
+            
+            // Pre-generate all URI types for extras processing
+            // Uses Godot's FileProvider (authority: <package_name>.fileprovider)
+            Uri romContentUri = null;  // FileProvider content:// URI
+            String romFilePath = null; // Raw file path
+            String romFileUri = null;  // file:// URI
+            String romSafUri = null;   // Original SAF content:// URI
+            
+            if (romPath != null && !romPath.isEmpty()) {
+                String filePath = romPath;
                 
-                // Convert content URI to file path if possible
-                if (romUri.startsWith("content://")) {
-                    String filePath = getFilePathFromContentUri(activity, romUri);
-                    if (filePath != null && !filePath.isEmpty()) {
-                        romPath = filePath;
-                        Log.d(TAG, "Converted content URI to file path: " + romPath);
+                // Check if romPath is already a content URI (SAF)
+                if (romPath.startsWith("content://")) {
+                    romSafUri = romPath;
+                    String convertedPath = getFilePathFromContentUri(activity, romPath);
+                    if (convertedPath != null && !convertedPath.isEmpty()) {
+                        filePath = convertedPath;
+                        Log.d(TAG, "Converted SAF URI to file path: " + filePath);
                     } else {
-                        Log.w(TAG, "Could not convert content URI to file path, using original: " + romUri);
+                        Log.w(TAG, "Could not convert SAF URI to file path: " + romPath);
                     }
                 }
                 
-                intent.putExtra("ROM", romPath);
-                Log.d(TAG, "Added ROM extra: " + romPath);
-            }
-            if (coreName != null && !coreName.isEmpty()) {
-                intent.putExtra("LIBRETRO", coreName);
-                Log.d(TAG, "Added LIBRETRO extra: " + coreName);
+                romFilePath = filePath;
+                
+                // Create File object and generate URIs
+                File romFile = new File(filePath);
+                if (romFile.exists()) {
+                    // Generate file:// URI
+                    romFileUri = Uri.fromFile(romFile).toString();
+                    Log.d(TAG, "Generated file:// URI: " + romFileUri);
+                    
+                    // Generate FileProvider content:// URI
+                    try {
+                        String authority = activity.getPackageName() + ".fileprovider";
+                        romContentUri = FileProvider.getUriForFile(activity, authority, romFile);
+                        Log.d(TAG, "Generated FileProvider URI: " + romContentUri);
+                    } catch (IllegalArgumentException e) {
+                        Log.w(TAG, "Could not generate FileProvider URI: " + e.getMessage());
+                    }
+                } else {
+                    Log.w(TAG, "ROM file does not exist: " + filePath);
+                }
             }
             
-            // Also add flag for intent-based permission
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            // Deliver ROM based on romDelivery mode
+            if (romDelivery != null && !romDelivery.isEmpty()) {
+                switch (romDelivery) {
+                    case "intent_data":
+                        if (romContentUri != null) {
+                            String type = (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/octet-stream";
+                            intent.setDataAndType(romContentUri, type);
+                            Log.d(TAG, "Set intent data (content URI): " + romContentUri);
+                            
+                            // Grant read permission via ClipData for VIEW intents
+                            if (grantUriPermission || action.equals(Intent.ACTION_VIEW)) {
+                                intent.setClipData(ClipData.newRawUri(null, romContentUri));
+                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                Log.d(TAG, "Granted URI read permission via ClipData");
+                            }
+                        }
+                        break;
+                        
+                    case "extra_file_path":
+                        // ROM delivered as file path string in extras (handled below)
+                        Log.d(TAG, "ROM will be delivered via extra as file path");
+                        break;
+                        
+                    case "extra_file_uri":
+                        // ROM delivered as content:// URI string in extras (handled below)
+                        Log.d(TAG, "ROM will be delivered via extra as content URI");
+                        break;
+                        
+                    case "extra_document_uri":
+                        // ROM delivered as document URI in extras (handled below)
+                        Log.d(TAG, "ROM will be delivered via extra as document URI");
+                        break;
+                        
+                    case "none":
+                        Log.d(TAG, "No ROM delivery requested");
+                        break;
+                        
+                    default:
+                        Log.w(TAG, "Unknown romDelivery mode: " + romDelivery + ", defaulting to intent_data");
+                        if (romContentUri != null) {
+                            intent.setDataAndType(romContentUri, "application/octet-stream");
+                        }
+                        break;
+                }
+            }
             
-            Log.d(TAG, "Starting activity with intent...");
+            // Process extras from JSON
+            if (extrasJson != null && !extrasJson.isEmpty()) {
+                try {
+                    org.json.JSONArray extrasArray = new org.json.JSONArray(extrasJson);
+                    Log.d(TAG, "Processing " + extrasArray.length() + " extras");
+                    
+                    for (int i = 0; i < extrasArray.length(); i++) {
+                        org.json.JSONObject extraObj = extrasArray.getJSONObject(i);
+                        String key = extraObj.getString("key");
+                        String value = extraObj.optString("value", "");
+                        String type = extraObj.optString("type", "string");
+                        
+                        // Replace {rom} placeholder based on type
+                        if (value.contains("{rom}")) {
+                            switch (type) {
+                                case "file_path":
+                                    // Raw filesystem path: /storage/emulated/0/roms/game.3ds
+                                    value = value.replace("{rom}", romFilePath != null ? romFilePath : "");
+                                    break;
+                                    
+                                case "content_uri":
+                                    // FileProvider content:// URI: content://org.godotengine.../external_storage/roms/game.3ds
+                                    value = value.replace("{rom}", romContentUri != null ? romContentUri.toString() : "");
+                                    break;
+                                    
+                                case "file_uri":
+                                    // Legacy file:// URI: file:///storage/emulated/0/roms/game.3ds
+                                    value = value.replace("{rom}", romFileUri != null ? romFileUri : "");
+                                    break;
+                                    
+                                case "saf_uri":
+                                    // Original SAF content:// URI: content://com.android.externalstorage.documents/tree/primary:roms/game.3ds
+                                    value = value.replace("{rom}", romSafUri != null ? romSafUri : "");
+                                    break;
+                                    
+                                case "document_uri":
+                                    // Converted to SAF document URI format
+                                    String docUri = convertFilePathToDocumentUri(romFilePath);
+                                    value = value.replace("{rom}", docUri != null ? docUri : "");
+                                    break;
+                                    
+                                default:
+                                    // Default to file path for unknown types
+                                    value = value.replace("{rom}", romFilePath != null ? romFilePath : "");
+                                    break;
+                            }
+                        }
+                        
+                        // Replace {core_path} placeholder
+                        if (value.contains("{core_path}")) {
+                            value = value.replace("{core_path}", corePath != null ? corePath : "");
+                            Log.d(TAG, "Replaced {core_path} with: " + corePath);
+                        }
+                        
+                        // Add extra based on type
+                        switch (type) {
+                            case "string":
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added string extra: " + key + "=" + value);
+                                break;
+                                
+                            case "file_path":
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added file path extra: " + key + "=" + value);
+                                break;
+                                
+                            case "content_uri":
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added content URI extra: " + key + "=" + value);
+                                break;
+                                
+                            case "file_uri":
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added file URI extra: " + key + "=" + value);
+                                break;
+                                
+                            case "saf_uri":
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added SAF URI extra: " + key + "=" + value);
+                                break;
+                                
+                            case "document_uri":
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added document URI extra: " + key + "=" + value);
+                                break;
+                                
+                            case "boolean":
+                                boolean boolValue = Boolean.parseBoolean(value);
+                                intent.putExtra(key, boolValue);
+                                Log.d(TAG, "Added boolean extra: " + key + "=" + boolValue);
+                                break;
+                                
+                            case "int":
+                                try {
+                                    int intValue = Integer.parseInt(value);
+                                    intent.putExtra(key, intValue);
+                                    Log.d(TAG, "Added int extra: " + key + "=" + intValue);
+                                } catch (NumberFormatException e) {
+                                    Log.w(TAG, "Could not parse int value for " + key + ": " + value);
+                                    intent.putExtra(key, value);
+                                }
+                                break;
+                                
+                            default:
+                                intent.putExtra(key, value);
+                                Log.d(TAG, "Added extra (default string): " + key + "=" + value);
+                                break;
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "ERROR parsing extras JSON: " + e.getMessage());
+                }
+            } else {
+                Log.d(TAG, "No extras provided");
+            }
+            
+            // Add intent flags
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (clearTask) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                Log.d(TAG, "Added FLAG_ACTIVITY_CLEAR_TASK");
+            }
+            if (grantUriPermission) {
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                Log.d(TAG, "Added FLAG_GRANT_READ_URI_PERMISSION");
+            }
+            
+            // DEBUG: Log final intent details
+            Log.d(TAG, "Final Intent:");
+            Log.d(TAG, "  Action: " + intent.getAction());
+            Log.d(TAG, "  Package: " + intent.getPackage());
+            Log.d(TAG, "  Component: " + intent.getComponent());
+            Log.d(TAG, "  Data: " + intent.getData());
+            Log.d(TAG, "  Type: " + intent.getType());
+            if (intent.getExtras() != null) {
+                Log.d(TAG, "  Extras count: " + intent.getExtras().size());
+                for (String key : intent.getExtras().keySet()) {
+                    Log.d(TAG, "    " + key + " = " + intent.getExtras().get(key));
+                }
+            }
+            
+            // Verify ROM file exists before launching
+            if (romPath != null && !romPath.isEmpty()) {
+                File romFile = new File(romPath);
+                Log.d(TAG, "ROM file status - exists: " + romFile.exists() + 
+                          ", readable: " + romFile.canRead() + 
+                          ", size: " + romFile.length() + " bytes");
+            }
+            
+            Log.d(TAG, "Starting activity...");
             activity.startActivity(intent);
             
-            Log.d(TAG, "SUCCESS: Android intent launched");
+            Log.d(TAG, "SUCCESS: Intent launched successfully");
             Log.d(TAG, "==========================================");
             return true;
             
         } catch (Exception e) {
             Log.e(TAG, "ERROR launching Android intent: " + e.getMessage());
             Log.e(TAG, "Exception type: " + e.getClass().getName());
+            Log.e(TAG, "Stack trace:");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
             return false;
         }
+    }
+    
+    /**
+     * Converts a file path to a document URI (SAF format).
+     * This is needed for some emulators that expect document URIs in extras.
+     */
+    private String convertFilePathToDocumentUri(String filePath) {
+        if (filePath == null || filePath.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            // Try to build a document URI from the file path
+            // Format: content://com.android.externalstorage.documents/document/primary:path/to/file
+            
+            // Check if it's already a content URI
+            if (filePath.startsWith("content://")) {
+                return filePath;
+            }
+            
+            // Parse the file path to determine storage volume
+            if (filePath.startsWith("/storage/emulated/0/")) {
+                String relativePath = filePath.substring("/storage/emulated/0/".length());
+                return "content://com.android.externalstorage.documents/document/primary:" + 
+                       relativePath.replace("/", "%2F");
+            } else if (filePath.startsWith("/storage/")) {
+                // Extract storage ID (e.g., "ABCD-1234" from "/storage/ABCD-1234/path/to/file")
+                String[] parts = filePath.split("/");
+                if (parts.length >= 3) {
+                    String storageId = parts[2];
+                    String relativePath = filePath.substring(("/storage/" + storageId + "/").length());
+                    return "content://com.android.externalstorage.documents/document/" + storageId + ":" + 
+                           relativePath.replace("/", "%2F");
+                }
+            } else if (filePath.startsWith("/data/data/")) {
+                // Internal app data - return as-is since it can't be shared via SAF
+                return filePath;
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error converting file path to document URI: " + e.getMessage());
+        }
+        
+        // Fallback: return original path
+        return filePath;
     }
     
     /**

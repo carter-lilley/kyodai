@@ -31,14 +31,19 @@ var working_directory: String = ""
 ## For Android: intent action
 var android_action: String = ""
 
-## For Android: intent extras dictionary
-var android_extras: Dictionary = {}
+## For Android: intent extras array
+## Format: [{"key": "name", "value": "val", "type": "string"}, ...]
+## Types: "string", "file_path", "file_uri", "document_uri", "boolean", "int"
+var android_extras: Array = []
 
 ## For Android: package name
 var android_package: String = ""
 
 ## For Android: activity class
 var android_class: String = ""
+
+## For Android: full config dictionary (includes use_intent_data, use_extras, resolve_uri_to_path flags)
+var android_config: Dictionary = {}
 
 func _to_string() -> String:
 	return "LaunchIntent(game=%s, emulator=%s, platform=%s, rom=%s)" % [

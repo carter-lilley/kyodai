@@ -833,7 +833,12 @@ func _continue_post_install_sequence(emulator_id: String, emulator: Dictionary):
 ## Flattens an extracted directory by moving contents of a single top-level subdirectory up one level
 ## This handles zips that extract to a nested directory like "Archive-1.0/file.txt" -> "file.txt"
 func _flatten_extracted_directory(emulator_id: String, extract_to: String, target_folder: String = ""):
-	var extract_path = EMULATORS_DIR + emulator_id + "/" + extract_to
+	# Android uses absolute paths, Desktop uses relative paths
+	var extract_path: String
+	if PlatformManager.is_android():
+		extract_path = extract_to
+	else:
+		extract_path = EMULATORS_DIR + emulator_id + "/" + extract_to
 	
 	print("[LaunchManager] Starting flatten for: " + emulator_id)
 	print("[LaunchManager]   extract_to: '" + extract_to + "'")
@@ -1248,7 +1253,9 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		intent.android_action = android_template.get("action", "")
 		intent.android_package = android_template.get("package", "")
 		intent.android_class = android_template.get("class", "")
-		intent.android_extras = android_template.get("extras", {})
+		# Extras is always an array in the new unified format
+		intent.android_extras = android_template.get("extras", [])
+		intent.android_config = android_template
 	else:
 		# Desktop uses command-line arguments
 		var template = templates.get(platform_name, [])
@@ -1856,20 +1863,54 @@ func _execute_android(intent: LaunchIntent) -> bool:
 				# Fallback if package name is somehow empty
 				core_path = "/data/data/com.retroarch/cores/" + core_filename
 	
-	print("[LaunchManager] Launching with:")
+	# Get configuration from android_config
+	var rom_delivery = intent.android_config.get("rom_delivery", "intent_data")
+	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
+	var clear_task = intent.android_config.get("clear_task", true)
+	var grant_uri_permission = intent.android_config.get("grant_uri_permission", true)
+	
+	# Convert extras array to JSON string
+	var extras_array = intent.android_extras
+	if extras_array.is_empty() and intent.android_config.has("extras"):
+		extras_array = intent.android_config.get("extras", [])
+	
+	# Convert extras to JSON
+	var extras_json = "[]"
+	if extras_array.size() > 0:
+		var json_parts = []
+		for extra in extras_array:
+			var json_obj = "{"
+			json_obj += '"key": "' + extra.get("key", "") + '", '
+			json_obj += '"value": "' + extra.get("value", "").replace("{", "\\{").replace("}", "\\}") + '", '
+			json_obj += '"type": "' + extra.get("type", "string") + '"'
+			json_obj += "}"
+			json_parts.append(json_obj)
+		extras_json = "[" + ", ".join(json_parts) + "]"
+	
+	print("[LaunchManager] Launching Android intent:")
 	print("  Action: " + intent.android_action)
 	print("  Package: " + intent.android_package)
 	print("  Class: " + intent.android_class)
-	print("  ROM: " + intent.rom_path)
-	print("  Core: " + core_path)
+	print("  ROM Path: " + intent.rom_path)
+	print("  Core Path: " + core_path)
+	print("  ROM Delivery: " + rom_delivery)
+	print("  MIME Type: " + mime_type)
+	print("  Clear Task: " + str(clear_task))
+	print("  Grant URI Permission: " + str(grant_uri_permission))
+	print("  Extras JSON: " + extras_json)
 	
-	# Launch the Android intent via plugin
-	var success = plugin.call("launchAndroidIntent", 
+	# Launch using unified method
+	var success = plugin.call("launchAndroidIntent",
 		intent.android_action,
-		intent.android_package, 
+		intent.android_package,
 		intent.android_class,
 		intent.rom_path,
-		core_path
+		core_path,
+		rom_delivery,
+		extras_json,
+		mime_type,
+		clear_task,
+		grant_uri_permission
 	)
 	
 	if success:
@@ -2005,6 +2046,17 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	push_error("[LaunchManager] Unknown action_type '" + action_type + "' for step: " + step_name)
 	return false
 
+## Re-runs a previous install step when current step needs it
+## Use this when a step's input (downloaded file, etc.) is missing
+func _retry_previous_step(emulator_id: String, current_step_index: int) -> bool:
+	var target_step = current_step_index - 1
+	if target_step < 0:
+		push_error("[LaunchManager] Cannot retry - would go before first step")
+		return false
+	
+	print("[LaunchManager] Re-running step " + str(target_step) + " (needed by step " + str(current_step_index) + ")")
+	return _execute_install_step(emulator_id, target_step)
+
 ## Executes APK install action for a step (Android only)
 func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config: Dictionary) -> bool:
 	print("[LaunchManager] Executing APK install step...")
@@ -2018,41 +2070,43 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	print("[LaunchManager] APK install config:")
 	print("[LaunchManager]   - package_name: '" + package_name + "'")
 	
-	# Find the downloaded APK from the previous download step
-	var emulator = get_emulator(emulator_id)
-	var install_steps = emulator.get("install", [])
-	
-	# Get previous step (should be download)
+	# Check if this is the first step (can't go back)
 	if step_index == 0:
 		push_error("[LaunchManager] Cannot install APK - no previous download step")
 		return false
 	
-	var prev_step = install_steps[step_index - 1]
-	var prev_platforms = prev_step.get("platforms", {})
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var prev_config = prev_platforms.get("all", {})
-	if prev_config.is_empty():
-		prev_config = prev_platforms.get(platform_name, {})
-	
-	var download_url = prev_config.get("url", "")
-	if download_url == "":
-		push_error("[LaunchManager] Cannot install APK - no download URL from previous step")
+	# Get expected filename pattern from config
+	var expected_file = apk_config.get("expected_file", "")
+	if expected_file == "":
+		push_error("[LaunchManager] No expected_file specified for apk_install - cannot find APK to install")
 		return false
 	
-	var filename = download_url.get_file()
-	var apk_path = EMULATORS_DIR + emulator_id + "/" + filename
+	var emulator_dir = EMULATORS_DIR + emulator_id
+	var apk_path = ""
+	
+	# Find the APK file matching the expected pattern
+	var dir = DirAccess.open(emulator_dir)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if file_name.match(expected_file):
+				apk_path = emulator_dir + "/" + file_name
+				break
+			file_name = dir.get_next()
+		dir.list_dir_end()
+	
+	# If no APK found matching the pattern, re-run the download step
+	if apk_path == "":
+		print("[LaunchManager] No APK file matching pattern '" + expected_file + "' found in: " + emulator_dir)
+		print("[LaunchManager] Going back to download step")
+		return _retry_previous_step(emulator_id, step_index)
 	
 	# Convert user:// path to absolute path for Android
 	var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
 	
 	print("[LaunchManager] Installing APK: " + apk_path)
 	print("[LaunchManager] Absolute path: " + absolute_apk_path)
-	
-	# Check if file exists
-	if not FileAccess.file_exists(apk_path):
-		push_error("[LaunchManager] APK file not found: " + apk_path)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		return false
 	
 	# Use OS.shell_open with proper Android intent format
 	# Try different approaches for Android
@@ -2287,7 +2341,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		print("[LaunchManager] Archive not found: " + archive_path)
 		print("[LaunchManager] Going back to download step (index " + str(step_index - 1) + ")")
 		# Go back to download step
-		return _execute_install_step(emulator_id, step_index - 1)
+		return _retry_previous_step(emulator_id, step_index)
 	
 	print("[LaunchManager] Archive found: " + archive_path)
 	print("[LaunchManager] Extracting to: " + extract_dir)
@@ -2662,6 +2716,7 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		"context": "emulator",
 		"step_index": step_index,
 		"step_config": step_config,
+		"filename": filename,
 		"callback": func(success: bool, message: String):
 			if not success:
 				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED

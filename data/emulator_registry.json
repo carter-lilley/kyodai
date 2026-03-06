@@ -1,8 +1,8 @@
 {
   "_meta": {
-	"version": "2.2",
+	"version": "3.0",
 	"description": "Emulator registry for Kyodai launcher",
-	"note": "Add emulator entries here. See retroarch example for structure."
+	"note": "Version 3.0 uses unified Android intent format. See retroarch or azahar examples."
   },
   "_platform_defaults": {
 	"3do": "retroarch",
@@ -62,11 +62,11 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "download_url",
-			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
+			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z"
 		  },
 		  "android": {
 			"action_type": "download_url",
-			"url": "https://buildbot.libretro.com/stable/1.22.2/android/RetroArch.apk",
+			"url": "https://buildbot.libretro.com/stable/1.22.2/android/RetroArch.apk"
 		  }
 		}
 	  },
@@ -97,7 +97,7 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "download_url",
-			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z",
+			"url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch_cores.7z"
 		  },
 		  "android": {
 			"action_type": "batch_url_download",
@@ -150,7 +150,7 @@
 		"platforms": {
 		  "all": {
 			"action_type": "download_url",
-			"url": "https://files.lilley.video/other_assets/retroarch_bios.zip",
+			"url": "https://files.lilley.video/other_assets/retroarch_bios.zip"
 		  }
 		}
 	  },
@@ -193,10 +193,22 @@
 		  "action": "android.intent.action.VIEW",
 		  "package": "com.retroarch",
 		  "class": "com.retroarch.browser.debug.CoreSideloadActivity",
-		  "extras": {
-			"ROM": "{rom}",
-			"LIBRETRO": "{core_path}"
-		  }
+		  "rom_delivery": "extra_file_path",
+		  "mime_type": "application/octet-stream",
+		  "grant_uri_permission": false,
+		  "clear_task": false,
+		  "extras": [
+			{
+			  "key": "ROM",
+			  "value": "{rom}",
+			  "type": "file_path"
+			},
+			{
+			  "key": "LIBRETRO",
+			  "value": "{core_path}",
+			  "type": "string"
+			}
+		  ]
 		}
 	  }
 	},
@@ -241,7 +253,112 @@
 	  "tg16": "mednafen_pce",
 	  "turbografx-cd": "mednafen_pce",
 	  "virtualboy": "mednafen_vb",
-	  "wii": "dolphin"
-	}
+  	"wii": "dolphin"
   }
+},
+"azahar": {
+	"name": "Azahar",
+	"platforms": ["3ds"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "azahar-emu/azahar",
+			"asset_pattern": "azahar-.*-windows-msvc\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "azahar-emu/azahar",
+			"asset_pattern": "azahar\\.AppImage"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "azahar-emu/azahar",
+			"asset_pattern": "azahar-.*-android-vanilla\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "azahar.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "azahar.AppImage"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "io.github.lime3ds.android",
+			"expected_file": "azahar-*-android-vanilla.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "io.github.lime3ds.android"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "setup_user_folder",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_folders",
+			"folders": ["user"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user"
+			}
+		  },
+		  "linux": {
+			"action_type": "create_folders",
+			"folders": ["user"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "azahar.exe",
+		  "template": ["{exe}", "-f", "{rom}"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "azahar.AppImage",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.VIEW",
+		  "package": "io.github.lime3ds.android",
+		  "class": "org.citra.citra_emu.activities.EmulationActivity",
+		  "rom_delivery": "intent_data",
+		  "mime_type": "application/octet-stream",
+		  "grant_uri_permission": true,
+		  "clear_task": true,
+		  "extras": []
+		}
+}
+  }
+}
 }
