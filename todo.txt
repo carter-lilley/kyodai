@@ -7,6 +7,9 @@ bug: refresh home scan after download
 check: skip cover download if existing?
 check: merge siblings for same cover
 bug: user selectable storage paths on android (retroarch/vita3k)
+bug: you have to hit back twice
+Line 1556 is escaping the curly braces:
+.replace("{", "\\{").replace("}", "\\}")
 ## UI
 	color presets
 	theme presets
@@ -35,10 +38,9 @@ bug: user selectable storage paths on android (retroarch/vita3k)
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	vita3k: firmware config
+	vita3k: launch intent win/android
 	check for updates
-	vita launching (not installing)
-	controller inis for pcsx2, dolphin, azahar, melonds
+	controller inis
 	all: controllers, hotkeys, graphics settings, confirm on exit, etc?
 	named post install notifs (and toggle for core system downloading)
 	cemu:

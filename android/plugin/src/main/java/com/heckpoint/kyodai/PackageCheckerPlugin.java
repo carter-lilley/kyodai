@@ -536,7 +536,8 @@ public class PackageCheckerPlugin extends GodotPlugin {
                                         clipData.addItem(new ClipData.Item(contentUri));
                                     }
                                     intent.setClipData(clipData);
-                                    Log.d(TAG, "Added content URI to ClipData for permission grant");
+                                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                    Log.d(TAG, "Added content URI to ClipData for permission grant with FLAG_GRANT_READ_URI_PERMISSION");
                                 }
                                 break;
                                 
@@ -611,8 +612,9 @@ public class PackageCheckerPlugin extends GodotPlugin {
             }
             
             // Verify ROM file exists before launching
-            if (romPath != null && !romPath.isEmpty()) {
-                File romFile = new File(romPath);
+            String checkPath = romFilePath != null ? romFilePath : romPath;
+            if (checkPath != null && !checkPath.isEmpty() && !checkPath.startsWith("content://")) {
+                File romFile = new File(checkPath);
                 Log.d(TAG, "ROM file status - exists: " + romFile.exists() + 
                           ", readable: " + romFile.canRead() + 
                           ", size: " + romFile.length() + " bytes");

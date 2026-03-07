@@ -681,7 +681,7 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "download_url",
-			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP?dest=us",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_pre.pup",
 			"validate": {
 			  "action_type": "files_exist",
@@ -693,7 +693,7 @@
 		  },
 		  "android": {
 			"action_type": "download_url",
-			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP?dest=us",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_pre.pup",
 			"destination": "/storage/emulated/0/Vita3K",
 			"validate": {
@@ -735,7 +735,7 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "download_url",
-			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP?dest=us",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_sd.pup",
 			"validate": {
 			  "action_type": "files_exist",
@@ -747,7 +747,7 @@
 		  },
 		  "android": {
 			"action_type": "download_url",
-			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP?dest=us",
+			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_sd.pup",
 			"destination": "/storage/emulated/0/Vita3K",
 			"validate": {
@@ -780,6 +780,303 @@
 		  "grant_uri_permission": true,
 		  "clear_task": true,
 		  "extras": []
+		}
+	  }
+	}
+  },
+  "pcsx2": {
+	"name": "PCSX2",
+	"platforms": ["ps2"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "PCSX2/pcsx2",
+			"asset_pattern": "pcsx2-.*-windows-x64-Qt\\.7z"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "PCSX2/pcsx2",
+			"asset_pattern": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "Trixarian/NetherSX2-patch",
+			"asset_pattern": "NetherSX2-.*-.*\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "pcsx2-qt.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "pcsx2-qt"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "xyz.aethersx2.android",
+			"expected_file": "NetherSX2-*.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "xyz.aethersx2.android"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_portable_mode",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": ["portable.txt"],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["portable.txt"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "download_bios",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+			"filename": "LRPS2_bios.zip"
+		  },
+		  "linux": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+			"filename": "LRPS2_bios.zip"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+			"filename": "LRPS2_bios.zip",
+			"destination": "/storage/emulated/0/Download"
+		  }
+		}
+	  },
+	  {
+		"step": "extract_bios",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"expected_file": "LRPS2_bios.zip",
+			"extract_to": ".",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "bios"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"expected_file": "LRPS2_bios.zip",
+			"extract_to": ".",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "bios"
+			}
+		  },
+		  "android": {
+			"action_type": "extract",
+			"expected_file": "/storage/emulated/0/Download/LRPS2_bios.zip",
+			"extract_to": "/storage/emulated/0/Download",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "/storage/emulated/0/Download/bios"
+			}
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "pcsx2-qt.exe",
+		  "template": ["{exe}", "-nogui", "-fullscreen", "{rom}"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "pcsx2-qt",
+		  "template": ["{exe}", "-batch", "{rom}"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.MAIN",
+		  "package": "xyz.aethersx2.android",
+		  "class": "xyz.aethersx2.android.EmulationActivity",
+		  "extras": [
+			{
+			  "key": "bootPath",
+			  "value": "{rom}",
+			  "type": "file_path"
+			}
+		  ]
+		}
+	  }
+	}
+  },
+  "melonds": {
+	"name": "melonDS",
+	"platforms": ["nds"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "melonDS-emu/melonDS",
+			"asset_pattern": "melonDS-.*-windows-x86_64\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "melonDS-emu/melonDS",
+			"asset_pattern": "melonDS-.*-appimage-x86_64\\.zip"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "rafaelvcaetano/melonDS-android",
+			"asset_pattern": "app-gitHub-nightly-release\\.apk",
+			"release_tag": "nightly-release"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": false,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "melonDS.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": false,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "melonDS"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "me.magnum.melonds.nightly",
+			"expected_file": "app-gitHub-nightly-release.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "me.magnum.melonds.nightly"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_bios",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/melonds_bios.zip",
+			"filename": "melonds_bios.zip"
+		  },
+		  "linux": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/melonds_bios.zip",
+			"filename": "melonds_bios.zip"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/melonds_bios.zip",
+			"filename": "melonds_bios.zip",
+			"destination": "/storage/emulated/0/Download"
+		  }
+		}
+	  },
+	  {
+		"step": "extract_bios",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"expected_file": "melonds_bios.zip",
+			"extract_to": ".",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "bios"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"expected_file": "melonds_bios.zip",
+			"extract_to": ".",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "bios"
+			}
+		  },
+		  "android": {
+			"action_type": "extract",
+			"expected_file": "/storage/emulated/0/Download/melonds_bios.zip",
+			"extract_to": "/storage/emulated/0/Download",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "/storage/emulated/0/Download/bios"
+			}
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "melonDS.exe",
+		  "template": ["{exe}", "{rom}", "--fullscreen"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "melonDS",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "me.magnum.melonds.nightly.LAUNCH_ROM",
+		  "package": "me.magnum.melonds.nightly",
+		  "class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
+		  "rom_delivery": "intent_data",
+		  "grant_uri_permission": true,
+		  "clear_task": true,
+		  "extras": [
+			{
+			  "key": "uri",
+			  "value": "{rom}",
+			  "type": "content_uri"
+			}
+		  ]
 		}
 	  }
 	}

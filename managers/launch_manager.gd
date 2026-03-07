@@ -1546,18 +1546,21 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	if extras_array.is_empty() and intent.android_config.has("extras"):
 		extras_array = intent.android_config.get("extras", [])
 	
-	# Convert extras to JSON
+	# Convert extras to JSON using proper JSON.stringify to handle escaping correctly
 	var extras_json = "[]"
 	if extras_array.size() > 0:
-		var json_parts = []
+		var extras_to_serialize = []
 		for extra in extras_array:
-			var json_obj = "{"
-			json_obj += '"key": "' + extra.get("key", "") + '", '
-			json_obj += '"value": "' + extra.get("value", "").replace("{", "\\{").replace("}", "\\}") + '", '
-			json_obj += '"type": "' + extra.get("type", "string") + '"'
-			json_obj += "}"
-			json_parts.append(json_obj)
-		extras_json = "[" + ", ".join(json_parts) + "]"
+			extras_to_serialize.append({
+				"key": extra.get("key", ""),
+				"value": extra.get("value", ""),
+				"type": extra.get("type", "string")
+			})
+		var json_result = JSON.stringify(extras_to_serialize)
+		if json_result == "":
+			push_error("[LaunchManager] Failed to serialize extras to JSON")
+		else:
+			extras_json = json_result
 	
 	print("[LaunchManager] Launching Android intent:")
 	print("  Action: " + intent.android_action)
@@ -1659,220 +1662,31 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	var action_type = platform_config.get("action_type", "")
 	
-	# Handle download_url action
-	if action_type == "download_url":
-		var url = platform_config.get("url", "")
-		if url == "":
-			push_error("[LaunchManager] No download URL for step '" + step_name + "'")
+	# Route to appropriate handler based on action type
+	match action_type:
+		"download_url":
+			return _handle_download_url_step(emulator_id, emulator_name, step_name, step_index, platform_config)
+		"download_repo":
+			return _handle_download_repo_step(emulator_id, emulator_name, step_name, step_index, platform_config)
+		"download_scrape":
+			return _handle_download_scrape_step(emulator_id, emulator_name, step_name, step_index, platform_config)
+		"extract":
+			return _execute_extract_step(emulator_id, step_index, platform_config)
+		"apk_install":
+			return _execute_apk_install_step(emulator_id, step_index, platform_config)
+		"batch_url_download":
+			return _execute_batch_url_download_step(emulator_id, step_index, platform_config)
+		"create_folders":
+			return _handle_create_folders_step(emulator_id, step_name, step_index, platform_config)
+		"create_files":
+			return _handle_create_files_step(emulator_id, step_name, step_index, platform_config)
+		"edit_file":
+			return _handle_edit_file_step(emulator_id, step_name, step_index, platform_config)
+		"none":
+			return _handle_none_step(emulator_id, step_name, step_index)
+		_:
+			push_error("[LaunchManager] Unknown action_type '" + action_type + "' for step: " + step_name)
 			return false
-		
-		# Create step-specific display name for notifications
-		var step_display_name = _get_step_display_name(step_name)
-		_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
-		return true
-	
-	# Handle download_repo action
-	elif action_type == "download_repo":
-		var github_repo = platform_config.get("github_repo", "")
-		var asset_pattern = platform_config.get("asset_pattern", "")
-		
-		if github_repo == "" or asset_pattern == "":
-			push_error("[LaunchManager] Invalid download_repo config for step: " + step_name)
-			return false
-		
-		_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
-		_emulator_install_progress[emulator_id] = "Fetching release info..."
-		
-		# Create step-specific display name for notifications
-		var step_display_name = _get_step_display_name(step_name)
-		
-		NetworkManager.fetch_github_latest_release(
-			github_repo,
-			asset_pattern,
-			func(url: String, error: String):
-				if error != "":
-					push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
-					_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-					return
-				_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
-		)
-		return true
-	
-	# Handle download_scrape action
-	elif action_type == "download_scrape":
-		var scrape_url = platform_config.get("scrape_url", "")
-		var version_pattern = platform_config.get("version_pattern", "")
-		var url_template = platform_config.get("url_template", "")
-		
-		if scrape_url == "" or version_pattern == "" or url_template == "":
-			push_error("[LaunchManager] Invalid download_scrape config for step: " + step_name)
-			return false
-		
-		_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
-		_emulator_install_progress[emulator_id] = "Scraping for latest version..."
-		
-		# Create step-specific display name for notifications
-		var step_display_name = _get_step_display_name(step_name)
-		
-		NetworkManager.fetch_scraped_release(
-			scrape_url,
-			version_pattern,
-			url_template,
-			func(url: String, error: String):
-				if error != "":
-					push_error("[LaunchManager] Failed to scrape release: " + error)
-					_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-					return
-				_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
-		)
-		return true
-	
-	# Handle extract action
-	elif action_type == "extract":
-		return _execute_extract_step(emulator_id, step_index, platform_config)
-	
-	# Handle apk_install action (Android only)
-	elif action_type == "apk_install":
-		return _execute_apk_install_step(emulator_id, step_index, platform_config)
-	
-	# Handle batch_url_download action for downloading multiple files
-	elif action_type == "batch_url_download":
-		return _execute_batch_url_download_step(emulator_id, step_index, platform_config)
-	
-	# Handle create_folders action
-	elif action_type == "create_folders":
-		var folders = platform_config.get("folders", [])
-		if folders.is_empty():
-			print("[LaunchManager] No folders to create for step: " + step_name)
-			return _execute_install_step(emulator_id, step_index + 1)
-		
-		for folder_path in folders:
-			var full_path: String
-			if folder_path.begins_with("/"):
-				# Absolute path (e.g., /storage/emulated/0/Vita3K)
-				full_path = folder_path
-			else:
-				# Relative path - use emulator directory
-				full_path = EMULATORS_DIR + emulator_id + "/" + folder_path
-			
-			# Get base directory
-			var base_dir = full_path.get_base_dir()
-			var dir_name = full_path.get_file()
-			
-			var dir = DirAccess.open(base_dir)
-			if dir and not dir.dir_exists(dir_name):
-				var error = dir.make_dir_recursive(dir_name)
-				if error != OK:
-					push_error("[LaunchManager] Failed to create folder: " + full_path)
-					return false
-				else:
-					print("[LaunchManager] Created folder: " + full_path)
-			elif not dir:
-				push_error("[LaunchManager] Cannot access base directory: " + base_dir)
-				return false
-			else:
-				print("[LaunchManager] Folder already exists: " + full_path)
-		
-		print("[LaunchManager] Folder creation complete for step: " + step_name)
-		return _execute_install_step(emulator_id, step_index + 1)
-	
-	# Handle create_files action
-	elif action_type == "create_files":
-		var files = platform_config.get("files", [])
-		if files.is_empty():
-			print("[LaunchManager] No files to create for step: " + step_name)
-			return _execute_install_step(emulator_id, step_index + 1)
-		
-		for file_entry in files:
-			var file_name = ""
-			var file_content = ""
-			
-			if typeof(file_entry) == TYPE_STRING:
-				file_name = file_entry
-			elif typeof(file_entry) == TYPE_DICTIONARY:
-				file_name = file_entry.get("name", "")
-				file_content = file_entry.get("content", "")
-			
-			if file_name == "":
-				continue
-			
-			var full_path: String
-			if file_name.begins_with("/"):
-				full_path = file_name
-			else:
-				full_path = EMULATORS_DIR + emulator_id + "/" + file_name
-			
-			if not FileAccess.file_exists(full_path):
-				var file = FileAccess.open(full_path, FileAccess.WRITE)
-				if file == null:
-					push_error("[LaunchManager] Failed to create file: " + full_path)
-					return false
-				else:
-					file.store_string(file_content)
-					file.close()
-					print("[LaunchManager] Created file: " + full_path)
-			else:
-				print("[LaunchManager] File already exists: " + full_path)
-		
-		print("[LaunchManager] File creation complete for step: " + step_name)
-		return _execute_install_step(emulator_id, step_index + 1)
-	
-	# Handle edit_file action
-	elif action_type == "edit_file":
-		var file_path = platform_config.get("file", "")
-		var edits = platform_config.get("edits", [])
-		
-		if file_path == "" or edits.is_empty():
-			print("[LaunchManager] No file or edits for step: " + step_name)
-			return _execute_install_step(emulator_id, step_index + 1)
-		
-		var full_path: String
-		if file_path.begins_with("/"):
-			full_path = file_path
-		else:
-			full_path = EMULATORS_DIR + emulator_id + "/" + file_path
-		
-		if not FileAccess.file_exists(full_path):
-			push_error("[LaunchManager] File not found for editing: " + full_path)
-			return false
-		
-		var file = FileAccess.open(full_path, FileAccess.READ)
-		if file == null:
-			push_error("[LaunchManager] Failed to open file for editing: " + full_path)
-			return false
-		
-		var content = file.get_as_text()
-		file.close()
-		
-		for edit in edits:
-			var old_text = edit.get("old", "")
-			var new_text = edit.get("new", "")
-			
-			if old_text == "":
-				continue
-			
-			content = content.replace(old_text, new_text)
-			print("[LaunchManager] Edited file " + file_path + ": replaced '" + old_text + "' with '" + new_text + "'")
-		
-		# Write back
-		file = FileAccess.open(full_path, FileAccess.WRITE)
-		if file == null:
-			push_error("[LaunchManager] Failed to write edited file: " + full_path)
-			return false
-		
-		file.store_string(content)
-		file.close()
-		
-		print("[LaunchManager] File editing complete for step: " + step_name)
-		return _execute_install_step(emulator_id, step_index + 1)
-	
-	# Handle none action (skip)
-	elif action_type == "none":
-		print("[LaunchManager] Skipping step '" + step_name + "' (action_type: none)")
-		return _execute_install_step(emulator_id, step_index + 1)
-	
-	push_error("[LaunchManager] Unknown action_type '" + action_type + "' for step: " + step_name)
-	return false
 
 ## Re-runs a previous install step when current step needs it
 ## Use this when a step's input (downloaded file, etc.) is missing
@@ -2143,8 +1957,21 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		push_error("[LaunchManager] Cannot extract - no download URL from previous step")
 		return false
 	
-	var filename = download_url.get_file()
-	var archive_path = EMULATORS_DIR + emulator_id + "/" + filename
+	# Get filename from config (explicit) or URL
+	var filename = prev_config.get("filename", "")
+	if filename == "":
+		filename = download_url.get_file()
+	
+	# Check for custom destination from previous download step
+	var custom_destination = prev_config.get("destination", "")
+	var archive_path: String
+	if custom_destination != "":
+		# File was downloaded to custom destination
+		archive_path = custom_destination + "/" + filename
+		print("[LaunchManager] Using custom archive path: " + archive_path)
+	else:
+		# Default: file is in emulator directory
+		archive_path = EMULATORS_DIR + emulator_id + "/" + filename
 	
 	# Handle extract_to: absolute paths are used directly, relative paths are relative to emulator dir
 	var extract_dir: String
@@ -2323,6 +2150,201 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 		_:
 			print("[LaunchManager] Unknown validation action_type: " + action_type)
 			return false
+
+## Helper function for download_url action
+func _handle_download_url_step(emulator_id: String, emulator_name: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var url = platform_config.get("url", "")
+	if url == "":
+		push_error("[LaunchManager] No download URL for step '" + step_name + "'")
+		return false
+	
+	var step_display_name = _get_step_display_name(step_name)
+	_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
+	return true
+
+## Helper function for download_repo action
+func _handle_download_repo_step(emulator_id: String, emulator_name: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var github_repo = platform_config.get("github_repo", "")
+	var asset_pattern = platform_config.get("asset_pattern", "")
+	var release_tag = platform_config.get("release_tag", "")
+	
+	if github_repo == "" or asset_pattern == "":
+		push_error("[LaunchManager] Invalid download_repo config for step: " + step_name)
+		return false
+	
+	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+	_emulator_install_progress[emulator_id] = "Fetching release info..."
+	
+	var step_display_name = _get_step_display_name(step_name)
+	
+	NetworkManager.fetch_github_latest_release(
+		github_repo,
+		asset_pattern,
+		func(url: String, error: String):
+			if error != "":
+				push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
+				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+				return
+			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
+		release_tag
+	)
+	return true
+
+## Helper function for download_scrape action
+func _handle_download_scrape_step(emulator_id: String, emulator_name: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var scrape_url = platform_config.get("scrape_url", "")
+	var version_pattern = platform_config.get("version_pattern", "")
+	var url_template = platform_config.get("url_template", "")
+	
+	if scrape_url == "" or version_pattern == "" or url_template == "":
+		push_error("[LaunchManager] Invalid download_scrape config for step: " + step_name)
+		return false
+	
+	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+	_emulator_install_progress[emulator_id] = "Scraping for latest version..."
+	
+	var step_display_name = _get_step_display_name(step_name)
+	
+	NetworkManager.fetch_scraped_release(
+		scrape_url,
+		version_pattern,
+		url_template,
+		func(url: String, error: String):
+			if error != "":
+				push_error("[LaunchManager] Failed to scrape release: " + error)
+				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+				return
+			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
+	)
+	return true
+
+## Helper function for create_folders action
+func _handle_create_folders_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var folders = platform_config.get("folders", [])
+	if folders.is_empty():
+		print("[LaunchManager] No folders to create for step: " + step_name)
+		return _execute_install_step(emulator_id, step_index + 1)
+	
+	for folder_path in folders:
+		var full_path: String
+		if folder_path.begins_with("/"):
+			full_path = folder_path
+		else:
+			full_path = EMULATORS_DIR + emulator_id + "/" + folder_path
+		
+		var base_dir = full_path.get_base_dir()
+		var dir_name = full_path.get_file()
+		
+		var dir = DirAccess.open(base_dir)
+		if dir and not dir.dir_exists(dir_name):
+			var error = dir.make_dir_recursive(dir_name)
+			if error != OK:
+				push_error("[LaunchManager] Failed to create folder: " + full_path)
+				return false
+			else:
+				print("[LaunchManager] Created folder: " + full_path)
+		elif not dir:
+			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
+			return false
+		else:
+			print("[LaunchManager] Folder already exists: " + full_path)
+	
+	print("[LaunchManager] Folder creation complete for step: " + step_name)
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Helper function for create_files action
+func _handle_create_files_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var files = platform_config.get("files", [])
+	if files.is_empty():
+		print("[LaunchManager] No files to create for step: " + step_name)
+		return _execute_install_step(emulator_id, step_index + 1)
+	
+	for file_entry in files:
+		var file_name = ""
+		var file_content = ""
+		
+		if typeof(file_entry) == TYPE_STRING:
+			file_name = file_entry
+		elif typeof(file_entry) == TYPE_DICTIONARY:
+			file_name = file_entry.get("name", "")
+			file_content = file_entry.get("content", "")
+		
+		if file_name == "":
+			continue
+		
+		var full_path: String
+		if file_name.begins_with("/"):
+			full_path = file_name
+		else:
+			full_path = EMULATORS_DIR + emulator_id + "/" + file_name
+		
+		if not FileAccess.file_exists(full_path):
+			var file = FileAccess.open(full_path, FileAccess.WRITE)
+			if file == null:
+				push_error("[LaunchManager] Failed to create file: " + full_path)
+				return false
+			else:
+				file.store_string(file_content)
+				file.close()
+				print("[LaunchManager] Created file: " + full_path)
+		else:
+			print("[LaunchManager] File already exists: " + full_path)
+	
+	print("[LaunchManager] File creation complete for step: " + step_name)
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Helper function for edit_file action
+func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var file_path = platform_config.get("file", "")
+	var edits = platform_config.get("edits", [])
+	
+	if file_path == "" or edits.is_empty():
+		print("[LaunchManager] No file or edits for step: " + step_name)
+		return _execute_install_step(emulator_id, step_index + 1)
+	
+	var full_path: String
+	if file_path.begins_with("/"):
+		full_path = file_path
+	else:
+		full_path = EMULATORS_DIR + emulator_id + "/" + file_path
+	
+	if not FileAccess.file_exists(full_path):
+		push_error("[LaunchManager] File not found for editing: " + full_path)
+		return false
+	
+	var file = FileAccess.open(full_path, FileAccess.READ)
+	if file == null:
+		push_error("[LaunchManager] Failed to open file for editing: " + full_path)
+		return false
+	
+	var content = file.get_as_text()
+	file.close()
+	
+	for edit in edits:
+		var old_text = edit.get("old", "")
+		var new_text = edit.get("new", "")
+		
+		if old_text == "":
+			continue
+		
+		content = content.replace(old_text, new_text)
+		print("[LaunchManager] Edited file " + file_path + ": replaced '" + old_text + "' with '" + new_text + "'")
+	
+	file = FileAccess.open(full_path, FileAccess.WRITE)
+	if file == null:
+		push_error("[LaunchManager] Failed to write edited file: " + full_path)
+		return false
+	
+	file.store_string(content)
+	file.close()
+	
+	print("[LaunchManager] File editing complete for step: " + step_name)
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Helper function for none action (skip)
+func _handle_none_step(emulator_id: String, step_name: String, step_index: int) -> bool:
+	print("[LaunchManager] Skipping step '" + step_name + "' (action_type: none)")
+	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Executes install steps from new step-based format (entry point)
 func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:
@@ -2528,8 +2550,26 @@ func scan_emulator_install_state(emulator_id: String):
 
 ## Legacy unified download - kept for reference but not used
 func _queue_emulator_download(emulator_id: String, emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
-	var filename = download_url.get_file()
-	var destination_path = EMULATORS_DIR + emulator_id + "/" + filename
+	# Use explicit filename from config if provided, otherwise extract from URL
+	var filename = step_config.get("filename", "")
+	if filename == "":
+		filename = download_url.get_file()
+	
+	# Check for custom destination path (for firmware/shared files)
+	var custom_destination = step_config.get("destination", "")
+	var destination_path: String
+	if custom_destination != "":
+		# Ensure the custom destination directory exists
+		var base_dir = custom_destination.get_base_dir()
+		var dir_name = custom_destination.get_file()
+		var dir = DirAccess.open(base_dir)
+		if dir and not dir.dir_exists(dir_name):
+			dir.make_dir_recursive(dir_name)
+			print("[LaunchManager] Created custom destination directory: " + custom_destination)
+		destination_path = custom_destination + "/" + filename
+		print("[LaunchManager] Using custom destination: " + destination_path)
+	else:
+		destination_path = EMULATORS_DIR + emulator_id + "/" + filename
 	
 	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
