@@ -32,6 +32,7 @@ class QueueItem:
 	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
 	var saf_destination: String = ""  # Original SAF URI if using SAF storage
 	var use_saf: bool = false  # Whether this download uses SAF
+	var delete_after_extract: bool = false  # Whether to delete archive after extraction
 
 # Unified queue
 var _queue: Array[QueueItem] = []
@@ -171,7 +172,8 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	return item_id
 
 ## Queues an extraction task (for already-downloaded archives)
-func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", name: String = "") -> String:
+## delete_after_extract: If true, deletes the archive after successful extraction (default: true)
+func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", name: String = "", delete_after_extract: bool = true) -> String:
 	var item_id = "extract_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
 	# Check if already extracting this archive
@@ -189,6 +191,7 @@ func queue_extraction(archive_path: String, extract_dir: String, type: String = 
 	item.status = "extract_pending"
 	item.auto_extract = false  # Already an extraction task
 	item.extract_dir = extract_dir
+	item.delete_after_extract = delete_after_extract
 	
 	_queue.append(item)
 	print("[DownloadManager] Queued extraction: " + item_id + " - " + archive_path)
@@ -315,7 +318,7 @@ func _start_download(item: QueueItem):
 	
 	# Show notification with progress
 	item.notification_id = NotificationManager.show_notification(
-		"Downloading " + item.name + "...",
+		item.name + "...",
 		Notification.Type.INFO,
 		null,
 		0.0,
@@ -325,8 +328,8 @@ func _start_download(item: QueueItem):
 			if item.expected_file_size > 0:
 				var mb_downloaded = int(item.expected_file_size * progress / (1024 * 1024))
 				var mb_total = int(item.expected_file_size / (1024 * 1024))
-				return "Downloading %s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
-			return "Downloading " + item.name + ": %d%%" % int(progress * 100)
+				return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
+			return item.name + ": %d%%" % int(progress * 100)
 	)
 	
 	download_started.emit(item.id)
@@ -796,15 +799,18 @@ func _start_extraction(item: QueueItem):
 
 func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 	# Show extraction notification immediately
-	NotificationManager.update_notification_text(item.notification_id, "Extracting " + item.name + "...")
+	NotificationManager.update_notification_text(item.notification_id, item.name + "...")
 	
 	# Create extraction callable for MemoryManager
 	var extraction_callable = func() -> bool:
+		print("[DownloadManager] Opening ZIP for extraction: " + archive_path)
+		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(archive_path)))
+		
 		var reader = ZIPReader.new()
 		var err = reader.open(archive_path)
 		
 		if err != OK:
-			print("[DownloadManager] Failed to open ZIP: " + str(err))
+			print("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")
 			return false
 		
 		var files = reader.get_files()
@@ -834,10 +840,12 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		reader.close()
 		
-		# Clean up archive
-		var dir = DirAccess.open("user://")
-		if dir:
-			dir.remove(archive_path.trim_prefix("user://"))
+		# Clean up archive only if delete_after_extract is true
+		if item.delete_after_extract:
+			var dir = DirAccess.open("user://")
+			if dir:
+				dir.remove(archive_path.trim_prefix("user://"))
+				print("[DownloadManager] Cleaned up archive: " + archive_path)
 		
 		return true
 	
@@ -894,9 +902,12 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 			return false
 		
 		# Clean up archive
-		var dir = DirAccess.open("user://")
-		if dir:
-			dir.remove(archive_path.trim_prefix("user://"))
+		# Clean up archive only if delete_after_extract is true
+		if item.delete_after_extract:
+			var dir = DirAccess.open("user://")
+			if dir:
+				dir.remove(archive_path.trim_prefix("user://"))
+				print("[DownloadManager] Cleaned up 7z archive: " + archive_path)
 		
 		return true
 	

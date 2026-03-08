@@ -33,6 +33,9 @@ extends Resource
 ## Timestamp of when this game was last played (ISO format)
 @export var last_played: String = ""
 
+## Platform-specific Title ID (for Vita, PS3, etc.)
+@export var title_id: String = ""
+
 ## Tracks which sibling IDs have been downloaded locally
 ## Array of sibling IDs that have local copies
 @export var downloaded_sibling_ids: Array[int] = []

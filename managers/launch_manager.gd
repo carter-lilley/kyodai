@@ -811,7 +811,14 @@ func get_emulator_install_path(emulator_id: String) -> String:
 		return ""
 	
 	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var executable_name = emulator.get("executable_names", {}).get(platform_name, "")
+	
+	# Get executable name from new launch.platforms format
+	var executable_name = ""
+	var launch_config = emulator.get("launch", {})
+	var platforms = launch_config.get("platforms", {})
+	var platform_config = platforms.get(platform_name, {})
+	if platform_config.has("executable"):
+		executable_name = platform_config.get("executable", "")
 	
 	if executable_name == "":
 		return ""
@@ -905,22 +912,28 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	# Build launch arguments based on platform
 	_build_launch_args(intent, emulator)
 	
+	# Vita3K special handling - extract game and prepare TitleID (all platforms)
+	if intent.emulator_id.begins_with("vita3k"):
+		print("[LaunchManager] Vita3K detected - preparing game...")
+		var vita_ready = await _prepare_vita3k_game(game, intent)
+		if not vita_ready:
+			push_error("[LaunchManager] Failed to prepare Vita3K game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
+			return null
+		print("[LaunchManager] Vita3K game ready")
+	
 	return intent
 
 func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 	var platform_name = PlatformManager.get_platform_name().to_lower()
 	
-	# Get launch configuration (support both old and new registry formats)
+	# Get launch configuration from new registry format
 	var launch_config = emulator.get("launch", {})
 	var platforms = launch_config.get("platforms", {})
-	var templates = emulator.get("launch_templates", {})  # Legacy support
 	
 	if PlatformManager.is_android():
 		# Android uses intent-based launching
-		# Check new format first (launch.platforms.android), then legacy (launch_templates.android)
 		var android_template = platforms.get("android", {})
-		if android_template.is_empty():
-			android_template = templates.get("android", {})
 		
 		intent.android_action = android_template.get("action", "")
 		intent.android_package = android_template.get("package", "")
@@ -928,9 +941,20 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		# Extras is always an array in the new unified format
 		intent.android_extras = android_template.get("extras", [])
 		intent.android_config = android_template
+		
+		# Vita3K special handling - add TitleID to extras
+		if intent.emulator_id.begins_with("vita3k") and intent.game and intent.game.title_id != "":
+			intent.android_extras.append({
+				"key": "AppStartParameters",
+				"value": JSON.stringify(["-r", intent.game.title_id]),
+				"type": "string"
+			})
+			print("[LaunchManager] Vita3K: Added AppStartParameters for TitleID: " + intent.game.title_id)
 	else:
 		# Desktop uses command-line arguments
-		var template = templates.get(platform_name, [])
+		var platform_config = platforms.get(platform_name, {})
+		var template = platform_config.get("template", [])
+		
 		var install_path = get_emulator_install_path(intent.emulator_id)
 		
 		# Convert paths to absolute system paths for OS.execute
@@ -954,15 +978,26 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var global_core_path = install_dir + core_separator + "cores" + core_separator + intent.core_name + core_extension
 		global_core_path = global_core_path.replace("//", "/")
 		
-		# Set working directory only if emulator requires it (e.g., xemu)
-		if emulator.get("requires_working_dir", false):
+		# Set working directory only if emulator requires it (e.g., xemu) or for Vita3K
+		if emulator.get("requires_working_dir", false) or intent.emulator_id.begins_with("vita3k"):
 			intent.working_directory = install_dir
+			print("[LaunchManager] Set working directory: " + install_dir)
 		
 		for arg in template:
 			var formatted_arg = arg.replace("{exe}", global_install_path)
 			formatted_arg = formatted_arg.replace("{rom}", global_rom_path)
 			formatted_arg = formatted_arg.replace("{core}", global_core_path)
 			intent.launch_args.append(formatted_arg)
+		
+		# Vita3K special handling for desktop - replace ROM path with TitleID
+		if intent.emulator_id.begins_with("vita3k") and intent.game and intent.game.title_id != "":
+			# Replace the ROM path (ZIP) with the TitleID flag
+			for i in range(intent.launch_args.size()):
+				if intent.launch_args[i] == global_rom_path:
+					intent.launch_args[i] = "-r"
+					intent.launch_args.insert(i + 1, intent.game.title_id)
+					print("[LaunchManager] Vita3K: Replaced ROM path with TitleID: " + intent.game.title_id)
+					break
 
 ## Executes a launch intent
 func execute_launch(intent: LaunchIntent) -> bool:
@@ -1472,11 +1507,11 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 		await get_tree().create_timer(0.5).timeout
 		
 		# Retry the launch
-		_launch_game_internal(game, emulator_id)
+		await _launch_game_internal(game, emulator_id)
 
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
-	var intent = create_launch_intent(game)
+	var intent = await create_launch_intent(game)
 	
 	if not intent:
 		NotificationManager.show_notification("Failed to create launch intent", Notification.Type.ERROR)
@@ -1643,6 +1678,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	if step_index >= install_steps.size():
 		print("[LaunchManager] All install steps complete for: " + emulator_id)
 		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		emulator_extraction_completed.emit(emulator_id, true)
 		return true
 	
 	var step = install_steps[step_index]
@@ -1937,41 +1973,8 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	print("[LaunchManager]   - strip_top_directory: " + str(strip_top))
 	print("[LaunchManager]   - flatten_target: '" + flatten_target + "'")
 	
-	# Find the downloaded file from the previous download step
 	var emulator = get_emulator(emulator_id)
 	var install_steps = emulator.get("install", [])
-	
-	# Get previous step (should be download)
-	if step_index == 0:
-		push_error("[LaunchManager] Cannot extract - no previous download step")
-		return false
-	
-	var prev_step = install_steps[step_index - 1]
-	var prev_platforms = prev_step.get("platforms", {})
-	var prev_config = prev_platforms.get("all", {})
-	if prev_config.is_empty():
-		prev_config = prev_platforms.get(PlatformManager.get_platform_name().to_lower(), {})
-	
-	var download_url = prev_config.get("url", "")
-	if download_url == "":
-		push_error("[LaunchManager] Cannot extract - no download URL from previous step")
-		return false
-	
-	# Get filename from config (explicit) or URL
-	var filename = prev_config.get("filename", "")
-	if filename == "":
-		filename = download_url.get_file()
-	
-	# Check for custom destination from previous download step
-	var custom_destination = prev_config.get("destination", "")
-	var archive_path: String
-	if custom_destination != "":
-		# File was downloaded to custom destination
-		archive_path = custom_destination + "/" + filename
-		print("[LaunchManager] Using custom archive path: " + archive_path)
-	else:
-		# Default: file is in emulator directory
-		archive_path = EMULATORS_DIR + emulator_id + "/" + filename
 	
 	# Handle extract_to: absolute paths are used directly, relative paths are relative to emulator dir
 	var extract_dir: String
@@ -1991,11 +1994,51 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	
 	print("[LaunchManager] Extraction output not found, checking for input archive...")
 	
-	# Check if input zip exists
-	if not FileAccess.file_exists(archive_path):
-		print("[LaunchManager] Archive not found: " + archive_path)
+	# Look for the archive file to extract
+	var emulator_dir = EMULATORS_DIR + emulator_id
+	var archive_path = ""
+	
+	# First, check for explicit expected_file pattern in extract_config
+	var expected_file = extract_config.get("expected_file", "")
+	if expected_file != "":
+		var dir = DirAccess.open(emulator_dir)
+		if dir:
+			dir.list_dir_begin()
+			var file_name = dir.get_next()
+			while file_name != "":
+				if not dir.current_is_dir():
+					if file_name.match(expected_file):
+						archive_path = emulator_dir + "/" + file_name
+						print("[LaunchManager] Found archive matching expected_file pattern: " + file_name)
+						break
+				file_name = dir.get_next()
+			dir.list_dir_end()
+	
+	# If no expected_file match, scan for common archive extensions
+	if archive_path == "":
+		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
+		var dir = DirAccess.open(emulator_dir)
+		if dir:
+			dir.list_dir_begin()
+			var file_name = dir.get_next()
+			while file_name != "":
+				if not dir.current_is_dir():
+					var lower_name = file_name.to_lower()
+					for ext in archive_extensions:
+						if lower_name.ends_with(ext):
+							archive_path = emulator_dir + "/" + file_name
+							print("[LaunchManager] Found archive file: " + file_name)
+							break
+					if archive_path != "":
+						break
+				file_name = dir.get_next()
+			dir.list_dir_end()
+	
+	# Check if archive was found
+	if archive_path == "" or not FileAccess.file_exists(archive_path):
+		print("[LaunchManager] No archive file found in: " + emulator_dir)
 		print("[LaunchManager] Going back to download step (index " + str(step_index - 1) + ")")
-		# Go back to download step
+		# Go back to download step to re-download
 		return _retry_previous_step(emulator_id, step_index)
 	
 	print("[LaunchManager] Archive found: " + archive_path)
@@ -2863,4 +2906,163 @@ func _on_unified_extraction_completed(item_id: String, success: bool, extract_di
 		emulator_extraction_completed.emit(emulator_id, true)
 		task_info.callback.call(true, "")
 		return
+
+# ==================== VITA3K HELPERS ====================
+
+## Extracts TitleID from Vita game ZIP by reading root folder name
+func _extract_vita_title_id(zip_path: String) -> String:
+	if not FileAccess.file_exists(zip_path):
+		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + zip_path)
+		return ""
 	
+	var reader = ZIPReader.new()
+	var err = reader.open(zip_path)
+	if err != OK:
+		push_error("[LaunchManager] Failed to open ZIP for TitleID extraction: " + zip_path)
+		return ""
+	
+	var files = reader.get_files()
+	reader.close()
+	
+	if files.is_empty():
+		push_error("[LaunchManager] ZIP is empty: " + zip_path)
+		return ""
+	
+	# Get root folder from first file path
+	var first_file = files[0]
+	var parts = first_file.split("/")
+	if parts.is_empty():
+		push_error("[LaunchManager] Invalid ZIP structure: " + zip_path)
+		return ""
+	
+	var title_id = parts[0]
+	print("[LaunchManager] Extracted Vita TitleID: " + title_id + " from " + zip_path)
+	return title_id
+
+## Handles Vita3K game extraction and launch preparation
+## Returns true if ready to launch, false if error
+func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
+	var rom_path = intent.rom_path
+	
+	# Get emulator directory for checking existing games
+	var emulator_path = get_emulator_install_path(intent.emulator_id)
+	if emulator_path == "":
+		push_error("[LaunchManager] Vita3K: Cannot find emulator install path")
+		return false
+	var emulator_dir = emulator_path.get_base_dir()
+	var ux0_app_path = emulator_dir + "/ux0/app"
+	
+	# Extract TitleID from ZIP if not already stored
+	if game.title_id == "":
+		print("[LaunchManager] Vita3K: TitleID not stored, checking for existing extraction...")
+		
+		# First, check if the game was already extracted (from previous launch)
+		# by scanning the ux0/app directory for any TitleID folder
+		var found_title_id = ""
+		if DirAccess.dir_exists_absolute(ux0_app_path):
+			var dir = DirAccess.open(ux0_app_path)
+			if dir:
+				dir.list_dir_begin()
+				var folder_name = dir.get_next()
+				while folder_name != "":
+					if folder_name != "." and folder_name != ".." and dir.current_is_dir():
+						# Found a TitleID folder - use it (Vita3K stores games by TitleID)
+						found_title_id = folder_name
+						print("[LaunchManager] Vita3K: Found existing TitleID folder: " + folder_name)
+						break
+					folder_name = dir.get_next()
+				dir.list_dir_end()
+		
+		# If no existing game found, extract from ZIP
+		if found_title_id == "":
+			print("[LaunchManager] Vita3K: No existing game found, extracting TitleID from ZIP...")
+			found_title_id = _extract_vita_title_id(rom_path)
+			if found_title_id == "":
+				push_error("[LaunchManager] Vita3K: Failed to extract TitleID from: " + rom_path)
+				NotificationManager.show_notification("Failed to extract Vita game TitleID", Notification.Type.ERROR)
+				return false
+		
+		game.title_id = found_title_id
+		# Save only title_id to database (doesn't overwrite other fields)
+		DataManager.update_game_title_id(game.romm_id, found_title_id)
+		print("[LaunchManager] Vita3K: Stored TitleID " + found_title_id + " for game " + game.get_display_name())
+	
+	var title_id = game.title_id
+	
+	# Platform-specific Vita3K app path
+	var vita_app_path: String
+	if PlatformManager.is_android():
+		vita_app_path = "/storage/emulated/0/Vita3K/ux0/app/" + title_id
+	else:
+		# Desktop - use emulator directory (already obtained above)
+		vita_app_path = emulator_dir + "/ux0/app/" + title_id
+	
+	print("[LaunchManager] Vita3K: App path: " + vita_app_path)
+	
+	# Check if already extracted
+	print("[LaunchManager] Vita3K: Checking if folder exists: " + vita_app_path)
+	var dir = DirAccess.open(vita_app_path)
+	print("[LaunchManager] Vita3K: DirAccess.open result: " + str(dir))
+	if dir != null:
+		print("[LaunchManager] Vita3K: Game already extracted to " + vita_app_path)
+		return true
+	print("[LaunchManager] Vita3K: Folder does not exist, need to extract")
+	
+	# Extract ZIP to Vita3K ux0/app directory (ZIP contains the TitleID folder)
+	# We extract to the parent directory (ux0/app) so the ZIP's root folder lands correctly
+	var extract_parent = vita_app_path.get_base_dir()
+	print("[LaunchManager] Vita3K: First launch - extracting game to " + extract_parent)
+	NotificationManager.show_notification("Extracting Vita game for first launch...", Notification.Type.INFO)
+	
+	var extract_success = await _extract_vita_zip(rom_path, extract_parent, title_id)
+	if not extract_success:
+		push_error("[LaunchManager] Vita3K: Failed to extract game to " + vita_app_path)
+		return false
+	
+	print("[LaunchManager] Vita3K: Extraction complete for " + title_id)
+	return true
+
+## Extracts Vita game ZIP with progress tracking
+func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -> bool:
+	# Create parent directories if needed
+	var parent_dir = extract_to.get_base_dir()
+	var err = DirAccess.make_dir_recursive_absolute(parent_dir)
+	if err != OK and err != ERR_ALREADY_EXISTS:
+		push_error("[LaunchManager] Failed to create Vita3K app directory: " + parent_dir)
+		return false
+	
+	# Use DownloadManager's extraction for progress tracking
+	# Pass false to preserve the ZIP file (don't delete after extraction)
+	var item_id = DownloadManager.queue_extraction(zip_path, extract_to, "vita_game", title_id, false)
+	if item_id == "":
+		push_error("[LaunchManager] Failed to queue Vita game extraction")
+		return false
+	
+	print("[LaunchManager] Vita3K: Queued extraction with ID: " + item_id)
+	
+	# Wait for extraction to complete
+	var extraction_complete = false
+	var extraction_success = false
+	
+	var on_complete = func(completed_item_id: String, success: bool, message: String):
+		if completed_item_id == item_id:
+			extraction_complete = true
+			extraction_success = success
+			print("[LaunchManager] Vita3K: Extraction " + ("succeeded" if success else "failed") + ": " + message)
+	
+	DownloadManager.extraction_completed.connect(on_complete)
+	
+	# Wait for completion (with timeout)
+	var timeout = 300.0  # 5 minutes timeout
+	var elapsed = 0.0
+	while not extraction_complete and elapsed < timeout:
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
+	
+	DownloadManager.extraction_completed.disconnect(on_complete)
+	
+	if not extraction_complete:
+		push_error("[LaunchManager] Vita3K: Extraction timed out")
+		return false
+	
+	return extraction_success

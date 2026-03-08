@@ -763,20 +763,19 @@
 		"windows": {
 		  "type": "command",
 		  "executable": "Vita3K.exe",
-		  "template": ["{exe}", "{rom}"]
+		  "template": ["{exe}","--fullscreen", "{rom}"]
 		},
 		"linux": {
 		  "type": "command",
 		  "executable": "Vita3K",
-		  "template": ["{exe}", "{rom}"]
+		  "template": ["{exe}","--fullscreen", "{rom}"]
 		},
 		"android": {
 		  "type": "intent",
-		  "action": "android.intent.action.VIEW",
+		  "action": "android.intent.action.MAIN",
 		  "package": "org.vita3k.emulator",
 		  "class": "org.vita3k.emulator.Emulator",
-		  "rom_delivery": "intent_data",
-		  "mime_type": "application/octet-stream",
+		  "rom_delivery": "none",
 		  "grant_uri_permission": true,
 		  "clear_task": true,
 		  "extras": []
@@ -1025,8 +1024,8 @@
 			"expected_file": "melonds_bios.zip",
 			"extract_to": ".",
 			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "bios"
+			  "action_type": "files_exist",
+			  "files": ["firmware.bin", "bios7.bin", "bios9.bin"]
 			}
 		  },
 		  "linux": {
@@ -1034,8 +1033,8 @@
 			"expected_file": "melonds_bios.zip",
 			"extract_to": ".",
 			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "bios"
+			  "action_type": "files_exist",
+			  "files": ["firmware.bin", "bios7.bin", "bios9.bin"]
 			}
 		  },
 		  "android": {
@@ -1043,9 +1042,52 @@
 			"expected_file": "/storage/emulated/0/Download/melonds_bios.zip",
 			"extract_to": "/storage/emulated/0/Download",
 			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "/storage/emulated/0/Download/bios"
+			  "action_type": "files_exist",
+			  "files": ["/storage/emulated/0/Download/firmware.bin", "/storage/emulated/0/Download/bios7.bin", "/storage/emulated/0/Download/bios9.bin"]
 			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_config",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": ["melonDS.toml"],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["melonDS.toml"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "configure_bios_paths",
+		"platforms": {
+		  "windows": {
+			"action_type": "edit_file",
+			"file": "melonDS.toml",
+			"edits": [
+			  {
+				"content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/biosdsi9.bin\"\nBIOS7Path = \"{emulator_dir}/biosdsi7.bin\"\nNANDPath = \"{emulator_dir}/nand.bin\""
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["melonDS.toml"]
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "none"
 		  }
 		}
 	  }

@@ -154,7 +154,8 @@ func show_notification(
 	entry.is_progress_linked = not progress_callable.is_null() or pulsing
 
 	if entry.is_progress_linked:
-		notification.show_progress(true)
+		# Hide percentage for pulsing notifications, show for regular progress
+		notification.show_progress(true, not entry.is_pulsing)
 	
 	_notifications.append(entry)
 	_add_notification_to_container(notification)

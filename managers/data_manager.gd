@@ -107,7 +107,8 @@ func _create_tables():
 			is_master_entry INTEGER DEFAULT 1,
 			downloaded_sibling_ids TEXT DEFAULT '[]',
 			has_cover_art INTEGER DEFAULT 1,
-			last_played TEXT DEFAULT ''
+			last_played TEXT DEFAULT '',
+			title_id TEXT DEFAULT ''
 		)
 	""")
 	
@@ -816,8 +817,8 @@ func _build_insert_query(game: GameResource) -> String:
 		INSERT OR REPLACE INTO games 
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 		 file_name, file_path, file_size, has_local_copy, last_updated, 
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played)
-		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s')
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id)
+		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s', '%s')
 	""" % [
 		_escape_sql(game.id),
 		game.romm_id,
@@ -839,7 +840,8 @@ func _build_insert_query(game: GameResource) -> String:
 		1 if game.is_master_entry else 0,
 		downloaded_sibling_ids,
 		1 if game.has_cover_art else 0,
-		_escape_sql(game.last_played)
+		_escape_sql(game.last_played),
+		_escape_sql(game.title_id)
 	]
 
 # ==================== DATABASE OPERATIONS ====================
@@ -854,8 +856,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				INSERT OR REPLACE INTO games 
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 				 file_name, file_path, file_size, has_local_copy, last_updated, 
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played)
-				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s')
+				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id)
+				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s', '%s')
 			""" % [
 				_escape_sql(game.id),
 				game.romm_id,
@@ -877,7 +879,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.is_master_entry else 0,
 				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
 				1 if game.has_cover_art else 0,
-				_escape_sql(game.last_played)
+				_escape_sql(game.last_played),
+				_escape_sql(game.title_id)
 			]
 			return _db.query(query),
 		func(success: bool):
@@ -921,7 +924,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					is_master_entry = %d,
 					downloaded_sibling_ids = '%s',
 					has_cover_art = %d,
-					last_played = '%s'
+					last_played = '%s',
+					title_id = '%s'
 				WHERE romm_id = %d
 			""" % [
 				_escape_sql(game.title),
@@ -943,6 +947,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
 				1 if game.has_cover_art else 0,
 				_escape_sql(game.last_played),
+				_escape_sql(game.title_id),
 				game.romm_id
 			]
 			return _db.query(query),
@@ -1050,6 +1055,28 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	
 	# Persist to database
 	return update_game(game, callback)
+
+## Updates only the title_id field for a game (used by Vita3K during launch)
+## This avoids overwriting other fields like file_path and has_local_copy
+func update_game_title_id(romm_id: int, title_id: String, callback: Callable = Callable()) -> bool:
+	if not _is_db_ready:
+		return false
+	
+	MemoryManager.queue_db_task(
+		func():
+			var query = """
+				UPDATE games SET
+					title_id = '%s'
+				WHERE romm_id = %d
+			""" % [_escape_sql(title_id), romm_id]
+			return _db.query(query),
+		func(success: bool):
+			if success:
+				print("[DataManager] Updated title_id for game %d: %s" % [romm_id, title_id])
+			if callback.is_valid():
+				callback.call(success)
+	)
+	return true
 
 func get_game_by_id(romm_id: int) -> GameResource:
 	if not _is_db_ready:
@@ -1350,10 +1377,10 @@ func _row_to_game(row: Dictionary) -> GameResource:
 		game.downloaded_sibling_ids = []
 	
 	# Restore last_played timestamp
-	if row.has("last_played"):
-		game.last_played = row.get("last_played", "")
-	else:
-		game.last_played = ""
+	game.last_played = row.get("last_played", "")
+	
+	# Restore title_id
+	game.title_id = row.get("title_id", "")
 	
 	return game
 

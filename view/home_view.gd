@@ -462,7 +462,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	NotificationManager.show_notification("Adding " + game.title + " to Steam...", Notification.Type.INFO)
 	
 	# Get launch intent for the game
-	var launch_intent = LaunchManager.create_launch_intent(game)
+	var launch_intent = await LaunchManager.create_launch_intent(game)
 	if not launch_intent:
 		NotificationManager.show_notification("Failed to create launch intent for " + game.title, Notification.Type.ERROR)
 		if AudioManager:

@@ -8,6 +8,7 @@ check: skip cover download if existing?
 check: merge siblings for same cover
 bug: user selectable storage paths on android (retroarch/vita3k)
 bug: you have to hit back twice
+bug: after sync when finding existing game, it has no cover
 Line 1556 is escaping the curly braces:
 .replace("{", "\\{").replace("}", "\\}")
 ## UI

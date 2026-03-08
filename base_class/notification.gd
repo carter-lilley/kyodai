@@ -104,10 +104,11 @@ func set_progress(value: float) -> void:
 func get_progress() -> float:
 	return _progress_bar.value / 100.0 if _progress_bar else 0.0
 
-func show_progress(visible: bool) -> void:
+func show_progress(visible: bool, show_percentage: bool = true) -> void:
 	if not is_node_ready():
 		await ready
 	_progress_bar.visible = visible
+	_progress_bar.show_percentage = show_percentage
 
 func set_icon(texture: Texture2D) -> void:
 	if not is_node_ready():
