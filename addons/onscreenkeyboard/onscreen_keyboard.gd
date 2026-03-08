@@ -181,9 +181,16 @@ func _update_auto_display_on_input(event):
 
 
 func _hide_keyboard(key_data=null):
+	# Don't hide if already hidden - prevents animation toggling visibility
+	if not visible:
+		return
+	
 	print("[KEYBOARD DEBUG] Hiding keyboard, was active_line_edit: ", _active_line_edit)
+	# Set _previous_focus_object to the LineEdit before clearing so auto-show
+	# doesn't reopen keyboard when focus returns to it
+	if _active_line_edit != null:
+		_previous_focus_object = _active_line_edit
 	_active_line_edit = null
-	_previous_focus_object = null  # Reset focus tracking when hiding
 	if animate:
 		var new_y_pos = get_viewport().get_visible_rect().size.y + 10
 		animate_position(Vector2(position.x, new_y_pos), true)
@@ -194,9 +201,17 @@ func _hide_keyboard(key_data=null):
 
 func _on_hide_keyboard_clicked(key_data=null):
 	"""Handle click on hide keyboard button - return focus and hide."""
-	if _active_line_edit != null:
-		_active_line_edit.grab_focus()
+	var line_edit_to_focus = _active_line_edit
 	_hide_keyboard()
+	# Defer focus grab to ensure it happens after keyboard starts hiding
+	if line_edit_to_focus != null:
+		call_deferred("_deferred_focus_grab", line_edit_to_focus)
+
+
+func _deferred_focus_grab(control: Control):
+	"""Grab focus on a control after a frame delay."""
+	if is_instance_valid(control):
+		control.grab_focus()
 
 
 func _show_keyboard(key_data=null):
@@ -214,10 +229,15 @@ func _show_keyboard(key_data=null):
 
 
 func animate_position(new_position, trigger_visibility:bool=false):
-	var tween = get_tree().create_tween()
+	# Kill any existing position tween to prevent conflicting visibility changes
+	if tween_position and tween_position.is_valid():
+		tween_position.kill()
+	
+	tween_position = get_tree().create_tween()
 	if trigger_visibility:
-		tween.finished.connect(change_visibility.bind(!visible))
-	tween.tween_property(
+		# Use a callable that evaluates visibility at finish time, not connect time
+		tween_position.finished.connect(func(): change_visibility(not visible))
+	tween_position.tween_property(
 		self,"position",
 		Vector2(new_position),
 		tween_speed
@@ -440,9 +460,9 @@ func _create_keyboard(layout_data):
 						new_key.toggle_mode = true
 						capslock_keys.push_back(new_key)
 						_set_key_style("normal",new_key, style_special_keys)
-				elif key.get("type") == "special-hide-keyboard":
-					new_key.released.connect(_on_hide_keyboard_clicked)
-					_set_key_style("normal",new_key, style_special_keys)
+					elif key.get("type") == "special-hide-keyboard":
+						new_key.released.connect(_on_hide_keyboard_clicked)
+						_set_key_style("normal",new_key, style_special_keys)
 
 				# SET ICONS
 				if key.has("display-icon"):

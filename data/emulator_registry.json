@@ -786,6 +786,7 @@
   "pcsx2": {
 	"name": "PCSX2",
 	"platforms": ["ps2"],
+	"requires_native_paths": true,
 	"install": [
 	  {
 		"step": "download_emulator",

@@ -1087,8 +1087,29 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 			print("[LaunchManager] Shell command: sh -c \"" + inner_cmd + "\"")
 			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 	else:
-		# No working directory specified, launch directly
-		pid = OS.create_process(exe_path, arguments, false)
+		# No working directory specified, but still need to quote arguments properly
+		# Build the command with proper quoting for each argument
+		var quoted_args = []
+		for arg in arguments:
+			var escaped = arg.replace('"', '\\"')
+			quoted_args.append('"' + escaped + '"')
+		
+		if PlatformManager.is_windows():
+			# Windows: use cmd /c "exe args"
+			var inner_cmd = '"%s" %s' % [
+				exe_path,
+				" ".join(quoted_args)
+			]
+			print("[LaunchManager] Shell command: cmd /c \"" + inner_cmd + "\"")
+			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
+		else:
+			# Linux/macOS: use sh -c "exe args"
+			var inner_cmd = '"%s" %s' % [
+				exe_path,
+				" ".join(quoted_args)
+			]
+			print("[LaunchManager] Shell command: sh -c \"" + inner_cmd + "\"")
+			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 	
 	if pid == -1:
 		push_error("[LaunchManager] Failed to launch process: " + exe_path)
@@ -2911,32 +2932,53 @@ func _on_unified_extraction_completed(item_id: String, success: bool, extract_di
 
 ## Extracts TitleID from Vita game ZIP by reading root folder name
 func _extract_vita_title_id(zip_path: String) -> String:
-	if not FileAccess.file_exists(zip_path):
-		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + zip_path)
+	var actual_zip_path = zip_path
+	
+	# On Android with SAF, content:// URIs can't be read directly by ZIPReader
+	# Convert to real file path using the PackageChecker plugin
+	if PlatformManager.is_android() and zip_path.begins_with("content://"):
+		print("[LaunchManager] Content URI detected, converting to real path...")
+		
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin == null:
+			push_error("[LaunchManager] PackageChecker plugin not available for SAF URI conversion")
+			return ""
+		
+		var real_path = plugin.getRealPathFromSafUri(zip_path)
+		if real_path == "":
+			push_error("[LaunchManager] Cannot convert SAF URI to real path: " + zip_path)
+			return ""
+		
+		actual_zip_path = real_path
+		print("[LaunchManager] Converted SAF URI to path: " + actual_zip_path)
+	
+	if not FileAccess.file_exists(actual_zip_path):
+		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + actual_zip_path)
 		return ""
 	
 	var reader = ZIPReader.new()
-	var err = reader.open(zip_path)
+	var err = reader.open(actual_zip_path)
 	if err != OK:
-		push_error("[LaunchManager] Failed to open ZIP for TitleID extraction: " + zip_path)
+		push_error("[LaunchManager] Failed to open ZIP for TitleID extraction: " + actual_zip_path)
 		return ""
 	
 	var files = reader.get_files()
 	reader.close()
 	
 	if files.is_empty():
-		push_error("[LaunchManager] ZIP is empty: " + zip_path)
+		push_error("[LaunchManager] ZIP is empty: " + actual_zip_path)
 		return ""
 	
 	# Get root folder from first file path
 	var first_file = files[0]
 	var parts = first_file.split("/")
 	if parts.is_empty():
-		push_error("[LaunchManager] Invalid ZIP structure: " + zip_path)
+		push_error("[LaunchManager] Invalid ZIP structure: " + actual_zip_path)
 		return ""
 	
 	var title_id = parts[0]
 	print("[LaunchManager] Extracted Vita TitleID: " + title_id + " from " + zip_path)
+	
 	return title_id
 
 ## Handles Vita3K game extraction and launch preparation
@@ -2945,12 +2987,22 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var rom_path = intent.rom_path
 	
 	# Get emulator directory for checking existing games
-	var emulator_path = get_emulator_install_path(intent.emulator_id)
-	if emulator_path == "":
-		push_error("[LaunchManager] Vita3K: Cannot find emulator install path")
-		return false
-	var emulator_dir = emulator_path.get_base_dir()
-	var ux0_app_path = emulator_dir + "/ux0/app"
+	# Platform-specific: Android uses fixed external storage path, desktop uses install path
+	var emulator_dir: String
+	var ux0_app_path: String
+	
+	if PlatformManager.is_android():
+		# Android: Vita3K stores games in external storage
+		emulator_dir = "/storage/emulated/0/Vita3K"
+		ux0_app_path = emulator_dir + "/ux0/app"
+	else:
+		# Desktop: Get path from emulator installation
+		var emulator_path = get_emulator_install_path(intent.emulator_id)
+		if emulator_path == "":
+			push_error("[LaunchManager] Vita3K: Cannot find emulator install path")
+			return false
+		emulator_dir = emulator_path.get_base_dir()
+		ux0_app_path = emulator_dir + "/ux0/app"
 	
 	# Extract TitleID from ZIP if not already stored
 	if game.title_id == "":

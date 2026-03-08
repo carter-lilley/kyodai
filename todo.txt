@@ -1,61 +1,51 @@
 #TODO.TXT
-
-how to split important siblings
-bug: retroarch system cores arent the same on android, check and fix
-bug: refresh platform card after install status flow
-bug: refresh home scan after download
-check: skip cover download if existing?
-check: merge siblings for same cover
-bug: user selectable storage paths on android (retroarch/vita3k)
-bug: you have to hit back twice
-bug: after sync when finding existing game, it has no cover
-Line 1556 is escaping the curly braces:
-.replace("{", "\\{").replace("}", "\\}")
 ## UI
-	color presets
+	bug: after sync when finding existing game, it has no cover/dimensions need updated
+	focused card in front
+	color presets (platform/game/custom)
 	theme presets
-	placeholder cards
+	update placeholder card icons + add more to grid?
 	font! rodin?
 	'controls/info bar'
 	focus glow
 	layer system inner-shadow
 	add letters to library navigation?
 	badge effect placement opts
-## cards
-	try scaling cropping algo
 ## hero
 	postcard-style [[img] name ]
 	background style (disable other opts?)
-	card style
+	card/image/poster style
 	hero placement opt -> '4 way container?'
 	hero IGDB opt
 	hero fx (screenshots/cropping.shadows/etc)
 ## performance:
+	try scaling cropping algo
 	XMB shader too heavy
-	cache image colors,  cropping data, and sibiling lookup on sync
 	further card image retries & priority management.
 	performance.add_custom_monitor for everything
-	are sync db actions and load db actions the same?
+## sync:
+	how to split important siblings
+	bug: refresh home scan after download
+	check: skip cover download if existing?
+	check: merge siblings for same cover
+	cache image colors,  cropping data, and sibiling lookup on sync
+	check: are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	vita3k: launch intent win/android
-	check for updates
-	controller inis
+	add: user selectable 'emulators' storage paths on on all paltforms, update android intents to look there when needed (retroarch/vita3k/melonds)
+	bug: retroarch system cores arent the same on android, check and fix
+	bug: melonDS bios names on android(?)
+  	add: ppsspp!
+	ft: scrape-style download action for retroarch
+	ft: check for emulator updates
+	dolphin: controller inis
 	all: controllers, hotkeys, graphics settings, confirm on exit, etc?
-	named post install notifs (and toggle for core system downloading)
 	cemu:
 		title keys
-	dolphin:
-		game profiles
 	rpcs3
 		zip extraction??
 ## registry:
 	hidden core systems toggle(?)
-	platform download/launch diffs (Linux/android)
-	android -
-		[LaunchManager] Executing step 2: download_cores
-		[LaunchManager] Skipping step 'download_cores' (action_type: none)
-		[LaunchManager] Executing step 3: install_cores
-		[LaunchManager] Skipping step 'install_cores' (action_type: none)
+	platform download/launch diffs (Linux)
 	Backport other implementations to multistep

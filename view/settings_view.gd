@@ -307,9 +307,11 @@ func _input(event: InputEvent):
 		var current_tab = _settings_container.current_tab
 		var tab_count = _settings_container.get_tab_count()
 		_settings_container.current_tab = (current_tab + 1) % tab_count
+		_settings_container.grab_focus()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("cycle_platform_prev"):
 		var current_tab = _settings_container.current_tab
 		var tab_count = _settings_container.get_tab_count()
 		_settings_container.current_tab = (current_tab - 1 + tab_count) % tab_count
+		_settings_container.grab_focus()
 		get_viewport().set_input_as_handled()

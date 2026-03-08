@@ -809,6 +809,29 @@ public class PackageCheckerPlugin extends GodotPlugin {
         return base + "/document/" + treeId + "%2F" + path.replace("/", "%2F");
     }
     
+    /**
+     * Converts a SAF (Storage Access Framework) content URI to a real file path.
+     * Returns the actual filesystem path for tree URIs and document URIs.
+     * Returns empty string if the URI cannot be converted.
+     */
+    @UsedByGodot
+    public String getRealPathFromSafUri(String safUri) {
+        Log.d(TAG, "getRealPathFromSafUri() called: " + safUri);
+        
+        if (safUri == null || safUri.isEmpty()) {
+            return "";
+        }
+        
+        String realPath = getFilePathFromContentUri(activity, safUri);
+        if (realPath != null && !realPath.isEmpty()) {
+            Log.d(TAG, "Converted SAF URI to path: " + realPath);
+            return realPath;
+        }
+        
+        Log.w(TAG, "Could not convert SAF URI to real path: " + safUri);
+        return "";
+    }
+    
     @UsedByGodot
     public boolean createSafDirectory(String treeUriString, String dirName) {
         Log.d(TAG, "==========================================");
