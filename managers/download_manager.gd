@@ -803,11 +803,31 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 	
 	# Create extraction callable for MemoryManager
 	var extraction_callable = func() -> bool:
-		print("[DownloadManager] Opening ZIP for extraction: " + archive_path)
-		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(archive_path)))
+		var actual_archive_path = archive_path
+		
+		# On Android with SAF, content:// URIs can't be read directly by ZIPReader
+		# Convert to real file path using the PackageChecker plugin
+		if PlatformManager.is_android() and archive_path.begins_with("content://"):
+			print("[DownloadManager] Content URI detected, converting to real path...")
+			
+			var plugin = Engine.get_singleton("PackageChecker")
+			if plugin == null:
+				print("[DownloadManager] ERROR: PackageChecker plugin not available for SAF URI conversion")
+				return false
+			
+			var real_path = plugin.getRealPathFromSafUri(archive_path)
+			if real_path == "":
+				print("[DownloadManager] ERROR: Cannot convert SAF URI to real path: " + archive_path)
+				return false
+			
+			actual_archive_path = real_path
+			print("[DownloadManager] Converted SAF URI to path: " + actual_archive_path)
+		
+		print("[DownloadManager] Opening ZIP for extraction: " + actual_archive_path)
+		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(actual_archive_path)))
 		
 		var reader = ZIPReader.new()
-		var err = reader.open(archive_path)
+		var err = reader.open(actual_archive_path)
 		
 		if err != OK:
 			print("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")

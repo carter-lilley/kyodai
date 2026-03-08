@@ -942,12 +942,13 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		intent.android_extras = android_template.get("extras", [])
 		intent.android_config = android_template
 		
-		# Vita3K special handling - add TitleID to extras
+		# Vita3K special handling - pass TitleID as command-line args via AppStartParameters
+		# Vita3K expects StringArray extra with key "AppStartParameters" containing ["-r", "TitleID"]
 		if intent.emulator_id.begins_with("vita3k") and intent.game and intent.game.title_id != "":
 			intent.android_extras.append({
 				"key": "AppStartParameters",
 				"value": JSON.stringify(["-r", intent.game.title_id]),
-				"type": "string"
+				"type": "string_array"
 			})
 			print("[LaunchManager] Vita3K: Added AppStartParameters for TitleID: " + intent.game.title_id)
 	else:
