@@ -6,6 +6,7 @@ var _border_inset_pixels: float = 0.0
 var _badge_width: float = 0.0
 var _badge_height: float = 0.0
 var _safe_zone: Vector4 = Vector4(0, 0, 0, 0)
+var _safe_zone_top_bar: Vector4 = Vector4(0, 0, 0, 0)
 var _show_safe_zone: bool = false
 
 func _ready():
@@ -67,6 +68,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("border_inset_pixels", _border_inset_pixels)
 	_set_shader_param("show_safe_zone", _show_safe_zone)
 	_set_shader_param("safe_zone", Vector4(_safe_zone.x, _safe_zone.y, _safe_zone.z, _safe_zone.w))
+	_set_shader_param("safe_zone_top_bar", Vector4(_safe_zone_top_bar.x, _safe_zone_top_bar.y, _safe_zone_top_bar.z, _safe_zone_top_bar.w))
 
 func set_border_width(width: float) -> void:
 	_border_width = width
@@ -89,6 +91,11 @@ func set_badge_dimensions(dimensions: Vector2) -> void:
 
 func set_safe_zone(safe_x: float, safe_y: float, safe_width: float, safe_height: float, show_debug: bool = false) -> void:
 	_safe_zone = Vector4(safe_x, safe_y, safe_width, safe_height)
+	_show_safe_zone = show_debug
+	_update_shader_params()
+
+func set_safe_zone_top_bar(safe_x: float, safe_y: float, safe_width: float, safe_height: float, show_debug: bool = false) -> void:
+	_safe_zone_top_bar = Vector4(safe_x, safe_y, safe_width, safe_height)
 	_show_safe_zone = show_debug
 	_update_shader_params()
 

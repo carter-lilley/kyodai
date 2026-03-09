@@ -14,7 +14,8 @@ uniform int badge_type = 0; // 0 = corner badge, 1 = top bar
 
 // Safe zone uniforms (set by GameCard for debugging)
 uniform bool show_safe_zone = false;
-uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels
+uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (corner badge mode)
+uniform vec4 safe_zone_top_bar = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (top bar mode)
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
@@ -138,12 +139,20 @@ void fragment() {
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, edge_dist);
 	final_color.a *= edge_alpha;
 	
-	// Debug: overlay safe zone in magenta
-	if (show_safe_zone && safe_zone.z > 0.0 && safe_zone.w > 0.0) {
-		if (pixel_pos.x >= safe_zone.x && pixel_pos.x <= safe_zone.x + safe_zone.z &&
-			pixel_pos.y >= safe_zone.y && pixel_pos.y <= safe_zone.y + safe_zone.w) {
-			// Blend magenta overlay
-			final_color = mix(final_color, vec4(1.0, 0.0, 1.0, 0.6), 0.6);
+	// Debug: overlay safe zone in magenta for corner badge, cyan for top bar
+	if (show_safe_zone) {
+		if (badge_type == 0 && safe_zone.z > 0.0 && safe_zone.w > 0.0) {
+			// Corner badge safe zone (magenta)
+			if (pixel_pos.x >= safe_zone.x && pixel_pos.x <= safe_zone.x + safe_zone.z &&
+				pixel_pos.y >= safe_zone.y && pixel_pos.y <= safe_zone.y + safe_zone.w) {
+				final_color = mix(final_color, vec4(1.0, 0.0, 1.0, 0.6), 0.6);
+			}
+		} else if (badge_type == 1 && safe_zone_top_bar.z > 0.0 && safe_zone_top_bar.w > 0.0) {
+			// Top bar safe zone (cyan)
+			if (pixel_pos.x >= safe_zone_top_bar.x && pixel_pos.x <= safe_zone_top_bar.x + safe_zone_top_bar.z &&
+				pixel_pos.y >= safe_zone_top_bar.y && pixel_pos.y <= safe_zone_top_bar.y + safe_zone_top_bar.w) {
+				final_color = mix(final_color, vec4(0.0, 1.0, 1.0, 0.6), 0.6);
+			}
 		}
 	}
 	
