@@ -13,6 +13,7 @@
 	add letters to library navigation?
 	badge effect placement opts
 ## hero
+	bug: hero is broken currently
 	postcard-style [[img] name ]
 	background style (disable other opts?)
 	card/image/poster style

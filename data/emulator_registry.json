@@ -1341,5 +1341,176 @@
 		}
 	  }
 	}
+  },
+  "xemu": {
+	"name": "Xemu",
+	"platforms": ["xbox"],
+	"requires_working_dir": true,
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "xemu-project/xemu",
+			"asset_pattern": "xemu-.*-windows-x86_64\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "xemu-project/xemu",
+			"asset_pattern": "xemu-.*-x86_64\\.AppImage"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "rfandango/xemu-android",
+			"asset_pattern": "app-debug\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "xemu.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "xemu"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "org.xemu.xemu",
+			"expected_file": "app-debug.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "org.xemu.xemu"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_config",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "xemu.toml",
+				"content": "[general]\nshow_welcome = false\n\n[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.qcow2'"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["xemu.toml"]
+			}
+		  },
+		  "linux": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "xemu.toml",
+				"content": "[general]\nshow_welcome = false\n\n[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.qcow2'"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["xemu.toml"]
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "download_bios",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/xemu_bios.zip"
+		  },
+		  "linux": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/xemu_bios.zip"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "https://files.lilley.video/other_assets/xemu_bios.zip"
+		  }
+		}
+	  },
+	  {
+		"step": "install_bios",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"filename": "xemu_bios.zip",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"flatten_target": "xemu_bios",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["mcpx_1.0.bin", "Complex_4627.bin"]
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"filename": "xemu_bios.zip",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"flatten_target": "xemu_bios",
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["mcpx_1.0.bin", "Complex_4627.bin"]
+			}
+		  },
+		  "android": {
+			"action_type": "extract",
+			"filename": "xemu_bios.zip",
+			"extract_to": "/storage/emulated/0/Xemu",
+			"strip_top_directory": true,
+			"flatten_target": "xemu_bios",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "/storage/emulated/0/Xemu",
+			  "files": ["mcpx_1.0.bin", "Complex_4627.bin"]
+			}
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "xemu.exe",
+		  "template": ["{exe}", "-full-screen", "-dvd_path", "{rom}"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "xemu",
+		  "template": ["{exe}", "-dvd_path", "{rom}"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.VIEW",
+		  "package": "org.xemu.xemu",
+		  "class": "org.xemu.xemu.MainActivity",
+		  "rom_delivery": "intent_data",
+		  "mime_type": "application/octet-stream",
+		  "grant_uri_permission": true,
+		  "clear_task": true
+		}
+	  }
+	}
   }
 }

@@ -2327,6 +2327,10 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		print("[LaunchManager] No files to create for step: " + step_name)
 		return _execute_install_step(emulator_id, step_index + 1)
 	
+	# Get the emulator directory path for placeholder resolution
+	var emulator_dir = EMULATORS_DIR + emulator_id
+	var global_emulator_dir = ProjectSettings.globalize_path(emulator_dir)
+	
 	for file_entry in files:
 		var file_name = ""
 		var file_content = ""
@@ -2344,7 +2348,10 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		if file_name.begins_with("/"):
 			full_path = file_name
 		else:
-			full_path = EMULATORS_DIR + emulator_id + "/" + file_name
+			full_path = emulator_dir + "/" + file_name
+		
+		# Resolve placeholders in content
+		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
 		
 		if not FileAccess.file_exists(full_path):
 			var file = FileAccess.open(full_path, FileAccess.WRITE)
@@ -2355,6 +2362,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 				file.store_string(file_content)
 				file.close()
 				print("[LaunchManager] Created file: " + full_path)
+				print("[LaunchManager] Resolved {emulator_dir} to: " + global_emulator_dir)
 		else:
 			print("[LaunchManager] File already exists: " + full_path)
 	
