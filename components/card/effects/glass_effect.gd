@@ -19,6 +19,7 @@ func _update_shader_params() -> void:
 	
 	var distortion = _settings.get("distortion", 0.5)
 	var glass_color = _settings.get("glass_color", Color(0.2, 0.4, 1.0, 0.3))
+	var texture_opacity = _settings.get("texture_opacity", 1.0)
 	
 	# Specular parameters
 	var specular_power = _settings.get("specular_power", 32.0)
@@ -38,6 +39,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("distortion", distortion)
 	_set_shader_param("glass_color", glass_color)
+	_set_shader_param("texture_opacity", texture_opacity)
 	_set_shader_param("game_texture", _card_state.game_texture)
 	
 	# Specular uniforms
@@ -68,6 +70,11 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var color_var = SettingsVar.new(Type.COLOR, Color(0.2, 0.4, 1.0, 0.3), State.ENABLED, "Glass Color")
 	color_var.property_name = "glass_color"
 	schema.append(color_var)
+	
+	# Texture opacity slider
+	var texture_opacity_var = SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "Texture Opacity", "", 0.0, 1.0, 0.01)
+	texture_opacity_var.property_name = "texture_opacity"
+	schema.append(texture_opacity_var)
 	
 	# --- Specular Lighting Parameters ---
 	
