@@ -1388,11 +1388,11 @@
 		  },
 		  "android": {
 			"action_type": "apk_install",
-			"package_name": "org.xemu.xemu",
+			"package_name": "com.izzy2lost.x1box",
 			"expected_file": "app-debug.apk",
 			"validate": {
 			  "action_type": "package_installed",
-			  "package": "org.xemu.xemu"
+			  "package": "com.izzy2lost.x1box"
 			}
 		  }
 		}
@@ -1503,8 +1503,8 @@
 		"android": {
 		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
-		  "package": "org.xemu.xemu",
-		  "class": "org.xemu.xemu.MainActivity",
+		  "package": "com.izzy2lost.x1box",
+		  "class": "com.izzy2lost.x1box.MainActivity",
 		  "rom_delivery": "intent_data",
 		  "mime_type": "application/octet-stream",
 		  "grant_uri_permission": true,

@@ -106,14 +106,16 @@ func _update_status(text: String):
 
 func _on_focus_changed(control: Control):
 	print("[HomeView] Focus changed to: ", control.name if control else "null")
-	# Check if focused control is a button inside a GameCard
-	var card = control.get_parent() if control is Button else control
-	if card is GameCard:
-		print("[HomeView] Focus on GameCard: ", card.game.get_display_name() if card.game else "no game")
-		hero_game_changed.emit(card.game)
-	else:
-		print("[HomeView] Focus not on GameCard, clearing hero")
-		hero_game_changed.emit(null)
+	# Traverse up the tree to find if focused control is inside a GameCard
+	var card = control
+	while card != null:
+		if card is GameCard:
+			print("[HomeView] Focus on GameCard: ", card.game.get_display_name() if card.game else "no game")
+			hero_game_changed.emit(card.game)
+			return
+		card = card.get_parent()
+	
+	# Don't clear hero - keep the last focused game image
 
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""

@@ -244,7 +244,7 @@ func _input(event: InputEvent):
 	if event.is_action_pressed("ui_cancel"):
 		print("[MAIN DEBUG] ui_cancel pressed")
 		# Check if keyboard is visible - if so, let keyboard handle it
-		var keyboard = $AntiAliasingLayer/OnscreenKeyboard
+		var keyboard = $UILayer/OnscreenKeyboard
 		print("[MAIN DEBUG] Keyboard visible: ", keyboard.visible if keyboard else "null")
 		if keyboard and keyboard.visible:
 			# Keyboard will handle ui_cancel to close itself

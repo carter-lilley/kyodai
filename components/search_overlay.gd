@@ -73,7 +73,7 @@ func hide_overlay():
 	results_label.text = ""
 	
 	# Explicitly hide keyboard if open
-	var keyboard = get_tree().get_root().get_node_or_null("Main/AntiAliasingLayer/OnscreenKeyboard")
+	var keyboard = get_tree().get_root().get_node_or_null("Main/UILayer/OnscreenKeyboard")
 	print("[OVERLAY DEBUG] Keyboard found: ", keyboard != null, ", visible: ", keyboard.visible if keyboard else "N/A")
 	if keyboard and keyboard.visible:
 		print("[OVERLAY DEBUG] Hiding keyboard")
@@ -119,7 +119,7 @@ func _input(event: InputEvent):
 	if event.is_action_pressed("ui_cancel"):
 		print("[OVERLAY DEBUG] ui_cancel received in search overlay")
 		# Close keyboard first if it's open
-		var keyboard = get_tree().get_root().get_node_or_null("Main/AntiAliasingLayer/OnscreenKeyboard")
+		var keyboard = get_tree().get_root().get_node_or_null("Main/UILayer/OnscreenKeyboard")
 		if keyboard and keyboard.visible:
 			print("[OVERLAY DEBUG] Hiding keyboard from ui_cancel")
 			keyboard.hide()

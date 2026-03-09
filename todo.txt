@@ -1,6 +1,5 @@
 #TODO.TXT
 ## UI
-	bug: focus tabs on rb/lb switch in menu
 	bug: after sync when finding existing game, it has no cover/dimensions need updated
 	focused card in front
 	color presets (platform/game/custom)
@@ -13,6 +12,7 @@
 	add letters to library navigation?
 	badge effect placement opts
 ## hero
+	bug: library background shaders dont update size when hero is on
 	bug: hero is broken currently
 	postcard-style [[img] name ]
 	background style (disable other opts?)

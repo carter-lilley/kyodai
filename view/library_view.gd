@@ -414,12 +414,15 @@ func _update_status(text: String):
 		main.set_status_text(text)
 
 func _on_focus_changed(control: Control):
-	# Check if focused control is a button inside a GameCard
-	var card = control.get_parent() if control is Button else control
-	if card is GameCard:
-		hero_game_changed.emit(card.game)
-	else:
-		hero_game_changed.emit(null)
+	# Traverse up the tree to find if focused control is inside a GameCard
+	var card = control
+	while card != null:
+		if card is GameCard:
+			hero_game_changed.emit(card.game)
+			return
+		card = card.get_parent()
+	
+	# Don't clear hero - keep the last focused game image
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
