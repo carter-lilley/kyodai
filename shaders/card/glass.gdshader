@@ -4,6 +4,7 @@ uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_ratio = 0.06;
 uniform float border_inset_ratio = 0.0;  // Inherited from border effect
 uniform sampler2D game_texture : filter_linear, repeat_disable;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear;
 
 // Glass parameters  
 uniform float distortion : hint_range(0.0, 1.0) = 0.5;
@@ -119,8 +120,15 @@ void fragment() {
 	
 	// Check if we're inside the inset area using the adjusted corner radius
 	float sdf_dist = rounded_rect_sdf(inner_pixel_pos, inner_size, inner_radius_ratio);
-	vec4 final_color;
 	
+	// Calculate edge anti-aliasing
+	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
+	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
+	
+	// Read the background from screen
+	vec4 background = texture(screen_texture, SCREEN_UV);
+	
+	// Get distorted/warped game texture
 	vec2 warped_uv = spherical_distort(UV, distortion);
 	warped_uv = clamp(warped_uv, 0.0, 1.0);
 	vec4 tex_color = texture(game_texture, warped_uv);
@@ -173,32 +181,24 @@ void fragment() {
 	vec3 rim_color = glass_color.rgb * 3.0;
 	rim_color = clamp(rim_color, vec3(0.0), vec3(1.0));
 	
-	// Apply glass color tint with texture opacity
-	// texture_opacity controls how much game image shows through
-	vec3 game_image = tex_color.rgb * texture_opacity;
-	vec3 glass_tint = mix(game_image, glass_color.rgb, glass_color.a);
+	// Create glass layer: tinted, distorted texture
+	vec3 glass_layer = mix(tex_color.rgb, glass_color.rgb, glass_color.a);
 	
-	// Calculate lights contribution
+	// Alpha blend glass with background based on texture_opacity
+	vec3 blended = mix(background.rgb, glass_layer, texture_opacity);
+	
+	// Calculate lights contribution (additive)
 	vec3 lights = (specular_color * specular) + (bounce_color * bounce) + (rim_color * rim);
 	
-	vec3 final_rgb = glass_tint + lights;
+	// Add lights on top
+	vec3 final_rgb = blended + lights;
 	
-	// Calculate edge anti-aliasing
-	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
-	
-	// Content opacity: max of texture and glass alpha
-	// When both are 0, interior is transparent (shows through to layers below)
-	float content_alpha = max(texture_opacity, glass_color.a);
-	
-	// Calculate lights intensity (brightness of all lights combined)
+	// Calculate lights intensity for alpha
 	float lights_intensity = length(lights);
 	
-	// Final alpha: combine edge, content, and lights
+	// Final alpha: combine edge, content opacity, and lights
 	// If content is transparent but lights are bright, we still need alpha to show the lights
-	float final_alpha = edge_alpha * max(content_alpha, lights_intensity);
+	float final_alpha = edge_alpha * max(texture_opacity, lights_intensity);
 	
-	final_color = vec4(final_rgb, final_alpha);
-	
-	COLOR = final_color;
+	COLOR = vec4(final_rgb, final_alpha);
 }
