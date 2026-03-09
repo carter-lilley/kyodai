@@ -713,6 +713,9 @@ func _set_texture(tex: Texture2D) -> void:
 	# Update glow effect texture if it exists
 	if _glow_effect:
 		_glow_effect.set_game_texture(tex)
+	# Update glass effect texture if it exists
+	if _glass_effect:
+		_glass_effect.set_game_texture(tex)
 
 func _on_card_pressed():
 	if not game:

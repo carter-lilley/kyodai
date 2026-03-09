@@ -10,6 +10,11 @@ func _ready():
 	effect_name = "Border"
 	effect_id = "border"
 
+func update_settings(settings: Dictionary) -> void:
+	visible = true
+	queue_redraw()
+	super.update_settings(settings)
+
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/border.gdshader")

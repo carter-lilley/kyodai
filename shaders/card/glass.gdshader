@@ -2,6 +2,7 @@ shader_type canvas_item;
 
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_ratio = 0.06;
+uniform float border_inset_ratio = 0.0;  // Inherited from border effect
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 
 // Glass parameters  
@@ -97,15 +98,35 @@ vec2 spherical_distort(vec2 uv, float raw_distortion) {
 
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
-	float sdf_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
+	
+	// Calculate border inset (same as base_card)
+	float border_inset_pixels = border_inset_ratio * card_size.x;
+	
+	// Subtract padding to extend under the border edge (same as base_card)
+	float padding_pixels = 5.0;
+	float effective_border_inset = max(0.0, border_inset_pixels - padding_pixels);
+	
+	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
+	vec2 inner_offset = vec2(effective_border_inset);
+	
+	// Calculate effective inner corner radius
+	// Inner radius = outer radius - effective_inset (but not less than 0)
+	float inner_radius_pixels = max(0.0, corner_radius_ratio * min(card_size.x, card_size.y) / 2.0 - effective_border_inset);
+	float inner_radius_ratio = inner_radius_pixels / (min(inner_size.x, inner_size.y) / 2.0);
+	
+	// Offset pixel position for inset calculations
+	vec2 inner_pixel_pos = pixel_pos - inner_offset;
+	
+	// Check if we're inside the inset area using the adjusted corner radius
+	float sdf_dist = rounded_rect_sdf(inner_pixel_pos, inner_size, inner_radius_ratio);
 	vec4 final_color;
 	
 	vec2 warped_uv = spherical_distort(UV, distortion);
 	warped_uv = clamp(warped_uv, 0.0, 1.0);
 	vec4 tex_color = texture(game_texture, warped_uv);
 	
-	// Calculate 3D dome normal
-	vec3 normal = calculate_dome_normal(pixel_pos, card_size, corner_radius_ratio);
+	// Calculate 3D dome normal from inset area with adjusted corner radius
+	vec3 normal = calculate_dome_normal(inner_pixel_pos, inner_size, inner_radius_ratio);
 	
 	// Specular
 	float angle_rad = radians(light_angle);

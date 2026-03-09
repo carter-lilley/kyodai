@@ -22,6 +22,10 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	_update_shadow_offsets()
 	_update_shader_params()
 
+func _on_orientation_changed(_new_orientation: int) -> void:
+	_update_shadow_offsets()
+	_update_shader_params()
+
 func _update_shadow_offsets():
 	if not _card_state:
 		return

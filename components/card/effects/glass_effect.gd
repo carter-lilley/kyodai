@@ -37,6 +37,7 @@ func _update_shader_params() -> void:
 	
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
 	_set_shader_param("distortion", distortion)
 	_set_shader_param("glass_color", glass_color)
 	_set_shader_param("texture_opacity", texture_opacity)
@@ -55,6 +56,9 @@ func _update_shader_params() -> void:
 	# Rim uniforms
 	_set_shader_param("rim_intensity", rim_intensity)
 	_set_shader_param("rim_sharpness", rim_sharpness)
+
+func set_game_texture(texture: Texture2D) -> void:
+	_set_shader_param("game_texture", texture)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
