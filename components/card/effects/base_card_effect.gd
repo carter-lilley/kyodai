@@ -22,6 +22,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
+	_set_shader_param("glass_inset_ratio", _card_state.glass_inset_ratio)
 	_set_shader_param("game_texture", _card_state.game_texture)
 
 func set_game_texture(texture: Texture2D) -> void:

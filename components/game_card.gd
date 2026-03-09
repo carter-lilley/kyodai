@@ -276,8 +276,13 @@ func _rebuild_effects():
 			_glass_effect.update_state(_card_state)
 			_glass_effect.update_settings(glass_config.get("settings", {}))
 			_glass_effect.visible = true
+		
+		# Calculate glass inset
+		var glass_inset = glass_config.get("settings", {}).get("additional_inset_ratio", 0.0)
+		_card_state.glass_inset_ratio = glass_inset
 	elif _glass_effect != null:
 		_glass_effect.visible = false
+		_card_state.glass_inset_ratio = 0.0
 	
 	# Ensure card_input is on top
 	if card_input:

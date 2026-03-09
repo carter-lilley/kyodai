@@ -19,7 +19,7 @@ func _update_shader_params() -> void:
 	
 	var distortion = _settings.get("distortion", 0.5)
 	var glass_color = _settings.get("glass_color", Color(0.2, 0.4, 1.0, 0.3))
-	var texture_opacity = _settings.get("texture_opacity", 1.0)
+	var reflection_overlay_opacity = _settings.get("reflection_overlay_opacity", 1.0)
 	
 	# Specular parameters
 	var specular_power = _settings.get("specular_power", 32.0)
@@ -35,12 +35,15 @@ func _update_shader_params() -> void:
 	var rim_intensity = _settings.get("rim_intensity", 1.0)
 	var rim_sharpness = _settings.get("rim_sharpness", 5.0)
 	
+	# Additional inset parameter
+	var additional_inset = _settings.get("additional_inset_ratio", 0.0)
+	
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
 	_set_shader_param("distortion", distortion)
 	_set_shader_param("glass_color", glass_color)
-	_set_shader_param("texture_opacity", texture_opacity)
+	_set_shader_param("reflection_overlay_opacity", reflection_overlay_opacity)
 	_set_shader_param("game_texture", _card_state.game_texture)
 	
 	# Specular uniforms
@@ -56,6 +59,9 @@ func _update_shader_params() -> void:
 	# Rim uniforms
 	_set_shader_param("rim_intensity", rim_intensity)
 	_set_shader_param("rim_sharpness", rim_sharpness)
+	
+	# Additional inset uniform
+	_set_shader_param("additional_inset_ratio", additional_inset)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_set_shader_param("game_texture", texture)
@@ -75,10 +81,15 @@ func get_settings_schema() -> Array[SettingsVar]:
 	color_var.property_name = "glass_color"
 	schema.append(color_var)
 	
-	# Texture opacity slider
-	var texture_opacity_var = SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "Texture Opacity", "", 0.0, 1.0, 0.01)
-	texture_opacity_var.property_name = "texture_opacity"
-	schema.append(texture_opacity_var)
+	# Reflection overlay opacity slider
+	var reflection_overlay_opacity_var = SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "Reflection Overlay Opacity", "Distorted reflection overlay", 0.0, 1.0, 0.01)
+	reflection_overlay_opacity_var.property_name = "reflection_overlay_opacity"
+	schema.append(reflection_overlay_opacity_var)
+	
+	# Additional inset slider
+	var additional_inset_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Additional Inset", "Push underlying image inward", 0.0, 0.5, 0.01)
+	additional_inset_var.property_name = "additional_inset_ratio"
+	schema.append(additional_inset_var)
 	
 	# --- Specular Lighting Parameters ---
 	
@@ -97,8 +108,8 @@ func get_settings_schema() -> Array[SettingsVar]:
 	light_angle_var.property_name = "light_angle"
 	schema.append(light_angle_var)
 	
-	# Light height (0-1, where 0=horizon, 1=overhead)
-	var light_height_var = SettingsVar.new(Type.FLOAT, 0.5, State.ENABLED, "Light Height", "", 0.0, 1.0, 0.01)
+	# Light height (-0.5 to 1, where 0=horizon, 1=overhead, negative=below horizon)
+	var light_height_var = SettingsVar.new(Type.FLOAT, 0.5, State.ENABLED, "Light Height", "", -0.5, 1.0, 0.01)
 	light_height_var.property_name = "light_height"
 	schema.append(light_height_var)
 	

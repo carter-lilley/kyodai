@@ -42,6 +42,9 @@ var border_inset_ratio: float = 0.0:
 			border_inset_ratio = clamped
 			border_inset_changed.emit(clamped)
 
+# Glass inset as ratio of card width (0.0 - 1.0) - additional inset from glass effect
+var glass_inset_ratio: float = 0.0
+
 # Computed dimensions (derived from zoom + orientation)
 var card_size: Vector2 = VERTICAL_SIZE
 var game_texture: Texture2D = null
@@ -95,6 +98,7 @@ func duplicate() -> CardState:
 	new_state.orientation = orientation
 	new_state.corner_radius_ratio = corner_radius_ratio
 	new_state.border_inset_ratio = border_inset_ratio
+	new_state.glass_inset_ratio = glass_inset_ratio
 	new_state.game_texture = game_texture
 	new_state.effect_settings = effect_settings.duplicate(true)
 	# _update_dimensions will be called in _init, but card_size will be recalculated
