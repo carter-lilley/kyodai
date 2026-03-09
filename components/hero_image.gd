@@ -126,7 +126,7 @@ func _update_shader_size_with_validation(source: String = ""):
 		_size_retry_count = 0
 
 func _get_cache_path(game: GameResource) -> String:
-	if game.cover_path and FileAccess.file_exists(game.cover_path):
+	if game.cover_path and ResourceLoader.exists(game.cover_path):
 		return game.cover_path
 	elif game.cover_url != "" and game.cover_url.begins_with("http"):
 		return "user://cache/covers/" + game.cover_url.md5_text() + ".jpg"

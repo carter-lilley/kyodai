@@ -1597,6 +1597,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
 	var clear_task = intent.android_config.get("clear_task", true)
 	var grant_uri_permission = intent.android_config.get("grant_uri_permission", true)
+	var use_document_uri = intent.android_config.get("use_document_uri", false)  # Opt-in for tree->document conversion (Eden only)
 	
 	# Convert extras array to JSON string
 	var extras_array = intent.android_extras
@@ -1629,6 +1630,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	print("  MIME Type: " + mime_type)
 	print("  Clear Task: " + str(clear_task))
 	print("  Grant URI Permission: " + str(grant_uri_permission))
+	print("  Use Document URI: " + str(use_document_uri))
 	print("  Extras JSON: " + extras_json)
 	
 	# Launch using unified method
@@ -1642,7 +1644,8 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		extras_json,
 		mime_type,
 		clear_task,
-		grant_uri_permission
+		grant_uri_permission,
+		use_document_uri
 	)
 	
 	if success:

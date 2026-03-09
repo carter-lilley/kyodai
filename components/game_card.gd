@@ -347,7 +347,7 @@ func _update_platform_badge():
 	var icon_texture: Texture2D = null
 	if platform_slug:
 		var icon_path = "res://assets/platforms/icon/icon_%s.png" % platform_slug
-		if FileAccess.file_exists(icon_path):
+		if ResourceLoader.exists(icon_path):
 			icon_texture = load(icon_path)
 	
 	if icon_texture:
@@ -378,7 +378,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var texture_to_use = icon_texture
 	if badge_type == 1 and game and game.platform_slug:
 		var wordmark_path = "res://assets/platforms/wordmark/wordmark_" + game.platform_slug + ".png"
-		if FileAccess.file_exists(wordmark_path):
+		if ResourceLoader.exists(wordmark_path):
 			var wordmark_tex = load(wordmark_path)
 			if wordmark_tex:
 				texture_to_use = wordmark_tex

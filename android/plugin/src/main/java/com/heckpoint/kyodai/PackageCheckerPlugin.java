@@ -321,7 +321,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
     @UsedByGodot
     public boolean launchAndroidIntent(String action, String packageName, String className, String romPath,
                                         String corePath, String romDelivery, String extrasJson, String mimeType,
-                                        boolean clearTask, boolean grantUriPermission) {
+                                        boolean clearTask, boolean grantUriPermission, boolean useDocumentUri) {
         Log.d(TAG, "==========================================");
         Log.d(TAG, "launchAndroidIntent() [UNIFIED] called");
         Log.d(TAG, "Action: " + action);
@@ -334,6 +334,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         Log.d(TAG, "MIME Type: " + mimeType);
         Log.d(TAG, "Clear Task: " + clearTask);
         Log.d(TAG, "Grant URI Permission: " + grantUriPermission);
+        Log.d(TAG, "Use Document URI: " + useDocumentUri);
         
         if (activity == null) {
             Log.e(TAG, "ERROR: Activity is null!");
@@ -416,6 +417,19 @@ public class PackageCheckerPlugin extends GodotPlugin {
                     case "intent_data":
                         if (romContentUri != null) {
                             String type = (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/octet-stream";
+                            
+                            // Convert tree URI to document URI ONLY when explicitly requested (for Eden)
+                            if (useDocumentUri) {
+                                String uriString = romContentUri.toString();
+                                if (uriString.contains("/tree/")) {
+                                    String docUriString = convertTreeUriToDocumentUri(uriString);
+                                    if (!docUriString.equals(uriString)) {
+                                        romContentUri = Uri.parse(docUriString);
+                                        Log.d(TAG, "Converted tree URI to document URI: " + romContentUri);
+                                    }
+                                }
+                            }
+                            
                             intent.setDataAndType(romContentUri, type);
                             Log.d(TAG, "Set intent data (content URI): " + romContentUri);
                             

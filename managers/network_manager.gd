@@ -374,12 +374,15 @@ func format_bytes(bytes: int) -> String:
 	else:
 		return str(bytes / (1024 * 1024 * 1024)) + " GB"
 
-func fetch_github_latest_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = ""):
+func fetch_github_latest_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
+	# Use GitHub as default if no api_base_url provided
+	var base_url = api_base_url if api_base_url != "" else "https://api.github.com"
+	
 	var url = ""
 	if release_tag != "" and release_tag != "latest":
-		url = "https://api.github.com/repos/" + repo + "/releases/tags/" + release_tag
+		url = base_url + "/repos/" + repo + "/releases/tags/" + release_tag
 	else:
-		url = "https://api.github.com/repos/" + repo + "/releases/latest"
+		url = base_url + "/repos/" + repo + "/releases/latest"
 	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
 	
 	var http = HTTPRequest.new()

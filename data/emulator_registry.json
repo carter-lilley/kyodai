@@ -569,6 +569,224 @@
 	  }
 	}
   },
+  "eden": {
+	"name": "Eden",
+	"platforms": ["switch"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "eden-emu/eden",
+			"api_base_url": "https://git.eden-emu.dev/api/v1",
+			"asset_pattern": "Eden-Windows-.*-amd64-msvc.*\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "eden-emu/eden",
+			"api_base_url": "https://git.eden-emu.dev/api/v1",
+			"asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "eden-emu/eden",
+			"api_base_url": "https://git.eden-emu.dev/api/v1",
+			"asset_pattern": "Eden-Android-.*-standard\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "eden.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "dev.eden.eden_emulator",
+			"expected_file": "Eden-Android-*-standard.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "dev.eden.eden_emulator"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_user_folders",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_folders",
+			"folders": ["user", "user/nand/system/Contents/registered", "user/keys"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user"
+			}
+		  },
+		  "linux": {
+			"action_type": "create_folders",
+			"folders": ["user", "user/nand/system/Contents/registered", "user/keys"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user"
+			}
+		  },
+		  "android": {
+			"action_type": "create_folders",
+			"folders": ["/storage/emulated/0/Eden/user", "/storage/emulated/0/Eden/user/nand/system/Contents/registered", "/storage/emulated/0/Eden/user/keys"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "/storage/emulated/0/Eden/user"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_firmware",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "THZoria/NX_Firmware",
+			"asset_pattern": "Firmware.*\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "THZoria/NX_Firmware",
+			"asset_pattern": "Firmware.*\\.zip"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "THZoria/NX_Firmware",
+			"asset_pattern": "Firmware.*\\.zip"
+		  }
+		}
+	  },
+	  {
+		"step": "extract_firmware",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": "user/nand/system/Contents/registered",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user/nand/system/Contents/registered"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": "user/nand/system/Contents/registered",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user/nand/system/Contents/registered"
+			}
+		  },
+		  "android": {
+			"action_type": "extract",
+			"extract_to": "/storage/emulated/0/Eden/user/nand/system/Contents/registered",
+			"validate": {
+			  "action_type": "files_exist",
+			  "path": "/storage/emulated/0/Eden/user/nand/system/Contents/registered",
+			  "pattern": "*"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_keys",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
+			"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
+			"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip"
+		  },
+		  "linux": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
+			"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
+			"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip"
+		  },
+		  "android": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
+			"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
+			"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip"
+		  }
+		}
+	  },
+	  {
+		"step": "extract_keys",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": "user/keys",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["user/keys/prod.keys", "user/keys/title.keys"]
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": "user/keys",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["user/keys/prod.keys", "user/keys/title.keys"]
+			}
+		  },
+		  "android": {
+			"action_type": "extract",
+			"extract_to": "/storage/emulated/0/Eden/user/keys",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["/storage/emulated/0/Eden/user/keys/prod.keys", "/storage/emulated/0/Eden/user/keys/title.keys"]
+			}
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "eden.exe",
+		  "template": ["{exe}", "{rom}", "-f"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "Eden-Linux-.*-amd64-clang-pgo.AppImage",
+		  "template": ["{exe}", "{rom}", "-f"]
+		},
+		"android": {
+		  "type": "intent",
+		  "action": "android.intent.action.VIEW",
+		  "package": "dev.eden.eden_emulator",
+		  "class": "org.yuzu.yuzu_emu.activities.EmulationActivity",
+		  "rom_delivery": "intent_data",
+		  "mime_type": "application/octet-stream",
+		  "grant_uri_permission": true,
+		  "clear_task": true,
+		  "use_document_uri": true
+		}
+	  }
+	}
+  },
   "vita3k": {
 	"name": "Vita3K",
 	"platforms": ["psvita"],
