@@ -9,7 +9,7 @@ signal batch_progress_changed(progress: float)
 @export var card_scene: PackedScene
 @export var data_buffer_multiplier: int = 5
 @export var data_preload_multiplier: int = 3
-@export var visual_buffer_lines: int = 6
+@export var visual_buffer_lines: int = 4
 @export var debug_mode: bool = false:
 	set(value):
 		if debug_mode != value:

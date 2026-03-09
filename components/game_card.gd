@@ -37,6 +37,9 @@ const ICON_SIZE_RATIO: float = 0.11  # ~22px at default width
 var _current_texture: Texture2D = null
 var _card_state: CardState = CardState.new()
 
+# Static cache for icon materials to reduce shader compilation overhead
+static var _icon_material_cache: Dictionary = {}
+
 var _base_effect: BaseCardEffect = null
 var _border_effect: BorderEffect = null
 var _badge_effect: BadgeEffect = null
@@ -158,84 +161,104 @@ func _get_effect_config(effect_id: String) -> Dictionary:
 	return {}
 
 func _rebuild_effects():
-	# Clean up existing effects from VisualContainer
-	if visual_container:
-		for child in visual_container.get_children():
-			if child is CardEffect:
-				child.queue_free()
-	
-	_base_effect = null
-	_border_effect = null
-	_badge_effect = null
-	_drop_shadow_effect = null
-	_glow_effect = null
-	_card_state.border_inset_ratio = 0.0
-	
-	# Add all effects to VisualContainer so they scale together with the card content
+	# Update or create effects - don't destroy existing ones
+	# This reduces GC pressure and shader compilation stutter during scroll
 	if not visual_container:
 		push_warning("GameCard: visual_container is null, cannot add effects")
 		return
 	
-	_base_effect = BaseCardEffect.new()
-	_base_effect.name = "BaseEffect"
-	_base_effect.anchor_right = 1.0
-	_base_effect.anchor_bottom = 1.0
-	visual_container.add_child(_base_effect)
-	_base_effect.initialize(_card_state, {})
+	_card_state.border_inset_ratio = 0.0
 	
-	# Add badge BEFORE border so it renders underneath
+	# Base effect - required
+	if _base_effect == null:
+		_base_effect = BaseCardEffect.new()
+		_base_effect.name = "BaseEffect"
+		_base_effect.anchor_right = 1.0
+		_base_effect.anchor_bottom = 1.0
+		visual_container.add_child(_base_effect)
+		_base_effect.initialize(_card_state, {})
+	else:
+		_base_effect.update_state(_card_state)
+	
+	# Badge effect - optional
 	var badge_config = _get_effect_config("badge")
 	if badge_config:
-		_badge_effect = BadgeEffect.new()
-		_badge_effect.name = "BadgeEffect"
-		_badge_effect.anchor_right = 1.0
-		_badge_effect.anchor_bottom = 1.0
-		visual_container.add_child(_badge_effect)
-		_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
+		if _badge_effect == null:
+			_badge_effect = BadgeEffect.new()
+			_badge_effect.name = "BadgeEffect"
+			_badge_effect.anchor_right = 1.0
+			_badge_effect.anchor_bottom = 1.0
+			visual_container.add_child(_badge_effect)
+			_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
+		else:
+			_badge_effect.update_state(_card_state)
+			_badge_effect.update_settings(badge_config.get("settings", {}))
+	elif _badge_effect != null:
+		# Config removed but effect exists - hide it
+		_badge_effect.visible = false
 	
+	# Border effect - optional
 	var border_config = _get_effect_config("border")
 	if border_config:
-		_border_effect = BorderEffect.new()
-		_border_effect.name = "BorderEffect"
-		_border_effect.anchor_right = 1.0
-		_border_effect.anchor_bottom = 1.0
-		visual_container.add_child(_border_effect)
-		_border_effect.initialize(_card_state, border_config.get("settings", {}))
+		if _border_effect == null:
+			_border_effect = BorderEffect.new()
+			_border_effect.name = "BorderEffect"
+			_border_effect.anchor_right = 1.0
+			_border_effect.anchor_bottom = 1.0
+			visual_container.add_child(_border_effect)
+			_border_effect.initialize(_card_state, border_config.get("settings", {}))
+		else:
+			_border_effect.update_state(_card_state)
+			_border_effect.update_settings(border_config.get("settings", {}))
 		
-		# Calculate border inset to match inner edge of border
-		# Border extends inward by (fade_in + width), so inset image to that edge
+		# Calculate border inset
 		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
-		_original_border_size = border_size  # Store for focus effects
+		_original_border_size = border_size
 		var fade_in = border_config.get("settings", {}).get("border_fade_in", 0.0)
 		_card_state.border_inset_ratio = border_size + fade_in
+	elif _border_effect != null:
+		_border_effect.visible = false
 	
-	# Configure badge with border info (or 0 if no border)
-	if _badge_effect:
+	# Configure badge with border info
+	if _badge_effect and _badge_effect.visible:
 		_badge_effect.set_border_width(_card_state.border_inset_ratio)
 		_badge_effect.set_border_inset_pixels(_card_state.border_inset_ratio * _card_state.card_size.x)
 	
-	# Add glow effect first (will be behind everything)
+	# Glow effect - optional
 	var glow_config = _get_effect_config("glow")
 	if glow_config:
-		_glow_effect = GlowEffect.new()
-		_glow_effect.name = "GlowEffect"
-		_glow_effect.set_anchors_preset(Control.PRESET_CENTER)
-		visual_container.add_child(_glow_effect)
-		_glow_effect.initialize(_card_state, glow_config.get("settings", {}))
-		visual_container.move_child(_glow_effect, 0)
+		if _glow_effect == null:
+			_glow_effect = GlowEffect.new()
+			_glow_effect.name = "GlowEffect"
+			_glow_effect.set_anchors_preset(Control.PRESET_CENTER)
+			visual_container.add_child(_glow_effect)
+			_glow_effect.initialize(_card_state, glow_config.get("settings", {}))
+			visual_container.move_child(_glow_effect, 0)
+		else:
+			_glow_effect.update_state(_card_state)
+			_glow_effect.update_settings(glow_config.get("settings", {}))
+			_glow_effect.visible = true
+	elif _glow_effect != null:
+		_glow_effect.visible = false
 	
+	# Drop shadow effect - optional
 	var drop_shadow_config = _get_effect_config("drop_shadow")
 	if drop_shadow_config:
-		_drop_shadow_effect = DropShadowEffect.new()
-		_drop_shadow_effect.name = "DropShadowEffect"
-		_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
-		visual_container.add_child(_drop_shadow_effect)
-		_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
-		# Move drop shadow to back (behind card but after glow)
-		visual_container.move_child(_drop_shadow_effect, 0 if _glow_effect == null else 1)
+		if _drop_shadow_effect == null:
+			_drop_shadow_effect = DropShadowEffect.new()
+			_drop_shadow_effect.name = "DropShadowEffect"
+			_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
+			visual_container.add_child(_drop_shadow_effect)
+			_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
+			visual_container.move_child(_drop_shadow_effect, 0 if _glow_effect == null or not _glow_effect.visible else 1)
+		else:
+			_drop_shadow_effect.update_state(_card_state)
+			_drop_shadow_effect.update_settings(drop_shadow_config.get("settings", {}))
+			_drop_shadow_effect.visible = true
+	elif _drop_shadow_effect != null:
+		_drop_shadow_effect.visible = false
 	
-	# Move card_input to front so it's on top of all effects
-	# CardInput is inside VisualContainer and contains all interactive UI elements
+	# Ensure card_input is on top
 	if card_input:
 		visual_container.move_child(card_input, -1)
 	
@@ -536,10 +559,14 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	platform_icon.offset_bottom = icon_offset_y + icon_draw_height
 	platform_icon.modulate = Color.WHITE
 	
-	var shader_material = ShaderMaterial.new()
-	shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")
-	shader_material.set_shader_parameter("icon_color", icon_color)
-	platform_icon.material = shader_material
+	# Use cached material for this color to reduce shader overhead
+	var cache_key = str(icon_color)
+	if not _icon_material_cache.has(cache_key):
+		var cached_material = ShaderMaterial.new()
+		cached_material.shader = preload("res://shaders/icon_color_shader.gdshader")
+		cached_material.set_shader_parameter("icon_color", icon_color)
+		_icon_material_cache[cache_key] = cached_material
+	platform_icon.material = _icon_material_cache[cache_key]
 
 func _load_cover(high_priority: bool = false):
 	if not game:

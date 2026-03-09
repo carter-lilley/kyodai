@@ -13,7 +13,6 @@
 	badge effect placement opts
 ## hero
 	bug: library background shaders dont update size when hero is on
-	bug: hero is broken currently
 	postcard-style [[img] name ]
 	background style (disable other opts?)
 	card/image/poster style

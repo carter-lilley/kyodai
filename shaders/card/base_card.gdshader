@@ -6,10 +6,11 @@ uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float alpha = 1.0;  // Global alpha multiplier for fade animations
 uniform bool debug_sobel = false;
-uniform bool debug_sobel_density = false;
+uniform bool debug_sobel_density = true;
 uniform bool debug_blend_vls = false;
-uniform bool debug_thirds = false;
-uniform bool smart_crop_enabled = true;
+uniform bool debug_thirds = true;
+uniform bool smart_crop_enabled = false;
+uniform float resolution_scale : hint_range(0.0, 100.0) = 50.0;
 uniform float blend_outlier_threshold = 0.15;
 uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
@@ -75,9 +76,13 @@ float sobel_edge_detection(vec2 uv, sampler2D tex) {
 	return clamp(edge_strength * 2.0, 0.0, 1.0);
 }
 
-float find_max_density_region(sampler2D tex, float window_ratio, float threshold) {
-	int window_rows = max(1, int(float(ROW_SAMPLES) * window_ratio));
-	int num_windows = ROW_SAMPLES - window_rows + 1;
+float find_max_density_region(sampler2D tex, float window_ratio, float threshold, float scale) {
+	// Calculate dynamic grid size based on resolution scale
+	int row_samples = max(2, int(float(ROW_SAMPLES) * scale / 100.0));
+	int col_samples = max(2, int(float(COL_SAMPLES) * scale / 100.0));
+	
+	int window_rows = max(1, int(float(row_samples) * window_ratio));
+	int num_windows = row_samples - window_rows + 1;
 	float max_hits = 0.0;
 	float best_center_y = 0.5;
 	
@@ -90,10 +95,11 @@ float find_max_density_region(sampler2D tex, float window_ratio, float threshold
 			if (r >= window_rows) break;
 			
 			int row = w + r;
-			float y = float(row) / float(ROW_SAMPLES - 1);
+			float y = float(row) / float(row_samples - 1);
 			
 			for (int c = 0; c < COL_SAMPLES; c++) {
-				float x = float(c) / float(COL_SAMPLES - 1);
+				if (c >= col_samples) break;
+				float x = float(c) / float(col_samples - 1);
 				vec2 sample_uv = vec2(x, y);
 				float edge = sobel_edge_detection(sample_uv, tex);
 				
@@ -105,16 +111,20 @@ float find_max_density_region(sampler2D tex, float window_ratio, float threshold
 		
 		if (hits > max_hits) {
 			max_hits = hits;
-			best_center_y = (float(w) + float(window_rows) * 0.5) / float(ROW_SAMPLES);
+			best_center_y = (float(w) + float(window_rows) * 0.5) / float(row_samples);
 		}
 	}
 	
 	return best_center_y;
 }
 
-float find_max_variance_region(sampler2D tex, float band_height_ratio, bool use_saturation) {
-	int band_rows = max(1, int(float(ROW_SAMPLES) * band_height_ratio));
-	int num_bands = ROW_SAMPLES - band_rows + 1;
+float find_max_variance_region(sampler2D tex, float band_height_ratio, bool use_saturation, float scale) {
+	// Calculate dynamic grid size based on resolution scale
+	int row_samples = max(2, int(float(ROW_SAMPLES) * scale / 100.0));
+	int col_samples = max(2, int(float(COL_SAMPLES) * scale / 100.0));
+	
+	int band_rows = max(1, int(float(row_samples) * band_height_ratio));
+	int num_bands = row_samples - band_rows + 1;
 	
 	float max_variance = -1.0;
 	float best_center_y = 0.5;
@@ -130,10 +140,11 @@ float find_max_variance_region(sampler2D tex, float band_height_ratio, bool use_
 			if (r >= band_rows) break;
 			
 			int row = b + r;
-			float y = float(row) / float(ROW_SAMPLES - 1);
+			float y = float(row) / float(row_samples - 1);
 			
 			for (int c = 0; c < COL_SAMPLES; c++) {
-				float x = float(c) / float(COL_SAMPLES - 1);
+				if (c >= col_samples) break;
+				float x = float(c) / float(col_samples - 1);
 				vec2 sample_uv = vec2(x, y);
 				float val = use_saturation ? get_saturation(texture(tex, sample_uv)) : get_luminance(texture(tex, sample_uv));
 				
@@ -148,17 +159,17 @@ float find_max_variance_region(sampler2D tex, float band_height_ratio, bool use_
 		
 		if (variance > max_variance) {
 			max_variance = variance;
-			best_center_y = (float(b) + float(band_rows) * 0.5) / float(ROW_SAMPLES);
+			best_center_y = (float(b) + float(band_rows) * 0.5) / float(row_samples);
 		}
 	}
 	
 	return best_center_y;
 }
 
-float find_blend_vls(sampler2D tex, float window_ratio, float threshold, float outlier_threshold) {
-	float sobel_y = find_max_density_region(tex, window_ratio, threshold);
-	float luminance_y = find_max_variance_region(tex, window_ratio, false);
-	float saturation_y = find_max_variance_region(tex, window_ratio, true);
+float find_blend_vls(sampler2D tex, float window_ratio, float threshold, float outlier_threshold, float scale) {
+	float sobel_y = find_max_density_region(tex, window_ratio, threshold, scale);
+	float luminance_y = find_max_variance_region(tex, window_ratio, false, scale);
+	float saturation_y = find_max_variance_region(tex, window_ratio, true, scale);
 	
 	float anchor = (sobel_y + luminance_y) * 0.5;
 	float sat_distance = abs(saturation_y - anchor);
@@ -215,7 +226,7 @@ void fragment() {
 	float tex_aspect = tex_size.x / tex_size.y;
 	
 	if (tex_aspect < card_aspect && (smart_crop_enabled || debug_sobel_density)) {
-		logo_y = find_blend_vls(game_texture, detection_window_ratio, edge_threshold, blend_outlier_threshold);
+		logo_y = find_blend_vls(game_texture, detection_window_ratio, edge_threshold, blend_outlier_threshold, resolution_scale);
 	}
 	
 	if (smart_crop_enabled && tex_aspect < card_aspect) {
@@ -288,7 +299,7 @@ void fragment() {
 	}
 	
 	if (debug_blend_vls) {
-		float blend_y = find_blend_vls(game_texture, detection_window_ratio, edge_threshold, blend_outlier_threshold);
+		float blend_y = find_blend_vls(game_texture, detection_window_ratio, edge_threshold, blend_outlier_threshold, resolution_scale);
 		float display_y = blend_y;
 		
 		if (smart_crop_enabled && tex_aspect < card_aspect) {

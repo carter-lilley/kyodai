@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://4p4i1nlgkicx" path="res://main.gd" id="1_main"]
 [ext_resource type="PackedScene" uid="uid://b70vbph3l300i" path="res://components/bottom_bar.tscn" id="3_bottombar"]
 [ext_resource type="Script" uid="uid://sgqdjn7yeqxm" path="res://addons/onscreenkeyboard/onscreen_keyboard.gd" id="4_onscreenkeyboard"]
-[ext_resource type="Script" uid="uid://fpscounter123" path="res://components/fps_counter.gd" id="5_fpscounter"]
+[ext_resource type="Script" uid="uid://b4lrijvkxphmr" path="res://components/fps_counter.gd" id="5_fpscounter"]
 
 [node name="Main" type="Control" unique_id=527286469]
 layout_mode = 3
@@ -55,22 +55,18 @@ size_flags_vertical = 0
 layer = 1000
 
 [node name="FPSLabel" type="Label" parent="UILayer" unique_id=777777778]
-anchors_preset = 0
-anchor_left = 0.0
-anchor_top = 0.0
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 100.0
 offset_bottom = 40.0
 theme_override_colors/font_color = Color(1, 0, 0.6, 1)
 theme_override_font_sizes/font_size = 20
-horizontal_alignment = 0
 vertical_alignment = 1
 script = ExtResource("5_fpscounter")
 
 [node name="Background" type="ColorRect" parent="UILayer/FPSLabel" unique_id=777777779]
 show_behind_parent = true
-anchors_preset = 15
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
@@ -87,5 +83,3 @@ offset_top = -300.0
 grow_horizontal = 2
 grow_vertical = 0
 script = ExtResource("4_onscreenkeyboard")
-
-
