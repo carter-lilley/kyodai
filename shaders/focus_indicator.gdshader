@@ -11,8 +11,9 @@ uniform float fade_length : hint_range(0.0, 0.5) = 0.35;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
-	float radius = radius_ratio * size.x;
-	vec2 d = abs(pos - half_size) - (half_size - radius);
+	// 1.0 ratio = corners touch (half of smallest dimension)
+	float radius = radius_ratio * min(size.x, size.y) / 2.0;
+	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
 

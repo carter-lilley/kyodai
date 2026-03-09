@@ -40,7 +40,7 @@ const Type = SettingsVar.SettingType
 @export var card_effect_config := SettingsVar.new(Type.DICTIONARY, {
 	"effects": [],
 	"card_orientation": 0,
-	"corner_radius": 12.0
+	"corner_radius": 0.06
 }, State.INTERNAL, "Card Effect Configuration")
 
 @export_subgroup("Library Appearance")

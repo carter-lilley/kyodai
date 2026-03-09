@@ -6,10 +6,10 @@ uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float alpha = 1.0;  // Global alpha multiplier for fade animations
 uniform bool debug_sobel = false;
-uniform bool debug_sobel_density = true;
+uniform bool debug_sobel_density = false;
 uniform bool debug_blend_vls = false;
-uniform bool debug_thirds = true;
-uniform bool smart_crop_enabled = false;
+uniform bool debug_thirds = false;
+uniform bool smart_crop_enabled = true;
 uniform float resolution_scale : hint_range(0.0, 100.0) = 50.0;
 uniform float blend_outlier_threshold = 0.15;
 uniform float detection_window_ratio = 0.15;
@@ -21,8 +21,9 @@ const int COL_SAMPLES = 8;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
-	float radius = radius_ratio * size.x;  // Radius as ratio of width
-	vec2 d = abs(pos - half_size) - (half_size - radius);
+	// 1.0 ratio = corners touch (half of smallest dimension)
+	float radius = radius_ratio * min(size.x, size.y) / 2.0;
+	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
 

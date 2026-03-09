@@ -63,14 +63,14 @@ func _setup_ui():
 	left_vbox.add_child(_orientation_btn)
 	
 	var corner_label = Label.new()
-	corner_label.text = "Corner Radius"
+	corner_label.text = "Corner Radius (0-1)"
 	left_vbox.add_child(corner_label)
 	
 	_corner_slider = HSlider.new()
-	_corner_slider.min_value = 0
-	_corner_slider.max_value = 50
-	_corner_slider.step = 1
-	_corner_slider.value = 12
+	_corner_slider.min_value = 0.0
+	_corner_slider.max_value = 1.0
+	_corner_slider.step = 0.01
+	_corner_slider.value = 0.06
 	_corner_slider.value_changed.connect(_on_corner_radius_changed)
 	left_vbox.add_child(_corner_slider)
 	
@@ -93,6 +93,7 @@ func _setup_ui():
 	popup.add_item("Platform Badge", 1)
 	popup.add_item("Drop Shadow", 2)
 	popup.add_item("Glow", 3)
+	popup.add_item("Glass", 4)
 	popup.id_pressed.connect(_on_add_effect)
 	
 	left_vbox.add_child(HSeparator.new())
@@ -139,19 +140,18 @@ func _load_current_config():
 		print("[CardDesigner] No SettingsManager, using default")
 	
 	_orientation_btn.select(_current_config.get("card_orientation", 0))
-	_corner_slider.value = _current_config.get("corner_radius", 12.0)
+	_corner_slider.value = _current_config.get("corner_radius", 0.06)
 	
 	_card_state.orientation = _current_config.get("card_orientation", 0)
-	# Convert corner radius from pixels to ratio
-	var corner_pixels = _current_config.get("corner_radius", 12.0)
-	_card_state.corner_radius_ratio = corner_pixels / 202.0
+	# Corner radius is now 0.0-1.0 ratio directly
+	_card_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	_card_state.effect_settings = _current_config.get("effects", [])
 
 func _get_default_config() -> Dictionary:
 	return {
 		"effects": [],
 		"card_orientation": 0,
-		"corner_radius": 12.0
+		"corner_radius": 0.06
 	}
 
 func _setup_preview_card():
@@ -160,9 +160,8 @@ func _setup_preview_card():
 	
 	var state = CardState.new()
 	state.orientation = _current_config.get("card_orientation", 0)
-	# Convert corner radius from pixels to ratio
-	var corner_pixels = _current_config.get("corner_radius", 12.0)
-	state.corner_radius_ratio = corner_pixels / 202.0
+	# Corner radius is now 0.0-1.0 ratio directly
+	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
 	state.zoom_level = 1.5
 	
@@ -274,6 +273,22 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
+	elif effect_data.get("effect_id") == "glass":
+		var glass_effect = GlassEffect.new()
+		var schema = glass_effect.get_settings_schema()
+		glass_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -323,6 +338,14 @@ func _on_add_effect(id: int):
 					"glow_spread": 0.05
 				}
 			}
+		4:
+			new_effect = {
+				"effect_id": "glass",
+				"settings": {
+					"distortion": 0.5,
+					"glass_color": Color(0.2, 0.4, 1.0, 0.3)
+				}
+			}
 	
 	if new_effect:
 		var effects = _current_config.get("effects", [])
@@ -364,7 +387,7 @@ func _on_orientation_changed(index: int):
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
-	_card_state.corner_radius_ratio = value / 202.0
+	_card_state.corner_radius_ratio = value
 	_card_state.zoom_level = 1.5
 	_update_preview()
 
@@ -374,9 +397,8 @@ func _update_preview():
 	
 	var state = CardState.new()
 	state.orientation = _current_config.get("card_orientation", 0)
-	# Convert corner radius from pixels to ratio
-	var corner_pixels = _current_config.get("corner_radius", 12.0)
-	state.corner_radius_ratio = corner_pixels / 202.0
+	# Corner radius is now 0.0-1.0 ratio directly
+	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
 	state.zoom_level = 1.5
 	state.game_texture = _preview_card._current_texture

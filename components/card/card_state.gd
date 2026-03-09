@@ -26,10 +26,10 @@ var orientation: int = 0:  # 0=vertical, 1=horizontal, 2=square
 			_update_dimensions()
 			orientation_changed.emit(value)
 
-# Corner radius as ratio of card width (0.0 - 1.0)
-var corner_radius_ratio: float = 0.06:  # ~12px at default zoom
+# Corner radius as ratio where 0.0 = square, 1.0 = corners touch (pill/circle)
+var corner_radius_ratio: float = 0.06:
 	set(value):
-		var clamped = clampf(value, 0.0, 0.5)
+		var clamped = clampf(value, 0.0, 1.0)
 		if not is_equal_approx(corner_radius_ratio, clamped):
 			corner_radius_ratio = clamped
 			corner_radius_changed.emit(clamped)
@@ -61,8 +61,9 @@ func _get_base_dimensions() -> Vector2:
 		_: return VERTICAL_SIZE
 
 # Helper to get corner radius in pixels (for internal calculations)
+# 1.0 ratio = corners touch (half of smallest dimension)
 func get_corner_radius_pixels() -> float:
-	return card_size.x * corner_radius_ratio
+	return corner_radius_ratio * min(card_size.x, card_size.y) / 2.0
 
 # Helper to get border inset in pixels (for internal calculations)
 func get_border_inset_pixels() -> float:
