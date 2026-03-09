@@ -106,7 +106,6 @@ void fragment() {
 		vec2 warped_uv = spherical_distort(UV, distortion);
 		warped_uv = clamp(warped_uv, 0.0, 1.0);
 		vec4 tex_color = texture(game_texture, warped_uv);
-		tex_color.a *= texture_opacity;
 		
 		// Calculate 3D dome normal
 		vec3 normal = calculate_dome_normal(pixel_pos, card_size, corner_radius_ratio);
@@ -156,15 +155,18 @@ void fragment() {
 		vec3 rim_color = glass_color.rgb * 3.0;
 		rim_color = clamp(rim_color, vec3(0.0), vec3(1.0));
 		
-		// Apply glass color tint
-		vec3 glass_tint = mix(tex_color.rgb, glass_color.rgb, glass_color.a);
+		// Apply glass color tint with texture opacity
+		// texture_opacity controls how much game image shows through (0 = only glass color, 1 = full image)
+		vec3 game_image = tex_color.rgb * texture_opacity;
+		vec3 glass_tint = mix(game_image, glass_color.rgb, glass_color.a);
 		
 		vec3 final_rgb = glass_tint + (specular_color * specular) + (bounce_color * bounce) + (rim_color * rim);
 		
 		float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 		float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
 		
-		final_color = vec4(final_rgb, tex_color.a * edge_alpha);
+		// Alpha comes only from card shape, not from game texture
+		final_color = vec4(final_rgb, edge_alpha);
 	}
 	
 	COLOR = final_color;
