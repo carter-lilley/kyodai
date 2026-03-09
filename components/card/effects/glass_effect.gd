@@ -17,9 +17,7 @@ func _update_shader_params() -> void:
 	if not _card_state:
 		return
 	
-	var distortion = _settings.get("distortion", 0.5)
 	var glass_color = _settings.get("glass_color", Color(0.2, 0.4, 1.0, 0.3))
-	var reflection_overlay_opacity = _settings.get("reflection_overlay_opacity", 1.0)
 	
 	# Specular parameters
 	var specular_power = _settings.get("specular_power", 32.0)
@@ -41,10 +39,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
-	_set_shader_param("distortion", distortion)
 	_set_shader_param("glass_color", glass_color)
-	_set_shader_param("reflection_overlay_opacity", reflection_overlay_opacity)
-	_set_shader_param("game_texture", _card_state.game_texture)
 	
 	# Specular uniforms
 	_set_shader_param("specular_power", specular_power)
@@ -63,28 +58,15 @@ func _update_shader_params() -> void:
 	# Additional inset uniform
 	_set_shader_param("additional_inset_ratio", additional_inset)
 
-func set_game_texture(texture: Texture2D) -> void:
-	_set_shader_param("game_texture", texture)
-
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
 	var Type = SettingsVar.SettingType
 	var State = SettingsVar.SettingState
 	
-	# Distortion slider: 0.0 (pinch in) to 1.0 (bulge out), default 0.5 (nothing)
-	var distortion_var = SettingsVar.new(Type.FLOAT, 0.5, State.ENABLED, "Distortion", "", 0.0, 1.0, 0.01)
-	distortion_var.property_name = "distortion"
-	schema.append(distortion_var)
-	
-	# Color picker
+	# Glass Color picker (alpha controls tint intensity)
 	var color_var = SettingsVar.new(Type.COLOR, Color(0.2, 0.4, 1.0, 0.3), State.ENABLED, "Glass Color")
 	color_var.property_name = "glass_color"
 	schema.append(color_var)
-	
-	# Reflection overlay opacity slider
-	var reflection_overlay_opacity_var = SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "Reflection Overlay Opacity", "Distorted reflection overlay", 0.0, 1.0, 0.01)
-	reflection_overlay_opacity_var.property_name = "reflection_overlay_opacity"
-	schema.append(reflection_overlay_opacity_var)
 	
 	# Additional inset slider
 	var additional_inset_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Additional Inset", "Push underlying image inward", 0.0, 0.5, 0.01)

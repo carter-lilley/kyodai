@@ -26,13 +26,13 @@ var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
 # Ratio-based constants (as fraction of card width)
-const BADGE_SIZE_RATIO: float = 0.225  # Adjusted to allow 45% max with 2.0 multiplier
+const BADGE_SIZE_RATIO: float = 0.20  # Slightly smaller badge
 const BADGE_MARGIN_RATIO: float = 0.04  # ~8px at default width
 const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 
 # Debug
 var _debug_safe_area: ColorRect = null
-const ICON_SIZE_RATIO: float = 0.11  # ~22px at default width
+const ICON_SIZE_RATIO: float = 0.16  # Icon slightly larger to fill badge
 
 var _current_texture: Texture2D = null
 var _card_state: CardState = CardState.new()
@@ -46,6 +46,7 @@ var _badge_effect: BadgeEffect = null
 var _drop_shadow_effect: DropShadowEffect = null
 var _glow_effect: GlowEffect = null
 var _glass_effect: GlassEffect = null
+var _distort_effect: DistortEffect = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -215,11 +216,10 @@ func _rebuild_effects():
 			_border_effect.update_state(_card_state)
 			_border_effect.update_settings(border_config.get("settings", {}))
 		
-		# Calculate border inset
+		# Calculate border inset (only solid border affects inset, fade overlays on top)
 		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
 		_original_border_size = border_size
-		var fade_in = border_config.get("settings", {}).get("border_fade_in", 0.0)
-		_card_state.border_inset_ratio = border_size + fade_in
+		_card_state.border_inset_ratio = border_size
 	elif _border_effect != null:
 		_border_effect.visible = false
 	
@@ -283,6 +283,23 @@ func _rebuild_effects():
 	elif _glass_effect != null:
 		_glass_effect.visible = false
 		_card_state.glass_inset_ratio = 0.0
+	
+	# Distort effect - optional texture distortion
+	var distort_config = _get_effect_config("distort")
+	if distort_config:
+		if _distort_effect == null:
+			_distort_effect = DistortEffect.new()
+			_distort_effect.name = "DistortEffect"
+			_distort_effect.anchor_right = 1.0
+			_distort_effect.anchor_bottom = 1.0
+			visual_container.add_child(_distort_effect)
+			_distort_effect.initialize(_card_state, distort_config.get("settings", {}))
+		else:
+			_distort_effect.update_state(_card_state)
+			_distort_effect.update_settings(distort_config.get("settings", {}))
+			_distort_effect.visible = true
+	elif _distort_effect != null:
+		_distort_effect.visible = false
 	
 	# Ensure card_input is on top
 	if card_input:
@@ -718,9 +735,9 @@ func _set_texture(tex: Texture2D) -> void:
 	# Update glow effect texture if it exists
 	if _glow_effect:
 		_glow_effect.set_game_texture(tex)
-	# Update glass effect texture if it exists
-	if _glass_effect:
-		_glass_effect.set_game_texture(tex)
+	# Update distort effect texture if it exists
+	if _distort_effect:
+		_distort_effect.set_game_texture(tex)
 
 func _on_card_pressed():
 	if not game:

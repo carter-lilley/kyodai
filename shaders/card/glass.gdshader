@@ -1,14 +1,12 @@
 shader_type canvas_item;
+render_mode blend_add;
 
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_ratio = 0.06;
 uniform float border_inset_ratio = 0.0;  // Inherited from border effect
-uniform sampler2D game_texture : filter_linear, repeat_disable;
 
 // Glass parameters  
-uniform float distortion : hint_range(0.0, 1.0) = 0.5;
 uniform vec4 glass_color : source_color = vec4(0.2, 0.4, 1.0, 0.3);
-uniform float reflection_overlay_opacity : hint_range(0.0, 1.0) = 1.0;
 
 // Specular parameters
 uniform float specular_power : hint_range(1.0, 128.0) = 32.0;
@@ -24,7 +22,7 @@ uniform float bounce_softness : hint_range(1.0, 8.0) = 3.0;
 uniform float rim_intensity : hint_range(0.0, 2.0) = 1.0;
 uniform float rim_sharpness : hint_range(2.0, 10.0) = 5.0;
 
-// Additional inset to push underlying image inward (creates blank corners like Wii U icons)
+// Additional inset to push underlying image inward
 uniform float additional_inset_ratio : hint_range(0.0, 0.5) = 0.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
@@ -72,48 +70,6 @@ vec3 calculate_dome_normal(vec2 pos, vec2 size, float radius_ratio) {
 	return normalize(vec3(surface_xy.x, surface_xy.y, z));
 }
 
-vec2 distort(vec2 p, float dist_param, float aspect) {
-	float d = length(p);
-	float z = sqrt(dist_param + d * d * -dist_param);
-	float r = atan(d, z) / 3.1415926535;
-	float phi = atan(p.y, p.x);
-	return vec2(r * cos(phi) * (1.0 / aspect) + 0.5, r * sin(phi) + 0.5);
-}
-
-vec2 spherical_distort(vec2 uv, float raw_distortion) {
-	vec2 pixel_pos = uv * card_size;
-	vec2 half_size = card_size * 0.5;
-	float aspect = card_size.x / card_size.y;
-	vec2 centered = (pixel_pos - half_size) / half_size;
-	float max_dist = sqrt(aspect * aspect + 1.0);
-	centered = centered / max_dist;
-	centered.x *= aspect;
-	
-	float dist_param;
-	if (raw_distortion < 0.5) {
-		dist_param = mix(0.3, 1.0, raw_distortion * 2.0);
-	} else {
-		dist_param = mix(1.0, 1.8, (raw_distortion - 0.5) * 2.0);
-	}
-	
-	return distort(centered, dist_param, aspect);
-}
-
-// Aspect ratio preserving UV calculation (same as base_card)
-vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
-	float card_aspect = card.x / card.y;
-	float tex_aspect = tex.x / tex.y;
-	
-	vec2 scale;
-	if (card_aspect > tex_aspect) {
-		scale = vec2(1.0, tex_aspect / card_aspect);
-	} else {
-		scale = vec2(card_aspect / tex_aspect, 1.0);
-	}
-	
-	return (uv - 0.5) * scale + 0.5;
-}
-
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
@@ -142,21 +98,19 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
 	
-	// Calculate the inner "image area" with additional inset (like Wii U icons)
+	// Calculate the inner "image area" with additional inset (for alpha only)
 	float additional_inset_pixels = additional_inset_ratio * card_size.x;
-	float effective_additional_inset = max(0.0, additional_inset_pixels);
-	
-	vec2 image_area_size = inner_size - vec2(effective_additional_inset * 2.0);
-	vec2 image_area_offset = inner_offset + vec2(effective_additional_inset);
+	vec2 image_area_size = inner_size - vec2(additional_inset_pixels * 2.0);
+	vec2 image_area_offset = inner_offset + vec2(additional_inset_pixels);
 	
 	// Calculate image area corner radius
-	float image_area_radius_pixels = max(0.0, inner_radius_pixels - effective_additional_inset);
+	float image_area_radius_pixels = max(0.0, inner_radius_pixels - additional_inset_pixels);
 	float image_area_radius_ratio = 0.0;
 	if (min(image_area_size.x, image_area_size.y) > 0.0) {
 		image_area_radius_ratio = image_area_radius_pixels / (min(image_area_size.x, image_area_size.y) / 2.0);
 	}
 	
-	// Check if current pixel is inside the image area
+	// Check if inside image area (for alpha calculation only)
 	vec2 image_pixel_pos = pixel_pos - image_area_offset;
 	float image_sdf_dist = rounded_rect_sdf(image_pixel_pos, image_area_size, image_area_radius_ratio);
 	float image_aa = 1.0 - smoothstep(-aa_width, 0.0, image_sdf_dist);
@@ -209,59 +163,22 @@ void fragment() {
 	vec3 rim_color = glass_color.rgb * 3.0;
 	rim_color = clamp(rim_color, vec3(0.0), vec3(1.0));
 	
-	// Calculate lights contribution (additive) - always on full glass area
+	// Calculate lights contribution (additive)
 	vec3 lights = (specular_color * specular) + (bounce_color * bounce) + (rim_color * rim);
 	
-	// Calculate UVs for the image area with proper aspect ratio
-	// Map from image area space to 0-1 UV space
-	vec2 image_uv = vec2(0.0);
-	if (image_area_size.x > 0.0 && image_area_size.y > 0.0) {
-		image_uv = (image_pixel_pos) / image_area_size;
-		image_uv = clamp(image_uv, 0.0, 1.0);
-		
-		// Apply aspect ratio correction to prevent stretching
-		vec2 tex_size = vec2(textureSize(game_texture, 0));
-		image_uv = aspect_covered_uv(image_uv, image_area_size, tex_size);
-	}
+	// Add glass color tint (alpha-blended into the additive lights)
+	vec3 glass_tint = glass_color.rgb * glass_color.a;
 	
-	// Calculate the "corner mask" - 1.0 in corners (outside image area), 0.0 inside image area
-	float corner_mask = 1.0 - image_aa;
-	
-	// Sample the base game texture (only inside image area)
-	vec3 base_color = vec3(0.0);
-	if (image_aa > 0.0) {
-		base_color = texture(game_texture, image_uv).rgb;
-	}
-	
-	// Create reflection overlay only when reflection_overlay_opacity > 0
-	vec3 reflection_content = vec3(0.0);
-	if (reflection_overlay_opacity > 0.0 && image_aa > 0.0) {
-		// Get distorted/warped game texture for reflection
-		vec2 warped_uv = spherical_distort(UV, distortion);
-		warped_uv = clamp(warped_uv, 0.0, 1.0);
-		vec3 warped_color = texture(game_texture, warped_uv).rgb;
-		
-		vec3 tinted_reflection = mix(warped_color, glass_color.rgb, glass_color.a);
-		reflection_content = tinted_reflection * reflection_overlay_opacity;
-	}
-	
-	// In the image area: base + reflection + lights
-	// In the corners: just lights (transparent, showing background behind)
-	vec3 image_content = base_color + reflection_content;
-	
-	// Mix between transparent corners and image content based on image_aa
-	vec3 content = image_content * image_aa;
-	
-	// Add lights on top of everything
-	vec3 final_rgb = content + lights;
+	// Final color: lights + glass tint
+	vec3 final_rgb = lights + glass_tint;
 	
 	// Calculate lights intensity for alpha
-	float lights_intensity = length(lights);
+	float lights_intensity = length(lights) + glass_color.a;
 	
-	// Final alpha: 
-	// - image_aa when showing the image content
-	// - lights_intensity when showing only lights
-	// - edge_alpha for the outer glass edge
+	// Final alpha:
+	// - edge_alpha controls the outer glass shape
+	// - image_aa controls where the base image shows through (0 in corners)
+	// - lights always show through, even in corners
 	float content_alpha = max(image_aa, lights_intensity);
 	float final_alpha = edge_alpha * content_alpha;
 	
