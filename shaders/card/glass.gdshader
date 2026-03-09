@@ -100,74 +100,84 @@ void fragment() {
 	float sdf_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
 	vec4 final_color;
 	
-	if (sdf_dist > 0.0) {
-		final_color = vec4(0.0);
-	} else {
-		vec2 warped_uv = spherical_distort(UV, distortion);
-		warped_uv = clamp(warped_uv, 0.0, 1.0);
-		vec4 tex_color = texture(game_texture, warped_uv);
-		
-		// Calculate 3D dome normal
-		vec3 normal = calculate_dome_normal(pixel_pos, card_size, corner_radius_ratio);
-		
-		// Specular
-		float angle_rad = radians(light_angle);
-		float height_rad = light_height * 3.14159265359 * 0.5;
-		
-		vec3 light_dir = normalize(vec3(
-			cos(angle_rad) * cos(height_rad),
-			sin(angle_rad) * cos(height_rad),
-			sin(height_rad)
-		));
-		
-		vec3 view_dir = vec3(0.0, 0.0, 1.0);
-		vec3 half_dir = normalize(light_dir + view_dir);
-		float spec_angle = max(0.0, dot(normal, half_dir));
-		float specular = pow(spec_angle, specular_power) * specular_intensity;
-		
-		// Bounce
-		float bounce_angle_rad = radians(light_angle + 180.0);
-		float bounce_height_rad = 0.25 * 3.14159265359 * 0.5;
-		
-		vec3 bounce_dir = normalize(vec3(
-			cos(bounce_angle_rad) * cos(bounce_height_rad),
-			sin(bounce_angle_rad) * cos(bounce_height_rad),
-			sin(bounce_height_rad)
-		));
-		
-		float bounce = max(0.0, dot(normal, bounce_dir));
-		bounce = pow(bounce, bounce_softness) * bounce_intensity;
-		
-		// Colors
-		vec3 specular_color = glass_color.rgb * 2.0;
-		specular_color = clamp(specular_color, vec3(0.0), vec3(1.0));
-		
-		vec3 bounce_color = glass_color.rgb * 1.3;
-		bounce_color = mix(bounce_color, vec3(1.0, 0.9, 0.7), 0.2);
-		bounce_color = clamp(bounce_color, vec3(0.0), vec3(1.0));
-		
-		// Rim
-		float fresnel = 1.0 - abs(dot(view_dir, normal));
-		float opposite_light = 1.0 - max(0.0, dot(normal, light_dir));
-		float rim = fresnel * opposite_light;
-		rim = pow(rim, rim_sharpness) * rim_intensity;
-		
-		vec3 rim_color = glass_color.rgb * 3.0;
-		rim_color = clamp(rim_color, vec3(0.0), vec3(1.0));
-		
-		// Apply glass color tint with texture opacity
-		// texture_opacity controls how much game image shows through (0 = only glass color, 1 = full image)
-		vec3 game_image = tex_color.rgb * texture_opacity;
-		vec3 glass_tint = mix(game_image, glass_color.rgb, glass_color.a);
-		
-		vec3 final_rgb = glass_tint + (specular_color * specular) + (bounce_color * bounce) + (rim_color * rim);
-		
-		float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
-		float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
-		
-		// Alpha comes only from card shape, not from game texture
-		final_color = vec4(final_rgb, edge_alpha);
-	}
+	vec2 warped_uv = spherical_distort(UV, distortion);
+	warped_uv = clamp(warped_uv, 0.0, 1.0);
+	vec4 tex_color = texture(game_texture, warped_uv);
+	
+	// Calculate 3D dome normal
+	vec3 normal = calculate_dome_normal(pixel_pos, card_size, corner_radius_ratio);
+	
+	// Specular
+	float angle_rad = radians(light_angle);
+	float height_rad = light_height * 3.14159265359 * 0.5;
+	
+	vec3 light_dir = normalize(vec3(
+		cos(angle_rad) * cos(height_rad),
+		sin(angle_rad) * cos(height_rad),
+		sin(height_rad)
+	));
+	
+	vec3 view_dir = vec3(0.0, 0.0, 1.0);
+	vec3 half_dir = normalize(light_dir + view_dir);
+	float spec_angle = max(0.0, dot(normal, half_dir));
+	float specular = pow(spec_angle, specular_power) * specular_intensity;
+	
+	// Bounce
+	float bounce_angle_rad = radians(light_angle + 180.0);
+	float bounce_height_rad = 0.25 * 3.14159265359 * 0.5;
+	
+	vec3 bounce_dir = normalize(vec3(
+		cos(bounce_angle_rad) * cos(bounce_height_rad),
+		sin(bounce_angle_rad) * cos(bounce_height_rad),
+		sin(bounce_height_rad)
+	));
+	
+	float bounce = max(0.0, dot(normal, bounce_dir));
+	bounce = pow(bounce, bounce_softness) * bounce_intensity;
+	
+	// Colors
+	vec3 specular_color = glass_color.rgb * 2.0;
+	specular_color = clamp(specular_color, vec3(0.0), vec3(1.0));
+	
+	vec3 bounce_color = glass_color.rgb * 1.3;
+	bounce_color = mix(bounce_color, vec3(1.0, 0.9, 0.7), 0.2);
+	bounce_color = clamp(bounce_color, vec3(0.0), vec3(1.0));
+	
+	// Rim
+	float fresnel = 1.0 - abs(dot(view_dir, normal));
+	float opposite_light = 1.0 - max(0.0, dot(normal, light_dir));
+	float rim = fresnel * opposite_light;
+	rim = pow(rim, rim_sharpness) * rim_intensity;
+	
+	vec3 rim_color = glass_color.rgb * 3.0;
+	rim_color = clamp(rim_color, vec3(0.0), vec3(1.0));
+	
+	// Apply glass color tint with texture opacity
+	// texture_opacity controls how much game image shows through
+	vec3 game_image = tex_color.rgb * texture_opacity;
+	vec3 glass_tint = mix(game_image, glass_color.rgb, glass_color.a);
+	
+	// Calculate lights contribution
+	vec3 lights = (specular_color * specular) + (bounce_color * bounce) + (rim_color * rim);
+	
+	vec3 final_rgb = glass_tint + lights;
+	
+	// Calculate edge anti-aliasing
+	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
+	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
+	
+	// Content opacity: max of texture and glass alpha
+	// When both are 0, interior is transparent (shows through to layers below)
+	float content_alpha = max(texture_opacity, glass_color.a);
+	
+	// Calculate lights intensity (brightness of all lights combined)
+	float lights_intensity = length(lights);
+	
+	// Final alpha: combine edge, content, and lights
+	// If content is transparent but lights are bright, we still need alpha to show the lights
+	float final_alpha = edge_alpha * max(content_alpha, lights_intensity);
+	
+	final_color = vec4(final_rgb, final_alpha);
 	
 	COLOR = final_color;
 }
