@@ -5,6 +5,7 @@ signal zoom_changed(new_zoom: float)
 signal orientation_changed(new_orientation: int)
 signal corner_radius_changed(new_ratio: float)
 signal border_inset_changed(new_ratio: float)
+signal shape_changed()
 
 # Base dimensions (unscaled reference sizes)
 const VERTICAL_SIZE: Vector2 = Vector2(202.0, 270.0)
@@ -17,6 +18,7 @@ var zoom_level: float = 1.0:
 		if not is_equal_approx(zoom_level, value):
 			zoom_level = value
 			_update_dimensions()
+			_recalculate_shape()
 			zoom_changed.emit(value)
 
 var orientation: int = 0:  # 0=vertical, 1=horizontal, 2=square
@@ -24,6 +26,7 @@ var orientation: int = 0:  # 0=vertical, 1=horizontal, 2=square
 		if orientation != value:
 			orientation = value
 			_update_dimensions()
+			_recalculate_shape()
 			orientation_changed.emit(value)
 
 # Corner radius as ratio where 0.0 = square, 1.0 = corners touch (pill/circle)
@@ -32,26 +35,38 @@ var corner_radius_ratio: float = 0.06:
 		var clamped = clampf(value, 0.0, 1.0)
 		if not is_equal_approx(corner_radius_ratio, clamped):
 			corner_radius_ratio = clamped
+			_recalculate_shape()
 			corner_radius_changed.emit(clamped)
 
-# Border inset as ratio of card width (0.0 - 1.0)  
+# Border inset as ratio of card width (0.0 - 1.0)
 var border_inset_ratio: float = 0.0:
 	set(value):
 		var clamped = clampf(value, 0.0, 0.5)
 		if not is_equal_approx(border_inset_ratio, clamped):
 			border_inset_ratio = clamped
+			_recalculate_shape()
 			border_inset_changed.emit(clamped)
 
 # Glass inset as ratio of card width (0.0 - 1.0) - additional inset from glass effect
-var glass_inset_ratio: float = 0.0
+var glass_inset_ratio: float = 0.0:
+	set(value):
+		var clamped = clampf(value, 0.0, 0.5)
+		if not is_equal_approx(glass_inset_ratio, clamped):
+			glass_inset_ratio = clamped
+			_recalculate_shape()
 
 # Computed dimensions (derived from zoom + orientation)
 var card_size: Vector2 = VERTICAL_SIZE
 var game_texture: Texture2D = null
 var effect_settings: Array = []
 
+# Shared shape parameters for SDF calculations (calculated once, used by all effects)
+var corner_radius_pixels: float = 0.0
+var total_inset_pixels: float = 0.0
+
 func _init() -> void:
 	_update_dimensions()
+	_recalculate_shape()
 
 func _update_dimensions() -> void:
 	var base = _get_base_dimensions()
@@ -63,21 +78,15 @@ func _get_base_dimensions() -> Vector2:
 		2: return SQUARE_SIZE
 		_: return VERTICAL_SIZE
 
-# Helper to get corner radius in pixels (for internal calculations)
-# 1.0 ratio = corners touch (half of smallest dimension)
-func get_corner_radius_pixels() -> float:
-	return corner_radius_ratio * min(card_size.x, card_size.y) / 2.0
-
-# Helper to get border inset in pixels (for internal calculations)
-func get_border_inset_pixels() -> float:
-	return card_size.x * border_inset_ratio
-
-# Helper to set border inset from pixels
-func set_border_inset_pixels(pixels: float) -> void:
-	if card_size.x > 0:
-		border_inset_ratio = pixels / card_size.x
-	else:
-		border_inset_ratio = 0.0
+# Recalculates shape parameters that all shaders use
+func _recalculate_shape() -> void:
+	# Corner radius in pixels (using min dimension like border shader)
+	corner_radius_pixels = corner_radius_ratio * min(card_size.x, card_size.y) / 2.0
+	
+	# Total inset combines border and glass
+	total_inset_pixels = (border_inset_ratio + glass_inset_ratio) * card_size.x
+	
+	shape_changed.emit()
 
 func get_effect_config(effect_id: String) -> Dictionary:
 	for effect_data in effect_settings:

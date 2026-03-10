@@ -452,17 +452,15 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 				texture_to_use = wordmark_tex
 	
 	var card_width = _card_state.card_size.x
-	var corner_radius_pixels = _card_state.get_corner_radius_pixels()
-	var border_inset_pixels = _card_state.border_inset_ratio * card_width
-	var glass_inset_pixels = _card_state.glass_inset_ratio * card_width
-	var total_inset = border_inset_pixels + glass_inset_pixels
+	# Use pre-calculated shape parameters from CardState (shared by all effects)
+	var corner_radius_pixels = _card_state.corner_radius_pixels
+	var total_inset = _card_state.total_inset_pixels
 	
 	# Effective corner radius at the inset position (min-dimension based for card)
 	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
 	
-	# Width-based corner radius for badge calculations (matches reverted shader logic)
-	var corner_radius_width_based = _card_state.corner_radius_ratio * card_width
-	var effective_corner_radius_badge = max(0, corner_radius_width_based - total_inset)
+	# For badge: use the same calculation as the shader will use
+	var effective_corner_radius_badge = effective_corner_radius
 	
 	# Base badge size as ratio of card width
 	var base_badge_size = BADGE_SIZE_RATIO * card_width

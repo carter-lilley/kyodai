@@ -3,6 +3,10 @@ shader_type canvas_item;
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_ratio = 0.06;
 
+// Shared shape parameters from CardState (calculated once, used by all effects)
+uniform float corner_radius_pixels = 0.0;
+uniform float total_inset_pixels = 0.0;
+
 uniform bool hide_background = false;
 uniform float badge_size_ratio = 0.16;
 uniform vec2 badge_aspect_ratio = vec2(1.0, 1.0);
@@ -17,10 +21,11 @@ uniform bool show_safe_zone = false;
 uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (corner badge mode)
 uniform vec4 safe_zone_top_bar = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (top bar mode)
 
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
+// SDF that accepts radius in pixels (consistent with base_card.gdshader)
+float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 	vec2 half_size = size * 0.5;
-	float radius = radius_ratio * size.x;
-	vec2 d = abs(pos - half_size) - (half_size - radius);
+	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
+	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
 
@@ -33,9 +38,8 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// Effective corner radius at inset position
-	float effective_corner_radius = max(0.0, corner_radius_ratio * card_size.x - border_inset_pixels);
-	float effective_corner_radius_ratio = (card_size.x > 0.0) ? (effective_corner_radius / card_size.x) : 0.0;
+	// Note: corner_radius_pixels and total_inset_pixels are passed from CardState
+	// These are used for clipping the badge to the card shape
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
@@ -134,10 +138,11 @@ void fragment() {
 		}
 	}
 	
-	// Use effective corner radius for edge clipping
-	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, effective_corner_radius_ratio);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, edge_dist);
-	final_color.a *= edge_alpha;
+	// Clip to card shape using shared shape parameters from CardState
+	// The card edge is at the inset position, so we use effective corner radius
+	float card_edge_sdf = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
+	float card_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, card_edge_sdf);
+	final_color.a *= card_edge_alpha;
 	
 	// Debug: overlay safe zone in magenta for corner badge, cyan for top bar
 	if (show_safe_zone) {

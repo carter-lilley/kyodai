@@ -24,6 +24,9 @@ func _update_shader_params() -> void:
 	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
 	_set_shader_param("glass_inset_ratio", _card_state.glass_inset_ratio)
 	_set_shader_param("game_texture", _card_state.game_texture)
+	# Pass shared shape parameters for consistent SDF calculations
+	_set_shader_param("corner_radius_pixels", _card_state.corner_radius_pixels)
+	_set_shader_param("total_inset_pixels", _card_state.total_inset_pixels)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_current_texture = texture

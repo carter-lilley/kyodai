@@ -32,15 +32,10 @@ func _update_shader_params() -> void:
 	var badge_type = _settings.get("badge_type", 0)
 	
 	_set_shader_param("card_size", _card_state.card_size)
-	# Calculate correct corner radius ratio for shader
-	# get_corner_radius_pixels returns (ratio * min_dim / 2)
-	# Shader calculates radius as (ratio * card_size.x)
-	# So we need: shader_ratio * card_size.x = actual_radius
-	# shader_ratio = actual_radius / card_size.x = (ratio * min_dim / 2) / card_size.x
-	var min_dim = min(_card_state.card_size.x, _card_state.card_size.y)
-	var actual_radius = _card_state.corner_radius_ratio * min_dim / 2.0
-	var shader_ratio = actual_radius / _card_state.card_size.x
-	_set_shader_param("corner_radius_ratio", shader_ratio)
+	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	# Pass shared shape parameters for consistent SDF calculations
+	_set_shader_param("corner_radius_pixels", _card_state.corner_radius_pixels)
+	_set_shader_param("total_inset_pixels", _card_state.total_inset_pixels)
 	_set_shader_param("hide_background", hide_background)
 	_set_shader_param("badge_type", badge_type)
 	# Calculate proper shader params
