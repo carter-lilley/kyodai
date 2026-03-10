@@ -63,6 +63,7 @@ var effect_settings: Array = []
 # Shared shape parameters for SDF calculations (calculated once, used by all effects)
 var corner_radius_pixels: float = 0.0
 var total_inset_pixels: float = 0.0
+var inner_corner_radius_pixels: float = 0.0  # Radius after glass inset
 
 func _init() -> void:
 	_update_dimensions()
@@ -85,6 +86,10 @@ func _recalculate_shape() -> void:
 	
 	# Total inset combines border and glass
 	total_inset_pixels = (border_inset_ratio + glass_inset_ratio) * card_size.x
+	
+	# Inner corner radius after glass inset (for badge clipping)
+	var glass_inset_pixels = glass_inset_ratio * card_size.x
+	inner_corner_radius_pixels = max(0.0, corner_radius_pixels - glass_inset_pixels)
 	
 	shape_changed.emit()
 

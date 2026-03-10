@@ -6,6 +6,8 @@ uniform float corner_radius_ratio = 0.06;
 // Shared shape parameters from CardState (calculated once, used by all effects)
 uniform float corner_radius_pixels = 0.0;
 uniform float total_inset_pixels = 0.0;
+uniform float inner_corner_radius_pixels = 0.0;  // Radius after glass inset
+uniform float glass_inset_ratio = 0.0;  // For calculating inner size
 
 uniform bool hide_background = false;
 uniform float badge_size_ratio = 0.16;
@@ -139,9 +141,17 @@ void fragment() {
 	}
 	
 	// Clip to card shape using shared shape parameters from CardState
-	// The card edge is at the inset position, so we use effective corner radius
-	float card_edge_sdf = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
-	float card_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, card_edge_sdf);
+	// Calculate inner size (after glass inset) and check SDF against that
+	float glass_inset_pixels = glass_inset_ratio * card_size.x;
+	vec2 inner_size = card_size - vec2(glass_inset_pixels * 2.0);
+	vec2 inner_offset = vec2(glass_inset_pixels);
+	
+	// Check if pixel is inside the inner area (after glass inset)
+	vec2 inner_pixel_pos = pixel_pos - inner_offset;
+	float inner_sdf = rounded_rect_sdf_pixels(inner_pixel_pos, inner_size, inner_corner_radius_pixels);
+	
+	// Extend by 0.5px to create overlap with border and avoid anti-aliasing gaps
+	float card_edge_alpha = 1.0 - smoothstep(-aa_width, 0.5, inner_sdf);
 	final_color.a *= card_edge_alpha;
 	
 	// Debug: overlay safe zone in magenta for corner badge, cyan for top bar

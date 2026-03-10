@@ -21,6 +21,11 @@ func _setup_shader() -> void:
 func _apply_settings() -> void:
 	_update_shader_params()
 
+func update_settings(settings: Dictionary) -> void:
+	visible = true
+	queue_redraw()
+	super.update_settings(settings)
+
 func _update_shader_params() -> void:
 	if not _card_state:
 		return
@@ -36,6 +41,9 @@ func _update_shader_params() -> void:
 	# Pass shared shape parameters for consistent SDF calculations
 	_set_shader_param("corner_radius_pixels", _card_state.corner_radius_pixels)
 	_set_shader_param("total_inset_pixels", _card_state.total_inset_pixels)
+	# Inner corner radius accounts for glass inset
+	_set_shader_param("inner_corner_radius_pixels", _card_state.inner_corner_radius_pixels)
+	_set_shader_param("glass_inset_ratio", _card_state.glass_inset_ratio)
 	_set_shader_param("hide_background", hide_background)
 	_set_shader_param("badge_type", badge_type)
 	# Calculate proper shader params
@@ -68,10 +76,12 @@ func _update_shader_params() -> void:
 func set_border_width(width: float) -> void:
 	_border_width = width
 	_update_shader_params()
+	queue_redraw()
 
 func set_border_inset_pixels(pixels: float) -> void:
 	_border_inset_pixels = pixels
 	_update_shader_params()
+	queue_redraw()
 
 func set_badge_dimensions(dimensions: Vector2) -> void:
 	# Store actual dimensions passed from GameCard
@@ -82,7 +92,8 @@ func set_badge_dimensions(dimensions: Vector2) -> void:
 	var max_dim = max(dimensions.x, dimensions.y)
 	if max_dim > 0:
 		_settings["badge_aspect"] = Vector2(dimensions.x / max_dim, dimensions.y / max_dim)
-		_update_shader_params()
+	_update_shader_params()
+	queue_redraw()
 
 func set_safe_zone(safe_x: float, safe_y: float, safe_width: float, safe_height: float, show_debug: bool = false) -> void:
 	_safe_zone = Vector4(safe_x, safe_y, safe_width, safe_height)

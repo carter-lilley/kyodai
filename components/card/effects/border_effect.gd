@@ -37,6 +37,8 @@ func _update_shader_params() -> void:
 	
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	# Pass shared shape parameters for consistent SDF calculations
+	_set_shader_param("corner_radius_pixels", _card_state.corner_radius_pixels)
 	_set_shader_param("border_width_ratio", border_size)
 	_set_shader_param("border_fade_in_ratio", border_fade_in)
 	_set_shader_param("gradient_direction", gradient_direction)

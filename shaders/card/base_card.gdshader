@@ -17,9 +17,22 @@ uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
 uniform float smart_crop_overshoot = 0.15;
 
+// Shared shape parameters from CardState (calculated once, used by all effects)
+uniform float corner_radius_pixels = 0.0;
+uniform float total_inset_pixels = 0.0;
+
 const int ROW_SAMPLES = 8;
 const int COL_SAMPLES = 8;
 
+// SDF that accepts radius in pixels (consistent with border.gdshader and badge.gdshader)
+float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
+	vec2 half_size = size * 0.5;
+	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
+	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
+	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+}
+
+// Kept for backward compatibility with glass inset calculation
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
 	// 1.0 ratio = corners touch (half of smallest dimension)
@@ -194,21 +207,22 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// Convert ratios to pixels and combine both border and glass insets
-	float border_inset_pixels = border_inset_ratio * card_size.x;
-	float glass_inset_pixels = glass_inset_ratio * card_size.x;
-	float total_inset_pixels = border_inset_pixels + glass_inset_pixels;
-	
+	// Use shared shape parameters from CardState
+	// total_inset_pixels already includes border + glass insets
 	// Subtract padding to make base card sit deeper under the border
 	// (negative padding = larger card, extending further under the border edge)
 	float padding_pixels = 5.0;
 	float effective_border_inset = max(0.0, total_inset_pixels - padding_pixels);
 	
+	// For glass inset calculation, derive glass pixels from the ratio
+	float glass_inset_pixels = glass_inset_ratio * card_size.x;
+	
 	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
 	vec2 inner_offset = vec2(effective_border_inset);
 	
 	// Calculate the outer edge (base card shape)
-	float dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
+	// Use shared corner_radius_pixels from CardState for consistent rounding
+	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 	
 	if (edge_alpha <= 0.0) {

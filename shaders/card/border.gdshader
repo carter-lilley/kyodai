@@ -19,10 +19,13 @@ uniform bool use_outer_stroke_gradient = false;
 uniform sampler2D outer_stroke_gradient_texture : filter_linear, repeat_disable;
 uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
+// Shared shape parameters from CardState (calculated once, used by all effects)
+uniform float corner_radius_pixels = 0.0;
+
+// SDF that accepts radius in pixels (consistent with base_card.gdshader and badge.gdshader)
+float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 	vec2 half_size = size * 0.5;
-	// 1.0 ratio = corners touch (half of smallest dimension)
-	float radius = radius_ratio * min(size.x, size.y) / 2.0;
+	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
 	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
@@ -33,22 +36,32 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// Convert ratios to pixels
-	float corner_radius_pixels = corner_radius_ratio * card_size.x;
+	// Convert border ratios to pixels (corner_radius_pixels comes from CardState)
 	float border_width_pixels = border_width_ratio * card_size.x;
 	float border_fade_in_pixels = border_fade_in_ratio * card_size.x;
 	
-	float dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
+	// Use shared corner_radius_pixels from CardState for consistent rounding
+	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
 	float total_border = border_width_pixels + border_fade_in_pixels;
 	
-	if (total_border > 0.0 && dist >= -total_border && dist <= 0.0) {
-		float rel_d = (dist + total_border) / total_border;
-		float inner_aa_alpha = smoothstep(0.0, aa_width / total_border, rel_d);
+	// Extend border 1px beyond card edge to cover anti-aliasing
+	float extension = 1.0;
+	
+	if (total_border > 0.0 && dist >= -total_border && dist <= extension) {
+		// Normalized distance from inner edge (0 = inner edge, 1 = outer edge + extension)
+		float total_range = total_border + extension;
+		float rel_d = (dist + total_border) / total_range;
 		
-		float fade_in_factor = border_fade_in_pixels / total_border;
+		// Anti-alias only the inner edge, keep outer edge (and extension) solid
+		float inner_aa_alpha = smoothstep(0.0, aa_width / total_range, rel_d);
+		
+		// Calculate fade and solid positions relative to total_range
+		// The solid border ends at (border_fade_in + border_width) / total_range
+		// The extension area (1px beyond card) is treated as part of the solid border
+		float fade_in_factor = border_fade_in_pixels / total_range;
 		float border_alpha = 1.0;
 		
 		if (fade_in_factor > 0.001) {
@@ -56,7 +69,7 @@ void fragment() {
 		}
 		border_alpha = clamp(border_alpha, 0.0, 1.0);
 		
-		float solid_border_end = (border_fade_in_pixels + border_width_pixels) / total_border;
+		float solid_border_end = (border_fade_in_pixels + border_width_pixels + extension) / total_range;
 		
 		vec4 color;
 		if (use_gradient) {
@@ -85,9 +98,9 @@ void fragment() {
 		float inner_stroke_width_pixels = inner_stroke_width_ratio * card_size.x;
 		if (inner_stroke_width_pixels > 0.0) {
 			float inner_stroke_pos = fade_in_factor;
-			float inner_stroke_half = (inner_stroke_width_pixels / total_border) * 0.5;
+			float inner_stroke_half = (inner_stroke_width_pixels / total_range) * 0.5;
 			if (abs(rel_d - inner_stroke_pos) < inner_stroke_half) {
-				float stroke_alpha = smoothstep(inner_stroke_half, inner_stroke_half - aa_width / total_border, abs(rel_d - inner_stroke_pos));
+				float stroke_alpha = smoothstep(inner_stroke_half, inner_stroke_half - aa_width / total_range, abs(rel_d - inner_stroke_pos));
 				
 				vec4 stroke_color;
 				if (use_inner_stroke_gradient) {
@@ -113,9 +126,9 @@ void fragment() {
 		float outer_stroke_width_pixels = outer_stroke_width_ratio * card_size.x;
 		if (outer_stroke_width_pixels > 0.0) {
 			float outer_stroke_pos = 1.0;
-			float outer_stroke_half = (outer_stroke_width_pixels / total_border) * 0.5;
+			float outer_stroke_half = (outer_stroke_width_pixels / total_range) * 0.5;
 			if (abs(rel_d - outer_stroke_pos) < outer_stroke_half) {
-				float stroke_alpha = smoothstep(outer_stroke_half, outer_stroke_half - aa_width / total_border, abs(rel_d - outer_stroke_pos));
+				float stroke_alpha = smoothstep(outer_stroke_half, outer_stroke_half - aa_width / total_range, abs(rel_d - outer_stroke_pos));
 				
 				vec4 stroke_color;
 				if (use_outer_stroke_gradient) {
@@ -138,9 +151,10 @@ void fragment() {
 		}
 	}
 	
-	float edge_dist = rounded_rect_sdf(pixel_pos, card_size, corner_radius_ratio);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, edge_dist);
-	final_color.a *= edge_alpha;
+	// Apply anti-aliasing to the outer edge (at 1px extension)
+	// Fade out as we approach the outer boundary for smooth edges
+	float outer_edge_alpha = 1.0 - smoothstep(1.0 - aa_width, 1.0, dist);
+	final_color.a *= outer_edge_alpha;
 	
 	if (final_color.a <= 0.0) {
 		discard;
