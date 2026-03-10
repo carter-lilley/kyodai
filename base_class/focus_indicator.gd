@@ -20,6 +20,7 @@ var _current_tween: Tween
 # Cached shape params from the focused control
 var _custom_shape_size: Vector2 = Vector2.ZERO
 var _custom_corner_radius_ratio: float = 0.0
+var _custom_corner_radius_pixels: float = 0.0
 var _use_custom_shape: bool = false
 var _was_using_custom_shape: bool = false
 
@@ -81,6 +82,7 @@ func _on_focus_changed(control: Control) -> void:
 		var params = control.get_focus_shape_params()
 		_custom_shape_size = params.get("shape_size", Vector2.ZERO)
 		_custom_corner_radius_ratio = params.get("corner_radius_ratio", 0.0)
+		_custom_corner_radius_pixels = params.get("corner_radius_pixels", 0.0)
 		_use_custom_shape = _custom_shape_size != Vector2.ZERO
 	else:
 		# Traverse up the tree to find a node with get_focus_shape_params
@@ -92,6 +94,7 @@ func _on_focus_changed(control: Control) -> void:
 				var params = ancestor.get_focus_shape_params()
 				_custom_shape_size = params.get("shape_size", Vector2.ZERO)
 				_custom_corner_radius_ratio = params.get("corner_radius_ratio", 0.0)
+				_custom_corner_radius_pixels = params.get("corner_radius_pixels", 0.0)
 				_use_custom_shape = _custom_shape_size != Vector2.ZERO
 				found_shape = true
 				break
@@ -101,6 +104,7 @@ func _on_focus_changed(control: Control) -> void:
 		if not found_shape:
 			_custom_shape_size = control.size
 			_custom_corner_radius_ratio = 0.0
+			_custom_corner_radius_pixels = 0.0
 			_use_custom_shape = false
 	
 	_update_shader_params()
@@ -229,10 +233,15 @@ func _update_shader_params() -> void:
 	
 	if _use_custom_shape:
 		_shader_material.set_shader_parameter("shape_size", size)
+		# Use ratio for consistent roundness - shader will calculate appropriate pixel radius
+		# based on the focus indicator's actual size
 		_shader_material.set_shader_parameter("corner_radius_ratio", _custom_corner_radius_ratio)
+		# Don't pass pixels - let shader calculate from ratio to match proportions
+		_shader_material.set_shader_parameter("corner_radius_pixels", 0.0)
 	else:
 		_shader_material.set_shader_parameter("shape_size", size)
 		_shader_material.set_shader_parameter("corner_radius_ratio", 0.0)
+		_shader_material.set_shader_parameter("corner_radius_pixels", 0.0)
 
 func _process(_delta: float) -> void:
 	# Check if target has moved and update tween target

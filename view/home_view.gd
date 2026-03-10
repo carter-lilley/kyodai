@@ -134,6 +134,39 @@ func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, Notification.Type.SUCCESS)
+		# Debug: Show details of games that were found
+		print("[HomeView] Scan found %d games, querying details..." % found_count)
+		MemoryManager.queue_db_task(
+			func():
+				var query = """
+					SELECT title, platform_slug, romm_id, has_local_copy, is_master_entry, has_cover_art, file_path, downloaded_sibling_ids 
+					FROM games 
+					WHERE has_local_copy = 1 
+					ORDER BY title
+				"""
+				var games = []
+				if DataManager._db.query(query):
+					for row in DataManager._db.query_result:
+						games.append({
+							"title": row.get("title", "N/A"),
+							"platform": row.get("platform_slug", "N/A"),
+							"romm_id": row.get("romm_id", 0),
+							"has_local_copy": row.get("has_local_copy", 0),
+							"is_master_entry": row.get("is_master_entry", 0),
+							"has_cover_art": row.get("has_cover_art", 0),
+							"file_path": row.get("file_path", ""),
+							"downloaded_sibling_ids": row.get("downloaded_sibling_ids", "[]")
+						})
+				return games,
+			func(games: Array):
+				print("[HomeView] === GAMES MARKED AS DOWNLOADED ===")
+				for g in games:
+					print("[HomeView] Game: '%s' (%s)" % [g.title, g.platform])
+					print("[HomeView]   romm_id: %d, has_local_copy: %d, is_master_entry: %d, has_cover_art: %d" % [g.romm_id, g.has_local_copy, g.is_master_entry, g.has_cover_art])
+					print("[HomeView]   file_path: %s" % g.file_path)
+					print("[HomeView]   downloaded_sibling_ids: %s" % g.downloaded_sibling_ids)
+				print("[HomeView] === END OF DOWNLOADED GAMES ===")
+		)
 
 func _on_sync_completed(success: bool, message: String):
 	"""Called when library sync completes."""

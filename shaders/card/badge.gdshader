@@ -150,8 +150,7 @@ void fragment() {
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;
 	float inner_sdf = rounded_rect_sdf_pixels(inner_pixel_pos, inner_size, inner_corner_radius_pixels);
 	
-	// Extend by 0.5px to create overlap with border and avoid anti-aliasing gaps
-	float card_edge_alpha = 1.0 - smoothstep(-aa_width, 0.5, inner_sdf);
+	float card_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, inner_sdf);
 	final_color.a *= card_edge_alpha;
 	
 	// Debug: overlay safe zone in magenta for corner badge, cyan for top bar

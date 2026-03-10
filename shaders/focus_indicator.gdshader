@@ -2,6 +2,7 @@ shader_type canvas_item;
 
 uniform vec2 shape_size = vec2(100.0, 100.0);
 uniform float corner_radius_ratio = 0.0;
+uniform float corner_radius_pixels = 0.0;  // Pre-calculated from CardState for consistency
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 0.8);
 uniform float border_width : hint_range(1.0, 20.0) = 6.0;
 uniform bool debug_mode = false;
@@ -9,6 +10,15 @@ uniform float chase_speed : hint_range(0.0, 5.0) = 0.65;
 uniform float gap_size : hint_range(0.0, 0.3) = 0.04;
 uniform float fade_length : hint_range(0.0, 0.5) = 0.35;
 
+// SDF using pre-calculated pixel radius (matches CardState calculation exactly)
+float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
+	vec2 half_size = size * 0.5;
+	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
+	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
+	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+}
+
+// Legacy SDF using ratio (kept for backward compatibility)
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
 	// 1.0 ratio = corners touch (half of smallest dimension)
@@ -48,7 +58,13 @@ void fragment() {
 		float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 		aa_width = max(aa_width, 0.5);
 		
-		float dist = rounded_rect_sdf(pixel_pos, shape_size, corner_radius_ratio);
+		// Use pre-calculated pixel radius if available, otherwise calculate from ratio
+		float dist;
+		if (corner_radius_pixels > 0.0) {
+			dist = rounded_rect_sdf_pixels(pixel_pos, shape_size, corner_radius_pixels);
+		} else {
+			dist = rounded_rect_sdf(pixel_pos, shape_size, corner_radius_ratio);
+		}
 		
 		vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 		

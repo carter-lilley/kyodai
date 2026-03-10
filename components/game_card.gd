@@ -16,18 +16,17 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 
 @onready var visual_container: Control = $VisualContainer
 @onready var card_input: Button = $VisualContainer/CardInput
-@onready var status_icon: TextureRect = $VisualContainer/CardInput/StatusBadge/StatusIcon
 @onready var status_badge: Panel = $VisualContainer/CardInput/StatusBadge
 @onready var platform_icon: TextureRect = $VisualContainer/CardInput/PlatformIcon
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
-var _download_icon: Texture2D = preload("res://assets/ui/icons/download.png")
-var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
 # Ratio-based constants (as fraction of card width)
-const BADGE_SIZE_RATIO: float = 0.16  # Smaller badge
-const BADGE_MARGIN_RATIO: float = 0.025  # ~5px at default width
+const BADGE_SIZE_RATIO: float = 0.16  # Platform badge size (16% of card width)
+const BADGE_MARGIN_RATIO: float = 0.025  # Platform badge margin
+const STATUS_BADGE_SIZE_RATIO: float = 0.08  # Status badge size (8% of card width)
+const STATUS_BADGE_MARGIN_RATIO: float = 0.05  # Status badge margin - sits deeper in card
 const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 
 # Debug
@@ -142,7 +141,8 @@ func get_card_state() -> CardState:
 func get_focus_shape_params() -> Dictionary:
 	return {
 		"shape_size": _card_state.card_size,
-		"corner_radius_ratio": _card_state.corner_radius_ratio
+		"corner_radius_ratio": _card_state.corner_radius_ratio,
+		"corner_radius_pixels": _card_state.corner_radius_pixels
 	}
 
 func _update_card_state_from_settings():
@@ -309,6 +309,7 @@ func _rebuild_effects():
 		_set_texture(_current_texture)
 	
 	_update_platform_badge()
+	_update_status_badge_layout()
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
@@ -328,34 +329,59 @@ func _update_status_badge_layout():
 	if not status_badge:
 		return
 	
-	var card_width = _card_state.card_size.x
-	var badge_size = BADGE_SIZE_RATIO * card_width
-	var badge_margin = BADGE_MARGIN_RATIO * card_width
-	var badge_corner = int(BADGE_CORNER_RATIO * card_width)
+	var card_size = _card_state.card_size
+	var card_width = card_size.x
+	var card_height = card_size.y
+	var badge_size = STATUS_BADGE_SIZE_RATIO * card_width
 	var border_inset_pixels = _card_state.border_inset_ratio * card_width
 	var glass_inset_pixels = _card_state.glass_inset_ratio * card_width
 	var total_inset = border_inset_pixels + glass_inset_pixels
 	
-	# Account for border inset and glass inset so badge doesn't overlap
-	status_badge.offset_left = -badge_size - badge_margin - total_inset
-	status_badge.offset_top = -badge_size - badge_margin - total_inset
-	status_badge.offset_right = -badge_margin - total_inset
-	status_badge.offset_bottom = -badge_margin - total_inset
+	# Calculate effective corner radius at the inset position
+	var effective_corner_radius = max(0, _card_state.corner_radius_pixels - total_inset)
+	
+	# Corner margin calculation (same as platform badge)
+	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
+	var corner_margin = effective_corner_radius * corner_midpoint_factor
+	
+	# Position in BOTTOM RIGHT corner (mirror of top-left logic)
+	# Start from bottom-right corner and move inward by total_inset + corner_margin
+	var safe_x = card_width - total_inset - corner_margin - badge_size
+	var safe_y = card_height - total_inset - corner_margin - badge_size
+	
+	# Position the status badge
+	status_badge.offset_left = safe_x
+	status_badge.offset_top = safe_y
+	status_badge.offset_right = safe_x + badge_size
+	status_badge.offset_bottom = safe_y + badge_size
+	
+	# Update badge style - always a circle (radius = half the size)
+	_update_status_badge_style()
+
+func _update_status_badge_style():
+	if not status_badge:
+		return
+	
+	var card_width = _card_state.card_size.x
+	var badge_size = STATUS_BADGE_SIZE_RATIO * card_width
+	# Always a perfect circle (radius = half the size)
+	var circle_radius = int(badge_size / 2.0)
 	
 	var new_style = StyleBoxFlat.new()
-	new_style.bg_color = Color(0, 0, 0, 0.4)
-	new_style.corner_radius_top_left = badge_corner
-	new_style.corner_radius_top_right = badge_corner
-	new_style.corner_radius_bottom_left = badge_corner
-	new_style.corner_radius_bottom_right = badge_corner
-	status_badge.add_theme_stylebox_override("panel", new_style)
+	# Set color based on download status
+	if game and game.is_active_variant_downloaded():
+		# Downloaded/ready to launch - green
+		new_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)  # #7db600
+	else:
+		# Not downloaded - blue
+		new_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)  # #009feb
 	
-	if status_icon:
-		var icon_size = ICON_SIZE_RATIO * card_width * 0.5
-		status_icon.offset_left = -icon_size
-		status_icon.offset_top = -icon_size
-		status_icon.offset_right = icon_size
-		status_icon.offset_bottom = icon_size
+	# Always a perfect circle
+	new_style.corner_radius_top_left = circle_radius
+	new_style.corner_radius_top_right = circle_radius
+	new_style.corner_radius_bottom_left = circle_radius
+	new_style.corner_radius_bottom_right = circle_radius
+	status_badge.add_theme_stylebox_override("panel", new_style)
 
 func _update_display():
 	if not game:
@@ -379,26 +405,17 @@ func load_cover_with_priority(high_priority: bool = false):
 	_load_cover(high_priority)
 
 func _update_status_icon():
-	if not status_icon or not status_badge:
+	if not status_badge:
 		return
 	if not game:
-		status_icon.visible = false
 		status_badge.visible = false
 		return
 	
-	if game.is_active_variant_downloaded():
-		status_icon.texture = _play_icon
-		status_icon.visible = true
-		status_icon.modulate = Color(1, 1, 1, 1)
-		status_badge.visible = true
-	elif _is_downloading:
-		status_icon.visible = false
+	if _is_downloading:
 		status_badge.visible = false
 	else:
-		status_icon.texture = _download_icon
-		status_icon.visible = true
-		status_icon.modulate = Color(1, 1, 1, 0.8)
 		status_badge.visible = true
+		_update_status_badge_style()
 
 func _update_platform_badge():
 	if not _badge_effect:
@@ -983,8 +1000,6 @@ func _on_download_completed(item_id: String, success: bool, message: String):
 func set_placeholder(is_placeholder: bool):
 	if is_placeholder:
 		_set_texture(_loading_texture)
-		if status_icon:
-			status_icon.visible = false
 		if status_badge:
 			status_badge.visible = false
 	else:
