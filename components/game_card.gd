@@ -26,8 +26,8 @@ var _play_icon: Texture2D = preload("res://assets/ui/icons/play.png")
 var _is_downloading: bool = false
 
 # Ratio-based constants (as fraction of card width)
-const BADGE_SIZE_RATIO: float = 0.20  # Slightly smaller badge
-const BADGE_MARGIN_RATIO: float = 0.04  # ~8px at default width
+const BADGE_SIZE_RATIO: float = 0.16  # Smaller badge
+const BADGE_MARGIN_RATIO: float = 0.025  # ~5px at default width
 const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 
 # Debug
@@ -333,12 +333,14 @@ func _update_status_badge_layout():
 	var badge_margin = BADGE_MARGIN_RATIO * card_width
 	var badge_corner = int(BADGE_CORNER_RATIO * card_width)
 	var border_inset_pixels = _card_state.border_inset_ratio * card_width
+	var glass_inset_pixels = _card_state.glass_inset_ratio * card_width
+	var total_inset = border_inset_pixels + glass_inset_pixels
 	
-	# Account for border inset so badge doesn't overlap the border
-	status_badge.offset_left = -badge_size - badge_margin - border_inset_pixels
-	status_badge.offset_top = -badge_size - badge_margin - border_inset_pixels
-	status_badge.offset_right = -badge_margin - border_inset_pixels
-	status_badge.offset_bottom = -badge_margin - border_inset_pixels
+	# Account for border inset and glass inset so badge doesn't overlap
+	status_badge.offset_left = -badge_size - badge_margin - total_inset
+	status_badge.offset_top = -badge_size - badge_margin - total_inset
+	status_badge.offset_right = -badge_margin - total_inset
+	status_badge.offset_bottom = -badge_margin - total_inset
 	
 	var new_style = StyleBoxFlat.new()
 	new_style.bg_color = Color(0, 0, 0, 0.4)
@@ -452,13 +454,15 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var card_width = _card_state.card_size.x
 	var corner_radius_pixels = _card_state.get_corner_radius_pixels()
 	var border_inset_pixels = _card_state.border_inset_ratio * card_width
+	var glass_inset_pixels = _card_state.glass_inset_ratio * card_width
+	var total_inset = border_inset_pixels + glass_inset_pixels
 	
 	# Effective corner radius at the inset position (min-dimension based for card)
-	var effective_corner_radius = max(0, corner_radius_pixels - border_inset_pixels)
+	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
 	
 	# Width-based corner radius for badge calculations (matches reverted shader logic)
 	var corner_radius_width_based = _card_state.corner_radius_ratio * card_width
-	var effective_corner_radius_badge = max(0, corner_radius_width_based - border_inset_pixels)
+	var effective_corner_radius_badge = max(0, corner_radius_width_based - total_inset)
 	
 	# Base badge size as ratio of card width
 	var base_badge_size = BADGE_SIZE_RATIO * card_width
@@ -478,10 +482,10 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		
 		# Calculate top bar safe zone - Y always at top, X constrained by corner radius
 		# X: inset by radius from left/right rounded corners (inside point of bevel)
-		# Y: always at top (border_inset)
-		var top_bar_safe_x = border_inset_pixels + effective_corner_radius
-		var top_bar_safe_width = (card_width - border_inset_pixels * 2) - (effective_corner_radius * 2)
-		var top_bar_safe_y = border_inset_pixels
+		# Y: always at top (total_inset)
+		var top_bar_safe_x = total_inset + effective_corner_radius
+		var top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
+		var top_bar_safe_y = total_inset
 		var top_bar_safe_height = bar_height
 		
 		# Apply padding inside the safe zone (like corner mode)
@@ -527,7 +531,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		if _badge_effect:
 			# For top bar, pass full card width and bar height
 			_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
-			_badge_effect.set_border_inset_pixels(border_inset_pixels)
+			_badge_effect.set_border_inset_pixels(total_inset)
 			# Pass the top bar safe zone (cyan debug overlay)
 			_badge_effect.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
 		
@@ -538,7 +542,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	# effective_corner_radius is already the actual radius in pixels (min-dim based)
 	# corner_margin is the distance from edge to the midpoint of the rounded curve
 	# Minimum 3px margin to prevent collapse with tiny radii
-	var corner_margin = max(effective_corner_radius * corner_midpoint_factor, 3.0)
+	var corner_margin = effective_corner_radius * corner_midpoint_factor
 	
 	# Calculate badge size: independent of corner radius
 	# Scales from 15% to 45% of card width based on badge_size_setting (0.5 to 2.0)
@@ -562,15 +566,15 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	var inner_corner_margin = base_inner_corner * corner_midpoint_factor
 	
 	# Safe zone calculation:
-	# Start at: border_inset + outer_corner_margin (after card's rounded edge midpoint)
-	# End at: border_inset + badge_size - inner_corner_margin (before badge's inner rounded corner)
+	# Start at: total_inset + outer_corner_margin (after card's rounded edge midpoint)
+	# End at: total_inset + badge_size - inner_corner_margin (before badge's inner rounded corner)
 	# This creates a rectangular safe area between the two curved regions
 	# Cap corner_margin so it never exceeds 80% of badge size (prevents negative safe zone)
 	var max_corner_margin = badge_width * 0.8
 	var clamped_corner_margin = min(corner_margin, max_corner_margin)
 	
-	var safe_x = border_inset_pixels + clamped_corner_margin
-	var safe_y = border_inset_pixels + clamped_corner_margin
+	var safe_x = total_inset + clamped_corner_margin
+	var safe_y = total_inset + clamped_corner_margin
 	var safe_width = badge_width - clamped_corner_margin - inner_corner_margin
 	var safe_height = badge_height - clamped_corner_margin - inner_corner_margin
 	
@@ -590,7 +594,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	
 	if _badge_effect:
 		_badge_effect.set_badge_dimensions(Vector2(badge_width, badge_height))
-		_badge_effect.set_border_inset_pixels(border_inset_pixels)
+		_badge_effect.set_border_inset_pixels(total_inset)
 		# Pass safe zone to shader for debugging (set last param to true to show debug)
 		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 	

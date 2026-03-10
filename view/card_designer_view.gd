@@ -94,6 +94,7 @@ func _setup_ui():
 	popup.add_item("Drop Shadow", 2)
 	popup.add_item("Glow", 3)
 	popup.add_item("Glass", 4)
+	popup.add_item("Distort", 5)
 	popup.id_pressed.connect(_on_add_effect)
 	
 	left_vbox.add_child(HSeparator.new())
@@ -105,6 +106,11 @@ func _setup_ui():
 	
 	var right_panel = Panel.new()
 	hsplit.add_child(right_panel)
+	
+	# Add library background to show cards in context
+	var library_bg = preload("res://components/library_background.tscn").instantiate()
+	library_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	right_panel.add_child(library_bg)
 	
 	var preview_container = CenterContainer.new()
 	preview_container.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -274,6 +280,22 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
+	elif effect_data.get("effect_id") == "distort":
+		var distort_effect = DistortEffect.new()
+		var schema = distort_effect.get_settings_schema()
+		distort_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
 	elif effect_data.get("effect_id") == "glass":
 		var glass_effect = GlassEffect.new()
 		var schema = glass_effect.get_settings_schema()
@@ -344,6 +366,14 @@ func _on_add_effect(id: int):
 				"settings": {
 					"distortion": 0.5,
 					"glass_color": Color(0.2, 0.4, 1.0, 0.3)
+				}
+			}
+		5:
+			new_effect = {
+				"effect_id": "distort",
+				"settings": {
+					"distortion": 0.5,
+					"opacity": 1.0
 				}
 			}
 	
