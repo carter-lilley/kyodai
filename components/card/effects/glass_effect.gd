@@ -1,10 +1,22 @@
 class_name GlassEffect
 extends CardEffect
 
+var _swoop_layer: ColorRect = null
+
 func _ready():
 	super._ready()
 	effect_name = "Glass"
 	effect_id = "glass"
+	
+	# Add swoop layer on top for darkening effect
+	_swoop_layer = ColorRect.new()
+	_swoop_layer.name = "GlassSwoop"
+	_swoop_layer.anchor_right = 1.0
+	_swoop_layer.anchor_bottom = 1.0
+	var swoop_mat = ShaderMaterial.new()
+	swoop_mat.shader = preload("res://shaders/card/glass_swoop.gdshader")
+	_swoop_layer.material = swoop_mat
+	add_child(_swoop_layer)
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
@@ -36,6 +48,13 @@ func _update_shader_params() -> void:
 	# Additional inset parameter
 	var additional_inset = _settings.get("additional_inset_ratio", 0.0)
 	
+	# Swoop parameters
+	var swoop_intensity = _settings.get("swoop_intensity", 0.3)
+	var swoop_height = _settings.get("swoop_height", 0.25)
+	var swoop_curve = _settings.get("swoop_curve", 0.5)
+	var swoop_tilt = _settings.get("swoop_tilt", 0.0)
+	
+	# Update lights layer (this effect)
 	_set_shader_param("card_size", _card_state.card_size)
 	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
 	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
@@ -57,6 +76,18 @@ func _update_shader_params() -> void:
 	
 	# Additional inset uniform
 	_set_shader_param("additional_inset_ratio", additional_inset)
+	
+	# Update swoop layer
+	if _swoop_layer and _swoop_layer.material:
+		var swoop_mat = _swoop_layer.material as ShaderMaterial
+		swoop_mat.set_shader_parameter("card_size", _card_state.card_size)
+		swoop_mat.set_shader_parameter("corner_radius_ratio", _card_state.corner_radius_ratio)
+		swoop_mat.set_shader_parameter("border_inset_ratio", _card_state.border_inset_ratio)
+		swoop_mat.set_shader_parameter("glass_color", glass_color)
+		swoop_mat.set_shader_parameter("swoop_intensity", swoop_intensity)
+		swoop_mat.set_shader_parameter("swoop_height", swoop_height)
+		swoop_mat.set_shader_parameter("swoop_curve", swoop_curve)
+		swoop_mat.set_shader_parameter("swoop_tilt", swoop_tilt)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
@@ -72,6 +103,28 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var additional_inset_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Additional Inset", "Push underlying image inward", 0.0, 0.5, 0.01)
 	additional_inset_var.property_name = "additional_inset_ratio"
 	schema.append(additional_inset_var)
+	
+	# --- Swoop Parameters ---
+	
+	# Swoop intensity
+	var swoop_intensity_var = SettingsVar.new(Type.FLOAT, 0.3, State.ENABLED, "Swoop Intensity", "Darkness of the curved swoop", 0.0, 1.0, 0.01)
+	swoop_intensity_var.property_name = "swoop_intensity"
+	schema.append(swoop_intensity_var)
+	
+	# Swoop height
+	var swoop_height_var = SettingsVar.new(Type.FLOAT, 0.25, State.ENABLED, "Swoop Height", "How far up the swoop extends", 0.0, 0.5, 0.01)
+	swoop_height_var.property_name = "swoop_height"
+	schema.append(swoop_height_var)
+	
+	# Swoop curve
+	var swoop_curve_var = SettingsVar.new(Type.FLOAT, 0.3, State.ENABLED, "Swoop Curve", "How pronounced the curve is", 0.0, 1.0, 0.01)
+	swoop_curve_var.property_name = "swoop_curve"
+	schema.append(swoop_curve_var)
+	
+	# Swoop tilt
+	var swoop_tilt_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Swoop Tilt", "Tilt the curve to raise one side", -1.0, 1.0, 0.01)
+	swoop_tilt_var.property_name = "swoop_tilt"
+	schema.append(swoop_tilt_var)
 	
 	# --- Specular Lighting Parameters ---
 	

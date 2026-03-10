@@ -55,6 +55,7 @@ size_flags_vertical = 0
 layer = 1000
 
 [node name="FPSLabel" type="Label" parent="UILayer" unique_id=777777778]
+visible = false
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 100.0
