@@ -1255,4 +1255,53 @@ public class PackageCheckerPlugin extends GodotPlugin {
             }
         }
     }
+    
+    /**
+     * Launch a Steam game via GameNative app.
+     * 
+     * @param appId The Steam App ID to launch
+     * @return true if intent was launched successfully
+     */
+    @UsedByGodot
+    public boolean launchGameNativeGame(int appId) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "launchGameNativeGame() called");
+        Log.d(TAG, "App ID: " + appId);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Create intent for GameNative
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName("app.gamenative", "app.gamenative.MainActivity"));
+            intent.setAction("app.gamenative.LAUNCH_GAME");
+            intent.addCategory(Intent.CATEGORY_DEFAULT);
+            intent.putExtra("app_id", appId);
+            
+            // Add flags for launching from another app
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            
+            Log.d(TAG, "Launching GameNative with App ID: " + appId);
+            Log.d(TAG, "Intent action: " + intent.getAction());
+            Log.d(TAG, "Intent component: " + intent.getComponent());
+            
+            activity.startActivity(intent);
+            
+            Log.d(TAG, "SUCCESS: GameNative launch intent sent");
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR launching GameNative game: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            Log.e(TAG, "Stack trace:");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            return false;
+        }
+    }
 }

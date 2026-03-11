@@ -48,6 +48,9 @@ func _ready():
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
 	DataManager.game_updated.connect(_on_game_updated)
+	
+	# Connect to GameNativeManager signal to refresh when games are added/removed
+	GameNativeManager.games_updated.connect(_on_gamenative_games_updated)
 	DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
 	DataManager.sync_completed.connect(_on_sync_completed)
 	
@@ -75,7 +78,9 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_downloaded_games_count()
-			print("[HomeView] Total downloaded games count: %d" % count)
+			# Add GameNative games count
+			count += GameNativeManager.get_game_count()
+			print("[HomeView] Total downloaded games count: %d (includes %d GameNative)" % [count, GameNativeManager.get_game_count()])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -180,6 +185,16 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	MemoryManager.queue_db_task(
 		func():
 			var games = DataManager.get_downloaded_games_paginated(offset, limit)
+			
+			# Add GameNative games (only on first page for now)
+			if offset == 0 and GameNativeManager.has_games():
+				var gamenative_games = GameNativeManager.create_game_resources()
+				# Prepend GameNative games to the list
+				var combined: Array[GameResource] = []
+				combined.append_array(gamenative_games)
+				combined.append_array(games)
+				games = combined
+			
 			print("[HomeView] DB query complete: got %d games" % games.size())
 			for game in games:
 				print("[HomeView] Loaded game: %s (has_local_copy=%s, file_path=%s)" % [game.title, game.has_local_copy, game.file_path])
@@ -316,6 +331,12 @@ func _on_game_launched(game: GameResource):
 	_load_total_count_with_callback(false, func():
 		games_grid.refresh_dimensions()
 	)
+
+func _on_gamenative_games_updated():
+	"""Called when GameNative games are added or removed - refresh grid."""
+	print("[HomeView] GameNative games updated, refreshing grid")
+	# Reload total count and refresh grid (don't preserve cache)
+	_load_total_count(false)
 
 func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
 	"""Get total downloaded game count and call callback when complete."""

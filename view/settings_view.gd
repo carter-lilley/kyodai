@@ -46,6 +46,12 @@ func _build_settings_view():
 	var designer_tab = _create_card_designer_tab()
 	_settings_container.add_child(designer_tab)
 	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Card Designer")
+	
+	# Add GameNative tab (Android only)
+	if PlatformManager.is_android():
+		var gamenative_tab = _create_gamenative_tab()
+		_settings_container.add_child(gamenative_tab)
+		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "GameNative")
 
 func _create_card_designer_tab() -> Control:
 	var designer = preload("res://view/card_designer_view.tscn").instantiate()
@@ -55,6 +61,10 @@ func _create_card_designer_tab() -> Control:
 func _create_platforms_tab() -> Control:
 	var platforms_view = preload("res://view/platforms_settings_view.gd").new()
 	return platforms_view
+
+func _create_gamenative_tab() -> Control:
+	var gamenative_view = preload("res://view/settings/gamenative_settings_view.gd").new()
+	return gamenative_view
 
 func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	var scroll = ScrollContainer.new()

@@ -1399,6 +1399,11 @@ func launch_game(game: GameResource) -> void:
 	if AudioManager:
 		AudioManager.play_sfx("affirm_00")
 	
+	# Check if this is a GameNative game
+	if game.source == "gamenative":
+		_launch_gamenative_game(game)
+		return
+	
 	# If game is not downloaded, queue the download first then proceed
 	if not game.is_active_variant_downloaded():
 		_queue_game_download_then_launch(game)
@@ -1406,6 +1411,23 @@ func launch_game(game: GameResource) -> void:
 	
 	# Game is downloaded, proceed with launch
 	_launch_with_emulator_check(game)
+
+## Launch a GameNative game via intent
+func _launch_gamenative_game(game: GameResource) -> void:
+	print("[LaunchManager] Launching GameNative game: %s (App ID: %d)" % [game.title, game.steam_app_id])
+	
+	if not PlatformManager.is_android():
+		push_error("[LaunchManager] Cannot launch GameNative game on non-Android platform")
+		NotificationManager.show_notification("GameNative games only available on Android", Notification.Type.ERROR)
+		return
+	
+	var success = GameNativeManager.launch_game(game.steam_app_id)
+	if success:
+		print("[LaunchManager] GameNative launch intent sent successfully")
+		game_launched.emit(game)
+	else:
+		push_error("[LaunchManager] Failed to launch GameNative game")
+		NotificationManager.show_notification("Failed to launch GameNative. Is the app installed?", Notification.Type.ERROR)
 	
 ## If game is not downloaded, queue the download first then proceed
 func _queue_game_download_then_launch(game: GameResource) -> void:

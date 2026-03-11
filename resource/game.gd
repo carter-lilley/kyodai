@@ -40,6 +40,12 @@ extends Resource
 ## Array of sibling IDs that have local copies
 @export var downloaded_sibling_ids: Array[int] = []
 
+## Game source type: "romm" (default), "gamenative", etc.
+@export var source: String = "romm"
+
+## Steam App ID for GameNative games
+@export var steam_app_id: int = 0
+
 # Transient fields for sync tracking (not persisted)
 var _sync_db_done: bool = false
 var _sync_cover_done: bool = false
