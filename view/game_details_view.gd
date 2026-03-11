@@ -226,6 +226,12 @@ func _on_action_button_pressed() -> void:
 	if not _current_game:
 		return
 	
+	# Skip file check for GameNative games - they don't have physical files
+	if _current_game.source == "gamenative":
+		print("[GameDetailsView] Launching GameNative game: ", _current_game.steam_app_id)
+		LaunchManager.launch_game(_current_game)
+		return
+	
 	if _current_game.is_active_variant_downloaded():
 		# Check if the file actually exists before launching
 		var root_folder = SettingsManager.get_setting("games_root_folder")

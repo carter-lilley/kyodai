@@ -80,15 +80,12 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			var count = DataManager.get_downloaded_games_count()
 			# Add GameNative games count
 			count += GameNativeManager.get_game_count()
-			print("[HomeView] Total downloaded games count: %d (includes %d GameNative)" % [count, GameNativeManager.get_game_count()])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
-				print("[HomeView] games_grid no longer valid, skipping set_total_count")
 				_is_loading = false
 				return
 			_total_games = count
-			print("[HomeView] Setting total count: %d (preserve_cache=%s)" % [count, preserve_cache])
 			games_grid.set_total_count(count, preserve_cache)
 			if count == 0:
 				_update_status("No downloaded games found")
@@ -345,7 +342,10 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	
 	MemoryManager.queue_db_task(
 		func():
-			return DataManager.get_downloaded_games_count(),
+			var count = DataManager.get_downloaded_games_count()
+			# Add GameNative games count
+			count += GameNativeManager.get_game_count()
+			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
 				print("[HomeView] games_grid no longer valid, skipping set_total_count")

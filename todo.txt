@@ -17,7 +17,7 @@
 	card/image/poster style
 	hero placement opt -> '4 way container?'
 	hero IGDB opt
-	hero fx (screenshots/cropping.shadows/etc)
+	hero fx (screenshots/cropping/shadows/etc)
 ## performance:
 	try scaling cropping algo
 	XMB shader too heavy

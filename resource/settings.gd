@@ -33,6 +33,9 @@ const Type = SettingsVar.SettingType
 @export var games_root_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Games Folder")
 @export var steam_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Steam Installation Folder", "Path to your Steam installation (e.g., C:\\Program Files (x86)\\Steam)")
 
+# Internal GameNative games list (not displayed in settings menu)
+@export var gamenative_games := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "GameNative Games")
+
 # Internal platform sync settings (not displayed in auto-generated menu)
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
 

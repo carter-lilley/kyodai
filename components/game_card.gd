@@ -795,6 +795,12 @@ func _on_card_pressed():
 	if not game:
 		return
 	
+	# Skip file check for GameNative games - they don't have physical files
+	if game.source == "gamenative":
+		if LaunchManager:
+			LaunchManager.launch_game(game)
+		return
+	
 	if game.is_active_variant_downloaded():
 		var root_folder = SettingsManager.get_setting("games_root_folder") if SettingsManager else null
 		if root_folder and root_folder.value != "":

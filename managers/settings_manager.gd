@@ -97,6 +97,10 @@ func load_settings() -> void:
 			print("[SettingsManager]: Loaded preferences from disk.")
 			store_property_names(settings)
 			_decrypt_settings()
+			# DEBUG: Check gamenative_games after load
+			if settings.gamenative_games:
+				var count = settings.gamenative_games.value.size() if settings.gamenative_games.value is Array else 0
+				print("[SettingsManager] gamenative_games loaded: ", count, " games")
 			return
 	# fallback if load failed
 	settings = Settings.new()
@@ -113,6 +117,11 @@ func store_property_names(_settings : Settings):
 func save_settings() -> void:
 	if settings:
 		print("[SettingsManager] === save_settings called ===")
+		# DEBUG: Check gamenative_games before save
+		if settings.gamenative_games:
+			var count = settings.gamenative_games.value.size() if settings.gamenative_games.value is Array else 0
+			print("[SettingsManager] gamenative_games BEFORE save: ", count, " games")
+		
 		# DEBUG: Check card_effect_config before encryption
 		if settings.card_effect_config and settings.card_effect_config.value is Dictionary:
 			print("[SettingsManager] card_effect_config BEFORE encryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())

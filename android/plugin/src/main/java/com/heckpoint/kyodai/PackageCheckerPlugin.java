@@ -3,6 +3,7 @@ package com.heckpoint.kyodai;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.UriPermission;

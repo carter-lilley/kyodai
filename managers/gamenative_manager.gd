@@ -2,7 +2,6 @@ extends Node
 
 ## Manager for GameNative integration - handles loading/saving game list and fetching Steam metadata
 
-const CONFIG_PATH = "user://gamenative_games.json"
 const STEAM_CDN_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
 
 ## Signal emitted when games list changes
@@ -18,57 +17,34 @@ func _ready():
 	_load_games()
 
 func _load_games() -> void:
-	"""Load GameNative games from JSON file."""
-	print("[GameNativeManager] Loading games from: " + CONFIG_PATH)
+	"""Load GameNative games from Settings."""
+	var setting = SettingsManager.get_setting("gamenative_games")
 	
-	if not FileAccess.file_exists(CONFIG_PATH):
-		print("[GameNativeManager] Config file does not exist")
-		_games_data = []
-		return
-	
-	var file = FileAccess.open(CONFIG_PATH, FileAccess.READ)
-	if not file:
-		print("[GameNativeManager] Failed to open config file")
-		_games_data = []
-		return
-	
-	var json_text = file.get_as_text()
-	file.close()
-	
-	print("[GameNativeManager] Loaded JSON text: " + json_text)
-	
-	var json = JSON.new()
-	var error = json.parse(json_text)
-	if error != OK:
-		push_error("[GameNativeManager] Failed to parse games JSON: " + json.get_error_message())
-		_games_data = []
-		return
-	
-	var data = json.get_data()
-	print("[GameNativeManager] Parsed data type: " + typeof(data))
-	
-	if data is Array:
-		# Convert to typed array
+	if setting and setting.value is Array:
+		# Convert to typed array of dictionaries
 		_games_data.clear()
-		for item in data:
+		for item in setting.value:
 			if item is Dictionary:
 				_games_data.append(item)
-		print("[GameNativeManager] Loaded " + str(_games_data.size()) + " games")
+		print("[GameNativeManager] Loaded " + str(_games_data.size()) + " games from Settings")
 	else:
-		print("[GameNativeManager] Data is not an array, clearing")
 		_games_data = []
 
 func _save_games() -> void:
-	"""Save GameNative games to JSON file."""
-	var file = FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
-	if not file:
-		push_error("[GameNativeManager] Failed to save games JSON")
-		return
+	"""Save GameNative games to Settings."""
+	# Create a deep copy of the array to ensure it gets saved properly
+	var games_array: Array = []
+	for game in _games_data:
+		games_array.append(game.duplicate())
 	
-	var json_text = JSON.stringify(_games_data)
-	file.store_string(json_text)
-	file.close()
-	print("[GameNativeManager] Saved " + str(_games_data.size()) + " games to JSON")
+	var setting = SettingsManager.get_setting("gamenative_games")
+	if setting:
+		setting.value = games_array
+		# Note: Don't call set_setting - we already modified the setting object directly
+		# SettingsManager.set_setting expects (value, setting) but we already set setting.value
+		SettingsManager.save_settings()
+		print("[GameNativeManager] Saved " + str(_games_data.size()) + " games to Settings")
+	
 	games_updated.emit()
 
 func add_game(app_id: int, callback: Callable = Callable()) -> void:
@@ -138,17 +114,33 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 							if name != "":
 								game_name = name
 		
-		# Add game to list
-		_games_data.append({
-			"app_id": app_id,
-			"name": game_name,
-			"source": "STEAM",
-			"added_at": Time.get_datetime_string_from_system()
-		})
-		_save_games()
+		# Download cover image before saving
+		var cover_url = STEAM_CDN_URL.format({"appid": app_id})
+		var cover_path = DataManager.get_cached_image_path(cover_url)
 		
-		if callback.is_valid():
-			callback.call(true, game_name)
+		print("[GameNativeManager] Downloading cover for App ID %d: %s" % [app_id, cover_url])
+		
+		# Download the cover image
+		DownloadManager.download_image(cover_url, cover_path, func(success: bool):
+			if success:
+				print("[GameNativeManager] Cover downloaded successfully: %s" % cover_path)
+			else:
+				print("[GameNativeManager] Cover download failed, will use placeholder")
+				cover_path = ""  # Will fall back to placeholder
+			
+			# Add game to list with cover path
+			_games_data.append({
+				"app_id": app_id,
+				"name": game_name,
+				"source": "STEAM",
+				"added_at": Time.get_datetime_string_from_system(),
+				"cover_path": cover_path
+			})
+			_save_games()
+			
+			if callback.is_valid():
+				callback.call(true, game_name)
+		)
 		
 		http.queue_free()
 	)
@@ -181,6 +173,7 @@ func create_game_resources() -> Array[GameResource]:
 	for game_data in _games_data:
 		var app_id = game_data.get("app_id", 0)
 		var name = game_data.get("name", "Steam Game %d" % app_id)
+		var cover_path = game_data.get("cover_path", "")
 		
 		var game = GameResource.new()
 		game.id = "gamenative_%d" % app_id
@@ -189,6 +182,7 @@ func create_game_resources() -> Array[GameResource]:
 		game.platform = "Steam (GameNative)"
 		game.platform_slug = "gamenative"
 		game.cover_url = STEAM_CDN_URL.format({"appid": app_id})
+		game.cover_path = cover_path  # Use cached cover path
 		game.file_name = ""
 		game.file_path = ""
 		game.has_local_copy = true  # Always playable if GameNative is installed
@@ -203,15 +197,11 @@ func create_game_resources() -> Array[GameResource]:
 
 func get_game_count() -> int:
 	"""Get number of GameNative games."""
-	var count = _games_data.size()
-	print("[GameNativeManager] get_game_count() returning: " + str(count))
-	return count
+	return _games_data.size()
 
 func has_games() -> bool:
 	"""Check if any GameNative games are configured."""
-	var has = _games_data.size() > 0
-	print("[GameNativeManager] has_games() returning: " + str(has) + " (count: " + str(_games_data.size()) + ")")
-	return has
+	return _games_data.size() > 0
 
 func is_game_native_installed() -> bool:
 	"""Check if GameNative app is installed on Android."""
