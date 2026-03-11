@@ -34,8 +34,6 @@ func _ready():
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
-	# Connect to resized signal to trigger rebuild when grid gets valid dimensions
-	games_grid.resized.connect(_on_grid_resized)
 	
 	# Setup vertical layout from settings
 	_update_grid_orientation()
@@ -696,13 +694,6 @@ func _do_rebuild(reason: String = "") -> void:
 	print("[LibraryView] refresh_effects=%s (reason: '%s')" % [refresh_effects, reason])
 	rebuild_grid(refresh_effects)
 	print("[LibraryView] Rebuild complete")
-
-func _on_grid_resized() -> void:
-	"""Called when games_grid is resized. Triggers rebuild if needed and grid has valid dimensions."""
-	# Only trigger rebuild if we have valid dimensions and a pending rebuild
-	if needs_rebuild and games_grid and games_grid.size.x > 0 and games_grid.size.y > 0:
-		print("[LibraryView] Grid resized with valid dimensions, triggering pending rebuild")
-		check_and_rebuild_if_needed()
 
 func _update_grid_orientation() -> void:
 	if SettingsManager:
