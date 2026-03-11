@@ -25,23 +25,12 @@ func _ready():
 	_load_current_config()
 	call_deferred("_setup_preview_card")
 	call_deferred("_rebuild_effects_ui")
-	
-	# Connect to settings changes so we refresh when a preset is applied
-	if SettingsManager:
-		SettingsManager.settings_saved.connect(_on_settings_saved)
 
-func _on_settings_saved():
-	print("[CardDesigner] Settings saved signal received, reloading config...")
-	print("[CardDesigner] Is instance valid: ", is_instance_valid(self))
+func on_view_show():
+	# Reload config when tab becomes visible (in case preset was loaded)
 	_load_current_config()
 	_rebuild_effects_ui()
 	_setup_preview_card()
-	print("[CardDesigner] Config reload complete. Effects count: ", _current_config.get("effects", []).size())
-
-func _exit_tree():
-	# Disconnect signal to prevent callbacks on freed object
-	if SettingsManager and SettingsManager.settings_saved.is_connected(_on_settings_saved):
-		SettingsManager.settings_saved.disconnect(_on_settings_saved)
 
 func on_view_hide():
 	# Save any pending changes before the view is hidden
@@ -507,6 +496,7 @@ func _save_to_settings() -> void:
 	if not SettingsManager:
 		return
 	
+	# Don't save if we're reacting to external changes (preset loaded)
 	var config_setting = SettingsManager.get_setting("card_effect_config")
 	if config_setting:
 		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
