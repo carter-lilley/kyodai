@@ -21,6 +21,7 @@ const EFFECT_ID_MAP: Dictionary = {
 }
 
 func _ready():
+	print("READY")
 	_setup_ui()
 	_load_current_config()
 	call_deferred("_setup_preview_card")
@@ -44,8 +45,15 @@ func _exit_tree():
 		SettingsManager.settings_saved.disconnect(_on_settings_saved)
 
 func on_view_hide():
-	# Save any pending changes before the view is hidden
-	_save_to_settings()
+	# Don't save here - the Card Designer reloads from SettingsManager when shown
+	# This prevents stale internal config from overwriting preset changes
+	pass
+
+func on_view_show():
+	# Reload config from SettingsManager to ensure we have latest (including preset changes)
+	_load_current_config()
+	_rebuild_effects_ui()
+	_setup_preview_card()
 
 func _setup_ui():
 	var hsplit = HSplitContainer.new()

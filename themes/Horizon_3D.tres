@@ -1,0 +1,56 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://resource/theme_preset.gd" id="1_lk8v1"]
+
+[sub_resource type="Gradient" id="Gradient_3yjc8"]
+offsets = PackedFloat32Array(0.22068965, 0.6413793, 0.8137931, 0.91034484, 0.9655172)
+colors = PackedColorArray(0.96862745, 0.96862745, 0.96862745, 1, 0.96862745, 0.96862745, 0.96862745, 1, 0.88235295, 0.88235295, 0.88235295, 1, 0.85490197, 0.85490197, 0.85490197, 1, 0.96862745, 0.96862745, 0.96862745, 1)
+
+[sub_resource type="Gradient" id="Gradient_rgwmd"]
+colors = PackedColorArray(0.9607843, 0.9607843, 0.9607843, 1, 0.57254905, 0.57254905, 0.57254905, 1)
+
+[resource]
+script = ExtResource("1_lk8v1")
+name = "Horizon 3D"
+created_at = "2026-03-11T00:23:11"
+library_hide_hero_image = true
+library_vertical_layout = false
+library_grid_padding = 23
+library_grid_margin_x = 0
+library_grid_margin_y = 0
+library_card_zoom = 0.25
+library_bar_color = Color(0.8745098, 0.8745098, 0.90588236, 1)
+library_icon_color = Color(0, 0, 0, 1)
+library_background_config = {
+"effect_id": "solid",
+"settings": {
+"background_color": Color(0.8745098, 0.85882354, 0.84313726, 1)
+}
+}
+card_effect_config = {
+"card_orientation": 2,
+"corner_radius": 0.37,
+"effects": [{
+"effect_id": "border",
+"settings": {
+"border_color": Color(1, 1, 1, 1),
+"border_fade_in": 0.0,
+"border_gradient": SubResource("Gradient_3yjc8"),
+"border_size": 0.15000000000000002,
+"gradient_direction": 1,
+"inner_stroke_width": 0.1,
+"outer_stroke_gradient": SubResource("Gradient_rgwmd"),
+"outer_stroke_width": 0.055
+}
+}, {
+"effect_id": "drop_shadow",
+"settings": {
+"shadow_color": Color(0, 0, 0, 0.2),
+"shadow_expand": 0.084,
+"shadow_offset_x": 0.0,
+"shadow_offset_y": 0.04099999999999998,
+"shadow_softness": 0.15,
+"shadow_spread": 0.07
+}
+}]
+}

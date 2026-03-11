@@ -11,6 +11,7 @@ import android.content.pm.PackageInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Looper;
+import android.provider.DocumentsContract;
 import android.util.Log;
 import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
@@ -1080,6 +1081,105 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 return "application/x-nintendo-rom";
             default:
                 return "application/octet-stream";
+        }
+    }
+    
+    /**
+     * Deletes a file or directory using a SAF (Storage Access Framework) URI.
+     * Returns true if deletion was successful, false otherwise.
+     */
+    @UsedByGodot
+    public boolean deleteSafFile(String fileUriString) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "deleteSafFile() called");
+        Log.d(TAG, "File URI: " + fileUriString);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Parse the tree URI to extract tree base and relative path
+            // Format: content://authority/tree/treeId/subdir1/subdir2/filename
+            int treePos = fileUriString.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "ERROR: Invalid SAF path format - no /tree/ found");
+                return false;
+            }
+            
+            // Find end of tree ID (first / after /tree/)
+            int afterTree = treePos + 6;
+            int nextSlash = fileUriString.indexOf("/", afterTree);
+            
+            if (nextSlash == -1) {
+                Log.e(TAG, "ERROR: Path is tree root, no file to delete");
+                return false;
+            }
+            
+            // Extract tree base URI (up to and including tree ID)
+            String treeBase = fileUriString.substring(0, nextSlash);
+            Log.d(TAG, "Tree base: " + treeBase);
+            
+            // Extract relative path from tree
+            String relativePath = fileUriString.substring(nextSlash + 1);
+            Log.d(TAG, "Relative path: " + relativePath);
+            
+            // Navigate through DocumentFile tree (same as safFileExists)
+            Uri treeUri = Uri.parse(treeBase);
+            DocumentFile currentDir = DocumentFile.fromTreeUri(activity, treeUri);
+            
+            if (currentDir == null) {
+                Log.e(TAG, "ERROR: Could not access tree root");
+                return false;
+            }
+            
+            // Split relative path into components
+            String[] pathParts = relativePath.split("/");
+            
+            // Navigate through directories
+            for (int i = 0; i < pathParts.length - 1; i++) {
+                String dirName = pathParts[i];
+                if (dirName.isEmpty()) continue;
+                
+                Log.d(TAG, "Looking for directory: " + dirName);
+                DocumentFile subDir = currentDir.findFile(dirName);
+                if (subDir == null || !subDir.isDirectory()) {
+                    Log.e(TAG, "Directory not found: " + dirName);
+                    return false;
+                }
+                currentDir = subDir;
+            }
+            
+            // Find the file
+            String fileName = pathParts[pathParts.length - 1];
+            Log.d(TAG, "Looking for file: " + fileName);
+            DocumentFile file = currentDir.findFile(fileName);
+            
+            if (file == null || !file.exists()) {
+                Log.e(TAG, "ERROR: File does not exist");
+                return false;
+            }
+            
+            // Delete the file
+            boolean deleted = file.delete();
+            
+            if (deleted) {
+                Log.d(TAG, "SUCCESS: Deleted file at " + fileUriString);
+                Log.d(TAG, "==========================================");
+                return true;
+            } else {
+                Log.e(TAG, "ERROR: DocumentFile.delete() returned false");
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR deleting SAF file: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            Log.e(TAG, "Stack trace:");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            return false;
         }
     }
     

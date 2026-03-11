@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://resource/theme_preset.gd" id="1_vc61b"]
+
+[resource]
+script = ExtResource("1_vc61b")
+name = "Horizon 2"
+created_at = "2026-03-11T00:22:47"
+library_hide_hero_image = true
+library_vertical_layout = false
+library_grid_padding = 17
+library_grid_margin_x = 43
+library_grid_margin_y = 79
+library_card_zoom = 0.41
+library_bar_color = Color(0.10980392, 0.10980392, 0.10980392, 1)
+library_icon_color = Color(0.8745098, 0.8745098, 0.8745098, 1)
+library_background_config = {
+"effect_id": "solid",
+"settings": {
+"background_color": Color(0.10980392, 0.10980392, 0.10980392, 1)
+}
+}
+card_effect_config = {
+"card_orientation": 2,
+"corner_radius": 0.11,
+"effects": [{
+"effect_id": "badge",
+"settings": {
+"badge_color": Color(1, 0, 0, 1),
+"badge_inner_radius": 0.0,
+"badge_size": 1.4,
+"hide_background": false,
+"icon_color": Color(1, 1, 1, 1),
+"icon_padding": 0.5
+}
+}]
+}

@@ -366,6 +366,11 @@ func _refresh_all_settings_ui() -> void:
 		_rebuild_library_effect_controls(current_effect_id)
 	
 	# Notify other views that settings changed
+	# Emit setting_changed for card_effect_config so LibraryView and HomeView rebuild their cards
+	var card_effect_setting = SettingsManager.get_setting("card_effect_config")
+	if card_effect_setting:
+		SettingsManager.setting_changed.emit(card_effect_setting.value, card_effect_setting)
+	
 	SettingsManager.settings_saved.emit()
 
 func _on_load_preset_pressed() -> void:

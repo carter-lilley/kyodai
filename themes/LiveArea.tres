@@ -1,0 +1,70 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://resource/theme_preset.gd" id="1_3bdin"]
+
+[resource]
+script = ExtResource("1_3bdin")
+name = "LiveArea"
+created_at = "2026-03-10T16:49:25"
+library_hide_hero_image = true
+library_bottom_bar_position = 1
+library_grid_padding = 50
+library_grid_margin_x = 0
+library_grid_margin_y = 0
+library_card_zoom = 0.22
+library_bar_color = Color(0, 0, 0, 1)
+library_icon_color = Color(1, 1, 1, 1)
+library_background_config = {
+"effect_id": "xmb",
+"settings": {
+"color_bottom_left": Color(0.2627451, 0.47843137, 0.9764706, 1),
+"color_bottom_right": Color(0.2627451, 0.47843137, 0.9764706, 1),
+"color_top_left": Color(0.03137255, 0.101960786, 0.5019608, 1),
+"color_top_right": Color(0.03137255, 0.101960786, 0.5019608, 1),
+"show_dust": false,
+"star_threshold": 0.99,
+"time_scale": 0.5,
+"wave_blend_color": Color(0.9882353, 0.99607843, 1, 1),
+"wave_intensity": 1.6
+}
+}
+card_effect_config = {
+"card_orientation": 2,
+"corner_radius": 1.0,
+"effects": [{
+"effect_id": "distort",
+"settings": {
+"distortion": 0.07,
+"opacity": 1.0
+}
+}, {
+"effect_id": "glass",
+"settings": {
+"additional_inset_ratio": 0.0,
+"bounce_intensity": 0.34,
+"bounce_softness": 5.5,
+"distortion": 0.5,
+"glass_color": Color(0.3451539, 0.3451539, 0.3451539, 0),
+"light_angle": 311.0,
+"light_height": 0.30000000000000004,
+"rim_intensity": 0.94,
+"rim_sharpness": 3.2,
+"specular_intensity": 0.96,
+"specular_power": 35.0,
+"swoop_curve": 0.0,
+"swoop_height": 0.0,
+"swoop_intensity": 0.0,
+"swoop_tilt": -1.0
+}
+}, {
+"effect_id": "drop_shadow",
+"settings": {
+"shadow_color": Color(0, 0, 0, 0.5),
+"shadow_expand": 0.03,
+"shadow_offset_x": -0.0010000000000000009,
+"shadow_offset_y": 0.0,
+"shadow_softness": 0.075,
+"shadow_spread": 0.04
+}
+}]
+}

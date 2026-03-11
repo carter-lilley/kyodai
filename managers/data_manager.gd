@@ -993,8 +993,22 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	
 	print("[DataManager] Deleting file at constructed path: " + abs_path)
 	
-	# Check if file exists
-	if not FileAccess.file_exists(abs_path):
+	# Check if file exists (use PackageChecker for SAF paths on Android)
+	var file_exists = false
+	if PlatformManager.is_android() and abs_path.begins_with("content://"):
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			file_exists = plugin.call("safFileExists", abs_path)
+			print("[DataManager] SAF file exists check: " + str(file_exists))
+		else:
+			push_error("[DataManager] PackageChecker plugin not available for SAF file check")
+			if callback.is_valid():
+				callback.call(false)
+			return false
+	else:
+		file_exists = FileAccess.file_exists(abs_path)
+	
+	if not file_exists:
 		push_error("[DataManager] File does not exist: " + abs_path)
 		if callback.is_valid():
 			callback.call(false)
@@ -1004,30 +1018,43 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	var file_deleted = false
 	var error_msg = ""
 	
-	# Method 1: Try using DirAccess with the parent directory
-	var parent_dir = abs_path.get_base_dir()
-	var file_name = abs_path.get_file()
-	var dir = DirAccess.open(parent_dir)
-	
-	if dir:
-		var err = dir.remove(file_name)
-		if err == OK:
-			file_deleted = true
-			print("[DataManager] Successfully deleted file using DirAccess: " + abs_path)
+	# Check if this is an Android SAF path
+	if PlatformManager.is_android() and abs_path.begins_with("content://"):
+		print("[DataManager] Using PackageChecker plugin for SAF file deletion")
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			file_deleted = plugin.call("deleteSafFile", abs_path)
+			if file_deleted:
+				print("[DataManager] Successfully deleted SAF file using PackageChecker")
+			else:
+				error_msg = "PackageChecker.deleteSafFile returned false"
 		else:
-			error_msg = "DirAccess.remove failed with error: " + str(err)
+			error_msg = "PackageChecker plugin not available for SAF file deletion"
 	else:
-		error_msg = "Failed to open directory: " + parent_dir
-	
-	# Method 2: If first method failed, try remove_absolute
-	if not file_deleted:
-		print("[DataManager] Trying remove_absolute for: " + abs_path)
-		var err = DirAccess.remove_absolute(abs_path)
-		if err == OK:
-			file_deleted = true
-			print("[DataManager] Successfully deleted file using remove_absolute: " + abs_path)
+		# Method 1: Try using DirAccess with the parent directory
+		var parent_dir = abs_path.get_base_dir()
+		var file_name = abs_path.get_file()
+		var dir = DirAccess.open(parent_dir)
+		
+		if dir:
+			var err = dir.remove(file_name)
+			if err == OK:
+				file_deleted = true
+				print("[DataManager] Successfully deleted file using DirAccess: " + abs_path)
+			else:
+				error_msg = "DirAccess.remove failed with error: " + str(err)
 		else:
-			error_msg += " | remove_absolute failed with error: " + str(err)
+			error_msg = "Failed to open directory: " + parent_dir
+		
+		# Method 2: If first method failed, try remove_absolute
+		if not file_deleted:
+			print("[DataManager] Trying remove_absolute for: " + abs_path)
+			var err = DirAccess.remove_absolute(abs_path)
+			if err == OK:
+				file_deleted = true
+				print("[DataManager] Successfully deleted file using remove_absolute: " + abs_path)
+			else:
+				error_msg += " | remove_absolute failed with error: " + str(err)
 	
 	# If file deletion failed, don't update the database
 	if not file_deleted:
@@ -1036,8 +1063,16 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 			callback.call(false)
 		return false
 	
-	# Verify file was actually deleted
-	if FileAccess.file_exists(abs_path):
+	# Verify file was actually deleted (use PackageChecker for SAF paths on Android)
+	var file_still_exists = false
+	if PlatformManager.is_android() and abs_path.begins_with("content://"):
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			file_still_exists = plugin.call("safFileExists", abs_path)
+	else:
+		file_still_exists = FileAccess.file_exists(abs_path)
+	
+	if file_still_exists:
 		push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
 		if callback.is_valid():
 			callback.call(false)

@@ -7,6 +7,7 @@ signal settings_saved
 
 const SAVE_PATH := "user://user_prefs.tres"
 const PRESETS_FOLDER := "user://themes/"
+const BUILTIN_PRESETS_FOLDER := "res://themes/"
 var settings: Settings
 var settings_dict: Dictionary[String, SettingsVar] = {}
 
@@ -213,23 +214,85 @@ func _ensure_presets_folder() -> void:
 		if not dir.dir_exists("themes"):
 			dir.make_dir("themes")
 
+# List of built-in preset filenames (needed for Android where DirAccess doesn't work on res://)
+const BUILTIN_PRESET_FILES: Array[String] = [
+	# Add your built-in preset filenames here, e.g.:
+	# "Default.tres",
+	# "Neon.tres",
+	# "Retro.tres",
+]
+
 func list_presets() -> Array[ThemePreset]:
 	_ensure_presets_folder()
 	var presets: Array[ThemePreset] = []
-	var dir = DirAccess.open(PRESETS_FOLDER)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir() and file_name.ends_with(".tres"):
-				var preset_path = PRESETS_FOLDER + file_name
+	var loaded_names: Array[String] = []
+	
+	# Load built-in presets first (from res://)
+	# On Android, DirAccess doesn't work for res://, so we use the hardcoded list
+	print("[SettingsManager] Loading presets. BUILTIN_PRESET_FILES: ", BUILTIN_PRESET_FILES)
+	print("[SettingsManager] BUILTIN_PRESETS_FOLDER: ", BUILTIN_PRESETS_FOLDER)
+	
+	if not BUILTIN_PRESET_FILES.is_empty():
+		print("[SettingsManager] Using hardcoded preset list")
+		for file_name in BUILTIN_PRESET_FILES:
+			var preset_path = BUILTIN_PRESETS_FOLDER + file_name
+			print("[SettingsManager] Checking: ", preset_path, " exists: ", ResourceLoader.exists(preset_path))
+			if ResourceLoader.exists(preset_path):
 				var preset = ResourceLoader.load(preset_path) as ThemePreset
-				if preset:
+				print("[SettingsManager] Loaded preset: ", preset.name if preset else "null")
+				if preset and preset.name not in loaded_names:
 					presets.append(preset)
-			file_name = dir.get_next()
-		
-		# Sort by name
-		presets.sort_custom(func(a, b): return a.name < b.name)
+					loaded_names.append(preset.name)
+	else:
+		# Fallback: try DirAccess (works on desktop)
+		print("[SettingsManager] BUILTIN_PRESET_FILES is empty, trying DirAccess")
+		var dir = DirAccess.open(BUILTIN_PRESETS_FOLDER)
+		if dir:
+			print("[SettingsManager] Opened dir: ", BUILTIN_PRESETS_FOLDER)
+			dir.list_dir_begin()
+			var file_name = dir.get_next()
+			while file_name != "":
+				print("[SettingsManager] Found file: ", file_name)
+				if not dir.current_is_dir() and (file_name.ends_with(".tres") or file_name.ends_with(".tres.remap")):
+					# Strip .remap extension if present - it's a mapping file, load the actual resource
+					var preset_path = BUILTIN_PRESETS_FOLDER + file_name
+					if preset_path.ends_with(".remap"):
+						preset_path = preset_path.substr(0, preset_path.length() - 6)
+					print("[SettingsManager] Loading: ", preset_path)
+					print("[SettingsManager] ResourceLoader.exists: ", ResourceLoader.exists(preset_path))
+					var loaded_resource = ResourceLoader.load(preset_path)
+					print("[SettingsManager] Loaded resource: ", loaded_resource)
+					print("[SettingsManager] Resource type: ", loaded_resource.get_class() if loaded_resource else "null")
+					var preset = loaded_resource as ThemePreset
+					print("[SettingsManager] Cast to ThemePreset: ", preset)
+					if preset and preset.name not in loaded_names:
+						presets.append(preset)
+						loaded_names.append(preset.name)
+					elif not preset:
+						print("[SettingsManager] WARNING: Failed to cast to ThemePreset")
+				file_name = dir.get_next()
+		else:
+			print("[SettingsManager] FAILED to open dir: ", BUILTIN_PRESETS_FOLDER)
+	
+	# Load user presets (from user://) - these can override built-ins
+	var user_dir = DirAccess.open(PRESETS_FOLDER)
+	if user_dir:
+		user_dir.list_dir_begin()
+		var user_file_name = user_dir.get_next()
+		while user_file_name != "":
+			if not user_dir.current_is_dir() and (user_file_name.ends_with(".tres") or user_file_name.ends_with(".tres.remap")):
+				var user_preset_path = PRESETS_FOLDER + user_file_name
+				var user_preset = ResourceLoader.load(user_preset_path) as ThemePreset
+				if user_preset and user_preset.name not in loaded_names:
+					presets.append(user_preset)
+					loaded_names.append(user_preset.name)
+			user_file_name = user_dir.get_next()
+	
+	# Sort by name
+	presets.sort_custom(func(a, b): return a.name < b.name)
+	print("[SettingsManager] Total presets loaded: ", presets.size())
+	for p in presets:
+		print("[SettingsManager]   - ", p.name)
 	return presets
 
 func save_preset(preset: ThemePreset) -> bool:
@@ -279,29 +342,30 @@ func apply_preset(preset: ThemePreset) -> bool:
 	
 	if success:
 		# Emit setting_changed for all library settings so views get notified
+		# Emit the SETTING VALUE (settings.X.value), not the preset value
 		if settings.get("library_hide_hero_image") != null:
-			emit_signal("setting_changed", preset.library_hide_hero_image, settings.library_hide_hero_image)
+			emit_signal("setting_changed", settings.library_hide_hero_image.value, settings.library_hide_hero_image)
 		if settings.get("library_vertical_layout") != null:
-			emit_signal("setting_changed", preset.library_vertical_layout, settings.library_vertical_layout)
+			emit_signal("setting_changed", settings.library_vertical_layout.value, settings.library_vertical_layout)
 		if settings.get("library_bottom_bar_position") != null:
-			emit_signal("setting_changed", preset.library_bottom_bar_position, settings.library_bottom_bar_position)
+			emit_signal("setting_changed", settings.library_bottom_bar_position.value, settings.library_bottom_bar_position)
 		if settings.get("library_grid_padding") != null:
-			emit_signal("setting_changed", preset.library_grid_padding, settings.library_grid_padding)
+			emit_signal("setting_changed", settings.library_grid_padding.value, settings.library_grid_padding)
 		if settings.get("library_grid_margin_x") != null:
-			emit_signal("setting_changed", preset.library_grid_margin_x, settings.library_grid_margin_x)
+			emit_signal("setting_changed", settings.library_grid_margin_x.value, settings.library_grid_margin_x)
 		if settings.get("library_grid_margin_y") != null:
-			emit_signal("setting_changed", preset.library_grid_margin_y, settings.library_grid_margin_y)
+			emit_signal("setting_changed", settings.library_grid_margin_y.value, settings.library_grid_margin_y)
 		if settings.get("library_card_zoom") != null:
-			emit_signal("setting_changed", preset.library_card_zoom, settings.library_card_zoom)
+			emit_signal("setting_changed", settings.library_card_zoom.value, settings.library_card_zoom)
 		if settings.get("library_bar_color") != null:
-			emit_signal("setting_changed", preset.library_bar_color, settings.library_bar_color)
+			emit_signal("setting_changed", settings.library_bar_color.value, settings.library_bar_color)
 		if settings.get("library_icon_color") != null:
-			emit_signal("setting_changed", preset.library_icon_color, settings.library_icon_color)
+			emit_signal("setting_changed", settings.library_icon_color.value, settings.library_icon_color)
 		if settings.get("library_background_config") != null:
-			emit_signal("setting_changed", preset.library_background_config, settings.library_background_config)
+			emit_signal("setting_changed", settings.library_background_config.value, settings.library_background_config)
 		# Emit for card effect config - this triggers grid rebuild
 		if settings.get("card_effect_config") != null:
-			emit_signal("setting_changed", preset.card_effect_config, settings.card_effect_config)
+			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)
 		
 		save_settings()
 		emit_signal("settings_saved")

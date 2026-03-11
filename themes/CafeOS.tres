@@ -1,0 +1,74 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://resource/theme_preset.gd" id="1_rp5om"]
+
+[sub_resource type="Gradient" id="Gradient_3yjc8"]
+colors = PackedColorArray(1, 1, 1, 1, 0.8359375, 0.8359375, 0.8359375, 1)
+
+[resource]
+script = ExtResource("1_rp5om")
+name = "CafeOS"
+created_at = "2026-03-10T17:06:58"
+library_hide_hero_image = true
+library_vertical_layout = false
+library_grid_padding = 23
+library_grid_margin_x = 0
+library_grid_margin_y = 0
+library_card_zoom = 0.19
+library_bar_color = Color(1, 1, 1, 1)
+library_icon_color = Color(0, 0, 0, 1)
+library_background_config = {
+"effect_id": "solid",
+"settings": {
+"background_color": Color(0.8509804, 0.8901961, 0.84705883, 1)
+}
+}
+card_effect_config = {
+"card_orientation": 2,
+"corner_radius": 0.26,
+"effects": [{
+"effect_id": "glass",
+"settings": {
+"additional_inset_ratio": 0.08,
+"bounce_intensity": 0.29,
+"bounce_softness": 8.0,
+"distortion": 0.5,
+"glass_color": Color(0.19720905, 0.31868905, 0.4254442, 0.18039216),
+"light_angle": 224.0,
+"light_height": -0.2,
+"rim_intensity": 0.53,
+"rim_sharpness": 3.7,
+"specular_intensity": 1.27,
+"specular_power": 63.0,
+"swoop_curve": 0.21,
+"swoop_height": 0.42,
+"swoop_intensity": 0.07,
+"swoop_tilt": -0.5700000000000001
+}
+}, {
+"effect_id": "border",
+"settings": {
+"border_color": Color(1, 1, 1, 1),
+"border_fade_in": 0.0,
+"border_gradient": SubResource("Gradient_3yjc8"),
+"border_size": 0.01,
+"gradient_direction": 1
+}
+}, {
+"effect_id": "drop_shadow",
+"settings": {
+"shadow_color": Color(0, 0, 0, 0.26666668),
+"shadow_expand": 0.064,
+"shadow_offset_x": 0.0,
+"shadow_offset_y": 0.017,
+"shadow_softness": 0.15,
+"shadow_spread": 0.0
+}
+}, {
+"effect_id": "distort",
+"settings": {
+"distortion": 1.0,
+"opacity": 0.06
+}
+}]
+}
