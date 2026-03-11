@@ -46,9 +46,15 @@ const Type = SettingsVar.SettingType
 	"corner_radius": 0.06
 }, State.INTERNAL, "Card Effect Configuration")
 
+# Internal hero effect configuration (managed by Hero Designer)
+@export var hero_effect_config := SettingsVar.new(Type.DICTIONARY, {
+	"effects": [],
+	"corner_radius": 0.06
+}, State.INTERNAL, "Hero Effect Configuration")
+
 @export_subgroup("Library Appearance")
 # General layout settings (always visible)
-@export var library_hide_hero_image := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Hide Hero Image")
+@export var library_hero_layout_height := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Hero Height", "Height of hero image as percentage of viewport (0% = hidden)", 0.0, 4.0, 1.0, ["Full (100%)", "Two Thirds (66%)", "Half (50%)", "One Third (33%)", "Hidden (0%)"])
 @export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")
 @export var library_bottom_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Bottom Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)

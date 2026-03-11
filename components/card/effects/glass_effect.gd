@@ -26,7 +26,7 @@ func _apply_settings() -> void:
 	_update_shader_params()
 
 func _update_shader_params() -> void:
-	if not _card_state:
+	if not _container_state:
 		return
 	
 	var glass_color = _settings.get("glass_color", Color(0.2, 0.4, 1.0, 0.3))
@@ -55,9 +55,9 @@ func _update_shader_params() -> void:
 	var swoop_tilt = _settings.get("swoop_tilt", 0.0)
 	
 	# Update lights layer (this effect)
-	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
-	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
+	_set_shader_param("card_size", _container_state.container_size)
+	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
+	_set_shader_param("border_inset_ratio", _container_state.border_inset_ratio)
 	_set_shader_param("glass_color", glass_color)
 	
 	# Specular uniforms
@@ -80,9 +80,9 @@ func _update_shader_params() -> void:
 	# Update swoop layer
 	if _swoop_layer and _swoop_layer.material:
 		var swoop_mat = _swoop_layer.material as ShaderMaterial
-		swoop_mat.set_shader_parameter("card_size", _card_state.card_size)
-		swoop_mat.set_shader_parameter("corner_radius_ratio", _card_state.corner_radius_ratio)
-		swoop_mat.set_shader_parameter("border_inset_ratio", _card_state.border_inset_ratio)
+		swoop_mat.set_shader_parameter("card_size", _container_state.container_size)
+		swoop_mat.set_shader_parameter("corner_radius_ratio", _container_state.corner_radius_ratio)
+		swoop_mat.set_shader_parameter("border_inset_ratio", _container_state.border_inset_ratio)
 		swoop_mat.set_shader_parameter("glass_color", glass_color)
 		swoop_mat.set_shader_parameter("swoop_intensity", swoop_intensity)
 		swoop_mat.set_shader_parameter("swoop_height", swoop_height)

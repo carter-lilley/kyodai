@@ -6,7 +6,7 @@
 script = ExtResource("1_ca4q8")
 name = "NSO"
 created_at = "2026-03-10T21:18:26"
-library_hide_hero_image = true
+library_hero_layout_height = 4
 library_bottom_bar_position = 2
 library_grid_padding = 0
 library_grid_margin_x = 0

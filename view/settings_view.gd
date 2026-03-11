@@ -47,6 +47,11 @@ func _build_settings_view():
 	_settings_container.add_child(designer_tab)
 	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Card Designer")
 	
+	# Add Hero Designer tab
+	var hero_designer_tab = _create_hero_designer_tab()
+	_settings_container.add_child(hero_designer_tab)
+	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Hero Designer")
+	
 	# Add GameNative tab (Android only)
 	if PlatformManager.is_android():
 		var gamenative_tab = _create_gamenative_tab()
@@ -55,6 +60,11 @@ func _build_settings_view():
 
 func _create_card_designer_tab() -> Control:
 	var designer = preload("res://view/card_designer_view.tscn").instantiate()
+	designer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	return designer
+
+func _create_hero_designer_tab() -> Control:
+	var designer = preload("res://view/designer/hero_designer_view.tscn").instantiate()
 	designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	return designer
 
@@ -315,7 +325,7 @@ func _check_preset_match() -> void:
 
 func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	# Compare all relevant fields
-	if a.library_hide_hero_image != b.library_hide_hero_image:
+	if a.library_hero_layout_height != b.library_hero_layout_height:
 		return false
 	if a.library_vertical_layout != b.library_vertical_layout:
 		return false

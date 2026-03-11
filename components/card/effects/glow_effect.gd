@@ -9,6 +9,11 @@ func _ready():
 	effect_name = "Glow"
 	effect_id = "glow"
 	z_index = -2  # Render behind everything (even drop shadow)
+	
+	# Connect to parent resized signal to update geometry when card size changes
+	# This ensures glow size is calculated AFTER the card has its final size
+	if get_parent():
+		get_parent().resized.connect(_on_parent_resized)
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
@@ -22,12 +27,25 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	_update_glow_offsets()
 	_update_shader_params()
 
+# Override to update geometry when container size changes
+func _on_size_changed(_new_size: Vector2) -> void:
+	_update_glow_offsets()
+	_update_shader_params()
+
+# Called when parent card resizes - ensures geometry is calculated after layout settles
+func _on_parent_resized() -> void:
+	_update_glow_offsets()
+	_update_shader_params()
+
 func _update_glow_offsets():
-	if not _card_state:
+	# Use parent's ACTUAL size (not container_state) to ensure we're synced with layout
+	var parent = get_parent()
+	if not parent:
 		return
 	
-	var card_width = _card_state.card_size.x
-	var card_height = _card_state.card_size.y
+	var card_size = parent.size
+	var card_width = card_size.x
+	var card_height = card_size.y
 	var glow_radius_ratio = _settings.get("glow_radius", 0.06)
 	
 	# Calculate margin needed for the glow
@@ -44,12 +62,12 @@ func _update_glow_offsets():
 	position = Vector2(-margin_pixels, -margin_pixels)
 
 func set_game_texture(texture: Texture2D) -> void:
-	if _card_state:
-		_card_state.game_texture = texture
+	if _container_state:
+		_container_state.game_texture = texture
 		_update_shader_params()
 
 func _update_shader_params() -> void:
-	if not _card_state:
+	if not _container_state:
 		return
 	
 	var glow_radius = _settings.get("glow_radius", 0.1)
@@ -58,7 +76,7 @@ func _update_shader_params() -> void:
 	var threshold = _settings.get("threshold", 0.1)
 	var glow_spread = _settings.get("glow_spread", 0.05)
 	
-	var card_size = _card_state.card_size
+	var card_size = _container_state.container_size
 	var card_width = card_size.x
 	
 	# Convert ratios to pixels
@@ -66,14 +84,14 @@ func _update_shader_params() -> void:
 	var margin_pixels = (GLOW_MARGIN_RATIO + glow_radius) * card_width
 	
 	_set_shader_param("card_size", card_size)
-	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
 	_set_shader_param("glow_radius", radius_pixels)
 	_set_shader_param("glow_intensity", glow_intensity)
 	_set_shader_param("blur_amount", blur_amount)
 	_set_shader_param("threshold", threshold)
 	_set_shader_param("glow_spread", glow_spread)
 	_set_shader_param("glow_margin", margin_pixels)
-	_set_shader_param("game_texture", _card_state.game_texture)
+	_set_shader_param("game_texture", _container_state.game_texture)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

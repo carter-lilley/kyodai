@@ -449,6 +449,9 @@ func perform_rebuild() -> void:
 	# This is called by the base class, but we handle the deferred rebuild in check_and_rebuild_if_needed
 	pass
 
+var _deferred_rebuild_attempts: int = 0
+const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
+
 func _do_rebuild(reason: String = "") -> void:
 	print("[HomeView] _do_rebuild() executing, reason: '%s'" % reason)
 	print("[HomeView] Size now: ", size)
@@ -456,9 +459,17 @@ func _do_rebuild(reason: String = "") -> void:
 	
 	# Ensure we have valid dimensions before rebuilding
 	if size.x <= 0 or size.y <= 0:
-		print("[HomeView] WARNING: Invalid size detected, deferring again...")
+		_deferred_rebuild_attempts += 1
+		if _deferred_rebuild_attempts > MAX_DEFERRED_REBUILD_ATTEMPTS:
+			push_warning("[HomeView] Max deferred rebuild attempts reached with invalid size, aborting")
+			_deferred_rebuild_attempts = 0
+			return
+		print("[HomeView] WARNING: Invalid size detected, deferring again... (attempt %d/%d)" % [_deferred_rebuild_attempts, MAX_DEFERRED_REBUILD_ATTEMPTS])
 		call_deferred("_do_rebuild", reason)
 		return
+	
+	# Reset counter on successful rebuild
+	_deferred_rebuild_attempts = 0
 	
 	if games_grid:
 		print("[HomeView] games_grid size: ", games_grid.size)

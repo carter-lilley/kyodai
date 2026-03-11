@@ -9,7 +9,7 @@ class_name ThemePreset
 @export var version: int = 1  # For backwards compatibility
 
 # Library Appearance Settings
-@export var library_hide_hero_image: bool = false
+@export var library_hero_layout_height: int = 0
 @export var library_vertical_layout: bool = true
 @export var library_bottom_bar_position: int = 0
 @export var library_grid_padding: int = 10
@@ -36,7 +36,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.version = 1
 	
 	# Library settings
-	preset.library_hide_hero_image = settings.library_hide_hero_image.value if settings.library_hide_hero_image else false
+	preset.library_hero_layout_height = settings.library_hero_layout_height.value if settings.library_hero_layout_height else 0
 	preset.library_vertical_layout = settings.library_vertical_layout.value if settings.library_vertical_layout else true
 	preset.library_bottom_bar_position = settings.library_bottom_bar_position.value if settings.library_bottom_bar_position else 0
 	preset.library_grid_padding = settings.library_grid_padding.value if settings.library_grid_padding else 10
@@ -64,8 +64,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		return false
 	
 	# Apply library settings (with null checks)
-	if settings.get("library_hide_hero_image") != null:
-		settings.library_hide_hero_image.value = library_hide_hero_image
+	if settings.get("library_hero_layout_height") != null:
+		settings.library_hero_layout_height.value = library_hero_layout_height
 	if settings.get("library_vertical_layout") != null:
 		settings.library_vertical_layout.value = library_vertical_layout
 	if settings.get("library_bottom_bar_position") != null:

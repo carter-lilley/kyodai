@@ -9,6 +9,11 @@ func _ready():
 	effect_name = "Drop Shadow"
 	effect_id = "drop_shadow"
 	z_index = -1
+	
+	# Connect to parent resized signal to update geometry when card size changes
+	# This ensures shadow size is calculated AFTER the card has its final size
+	if get_parent():
+		get_parent().resized.connect(_on_parent_resized)
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
@@ -26,12 +31,25 @@ func _on_orientation_changed(_new_orientation: int) -> void:
 	_update_shadow_offsets()
 	_update_shader_params()
 
+# Override to update geometry when container size changes
+func _on_size_changed(_new_size: Vector2) -> void:
+	_update_shadow_offsets()
+	_update_shader_params()
+
+# Called when parent card resizes - ensures geometry is calculated after layout settles
+func _on_parent_resized() -> void:
+	_update_shadow_offsets()
+	_update_shader_params()
+
 func _update_shadow_offsets():
-	if not _card_state:
+	# Use parent's ACTUAL size (not container_state) to ensure we're synced with layout
+	var parent = get_parent()
+	if not parent:
 		return
 	
-	var card_width = _card_state.card_size.x
-	var card_height = _card_state.card_size.y
+	var card_size = parent.size
+	var card_width = card_size.x
+	var card_height = card_size.y
 	var shadow_offset_y_ratio = _settings.get("shadow_offset_y", 0.05)
 	var shadow_softness_ratio = _settings.get("shadow_softness", 0.04)
 	
@@ -49,7 +67,7 @@ func _update_shadow_offsets():
 	position = Vector2(-margin_pixels, -margin_pixels)
 
 func _update_shader_params() -> void:
-	if not _card_state:
+	if not _container_state:
 		return
 	
 	var shadow_color = _settings.get("shadow_color", Color(0, 0, 0, 0.5))
@@ -59,7 +77,7 @@ func _update_shader_params() -> void:
 	var shadow_spread = _settings.get("shadow_spread", 0.0)
 	var shadow_expand = _settings.get("shadow_expand", 0.02)
 	
-	var card_size = _card_state.card_size
+	var card_size = _container_state.container_size
 	var card_width = card_size.x
 	
 	# Convert ratios to pixels for shader
@@ -68,7 +86,7 @@ func _update_shader_params() -> void:
 	var margin_pixels = (SHADOW_MARGIN_RATIO + abs(shadow_offset_y) + shadow_softness) * card_width
 	
 	_set_shader_param("card_size", card_size)
-	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
 	_set_shader_param("shadow_color", shadow_color)
 	_set_shader_param("shadow_offset", shadow_offset)
 	_set_shader_param("shadow_softness", softness_pixels)

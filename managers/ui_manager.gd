@@ -19,15 +19,18 @@ const BAR_POSITIONS = ["bottom", "top", "left", "right"]
 # Bar sizing constant (7.5% of viewport dimension)
 const BAR_SIZE_RATIO = 0.075
 
-# Hero image sizing constant (33% of viewport height)
-const HERO_SIZE_RATIO = 0.33
+# Default hero height ratio (will be overridden by settings)
+const HERO_SIZE_RATIO_DEFAULT = 0.33
+const HERO_HEIGHT_RATIOS = [1.0, 0.66, 0.5, 0.33, 0.0]
 
 # Hero image management
 var _hero_image: HeroImage = null
+var _hero_spacer: Control = null  # Spacer for layout when hero is <100%
 
 # Library background management
 var _library_background: LibraryBackground = null
 var _content_wrapper: Control = null
+var _background_vbox: VBoxContainer = null  # Container for HeroImage + LibraryBackground
 
 # Modal management
 var _active_modal: Modal = null
@@ -135,42 +138,91 @@ func _update_bar_size() -> void:
 		_bottom_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 func _update_hero_size() -> void:
-	"""Update the hero image size based on viewport."""
+	"""Update the hero image and library background sizes based on viewport and settings."""
 	if not _hero_image or not is_inside_tree():
 		return
 	
-	var viewport_size = get_viewport().size
-	var target_height = viewport_size.y * HERO_SIZE_RATIO
-	_hero_image.custom_minimum_size = Vector2(0, target_height)
-	_hero_image.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_hero_image.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var viewport = get_viewport()
+	if not viewport:
+		return
+	
+	var viewport_size = viewport.size
+	# Prevent invalid sizes
+	if viewport_size.y <= 0:
+		print("[UIManager] WARNING: Invalid viewport height, skipping hero size update")
+		return
+	
+	# Get height ratio from settings (default to 0.33 if not set)
+	var height_ratio = HERO_SIZE_RATIO_DEFAULT
+	if SettingsManager:
+		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
+		if height_setting and height_setting.value is int and height_setting.value >= 0 and height_setting.value < HERO_HEIGHT_RATIOS.size():
+			height_ratio = HERO_HEIGHT_RATIOS[height_setting.value]
+	
+	var target_height = viewport_size.y * height_ratio
+	# Ensure minimum valid height
+	if target_height < 1.0:
+		target_height = 1.0
+	
+	# Update BackgroundVBox children sizes
+	# HeroImage and LibraryBackground share space in BackgroundVBox
+	if _background_vbox:
+		# Calculate sizes based on ratio
+		var hero_bg_height = viewport_size.y * height_ratio
+		var lib_bg_height = viewport_size.y * (1.0 - height_ratio)
+		
+		# Update HeroImage size
+		_hero_image.custom_minimum_size = Vector2(0, hero_bg_height)
+		_hero_image.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		
+		# Update LibraryBackground size (0 when hero is 100%)
+		if _library_background:
+			if height_ratio >= 1.0:
+				_library_background.visible = false
+				_library_background.custom_minimum_size = Vector2(0, 0)
+			else:
+				_library_background.visible = true
+				_library_background.custom_minimum_size = Vector2(0, lib_bg_height)
+				_library_background.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			
+		print("[UIManager] BackgroundVBox updated: hero_height=", hero_bg_height, ", lib_height=", lib_bg_height)
+	
+	# Update spacer size (pushes grid down, 0 when hero is 100%)
+	var spacer_height = 0.0
+	if height_ratio < 1.0:
+		spacer_height = target_height
+	
+	if _hero_spacer:
+		_hero_spacer.custom_minimum_size = Vector2(0, spacer_height)
+		print("[UIManager] Spacer size updated: height=", spacer_height)
+	
+	print("[UIManager] Hero size updated: height=", target_height, " (", height_ratio * 100, "% of viewport)")
 
 func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
-	"""Create and setup the shared HeroImage instance."""
+	"""Create and setup the shared HeroImage and spacer instances."""
 	if _hero_image:
 		return
 	
+	# Create HeroImage (will be added to BackgroundVBox in _setup_layout)
 	var hero_scene = preload("res://components/hero_image.tscn")
 	_hero_image = hero_scene.instantiate()
 	_hero_image.name = "HeroImage"
 	
+	# Create spacer for layout (pushes grid down when hero <100%)
+	_hero_spacer = Control.new()
+	_hero_spacer.name = "HeroSpacer"
+	_hero_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	
 	# Add to main_content_vbox if provided
 	if main_content_vbox:
-		main_content_vbox.add_child(_hero_image)
-		main_content_vbox.move_child(_hero_image, 0)
-		print("[UIManager] HeroImage added to MainContentVBox at index 0")
-	else:
-		# Temporarily add to root control until layout is set up
-		_root_control.add_child(_hero_image)
-		_root_control.move_child(_hero_image, 0)
-		print("[UIManager] HeroImage added to root control temporarily")
+		main_content_vbox.add_child(_hero_spacer)
+		main_content_vbox.move_child(_hero_spacer, 0)
+		print("[UIManager] HeroSpacer added to MainContentVBox at index 0")
+	
+	# HeroImage will be added to BackgroundVBox in _setup_layout
+	print("[UIManager] HeroImage created, will be added to BackgroundVBox in _setup_layout")
 	
 	_update_hero_size()
-	
-	# Check if hero should be hidden by default
-	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
-	if hide_hero_setting and hide_hero_setting.value:
-		_hero_image.visible = false
 
 func _setup_library_background() -> void:
 	"""Create and setup the shared LibraryBackground instance."""
@@ -336,18 +388,38 @@ func _setup_layout() -> void:
 	elif _content_wrapper.get_parent():
 		_content_wrapper.get_parent().remove_child(_content_wrapper)
 	
-	# Clear ContentWrapper children except LibraryBackground (which stays permanently)
+	# Clear ContentWrapper children (we'll rebuild the structure)
 	for child in _content_wrapper.get_children():
-		if child != _library_background:
-			_content_wrapper.remove_child(child)
+		_content_wrapper.remove_child(child)
 	
-	# Add LibraryBackground to ContentWrapper if not already there
-	if _library_background.get_parent() == null:
-		_library_background.set_anchors_preset(Control.PRESET_FULL_RECT)
-		_content_wrapper.add_child(_library_background)
-		print("[UIManager] LibraryBackground added to ContentWrapper")
+	# Create BackgroundVBox to hold HeroImage and LibraryBackground behind everything
+	if not _background_vbox:
+		_background_vbox = VBoxContainer.new()
+		_background_vbox.name = "BackgroundVBox"
+		_background_vbox.z_index = -1  # Render behind MainContentVBox
+	_background_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_content_wrapper.add_child(_background_vbox)
+	print("[UIManager] BackgroundVBox added to ContentWrapper")
 	
-	# Configure MainContentVBox to fill the content wrapper (on top of LibraryBackground)
+	# Add HeroImage to BackgroundVBox if not already there
+	if _hero_image:
+		if _hero_image.get_parent():
+			_hero_image.get_parent().remove_child(_hero_image)
+		_hero_image.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_hero_image.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_background_vbox.add_child(_hero_image)
+		print("[UIManager] HeroImage added to BackgroundVBox")
+	
+	# Add LibraryBackground to BackgroundVBox if not already there
+	if _library_background:
+		if _library_background.get_parent():
+			_library_background.get_parent().remove_child(_library_background)
+		_library_background.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_library_background.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_background_vbox.add_child(_library_background)
+		print("[UIManager] LibraryBackground added to BackgroundVBox")
+	
+	# Configure MainContentVBox to fill the content wrapper (on top of BackgroundVBox)
 	main_content_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_content_wrapper.add_child(main_content_vbox)
 	
@@ -373,6 +445,9 @@ func _setup_layout() -> void:
 	# Update bar size and connect resize handler
 	_update_bar_size()
 	_connect_viewport_resize()
+	
+	# Update hero size now that BackgroundVBox is created and children are added
+	_update_hero_size()
 	
 	# Apply bar and icon colors from settings (deferred to ensure BottomBar is fully ready)
 	call_deferred("_apply_bottom_bar_colors")
@@ -580,10 +655,15 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# Restore focus after rebuild if control still exists
 		if focused_control and is_instance_valid(focused_control):
 			focused_control.grab_focus()
-	elif setting.property_name == "library_hide_hero_image":
-		# Update hero image visibility when setting changes
-		var current_view_name = _current_view.view_name if _current_view else ""
-		_update_hero_visibility(current_view_name)
+	elif setting.property_name == "library_hero_layout_height":
+		# Update hero image size when height setting changes
+		print("[UIManager] Hero layout height changed to index: ", setting.value)
+		_update_hero_size()
+		# Mark views for rebuild so they reflect the new hero size
+		if _views.has("Home"):
+			_views["Home"].mark_for_rebuild("Hero height changed")
+		if _views.has("Library"):
+			_views["Library"].mark_for_rebuild("Hero height changed")
 	elif setting.property_name == "library_vertical_layout":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):
@@ -619,6 +699,11 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			else:
 				print("[UIManager DEBUG] Marking Library view for rebuild (not current view)")
 				library_view.mark_for_rebuild("Card effects changed")
+	elif setting.property_name == "hero_effect_config":
+		# Refresh hero image when hero effects change
+		print("[UIManager DEBUG] hero_effect_config changed, refreshing hero image")
+		if _hero_image and _hero_image.has_method("refresh_from_settings"):
+			_hero_image.refresh_from_settings()
 	elif setting.property_name == "library_grid_padding":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):
@@ -659,26 +744,43 @@ func _on_tab_changed(tab_idx: int):
 		tab_changed.emit(tab_title)
 
 func _update_hero_visibility(view_name: String) -> void:
-	"""Show/hide hero image and library background based on current view and settings."""
-	# Update hero image visibility
+	"""Show/hide hero image, spacer, and library background based on current view and settings."""
+	# Check if hero height is set to 0% (hidden)
+	var height_ratio = HERO_SIZE_RATIO_DEFAULT
+	if SettingsManager:
+		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
+		if height_setting and height_setting.value is int and height_setting.value >= 0 and height_setting.value < HERO_HEIGHT_RATIOS.size():
+			height_ratio = HERO_HEIGHT_RATIOS[height_setting.value]
+	var hero_enabled = height_ratio > 0.0
+	
+	# Show background for Home and Library views, hide for Downloads and Settings
+	var show_background = view_name in ["Home", "Library"]
+	
+	# Update BackgroundVBox visibility (always show for Home/Library, even if hero is 0%)
+	if _background_vbox:
+		_background_vbox.visible = show_background
+	
+	# Update hero image visibility (only visible when enabled AND showing background)
 	if _hero_image:
-		# Check if hero image is disabled in settings
-		var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
-		var hide_hero = hide_hero_setting and hide_hero_setting.value
+		_hero_image.visible = show_background and hero_enabled
 		
-		# Show hero for Home and Library views (unless disabled), hide for Downloads and Settings
-		var show_hero = (view_name in ["Home", "Library"]) and not hide_hero
-		_hero_image.visible = show_hero
-		
-		if show_hero:
+		if show_background and hero_enabled:
 			# Clear hero when switching to a view that shows it
 			_hero_image.clear()
+	
+	# Update spacer visibility (only when hero is enabled)
+	if _hero_spacer:
+		_hero_spacer.visible = show_background and hero_enabled
 	
 	# Update library background visibility
 	if _library_background:
 		# Show library background for Home and Library views, hide for Downloads and Settings
-		var show_background = view_name in ["Home", "Library"]
-		_library_background.visible = show_background
+		# Show library background at 100% when hero is 0%
+		if show_background:
+			# Show library background when hero is < 100% (including 0%)
+			_library_background.visible = (height_ratio < 1.0)
+		else:
+			_library_background.visible = false
 
 func _on_hero_game_changed(game: GameResource) -> void:
 	"""Handle hero game change from views."""
@@ -691,9 +793,13 @@ func _on_hero_game_changed(game: GameResource) -> void:
 	if current_view_name not in ["Home", "Library"]:
 		return
 	
-	# Check if hero image is disabled in settings
-	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
-	if hide_hero_setting and hide_hero_setting.value:
+	# Check if hero height is set to 0% (hidden)
+	var height_ratio = HERO_SIZE_RATIO_DEFAULT
+	if SettingsManager:
+		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
+		if height_setting and height_setting.value is int and height_setting.value >= 0 and height_setting.value < HERO_HEIGHT_RATIOS.size():
+			height_ratio = HERO_HEIGHT_RATIOS[height_setting.value]
+	if height_ratio == 0.0:
 		return
 	
 	if game:

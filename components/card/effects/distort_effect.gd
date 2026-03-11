@@ -14,18 +14,18 @@ func _apply_settings() -> void:
 	_update_shader_params()
 
 func _update_shader_params() -> void:
-	if not _card_state:
+	if not _container_state:
 		return
 	
 	var distortion = _settings.get("distortion", 0.5)
 	var opacity = _settings.get("opacity", 1.0)
 	
-	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
-	_set_shader_param("border_inset_ratio", _card_state.border_inset_ratio)
+	_set_shader_param("card_size", _container_state.container_size)
+	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
+	_set_shader_param("border_inset_ratio", _container_state.border_inset_ratio)
 	_set_shader_param("distortion", distortion)
 	_set_shader_param("opacity", opacity)
-	_set_shader_param("game_texture", _card_state.game_texture)
+	_set_shader_param("game_texture", _container_state.game_texture)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_set_shader_param("game_texture", texture)

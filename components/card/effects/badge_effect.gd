@@ -27,7 +27,7 @@ func update_settings(settings: Dictionary) -> void:
 	super.update_settings(settings)
 
 func _update_shader_params() -> void:
-	if not _card_state:
+	if not _container_state:
 		return
 	
 	var hide_background = _settings.get("hide_background", false)
@@ -36,18 +36,18 @@ func _update_shader_params() -> void:
 	var badge_aspect = _settings.get("badge_aspect", Vector2(1.0, 1.0))
 	var badge_type = _settings.get("badge_type", 0)
 	
-	_set_shader_param("card_size", _card_state.card_size)
-	_set_shader_param("corner_radius_ratio", _card_state.corner_radius_ratio)
+	_set_shader_param("card_size", _container_state.container_size)
+	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
 	# Pass shared shape parameters for consistent SDF calculations
-	_set_shader_param("corner_radius_pixels", _card_state.corner_radius_pixels)
-	_set_shader_param("total_inset_pixels", _card_state.total_inset_pixels)
+	_set_shader_param("corner_radius_pixels", _container_state.corner_radius_pixels)
+	_set_shader_param("total_inset_pixels", _container_state.total_inset_pixels)
 	# Inner corner radius accounts for glass inset
-	_set_shader_param("inner_corner_radius_pixels", _card_state.inner_corner_radius_pixels)
-	_set_shader_param("glass_inset_ratio", _card_state.glass_inset_ratio)
+	_set_shader_param("inner_corner_radius_pixels", _container_state.inner_corner_radius_pixels)
+	_set_shader_param("glass_inset_ratio", _container_state.glass_inset_ratio)
 	_set_shader_param("hide_background", hide_background)
 	_set_shader_param("badge_type", badge_type)
 	# Calculate proper shader params
-	var card_width = _card_state.card_size.x
+	var card_width = _container_state.container_size.x
 	if _badge_width > 0 and _badge_height > 0:
 		if badge_type == 1:
 			# Top bar mode: width is card width, height is the bar height
