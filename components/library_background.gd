@@ -74,6 +74,8 @@ func _create_effect(effect_id: String) -> BackgroundEffect:
 			return MotesBackgroundEffect.new()
 		"osdsys":
 			return OsdSysBackgroundEffect.new()
+		"wiiu":
+			return WiiUBackgroundEffect.new()
 		_:
 			return XmbBackgroundEffect.new()
 
@@ -115,7 +117,7 @@ func set_background_color(_color: Color) -> void:
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:
-	return ["solid", "xmb", "motes", "osdsys"]
+	return ["solid", "xmb", "motes", "osdsys", "wiiu"]
 
 # Get effect display name
 static func get_effect_display_name(effect_id: String) -> String:
@@ -124,6 +126,7 @@ static func get_effect_display_name(effect_id: String) -> String:
 		"xmb": return "XMB"
 		"motes": return "Motes"
 		"osdsys": return "OSDSYS"
+		"wiiu": return "WiiU Orbit"
 		_: return "Unknown"
 
 # Get settings schema for an effect
@@ -138,6 +141,8 @@ static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 			effect = MotesBackgroundEffect.new()
 		"osdsys":
 			effect = OsdSysBackgroundEffect.new()
+		"wiiu":
+			effect = WiiUBackgroundEffect.new()
 		_:
 			effect = XmbBackgroundEffect.new()
 	

@@ -11,9 +11,7 @@
 	add letters to library navigation?
 	badge effect placement opts
 ## hero
-	bug: library background shaders dont update size when hero is on
 	postcard-style [[img] name ]
-	background style (disable other opts?)
 	card/image/poster style
 	hero placement opt -> '4 way container?'
 	hero IGDB opt
