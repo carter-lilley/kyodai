@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://mea1kmrwe6ry"
-path="res://.godot/imported/wiiu_atlas_x2.png-1780059c8c7f36acf9642c3543b8892e.ctex"
+uid="uid://bp3wxk2emjlj4"
+path="res://.godot/imported/wiiu_atlas_x4.png-b084e0be116198759a53924d9e7a64a5.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/ui/background/wiiu_atlas_x2.png"
-dest_files=["res://.godot/imported/wiiu_atlas_x2.png-1780059c8c7f36acf9642c3543b8892e.ctex"]
+source_file="res://assets/ui/background/wiiu_atlas_x4.png"
+dest_files=["res://.godot/imported/wiiu_atlas_x4.png-b084e0be116198759a53924d9e7a64a5.ctex"]
 
 [params]
 

@@ -5,20 +5,20 @@ shader_type canvas_item;
 uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear;
 uniform float time_scale : hint_range(0.0, 2.0) = 0.5;
 uniform float orbit_radius : hint_range(1.0, 5.0) = 2.5;
-uniform float icon_scale : hint_range(0.1, 1.0) = 0.4;
+uniform float icon_scale : hint_range(0.1, 1.0) = 0.7;
 uniform float orbit_speed : hint_range(0.05, 1.0) = 0.15;
 uniform int num_icons : hint_range(5, 30) = 15;
 uniform vec3 light_direction = vec3(0.7, -0.7, 0.0);
 uniform vec4 background_color : source_color = vec4(0.1, 0.1, 0.15, 1.0);
 uniform float rotation_speed : hint_range(0.0, 2.0) = 0.3;
 
-const float ICON_SIZE = 128.0;
-const float ATLAS_WIDTH = 1152.0;
-const float ATLAS_HEIGHT = 1024.0;
+const float ICON_SIZE = 256.0;
+const float ATLAS_WIDTH = 2304.0;
+const float ATLAS_HEIGHT = 2048.0;
 const float ICONS_PER_ROW = 9.0;
-const float EXTRUSION_DEPTH = 0.05;
-const int MAX_STEPS = 64;
-const float STEP_SIZE = 0.004;
+const float EXTRUSION_DEPTH = 0.024;
+const int MAX_STEPS = 128;
+const float STEP_SIZE = 0.002;
 const float ALPHA_THRESHOLD = 0.1;
 
 float hash(vec2 p) {
@@ -129,7 +129,9 @@ vec3 render_ray(vec2 uv, float aspect) {
         vec3 icon_up = rot_mat * vec3(0.0, 1.0, 0.0);
         vec3 icon_normal = rot_mat * vec3(0.0, 0.0, 1.0);
         
-        float scale = icon_scale;
+        // Random scale between 60% and 100% of icon_scale
+        float size_variation = 0.6 + hash(seed_vec.xy) * 0.4;
+        float scale = icon_scale * size_variation;
         int icon_index = int(floor(seed_vec.x * 72.0)) % 72;
         
         vec3 local_origin = vec3(
@@ -175,7 +177,7 @@ vec3 render_ray(vec2 uv, float aspect) {
                 inside = pos.z >= -height && pos.z <= 0.0;
             }
             
-            // Entry point
+            // Entry point - entering the volume
             if (inside && !was_inside) {
                 vec4 col = sample_icon(icon_index, clamp(uv_local, 0.0, 1.0));
                 
@@ -189,8 +191,48 @@ vec3 render_ray(vec2 uv, float aspect) {
                         closest_color = col.rgb;
                         hit = true;
                     }
-                    break;
                 }
+            }
+            
+            // Exit point - check if we're leaving through sides
+            if (!inside && was_inside) {
+                // Calculate position just before exit
+                vec3 exit_pos = local_origin + local_dir * max(t - STEP_SIZE * 0.5, 0.0);
+                vec2 exit_uv = vec2(exit_pos.x / scale + 0.5, exit_pos.y / scale + 0.5);
+                float exit_height = get_height_smooth(icon_index, clamp(exit_uv, 0.0, 1.0));
+                
+                // Check if we exited through sides (out of UV bounds) or back
+                bool exited_sides = exit_uv.x <= 0.0 || exit_uv.x >= 1.0 || exit_uv.y <= 0.0 || exit_uv.y >= 1.0;
+                bool exited_back = exit_pos.z <= -exit_height && exit_uv.x > 0.0 && exit_uv.x < 1.0 && exit_uv.y > 0.0 && exit_uv.y < 1.0;
+                
+                if ((exited_sides || exited_back)) {
+                    // Sample color at the edge - use the last valid UV we had
+                    vec4 col = sample_icon(icon_index, clamp(prev_uv, 0.0, 1.0));
+                    
+                    // Always render exit if we were inside (to prevent gaps)
+                    if (col.a > ALPHA_THRESHOLD || exited_sides) {
+                        vec3 world_pos = icon_center + icon_right * exit_pos.x + icon_up * exit_pos.y + icon_normal * exit_pos.z;
+                        float world_t = length(world_pos - camera_pos);
+                        
+                        if (world_t < closest_t) {
+                            closest_t = world_t;
+                            
+                            if (exited_back) {
+                                closest_normal = calc_normal(icon_index, clamp(prev_uv, 0.0, 1.0), scale, icon_right, icon_up, icon_normal);
+                                closest_color = col.rgb * 0.6;
+                            } else {
+                                // Side wall - use gradient normal from edge
+                                closest_normal = calc_normal(icon_index, clamp(prev_uv, 0.0, 1.0), scale, icon_right, icon_up, icon_normal);
+                                closest_color = col.rgb * 0.75;
+                            }
+                            
+                            hit = true;
+                        }
+                    }
+                }
+                
+                // Don't continue raymarching this icon after exit
+                break;
             }
             
             was_inside = inside;
@@ -202,7 +244,7 @@ vec3 render_ray(vec2 uv, float aspect) {
     
     if (hit) {
         float NdotL = max(0.0, dot(closest_normal, light));
-        float diffuse = 0.3 + 0.7 * NdotL;
+        float diffuse = 0.4 + 0.6 * NdotL; // Softer lighting: 20% less light, brighter shadows
         return closest_color * diffuse;
     }
     
@@ -211,17 +253,28 @@ vec3 render_ray(vec2 uv, float aspect) {
 
 void fragment() {
     vec2 uv = UV * 2.0 - 1.0;
+    // Stretch vertically by ~10% (divide by 1.1 = multiply by 0.909)
+    uv.y *= 0.909;
     float aspect = (1.0 / SCREEN_PIXEL_SIZE).x / (1.0 / SCREEN_PIXEL_SIZE).y;
     
-    // 2x2 supersampling for anti-aliasing
-    vec2 pixel_offset = vec2(SCREEN_PIXEL_SIZE.x * aspect, SCREEN_PIXEL_SIZE.y);
+    vec3 final_color = render_ray(uv, aspect);
     
-    vec3 col00 = render_ray(uv + vec2(-0.5, -0.5) * pixel_offset, aspect);
-    vec3 col01 = render_ray(uv + vec2(-0.5, 0.5) * pixel_offset, aspect);
-    vec3 col10 = render_ray(uv + vec2(0.5, -0.5) * pixel_offset, aspect);
-    vec3 col11 = render_ray(uv + vec2(0.5, 0.5) * pixel_offset, aspect);
+    // Blur for out-of-focus depth-of-field effect
+    float blur_amount = 0.00448;
+    vec3 blurred_color = vec3(0.0);
     
-    vec3 final_color = (col00 + col01 + col10 + col11) * 0.25;
+    // 5x5 kernel sampling with finer step
+    for(float x = -2.0; x <= 2.0; x += 1.0) {
+        for(float y = -2.0; y <= 2.0; y += 1.0) {
+            vec2 offset = vec2(x, y) * blur_amount * 0.5;
+            blurred_color += render_ray(uv + offset, aspect);
+        }
+    }
+    
+    blurred_color *= 0.04; // Divide by 25 (5x5 kernel)
+    
+    // Full blur - no mixing with original
+    final_color = blurred_color;
     
     COLOR = vec4(final_color, 1.0);
 }
