@@ -3,7 +3,6 @@
 	bug: after sync when finding existing game, it has no cover/dimensions need updated
 	focused card in front
 	color presets (platform/game/custom)
-	theme presets
 	update placeholder card icons + add more to grid?
 	font! rodin?
 	'controls/info bar'

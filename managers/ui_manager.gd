@@ -73,11 +73,8 @@ func initialize(tab_container: TabContainer, layout_container: BoxContainer, bot
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
-		print("[UIManager DEBUG] Initial view set to: ", current_tab_title, " calling _update_hero_visibility")
 		# Apply hero image visibility based on saved setting
 		_update_hero_visibility(current_tab_title)
-	else:
-		print("[UIManager DEBUG] No view found for tab: ", current_tab_title)
 	
 	# Setup modal input handling
 	_setup_modal_input_handling()
@@ -172,14 +169,8 @@ func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
 	
 	# Check if hero should be hidden by default
 	var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
-	print("[UIManager DEBUG] _setup_hero_image - hide_hero_setting: ", hide_hero_setting, " value: ", hide_hero_setting.value if hide_hero_setting else "null")
 	if hide_hero_setting and hide_hero_setting.value:
 		_hero_image.visible = false
-		print("[UIManager DEBUG] HeroImage set to hidden in _setup_hero_image")
-	else:
-		print("[UIManager DEBUG] HeroImage left visible (setting: ", hide_hero_setting.value if hide_hero_setting else "no setting", ")")
-	
-	print("[UIManager] HeroImage setup complete")
 
 func _setup_library_background() -> void:
 	"""Create and setup the shared LibraryBackground instance."""
@@ -577,7 +568,6 @@ func _setup_library_appearance() -> void:
 	_tab_container.add_theme_stylebox_override("panel", transparent_style)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	print("[UIManager] _on_setting_changed called for: %s with value: %s" % [setting.property_name, str(_value)])
 	if setting.property_name == "library_background_config":
 		# Update the library background with new effect configuration
 		if _library_background and _value is Dictionary:
@@ -609,67 +599,57 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			else:
 				library_view.mark_for_rebuild("Vertical layout changed")
 	elif setting.property_name == "card_effect_config":
+		# DEBUG: Check current view state
+		print("[UIManager DEBUG] card_effect_config changed. _current_view: %s, is_current_view(Home): %s, is_current_view(Library): %s" % [_current_view.view_name if _current_view else "null", is_current_view("Home"), is_current_view("Library")])
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		# Pass true to refresh effects on cards
 		if _views.has("Home"):
 			var home_view = _views["Home"]
 			if is_current_view("Home"):
+				print("[UIManager DEBUG] Rebuilding Home view immediately with refresh_effects=true")
 				home_view.rebuild_grid(true)
 			else:
+				print("[UIManager DEBUG] Marking Home view for rebuild (not current view)")
 				home_view.mark_for_rebuild("Card effects changed")
 		if _views.has("Library"):
 			var library_view = _views["Library"]
 			if is_current_view("Library"):
+				print("[UIManager DEBUG] Rebuilding Library view immediately with refresh_effects=true")
 				library_view.rebuild_grid(true)
 			else:
+				print("[UIManager DEBUG] Marking Library view for rebuild (not current view)")
 				library_view.mark_for_rebuild("Card effects changed")
 	elif setting.property_name == "library_grid_padding":
-		print("[UIManager] Grid padding changed to: %d" % setting.value)
-		print("[UIManager] Current view: %s" % (_current_view.view_name if _current_view else "none"))
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):
 			var home_view = _views["Home"]
-			print("[UIManager] Home view needs_rebuild before: %s" % str(home_view.needs_rebuild))
 			if is_current_view("Home"):
-				print("[UIManager] Rebuilding Home view immediately")
 				home_view.rebuild_grid()
 			else:
-				print("[UIManager] Marking Home view for rebuild")
 				home_view.mark_for_rebuild("Grid padding changed")
-			print("[UIManager] Home view needs_rebuild after: %s" % str(home_view.needs_rebuild))
 		if _views.has("Library"):
 			var library_view = _views["Library"]
-			print("[UIManager] Library view needs_rebuild before: %s" % str(library_view.needs_rebuild))
 			if is_current_view("Library"):
-				print("[UIManager] Rebuilding Library view immediately")
 				library_view.rebuild_grid()
 			else:
-				print("[UIManager] Marking Library view for rebuild")
 				library_view.mark_for_rebuild("Grid padding changed")
-			print("[UIManager] Library view needs_rebuild after: %s" % str(library_view.needs_rebuild))
 	elif setting.property_name == "library_bar_color":
-		print("[UIManager] Bar color changed to: %s" % str(setting.value))
 		if _bottom_bar:
 			_bottom_bar.set_bar_background_color(setting.value)
 	elif setting.property_name == "library_icon_color":
-		print("[UIManager] Icon color changed to: %s" % str(setting.value))
 		if _bottom_bar:
 			_bottom_bar.set_icon_color(setting.value)
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)
-	print("[UIManager] _on_tab_changed called for tab: %s (index: %d)" % [tab_title, tab_idx])
 	
 	# Hide current view
 	if _current_view:
-		print("[UIManager] Hiding current view: %s" % _current_view.view_name)
 		_current_view.on_view_hide()
 	
 	# Show new view
 	if _views.has(tab_title):
-		print("[UIManager] Showing new view: %s" % tab_title)
 		_current_view = _views[tab_title]
-		print("[UIManager] Calling on_view_show() for: %s" % _current_view.view_name)
 		_current_view.on_view_show()
 		
 		# Update hero image visibility based on view
@@ -681,35 +661,24 @@ func _on_tab_changed(tab_idx: int):
 func _update_hero_visibility(view_name: String) -> void:
 	"""Show/hide hero image and library background based on current view and settings."""
 	# Update hero image visibility
-	if not _hero_image:
-		print("[UIManager DEBUG] _update_hero_visibility - no _hero_image!")
-	else:
+	if _hero_image:
 		# Check if hero image is disabled in settings
 		var hide_hero_setting = SettingsManager.get_setting("library_hide_hero_image")
 		var hide_hero = hide_hero_setting and hide_hero_setting.value
 		
-		print("[UIManager DEBUG] _update_hero_visibility - view_name: ", view_name, " hide_hero_setting: ", hide_hero_setting, " hide_hero: ", hide_hero)
-		
 		# Show hero for Home and Library views (unless disabled), hide for Downloads and Settings
 		var show_hero = (view_name in ["Home", "Library"]) and not hide_hero
-		print("[UIManager DEBUG] _update_hero_visibility - setting hero visible to: ", show_hero, " (was: ", _hero_image.visible, ")")
 		_hero_image.visible = show_hero
 		
 		if show_hero:
 			# Clear hero when switching to a view that shows it
 			_hero_image.clear()
-		
-		print("[UIManager] HeroImage visibility set to: ", show_hero, " for view: ", view_name, " (hide_hero: ", hide_hero, ")")
 	
 	# Update library background visibility
-	if not _library_background:
-		print("[UIManager DEBUG] _update_hero_visibility - no _library_background!")
-	else:
+	if _library_background:
 		# Show library background for Home and Library views, hide for Downloads and Settings
 		var show_background = view_name in ["Home", "Library"]
-		print("[UIManager DEBUG] _update_hero_visibility - setting library background visible to: ", show_background, " (was: ", _library_background.visible, ")")
 		_library_background.visible = show_background
-		print("[UIManager] LibraryBackground visibility set to: ", show_background, " for view: ", view_name)
 
 func _on_hero_game_changed(game: GameResource) -> void:
 	"""Handle hero game change from views."""
@@ -718,7 +687,6 @@ func _on_hero_game_changed(game: GameResource) -> void:
 	
 	# Only update hero image if we're in Home or Library view
 	var current_view_name = _current_view.view_name if _current_view else ""
-	print("[UIManager DEBUG] _on_hero_game_changed - game: ", game.get_display_name() if game else "null", " current_view: ", current_view_name)
 	
 	if current_view_name not in ["Home", "Library"]:
 		return

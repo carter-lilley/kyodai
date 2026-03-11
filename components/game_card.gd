@@ -146,18 +146,37 @@ func get_focus_shape_params() -> Dictionary:
 	}
 
 func _update_card_state_from_settings():
+	print("[GameCard] === _update_card_state_from_settings called ===")
+	print("[GameCard] Node path: ", get_path())
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting and config_setting.value is Dictionary:
-			_card_state.orientation = config_setting.value.get("card_orientation", 0)
-			_card_state.effect_settings = config_setting.value.get("effects", [])
-			# Corner radius as ratio (0.0 to 1.0) - convert from old pixel format if needed
-			var corner_value = config_setting.value.get("corner_radius", 0.06)
-			# If value > 1.0, it's in old pixel format (default was 12px), convert to ratio
-			if corner_value > 1.0:
-				_card_state.corner_radius_ratio = corner_value / 202.0
+		print("[GameCard] SettingsManager.get_setting result: ", config_setting)
+		if config_setting:
+			print("[GameCard] config_setting.value type: ", typeof(config_setting.value))
+			if config_setting.value is Dictionary:
+				print("[GameCard] config_setting.value is Dictionary: TRUE")
+				print("[GameCard]   - effects count: ", config_setting.value.get("effects", []).size())
+				print("[GameCard]   - card_orientation: ", config_setting.value.get("card_orientation", "NOT SET"))
+				print("[GameCard]   - corner_radius: ", config_setting.value.get("corner_radius", "NOT SET"))
+				print("[GameCard]   - full dict: ", config_setting.value)
+				
+				_card_state.orientation = config_setting.value.get("card_orientation", 0)
+				_card_state.effect_settings = config_setting.value.get("effects", [])
+				# Corner radius as ratio (0.0 to 1.0) - convert from old pixel format if needed
+				var corner_value = config_setting.value.get("corner_radius", 0.06)
+				# If value > 1.0, it's in old pixel format (default was 12px), convert to ratio
+				if corner_value > 1.0:
+					_card_state.corner_radius_ratio = corner_value / 202.0
+				else:
+					_card_state.corner_radius_ratio = corner_value
+				print("[GameCard] Card state updated - orientation: ", _card_state.orientation, ", effects count: ", _card_state.effect_settings.size())
 			else:
-				_card_state.corner_radius_ratio = corner_value
+				print("[GameCard] WARNING: config_setting.value is NOT a Dictionary: ", config_setting.value)
+		else:
+			print("[GameCard] WARNING: config_setting is null")
+	else:
+		print("[GameCard] WARNING: SettingsManager is null")
+	print("[GameCard] === _update_card_state_from_settings complete ===")
 
 func _get_effect_config(effect_id: String) -> Dictionary:
 	for effect_data in _card_state.effect_settings:
@@ -168,6 +187,10 @@ func _get_effect_config(effect_id: String) -> Dictionary:
 func _rebuild_effects():
 	# Update or create effects - don't destroy existing ones
 	# This reduces GC pressure and shader compilation stutter during scroll
+	print("[GameCard REBUILD] Starting _rebuild_effects. _card_state.effect_settings size: ", _card_state.effect_settings.size())
+	for i in range(_card_state.effect_settings.size()):
+		print("[GameCard REBUILD] Effect ", i, ": ", _card_state.effect_settings[i].get("effect_id", "UNKNOWN"))
+	
 	if not visual_container:
 		push_warning("GameCard: visual_container is null, cannot add effects")
 		return
@@ -187,6 +210,7 @@ func _rebuild_effects():
 	
 	# Badge effect - optional
 	var badge_config = _get_effect_config("badge")
+	print("[GameCard REBUILD] badge_config found: ", badge_config != null, ", badge_config: ", badge_config)
 	if badge_config:
 		if _badge_effect == null:
 			_badge_effect = BadgeEffect.new()
@@ -196,6 +220,7 @@ func _rebuild_effects():
 			visual_container.add_child(_badge_effect)
 			_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
 		else:
+			_badge_effect.visible = true
 			_badge_effect.update_state(_card_state)
 			_badge_effect.update_settings(badge_config.get("settings", {}))
 	elif _badge_effect != null:
@@ -204,6 +229,7 @@ func _rebuild_effects():
 	
 	# Border effect - optional
 	var border_config = _get_effect_config("border")
+	print("[GameCard REBUILD] border_config found: ", border_config != null, ", border_config: ", border_config)
 	if border_config:
 		if _border_effect == null:
 			_border_effect = BorderEffect.new()
@@ -213,6 +239,7 @@ func _rebuild_effects():
 			visual_container.add_child(_border_effect)
 			_border_effect.initialize(_card_state, border_config.get("settings", {}))
 		else:
+			_border_effect.visible = true
 			_border_effect.update_state(_card_state)
 			_border_effect.update_settings(border_config.get("settings", {}))
 		
@@ -230,6 +257,7 @@ func _rebuild_effects():
 	
 	# Glow effect - optional
 	var glow_config = _get_effect_config("glow")
+	print("[GameCard REBUILD] glow_config found: ", glow_config != null)
 	if glow_config:
 		if _glow_effect == null:
 			_glow_effect = GlowEffect.new()
@@ -247,6 +275,7 @@ func _rebuild_effects():
 	
 	# Drop shadow effect - optional
 	var drop_shadow_config = _get_effect_config("drop_shadow")
+	print("[GameCard REBUILD] drop_shadow_config found: ", drop_shadow_config != null)
 	if drop_shadow_config:
 		if _drop_shadow_effect == null:
 			_drop_shadow_effect = DropShadowEffect.new()
@@ -262,8 +291,27 @@ func _rebuild_effects():
 	elif _drop_shadow_effect != null:
 		_drop_shadow_effect.visible = false
 	
-	# Glass effect - optional overlay
+	# Distort effect - optional texture distortion (rendered BEFORE glass so it appears behind)
+	var distort_config = _get_effect_config("distort")
+	print("[GameCard REBUILD] distort_config found: ", distort_config != null)
+	if distort_config:
+		if _distort_effect == null:
+			_distort_effect = DistortEffect.new()
+			_distort_effect.name = "DistortEffect"
+			_distort_effect.anchor_right = 1.0
+			_distort_effect.anchor_bottom = 1.0
+			visual_container.add_child(_distort_effect)
+			_distort_effect.initialize(_card_state, distort_config.get("settings", {}))
+		else:
+			_distort_effect.update_state(_card_state)
+			_distort_effect.update_settings(distort_config.get("settings", {}))
+			_distort_effect.visible = true
+	elif _distort_effect != null:
+		_distort_effect.visible = false
+	
+	# Glass effect - optional overlay (rendered AFTER distort so it appears on top)
 	var glass_config = _get_effect_config("glass")
+	print("[GameCard REBUILD] glass_config found: ", glass_config != null)
 	if glass_config:
 		if _glass_effect == null:
 			_glass_effect = GlassEffect.new()
@@ -284,23 +332,6 @@ func _rebuild_effects():
 		_glass_effect.visible = false
 		_card_state.glass_inset_ratio = 0.0
 	
-	# Distort effect - optional texture distortion
-	var distort_config = _get_effect_config("distort")
-	if distort_config:
-		if _distort_effect == null:
-			_distort_effect = DistortEffect.new()
-			_distort_effect.name = "DistortEffect"
-			_distort_effect.anchor_right = 1.0
-			_distort_effect.anchor_bottom = 1.0
-			visual_container.add_child(_distort_effect)
-			_distort_effect.initialize(_card_state, distort_config.get("settings", {}))
-		else:
-			_distort_effect.update_state(_card_state)
-			_distort_effect.update_settings(distort_config.get("settings", {}))
-			_distort_effect.visible = true
-	elif _distort_effect != null:
-		_distort_effect.visible = false
-	
 	# Ensure card_input is on top
 	if card_input:
 		visual_container.move_child(card_input, -1)
@@ -310,6 +341,8 @@ func _rebuild_effects():
 	
 	_update_platform_badge()
 	_update_status_badge_layout()
+	
+	print("[GameCard REBUILD] _rebuild_effects complete")
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
@@ -1018,8 +1051,11 @@ func reset():
 		visual_container.scale = Vector2.ONE
 
 func refresh_settings():
+	print("[GameCard] === refresh_settings called on ", name, " ===")
 	_update_card_state_from_settings()
+	print("[GameCard] Rebuilding effects...")
 	_rebuild_effects()
+	print("[GameCard] === refresh_settings complete ===")
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:

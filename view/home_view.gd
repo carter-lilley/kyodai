@@ -203,7 +203,18 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 
 func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
-	print("[HomeView] rebuild_grid() called, refresh_effects=%s" % refresh_effects)
+	print("[HomeView] === rebuild_grid called ===")
+	print("[HomeView] refresh_effects parameter: ", refresh_effects)
+	
+	# DEBUG: Check what SettingsManager has for card_effect_config at rebuild time
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			print("[HomeView] SettingsManager card_effect_config at rebuild time:")
+			print("[HomeView]   - effects count: ", config_setting.value.get("effects", []).size())
+		else:
+			print("[HomeView] WARNING: SettingsManager card_effect_config not available or not a Dictionary")
+	
 	_update_grid_orientation()
 	
 	# If refreshing effects, reload data first (clears cache), then refresh dimensions
@@ -211,15 +222,20 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 		print("[HomeView] Rebuilding grid with effect refresh")
 		# Use callback version to ensure dimensions refresh AFTER data loads
 		_load_total_count_with_callback(false, func():
+			print("[HomeView] In rebuild callback - calling refresh_all_card_effects")
 			# Also refresh existing cards
 			games_grid.refresh_all_card_effects()
 			# Refresh dimensions AFTER data reload to get correct layout
+			print("[HomeView] In rebuild callback - calling refresh_dimensions")
 			games_grid.refresh_dimensions()
+			print("[HomeView] In rebuild callback - complete")
 		)
 	else:
+		print("[HomeView] Rebuilding grid without effect refresh")
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
 		_load_total_count(true)
+	print("[HomeView] === rebuild_grid complete ===")
 
 func _regenerate_delay_pool(count: int) -> void:
 	"""Generate a shuffled pool of animation delays for random mode."""

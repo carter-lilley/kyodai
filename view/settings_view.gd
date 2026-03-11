@@ -7,6 +7,13 @@ var _settings_container: TabContainer
 var _library_appearance_config: Dictionary = {}
 var _library_effect_menu: SettingsMenu = null
 var _library_effect_dropdown: OptionButton = null
+var _library_general_menu: SettingsMenu = null  # Store reference to general settings menu
+
+# Theme preset UI
+var _preset_dropdown: OptionButton = null
+var _current_presets: Array[ThemePreset] = []
+var _is_applying_preset: bool = false
+var _loaded_preset: ThemePreset = null
 
 func _ready():
 	view_name = "Settings"
@@ -110,6 +117,7 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 		general_menu.build_controls_from_settingsvars(general_settings)
 		general_menu.setting_changed.connect(_on_setting_changed)
 		vbox.add_child(general_menu)
+		_library_general_menu = general_menu  # Store reference
 		vbox.add_child(HSeparator.new())
 	
 	# Background Effect section
@@ -153,6 +161,280 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	
 	# Build initial controls for current effect
 	_rebuild_library_effect_controls(current_effect_id)
+	
+	vbox.add_child(HSeparator.new())
+	
+	# Theme Presets section
+	_create_preset_section(vbox)
+
+func _create_preset_section(vbox: VBoxContainer) -> void:
+	var preset_label = Label.new()
+	preset_label.text = "Theme Presets"
+	preset_label.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(preset_label)
+	
+	# Preset dropdown and buttons container
+	var preset_container = HBoxContainer.new()
+	preset_container.custom_minimum_size = Vector2(0, 30)
+	vbox.add_child(preset_container)
+	
+	# Preset dropdown
+	_preset_dropdown = OptionButton.new()
+	_preset_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_dropdown.text = "Select Preset..."
+	_preset_dropdown.item_selected.connect(_on_preset_selected)
+	preset_container.add_child(_preset_dropdown)
+	
+	# Load button (opens file dialog)
+	var load_button = Button.new()
+	load_button.text = "Load"
+	load_button.tooltip_text = "Import preset from file"
+	load_button.pressed.connect(_on_load_preset_pressed)
+	preset_container.add_child(load_button)
+	
+	# Export button
+	var export_button = Button.new()
+	export_button.text = "Export"
+	export_button.tooltip_text = "Export current settings as preset"
+	export_button.pressed.connect(_on_export_preset_pressed)
+	preset_container.add_child(export_button)
+	
+	# Refresh preset list
+	_refresh_preset_dropdown()
+
+func _refresh_preset_dropdown() -> void:
+	if not _preset_dropdown:
+		return
+	
+	_preset_dropdown.clear()
+	_preset_dropdown.add_item("New Theme...", -1)
+	_preset_dropdown.set_item_disabled(0, false)
+	
+	_current_presets = SettingsManager.list_presets()
+	for i in range(_current_presets.size()):
+		var preset = _current_presets[i]
+		_preset_dropdown.add_item(preset.get_display_name(), i)
+		_preset_dropdown.set_item_metadata(i + 1, preset)
+	
+	# Check if current settings match any preset
+	_check_preset_match()
+
+func _on_preset_selected(index: int) -> void:
+	if _is_applying_preset or index <= 0:
+		return
+	
+	var preset = _preset_dropdown.get_item_metadata(index) as ThemePreset
+	if not preset:
+		return
+	
+	# Show confirmation dialog
+	var dialog = ConfirmationDialog.new()
+	dialog.title = "Load Theme Preset"
+	dialog.dialog_text = "Load preset '%s'?\n\nThis will overwrite your current library and card settings." % preset.name
+	dialog.get_ok_button().text = "Load"
+	dialog.confirmed.connect(func():
+		_apply_preset(preset)
+	)
+	dialog.canceled.connect(func():
+		# Reset dropdown to "Select Preset..."
+		_preset_dropdown.select(0)
+	)
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _apply_preset(preset: ThemePreset) -> void:
+	_is_applying_preset = true
+	
+	var success = SettingsManager.apply_preset(preset)
+	if success:
+		_loaded_preset = preset
+		NotificationManager.show_notification("Applied preset: %s" % preset.name, Notification.Type.SUCCESS)
+		
+		# Refresh all UI to reflect new settings
+		_refresh_all_settings_ui()
+		
+		# Update dropdown to show loaded preset
+		_update_preset_dropdown_for_loaded_preset()
+	else:
+		NotificationManager.show_notification("Failed to apply preset", Notification.Type.ERROR)
+		_preset_dropdown.select(0)
+	
+	_is_applying_preset = false
+
+func _update_preset_dropdown_for_loaded_preset() -> void:
+	if not _preset_dropdown or not _loaded_preset:
+		return
+	
+	# Find the loaded preset in the dropdown and select it
+	for i in range(_preset_dropdown.get_item_count()):
+		if i == 0:
+			continue
+		var preset = _preset_dropdown.get_item_metadata(i) as ThemePreset
+		if preset and preset.name == _loaded_preset.name:
+			_preset_dropdown.select(i)
+			return
+	
+	# If not found, select "Select Preset..."
+	_preset_dropdown.select(0)
+
+func _check_preset_match() -> void:
+	if not _preset_dropdown:
+		return
+	
+	# If no preset is loaded, ensure we show "New Theme..."
+	if not _loaded_preset:
+		if _preset_dropdown.get_item_count() > 0:
+			_preset_dropdown.set_item_text(0, "New Theme...")
+			_preset_dropdown.set_item_disabled(0, false)
+			_preset_dropdown.select(0)
+		return
+	
+	# Check if current settings match the loaded preset
+	var current_preset = ThemePreset.from_current_settings(SettingsManager.settings)
+	var is_match = _presets_equal(current_preset, _loaded_preset)
+	
+	if is_match:
+		# Settings match loaded preset, show preset name
+		_update_preset_dropdown_for_loaded_preset()
+	else:
+		# Settings deviated, show "New Theme..."
+		if _preset_dropdown.get_item_count() > 0:
+			_preset_dropdown.set_item_text(0, "New Theme...")
+			_preset_dropdown.set_item_disabled(0, false)
+			_preset_dropdown.select(0)
+
+func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
+	# Compare all relevant fields
+	if a.library_hide_hero_image != b.library_hide_hero_image:
+		return false
+	if a.library_vertical_layout != b.library_vertical_layout:
+		return false
+	if a.library_bottom_bar_position != b.library_bottom_bar_position:
+		return false
+	if a.library_grid_padding != b.library_grid_padding:
+		return false
+	if a.library_grid_margin_x != b.library_grid_margin_x:
+		return false
+	if a.library_grid_margin_y != b.library_grid_margin_y:
+		return false
+	if a.library_card_zoom != b.library_card_zoom:
+		return false
+	if a.library_bar_color != b.library_bar_color:
+		return false
+	if a.library_icon_color != b.library_icon_color:
+		return false
+	
+	# Compare dictionaries using JSON stringify for reliable comparison
+	var card_a = JSON.stringify(a.card_effect_config)
+	var card_b = JSON.stringify(b.card_effect_config)
+	if card_a != card_b:
+		return false
+	
+	var bg_a = JSON.stringify(a.library_background_config)
+	var bg_b = JSON.stringify(b.library_background_config)
+	if bg_a != bg_b:
+		return false
+	
+	return true
+
+func _refresh_all_settings_ui() -> void:
+	# Refresh library appearance UI
+	_load_library_background_config()
+	
+	# Refresh the general settings menu
+	if _library_general_menu:
+		_library_general_menu.clear_controls()
+		
+		# Get fresh settings from SettingsManager
+		var general_settings: Array[SettingsVar] = []
+		var subgroups = SettingsManager.get_settings_by_subgroup()
+		if subgroups.has("Library Appearance"):
+			for sv in subgroups["Library Appearance"]:
+				if sv.state != SettingsVar.SettingState.INTERNAL:
+					general_settings.append(sv)
+		
+		if general_settings.size() > 0:
+			_library_general_menu.build_controls_from_settingsvars(general_settings)
+	
+	if _library_effect_dropdown:
+		var current_effect_id = _library_appearance_config.get("effect_id", "xmb")
+		var effects = LibraryBackground.get_available_effects()
+		for i in range(effects.size()):
+			if effects[i] == current_effect_id:
+				_library_effect_dropdown.select(i)
+				break
+		_rebuild_library_effect_controls(current_effect_id)
+	
+	# Notify other views that settings changed
+	SettingsManager.settings_saved.emit()
+
+func _on_load_preset_pressed() -> void:
+	var file_dialog = FileDialog.new()
+	file_dialog.title = "Import Theme Preset"
+	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	file_dialog.filters = PackedStringArray(["*.tres ; Theme Preset Files"])
+	
+	file_dialog.file_selected.connect(func(path: String):
+		var preset = SettingsManager.import_preset(path)
+		if preset:
+			NotificationManager.show_notification("Imported preset: %s" % preset.name, Notification.Type.SUCCESS)
+			_refresh_preset_dropdown()
+			
+			# Auto-apply the imported preset with confirmation
+			var dialog = ConfirmationDialog.new()
+			dialog.title = "Apply Imported Preset"
+			dialog.dialog_text = "Apply the imported preset '%s' now?" % preset.name
+			dialog.get_ok_button().text = "Apply"
+			dialog.confirmed.connect(func():
+				_apply_preset(preset)
+			)
+			add_child(dialog)
+			dialog.popup_centered()
+		else:
+			NotificationManager.show_notification("Failed to import preset", Notification.Type.ERROR)
+	)
+	
+	add_child(file_dialog)
+	file_dialog.popup_centered(Vector2(800, 600))
+
+func _on_export_preset_pressed() -> void:
+	if not SettingsManager.settings:
+		return
+	
+	var preset = ThemePreset.from_current_settings(SettingsManager.settings)
+	
+	# Ask for preset name
+	var name_dialog = ConfirmationDialog.new()
+	name_dialog.title = "Export Theme Preset"
+	name_dialog.dialog_text = "Enter a name for this preset:"
+	name_dialog.get_ok_button().text = "Save"
+	
+	var line_edit = LineEdit.new()
+	line_edit.text = preset.name
+	line_edit.placeholder_text = "Preset Name"
+	line_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_dialog.add_child(line_edit)
+	
+	name_dialog.confirmed.connect(func():
+		if line_edit.text.is_empty():
+			NotificationManager.show_notification("Preset name cannot be empty", Notification.Type.WARNING)
+			return
+		
+		preset.name = line_edit.text
+		preset.created_at = Time.get_datetime_string_from_system()
+		
+		# Save directly to internal presets folder
+		var success = SettingsManager.save_preset(preset)
+		if success:
+			NotificationManager.show_notification("Saved preset: %s" % preset.name, Notification.Type.SUCCESS)
+			_refresh_preset_dropdown()
+		else:
+			NotificationManager.show_notification("Failed to save preset", Notification.Type.ERROR)
+	)
+	
+	add_child(name_dialog)
+	name_dialog.popup_centered()
 
 func _load_library_background_config() -> void:
 	var config_setting = SettingsManager.get_setting("library_background_config")
@@ -287,8 +569,28 @@ func _update_connection_status(indicator: Indicator):
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	SettingsManager.set_setting(value, setting)
 
+func _on_any_setting_changed(value: Variant, setting: SettingsVar):
+	# Check if settings now deviate from loaded preset
+	if not _is_applying_preset:
+		_check_preset_match()
+
+func on_view_show():
+	super.on_view_show()
+	# Ensure signal is connected when view is shown
+	if not SettingsManager.setting_changed.is_connected(_on_any_setting_changed):
+		SettingsManager.setting_changed.connect(_on_any_setting_changed)
+
 func on_view_hide():
+	# First, trigger on_view_hide on all child tabs (especially Card Designer to save settings)
+	for i in range(_settings_container.get_tab_count()):
+		var tab = _settings_container.get_tab_control(i)
+		if tab and tab.has_method("on_view_hide"):
+			tab.on_view_hide()
+	
 	SettingsManager.save_settings()
+	# Disconnect signal to prevent callbacks on freed object
+	if SettingsManager.setting_changed.is_connected(_on_any_setting_changed):
+		SettingsManager.setting_changed.disconnect(_on_any_setting_changed)
 	super.on_view_hide()
 
 func _on_settings_tab_changed(tab_idx: int):

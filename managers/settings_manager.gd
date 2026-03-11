@@ -6,6 +6,7 @@ signal setting_changed(value: Variant, setting: SettingsVar)
 signal settings_saved
 
 const SAVE_PATH := "user://user_prefs.tres"
+const PRESETS_FOLDER := "user://themes/"
 var settings: Settings
 var settings_dict: Dictionary[String, SettingsVar] = {}
 
@@ -110,25 +111,61 @@ func store_property_names(_settings : Settings):
 
 func save_settings() -> void:
 	if settings:
+		print("[SettingsManager] === save_settings called ===")
+		# DEBUG: Check card_effect_config before encryption
+		if settings.card_effect_config and settings.card_effect_config.value is Dictionary:
+			print("[SettingsManager] card_effect_config BEFORE encryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())
+		else:
+			print("[SettingsManager] card_effect_config BEFORE encryption - NOT A DICTIONARY or null: ", settings.card_effect_config.value if settings.card_effect_config else "null")
+		
 		_encrypt_settings()
+		
+		# DEBUG: Check card_effect_config after encryption
+		if settings.card_effect_config and settings.card_effect_config.value:
+			print("[SettingsManager] card_effect_config AFTER encryption - type: ", typeof(settings.card_effect_config.value))
+			if settings.card_effect_config.value is Dictionary:
+				print("[SettingsManager] card_effect_config AFTER encryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())
+		
 		var err = ResourceSaver.save(settings, SAVE_PATH)
+		
+		# DEBUG: Check card_effect_config after save
+		if settings.card_effect_config and settings.card_effect_config.value:
+			print("[SettingsManager] card_effect_config AFTER save - type: ", typeof(settings.card_effect_config.value))
+			if settings.card_effect_config.value is Dictionary:
+				print("[SettingsManager] card_effect_config AFTER save - effects count: ", settings.card_effect_config.value.get("effects", []).size())
+		
 		_decrypt_settings()  # Restore decrypted values for runtime use
+		
+		# DEBUG: Check card_effect_config after decryption
+		if settings.card_effect_config and settings.card_effect_config.value is Dictionary:
+			print("[SettingsManager] card_effect_config AFTER decryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())
+		else:
+			print("[SettingsManager] card_effect_config AFTER decryption - NOT A DICTIONARY or null: ", settings.card_effect_config.value if settings.card_effect_config else "null")
+		
 		if err != OK:
 			push_error("Failed to save preferences: %s" % err)
 		else:
 			print("[SettingsManager]: Preferences saved.")
 			emit_signal("settings_saved")
+		print("[SettingsManager] === save_settings complete ===")
 
 const PASSWORD_KEY = "kyodai_v1"
 
 func _encrypt_settings() -> void:
+	print("[SettingsManager] _encrypt_settings called")
+	var encrypted_count = 0
 	for prop in settings.get_property_list():
 		var setting = settings.get(prop.name)
 		if setting is SettingsVar and setting.encrypted and setting.value:
 			if setting.value is String and not setting.value.is_empty():
 				setting.value = _xor_encrypt(setting.value, PASSWORD_KEY)
+				encrypted_count += 1
+				print("[SettingsManager] Encrypted setting: ", prop.name)
+	print("[SettingsManager] Encrypted ", encrypted_count, " settings")
 
 func _decrypt_settings() -> void:
+	print("[SettingsManager] _decrypt_settings called")
+	var decrypted_count = 0
 	for prop in settings.get_property_list():
 		var setting = settings.get(prop.name)
 		if setting is SettingsVar and setting.encrypted and setting.value:
@@ -136,6 +173,9 @@ func _decrypt_settings() -> void:
 				# Check if value looks encrypted (base64)
 				if _is_base64(setting.value):
 					setting.value = _xor_decrypt(setting.value, PASSWORD_KEY)
+					decrypted_count += 1
+					print("[SettingsManager] Decrypted setting: ", prop.name)
+	print("[SettingsManager] Decrypted ", decrypted_count, " settings")
 
 func _is_base64(text: String) -> bool:
 	# Simple check: base64 strings are typically divisible by 4 and contain specific chars
@@ -164,3 +204,137 @@ func _xor_decrypt(encrypted: String, key: String) -> String:
 	for i in range(text.length()):
 		result += char(text.unicode_at(i) ^ key.unicode_at(i % key.length()))
 	return result
+
+## === Theme Preset Management ===
+
+func _ensure_presets_folder() -> void:
+	var dir = DirAccess.open("user://")
+	if dir:
+		if not dir.dir_exists("themes"):
+			dir.make_dir("themes")
+
+func list_presets() -> Array[ThemePreset]:
+	_ensure_presets_folder()
+	var presets: Array[ThemePreset] = []
+	var dir = DirAccess.open(PRESETS_FOLDER)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir() and file_name.ends_with(".tres"):
+				var preset_path = PRESETS_FOLDER + file_name
+				var preset = ResourceLoader.load(preset_path) as ThemePreset
+				if preset:
+					presets.append(preset)
+			file_name = dir.get_next()
+		
+		# Sort by name
+		presets.sort_custom(func(a, b): return a.name < b.name)
+	return presets
+
+func save_preset(preset: ThemePreset) -> bool:
+	_ensure_presets_folder()
+	if preset.name.is_empty():
+		push_error("Cannot save preset without a name")
+		return false
+	
+	# Sanitize filename
+	var safe_name = preset.name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+	var preset_path = PRESETS_FOLDER + safe_name + ".tres"
+	
+	var err = ResourceSaver.save(preset, preset_path)
+	if err != OK:
+		push_error("Failed to save preset: %s" % err)
+		return false
+	
+	print("[SettingsManager]: Saved preset '%s' to %s" % [preset.name, preset_path])
+	return true
+
+func load_preset(preset_path: String) -> ThemePreset:
+	if not FileAccess.file_exists(preset_path):
+		push_error("Preset file not found: %s" % preset_path)
+		return null
+	
+	var preset = ResourceLoader.load(preset_path) as ThemePreset
+	if not preset:
+		push_error("Failed to load preset from: %s" % preset_path)
+		return null
+	
+	return preset
+
+func apply_preset(preset: ThemePreset) -> bool:
+	if not preset:
+		push_error("[SettingsManager] Cannot apply null preset")
+		return false
+	
+	if not settings:
+		push_error("[SettingsManager] No settings loaded, cannot apply preset")
+		return false
+	
+	# Create a default preset for merging missing values
+	var default_preset = ThemePreset.from_current_settings(Settings.new())
+	preset.merge_with_defaults(default_preset)
+	
+	var success = preset.apply_to_settings(settings)
+	
+	if success:
+		# Emit setting_changed for all library settings so views get notified
+		if settings.get("library_hide_hero_image") != null:
+			emit_signal("setting_changed", preset.library_hide_hero_image, settings.library_hide_hero_image)
+		if settings.get("library_vertical_layout") != null:
+			emit_signal("setting_changed", preset.library_vertical_layout, settings.library_vertical_layout)
+		if settings.get("library_bottom_bar_position") != null:
+			emit_signal("setting_changed", preset.library_bottom_bar_position, settings.library_bottom_bar_position)
+		if settings.get("library_grid_padding") != null:
+			emit_signal("setting_changed", preset.library_grid_padding, settings.library_grid_padding)
+		if settings.get("library_grid_margin_x") != null:
+			emit_signal("setting_changed", preset.library_grid_margin_x, settings.library_grid_margin_x)
+		if settings.get("library_grid_margin_y") != null:
+			emit_signal("setting_changed", preset.library_grid_margin_y, settings.library_grid_margin_y)
+		if settings.get("library_card_zoom") != null:
+			emit_signal("setting_changed", preset.library_card_zoom, settings.library_card_zoom)
+		if settings.get("library_bar_color") != null:
+			emit_signal("setting_changed", preset.library_bar_color, settings.library_bar_color)
+		if settings.get("library_icon_color") != null:
+			emit_signal("setting_changed", preset.library_icon_color, settings.library_icon_color)
+		if settings.get("library_background_config") != null:
+			emit_signal("setting_changed", preset.library_background_config, settings.library_background_config)
+		# Emit for card effect config - this triggers grid rebuild
+		if settings.get("card_effect_config") != null:
+			emit_signal("setting_changed", preset.card_effect_config, settings.card_effect_config)
+		
+		save_settings()
+		emit_signal("settings_saved")
+	else:
+		push_error("[SettingsManager] preset.apply_to_settings returned false")
+	
+	return success
+
+func export_preset(preset: ThemePreset, export_path: String) -> bool:
+	if not preset:
+		return false
+	
+	var err = ResourceSaver.save(preset, export_path)
+	if err != OK:
+		push_error("Failed to export preset: %s" % err)
+		return false
+	
+	print("[SettingsManager]: Exported preset to %s" % export_path)
+	return true
+
+func import_preset(import_path: String) -> ThemePreset:
+	if not FileAccess.file_exists(import_path):
+		push_error("Import file not found: %s" % import_path)
+		return null
+	
+	var preset = ResourceLoader.load(import_path) as ThemePreset
+	if not preset:
+		push_error("Failed to import preset from: %s" % import_path)
+		return null
+	
+	# Save to presets folder
+	if save_preset(preset):
+		print("[SettingsManager]: Imported preset '%s'" % preset.name)
+		return preset
+	
+	return null

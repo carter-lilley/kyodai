@@ -7,15 +7,45 @@ var _current_config: Dictionary = {}
 var _preview_card: GameCard
 var _effects_list: VBoxContainer
 var _add_effect_button: MenuButton
-var _save_button: Button
 var _orientation_btn: OptionButton
 var _corner_slider: HSlider
+
+# Maps dropdown IDs to effect IDs for filtering active effects
+const EFFECT_ID_MAP: Dictionary = {
+	0: "border",
+	1: "badge",
+	2: "drop_shadow",
+	3: "glow",
+	4: "glass",
+	5: "distort"
+}
 
 func _ready():
 	_setup_ui()
 	_load_current_config()
 	call_deferred("_setup_preview_card")
 	call_deferred("_rebuild_effects_ui")
+	
+	# Connect to settings changes so we refresh when a preset is applied
+	if SettingsManager:
+		SettingsManager.settings_saved.connect(_on_settings_saved)
+
+func _on_settings_saved():
+	print("[CardDesigner] Settings saved signal received, reloading config...")
+	print("[CardDesigner] Is instance valid: ", is_instance_valid(self))
+	_load_current_config()
+	_rebuild_effects_ui()
+	_setup_preview_card()
+	print("[CardDesigner] Config reload complete. Effects count: ", _current_config.get("effects", []).size())
+
+func _exit_tree():
+	# Disconnect signal to prevent callbacks on freed object
+	if SettingsManager and SettingsManager.settings_saved.is_connected(_on_settings_saved):
+		SettingsManager.settings_saved.disconnect(_on_settings_saved)
+
+func on_view_hide():
+	# Save any pending changes before the view is hidden
+	_save_to_settings()
 
 func _setup_ui():
 	var hsplit = HSplitContainer.new()
@@ -89,20 +119,10 @@ func _setup_ui():
 	left_vbox.add_child(_add_effect_button)
 	
 	var popup = _add_effect_button.get_popup()
-	popup.add_item("Border", 0)
-	popup.add_item("Platform Badge", 1)
-	popup.add_item("Drop Shadow", 2)
-	popup.add_item("Glow", 3)
-	popup.add_item("Glass", 4)
-	popup.add_item("Distort", 5)
 	popup.id_pressed.connect(_on_add_effect)
+	# Dropdown will be populated in _rebuild_add_effect_dropdown based on active effects
 	
 	left_vbox.add_child(HSeparator.new())
-	
-	_save_button = Button.new()
-	_save_button.text = "Save Changes"
-	_save_button.pressed.connect(_on_save)
-	left_vbox.add_child(_save_button)
 	
 	var right_panel = Panel.new()
 	hsplit.add_child(right_panel)
@@ -122,8 +142,15 @@ func _setup_ui():
 
 func _load_current_config():
 	print("[CardDesigner] Loading config...")
+	print("[CardDesigner] SettingsManager exists: ", SettingsManager != null)
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
+		print("[CardDesigner] config_setting exists: ", config_setting != null)
+		if config_setting:
+			print("[CardDesigner] config_setting.value type: ", typeof(config_setting.value))
+			print("[CardDesigner] config_setting.value is Dictionary: ", config_setting.value is Dictionary)
+			if config_setting.value is Dictionary:
+				print("[CardDesigner] config_setting.value effects count: ", config_setting.value.get("effects", []).size())
 		if config_setting and config_setting.value is Dictionary:
 			_current_config = config_setting.value.duplicate(true)
 			print("[CardDesigner] Loaded config with ", _current_config.get("effects", []).size(), " effects")
@@ -192,6 +219,41 @@ func _rebuild_effects_ui():
 	for child in _effects_list.get_children():
 		if child is CollapsableVBoxContainer and collapsed_states.has(child.title):
 			child.collapsed = collapsed_states[child.title]
+	
+	# Update the Add Effect dropdown to only show inactive effects
+	_rebuild_add_effect_dropdown()
+
+func _rebuild_add_effect_dropdown() -> void:
+	"""Rebuild the Add Effect dropdown to only show effects that aren't already active."""
+	if not _add_effect_button:
+		return
+	
+	var popup = _add_effect_button.get_popup()
+	popup.clear()
+	
+	# Get list of currently active effect IDs
+	var active_effects: Array[String] = []
+	var effects = _current_config.get("effects", [])
+	for effect in effects:
+		var effect_id = effect.get("effect_id", "")
+		if effect_id:
+			active_effects.append(effect_id)
+	
+	# Add only inactive effects to the dropdown
+	var has_available_effects = false
+	for id in EFFECT_ID_MAP.keys():
+		var effect_id = EFFECT_ID_MAP[id]
+		if not effect_id in active_effects:
+			var display_name = effect_id.replace("_", " ").capitalize()
+			popup.add_item(display_name, id)
+			has_available_effects = true
+	
+	# Disable button if all effects are active
+	_add_effect_button.disabled = not has_available_effects
+	if not has_available_effects:
+		_add_effect_button.text = "All Effects Added"
+	else:
+		_add_effect_button.text = "Add Effect"
 
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()
@@ -384,6 +446,7 @@ func _on_add_effect(id: int):
 		_card_state.effect_settings = effects
 		_rebuild_effects_ui()
 		_update_preview()
+		_save_to_settings()
 
 func _on_remove_effect(index: int):
 	var effects = _current_config.get("effects", [])
@@ -393,6 +456,7 @@ func _on_remove_effect(index: int):
 		_card_state.effect_settings = effects
 		_rebuild_effects_ui()
 		_update_preview()
+		_save_to_settings()
 
 func _on_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):
 	print("[CardDesigner] Setting changed: effect=", effect_index, " name=", setting_name, " type=", typeof(value))
@@ -408,18 +472,21 @@ func _on_effect_setting_changed(effect_index: int, setting_name: String, value: 
 			effects[effect_index]["settings"] = {}
 		effects[effect_index]["settings"][setting_name] = value
 		_update_preview()
+		_save_to_settings()
 
 func _on_orientation_changed(index: int):
 	_current_config["card_orientation"] = index
 	_card_state.orientation = index
 	_card_state.zoom_level = 1.5
 	_update_preview()
+	_save_to_settings()
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
 	_card_state.corner_radius_ratio = value
 	_card_state.zoom_level = 1.5
 	_update_preview()
+	_save_to_settings()
 
 func _update_preview():
 	if not _preview_card or not is_instance_valid(_preview_card):
@@ -435,24 +502,12 @@ func _update_preview():
 	
 	_preview_card.set_card_state(state)
 
-func _on_save():
-	print("[CardDesigner] Saving config...")
-	# Debug: print all gradient points before saving
-	for i in range(_current_config.get("effects", []).size()):
-		var effect = _current_config["effects"][i]
-		var settings = effect.get("settings", {})
-		for key in settings.keys():
-			if settings[key] is Gradient:
-				var grad = settings[key]
-				var points_str = ""
-				for j in range(grad.get_point_count()):
-					points_str += "(" + str(grad.get_offset(j)) + ":" + str(grad.get_color(j)) + ") "
-				print("[CardDesigner] Saving Effect ", i, " - ", key, " points: ", points_str)
+func _save_to_settings() -> void:
+	"""Save the current config to SettingsManager immediately."""
+	if not SettingsManager:
+		return
 	
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting:
-			SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
-			SettingsManager.save_settings()
-			NotificationManager.show_notification("Card design saved", Notification.Type.SUCCESS)
-			print("[CardDesigner] Config saved successfully")
+	var config_setting = SettingsManager.get_setting("card_effect_config")
+	if config_setting:
+		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
+		print("[CardDesigner] Config saved to SettingsManager")

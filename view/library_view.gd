@@ -480,6 +480,20 @@ func _get_current_platform_name() -> String:
 
 func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
+	print("[LibraryView] === rebuild_grid called ===")
+	print("[LibraryView] refresh_effects parameter: ", refresh_effects)
+	
+	# DEBUG: Check what SettingsManager has for card_effect_config at rebuild time
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			print("[LibraryView] SettingsManager card_effect_config at rebuild time:")
+			print("[LibraryView]   - effects count: ", config_setting.value.get("effects", []).size())
+			print("[LibraryView]   - card_orientation: ", config_setting.value.get("card_orientation", "NOT SET"))
+			print("[LibraryView]   - corner_radius: ", config_setting.value.get("corner_radius", "NOT SET"))
+		else:
+			print("[LibraryView] WARNING: SettingsManager card_effect_config not available or not a Dictionary")
+	
 	_update_grid_orientation()
 	
 	# If refreshing effects, reload data first (clears cache), then refresh dimensions
@@ -487,15 +501,20 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 		print("[LibraryView] Rebuilding grid with effect refresh")
 		# Use callback version to ensure dimensions refresh AFTER data loads
 		_load_total_count_with_callback(false, func():
+			print("[LibraryView] In rebuild callback - calling refresh_all_card_effects")
 			# Also refresh existing cards
 			games_grid.refresh_all_card_effects()
 			# Refresh dimensions AFTER data reload to get correct layout
+			print("[LibraryView] In rebuild callback - calling refresh_dimensions")
 			games_grid.refresh_dimensions()
+			print("[LibraryView] In rebuild callback - complete")
 		)
 	else:
+		print("[LibraryView] Rebuilding grid without effect refresh")
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
 		_load_total_count(true)
+	print("[LibraryView] === rebuild_grid complete ===")
 
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
