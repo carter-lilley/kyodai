@@ -8,6 +8,7 @@ var _library_appearance_config: Dictionary = {}
 var _library_effect_menu: SettingsMenu = null
 var _library_effect_dropdown: OptionButton = null
 var _library_general_menu: SettingsMenu = null  # Store reference to general settings menu
+var _library_background_color_picker: ColorPickerButton = null  # Store reference to background color picker
 
 # Theme preset UI
 var _preset_dropdown: OptionButton = null
@@ -139,6 +140,20 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 		vbox.add_child(general_menu)
 		_library_general_menu = general_menu  # Store reference
 		vbox.add_child(HSeparator.new())
+	
+	# Background Color section (global, applies to all effects)
+	var bg_color_label = Label.new()
+	bg_color_label.text = "Background Color"
+	bg_color_label.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(bg_color_label)
+	
+	_library_background_color_picker = ColorPickerButton.new()
+	_library_background_color_picker.custom_minimum_size = Vector2(100, 30)
+	_library_background_color_picker.color = _library_appearance_config.get("background_color", Color(0.1, 0.1, 0.15, 1.0))
+	_library_background_color_picker.color_changed.connect(_on_library_background_color_changed)
+	vbox.add_child(_library_background_color_picker)
+	
+	vbox.add_child(HSeparator.new())
 	
 	# Background Effect section
 	var bg_label = Label.new()
@@ -385,6 +400,10 @@ func _refresh_all_settings_ui() -> void:
 				break
 		_rebuild_library_effect_controls(current_effect_id)
 	
+	# Refresh background color picker
+	if _library_background_color_picker:
+		_library_background_color_picker.color = _library_appearance_config.get("background_color", Color(0.1, 0.1, 0.15, 1.0))
+	
 	# Notify other views that settings changed
 	# Emit setting_changed for card_effect_config so LibraryView and HomeView rebuild their cards
 	var card_effect_setting = SettingsManager.get_setting("card_effect_config")
@@ -468,6 +487,7 @@ func _load_library_background_config() -> void:
 	else:
 		_library_appearance_config = {
 			"effect_id": "xmb",
+			"background_color": Color(0.1, 0.1, 0.15, 1.0),
 			"settings": {
 				"time_scale": 1.0,
 				"show_dust": true,
@@ -476,16 +496,22 @@ func _load_library_background_config() -> void:
 			}
 		}
 
+func _on_library_background_color_changed(color: Color) -> void:
+	_library_appearance_config["background_color"] = color
+	
+	# Save the config change
+	var config_setting = SettingsManager.get_setting("library_background_config")
+	if config_setting:
+		SettingsManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
+
 func _on_library_effect_selected(index: int) -> void:
 	var effect_id = _library_effect_dropdown.get_item_metadata(index)
 	_library_appearance_config["effect_id"] = effect_id
 	
 	# Reset settings to defaults for new effect
 	match effect_id:
-		"solid":
-			_library_appearance_config["settings"] = {
-				"background_color": Color(0.1, 0.1, 0.1, 1.0)
-			}
+		"none":
+			_library_appearance_config["settings"] = {}
 		"xmb":
 			_library_appearance_config["settings"] = {
 				"time_scale": 1.0,

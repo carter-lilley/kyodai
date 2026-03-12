@@ -9,7 +9,7 @@ uniform float icon_scale : hint_range(0.1, 1.0) = 0.7;
 uniform float orbit_speed : hint_range(0.05, 1.0) = 0.15;
 uniform int num_icons : hint_range(5, 30) = 15;
 uniform vec3 light_direction = vec3(0.7, -0.7, 0.0);
-uniform vec4 background_color : source_color = vec4(0.1, 0.1, 0.15, 1.0);
+
 uniform float rotation_speed : hint_range(0.0, 2.0) = 0.3;
 
 const float ICON_SIZE = 256.0;
@@ -101,7 +101,7 @@ vec3 calc_normal(int icon_index, vec2 uv, float scale,
 }
 
 // Render a single ray sample
-vec3 render_ray(vec2 uv, float aspect) {
+vec4 render_ray(vec2 uv, float aspect) {
     vec3 camera_pos = vec3(0.0, 0.0, -4.0);
     vec3 ray_dir = normalize(vec3(uv, 1.5));
     
@@ -245,10 +245,10 @@ vec3 render_ray(vec2 uv, float aspect) {
     if (hit) {
         float NdotL = max(0.0, dot(closest_normal, light));
         float diffuse = 0.4 + 0.6 * NdotL; // Softer lighting: 20% less light, brighter shadows
-        return closest_color * diffuse;
+        return vec4(closest_color * diffuse, 1.0);
     }
     
-    return background_color.rgb;
+    return vec4(0.0);
 }
 
 void fragment() {
@@ -257,11 +257,11 @@ void fragment() {
     uv.y *= 0.909;
     float aspect = (1.0 / SCREEN_PIXEL_SIZE).x / (1.0 / SCREEN_PIXEL_SIZE).y;
     
-    vec3 final_color = render_ray(uv, aspect);
+    vec4 final_color = render_ray(uv, aspect);
     
     // Blur for out-of-focus depth-of-field effect
     float blur_amount = 0.00448;
-    vec3 blurred_color = vec3(0.0);
+    vec4 blurred_color = vec4(0.0);
     
     // 5x5 kernel sampling with finer step
     for(float x = -2.0; x <= 2.0; x += 1.0) {
@@ -276,5 +276,5 @@ void fragment() {
     // Full blur - no mixing with original
     final_color = blurred_color;
     
-    COLOR = vec4(final_color, 1.0);
+    COLOR = final_color;
 }

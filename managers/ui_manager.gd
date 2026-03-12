@@ -253,6 +253,7 @@ func _apply_library_background_config() -> void:
 		# Apply default config
 		_library_background.set_background_config({
 			"effect_id": "xmb",
+			"background_color": Color(0.1, 0.1, 0.15, 1.0),
 			"settings": {
 				"time_scale": 1.0,
 				"show_dust": true,

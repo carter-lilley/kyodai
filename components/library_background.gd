@@ -3,6 +3,8 @@ extends Control
 
 var _current_effect: BackgroundEffect = null
 var _background_state: BackgroundState = null
+var _background_color_rect: ColorRect = null
+var _effect_rect: ColorRect = null
 
 func _ready():
 	# Wait for next frame to initialize
@@ -10,16 +12,43 @@ func _ready():
 	resized.connect(_on_resized)
 
 func _on_resized() -> void:
-	# Update effect size when LibraryBackground resizes
+	# Update size when LibraryBackground resizes
+	if _background_color_rect:
+		_background_color_rect.size = size
+	if _effect_rect:
+		_effect_rect.size = size
 	if _current_effect:
 		_current_effect.size = size
 
 func _initialize_background() -> void:
+	# Create background color layer (bottom)
+	_background_color_rect = ColorRect.new()
+	_background_color_rect.name = "BackgroundColor"
+	_background_color_rect.layout_mode = 1
+	_background_color_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_background_color_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_background_color_rect.size = size
+	_background_color_rect.z_index = -1
+	add_child(_background_color_rect)
+	
+	# Force initial color update
+	_background_color_rect.color = Color(0.1, 0.1, 0.15, 1.0)
+	
+	# Create effect layer (middle, transparent)
+	_effect_rect = ColorRect.new()
+	_effect_rect.name = "EffectLayer"
+	_effect_rect.layout_mode = 1
+	_effect_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_effect_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_effect_rect.color = Color(0, 0, 0, 0)  # Start fully transparent
+	add_child(_effect_rect)
+	
 	# Get initial config from settings if available
 	var config = _get_initial_config()
 	_background_state = BackgroundState.new(config)
 	_background_state.effect_changed.connect(_on_effect_changed)
 	_background_state.setting_changed.connect(_on_setting_changed)
+	_background_state.background_color_changed.connect(_on_background_color_changed)
 	_apply_background_state()
 
 func _get_initial_config() -> Dictionary:
@@ -31,6 +60,7 @@ func _get_initial_config() -> Dictionary:
 	# Default config
 	return {
 		"effect_id": "xmb",
+		"background_color": Color(0.1, 0.1, 0.15, 1.0),
 		"settings": {
 			"time_scale": 1.0,
 			"show_dust": true,
@@ -48,26 +78,29 @@ func _apply_background_state() -> void:
 	if not _background_state:
 		return
 	
+	# Update background color
+	if _background_color_rect:
+		_background_color_rect.color = _background_state.background_color
+	
 	# Remove current effect if any
 	if _current_effect:
 		_current_effect.queue_free()
 		_current_effect = null
 	
-	# Create and add new effect
+	# Create and add new effect to the effect rect
 	_current_effect = _create_effect(_background_state.effect_id)
-	if _current_effect:
-		add_child(_current_effect)
-		_current_effect.layout_mode = 1  # Required for anchors to work
+	if _current_effect and _effect_rect:
+		_effect_rect.add_child(_current_effect)
+		_current_effect.layout_mode = 1
 		_current_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_current_effect.visible = true
-		# Force size to match parent immediately
-		_current_effect.size = size
+		_current_effect.size = _effect_rect.size
 		_current_effect.initialize(_background_state.effect_settings)
 
 func _create_effect(effect_id: String) -> BackgroundEffect:
 	match effect_id:
-		"solid":
-			return SolidBackgroundEffect.new()
+		"none":
+			return null
 		"xmb":
 			return XmbBackgroundEffect.new()
 		"motes":
@@ -86,24 +119,32 @@ func _on_setting_changed(setting_name: String, value: Variant) -> void:
 	if _current_effect:
 		_current_effect.update_settings(_background_state.effect_settings)
 
+func _on_background_color_changed(color: Color) -> void:
+	if _background_color_rect:
+		_background_color_rect.color = color
+
 # Public API for updating background configuration
 func set_background_config(config: Dictionary) -> void:
 	if not _background_state:
 		_background_state = BackgroundState.new(config)
 		_background_state.effect_changed.connect(_on_effect_changed)
 		_background_state.setting_changed.connect(_on_setting_changed)
+		_background_state.background_color_changed.connect(_on_background_color_changed)
 		_apply_background_state()
 	else:
 		var old_effect_id = _background_state.effect_id
 		_background_state.effect_id = config.get("effect_id", "xmb")
+		_background_state.background_color = config.get("background_color", Color(0.1, 0.1, 0.15, 1.0))
 		_background_state.effect_settings = config.get("settings", {}).duplicate()
 		
 		if _background_state.effect_id != old_effect_id:
 			_apply_background_state()
 		else:
-			# Same effect, just update settings
+			# Same effect, just update settings and color
 			if _current_effect:
 				_current_effect.update_settings(_background_state.effect_settings)
+			if _background_color_rect:
+				_background_color_rect.color = _background_state.background_color
 
 func get_background_config() -> Dictionary:
 	if _background_state:
@@ -111,18 +152,18 @@ func get_background_config() -> Dictionary:
 	return _get_initial_config()
 
 # Legacy method for backward compatibility
-func set_background_color(_color: Color) -> void:
-	# This is now handled by the solid background effect
-	pass
+func set_background_color(color: Color) -> void:
+	if _background_state:
+		_background_state.background_color = color
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:
-	return ["solid", "xmb", "motes", "osdsys", "wiiu"]
+	return ["none", "xmb", "motes", "osdsys", "wiiu"]
 
 # Get effect display name
 static func get_effect_display_name(effect_id: String) -> String:
 	match effect_id:
-		"solid": return "Solid Color"
+		"none": return "None"
 		"xmb": return "XMB"
 		"motes": return "Motes"
 		"osdsys": return "OSDSYS"
@@ -131,10 +172,11 @@ static func get_effect_display_name(effect_id: String) -> String:
 
 # Get settings schema for an effect
 static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
+	if effect_id == "none":
+		return []
+	
 	var effect: BackgroundEffect
 	match effect_id:
-		"solid":
-			effect = SolidBackgroundEffect.new()
 		"xmb":
 			effect = XmbBackgroundEffect.new()
 		"motes":
@@ -149,3 +191,9 @@ static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 	var schema = effect.get_settings_schema()
 	effect.queue_free()
 	return schema
+
+# Get/set background color (global setting, separate from effect)
+func get_background_color() -> Color:
+	if _background_state:
+		return _background_state.background_color
+	return Color(0.1, 0.1, 0.15, 1.0)
