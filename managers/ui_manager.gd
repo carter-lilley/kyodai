@@ -16,8 +16,9 @@ var _current_bar_position: String = "bottom"
 # Position index mapping
 const BAR_POSITIONS = ["bottom", "top", "left", "right"]
 
-# Bar sizing constant (7.5% of viewport dimension)
-const BAR_SIZE_RATIO = 0.075
+# Bar sizing constants
+const BAR_SIZE_RATIO_HORIZONTAL = 0.075  # 7.5% of viewport height for top/bottom
+const BAR_SIZE_RATIO_VERTICAL = 0.05     # 5% of viewport width for left/right
 
 # Default hero height ratio (will be overridden by settings)
 const HERO_SIZE_RATIO_DEFAULT = 0.33
@@ -225,6 +226,13 @@ func _update_layout_orientation() -> void:
 	if is_horizontal != current_is_horizontal:
 		print("[UIManager] Orientation changed, replacing InnerLayout...")
 		
+		# IMPORTANT: Remove children from old layout BEFORE freeing it
+		# Otherwise queue_free() will destroy NavigationBar and ContentWrapper too!
+		if _navigation_bar.get_parent() == _inner_layout:
+			_inner_layout.remove_child(_navigation_bar)
+		if _content_wrapper.get_parent() == _inner_layout:
+			_inner_layout.remove_child(_content_wrapper)
+		
 		# Create new InnerLayout
 		var new_layout = _create_inner_layout(is_horizontal)
 		
@@ -234,7 +242,7 @@ func _update_layout_orientation() -> void:
 		_inner_layout = new_layout
 		_root_control.add_child(_inner_layout)
 		
-		# Re-add children in correct order
+		# Re-add children in correct order (they're now orphaned but still valid)
 		_update_inner_layout_children()
 	else:
 		# Just update child order
@@ -340,12 +348,12 @@ func _update_bar_size() -> void:
 	var is_horizontal = _current_bar_position in ["top", "bottom"]
 	
 	if is_horizontal:
-		var target_height = viewport_size.y * BAR_SIZE_RATIO
+		var target_height = viewport_size.y * BAR_SIZE_RATIO_HORIZONTAL
 		_navigation_bar.custom_minimum_size = Vector2(0, target_height)
 		_navigation_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	else:
-		var target_width = viewport_size.x * BAR_SIZE_RATIO
+		var target_width = viewport_size.x * BAR_SIZE_RATIO_VERTICAL
 		_navigation_bar.custom_minimum_size = Vector2(target_width, 0)
 		_navigation_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_navigation_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
