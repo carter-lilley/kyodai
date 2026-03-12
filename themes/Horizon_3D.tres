@@ -9,11 +9,14 @@ colors = PackedColorArray(0.96862745, 0.96862745, 0.96862745, 1, 0.96862745, 0.9
 [sub_resource type="Gradient" id="Gradient_rgwmd"]
 colors = PackedColorArray(0.9607843, 0.9607843, 0.9607843, 1, 0.57254905, 0.57254905, 0.57254905, 1)
 
+[sub_resource type="Gradient" id="Gradient_5arxv"]
+colors = PackedColorArray(0.8745098, 0.8627451, 0.8392157, 1, 0.8745098, 0.8627451, 0.8392157, 1)
+
 [resource]
 script = ExtResource("1_lk8v1")
 name = "Horizon 3D"
-created_at = "2026-03-11T00:23:11"
-library_hero_layout_height = 4
+created_at = "2026-03-12T01:49:52"
+library_hero_layout_height = 2
 library_vertical_layout = false
 library_grid_padding = 23
 library_grid_margin_x = 0
@@ -22,10 +25,9 @@ library_card_zoom = 0.25
 library_bar_color = Color(0.8745098, 0.8745098, 0.90588236, 1)
 library_icon_color = Color(0, 0, 0, 1)
 library_background_config = {
-"effect_id": "solid",
-"settings": {
-"background_color": Color(0.8745098, 0.85882354, 0.84313726, 1)
-}
+"background_gradient": SubResource("Gradient_5arxv"),
+"effect_id": "none",
+"settings": {}
 }
 card_effect_config = {
 "card_orientation": 2,

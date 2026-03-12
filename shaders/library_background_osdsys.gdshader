@@ -1,6 +1,7 @@
 shader_type canvas_item;
+render_mode blend_premul_alpha;
 
-// OSDSYS Background Effect
+// OSDSYS Background Effect - Overlay Version
 // Based on PS2 OSDSYS visual style with 8 orbiting particles
 
 #define PARTICLE_COUNT 8.0
@@ -83,9 +84,9 @@ void fragment() {
     // Apply color curve for blue tint
     drawing = vec3(pow(drawing, vec3(2.5, 1.8, 1.0)));
     
-    // Add vignette
-    float vignette = clamp(1.0 - length(suv) * 1.5, 0.0, 1.0);
-    vec3 bg_color = vignette * vec3(0.05, 0.05, 0.15);
+    // Calculate alpha based on particle intensity
+    float alpha = max(drawing.r, max(drawing.g, drawing.b));
     
-    COLOR = vec4(drawing + bg_color, 1.0);
+    // Output premultiplied: (RGB * A, A)
+    COLOR = vec4(drawing * alpha, alpha);
 }

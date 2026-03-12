@@ -1,23 +1,24 @@
 shader_type canvas_item;
+render_mode blend_add;
 
-// PS3 XMB Background Shader Port
+// PS3 XMB Background Shader Port - Additive Overlay Version
 // Based on: https://www.shadertoy.com/view/tXy3DK by int_45h
 // Ported to Godot 4.x
 
 uniform float time_scale : hint_range(0.0, 2.0) = 1.0;
 uniform bool show_dust = true;
-uniform float wave_intensity : hint_range(0.0, 2.0) = 1.0;
-uniform float star_threshold : hint_range(0.9, 1.0) = 0.99;
+uniform float wave_intensity : hint_range(0.0, 5.0) = 0.812;
+uniform float star_threshold : hint_range(0.9, 1.0) = 1.0;
+uniform float wave_thickness : hint_range(0.5, 5.0) = 0.5;
+uniform float wave_amplitude : hint_range(0.0, 3.0) = 0.324;
+uniform float wave_vertical_offset : hint_range(-1.0, 1.0) = -0.2;
 uniform sampler2D noise_texture : filter_linear, repeat_enable;
 
-// Gradient colors (4 corners)
-uniform vec4 color_top_left : source_color = vec4(0.7, 0.2, 0.2, 1.0);
-uniform vec4 color_top_right : source_color = vec4(0.4, 0.1, 0.1, 1.0);
-uniform vec4 color_bottom_left : source_color = vec4(0.45, 0.1, 0.1, 1.0);
-uniform vec4 color_bottom_right : source_color = vec4(0.8, 0.3, 0.5, 1.0);
+// Wave color - bright color that adds to the background
+uniform vec4 wave_color : source_color = vec4(0.5, 0.5, 0.8, 1.0);
 
-// Wave blend color (what the wave fades to)
-uniform vec4 wave_blend_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+// Dust color
+uniform vec4 dust_color : source_color = vec4(0.4, 0.4, 0.6, 1.0);
 
 const float THRESHOLD = 0.99;
 const float MIN_DIST = 0.13;
@@ -92,15 +93,29 @@ float get_dust(vec2 p, vec2 size, float f, float time, vec2 resolution) {
 	);
 }
 
-// SDF for the wave
+// SDF for the wave - Vita-style broad, soft waves
 float sdf(vec3 p, float time) {
-	p *= 2.0;
-	float o = 4.2 * sin(0.05 * p.x + time * 0.25) +
-		(0.04 * p.z) *
-		sin(p.x * 0.11 + time) *
-		2.0 * sin(p.z * 0.2 + time) *
-		value2d_hash(vec2(0.03, 0.4) * p.xz + vec2(time * 0.5, 0.0));
-	return abs(dot(p, normalize(vec3(0.0, 1.0, 0.05))) + 2.5 + o * 0.5);
+	// Scale down for broader waves
+	vec3 wp = p * 0.5;
+	
+	// Multiple parallel wave bands (Vita has several flowing ribbons)
+	// Distributed vertically for full-screen coverage
+	float wave1 = sin(wp.x * 0.8 + time * 0.3) * 0.5;
+	float wave2 = sin(wp.x * 0.6 + wp.z * 0.3 + time * 0.25 + 1.0) * 0.4;
+	float wave3 = sin(wp.x * 0.4 + time * 0.2 + 2.0) * 0.3;
+	float wave4 = sin(wp.x * 0.5 + wp.y * 0.2 + time * 0.35 + 0.5) * 0.35;  // Vertical variation
+	
+	// Combine waves
+	float combined_wave = wave1 + wave2 + wave3 + wave4;
+	
+	// Soft SDF - returns distance from wave center with smooth falloff
+	// Not using abs() - instead we get signed distance for soft edges
+	float wave_height = combined_wave * 1.5 * wave_amplitude;
+	// Center the wave vertically with offset
+	float dist = dot(wp, normalize(vec3(0.0, 1.0, 0.05))) + wave_height + wave_vertical_offset;
+	
+	// Return soft distance (positive = outside wave, negative = inside)
+	return dist;
 }
 
 // Normal calculation
@@ -115,56 +130,36 @@ vec3 norm(vec3 p, float time) {
 	);
 }
 
-// Raymarching
+// Raymarching with density accumulation for soft Vita-style waves
 vec2 raymarch(vec3 o, vec3 d, float omega, float time) {
 	float t = 0.0;
-	float a = 0.0;
-	float g = MAX_DIST;
-	float dt = 0.0;
-	float sl = 0.0;
-	float emin = 0.03;
-	float ed = emin;
-	int dr = 0;
-	bool hit = false;
+	float density = 0.0;
+	float step_size = 0.1;
+	float total_density = 0.0;
+	int samples = 0;
 	
-	for (int i = 0; i < 100; i++) {
+	for (int i = 0; i < 80; i++) {
 		vec3 p = o + d * t;
-		float ndt = sdf(p, time);
+		float dist = sdf(p, time);
 		
-		if (abs(dt) + abs(ndt) < sl) {
-			sl -= omega * sl;
-			omega = 1.0;
-		} else {
-			sl = ndt * omega;
-		}
+		// Accumulate density based on how close we are to the wave center
+		// Smooth falloff for soft, broad waves
+		float sample_density = smoothstep(wave_thickness, 0.0, abs(dist));
 		
-		dt = ndt;
-		t += sl;
+		total_density += sample_density;
+		samples++;
 		
-		g = (t > 10.0) ? min(g, abs(dt)) : MAX_DIST;
-		
-		t += dt;
+		t += step_size;
 		if (t >= MAX_DIST) break;
-		
-		if (dt < MIN_DIST) {
-			if (dr > MAX_DRAWS) break;
-			dr++;
-			
-			float f = smoothstep(0.09, 0.11, (p.z * 0.9) / 100.0);
-			
-			if (!hit) {
-				a = 0.01;
-				hit = true;
-			}
-			
-			ed = 2.0 * max(emin, abs(ndt));
-			a += 0.0135 * f;
-			t += ed;
-		}
 	}
 	
-	g /= 3.0;
-	return vec2(a, max(1.0 - g, 0.0));
+	// Average density
+	float avg_density = total_density / float(samples);
+	
+	// Calculate glow based on density (brighter where wave is denser)
+	float glow = avg_density * 3.0;
+	
+	return vec2(avg_density, glow);
 }
 
 void fragment() {
@@ -178,22 +173,30 @@ void fragment() {
 	vec3 d = vec3((U - 0.5 * resolution) / resolution.y, 1.0);
 	
 	vec2 mg = raymarch(o, d, 1.2, time);
-	float m = mg.x * wave_intensity;
+	float wave_density = mg.x;
+	float wave_glow = mg.y;
 	
-	// 4-point gradient using uniforms
-	vec3 c = mix(
-		mix(color_top_left.rgb, color_top_right.rgb, uv.x),
-		mix(color_bottom_left.rgb, color_bottom_right.rgb, uv.x),
-		uv.y
-	);
+	// Start with black (additive blending adds to the background)
+	vec3 final_color = vec3(0.0);
 	
-	// Blend between gradient and wave blend color based on wave alpha
-	c = mix(c, wave_blend_color.rgb, m);
-	
-	// Add dust
-	if (show_dust) {
-		c += get_dust(uv, vec2(2000.0), mg.y, time, resolution) * 0.3;
+	// Vita-style: broad, soft waves with bright center
+	if (wave_density > 0.0) {
+		// Power curve for brighter center, softer edges
+		float brightness = pow(wave_density, 0.7) * wave_intensity;
+		// Add glow falloff
+		brightness *= (1.0 + wave_glow * 0.5);
+		final_color += wave_color.rgb * brightness;
 	}
 	
-	COLOR = vec4(c, 1.0);
+	// Add dust particles (keep them subtle)
+	if (show_dust) {
+		float dust = get_dust(uv, vec2(2000.0), mg.y, time, resolution);
+		final_color += dust_color.rgb * dust * 0.3;
+	}
+	
+	// Calculate alpha based on brightness
+	float alpha = min(length(final_color), 1.0);
+	
+	// Output with alpha for blending
+	COLOR = vec4(final_color, alpha);
 }

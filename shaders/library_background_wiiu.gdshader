@@ -5,28 +5,28 @@ render_mode blend_premul_alpha;
 
 uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
 uniform float time_scale : hint_range(0.0, 2.0) = 0.5;
-uniform float orbit_radius : hint_range(1.0, 5.0) = 2.5;
+uniform float orbit_radius : hint_range(1.0, 5.0) = 2.358;
 uniform float icon_scale : hint_range(0.1, 1.0) = 0.7;
 uniform float orbit_speed : hint_range(0.05, 1.0) = 0.15;
-uniform int num_icons : hint_range(5, 30) = 15;
-uniform vec3 light_direction = vec3(0.7, -0.7, 0.0);
+uniform int num_icons : hint_range(5, 30) = 21;
+uniform vec3 light_direction = vec3(1.0, 1.0, 0.0);
 
 uniform float rotation_speed : hint_range(0.0, 2.0) = 0.3;
 
 // 3D Extrusion & Raymarching Settings
-uniform float extrusion_depth : hint_range(0.001, 0.1) = 0.024;
+uniform float extrusion_depth : hint_range(0.001, 0.1) = 0.03;
 uniform int max_ray_steps : hint_range(16, 256) = 128;
 uniform float ray_step_size : hint_range(0.0001, 0.01) = 0.002;
-uniform float alpha_threshold : hint_range(0.0, 1.0) = 0.01;
-uniform float edge_softness : hint_range(0.0, 1.0) = 0.5;
+uniform float alpha_threshold : hint_range(0.0, 1.0) = 0.9;
+uniform float edge_softness : hint_range(0.0, 1.0) = 1.0;
 
 // Blur Settings
-uniform float blur_amount : hint_range(0.0, 0.02) = 0.00448;
-uniform int blur_kernel_size : hint_range(1, 5) = 5;
+uniform float blur_amount : hint_range(0.0, 0.02) = 0.004;
+uniform int blur_kernel_size : hint_range(1, 7) = 6;
 
 // Lighting Settings
-uniform float light_ambient : hint_range(0.0, 5.0) = 0.4;
-uniform float light_diffuse : hint_range(0.0, 5.0) = 0.6;
+uniform float light_ambient : hint_range(0.0, 5.0) = 0.85;
+uniform float light_diffuse : hint_range(0.0, 5.0) = 0.275;
 uniform float front_face_brightness : hint_range(0.0, 2.0) = 1.0;
 
 // Anti-aliasing / Supersampling
