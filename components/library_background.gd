@@ -5,7 +5,6 @@ var _current_effect: BackgroundEffect = null
 var _background_state: BackgroundState = null
 var _background_gradient_rect: ColorRect = null
 var _gradient_texture: ImageTexture = null
-var _effect_rect: ColorRect = null
 
 func _ready():
 	# Wait for next frame to initialize
@@ -16,8 +15,6 @@ func _on_resized() -> void:
 	# Update size when LibraryBackground resizes
 	if _background_gradient_rect:
 		_background_gradient_rect.size = size
-	if _effect_rect:
-		_effect_rect.size = size
 	if _current_effect:
 		_current_effect.size = size
 
@@ -37,15 +34,6 @@ func _initialize_background() -> void:
 	_background_gradient_rect.material = shader_material
 	
 	add_child(_background_gradient_rect)
-	
-	# Create effect layer (middle, transparent)
-	_effect_rect = ColorRect.new()
-	_effect_rect.name = "EffectLayer"
-	_effect_rect.layout_mode = 1
-	_effect_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_effect_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_effect_rect.color = Color(0, 0, 0, 0)  # Start fully transparent
-	add_child(_effect_rect)
 	
 	# Get initial config from settings if available
 	var config = _get_initial_config()
@@ -98,14 +86,14 @@ func _apply_background_state() -> void:
 		_current_effect.queue_free()
 		_current_effect = null
 	
-	# Create and add new effect to the effect rect
+	# Create and add new effect as sibling of background gradient
 	_current_effect = _create_effect(_background_state.effect_id)
-	if _current_effect and _effect_rect:
-		_effect_rect.add_child(_current_effect)
+	if _current_effect:
+		add_child(_current_effect)
 		_current_effect.layout_mode = 1
 		_current_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_current_effect.visible = true
-		_current_effect.size = _effect_rect.size
+		_current_effect.size = size
 		_current_effect.initialize(_background_state.effect_settings)
 
 func _gradient_to_texture(gradient: Gradient) -> ImageTexture:

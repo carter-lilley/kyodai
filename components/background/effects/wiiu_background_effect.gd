@@ -28,6 +28,25 @@ func _apply_settings() -> void:
 	# Light direction as normalized vec3
 	var light_dir = _settings.get("light_direction", Vector3(0.5, 0.5, 1.0))
 	_set_shader_param("light_direction", light_dir.normalized())
+	
+	# 3D Extrusion & Raymarching Settings
+	_set_shader_param("extrusion_depth", _settings.get("extrusion_depth", 0.024))
+	_set_shader_param("max_ray_steps", _settings.get("max_ray_steps", 128))
+	_set_shader_param("ray_step_size", _settings.get("ray_step_size", 0.002))
+	_set_shader_param("alpha_threshold", _settings.get("alpha_threshold", 0.01))
+	_set_shader_param("edge_softness", _settings.get("edge_softness", 0.5))
+	
+	# Blur Settings
+	_set_shader_param("blur_amount", _settings.get("blur_amount", 0.00448))
+	_set_shader_param("blur_kernel_size", _settings.get("blur_kernel_size", 5))
+	
+	# Lighting Settings
+	_set_shader_param("light_ambient", _settings.get("light_ambient", 0.4))
+	_set_shader_param("light_diffuse", _settings.get("light_diffuse", 0.6))
+	_set_shader_param("front_face_brightness", _settings.get("front_face_brightness", 1.0))
+	
+	# Anti-aliasing
+	_set_shader_param("supersample_level", _settings.get("supersample_level", 2))
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

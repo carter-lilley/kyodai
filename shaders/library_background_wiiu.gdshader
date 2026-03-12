@@ -1,8 +1,9 @@
 shader_type canvas_item;
+render_mode blend_premul_alpha;
 
 // WiiU Menu - TRUE 3D Alpha Extrusion with Flat Shading
 
-uniform sampler2D icon_atlas : source_color, repeat_disable, filter_nearest;
+uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
 uniform float time_scale : hint_range(0.0, 2.0) = 0.5;
 uniform float orbit_radius : hint_range(1.0, 5.0) = 2.5;
 uniform float icon_scale : hint_range(0.1, 1.0) = 0.7;
@@ -12,14 +13,30 @@ uniform vec3 light_direction = vec3(0.7, -0.7, 0.0);
 
 uniform float rotation_speed : hint_range(0.0, 2.0) = 0.3;
 
+// 3D Extrusion & Raymarching Settings
+uniform float extrusion_depth : hint_range(0.001, 0.1) = 0.024;
+uniform int max_ray_steps : hint_range(16, 256) = 128;
+uniform float ray_step_size : hint_range(0.0001, 0.01) = 0.002;
+uniform float alpha_threshold : hint_range(0.0, 1.0) = 0.01;
+uniform float edge_softness : hint_range(0.0, 1.0) = 0.5;
+
+// Blur Settings
+uniform float blur_amount : hint_range(0.0, 0.02) = 0.00448;
+uniform int blur_kernel_size : hint_range(1, 5) = 5;
+
+// Lighting Settings
+uniform float light_ambient : hint_range(0.0, 5.0) = 0.4;
+uniform float light_diffuse : hint_range(0.0, 5.0) = 0.6;
+uniform float front_face_brightness : hint_range(0.0, 2.0) = 1.0;
+
+// Anti-aliasing / Supersampling
+uniform int supersample_level : hint_range(1, 4) = 2;
+
+// Constants (don't change)
 const float ICON_SIZE = 256.0;
 const float ATLAS_WIDTH = 2304.0;
 const float ATLAS_HEIGHT = 2048.0;
 const float ICONS_PER_ROW = 9.0;
-const float EXTRUSION_DEPTH = 0.024;
-const int MAX_STEPS = 128;
-const float STEP_SIZE = 0.002;
-const float ALPHA_THRESHOLD = 0.1;
 
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
@@ -50,7 +67,7 @@ vec4 sample_icon(int icon_index, vec2 uv) {
 }
 
 float get_height(int icon_index, vec2 uv) {
-    return sample_icon(icon_index, uv).a * EXTRUSION_DEPTH;
+    return sample_icon(icon_index, uv).a * extrusion_depth;
 }
 
 float get_height_smooth(int icon_index, vec2 uv) {
@@ -102,7 +119,7 @@ vec3 calc_normal(int icon_index, vec2 uv, float scale,
     return normalize(icon_normal + icon_right * (dx / eps) + icon_up * (dy / eps));
 }
 
-// Render a single ray sample
+// Improved render_ray with continuous alpha sampling and adaptive stepping
 vec4 render_ray(vec2 uv, float aspect) {
     vec3 camera_pos = vec3(0.0, 0.0, -4.0);
     vec3 ray_dir = normalize(vec3(uv, 1.5));
@@ -111,8 +128,9 @@ vec4 render_ray(vec2 uv, float aspect) {
     vec3 light = normalize(light_direction);
     
     float closest_t = 9999.0;
-    vec3 closest_normal;
-    vec3 closest_color;
+    vec3 closest_normal = vec3(0.0, 0.0, 1.0);
+    vec3 closest_color = vec3(0.0);
+    float closest_alpha = 0.0;
     bool hit = false;
     
     for (int i = 0; i < num_icons && i < 12; i++) {
@@ -131,7 +149,6 @@ vec4 render_ray(vec2 uv, float aspect) {
         vec3 icon_up = rot_mat * vec3(0.0, 1.0, 0.0);
         vec3 icon_normal = rot_mat * vec3(0.0, 0.0, 1.0);
         
-        // Random scale between 60% and 100% of icon_scale
         float size_variation = 0.6 + hash(seed_vec.xy) * 0.4;
         float scale = icon_scale * size_variation;
         int icon_index = int(floor(seed_vec.x * 72.0)) % 72;
@@ -147,7 +164,7 @@ vec4 render_ray(vec2 uv, float aspect) {
             dot(ray_dir, icon_normal)
         );
         
-        vec3 box_min = vec3(-scale * 0.5, -scale * 0.5, -EXTRUSION_DEPTH);
+        vec3 box_min = vec3(-scale * 0.5, -scale * 0.5, -extrusion_depth);
         vec3 box_max = vec3(scale * 0.5, scale * 0.5, 0.0);
         
         vec3 inv_rd = 1.0 / local_dir;
@@ -161,93 +178,59 @@ vec4 render_ray(vec2 uv, float aspect) {
         if (t_end <= max(t_start, 0.0)) continue;
         
         float t = max(t_start, 0.0);
-        bool was_inside = false;
+        float prev_alpha = 0.0;
         vec2 prev_uv = vec2(0.0);
         
-        for (int step = 0; step < MAX_STEPS; step++) {
+        for (int step = 0; step < max_ray_steps; step++) {
             vec3 pos = local_origin + local_dir * t;
             vec2 uv_local = vec2(pos.x / scale + 0.5, pos.y / scale + 0.5);
             
             bool in_uv = uv_local.x >= 0.0 && uv_local.x <= 1.0 && 
                         uv_local.y >= 0.0 && uv_local.y <= 1.0;
             
-            bool inside = false;
-            float height = 0.0;
-            
-            if (in_uv) {
-                height = get_height_smooth(icon_index, uv_local);
-                inside = pos.z >= -height && pos.z <= 0.0;
+            if (!in_uv) {
+                prev_alpha = 0.0;
+                t += ray_step_size;
+                if (t > t_end) break;
+                continue;
             }
             
-            // Entry point - entering the volume
-            if (inside && !was_inside) {
-                vec4 col = sample_icon(icon_index, clamp(uv_local, 0.0, 1.0));
+            vec4 col = sample_icon(icon_index, clamp(uv_local, 0.0, 1.0));
+            float height = col.a * extrusion_depth;
+            bool inside = pos.z >= -height && pos.z <= 0.0;
+            
+            // Check if we're entering the volume (alpha transition from low to high)
+            if (inside && col.a > alpha_threshold) {
+                vec3 world_pos = icon_center + icon_right * pos.x + icon_up * pos.y + icon_normal * pos.z;
+                float world_t = length(world_pos - camera_pos);
                 
-                if (col.a > ALPHA_THRESHOLD) {
-                    vec3 world_pos = icon_center + icon_right * pos.x + icon_up * pos.y + icon_normal * pos.z;
-                    float world_t = length(world_pos - camera_pos);
+                if (world_t < closest_t) {
+                    closest_t = world_t;
+                    closest_normal = calc_normal(icon_index, uv_local, scale, icon_right, icon_up, icon_normal);
+                    closest_color = col.rgb;
+                    closest_alpha = col.a;
+                    hit = true;
                     
-                    if (world_t < closest_t) {
-                        closest_t = world_t;
-                        closest_normal = calc_normal(icon_index, uv_local, scale, icon_right, icon_up, icon_normal);
-                        closest_color = col.rgb;
-                        hit = true;
-                    }
+                    // Don't break - we want to find the closest hit across all icons
                 }
             }
             
-            // Exit point - check if we're leaving through sides
-            if (!inside && was_inside) {
-                // Calculate position just before exit
-                vec3 exit_pos = local_origin + local_dir * max(t - STEP_SIZE * 0.5, 0.0);
-                vec2 exit_uv = vec2(exit_pos.x / scale + 0.5, exit_pos.y / scale + 0.5);
-                float exit_height = get_height_smooth(icon_index, clamp(exit_uv, 0.0, 1.0));
-                
-                // Check if we exited through sides (out of UV bounds) or back
-                bool exited_sides = exit_uv.x <= 0.0 || exit_uv.x >= 1.0 || exit_uv.y <= 0.0 || exit_uv.y >= 1.0;
-                bool exited_back = exit_pos.z <= -exit_height && exit_uv.x > 0.0 && exit_uv.x < 1.0 && exit_uv.y > 0.0 && exit_uv.y < 1.0;
-                
-                if ((exited_sides || exited_back)) {
-                    // Sample color at the edge - use the last valid UV we had
-                    vec4 col = sample_icon(icon_index, clamp(prev_uv, 0.0, 1.0));
-                    
-                    // Always render exit if we were inside (to prevent gaps)
-                    if (col.a > ALPHA_THRESHOLD || exited_sides) {
-                        vec3 world_pos = icon_center + icon_right * exit_pos.x + icon_up * exit_pos.y + icon_normal * exit_pos.z;
-                        float world_t = length(world_pos - camera_pos);
-                        
-                        if (world_t < closest_t) {
-                            closest_t = world_t;
-                            
-                            if (exited_back) {
-                                closest_normal = calc_normal(icon_index, clamp(prev_uv, 0.0, 1.0), scale, icon_right, icon_up, icon_normal);
-                                closest_color = col.rgb * 0.6;
-                            } else {
-                                // Side wall - use gradient normal from edge
-                                closest_normal = calc_normal(icon_index, clamp(prev_uv, 0.0, 1.0), scale, icon_right, icon_up, icon_normal);
-                                closest_color = col.rgb * 0.75;
-                            }
-                            
-                            hit = true;
-                        }
-                    }
-                }
-                
-                // Don't continue raymarching this icon after exit
-                break;
-            }
+            // Adaptive step size: smaller steps when near the surface
+            float dist_to_surface = abs(pos.z + height);
+            float adaptive_step = mix(ray_step_size * 0.25, ray_step_size, smoothstep(0.0, 0.01, dist_to_surface));
             
-            was_inside = inside;
+            prev_alpha = col.a;
             prev_uv = uv_local;
-            t += STEP_SIZE;
+            t += adaptive_step;
             if (t > t_end) break;
         }
     }
     
-    if (hit) {
+    if (hit && closest_alpha > 0.0) {
         float NdotL = max(0.0, dot(closest_normal, light));
-        float diffuse = 0.4 + 0.6 * NdotL; // Softer lighting: 20% less light, brighter shadows
-        return vec4(closest_color * diffuse, 1.0);
+        float diffuse = light_ambient + light_diffuse * NdotL;
+        vec3 final_color = closest_color * diffuse * front_face_brightness;
+        return vec4(final_color * closest_alpha, closest_alpha);
     }
     
     return vec4(0.0);
@@ -259,31 +242,79 @@ void fragment() {
     uv.y *= 0.909;
     float aspect = (1.0 / SCREEN_PIXEL_SIZE).x / (1.0 / SCREEN_PIXEL_SIZE).y;
     
-    vec4 final_color = render_ray(uv, aspect);
+    // Calculate pixel size for supersampling
+    vec2 pixel_size = SCREEN_PIXEL_SIZE * 2.0; // UV range is -1 to 1
+    
+    vec4 final_color = vec4(0.0);
+    
+    // Supersampling anti-aliasing
+    // Sample at subpixel offsets and average
+    if (supersample_level <= 1) {
+        // No supersampling - single sample
+        final_color = render_ray(uv, aspect);
+    } else if (supersample_level == 2) {
+        // 2x2 supersampling (4 samples)
+        vec2 offsets[4] = vec2[](
+            vec2(-0.25, -0.25),
+            vec2( 0.25, -0.25),
+            vec2(-0.25,  0.25),
+            vec2( 0.25,  0.25)
+        );
+        
+        for (int i = 0; i < 4; i++) {
+            vec2 sample_uv = uv + offsets[i] * pixel_size;
+            vec4 sample = render_ray(sample_uv, aspect);
+            final_color += vec4(sample.rgb * sample.a, sample.a);
+        }
+        final_color /= 4.0;
+    } else if (supersample_level == 3) {
+        // 3x3 supersampling (9 samples)
+        for (float x = -1.0; x <= 1.0; x += 1.0) {
+            for (float y = -1.0; y <= 1.0; y += 1.0) {
+                vec2 sample_uv = uv + vec2(x, y) * pixel_size / 3.0;
+                vec4 sample = render_ray(sample_uv, aspect);
+                final_color += vec4(sample.rgb * sample.a, sample.a);
+            }
+        }
+        final_color /= 9.0;
+    } else {
+        // 4x4 supersampling (16 samples)
+        for (float x = -1.5; x <= 1.5; x += 1.0) {
+            for (float y = -1.5; y <= 1.5; y += 1.0) {
+                vec2 sample_uv = uv + vec2(x, y) * pixel_size / 4.0;
+                vec4 sample = render_ray(sample_uv, aspect);
+                final_color += vec4(sample.rgb * sample.a, sample.a);
+            }
+        }
+        final_color /= 16.0;
+    }
     
     // Blur for out-of-focus depth-of-field effect
-    float blur_amount = 0.00448;
     vec4 blurred_color = vec4(0.0);
     float total_weight = 0.0;
     
-    // 5x5 kernel sampling with alpha-weighted blending
-    for(float x = -2.0; x <= 2.0; x += 1.0) {
-        for(float y = -2.0; y <= 2.0; y += 1.0) {
+    // Calculate kernel bounds based on blur_kernel_size
+    float kernel_half = float(blur_kernel_size - 1) / 2.0;
+    float kernel_samples = float(blur_kernel_size * blur_kernel_size);
+    
+    // Dynamic kernel sampling with proper alpha-premultiplied blending
+    // This prevents dark halos by properly handling transparent regions
+    for(float x = -kernel_half; x <= kernel_half; x += 1.0) {
+        for(float y = -kernel_half; y <= kernel_half; y += 1.0) {
             vec2 offset = vec2(x, y) * blur_amount * 0.5;
             vec4 sample = render_ray(uv + offset, aspect);
-            // Weight by alpha to avoid blending in transparent/black pixels
-            float weight = sample.a;
-            blurred_color += sample * weight;
-            total_weight += weight;
+            // Accumulate premultiplied: (RGB * A, A)
+            blurred_color += vec4(sample.rgb * sample.a, sample.a);
+            total_weight += sample.a;
         }
     }
     
-    // Normalize by total weight to get proper alpha-weighted average
-    if (total_weight > 0.0) {
-        blurred_color /= total_weight;
-    }
+    // Normalize by sample count (not by weight) to preserve alpha
+    // This ensures transparent areas stay transparent without dark fringes
+    blurred_color /= kernel_samples;
     
     // Full blur - no mixing with original
+    // Output is already premultiplied: (RGB * A, A)
     final_color = blurred_color;
     
     COLOR = final_color;
