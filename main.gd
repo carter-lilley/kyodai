@@ -1,8 +1,14 @@
 extends Control
 
-@onready var layout_container: BoxContainer = $VBoxContainer
-@onready var tab_container: TabContainer = $VBoxContainer/TabContainer
-@onready var navigation_bar: NavigationBar = $VBoxContainer/NavigationBar
+# UI Nodes - initialized in _ready()
+var tab_container: TabContainer
+var navigation_bar: NavigationBar
+var hero_image: HeroImage
+var hero_spacer: Control
+var library_background: LibraryBackground
+var content_wrapper: Control
+var main_content_vbox: VBoxContainer
+var root_layout: Control
 
 # Auto-repeat navigation
 var _held_dir: String = ""
@@ -22,8 +28,38 @@ func _ready():
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 	
-	# Initialize UIManager with the tab container, layout container, and navigation bar
-	UIManager.initialize(tab_container, layout_container, navigation_bar)
+	# Get all nodes using get_node to ensure they're ready
+	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
+	navigation_bar = get_node("NavigationBar")
+	hero_image = get_node("RootLayout/ContentWrapper/HeroImage")
+	hero_spacer = get_node("RootLayout/ContentWrapper/MainContentVBox/HeroSpacer")
+	library_background = get_node("RootLayout/ContentWrapper/LibraryBackground")
+	content_wrapper = get_node("RootLayout/ContentWrapper")
+	main_content_vbox = get_node("RootLayout/ContentWrapper/MainContentVBox")
+	root_layout = get_node("RootLayout")
+	
+	# Debug: Verify all nodes are found
+	print("[Main] Verifying nodes...")
+	print("[Main] tab_container: ", tab_container)
+	print("[Main] navigation_bar: ", navigation_bar)
+	print("[Main] hero_image: ", hero_image)
+	print("[Main] hero_spacer: ", hero_spacer)
+	print("[Main] library_background: ", library_background)
+	print("[Main] content_wrapper: ", content_wrapper)
+	print("[Main] main_content_vbox: ", main_content_vbox)
+	print("[Main] root_layout: ", root_layout)
+	
+	# Initialize UIManager with all the pre-built nodes
+	UIManager.initialize(
+		tab_container,
+		navigation_bar,
+		hero_image,
+		hero_spacer,
+		library_background,
+		content_wrapper,
+		main_content_vbox,
+		root_layout
+	)
 	
 	# Connect navigation bar signals
 	if navigation_bar:
