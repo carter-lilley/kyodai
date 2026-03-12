@@ -8,7 +8,7 @@ var _library_appearance_config: Dictionary = {}
 var _library_effect_menu: SettingsMenu = null
 var _library_effect_dropdown: OptionButton = null
 var _library_general_menu: SettingsMenu = null  # Store reference to general settings menu
-var _library_background_color_picker: ColorPickerButton = null  # Store reference to background color picker
+var _library_gradient_menu: SettingsMenu = null  # Store reference to gradient settings menu
 
 # Theme preset UI
 var _preset_dropdown: OptionButton = null
@@ -141,17 +141,27 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 		_library_general_menu = general_menu  # Store reference
 		vbox.add_child(HSeparator.new())
 	
-	# Background Color section (global, applies to all effects)
-	var bg_color_label = Label.new()
-	bg_color_label.text = "Background Color"
-	bg_color_label.add_theme_font_size_override("font_size", 14)
-	vbox.add_child(bg_color_label)
+	# Background Gradient section (global, applies to all effects)
+	var bg_gradient_label = Label.new()
+	bg_gradient_label.text = "Background Gradient"
+	bg_gradient_label.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(bg_gradient_label)
 	
-	_library_background_color_picker = ColorPickerButton.new()
-	_library_background_color_picker.custom_minimum_size = Vector2(100, 30)
-	_library_background_color_picker.color = _library_appearance_config.get("background_color", Color(0.1, 0.1, 0.15, 1.0))
-	_library_background_color_picker.color_changed.connect(_on_library_background_color_changed)
-	vbox.add_child(_library_background_color_picker)
+	_library_gradient_menu = SettingsMenu.new()
+	var gradient_schema = LibraryBackground.get_background_gradient_schema()
+	
+	# Apply current values to schema
+	for setting in gradient_schema:
+		if setting.property_name == "background_gradient":
+			var gradient_data = _library_appearance_config.get("background_gradient")
+			if gradient_data is Gradient:
+				setting.value = gradient_data
+		elif setting.property_name == "gradient_direction":
+			setting.value = _library_appearance_config.get("gradient_direction", 0)
+	
+	_library_gradient_menu.build_controls_from_settingsvars(gradient_schema, "Gradient Settings")
+	_library_gradient_menu.setting_changed.connect(_on_library_gradient_setting_changed)
+	vbox.add_child(_library_gradient_menu)
 	
 	vbox.add_child(HSeparator.new())
 	
@@ -400,9 +410,21 @@ func _refresh_all_settings_ui() -> void:
 				break
 		_rebuild_library_effect_controls(current_effect_id)
 	
-	# Refresh background color picker
-	if _library_background_color_picker:
-		_library_background_color_picker.color = _library_appearance_config.get("background_color", Color(0.1, 0.1, 0.15, 1.0))
+	# Refresh background gradient menu
+	if _library_gradient_menu:
+		_library_gradient_menu.clear_controls()
+		var gradient_schema = LibraryBackground.get_background_gradient_schema()
+		
+		# Apply current values to schema
+		for setting in gradient_schema:
+			if setting.property_name == "background_gradient":
+				var gradient_data = _library_appearance_config.get("background_gradient")
+				if gradient_data is Gradient:
+					setting.value = gradient_data
+			elif setting.property_name == "gradient_direction":
+				setting.value = _library_appearance_config.get("gradient_direction", 0)
+		
+		_library_gradient_menu.build_controls_from_settingsvars(gradient_schema, "Gradient Settings")
 	
 	# Notify other views that settings changed
 	# Emit setting_changed for card_effect_config so LibraryView and HomeView rebuild their cards
@@ -485,9 +507,14 @@ func _load_library_background_config() -> void:
 	if config_setting and config_setting.value is Dictionary:
 		_library_appearance_config = config_setting.value.duplicate(true)
 	else:
+		var default_gradient = Gradient.new()
+		default_gradient.offsets = [0.0, 1.0]
+		default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
+		
 		_library_appearance_config = {
 			"effect_id": "xmb",
-			"background_color": Color(0.1, 0.1, 0.15, 1.0),
+			"background_gradient": default_gradient,
+			"gradient_direction": 0,
 			"settings": {
 				"time_scale": 1.0,
 				"show_dust": true,
@@ -496,8 +523,8 @@ func _load_library_background_config() -> void:
 			}
 		}
 
-func _on_library_background_color_changed(color: Color) -> void:
-	_library_appearance_config["background_color"] = color
+func _on_library_gradient_setting_changed(value: Variant, setting: SettingsVar) -> void:
+	_library_appearance_config[setting.property_name] = value
 	
 	# Save the config change
 	var config_setting = SettingsManager.get_setting("library_background_config")

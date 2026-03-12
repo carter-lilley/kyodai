@@ -3,7 +3,8 @@ extends Control
 
 var _current_effect: BackgroundEffect = null
 var _background_state: BackgroundState = null
-var _background_color_rect: ColorRect = null
+var _background_gradient_rect: ColorRect = null
+var _gradient_texture: ImageTexture = null
 var _effect_rect: ColorRect = null
 
 func _ready():
@@ -13,26 +14,29 @@ func _ready():
 
 func _on_resized() -> void:
 	# Update size when LibraryBackground resizes
-	if _background_color_rect:
-		_background_color_rect.size = size
+	if _background_gradient_rect:
+		_background_gradient_rect.size = size
 	if _effect_rect:
 		_effect_rect.size = size
 	if _current_effect:
 		_current_effect.size = size
 
 func _initialize_background() -> void:
-	# Create background color layer (bottom)
-	_background_color_rect = ColorRect.new()
-	_background_color_rect.name = "BackgroundColor"
-	_background_color_rect.layout_mode = 1
-	_background_color_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_background_color_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_background_color_rect.size = size
-	_background_color_rect.z_index = -1
-	add_child(_background_color_rect)
+	# Create background gradient layer (bottom)
+	_background_gradient_rect = ColorRect.new()
+	_background_gradient_rect.name = "BackgroundGradient"
+	_background_gradient_rect.layout_mode = 1
+	_background_gradient_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_background_gradient_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_background_gradient_rect.size = size
+	_background_gradient_rect.z_index = -1
 	
-	# Force initial color update
-	_background_color_rect.color = Color(0.1, 0.1, 0.15, 1.0)
+	# Create shader material for gradient
+	var shader_material = ShaderMaterial.new()
+	shader_material.shader = preload("res://shaders/library_background_gradient.gdshader")
+	_background_gradient_rect.material = shader_material
+	
+	add_child(_background_gradient_rect)
 	
 	# Create effect layer (middle, transparent)
 	_effect_rect = ColorRect.new()
@@ -48,7 +52,8 @@ func _initialize_background() -> void:
 	_background_state = BackgroundState.new(config)
 	_background_state.effect_changed.connect(_on_effect_changed)
 	_background_state.setting_changed.connect(_on_setting_changed)
-	_background_state.background_color_changed.connect(_on_background_color_changed)
+	_background_state.background_gradient_changed.connect(_on_background_gradient_changed)
+	_background_state.gradient_direction_changed.connect(_on_gradient_direction_changed)
 	_apply_background_state()
 
 func _get_initial_config() -> Dictionary:
@@ -58,9 +63,14 @@ func _get_initial_config() -> Dictionary:
 			return config_setting.value.duplicate()
 	
 	# Default config
+	var default_gradient = Gradient.new()
+	default_gradient.offsets = [0.0, 1.0]
+	default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
+	
 	return {
 		"effect_id": "xmb",
-		"background_color": Color(0.1, 0.1, 0.15, 1.0),
+		"background_gradient": default_gradient,
+		"gradient_direction": 0,
 		"settings": {
 			"time_scale": 1.0,
 			"show_dust": true,
@@ -78,9 +88,10 @@ func _apply_background_state() -> void:
 	if not _background_state:
 		return
 	
-	# Update background color
-	if _background_color_rect:
-		_background_color_rect.color = _background_state.background_color
+	# Update background gradient
+	if _background_gradient_rect and _background_gradient_rect.material:
+		_update_gradient_texture(_background_state.background_gradient)
+		_background_gradient_rect.material.set_shader_parameter("gradient_direction", _background_state.gradient_direction)
 	
 	# Remove current effect if any
 	if _current_effect:
@@ -96,6 +107,26 @@ func _apply_background_state() -> void:
 		_current_effect.visible = true
 		_current_effect.size = _effect_rect.size
 		_current_effect.initialize(_background_state.effect_settings)
+
+func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
+	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
+	
+	for i in range(256):
+		var t = i / 255.0
+		var color = gradient.sample(t)
+		image.set_pixel(i, 0, color)
+	
+	return ImageTexture.create_from_image(image)
+
+func _update_gradient_texture(gradient: Gradient) -> void:
+	if _gradient_texture:
+		_gradient_texture = _gradient_to_texture(gradient)
+		if _background_gradient_rect and _background_gradient_rect.material:
+			_background_gradient_rect.material.set_shader_parameter("gradient_texture", _gradient_texture)
+	else:
+		_gradient_texture = _gradient_to_texture(gradient)
+		if _background_gradient_rect and _background_gradient_rect.material:
+			_background_gradient_rect.material.set_shader_parameter("gradient_texture", _gradient_texture)
 
 func _create_effect(effect_id: String) -> BackgroundEffect:
 	match effect_id:
@@ -119,9 +150,12 @@ func _on_setting_changed(setting_name: String, value: Variant) -> void:
 	if _current_effect:
 		_current_effect.update_settings(_background_state.effect_settings)
 
-func _on_background_color_changed(color: Color) -> void:
-	if _background_color_rect:
-		_background_color_rect.color = color
+func _on_background_gradient_changed(gradient: Gradient) -> void:
+	_update_gradient_texture(gradient)
+
+func _on_gradient_direction_changed(direction: int) -> void:
+	if _background_gradient_rect and _background_gradient_rect.material:
+		_background_gradient_rect.material.set_shader_parameter("gradient_direction", direction)
 
 # Public API for updating background configuration
 func set_background_config(config: Dictionary) -> void:
@@ -129,22 +163,31 @@ func set_background_config(config: Dictionary) -> void:
 		_background_state = BackgroundState.new(config)
 		_background_state.effect_changed.connect(_on_effect_changed)
 		_background_state.setting_changed.connect(_on_setting_changed)
-		_background_state.background_color_changed.connect(_on_background_color_changed)
+		_background_state.background_gradient_changed.connect(_on_background_gradient_changed)
+		_background_state.gradient_direction_changed.connect(_on_gradient_direction_changed)
 		_apply_background_state()
 	else:
 		var old_effect_id = _background_state.effect_id
 		_background_state.effect_id = config.get("effect_id", "xmb")
-		_background_state.background_color = config.get("background_color", Color(0.1, 0.1, 0.15, 1.0))
 		_background_state.effect_settings = config.get("settings", {}).duplicate()
+		
+		# Update gradient if provided
+		if config.has("background_gradient"):
+			if config.background_gradient is Gradient:
+				_background_state.background_gradient = config.background_gradient
+			
+		if config.has("gradient_direction"):
+			_background_state.gradient_direction = config.get("gradient_direction", 0)
 		
 		if _background_state.effect_id != old_effect_id:
 			_apply_background_state()
 		else:
-			# Same effect, just update settings and color
+			# Same effect, just update settings and gradient
 			if _current_effect:
 				_current_effect.update_settings(_background_state.effect_settings)
-			if _background_color_rect:
-				_background_color_rect.color = _background_state.background_color
+			_update_gradient_texture(_background_state.background_gradient)
+			if _background_gradient_rect and _background_gradient_rect.material:
+				_background_gradient_rect.material.set_shader_parameter("gradient_direction", _background_state.gradient_direction)
 
 func get_background_config() -> Dictionary:
 	if _background_state:
@@ -154,7 +197,11 @@ func get_background_config() -> Dictionary:
 # Legacy method for backward compatibility
 func set_background_color(color: Color) -> void:
 	if _background_state:
-		_background_state.background_color = color
+		# Convert solid color to single-color gradient
+		var gradient = Gradient.new()
+		gradient.offsets = [0.0, 1.0]
+		gradient.colors = [color, color]
+		_background_state.background_gradient = gradient
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:
@@ -192,8 +239,23 @@ static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 	effect.queue_free()
 	return schema
 
-# Get/set background color (global setting, separate from effect)
-func get_background_color() -> Color:
-	if _background_state:
-		return _background_state.background_color
-	return Color(0.1, 0.1, 0.15, 1.0)
+# Get background gradient settings schema (global)
+static func get_background_gradient_schema() -> Array[SettingsVar]:
+	var schema: Array[SettingsVar] = []
+	var Type = SettingsVar.SettingType
+	var State = SettingsVar.SettingState
+	
+	# Background Gradient
+	var gradient = Gradient.new()
+	gradient.offsets = [0.0, 1.0]
+	gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
+	var gradient_var = SettingsVar.new(Type.GRADIENT, gradient, State.ENABLED, "Background Gradient")
+	gradient_var.property_name = "background_gradient"
+	schema.append(gradient_var)
+	
+	# Gradient Direction
+	var direction_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Gradient Direction", "", 0.0, 2.0, 1.0, ["Horizontal", "Vertical", "Diagonal"])
+	direction_var.property_name = "gradient_direction"
+	schema.append(direction_var)
+	
+	return schema

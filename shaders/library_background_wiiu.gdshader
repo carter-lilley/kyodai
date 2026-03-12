@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 // WiiU Menu - TRUE 3D Alpha Extrusion with Flat Shading
 
-uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear;
+uniform sampler2D icon_atlas : source_color, repeat_disable, filter_nearest;
 uniform float time_scale : hint_range(0.0, 2.0) = 0.5;
 uniform float orbit_radius : hint_range(1.0, 5.0) = 2.5;
 uniform float icon_scale : hint_range(0.1, 1.0) = 0.7;
@@ -39,12 +39,14 @@ vec3 spherical_to_cartesian(float theta, float phi, float radius) {
 
 vec4 sample_icon(int icon_index, vec2 uv) {
     float row = floor(float(icon_index) / ICONS_PER_ROW);
-    float col = mod(float(icon_index), ICONS_PER_ROW);
+    float icon_col = mod(float(icon_index), ICONS_PER_ROW);
     vec2 pixel_pos = vec2(
-        col * ICON_SIZE + uv.x * ICON_SIZE,
+        icon_col * ICON_SIZE + uv.x * ICON_SIZE,
         row * (ICON_SIZE + 1.0) + uv.y * ICON_SIZE
     );
-    return texture(icon_atlas, pixel_pos / vec2(ATLAS_WIDTH, ATLAS_HEIGHT));
+    vec4 col = texture(icon_atlas, pixel_pos / vec2(ATLAS_WIDTH, ATLAS_HEIGHT));
+    // Premultiply alpha to fix dark halos from transparent black pixels
+    return vec4(col.rgb * col.a, col.a);
 }
 
 float get_height(int icon_index, vec2 uv) {
@@ -262,16 +264,24 @@ void fragment() {
     // Blur for out-of-focus depth-of-field effect
     float blur_amount = 0.00448;
     vec4 blurred_color = vec4(0.0);
+    float total_weight = 0.0;
     
-    // 5x5 kernel sampling with finer step
+    // 5x5 kernel sampling with alpha-weighted blending
     for(float x = -2.0; x <= 2.0; x += 1.0) {
         for(float y = -2.0; y <= 2.0; y += 1.0) {
             vec2 offset = vec2(x, y) * blur_amount * 0.5;
-            blurred_color += render_ray(uv + offset, aspect);
+            vec4 sample = render_ray(uv + offset, aspect);
+            // Weight by alpha to avoid blending in transparent/black pixels
+            float weight = sample.a;
+            blurred_color += sample * weight;
+            total_weight += weight;
         }
     }
     
-    blurred_color *= 0.04; // Divide by 25 (5x5 kernel)
+    // Normalize by total weight to get proper alpha-weighted average
+    if (total_weight > 0.0) {
+        blurred_color /= total_weight;
+    }
     
     // Full blur - no mixing with original
     final_color = blurred_color;

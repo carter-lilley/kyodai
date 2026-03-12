@@ -251,9 +251,14 @@ func _apply_library_background_config() -> void:
 		_library_background.set_background_config(config_setting.value.duplicate())
 	else:
 		# Apply default config
+		var default_gradient = Gradient.new()
+		default_gradient.offsets = [0.0, 1.0]
+		default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
+		
 		_library_background.set_background_config({
 			"effect_id": "xmb",
-			"background_color": Color(0.1, 0.1, 0.15, 1.0),
+			"background_gradient": default_gradient,
+			"gradient_direction": 0,
 			"settings": {
 				"time_scale": 1.0,
 				"show_dust": true,
