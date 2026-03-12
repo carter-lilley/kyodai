@@ -11,7 +11,7 @@ class_name ThemePreset
 # Library Appearance Settings
 @export var library_hero_layout_height: int = 0
 @export var library_vertical_layout: bool = true
-@export var library_bottom_bar_position: int = 0
+@export var library_navigation_bar_position: int = 0
 @export var library_grid_padding: int = 10
 @export var library_grid_margin_x: int = 20
 @export var library_grid_margin_y: int = 20
@@ -38,7 +38,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	# Library settings
 	preset.library_hero_layout_height = settings.library_hero_layout_height.value if settings.library_hero_layout_height else 0
 	preset.library_vertical_layout = settings.library_vertical_layout.value if settings.library_vertical_layout else true
-	preset.library_bottom_bar_position = settings.library_bottom_bar_position.value if settings.library_bottom_bar_position else 0
+	preset.library_navigation_bar_position = settings.library_navigation_bar_position.value if settings.library_navigation_bar_position else 0
 	preset.library_grid_padding = settings.library_grid_padding.value if settings.library_grid_padding else 10
 	preset.library_grid_margin_x = settings.library_grid_margin_x.value if settings.library_grid_margin_x else 20
 	preset.library_grid_margin_y = settings.library_grid_margin_y.value if settings.library_grid_margin_y else 20
@@ -68,8 +68,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_hero_layout_height.value = library_hero_layout_height
 	if settings.get("library_vertical_layout") != null:
 		settings.library_vertical_layout.value = library_vertical_layout
-	if settings.get("library_bottom_bar_position") != null:
-		settings.library_bottom_bar_position.value = library_bottom_bar_position
+	if settings.get("library_navigation_bar_position") != null:
+		settings.library_navigation_bar_position.value = library_navigation_bar_position
 	if settings.get("library_grid_padding") != null:
 		settings.library_grid_padding.value = library_grid_padding
 	if settings.get("library_grid_margin_x") != null:

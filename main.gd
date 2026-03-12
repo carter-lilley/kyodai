@@ -2,7 +2,7 @@ extends Control
 
 @onready var layout_container: BoxContainer = $VBoxContainer
 @onready var tab_container: TabContainer = $VBoxContainer/TabContainer
-@onready var bottom_bar: BottomBar = $VBoxContainer/BottomBar
+@onready var navigation_bar: NavigationBar = $VBoxContainer/NavigationBar
 
 # Auto-repeat navigation
 var _held_dir: String = ""
@@ -22,24 +22,24 @@ func _ready():
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 	
-	# Initialize UIManager with the tab container, layout container, and bottom bar
-	UIManager.initialize(tab_container, layout_container, bottom_bar)
+	# Initialize UIManager with the tab container, layout container, and navigation bar
+	UIManager.initialize(tab_container, layout_container, navigation_bar)
 	
-	# Connect bottom bar signals
-	if bottom_bar:
-		print("[Main] BottomBar found, connecting signals")
-		bottom_bar.nav_button_pressed.connect(_on_nav_button_pressed)
-		bottom_bar.zoom_changed.connect(_on_zoom_changed)
-		bottom_bar.zoom_changed_finished.connect(_on_zoom_changed_finished)
-		print("[Main] Zoom signal connected: ", bottom_bar.zoom_changed.is_connected(_on_zoom_changed))
+	# Connect navigation bar signals
+	if navigation_bar:
+		print("[Main] NavigationBar found, connecting signals")
+		navigation_bar.nav_button_pressed.connect(_on_nav_button_pressed)
+		navigation_bar.zoom_changed.connect(_on_zoom_changed)
+		navigation_bar.zoom_changed_finished.connect(_on_zoom_changed_finished)
+		print("[Main] Zoom signal connected: ", navigation_bar.zoom_changed.is_connected(_on_zoom_changed))
 	else:
-		push_error("[Main] BottomBar not found!")
+		push_error("[Main] NavigationBar not found!")
 	
 	# Connect to UIManager for tab changes
 	UIManager.tab_changed.connect(_on_tab_changed)
 	
 	# Set initial view
-	_update_bottom_bar_for_view("Home")
+	_update_navigation_bar_for_view("Home")
 	
 	# Load and apply saved zoom setting (wait for views to be ready)
 	await get_tree().process_frame
@@ -49,7 +49,7 @@ func _on_nav_button_pressed(view_name: String):
 	UIManager.switch_to_tab(view_name)
 
 func _on_tab_changed(view_name: String):
-	_update_bottom_bar_for_view(view_name)
+	_update_navigation_bar_for_view(view_name)
 	
 	# Apply saved zoom to newly visible view (deferred to allow layout)
 	if view_name in ["Home", "Library"]:
@@ -79,15 +79,15 @@ func _apply_zoom_to_view_deferred(view_name: String) -> void:
 	print("[Main] Applying saved zoom to %s: %s (grid size: %s)" % [view_name, zoom_setting.value, str(grid.size)])
 	grid.target_card_width_ratio = zoom_setting.value
 
-func _update_bottom_bar_for_view(view_name: String):
-	bottom_bar.set_current_view(view_name)
+func _update_navigation_bar_for_view(view_name: String):
+	navigation_bar.set_current_view(view_name)
 	
 	# Update zoom slider to match current view's grid
 	var view = UIManager.get_view(view_name)
 	if view and view_name in ["Home", "Library"]:
 		var games_grid = _get_view_grid(view)
 		if games_grid:
-			bottom_bar.set_zoom_value(games_grid.target_card_width_ratio)
+			navigation_bar.set_zoom_value(games_grid.target_card_width_ratio)
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""
@@ -150,22 +150,22 @@ func _load_and_apply_saved_zoom() -> void:
 				print("[Main] Applying zoom to %s grid: %s" % [view_name, saved_zoom])
 				grid.target_card_width_ratio = saved_zoom
 	
-	# Set bottom bar slider to saved value
-	if bottom_bar:
-		print("[Main] Setting bottom bar zoom slider to: ", saved_zoom)
-		bottom_bar.set_zoom_value(saved_zoom)
+	# Set navigation bar slider to saved value
+	if navigation_bar:
+		print("[Main] Setting navigation bar zoom slider to: ", saved_zoom)
+		navigation_bar.set_zoom_value(saved_zoom)
 
 func set_status_text(text: String):
-	if is_instance_valid(bottom_bar):
-		bottom_bar.set_status_text(text)
+	if is_instance_valid(navigation_bar):
+		navigation_bar.set_status_text(text)
 
 func reset_focus_to_home_button() -> void:
-	"""Reset focus to the Home button in the bottom bar."""
-	if not is_instance_valid(bottom_bar):
+	"""Reset focus to the Home button in the navigation bar."""
+	if not is_instance_valid(navigation_bar):
 		return
 	
 	# Search recursively for HomeButton since it's in dynamic containers
-	var home_button = _find_node_by_name(bottom_bar, "HomeButton")
+	var home_button = _find_node_by_name(navigation_bar, "HomeButton")
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
 		home_button.grab_focus()
 
@@ -265,16 +265,16 @@ func _input(event: InputEvent):
 
 func _adjust_zoom(delta: float) -> void:
 	"""Adjust zoom level by delta and save to settings."""
-	if not bottom_bar:
+	if not navigation_bar:
 		return
 	
-	var current_zoom = bottom_bar.get_zoom_value()
+	var current_zoom = navigation_bar.get_zoom_value()
 	var new_zoom = clampf(current_zoom + delta, 0.05, 0.5)
 	
 	# Only update if value actually changed
 	if not is_equal_approx(current_zoom, new_zoom):
-		# Update bottom bar slider (uses set_value_no_signal, so we need to manually trigger updates)
-		bottom_bar.set_zoom_value(new_zoom)
+		# Update navigation bar slider (uses set_value_no_signal, so we need to manually trigger updates)
+		navigation_bar.set_zoom_value(new_zoom)
 		
 		# Manually trigger zoom update for grids (since set_zoom_value doesn't emit signals)
 		_on_zoom_changed(new_zoom)

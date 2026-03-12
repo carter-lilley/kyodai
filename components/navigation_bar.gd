@@ -1,4 +1,4 @@
-class_name BottomBar
+class_name NavigationBar
 extends MarginContainer
 
 signal nav_button_pressed(view_name: String)
@@ -369,23 +369,23 @@ func set_zoom_range(min_val: float, max_val: float, step: float):
 	_v_zoom_slider.step = step
 
 func set_bar_background_color(color: Color) -> void:
-	"""Set the background color of the bottom bar."""
-	print("[BottomBar] Setting bar background color to: ", color)
+	"""Set the background color of the navigation bar."""
+	print("[NavigationBar] Setting bar background color to: ", color)
 	if _background_rect:
 		_background_rect.color = color
 	else:
-		print("[BottomBar] Background rect not ready yet!")
+		print("[NavigationBar] Background rect not ready yet!")
 
 func set_icon_color(color: Color) -> void:
 	"""Set the color for all navigation icons using a shader."""
-	print("[BottomBar] Setting icon color to: ", color)
+	print("[NavigationBar] Setting icon color to: ", color)
 	var buttons = [home_button, library_button, downloads_button, settings_button]
 	for button in buttons:
 		if is_instance_valid(button):
 			_apply_icon_color_to_button(button, color)
-			print("[BottomBar] Applied icon color to button: ", button.name)
+			print("[NavigationBar] Applied icon color to button: ", button.name)
 		else:
-			print("[BottomBar] Button not valid: ", buttons.find(button))
+			print("[NavigationBar] Button not valid: ", buttons.find(button))
 
 func _apply_icon_color_to_button(button: TextureButton, color: Color) -> void:
 	"""Apply icon color shader to a texture button."""

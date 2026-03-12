@@ -356,8 +356,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_hero_layout_height.value, settings.library_hero_layout_height)
 		if settings.get("library_vertical_layout") != null:
 			emit_signal("setting_changed", settings.library_vertical_layout.value, settings.library_vertical_layout)
-		if settings.get("library_bottom_bar_position") != null:
-			emit_signal("setting_changed", settings.library_bottom_bar_position.value, settings.library_bottom_bar_position)
+		if settings.get("library_navigation_bar_position") != null:
+			emit_signal("setting_changed", settings.library_navigation_bar_position.value, settings.library_navigation_bar_position)
 		if settings.get("library_grid_padding") != null:
 			emit_signal("setting_changed", settings.library_grid_padding.value, settings.library_grid_padding)
 		if settings.get("library_grid_margin_x") != null:

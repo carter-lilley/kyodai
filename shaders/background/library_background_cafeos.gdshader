@@ -1,7 +1,7 @@
 shader_type canvas_item;
 render_mode blend_premul_alpha;
 
-// WiiU Menu - TRUE 3D Alpha Extrusion with Flat Shading
+// CafeOS - TRUE 3D Alpha Extrusion with Flat Shading
 
 uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
 uniform float time_scale : hint_range(0.0, 2.0) = 0.5;

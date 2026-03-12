@@ -1,14 +1,14 @@
-class_name WiiUBackgroundEffect
+class_name CafeOSBackgroundEffect
 extends BackgroundEffect
 
 func _ready():
 	super._ready()
-	effect_name = "WiiU Orbit"
-	effect_id = "wiiu"
+	effect_name = "CafeOS"
+	effect_id = "cafeos"
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
-	mat.shader = preload("res://shaders/library_background_wiiu.gdshader")
+	mat.shader = preload("res://shaders/background/library_background_cafeos.gdshader")
 	
 	# Load the icon atlas texture (x4 resolution)
 	var icon_atlas = load("res://assets/ui/background/wiiu_atlas_x4.png")
@@ -21,9 +21,6 @@ func _apply_settings() -> void:
 	_set_shader_param("icon_scale", _settings.get("icon_scale", 0.7))
 	_set_shader_param("orbit_speed", _settings.get("orbit_speed", 0.15))
 	_set_shader_param("num_icons", _settings.get("num_icons", 21))
-	_set_shader_param("depth_intensity", _settings.get("depth_intensity", 0.6))
-	_set_shader_param("fog_density", _settings.get("fog_density", 0.3))
-	_set_shader_param("background_color", _settings.get("background_color", Color(0.95, 0.95, 0.95, 1.0)))
 	
 	# Light direction as normalized vec3
 	var light_dir = _settings.get("light_direction", Vector3(1.0, 1.0, 0.0))
@@ -72,17 +69,5 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var num_icons_var = SettingsVar.new(Type.INT, 15, State.ENABLED, "Icon Count", "Number of icons to display", 5, 30, 1)
 	num_icons_var.property_name = "num_icons"
 	schema.append(num_icons_var)
-	
-	var depth_var = SettingsVar.new(Type.FLOAT, 0.6, State.ENABLED, "Depth Intensity", "3D depth effect strength", 0.0, 1.0, 0.05)
-	depth_var.property_name = "depth_intensity"
-	schema.append(depth_var)
-	
-	var fog_var = SettingsVar.new(Type.FLOAT, 0.3, State.ENABLED, "Fog Density", "Distance fog amount", 0.0, 2.0, 0.05)
-	fog_var.property_name = "fog_density"
-	schema.append(fog_var)
-	
-	var bg_color_var = SettingsVar.new(Type.COLOR, Color(0.95, 0.95, 0.95, 1.0), State.ENABLED, "Background Color", "Background color")
-	bg_color_var.property_name = "background_color"
-	schema.append(bg_color_var)
 	
 	return schema

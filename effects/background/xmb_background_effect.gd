@@ -8,7 +8,7 @@ func _ready():
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
-	mat.shader = preload("res://shaders/library_background_xmb.gdshader")
+	mat.shader = preload("res://shaders/background/library_background_xmb.gdshader")
 	
 	# Set up noise texture for XMB shader
 	var noise = FastNoiseLite.new()

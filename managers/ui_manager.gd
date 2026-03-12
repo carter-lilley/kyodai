@@ -10,7 +10,7 @@ var _current_view: View
 # Layout management
 var _root_control: Control = null
 var _layout_container: BoxContainer = null
-var _bottom_bar: BottomBar = null
+var _navigation_bar: NavigationBar = null
 var _current_bar_position: String = "bottom"
 
 # Position index mapping
@@ -30,7 +30,7 @@ var _hero_spacer: Control = null  # Spacer for layout when hero is <100%
 # Library background management
 var _library_background: LibraryBackground = null
 var _content_wrapper: Control = null
-var _background_vbox: VBoxContainer = null  # Container for HeroImage + LibraryBackground
+
 
 # Modal management
 var _active_modal: Modal = null
@@ -50,13 +50,13 @@ signal modal_item_selected(item_id: String, context: Dictionary)
 signal tab_changed(view_name: String)
 signal layout_changed(position: String)
 
-func initialize(tab_container: TabContainer, layout_container: BoxContainer, bottom_bar: BottomBar = null):
+func initialize(tab_container: TabContainer, layout_container: BoxContainer, navigation_bar: NavigationBar = null):
 	_tab_container = tab_container
 	_tab_container.tab_changed.connect(_on_tab_changed)
 	
 	_layout_container = layout_container
 	_root_control = layout_container.get_parent()
-	_bottom_bar = bottom_bar
+	_navigation_bar = navigation_bar
 	
 	# Create LibraryBackground first (before layout setup)
 	_setup_library_background()
@@ -117,8 +117,8 @@ func _on_viewport_resized() -> void:
 	_update_hero_size()
 
 func _update_bar_size() -> void:
-	"""Update the bottom bar size based on viewport and orientation."""
-	if not _bottom_bar or not is_inside_tree():
+	"""Update the navigation bar size based on viewport and orientation."""
+	if not _navigation_bar or not is_inside_tree():
 		return
 	
 	var viewport_size = get_viewport().size
@@ -127,15 +127,15 @@ func _update_bar_size() -> void:
 	if is_horizontal:
 		# Horizontal bar: fixed height, full width
 		var target_height = viewport_size.y * BAR_SIZE_RATIO
-		_bottom_bar.custom_minimum_size = Vector2(0, target_height)
-		_bottom_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_bottom_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_navigation_bar.custom_minimum_size = Vector2(0, target_height)
+		_navigation_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	else:
 		# Vertical bar: fixed width, full height
 		var target_width = viewport_size.x * BAR_SIZE_RATIO
-		_bottom_bar.custom_minimum_size = Vector2(target_width, 0)
-		_bottom_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		_bottom_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_navigation_bar.custom_minimum_size = Vector2(target_width, 0)
+		_navigation_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_navigation_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 func _update_hero_size() -> void:
 	"""Update the hero image and library background sizes based on viewport and settings."""
@@ -164,28 +164,23 @@ func _update_hero_size() -> void:
 	if target_height < 1.0:
 		target_height = 1.0
 	
-	# Update BackgroundVBox children sizes
-	# HeroImage and LibraryBackground share space in BackgroundVBox
-	if _background_vbox:
-		# Calculate sizes based on ratio
-		var hero_bg_height = viewport_size.y * height_ratio
-		var lib_bg_height = viewport_size.y * (1.0 - height_ratio)
-		
-		# Update HeroImage size
-		_hero_image.custom_minimum_size = Vector2(0, hero_bg_height)
-		_hero_image.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		
-		# Update LibraryBackground size (0 when hero is 100%)
-		if _library_background:
-			if height_ratio >= 1.0:
-				_library_background.visible = false
-				_library_background.custom_minimum_size = Vector2(0, 0)
-			else:
-				_library_background.visible = true
-				_library_background.custom_minimum_size = Vector2(0, lib_bg_height)
-				_library_background.size_flags_vertical = Control.SIZE_EXPAND_FILL
-			
-		print("[UIManager] BackgroundVBox updated: hero_height=", hero_bg_height, ", lib_height=", lib_bg_height)
+	# Update HeroImage size and position
+	var hero_bg_height = viewport_size.y * height_ratio
+	# Set anchors to fill top portion: left=0, top=0, right=1, bottom=height_ratio
+	_hero_image.anchor_left = 0.0
+	_hero_image.anchor_top = 0.0
+	_hero_image.anchor_right = 1.0
+	_hero_image.anchor_bottom = height_ratio
+	# Reset offsets since we're using anchors
+	_hero_image.offset_left = 0.0
+	_hero_image.offset_top = 0.0
+	_hero_image.offset_right = 0.0
+	_hero_image.offset_bottom = 0.0
+	
+	# LibraryBackground is always full size, visible behind hero
+	if _library_background:
+		_library_background.visible = true
+		print("[UIManager] HeroImage height updated: ", hero_bg_height)
 	
 	# Update spacer size (pushes grid down, 0 when hero is 100%)
 	var spacer_height = 0.0
@@ -203,7 +198,7 @@ func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
 	if _hero_image:
 		return
 	
-	# Create HeroImage (will be added to BackgroundVBox in _setup_layout)
+	# Create HeroImage (will be added to ContentWrapper in _setup_layout)
 	var hero_scene = preload("res://components/hero_image.tscn")
 	_hero_image = hero_scene.instantiate()
 	_hero_image.name = "HeroImage"
@@ -219,8 +214,8 @@ func _setup_hero_image(main_content_vbox: VBoxContainer = null) -> void:
 		main_content_vbox.move_child(_hero_spacer, 0)
 		print("[UIManager] HeroSpacer added to MainContentVBox at index 0")
 	
-	# HeroImage will be added to BackgroundVBox in _setup_layout
-	print("[UIManager] HeroImage created, will be added to BackgroundVBox in _setup_layout")
+	# HeroImage will be added to ContentWrapper in _setup_layout
+	print("[UIManager] HeroImage created, will be added to ContentWrapper in _setup_layout")
 	
 	_update_hero_size()
 
@@ -280,9 +275,9 @@ func _update_library_background_color() -> void:
 	pass
 
 func _setup_layout() -> void:
-	"""Setup the layout container based on the bottom bar position setting."""
+	"""Setup the layout container based on the navigation bar position setting."""
 	# Get current position setting (stored as index)
-	var position_setting = SettingsManager.get_setting("library_bottom_bar_position")
+	var position_setting = SettingsManager.get_setting("library_navigation_bar_position")
 	if position_setting:
 		_current_bar_position = _get_bar_position_string(position_setting.value)
 	
@@ -291,12 +286,12 @@ func _setup_layout() -> void:
 	
 	# Store references to children before reorganizing
 	var tab_container_ref = _tab_container
-	var bottom_bar_ref = _bottom_bar
+	var navigation_bar_ref = _navigation_bar
 	
-	# Remove BottomBar from wherever it currently is
-	if bottom_bar_ref and is_instance_valid(bottom_bar_ref) and bottom_bar_ref.get_parent():
-		print("[UIManager] Removing BottomBar from parent: ", bottom_bar_ref.get_parent().name)
-		bottom_bar_ref.get_parent().remove_child(bottom_bar_ref)
+	# Remove NavigationBar from wherever it currently is
+	if navigation_bar_ref and is_instance_valid(navigation_bar_ref) and navigation_bar_ref.get_parent():
+		print("[UIManager] Removing NavigationBar from parent: ", navigation_bar_ref.get_parent().name)
+		navigation_bar_ref.get_parent().remove_child(navigation_bar_ref)
 	
 	# Remove children from current layout container so they can be reparented
 	for child in _layout_container.get_children():
@@ -379,12 +374,12 @@ func _setup_layout() -> void:
 	# Update _layout_container reference to MainContentVBox
 	_layout_container = main_content_vbox
 	
-	# Configure bottom bar orientation
-	if _bottom_bar:
+	# Configure navigation bar orientation
+	if _navigation_bar:
 		if is_horizontal:
-			_bottom_bar.set_orientation(BottomBar.BarOrientation.HORIZONTAL)
+			_navigation_bar.set_orientation(NavigationBar.BarOrientation.HORIZONTAL)
 		else:
-			_bottom_bar.set_orientation(BottomBar.BarOrientation.VERTICAL)
+			_navigation_bar.set_orientation(NavigationBar.BarOrientation.VERTICAL)
 	
 	# Create ContentWrapper to hold both LibraryBackground and MainContentVBox
 	# This allows them to overlap (LibraryBackground behind, MainContentVBox on top)
@@ -398,34 +393,26 @@ func _setup_layout() -> void:
 	for child in _content_wrapper.get_children():
 		_content_wrapper.remove_child(child)
 	
-	# Create BackgroundVBox to hold HeroImage and LibraryBackground behind everything
-	if not _background_vbox:
-		_background_vbox = VBoxContainer.new()
-		_background_vbox.name = "BackgroundVBox"
-		_background_vbox.z_index = -1  # Render behind MainContentVBox
-	_background_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_content_wrapper.add_child(_background_vbox)
-	print("[UIManager] BackgroundVBox added to ContentWrapper")
-	
-	# Add HeroImage to BackgroundVBox if not already there
-	if _hero_image:
-		if _hero_image.get_parent():
-			_hero_image.get_parent().remove_child(_hero_image)
-		_hero_image.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_hero_image.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		_background_vbox.add_child(_hero_image)
-		print("[UIManager] HeroImage added to BackgroundVBox")
-	
-	# Add LibraryBackground to BackgroundVBox if not already there
+	# Add LibraryBackground to fill entire ContentWrapper (behind everything)
 	if _library_background:
 		if _library_background.get_parent():
 			_library_background.get_parent().remove_child(_library_background)
-		_library_background.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_library_background.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		_background_vbox.add_child(_library_background)
-		print("[UIManager] LibraryBackground added to BackgroundVBox")
+		_library_background.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_library_background.z_index = -1  # Behind everything
+		_content_wrapper.add_child(_library_background)
+		print("[UIManager] LibraryBackground added to ContentWrapper (full rect)")
 	
-	# Configure MainContentVBox to fill the content wrapper (on top of BackgroundVBox)
+	# Add HeroImage to ContentWrapper - positioned at top
+	if _hero_image:
+		if _hero_image.get_parent():
+			_hero_image.get_parent().remove_child(_hero_image)
+		# Use full rect anchors but position will be controlled by _update_hero_size
+		_hero_image.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_hero_image.z_index = 0  # Above library background, below main content
+		_content_wrapper.add_child(_hero_image)
+		print("[UIManager] HeroImage added to ContentWrapper")
+	
+	# Configure MainContentVBox to fill the content wrapper (on top of LibraryBackground and HeroImage)
 	main_content_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_content_wrapper.add_child(main_content_vbox)
 	
@@ -433,16 +420,16 @@ func _setup_layout() -> void:
 	_content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
-	# Add BottomBar and ContentWrapper to RootLayout in correct order
+	# Add NavigationBar and ContentWrapper to RootLayout in correct order
 	match _current_bar_position:
 		"top", "left":
-			if bottom_bar_ref:
-				root_layout.add_child(bottom_bar_ref)
+			if navigation_bar_ref:
+				root_layout.add_child(navigation_bar_ref)
 			root_layout.add_child(_content_wrapper)
 		"bottom", "right", _:
 			root_layout.add_child(_content_wrapper)
-			if bottom_bar_ref:
-				root_layout.add_child(bottom_bar_ref)
+			if navigation_bar_ref:
+				root_layout.add_child(navigation_bar_ref)
 	
 	# TabContainer fills the MainContentVBox (below HeroImage)
 	tab_container_ref.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -452,34 +439,34 @@ func _setup_layout() -> void:
 	_update_bar_size()
 	_connect_viewport_resize()
 	
-	# Update hero size now that BackgroundVBox is created and children are added
+	# Update hero size now that layout is complete
 	_update_hero_size()
 	
-	# Apply bar and icon colors from settings (deferred to ensure BottomBar is fully ready)
-	call_deferred("_apply_bottom_bar_colors")
+	# Apply bar and icon colors from settings (deferred to ensure NavigationBar is fully ready)
+	call_deferred("_apply_navigation_bar_colors")
 	
 	print("[UIManager] Layout setup complete with bar position: ", _current_bar_position)
 
-func _apply_bottom_bar_colors() -> void:
+func _apply_navigation_bar_colors() -> void:
 	"""Apply bar background and icon colors from settings."""
-	print("[UIManager] _apply_bottom_bar_colors called")
-	if not _bottom_bar:
-		print("[UIManager] _bottom_bar is null!")
+	print("[UIManager] _apply_navigation_bar_colors called")
+	if not _navigation_bar:
+		print("[UIManager] _navigation_bar is null!")
 		return
 	
-	print("[UIManager] _bottom_bar is valid, applying colors...")
+	print("[UIManager] _navigation_bar is valid, applying colors...")
 	
 	var bar_color_setting = SettingsManager.get_setting("library_bar_color")
 	if bar_color_setting:
 		print("[UIManager] Applying bar color: ", bar_color_setting.value)
-		_bottom_bar.set_bar_background_color(bar_color_setting.value)
+		_navigation_bar.set_bar_background_color(bar_color_setting.value)
 	else:
 		print("[UIManager] library_bar_color setting not found!")
 	
 	var icon_color_setting = SettingsManager.get_setting("library_icon_color")
 	if icon_color_setting:
 		print("[UIManager] Applying icon color: ", icon_color_setting.value)
-		_bottom_bar.set_icon_color(icon_color_setting.value)
+		_navigation_bar.set_icon_color(icon_color_setting.value)
 	else:
 		print("[UIManager] library_icon_color setting not found!")
 
@@ -588,15 +575,15 @@ func _get_tab_index(tab_title: String) -> int:
 	return -1
 
 func _set_initial_focus() -> void:
-	"""Set initial focus to the Home button in the bottom bar."""
+	"""Set initial focus to the Home button in the navigation bar."""
 	# Wait a frame for the UI to be fully ready
 	await get_tree().process_frame
 	
-	# Try to find the home button in the bottom bar (search recursively since buttons are in dynamic containers)
+	# Try to find the home button in the navigation bar (search recursively since buttons are in dynamic containers)
 	var home_button = _find_home_button()
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
 		home_button.grab_focus()
-		print("[UIManager] Set initial focus to Home button in bottom bar")
+		print("[UIManager] Set initial focus to Home button in navigation bar")
 		return
 	
 	# Fallback: try to focus the first focusable element in the root control
@@ -607,12 +594,12 @@ func _set_initial_focus() -> void:
 			print("[UIManager] Set initial focus to: " + first_focusable.name)
 
 func _find_home_button() -> Control:
-	"""Find the Home button in the bottom bar."""
-	if not _bottom_bar:
+	"""Find the Home button in the navigation bar."""
+	if not _navigation_bar:
 		return null
 	
 	# Search recursively for a button named HomeButton
-	return _find_node_by_name(_bottom_bar, "HomeButton")
+	return _find_node_by_name(_navigation_bar, "HomeButton")
 
 func _find_node_by_name(node: Node, target_name: String) -> Node:
 	"""Recursively find a node by name."""
@@ -653,7 +640,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# Update the library background with new effect configuration
 		if _library_background and _value is Dictionary:
 			_library_background.set_background_config(_value.duplicate())
-	elif setting.property_name == "library_bottom_bar_position":
+	elif setting.property_name == "library_navigation_bar_position":
 		_current_bar_position = _get_bar_position_string(setting.value)
 		# Store currently focused control before rebuild
 		var focused_control = get_viewport().gui_get_focus_owner()
@@ -725,11 +712,11 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			else:
 				library_view.mark_for_rebuild("Grid padding changed")
 	elif setting.property_name == "library_bar_color":
-		if _bottom_bar:
-			_bottom_bar.set_bar_background_color(setting.value)
+		if _navigation_bar:
+			_navigation_bar.set_bar_background_color(setting.value)
 	elif setting.property_name == "library_icon_color":
-		if _bottom_bar:
-			_bottom_bar.set_icon_color(setting.value)
+		if _navigation_bar:
+			_navigation_bar.set_icon_color(setting.value)
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)
@@ -759,12 +746,8 @@ func _update_hero_visibility(view_name: String) -> void:
 			height_ratio = HERO_HEIGHT_RATIOS[height_setting.value]
 	var hero_enabled = height_ratio > 0.0
 	
-	# Show background for Home and Library views, hide for Downloads and Settings
-	var show_background = view_name in ["Home", "Library"]
-	
-	# Update BackgroundVBox visibility (always show for Home/Library, even if hero is 0%)
-	if _background_vbox:
-		_background_vbox.visible = show_background
+	# Show background for all views (Settings, Downloads, Home, Library)
+	var show_background = true
 	
 	# Update hero image visibility (only visible when enabled AND showing background)
 	if _hero_image:
@@ -778,15 +761,9 @@ func _update_hero_visibility(view_name: String) -> void:
 	if _hero_spacer:
 		_hero_spacer.visible = show_background and hero_enabled
 	
-	# Update library background visibility
+	# Update library background visibility (always show for Home/Library)
 	if _library_background:
-		# Show library background for Home and Library views, hide for Downloads and Settings
-		# Show library background at 100% when hero is 0%
-		if show_background:
-			# Show library background when hero is < 100% (including 0%)
-			_library_background.visible = (height_ratio < 1.0)
-		else:
-			_library_background.visible = false
+		_library_background.visible = show_background
 
 func _on_hero_game_changed(game: GameResource) -> void:
 	"""Handle hero game change from views."""
@@ -854,7 +831,7 @@ func switch_to_tab(tab_name: String):
 		_tab_container.current_tab = idx
 
 func get_bar_position() -> String:
-	"""Get the current bottom bar position."""
+	"""Get the current navigation bar position."""
 	return _current_bar_position
 
 # ==================== MODAL MANAGEMENT ====================

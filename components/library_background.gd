@@ -7,30 +7,28 @@ var _background_gradient_rect: ColorRect = null
 var _gradient_texture: ImageTexture = null
 
 func _ready():
-	# Wait for next frame to initialize
-	call_deferred("_initialize_background")
+	_initialize_background()
 	resized.connect(_on_resized)
 
 func _on_resized() -> void:
-	# Update size when LibraryBackground resizes
-	if _background_gradient_rect:
-		_background_gradient_rect.size = size
-	if _current_effect:
-		_current_effect.size = size
+	# Children use anchors to fill parent automatically
+	# No manual sizing needed with PRESET_FULL_RECT
+	pass
 
 func _initialize_background() -> void:
 	# Create background gradient layer (bottom)
 	_background_gradient_rect = ColorRect.new()
 	_background_gradient_rect.name = "BackgroundGradient"
-	_background_gradient_rect.layout_mode = 1
 	_background_gradient_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_background_gradient_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_background_gradient_rect.size = size
 	_background_gradient_rect.z_index = -1
+	# Initial size in case parent already has size
+	if size.x > 0 and size.y > 0:
+		_background_gradient_rect.size = size
 	
 	# Create shader material for gradient
 	var shader_material = ShaderMaterial.new()
-	shader_material.shader = preload("res://shaders/library_background_gradient.gdshader")
+	shader_material.shader = preload("res://shaders/background/library_background_gradient.gdshader")
 	_background_gradient_rect.material = shader_material
 	
 	add_child(_background_gradient_rect)
@@ -90,10 +88,11 @@ func _apply_background_state() -> void:
 	_current_effect = _create_effect(_background_state.effect_id)
 	if _current_effect:
 		add_child(_current_effect)
-		_current_effect.layout_mode = 1
 		_current_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_current_effect.visible = true
-		_current_effect.size = size
+		# Initial size in case parent already has size
+		if size.x > 0 and size.y > 0:
+			_current_effect.size = size
 		_current_effect.initialize(_background_state.effect_settings)
 
 func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
@@ -126,8 +125,8 @@ func _create_effect(effect_id: String) -> BackgroundEffect:
 			return MotesBackgroundEffect.new()
 		"osdsys":
 			return OsdSysBackgroundEffect.new()
-		"wiiu":
-			return WiiUBackgroundEffect.new()
+		"cafeos":
+			return CafeOSBackgroundEffect.new()
 		_:
 			return XmbBackgroundEffect.new()
 
@@ -193,7 +192,7 @@ func set_background_color(color: Color) -> void:
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:
-	return ["none", "xmb", "motes", "osdsys", "wiiu"]
+	return ["none", "xmb", "motes", "osdsys", "cafeos"]
 
 # Get effect display name
 static func get_effect_display_name(effect_id: String) -> String:
@@ -202,7 +201,7 @@ static func get_effect_display_name(effect_id: String) -> String:
 		"xmb": return "XMB"
 		"motes": return "Motes"
 		"osdsys": return "OSDSYS"
-		"wiiu": return "WiiU Orbit"
+		"cafeos": return "CafeOS"
 		_: return "Unknown"
 
 # Get settings schema for an effect
@@ -218,8 +217,8 @@ static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 			effect = MotesBackgroundEffect.new()
 		"osdsys":
 			effect = OsdSysBackgroundEffect.new()
-		"wiiu":
-			effect = WiiUBackgroundEffect.new()
+		"cafeos":
+			effect = CafeOSBackgroundEffect.new()
 		_:
 			effect = XmbBackgroundEffect.new()
 	

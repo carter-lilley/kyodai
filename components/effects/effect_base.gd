@@ -13,6 +13,8 @@ signal settings_changed(setting_name: String, value: Variant)
 func _ready():
 	material = ShaderMaterial.new()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Make the ColorRect transparent so shader can control visibility
+	color = Color.TRANSPARENT
 
 func initialize(container_state: EffectContainerState, settings: Dictionary) -> void:
 	_container_state = container_state

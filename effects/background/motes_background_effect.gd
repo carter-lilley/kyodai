@@ -1,17 +1,17 @@
-class_name OsdSysBackgroundEffect
+class_name MotesBackgroundEffect
 extends BackgroundEffect
 
 func _ready():
 	super._ready()
-	effect_name = "OSDSYS"
-	effect_id = "osdsys"
+	effect_name = "Motes"
+	effect_id = "motes"
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
-	mat.shader = preload("res://shaders/library_background_osdsys.gdshader")
+	mat.shader = preload("res://shaders/background/library_background_motes.gdshader")
 
 func _apply_settings() -> void:
-	# OSDSYS effect has no configurable settings - everything is hardcoded
+	# Motes effect has no configurable settings - everything is hardcoded
 	pass
 
 func get_settings_schema() -> Array[SettingsVar]:

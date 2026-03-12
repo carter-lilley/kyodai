@@ -7,7 +7,7 @@
 	font! rodin?
 	'controls/info bar'
 	focus glow
-	layer system inner-shadow
+	layer system inner-shadow/blur/HSV
 	add letters to library navigation?
 	badge effect placement opts
 ## hero

@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://oa15cvl0ceqq"]
 
 [ext_resource type="Script" uid="uid://4p4i1nlgkicx" path="res://main.gd" id="1_main"]
-[ext_resource type="PackedScene" uid="uid://b70vbph3l300i" path="res://components/bottom_bar.tscn" id="3_bottombar"]
+[ext_resource type="PackedScene" uid="uid://b70vbph3l300i" path="res://components/navigation_bar.tscn" id="3_navigationbar"]
 [ext_resource type="Script" uid="uid://sgqdjn7yeqxm" path="res://addons/onscreenkeyboard/onscreen_keyboard.gd" id="4_onscreenkeyboard"]
 [ext_resource type="Script" uid="uid://b4lrijvkxphmr" path="res://components/fps_counter.gd" id="5_fpscounter"]
 
@@ -47,7 +47,7 @@ visible = false
 layout_mode = 2
 metadata/_tab_index = 3
 
-[node name="BottomBar" parent="VBoxContainer" unique_id=344391296 instance=ExtResource("3_bottombar")]
+[node name="NavigationBar" parent="VBoxContainer" unique_id=344391296 instance=ExtResource("3_navigationbar")]
 layout_mode = 2
 size_flags_vertical = 0
 
@@ -55,6 +55,7 @@ size_flags_vertical = 0
 layer = 1000
 
 [node name="FPSLabel" type="Label" parent="UILayer" unique_id=777777778]
+visible = false
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 100.0

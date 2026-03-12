@@ -9,13 +9,13 @@ var _effect_configs: Array = []  # Array of {effect_id, settings} dictionaries
 
 # Effect factory - maps effect_id to script path
 const EFFECT_REGISTRY: Dictionary = {
-	"base": "res://components/card/effects/base_card_effect.gd",
-	"border": "res://components/card/effects/border_effect.gd",
-	"badge": "res://components/card/effects/badge_effect.gd",
-	"drop_shadow": "res://components/card/effects/drop_shadow_effect.gd",
-	"glow": "res://components/card/effects/glow_effect.gd",
-	"glass": "res://components/card/effects/glass_effect.gd",
-	"distort": "res://components/card/effects/distort_effect.gd",
+	"base": "res://effects/shared/base_card_effect.gd",
+	"border": "res://effects/shared/border_effect.gd",
+	"badge": "res://effects/shared/badge_effect.gd",
+	"drop_shadow": "res://effects/shared/drop_shadow_effect.gd",
+	"glow": "res://effects/shared/glow_effect.gd",
+	"glass": "res://effects/shared/glass_effect.gd",
+	"distort": "res://effects/shared/distort_effect.gd",
 }
 
 # Layer order (z-index / child order) - lower = behind, higher = in front
