@@ -69,6 +69,21 @@ func _enter_tree():
 		get_tree().get_root().size_changed.connect(size_changed)
 	_init_keyboard()
 
+func reconnect_viewport() -> void:
+	"""Reconnect the keyboard to the current viewport's focus system.
+	Call this after reparenting the keyboard to a different viewport."""
+	print("[KEYBOARD DEBUG] reconnect_viewport called")
+	# Reset focus tracking to ensure keyboard detects focus in new viewport
+	reset_focus_tracking()
+	# Force a re-check of current focus owner in case something is already focused
+	if auto_show:
+		var current_focus = get_viewport().gui_get_focus_owner()
+		if current_focus != null and is_keyboard_focus_object(current_focus):
+			print("[KEYBOARD DEBUG] Found focused LineEdit after reconnect: ", current_focus)
+			_previous_focus_object = current_focus
+			_active_line_edit = current_focus
+			_show_keyboard()
+
 #func _exit_tree():
 #    pass
 

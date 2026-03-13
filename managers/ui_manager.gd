@@ -914,6 +914,7 @@ var _hero_copy_in_second_viewport: Node = null
 # Node reparenting state for Android dual screen
 var _main_ui_original_parent: Node = null
 var _navigation_bar_original_parent: Node = null
+var _ui_layer_original_parent: Node = null
 var _is_nodes_reparented: bool = false
 var _viewport_layout: Node = null
 
@@ -1045,11 +1046,20 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	if _navigation_bar:
 		_navigation_bar_original_parent = _navigation_bar.get_parent()
 	
+	# Find and store UILayer original parent
+	var ui_layer = get_node_or_null("/root/Main/UILayer")
+	if ui_layer:
+		_ui_layer_original_parent = ui_layer.get_parent()
+	
 	# Remove from current parents
 	if _root_control and _root_control.get_parent():
 		_root_control.get_parent().remove_child(_root_control)
 	if _navigation_bar and _navigation_bar.get_parent():
 		_navigation_bar.get_parent().remove_child(_navigation_bar)
+	
+	# Remove UILayer from its current parent
+	if ui_layer and ui_layer.get_parent():
+		ui_layer.get_parent().remove_child(ui_layer)
 	
 	# Create layout container within the viewport
 	_viewport_layout = VBoxContainer.new()
@@ -1065,11 +1075,20 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_viewport_layout.add_child(_navigation_bar)
 	
+	# Add UILayer directly to MainViewport (CanvasLayer can't go in VBoxContainer)
+	if ui_layer:
+		main_viewport.add_child(ui_layer)
+	
 	_is_nodes_reparented = true
 	
 	# Reconnect FocusIndicator to new viewport after reparenting
 	if _focus_indicator and is_instance_valid(_focus_indicator):
 		_focus_indicator.reconnect_viewport()
+	
+	# Reconnect OnscreenKeyboard to new viewport after reparenting
+	var keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")
+	if keyboard and keyboard.has_method("reconnect_viewport"):
+		keyboard.reconnect_viewport()
 	
 	# Reconnect HomeView and LibraryView to new viewport after reparenting
 	var home_view = get_view("Home")
@@ -1109,13 +1128,26 @@ func _restore_ui_to_original_parents() -> void:
 			_navigation_bar.get_parent().remove_child(_navigation_bar)
 		_navigation_bar_original_parent.add_child(_navigation_bar)
 	
+	# Restore UILayer
+	var ui_layer = get_node_or_null("/root/Main/UILayer")
+	if ui_layer and _ui_layer_original_parent:
+		if ui_layer.get_parent():
+			ui_layer.get_parent().remove_child(ui_layer)
+		_ui_layer_original_parent.add_child(ui_layer)
+	
 	_is_nodes_reparented = false
 	_main_ui_original_parent = null
 	_navigation_bar_original_parent = null
+	_ui_layer_original_parent = null
 	
 	# Reconnect FocusIndicator to original viewport after restoring
 	if _focus_indicator and is_instance_valid(_focus_indicator):
 		_focus_indicator.reconnect_viewport()
+	
+	# Reconnect OnscreenKeyboard to original viewport after restoring
+	var keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")
+	if keyboard and keyboard.has_method("reconnect_viewport"):
+		keyboard.reconnect_viewport()
 	
 	# Reconnect HomeView and LibraryView to original viewport after restoring
 	var home_view = get_view("Home")

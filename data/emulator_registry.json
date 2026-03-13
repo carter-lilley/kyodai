@@ -55,7 +55,7 @@
   },
   "retroarch": {
 	"name": "RetroArch",
-	"platforms": ["3do", "arcade", "atari2600", "lynx", "atomiswave", "c64", "dos", "dc", "fds", "g-and-w", "gb", "gba", "gbc", "msx", "naomi", "naomi2", "neogeoaes", "neo-geo-pocket-color", "3ds", "n64", "nds", "nes", "ngc", "win3x", "pico8", "psx", "ps2", "psp", "sega32", "segacd", "gamegear", "sms", "genesis", "saturn", "sg1000", "snes", "tg16", "turbografx-cd", "virtualboy", "wii"],
+	"platforms": ["3do", "arcade", "atari2600", "lynx", "atomiswave", "c64", "dos", "dc", "fds", "g-and-w", "gb", "gba", "gbc", "msx", "naomi", "naomi2", "neogeoaes", "neo-geo-pocket-color", "n64", "nes", "win3x", "pico8", "psx", "sega32", "segacd", "gamegear", "sms", "genesis", "saturn", "sg1000", "snes", "tg16", "turbografx-cd", "virtualboy"],
 	"install": [
 	  {
 		"step": "download_emulator",
@@ -104,12 +104,11 @@
 			"base_url": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/",
 			"url_pattern": "{name}_libretro_android.so.zip",
 			"cores": [
-			  "gambatte", "snes9x", "genesis_plus_gx", "mgba", "nestopia",
-			  "fbneo", "pcsx_rearmed", "ppsspp", "flycast", "dolphin",
-			  "melonds", "mupen64plus_next", "bluemsx", "mednafen_ngp",
-			  "citra", "vice_x64", "dosbox_pure", "gw", "picodrive",
-			  "yabause", "mednafen_pce", "mednafen_vb", "pcsx2",
-			  "stella", "handy", "opera"
+				"opera", "mame2003_plus", "stella", "handy", "flycast", 
+				"vice_x64", "dosbox_pure", "nestopia", "gw", "gambatte", 
+				"mgba", "bluemsx", "fbneo", "mednafen_ngp", "mupen64plus_next_gles3", 
+				"swanstation", "picodrive", "genesis_plus_gx", "yabasanshiro", "snes9x", 
+				"mednafen_pce", "mednafen_vb"
 			],
 			"extract_to": "/storage/emulated/0/RetroArch/cores",
 			"validate": {
@@ -215,7 +214,7 @@
 	
 	"core_mappings": {
 	  "3do": "opera",
-	  "arcade": "fbneo",
+	  "arcade": "mame2003_plus",
 	  "atari2600": "stella",
 	  "lynx": "handy",
 	  "atomiswave": "flycast",
@@ -232,28 +231,21 @@
 	  "naomi2": "flycast",
 	  "neogeoaes": "fbneo",
 	  "neo-geo-pocket-color": "mednafen_ngp",
-	  "3ds": "citra",
-	  "n64": "mupen64plus_next",
-	  "nds": "melonds",
+	  "n64": "mupen64plus_next_gles3",
 	  "nes": "nestopia",
-	  "ngc": "dolphin",
 	  "win3x": "dosbox_pure",
-	  "pico8": "",
-	  "psx": "pcsx_rearmed",
-	  "ps2": "pcsx2",
-	  "psp": "ppsspp",
+	  "psx": "swanstation",
 	  "sega32": "picodrive",
 	  "segacd": "genesis_plus_gx",
 	  "gamegear": "genesis_plus_gx",
 	  "sms": "genesis_plus_gx",
 	  "genesis": "genesis_plus_gx",
-	  "saturn": "yabause",
+	  "saturn": "yabasanshiro",
 	  "sg1000": "genesis_plus_gx",
 	  "snes": "snes9x",
 	  "tg16": "mednafen_pce",
 	  "turbografx-cd": "mednafen_pce",
 	  "virtualboy": "mednafen_vb",
-  	"wii": "dolphin"
   }
 },
 "azahar": {

@@ -84,21 +84,21 @@ func reconnect_viewport() -> void:
 func _connect_scrollbar():
 	if vertical:
 		var v_scrollbar = get_v_scroll_bar()
-		if v_scrollbar:
+		if v_scrollbar and not v_scrollbar.value_changed.is_connected(_on_internal_scroll_changed):
 			v_scrollbar.value_changed.connect(_on_internal_scroll_changed)
 	else:
 		var h_scrollbar = get_h_scroll_bar()
-		if h_scrollbar:
+		if h_scrollbar and not h_scrollbar.value_changed.is_connected(_on_internal_scroll_changed):
 			h_scrollbar.value_changed.connect(_on_internal_scroll_changed)
 
 func _connect_scrollbar_input():
 	if vertical:
 		var v_scrollbar = get_v_scroll_bar()
-		if v_scrollbar:
+		if v_scrollbar and not v_scrollbar.gui_input.is_connected(_on_scrollbar_input):
 			v_scrollbar.gui_input.connect(_on_scrollbar_input)
 	else:
 		var h_scrollbar = get_h_scroll_bar()
-		if h_scrollbar:
+		if h_scrollbar and not h_scrollbar.gui_input.is_connected(_on_scrollbar_input):
 			h_scrollbar.gui_input.connect(_on_scrollbar_input)
 
 func _disconnect_scrollbar_signals(scrollbar: ScrollBar):

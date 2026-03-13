@@ -31,9 +31,8 @@
 	batch DB adds instead of single
 ## launch:
 	add: user selectable 'emulators' storage paths on on all paltforms, update android intents to look there when needed (retroarch/vita3k/melonds)
-	bug: retroarch system cores arent the same on android, check and fix
 	bug: melonDS bios names on android(?)
-  	add: ppsspp!
+  	add: ppsspp, xenia, rpcs3, shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis
