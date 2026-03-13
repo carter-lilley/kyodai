@@ -1,9 +1,20 @@
 class_name HeroImage
 extends Control
 
+signal game_changed(game: GameResource)
+
 var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
 var _effect_stack: EffectStack = null
+var _dual_screen_mode: bool = false
+
+func set_dual_screen_mode(enabled: bool) -> void:
+	_dual_screen_mode = enabled
+	if enabled:
+		# Hide when dual screen is active
+		visible = false
+	else:
+		visible = true
 
 func _ready():
 	print("[HeroImage] _ready() called")
@@ -117,7 +128,6 @@ func set_game(game: GameResource):
 				print("[HeroImage] Texture created, size: ", tex.get_size())
 				if _effect_stack:
 					_effect_stack.set_game_texture(tex)
-					visible = true
 					print("[HeroImage] Texture set to EffectStack")
 				return
 	
@@ -135,6 +145,13 @@ func clear():
 
 func get_current_game() -> GameResource:
 	return _current_game
+
+func set_game_texture_direct(texture: Texture2D) -> void:
+	"""Directly set the game texture - used for second screen copy."""
+	if texture and _effect_stack:
+		_effect_stack.set_game_texture(texture)
+		visible = true
+		print("[HeroImage] Texture set directly, size: ", texture.get_size())
 
 func refresh_from_settings():
 	"""Reload configuration from settings - called when settings change."""

@@ -1,15 +1,16 @@
 #TODO.TXT
 ## UI
+	launch animation?
 	bug: after sync when finding existing game, it has no cover/dimensions need updated
 	focused card in front
 	color presets (platform/game/custom)
-	update placeholder card icons + add more to grid?
 	font! rodin?
 	'controls/info bar'
 	focus glow
 	layer system inner-shadow/blur/HSV
 	add letters to library navigation?
 	badge effect placement opts
+	placeholders
 ## hero
 	postcard-style [[img] name ]
 	card/image/poster style

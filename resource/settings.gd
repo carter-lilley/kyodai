@@ -24,6 +24,7 @@ const Type = SettingsVar.SettingType
 	Vector2i(800,600)
 ]
 @export var resolution := SettingsVar.new(Type.ARRAY,resolutions[0],State.ENABLED, "Windowed Resolution:", "", 0.0, 1.0, 0.1, resolutions)
+@export var dual_screen_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
 
 @export_subgroup("RomM Connection")
 @export var romm_url := SettingsVar.new(Type.STRING, "", State.ENABLED, "RomM URL")

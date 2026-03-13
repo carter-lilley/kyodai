@@ -137,10 +137,30 @@ func initialize(
 	_setup_library_appearance()
 	SettingsManager.setting_changed.connect(_on_setting_changed)
 	
+	# Connect to dual screen mode changes
+	if DisplayManager:
+		DisplayManager.dual_screen_mode_changed.connect(_on_dual_screen_mode_changed)
+		
+		# Debug: Check plugin availability
+		print("[UIManager] Checking dual screen plugins...")
+		print("[UIManager] Platform: ", OS.get_name())
+		print("[UIManager] AynThor singleton available: ", Engine.has_singleton("AynThor"))
+		
+		# Check initial dual screen state (delay to allow plugins to initialize)
+		if DisplayManager.is_dual_screen_enabled():
+			print("[UIManager] Dual screen enabled, will initialize shortly...")
+			_initialize_dual_screen.call_deferred()
+	
 	# Set initial focus
 	_set_initial_focus()
 	
 	print("[UIManager] Initialized with pre-built nodes, position: ", _current_bar_position)
+
+func _initialize_dual_screen() -> void:
+	"""Initialize dual screen mode (called deferred to allow plugin initialization)."""
+	print("[UIManager] Initializing dual screen mode (deferred)...")
+	print("[UIManager] AynThor singleton check: ", Engine.has_singleton("AynThor"))
+	_on_dual_screen_mode_changed(true, DisplayManager.get_second_screen_index())
 
 func _get_bar_position_string(index: int) -> String:
 	"""Convert position index to string."""
@@ -646,6 +666,14 @@ func _on_tab_changed(tab_idx: int):
 
 func _update_hero_visibility(view_name: String) -> void:
 	"""Show/hide hero image, spacer, and library background based on current view and settings."""
+	# In dual screen mode, main hero should always be hidden (shown on second screen instead)
+	if _dual_screen_active:
+		if _hero_image:
+			_hero_image.visible = false
+		if _hero_spacer:
+			_hero_spacer.visible = false
+		return
+	
 	# Check if hero height is set to 0% (hidden)
 	var height_ratio = HERO_SIZE_RATIO_DEFAULT
 	if SettingsManager:
@@ -698,8 +726,13 @@ func _on_hero_game_changed(game: GameResource) -> void:
 	
 	if game:
 		_hero_image.set_game(game)
+		# Also set game on second screen hero if dual screen is active
+		if _dual_screen_active and _hero_copy_in_second_viewport and _hero_copy_in_second_viewport.has_method("set_game"):
+			_hero_copy_in_second_viewport.set_game(game)
 	else:
 		_hero_image.clear()
+		if _dual_screen_active and _hero_copy_in_second_viewport and _hero_copy_in_second_viewport.has_method("clear"):
+			_hero_copy_in_second_viewport.clear()
 
 func get_current_view() -> View:
 	return _current_view
@@ -860,6 +893,188 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_modal_open() and event.is_action_pressed("ui_cancel"):
 		dismiss_modal()
 		get_viewport().set_input_as_handled()
+
+# ==================== DUAL SCREEN MODE ====================
+
+var _dual_screen_active: bool = false
+var _dual_screen_viewport_mode: bool = false
+var _hero_copy_in_second_viewport: Node = null
+
+func _on_dual_screen_mode_changed(enabled: bool, second_screen_index: int) -> void:
+	"""Handle dual screen mode changes from DisplayManager."""
+	print("[UIManager] Dual screen mode changed - enabled: ", enabled, ", screen: ", second_screen_index)
+	
+	if enabled:
+		_enable_dual_screen_mode(second_screen_index)
+	else:
+		_disable_dual_screen_mode()
+
+func _enable_dual_screen_mode(second_screen_index: int) -> void:
+	"""Enable dual screen mode - show HeroImage on second display."""
+	if _dual_screen_active:
+		return
+	
+	if not _hero_image:
+		push_error("[UIManager] Cannot enable dual screen - hero image not available")
+		return
+	
+	print("[UIManager] Enabling dual screen mode on screen ", second_screen_index)
+	
+	# Check if AynThor plugin is available (Android dual screen)
+	var has_aynthor = Engine.has_singleton("AynThor")
+	print("[UIManager] AynThor plugin available: ", has_aynthor)
+	
+	if has_aynthor and PlatformManager.is_android():
+		# Use dual screen viewport plugin (works on any dual screen Android device)
+		_enable_dual_screen_viewport_mode()
+	else:
+		# Desktop: use Godot Window approach
+		_enable_dual_screen_mode_desktop.call_deferred(second_screen_index)
+
+func _enable_dual_screen_viewport_mode() -> void:
+	"""Enable dual screen using viewport plugin (generic dual screen support)."""
+	print("[UIManager] Using dual screen viewport mode")
+	
+	# Get the dual screen setup nodes
+	var dual_screen_setup = get_node("/root/Main/DualScreenSetup")
+	var second_viewport = get_node("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	_hero_copy_in_second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport/HeroImageSecondScreen")
+	
+	if not dual_screen_setup or not second_viewport or not _hero_copy_in_second_viewport:
+		push_warning("[UIManager] Dual screen setup nodes not found")
+		return
+	
+	print("[UIManager] Found second screen hero: ", _hero_copy_in_second_viewport.name)
+	
+	# Hide hero in main UI since it will be on second screen
+	if _hero_spacer:
+		_hero_spacer.visible = false
+		_hero_spacer.custom_minimum_size = Vector2.ZERO
+	if _hero_image:
+		_hero_image.set_dual_screen_mode(true)
+	
+	# Sync current game to second screen hero
+	var current_game = null
+	if _hero_image and _hero_image.has_method("get_current_game"):
+		current_game = _hero_image.get_current_game()
+		if current_game and _hero_copy_in_second_viewport.has_method("set_game"):
+			print("[UIManager] Setting game on second screen hero: ", current_game.get_display_name() if current_game.has_method("get_display_name") else "unknown")
+			_hero_copy_in_second_viewport.set_game(current_game)
+	
+	# Force viewport update
+	second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	
+	# Make dual screen setup visible (but off-screen)
+	dual_screen_setup.visible = true
+	
+	_dual_screen_active = true
+	_dual_screen_viewport_mode = true
+	print("[UIManager] Dual screen viewport mode enabled")
+
+func _disable_dual_screen_mode() -> void:
+	"""Disable dual screen mode - restore HeroImage to main layout."""
+	if not _dual_screen_active:
+		return
+	
+	print("[UIManager] Disabling dual screen mode")
+	
+	if _dual_screen_viewport_mode:
+		# Just hide the dual screen setup (heroes stay in place)
+		var dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
+		if dual_screen_setup:
+			dual_screen_setup.visible = false
+		
+		_dual_screen_viewport_mode = false
+	else:
+		# Desktop: close secondary window
+		_disable_dual_screen_mode_desktop()
+	
+	# Show hero in main UI again
+	if _hero_image:
+		_hero_image.set_dual_screen_mode(false)
+	
+	# Show hero spacer again
+	if _hero_spacer:
+		_hero_spacer.visible = true
+		_update_hero_size()  # This will set the correct spacer size
+	
+	_dual_screen_active = false
+	print("[UIManager] Dual screen mode disabled")
+
+# ==================== DUAL SCREEN DESKTOP FALLBACK ====================
+
+var _hero_secondary_window: Window = null
+var _hero_original_parent: Node = null
+
+func _enable_dual_screen_mode_desktop(second_screen_index: int) -> void:
+	"""Desktop fallback: Use Godot Window for dual screen."""
+	print("[UIManager] Enabling dual screen mode (desktop) on screen ", second_screen_index)
+	
+	# Use call_deferred to avoid race conditions during _ready()
+	_setup_desktop_dual_screen.call_deferred(second_screen_index)
+
+func _setup_desktop_dual_screen(second_screen_index: int) -> void:
+	"""Setup desktop dual screen (called deferred to avoid race conditions)."""
+	# Store reference to original parent
+	_hero_original_parent = _hero_image.get_parent()
+	
+	# Get second screen bounds
+	var screen_rect = DisplayManager.get_second_screen_rect()
+	if screen_rect.size == Vector2i.ZERO:
+		push_warning("[UIManager] Second screen has zero size, aborting dual screen mode")
+		return
+	
+	# Create a secondary window for the hero image
+	_hero_secondary_window = Window.new()
+	_hero_secondary_window.title = "Kyodai - Hero"
+	_hero_secondary_window.size = screen_rect.size
+	_hero_secondary_window.position = screen_rect.position
+	_hero_secondary_window.exclusive = false
+	_hero_secondary_window.always_on_top = false
+	_hero_secondary_window.borderless = true
+	_hero_secondary_window.unresizable = true
+	
+	# Reparent hero image to secondary window
+	if _hero_image.get_parent():
+		_hero_image.get_parent().remove_child(_hero_image)
+	
+	_hero_secondary_window.add_child(_hero_image)
+	
+	# Make hero image fill the window
+	_hero_image.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hero_image.offset_bottom = 0
+	_hero_image.position = Vector2.ZERO
+	_hero_image.size = Vector2(screen_rect.size)
+	
+	# Add window to scene tree
+	get_tree().root.add_child(_hero_secondary_window)
+	
+	# Hide hero spacer since hero is now in separate window
+	if _hero_spacer:
+		_hero_spacer.visible = false
+		_hero_spacer.custom_minimum_size = Vector2.ZERO
+	
+	_dual_screen_active = true
+	print("[UIManager] Desktop dual screen mode enabled")
+
+func _disable_dual_screen_mode_desktop() -> void:
+	"""Desktop fallback: Close secondary window and restore hero."""
+	# Remove hero from secondary window
+	if _hero_image and _hero_image.get_parent() == _hero_secondary_window:
+		_hero_secondary_window.remove_child(_hero_image)
+	
+	# Restore hero to original parent
+	if _hero_original_parent and _hero_image:
+		_hero_original_parent.add_child(_hero_image)
+		_update_hero_size()
+	
+	# Close secondary window
+	if _hero_secondary_window:
+		_hero_secondary_window.queue_free()
+		_hero_secondary_window = null
+	
+	_hero_original_parent = null
+	print("[UIManager] Desktop dual screen mode disabled")
 
 # ==================== GAME DETAILS VIEW ====================
 

@@ -2,18 +2,31 @@ package com.heckpoint.kyodai;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.UriPermission;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Display;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
 import org.godotengine.godot.Godot;
@@ -1303,6 +1316,185 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 Log.e(TAG, "  at " + element.toString());
             }
             return false;
+        }
+    }
+    
+    // ============================================================================
+    // Dual Screen / Display Detection Methods
+    // ============================================================================
+    
+    /**
+     * Get the number of displays connected to the device.
+     * This is useful for detecting dual screen devices like Ayn Thor.
+     * 
+     * @return The number of displays (1 for single screen, 2+ for dual/multi screen)
+     */
+    @UsedByGodot
+    public int getDisplayCount() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "getDisplayCount() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return 1;
+        }
+        
+        try {
+            // Use DisplayManager to get all displays
+            android.hardware.display.DisplayManager displayManager = 
+                (android.hardware.display.DisplayManager) activity.getSystemService(Context.DISPLAY_SERVICE);
+            
+            if (displayManager == null) {
+                Log.e(TAG, "ERROR: DisplayManager is null");
+                return 1;
+            }
+            
+            // Get all displays (including virtual displays)
+            android.view.Display[] displays = displayManager.getDisplays();
+            int displayCount = displays.length;
+            
+            Log.d(TAG, "Found " + displayCount + " displays:");
+            for (int i = 0; i < displays.length; i++) {
+                android.view.Display display = displays[i];
+                Log.d(TAG, "  Display " + i + ": ID=" + display.getDisplayId() +
+                      ", Name=" + display.getName() +
+                      ", IsValid=" + display.isValid());
+                
+                // Get display metrics
+                android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+                display.getRealMetrics(metrics);
+                Log.d(TAG, "    Resolution: " + metrics.widthPixels + "x" + metrics.heightPixels);
+            }
+            
+            Log.d(TAG, "==========================================");
+            return displayCount;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR getting display count: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return 1;
+        }
+    }
+    
+    /**
+     * Check if the device has multiple physical displays.
+     * This filters out virtual displays and only counts physical screens.
+     * 
+     * @return true if 2 or more physical displays are connected
+     */
+    @UsedByGodot
+    public boolean hasMultipleDisplays() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "hasMultipleDisplays() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            android.hardware.display.DisplayManager displayManager = 
+                (android.hardware.display.DisplayManager) activity.getSystemService(Context.DISPLAY_SERVICE);
+            
+            if (displayManager == null) {
+                Log.e(TAG, "ERROR: DisplayManager is null");
+                return false;
+            }
+            
+            // Get only physical displays (excludes virtual displays)
+            android.view.Display[] displays = displayManager.getDisplays(android.hardware.display.DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+            int physicalDisplayCount = displays.length;
+            
+            // If no presentation displays, check all displays and filter
+            if (physicalDisplayCount == 0) {
+                displays = displayManager.getDisplays();
+                physicalDisplayCount = 0;
+                for (android.view.Display display : displays) {
+                    // Skip the default display (usually display 0)
+                    if (display.getDisplayId() != android.view.Display.DEFAULT_DISPLAY && display.isValid()) {
+                        physicalDisplayCount++;
+                    }
+                }
+            }
+            
+            Log.d(TAG, "Physical display count: " + physicalDisplayCount);
+            Log.d(TAG, "==========================================");
+            
+            return physicalDisplayCount >= 1; // 1 presentation display + default = 2 total
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR checking for multiple displays: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Get information about the second display (if available).
+     * Returns a dictionary with display properties.
+     * 
+     * @return Dictionary with display info, or empty dict if no second display
+     */
+    @UsedByGodot
+    public Dictionary getSecondDisplayInfo() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "getSecondDisplayInfo() called");
+        
+        Dictionary result = new Dictionary();
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return result;
+        }
+        
+        try {
+            android.hardware.display.DisplayManager displayManager = 
+                (android.hardware.display.DisplayManager) activity.getSystemService(Context.DISPLAY_SERVICE);
+            
+            if (displayManager == null) {
+                Log.e(TAG, "ERROR: DisplayManager is null");
+                return result;
+            }
+            
+            // Find the second display (non-default display)
+            android.view.Display[] displays = displayManager.getDisplays();
+            android.view.Display secondDisplay = null;
+            
+            for (android.view.Display display : displays) {
+                if (display.getDisplayId() != android.view.Display.DEFAULT_DISPLAY && display.isValid()) {
+                    secondDisplay = display;
+                    break;
+                }
+            }
+            
+            if (secondDisplay == null) {
+                Log.d(TAG, "No second display found");
+                return result;
+            }
+            
+            // Get display metrics
+            android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+            secondDisplay.getRealMetrics(metrics);
+            
+            // Populate result dictionary
+            result.put("id", secondDisplay.getDisplayId());
+            result.put("name", secondDisplay.getName());
+            result.put("width", metrics.widthPixels);
+            result.put("height", metrics.heightPixels);
+            result.put("density", metrics.density);
+            result.put("xdpi", metrics.xdpi);
+            result.put("ydpi", metrics.ydpi);
+            
+            Log.d(TAG, "Second display info:");
+            Log.d(TAG, "  ID: " + secondDisplay.getDisplayId());
+            Log.d(TAG, "  Name: " + secondDisplay.getName());
+            Log.d(TAG, "  Resolution: " + metrics.widthPixels + "x" + metrics.heightPixels);
+            
+            Log.d(TAG, "==========================================");
+            return result;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR getting second display info: " + e.getMessage());
+            return result;
         }
     }
 }
