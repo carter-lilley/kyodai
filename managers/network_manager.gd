@@ -164,7 +164,7 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 
 # ==================== ROMM API OPERATIONS ====================
 
-func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0, limit: int = 100):
+func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0, limit: int = 250):
 	if not _is_online:
 		callback.call({}, "Not connected")
 		return

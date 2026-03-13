@@ -37,7 +37,7 @@ class QueueItem:
 # Unified queue
 var _queue: Array[QueueItem] = []
 var _active_items: Dictionary = {}  # id -> QueueItem
-var _max_concurrent: int = 3  # Increased from 2 for better throughput
+var _max_concurrent: int = 5  # Concurrent downloads for better throughput on mobile
 
 # Progress timer for downloads
 var _progress_timers: Dictionary = {}  # item_id -> Timer

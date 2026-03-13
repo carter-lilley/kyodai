@@ -333,7 +333,7 @@ func sync_platform_games(platform_id: int, platform_slug: String, platform_name:
 			callback.call(false, "Database not ready", 0, 0)
 		return
 	
-	var batch_size = 100
+	var batch_size = 250  # Increased from 100 for faster syncing
 	
 	# Fetch first batch
 	_fetch_batch(str(platform_id), 0, batch_size, func(data, error):
@@ -420,7 +420,7 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 		func(item: Dictionary, _idx: int) -> bool:
 			return _check_siblings_in_db(item["romm_id"], item["siblings"]),
 		MemoryManager.BatchMode.DB_THREAD,
-		5,  # 5 sibling checks per frame
+		15,  # 15 sibling checks per frame (increased for better performance)
 		func(processed: int, total_count: int):
 			pass,
 		func(sibling_results: Array):
@@ -472,8 +472,8 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 			
 			return success,
 		MemoryManager.BatchMode.DB_THREAD,
-		10,  # 10 DB inserts per frame
-		func(processed: int, total_count: int):
+		25,  # 25 DB inserts per frame (increased for better performance)
+		func(_processed: int, _total_count: int):
 			pass,
 		func(_results: Array):
 			
@@ -505,8 +505,8 @@ func _cover_download_batch(games: Array[GameResource], on_complete: Callable):
 			_download_cover_sync(item["url"], item["cache_path"])
 			return success,
 		MemoryManager.BatchMode.SYNC,  # Downloads are already async via DownloadManager
-		5,  # 5 covers queued per frame
-		func(processed: int, total_count: int):
+		15,  # 15 covers queued per frame (increased for better performance)
+		func(_processed: int, _total_count: int):
 			pass,
 		func(_results: Array):
 			on_complete.call(games.size())

@@ -608,7 +608,7 @@ func _complete_batch(batch: BatchProcess):
 static func queue_sibling_checks(
 	games_data: Array,
 	db_instance: SQLite,
-	batch_size: int = 10,
+	batch_size: int = 15,
 	on_progress: Callable = Callable(),
 	on_complete: Callable = Callable()
 ) -> int:
@@ -646,7 +646,7 @@ static func queue_sibling_checks(
 static func queue_db_inserts(
 	games: Array,
 	db_instance: SQLite,
-	batch_size: int = 10,
+	batch_size: int = 25,
 	on_progress: Callable = Callable(),
 	on_complete: Callable = Callable()
 ) -> int:
