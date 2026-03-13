@@ -62,8 +62,6 @@ func _ready():
 	_setup_ui()
 
 func _setup_ui():
-	print("[EffectDesignerUI] _setup_ui called")
-	
 	# Set up this control to fill parent
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	
@@ -71,8 +69,6 @@ func _setup_ui():
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.name = "ScrollContainer"
 	add_child(scroll)
-	
-	print("[EffectDesignerUI] ScrollContainer added")
 	
 	var vbox = VBoxContainer.new()
 	scroll.add_child(vbox)
@@ -93,7 +89,6 @@ func _setup_ui():
 	popup.id_pressed.connect(_on_add_effect)
 
 func set_config(config: Dictionary):
-	print("[EffectDesignerUI] set_config called with ", config.get("effects", []).size(), " effects")
 	_current_config = config.duplicate(true)
 	_rebuild_effects_ui()
 
@@ -101,10 +96,8 @@ func get_config() -> Dictionary:
 	return _current_config.duplicate(true)
 
 func _rebuild_effects_ui():
-	print("[EffectDesignerUI] _rebuild_effects_ui called, _effects_list: ", _effects_list)
-	
 	if not _effects_list:
-		print("[EffectDesignerUI] ERROR: _effects_list is null!")
+		push_error("_effects_list is null")
 		return
 	
 	# Save collapsed states before rebuilding

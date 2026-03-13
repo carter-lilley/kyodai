@@ -328,10 +328,6 @@ func has_lowercase(name):
 
 func get_key_from_string(name, debug=false):
 	if key_list.has(str(name)):
-		if debug:
-			print("Scancode OK:"+name)
 		return key_list.get(str(name))
 	else:
-		if debug:
-			print("Scancode Key not found:"+ name)
 		return 0

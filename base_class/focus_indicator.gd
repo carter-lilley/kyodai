@@ -76,7 +76,6 @@ func reconnect_viewport() -> void:
 	
 	# Connect to new viewport
 	viewport.gui_focus_changed.connect(_on_focus_changed)
-	print("[FocusIndicator] Reconnected to viewport: ", viewport.name)
 	
 	# Check if there's already a focused control
 	var focused = viewport.gui_get_focus_owner()

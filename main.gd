@@ -38,16 +38,7 @@ func _ready():
 	main_content_vbox = get_node("RootLayout/ContentWrapper/MainContentVBox")
 	root_layout = get_node("RootLayout")
 	
-	# Debug: Verify all nodes are found
-	print("[Main] Verifying nodes...")
-	print("[Main] tab_container: ", tab_container)
-	print("[Main] navigation_bar: ", navigation_bar)
-	print("[Main] hero_image: ", hero_image)
-	print("[Main] hero_spacer: ", hero_spacer)
-	print("[Main] library_background: ", library_background)
-	print("[Main] content_wrapper: ", content_wrapper)
-	print("[Main] main_content_vbox: ", main_content_vbox)
-	print("[Main] root_layout: ", root_layout)
+
 	
 	# Initialize UIManager with all the pre-built nodes
 	UIManager.initialize(
@@ -63,11 +54,9 @@ func _ready():
 	
 	# Connect navigation bar signals
 	if navigation_bar:
-		print("[Main] NavigationBar found, connecting signals")
 		navigation_bar.nav_button_pressed.connect(_on_nav_button_pressed)
 		navigation_bar.zoom_changed.connect(_on_zoom_changed)
 		navigation_bar.zoom_changed_finished.connect(_on_zoom_changed_finished)
-		print("[Main] Zoom signal connected: ", navigation_bar.zoom_changed.is_connected(_on_zoom_changed))
 	else:
 		push_error("[Main] NavigationBar not found!")
 	
@@ -112,12 +101,10 @@ func _apply_zoom_to_view_deferred(view_name: String) -> void:
 	
 	# Keep checking until grid has valid dimensions
 	if grid.size.x <= 0 or grid.size.y <= 0:
-		print("[Main] Grid for %s not ready yet (size: %s), deferring..." % [view_name, str(grid.size)])
 		await get_tree().process_frame
 		_apply_zoom_to_view_deferred(view_name)
 		return
 	
-	print("[Main] Applying saved zoom to %s: %s (grid size: %s)" % [view_name, zoom_setting.value, str(grid.size)])
 	grid.target_card_width_ratio = zoom_setting.value
 
 func _update_navigation_bar_for_view(view_name: String):
@@ -132,26 +119,22 @@ func _update_navigation_bar_for_view(view_name: String):
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""
-	print("[Main] Zoom changed to: ", value)
 	# Apply zoom to BOTH Home and Library grids for consistent zoom across views
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
 		if view:
 			var games_grid = _get_view_grid(view)
 			if games_grid:
-				print("[Main] Setting target_card_width_ratio to: ", value, " for view: ", view_name)
 				games_grid.target_card_width_ratio = value
 
 func _on_zoom_changed_finished(value: float):
 	"""Called when drag ends - saves the setting."""
-	print("[Main] Zoom drag finished at: ", value)
 	# Save zoom to settings (only when drag ends)
 	if SettingsManager:
 		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 		if zoom_setting:
 			SettingsManager.set_setting(value, zoom_setting)
 			SettingsManager.save_settings()
-			print("[Main] Saved zoom setting: ", value)
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Safely get the games grid from a view
@@ -168,19 +151,14 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 
 func _load_and_apply_saved_zoom() -> void:
 	"""Load saved zoom from settings and apply to both grids for parity."""
-	print("[Main] _load_and_apply_saved_zoom() called")
-	
 	if not SettingsManager:
-		print("[Main] ERROR: SettingsManager is null!")
 		return
 	
 	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 	if not zoom_setting:
-		print("[Main] No saved zoom setting found, using default")
 		return
 	
 	var saved_zoom = zoom_setting.value
-	print("[Main] Loading saved zoom: ", saved_zoom)
 	
 	# Apply to BOTH Home and Library views for consistent zoom across views
 	for view_name in ["Home", "Library"]:
@@ -188,12 +166,10 @@ func _load_and_apply_saved_zoom() -> void:
 		if view:
 			var grid = _get_view_grid(view)
 			if grid:
-				print("[Main] Applying zoom to %s grid: %s" % [view_name, saved_zoom])
 				grid.target_card_width_ratio = saved_zoom
 	
 	# Set navigation bar slider to saved value
 	if navigation_bar:
-		print("[Main] Setting navigation bar zoom slider to: ", saved_zoom)
 		navigation_bar.set_zoom_value(saved_zoom)
 
 func set_status_text(text: String):
@@ -283,16 +259,12 @@ func _input(event: InputEvent):
 	
 	# Handle ui_cancel to go back to Home (unless keyboard is open)
 	if event.is_action_pressed("ui_cancel"):
-		print("[MAIN DEBUG] ui_cancel pressed")
 		# Check if keyboard is visible - if so, let keyboard handle it
 		var keyboard = $UILayer/OnscreenKeyboard
-		print("[MAIN DEBUG] Keyboard visible: ", keyboard.visible if keyboard else "null")
 		if keyboard and keyboard.visible:
 			# Keyboard will handle ui_cancel to close itself
-			print("[MAIN DEBUG] Keyboard visible, returning early")
 			return
 		
-		print("[MAIN DEBUG] Switching to Home")
 		# Play return sound
 		if AudioManager:
 			AudioManager.play_sfx("return")
@@ -300,7 +272,6 @@ func _input(event: InputEvent):
 		UIManager.switch_to_tab("Home")
 		# Set focus to Home button (use UIManager's helper to find it)
 		await get_tree().process_frame
-		print("[MAIN DEBUG] Resetting focus to home button")
 		reset_focus_to_home_button()
 		return
 
@@ -326,7 +297,6 @@ func _adjust_zoom(delta: float) -> void:
 			if zoom_setting:
 				SettingsManager.set_setting(new_zoom, zoom_setting)
 				SettingsManager.save_settings()
-				print("[Main] Zoom adjusted to %.2f and saved" % new_zoom)
 
 func _on_delay_timeout():
 	if _held_dir != "":
@@ -353,6 +323,5 @@ func _resend():
 
 func _on_screens_swapped(is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
-	print("[Main] Screens swapped: ", is_swapped)
 	# Update any UI state that depends on which screen is primary
 	# Note: No reparenting needed - AynThorManager handles rendering swap

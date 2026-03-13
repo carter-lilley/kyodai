@@ -87,8 +87,6 @@ func get_settings_key_for_emulator() -> String:
 
 ## Requests necessary permissions on Android
 func _request_android_permissions():
-	print("[PlatformManager] Checking Android permissions...")
-	
 	# Check and request standard runtime permissions
 	var permissions_to_request = []
 	
@@ -108,11 +106,7 @@ func _request_android_permissions():
 		permissions_to_request.append("android.permission.ACCESS_NETWORK_STATE")
 	
 	if permissions_to_request.size() > 0:
-		print("[PlatformManager] Requesting permissions: " + str(permissions_to_request))
-		var result = OS.request_permissions()
-		print("[PlatformManager] Permission request result: " + str(result))
-	else:
-		print("[PlatformManager] All standard permissions already granted")
+		OS.request_permissions()
 	
 	# Note: "Install unknown apps" permission is checked when user tries to install an emulator
 	# We don't prompt on startup to avoid annoying the user
@@ -121,8 +115,6 @@ func _request_android_permissions():
 func open_install_unknown_apps_settings():
 	if not is_android():
 		return
-	
-	print("[PlatformManager] Opening Android Settings for 'Install unknown apps'")
 	
 	# On Android, we need to open the system settings for this app
 	# The user must manually enable "Install unknown apps" permission
@@ -142,8 +134,6 @@ func has_permission(permission_name: String) -> bool:
 func show_install_permission_dialog():
 	if not is_android():
 		return
-	
-	print("[PlatformManager] Opening settings for install permission")
 	
 	# Open Android settings directly - user must manually enable "Install unknown apps"
 	# We don't show a notification since we're taking them directly to settings

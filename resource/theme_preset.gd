@@ -88,8 +88,6 @@ func apply_to_settings(settings: Settings) -> bool:
 	# Apply card settings
 	if settings.get("card_effect_config") != null:
 		settings.card_effect_config.value = card_effect_config.duplicate()
-		print("[apply_preset] Set card_effect_config to: ", settings.card_effect_config.value)
-		print("[apply_preset] Effects count: ", settings.card_effect_config.value.get("effects", []).size())
 	
 	return true
 

@@ -17,8 +17,6 @@ func set_dual_screen_mode(enabled: bool) -> void:
 		visible = true
 
 func _ready():
-	print("[HeroImage] _ready() called")
-	
 	# Create gray fallback texture
 	_create_gray_texture()
 	
@@ -26,14 +24,8 @@ func _ready():
 	
 	# Show gray initially
 	clear()
-	
-	print("[HeroImage] _ready() complete on ", name, ", _effect_stack: ", _effect_stack)
-	
-	print("[HeroImage] Initialized with EffectStack, size: ", size)
 
 func _setup_effect_stack():
-	print("[HeroImage] Setting up EffectStack...")
-	
 	# Create EffectStack
 	_effect_stack = EffectStack.new()
 	_effect_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -41,7 +33,6 @@ func _setup_effect_stack():
 	# Clip children to ensure effects don't draw outside the hero area
 	_effect_stack.clip_children = CanvasItem.CLIP_CHILDREN_AND_DRAW
 	add_child(_effect_stack)
-	print("[HeroImage] EffectStack added as child")
 	
 	# Load configuration
 	_load_effect_config()
@@ -60,7 +51,6 @@ func _load_effect_config():
 	state.corner_radius_ratio = config.get("corner_radius", 0.06)
 	state.effect_settings = config.get("effects", [])
 	_effect_stack.initialize(state, state.effect_settings)
-	print("[HeroImage] Loaded effect config with ", state.effect_settings.size(), " effects")
 
 func _notification(what: int) -> void:
 	# Update size when resized
@@ -70,7 +60,6 @@ func _notification(what: int) -> void:
 			var state = _effect_stack.get_container_state()
 			if state:
 				state.container_size = size
-				print("[HeroImage] Size updated to: ", size)
 
 func _create_gray_texture():
 	var img = Image.create(4, 4, false, Image.FORMAT_RGB8)
@@ -86,21 +75,16 @@ func _get_cache_path(game: GameResource) -> String:
 	return ""
 
 func set_game(game: GameResource):
-	print("[HeroImage] set_game called on ", name, " with: ", game.get_display_name() if game and game.has_method("get_display_name") else "null")
-	
 	if game == _current_game:
-		print("[HeroImage] Same game, skipping")
 		return
 	
 	_current_game = game
 	
 	if not game or not game.has_cover_art:
-		print("[HeroImage] No game or no cover art")
 		clear()
 		return
 	
 	var cache_path = _get_cache_path(game)
-	print("[HeroImage] Cache path: ", cache_path)
 	if cache_path == "":
 		clear()
 		return
@@ -123,19 +107,12 @@ func set_game(game: GameResource):
 			else:
 				err = img.load_webp_from_buffer(buffer)
 		
-		print("[HeroImage] Image load error: ", err, " on ", name)
 		if err == OK:
 			var tex = ImageTexture.create_from_image(img)
 			if tex:
-				print("[HeroImage] Texture created on ", name, ", size: ", tex.get_size())
 				if _effect_stack:
 					_effect_stack.set_game_texture(tex)
-					print("[HeroImage] Texture set to EffectStack on ", name)
-				else:
-					print("[HeroImage] ERROR: _effect_stack is null on ", name)
 				return
-			else:
-				print("[HeroImage] ERROR: Failed to create texture on ", name)
 	
 	clear()
 
@@ -157,7 +134,6 @@ func set_game_texture_direct(texture: Texture2D) -> void:
 	if texture and _effect_stack:
 		_effect_stack.set_game_texture(texture)
 		visible = true
-		print("[HeroImage] Texture set directly, size: ", texture.get_size())
 
 func refresh_from_settings():
 	"""Reload configuration from settings - called when settings change."""
@@ -168,12 +144,10 @@ func refresh_from_settings():
 		if _effect_stack.get_container_state():
 			current_texture = _effect_stack.get_container_state().game_texture
 			current_size = _effect_stack.get_container_state().container_size
-		print("[HeroImage] refresh_from_settings - preserving texture: ", current_texture, ", size: ", current_size)
 		_load_effect_config()
 		# Restore the texture and size after reloading
 		if current_texture:
 			_effect_stack.set_game_texture(current_texture)
-			print("[HeroImage] Texture restored after refresh")
 		# Restore the size to maintain aspect ratio
 		if current_size != Vector2.ZERO:
 			var state = _effect_stack.get_container_state()
@@ -185,4 +159,3 @@ func refresh_from_settings():
 					var effect = _effect_stack._effects[effect_id]
 					if effect and effect.visible:
 						effect.update_state(state)
-				print("[HeroImage] Size restored after refresh: ", current_size)

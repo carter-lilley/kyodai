@@ -26,7 +26,6 @@ func _load_games() -> void:
 		for item in setting.value:
 			if item is Dictionary:
 				_games_data.append(item)
-		print("[GameNativeManager] Loaded " + str(_games_data.size()) + " games from Settings")
 	else:
 		_games_data = []
 
@@ -43,7 +42,6 @@ func _save_games() -> void:
 		# Note: Don't call set_setting - we already modified the setting object directly
 		# SettingsManager.set_setting expects (value, setting) but we already set setting.value
 		SettingsManager.save_settings()
-		print("[GameNativeManager] Saved " + str(_games_data.size()) + " games to Settings")
 	
 	games_updated.emit()
 
@@ -118,14 +116,9 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 		var cover_url = STEAM_CDN_URL.format({"appid": app_id})
 		var cover_path = DataManager.get_cached_image_path(cover_url)
 		
-		print("[GameNativeManager] Downloading cover for App ID %d: %s" % [app_id, cover_url])
-		
 		# Download the cover image
 		DownloadManager.download_image(cover_url, cover_path, func(success: bool):
-			if success:
-				print("[GameNativeManager] Cover downloaded successfully: %s" % cover_path)
-			else:
-				print("[GameNativeManager] Cover download failed, will use placeholder")
+			if not success:
 				cover_path = ""  # Will fall back to placeholder
 			
 			# Add game to list with cover path

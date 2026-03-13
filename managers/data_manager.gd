@@ -158,7 +158,6 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 			disabled_platforms.append(slug)
 	
 	if disabled_platforms.size() > 0:
-		print("[DataManager] Removing ", disabled_platforms.size(), " disabled platforms: " + str(disabled_platforms))
 		_remove_disabled_platforms(disabled_platforms, enabled, callback)
 	else:
 		_start_sync(enabled, callback)
@@ -203,8 +202,6 @@ func _start_sync(enabled: Array, callback: Callable):
 			callback.call(true, "", 0, 0)
 		return
 	
-	print("[DataManager] Syncing ", enabled.size(), " platforms")
-	
 	# Reset sync state
 	_sync_current = 0
 	_sync_platform_index = 0
@@ -217,7 +214,6 @@ func _start_sync(enabled: Array, callback: Callable):
 	# Pre-calculate total games across all platforms
 	_precalculate_totals(enabled, func(grand_total: int):
 		_sync_total = grand_total
-		print("[DataManager] Total games to sync: ", grand_total)
 		
 		# Show notification with grand total
 		_sync_notification_id = NotificationManager.show_notification(
@@ -290,9 +286,8 @@ func _get_enabled_platforms() -> Array:
 
 func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: Callable):
 	if index >= platforms.size():
-		print("[DataManager] Sync complete: ", total_synced, " games")
 		if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			print("[DataManager] DEBUG: ", _sync_skipped_no_cover, " games hidden (no cover art)")
+			pass
 		
 		# Flush any remaining batch notifications before stopping
 		_flush_batch_notifications()
@@ -320,10 +315,8 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 		var lookup_query = "SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform.slug)
 		if _db.query(lookup_query) and _db.query_result.size() > 0:
 			platform_id = _db.query_result[0].get("romm_id", 0)
-			print("[DataManager] Looked up platform ID for '%s': %d" % [platform.slug, platform_id])
 	
 	if platform_id == 0:
-		print("[DataManager] WARNING: Platform '%s' has no ID, skipping sync" % platform.slug)
 		# Skip this platform and continue to next
 		_sync_platforms(platforms, index + 1, total_synced, callback)
 		return
@@ -421,8 +414,6 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 		on_complete.call(0)
 		return
 	
-	print("[DataManager] Processing batch of %d games with batched sibling checks..." % games.size())
-	
 	# Phase 2: Batch sibling checks (async, spread across frames)
 	var sibling_batch_id = MemoryManager.start_batch(
 		sibling_check_data,
@@ -431,7 +422,7 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 		MemoryManager.BatchMode.DB_THREAD,
 		5,  # 5 sibling checks per frame
 		func(processed: int, total_count: int):
-			print("[DataManager] Sibling checks: %d/%d" % [processed, total_count]),
+			pass,
 		func(sibling_results: Array):
 			# Apply sibling results to games
 			for i in range(sibling_results.size()):
@@ -442,8 +433,6 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 			# Apply consistent master selection by lowest ID within the batch
 			# This handles the case where multiple siblings are processed in the same batch
 			_ensure_consistent_masters_in_batch(games)
-			
-			print("[DataManager] Sibling checks complete, starting DB inserts...")
 			
 			# Phase 3: Batch DB inserts (async, spread across frames)
 			_db_insert_batch(games, on_complete)
@@ -485,9 +474,8 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 		MemoryManager.BatchMode.DB_THREAD,
 		10,  # 10 DB inserts per frame
 		func(processed: int, total_count: int):
-			print("[DataManager] DB inserts: %d/%d" % [processed, total_count]),
+			pass,
 		func(_results: Array):
-			print("[DataManager] DB inserts complete, starting cover downloads...")
 			
 			# Phase 4: Batch cover downloads (async, spread across frames)
 			_cover_download_batch(games_with_covers, on_complete)
@@ -504,7 +492,6 @@ func _cover_download_batch(games: Array[GameResource], on_complete: Callable):
 			})
 	
 	if cover_data.is_empty():
-		print("[DataManager] No covers to download")
 		on_complete.call(games.size())
 		return
 	
@@ -520,9 +507,8 @@ func _cover_download_batch(games: Array[GameResource], on_complete: Callable):
 		MemoryManager.BatchMode.SYNC,  # Downloads are already async via DownloadManager
 		5,  # 5 covers queued per frame
 		func(processed: int, total_count: int):
-			print("[DataManager] Cover downloads queued: %d/%d" % [processed, total_count]),
+			pass,
 		func(_results: Array):
-			print("[DataManager] Cover downloads complete")
 			on_complete.call(games.size())
 	)
 
@@ -611,7 +597,6 @@ func _ensure_consistent_masters_in_batch(games: Array[GameResource]):
 		# Only keep as master if this game has the lowest ID in its group
 		var lowest_id = sibling_group_lowest.get(group_key, game.romm_id)
 		if game.romm_id != lowest_id:
-			print("[DataManager] Marking game '%s' (ID: %d) as non-master - sibling with lower ID (%d) exists in batch" % [game.title, game.romm_id, lowest_id])
 			game.is_master_entry = false
 
 # ==================== BATCH NOTIFICATION SYSTEM ====================
@@ -631,8 +616,6 @@ func _start_sync_batch_mode():
 	_sync_batch_timer.timeout.connect(_flush_batch_notifications)
 	add_child(_sync_batch_timer)
 	_sync_batch_timer.start()
-	
-	print("[DataManager] Batch mode started with timer")
 
 func _stop_sync_batch_mode():
 	"""Stop batch mode and flush any remaining notifications."""
@@ -651,17 +634,12 @@ func _stop_sync_batch_mode():
 	
 	if has_pending:
 		_flush_batch_notifications()
-	
-	print("[DataManager] Batch mode stopped")
 
 func _queue_batch_notification(game: GameResource):
 	"""Queue a game notification during batch mode. Called via call_deferred from DB thread."""
 	_sync_batch_pending_mutex.lock()
 	_sync_batch_pending.append(game)
-	var current_size = _sync_batch_pending.size()
 	_sync_batch_pending_mutex.unlock()
-	
-	print("[DataManager] Queued game for batch notification: %s (pending: %d)" % [game.title, current_size])
 
 func _flush_batch_notifications():
 	"""Emit batched games and clear the pending list."""
@@ -676,7 +654,6 @@ func _flush_batch_notifications():
 	
 	var start_index = _sync_current - games.size()
 	
-	print("[DataManager] Emitting batch of %d games for %s" % [games.size(), _sync_platform])
 	games_batch_added.emit(_sync_platform, start_index, games)
 	
 	_sync_batch_last_emit_time = Time.get_ticks_msec()
@@ -712,8 +689,6 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	# Extract siblings from API response
 	var siblings: Array[Dictionary] = []
 	if data.has("siblings") and data["siblings"] is Array:
-		print("[DataManager] Found siblings array for game '%s' (ID: %d) with %d items" % [game.title, game.romm_id, data["siblings"].size()])
-		
 		for sibling_data in data["siblings"]:
 			if sibling_data is Dictionary:
 				# Note: Sibling data from API only has basic info (id, name, fs_name_no_ext, etc.)
@@ -727,16 +702,9 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 					"file_size": sibling_data.get("fs_size_bytes", 0)
 				}
 				siblings.append(sibling)
-				print("[DataManager]   Sibling: id=%d, name='%s' (details will be fetched on-demand)" % [sibling.id, sibling.name])
 	else:
-		if data.has("siblings"):
-			print("[DataManager] Game '%s' has siblings field but it's not an array (type: %s)" % [game.title, typeof(data["siblings"])])
-		else:
-			print("[DataManager] Game '%s' (ID: %d) has no siblings field" % [game.title, game.romm_id])
+		pass
 	game.siblings = siblings
-	
-	if siblings.size() > 0:
-		print("[DataManager] Stored %d siblings for game '%s' (ID: %d)" % [siblings.size(), game.title, game.romm_id])
 	
 	# Determine if this should be a master entry
 	# A game is a master if none of its siblings already exist in our database
@@ -749,9 +717,7 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	
 	# Debug: Mark games without cover art as hidden if toggle is enabled
 	if _DEBUG_HIDE_GAMES_WITHOUT_COVERS:
-		print("[DataManager] DEBUG: Checking cover for '%s' - cover_url: '%s'" % [game.title, game.cover_url])
 		if game.cover_url == "" or game.cover_url == "null" or game.cover_url == "<null>" or game.cover_url == "None":
-			print("[DataManager] DEBUG: Marking game '%s' (ID: %d) as hidden - no cover art" % [game.title, game.romm_id])
 			game.has_cover_art = false
 			_sync_skipped_no_cover += 1
 	
@@ -803,7 +769,6 @@ func _build_insert_query(game: GameResource) -> String:
 			# Preserve download status from existing record
 			if existing.get("has_local_copy", 0) == 1:
 				has_local_copy = 1
-				print("[DataManager] Preserving has_local_copy for existing game: %s (romm_id: %d)" % [game.title, game.romm_id])
 			# Preserve downloaded siblings
 			var existing_siblings = existing.get("downloaded_sibling_ids", "[]")
 			if existing_siblings != "[]" and existing_siblings != "":
@@ -991,15 +956,12 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	var root_path = root_folder.value if root_folder else "user://games"
 	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 	
-	print("[DataManager] Deleting file at constructed path: " + abs_path)
-	
 	# Check if file exists (use PackageChecker for SAF paths on Android)
 	var file_exists = false
 	if PlatformManager.is_android() and abs_path.begins_with("content://"):
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin:
 			file_exists = plugin.call("safFileExists", abs_path)
-			print("[DataManager] SAF file exists check: " + str(file_exists))
 		else:
 			push_error("[DataManager] PackageChecker plugin not available for SAF file check")
 			if callback.is_valid():
@@ -1020,13 +982,10 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	
 	# Check if this is an Android SAF path
 	if PlatformManager.is_android() and abs_path.begins_with("content://"):
-		print("[DataManager] Using PackageChecker plugin for SAF file deletion")
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin:
 			file_deleted = plugin.call("deleteSafFile", abs_path)
-			if file_deleted:
-				print("[DataManager] Successfully deleted SAF file using PackageChecker")
-			else:
+			if not file_deleted:
 				error_msg = "PackageChecker.deleteSafFile returned false"
 		else:
 			error_msg = "PackageChecker plugin not available for SAF file deletion"
@@ -1040,7 +999,6 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 			var err = dir.remove(file_name)
 			if err == OK:
 				file_deleted = true
-				print("[DataManager] Successfully deleted file using DirAccess: " + abs_path)
 			else:
 				error_msg = "DirAccess.remove failed with error: " + str(err)
 		else:
@@ -1048,11 +1006,9 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 		
 		# Method 2: If first method failed, try remove_absolute
 		if not file_deleted:
-			print("[DataManager] Trying remove_absolute for: " + abs_path)
 			var err = DirAccess.remove_absolute(abs_path)
 			if err == OK:
 				file_deleted = true
-				print("[DataManager] Successfully deleted file using remove_absolute: " + abs_path)
 			else:
 				error_msg += " | remove_absolute failed with error: " + str(err)
 	
@@ -1079,7 +1035,6 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 		return false
 	
 	# Update game state only after successful deletion
-	print("[DataManager] Updating game state after successful deletion")
 	if active_id == game.romm_id:
 		# Main game
 		game.has_local_copy = false
@@ -1107,7 +1062,7 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 			return _db.query(query),
 		func(success: bool):
 			if success:
-				print("[DataManager] Updated title_id for game %d: %s" % [romm_id, title_id])
+				pass
 			if callback.is_valid():
 				callback.call(success)
 	)
@@ -1142,7 +1097,6 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "") -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
-		print("[DataManager] DB not ready for pagination query")
 		return games
 	
 	var order = "ASC" if ascending else "DESC"
@@ -1153,9 +1107,7 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	else:
 		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
 	
-	print("[DataManager] Executing query: %s" % query)
 	_db.query(query)
-	print("[DataManager] Query returned %d rows" % _db.query_result.size())
 	
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
@@ -1234,7 +1186,6 @@ func search_games_paginated(query: String, offset: int, limit: int) -> Array[Gam
 		LIMIT %d OFFSET %d
 	""" % [sanitized_query, limit, offset]
 	
-	print("[DataManager] Executing search query: %s" % sql)
 	var success = _db.query(sql)
 	if success:
 		for row in _db.query_result:
@@ -1373,8 +1324,6 @@ func _row_to_game(row: Dictionary) -> GameResource:
 				if item is Dictionary:
 					siblings.append(item)
 			game.siblings = siblings
-			if siblings.size() > 0:
-				print("[DataManager] Loaded %d siblings for game '%s' from DB" % [siblings.size(), game.title])
 		else:
 			game.siblings = []
 	else:
@@ -1696,10 +1645,9 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 					var cache_path = get_cached_image_path(url)
 					if FileAccess.file_exists(cache_path):
 						DirAccess.remove_absolute(cache_path)
-						covers_deleted += 1
-				
-				print("[DataManager] Removed ", count, " games from ", platform_slug, ", deleted ", covers_deleted, " covers")
-				games_removed.emit(platform_slug)
+				covers_deleted += 1
+			
+			games_removed.emit(platform_slug)
 			
 			if callback.is_valid():
 				callback.call(success)
@@ -1790,25 +1738,21 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 	Updates has_local_copy and downloaded_sibling_ids for matched games.
 	"""
 	if not _is_db_ready:
-		print("[DataManager] Cannot scan - database not ready")
 		if callback.is_valid():
 			callback.call(0)
 		return
 	
 	var root_folder_setting = SettingsManager.get_setting("games_root_folder")
 	if not root_folder_setting or root_folder_setting.value == "":
-		print("[DataManager] Cannot scan - games_root_folder not set")
 		if callback.is_valid():
 			callback.call(0)
 		return
 	
 	var root_folder = root_folder_setting.value
-	print("[DataManager] Scanning for downloaded games in: " + root_folder)
 	
 	# Get all games from database to match against
 	var all_games = get_all_games()
 	if all_games.size() == 0:
-		print("[DataManager] No games in database to match against")
 		if callback.is_valid():
 			callback.call(0)
 		return
@@ -1828,13 +1772,9 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 				var sibling_key = game.platform_slug + "/" + sibling_file_name.to_lower()
 				game_lookup[sibling_key] = game
 	
-	print("[DataManager] Built lookup with %d game entries" % game_lookup.size())
-	
 	# Scan filesystem
 	var found_files: Array[String] = []
 	_scan_games_directory(root_folder, "", found_files)
-	
-	print("[DataManager] Found %d files in games directory" % found_files.size())
 	
 	# Match files to games
 	var matched_games: Dictionary = {}  # romm_id -> {game, matched_siblings: [], file_path: ""}
@@ -1876,9 +1816,6 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 							break
 			
 			matched_count += 1
-			print("[DataManager] Matched file: %s -> %s" % [file_path, game.title])
-	
-	print("[DataManager] Matched %d files to %d unique games" % [matched_count, matched_games.size()])
 	
 	# Update database for matched games
 	if matched_games.size() > 0:
@@ -1933,7 +1870,6 @@ func _scan_saf_directory(tree_uri: String, results: Array[String]) -> void:
 	"""Scan a SAF (Storage Access Framework) directory using the PackageChecker plugin.
 	
 	The plugin returns a JSON array of file paths like: ["gb/game.gb", "snes/game.smc"]"""
-	print("[DataManager] Scanning SAF directory: " + tree_uri)
 	
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin == null:
@@ -1943,7 +1879,6 @@ func _scan_saf_directory(tree_uri: String, results: Array[String]) -> void:
 	# Call the plugin method to list files
 	var json_result = plugin.call("listSafFiles", tree_uri)
 	if json_result == null or json_result == "[]":
-		print("[DataManager] No files found in SAF directory or error occurred")
 		return
 	
 	# Parse the JSON array
@@ -1958,13 +1893,10 @@ func _scan_saf_directory(tree_uri: String, results: Array[String]) -> void:
 		push_error("[DataManager] SAF file list is not an array")
 		return
 	
-	print("[DataManager] Found " + str(files.size()) + " files via SAF")
-	
 	# Add all files to results
 	for file_path in files:
 		if file_path is String and file_path != "":
 			results.append(file_path)
-			print("[DataManager] SAF file: " + file_path)
 
 func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
 	"""Update database entries for matched games."""
@@ -1996,17 +1928,11 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 					WHERE romm_id = %d
 				""" % [_escape_sql(new_file_path), _escape_sql(downloaded_ids_json), romm_id]
 				
-				print("[DataManager] Updating game %d (%s): file_path=%s, has_local_copy=1" % [romm_id, game.title, new_file_path])
-				
 				if _db.query(query):
 					updated_count += 1
-					print("[DataManager] Successfully updated game %d" % romm_id)
-				else:
-					print("[DataManager] FAILED to update game %d" % romm_id)
-			
+
 			return updated_count,
 		func(updated_count: int):
-			print("[DataManager] Updated %d games as downloaded" % updated_count)
 			scan_for_downloaded_games_completed.emit(updated_count)
 			if callback.is_valid():
 				callback.call(updated_count)

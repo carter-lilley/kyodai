@@ -70,7 +70,7 @@ func is_valid() -> bool:
 			if not plugin.call("safFileExists", rom_path):
 				return false
 		else:
-			print("[LaunchIntent] WARNING: PackageChecker plugin not available for SAF path check")
+			push_warning("[LaunchIntent] PackageChecker plugin not available for SAF path check")
 			return false
 	else:
 		# Desktop platforms - use standard file check

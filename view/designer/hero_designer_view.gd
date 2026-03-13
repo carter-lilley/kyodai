@@ -13,7 +13,6 @@ var _height_preset_btn: OptionButton
 const HEIGHT_RATIOS = [1.0, 0.66, 0.5, 0.33, 0.0]
 
 func _ready():
-	print("[HeroDesignerView] _ready() called")
 	_container_state = EffectContainerState.for_hero()
 	_setup_ui()
 	_load_current_config()
@@ -43,14 +42,11 @@ func on_view_hide():
 	pass
 
 func on_view_show():
-	print("[HeroDesignerView] on_view_show() called")
 	_load_current_config()
 	_setup_preview_hero()
 	_update_preview()
 
 func _setup_ui():
-	print("[HeroDesignerView] Setting up UI...")
-	
 	var hsplit = HSplitContainer.new()
 	hsplit.set_anchors_preset(Control.PRESET_FULL_RECT)
 	hsplit.split_offset = 350
@@ -118,8 +114,6 @@ func _setup_ui():
 	_effect_designer_ui.config_changed.connect(_on_config_changed)
 	left_vbox.add_child(_effect_designer_ui)
 	
-	print("[HeroDesignerView] EffectDesignerUI added")
-	
 	# Right panel - hero preview (needs minimum size for split container)
 	var right_panel = Panel.new()
 	right_panel.custom_minimum_size = Vector2(400, 300)  # Ensure right panel gets some space
@@ -137,20 +131,14 @@ func _setup_ui():
 	_preview_hero = preload("res://components/hero_image.tscn").instantiate()
 	_preview_hero.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_preview_container.add_child(_preview_hero)
-	
-	print("[HeroDesignerView] HeroImage added to center container")
 
 func _load_current_config():
-	print("[HeroDesignerView] Loading config...")
-	
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("hero_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_current_config = config_setting.value.duplicate(true)
-			print("[HeroDesignerView] Loaded config with ", _current_config.get("effects", []).size(), " effects")
 		else:
 			_current_config = _get_default_config()
-			print("[HeroDesignerView] Using default config")
 	else:
 		_current_config = _get_default_config()
 	
@@ -163,7 +151,6 @@ func _load_current_config():
 		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
 		if height_setting and height_setting.value is int:
 			_height_preset_btn.select(height_setting.value)
-			print("[HeroDesignerView] Loaded height preset: ", height_setting.value)
 	
 	# Update effect designer UI
 	if _effect_designer_ui:
@@ -180,8 +167,6 @@ func _get_default_config() -> Dictionary:
 	}
 
 func _setup_preview_hero():
-	print("[HeroDesignerView] _setup_preview_hero called")
-	
 	if not _preview_hero or not is_instance_valid(_preview_hero):
 		print("[HeroDesignerView] ERROR: _preview_hero is null or invalid!")
 		return
@@ -194,32 +179,22 @@ func _setup_preview_hero():
 	
 	# Finally load a random game for preview
 	if DataManager:
-		print("[HeroDesignerView] Getting random game...")
 		var random_game = DataManager.get_random_game()
 		if random_game:
 			_preview_hero.set_game(random_game)
-			print("[HeroDesignerView] Loaded preview game: ", random_game.get_display_name() if random_game.has_method("get_display_name") else "Unknown")
-		else:
-			print("[HeroDesignerView] No random game available")
-	else:
-		print("[HeroDesignerView] DataManager not available")
 
 func _on_config_changed(config: Dictionary):
-	print("[HeroDesignerView] Config changed, effects: ", config.get("effects", []).size())
 	_current_config = config.duplicate(true)
 	_update_preview()
 	_save_to_settings()
 
 func _update_preview():
-	print("[HeroDesignerView] _update_preview called")
-	
 	if not _preview_hero or not is_instance_valid(_preview_hero):
 		print("[HeroDesignerView] ERROR: _preview_hero is null or invalid!")
 		return
 	
 	# Update the hero image config
 	_preview_hero.refresh_from_settings()
-	print("[HeroDesignerView] Preview updated")
 
 func _save_to_settings() -> void:
 	if not SettingsManager:
@@ -228,7 +203,6 @@ func _save_to_settings() -> void:
 	var config_setting = SettingsManager.get_setting("hero_effect_config")
 	if config_setting:
 		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
-		print("[HeroDesignerView] Config saved to settings")
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
@@ -246,7 +220,6 @@ func _on_height_preset_changed(index: int):
 		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
 		if height_setting:
 			SettingsManager.set_setting(index, height_setting)
-			print("[HeroDesignerView] Hero layout height saved: ", index)
 
 func _on_viewport_size_changed(_new_size: Vector2):
 	# Update preview size when viewport changes
@@ -269,16 +242,10 @@ func _do_update_preview_size():
 		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
 		if height_setting and height_setting.value is int and height_setting.value >= 0 and height_setting.value < HEIGHT_RATIOS.size():
 			height_ratio = HEIGHT_RATIOS[height_setting.value]
-			print("[HeroDesignerView] Loaded height from setting: index=", height_setting.value, ", ratio=", height_ratio)
-		else:
-			print("[HeroDesignerView] Using default height ratio: ", height_ratio)
-	else:
-		print("[HeroDesignerView] No SettingsManager, using default height ratio: ", height_ratio)
 	
 	# Check if parent is ready (has valid size)
 	var parent = _preview_container.get_parent()
 	if not parent or parent.size.y <= 0:
-		print("[HeroDesignerView] Parent not ready, deferring...")
 		call_deferred("_do_update_preview_size")
 		return
 	
@@ -296,8 +263,6 @@ func _do_update_preview_size():
 	
 	# Force the HeroImage to update its size
 	call_deferred("_force_hero_resize")
-	
-	print("[HeroDesignerView] Preview size updated: ratio=", height_ratio, " (", height_ratio * 100, "% of container)")
 
 func _force_hero_resize():
 	if not _preview_hero:
@@ -309,7 +274,6 @@ func _force_hero_resize():
 	# Update the EffectStack with the actual container size
 	if _preview_hero._effect_stack:
 		var actual_size = _preview_hero.size
-		print("[HeroDesignerView] Hero actual size: ", actual_size)
 		
 		var state = _preview_hero._effect_stack.get_container_state()
 		if state:
@@ -321,5 +285,3 @@ func _force_hero_resize():
 				var effect = _preview_hero._effect_stack._effects[effect_id]
 				if effect and effect.visible:
 					effect.update_state(state)
-			
-			print("[HeroDesignerView] Effect stack updated with size: ", actual_size)

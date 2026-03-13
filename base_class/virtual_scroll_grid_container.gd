@@ -343,8 +343,6 @@ func _initial_load():
 	# Cap card count to pool size to prevent creating too many cards
 	var card_count = min(total_card_count, _total_items, _max_pool_size)
 	
-	print("[VirtualScrollGridContainer] _initial_load: total_items=%d, card_count=%d" % [_total_items, card_count])
-	
 	_virtual_start = 0
 	_virtual_end = card_count - 1
 	
@@ -674,9 +672,6 @@ func _update_margin():
 		_margin_container.add_theme_constant_override("margin_top", int(margin_top))
 		_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
 		_flow_container.custom_minimum_size.y = flow_height
-		
-		if debug_mode:
-			print("[VScrollGrid] _update_margin: margin_top=%d, flow_height=%d, margin_bottom=%d, total=%d" % [margin_top, flow_height, margin_bottom, margin_top + flow_height + margin_bottom])
 	else:
 		var card_width = item_width - grid_separation
 		
@@ -767,11 +762,9 @@ func _request_data(offset: int, limit: int):
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
-	print("[VirtualScrollGridContainer] on_items_loaded called: items=%d, offset=%d" % [items.size(), offset])
 	_pending_loads.erase(offset)
 	
 	if items.is_empty():
-		print("[VirtualScrollGridContainer] on_items_loaded: items is empty, returning")
 		return
 	
 	for i in range(items.size()):
@@ -819,7 +812,6 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 
 func _refresh_buffer():
-	print("[VirtualScrollGridContainer] _refresh_buffer called, total_items=%d" % _total_items)
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)
 	
@@ -833,7 +825,6 @@ func _refresh_buffer():
 	_flow_container.custom_minimum_size = Vector2(0, 0)
 	_virtual_start = 0
 	_virtual_end = 0
-	print("[VirtualScrollGridContainer] Calling _initial_load from _refresh_buffer")
 	_initial_load()
 
 func _reload_buffer_around_target(visible_start: int, visible_end: int):
@@ -970,8 +961,6 @@ func _update_debug_mode():
 	if not is_inside_tree():
 		return
 	
-	print("[VScrollGrid] Debug mode: %s, scroll_pos=%d, virtual_start=%d, active_cards=%d" % [debug_mode, _scroll_container.scroll_vertical if _scroll_container else 0, _virtual_start, _active_cards.size()])
-	
 	if debug_mode:
 		_scroll_container.clip_contents = false
 		_setup_debug_camera()
@@ -980,8 +969,6 @@ func _update_debug_mode():
 			var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 			var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 			_update_debug_visuals(first_idx, last_idx)
-		print("[VScrollGrid] Debug camera position: %s" % _debug_camera.position)
-		print("[VScrollGrid] First card position: %s" % (_active_cards[0].global_position if _active_cards.size() > 0 else "N/A"))
 	else:
 		_scroll_container.clip_contents = true
 		if _debug_camera:

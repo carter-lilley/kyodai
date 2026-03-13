@@ -72,14 +72,12 @@ func _enter_tree():
 func reconnect_viewport() -> void:
 	"""Reconnect the keyboard to the current viewport's focus system.
 	Call this after reparenting the keyboard to a different viewport."""
-	print("[KEYBOARD DEBUG] reconnect_viewport called")
 	# Reset focus tracking to ensure keyboard detects focus in new viewport
 	reset_focus_tracking()
 	# Force a re-check of current focus owner in case something is already focused
 	if auto_show:
 		var current_focus = get_viewport().gui_get_focus_owner()
 		if current_focus != null and is_keyboard_focus_object(current_focus):
-			print("[KEYBOARD DEBUG] Found focused LineEdit after reconnect: ", current_focus)
 			_previous_focus_object = current_focus
 			_active_line_edit = current_focus
 			_show_keyboard()
@@ -147,7 +145,6 @@ func hide():
 
 func reset_focus_tracking():
 	"""Reset focus tracking so keyboard will reopen on next LineEdit focus."""
-	print("[KEYBOARD DEBUG] reset_focus_tracking called")
 	_previous_focus_object = null
 	_active_line_edit = null
 
@@ -162,10 +159,8 @@ func _update_auto_display_on_input(event):
 	# Keyboard stays open until manually dismissed
 	var focus_object = get_viewport().gui_get_focus_owner()
 	if focus_object != _previous_focus_object:
-		print("[KEYBOARD DEBUG] Focus changed from ", _previous_focus_object, " to ", focus_object)
 		_previous_focus_object = focus_object
 		if focus_object != null and is_keyboard_focus_object(focus_object):
-			print("[KEYBOARD DEBUG] Opening keyboard for LineEdit: ", focus_object)
 			_active_line_edit = focus_object
 			_show_keyboard()
 
@@ -184,13 +179,10 @@ func _update_auto_display_on_input(event):
 	
 	# Handle ui_start (Start/Enter button) same as virtual keyboard Enter
 	if event.is_action_pressed("ui_start"):
-		print("[KEYBOARD DEBUG] ui_start pressed")
 		if _active_line_edit is LineEdit:
-			print("[KEYBOARD DEBUG] Emitting text_submitted for: ", _active_line_edit)
 			_active_line_edit.text_submitted.emit(_active_line_edit.text)
 		# Return focus and hide keyboard
 		if _active_line_edit != null:
-			print("[KEYBOARD DEBUG] Returning focus to LineEdit")
 			_active_line_edit.grab_focus()
 		_hide_keyboard()
 
@@ -200,7 +192,6 @@ func _hide_keyboard(key_data=null):
 	if not visible:
 		return
 	
-	print("[KEYBOARD DEBUG] Hiding keyboard, was active_line_edit: ", _active_line_edit)
 	# Set _previous_focus_object to the LineEdit before clearing so auto-show
 	# doesn't reopen keyboard when focus returns to it
 	if _active_line_edit != null:
@@ -211,7 +202,6 @@ func _hide_keyboard(key_data=null):
 		animate_position(Vector2(position.x, new_y_pos), true)
 	else:
 		change_visibility(false)
-	print("[KEYBOARD DEBUG] Keyboard hidden, visible: ", visible)
 
 
 func _on_hide_keyboard_clicked(key_data=null):
@@ -230,7 +220,6 @@ func _deferred_focus_grab(control: Control):
 
 
 func _show_keyboard(key_data=null):
-	print("[KEYBOARD DEBUG] _show_keyboard called, visible: ", visible)
 	var was_hidden = not visible
 	change_visibility(true)
 	if animate:
@@ -238,9 +227,7 @@ func _show_keyboard(key_data=null):
 		animate_position(Vector2(position.x, new_y_pos))
 	# Always grab focus on first key when showing keyboard
 	if keys.size() > 0:
-		print("[KEYBOARD DEBUG] Grabbing focus on first key")
 		keys[0].grab_focus()
-	print("[KEYBOARD DEBUG] _show_keyboard complete, visible: ", visible)
 
 
 func animate_position(new_position, trigger_visibility:bool=false):
@@ -354,14 +341,11 @@ func _key_released(key_data):
 					_active_line_edit.caret_column = _active_line_edit.text.length()
 					_active_line_edit.text_changed.emit(_active_line_edit.text)
 			elif key_value == "Return" or key_value == "Enter":
-				print("[KEYBOARD DEBUG] Virtual Enter key pressed")
 				# Trigger submit/confirmation on the LineEdit
 				if _active_line_edit is LineEdit:
-					print("[KEYBOARD DEBUG] Emitting text_submitted for: ", _active_line_edit)
 					_active_line_edit.text_submitted.emit(_active_line_edit.text)
 				# Return focus and hide keyboard
 				if _active_line_edit != null:
-					print("[KEYBOARD DEBUG] Returning focus to LineEdit")
 					_active_line_edit.grab_focus()
 				_hide_keyboard()
 				return  # Don't process caps lock after hiding
@@ -394,7 +378,7 @@ func _set_key_style(style_name:String, key: Control, style:StyleBoxFlat):
 
 func _create_keyboard(layout_data):
 	if layout_data == null:
-		print("ERROR. No layout file found")
+		push_error("ERROR. No layout file found")
 		return
 
 	KeyListHandler = preload("keylist.gd").new()
@@ -529,14 +513,14 @@ func _load_json(file_path) -> Variant:
 		else:
 			return {"msg": "unexpected data => expected DICTIONARY"}
 	else:
-		print("JSON Parse Error: ", json.get_error_message(), " in ", json_string, " at line ", json.get_error_line())
+		push_error("JSON Parse Error: " + json.get_error_message() + " in " + json_string + " at line " + str(json.get_error_line()))
 		return {"msg":json.get_error_message()}
 
 
 func _load_file(file_path):
 	var file = FileAccess.open(file_path, FileAccess.READ)
 	if not file:
-		print("Error loading File. Error: ")
+		push_error("Error loading File: " + file_path)
 
 	var content = file.get_as_text()
 	file.close()

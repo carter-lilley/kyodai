@@ -17,7 +17,6 @@ func _ready():
 	view_ready.emit()
 
 func on_view_show():
-	print("[%s] on_view_show() called, needs_rebuild=%s" % [view_name, str(needs_rebuild)])
 	view_shown.emit()
 	# Check if view needs to be rebuilt before showing
 	check_and_rebuild_if_needed()
@@ -29,12 +28,9 @@ func mark_for_rebuild(reason: String = "") -> void:
 	"""Mark this view as needing a rebuild. Will be rebuilt when next shown."""
 	needs_rebuild = true
 	needs_rebuild_reason = reason
-	print("[%s] Marked for rebuild. Reason: %s" % [view_name, reason])
 
 func check_and_rebuild_if_needed() -> void:
 	"""Override in subclasses to rebuild if needs_rebuild is true."""
-	print("[%s] check_and_rebuild_if_needed() called, needs_rebuild=%s, attempts=%d" % [view_name, str(needs_rebuild), _rebuild_attempts])
-	
 	if needs_rebuild:
 		_rebuild_attempts += 1
 		if _rebuild_attempts > MAX_REBUILD_ATTEMPTS:
@@ -44,14 +40,11 @@ func check_and_rebuild_if_needed() -> void:
 			_rebuild_attempts = 0
 			return
 		
-		print("[%s] Rebuilding due to: %s" % [view_name, needs_rebuild_reason])
 		perform_rebuild()
 		needs_rebuild = false
 		needs_rebuild_reason = ""
 		_rebuild_attempts = 0
-		print("[%s] Rebuild complete" % view_name)
 	else:
-		print("[%s] No rebuild needed" % view_name)
 		_rebuild_attempts = 0
 
 func perform_rebuild() -> void:

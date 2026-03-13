@@ -59,16 +59,13 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	# Check if already downloading this URL (in queue OR active)
 	for item in _queue:
 		if item.url == url:
-			print("[DownloadManager] Already queued: " + url)
 			return ""
 	
 	for active_id in _active_items:
 		if _active_items[active_id].url == url:
-			print("[DownloadManager] Already downloading: " + url)
 			return ""
 	
 	if _active_items.has(item_id):
-		print("[DownloadManager] Already active: " + item_id)
 		return ""
 	
 	# Create item
@@ -89,14 +86,11 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	
 	# Check if destination is a SAF (Storage Access Framework) path
 	if destination.begins_with("content://"):
-		print("[DownloadManager] Detected SAF path, using two-step download")
-		
 		# On Android, verify SAF permissions before starting download
 		if PlatformManager.is_android():
-			print("[DownloadManager] Checking SAF permissions for: " + destination)
 			var plugin = Engine.get_singleton("PackageChecker")
 			if plugin == null:
-				print("[DownloadManager] ERROR: PackageChecker plugin not available")
+				push_error("[DownloadManager] PackageChecker plugin not available")
 				NotificationManager.show_notification("Download Error: Storage plugin not available", Notification.Type.ERROR, null, 5.0)
 				return ""
 			
@@ -104,19 +98,15 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 			# Extract the base tree URI (up to /tree/.../), not including subdirectories
 			var tree_uri = _extract_saf_tree_uri(destination)
 			if tree_uri == "":
-				print("[DownloadManager] ERROR: Could not extract tree URI from: " + destination)
+				push_error("[DownloadManager] Could not extract tree URI from: " + destination)
 				NotificationManager.show_notification("Download Error: Invalid storage path format.", Notification.Type.ERROR, null, 5.0)
 				return ""
 			
-			print("[DownloadManager] Checking permission for tree: " + tree_uri)
 			var has_permission = plugin.checkSafPermission(tree_uri)
 			if not has_permission:
-				print("[DownloadManager] ERROR: No permission for SAF tree: " + tree_uri)
-				print("[DownloadManager] Full destination was: " + destination)
+				push_error("[DownloadManager] No permission for SAF tree: " + tree_uri)
 				NotificationManager.show_notification("Download Error: No permission for storage directory. Please re-select the folder in Settings > Storage.", Notification.Type.ERROR, null, 8.0)
 				return ""
-			
-			print("[DownloadManager] SAF permissions verified for tree: " + tree_uri)
 		
 		item.use_saf = true
 		item.saf_destination = destination
@@ -129,13 +119,10 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 			item.extract_dir = temp_dir + "/extracted"
 		else:
 			item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
-		print("[DownloadManager] SAF destination: " + destination)
-		print("[DownloadManager] Temp destination: " + item.destination_path)
-		print("[DownloadManager] Extract dir: " + item.extract_dir)
 		# Create temp directory
 		var result = DirAccess.make_dir_recursive_absolute(temp_dir)
 		if result != OK:
-			print("[DownloadManager] Failed to create temp directory: " + temp_dir)
+			push_error("[DownloadManager] Failed to create temp directory: " + temp_dir)
 			return ""
 	else:
 		# Set extract_dir for regular paths
@@ -150,7 +137,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 			if dir and not dir.dir_exists(dest_dir.get_file()):
 				var result = dir.make_dir_recursive(dest_dir.get_file())
 				if result != OK:
-					print("[DownloadManager] Failed to create directory: " + dest_dir)
+					push_error("[DownloadManager] Failed to create directory: " + dest_dir)
 					return ""
 		else:
 			# Absolute path (e.g., D:/Emulation/roms/switch)
@@ -160,11 +147,10 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 				var global_path = ProjectSettings.globalize_path(dest_dir) if dest_dir.begins_with("res://") else dest_dir
 				var result = DirAccess.make_dir_recursive_absolute(global_path)
 				if result != OK:
-					print("[DownloadManager] Failed to create directory: " + global_path + " (error: " + str(result) + ")")
+					push_error("[DownloadManager] Failed to create directory: " + global_path + " (error: " + str(result) + ")")
 					return ""
 	
 	_queue.append(item)
-	print("[DownloadManager] Queued download: " + item_id + " (" + type + ") - " + url)
 	
 	queue_changed.emit()
 	_process_queue()
@@ -179,7 +165,6 @@ func queue_extraction(archive_path: String, extract_dir: String, type: String = 
 	# Check if already extracting this archive
 	for item in _queue:
 		if item.destination_path == archive_path and item.status == "extract_pending":
-			print("[DownloadManager] Already queued for extraction: " + archive_path)
 			return ""
 	
 	var item = QueueItem.new()
@@ -194,7 +179,6 @@ func queue_extraction(archive_path: String, extract_dir: String, type: String = 
 	item.delete_after_extract = delete_after_extract
 	
 	_queue.append(item)
-	print("[DownloadManager] Queued extraction: " + item_id + " - " + archive_path)
 	
 	queue_changed.emit()
 	_process_queue()
@@ -210,7 +194,6 @@ func cancel(item_id: String) -> bool:
 			_cleanup_item(item)
 			_queue.remove_at(i)
 			queue_changed.emit()
-			print("[DownloadManager] Cancelled queued: " + item_id)
 			return true
 	
 	# Cancel if active
@@ -223,7 +206,6 @@ func cancel(item_id: String) -> bool:
 		_active_items.erase(item_id)
 		queue_changed.emit()
 		download_completed.emit(item_id, false, "Cancelled")
-		print("[DownloadManager] Cancelled active: " + item_id)
 		_process_queue()
 		return true
 	
@@ -333,18 +315,13 @@ func _start_download(item: QueueItem):
 	)
 	
 	download_started.emit(item.id)
-	print("[DownloadManager] Starting download: " + item.id + " - " + item.url)
 	
 	# Start looping sound while downloading
 	if AudioManager:
-		print("[DownloadManager] Starting audio loop for item: " + item.id + " with status: " + item.status)
-		var audio_started = AudioManager.play_loop_while("loading_2", func(): 
+		AudioManager.play_loop_while("loading_2", func(): 
 			var still_active = item.status == "downloading"
 			return still_active
 		)
-		print("[DownloadManager] Audio loop started: " + str(audio_started))
-	else:
-		print("[DownloadManager] AudioManager not available!")
 	
 	# Make HTTP request through NetworkManager
 	# Always include User-Agent to prevent blocking (archive.org requires this)
@@ -355,14 +332,11 @@ func _start_download(item: QueueItem):
 	# Use file-based download for large files (games)
 	# Note: HTTPRequest.download_file streams directly to disk
 	if item.type == "game":
-		print("[DownloadManager] Using file-based download for: " + item.name)
-		print("[DownloadManager] Expected file size: " + str(item.expected_file_size) + " bytes (" + str(item.expected_file_size / (1024*1024)) + " MB)")
 		item.download_info = NetworkManager.http_download_file(
 			item.url,
 			item.destination_path,
 			headers,
 			func(success: bool, status_code: int, error_msg: String):
-				print("[DownloadManager] Callback fired for %s - success: %s, code: %d, error: %s" % [item.name, str(success), status_code, error_msg])
 				_on_file_download_complete(item, success, error_msg),
 			item.expected_file_size
 		)
@@ -431,15 +405,9 @@ func _update_download_progress(item: QueueItem):
 					# No expected size, cap at 99%
 					item.progress = 0.5  # Unknown progress
 				
-				# Log progress periodically (every 50MB change)
+				# Track progress periodically (every 50MB change)
 				var last_bytes = _last_downloaded_bytes.get(item.id, 0)
 				if abs(current_size - last_bytes) > 50 * 1024 * 1024:
-					var mb_downloaded = current_size / (1024 * 1024)
-					if item.expected_file_size > 0:
-						var mb_total = item.expected_file_size / (1024 * 1024)
-						print("[DownloadManager] %s: %d/%d MB (%.1f%%)" % [item.name, mb_downloaded, mb_total, item.progress * 100])
-					else:
-						print("[DownloadManager] %s: %d MB downloaded" % [item.name, mb_downloaded])
 					_last_downloaded_bytes[item.id] = current_size
 				
 				# Update stall time if making progress
@@ -448,14 +416,12 @@ func _update_download_progress(item: QueueItem):
 		
 		# Check if download completed via request_completed callback
 		if item.download_info.get("completed", false):
-			print("[DownloadManager] Download request completed for: " + item.name)
 			_on_file_download_complete(item, true, "")
 			return
 		
 		# Check if download had an error
 		if item.download_info.has("error"):
 			var error_msg = item.download_info.get("error", "Unknown error")
-			print("[DownloadManager] Download failed for %s: %s" % [item.name, error_msg])
 			_on_file_download_complete(item, false, error_msg)
 			return
 		
@@ -509,8 +475,6 @@ func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray
 	file.store_buffer(body)
 	file.close()
 	
-	print("[DownloadManager] Download complete: " + item.id + " -> " + item.destination_path)
-	
 	# Update game resource if applicable
 	if item.game_resource:
 		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
@@ -556,8 +520,6 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		_process_queue()
 		return
 	
-	print("[DownloadManager] File download complete: " + item.id + " -> " + item.destination_path)
-	
 	# Verify file exists and has content
 	if not FileAccess.file_exists(item.destination_path):
 		item.status = "failed"
@@ -570,23 +532,13 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		_process_queue()
 		return
 	
-	# Get final file size for logging
-	var file = FileAccess.open(item.destination_path, FileAccess.READ)
-	if file:
-		var final_size = file.get_length()
-		file.close()
-		print("[DownloadManager] Final file size: " + str(final_size) + " bytes (" + str(final_size / (1024*1024)) + " MB)")
-	
 	# Handle SAF (Storage Access Framework) copy if needed
 	if item.use_saf:
-		print("[DownloadManager] Copying file to SAF location...")
-		print("[DownloadManager] Source: " + item.destination_path)
-		print("[DownloadManager] Destination: " + item.saf_destination)
 		NotificationManager.update_notification_text(item.notification_id, "Moving to storage: " + item.name + "...")
 		
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin == null:
-			print("[DownloadManager] ERROR: PackageChecker plugin not available for SAF copy")
+			push_error("[DownloadManager] PackageChecker plugin not available for SAF copy")
 			item.status = "failed"
 			item.error_message = "Plugin not available"
 			_cleanup_item(item)
@@ -601,13 +553,10 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		var saf_path = item.saf_destination
 		var file_name = item.destination_path.get_file()
 		
-		print("[DownloadManager] SAF destination: " + saf_path)
-		print("[DownloadManager] File name: " + file_name)
-		
 		# Extract the base tree URI (not including subdirectories)
 		var tree_uri = _extract_saf_tree_uri(saf_path)
 		if tree_uri == "":
-			print("[DownloadManager] ERROR: Could not extract tree URI from: " + saf_path)
+			push_error("[DownloadManager] Could not extract tree URI from: " + saf_path)
 			item.status = "failed"
 			item.error_message = "Invalid SAF path format"
 			NotificationManager.update_notification_text(item.notification_id, "Failed: " + item.name + " - Invalid path")
@@ -617,8 +566,6 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 			queue_changed.emit()
 			_process_queue()
 			return
-		
-		print("[DownloadManager] Tree base URI: " + tree_uri)
 		
 		# Extract subdirectory from the SAF path (e.g., "dc" from /tree/roms/dc/file.chd)
 		var subdir = ""
@@ -630,21 +577,18 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		
 		# Create subdirectory if needed
 		if subdir != "":
-			print("[DownloadManager] Creating subdirectory: " + subdir)
 			var dir_created = plugin.createSafDirectory(tree_uri, subdir)
 			if not dir_created:
-				print("[DownloadManager] WARNING: Could not create subdirectory (may already exist)")
+				push_warning("[DownloadManager] Could not create subdirectory (may already exist)")
 		
 		# Convert Godot user:// path to absolute path for Java
 		var absolute_path = ProjectSettings.globalize_path(item.destination_path)
-		print("[DownloadManager] Absolute path: " + absolute_path)
-		print("[DownloadManager] Target file: " + file_name + " in subdir: " + subdir)
 		
 		# Try to copy the file
 		var copy_success = plugin.copyFileToSaf(absolute_path, tree_uri, subdir + "/" + file_name if subdir != "" else file_name)
 		
 		if not copy_success:
-			print("[DownloadManager] ERROR: Failed to copy file to SAF location")
+			push_error("[DownloadManager] Failed to copy file to SAF location")
 			item.status = "failed"
 			item.error_message = "Failed to copy to storage - check permissions"
 			NotificationManager.update_notification_text(item.notification_id, "Failed: " + item.name + " - No storage permission")
@@ -656,13 +600,10 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 			_process_queue()
 			return
 		
-		print("[DownloadManager] Successfully copied to SAF location")
-		
 		# Delete temp file
 		var temp_dir = item.destination_path.get_base_dir()
 		DirAccess.remove_absolute(item.destination_path)
 		DirAccess.remove_absolute(temp_dir)
-		print("[DownloadManager] Cleaned up temp files")
 	
 	# Update game resource if applicable
 	if item.game_resource:
@@ -719,7 +660,6 @@ func _check_download_timeout(item_id: String):
 	
 	# Check for overall timeout
 	if elapsed_since_start > DOWNLOAD_TIMEOUT_MS:
-		print("[DownloadManager] Download timed out (max duration): " + item_id)
 		_fail_download(item_id, "Download timed out")
 		return
 	
@@ -729,7 +669,6 @@ func _check_download_timeout(item_id: String):
 	
 	# Check for stall (no progress for too long after grace period)
 	if current_time - last_progress > STALL_TIMEOUT_MS:
-		print("[DownloadManager] Download stalled (no progress for %d sec): " % [(current_time - last_progress) / 1000] + item_id)
 		_fail_download(item_id, "Download stalled - no progress")
 		return
 
@@ -777,7 +716,6 @@ func _start_extraction(item: QueueItem):
 	)
 	
 	extraction_started.emit(item.id)
-	print("[DownloadManager] Starting extraction: " + item.id + " - " + item.destination_path)
 	
 	# Determine format and extract
 	var archive_path = item.destination_path
@@ -808,29 +746,23 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		# On Android with SAF, content:// URIs can't be read directly by ZIPReader
 		# Convert to real file path using the PackageChecker plugin
 		if PlatformManager.is_android() and archive_path.begins_with("content://"):
-			print("[DownloadManager] Content URI detected, converting to real path...")
-			
 			var plugin = Engine.get_singleton("PackageChecker")
 			if plugin == null:
-				print("[DownloadManager] ERROR: PackageChecker plugin not available for SAF URI conversion")
+				push_error("[DownloadManager] PackageChecker plugin not available for SAF URI conversion")
 				return false
 			
 			var real_path = plugin.getRealPathFromSafUri(archive_path)
 			if real_path == "":
-				print("[DownloadManager] ERROR: Cannot convert SAF URI to real path: " + archive_path)
+				push_error("[DownloadManager] Cannot convert SAF URI to real path: " + archive_path)
 				return false
 			
 			actual_archive_path = real_path
-			print("[DownloadManager] Converted SAF URI to path: " + actual_archive_path)
-		
-		print("[DownloadManager] Opening ZIP for extraction: " + actual_archive_path)
-		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(actual_archive_path)))
 		
 		var reader = ZIPReader.new()
 		var err = reader.open(actual_archive_path)
 		
 		if err != OK:
-			print("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")
+			push_error("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")
 			return false
 		
 		var files = reader.get_files()
@@ -865,7 +797,6 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 			var dir = DirAccess.open("user://")
 			if dir:
 				dir.remove(archive_path.trim_prefix("user://"))
-				print("[DownloadManager] Cleaned up archive: " + archive_path)
 		
 		return true
 	
@@ -878,7 +809,6 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 			_cleanup_item(item)
 			_active_items.erase(item.id)
 			
-			print("[DownloadManager] Extraction complete: " + item.id)
 			extraction_completed.emit(item.id, true, extract_dir)
 			queue_changed.emit()
 			_process_queue()
@@ -918,7 +848,7 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 		var exit_code = OS.execute(binary_path, args, output, true)
 		
 		if exit_code != 0:
-			print("[DownloadManager] 7z extraction failed with exit code: " + str(exit_code))
+			push_error("[DownloadManager] 7z extraction failed with exit code: " + str(exit_code))
 			return false
 		
 		# Clean up archive
@@ -927,7 +857,6 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 			var dir = DirAccess.open("user://")
 			if dir:
 				dir.remove(archive_path.trim_prefix("user://"))
-				print("[DownloadManager] Cleaned up 7z archive: " + archive_path)
 		
 		return true
 	
@@ -940,7 +869,6 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 			_cleanup_item(item)
 			_active_items.erase(item.id)
 			
-			print("[DownloadManager] 7z extraction complete: " + item.id)
 			extraction_completed.emit(item.id, true, extract_dir)
 			queue_changed.emit()
 			_process_queue()

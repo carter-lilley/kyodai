@@ -56,34 +56,25 @@ func _ready():
 	self.results_label = results_label
 
 func show_overlay():
-	print("[OVERLAY DEBUG] show_overlay called")
 	visible = true
 	_is_active = true
-	print("[OVERLAY DEBUG] Grabbing focus on search bar")
 	search_bar.grab_focus_on_input()
-	print("[OVERLAY DEBUG] show_overlay complete")
 
 func hide_overlay():
-	print("[OVERLAY DEBUG] hide_overlay called")
 	visible = false
 	_is_active = false
-	print("[OVERLAY DEBUG] Releasing focus from search bar")
 	search_bar.release_focus_from_input()
 	search_bar.clear()
 	results_label.text = ""
 	
 	# Explicitly hide keyboard if open
 	var keyboard = get_tree().get_root().get_node_or_null("Main/UILayer/OnscreenKeyboard")
-	print("[OVERLAY DEBUG] Keyboard found: ", keyboard != null, ", visible: ", keyboard.visible if keyboard else "N/A")
 	if keyboard and keyboard.visible:
-		print("[OVERLAY DEBUG] Hiding keyboard")
 		keyboard.hide()
 	
 	# Reset keyboard focus tracking so it will reopen on next search
 	if keyboard:
-		print("[OVERLAY DEBUG] Resetting keyboard focus tracking")
 		keyboard.reset_focus_tracking()
-	print("[OVERLAY DEBUG] hide_overlay complete")
 
 func is_active() -> bool:
 	return _is_active
@@ -117,13 +108,10 @@ func _input(event: InputEvent):
 	
 	# Close on ui_cancel - also close keyboard if open
 	if event.is_action_pressed("ui_cancel"):
-		print("[OVERLAY DEBUG] ui_cancel received in search overlay")
 		# Close keyboard first if it's open
 		var keyboard = get_tree().get_root().get_node_or_null("Main/UILayer/OnscreenKeyboard")
 		if keyboard and keyboard.visible:
-			print("[OVERLAY DEBUG] Hiding keyboard from ui_cancel")
 			keyboard.hide()
 		# Cancel the search
-		print("[OVERLAY DEBUG] Emitting search_cancelled")
 		search_cancelled.emit()
 		get_viewport().set_input_as_handled()

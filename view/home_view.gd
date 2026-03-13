@@ -107,12 +107,10 @@ func _update_status(text: String):
 		main.set_status_text(text)
 
 func _on_focus_changed(control: Control):
-	print("[HomeView] Focus changed to: ", control.name if control else "null")
 	# Traverse up the tree to find if focused control is inside a GameCard
 	var card = control
 	while card != null:
 		if card is GameCard:
-			print("[HomeView] Focus on GameCard: ", card.game.get_display_name() if card.game else "no game")
 			hero_game_changed.emit(card.game)
 			return
 		card = card.get_parent()
@@ -132,7 +130,6 @@ func reconnect_viewport() -> void:
 	
 	# Connect to new/current viewport
 	viewport.gui_focus_changed.connect(_on_focus_changed)
-	print("[HomeView] Reconnected to viewport: ", viewport.name)
 	
 	# Reconnect grid's scroll container follow_focus
 	if games_grid and games_grid._scroll_container:
@@ -141,9 +138,7 @@ func reconnect_viewport() -> void:
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
 	_update_status("Scanning for downloaded games...")
-	print("[HomeView] Scanning for downloaded games...")
 	DataManager.scan_for_downloaded_games(func(found_count: int):
-		print("[HomeView] Scan complete, found %d games" % found_count)
 		if found_count > 0:
 			# Force complete grid refresh (don't preserve cache - we need fresh data from DB)
 			_load_total_count(false, false)
@@ -155,49 +150,14 @@ func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, Notification.Type.SUCCESS)
-		# Debug: Show details of games that were found
-		print("[HomeView] Scan found %d games, querying details..." % found_count)
-		MemoryManager.queue_db_task(
-			func():
-				var query = """
-					SELECT title, platform_slug, romm_id, has_local_copy, is_master_entry, has_cover_art, file_path, downloaded_sibling_ids 
-					FROM games 
-					WHERE has_local_copy = 1 
-					ORDER BY title
-				"""
-				var games = []
-				if DataManager._db.query(query):
-					for row in DataManager._db.query_result:
-						games.append({
-							"title": row.get("title", "N/A"),
-							"platform": row.get("platform_slug", "N/A"),
-							"romm_id": row.get("romm_id", 0),
-							"has_local_copy": row.get("has_local_copy", 0),
-							"is_master_entry": row.get("is_master_entry", 0),
-							"has_cover_art": row.get("has_cover_art", 0),
-							"file_path": row.get("file_path", ""),
-							"downloaded_sibling_ids": row.get("downloaded_sibling_ids", "[]")
-						})
-				return games,
-			func(games: Array):
-				print("[HomeView] === GAMES MARKED AS DOWNLOADED ===")
-				for g in games:
-					print("[HomeView] Game: '%s' (%s)" % [g.title, g.platform])
-					print("[HomeView]   romm_id: %d, has_local_copy: %d, is_master_entry: %d, has_cover_art: %d" % [g.romm_id, g.has_local_copy, g.is_master_entry, g.has_cover_art])
-					print("[HomeView]   file_path: %s" % g.file_path)
-					print("[HomeView]   downloaded_sibling_ids: %s" % g.downloaded_sibling_ids)
-				print("[HomeView] === END OF DOWNLOADED GAMES ===")
-		)
 
 func _on_sync_completed(success: bool, message: String):
 	"""Called when library sync completes."""
 	if success:
-		print("[HomeView] Sync completed, triggering scan for downloaded games")
 		_scan_for_downloaded_games()
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
-	print("[HomeView] Items requested: offset=%d, limit=%d, preload=%s" % [offset, limit, is_preload])
 	MemoryManager.queue_db_task(
 		func():
 			var games = DataManager.get_downloaded_games_paginated(offset, limit)
@@ -211,12 +171,8 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				combined.append_array(games)
 				games = combined
 			
-			print("[HomeView] DB query complete: got %d games" % games.size())
-			for game in games:
-				print("[HomeView] Loaded game: %s (has_local_copy=%s, file_path=%s)" % [game.title, game.has_local_copy, game.file_path])
 			return games,
 		func(games: Array[GameResource]):
-			print("[HomeView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
 			games_grid.on_items_loaded(games, offset, is_preload)
 			# Mark initial launch complete after first batch loads
 			if offset == 0 and _is_initial_launch:
@@ -234,39 +190,21 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 
 func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
-	print("[HomeView] === rebuild_grid called ===")
-	print("[HomeView] refresh_effects parameter: ", refresh_effects)
-	
-	# DEBUG: Check what SettingsManager has for card_effect_config at rebuild time
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting and config_setting.value is Dictionary:
-			print("[HomeView] SettingsManager card_effect_config at rebuild time:")
-			print("[HomeView]   - effects count: ", config_setting.value.get("effects", []).size())
-		else:
-			print("[HomeView] WARNING: SettingsManager card_effect_config not available or not a Dictionary")
-	
 	_update_grid_orientation()
 	
 	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:
-		print("[HomeView] Rebuilding grid with effect refresh")
 		# Use callback version to ensure dimensions refresh AFTER data loads
 		_load_total_count_with_callback(false, func():
-			print("[HomeView] In rebuild callback - calling refresh_all_card_effects")
 			# Also refresh existing cards
 			games_grid.refresh_all_card_effects()
 			# Refresh dimensions AFTER data reload to get correct layout
-			print("[HomeView] In rebuild callback - calling refresh_dimensions")
 			games_grid.refresh_dimensions()
-			print("[HomeView] In rebuild callback - complete")
 		)
 	else:
-		print("[HomeView] Rebuilding grid without effect refresh")
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
 		_load_total_count(true)
-	print("[HomeView] === rebuild_grid complete ===")
 
 func _regenerate_delay_pool(count: int) -> void:
 	"""Generate a shuffled pool of animation delays for random mode."""
@@ -342,7 +280,6 @@ func _on_game_updated(game: GameResource):
 
 func _on_game_launched(game: GameResource):
 	"""Called when a game is launched - refresh grid to resort by last_played."""
-	print("[HomeView] Game launched, refreshing grid to resort by last_played")
 	# Reload data to get new sort order (don't preserve cache), then refresh dimensions
 	_load_total_count_with_callback(false, func():
 		games_grid.refresh_dimensions()
@@ -350,7 +287,6 @@ func _on_game_launched(game: GameResource):
 
 func _on_gamenative_games_updated():
 	"""Called when GameNative games are added or removed - refresh grid."""
-	print("[HomeView] GameNative games updated, refreshing grid")
 	# Reload total count and refresh grid (don't preserve cache)
 	_load_total_count(false)
 
@@ -367,7 +303,6 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
-				print("[HomeView] games_grid no longer valid, skipping set_total_count")
 				_is_loading = false
 				if on_complete.is_valid():
 					on_complete.call()
@@ -407,14 +342,10 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"details":
 			UIManager.show_game_details(romm_id)
 		"launch":
-			print("[HomeView] Launch requested for game: ", romm_id)
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				LaunchManager.launch_game(game)
-			else:
-				print("[HomeView] Game not found: ", romm_id)
 		"delete":
-			print("[HomeView] Delete requested for game: ", romm_id)
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				# Show deleting notification
@@ -442,26 +373,21 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 							AudioManager.play_sfx("error")
 				)
 		"hide":
-			print("[HomeView] Hide requested for game: ", romm_id)
+			pass
 		"add_to_steam":
-			print("[HomeView] Add to Steam requested for game: ", romm_id)
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				_add_game_to_steam(game)
 
 func check_and_rebuild_if_needed() -> void:
 	"""Override: Capture reason before it's cleared, then defer rebuild."""
-	print("[HomeView] check_and_rebuild_if_needed() called, needs_rebuild=%s" % str(needs_rebuild))
 	if needs_rebuild:
 		var reason = needs_rebuild_reason
-		print("[HomeView] Rebuilding due to: %s" % reason)
 		# Clear flags now since we're handling the rebuild
 		needs_rebuild = false
 		needs_rebuild_reason = ""
 		# Pass the captured reason to the deferred rebuild
 		call_deferred("_do_rebuild", reason)
-	else:
-		print("[HomeView] No rebuild needed")
 
 func perform_rebuild() -> void:
 	"""Override: Perform the actual grid rebuild when view becomes visible."""
@@ -472,10 +398,6 @@ var _deferred_rebuild_attempts: int = 0
 const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
 
 func _do_rebuild(reason: String = "") -> void:
-	print("[HomeView] _do_rebuild() executing, reason: '%s'" % reason)
-	print("[HomeView] Size now: ", size)
-	print("[HomeView] Visible now: ", visible)
-	
 	# Ensure we have valid dimensions before rebuilding
 	if size.x <= 0 or size.y <= 0:
 		_deferred_rebuild_attempts += 1
@@ -483,7 +405,6 @@ func _do_rebuild(reason: String = "") -> void:
 			push_warning("[HomeView] Max deferred rebuild attempts reached with invalid size, aborting")
 			_deferred_rebuild_attempts = 0
 			return
-		print("[HomeView] WARNING: Invalid size detected, deferring again... (attempt %d/%d)" % [_deferred_rebuild_attempts, MAX_DEFERRED_REBUILD_ATTEMPTS])
 		call_deferred("_do_rebuild", reason)
 		return
 	
@@ -491,16 +412,12 @@ func _do_rebuild(reason: String = "") -> void:
 	_deferred_rebuild_attempts = 0
 	
 	if games_grid:
-		print("[HomeView] games_grid size: ", games_grid.size)
-		print("[HomeView] games_grid visible: ", games_grid.visible)
 		# Force a layout recalculation with the new valid size
 		games_grid.queue_redraw()
 	
 	# Check if rebuild is due to card effects change
 	var refresh_effects = reason == "Card effects changed"
-	print("[HomeView] refresh_effects=%s (reason: '%s')" % [refresh_effects, reason])
 	rebuild_grid(refresh_effects)
-	print("[HomeView] Rebuild complete")
 
 func _update_grid_orientation() -> void:
 	if SettingsManager:
@@ -530,17 +447,13 @@ func _update_grid_margins() -> void:
 	margin_container.add_theme_constant_override("margin_top", margin_y)
 	margin_container.add_theme_constant_override("margin_bottom", margin_y)
 	
-	print("[HomeView] Grid margins updated: x=%d, y=%d" % [margin_x, margin_y])
-
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
 	if setting.property_name in ["library_grid_margin_x", "library_grid_margin_y"]:
-		print("[HomeView] Grid margin setting changed, updating margins...")
 		_update_grid_margins()
 		# Also refresh the grid layout to recalculate with new margins
 		games_grid.refresh_dimensions()
 	elif setting.property_name == "card_effect_config":
-		print("[HomeView] Card effect config changed, marking for rebuild...")
 		mark_for_rebuild("Card effects changed")
 
 func _add_game_to_steam(game: GameResource) -> void:

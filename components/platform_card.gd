@@ -304,7 +304,6 @@ func _on_download_pressed():
 	match install_state:
 		LaunchManager.InstallState.NEEDS_POST_INSTALL:
 			# Trigger post-install completion
-			print("[PlatformCard] Completing post-install for: " + effective_emulator)
 			LaunchManager.complete_post_install(effective_emulator)
 			refresh_ui()
 		
@@ -314,7 +313,6 @@ func _on_download_pressed():
 			
 			if install_progress["status"] == "partial":
 				# Resume from first incomplete step
-				print("[PlatformCard] Resuming install from step %d for: %s" % [install_progress["next_step_index"], effective_emulator])
 				LaunchManager.download_emulator(effective_emulator)
 				refresh_ui()
 			else:

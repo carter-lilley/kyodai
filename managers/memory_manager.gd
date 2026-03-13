@@ -26,13 +26,13 @@ var _image_tasks: Dictionary = {}
 var _texture_cache: Dictionary = {}
 var _texture_cache_order: Array[String] = []
 var _texture_cache_mutex: Mutex
-const MAX_TEXTURE_CACHE_SIZE: int = 800
+const MAX_TEXTURE_CACHE_SIZE: int = 300
 
 var _lp_callbacks: Array = []
 var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
-const IMAGE_THREAD_COUNT: int = 12
+const IMAGE_THREAD_COUNT: int = 4
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
@@ -440,7 +440,6 @@ static func has_pending_tasks() -> bool:
 static func shutdown():
 	if _instance == null:
 		return
-	print("[MemoryManager] Shutting down threads...")
 	_instance._exit_flag = true
 	_instance._db_semaphore.post()
 	_instance._extraction_semaphore.post()
@@ -450,7 +449,6 @@ static func shutdown():
 	for thread in _instance._image_threads:
 		thread.wait_to_finish()
 	_instance._extraction_thread.wait_to_finish()
-	print("[MemoryManager] Threads shut down")
 	_instance = null
 
 # ============================================================================
@@ -482,9 +480,6 @@ static func start_batch(
 	_instance._batch_processes.append(batch)
 	_instance._batch_mutex.unlock()
 	
-	print("[MemoryManager] Started batch %d with %d items (mode: %d, batch_size: %d)" % 
-		  [batch.id, items.size(), mode, batch_size])
-	
 	return batch.id
 
 ## Cancels a running batch process
@@ -497,7 +492,6 @@ static func cancel_batch(batch_id: int) -> bool:
 		if _instance._batch_processes[i].id == batch_id:
 			_instance._batch_processes.remove_at(i)
 			_instance._batch_mutex.unlock()
-			print("[MemoryManager] Cancelled batch %d" % batch_id)
 			return true
 	_instance._batch_mutex.unlock()
 	return false
@@ -592,7 +586,6 @@ func _complete_batch(batch: BatchProcess):
 		return
 	
 	batch.is_complete = true
-	print("[MemoryManager] Batch %d complete: %d items processed" % [batch.id, batch.results.size()])
 	
 	if batch.on_complete.is_valid():
 		batch.on_complete.call(batch.results)

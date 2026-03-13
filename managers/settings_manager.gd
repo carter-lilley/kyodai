@@ -23,8 +23,7 @@ func get_settings() -> Dictionary:
 		return dictionary
 	for property in settings.get_property_list():
 		if settings.get(property.name) is SettingsVar: #Check each property for SettingsVars
-			print("[SettingsManager]:",settings.get(property.name))
-			#dictionary[property.name] = settings.get(property.name) #Property name is key, SettingsVAR is value. 
+			dictionary[property.name] = settings.get(property.name) #Property name is key, SettingsVAR is value. 
 			#print("Storing ", property.value)
 	return dictionary
 
@@ -61,8 +60,7 @@ func get_settings_by_subgroup() -> Dictionary:
 		#print("[SettingsManager] Adding final subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
 		dictionary[subgroup] = settingsvars.duplicate()
 	else:
-		print("[SettingsManager] Skipping final empty subgroup '", subgroup, "'")
-	print("[SettingsManager] Returning subgroups: ", dictionary.keys())
+		pass  # Skipping final empty subgroup
 	return dictionary
 
 func enable_setting(_name:String):
@@ -72,7 +70,6 @@ func enable_setting(_name:String):
 func disable_setting(_name:String):
 	var settingsvar: SettingsVar = get_setting(_name)
 	settingsvar.state = SettingsVar.SettingState.DISABLED
-	print("[SettingsManager]: Disabling setting ",_name, settingsvar.state )
 
 func set_setting(value: Variant, setting: SettingsVar):
 	if not settings:
@@ -80,7 +77,6 @@ func set_setting(value: Variant, setting: SettingsVar):
 		return
 	setting.value = value
 	emit_signal("setting_changed", value, setting)
-	print("[SettingsManager]: Changed setting '%s' to %s" % [setting.property_name, str(value)])
 
 func get_setting(_name:String) -> SettingsVar:
 	var settingsvar: SettingsVar
@@ -93,19 +89,13 @@ func get_setting(_name:String) -> SettingsVar:
 func load_settings() -> void:
 	if FileAccess.file_exists(SAVE_PATH):
 		settings = ResourceLoader.load(SAVE_PATH) as Settings
-		if settings:
-			print("[SettingsManager]: Loaded preferences from disk.")
-			store_property_names(settings)
-			_decrypt_settings()
-			# DEBUG: Check gamenative_games after load
-			if settings.gamenative_games:
-				var count = settings.gamenative_games.value.size() if settings.gamenative_games.value is Array else 0
-				print("[SettingsManager] gamenative_games loaded: ", count, " games")
-			return
+	if settings:
+		store_property_names(settings)
+		_decrypt_settings()
+		return
 	# fallback if load failed
 	settings = Settings.new()
 	store_property_names(settings)
-	print("[SettingsManager]: Created new default preferences.")
 
 # Here we're storing an internal reference to the properties the settingsvars are assigned to. 
 func store_property_names(_settings : Settings):
@@ -116,66 +106,25 @@ func store_property_names(_settings : Settings):
 
 func save_settings() -> void:
 	if settings:
-		print("[SettingsManager] === save_settings called ===")
-		# DEBUG: Check gamenative_games before save
-		if settings.gamenative_games:
-			var count = settings.gamenative_games.value.size() if settings.gamenative_games.value is Array else 0
-			print("[SettingsManager] gamenative_games BEFORE save: ", count, " games")
-		
-		# DEBUG: Check card_effect_config before encryption
-		if settings.card_effect_config and settings.card_effect_config.value is Dictionary:
-			print("[SettingsManager] card_effect_config BEFORE encryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())
-		else:
-			print("[SettingsManager] card_effect_config BEFORE encryption - NOT A DICTIONARY or null: ", settings.card_effect_config.value if settings.card_effect_config else "null")
-		
 		_encrypt_settings()
-		
-		# DEBUG: Check card_effect_config after encryption
-		if settings.card_effect_config and settings.card_effect_config.value:
-			print("[SettingsManager] card_effect_config AFTER encryption - type: ", typeof(settings.card_effect_config.value))
-			if settings.card_effect_config.value is Dictionary:
-				print("[SettingsManager] card_effect_config AFTER encryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())
-		
 		var err = ResourceSaver.save(settings, SAVE_PATH)
-		
-		# DEBUG: Check card_effect_config after save
-		if settings.card_effect_config and settings.card_effect_config.value:
-			print("[SettingsManager] card_effect_config AFTER save - type: ", typeof(settings.card_effect_config.value))
-			if settings.card_effect_config.value is Dictionary:
-				print("[SettingsManager] card_effect_config AFTER save - effects count: ", settings.card_effect_config.value.get("effects", []).size())
-		
 		_decrypt_settings()  # Restore decrypted values for runtime use
-		
-		# DEBUG: Check card_effect_config after decryption
-		if settings.card_effect_config and settings.card_effect_config.value is Dictionary:
-			print("[SettingsManager] card_effect_config AFTER decryption - effects count: ", settings.card_effect_config.value.get("effects", []).size())
-		else:
-			print("[SettingsManager] card_effect_config AFTER decryption - NOT A DICTIONARY or null: ", settings.card_effect_config.value if settings.card_effect_config else "null")
 		
 		if err != OK:
 			push_error("Failed to save preferences: %s" % err)
 		else:
-			print("[SettingsManager]: Preferences saved.")
 			emit_signal("settings_saved")
-		print("[SettingsManager] === save_settings complete ===")
 
 const PASSWORD_KEY = "kyodai_v1"
 
 func _encrypt_settings() -> void:
-	print("[SettingsManager] _encrypt_settings called")
-	var encrypted_count = 0
 	for prop in settings.get_property_list():
 		var setting = settings.get(prop.name)
 		if setting is SettingsVar and setting.encrypted and setting.value:
 			if setting.value is String and not setting.value.is_empty():
 				setting.value = _xor_encrypt(setting.value, PASSWORD_KEY)
-				encrypted_count += 1
-				print("[SettingsManager] Encrypted setting: ", prop.name)
-	print("[SettingsManager] Encrypted ", encrypted_count, " settings")
 
 func _decrypt_settings() -> void:
-	print("[SettingsManager] _decrypt_settings called")
-	var decrypted_count = 0
 	for prop in settings.get_property_list():
 		var setting = settings.get(prop.name)
 		if setting is SettingsVar and setting.encrypted and setting.value:
@@ -183,9 +132,6 @@ func _decrypt_settings() -> void:
 				# Check if value looks encrypted (base64)
 				if _is_base64(setting.value):
 					setting.value = _xor_decrypt(setting.value, PASSWORD_KEY)
-					decrypted_count += 1
-					print("[SettingsManager] Decrypted setting: ", prop.name)
-	print("[SettingsManager] Decrypted ", decrypted_count, " settings")
 
 func _is_base64(text: String) -> bool:
 	# Simple check: base64 strings are typically divisible by 4 and contain specific chars
@@ -238,50 +184,32 @@ func list_presets() -> Array[ThemePreset]:
 	
 	# Load built-in presets first (from res://)
 	# On Android, DirAccess doesn't work for res://, so we use the hardcoded list
-	print("[SettingsManager] Loading presets. BUILTIN_PRESET_FILES: ", BUILTIN_PRESET_FILES)
-	print("[SettingsManager] BUILTIN_PRESETS_FOLDER: ", BUILTIN_PRESETS_FOLDER)
-	
 	if not BUILTIN_PRESET_FILES.is_empty():
-		print("[SettingsManager] Using hardcoded preset list")
 		for file_name in BUILTIN_PRESET_FILES:
 			var preset_path = BUILTIN_PRESETS_FOLDER + file_name
-			print("[SettingsManager] Checking: ", preset_path, " exists: ", ResourceLoader.exists(preset_path))
 			if ResourceLoader.exists(preset_path):
 				var preset = ResourceLoader.load(preset_path) as ThemePreset
-				print("[SettingsManager] Loaded preset: ", preset.name if preset else "null")
 				if preset and preset.name not in loaded_names:
 					presets.append(preset)
 					loaded_names.append(preset.name)
 	else:
 		# Fallback: try DirAccess (works on desktop)
-		print("[SettingsManager] BUILTIN_PRESET_FILES is empty, trying DirAccess")
 		var dir = DirAccess.open(BUILTIN_PRESETS_FOLDER)
 		if dir:
-			print("[SettingsManager] Opened dir: ", BUILTIN_PRESETS_FOLDER)
 			dir.list_dir_begin()
 			var file_name = dir.get_next()
 			while file_name != "":
-				print("[SettingsManager] Found file: ", file_name)
 				if not dir.current_is_dir() and (file_name.ends_with(".tres") or file_name.ends_with(".tres.remap")):
 					# Strip .remap extension if present - it's a mapping file, load the actual resource
 					var preset_path = BUILTIN_PRESETS_FOLDER + file_name
 					if preset_path.ends_with(".remap"):
 						preset_path = preset_path.substr(0, preset_path.length() - 6)
-					print("[SettingsManager] Loading: ", preset_path)
-					print("[SettingsManager] ResourceLoader.exists: ", ResourceLoader.exists(preset_path))
 					var loaded_resource = ResourceLoader.load(preset_path)
-					#print("[SettingsManager] Loaded resource: ", loaded_resource)
-					#print("[SettingsManager] Resource type: ", loaded_resource.get_class() if loaded_resource else "null")
 					var preset = loaded_resource as ThemePreset
-					print("[SettingsManager] Cast to ThemePreset: ", preset)
 					if preset and preset.name not in loaded_names:
 						presets.append(preset)
 						loaded_names.append(preset.name)
-					elif not preset:
-						print("[SettingsManager] WARNING: Failed to cast to ThemePreset")
 				file_name = dir.get_next()
-		else:
-			print("[SettingsManager] FAILED to open dir: ", BUILTIN_PRESETS_FOLDER)
 	
 	# Load user presets (from user://) - these can override built-ins
 	var user_dir = DirAccess.open(PRESETS_FOLDER)
@@ -299,9 +227,6 @@ func list_presets() -> Array[ThemePreset]:
 	
 	# Sort by name
 	presets.sort_custom(func(a, b): return a.name < b.name)
-	print("[SettingsManager] Total presets loaded: ", presets.size())
-	for p in presets:
-		print("[SettingsManager]   - ", p.name)
 	return presets
 
 func save_preset(preset: ThemePreset) -> bool:
@@ -319,7 +244,6 @@ func save_preset(preset: ThemePreset) -> bool:
 		push_error("Failed to save preset: %s" % err)
 		return false
 	
-	print("[SettingsManager]: Saved preset '%s' to %s" % [preset.name, preset_path])
 	return true
 
 func load_preset(preset_path: String) -> ThemePreset:
@@ -392,7 +316,6 @@ func export_preset(preset: ThemePreset, export_path: String) -> bool:
 		push_error("Failed to export preset: %s" % err)
 		return false
 	
-	print("[SettingsManager]: Exported preset to %s" % export_path)
 	return true
 
 func import_preset(import_path: String) -> ThemePreset:
@@ -407,7 +330,6 @@ func import_preset(import_path: String) -> ThemePreset:
 	
 	# Save to presets folder
 	if save_preset(preset):
-		print("[SettingsManager]: Imported preset '%s'" % preset.name)
 		return preset
 	
 	return null

@@ -173,15 +173,12 @@ func match_var_type(settingsvar : SettingsVar):
 					
 					# On Android, persist SAF permission immediately when folder is selected
 					if dir.begins_with("content://") and PlatformManager.is_android():
-						print("[SettingsMenu] Android detected, persisting SAF permission for: " + dir)
 						var plugin = Engine.get_singleton("PackageChecker")
 						if plugin:
-							print("[SettingsMenu] PackageChecker plugin found, calling persistSafPermission...")
 							# Try to call the method directly (Godot 4.x plugin method exposure can be tricky)
-							var result = plugin.call("persistSafPermission", dir)
-							print("[SettingsMenu] persistSafPermission called, result: " + str(result))
+							plugin.call("persistSafPermission", dir)
 						else:
-							print("[SettingsMenu] ERROR: PackageChecker plugin not available")
+							push_error("[SettingsMenu] PackageChecker plugin not available")
 					
 					dialog.queue_free()
 				)

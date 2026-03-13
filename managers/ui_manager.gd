@@ -142,31 +142,18 @@ func initialize(
 		DisplayManager.dual_screen_mode_changed.connect(_on_dual_screen_mode_changed)
 		
 		# Debug: Check plugin availability
-		print("[UIManager] Checking dual screen plugins...")
-		print("[UIManager] Platform: ", OS.get_name())
-		print("[UIManager] AynThor singleton available: ", Engine.has_singleton("AynThor"))
 		
 		# Check initial dual screen state (delay to allow plugins to initialize)
 		if DisplayManager.is_dual_screen_enabled():
-			print("[UIManager] Dual screen enabled, will initialize shortly...")
-			print("[UIManager] About to call _initialize_dual_screen.call_deferred()")
 			# Try calling directly first to see if deferred is the issue
 			_initialize_dual_screen()
-			print("[UIManager] _initialize_dual_screen() returned (direct call)")
 	
 	# Set initial focus
 	_set_initial_focus()
-	
-	print("[UIManager] Initialized with pre-built nodes, position: ", _current_bar_position)
 
 func _initialize_dual_screen() -> void:
-	print("[UIManager] >>> _initialize_dual_screen() ENTERED <<<")
 	"""Initialize dual screen mode (called deferred to allow plugin initialization)."""
-	print("[UIManager] Initializing dual screen mode (deferred)...")
-	print("[UIManager] AynThor singleton check: ", Engine.has_singleton("AynThor"))
-	print("[UIManager] DisplayManager second screen index: ", DisplayManager.get_second_screen_index())
 	_on_dual_screen_mode_changed(true, DisplayManager.get_second_screen_index())
-	print("[UIManager] _initialize_dual_screen() COMPLETED")
 
 func _get_bar_position_string(index: int) -> String:
 	"""Convert position index to string."""
@@ -250,8 +237,6 @@ func _update_layout_orientation() -> void:
 	
 	# Only replace InnerLayout if orientation type changed
 	if is_horizontal != current_is_horizontal:
-		print("[UIManager] Orientation changed, replacing InnerLayout...")
-		
 		# IMPORTANT: Remove children from old layout BEFORE freeing it
 		# Otherwise queue_free() will destroy NavigationBar and ContentWrapper too!
 		if _navigation_bar.get_parent() == _inner_layout:
@@ -315,21 +300,17 @@ func _update_hero_size() -> void:
 		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
 		if height_setting:
 			raw_setting_value = height_setting.value
-			print("[UIManager] Raw height setting value: ", raw_setting_value, " (type: ", typeof(raw_setting_value), ")")
 			# Better type checking that handles float/int conversion
 			if height_setting.value is int or height_setting.value is float:
 				var index = int(height_setting.value)
 				if index >= 0 and index < HERO_HEIGHT_RATIOS.size():
 					height_ratio = HERO_HEIGHT_RATIOS[index]
-					print("[UIManager] Mapped setting index ", index, " to ratio ", height_ratio)
-				else:
-					print("[UIManager] WARNING: Setting index ", index, " out of range, using default ", HERO_SIZE_RATIO_DEFAULT)
 			else:
-				print("[UIManager] WARNING: Setting value is not int/float, using default ", HERO_SIZE_RATIO_DEFAULT)
+				pass
 		else:
-			print("[UIManager] WARNING: No height setting found, using default ", HERO_SIZE_RATIO_DEFAULT)
+			pass
 	else:
-		print("[UIManager] WARNING: SettingsManager not available, using default ", HERO_SIZE_RATIO_DEFAULT)
+		pass
 	
 	var target_height = viewport_size.y * height_ratio
 	if target_height < 1.0:
@@ -352,18 +333,13 @@ func _update_hero_size() -> void:
 	_hero_spacer.custom_minimum_size = Vector2(0, spacer_height)
 	# Note: Don't set visibility here - _update_hero_visibility() controls that based on view
 	
-	print("[UIManager] Hero height set: ratio=", height_ratio, " target_height=", target_height)
-	print("[UIManager] HeroImage offset_bottom: ", _hero_image.offset_bottom)
-	print("[UIManager] HeroSpacer min_size: ", _hero_spacer.custom_minimum_size, " visible: ", _hero_spacer.visible)
-	
 	# Force redraw to apply changes
 	_hero_image.queue_redraw()
 
 func _verify_hero_size() -> void:
 	"""Debug function to verify hero size after layout update."""
 	if _hero_image:
-		print("[UIManager] VERIFICATION - HeroImage actual size: ", _hero_image.size)
-		print("[UIManager] VERIFICATION - HeroImage offset_bottom: ", _hero_image.offset_bottom)
+		pass
 
 func _update_bar_size() -> void:
 	"""Update navigation bar size based on viewport and orientation."""
@@ -410,7 +386,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_update_layout_orientation()
 	elif setting.property_name == "library_hero_layout_height":
 		# Update hero image size when height setting changes
-		print("[UIManager] Hero layout height changed to index: ", setting.value)
 		_update_hero_size()
 		# Mark views for rebuild so they reflect the new hero size
 		if _views.has("Home"):
@@ -569,7 +544,6 @@ func _set_initial_focus() -> void:
 	var home_button = _find_home_button()
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
 		home_button.grab_focus()
-		print("[UIManager] Set initial focus to Home button in navigation bar")
 		return
 	
 	# Fallback: try to focus the first focusable element in the root control
@@ -577,7 +551,6 @@ func _set_initial_focus() -> void:
 		var first_focusable = _find_first_focusable(_root_control)
 		if first_focusable:
 			first_focusable.grab_focus()
-			print("[UIManager] Set initial focus to: " + first_focusable.name)
 
 func _find_home_button() -> Control:
 	"""Find the Home button in the navigation bar."""
@@ -920,8 +893,6 @@ var _viewport_layout: Node = null
 
 func _on_dual_screen_mode_changed(enabled: bool, second_screen_index: int) -> void:
 	"""Handle dual screen mode changes from DisplayManager."""
-	print("[UIManager] Dual screen mode changed - enabled: ", enabled, ", screen: ", second_screen_index)
-	
 	if enabled:
 		_enable_dual_screen_mode(second_screen_index)
 	else:
@@ -936,11 +907,8 @@ func _enable_dual_screen_mode(second_screen_index: int) -> void:
 		push_error("[UIManager] Cannot enable dual screen - hero image not available")
 		return
 	
-	print("[UIManager] Enabling dual screen mode on screen ", second_screen_index)
-	
 	# Check if AynThor plugin is available (Android dual screen)
 	var has_aynthor = Engine.has_singleton("AynThor")
-	print("[UIManager] AynThor plugin available: ", has_aynthor)
 	
 	if has_aynthor and PlatformManager.is_android():
 		# Use dual screen viewport plugin (works on any dual screen Android device)
@@ -951,7 +919,6 @@ func _enable_dual_screen_mode(second_screen_index: int) -> void:
 
 func _enable_dual_screen_viewport_mode() -> void:
 	"""Enable dual screen using viewport plugin (generic dual screen support)."""
-	print("[UIManager] Using dual screen viewport mode")
 	
 	# Get the dual screen setup nodes
 	var dual_screen_setup = get_node("/root/Main/DualScreenSetup")
@@ -961,8 +928,6 @@ func _enable_dual_screen_viewport_mode() -> void:
 	if not dual_screen_setup or not second_viewport or not _hero_copy_in_second_viewport:
 		push_warning("[UIManager] Dual screen setup nodes not found")
 		return
-	
-	print("[UIManager] Found second screen hero: ", _hero_copy_in_second_viewport.name)
 	
 	# REPARENTING: Move main UI nodes into MainViewport
 	var main_viewport = get_node("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
@@ -978,17 +943,11 @@ func _enable_dual_screen_viewport_mode() -> void:
 	
 	# Sync current game to second screen hero
 	var current_game = null
-	print("[UIManager] DEBUG: _hero_image = ", _hero_image)
 	if _hero_image:
-		print("[UIManager] DEBUG: _hero_image has get_current_game = ", _hero_image.has_method("get_current_game"))
 		if _hero_image.has_method("get_current_game"):
 			current_game = _hero_image.get_current_game()
-			print("[UIManager] DEBUG: current_game = ", current_game)
-			if current_game:
-				print("[UIManager] DEBUG: _hero_copy_in_second_viewport has set_game = ", _hero_copy_in_second_viewport.has_method("set_game"))
-				if _hero_copy_in_second_viewport.has_method("set_game"):
-					print("[UIManager] Setting game on second screen hero: ", current_game.get_display_name() if current_game.has_method("get_display_name") else "unknown")
-					_hero_copy_in_second_viewport.set_game(current_game)
+			if current_game and _hero_copy_in_second_viewport.has_method("set_game"):
+				_hero_copy_in_second_viewport.set_game(current_game)
 	
 	# Position and make dual screen setup visible
 	# MainViewportContainer will be at (0,0) relative to this, so position at (0,0)
@@ -997,14 +956,11 @@ func _enable_dual_screen_viewport_mode() -> void:
 	
 	_dual_screen_active = true
 	_dual_screen_viewport_mode = true
-	print("[UIManager] Dual screen viewport mode enabled")
 
 func _disable_dual_screen_mode() -> void:
 	"""Disable dual screen mode - restore HeroImage to main layout."""
 	if not _dual_screen_active:
 		return
-	
-	print("[UIManager] Disabling dual screen mode")
 	
 	# Restore UI nodes to original parents first
 	_restore_ui_to_original_parents()
@@ -1031,14 +987,11 @@ func _disable_dual_screen_mode() -> void:
 		_update_hero_size()  # This will set the correct spacer size
 	
 	_dual_screen_active = false
-	print("[UIManager] Dual screen mode disabled")
 
 func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	"""Reparent NavigationBar and RootLayout into MainViewport for dual screen."""
 	if _is_nodes_reparented:
 		return
-	
-	print("[UIManager] Reparenting UI nodes to MainViewport")
 	
 	# Store original parents
 	if _root_control:
@@ -1098,15 +1051,11 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	var library_view = get_view("Library")
 	if library_view and library_view.has_method("reconnect_viewport"):
 		library_view.reconnect_viewport()
-	
-	print("[UIManager] UI nodes reparented successfully")
 
 func _restore_ui_to_original_parents() -> void:
 	"""Restore NavigationBar and RootLayout to their original parents."""
 	if not _is_nodes_reparented:
 		return
-	
-	print("[UIManager] Restoring UI nodes to original parents")
 	
 	# Remove viewport layout from MainViewport
 	if _viewport_layout:
@@ -1157,8 +1106,6 @@ func _restore_ui_to_original_parents() -> void:
 	var library_view = get_view("Library")
 	if library_view and library_view.has_method("reconnect_viewport"):
 		library_view.reconnect_viewport()
-	
-	print("[UIManager] UI nodes restored successfully")
 
 # ==================== DUAL SCREEN DESKTOP FALLBACK ====================
 
@@ -1167,8 +1114,6 @@ var _hero_original_parent: Node = null
 
 func _enable_dual_screen_mode_desktop(second_screen_index: int) -> void:
 	"""Desktop fallback: Use Godot Window for dual screen."""
-	print("[UIManager] Enabling dual screen mode (desktop) on screen ", second_screen_index)
-	
 	# Use call_deferred to avoid race conditions during _ready()
 	_setup_desktop_dual_screen.call_deferred(second_screen_index)
 
@@ -1214,7 +1159,6 @@ func _setup_desktop_dual_screen(second_screen_index: int) -> void:
 		_hero_spacer.custom_minimum_size = Vector2.ZERO
 	
 	_dual_screen_active = true
-	print("[UIManager] Desktop dual screen mode enabled")
 
 func _disable_dual_screen_mode_desktop() -> void:
 	"""Desktop fallback: Close secondary window and restore hero."""
@@ -1233,7 +1177,6 @@ func _disable_dual_screen_mode_desktop() -> void:
 		_hero_secondary_window = null
 	
 	_hero_original_parent = null
-	print("[UIManager] Desktop dual screen mode disabled")
 
 # ==================== GAME DETAILS VIEW ====================
 

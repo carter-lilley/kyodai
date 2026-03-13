@@ -146,20 +146,10 @@ func get_focus_shape_params() -> Dictionary:
 	}
 
 func _update_card_state_from_settings():
-	print("[GameCard] === _update_card_state_from_settings called ===")
-	print("[GameCard] Node path: ", get_path())
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
-		print("[GameCard] SettingsManager.get_setting result: ", config_setting)
 		if config_setting:
-			print("[GameCard] config_setting.value type: ", typeof(config_setting.value))
 			if config_setting.value is Dictionary:
-				print("[GameCard] config_setting.value is Dictionary: TRUE")
-				print("[GameCard]   - effects count: ", config_setting.value.get("effects", []).size())
-				print("[GameCard]   - card_orientation: ", config_setting.value.get("card_orientation", "NOT SET"))
-				print("[GameCard]   - corner_radius: ", config_setting.value.get("corner_radius", "NOT SET"))
-				print("[GameCard]   - full dict: ", config_setting.value)
-				
 				_card_state.orientation = config_setting.value.get("card_orientation", 0)
 				_card_state.effect_settings = config_setting.value.get("effects", [])
 				# Corner radius as ratio (0.0 to 1.0) - convert from old pixel format if needed
@@ -169,14 +159,6 @@ func _update_card_state_from_settings():
 					_card_state.corner_radius_ratio = corner_value / 202.0
 				else:
 					_card_state.corner_radius_ratio = corner_value
-				print("[GameCard] Card state updated - orientation: ", _card_state.orientation, ", effects count: ", _card_state.effect_settings.size())
-			else:
-				print("[GameCard] WARNING: config_setting.value is NOT a Dictionary: ", config_setting.value)
-		else:
-			print("[GameCard] WARNING: config_setting is null")
-	else:
-		print("[GameCard] WARNING: SettingsManager is null")
-	print("[GameCard] === _update_card_state_from_settings complete ===")
 
 func _get_effect_config(effect_id: String) -> Dictionary:
 	for effect_data in _card_state.effect_settings:
@@ -620,16 +602,6 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 	safe_width = max(safe_width, 0.0)
 	safe_height = max(safe_height, 0.0)
 	
-	# Debug: print values for DS/3DS which seem to have issues
-	if game and (game.platform_slug == "nds" or game.platform_slug == "3ds"):
-		print("Platform: ", game.platform_slug)
-		print("  texture_size: ", texture_to_use.get_size())
-		print("  texture_aspect: ", texture_aspect)
-		print("  target_badge_size: ", target_badge_size)
-		print("  badge_width: ", badge_width, " badge_height: ", badge_height)
-		print("  corner_margin: ", corner_margin, " inner_corner_margin: ", inner_corner_margin)
-		print("  safe_zone: ", safe_x, safe_y, safe_width, safe_height)
-	
 	if _badge_effect:
 		_badge_effect.set_badge_dimensions(Vector2(badge_width, badge_height))
 		_badge_effect.set_border_inset_pixels(total_inset)
@@ -798,8 +770,6 @@ func _on_card_pressed():
 			var active_file_name = game.get_active_file_name()
 			var file_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
 			
-			print("[GameCard] Checking file exists: %s (game: %s, has_local_copy: %s)" % [file_path, game.title, game.has_local_copy])
-			
 			var file_exists = false
 			
 			# On Android with SAF paths, use plugin to check file existence
@@ -807,9 +777,8 @@ func _on_card_pressed():
 				var plugin = Engine.get_singleton("PackageChecker")
 				if plugin:
 					file_exists = plugin.call("safFileExists", file_path)
-					print("[GameCard] SAF file check result: " + str(file_exists))
 				else:
-					print("[GameCard] WARNING: PackageChecker plugin not available for SAF file check")
+					push_warning("PackageChecker plugin not available for SAF file check")
 					file_exists = false
 			else:
 				# Standard file check for regular paths

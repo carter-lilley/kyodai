@@ -21,7 +21,6 @@ const EFFECT_ID_MAP: Dictionary = {
 }
 
 func _ready():
-	print("READY")
 	_setup_ui()
 	_load_current_config()
 	call_deferred("_setup_preview_card")
@@ -32,12 +31,9 @@ func _ready():
 		SettingsManager.settings_saved.connect(_on_settings_saved)
 
 func _on_settings_saved():
-	print("[CardDesigner] Settings saved signal received, reloading config...")
-	print("[CardDesigner] Is instance valid: ", is_instance_valid(self))
 	_load_current_config()
 	_rebuild_effects_ui()
 	_setup_preview_card()
-	print("[CardDesigner] Config reload complete. Effects count: ", _current_config.get("effects", []).size())
 
 func _exit_tree():
 	# Disconnect signal to prevent callbacks on freed object
@@ -149,19 +145,10 @@ func _setup_ui():
 	preview_container.add_child(_preview_card)
 
 func _load_current_config():
-	print("[CardDesigner] Loading config...")
-	print("[CardDesigner] SettingsManager exists: ", SettingsManager != null)
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
-		print("[CardDesigner] config_setting exists: ", config_setting != null)
-		if config_setting:
-			print("[CardDesigner] config_setting.value type: ", typeof(config_setting.value))
-			print("[CardDesigner] config_setting.value is Dictionary: ", config_setting.value is Dictionary)
-			if config_setting.value is Dictionary:
-				print("[CardDesigner] config_setting.value effects count: ", config_setting.value.get("effects", []).size())
 		if config_setting and config_setting.value is Dictionary:
 			_current_config = config_setting.value.duplicate(true)
-			print("[CardDesigner] Loaded config with ", _current_config.get("effects", []).size(), " effects")
 			# Debug: print all gradient points in loaded config
 			for i in range(_current_config.get("effects", []).size()):
 				var effect = _current_config["effects"][i]
@@ -175,10 +162,8 @@ func _load_current_config():
 						print("[CardDesigner] Effect ", i, " - ", key, " points: ", points_str)
 		else:
 			_current_config = _get_default_config()
-			print("[CardDesigner] Using default config")
 	else:
 		_current_config = _get_default_config()
-		print("[CardDesigner] No SettingsManager, using default")
 	
 	_orientation_btn.select(_current_config.get("card_orientation", 0))
 	_corner_slider.value = _current_config.get("corner_radius", 0.06)
@@ -285,13 +270,7 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		content.add_child(settings_menu)
 		
 		var current_settings = effect_data.get("settings", {})
-		print("[CardDesigner] Creating border effect UI, settings keys: ", current_settings.keys())
-		var schema_props = []
-		for s in schema:
-			schema_props.append(s.property_name)
-		print("[CardDesigner] Schema properties: ", schema_props)
 		for setting in schema:
-			print("[CardDesigner] Checking setting: ", setting.property_name, " in settings? ", current_settings.has(setting.property_name))
 			if current_settings.has(setting.property_name):
 				var saved_value = current_settings[setting.property_name]
 				if saved_value is Gradient:
@@ -467,13 +446,6 @@ func _on_remove_effect(index: int):
 		_save_to_settings()
 
 func _on_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):
-	print("[CardDesigner] Setting changed: effect=", effect_index, " name=", setting_name, " type=", typeof(value))
-	if value is Gradient:
-		var points_str = ""
-		for i in range(value.get_point_count()):
-			points_str += "(" + str(value.get_offset(i)) + ":" + str(value.get_color(i)) + ") "
-		print("[CardDesigner]   Gradient points: ", points_str)
-	
 	var effects = _current_config.get("effects", [])
 	if effect_index >= 0 and effect_index < effects.size():
 		if not effects[effect_index].has("settings"):
@@ -518,4 +490,3 @@ func _save_to_settings() -> void:
 	var config_setting = SettingsManager.get_setting("card_effect_config")
 	if config_setting:
 		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
-		print("[CardDesigner] Config saved to SettingsManager")

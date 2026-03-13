@@ -92,22 +92,18 @@ func _setup_search_overlay():
 
 func _show_search_overlay():
 	"""Show the search overlay."""
-	print("[LIBRARY DEBUG] Showing search overlay")
 	# Remember current platform before search
 	_pre_search_platform_index = _current_platform_index
 	_search_overlay.show_overlay()
 
 func _on_search_submitted(query: String):
 	"""Handle search submission."""
-	print("[LIBRARY DEBUG] Search submitted: ", query)
 	_search_query = query
 	_is_search_active = true
-	print("[LIBRARY DEBUG] Hiding search overlay")
 	_search_overlay.hide_overlay()
 	
 	# Explicitly grab focus on the games grid to ensure keyboard closes and focus is set
 	if games_grid:
-		print("[LIBRARY DEBUG] Grabbing focus on games_grid")
 		games_grid.grab_focus()
 	
 	# Update platform indicator to show SEARCH
@@ -119,15 +115,12 @@ func _on_search_submitted(query: String):
 
 func _on_search_cancelled():
 	"""Handle search cancellation."""
-	print("[LIBRARY DEBUG] Search cancelled")
 	_search_overlay.hide_overlay()
 	_search_query = ""
 	# Explicitly grab focus on the games grid
 	if games_grid:
-		print("[LIBRARY DEBUG] Grabbing focus on games_grid after cancel")
 		games_grid.grab_focus()
 	# Return focus to the first card in the grid
-	print("[LIBRARY DEBUG] Calling _focus_first_card deferred")
 	call_deferred("_focus_first_card")
 
 func _clear_search():
@@ -159,7 +152,6 @@ func _load_total_count_with_search():
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_search_results_count(_search_query)
-			print("[LibraryView] Search results count for '%s': %d" % [_search_query, count])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -183,7 +175,6 @@ func _load_total_count_with_search():
 func _load_platforms_list() -> void:
 	"""Load platforms and initialize platform indicator."""
 	_platforms = DataManager.get_platforms_with_games()
-	print("[LibraryView] Loaded %d platforms" % _platforms.size())
 	
 	# Initialize platform indicator with "All" selected
 	if platform_indicator:
@@ -217,24 +208,14 @@ func _input(event: InputEvent) -> void:
 
 func _focus_first_card() -> void:
 	"""Focus the first game card in the grid."""
-	print("[LIBRARY DEBUG] _focus_first_card called, visible: ", visible)
 	if not visible:  # Don't try to focus if view is hidden
-		print("[LIBRARY DEBUG] View not visible, aborting focus")
 		return
 	if not UIManager.is_current_view(view_name):  # Don't focus if not current view
-		print("[LIBRARY DEBUG] Not current view, aborting focus")
 		return
 	var first_card = games_grid.get_card_at_index(0)
-	print("[LIBRARY DEBUG] First card: ", first_card)
 	if first_card and first_card is GameCard:
 		if first_card.card_input:
-			print("[LIBRARY DEBUG] Grabbing focus on first card")
 			first_card.card_input.grab_focus()
-			print("[LibraryView] Focused first card after platform switch")
-		else:
-			print("[LIBRARY DEBUG] First card has no card_input")
-	else:
-		print("[LIBRARY DEBUG] No first card or not a GameCard")
 
 func _cycle_platform(direction: int) -> void:
 	"""Cycle to next/previous platform filter."""
@@ -250,7 +231,6 @@ func _cycle_platform(direction: int) -> void:
 		_load_platforms_list()
 	
 	if _platforms.is_empty():
-		print("[LibraryView] No platforms with games found")
 		return
 	
 	# Calculate new index
@@ -271,12 +251,10 @@ func _cycle_platform(direction: int) -> void:
 	if _current_platform_index == -1:
 		_current_platform_slug = ""
 		_update_status("All Games - Loading...")
-		print("[LibraryView] Switched to: All Games")
 	else:
 		var platform = _platforms[_current_platform_index]
 		_current_platform_slug = platform.slug
 		_update_status("%s - Loading..." % platform.name)
-		print("[LibraryView] Switched to platform: %s (%d games)" % [platform.name, platform.count])
 	
 	# Reload the grid with new filter
 	_load_total_count_with_platform(false)
@@ -288,15 +266,12 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
-			print("[LibraryView] Total games count for platform '%s': %d" % [_current_platform_slug, count])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
-				print("[LibraryView] games_grid no longer valid, skipping set_total_count")
 				_is_loading = false
 				return
 			_total_games = count
-			print("[LibraryView] Setting total count: %d (preserve_cache=%s, platform=%s)" % [count, preserve_cache, _current_platform_slug])
 			games_grid.set_total_count(count, preserve_cache)
 			
 			# Reset scroll to top when switching platforms
@@ -326,7 +301,6 @@ func _on_platform_selected(platform_index: int) -> void:
 		_load_platforms_list()
 	
 	if _platforms.is_empty():
-		print("[LibraryView] No platforms with games found")
 		return
 	
 	# Set to the selected platform directly
@@ -339,12 +313,10 @@ func _on_platform_selected(platform_index: int) -> void:
 	if _current_platform_index == -1:
 		_current_platform_slug = ""
 		_update_status("All Games - Loading...")
-		print("[LibraryView] Switched to: All Games (via click)")
 	else:
 		var platform = _platforms[_current_platform_index]
 		_current_platform_slug = platform.slug
 		_update_status("%s - Loading..." % platform.name)
-		print("[LibraryView] Switched to platform: %s (%d games) (via click)" % [platform.name, platform.count])
 	
 	# Reload the grid with new filter
 	_load_total_count_with_platform(false)
@@ -366,15 +338,12 @@ func _load_total_count(preserve_cache: bool = false):
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
-			print("[LibraryView] Total games count: %d (platform: %s)" % [count, _current_platform_slug])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
-				print("[LibraryView] games_grid no longer valid, skipping set_total_count")
 				_is_loading = false
 				return
 			_total_games = count
-			print("[LibraryView] Setting total count: %d (preserve_cache=%s, platform=%s)" % [count, preserve_cache, _current_platform_slug])
 			games_grid.set_total_count(count, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
@@ -388,11 +357,9 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
-			print("[LibraryView] Total games count: %d (platform: %s)" % [count, _current_platform_slug])
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
-				print("[LibraryView] games_grid no longer valid, skipping set_total_count")
 				_is_loading = false
 				if on_complete.is_valid():
 					on_complete.call()
@@ -437,7 +404,6 @@ func reconnect_viewport() -> void:
 	
 	# Connect to new/current viewport
 	viewport.gui_focus_changed.connect(_on_focus_changed)
-	print("[LibraryView] Reconnected to viewport: ", viewport.name)
 	
 	# Reconnect grid's scroll container follow_focus
 	if games_grid and games_grid._scroll_container:
@@ -446,25 +412,19 @@ func reconnect_viewport() -> void:
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
 	if _is_search_active:
-		print("[LibraryView] Search items requested: offset=%d, limit=%d, query='%s', preload=%s" % [offset, limit, _search_query, is_preload])
 		MemoryManager.queue_db_task(
 			func():
 				var games = DataManager.search_games_paginated(_search_query, offset, limit)
-				print("[LibraryView] Search query complete: got %d games" % games.size())
 				return games,
 			func(games: Array[GameResource]):
-				print("[LibraryView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
 				games_grid.on_items_loaded(games, offset, is_preload)
 		)
 	else:
-		print("[LibraryView] Items requested: offset=%d, limit=%d, platform=%s, preload=%s" % [offset, limit, _current_platform_slug, is_preload])
 		MemoryManager.queue_db_task(
 			func():
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
-				print("[LibraryView] DB query complete: got %d games" % games.size())
 				return games,
 			func(games: Array[GameResource]):
-				print("[LibraryView] Calling on_items_loaded with %d games at offset %d (preload: %s)" % [games.size(), offset, is_preload])
 				games_grid.on_items_loaded(games, offset, is_preload)
 		)
 
@@ -499,41 +459,22 @@ func _get_current_platform_name() -> String:
 
 func rebuild_grid(refresh_effects: bool = false) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes."""
-	print("[LibraryView] === rebuild_grid called ===")
-	print("[LibraryView] refresh_effects parameter: ", refresh_effects)
-	
-	# DEBUG: Check what SettingsManager has for card_effect_config at rebuild time
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting and config_setting.value is Dictionary:
-			print("[LibraryView] SettingsManager card_effect_config at rebuild time:")
-			print("[LibraryView]   - effects count: ", config_setting.value.get("effects", []).size())
-			print("[LibraryView]   - card_orientation: ", config_setting.value.get("card_orientation", "NOT SET"))
-			print("[LibraryView]   - corner_radius: ", config_setting.value.get("corner_radius", "NOT SET"))
-		else:
-			print("[LibraryView] WARNING: SettingsManager card_effect_config not available or not a Dictionary")
 	
 	_update_grid_orientation()
 	
 	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:
-		print("[LibraryView] Rebuilding grid with effect refresh")
 		# Use callback version to ensure dimensions refresh AFTER data loads
 		_load_total_count_with_callback(false, func():
-			print("[LibraryView] In rebuild callback - calling refresh_all_card_effects")
 			# Also refresh existing cards
 			games_grid.refresh_all_card_effects()
 			# Refresh dimensions AFTER data reload to get correct layout
-			print("[LibraryView] In rebuild callback - calling refresh_dimensions")
 			games_grid.refresh_dimensions()
-			print("[LibraryView] In rebuild callback - complete")
 		)
 	else:
-		print("[LibraryView] Rebuilding grid without effect refresh")
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
 		_load_total_count(true)
-	print("[LibraryView] === rebuild_grid complete ===")
 
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
@@ -587,8 +528,6 @@ func _on_games_batch_added(platform_slug: String, start_index: int, games: Array
 	if filtered_games.size() == 0:
 		return
 	
-	print("[LibraryView] Batch added %d games from %s at index %d" % [filtered_games.size(), platform_slug, start_index])
-	
 	# Increment total count without rebuilding buffer
 	var actual_start = games_grid.increment_total_count(filtered_games.size())
 	
@@ -615,7 +554,6 @@ func _on_game_updated(game: GameResource):
 			break
 
 func _on_games_removed(platform_slug: String):
-	print("[LibraryView] Games removed from platform: ", platform_slug)
 	_reload_after_change()
 
 func _reload_after_change():
@@ -647,7 +585,6 @@ func on_view_show():
 	super.on_view_show()
 
 func on_view_hide():
-	print("[LIBRARY DEBUG] on_view_hide called")
 	# Clear search when leaving the view
 	_clear_search()
 	view_hidden.emit()
@@ -663,28 +600,21 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"details":
 			UIManager.show_game_details(romm_id)
 		"launch":
-			print("[LibraryView] Launch requested for game: ", romm_id)
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				LaunchManager.launch_game(game)
-			else:
-				print("[LibraryView] Game not found: ", romm_id)
 		"hide":
-			print("[LibraryView] Hide requested for game: ", romm_id)
+			pass
 
 func check_and_rebuild_if_needed() -> void:
 	"""Override: Capture reason before it's cleared, then defer rebuild."""
-	print("[LibraryView] check_and_rebuild_if_needed() called, needs_rebuild=%s" % str(needs_rebuild))
 	if needs_rebuild:
 		var reason = needs_rebuild_reason
-		print("[LibraryView] Rebuilding due to: %s" % reason)
 		# Clear flags now since we're handling the rebuild
 		needs_rebuild = false
 		needs_rebuild_reason = ""
 		# Pass the captured reason to the deferred rebuild
 		call_deferred("_do_rebuild", reason)
-	else:
-		print("[LibraryView] No rebuild needed")
 
 func perform_rebuild() -> void:
 	"""Override: Perform the actual grid rebuild when view becomes visible."""
@@ -695,10 +625,6 @@ var _deferred_rebuild_attempts: int = 0
 const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
 
 func _do_rebuild(reason: String = "") -> void:
-	print("[LibraryView] _do_rebuild() executing, reason: '%s'" % reason)
-	print("[LibraryView] Size now: ", size)
-	print("[LibraryView] Visible now: ", visible)
-	
 	# Ensure we have valid dimensions before rebuilding
 	if size.x <= 0 or size.y <= 0:
 		_deferred_rebuild_attempts += 1
@@ -706,7 +632,6 @@ func _do_rebuild(reason: String = "") -> void:
 			push_warning("[LibraryView] Max deferred rebuild attempts reached with invalid size, aborting")
 			_deferred_rebuild_attempts = 0
 			return
-		print("[LibraryView] WARNING: Invalid size detected, deferring again... (attempt %d/%d)" % [_deferred_rebuild_attempts, MAX_DEFERRED_REBUILD_ATTEMPTS])
 		call_deferred("_do_rebuild", reason)
 		return
 	
@@ -714,16 +639,12 @@ func _do_rebuild(reason: String = "") -> void:
 	_deferred_rebuild_attempts = 0
 	
 	if games_grid:
-		print("[LibraryView] games_grid size: ", games_grid.size)
-		print("[LibraryView] games_grid visible: ", games_grid.visible)
 		# Force a layout recalculation with the new valid size
 		games_grid.queue_redraw()
 	
 	# Check if rebuild is due to card effects change
 	var refresh_effects = reason == "Card effects changed"
-	print("[LibraryView] refresh_effects=%s (reason: '%s')" % [refresh_effects, reason])
 	rebuild_grid(refresh_effects)
-	print("[LibraryView] Rebuild complete")
 
 func _update_grid_orientation() -> void:
 	if SettingsManager:
@@ -752,16 +673,12 @@ func _update_grid_margins() -> void:
 	margin_container.add_theme_constant_override("margin_right", margin_x)
 	margin_container.add_theme_constant_override("margin_top", margin_y)
 	margin_container.add_theme_constant_override("margin_bottom", margin_y)
-	
-	print("[LibraryView] Grid margins updated: x=%d, y=%d" % [margin_x, margin_y])
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
 	if setting.property_name in ["library_grid_margin_x", "library_grid_margin_y"]:
-		print("[LibraryView] Grid margin setting changed, updating margins...")
 		_update_grid_margins()
 		# Also refresh the grid layout to recalculate with new margins
 		games_grid.refresh_dimensions()
 	elif setting.property_name == "card_effect_config":
-		print("[LibraryView] Card effect config changed, marking for rebuild...")
 		mark_for_rebuild("Card effects changed")

@@ -103,8 +103,7 @@ static func write_vdf(path: String, data: Dictionary) -> bool:
 			push_error("[SteamVDF] Failed to create directory: " + dir_path)
 			return false
 	
-	print("[SteamVDF] Writing VDF file to: " + path)
-	print("[SteamVDF] Buffer size: " + str(buffer.size()) + " bytes")
+
 	
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if not file:
@@ -119,7 +118,6 @@ static func write_vdf(path: String, data: Dictionary) -> bool:
 		push_error("[SteamVDF] Failed to write file: " + str(error))
 		return false
 	
-	print("[SteamVDF] Successfully wrote VDF file")
 	return true
 
 ## Writes an object to the buffer
@@ -233,15 +231,6 @@ static func generate_app_id(exe_path: String, app_name: String) -> Dictionary:
 	# Steam wraps exe path in quotes for the CRC calculation
 	var key := '"' + exe_path + '"' + app_name
 	
-	print("[SteamVDF] Key: '", key, "'")
-	print("[SteamVDF] Key bytes: ", key.to_utf8_buffer())
-	
-	# Test with known values for verification
-	var test_key := '"C:\\Users\\carter\\AppData\\Roaming\\Godot\\app_userdata\\kyodai\\emulators\\melonds\\melonDS.exe"Animal Crossing: Wild World'
-	var test_crc := _crc32(test_key)
-	print("[SteamVDF] Test CRC raw: ", test_crc)
-	print("[SteamVDF] Test CRC hex: ", "0x%08X" % (test_crc & 0xFFFFFFFF))
-	
 	var crc := _crc32(key)
 	# Mask to ensure unsigned 32-bit
 	var app_id_32: int = ((crc & 0xFFFFFFFF) | 0x80000000) & 0xFFFFFFFF
@@ -264,10 +253,6 @@ static func generate_app_id(exe_path: String, app_name: String) -> Dictionary:
 
 ## Debug function to calculate AppID
 static func debug_calculate_app_ids(full_command: String, app_name: String) -> void:
-	print("[SteamVDF] ===== AppID Calculation =====")
-	print("[SteamVDF] Game name: " + app_name)
-	print("[SteamVDF] Full command: " + full_command)
-	
 	# Extract exe path from full command (first quoted string, without quotes)
 	var exe_path: String = ""
 	if full_command.begins_with("\""):
@@ -277,15 +262,8 @@ static func debug_calculate_app_ids(full_command: String, app_name: String) -> v
 	else:
 		exe_path = full_command
 	
-	print("[SteamVDF] Exe path (no quotes): " + exe_path)
-	print("")
-	
 	# Calculate AppIDs
 	var result := generate_app_id(exe_path, app_name)
-	print("[SteamVDF] 32-bit Grid AppID: " + str(result.app_id_32))
-	print("[SteamVDF] 64-bit VDF AppID: " + str(result.app_id_64))
-	print("[SteamVDF] Expected Grid AppID: 3195136880")
-	print("[SteamVDF] ===== End AppID Debug =====")
 
 static func _test_appid_variation(desc: String, exe_str: String, name_str: String, use_null: bool = true) -> void:
 	var input_str: String
@@ -298,11 +276,6 @@ static func _test_appid_variation(desc: String, exe_str: String, name_str: Strin
 	
 	var crc := _crc32(input_str)
 	var app_id: int = (crc & 0xFFFFFFFF) | 0x80000000
-	print("[SteamVDF] " + desc + ":")
-	print("[SteamVDF]   Input: " + input_str)
-	print("[SteamVDF]   CRC32: " + str(crc))
-	print("[SteamVDF]   AppID: " + str(app_id))
-	print("")
 
 ## CRC32 implementation using reversed polynomial (standard CRC32)
 ## Standard CRC32: crc = (CRC32(exe + name) \u0026 0xFFFFFFFF) | 0x80000000
@@ -434,19 +407,15 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 		# PNG magic: 89 50 4E 47 0D 0A 1A 0A
 		if magic[0] == 0x89 and magic[1] == 0x50 and magic[2] == 0x4E and magic[3] == 0x47:
 			error = image.load_png_from_buffer(bytes)
-			print("[SteamVDF] Detected PNG format")
 		# JPEG magic: FF D8 FF
 		elif magic[0] == 0xFF and magic[1] == 0xD8 and magic[2] == 0xFF:
 			error = image.load_jpg_from_buffer(bytes)
-			print("[SteamVDF] Detected JPEG format")
 		# WebP magic: 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
 		elif magic[0] == 0x52 and magic[1] == 0x49 and magic[2] == 0x46 and magic[3] == 0x46:
 			error = image.load_webp_from_buffer(bytes)
-			print("[SteamVDF] Detected WebP format")
 		else:
 			# Try generic load
 			error = image.load(cover_path)
-			print("[SteamVDF] Trying generic load for: " + cover_path)
 	
 	if error != OK:
 		push_warning("[SteamVDF] Failed to load image from buffer: " + cover_path + " (error: " + str(error) + ")")
@@ -459,9 +428,7 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 	# Save as grid cover - Steam expects {appid}p.png (p = portrait/grid)
 	var grid_cover_path := grid_path.path_join(app_id_str + "p.png")
 	error = grid_image.save_png(grid_cover_path)
-	if error == OK:
-		print("[SteamVDF] Saved grid cover: " + grid_cover_path)
-	else:
+	if error != OK:
 		push_warning("[SteamVDF] Failed to save grid cover: " + grid_cover_path)
 		return false
 	

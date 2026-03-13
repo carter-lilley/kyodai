@@ -370,22 +370,15 @@ func set_zoom_range(min_val: float, max_val: float, step: float):
 
 func set_bar_background_color(color: Color) -> void:
 	"""Set the background color of the navigation bar."""
-	print("[NavigationBar] Setting bar background color to: ", color)
 	if _background_rect:
 		_background_rect.color = color
-	else:
-		print("[NavigationBar] Background rect not ready yet!")
 
 func set_icon_color(color: Color) -> void:
 	"""Set the color for all navigation icons using a shader."""
-	print("[NavigationBar] Setting icon color to: ", color)
 	var buttons = [home_button, library_button, downloads_button, settings_button]
 	for button in buttons:
 		if is_instance_valid(button):
 			_apply_icon_color_to_button(button, color)
-			#print("[NavigationBar] Applied icon color to button: ", button.name)
-		#else:
-			#print("[NavigationBar] Button not valid: ", buttons.find(button))
 
 func _apply_icon_color_to_button(button: TextureButton, color: Color) -> void:
 	"""Apply icon color shader to a texture button."""

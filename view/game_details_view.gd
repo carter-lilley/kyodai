@@ -34,12 +34,8 @@ func _ready():
 func set_game(game: GameResource) -> void:
 	_current_game = game
 	
-	print("[GameDetailsView] set_game called for '%s' (ID: %d), siblings: %d" % [game.title, game.romm_id, game.siblings.size()])
-	
 	if not is_node_ready():
-		print("[GameDetailsView] Node not ready, awaiting...")
 		await ready
-		print("[GameDetailsView] Node ready now, sibling_dropdown is: %s" % ("valid" if sibling_dropdown else "null"))
 	
 	title_label.text = game.title if game.title else "Unknown Game"
 	platform_label.text = game.platform if game.platform else "Unknown Platform"
@@ -67,10 +63,7 @@ func set_game(game: GameResource) -> void:
 
 func _setup_sibling_dropdown(game: GameResource) -> void:
 	if not sibling_dropdown:
-		print("[GameDetailsView] No sibling dropdown node found")
 		return
-	
-	print("[GameDetailsView] Setting up sibling dropdown for '%s' (ID: %d), siblings count: %d" % [game.title, game.romm_id, game.siblings.size()])
 	
 	sibling_dropdown.clear()
 	_sibling_options = []
@@ -83,16 +76,12 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 		"file_size": game.file_size
 	})
 	sibling_dropdown.add_item(game.file_name if game.file_name else game.title)
-	print("[GameDetailsView] Added main game option: '%s' (ID: %d)" % [game.file_name, game.romm_id])
 	
 	# Add siblings
 	for sibling in game.siblings:
 		if sibling is Dictionary:
-			print("[GameDetailsView] Adding sibling to dropdown: '%s' (ID: %d)" % [sibling.get("name", "Unknown"), sibling.get("id", 0)])
 			_sibling_options.append(sibling)
 			sibling_dropdown.add_item(sibling.get("name", "Unknown"))
-	
-	print("[GameDetailsView] Total dropdown options: %d" % _sibling_options.size())
 	
 	# Select the currently active sibling
 	var active_id = game.selected_sibling_id if game.selected_sibling_id != 0 else game.romm_id
@@ -103,11 +92,9 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 	
 	# Show/hide dropdown based on whether there are siblings
 	sibling_dropdown.visible = _sibling_options.size() > 1
-	print("[GameDetailsView] Dropdown visible: %s, options: %d" % [str(sibling_dropdown.visible), _sibling_options.size()])
 	
 	# Debug: force visible to check if it's a visibility issue
 	if _sibling_options.size() > 1:
-		print("[GameDetailsView] FORCING dropdown visible for debugging")
 		sibling_dropdown.visible = true
 
 func _on_sibling_selected(index: int) -> void:
@@ -123,7 +110,6 @@ func _on_sibling_selected(index: int) -> void:
 		# Check if we need to fetch full sibling details (no file extension means incomplete data)
 		var sibling_file_name = selected.get("file_name", "")
 		if selected_id != _current_game.romm_id and not sibling_file_name.contains("."):
-			print("[GameDetailsView] Fetching full details for sibling %d (no extension in cached data)" % selected_id)
 			_fetch_sibling_details(selected_id, index)
 			return
 		
@@ -139,7 +125,6 @@ func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 	NetworkManager.fetch_game_details(sibling_id, func(data: Dictionary, error: String):
 		if error == "" and data.has("fs_name"):
 			var full_file_name = str(data.get("fs_name", ""))
-			print("[GameDetailsView] Fetched sibling %d details: %s" % [sibling_id, full_file_name])
 			
 			# Update the sibling data in _current_game
 			for i in range(_current_game.siblings.size()):
@@ -160,7 +145,6 @@ func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 			_update_file_info_display(_current_game)
 			_update_action_button()
 		else:
-			print("[GameDetailsView] Failed to fetch sibling details: %s" % error)
 			# Still update display with what we have
 			_update_file_info_display(_current_game)
 			_update_action_button()
@@ -228,7 +212,6 @@ func _on_action_button_pressed() -> void:
 	
 	# Skip file check for GameNative games - they don't have physical files
 	if _current_game.source == "gamenative":
-		print("[GameDetailsView] Launching GameNative game: ", _current_game.steam_app_id)
 		LaunchManager.launch_game(_current_game)
 		return
 	
@@ -242,13 +225,11 @@ func _on_action_button_pressed() -> void:
 			
 			if not FileAccess.file_exists(file_path):
 				# File is marked as downloaded but doesn't exist - redownload
-				print("[GameDetailsView] File not found for game %d at %s, queuing redownload" % [_current_game.romm_id, file_path])
 				NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
 				_queue_download()
 				return
 		
 		# Launch the game
-		print("[GameDetailsView] Launch requested for game: ", _current_game.romm_id)
 		LaunchManager.launch_game(_current_game)
 	else:
 		# Download the game - same logic as library view

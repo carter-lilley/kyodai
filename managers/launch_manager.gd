@@ -63,26 +63,13 @@ func _ready():
 	
 	# DEBUG: Test PackageChecker plugin
 	if OS.get_name() == "Android":
-		print("[DEBUG] Godot version: ", Engine.get_version_info())
-		print("[DEBUG] Checking PackageChecker plugin...")
-		print("[DEBUG] All singletons: ", Engine.get_singleton_list())
-		
 		# Try different variations of the name
 		var possible_names = ["PackageChecker", "packagechecker", "com.heckpoint.kyodai.PackageChecker"]
 		var found = false
 		for name in possible_names:
 			if Engine.has_singleton(name):
-				print("[DEBUG] Found plugin as: ", name)
-				var plugin = Engine.get_singleton(name)
-				print("[DEBUG] Plugin object: ", plugin)
 				found = true
 				break
-		
-		if not found:
-			print("[DEBUG] PackageChecker plugin NOT found with any name variant")
-			print("[DEBUG] Total singletons count: ", Engine.get_singleton_list().size())
-	else:
-		print("[DEBUG] Not on Android - plugin check skipped")
 
 func _load_registry():
 	if not FileAccess.file_exists(REGISTRY_PATH):
@@ -108,7 +95,6 @@ func _load_registry():
 	_emulator_registry = json.data
 	_build_platform_defaults()
 	
-	print("[LaunchManager] Loaded " + str(_emulator_registry.size()) + " emulators from registry")
 	emulator_registry_loaded.emit(true)
 
 func _build_platform_defaults():
@@ -134,7 +120,6 @@ func _build_platform_defaults():
 		for platform in platforms:
 			if not _platform_defaults.has(platform):
 				_platform_defaults[platform] = emulator_id
-				print("[LaunchManager] Implicit default for %s: %s" % [platform, emulator_id])
 
 func _ensure_emulators_directory():
 	var dir = DirAccess.open("user://")
@@ -240,11 +225,8 @@ func is_emulator_installed(emulator_id: String) -> bool:
 ## Scans existing emulator installations and sets correct states
 ## Call this on startup to detect partial installations
 func scan_emulator_installations():
-	print("[LaunchManager] Scanning existing emulator installations...")
-	
 	var dir = DirAccess.open(EMULATORS_DIR)
 	if not dir:
-		print("[LaunchManager] No emulators directory found")
 		return
 	
 	dir.list_dir_begin()
@@ -261,8 +243,7 @@ func scan_emulator_installations():
 		
 		folder_name = dir.get_next()
 	
-	dir.list_dir_end()
-	print("[LaunchManager] Scan complete")
+		dir.list_dir_end()
 	emulator_installations_scanned.emit()
 
 ## Checks the actual disk state for a specific emulator and updates state accordingly
@@ -285,7 +266,6 @@ func _check_emulator_disk_state_internal(emulator_id: String, skip_if_active: bo
 		var current_state = get_emulator_install_state(emulator_id)
 		if current_state in [InstallState.DOWNLOADING, InstallState.EXTRACTING, 
 							InstallState.ENACTING_POST_INSTALL]:
-			print("[LaunchManager] Skipping disk check for " + emulator_id + " - active operation in progress")
 			return
 	
 	# Check if main executable exists
@@ -297,13 +277,11 @@ func _check_emulator_disk_state_internal(emulator_id: String, skip_if_active: bo
 		# No executable found - truly not installed
 		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		_emulator_install_progress[emulator_id] = ""
-		print("[LaunchManager] Disk check: " + emulator_id + " - executable not found, marking as NOT_INSTALLED")
 		return
 	
 	# All validation passed - fully installed
 	_emulator_install_states[emulator_id] = InstallState.INSTALLED
 	_emulator_install_progress[emulator_id] = ""
-	print("[LaunchManager] Disk check: " + emulator_id + " - fully installed")
 
 ## Checks if emulator archive has been downloaded
 func is_emulator_downloaded(emulator_id: String) -> bool:
@@ -338,7 +316,6 @@ func is_emulator_extracting(emulator_id: String) -> bool:
 
 func extract_emulator(emulator_id: String) -> bool:
 	if is_emulator_installed(emulator_id):
-		print("[LaunchManager] Emulator already installed: " + emulator_id)
 		return true
 	
 	if not is_emulator_downloaded(emulator_id):
@@ -347,8 +324,6 @@ func extract_emulator(emulator_id: String) -> bool:
 	
 	var archive_path = get_archive_path(emulator_id)
 	var extract_dir = EMULATORS_DIR + emulator_id + "/"
-	
-	print("[LaunchManager] Queueing extraction: " + emulator_id)
 	
 	# Set state to extracting
 	_emulator_install_states[emulator_id] = InstallState.EXTRACTING
@@ -419,24 +394,22 @@ func _on_download_manager_extraction_started(item_id: String):
 		return
 	
 	# Check if this is a cores or download_release extraction
-	if item.type == "cores" or item.type == "download_release":
-		# Find the emulator this download belongs to
-		for emulator_id in _emulator_install_states.keys():
-			if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
-				var current_state = get_emulator_install_state(emulator_id)
-				if current_state == InstallState.NEEDS_POST_INSTALL:
-					_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
-					print("[LaunchManager] " + item.type + " extraction started for: " + emulator_id)
-				return
-	else:
-		# Check if this is an emulator extraction
-		for emulator_id in _emulator_install_states.keys():
-			if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
-				var current_state = get_emulator_install_state(emulator_id)
-				if current_state == InstallState.DOWNLOADING:
-					_emulator_install_states[emulator_id] = InstallState.EXTRACTING
-					print("[LaunchManager] Emulator extraction started for: " + emulator_id)
-				return
+		if item.type == "cores" or item.type == "download_release":
+			# Find the emulator this download belongs to
+			for emulator_id in _emulator_install_states.keys():
+				if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
+					var current_state = get_emulator_install_state(emulator_id)
+					if current_state == InstallState.NEEDS_POST_INSTALL:
+						_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
+					return
+		else:
+			# Check if this is an emulator extraction
+			for emulator_id in _emulator_install_states.keys():
+				if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
+					var current_state = get_emulator_install_state(emulator_id)
+					if current_state == InstallState.DOWNLOADING:
+						_emulator_install_states[emulator_id] = InstallState.EXTRACTING
+					return
 
 ## Called when DownloadManager completes an extraction
 ## Updates emulator state based on extraction result
@@ -445,7 +418,6 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 	for emulator_id in _emulator_install_states.keys():
 		if extract_dir.begins_with(EMULATORS_DIR + emulator_id):
 			if success:
-				print("[LaunchManager] Extraction completed for: " + emulator_id)
 				
 				# Get current state before making changes
 				var current_state = get_emulator_install_state(emulator_id)
@@ -469,16 +441,12 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 						emulator_extraction_completed.emit(emulator_id, false)
 						return
 					
-					print("[LaunchManager] Validation passed - executable found for: " + emulator_id)
-					
 					# Mark as installed
 					_emulator_install_states[emulator_id] = InstallState.INSTALLED
 					_emulator_install_progress[emulator_id] = ""
-					print("[LaunchManager] Installation complete: " + emulator_id)
 					emulator_extraction_completed.emit(emulator_id, true)
 				else:
 					# Unexpected state
-					print("[LaunchManager] Warning: Extraction completed in unexpected state: " + str(current_state))
 					_emulator_install_states[emulator_id] = InstallState.INSTALLED
 					_emulator_install_progress[emulator_id] = ""
 					emulator_extraction_completed.emit(emulator_id, true)
@@ -495,8 +463,6 @@ func _on_download_manager_download_completed(item_id: String, success: bool, mes
 	# Handle game downloads
 	if _pending_game_downloads.has(item_id):
 		_pending_game_downloads.erase(item_id)
-		if not success:
-			print("[LaunchManager] Pending game download failed: " + item_id + " - " + message)
 		return
 	
 	# Post-install downloads are handled by unified system
@@ -512,43 +478,21 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	else:
 		extract_path = EMULATORS_DIR + emulator_id + "/" + extract_to
 	
-	print("[LaunchManager] Starting flatten for: " + emulator_id)
-	print("[LaunchManager]   extract_to: '" + extract_to + "'")
-	print("[LaunchManager]   extract_path: '" + extract_path + "'")
-	print("[LaunchManager]   target_folder: '" + target_folder + "'")
-	
 	var dir = DirAccess.open(extract_path)
 	if not dir:
-		print("[LaunchManager] Cannot open extract path for flattening: " + extract_path)
 		return
 	
-	# Debug: List what's in the directory
-	print("[LaunchManager] Contents of extract path:")
-	var debug_entries = []
-	dir.list_dir_begin()
-	var debug_file = dir.get_next()
-	while debug_file != "":
-		if debug_file != "." and debug_file != "..":
-			debug_entries.append(debug_file)
-			var is_dir = dir.dir_exists(debug_file)
-			print("[LaunchManager]   - " + debug_file + (" [DIR]" if is_dir else " [FILE]"))
-		debug_file = dir.get_next()
-	dir.list_dir_end()
-	print("[LaunchManager] Total entries: " + str(debug_entries.size()))
+
 	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
 		var target_path = extract_path + "/" + target_folder
 		
 		if not dir.dir_exists(target_folder):
-			print("[LaunchManager] Target folder not found for flattening: " + target_folder)
 			return
-		
-		print("[LaunchManager] Flattening target directory: " + target_folder + " -> " + extract_to)
 		
 		var subdir = DirAccess.open(target_path)
 		if not subdir:
-			print("[LaunchManager] Warning: Cannot open subdirectory for flattening: " + target_path)
 			return
 		
 		# Move all contents from the subdirectory to the parent
@@ -561,21 +505,17 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 				
 				# Check if destination already exists
 				if dir.file_exists(item_name) or dir.dir_exists(item_name):
-					print("[LaunchManager] Warning: Cannot flatten - destination exists: " + item_name)
+					pass
 				else:
 					var error = dir.rename(source_path, dest_path)
 					if error != OK:
-						print("[LaunchManager] Warning: Failed to move " + item_name + " during flattening")
+						pass
 			
 			item_name = subdir.get_next()
 		subdir.list_dir_end()
 		
 		# Remove the now-empty subdirectory
 		var remove_error = subdir.remove(target_path)
-		if remove_error != OK:
-			print("[LaunchManager] Warning: Failed to remove empty directory after flattening: " + target_path)
-		else:
-			print("[LaunchManager] Successfully flattened directory structure")
 		return
 	
 	# No target folder specified, use original logic (single directory only)
@@ -596,11 +536,9 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		
 		# Check if the single entry is a directory
 		if dir.dir_exists(single_entry):
-			print("[LaunchManager] Flattening directory: " + single_entry + " -> " + extract_to)
 			
 			var subdir = DirAccess.open(single_entry_path)
 			if not subdir:
-				print("[LaunchManager] Warning: Cannot open subdirectory for flattening: " + single_entry_path)
 				return
 			
 			# Move all contents from the subdirectory to the parent
@@ -613,21 +551,17 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 					
 					# Check if destination already exists
 					if dir.file_exists(item_name) or dir.dir_exists(item_name):
-						print("[LaunchManager] Warning: Cannot flatten - destination exists: " + item_name)
+						pass
 					else:
 						var error = dir.rename(source_path, dest_path)
 						if error != OK:
-							print("[LaunchManager] Warning: Failed to move " + item_name + " during flattening")
+							pass
 				
 				item_name = subdir.get_next()
 			subdir.list_dir_end()
 			
 			# Remove the now-empty subdirectory
 			var remove_error = subdir.remove(single_entry_path)
-			if remove_error != OK:
-				print("[LaunchManager] Warning: Failed to remove empty directory after flattening: " + single_entry_path)
-			else:
-				print("[LaunchManager] Successfully flattened directory structure")
 
 ## Gets a human-readable description for a task type
 func _get_task_description(task_type: String) -> String:
@@ -652,7 +586,6 @@ func _execute_create_folders_task(emulator_id: String, emulator: Dictionary, tas
 	var folders = task.get("folders", [])
 	
 	if folders.is_empty():
-		print("[LaunchManager] No folders to create for: " + emulator_id)
 		return true
 	
 	# Use emulator root directory (same as folders validation)
@@ -667,15 +600,10 @@ func _execute_create_folders_task(emulator_id: String, emulator: Dictionary, tas
 			if error != OK:
 				push_error("[LaunchManager] Failed to create folder: " + full_path + " (error: " + str(error) + ")")
 				return false
-			else:
-				print("[LaunchManager] Created folder: " + full_path)
 		elif not dir:
 			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
 			return false
-		else:
-			print("[LaunchManager] Folder already exists: " + full_path)
 	
-	print("[LaunchManager] Folder creation complete for: " + emulator_id)
 	return true
 
 ## Executes a create_files task - returns true if successful
@@ -683,7 +611,6 @@ func _execute_create_files_task(emulator_id: String, emulator: Dictionary, task:
 	var files = task.get("files", [])
 	
 	if files.is_empty():
-		print("[LaunchManager] No files to create for: " + emulator_id)
 		return true
 	
 	# Use emulator root directory (same as files validation)
@@ -713,11 +640,7 @@ func _execute_create_files_task(emulator_id: String, emulator: Dictionary, task:
 				for line in file_content:
 					file.store_line(line)
 				file.close()
-				print("[LaunchManager] Created file: " + full_path)
-		else:
-			print("[LaunchManager] File already exists: " + full_path)
 	
-	print("[LaunchManager] File creation complete for: " + emulator_id)
 	return true
 
 ## Executes an edit_file task - returns true if successful
@@ -726,7 +649,6 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 	var edits = task.get("edits", [])
 	
 	if config_file == "" or edits.is_empty():
-		print("[LaunchManager] No config file or edits specified for: " + emulator_id)
 		return true
 	
 	var emulator_path = get_emulator_install_path(emulator_id)
@@ -759,7 +681,6 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 			# Check if this content already exists
 			if not content.contains(raw_content.strip_edges()):
 				content += "\n" + raw_content
-				print("[LaunchManager] Added content section to " + config_file)
 			continue
 		
 		# Otherwise, treat as key-value edit
@@ -786,12 +707,10 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 			if new_content != content:
 				content = new_content
 				replaced = true
-				print("[LaunchManager] Updated " + key + " in " + config_file)
 				break
 		
 		if not replaced:
 			content += "\n" + key + ": " + value
-			print("[LaunchManager] Added " + key + " to " + config_file)
 	
 	file = FileAccess.open(full_path, FileAccess.WRITE)
 	if file == null:
@@ -801,7 +720,6 @@ func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Di
 	file.store_string(content)
 	file.close()
 	
-	print("[LaunchManager] Config edit complete for: " + emulator_id)
 	return true
 
 ## Gets the install path for an emulator (searches recursively)
@@ -887,13 +805,11 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	# Only fall back to constructing path if file_path is empty
 	if game.file_path != "":
 		intent.rom_path = game.file_path
-		print("[LaunchManager] Using stored file_path: " + intent.rom_path)
 	else:
 		# Fallback: construct path from components (for legacy or if file_path not set)
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		var root_path = root_folder.value if root_folder else "user://games"
 		intent.rom_path = root_path + "/" + game.platform_slug + "/" + active_file_name
-		print("[LaunchManager] Constructed fallback path: " + intent.rom_path)
 	
 	intent.platform_slug = game.platform_slug
 	
@@ -914,13 +830,11 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	
 	# Vita3K special handling - extract game and prepare TitleID (all platforms)
 	if intent.emulator_id.begins_with("vita3k"):
-		print("[LaunchManager] Vita3K detected - preparing game...")
 		var vita_ready = await _prepare_vita3k_game(game, intent)
 		if not vita_ready:
 			push_error("[LaunchManager] Failed to prepare Vita3K game: " + game.get_display_name())
 			NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
 			return null
-		print("[LaunchManager] Vita3K game ready")
 	
 	return intent
 
@@ -950,7 +864,6 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 				"value": JSON.stringify(["-r", intent.game.title_id]),
 				"type": "string_array"
 			})
-			print("[LaunchManager] Vita3K: Added AppStartParameters for TitleID: " + intent.game.title_id)
 	else:
 		# Desktop uses command-line arguments
 		var platform_config = platforms.get(platform_name, {})
@@ -982,7 +895,6 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		# Set working directory only if emulator requires it (e.g., xemu) or for Vita3K
 		if emulator.get("requires_working_dir", false) or intent.emulator_id.begins_with("vita3k"):
 			intent.working_directory = install_dir
-			print("[LaunchManager] Set working directory: " + install_dir)
 		
 		for arg in template:
 			var formatted_arg = arg.replace("{exe}", global_install_path)
@@ -997,7 +909,6 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 				if intent.launch_args[i] == global_rom_path:
 					intent.launch_args[i] = "-r"
 					intent.launch_args.insert(i + 1, intent.game.title_id)
-					print("[LaunchManager] Vita3K: Replaced ROM path with TitleID: " + intent.game.title_id)
 					break
 
 ## Executes a launch intent
@@ -1025,38 +936,25 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		NotificationManager.show_notification("Emulator not ready: " + intent.emulator_name, Notification.Type.ERROR)
 		return false
 	
-	print("[LaunchManager] Launching: " + intent.to_string())
-	
 	# Controller configuration temporarily disabled - need to solve SDL device index mapping
 	# TODO: Re-enable when SDL device index detection is implemented
 	# Configure controllers for this emulator before launching
 	# var should_continue = await _configure_emulator_controllers(intent)
 	# if not should_continue:
-	# 	print("[LaunchManager] Controller configuration cancelled, aborting launch")
 	# 	return false
 	
 	if PlatformManager.is_android():
 		return _execute_android(intent)
 	else:
-		print("[LaunchManager] Calling _execute_desktop")
 		return _execute_desktop(intent)
 
 func _execute_desktop(intent: LaunchIntent) -> bool:
-	print("[LaunchManager] _execute_desktop starting")
-	
 	if intent.launch_args.is_empty():
 		push_error("[LaunchManager] No launch arguments for desktop")
 		return false
 	
-	print("[LaunchManager] Got launch args: " + str(intent.launch_args.size()) + " arguments")
-	
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
-	
-	# Debug: Print the full command
-	var full_command = exe_path + " " + " ".join(arguments)
-	print("[LaunchManager] Full launch command: " + full_command)
-	print("[LaunchManager] Working directory: " + intent.working_directory)
 	
 	var pid: int
 	
@@ -1076,7 +974,6 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 				exe_path,
 				" ".join(quoted_args)
 			]
-			print("[LaunchManager] Shell command: cmd /c \"" + inner_cmd + "\"")
 			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
 		else:
 			# Linux/macOS: use sh -c "cd WORKING_DIR && exe args"
@@ -1085,7 +982,6 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 				exe_path,
 				" ".join(quoted_args)
 			]
-			print("[LaunchManager] Shell command: sh -c \"" + inner_cmd + "\"")
 			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 	else:
 		# No working directory specified, but still need to quote arguments properly
@@ -1101,7 +997,6 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 				exe_path,
 				" ".join(quoted_args)
 			]
-			print("[LaunchManager] Shell command: cmd /c \"" + inner_cmd + "\"")
 			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
 		else:
 			# Linux/macOS: use sh -c "exe args"
@@ -1109,7 +1004,6 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 				exe_path,
 				" ".join(quoted_args)
 			]
-			print("[LaunchManager] Shell command: sh -c \"" + inner_cmd + "\"")
 			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 	
 	if pid == -1:
@@ -1117,9 +1011,7 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 		launch_completed.emit(false, "Failed to start emulator")
 		return false
 	
-	print("[LaunchManager] Launched process with PID: " + str(pid))
 	launch_completed.emit(true, "Game launched successfully")
-	print("[LaunchManager] _execute_desktop returning true")
 	return true
 
 ## Configures controller settings for specific emulators before launch
@@ -1134,7 +1026,6 @@ func _get_controller_registry() -> Dictionary:
 
 func _load_controller_registry() -> void:
 	if not FileAccess.file_exists(CONTROLLER_REGISTRY_PATH):
-		print("[LaunchManager] Controller registry not found")
 		return
 	
 	var file = FileAccess.open(CONTROLLER_REGISTRY_PATH, FileAccess.READ)
@@ -1207,7 +1098,6 @@ func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bo
 	if not validate.is_empty():
 		var is_valid = _validate_controller_config(full_path, validate)
 		if is_valid:
-			print("[LaunchManager] Controller config valid: " + file_path)
 			return true
 	
 	# Show user prompt
@@ -1226,19 +1116,14 @@ func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bo
 	# Add to scene tree
 	get_tree().root.add_child(dialog)
 	
-	print("[LaunchManager] Controller config needs update: " + file_path)
-	print("[LaunchManager] Showing dialog for: " + emulator_name)
-	
 	# Use dictionary for reference semantics (lambdas capture by value)
 	var dialog_state = {"confirmed": false, "responded": false}
 	
 	var on_confirmed = func():
-		print("[LaunchManager] Dialog: User confirmed")
 		dialog_state.confirmed = true
 		dialog_state.responded = true
 	
 	var on_canceled = func():
-		print("[LaunchManager] Dialog: User canceled")
 		dialog_state.confirmed = false
 		dialog_state.responded = true
 	
@@ -1248,13 +1133,9 @@ func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bo
 	# Show dialog after signals are connected
 	dialog.popup_centered()
 	
-	print("[LaunchManager] Waiting for dialog response...")
-	
 	# Wait for response
 	while not dialog_state.responded:
 		await get_tree().process_frame
-	
-	print("[LaunchManager] Dialog closed, confirmed=" + str(dialog_state.confirmed))
 	
 	var confirmed = dialog_state.confirmed
 	
@@ -1262,11 +1143,9 @@ func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bo
 	dialog.queue_free()
 	
 	if not confirmed:
-		print("[LaunchManager] User skipped controller update for: " + file_path)
 		return true  # Continue with launch
 	
 	# Apply edits
-	print("[LaunchManager] Applying controller config update for: " + file_path)
 	var edits = task.get("edits", [])
 	for edit in edits:
 		var content = edit.get("content", "")
@@ -1339,8 +1218,6 @@ func _execute_controller_file_edit(file_path: String, content: String) -> void:
 	
 	write_file.store_string(final_content)
 	write_file.close()
-	
-	print("[LaunchManager] Updated controller config: " + file_path)
 
 ## Parse INI content into sections dictionary
 func _parse_ini_sections(content: String) -> Dictionary:
@@ -1414,8 +1291,6 @@ func launch_game(game: GameResource) -> void:
 
 ## Launch a GameNative game via intent
 func _launch_gamenative_game(game: GameResource) -> void:
-	print("[LaunchManager] Launching GameNative game: %s (App ID: %d)" % [game.title, game.steam_app_id])
-	
 	if not PlatformManager.is_android():
 		push_error("[LaunchManager] Cannot launch GameNative game on non-Android platform")
 		NotificationManager.show_notification("GameNative games only available on Android", Notification.Type.ERROR)
@@ -1423,7 +1298,6 @@ func _launch_gamenative_game(game: GameResource) -> void:
 	
 	var success = GameNativeManager.launch_game(game.steam_app_id)
 	if success:
-		print("[LaunchManager] GameNative launch intent sent successfully")
 		game_launched.emit(game)
 	else:
 		push_error("[LaunchManager] Failed to launch GameNative game")
@@ -1506,7 +1380,6 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 		is_actually_installed = get_emulator_install_state(emulator_id) == InstallState.INSTALLED
 	
 	if not is_actually_installed:
-		print("[LaunchManager] Emulator not fully installed, auto-downloading: " + emulator_id)
 		NotificationManager.show_notification("Setting up " + emulator_name + "...", Notification.Type.INFO)
 		
 		# Queue download/install - this will handle extraction and post-install
@@ -1536,15 +1409,12 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 	# Check if emulator is actually fully installed (post-install might still be in progress)
 	if get_emulator_install_state(emulator_id) != InstallState.INSTALLED:
 		# Post-install is still running, wait for it to complete
-		print("[LaunchManager] Emulator " + emulator_id + " main extraction complete, waiting for post-install...")
 		return
 	
 	# Check if we have a pending launch for this emulator
 	if _pending_launches.has(emulator_id):
 		var game: GameResource = _pending_launches[emulator_id]
 		_pending_launches.erase(emulator_id)
-		
-		print("[LaunchManager] Emulator " + emulator_id + " fully installed, auto-launching: " + game.get_display_name())
 		NotificationManager.show_notification("Launching " + game.get_display_name() + "...", Notification.Type.INFO)
 		
 		# Give a small delay for file system to settle
@@ -1578,14 +1448,10 @@ func _update_last_played(game: GameResource) -> void:
 	# Update in database
 	DataManager.update_game_last_played(game.romm_id, timestamp)
 	
-	print("[LaunchManager] Updated last_played for '%s' to %s" % [game.get_display_name(), timestamp])
-	
 	# Notify views that game was launched (so they can re-sort)
 	game_launched.emit(game)
 
 func _execute_android(intent: LaunchIntent) -> bool:
-	print("[LaunchManager] Executing Android launch...")
-	
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin == null:
 		push_error("[LaunchManager] PackageChecker plugin not available for Android launch")
@@ -1601,7 +1467,6 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			var core_filename = intent.core_name + "_libretro_android.so"
 			# Cores are downloaded to shared RetroArch directory
 			core_path = "/storage/emulated/0/RetroArch/cores/" + core_filename
-			print("[LaunchManager] Using sideloaded core from: " + core_path)
 	else:
 		# Regular RetroArch launch - use internal core path
 		if intent.core_name != "":
@@ -1642,19 +1507,6 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		else:
 			extras_json = json_result
 	
-	print("[LaunchManager] Launching Android intent:")
-	print("  Action: " + intent.android_action)
-	print("  Package: " + intent.android_package)
-	print("  Class: " + intent.android_class)
-	print("  ROM Path: " + intent.rom_path)
-	print("  Core Path: " + core_path)
-	print("  ROM Delivery: " + rom_delivery)
-	print("  MIME Type: " + mime_type)
-	print("  Clear Task: " + str(clear_task))
-	print("  Grant URI Permission: " + str(grant_uri_permission))
-	print("  Use Document URI: " + str(use_document_uri))
-	print("  Extras JSON: " + extras_json)
-	
 	# Launch using unified method
 	var success = plugin.call("launchAndroidIntent",
 		intent.android_action,
@@ -1670,9 +1522,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		use_document_uri
 	)
 	
-	if success:
-		print("[LaunchManager] Android intent launched successfully")
-	else:
+	if not success:
 		push_error("[LaunchManager] Failed to launch Android intent")
 	
 	return success
@@ -1690,12 +1540,10 @@ func download_emulator(emulator_id: String) -> bool:
 	var current_state = get_emulator_install_state(emulator_id)
 	
 	if current_state == InstallState.INSTALLED:
-		print("[LaunchManager] Emulator already installed: " + emulator_id)
 		return false
 	
 	if current_state in [InstallState.DOWNLOADING, InstallState.EXTRACTING, 
 						InstallState.ENACTING_POST_INSTALL]:
-		print("[LaunchManager] Emulator already downloading/installing: " + emulator_id)
 		return false
 	
 	var emulator = get_emulator(emulator_id)
@@ -1723,7 +1571,6 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var install_steps = emulator.get("install", [])
 	
 	if step_index >= install_steps.size():
-		print("[LaunchManager] All install steps complete for: " + emulator_id)
 		_emulator_install_states[emulator_id] = InstallState.INSTALLED
 		emulator_extraction_completed.emit(emulator_id, true)
 		return true
@@ -1731,8 +1578,6 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var step = install_steps[step_index]
 	var step_name = step.get("step", "")
 	var platforms = step.get("platforms", {})
-	
-	print("[LaunchManager] Executing step " + str(step_index) + ": " + step_name)
 	
 	# Get platform config
 	var platform_config = platforms.get("all", {})
@@ -1779,21 +1624,15 @@ func _retry_previous_step(emulator_id: String, current_step_index: int) -> bool:
 		push_error("[LaunchManager] Cannot retry - would go before first step")
 		return false
 	
-	print("[LaunchManager] Re-running step " + str(target_step) + " (needed by step " + str(current_step_index) + ")")
 	return _execute_install_step(emulator_id, target_step)
 
 ## Executes APK install action for a step (Android only)
 func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config: Dictionary) -> bool:
-	print("[LaunchManager] Executing APK install step...")
-	
 	var package_name = apk_config.get("package_name", "")
 	
 	if package_name == "":
 		push_error("[LaunchManager] No package_name specified for apk_install")
 		return false
-	
-	print("[LaunchManager] APK install config:")
-	print("[LaunchManager]   - package_name: '" + package_name + "'")
 	
 	# Check if this is the first step (can't go back)
 	if step_index == 0:
@@ -1823,20 +1662,14 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	
 	# If no APK found matching the pattern, re-run the download step
 	if apk_path == "":
-		print("[LaunchManager] No APK file matching pattern '" + expected_file + "' found in: " + emulator_dir)
-		print("[LaunchManager] Going back to download step")
 		return _retry_previous_step(emulator_id, step_index)
 	
 	# Convert user:// path to absolute path for Android
 	var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
 	
-	print("[LaunchManager] Installing APK: " + apk_path)
-	print("[LaunchManager] Absolute path: " + absolute_apk_path)
-	
 	# Use OS.shell_open with proper Android intent format
 	# Try different approaches for Android
 	var uri = "file://" + absolute_apk_path
-	print("[LaunchManager] Opening APK with URI: " + uri)
 	
 	# Try to open the APK for installation
 	# Note: On Android, this requires:
@@ -1845,9 +1678,6 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	var result = OS.shell_open(uri)
 	
 	if result != Error.OK:
-		print("[LaunchManager] Direct APK install failed with error: " + str(result))
-		print("[LaunchManager] This usually means Kyodai doesn't have permission to install APKs")
-		
 		# Show user-friendly message about manual installation
 		NotificationManager.show_notification(
 			"RetroArch APK downloaded!\nPlease install it manually from:\n" + absolute_apk_path,
@@ -1858,25 +1688,15 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		
 		# Try to open the folder so user can find the APK
 		var folder_path = ProjectSettings.globalize_path(EMULATORS_DIR + emulator_id)
-		print("[LaunchManager] Attempting to open folder: " + folder_path)
 		var folder_result = OS.shell_open(folder_path)
-		
-		if folder_result == Error.OK:
-			print("[LaunchManager] Opened folder containing APK")
-		else:
-			print("[LaunchManager] Could not open folder either: " + str(folder_result))
 		
 		# Mark as installed anyway - user will install manually
 		# Next time the app launches, validation will check if it's actually installed
 		_emulator_install_states[emulator_id] = InstallState.INSTALLED
-		print("[LaunchManager] Marked as installed - awaiting manual APK installation")
 		
 		# Progress to next step
 		_execute_install_step(emulator_id, step_index + 1)
 		return true
-	else:
-		print("[LaunchManager] APK installer opened successfully!")
-		print("[LaunchManager] User should see Android install dialog")
 	
 	# Mark as installing - user needs to complete the install via Android UI
 	_emulator_install_states[emulator_id] = InstallState.INSTALLED
@@ -1884,8 +1704,8 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	# Validate installation (check if package is installed)
 	var validate_config = apk_config.get("validate", {})
 	if not _validate_step(emulator_id, validate_config):
-		print("[LaunchManager] Warning: APK validation failed - package may not be installed yet")
 		# Don't fail here - user might still be installing
+		pass
 	
 	# Progress to next step
 	_execute_install_step(emulator_id, step_index + 1)
@@ -1894,8 +1714,6 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 ## Executes batch URL download action for downloading multiple files
 ## Downloads all items in parallel and extracts them automatically
 func _execute_batch_url_download_step(emulator_id: String, step_index: int, batch_config: Dictionary) -> bool:
-	print("[LaunchManager] Executing batch URL download step...")
-	
 	# Get configuration
 	var base_url = batch_config.get("base_url", "")
 	var url_pattern = batch_config.get("url_pattern", "{name}")
@@ -1909,12 +1727,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	if cores.is_empty():
 		push_error("[LaunchManager] No cores specified for batch_url_download")
 		return false
-	
-	print("[LaunchManager] Batch download config:")
-	print("[LaunchManager]   - base_url: " + base_url)
-	print("[LaunchManager]   - url_pattern: " + url_pattern)
-	print("[LaunchManager]   - cores count: " + str(cores.size()))
-	print("[LaunchManager]   - extract_to: " + extract_to)
 	
 	var emulator = get_emulator(emulator_id)
 	var install_steps = emulator.get("install", [])
@@ -1936,8 +1748,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(total_cores) + ")"
 	
-	print("[LaunchManager] Starting batch download of " + str(total_cores) + " cores...")
-	
 	# Queue all downloads
 	for core_name in cores:
 		# Construct URL from pattern
@@ -1954,8 +1764,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		# Download to emulator directory (for extraction, then delete)
 		var destination_path = EMULATORS_DIR + emulator_id + "/" + filename
 		
-		print("[LaunchManager] Queueing download: " + core_name + " -> " + full_url)
-		
 		# Queue download with auto-extract
 		var item_id = DownloadManager.queue_download(
 			full_url,
@@ -1967,7 +1775,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		)
 		
 		if item_id == "":
-			print("[LaunchManager] WARNING: Failed to queue download for: " + core_name)
 			failed_cores += 1
 		else:
 			download_ids.append(item_id)
@@ -1977,9 +1784,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 				completed_cores += 1
 				if not success:
 					failed_cores += 1
-					print("[LaunchManager] FAILED: " + core_name + " - " + message)
-				else:
-					print("[LaunchManager] COMPLETED: " + core_name)
 				# Update progress
 				_emulator_install_progress[emulator_id] = step_display_name + " (" + str(completed_cores) + "/" + str(total_cores) + ")"
 				# Check if all downloads are complete
@@ -1988,7 +1792,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 						push_error("[LaunchManager] Batch download failed: " + str(failed_cores) + "/" + str(total_cores) + " cores failed")
 						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 					else:
-						print("[LaunchManager] All " + str(total_cores) + " cores downloaded successfully!")
 						_execute_install_step(emulator_id, step_index + 1)
 			
 			# Track completion
@@ -2004,21 +1807,13 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		push_error("[LaunchManager] No downloads could be queued for batch_url_download")
 		return false
 	
-	print("[LaunchManager] Queued " + str(download_ids.size()) + "/" + str(total_cores) + " downloads")
 	return true
 
 ## Executes extract action for a step
 func _execute_extract_step(emulator_id: String, step_index: int, extract_config: Dictionary) -> bool:
-	print("[LaunchManager] Executing extract step...")
-	
 	var extract_to = extract_config.get("extract_to", ".")
 	var strip_top = extract_config.get("strip_top_directory", false)
 	var flatten_target = extract_config.get("flatten_target", "")
-	
-	print("[LaunchManager] Extract config:")
-	print("[LaunchManager]   - extract_to: '" + extract_to + "'")
-	print("[LaunchManager]   - strip_top_directory: " + str(strip_top))
-	print("[LaunchManager]   - flatten_target: '" + flatten_target + "'")
 	
 	var emulator = get_emulator(emulator_id)
 	var install_steps = emulator.get("install", [])
@@ -2033,13 +1828,9 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		extract_dir = EMULATORS_DIR + emulator_id + "/" + extract_to
 	
 	# NEW LOGIC: Check validation first (output files exist?)
-	print("[LaunchManager] Checking if extraction output already exists...")
 	if _validate_install_step(emulator_id, step_index, install_steps):
-		print("[LaunchManager] Extraction output already exists, skipping extraction")
 		_execute_install_step(emulator_id, step_index + 1)
 		return true
-	
-	print("[LaunchManager] Extraction output not found, checking for input archive...")
 	
 	# Look for the archive file to extract
 	var emulator_dir = EMULATORS_DIR + emulator_id
@@ -2056,7 +1847,6 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 				if not dir.current_is_dir():
 					if file_name.match(expected_file):
 						archive_path = emulator_dir + "/" + file_name
-						print("[LaunchManager] Found archive matching expected_file pattern: " + file_name)
 						break
 				file_name = dir.get_next()
 			dir.list_dir_end()
@@ -2074,7 +1864,6 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 					for ext in archive_extensions:
 						if lower_name.ends_with(ext):
 							archive_path = emulator_dir + "/" + file_name
-							print("[LaunchManager] Found archive file: " + file_name)
 							break
 					if archive_path != "":
 						break
@@ -2083,13 +1872,8 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	
 	# Check if archive was found
 	if archive_path == "" or not FileAccess.file_exists(archive_path):
-		print("[LaunchManager] No archive file found in: " + emulator_dir)
-		print("[LaunchManager] Going back to download step (index " + str(step_index - 1) + ")")
 		# Go back to download step to re-download
 		return _retry_previous_step(emulator_id, step_index)
-	
-	print("[LaunchManager] Archive found: " + archive_path)
-	print("[LaunchManager] Extracting to: " + extract_dir)
 	
 	# Get step name from install_steps for display
 	var step_name = ""
@@ -2123,7 +1907,6 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			
 			# Handle post-extraction flattening
 			if strip_top:
-				print("[LaunchManager] Flattening directory...")
 				_flatten_extracted_directory(emulator_id, extract_to, flatten_target)
 			
 			# Validate extraction
@@ -2134,8 +1917,6 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 				_emulator_install_progress[emulator_id] = "Validation failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
-			
-			print("[LaunchManager] Extraction complete and validated for: " + emulator_id)
 			
 			# Progress to next step
 			_execute_install_step(emulator_id, step_index + 1)
@@ -2165,9 +1946,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if file_path == "":
 				return true
 			var full_path = _resolve_validation_path(emulator_id, file_path)
-			var exists = FileAccess.file_exists(full_path)
-			print("[LaunchManager] Validation: file_exists '" + file_path + "' -> '" + full_path + "' = " + str(exists))
-			return exists
+			return FileAccess.file_exists(full_path)
 		
 		"folder_exists":
 			var folder_path = validate_config.get("path", "")
@@ -2175,9 +1954,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 				return true
 			var full_path = _resolve_validation_path(emulator_id, folder_path)
 			var dir = DirAccess.open(full_path)
-			var exists = dir != null
-			print("[LaunchManager] Validation: folder_exists '" + folder_path + "' -> '" + full_path + "' = " + str(exists))
-			return exists
+			return dir != null
 		
 		"files_exist":
 			var folder_path = validate_config.get("path", "")
@@ -2187,15 +1964,11 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			# Support both "files" array format and "path" + "pattern" format
 			if files_array.size() > 0:
 				# Check if all files in the array exist
-				var all_exist = true
 				for file_name in files_array:
 					var full_file_path = _resolve_validation_path(emulator_id, file_name)
-					var exists = FileAccess.file_exists(full_file_path)
-					print("[LaunchManager] Validation: files_exist checking file '" + file_name + "' -> '" + full_file_path + "' = " + str(exists))
-					if not exists:
-						all_exist = false
-						break
-				return all_exist
+					if not FileAccess.file_exists(full_file_path):
+						return false
+				return true
 			
 			if folder_path == "":
 				return true
@@ -2204,23 +1977,20 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			var dir = DirAccess.open(full_path)
 			
 			if not dir:
-				print("[LaunchManager] Validation: files_exist '" + folder_path + "' - directory not found")
 				return false
 			
-			var found_files = false
 			dir.list_dir_begin()
 			var file_name = dir.get_next()
 			
 			while file_name != "":
 				if file_name != "." and file_name != "..":
 					if pattern == "" or file_name.match(pattern):
-						found_files = true
-						break
+						dir.list_dir_end()
+						return true
 				file_name = dir.get_next()
 			
 			dir.list_dir_end()
-			print("[LaunchManager] Validation: files_exist '" + folder_path + "' -> '" + full_path + "' pattern '" + pattern + "' = " + str(found_files))
-			return found_files
+			return false
 		
 		"package_installed":
 			# Check if an Android package is installed using PackageManager
@@ -2238,7 +2008,6 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			return true
 		
 		_:
-			print("[LaunchManager] Unknown validation action_type: " + action_type)
 			return false
 
 ## Helper function for download_url action
@@ -2312,7 +2081,6 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 func _handle_create_folders_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var folders = platform_config.get("folders", [])
 	if folders.is_empty():
-		print("[LaunchManager] No folders to create for step: " + step_name)
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	for folder_path in folders:
@@ -2331,22 +2099,16 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 			if error != OK:
 				push_error("[LaunchManager] Failed to create folder: " + full_path)
 				return false
-			else:
-				print("[LaunchManager] Created folder: " + full_path)
 		elif not dir:
 			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
 			return false
-		else:
-			print("[LaunchManager] Folder already exists: " + full_path)
 	
-	print("[LaunchManager] Folder creation complete for step: " + step_name)
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Helper function for create_files action
 func _handle_create_files_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var files = platform_config.get("files", [])
 	if files.is_empty():
-		print("[LaunchManager] No files to create for step: " + step_name)
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	# Get the emulator directory path for placeholder resolution
@@ -2383,12 +2145,9 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 			else:
 				file.store_string(file_content)
 				file.close()
-				print("[LaunchManager] Created file: " + full_path)
-				print("[LaunchManager] Resolved {emulator_dir} to: " + global_emulator_dir)
 		else:
-			print("[LaunchManager] File already exists: " + full_path)
+			pass
 	
-	print("[LaunchManager] File creation complete for step: " + step_name)
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Helper function for edit_file action
@@ -2397,7 +2156,6 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	var edits = platform_config.get("edits", [])
 	
 	if file_path == "" or edits.is_empty():
-		print("[LaunchManager] No file or edits for step: " + step_name)
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	var full_path: String
@@ -2426,7 +2184,6 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 			continue
 		
 		content = content.replace(old_text, new_text)
-		print("[LaunchManager] Edited file " + file_path + ": replaced '" + old_text + "' with '" + new_text + "'")
 	
 	file = FileAccess.open(full_path, FileAccess.WRITE)
 	if file == null:
@@ -2436,28 +2193,20 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	file.store_string(content)
 	file.close()
 	
-	print("[LaunchManager] File editing complete for step: " + step_name)
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Helper function for none action (skip)
 func _handle_none_step(emulator_id: String, step_name: String, step_index: int) -> bool:
-	print("[LaunchManager] Skipping step '" + step_name + "' (action_type: none)")
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Executes install steps from new step-based format (entry point)
 func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:
-	print("[LaunchManager] Starting install flow for: " + emulator_id)
-	print("[LaunchManager] Total steps: " + str(install_steps.size()))
-	
 	# Find the first incomplete step to start from
 	var progress = get_install_progress(emulator_id)
 	var start_step = 0
 	
 	if progress["status"] == "partial" and progress["next_step_index"] >= 0:
 		start_step = progress["next_step_index"]
-		print("[LaunchManager] Resuming from step " + str(start_step) + ": " + progress["next_step_display"])
-	else:
-		print("[LaunchManager] Starting from beginning (step 0)")
 	
 	return _execute_install_step(emulator_id, start_step)
 
@@ -2489,53 +2238,27 @@ func _get_step_display_name(step_name: String) -> String:
 
 ## Checks if an Android package is installed using the PackageChecker plugin
 func _is_android_package_installed(package_name: String) -> bool:
-	print("[LaunchManager] ==========================================")
-	print("[LaunchManager] _is_android_package_installed() called")
-	print("[LaunchManager] Checking package: '" + package_name + "'")
-	
-	# Get the PackageChecker plugin singleton
-	print("[LaunchManager] Attempting to get PackageChecker singleton...")
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin == null:
-		print("[LaunchManager] ERROR: PackageChecker plugin singleton is NULL")
-		print("[LaunchManager] ==========================================")
 		return false
 	
-	print("[LaunchManager] SUCCESS: PackageChecker plugin singleton obtained")
-	print("[LaunchManager] Plugin object: " + str(plugin))
-	
 	# Check the main package name first
-	print("[LaunchManager] Calling plugin.isPackageInstalled('" + package_name + "')...")
 	var result = plugin.isPackageInstalled(package_name)
-	print("[LaunchManager] Result for '" + package_name + "': " + str(result))
 	
 	if result:
-		print("[LaunchManager] SUCCESS: Package '" + package_name + "' is INSTALLED")
-		print("[LaunchManager] ==========================================")
 		return true
-	
-	print("[LaunchManager] Package '" + package_name + "' not found, checking variants...")
 	
 	# For RetroArch, check common variants
 	if package_name == "com.retroarch":
 		var variants = ["com.retroarch.aarch64", "com.retroarch.ra32"]
-		print("[LaunchManager] Checking " + str(variants.size()) + " RetroArch variants: " + str(variants))
 		
 		for i in range(variants.size()):
 			var variant = variants[i]
-			print("[LaunchManager] Variant " + str(i + 1) + "/" + str(variants.size()) + ": Checking '" + variant + "'...")
 			result = plugin.isPackageInstalled(variant)
-			print("[LaunchManager] Variant '" + variant + "' result: " + str(result))
 			
 			if result:
-				print("[LaunchManager] SUCCESS: Variant '" + variant + "' is INSTALLED")
-				print("[LaunchManager] ==========================================")
 				return true
-		
-		print("[LaunchManager] No RetroArch variants found installed")
 	
-	print("[LaunchManager] FINAL: Package '" + package_name + "' is NOT installed")
-	print("[LaunchManager] ==========================================")
 	return false
 
 ## Validates a specific install step to check if it's complete
@@ -2563,13 +2286,10 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 	# If no validation config, consider step complete (just move on)
 	# This handles download steps where the file gets deleted after extraction
 	if validate_config.is_empty():
-		print("[LaunchManager] Step '" + step_name + "' has no validation - skipping")
 		return true
 	
 	# Run validation
-	var is_valid = _validate_step(emulator_id, validate_config)
-	print("[LaunchManager] Step validation '" + step_name + "' (index " + str(step_index) + "): " + str(is_valid))
-	return is_valid
+	return _validate_step(emulator_id, validate_config)
 
 ## Scans install steps and finds the first incomplete step
 ## Returns a dictionary with progress info
@@ -2620,10 +2340,6 @@ func get_install_progress(emulator_id: String) -> Dictionary:
 	else:
 		result["status"] = "partial"
 	
-	print("[LaunchManager] Install progress for '" + emulator_id + "': " + 
-		str(result["completed_steps"]) + "/" + str(result["total_steps"]) + 
-		" steps, next: " + result["next_step_display"])
-	
 	return result
 
 ## Scans emulator installation and updates state based on step completion
@@ -2641,10 +2357,6 @@ func scan_emulator_install_state(emulator_id: String):
 	else:
 		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		_emulator_install_progress[emulator_id] = ""
-	
-	print("[LaunchManager] Scanned '" + emulator_id + "': state=" + 
-		str(_emulator_install_states[emulator_id]) + 
-		", progress=" + _emulator_install_progress[emulator_id])
 
 ## Legacy unified download - kept for reference but not used
 func _queue_emulator_download(emulator_id: String, emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
@@ -2663,18 +2375,12 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		var dir = DirAccess.open(base_dir)
 		if dir and not dir.dir_exists(dir_name):
 			dir.make_dir_recursive(dir_name)
-			print("[LaunchManager] Created custom destination directory: " + custom_destination)
 		destination_path = custom_destination + "/" + filename
-		print("[LaunchManager] Using custom destination: " + destination_path)
 	else:
 		destination_path = EMULATORS_DIR + emulator_id + "/" + filename
 	
 	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
-	
-	print("[LaunchManager] Queueing emulator download: " + emulator_id + " from " + download_url)
-	print("[LaunchManager] Step index: " + str(step_index))
-	print("[LaunchManager] Display name: " + step_display_name)
 	
 	# Queue download WITHOUT auto-extract (extract is now a separate step)
 	var item_id = DownloadManager.queue_download(
@@ -2754,8 +2460,6 @@ func _execute_download_repo(emulator_id: String, context: String, item_name: Str
 	
 	var release_tag = download_config.get("release_tag", "")
 	
-	print("[LaunchManager] Starting download_repo for: " + emulator_id + " (" + context + ")")
-	
 	NetworkManager.fetch_github_latest_release(
 		github_repo,
 		asset_pattern,
@@ -2784,8 +2488,6 @@ func _execute_download_scrape(emulator_id: String, context: String, item_name: S
 		push_error("[LaunchManager] Invalid scrape config for download_scrape")
 		return false
 	
-	print("[LaunchManager] Starting download_scrape for: " + emulator_id)
-	
 	NetworkManager.fetch_scraped_release(
 		scrape_url,
 		version_pattern,
@@ -2812,8 +2514,6 @@ func _execute_download_url(emulator_id: String, context: String, item_name: Stri
 		push_error("[LaunchManager] No URL specified for download_url")
 		return false
 	
-	print("[LaunchManager] Starting download_url for: " + emulator_id)
-	
 	return _execute_download_from_url(emulator_id, context, item_name, download_config, url, callback, pending_tracker)
 
 ## Core download execution - queues download with DownloadManager
@@ -2838,10 +2538,6 @@ func _execute_download_from_url(emulator_id: String, context: String, item_name:
 	else:
 		# destination is a folder path, append filename
 		destination_path = destination_path + "/" + filename
-	
-	print("[LaunchManager] Download URL: " + download_url)
-	print("[LaunchManager] Destination: " + destination_path)
-	print("[LaunchManager] Extract: " + str(should_extract))
 	
 	var dm_type = "emulator" if context == "emulator" else "download_" + download_config.get("type", "unknown")
 	
@@ -2903,14 +2599,11 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		_pending_emulator_downloads.erase(item_id)
 		
 		if not success:
-			print("[LaunchManager] Download failed for: " + emulator_id)
 			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 			_emulator_install_progress[emulator_id] = "Download failed: " + message
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, message)
 			return
-		
-		print("[LaunchManager] Download completed for: " + emulator_id + " (step " + str(step_index) + ")")
 		
 		# Validate download if validation config exists
 		var validate_config = step_config.get("validate", {})
@@ -2921,8 +2614,6 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, "Validation failed")
 			return
-		
-		print("[LaunchManager] Download validated, progressing to next step...")
 		
 		# Progress to next step
 		_execute_install_step(emulator_id, step_index + 1)
@@ -2952,12 +2643,9 @@ func _on_unified_extraction_completed(item_id: String, success: bool, extract_di
 			task_info.callback.call(false, "Executable not found")
 			return
 		
-		print("[LaunchManager] Validation passed - executable found for: " + emulator_id)
-		
 		# Mark as installed
 		_emulator_install_states[emulator_id] = InstallState.INSTALLED
 		_emulator_install_progress[emulator_id] = ""
-		print("[LaunchManager] Installation complete: " + emulator_id)
 		emulator_extraction_completed.emit(emulator_id, true)
 		task_info.callback.call(true, "")
 		return
@@ -2971,8 +2659,6 @@ func _extract_vita_title_id(zip_path: String) -> String:
 	# On Android with SAF, content:// URIs can't be read directly by ZIPReader
 	# Convert to real file path using the PackageChecker plugin
 	if PlatformManager.is_android() and zip_path.begins_with("content://"):
-		print("[LaunchManager] Content URI detected, converting to real path...")
-		
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin == null:
 			push_error("[LaunchManager] PackageChecker plugin not available for SAF URI conversion")
@@ -2984,7 +2670,6 @@ func _extract_vita_title_id(zip_path: String) -> String:
 			return ""
 		
 		actual_zip_path = real_path
-		print("[LaunchManager] Converted SAF URI to path: " + actual_zip_path)
 	
 	if not FileAccess.file_exists(actual_zip_path):
 		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + actual_zip_path)
@@ -3010,10 +2695,7 @@ func _extract_vita_title_id(zip_path: String) -> String:
 		push_error("[LaunchManager] Invalid ZIP structure: " + actual_zip_path)
 		return ""
 	
-	var title_id = parts[0]
-	print("[LaunchManager] Extracted Vita TitleID: " + title_id + " from " + zip_path)
-	
-	return title_id
+	return parts[0]
 
 ## Handles Vita3K game extraction and launch preparation
 ## Returns true if ready to launch, false if error
@@ -3040,9 +2722,6 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	# Extract TitleID from ZIP if not already stored
 	if game.title_id == "":
-		print("[LaunchManager] Vita3K: TitleID not stored, checking for existing extraction...")
-		
-		# First, check if the game was already extracted (from previous launch)
 		# by scanning the ux0/app directory for any TitleID folder
 		var found_title_id = ""
 		if DirAccess.dir_exists_absolute(ux0_app_path):
@@ -3054,14 +2733,12 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 					if folder_name != "." and folder_name != ".." and dir.current_is_dir():
 						# Found a TitleID folder - use it (Vita3K stores games by TitleID)
 						found_title_id = folder_name
-						print("[LaunchManager] Vita3K: Found existing TitleID folder: " + folder_name)
 						break
 					folder_name = dir.get_next()
 				dir.list_dir_end()
 		
 		# If no existing game found, extract from ZIP
 		if found_title_id == "":
-			print("[LaunchManager] Vita3K: No existing game found, extracting TitleID from ZIP...")
 			found_title_id = _extract_vita_title_id(rom_path)
 			if found_title_id == "":
 				push_error("[LaunchManager] Vita3K: Failed to extract TitleID from: " + rom_path)
@@ -3071,7 +2748,6 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		game.title_id = found_title_id
 		# Save only title_id to database (doesn't overwrite other fields)
 		DataManager.update_game_title_id(game.romm_id, found_title_id)
-		print("[LaunchManager] Vita3K: Stored TitleID " + found_title_id + " for game " + game.get_display_name())
 	
 	var title_id = game.title_id
 	
@@ -3083,21 +2759,14 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		# Desktop - use emulator directory (already obtained above)
 		vita_app_path = emulator_dir + "/ux0/app/" + title_id
 	
-	print("[LaunchManager] Vita3K: App path: " + vita_app_path)
-	
 	# Check if already extracted
-	print("[LaunchManager] Vita3K: Checking if folder exists: " + vita_app_path)
 	var dir = DirAccess.open(vita_app_path)
-	print("[LaunchManager] Vita3K: DirAccess.open result: " + str(dir))
 	if dir != null:
-		print("[LaunchManager] Vita3K: Game already extracted to " + vita_app_path)
 		return true
-	print("[LaunchManager] Vita3K: Folder does not exist, need to extract")
 	
 	# Extract ZIP to Vita3K ux0/app directory (ZIP contains the TitleID folder)
 	# We extract to the parent directory (ux0/app) so the ZIP's root folder lands correctly
 	var extract_parent = vita_app_path.get_base_dir()
-	print("[LaunchManager] Vita3K: First launch - extracting game to " + extract_parent)
 	NotificationManager.show_notification("Extracting Vita game for first launch...", Notification.Type.INFO)
 	
 	var extract_success = await _extract_vita_zip(rom_path, extract_parent, title_id)
@@ -3105,7 +2774,6 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] Vita3K: Failed to extract game to " + vita_app_path)
 		return false
 	
-	print("[LaunchManager] Vita3K: Extraction complete for " + title_id)
 	return true
 
 ## Extracts Vita game ZIP with progress tracking
@@ -3124,8 +2792,6 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 		push_error("[LaunchManager] Failed to queue Vita game extraction")
 		return false
 	
-	print("[LaunchManager] Vita3K: Queued extraction with ID: " + item_id)
-	
 	# Wait for extraction to complete
 	var extraction_complete = false
 	var extraction_success = false
@@ -3134,7 +2800,6 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 		if completed_item_id == item_id:
 			extraction_complete = true
 			extraction_success = success
-			print("[LaunchManager] Vita3K: Extraction " + ("succeeded" if success else "failed") + ": " + message)
 	
 	DownloadManager.extraction_completed.connect(on_complete)
 	
