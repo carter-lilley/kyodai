@@ -285,11 +285,18 @@ func _adjust_zoom(delta: float) -> void:
 	
 	# Only update if value actually changed
 	if not is_equal_approx(current_zoom, new_zoom):
+		# Save the currently focused card's index before zooming
+		var focused_index = _get_focused_card_index()
+		
 		# Update navigation bar slider (uses set_value_no_signal, so we need to manually trigger updates)
 		navigation_bar.set_zoom_value(new_zoom)
 		
 		# Manually trigger zoom update for grids (since set_zoom_value doesn't emit signals)
 		_on_zoom_changed(new_zoom)
+		
+		# Restore focus to the previously focused card after layout updates
+		if focused_index >= 0:
+			call_deferred("_restore_focus_to_card", focused_index)
 		
 		# Save to settings immediately
 		if SettingsManager:
@@ -297,6 +304,47 @@ func _adjust_zoom(delta: float) -> void:
 			if zoom_setting:
 				SettingsManager.set_setting(new_zoom, zoom_setting)
 				SettingsManager.save_settings()
+
+func _get_focused_card_index() -> int:
+	"""Get the virtual index of the currently focused card, or -1 if none."""
+	var viewport = get_viewport()
+	if not viewport:
+		return -1
+	
+	var focused = viewport.gui_get_focus_owner()
+	if not focused:
+		return -1
+	
+	# Find the GameCard that contains the focused control
+	var parent = focused
+	while parent:
+		if parent.has_meta("virtual_index"):
+			return parent.get_meta("virtual_index", -1)
+		parent = parent.get_parent()
+	
+	return -1
+
+func _restore_focus_to_card(index: int) -> void:
+	"""Restore focus to the card at the given virtual index."""
+	# Get the current view
+	var current_view = UIManager.get_current_view()
+	if not current_view:
+		return
+	
+	var games_grid = _get_view_grid(current_view)
+	if not games_grid:
+		return
+	
+	# Get the card at the saved index
+	var card = games_grid.get_card_at_index(index)
+	if not card:
+		return
+	
+	# Grab focus on the card's input element
+	if card.has_node("CardInput"):
+		var card_input = card.get_node("CardInput")
+		if card_input and card_input is Control and card_input.focus_mode != Control.FOCUS_NONE:
+			card_input.grab_focus()
 
 func _on_delay_timeout():
 	if _held_dir != "":

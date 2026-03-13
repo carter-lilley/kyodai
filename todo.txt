@@ -1,4 +1,5 @@
 #TODO.TXT
+check weird image conversion webp/jpg thing
 ## UI
 	launch animation?
 	bug: after sync when finding existing game, it has no cover/dimensions need updated

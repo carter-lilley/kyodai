@@ -26,13 +26,13 @@ var _image_tasks: Dictionary = {}
 var _texture_cache: Dictionary = {}
 var _texture_cache_order: Array[String] = []
 var _texture_cache_mutex: Mutex
-const MAX_TEXTURE_CACHE_SIZE: int = 300
+const MAX_TEXTURE_CACHE_SIZE: int = 400
 
 var _lp_callbacks: Array = []
 var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
-const IMAGE_THREAD_COUNT: int = 4
+const IMAGE_THREAD_COUNT: int = 6
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5

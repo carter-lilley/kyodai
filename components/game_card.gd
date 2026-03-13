@@ -701,19 +701,21 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 		if file:
 			var buffer = file.get_buffer(file.get_length())
 			file.close()
-			return _load_texture_from_buffer(buffer)
+			return _load_image_from_buffer(buffer)
 		return null
 	
-	var callback_callable = func(texture):
+	var callback_callable = func(image):
 		_current_image_task_id = -1
 		if not is_instance_valid(self):
 			return
 		if not game or game.id != target_game_id:
 			return
 		
-		if texture:
-			MemoryManager.cache_texture(cache_path, texture)
-			_set_texture(texture)
+		if image:
+			var texture = ImageTexture.create_from_image(image)
+			if texture:
+				MemoryManager.cache_texture(cache_path, texture)
+				_set_texture(texture)
 		else:
 			_image_retry_count += 1
 			if _image_retry_count < MAX_IMAGE_RETRIES:
@@ -723,7 +725,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 	
 	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority)
 
-func _load_texture_from_buffer(buffer: PackedByteArray) -> Texture2D:
+func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
 		return null
 	
@@ -738,7 +740,7 @@ func _load_texture_from_buffer(buffer: PackedByteArray) -> Texture2D:
 		err = image.load_webp_from_buffer(buffer)
 	
 	if err == OK:
-		return ImageTexture.create_from_image(image)
+		return image
 	return null
 
 func _set_texture(tex: Texture2D) -> void:

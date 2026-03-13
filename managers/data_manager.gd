@@ -1430,8 +1430,11 @@ func _download_cover(url: String, callback: Callable):
 					return null
 				var buffer = file.get_buffer(file.get_length())
 				file.close()
-				return _load_texture_from_memory(buffer),
-			func(texture: Texture2D):
+				return _load_image_from_memory(buffer),
+			func(image):
+				var texture = null
+				if image:
+					texture = ImageTexture.create_from_image(image)
 				var load_success = texture != null
 				# Notify all waiting callbacks - thread-safe
 				_active_downloads_mutex.lock()
@@ -1459,7 +1462,7 @@ func _download_cover(url: String, callback: Callable):
 func get_cached_image_path(url: String) -> String:
 	return CACHE_FOLDER + url.md5_text() + ".jpg"
 
-func _load_texture_from_memory(buffer: PackedByteArray) -> Texture2D:
+func _load_image_from_memory(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
 		return null
 	
@@ -1475,7 +1478,7 @@ func _load_texture_from_memory(buffer: PackedByteArray) -> Texture2D:
 		err = image.load_webp_from_buffer(buffer)
 	
 	if err == OK:
-		return ImageTexture.create_from_image(image)
+		return image
 	return null
 
 func load_image(url: String, callback: Callable = Callable()):
@@ -1494,13 +1497,18 @@ func load_image(url: String, callback: Callable = Callable()):
 				if file:
 					var buffer = file.get_buffer(file.get_length())
 					file.close()
-					return _load_texture_from_memory(buffer)
+					return _load_image_from_memory(buffer)
 				return null,
-			func(texture):
-				if texture:
-					if callback.is_valid():
-						callback.call(texture)
-					image_loaded.emit(url, texture)
+			func(image):
+				if image:
+					var texture = ImageTexture.create_from_image(image)
+					if texture:
+						if callback.is_valid():
+							callback.call(texture)
+						image_loaded.emit(url, texture)
+					else:
+						# Cache file exists but failed to load, try downloading fresh
+						_load_image_from_network(url, cache_path, callback)
 				else:
 					# Cache file exists but failed to load, try downloading fresh
 					_load_image_from_network(url, cache_path, callback)
@@ -1525,13 +1533,15 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				if file:
 					var buffer = file.get_buffer(file.get_length())
 					file.close()
-					return _load_texture_from_memory(buffer)
+					return _load_image_from_memory(buffer)
 				return null,
-			func(texture):
-				if callback.is_valid():
-					callback.call(texture)
-				if texture:
-					image_loaded.emit(url, texture)
+			func(image):
+				if image:
+					var texture = ImageTexture.create_from_image(image)
+					if callback.is_valid():
+						callback.call(texture)
+					if texture:
+						image_loaded.emit(url, texture)
 		)
 	)
 
