@@ -149,7 +149,10 @@ func initialize(
 		# Check initial dual screen state (delay to allow plugins to initialize)
 		if DisplayManager.is_dual_screen_enabled():
 			print("[UIManager] Dual screen enabled, will initialize shortly...")
-			_initialize_dual_screen.call_deferred()
+			print("[UIManager] About to call _initialize_dual_screen.call_deferred()")
+			# Try calling directly first to see if deferred is the issue
+			_initialize_dual_screen()
+			print("[UIManager] _initialize_dual_screen() returned (direct call)")
 	
 	# Set initial focus
 	_set_initial_focus()
@@ -157,10 +160,13 @@ func initialize(
 	print("[UIManager] Initialized with pre-built nodes, position: ", _current_bar_position)
 
 func _initialize_dual_screen() -> void:
+	print("[UIManager] >>> _initialize_dual_screen() ENTERED <<<")
 	"""Initialize dual screen mode (called deferred to allow plugin initialization)."""
 	print("[UIManager] Initializing dual screen mode (deferred)...")
 	print("[UIManager] AynThor singleton check: ", Engine.has_singleton("AynThor"))
+	print("[UIManager] DisplayManager second screen index: ", DisplayManager.get_second_screen_index())
 	_on_dual_screen_mode_changed(true, DisplayManager.get_second_screen_index())
+	print("[UIManager] _initialize_dual_screen() COMPLETED")
 
 func _get_bar_position_string(index: int) -> String:
 	"""Convert position index to string."""
@@ -900,6 +906,12 @@ var _dual_screen_active: bool = false
 var _dual_screen_viewport_mode: bool = false
 var _hero_copy_in_second_viewport: Node = null
 
+# Node reparenting state for Android dual screen
+var _main_ui_original_parent: Node = null
+var _navigation_bar_original_parent: Node = null
+var _is_nodes_reparented: bool = false
+var _viewport_layout: Node = null
+
 func _on_dual_screen_mode_changed(enabled: bool, second_screen_index: int) -> void:
 	"""Handle dual screen mode changes from DisplayManager."""
 	print("[UIManager] Dual screen mode changed - enabled: ", enabled, ", screen: ", second_screen_index)
@@ -946,6 +958,11 @@ func _enable_dual_screen_viewport_mode() -> void:
 	
 	print("[UIManager] Found second screen hero: ", _hero_copy_in_second_viewport.name)
 	
+	# REPARENTING: Move main UI nodes into MainViewport
+	var main_viewport = get_node("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
+	if main_viewport:
+		_reparent_ui_to_main_viewport(main_viewport)
+	
 	# Hide hero in main UI since it will be on second screen
 	if _hero_spacer:
 		_hero_spacer.visible = false
@@ -955,16 +972,21 @@ func _enable_dual_screen_viewport_mode() -> void:
 	
 	# Sync current game to second screen hero
 	var current_game = null
-	if _hero_image and _hero_image.has_method("get_current_game"):
-		current_game = _hero_image.get_current_game()
-		if current_game and _hero_copy_in_second_viewport.has_method("set_game"):
-			print("[UIManager] Setting game on second screen hero: ", current_game.get_display_name() if current_game.has_method("get_display_name") else "unknown")
-			_hero_copy_in_second_viewport.set_game(current_game)
+	print("[UIManager] DEBUG: _hero_image = ", _hero_image)
+	if _hero_image:
+		print("[UIManager] DEBUG: _hero_image has get_current_game = ", _hero_image.has_method("get_current_game"))
+		if _hero_image.has_method("get_current_game"):
+			current_game = _hero_image.get_current_game()
+			print("[UIManager] DEBUG: current_game = ", current_game)
+			if current_game:
+				print("[UIManager] DEBUG: _hero_copy_in_second_viewport has set_game = ", _hero_copy_in_second_viewport.has_method("set_game"))
+				if _hero_copy_in_second_viewport.has_method("set_game"):
+					print("[UIManager] Setting game on second screen hero: ", current_game.get_display_name() if current_game.has_method("get_display_name") else "unknown")
+					_hero_copy_in_second_viewport.set_game(current_game)
 	
-	# Force viewport update
-	second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	
-	# Make dual screen setup visible (but off-screen)
+	# Position and make dual screen setup visible
+	# MainViewportContainer will be at (0,0) relative to this, so position at (0,0)
+	dual_screen_setup.position = Vector2.ZERO
 	dual_screen_setup.visible = true
 	
 	_dual_screen_active = true
@@ -978,11 +1000,15 @@ func _disable_dual_screen_mode() -> void:
 	
 	print("[UIManager] Disabling dual screen mode")
 	
+	# Restore UI nodes to original parents first
+	_restore_ui_to_original_parents()
+	
 	if _dual_screen_viewport_mode:
-		# Just hide the dual screen setup (heroes stay in place)
+		# Hide dual screen setup and move it back off-screen
 		var dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
 		if dual_screen_setup:
 			dual_screen_setup.visible = false
+			dual_screen_setup.position = Vector2(-10000, -10000)
 		
 		_dual_screen_viewport_mode = false
 	else:
@@ -1000,6 +1026,102 @@ func _disable_dual_screen_mode() -> void:
 	
 	_dual_screen_active = false
 	print("[UIManager] Dual screen mode disabled")
+
+func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
+	"""Reparent NavigationBar and RootLayout into MainViewport for dual screen."""
+	if _is_nodes_reparented:
+		return
+	
+	print("[UIManager] Reparenting UI nodes to MainViewport")
+	
+	# Store original parents
+	if _root_control:
+		_main_ui_original_parent = _root_control.get_parent()
+	if _navigation_bar:
+		_navigation_bar_original_parent = _navigation_bar.get_parent()
+	
+	# Remove from current parents
+	if _root_control and _root_control.get_parent():
+		_root_control.get_parent().remove_child(_root_control)
+	if _navigation_bar and _navigation_bar.get_parent():
+		_navigation_bar.get_parent().remove_child(_navigation_bar)
+	
+	# Create layout container within the viewport
+	_viewport_layout = VBoxContainer.new()
+	_viewport_layout.name = "ViewportLayout"
+	_viewport_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
+	main_viewport.add_child(_viewport_layout)
+	
+	# Add RootLayout (fills most space)
+	_root_control.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_viewport_layout.add_child(_root_control)
+	
+	# Add NavigationBar (fixed size at bottom)
+	_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_viewport_layout.add_child(_navigation_bar)
+	
+	_is_nodes_reparented = true
+	
+	# Reconnect FocusIndicator to new viewport after reparenting
+	if _focus_indicator and is_instance_valid(_focus_indicator):
+		_focus_indicator.reconnect_viewport()
+	
+	# Reconnect HomeView and LibraryView to new viewport after reparenting
+	var home_view = get_view("Home")
+	if home_view and home_view.has_method("reconnect_viewport"):
+		home_view.reconnect_viewport()
+	
+	var library_view = get_view("Library")
+	if library_view and library_view.has_method("reconnect_viewport"):
+		library_view.reconnect_viewport()
+	
+	print("[UIManager] UI nodes reparented successfully")
+
+func _restore_ui_to_original_parents() -> void:
+	"""Restore NavigationBar and RootLayout to their original parents."""
+	if not _is_nodes_reparented:
+		return
+	
+	print("[UIManager] Restoring UI nodes to original parents")
+	
+	# Remove viewport layout from MainViewport
+	if _viewport_layout:
+		# Remove children first
+		for child in _viewport_layout.get_children():
+			_viewport_layout.remove_child(child)
+		_viewport_layout.queue_free()
+		_viewport_layout = null
+	
+	# Restore RootLayout
+	if _root_control and _main_ui_original_parent:
+		if _root_control.get_parent():
+			_root_control.get_parent().remove_child(_root_control)
+		_main_ui_original_parent.add_child(_root_control)
+	
+	# Restore NavigationBar
+	if _navigation_bar and _navigation_bar_original_parent:
+		if _navigation_bar.get_parent():
+			_navigation_bar.get_parent().remove_child(_navigation_bar)
+		_navigation_bar_original_parent.add_child(_navigation_bar)
+	
+	_is_nodes_reparented = false
+	_main_ui_original_parent = null
+	_navigation_bar_original_parent = null
+	
+	# Reconnect FocusIndicator to original viewport after restoring
+	if _focus_indicator and is_instance_valid(_focus_indicator):
+		_focus_indicator.reconnect_viewport()
+	
+	# Reconnect HomeView and LibraryView to original viewport after restoring
+	var home_view = get_view("Home")
+	if home_view and home_view.has_method("reconnect_viewport"):
+		home_view.reconnect_viewport()
+	
+	var library_view = get_view("Library")
+	if library_view and library_view.has_method("reconnect_viewport"):
+		library_view.reconnect_viewport()
+	
+	print("[UIManager] UI nodes restored successfully")
 
 # ==================== DUAL SCREEN DESKTOP FALLBACK ====================
 

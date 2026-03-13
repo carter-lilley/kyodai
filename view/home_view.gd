@@ -119,6 +119,25 @@ func _on_focus_changed(control: Control):
 	
 	# Don't clear hero - keep the last focused game image
 
+func reconnect_viewport() -> void:
+	"""Reconnect to the current viewport's gui_focus_changed signal.
+	Call this after reparenting to ensure focus events are received."""
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	
+	# Try to disconnect from old viewport (might fail if not connected, that's ok)
+	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	# Connect to new/current viewport
+	viewport.gui_focus_changed.connect(_on_focus_changed)
+	print("[HomeView] Reconnected to viewport: ", viewport.name)
+	
+	# Reconnect grid's scroll container follow_focus
+	if games_grid and games_grid._scroll_container:
+		games_grid._scroll_container.reconnect_viewport()
+
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
 	_update_status("Scanning for downloaded games...")

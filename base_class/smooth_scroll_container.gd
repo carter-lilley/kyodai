@@ -23,11 +23,9 @@ var _is_dragging_scrollbar: bool = false
 var _scrollbar_drag_start_mouse_pos: float = 0.0
 var _scrollbar_drag_start_value: float = 0.0
 
-var _pre_focus_scroll: float = -1.0
-var _focus_key_pressed: bool = false
-
 func _ready():
-	follow_focus = true
+	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
+	follow_focus = false
 	
 	await get_tree().process_frame
 	
@@ -36,6 +34,52 @@ func _ready():
 	if smooth_scrolling:
 		gui_input.connect(_on_gui_input)
 		_connect_scrollbar_input()
+	
+	# Connect to viewport's focus changed signal
+	_connect_focus_signal()
+
+func _exit_tree():
+	# Disconnect from viewport to prevent dangling signal connections
+	var viewport = get_viewport()
+	if is_instance_valid(viewport) and viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+
+func _connect_focus_signal() -> void:
+	"""Connect to the current viewport's gui_focus_changed signal."""
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	
+	# Try to disconnect first (in case already connected)
+	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	# Connect to handle focus changes for smooth scrolling
+	viewport.gui_focus_changed.connect(_on_focus_changed)
+
+func _on_focus_changed(control: Control) -> void:
+	"""Handle focus changes to smoothly scroll focused items into view."""
+	if not control:
+		return
+	
+	# Only scroll if the focused control is inside this container
+	if not is_ancestor_of(control):
+		return
+	
+	# Calculate and smoothly scroll to centered position
+	_target_scroll = _get_centered_scroll_for_control(control)
+	_start_smooth_scroll()
+
+func reconnect_viewport() -> void:
+	"""Reconnect to the current viewport's gui_focus_changed signal.
+	Call this after reparenting into a SubViewport."""
+	# Disconnect from old viewport first
+	var old_viewport = get_viewport()
+	if is_instance_valid(old_viewport) and old_viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		old_viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	# Connect to new viewport (may be same, but ensures we're connected to current)
+	_connect_focus_signal()
 
 func _connect_scrollbar():
 	if vertical:
@@ -73,21 +117,6 @@ func _reconnect_scrollbars():
 	_connect_scrollbar()
 	_connect_scrollbar_input()
 
-func _input(event: InputEvent):
-	if not smooth_scrolling:
-		return
-	
-	if not event.is_pressed():
-		return
-	
-	if event.is_action("ui_up") or event.is_action("ui_down") or \
-	   event.is_action("ui_left") or event.is_action("ui_right") or \
-	   event.is_action("ui_focus_next") or event.is_action("ui_focus_prev"):
-		var focused = get_viewport().gui_get_focus_owner()
-		if focused and is_ancestor_of(focused):
-			_pre_focus_scroll = _get_current_scroll()
-			_focus_key_pressed = true
-
 func _get_current_scroll() -> float:
 	return scroll_vertical if vertical else scroll_horizontal
 
@@ -101,27 +130,6 @@ func _get_scrollbar():
 	return get_v_scroll_bar() if vertical else get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
-	if _focus_key_pressed and _pre_focus_scroll >= 0:
-		var pre_scroll = _pre_focus_scroll
-		_focus_key_pressed = false
-		_pre_focus_scroll = -1.0
-		
-		if abs(value - pre_scroll) > 10.0:
-			if _scroll_tween and _scroll_tween.is_valid():
-				_scroll_tween.kill()
-			_is_smooth_scrolling = false
-			
-			_set_current_scroll(int(pre_scroll))
-			
-			var focused = get_viewport().gui_get_focus_owner()
-			if focused and is_ancestor_of(focused):
-				_target_scroll = _get_centered_scroll_for_control(focused)
-			else:
-				_target_scroll = value
-			
-			call_deferred("_start_smooth_scroll")
-			return
-	
 	scroll_value_changed.emit(value)
 
 func _get_centered_scroll_for_control(p_control: Control) -> float:

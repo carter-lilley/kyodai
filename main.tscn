@@ -136,7 +136,7 @@ script = ExtResource("6_onscreenkeyboard")
 script = ExtResource("8_aynthor")
 main_screen = SubResource("Screen_1")
 second_screen = SubResource("Screen_2")
-target_fps = 60
+target_fps = 0
 
 [node name="DualScreenSetup" type="Control" parent="." unique_id=999999002]
 visible = false
@@ -152,7 +152,7 @@ offset_bottom = 1080.0
 stretch = false
 
 [node name="MainViewport" type="SubViewport" parent="DualScreenSetup/MainViewportContainer"]
-handle_input_locally = false
+handle_input_locally = true
 size = Vector2i(1920, 1080)
 render_target_update_mode = 4
 

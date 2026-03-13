@@ -80,6 +80,11 @@ func _ready():
 	# Load and apply saved zoom setting (wait for views to be ready)
 	await get_tree().process_frame
 	_load_and_apply_saved_zoom()
+	
+	# Connect to screen swap signal for dual screen handling
+	var ayn_thor_manager = get_node_or_null("AynThorManager")
+	if ayn_thor_manager:
+		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
 
 func _on_nav_button_pressed(view_name: String):
 	UIManager.switch_to_tab(view_name)
@@ -345,3 +350,9 @@ func _resend():
 		release.action = _held_dir
 		release.pressed = false
 		Input.parse_input_event(release)
+
+func _on_screens_swapped(is_swapped: bool) -> void:
+	"""Handle screen swap from AynThorManager."""
+	print("[Main] Screens swapped: ", is_swapped)
+	# Update any UI state that depends on which screen is primary
+	# Note: No reparenting needed - AynThorManager handles rendering swap

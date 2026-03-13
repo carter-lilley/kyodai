@@ -27,6 +27,8 @@ func _ready():
 	# Show gray initially
 	clear()
 	
+	print("[HeroImage] _ready() complete on ", name, ", _effect_stack: ", _effect_stack)
+	
 	print("[HeroImage] Initialized with EffectStack, size: ", size)
 
 func _setup_effect_stack():
@@ -84,7 +86,7 @@ func _get_cache_path(game: GameResource) -> String:
 	return ""
 
 func set_game(game: GameResource):
-	print("[HeroImage] set_game called with: ", game.get_display_name() if game and game.has_method("get_display_name") else "null")
+	print("[HeroImage] set_game called on ", name, " with: ", game.get_display_name() if game and game.has_method("get_display_name") else "null")
 	
 	if game == _current_game:
 		print("[HeroImage] Same game, skipping")
@@ -121,15 +123,19 @@ func set_game(game: GameResource):
 			else:
 				err = img.load_webp_from_buffer(buffer)
 		
-		print("[HeroImage] Image load error: ", err)
+		print("[HeroImage] Image load error: ", err, " on ", name)
 		if err == OK:
 			var tex = ImageTexture.create_from_image(img)
 			if tex:
-				print("[HeroImage] Texture created, size: ", tex.get_size())
+				print("[HeroImage] Texture created on ", name, ", size: ", tex.get_size())
 				if _effect_stack:
 					_effect_stack.set_game_texture(tex)
-					print("[HeroImage] Texture set to EffectStack")
+					print("[HeroImage] Texture set to EffectStack on ", name)
+				else:
+					print("[HeroImage] ERROR: _effect_stack is null on ", name)
 				return
+			else:
+				print("[HeroImage] ERROR: Failed to create texture on ", name)
 	
 	clear()
 

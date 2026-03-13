@@ -61,6 +61,28 @@ func _exit_tree() -> void:
 		if get_viewport().gui_focus_changed.is_connected(_on_focus_changed):
 			get_viewport().gui_focus_changed.disconnect(_on_focus_changed)
 
+func reconnect_viewport() -> void:
+	"""Reconnect to the current viewport's gui_focus_changed signal.
+	Call this after reparenting to ensure focus events are received."""
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	
+	# Try to disconnect from any viewport (might fail if not connected, that's ok)
+	# We need to try the old viewport first, but we don't have a reference to it
+	# So we'll just try to disconnect from current viewport in case we're reconnecting multiple times
+	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	# Connect to new viewport
+	viewport.gui_focus_changed.connect(_on_focus_changed)
+	print("[FocusIndicator] Reconnected to viewport: ", viewport.name)
+	
+	# Check if there's already a focused control
+	var focused = viewport.gui_get_focus_owner()
+	if focused:
+		_on_focus_changed(focused)
+
 func _on_focus_changed(control: Control) -> void:
 	if not is_instance_valid(control):
 		visible = false
