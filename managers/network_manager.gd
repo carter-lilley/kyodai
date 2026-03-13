@@ -14,6 +14,11 @@ var _password: String = ""
 var _is_online: bool = false
 var _is_configured: bool = false
 
+# HTTP Request Pool for efficient reuse during batch operations
+var _request_pool: Array[HTTPRequest] = []
+var _max_pool_size: int = 6
+var _active_request_count: int = 0
+
 func _ready():
 	SettingsManager.setting_changed.connect(_on_setting_changed)
 	_load_credentials()
@@ -53,6 +58,34 @@ func _check_configuration():
 	if _is_configured:
 		_check_connection()
 
+# ==================== HTTP REQUEST POOL ====================
+
+func _get_pooled_request() -> HTTPRequest:
+	"""Get an HTTPRequest from the pool or create a new one."""
+	if _request_pool.size() > 0:
+		var http = _request_pool.pop_back()
+		# Cancel any pending requests on reused node
+		http.cancel_request()
+		return http
+	
+	var http = HTTPRequest.new()
+	add_child(http)
+	return http
+
+func _return_request(http: HTTPRequest) -> void:
+	"""Return an HTTPRequest to the pool for reuse."""
+	if http == null or not is_instance_valid(http):
+		return
+	
+	# Disconnect any existing signal connections
+	for conn in http.request_completed.get_connections():
+		http.request_completed.disconnect(conn.callable)
+	
+	if _request_pool.size() < _max_pool_size:
+		_request_pool.append(http)
+	else:
+		http.queue_free()
+
 func _get_auth_header() -> String:
 	var credentials = _username + ":" + _password
 	var encoded = Marshalls.utf8_to_base64(credentials)
@@ -82,8 +115,8 @@ func _check_connection():
 # ==================== CORE HTTP METHOD ====================
 
 func make_request(endpoint: String, callback: Callable, authenticated: bool = true):
-	var http = HTTPRequest.new()
-	add_child(http)
+	var http = _get_pooled_request()
+	_active_request_count += 1
 	
 	var url = _base_url.rstrip("/") + "/api" + endpoint
 	
@@ -96,11 +129,13 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 	
 	if error != OK:
 		callback.call({}, "Failed to start request: " + str(error))
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		
 		if response_code == 401:
 			authentication_failed.emit()
@@ -171,19 +206,21 @@ func fetch_game_details(game_id: int, callback: Callable):
 ## Makes a generic HTTP GET request - returns body bytes and status via callback
 ## callback(success: bool, body: PackedByteArray, status_code: int, error_message: String)
 func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
-	var http = HTTPRequest.new()
-	add_child(http)
+	var http = _get_pooled_request()
+	_active_request_count += 1
 	
 	var error = http.request(url, headers)
 	
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, PackedByteArray(), 0, "Failed to start request: " + str(error))
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		return null
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		
 		if not callback.is_valid():
 			return
@@ -342,18 +379,20 @@ func fetch_github_latest_release(repo: String, asset_pattern: String, callback: 
 		url = base_url + "/repos/" + repo + "/releases/latest"
 	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
 	
-	var http = HTTPRequest.new()
-	add_child(http)
+	var http = _get_pooled_request()
+	_active_request_count += 1
 	
 	var error = http.request(url, headers)
 	
 	if error != OK:
 		callback.call("", "Failed to start request: " + str(error))
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "Request failed: " + str(result))
@@ -390,18 +429,20 @@ func fetch_github_latest_release(repo: String, asset_pattern: String, callback: 
 	)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable):
-	var http = HTTPRequest.new()
-	add_child(http)
+	var http = _get_pooled_request()
+	_active_request_count += 1
 	
 	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
 	
 	if error != OK:
 		callback.call("", "Failed to start request: " + str(error))
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
-		http.queue_free()
+		_active_request_count -= 1
+		_return_request(http)
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "Request failed: " + str(result))

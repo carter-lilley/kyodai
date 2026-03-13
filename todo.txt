@@ -19,14 +19,15 @@ check weird image conversion webp/jpg thing
 	hero IGDB opt
 	hero fx (screenshots/cropping/shadows/etc)
 ## performance:
-	try scaling cropping algo
+	sync: each make_request() creates new HTTPRequest instance
+	try scaling cropping algo(?)
 	further card image retries & priority management.
 	performance.add_custom_monitor for everything
 ## sync:
 	how to split important siblings
 	bug: refresh home scan after download
 	check: merge siblings for same cover
-	cache image colors,  cropping data, and sibiling lookup on sync
+	cache image colors, cropping data, and sibiling lookup on sync
 	check: are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
