@@ -383,9 +383,9 @@ func set_icon_color(color: Color) -> void:
 	for button in buttons:
 		if is_instance_valid(button):
 			_apply_icon_color_to_button(button, color)
-			print("[NavigationBar] Applied icon color to button: ", button.name)
-		else:
-			print("[NavigationBar] Button not valid: ", buttons.find(button))
+			#print("[NavigationBar] Applied icon color to button: ", button.name)
+		#else:
+			#print("[NavigationBar] Button not valid: ", buttons.find(button))
 
 func _apply_icon_color_to_button(button: TextureButton, color: Color) -> void:
 	"""Apply icon color shader to a texture button."""

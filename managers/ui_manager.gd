@@ -735,6 +735,11 @@ func _on_hero_game_changed(game: GameResource) -> void:
 		# Also set game on second screen hero if dual screen is active
 		if _dual_screen_active and _hero_copy_in_second_viewport and _hero_copy_in_second_viewport.has_method("set_game"):
 			_hero_copy_in_second_viewport.set_game(game)
+		# Force viewport update for UPDATE_ONCE mode
+		if _dual_screen_active:
+			var ayn_thor_manager = get_node_or_null("/root/Main/AynThorManager")
+			if ayn_thor_manager and ayn_thor_manager.has_method("force_hero_viewport_update"):
+				ayn_thor_manager.force_hero_viewport_update()
 	else:
 		_hero_image.clear()
 		if _dual_screen_active and _hero_copy_in_second_viewport and _hero_copy_in_second_viewport.has_method("clear"):

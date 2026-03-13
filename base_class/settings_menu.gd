@@ -23,12 +23,12 @@ func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: S
 		add_child(title_label)
 	
 	for settingsvar in settingsvars:
-		print("[SettingsMenu] Processing setting: ", settingsvar.display_name, " state: ", settingsvar.state, " INTERNAL?: ", settingsvar.state == State.INTERNAL)
+		#print("[SettingsMenu] Processing setting: ", settingsvar.display_name, " state: ", settingsvar.state, " INTERNAL?: ", settingsvar.state == State.INTERNAL)
 		if settingsvar.state != State.INTERNAL:
-			print("[SettingsMenu]   -> Adding to menu")
+			#print("[SettingsMenu]   -> Adding to menu")
 			match_var_type(settingsvar)
-		else:
-			print("[SettingsMenu]   -> SKIPPING (INTERNAL)")
+		#else:
+			#print("[SettingsMenu]   -> SKIPPING (INTERNAL)")
 
 func update_control_value(property_name: String, value: Variant) -> void:
 	var control = controls.get(property_name)

@@ -187,9 +187,6 @@ func _get_effect_config(effect_id: String) -> Dictionary:
 func _rebuild_effects():
 	# Update or create effects - don't destroy existing ones
 	# This reduces GC pressure and shader compilation stutter during scroll
-	print("[GameCard REBUILD] Starting _rebuild_effects. _card_state.effect_settings size: ", _card_state.effect_settings.size())
-	for i in range(_card_state.effect_settings.size()):
-		print("[GameCard REBUILD] Effect ", i, ": ", _card_state.effect_settings[i].get("effect_id", "UNKNOWN"))
 	
 	if not visual_container:
 		push_warning("GameCard: visual_container is null, cannot add effects")
@@ -210,7 +207,6 @@ func _rebuild_effects():
 	
 	# Badge effect - optional
 	var badge_config = _get_effect_config("badge")
-	print("[GameCard REBUILD] badge_config found: ", badge_config != null, ", badge_config: ", badge_config)
 	if badge_config:
 		if _badge_effect == null:
 			_badge_effect = BadgeEffect.new()
@@ -229,7 +225,6 @@ func _rebuild_effects():
 	
 	# Border effect - optional
 	var border_config = _get_effect_config("border")
-	print("[GameCard REBUILD] border_config found: ", border_config != null, ", border_config: ", border_config)
 	if border_config:
 		if _border_effect == null:
 			_border_effect = BorderEffect.new()
@@ -257,7 +252,6 @@ func _rebuild_effects():
 	
 	# Glow effect - optional
 	var glow_config = _get_effect_config("glow")
-	print("[GameCard REBUILD] glow_config found: ", glow_config != null)
 	if glow_config:
 		if _glow_effect == null:
 			_glow_effect = GlowEffect.new()
@@ -275,7 +269,6 @@ func _rebuild_effects():
 	
 	# Drop shadow effect - optional
 	var drop_shadow_config = _get_effect_config("drop_shadow")
-	print("[GameCard REBUILD] drop_shadow_config found: ", drop_shadow_config != null)
 	if drop_shadow_config:
 		if _drop_shadow_effect == null:
 			_drop_shadow_effect = DropShadowEffect.new()
@@ -293,7 +286,6 @@ func _rebuild_effects():
 	
 	# Distort effect - optional texture distortion (rendered BEFORE glass so it appears behind)
 	var distort_config = _get_effect_config("distort")
-	print("[GameCard REBUILD] distort_config found: ", distort_config != null)
 	if distort_config:
 		if _distort_effect == null:
 			_distort_effect = DistortEffect.new()
@@ -311,7 +303,6 @@ func _rebuild_effects():
 	
 	# Glass effect - optional overlay (rendered AFTER distort so it appears on top)
 	var glass_config = _get_effect_config("glass")
-	print("[GameCard REBUILD] glass_config found: ", glass_config != null)
 	if glass_config:
 		if _glass_effect == null:
 			_glass_effect = GlassEffect.new()
@@ -341,8 +332,7 @@ func _rebuild_effects():
 	
 	_update_platform_badge()
 	_update_status_badge_layout()
-	
-	print("[GameCard REBUILD] _rebuild_effects complete")
+
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
@@ -1057,11 +1047,11 @@ func reset():
 		visual_container.scale = Vector2.ONE
 
 func refresh_settings():
-	print("[GameCard] === refresh_settings called on ", name, " ===")
+	#print("[GameCard] === refresh_settings called on ", name, " ===")
 	_update_card_state_from_settings()
-	print("[GameCard] Rebuilding effects...")
+	#print("[GameCard] Rebuilding effects...")
 	_rebuild_effects()
-	print("[GameCard] === refresh_settings complete ===")
+	#print("[GameCard] === refresh_settings complete ===")
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:

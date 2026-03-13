@@ -6,8 +6,8 @@
 [ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/hero_image.tscn" id="5_heroimg"]
 [ext_resource type="Script" uid="uid://sgqdjn7yeqxm" path="res://addons/onscreenkeyboard/onscreen_keyboard.gd" id="6_onscreenkeyboard"]
 [ext_resource type="Script" uid="uid://b4lrijvkxphmr" path="res://components/fps_counter.gd" id="7_fpscounter"]
-[ext_resource type="Script" uid="uid://aynthor001" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
-[ext_resource type="Script" uid="uid://screenres001" path="res://addons/AynThor/screen_resource.gd" id="9_screenres"]
+[ext_resource type="Script" uid="uid://dpvnpkj275ewq" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
+[ext_resource type="Script" uid="uid://dnfalaub1s338" path="res://addons/AynThor/screen_resource.gd" id="9_screenres"]
 
 [sub_resource type="Resource" id="Screen_1"]
 script = ExtResource("9_screenres")
@@ -136,42 +136,32 @@ script = ExtResource("6_onscreenkeyboard")
 script = ExtResource("8_aynthor")
 main_screen = SubResource("Screen_1")
 second_screen = SubResource("Screen_2")
-target_fps = 0
 
 [node name="DualScreenSetup" type="Control" parent="." unique_id=999999002]
 visible = false
-layout_mode = 3
 anchors_preset = 0
 offset_left = -10000.0
 offset_top = -10000.0
 
-[node name="MainViewportContainer" type="SubViewportContainer" parent="DualScreenSetup"]
+[node name="MainViewportContainer" type="SubViewportContainer" parent="DualScreenSetup" unique_id=512595305]
 layout_mode = 0
 offset_right = 1920.0
 offset_bottom = 1080.0
-stretch = false
 
-[node name="MainViewport" type="SubViewport" parent="DualScreenSetup/MainViewportContainer"]
-handle_input_locally = true
+[node name="MainViewport" type="SubViewport" parent="DualScreenSetup/MainViewportContainer" unique_id=613151917]
+handle_input_locally = false
 size = Vector2i(1920, 1080)
-render_target_update_mode = 4
+render_target_update_mode = 0
 
-[node name="SecondViewportContainer" type="SubViewportContainer" parent="DualScreenSetup"]
+[node name="SecondViewportContainer" type="SubViewportContainer" parent="DualScreenSetup" unique_id=961374817]
 layout_mode = 0
 offset_left = 2000.0
 offset_right = 3240.0
 offset_bottom = 1080.0
-stretch = false
 
-[node name="SecondViewport" type="SubViewport" parent="DualScreenSetup/SecondViewportContainer"]
+[node name="SecondViewport" type="SubViewport" parent="DualScreenSetup/SecondViewportContainer" unique_id=1178559437]
 handle_input_locally = false
 size = Vector2i(1240, 1080)
-render_target_update_mode = 4
+render_target_update_mode = 0
 
-[node name="HeroImageSecondScreen" parent="DualScreenSetup/SecondViewportContainer/SecondViewport" instance=ExtResource("5_heroimg")]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+[node name="HeroImageSecondScreen" parent="DualScreenSetup/SecondViewportContainer/SecondViewport" unique_id=1788902033 instance=ExtResource("5_heroimg")]

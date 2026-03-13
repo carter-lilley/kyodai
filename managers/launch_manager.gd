@@ -122,7 +122,7 @@ func _build_platform_defaults():
 				var emulator_id = explicit_defaults[platform]
 				if _emulator_registry.has(emulator_id):
 					_platform_defaults[platform] = emulator_id
-					print("[LaunchManager] Explicit default for %s: %s" % [platform, emulator_id])
+					#print("[LaunchManager] Explicit default for %s: %s" % [platform, emulator_id])
 	
 	# Then, for any platforms not explicitly set, use first available emulator
 	for emulator_id in _emulator_registry.keys():

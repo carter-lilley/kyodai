@@ -40,12 +40,12 @@ func get_settings_by_subgroup() -> Dictionary:
 		if property.usage == 256:  # 								If it's a @export subgroup..
 			if not subgroup == "": # 								And we already have a previous subgroup
 				# Only add subgroup if it has non-INTERNAL settings
-				print("[SettingsManager] Checking subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
+				#print("[SettingsManager] Checking subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
 				if settingsvars.size() > 0:
 					dictionary[subgroup] = settingsvars.duplicate()
-					print("[SettingsManager] Added subgroup '", subgroup, "' to dictionary")
-				else:
-					print("[SettingsManager] Skipping empty subgroup '", subgroup, "'")
+					#print("[SettingsManager] Added subgroup '", subgroup, "' to dictionary")
+				#else:
+					#print("[SettingsManager] Skipping empty subgroup '", subgroup, "'")
 			subgroup = property.name
 			settingsvars.clear()										# And then clear the array for re-use.
 		if settings.get(property.name) is SettingsVar and not subgroup == "": 			#	If we've caught a SettingsVar and we already have a previous subgroup
@@ -53,12 +53,12 @@ func get_settings_by_subgroup() -> Dictionary:
 			# Skip INTERNAL settings - they shouldn't appear in the auto-generated menu
 			if settingsvar.state != SettingsVar.SettingState.INTERNAL:
 				settingsvars.append(settingsvar)
-				print("[SettingsManager] Added setting '", property.name, "' to subgroup '", subgroup, "'")
-			else:
-				print("[SettingsManager] Skipping INTERNAL setting '", property.name, "' in subgroup '", subgroup, "'")
+				#print("[SettingsManager] Added setting '", property.name, "' to subgroup '", subgroup, "'")
+			#else:
+				#print("[SettingsManager] Skipping INTERNAL setting '", property.name, "' in subgroup '", subgroup, "'")
 	# Only add last subgroup if it has non-INTERNAL settings
 	if settingsvars.size() > 0:
-		print("[SettingsManager] Adding final subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
+		#print("[SettingsManager] Adding final subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
 		dictionary[subgroup] = settingsvars.duplicate()
 	else:
 		print("[SettingsManager] Skipping final empty subgroup '", subgroup, "'")
@@ -270,8 +270,8 @@ func list_presets() -> Array[ThemePreset]:
 					print("[SettingsManager] Loading: ", preset_path)
 					print("[SettingsManager] ResourceLoader.exists: ", ResourceLoader.exists(preset_path))
 					var loaded_resource = ResourceLoader.load(preset_path)
-					print("[SettingsManager] Loaded resource: ", loaded_resource)
-					print("[SettingsManager] Resource type: ", loaded_resource.get_class() if loaded_resource else "null")
+					#print("[SettingsManager] Loaded resource: ", loaded_resource)
+					#print("[SettingsManager] Resource type: ", loaded_resource.get_class() if loaded_resource else "null")
 					var preset = loaded_resource as ThemePreset
 					print("[SettingsManager] Cast to ThemePreset: ", preset)
 					if preset and preset.name not in loaded_names:

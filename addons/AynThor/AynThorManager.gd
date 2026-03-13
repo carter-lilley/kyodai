@@ -75,7 +75,7 @@ func _ready():
 		_main_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 		_main_viewport.size = original_main_size
 	if _second_viewport:
-		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		_second_viewport.size = original_second_size
 
 	if _main_container:
@@ -146,6 +146,23 @@ func swap_screens():
 
 	screens_swapped.emit(is_swapped)
 	skip_frames = 2
+	
+	# Force hero viewport update after swap since UPDATE_ONCE may have stale texture
+	force_hero_viewport_update()
+
+func force_hero_viewport_update():
+	"""Force the hero viewport (SecondViewport) to update once.
+	Call this when the hero image changes or after screen swap."""
+	if _second_viewport:
+		# Temporarily set to ALWAYS to force one render, then back to ONCE
+		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		# Use call_deferred to ensure the render happens this frame
+		call_deferred("_set_second_viewport_update_once")
+
+func _set_second_viewport_update_once():
+	"""Callback to set SecondViewport back to UPDATE_ONCE after forcing update."""
+	if _second_viewport:
+		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 	var event = null

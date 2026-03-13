@@ -356,6 +356,7 @@
 		  "mime_type": "application/octet-stream",
 		  "grant_uri_permission": true,
 		  "clear_task": true,
+		  "use_document_uri": true,
 		  "extras": []
 		}
 	  }
