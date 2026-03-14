@@ -3,7 +3,64 @@ extends Manager
 ## Manages emulator registry, launch intents, and game execution
 
 const REGISTRY_PATH := "res://data/emulator_registry.json"
-const EMULATORS_DIR := "user://emulators/"
+
+## Returns the configured emulators directory from settings, or default if not set
+func get_emulators_directory() -> String:
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("emulators_folder")
+		if setting and setting.value != "":
+			return setting.value
+	return "user://emulators/"
+
+## Gets the full path to an emulator's directory
+## Handles path separators correctly for all platforms
+func _get_emulator_directory(emulator_id: String) -> String:
+	var base_dir = get_emulators_directory()
+	
+	# Ensure proper path separator
+	if base_dir.ends_with("/") or base_dir.ends_with("\\"):
+		return base_dir + emulator_id + "/"
+	else:
+		return base_dir + "/" + emulator_id + "/"
+
+## Resolves {emulator_dir} placeholders in paths
+func _resolve_emulator_path(path: String, emulator_id: String) -> String:
+	if path.begins_with("{emulator_dir}"):
+		return path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
+	return path
+
+## Extracts the base tree URI from a SAF path for permission checks
+func _extract_saf_tree_uri(full_uri: String) -> String:
+	var tree_pos = full_uri.find("/tree/")
+	if tree_pos == -1:
+		return ""
+	
+	var after_tree = tree_pos + 6
+	
+	# For SAF URIs with encoded paths, the tree URI includes everything up to the last component
+	var last_sep = full_uri.rfind("%2F")
+	if last_sep == -1:
+		last_sep = full_uri.rfind("/")
+	
+	if last_sep > after_tree:
+		return full_uri.substr(0, last_sep)
+	
+	return full_uri
+
+## Gets the subdirectory portion from a SAF path
+func _get_saf_subdirectory(full_uri: String) -> String:
+	var tree_pos = full_uri.find("/tree/")
+	if tree_pos == -1:
+		return ""
+	
+	var last_sep = full_uri.rfind("%2F")
+	if last_sep == -1:
+		last_sep = full_uri.rfind("/")
+	
+	if last_sep > tree_pos + 6:
+		return full_uri.substr(last_sep + 1)
+	
+	return ""
 
 # Installation states
 enum InstallState {
@@ -225,7 +282,7 @@ func is_emulator_installed(emulator_id: String) -> bool:
 ## Scans existing emulator installations and sets correct states
 ## Call this on startup to detect partial installations
 func scan_emulator_installations():
-	var dir = DirAccess.open(EMULATORS_DIR)
+	var dir = DirAccess.open(get_emulators_directory())
 	if not dir:
 		return
 	
@@ -304,7 +361,7 @@ func get_archive_path(emulator_id: String) -> String:
 		return ""
 	
 	var filename = download_url.get_file()
-	return EMULATORS_DIR + emulator_id + "/" + filename
+	return _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
 
 ## Checks if emulator is currently being extracted
 func is_emulator_extracting(emulator_id: String) -> bool:
@@ -323,7 +380,7 @@ func extract_emulator(emulator_id: String) -> bool:
 		return false
 	
 	var archive_path = get_archive_path(emulator_id)
-	var extract_dir = EMULATORS_DIR + emulator_id + "/"
+	var extract_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
 	
 	# Set state to extracting
 	_emulator_install_states[emulator_id] = InstallState.EXTRACTING
@@ -397,7 +454,7 @@ func _on_download_manager_extraction_started(item_id: String):
 		if item.type == "cores" or item.type == "download_release":
 			# Find the emulator this download belongs to
 			for emulator_id in _emulator_install_states.keys():
-				if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
+				if item.destination_path.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
 					var current_state = get_emulator_install_state(emulator_id)
 					if current_state == InstallState.NEEDS_POST_INSTALL:
 						_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
@@ -405,7 +462,7 @@ func _on_download_manager_extraction_started(item_id: String):
 		else:
 			# Check if this is an emulator extraction
 			for emulator_id in _emulator_install_states.keys():
-				if item.destination_path.begins_with(EMULATORS_DIR + emulator_id):
+				if item.destination_path.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
 					var current_state = get_emulator_install_state(emulator_id)
 					if current_state == InstallState.DOWNLOADING:
 						_emulator_install_states[emulator_id] = InstallState.EXTRACTING
@@ -416,7 +473,7 @@ func _on_download_manager_extraction_started(item_id: String):
 func _on_download_manager_extraction_completed(item_id: String, success: bool, extract_dir: String):
 	# Find which emulator this extraction belongs to
 	for emulator_id in _emulator_install_states.keys():
-		if extract_dir.begins_with(EMULATORS_DIR + emulator_id):
+		if extract_dir.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
 			if success:
 				
 				# Get current state before making changes
@@ -476,7 +533,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	if PlatformManager.is_android():
 		extract_path = extract_to
 	else:
-		extract_path = EMULATORS_DIR + emulator_id + "/" + extract_to
+		extract_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to
 	
 	var dir = DirAccess.open(extract_path)
 	if not dir:
@@ -589,7 +646,7 @@ func _execute_create_folders_task(emulator_id: String, emulator: Dictionary, tas
 		return true
 	
 	# Use emulator root directory (same as folders validation)
-	var base_dir = EMULATORS_DIR + emulator_id + "/"
+	var base_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
 	
 	for folder_path in folders:
 		var full_path = base_dir + folder_path
@@ -614,7 +671,7 @@ func _execute_create_files_task(emulator_id: String, emulator: Dictionary, task:
 		return true
 	
 	# Use emulator root directory (same as files validation)
-	var base_dir = EMULATORS_DIR + emulator_id + "/"
+	var base_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
 	
 	for file_entry in files:
 		var file_name = ""
@@ -742,12 +799,12 @@ func get_emulator_install_path(emulator_id: String) -> String:
 		return ""
 	
 	# First check direct path
-	var direct_path = EMULATORS_DIR + emulator_id + "/" + executable_name
+	var direct_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + executable_name
 	if FileAccess.file_exists(direct_path):
 		return direct_path
 	
 	# Search recursively up to 3 levels deep
-	var search_dir = EMULATORS_DIR + emulator_id + "/"
+	var search_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
 	var found_path = _find_executable_recursive(search_dir, executable_name, 3)
 	
 	if found_path != "":
@@ -1645,7 +1702,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		push_error("[LaunchManager] No expected_file specified for apk_install - cannot find APK to install")
 		return false
 	
-	var emulator_dir = EMULATORS_DIR + emulator_id
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	var apk_path = ""
 	
 	# Find the APK file matching the expected pattern
@@ -1687,7 +1744,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		)
 		
 		# Try to open the folder so user can find the APK
-		var folder_path = ProjectSettings.globalize_path(EMULATORS_DIR + emulator_id)
+		var folder_path = ProjectSettings.globalize_path(_get_emulator_directory(emulator_id).rstrip("/"))
 		var folder_result = OS.shell_open(folder_path)
 		
 		# Mark as installed anyway - user will install manually
@@ -1719,6 +1776,9 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var url_pattern = batch_config.get("url_pattern", "{name}")
 	var cores = batch_config.get("cores", [])
 	var extract_to = batch_config.get("extract_to", ".")
+	
+	# Resolve {emulator_dir} templates
+	extract_to = _resolve_emulator_path(extract_to, emulator_id)
 	
 	if base_url == "":
 		push_error("[LaunchManager] No base_url specified for batch_url_download")
@@ -1756,13 +1816,14 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		
 		# Determine extract directory
 		var extract_dir: String
-		if extract_to.begins_with("/"):
+		if extract_to.begins_with("/") or extract_to.begins_with("content://"):
+			# Absolute path or SAF URI
 			extract_dir = extract_to
 		else:
-			extract_dir = EMULATORS_DIR + emulator_id + "/" + extract_to
+			extract_dir = _get_emulator_directory(emulator_id) + extract_to
 		
 		# Download to emulator directory (for extraction, then delete)
-		var destination_path = EMULATORS_DIR + emulator_id + "/" + filename
+		var destination_path = _get_emulator_directory(emulator_id) + filename
 		
 		# Queue download with auto-extract
 		var item_id = DownloadManager.queue_download(
@@ -1818,14 +1879,17 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var emulator = get_emulator(emulator_id)
 	var install_steps = emulator.get("install", [])
 	
+	# Resolve {emulator_dir} templates
+	extract_to = _resolve_emulator_path(extract_to, emulator_id)
+	
 	# Handle extract_to: absolute paths are used directly, relative paths are relative to emulator dir
 	var extract_dir: String
-	if extract_to.begins_with("/"):
-		# Absolute path (e.g., Android /storage/emulated/0/...)
+	if extract_to.begins_with("/") or extract_to.begins_with("content://"):
+		# Absolute path (e.g., Android /storage/emulated/0/... or SAF URI)
 		extract_dir = extract_to
 	else:
 		# Relative path (default behavior for desktop)
-		extract_dir = EMULATORS_DIR + emulator_id + "/" + extract_to
+		extract_dir = _get_emulator_directory(emulator_id) + extract_to
 	
 	# NEW LOGIC: Check validation first (output files exist?)
 	if _validate_install_step(emulator_id, step_index, install_steps):
@@ -1833,7 +1897,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		return true
 	
 	# Look for the archive file to extract
-	var emulator_dir = EMULATORS_DIR + emulator_id
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	var archive_path = ""
 	
 	# First, check for explicit expected_file pattern in extract_config
@@ -1927,12 +1991,15 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 ## Validates a step result based on validation config
 ## Resolves a path for validation - uses absolute paths directly, relative paths are relative to emulator dir
 func _resolve_validation_path(emulator_id: String, path: String) -> String:
-	if path.begins_with("/"):
-		# Absolute path - use as-is
+	# First resolve {emulator_dir} templates
+	path = _resolve_emulator_path(path, emulator_id)
+	
+	if path.begins_with("/") or path.begins_with("content://"):
+		# Absolute path or SAF URI - use as-is
 		return path
 	else:
 		# Relative path - prepend emulator directory
-		return EMULATORS_DIR + emulator_id + "/" + path
+		return _get_emulator_directory(emulator_id) + path
 
 func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 	if validate_config.is_empty():
@@ -2084,11 +2151,25 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	for folder_path in folders:
+		# Resolve {emulator_dir} templates
+		folder_path = _resolve_emulator_path(folder_path, emulator_id)
+		
 		var full_path: String
-		if folder_path.begins_with("/"):
+		if folder_path.begins_with("/") or folder_path.begins_with("content://"):
+			# Absolute path or SAF URI - use as-is
 			full_path = folder_path
 		else:
-			full_path = EMULATORS_DIR + emulator_id + "/" + folder_path
+			full_path = _get_emulator_directory(emulator_id) + folder_path
+		
+		# On Android with SAF paths, use plugin to create directory
+		if PlatformManager.is_android() and full_path.begins_with("content://"):
+			var plugin = Engine.get_singleton("PackageChecker")
+			if plugin and plugin.has_method("createSafDirectory"):
+				var tree_uri = _extract_saf_tree_uri(full_path)
+				var subdir = _get_saf_subdirectory(full_path)
+				if subdir != "":
+					plugin.call("createSafDirectory", tree_uri, subdir)
+			continue
 		
 		var base_dir = full_path.get_base_dir()
 		var dir_name = full_path.get_file()
@@ -2112,7 +2193,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	# Get the emulator directory path for placeholder resolution
-	var emulator_dir = EMULATORS_DIR + emulator_id
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	var global_emulator_dir = ProjectSettings.globalize_path(emulator_dir)
 	
 	for file_entry in files:
@@ -2162,7 +2243,7 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	if file_path.begins_with("/"):
 		full_path = file_path
 	else:
-		full_path = EMULATORS_DIR + emulator_id + "/" + file_path
+		full_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + file_path
 	
 	if not FileAccess.file_exists(full_path):
 		push_error("[LaunchManager] File not found for editing: " + full_path)
@@ -2377,7 +2458,7 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 			dir.make_dir_recursive(dir_name)
 		destination_path = custom_destination + "/" + filename
 	else:
-		destination_path = EMULATORS_DIR + emulator_id + "/" + filename
+		destination_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
 	
 	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
@@ -2534,7 +2615,7 @@ func _execute_download_from_url(emulator_id: String, context: String, item_name:
 	# Check for custom destination path (for firmware/shared files)
 	var destination_path = download_config.get("destination", "")
 	if destination_path == "":
-		destination_path = EMULATORS_DIR + emulator_id + "/" + filename
+		destination_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
 	else:
 		# destination is a folder path, append filename
 		destination_path = destination_path + "/" + filename
@@ -2542,7 +2623,7 @@ func _execute_download_from_url(emulator_id: String, context: String, item_name:
 	var dm_type = "emulator" if context == "emulator" else "download_" + download_config.get("type", "unknown")
 	
 	if should_extract:
-		var extract_destination = EMULATORS_DIR + emulator_id + "/" + extract_to
+		var extract_destination = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to
 		
 		var item_id = DownloadManager.queue_download(
 			download_url,

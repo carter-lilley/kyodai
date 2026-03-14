@@ -85,6 +85,7 @@
 		  "android": {
 			"action_type": "apk_install",
 			"package_name": "com.retroarch",
+			"expected_file": "RetroArch.apk",
 			"validate": {
 			  "action_type": "package_installed",
 			  "package": "com.retroarch"
@@ -110,10 +111,10 @@
 				"swanstation", "picodrive", "genesis_plus_gx", "yabasanshiro", "snes9x", 
 				"mednafen_pce", "mednafen_vb"
 			],
-			"extract_to": "/storage/emulated/0/RetroArch/cores",
+			"extract_to": "{emulator_dir}/cores",
 			"validate": {
 			  "action_type": "files_exist",
-			  "path": "/storage/emulated/0/RetroArch/cores",
+			  "path": "{emulator_dir}/cores",
 			  "pattern": "*_libretro_android.so"
 			}
 		  }
@@ -135,10 +136,10 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"extract_to": "/storage/emulated/0/RetroArch/cores",
+			"extract_to": "{emulator_dir}/cores",
 			"validate": {
 			  "action_type": "files_exist",
-			  "path": "/storage/emulated/0/RetroArch/cores",
+			  "path": "{emulator_dir}/cores",
 			  "pattern": "*_libretro_android.so"
 			}
 		  }
@@ -168,12 +169,12 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"extract_to": "/storage/emulated/0/RetroArch/system",
+			"extract_to": "{emulator_dir}/system",
 			"strip_top_directory": true,
 			"flatten_target": "bios",
 			"validate": {
 			  "action_type": "files_exist",
-			  "path": "/storage/emulated/0/RetroArch/system"
+			  "path": "{emulator_dir}/system"
 			}
 		  }
 		}
@@ -185,7 +186,7 @@
 		"windows": {
 		  "type": "command",
 		  "executable": "retroarch.exe",
-		  "template": ["{exe}", "-L", "{core}", "{rom}"]
+		  "template": ["{exe}", "-L", "{core}", "{rom}", "-f"]
 		},
 		"android": {
 		  "type": "intent",
@@ -640,10 +641,10 @@
 		  },
 		  "android": {
 			"action_type": "create_folders",
-			"folders": ["/storage/emulated/0/Eden/user", "/storage/emulated/0/Eden/user/nand/system/Contents/registered", "/storage/emulated/0/Eden/user/keys"],
+			"folders": ["{emulator_dir}/user", "{emulator_dir}/user/nand/system/Contents/registered", "{emulator_dir}/user/keys"],
 			"validate": {
 			  "action_type": "folder_exists",
-			  "path": "/storage/emulated/0/Eden/user"
+			  "path": "{emulator_dir}/user"
 			}
 		  }
 		}
@@ -689,10 +690,10 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"extract_to": "/storage/emulated/0/Eden/user/nand/system/Contents/registered",
+			"extract_to": "{emulator_dir}/user/nand/system/Contents/registered",
 			"validate": {
 			  "action_type": "files_exist",
-			  "path": "/storage/emulated/0/Eden/user/nand/system/Contents/registered",
+			  "path": "{emulator_dir}/user/nand/system/Contents/registered",
 			  "pattern": "*"
 			}
 		  }
@@ -744,11 +745,11 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"extract_to": "/storage/emulated/0/Eden/user/keys",
+			"extract_to": "{emulator_dir}/user/keys",
 			"strip_top_directory": true,
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["/storage/emulated/0/Eden/user/keys/prod.keys", "/storage/emulated/0/Eden/user/keys/title.keys"]
+			  "files": ["{emulator_dir}/user/keys/prod.keys", "{emulator_dir}/user/keys/title.keys"]
 			}
 		  }
 		}
@@ -879,10 +880,10 @@
 		  },
 		  "android": {
 			"action_type": "create_folders",
-			"folders": ["/storage/emulated/0/Vita3K"],
+			"folders": ["{emulator_dir}"],
 			"validate": {
 			  "action_type": "folder_exists",
-			  "path": "/storage/emulated/0/Vita3K"
+			  "path": "{emulator_dir}"
 			}
 		  }
 		}
@@ -906,10 +907,10 @@
 			"action_type": "download_url",
 			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_pre.pup",
-			"destination": "/storage/emulated/0/Vita3K",
+			"destination": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["/storage/emulated/0/Vita3K/PSP2UPDAT_pre.pup"]
+			  "files": ["{emulator_dir}/PSP2UPDAT_pre.pup"]
 			}
 		  }
 		}
@@ -933,10 +934,10 @@
 			"action_type": "download_url",
 			"url": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
 			"filename": "PSVUPDAT.pup",
-			"destination": "/storage/emulated/0/Vita3K",
+			"destination": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["/storage/emulated/0/Vita3K/PSVUPDAT.pup"]
+			  "files": ["{emulator_dir}/PSVUPDAT.pup"]
 			}
 		  }
 		}
@@ -960,10 +961,10 @@
 			"action_type": "download_url",
 			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_sd.pup",
-			"destination": "/storage/emulated/0/Vita3K",
+			"destination": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["/storage/emulated/0/Vita3K/PSP2UPDAT_sd.pup"]
+			  "files": ["{emulator_dir}/PSP2UPDAT_sd.pup"]
 			}
 		  }
 		}
@@ -1469,12 +1470,12 @@
 		  "android": {
 			"action_type": "extract",
 			"filename": "xemu_bios.zip",
-			"extract_to": "/storage/emulated/0/Xemu",
+			"extract_to": "{emulator_dir}",
 			"strip_top_directory": true,
 			"flatten_target": "xemu_bios",
 			"validate": {
 			  "action_type": "files_exist",
-			  "path": "/storage/emulated/0/Xemu",
+			  "path": "{emulator_dir}",
 			  "files": ["mcpx_1.0.bin", "Complex_4627.bin"]
 			}
 		  }
