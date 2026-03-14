@@ -338,7 +338,7 @@ func _save_settings():
 
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	# Start the download
-	var success = LaunchManager.download_emulator(emulator_id)
+	var success = await LaunchManager.download_emulator(emulator_id)
 	if success:
 		# Update install status for the emulator
 		var install_status = {emulator_id: LaunchManager.get_emulator_install_state(emulator_id)}

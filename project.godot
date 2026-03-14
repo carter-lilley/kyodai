@@ -28,6 +28,7 @@ NotificationManager="*uid://igtredd7pthk"
 LaunchManager="*res://managers/launch_manager.gd"
 AudioManager="*res://managers/audio_manager.gd"
 GameNativeManager="*res://managers/gamenative_manager.gd"
+FileSystemManager="*res://managers/filesystem_manager.gd"
 
 [editor_plugins]
 

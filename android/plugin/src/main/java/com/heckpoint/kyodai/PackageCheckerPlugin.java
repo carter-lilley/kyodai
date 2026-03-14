@@ -360,6 +360,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
             Intent intent = new Intent();
             
             // Set component if className provided, otherwise just set package
+            // Package name is optional - if not provided, the system will find an appropriate handler
             if (packageName != null && !packageName.isEmpty()) {
                 if (className != null && !className.isEmpty()) {
                     intent.setClassName(packageName, className);
@@ -369,8 +370,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
                     Log.d(TAG, "Set package: " + packageName);
                 }
             } else {
-                Log.e(TAG, "ERROR: Package name is required");
-                return false;
+                Log.d(TAG, "No package name provided, using implicit intent");
             }
             
             // Set action if provided
@@ -430,27 +430,39 @@ public class PackageCheckerPlugin extends GodotPlugin {
             if (romDelivery != null && !romDelivery.isEmpty()) {
                 switch (romDelivery) {
                     case "intent_data":
-                        if (romContentUri != null) {
+                        Uri dataUri = null;
+                        
+                        // If original path is a SAF content:// URI, use it directly
+                        // This is important for APK installation where we need the original SAF URI
+                        if (romSafUri != null && !romSafUri.isEmpty()) {
+                            dataUri = Uri.parse(romSafUri);
+                            Log.d(TAG, "Using original SAF URI for intent data: " + dataUri);
+                        } else if (romContentUri != null) {
+                            dataUri = romContentUri;
+                            Log.d(TAG, "Using FileProvider URI for intent data: " + dataUri);
+                        }
+                        
+                        if (dataUri != null) {
                             String type = (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/octet-stream";
                             
                             // Convert tree URI to document URI ONLY when explicitly requested (for Eden)
                             if (useDocumentUri) {
-                                String uriString = romContentUri.toString();
+                                String uriString = dataUri.toString();
                                 if (uriString.contains("/tree/")) {
                                     String docUriString = convertTreeUriToDocumentUri(uriString);
                                     if (!docUriString.equals(uriString)) {
-                                        romContentUri = Uri.parse(docUriString);
-                                        Log.d(TAG, "Converted tree URI to document URI: " + romContentUri);
+                                        dataUri = Uri.parse(docUriString);
+                                        Log.d(TAG, "Converted tree URI to document URI: " + dataUri);
                                     }
                                 }
                             }
                             
-                            intent.setDataAndType(romContentUri, type);
-                            Log.d(TAG, "Set intent data (content URI): " + romContentUri);
+                            intent.setDataAndType(dataUri, type);
+                            Log.d(TAG, "Set intent data (content URI): " + dataUri);
                             
                             // Grant read permission via ClipData for VIEW intents
                             if (grantUriPermission || action.equals(Intent.ACTION_VIEW)) {
-                                intent.setClipData(ClipData.newRawUri(null, romContentUri));
+                                intent.setClipData(ClipData.newRawUri(null, dataUri));
                                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                                 Log.d(TAG, "Granted URI read permission via ClipData");
                             }
@@ -1075,6 +1087,8 @@ public class PackageCheckerPlugin extends GodotPlugin {
     private String getMimeType(String fileName) {
         String extension = fileName.substring(fileName.lastIndexOf(".") + 1).toLowerCase();
         switch (extension) {
+            case "apk":
+                return "application/vnd.android.package-archive";
             case "zip":
                 return "application/zip";
             case "7z":
@@ -1267,6 +1281,349 @@ public class PackageCheckerPlugin extends GodotPlugin {
             } else {
                 results.add(currentPath);
             }
+        }
+    }
+    
+    /**
+     * Checks if a directory exists in SAF storage.
+     * Returns true if the directory exists and is accessible, false otherwise.
+     */
+    @UsedByGodot
+    public boolean safDirExists(String fullPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "safDirExists() called");
+        Log.d(TAG, "Full path: " + fullPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Parse the path to extract tree base and directory path
+            // Format: content://authority/tree/treeId/subdir1/subdir2
+            int treePos = fullPath.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "ERROR: Invalid SAF path format - no /tree/ found");
+                return false;
+            }
+            
+            // Find end of tree ID (first / after /tree/)
+            int afterTree = treePos + 6;
+            int nextSlash = fullPath.indexOf("/", afterTree);
+            
+            if (nextSlash == -1) {
+                // Just the tree root
+                Log.d(TAG, "Path is tree root, checking if accessible");
+                Uri treeUri = Uri.parse(fullPath);
+                DocumentFile treeDir = DocumentFile.fromTreeUri(activity, treeUri);
+                boolean exists = treeDir != null && treeDir.exists() && treeDir.isDirectory();
+                Log.d(TAG, "Tree root exists: " + exists);
+                return exists;
+            }
+            
+            // Extract tree base URI (up to and including tree ID)
+            String treeBase = fullPath.substring(0, nextSlash);
+            Log.d(TAG, "Tree base: " + treeBase);
+            
+            // Extract relative path from tree
+            String relativePath = fullPath.substring(nextSlash + 1);
+            Log.d(TAG, "Relative path: " + relativePath);
+            
+            // Navigate through DocumentFile tree
+            Uri treeUri = Uri.parse(treeBase);
+            DocumentFile currentDir = DocumentFile.fromTreeUri(activity, treeUri);
+            
+            if (currentDir == null) {
+                Log.e(TAG, "ERROR: Could not access tree root");
+                return false;
+            }
+            
+            // Split relative path into components
+            String[] pathParts = relativePath.split("/");
+            
+            // Navigate through directories
+            for (String dirName : pathParts) {
+                if (dirName.isEmpty()) continue;
+                
+                Log.d(TAG, "Looking for directory: " + dirName);
+                DocumentFile subDir = currentDir.findFile(dirName);
+                if (subDir == null || !subDir.isDirectory()) {
+                    Log.d(TAG, "Directory not found: " + dirName);
+                    return false;
+                }
+                currentDir = subDir;
+            }
+            
+            boolean exists = currentDir.exists();
+            Log.d(TAG, "Directory exists: " + exists);
+            Log.d(TAG, "==========================================");
+            return exists;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR checking directory existence: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
+        }
+    }
+    
+    /**
+     * Lists files in a SAF directory.
+     * Returns a Godot array-compatible string representation of file names.
+     * Only lists immediate children (not recursive).
+     */
+    @UsedByGodot
+    public String safListFiles(String fullPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "safListFiles() called");
+        Log.d(TAG, "Full path: " + fullPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return "[]";
+        }
+        
+        try {
+            List<String> fileList = new ArrayList<>();
+            
+            // Parse the path to extract tree base and directory path
+            int treePos = fullPath.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "ERROR: Invalid SAF path format");
+                return "[]";
+            }
+            
+            int afterTree = treePos + 6;
+            int nextSlash = fullPath.indexOf("/", afterTree);
+            
+            Uri treeUri;
+            DocumentFile targetDir;
+            
+            if (nextSlash == -1) {
+                // Just the tree root
+                treeUri = Uri.parse(fullPath);
+                targetDir = DocumentFile.fromTreeUri(activity, treeUri);
+            } else {
+                String treeBase = fullPath.substring(0, nextSlash);
+                String relativePath = fullPath.substring(nextSlash + 1);
+                
+                treeUri = Uri.parse(treeBase);
+                targetDir = DocumentFile.fromTreeUri(activity, treeUri);
+                
+                // Navigate to target directory
+                String[] pathParts = relativePath.split("/");
+                for (String dirName : pathParts) {
+                    if (dirName.isEmpty()) continue;
+                    
+                    DocumentFile subDir = targetDir.findFile(dirName);
+                    if (subDir == null || !subDir.isDirectory()) {
+                        Log.d(TAG, "Directory not found: " + dirName);
+                        return "[]";
+                    }
+                    targetDir = subDir;
+                }
+            }
+            
+            if (targetDir == null || !targetDir.exists()) {
+                Log.e(TAG, "ERROR: Cannot access directory");
+                return "[]";
+            }
+            
+            // List files
+            DocumentFile[] files = targetDir.listFiles();
+            if (files != null) {
+                for (DocumentFile file : files) {
+                    fileList.add(file.getName());
+                }
+            }
+            
+            // Convert to JSON array string
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < fileList.size(); i++) {
+                if (i > 0) json.append(",");
+                json.append("\"").append(fileList.get(i)).append("\"");
+            }
+            json.append("]");
+            
+            Log.d(TAG, "Found " + fileList.size() + " items");
+            Log.d(TAG, "==========================================");
+            return json.toString();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR listing files: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return "[]";
+        }
+    }
+    
+    /**
+     * Writes text content to a file in SAF storage.
+     * Creates parent directories if they don't exist.
+     * Returns true if successful, false otherwise.
+     */
+    @UsedByGodot
+    public boolean writeSafFile(String fullPath, String content) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "writeSafFile() called");
+        Log.d(TAG, "Full path: " + fullPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Parse the path to extract tree base and file path
+            int treePos = fullPath.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "ERROR: Invalid SAF path format");
+                return false;
+            }
+            
+            int afterTree = treePos + 6;
+            int nextSlash = fullPath.indexOf("/", afterTree);
+            
+            if (nextSlash == -1) {
+                Log.e(TAG, "ERROR: Path is tree root, cannot write file");
+                return false;
+            }
+            
+            String treeBase = fullPath.substring(0, nextSlash);
+            String relativePath = fullPath.substring(nextSlash + 1);
+            
+            Log.d(TAG, "Tree base: " + treeBase);
+            Log.d(TAG, "Relative path: " + relativePath);
+            
+            // Navigate to parent directory and create if needed
+            Uri treeUri = Uri.parse(treeBase);
+            DocumentFile currentDir = DocumentFile.fromTreeUri(activity, treeUri);
+            
+            if (currentDir == null) {
+                Log.e(TAG, "ERROR: Could not access tree root");
+                return false;
+            }
+            
+            // Split path and navigate/create directories
+            String[] pathParts = relativePath.split("/");
+            String fileName = pathParts[pathParts.length - 1];
+            
+            // Navigate through parent directories
+            for (int i = 0; i < pathParts.length - 1; i++) {
+                String dirName = pathParts[i];
+                if (dirName.isEmpty()) continue;
+                
+                DocumentFile subDir = currentDir.findFile(dirName);
+                if (subDir == null || !subDir.isDirectory()) {
+                    // Create the directory
+                    subDir = currentDir.createDirectory(dirName);
+                    if (subDir == null) {
+                        Log.e(TAG, "ERROR: Failed to create directory: " + dirName);
+                        return false;
+                    }
+                }
+                currentDir = subDir;
+            }
+            
+            // Check if file exists and delete it
+            DocumentFile existingFile = currentDir.findFile(fileName);
+            if (existingFile != null) {
+                existingFile.delete();
+            }
+            
+            // Create new file
+            String mimeType = getMimeType(fileName);
+            DocumentFile newFile = currentDir.createFile(mimeType, fileName);
+            
+            if (newFile == null) {
+                Log.e(TAG, "ERROR: Failed to create file");
+                return false;
+            }
+            
+            // Write content
+            OutputStream outputStream = activity.getContentResolver().openOutputStream(newFile.getUri());
+            if (outputStream == null) {
+                Log.e(TAG, "ERROR: Could not open output stream");
+                return false;
+            }
+            
+            outputStream.write(content.getBytes("UTF-8"));
+            outputStream.flush();
+            outputStream.close();
+            
+            Log.d(TAG, "SUCCESS: Wrote file");
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR writing file: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            Log.e(TAG, "Stack trace:");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            return false;
+        }
+    }
+    
+    /**
+     * Copies a file from SAF storage to a local file path.
+     * Used to read SAF files by copying them to temp location first.
+     * Returns true if successful, false otherwise.
+     */
+    @UsedByGodot
+    public boolean copySafFileToLocal(String safUri, String localPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "copySafFileToLocal() called");
+        Log.d(TAG, "SAF URI: " + safUri);
+        Log.d(TAG, "Local path: " + localPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Create parent directories for local path
+            File localFile = new File(localPath);
+            File parentDir = localFile.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs();
+            }
+            
+            // Get input stream from SAF
+            Uri uri = Uri.parse(safUri);
+            java.io.InputStream inputStream = activity.getContentResolver().openInputStream(uri);
+            
+            if (inputStream == null) {
+                Log.e(TAG, "ERROR: Could not open SAF input stream");
+                return false;
+            }
+            
+            // Create output stream to local file
+            java.io.FileOutputStream outputStream = new java.io.FileOutputStream(localFile);
+            
+            // Copy data
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            long totalBytes = 0;
+            
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+                totalBytes += bytesRead;
+            }
+            
+            inputStream.close();
+            outputStream.flush();
+            outputStream.close();
+            
+            Log.d(TAG, "SUCCESS: Copied " + totalBytes + " bytes");
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR copying file from SAF: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
         }
     }
     

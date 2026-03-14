@@ -10,3 +10,8 @@ android/**/*.iml
 
 # Android debug keystore (contains sensitive signing key)
 android/*.keystore
+
+# Keep only the addon AAR - ignore build outputs
+# The canonical AAR is in addons/PackageChecker/ and should be in version control
+android/plugin/PackageCheckerPlugin.aar
+android/plugins/

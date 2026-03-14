@@ -313,7 +313,7 @@ func _on_download_pressed():
 			
 			if install_progress["status"] == "partial":
 				# Resume from first incomplete step
-				LaunchManager.download_emulator(effective_emulator)
+				await LaunchManager.download_emulator(effective_emulator)
 				refresh_ui()
 			else:
 				# Check legacy downloaded state

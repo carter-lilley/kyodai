@@ -1614,6 +1614,15 @@ func download_emulator(emulator_id: String) -> bool:
 		push_error("[LaunchManager] No install steps defined for: " + emulator_id)
 		return false
 	
+	# Ensure emulator directory exists before starting install (creates on desktop and SAF)
+	var emulator_dir = _get_emulator_directory(emulator_id)
+	if not FileSystemManager.dir_exists(emulator_dir):
+		print("[LaunchManager] Creating emulator directory: " + emulator_dir)
+		if not FileSystemManager.make_dir_recursive(emulator_dir):
+			push_error("[LaunchManager] Failed to create emulator directory: " + emulator_dir)
+			return false
+		print("[LaunchManager] Successfully created emulator directory")
+	
 	return _execute_install_steps(emulator_id, emulator, install_steps)
 
 ## Executes a single install step by index
@@ -1704,56 +1713,133 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	
 	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	var apk_path = ""
+	var use_saf = false
+	var saf_apk_uri = ""
 	
-	# Find the APK file matching the expected pattern
-	var dir = DirAccess.open(emulator_dir)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if file_name.match(expected_file):
-				apk_path = emulator_dir + "/" + file_name
-				break
-			file_name = dir.get_next()
-		dir.list_dir_end()
+	# Check if the previous download step used SAF by looking at pending downloads
+	# The download should have completed and been removed from pending, but we can infer from the context
+	# Check if we're on Android with SAF paths
+	if PlatformManager.is_android():
+		# Try SAF path first - look in the SAF directory
+		if FileSystemManager.is_saf_path(emulator_dir):
+			use_saf = true
+			print("[LaunchManager] APK install: Checking SAF path: " + emulator_dir)
+			
+			# List files in SAF directory
+			var files = FileSystemManager.list_dir(emulator_dir)
+			print("[LaunchManager] APK install: Found " + str(files.size()) + " files in SAF directory")
+			
+			for file_name in files:
+				print("[LaunchManager] APK install: Checking file: " + file_name)
+				if file_name.match(expected_file):
+					saf_apk_uri = emulator_dir + "/" + file_name
+					print("[LaunchManager] APK install: Found APK in SAF: " + saf_apk_uri)
+					break
+	
+	# If not found in SAF (or not using SAF), check regular directory
+	if apk_path == "" and saf_apk_uri == "":
+		print("[LaunchManager] APK install: Checking regular directory: " + emulator_dir)
+		var dir = DirAccess.open(emulator_dir)
+		if dir:
+			dir.list_dir_begin()
+			var file_name = dir.get_next()
+			while file_name != "":
+				if file_name.match(expected_file):
+					apk_path = emulator_dir + "/" + file_name
+					print("[LaunchManager] APK install: Found APK in regular directory: " + apk_path)
+					break
+				file_name = dir.get_next()
+			dir.list_dir_end()
 	
 	# If no APK found matching the pattern, re-run the download step
-	if apk_path == "":
+	if apk_path == "" and saf_apk_uri == "":
+		print("[LaunchManager] APK install: No APK found, retrying download step")
 		return _retry_previous_step(emulator_id, step_index)
 	
-	# Convert user:// path to absolute path for Android
-	var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
+	var apk_uri = ""
 	
-	# Use OS.shell_open with proper Android intent format
-	# Try different approaches for Android
-	var uri = "file://" + absolute_apk_path
+	# If we found the APK in SAF, use the content:// URI directly
+	if saf_apk_uri != "":
+		apk_uri = saf_apk_uri
+		print("[LaunchManager] APK install: Using SAF URI: " + apk_uri)
+	else:
+		# Regular path - convert to file:// URI
+		var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
+		apk_uri = "file://" + absolute_apk_path
+		print("[LaunchManager] APK install: Using file URI: " + apk_uri)
 	
-	# Try to open the APK for installation
-	# Note: On Android, this requires:
-	# 1. Kyodai to have "Install unknown apps" permission in Android Settings
-	# 2. The install_packages permission in the manifest
-	var result = OS.shell_open(uri)
+	if apk_uri == "":
+		push_error("[LaunchManager] Could not determine APK path for installation")
+		return _retry_previous_step(emulator_id, step_index)
 	
-	if result != Error.OK:
+	# Use PackageChecker plugin to launch APK installer with proper permissions
+	print("[LaunchManager] APK install: Launching installer via plugin")
+	var plugin = Engine.get_singleton("PackageChecker")
+	var install_success = false
+	
+	if plugin:
+		# Launch APK installer intent
+		# ACTION_VIEW with application/vnd.android.package-archive MIME type
+		install_success = plugin.call("launchAndroidIntent",
+			"android.intent.action.VIEW",  # action
+			"",  # packageName (system installer - empty for implicit intent)
+			"",  # className
+			apk_uri,  # data (APK URI)
+			"",  # corePath (not needed)
+			"intent_data",  # romDelivery - MUST be "intent_data" to set URI on intent
+			"{}",  # extrasJson (empty)
+			"application/vnd.android.package-archive",  # mimeType
+			false,  # clearTask
+			true,  # grantUriPermission (important for content:// URIs)
+			true   # useDocumentUri (true for content:// URIs)
+		)
+		print("[LaunchManager] APK install: Plugin launch result: " + str(install_success))
+	else:
+		push_error("[LaunchManager] PackageChecker plugin not available for APK install")
+	
+	# Fallback to OS.shell_open if plugin method fails
+	if not install_success:
+		print("[LaunchManager] APK install: Plugin launch failed, trying OS.shell_open fallback")
+		var result = OS.shell_open(apk_uri)
+		install_success = (result == Error.OK)
+		print("[LaunchManager] APK install: OS.shell_open result: " + str(result))
+	
+	if not install_success:
+		print("[LaunchManager] APK install: All launch methods failed")
 		# Show user-friendly message about manual installation
+		var display_path = apk_uri
+		if saf_apk_uri != "":
+			display_path = saf_apk_uri
+		else:
+			display_path = apk_uri.replace("file://", "")
 		NotificationManager.show_notification(
-			"RetroArch APK downloaded!\nPlease install it manually from:\n" + absolute_apk_path,
-			Notification.Type.WARNING,
+			"APK downloaded but install failed!\nPlease install it manually from:\n" + display_path,
+			Notification.Type.ERROR,
 			null,  # icon
 			10.0   # Show for 10 seconds
 		)
 		
 		# Try to open the folder so user can find the APK
-		var folder_path = ProjectSettings.globalize_path(_get_emulator_directory(emulator_id).rstrip("/"))
-		var folder_result = OS.shell_open(folder_path)
+		var folder_path = ""
+		if saf_apk_uri != "":
+			# For SAF, try to open the parent directory
+			folder_path = saf_apk_uri.get_base_dir()
+			if folder_path.begins_with("content://"):
+				# Can't open SAF URIs directly, just show the path in notification
+				folder_path = ""
+		else:
+			folder_path = ProjectSettings.globalize_path(_get_emulator_directory(emulator_id).rstrip("/"))
 		
-		# Mark as installed anyway - user will install manually
-		# Next time the app launches, validation will check if it's actually installed
-		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		if folder_path != "":
+			OS.shell_open(folder_path)
 		
-		# Progress to next step
-		_execute_install_step(emulator_id, step_index + 1)
-		return true
+		# DO NOT progress to next step - install failed
+		# Return false so the step can be retried
+		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+		_emulator_install_progress[emulator_id] = "APK install failed - manual install required"
+		return false
+	
+	print("[LaunchManager] APK install: Successfully opened package installer")
 	
 	# Mark as installing - user needs to complete the install via Android UI
 	_emulator_install_states[emulator_id] = InstallState.INSTALLED
@@ -1832,7 +1918,11 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 			"emulator_core",
 			core_name,
 			true,  # auto_extract
-			extract_dir
+			extract_dir,
+			null,  # game
+			{},    # callbacks
+			0,     # romm_id
+			true   # delete_after_extract
 		)
 		
 		if item_id == "":
@@ -2484,6 +2574,7 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		"step_index": step_index,
 		"step_config": step_config,
 		"filename": filename,
+		"use_saf": destination_path.begins_with("content://"),
 		"callback": func(success: bool, message: String):
 			if not success:
 				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
@@ -2697,7 +2788,13 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			return
 		
 		# Progress to next step
-		_execute_install_step(emulator_id, step_index + 1)
+		var step_success = _execute_install_step(emulator_id, step_index + 1)
+		if not step_success:
+			push_error("[LaunchManager] Install step " + str(step_index + 1) + " failed for: " + emulator_id)
+			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+			_emulator_install_progress[emulator_id] = "Install step failed"
+			emulator_extraction_completed.emit(emulator_id, false)
+			task_info.callback.call(false, "Install step failed")
 		return
 
 ## Handles extraction completion

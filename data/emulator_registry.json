@@ -1085,8 +1085,7 @@
 		  "android": {
 			"action_type": "download_url",
 			"url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
-			"filename": "LRPS2_bios.zip",
-			"destination": "/storage/emulated/0/Download"
+			"filename": "LRPS2_bios.zip"
 		  }
 		}
 	  },
@@ -1113,11 +1112,11 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"expected_file": "/storage/emulated/0/Download/LRPS2_bios.zip",
-			"extract_to": "/storage/emulated/0/Download",
+			"expected_file": "LRPS2_bios.zip",
+			"extract_to": ".",
 			"validate": {
 			  "action_type": "folder_exists",
-			  "path": "/storage/emulated/0/Download/bios"
+			  "path": "bios"
 			}
 		  }
 		}
@@ -1224,8 +1223,7 @@
 		  "android": {
 			"action_type": "download_url",
 			"url": "https://files.lilley.video/other_assets/melonds_bios.zip",
-			"filename": "melonds_bios.zip",
-			"destination": "/storage/emulated/0/Download"
+			"filename": "melonds_bios.zip"
 		  }
 		}
 	  },
@@ -1252,11 +1250,11 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"expected_file": "/storage/emulated/0/Download/melonds_bios.zip",
-			"extract_to": "/storage/emulated/0/Download",
+			"expected_file": "melonds_bios.zip",
+			"extract_to": ".",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["/storage/emulated/0/Download/firmware.bin", "/storage/emulated/0/Download/bios7.bin", "/storage/emulated/0/Download/bios9.bin"]
+			  "files": ["firmware.bin", "bios7.bin", "bios9.bin"]
 			}
 		  }
 		}

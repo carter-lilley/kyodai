@@ -51,8 +51,9 @@ const STALL_TIMEOUT_MS: int = 120 * 1000  # 120 seconds with no progress = stall
 const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at start
 
 ## Queues a download with optional auto-extraction
+## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0) -> String:
+func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
@@ -79,12 +80,16 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.game_resource = game
 	item.callbacks = callbacks
 	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
+	item.delete_after_extract = delete_after_extract
 	
 	# Store expected file size for progress tracking
 	if game:
 		item.expected_file_size = game.get_active_file_size()
 	
 	# Check if destination is a SAF (Storage Access Framework) path
+	print("[DownloadManager] queue_download: destination=" + destination)
+	print("[DownloadManager] destination starts with content://: " + str(destination.begins_with("content://")))
+	
 	if destination.begins_with("content://"):
 		# On Android, verify SAF permissions before starting download
 		if PlatformManager.is_android():
@@ -114,11 +119,14 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 		var file_name = destination.get_file()
 		var temp_dir = "user://downloads/saf_temp/" + item_id
 		item.destination_path = temp_dir + "/" + file_name
+		# Save original extract_dir for restoration after SAF copy
+		var original_extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
+		item.set_meta("original_extract_dir", original_extract_dir)
 		# Also set extract_dir to temp location if auto-extract is enabled
 		if item.auto_extract:
 			item.extract_dir = temp_dir + "/extracted"
 		else:
-			item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
+			item.extract_dir = original_extract_dir
 		# Create temp directory
 		var result = DirAccess.make_dir_recursive_absolute(temp_dir)
 		if result != OK:
@@ -329,9 +337,12 @@ func _start_download(item: QueueItem):
 	if item.type == "game":
 		headers.append("Authorization: " + NetworkManager.get_auth_header())
 	
-	# Use file-based download for large files (games)
+	# Use file-based download for:
+	# 1. Large files (games) - better for memory management
+	# 2. SAF paths - required for SAF copying after download
 	# Note: HTTPRequest.download_file streams directly to disk
-	if item.type == "game":
+	if item.type == "game" or item.use_saf:
+		print("[DownloadManager] Using file-based download for: " + item.name + " (type=" + item.type + ", use_saf=" + str(item.use_saf) + ")")
 		item.download_info = NetworkManager.http_download_file(
 			item.url,
 			item.destination_path,
@@ -353,6 +364,7 @@ func _start_download(item: QueueItem):
 		
 		item.http_request = item.download_info.get("http", null)
 	else:
+		print("[DownloadManager] Using buffer-based download for: " + item.name + " (type=" + item.type + ")")
 		item.http_request = NetworkManager.http_get(
 			item.url,
 			headers,
@@ -533,7 +545,10 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		return
 	
 	# Handle SAF (Storage Access Framework) copy if needed
+	print("[DownloadManager] _on_file_download_complete: use_saf=" + str(item.use_saf) + ", status=" + item.status)
+	
 	if item.use_saf:
+		print("[DownloadManager] Processing SAF copy for item: " + item.id)
 		NotificationManager.update_notification_text(item.notification_id, "Moving to storage: " + item.name + "...")
 		
 		var plugin = Engine.get_singleton("PackageChecker")
@@ -575,17 +590,34 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 			if file_name_pos > tree_end_pos:
 				subdir = saf_path.substr(tree_end_pos + 1, file_name_pos - tree_end_pos - 1)
 		
+		# DEBUG: Log all the paths
+		print("[DownloadManager] === SAF COPY DEBUG ===")
+		print("[DownloadManager] saf_path: " + saf_path)
+		print("[DownloadManager] tree_uri: " + tree_uri)
+		print("[DownloadManager] file_name: " + file_name)
+		print("[DownloadManager] subdir: '" + subdir + "'")
+		print("[DownloadManager] temp destination_path: " + item.destination_path)
+		
 		# Create subdirectory if needed
 		if subdir != "":
+			print("[DownloadManager] Creating subdirectory: " + subdir)
 			var dir_created = plugin.createSafDirectory(tree_uri, subdir)
+			print("[DownloadManager] createSafDirectory result: " + str(dir_created))
 			if not dir_created:
 				push_warning("[DownloadManager] Could not create subdirectory (may already exist)")
 		
 		# Convert Godot user:// path to absolute path for Java
 		var absolute_path = ProjectSettings.globalize_path(item.destination_path)
+		print("[DownloadManager] absolute_path: " + absolute_path)
+		
+		# Build the destination path for the plugin
+		var dest_path = subdir + "/" + file_name if subdir != "" else file_name
+		print("[DownloadManager] dest_path for plugin: " + dest_path)
 		
 		# Try to copy the file
-		var copy_success = plugin.copyFileToSaf(absolute_path, tree_uri, subdir + "/" + file_name if subdir != "" else file_name)
+		print("[DownloadManager] Calling copyFileToSaf...")
+		var copy_success = plugin.call("copyFileToSaf", absolute_path, tree_uri, dest_path)
+		print("[DownloadManager] copyFileToSaf result: " + str(copy_success))
 		
 		if not copy_success:
 			push_error("[DownloadManager] Failed to copy file to SAF location")
@@ -600,10 +632,23 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 			_process_queue()
 			return
 		
-		# Delete temp file
-		var temp_dir = item.destination_path.get_base_dir()
-		DirAccess.remove_absolute(item.destination_path)
-		DirAccess.remove_absolute(temp_dir)
+		# Save temp paths before updating destination_path
+		var temp_file_path = item.destination_path
+		var temp_dir_path = temp_file_path.get_base_dir()
+		
+		# Update destination_path to SAF path so extraction/callbacks use the correct location
+		item.destination_path = item.saf_destination
+		print("[DownloadManager] Updated destination_path to SAF location: " + item.destination_path)
+		
+		# Restore original extract_dir if it was saved
+		if item.has_meta("original_extract_dir"):
+			item.extract_dir = item.get_meta("original_extract_dir")
+			print("[DownloadManager] Restored extract_dir to: " + item.extract_dir)
+		
+		# Delete temp file and directory using saved paths
+		print("[DownloadManager] Cleaning up temp files: " + temp_file_path)
+		DirAccess.remove_absolute(temp_file_path)
+		DirAccess.remove_absolute(temp_dir_path)
 	
 	# Update game resource if applicable
 	if item.game_resource:
@@ -721,6 +766,9 @@ func _start_extraction(item: QueueItem):
 	var archive_path = item.destination_path
 	var extract_dir = item.extract_dir
 	
+	print("[DownloadManager] _start_extraction: archive_path=" + archive_path + ", extract_dir=" + extract_dir)
+	print("[DownloadManager] item.use_saf=" + str(item.use_saf) + ", item.saf_destination=" + item.saf_destination)
+	
 	if archive_path.ends_with(".zip"):
 		_extract_zip(item, archive_path, extract_dir)
 	elif archive_path.ends_with(".7z"):
@@ -739,9 +787,20 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 	# Show extraction notification immediately
 	NotificationManager.update_notification_text(item.notification_id, item.name + "...")
 	
+	# Check if destination is a SAF path
+	var is_saf_dest = FileSystemManager.is_saf_path(extract_dir)
+	var temp_extract_dir = ""
+	
+	if is_saf_dest:
+		# Extract to temp location first, then copy to SAF
+		temp_extract_dir = "user://extract_temp/" + item.id
+		if not DirAccess.dir_exists_absolute(temp_extract_dir.get_base_dir()):
+			DirAccess.make_dir_recursive_absolute(temp_extract_dir.get_base_dir())
+	
 	# Create extraction callable for MemoryManager
 	var extraction_callable = func() -> bool:
 		var actual_archive_path = archive_path
+		var actual_extract_dir = temp_extract_dir if is_saf_dest else extract_dir
 		
 		# On Android with SAF, content:// URIs can't be read directly by ZIPReader
 		# Convert to real file path using the PackageChecker plugin
@@ -768,22 +827,18 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		var files = reader.get_files()
 		
 		for file in files:
-			var dest_path = extract_dir + "/" + file
+			var dest_path = actual_extract_dir + "/" + file
 			
 			# Create directory if needed
 			if file.ends_with("/"):
-				var dir = DirAccess.open("user://")
-				if dir:
-					dir.make_dir_recursive(dest_path.trim_prefix("user://"))
+				FileSystemManager.make_dir_recursive(dest_path)
 				continue
 			
 			# Extract file
 			var buffer = reader.read_file(file)
 			if buffer.size() > 0:
 				var file_dir = dest_path.get_base_dir()
-				var dir = DirAccess.open("user://")
-				if dir:
-					dir.make_dir_recursive(file_dir.trim_prefix("user://"))
+				FileSystemManager.make_dir_recursive(file_dir)
 				
 				var f = FileAccess.open(dest_path, FileAccess.WRITE)
 				if f:
@@ -792,11 +847,18 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		reader.close()
 		
+		# If destination is SAF, copy extracted files there
+		if is_saf_dest:
+			if not FileSystemManager.copy_dir_to_saf(temp_extract_dir, extract_dir):
+				push_error("[DownloadManager] Failed to copy extracted files to SAF destination: " + extract_dir)
+				return false
+			
+			# Clean up temp directory
+			_cleanup_temp_dir(temp_extract_dir)
+		
 		# Clean up archive only if delete_after_extract is true
 		if item.delete_after_extract:
-			var dir = DirAccess.open("user://")
-			if dir:
-				dir.remove(archive_path.trim_prefix("user://"))
+			FileSystemManager.delete_file(archive_path)
 		
 		return true
 	
@@ -964,6 +1026,27 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 	
 	return true
 	return true
+
+## Helper function to recursively clean up a temp directory
+func _cleanup_temp_dir(dir_path: String) -> void:
+	var dir = DirAccess.open(dir_path)
+	if dir == null:
+		return
+	
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	
+	while file_name != "":
+		if file_name != "." and file_name != "..":
+			var full_path = dir_path + "/" + file_name
+			if dir.current_is_dir():
+				_cleanup_temp_dir(full_path)
+			else:
+				DirAccess.remove_absolute(full_path)
+		file_name = dir.get_next()
+	
+	dir.list_dir_end()
+	DirAccess.remove_absolute(dir_path)
 
 ## Extracts the base tree URI from a full SAF path
 ## SAF format: content://authority/tree/<tree_id>/subdir1/subdir2/file
