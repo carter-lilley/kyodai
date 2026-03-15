@@ -5,6 +5,8 @@ we lose focus on touch inputs and when launching games
 downloaded games dont show up in home view on android
 on android downloaded games arent found
 ## UI
+	game title under card option
+	game title "bubble option"
 	launch animation?
 	bug: after sync when finding existing game, it has no cover/dimensions need updated
 	focused card in front
@@ -37,7 +39,6 @@ on android downloaded games arent found
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	add: user selectable 'emulators' storage paths on on all paltforms, update android intents to look there when needed (retroarch/vita3k/melonds)
 	bug: melonDS bios names on android(?)
   	add: ppsspp, xenia, rpcs3, shadps4!
 	ft: scrape-style download action for retroarch

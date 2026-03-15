@@ -1159,6 +1159,27 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] PackageChecker plugin not available for Android launch")
 		return false
 	
+	# Check if we need MANAGE_EXTERNAL_STORAGE permission for FileProvider to work with SD cards
+	if plugin.has_method("hasManageExternalStoragePermission"):
+		if not plugin.hasManageExternalStoragePermission():
+			push_warning("[LaunchManager] MANAGE_EXTERNAL_STORAGE permission not granted - FileProvider may fail for SD card files")
+			# Show dialog to user explaining they need to grant the permission manually
+			if UIManager:
+				var dialog = ConfirmationDialog.new()
+				dialog.title = "Permission Required"
+				dialog.dialog_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
+				dialog.ok_button_text = "Open Settings"
+				dialog.cancel_button_text = "Cancel"
+				
+				var on_confirmed = func():
+					if plugin.has_method("requestManageExternalStoragePermission"):
+						plugin.requestManageExternalStoragePermission()
+				
+				dialog.confirmed.connect(on_confirmed)
+				UIManager.add_child(dialog)
+				dialog.popup_centered()
+			return false
+	
 	# Format the core path for RetroArch
 	var core_path = ""
 	
@@ -1187,6 +1208,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	var clear_task = intent.android_config.get("clear_task", true)
 	var grant_uri_permission = intent.android_config.get("grant_uri_permission", true)
 	var use_document_uri = intent.android_config.get("use_document_uri", false)
+	var use_file_uri = intent.android_config.get("use_file_uri", false)
 	
 	# Convert extras array to JSON string
 	var extras_array = intent.android_extras
@@ -1221,7 +1243,8 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		mime_type,
 		clear_task,
 		grant_uri_permission,
-		use_document_uri
+		use_document_uri,
+		use_file_uri
 	)
 	
 	if not success:

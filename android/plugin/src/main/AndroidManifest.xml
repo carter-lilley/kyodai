@@ -5,6 +5,10 @@
 	<!-- Permission to query all packages (Android 11+) -->
 	<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 	
+	<!-- Permission to access all files (for FileProvider to serve external files) -->
+	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+		android:minSdkVersion="30" />
+	
 	<!-- Explicitly declare packages we want to query -->
 	<queries>
 		<package android:name="com.retroarch" />
@@ -14,6 +18,20 @@
 	</queries>
 	
 	<application>
+		<!-- IMPORTANT: To enable SD card support, add to your app's AndroidManifest.xml: -->
+		<!-- 
+		<provider
+			android:name="androidx.core.content.FileProvider"
+			android:authorities="${applicationId}.fileprovider"
+			android:exported="false"
+			android:grantUriPermissions="true"
+			tools:replace="android:authorities,android:resource">
+			<meta-data
+				android:name="android.support.FILE_PROVIDER_PATHS"
+				android:resource="@xml/file_paths" />
+		</provider>
+		-->
+		
 		<meta-data 
 			android:name="org.godotengine.plugin.v2.PackageChecker" 
 			android:value="com.heckpoint.kyodai.PackageCheckerPlugin" />

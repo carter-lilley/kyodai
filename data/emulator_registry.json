@@ -1,8 +1,8 @@
 {
   "_meta": {
-	"version": "3.0",
+	"version": "3.1",
 	"description": "Emulator registry for Kyodai launcher",
-	"note": "Version 3.0 uses unified Android intent format. See retroarch or azahar examples."
+	"note": "Version 3.1 uses simplified Android intent format. Default values: grant_uri_permission=true, clear_task=true, mime_type='application/octet-stream'. rom_delivery: 'intent_data' (ROM as intent data), 'extra' (ROM via extras array), 'none' (no ROM)."
   },
   "_platform_defaults": {
 	"3do": "retroarch",
@@ -190,14 +190,10 @@
 		  "template": ["{exe}", "-L", "{core}", "{rom}", "-f"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
 		  "package": "com.retroarch",
 		  "class": "com.retroarch.browser.debug.CoreSideloadActivity",
-		  "rom_delivery": "extra_file_path",
-		  "mime_type": "application/octet-stream",
-		  "grant_uri_permission": false,
-		  "clear_task": false,
+		  "rom_delivery": "extra",
 		  "extras": [
 			{
 			  "key": "ROM",
@@ -342,15 +338,11 @@
 		  "template": ["{exe}", "{rom}"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
 		  "package": "io.github.lime3ds.android",
 		  "class": "org.citra.citra_emu.activities.EmulationActivity",
-		  "rom_delivery": "none",
-		  "mime_type": "application/octet-stream",
-		  "grant_uri_permission": false,
-		  "clear_task": true,
-		  "extras": []
+		  "rom_delivery": "intent_data",
+		  "grant_uri_permission": true
 		}
 	  }
 	}
@@ -447,14 +439,9 @@
 		  "template": ["{exe}", "-g", "{rom}", "-f"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
 		  "package": "info.cemu.cemu",
-		  "rom_delivery": "intent_data",
-		  "mime_type": "application/octet-stream",
-		  "grant_uri_permission": true,
-		  "clear_task": true,
-		  "extras": []
+		  "rom_delivery": "intent_data"
 		}
 	  }
 	}
@@ -547,11 +534,10 @@
 		  "template": []
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.MAIN",
 		  "package": "org.dolphinemu.dolphinemu",
 		  "class": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
-		  "grant_uri_permission": true,
+		  "rom_delivery": "extra",
 		  "extras": [
 			{
 			  "key": "AutoStartFile",
@@ -768,14 +754,9 @@
 		  "template": ["{exe}", "{rom}", "-f"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
 		  "package": "dev.eden.eden_emulator",
-		  "class": "org.yuzu.yuzu_emu.activities.EmulationActivity",
 		  "rom_delivery": "intent_data",
-		  "mime_type": "application/octet-stream",
-		  "grant_uri_permission": true,
-		  "clear_task": true,
 		  "use_document_uri": true
 		}
 	  }
@@ -983,14 +964,10 @@
 		  "template": ["{exe}","--fullscreen", "{rom}"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.MAIN",
 		  "package": "org.vita3k.emulator",
 		  "class": "org.vita3k.emulator.Emulator",
-		  "rom_delivery": "none",
-		  "grant_uri_permission": true,
-		  "clear_task": true,
-		  "extras": []
+		  "rom_delivery": "none"
 		}
 	  }
 	}
@@ -1135,10 +1112,10 @@
 		  "template": ["{exe}", "-batch", "{rom}"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.MAIN",
 		  "package": "xyz.aethersx2.android",
 		  "class": "xyz.aethersx2.android.EmulationActivity",
+		  "rom_delivery": "extra",
 		  "extras": [
 			{
 			  "key": "bootPath",
@@ -1316,13 +1293,10 @@
 		  "template": ["{exe}", "{rom}"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "me.magnum.melonds.nightly.LAUNCH_ROM",
 		  "package": "me.magnum.melonds.nightly",
 		  "class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
 		  "rom_delivery": "intent_data",
-		  "grant_uri_permission": true,
-		  "clear_task": true,
 		  "extras": [
 			{
 			  "key": "uri",
@@ -1493,14 +1467,10 @@
 		  "template": ["{exe}", "-dvd_path", "{rom}"]
 		},
 		"android": {
-		  "type": "intent",
 		  "action": "android.intent.action.VIEW",
 		  "package": "com.izzy2lost.x1box",
 		  "class": "com.izzy2lost.x1box.MainActivity",
-		  "rom_delivery": "intent_data",
-		  "mime_type": "application/octet-stream",
-		  "grant_uri_permission": true,
-		  "clear_task": true
+		  "rom_delivery": "intent_data"
 		}
 	  }
 	}

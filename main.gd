@@ -22,6 +22,9 @@ var _last_press: int = 0
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
 
+# Focus restoration on app resume (Android)
+var _last_focused_index: int = -1
+
 func _ready():
 	_setup_repeat()
 	

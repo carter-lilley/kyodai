@@ -307,36 +307,43 @@ public class PackageCheckerPlugin extends GodotPlugin {
     }
     
     /**
-     * NEW UNIFIED INTENT LAUNCHER
+     * UNIFIED INTENT LAUNCHER - Simplified Schema
      * 
-     * Supports multiple ways to deliver the ROM to the emulator:
+     * Supports streamlined configuration with sensible defaults:
+     * - grantUriPermission defaults to TRUE (SAF-compatible)
+     * - clearTask defaults to TRUE (prevents back-stack issues)
+     * - mimeType defaults to "application/octet-stream"
+     * 
+     * rom_delivery values:
      * - "intent_data": ROM passed via intent.setDataAndType() as content:// URI
-     * - "extra_file_path": ROM path passed as string extra
-     * - "extra_file_uri": ROM URI passed as string extra (content://)
-     * - "extra_document_uri": ROM URI passed as document URI string
-     * - "none": No ROM delivery (just launch the emulator)
-     * 
-     * Extras can be configured with types:
-     * - "string": Literal string value
-     * - "file_path": File system path (replaces {rom} with ROM path)
-     * - "file_uri": content:// URI (replaces {rom} with content URI)
-     * - "document_uri": Document provider URI
-     * - "boolean": Boolean value
+     * - "extra": ROM passed via extras array (define key/type in extras)
+     * - "none": No ROM delivery (just launch the app)
      * 
      * @param action Intent action (e.g., "android.intent.action.VIEW")
      * @param packageName Target app package name
      * @param className Target activity class name (can be null for package-only launch)
      * @param romPath Absolute file path to the ROM
-     * @param romDelivery How to deliver the ROM (see above)
-     * @param extrasJson JSON array string of extras (format: [{"key": "name", "value": "val", "type": "string"}, ...])
+     * @param corePath Core path for RetroArch
+     * @param romDelivery How to deliver the ROM: "intent_data", "extra", or "none"
+     * @param extrasJson JSON array string of extras
      * @param mimeType MIME type for intent data (default: "application/octet-stream")
-     * @param clearTask Whether to use FLAG_ACTIVITY_CLEAR_TASK
-     * @param grantUriPermission Whether to grant FLAG_GRANT_READ_URI_PERMISSION
+     * @param clearTask Whether to use FLAG_ACTIVITY_CLEAR_TASK (default: true)
+     * @param grantUriPermission Whether to grant URI permissions (default: true)
+     * @param useDocumentUri Whether to convert tree URIs to document URIs
+     * @param useFileUri Whether to pass file:// URI instead of content:// URI (for apps with MANAGE_EXTERNAL_STORAGE)
      */
     @UsedByGodot
     public boolean launchAndroidIntent(String action, String packageName, String className, String romPath,
                                         String corePath, String romDelivery, String extrasJson, String mimeType,
-                                        boolean clearTask, boolean grantUriPermission, boolean useDocumentUri) {
+                                        boolean clearTask, boolean grantUriPermission, boolean useDocumentUri, boolean useFileUri) {
+        // Apply sensible defaults
+        if (mimeType == null || mimeType.isEmpty()) {
+            mimeType = "application/octet-stream";
+        }
+        // Note: clearTask and grantUriPermission are primitive booleans, 
+        // so they'll use whatever value is passed. The caller (launch_manager.gd) 
+        // should apply the defaults.
+        
         Log.d(TAG, "==========================================");
         Log.d(TAG, "launchAndroidIntent() [UNIFIED] called");
         Log.d(TAG, "Action: " + action);
@@ -350,6 +357,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         Log.d(TAG, "Clear Task: " + clearTask);
         Log.d(TAG, "Grant URI Permission: " + grantUriPermission);
         Log.d(TAG, "Use Document URI: " + useDocumentUri);
+        Log.d(TAG, "Use File URI: " + useFileUri);
         
         if (activity == null) {
             Log.e(TAG, "ERROR: Activity is null!");
@@ -415,11 +423,15 @@ public class PackageCheckerPlugin extends GodotPlugin {
                     
                     // Generate FileProvider content:// URI
                     try {
+                        // Use Godot's FileProvider authority
+                        // Note: For SD card support, you must override Godot's file_paths.xml in your app's AndroidManifest.xml
                         String authority = activity.getPackageName() + ".fileprovider";
                         romContentUri = FileProvider.getUriForFile(activity, authority, romFile);
                         Log.d(TAG, "Generated FileProvider URI: " + romContentUri);
                     } catch (IllegalArgumentException e) {
                         Log.w(TAG, "Could not generate FileProvider URI: " + e.getMessage());
+                        Log.w(TAG, "FileProvider failed for path: " + filePath);
+                        Log.w(TAG, "For SD card support, add custom file_paths.xml to your AndroidManifest.xml");
                     }
                 } else {
                     Log.w(TAG, "ROM file does not exist: " + filePath);
@@ -437,10 +449,10 @@ public class PackageCheckerPlugin extends GodotPlugin {
                             dataUri = romContentUri;
                             Log.d(TAG, "Using FileProvider URI for intent data: " + dataUri);
                         } else if (romSafUri != null && !romSafUri.isEmpty()) {
-                            // Convert tree URI to document URI only when requested
                             String uriString = romSafUri;
-                            if (uriString.contains("/tree/") && useDocumentUri) {
-                                // Apps like Azahar need document URIs, not tree URIs
+                            
+                            // Convert tree URI to document URI when requested (for Azahar/Eden)
+                            if (uriString.contains("/tree/") && useDocumentUri && !useFileUri) {
                                 String docUriString = convertTreeUriToDocumentUri(uriString);
                                 if (!docUriString.equals(uriString)) {
                                     dataUri = Uri.parse(docUriString);
@@ -449,13 +461,48 @@ public class PackageCheckerPlugin extends GodotPlugin {
                                     dataUri = Uri.parse(romSafUri);
                                     Log.d(TAG, "Using original SAF tree URI (could not convert): " + dataUri);
                                 }
-                            } else {
-                                // Use original tree URI for emulators that support it
-                                dataUri = Uri.parse(romSafUri);
-                                if (uriString.contains("/document/")) {
-                                    Log.d(TAG, "Using original SAF URI (already document URI): " + dataUri);
+                            } else if (useFileUri) {
+                                // Convert to file:// URI for apps with MANAGE_EXTERNAL_STORAGE permission
+                                String realPath = getFilePathFromContentUri(activity, romSafUri);
+                                if (realPath != null && !realPath.isEmpty() && !realPath.startsWith("content://")) {
+                                    File romFile = new File(realPath);
+                                    if (romFile.exists()) {
+                                        dataUri = Uri.fromFile(romFile);
+                                        Log.d(TAG, "Created file:// URI (useFileUri=true): " + dataUri);
+                                    } else {
+                                        Log.w(TAG, "File does not exist at path: " + realPath);
+                                        dataUri = Uri.parse(romSafUri);
+                                        Log.d(TAG, "Falling back to original SAF URI: " + dataUri);
+                                    }
                                 } else {
-                                    Log.d(TAG, "Using original SAF tree URI (useDocumentUri=false): " + dataUri);
+                                    Log.w(TAG, "Could not convert SAF URI to file path for file:// URI");
+                                    dataUri = Uri.parse(romSafUri);
+                                    Log.d(TAG, "Falling back to original SAF URI: " + dataUri);
+                                }
+                            } else {
+                                // Try to create FileProvider URI from file path
+                                String realPath = getFilePathFromContentUri(activity, romSafUri);
+                                if (realPath != null && !realPath.isEmpty() && !realPath.startsWith("content://")) {
+                                    File romFile = new File(realPath);
+                                    if (romFile.exists()) {
+                                        try {
+                                            dataUri = FileProvider.getUriForFile(activity, "com.heckpoint.kyodai.fileprovider", romFile);
+                                            Log.d(TAG, "Created FileProvider URI from SAF path: " + dataUri);
+                                        } catch (Exception e) {
+                                            Log.w(TAG, "Could not create FileProvider URI from path: " + realPath + ", error: " + e.getMessage());
+                                            // Use original SAF URI instead of file:// (Android 7.0+ forbids file://)
+                                            dataUri = Uri.parse(romSafUri);
+                                            Log.d(TAG, "Using original SAF URI instead of file://: " + dataUri);
+                                        }
+                                    } else {
+                                        Log.w(TAG, "File does not exist at path: " + realPath);
+                                        dataUri = Uri.parse(romSafUri);
+                                        Log.d(TAG, "Falling back to original SAF URI: " + dataUri);
+                                    }
+                                } else {
+                                    // Could not convert to path, use original SAF URI
+                                    dataUri = Uri.parse(romSafUri);
+                                    Log.d(TAG, "Using original SAF URI (could not convert to path): " + dataUri);
                                 }
                             }
                         }
@@ -467,18 +514,26 @@ public class PackageCheckerPlugin extends GodotPlugin {
                             if (grantUriPermission) {
                                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                                 
-                                // For SAF URIs, also grant explicit permission to the target package
-                                if (dataUri.toString().startsWith("content://") && packageName != null && !packageName.isEmpty()) {
+                                // Only grant explicit permission for FileProvider URIs (our own provider)
+                                // SAF URIs cannot be explicitly granted - we must rely on FLAG_GRANT_READ_URI_PERMISSION
+                                String uriStr = dataUri.toString();
+                                boolean isSafUri = uriStr.contains("com.android.externalstorage.documents") ||
+                                                   uriStr.contains("com.android.providers.downloads") ||
+                                                   uriStr.contains("com.android.providers.media");
+                                
+                                if (!isSafUri && uriStr.startsWith("content://") && packageName != null && !packageName.isEmpty()) {
                                     try {
                                         activity.grantUriPermission(packageName, dataUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                                         Log.d(TAG, "Granted explicit URI permission to package: " + packageName);
                                     } catch (Exception e) {
                                         Log.w(TAG, "Could not grant explicit URI permission: " + e.getMessage());
                                     }
+                                } else if (isSafUri) {
+                                    Log.d(TAG, "SAF URI detected - skipping explicit grant, using FLAG_GRANT_READ_URI_PERMISSION only");
                                 }
                                 
-                                // Use ClipData for permission grants
-                                if (dataUri.toString().startsWith("content://")) {
+                                // Use ClipData for permission grants (works for both SAF and FileProvider URIs)
+                                if (uriStr.startsWith("content://")) {
                                     intent.setClipData(ClipData.newRawUri(null, dataUri));
                                     Log.d(TAG, "Granted URI read permission via ClipData and flags");
                                 }
@@ -491,19 +546,9 @@ public class PackageCheckerPlugin extends GodotPlugin {
                         }
                         break;
                         
-                    case "extra_file_path":
-                        // ROM delivered as file path string in extras (handled below)
-                        Log.d(TAG, "ROM will be delivered via extra as file path");
-                        break;
-                        
-                    case "extra_file_uri":
-                        // ROM delivered as content:// URI string in extras (handled below)
-                        Log.d(TAG, "ROM will be delivered via extra as content URI");
-                        break;
-                        
-                    case "extra_document_uri":
-                        // ROM delivered as document URI in extras (handled below)
-                        Log.d(TAG, "ROM will be delivered via extra as document URI");
+                    case "extra":
+                        // ROM delivered via extras array - handled below in extras processing
+                        Log.d(TAG, "ROM will be delivered via extras array");
                         break;
                         
                     case "none":
@@ -581,8 +626,17 @@ public class PackageCheckerPlugin extends GodotPlugin {
                                 break;
                                 
                             case "file_path":
-                                intent.putExtra(key, value);
-                                Log.d(TAG, "Added file path extra: " + key + "=" + value);
+                                // Convert SAF URI to real file path if needed
+                                String filePathValue = value;
+                                if (value != null && value.startsWith("content://")) {
+                                    String realPath = getFilePathFromContentUri(activity, value);
+                                    if (realPath != null && !realPath.isEmpty()) {
+                                        filePathValue = realPath;
+                                        Log.d(TAG, "Converted SAF URI to file path for extra: " + key + "=" + filePathValue);
+                                    }
+                                }
+                                intent.putExtra(key, filePathValue);
+                                Log.d(TAG, "Added file path extra: " + key + "=" + filePathValue);
                                 break;
                                 
                             case "content_uri":
@@ -610,13 +664,41 @@ public class PackageCheckerPlugin extends GodotPlugin {
                                 break;
                                 
                             case "saf_uri":
-                                intent.putExtra(key, value);
-                                Log.d(TAG, "Added SAF URI extra: " + key + "=" + value);
+                                // Parse as actual Uri object (not string) for proper permission handling
+                                Uri safUri = Uri.parse(value);
+                                intent.putExtra(key, safUri);
+                                Log.d(TAG, "Added SAF URI extra: " + key + "=" + safUri);
+                                // Also add to ClipData for permission grants
+                                if (grantUriPermission) {
+                                    ClipData clipData = intent.getClipData();
+                                    if (clipData == null) {
+                                        clipData = ClipData.newRawUri(null, safUri);
+                                    } else {
+                                        clipData.addItem(new ClipData.Item(safUri));
+                                    }
+                                    intent.setClipData(clipData);
+                                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                    Log.d(TAG, "Added SAF URI to ClipData for permission grant with FLAG_GRANT_READ_URI_PERMISSION");
+                                }
                                 break;
                                 
                             case "document_uri":
-                                intent.putExtra(key, value);
-                                Log.d(TAG, "Added document URI extra: " + key + "=" + value);
+                                // Parse as actual Uri object (not string) for proper permission handling
+                                Uri documentUri = Uri.parse(value);
+                                intent.putExtra(key, documentUri);
+                                Log.d(TAG, "Added document URI extra: " + key + "=" + documentUri);
+                                // Also add to ClipData for permission grants
+                                if (grantUriPermission) {
+                                    ClipData clipData = intent.getClipData();
+                                    if (clipData == null) {
+                                        clipData = ClipData.newRawUri(null, documentUri);
+                                    } else {
+                                        clipData.addItem(new ClipData.Item(documentUri));
+                                    }
+                                    intent.setClipData(clipData);
+                                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                    Log.d(TAG, "Added document URI to ClipData for permission grant with FLAG_GRANT_READ_URI_PERMISSION");
+                                }
                                 break;
                                 
                             case "boolean":
@@ -1874,6 +1956,79 @@ public class PackageCheckerPlugin extends GodotPlugin {
         } catch (Exception e) {
             Log.e(TAG, "ERROR getting second display info: " + e.getMessage());
             return result;
+        }
+    }
+    
+    /**
+     * Checks if the app has MANAGE_EXTERNAL_STORAGE permission (All Files Access on Android 11+)
+     * 
+     * @return true if permission is granted, false otherwise
+     */
+    @UsedByGodot
+    public boolean hasManageExternalStoragePermission() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "hasManageExternalStoragePermission() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            boolean hasPermission = android.os.Environment.isExternalStorageManager();
+            Log.d(TAG, "MANAGE_EXTERNAL_STORAGE permission: " + hasPermission);
+            Log.d(TAG, "==========================================");
+            return hasPermission;
+        } else {
+            // On older versions, check for WRITE_EXTERNAL_STORAGE
+            int permission = activity.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
+            boolean hasPermission = permission == PackageManager.PERMISSION_GRANTED;
+            Log.d(TAG, "WRITE_EXTERNAL_STORAGE permission: " + hasPermission);
+            Log.d(TAG, "==========================================");
+            return hasPermission;
+        }
+    }
+    
+    /**
+     * Requests MANAGE_EXTERNAL_STORAGE permission by opening system settings.
+     * The user must manually grant this permission.
+     * 
+     * @return true if settings intent was launched successfully
+     */
+    @UsedByGodot
+    public boolean requestManageExternalStoragePermission() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "requestManageExternalStoragePermission() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Open system settings for All Files Access permission
+                Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(Uri.parse("package:" + activity.getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity.startActivity(intent);
+                Log.d(TAG, "Launched system settings for MANAGE_EXTERNAL_STORAGE");
+            } else {
+                // On older versions, request WRITE_EXTERNAL_STORAGE normally
+                activity.requestPermissions(
+                    new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    1001
+                );
+                Log.d(TAG, "Requested WRITE_EXTERNAL_STORAGE permission");
+            }
+            
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR requesting permission: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
         }
     }
 }

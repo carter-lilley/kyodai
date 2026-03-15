@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Root filesystem access (requires MANAGE_EXTERNAL_STORAGE permission) -->
+    <!-- This allows serving files from anywhere including SD cards (/storage/XXXX-XXXX/) -->
+    <root-path
+        name="root"
+        path="." />
+    
     <!-- External storage (SD card, USB drives) -->
     <external-path
-        name="external_storage"
+        name="external"
         path="." />
     
     <!-- External files directory (Android/data/com.heckpoint.kyodai/files/) -->
@@ -17,16 +23,11 @@
     
     <!-- Internal app files directory -->
     <files-path
-        name="internal_files"
+        name="internal"
         path="." />
     
     <!-- Internal cache directory -->
     <cache-path
-        name="internal_cache"
-        path="." />
-    
-    <!-- Root of external storage (requires MANAGE_EXTERNAL_STORAGE permission) -->
-    <root-path
-        name="root_storage"
+        name="cache"
         path="." />
 </paths>
