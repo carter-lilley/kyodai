@@ -137,6 +137,7 @@
 		  "android": {
 			"action_type": "extract",
 			"extract_to": "{emulator_dir}/cores",
+			"batch": true,
 			"validate": {
 			  "action_type": "files_exist",
 			  "path": "{emulator_dir}/cores",

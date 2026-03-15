@@ -29,6 +29,17 @@ func _resolve_emulator_path(path: String, emulator_id: String) -> String:
 		return path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
 	return path
 
+## Resolves validation paths (handles {emulator_dir} and absolute paths)
+func _resolve_validation_path(emulator_id: String, path: String) -> String:
+	if path.begins_with("{emulator_dir}"):
+		return path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
+	if path.begins_with("/") or path.begins_with("content://"):
+		# Absolute path or SAF URI - use as-is
+		return path
+	else:
+		# Relative path - prepend emulator directory
+		return _get_emulator_directory(emulator_id) + path
+
 ## Extracts the base tree URI from a SAF path for permission checks
 func _extract_saf_tree_uri(full_uri: String) -> String:
 	var tree_pos = full_uri.find("/tree/")
@@ -271,6 +282,7 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 	dir.list_dir_end()
 	return ""
 
+## Called when DownloadManager completes an extraction
 ## Called when DownloadManager completes an extraction
 ## Registry-based validation handles actual installation checking
 func _on_download_manager_extraction_completed(item_id: String, success: bool, extract_dir: String):
@@ -1454,10 +1466,9 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	
 	var step_display_name = _get_step_display_name(step_name)
 	
-	# Track batch progress
+	# Track batch progress using Dictionary for proper reference semantics in closures
 	var total_cores = cores.size()
-	var completed_cores = 0
-	var failed_cores = 0
+	var progress = {"completed": 0, "failed": 0}
 	var download_ids = []
 	
 	# Set progress text
@@ -1480,36 +1491,36 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		# Download to emulator directory (for extraction, then delete)
 		var destination_path = _get_emulator_directory(emulator_id) + filename
 		
-		# Queue download with auto-extract
+		# Queue download without auto-extract (extraction happens in separate step)
 		var item_id = DownloadManager.queue_download(
 			full_url,
 			destination_path,
 			"emulator_core",
 			core_name,
-			true,  # auto_extract
-			extract_dir,
-			null,  # game
-			{},    # callbacks
-			0,     # romm_id
-			true   # delete_after_extract
+			false,  # auto_extract - extraction handled by install_cores step
+			"",     # extract_dir - not used here
+			null,   # game
+			{},     # callbacks
+			0,      # romm_id
+			false   # delete_after_extract - keep zips for extraction step
 		)
 		
 		if item_id == "":
-			failed_cores += 1
+			progress.failed += 1
 		else:
 			download_ids.append(item_id)
 			
-			# Create a callback that captures the current values
+			# Create a callback that captures by reference (Dictionary is a reference type)
 			var callback = func(success: bool, message: String):
-				completed_cores += 1
+				progress.completed += 1
 				if not success:
-					failed_cores += 1
+					progress.failed += 1
 				# Update progress
-				_emulator_install_progress[emulator_id] = step_display_name + " (" + str(completed_cores) + "/" + str(total_cores) + ")"
+				_emulator_install_progress[emulator_id] = step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
 				# Check if all downloads are complete
-				if completed_cores >= total_cores:
-					if failed_cores > 0:
-						push_error("[LaunchManager] Batch download failed: " + str(failed_cores) + "/" + str(total_cores) + " cores failed")
+				if progress.completed >= total_cores:
+					if progress.failed > 0:
+						push_error("[LaunchManager] Batch download failed: " + str(progress.failed) + "/" + str(total_cores) + " cores failed")
 						_emulator_install_progress[emulator_id] = "Batch download failed"
 					else:
 						_execute_install_step(emulator_id, step_index + 1)
@@ -1558,43 +1569,41 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# Look for the archive file to extract
 	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	var archive_path = ""
+	var is_batch_mode = extract_config.get("batch", false)
 	
+	if is_batch_mode:
+		# Batch mode: extract all matching archives
+		return _execute_batch_extract_step(emulator_id, step_index, extract_config, extract_dir, strip_top, flatten_target)
+	
+	# Single archive mode (default behavior)
 	# First, check for explicit expected_file pattern in extract_config
 	var expected_file = extract_config.get("expected_file", "")
 	if expected_file != "":
-		var dir = DirAccess.open(emulator_dir)
-		if dir:
-			dir.list_dir_begin()
-			var file_name = dir.get_next()
-			while file_name != "":
-				if not dir.current_is_dir():
-					if file_name.match(expected_file):
-						archive_path = emulator_dir + "/" + file_name
-						break
-				file_name = dir.get_next()
-			dir.list_dir_end()
+		var files = FileSystemManager.list_dir(emulator_dir)
+		for file_name in files:
+			if file_name.match(expected_file):
+				var full_path = emulator_dir + "/" + file_name
+				if FileSystemManager.file_exists(full_path):
+					archive_path = full_path
+					break
 	
-	# If no expected_file match, scan for common archive extensions
+	# If no expected_file match, scan for common archive extensions (first match only)
 	if archive_path == "":
 		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
-		var dir = DirAccess.open(emulator_dir)
-		if dir:
-			dir.list_dir_begin()
-			var file_name = dir.get_next()
-			while file_name != "":
-				if not dir.current_is_dir():
-					var lower_name = file_name.to_lower()
-					for ext in archive_extensions:
-						if lower_name.ends_with(ext):
-							archive_path = emulator_dir + "/" + file_name
-							break
-					if archive_path != "":
+		var files = FileSystemManager.list_dir(emulator_dir)
+		for file_name in files:
+			var lower_name = file_name.to_lower()
+			for ext in archive_extensions:
+				if lower_name.ends_with(ext):
+					var full_path = emulator_dir + "/" + file_name
+					if FileSystemManager.file_exists(full_path):
+						archive_path = full_path
 						break
-				file_name = dir.get_next()
-			dir.list_dir_end()
+			if archive_path != "":
+				break
 	
 	# Check if archive was found
-	if archive_path == "" or not FileAccess.file_exists(archive_path):
+	if archive_path == "" or not FileSystemManager.file_exists(archive_path):
 		# Go back to download step to re-download
 		return _retry_previous_step(emulator_id, step_index)
 	
@@ -1613,48 +1622,145 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		push_error("[LaunchManager] Failed to queue extraction for: " + emulator_id)
 		return false
 	
+	# Create callback for single archive extraction
+	var extraction_callback = func(success: bool, message: String):
+		if not success:
+			_emulator_install_progress[emulator_id] = "Extraction failed"
+			emulator_extraction_completed.emit(emulator_id, false)
+			return
+		
+		# Handle post-extraction flattening
+		if strip_top:
+			_flatten_extracted_directory(emulator_id, extract_to, flatten_target)
+		
+		# Validate extraction
+		var validate_config = extract_config.get("validate", {})
+		if not _validate_step(emulator_id, validate_config):
+			push_error("[LaunchManager] Validation failed after extraction: " + emulator_id)
+			_emulator_install_progress[emulator_id] = "Validation failed"
+			emulator_extraction_completed.emit(emulator_id, false)
+			return
+		
+		# Progress to next step
+		_execute_install_step(emulator_id, step_index + 1)
+	
 	# Track extraction completion
 	_pending_emulator_downloads[item_id] = {
 		"emulator_id": emulator_id,
 		"context": "extraction",
 		"step_index": step_index,
 		"step_config": extract_config,
-		"callback": func(success: bool, message: String):
-			if not success:
+		"callback": extraction_callback
+	}
+	
+	return true
+
+## Executes batch extraction for multiple archives
+func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_config: Dictionary, extract_dir: String, strip_top: bool, flatten_target: String) -> bool:
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
+	var archive_paths = []
+	
+	# First, check for explicit expected_file pattern in extract_config
+	var expected_file = extract_config.get("expected_file", "")
+	if expected_file != "":
+		var files = FileSystemManager.list_dir(emulator_dir)
+		for file_name in files:
+			if file_name.match(expected_file):
+				var full_path = emulator_dir + "/" + file_name
+				if FileSystemManager.file_exists(full_path):
+					archive_paths.append(full_path)
+	
+	# If no expected_file match, scan for common archive extensions
+	if archive_paths.is_empty():
+		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
+		var files = FileSystemManager.list_dir(emulator_dir)
+		for file_name in files:
+			var lower_name = file_name.to_lower()
+			for ext in archive_extensions:
+				if lower_name.ends_with(ext):
+					var full_path = emulator_dir + "/" + file_name
+					if FileSystemManager.file_exists(full_path):
+						archive_paths.append(full_path)
+						break
+	
+	# Check if any archives were found
+	if archive_paths.is_empty():
+		# Go back to download step to re-download
+		return _retry_previous_step(emulator_id, step_index)
+	
+	# Get step name from install_steps for display
+	var emulator = get_emulator(emulator_id)
+	var install_steps = emulator.get("install", [])
+	var step_name = ""
+	if step_index < install_steps.size():
+		step_name = install_steps[step_index].get("step", "")
+	
+	var step_display_name = _get_step_display_name(step_name)
+	
+	# Show batch progress
+	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(archive_paths.size()) + ")"
+	
+	# Track progress for multiple extractions using Dictionary (reference type for closures)
+	var total_archives = archive_paths.size()
+	var progress = {"completed": 0, "failed": 0}
+	var extraction_ids = []
+	
+	# Queue extraction for all archives
+	for archive_path in archive_paths:
+		var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name)
+		if item_id == "":
+			push_error("[LaunchManager] Failed to queue extraction for: " + archive_path)
+			progress.failed += 1
+		else:
+			extraction_ids.append(item_id)
+	
+	if extraction_ids.is_empty():
+		push_error("[LaunchManager] No extractions could be queued for batch: " + emulator_id)
+		return false
+	
+	# Create callback for batch extraction (shared by all archives)
+	var batch_callback = func(success: bool, message: String):
+		progress.completed += 1
+		
+		if not success:
+			progress.failed += 1
+		
+		# Update progress
+		_emulator_install_progress[emulator_id] = step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")"
+		
+		# Check if all extractions are complete
+		if progress.completed >= total_archives:
+			if progress.failed > 0:
 				_emulator_install_progress[emulator_id] = "Extraction failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
 			
 			# Handle post-extraction flattening
 			if strip_top:
-				_flatten_extracted_directory(emulator_id, extract_to, flatten_target)
+				_flatten_extracted_directory(emulator_id, extract_dir, flatten_target)
 			
 			# Validate extraction
 			var validate_config = extract_config.get("validate", {})
 			if not _validate_step(emulator_id, validate_config):
-				push_error("[LaunchManager] Validation failed after extraction: " + emulator_id)
+				push_error("[LaunchManager] Validation failed after batch extraction: " + emulator_id)
 				_emulator_install_progress[emulator_id] = "Validation failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
 			
 			# Progress to next step
 			_execute_install_step(emulator_id, step_index + 1)
-	}
+	
+	# Track extraction completion for each archive
+	for item_id in extraction_ids:
+		_pending_emulator_downloads[item_id] = {
+			"emulator_id": emulator_id,
+			"context": "extraction",
+			"step_index": step_index,
+			"step_config": extract_config,
+			"callback": batch_callback
+		}
 	
 	return true
-
-## Validates a step result based on validation config
-## Resolves a path for validation - uses absolute paths directly, relative paths are relative to emulator dir
-func _resolve_validation_path(emulator_id: String, path: String) -> String:
-	# First resolve {emulator_dir} templates
-	path = _resolve_emulator_path(path, emulator_id)
-	
-	if path.begins_with("/") or path.begins_with("content://"):
-		# Absolute path or SAF URI - use as-is
-		return path
-	else:
-		# Relative path - prepend emulator directory
-		return _get_emulator_directory(emulator_id) + path
 
 func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 	if validate_config.is_empty():
@@ -1668,15 +1774,14 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if file_path == "":
 				return true
 			var full_path = _resolve_validation_path(emulator_id, file_path)
-			return FileAccess.file_exists(full_path)
+			return FileSystemManager.file_exists(full_path)
 		
 		"folder_exists":
 			var folder_path = validate_config.get("path", "")
 			if folder_path == "":
 				return true
 			var full_path = _resolve_validation_path(emulator_id, folder_path)
-			var dir = DirAccess.open(full_path)
-			return dir != null
+			return FileSystemManager.dir_exists(full_path)
 		
 		"files_exist":
 			var folder_path = validate_config.get("path", "")
@@ -1688,7 +1793,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 				# Check if all files in the array exist
 				for file_name in files_array:
 					var full_file_path = _resolve_validation_path(emulator_id, file_name)
-					if not FileAccess.file_exists(full_file_path):
+					if not FileSystemManager.file_exists(full_file_path):
 						return false
 				return true
 			
@@ -1696,6 +1801,13 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 				return true
 			
 			var full_path = _resolve_validation_path(emulator_id, folder_path)
+			
+			# For SAF paths, we can't easily list files with patterns
+			# So we just check if the directory exists
+			if full_path.begins_with("content://"):
+				return FileSystemManager.dir_exists(full_path)
+			
+			# For regular paths, use DirAccess to list and match files
 			var dir = DirAccess.open(full_path)
 			
 			if not dir:
