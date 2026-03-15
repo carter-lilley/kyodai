@@ -1896,10 +1896,12 @@ func _handle_download_url_step(emulator_id: String, emulator_name: String, step_
 	return true
 
 ## Helper function for download_repo action
+## Supports GitHub, Gitea, Forgejo, and other GitHub-compatible APIs via api_base_url
 func _handle_download_repo_step(emulator_id: String, emulator_name: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var github_repo = platform_config.get("github_repo", "")
 	var asset_pattern = platform_config.get("asset_pattern", "")
 	var release_tag = platform_config.get("release_tag", "")
+	var api_base_url = platform_config.get("api_base_url", "")  # For non-GitHub hosts (e.g., Gitea/Forgejo)
 	
 	if github_repo == "" or asset_pattern == "":
 		push_error("[LaunchManager] Invalid download_repo config for step: " + step_name)
@@ -1909,16 +1911,17 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	
 	var step_display_name = _get_step_display_name(step_name)
 	
-	NetworkManager.fetch_github_latest_release(
+	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
 		func(url: String, error: String):
 			if error != "":
-				push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
+				push_error("[LaunchManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = "Failed to fetch release"
 				return
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
-		release_tag
+		release_tag,
+		api_base_url
 	)
 	return true
 
@@ -1976,17 +1979,10 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 					plugin.call("createSafDirectory", tree_uri, subdir)
 			continue
 		
-		var base_dir = full_path.get_base_dir()
-		var dir_name = full_path.get_file()
-		
-		var dir = DirAccess.open(base_dir)
-		if dir and not dir.dir_exists(dir_name):
-			var error = dir.make_dir_recursive(dir_name)
-			if error != OK:
-				push_error("[LaunchManager] Failed to create folder: " + full_path)
-				return false
-		elif not dir:
-			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
+		# Create the full path recursively (handles nested folders like user/nand/system/Contents)
+		var error = DirAccess.make_dir_recursive_absolute(full_path)
+		if error != OK:
+			push_error("[LaunchManager] Failed to create folder: " + full_path + " (error: " + str(error) + ")")
 			return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)
@@ -2313,168 +2309,6 @@ func is_emulator_queued(emulator_id: String) -> bool:
 		if item.name == emulator_id or item.name.begins_with(emulator_id):
 			return true
 	return false
-
-
-## Unified download task execution
-## Handles download_repo, download_scrape, and download_url for both emulator and post-install
-func _execute_download_task(emulator_id: String, context: String, item_name: String, download_config: Dictionary, callback: Callable, pending_tracker: Dictionary) -> bool:
-	var download_type = download_config.get("type", "")
-	
-	match download_type:
-		"download_repo":
-			return _execute_download_repo(emulator_id, context, item_name, download_config, callback, pending_tracker)
-		"download_scrape":
-			return _execute_download_scrape(emulator_id, context, item_name, download_config, callback, pending_tracker)
-		"download_url":
-			return _execute_download_url(emulator_id, context, item_name, download_config, callback, pending_tracker)
-		_:
-			push_error("[LaunchManager] Unknown download type: " + download_type)
-			return false
-
-## Executes a download_repo task - fetches from GitHub releases
-func _execute_download_repo(emulator_id: String, context: String, item_name: String, download_config: Dictionary, callback: Callable, pending_tracker: Dictionary) -> bool:
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var github_repo = download_config.get("github_repo", "")
-	var asset_pattern = download_config.get("asset_pattern", "")
-	
-	if asset_pattern == "":
-		var asset_patterns = download_config.get("asset_patterns", {})
-		asset_pattern = asset_patterns.get(platform_name, "")
-	
-	if github_repo == "" or asset_pattern == "":
-		push_error("[LaunchManager] No github_repo or asset_pattern specified for download_repo")
-		return false
-	
-	var release_tag = download_config.get("release_tag", "")
-	
-	NetworkManager.fetch_github_latest_release(
-		github_repo,
-		asset_pattern,
-		func(download_url: String, error: String):
-			if error != "":
-				callback.call(false, error)
-				return
-			_execute_download_from_url(emulator_id, context, item_name, download_config, download_url, callback, pending_tracker),
-		release_tag
-	)
-	
-	return true
-
-## Executes a download_scrape task - scrapes webpage for version
-func _execute_download_scrape(emulator_id: String, context: String, item_name: String, download_config: Dictionary, callback: Callable, pending_tracker: Dictionary) -> bool:
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var scrape_url = download_config.get("scrape_url", "")
-	var version_pattern = download_config.get("version_pattern", "")
-	var url_template = download_config.get("url_template", "")
-	
-	if url_template == "":
-		var url_templates = download_config.get("url_templates", {})
-		url_template = url_templates.get(platform_name, "")
-	
-	if scrape_url == "" or version_pattern == "" or url_template == "":
-		push_error("[LaunchManager] Invalid scrape config for download_scrape")
-		return false
-	
-	NetworkManager.fetch_scraped_release(
-		scrape_url,
-		version_pattern,
-		url_template,
-		func(download_url: String, error: String):
-			if error != "":
-				callback.call(false, error)
-				return
-			_execute_download_from_url(emulator_id, context, item_name, download_config, download_url, callback, pending_tracker)
-	)
-	
-	return true
-
-## Executes a download_url task - uses hardcoded URL
-func _execute_download_url(emulator_id: String, context: String, item_name: String, download_config: Dictionary, callback: Callable, pending_tracker: Dictionary) -> bool:
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var url = download_config.get("url", "")
-	
-	if url == "":
-		var urls = download_config.get("urls", {})
-		url = urls.get(platform_name, "")
-	
-	if url == "":
-		push_error("[LaunchManager] No URL specified for download_url")
-		return false
-	
-	return _execute_download_from_url(emulator_id, context, item_name, download_config, url, callback, pending_tracker)
-
-## Core download execution - queues download with DownloadManager
-func _execute_download_from_url(emulator_id: String, context: String, item_name: String, download_config: Dictionary, download_url: String, callback: Callable, pending_tracker: Dictionary) -> bool:
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var should_extract = download_config.get("extract", true)
-	var extract_to = download_config.get("extract_to", "")
-	var strip_top = download_config.get("strip_top_directory", false)
-	var filename = download_config.get("filename", "")
-	
-	if filename == "":
-		var filenames = download_config.get("filenames", {})
-		filename = filenames.get(platform_name, "")
-	
-	if filename == "":
-		filename = download_url.get_file()
-	
-	# Check for custom destination path (for firmware/shared files)
-	var destination_path = download_config.get("destination", "")
-	if destination_path == "":
-		destination_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
-	else:
-		# destination is a folder path, append filename
-		destination_path = destination_path + "/" + filename
-	
-	var dm_type = "emulator" if context == "emulator" else "download_" + download_config.get("type", "unknown")
-	
-	if should_extract:
-		var extract_destination = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to
-		
-		var item_id = DownloadManager.queue_download(
-			download_url,
-			destination_path,
-			dm_type,
-			item_name,
-			true,
-			extract_destination
-		)
-		
-		if item_id == "":
-			callback.call(false, "Failed to queue download")
-			return false
-		
-		pending_tracker[item_id] = {
-			"emulator_id": emulator_id,
-			"context": context,
-			"extract_to": extract_to,
-			"strip_top_directory": strip_top,
-			"flatten_target": download_config.get("flatten_target", ""),
-			"callback": callback
-		}
-		
-		return true
-	else:
-		var item_id = DownloadManager.queue_download(
-			download_url,
-			destination_path,
-			dm_type,
-			item_name,
-			false
-		)
-		
-		if item_id == "":
-			callback.call(false, "Failed to queue download")
-			return false
-		
-		pending_tracker[item_id] = {
-			"emulator_id": emulator_id,
-			"context": context,
-			"destination_path": destination_path,
-			"callback": callback
-		}
-		
-		return true
 
 ## Handles download completion
 func _on_unified_download_completed(item_id: String, success: bool, message: String):

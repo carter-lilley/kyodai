@@ -368,7 +368,14 @@ func format_bytes(bytes: int) -> String:
 	else:
 		return str(bytes / (1024 * 1024 * 1024)) + " GB"
 
-func fetch_github_latest_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
+## Fetches the latest release from a GitHub-compatible repository API
+## Supports GitHub, Gitea, Forgejo, and other platforms with GitHub-compatible API
+## @param repo: Repository path (e.g., "owner/repo")
+## @param asset_pattern: Regex pattern to match the desired asset filename
+## @param callback: Called with (download_url: String, error: String)
+## @param release_tag: Specific tag to fetch (empty or "latest" for latest release)
+## @param api_base_url: API base URL (default: "https://api.github.com", e.g., "https://git.example.com/api/v1")
+func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
 	# Use GitHub as default if no api_base_url provided
 	var base_url = api_base_url if api_base_url != "" else "https://api.github.com"
 	
