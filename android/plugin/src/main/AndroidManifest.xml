@@ -10,6 +10,7 @@
 		<package android:name="com.retroarch" />
 		<package android:name="com.retroarch.aarch64" />
 		<package android:name="com.retroarch.ra32" />
+		<package android:name="io.github.lime3ds.android" />
 	</queries>
 	
 	<application>

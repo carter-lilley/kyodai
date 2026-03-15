@@ -50,11 +50,12 @@ func _ready():
 	_build_ui()
 	_update_display()
 	
-	# Scan install state on ready to detect partial installs
-	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
-	if effective_emulator != "" and LaunchManager:
-		LaunchManager.scan_emulator_install_state(effective_emulator)
-		_update_status_indicator()
+	# If install status wasn't pre-set by parent, scan on ready
+	if _emulator_install_status.is_empty():
+		var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+		if effective_emulator != "" and LaunchManager:
+			LaunchManager.scan_emulator_install_state(effective_emulator)
+			_update_status_indicator()
 
 func _build_ui():
 	var margin = MarginContainer.new()

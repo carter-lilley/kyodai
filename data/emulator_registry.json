@@ -346,11 +346,10 @@
 		  "action": "android.intent.action.VIEW",
 		  "package": "io.github.lime3ds.android",
 		  "class": "org.citra.citra_emu.activities.EmulationActivity",
-		  "rom_delivery": "intent_data",
+		  "rom_delivery": "none",
 		  "mime_type": "application/octet-stream",
-		  "grant_uri_permission": true,
+		  "grant_uri_permission": false,
 		  "clear_task": true,
-		  "use_document_uri": true,
 		  "extras": []
 		}
 	  }

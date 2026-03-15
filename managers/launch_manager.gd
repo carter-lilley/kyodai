@@ -95,6 +95,11 @@ var _pending_game_downloads: Dictionary = {}
 # item_id -> {emulator_id, context, extract_to, strip_top_directory, callback}
 var _pending_emulator_downloads: Dictionary = {}
 
+## Validation cache to avoid redundant file system operations
+# emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
+var _validation_cache: Dictionary = {}
+var _cache_ttl_ms: int = 5000  # 5 second cache TTL
+
 # Signals
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
@@ -291,6 +296,10 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 		var task_info = _pending_emulator_downloads[item_id]
 		_pending_emulator_downloads.erase(item_id)
 		
+		# Clear validation cache for this emulator
+		if task_info.has("emulator_id"):
+			_validation_cache.erase(task_info.emulator_id)
+		
 		if task_info.has("callback"):
 			task_info.callback.call(success, "")
 			return
@@ -298,6 +307,9 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 	# Find which emulator this extraction belongs to (fallback for non-registry extractions)
 	for emulator_id in _emulator_install_progress.keys():
 		if extract_dir.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
+			# Clear validation cache
+			_validation_cache.erase(emulator_id)
+			
 			if success:
 				_emulator_install_progress[emulator_id] = ""
 				emulator_extraction_completed.emit(emulator_id, true)
@@ -1174,7 +1186,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
 	var clear_task = intent.android_config.get("clear_task", true)
 	var grant_uri_permission = intent.android_config.get("grant_uri_permission", true)
-	var use_document_uri = intent.android_config.get("use_document_uri", false)  # Opt-in for tree->document conversion (Eden only)
+	var use_document_uri = intent.android_config.get("use_document_uri", false)
 	
 	# Convert extras array to JSON string
 	var extras_array = intent.android_extras
@@ -2128,7 +2140,28 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 
 ## Scans install steps and finds the first incomplete step
 ## Returns a dictionary with progress info
+## Uses caching to avoid redundant file system operations
 func get_install_progress(emulator_id: String) -> Dictionary:
+	# Check cache first
+	if _validation_cache.has(emulator_id):
+		var cached = _validation_cache[emulator_id]
+		var elapsed = Time.get_ticks_msec() - cached.timestamp
+		if elapsed < _cache_ttl_ms:
+			return cached.result
+	
+	# Perform validation
+	var result = _compute_install_progress(emulator_id)
+	
+	# Cache the result
+	_validation_cache[emulator_id] = {
+		"result": result,
+		"timestamp": Time.get_ticks_msec()
+	}
+	
+	return result
+
+## Internal function to compute install progress without caching
+func _compute_install_progress(emulator_id: String) -> Dictionary:
 	var result = {
 		"total_steps": 0,
 		"completed_steps": 0,

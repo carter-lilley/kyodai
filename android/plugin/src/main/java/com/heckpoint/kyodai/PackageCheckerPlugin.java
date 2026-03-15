@@ -432,40 +432,62 @@ public class PackageCheckerPlugin extends GodotPlugin {
                     case "intent_data":
                         Uri dataUri = null;
                         
-                        // If original path is a SAF content:// URI, use it directly
-                        // This is important for APK installation where we need the original SAF URI
-                        if (romSafUri != null && !romSafUri.isEmpty()) {
-                            dataUri = Uri.parse(romSafUri);
-                            Log.d(TAG, "Using original SAF URI for intent data: " + dataUri);
-                        } else if (romContentUri != null) {
+                        // Priority: FileProvider URI > Converted Document URI > Original SAF URI
+                        if (romContentUri != null) {
                             dataUri = romContentUri;
                             Log.d(TAG, "Using FileProvider URI for intent data: " + dataUri);
+                        } else if (romSafUri != null && !romSafUri.isEmpty()) {
+                            // Convert tree URI to document URI only when requested
+                            String uriString = romSafUri;
+                            if (uriString.contains("/tree/") && useDocumentUri) {
+                                // Apps like Azahar need document URIs, not tree URIs
+                                String docUriString = convertTreeUriToDocumentUri(uriString);
+                                if (!docUriString.equals(uriString)) {
+                                    dataUri = Uri.parse(docUriString);
+                                    Log.d(TAG, "Converted tree URI to document URI (useDocumentUri=true): " + dataUri);
+                                } else {
+                                    dataUri = Uri.parse(romSafUri);
+                                    Log.d(TAG, "Using original SAF tree URI (could not convert): " + dataUri);
+                                }
+                            } else {
+                                // Use original tree URI for emulators that support it
+                                dataUri = Uri.parse(romSafUri);
+                                if (uriString.contains("/document/")) {
+                                    Log.d(TAG, "Using original SAF URI (already document URI): " + dataUri);
+                                } else {
+                                    Log.d(TAG, "Using original SAF tree URI (useDocumentUri=false): " + dataUri);
+                                }
+                            }
                         }
                         
                         if (dataUri != null) {
                             String type = (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/octet-stream";
                             
-                            // Convert tree URI to document URI ONLY when explicitly requested (for Eden)
-                            if (useDocumentUri) {
-                                String uriString = dataUri.toString();
-                                if (uriString.contains("/tree/")) {
-                                    String docUriString = convertTreeUriToDocumentUri(uriString);
-                                    if (!docUriString.equals(uriString)) {
-                                        dataUri = Uri.parse(docUriString);
-                                        Log.d(TAG, "Converted tree URI to document URI: " + dataUri);
+                            // Grant permissions only when explicitly requested
+                            if (grantUriPermission) {
+                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                
+                                // For SAF URIs, also grant explicit permission to the target package
+                                if (dataUri.toString().startsWith("content://") && packageName != null && !packageName.isEmpty()) {
+                                    try {
+                                        activity.grantUriPermission(packageName, dataUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                        Log.d(TAG, "Granted explicit URI permission to package: " + packageName);
+                                    } catch (Exception e) {
+                                        Log.w(TAG, "Could not grant explicit URI permission: " + e.getMessage());
                                     }
                                 }
+                                
+                                // Use ClipData for permission grants
+                                if (dataUri.toString().startsWith("content://")) {
+                                    intent.setClipData(ClipData.newRawUri(null, dataUri));
+                                    Log.d(TAG, "Granted URI read permission via ClipData and flags");
+                                }
+                            } else {
+                                Log.d(TAG, "Skipping permission grants (grantUriPermission=false)");
                             }
                             
                             intent.setDataAndType(dataUri, type);
                             Log.d(TAG, "Set intent data (content URI): " + dataUri);
-                            
-                            // Grant read permission via ClipData for VIEW intents
-                            if (grantUriPermission || action.equals(Intent.ACTION_VIEW)) {
-                                intent.setClipData(ClipData.newRawUri(null, dataUri));
-                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                                Log.d(TAG, "Granted URI read permission via ClipData");
-                            }
                         }
                         break;
                         

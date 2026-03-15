@@ -115,6 +115,36 @@ func _fetch_platforms():
 		var enabled_platforms = _get_enabled_platforms()
 		var fetched_slugs: Array[String] = []
 		
+		# Collect unique emulators and pre-validate them once
+		var unique_emulators: Array[String] = []
+		var emulator_platforms: Dictionary = {}  # emulator_id -> Array[slug]
+		
+		for platform_data in data:
+			if not platform_data is Dictionary:
+				continue
+			
+			var slug = platform_data.get("slug", "")
+			if slug == "":
+				continue
+			
+			# Get emulators for this platform
+			var platform_emulators = LaunchManager.get_emulators_for_platform(slug)
+			for emulator in platform_emulators:
+				var emu_id = emulator.get("id", "")
+				if emu_id != "" and not unique_emulators.has(emu_id):
+					unique_emulators.append(emu_id)
+					emulator_platforms[emu_id] = []
+				if emu_id != "":
+					emulator_platforms[emu_id].append(slug)
+		
+		# Pre-validate each unique emulator once
+		print("[PlatformsSettingsView] Pre-validating " + str(unique_emulators.size()) + " unique emulators for " + str(data.size()) + " platforms")
+		var precomputed_status: Dictionary = {}
+		for emu_id in unique_emulators:
+			var progress = LaunchManager.get_install_progress(emu_id)
+			precomputed_status[emu_id] = progress["status"] == "complete"
+		
+		# Create platform cards with precomputed status
 		for platform_data in data:
 			if not platform_data is Dictionary:
 				continue
@@ -129,8 +159,8 @@ func _fetch_platforms():
 			
 			fetched_slugs.append(slug)
 			
-			# Create platform card
-			var card = _create_platform_card(slug, name, romm_id, icon_url, enabled_platforms)
+			# Create platform card with precomputed validation results
+			var card = _create_platform_card(slug, name, romm_id, icon_url, enabled_platforms, precomputed_status)
 			_platforms_container.add_child(card)
 			_platform_cards[slug] = card
 		
@@ -141,7 +171,7 @@ func _fetch_platforms():
 		_update_select_all_button_text()
 	)
 
-func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: String, enabled_platforms: Dictionary) -> PlatformCard:
+func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCard.new()
 	card.platform_slug = slug
 	card.platform_name = name
@@ -169,13 +199,18 @@ func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: S
 	var available_emulators = LaunchManager.get_emulators_for_platform(slug)
 	card.set_available_emulators(available_emulators)
 	
-	# Set install status for each emulator
+	# Set install status for each emulator (use precomputed status if available)
 	var install_status = {}
 	for emulator in available_emulators:
 		var emu_id = emulator.get("id", "")
 		if emu_id != "":
-			var progress = LaunchManager.get_install_progress(emu_id)
-			install_status[emu_id] = progress["status"] == "complete"
+			if precomputed_status.has(emu_id):
+				# Use precomputed status (avoid redundant validation)
+				install_status[emu_id] = precomputed_status[emu_id]
+			else:
+				# Fallback: compute status (shouldn't happen with proper precomputation)
+				var progress = LaunchManager.get_install_progress(emu_id)
+				install_status[emu_id] = progress["status"] == "complete"
 	card.set_emulator_install_status(install_status)
 	
 	# Connect signals

@@ -1,6 +1,9 @@
 #TODO.TXT
 check weird image conversion webp/jpg thing
 batch core download ONE notification
+we lose focus on touch inputs and when launching games
+downloaded games dont show up in home view on android
+on android downloaded games arent found
 ## UI
 	launch animation?
 	bug: after sync when finding existing game, it has no cover/dimensions need updated
