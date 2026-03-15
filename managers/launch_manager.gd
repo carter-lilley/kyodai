@@ -88,9 +88,7 @@ var _pending_emulator_downloads: Dictionary = {}
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
 signal emulator_extraction_started(emulator_id: String)
-signal emulator_extraction_progress(emulator_id: String, progress: float)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
-signal emulator_installations_scanned()  # Emitted after disk scan completes
 signal game_launched(game: GameResource)  # Emitted when a game is successfully launched
 
 func _ready():
@@ -202,6 +200,19 @@ func get_emulator(emulator_id: String) -> Dictionary:
 ## Gets the current installation progress text for UI display
 func get_emulator_install_progress(emulator_id: String) -> String:
 	return _emulator_install_progress.get(emulator_id, "")
+
+## Gets platform-specific config from a step's platforms dictionary
+## Checks "all" first (universal config), then falls back to current platform
+## Returns empty dictionary if no config found for current platform
+func _get_step_platform_config(step: Dictionary) -> Dictionary:
+	var platform_name = PlatformManager.get_platform_name().to_lower()
+	var platforms = step.get("platforms", {})
+	
+	var platform_config = platforms.get("all", {})
+	if platform_config.is_empty():
+		platform_config = platforms.get(platform_name, {})
+	
+	return platform_config
 
 ## Checks if emulator is currently being extracted
 func is_emulator_extracting(emulator_id: String) -> bool:
@@ -388,165 +399,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			
 			# Remove the now-empty subdirectory
 			var remove_error = subdir.remove(single_entry_path)
-
-## Gets a human-readable description for a task type
-func _get_task_description(task_type: String) -> String:
-	match task_type:
-		"cores":
-			return "Downloading cores..."
-		"download_release":
-			return "Downloading firmware..."
-		"download_scraped":
-			return "Downloading keys..."
-		"create_folders":
-			return "Creating folders..."
-		"create_files":
-			return "Creating files..."
-		"edit_file":
-			return "Editing configuration..."
-		_:
-			return "Setting up..."
-
-## Executes a create_folders task - returns true if successful
-func _execute_create_folders_task(emulator_id: String, emulator: Dictionary, task: Dictionary) -> bool:
-	var folders = task.get("folders", [])
-	
-	if folders.is_empty():
-		return true
-	
-	# Use emulator root directory (same as folders validation)
-	var base_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
-	
-	for folder_path in folders:
-		var full_path = base_dir + folder_path
-		var dir = DirAccess.open(base_dir)
-		
-		if dir and not dir.dir_exists(folder_path):
-			var error = dir.make_dir_recursive(folder_path)
-			if error != OK:
-				push_error("[LaunchManager] Failed to create folder: " + full_path + " (error: " + str(error) + ")")
-				return false
-		elif not dir:
-			push_error("[LaunchManager] Cannot access base directory: " + base_dir)
-			return false
-	
-	return true
-
-## Executes a create_files task - returns true if successful
-func _execute_create_files_task(emulator_id: String, emulator: Dictionary, task: Dictionary) -> bool:
-	var files = task.get("files", [])
-	
-	if files.is_empty():
-		return true
-	
-	# Use emulator root directory (same as files validation)
-	var base_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
-	
-	for file_entry in files:
-		var file_name = ""
-		var file_content = []
-		
-		if typeof(file_entry) == TYPE_STRING:
-			file_name = file_entry
-		elif typeof(file_entry) == TYPE_DICTIONARY:
-			file_name = file_entry.get("name", "")
-			file_content = file_entry.get("content", [])
-		
-		if file_name == "":
-			continue
-		
-		var full_path = base_dir + file_name
-		
-		if not FileAccess.file_exists(full_path):
-			var file = FileAccess.open(full_path, FileAccess.WRITE)
-			if file == null:
-				push_error("[LaunchManager] Failed to create file: " + full_path + " (error: " + str(FileAccess.get_open_error()) + ")")
-				return false
-			else:
-				for line in file_content:
-					file.store_line(line)
-				file.close()
-	
-	return true
-
-## Executes an edit_file task - returns true if successful
-func _execute_edit_file_task(emulator_id: String, emulator: Dictionary, task: Dictionary) -> bool:
-	var config_file = task.get("file", "")
-	var edits = task.get("edits", [])
-	
-	if config_file == "" or edits.is_empty():
-		return true
-	
-	var emulator_path = get_emulator_install_path(emulator_id)
-	if emulator_path == "":
-		push_error("[LaunchManager] Cannot find emulator path for file edit: " + emulator_id)
-		return false
-	
-	var base_dir = emulator_path.get_base_dir()
-	var full_path = base_dir + "/" + config_file
-	
-	if not FileAccess.file_exists(full_path):
-		push_error("[LaunchManager] Config file not found: " + full_path)
-		return false
-	
-	var file = FileAccess.open(full_path, FileAccess.READ)
-	if file == null:
-		push_error("[LaunchManager] Failed to open config file: " + full_path)
-		return false
-	
-	var content = file.get_as_text()
-	file.close()
-	
-	for edit in edits:
-		# Check if this is a raw content edit (for TOML sections, etc.)
-		var raw_content = edit.get("content", "")
-		if raw_content != "":
-			# Globalize the path for native compatibility
-			var global_base_dir = ProjectSettings.globalize_path(base_dir)
-			raw_content = raw_content.replace("{emulator_dir}", global_base_dir)
-			# Check if this content already exists
-			if not content.contains(raw_content.strip_edges()):
-				content += "\n" + raw_content
-			continue
-		
-		# Otherwise, treat as key-value edit
-		var key = edit.get("key", "")
-		var value = edit.get("value", "")
-		
-		if key == "":
-			continue
-		
-		# Globalize the path for native compatibility
-		var global_base_dir = ProjectSettings.globalize_path(base_dir)
-		value = value.replace("{emulator_dir}", global_base_dir)
-		
-		var patterns = [
-			"(?m)^(" + key.regex_escape() + ")\\s*:\\s*.*$",
-			"(?m)^(" + key.regex_escape() + ")\\s*=\\s*.*$"
-		]
-		
-		var replaced = false
-		for pattern in patterns:
-			var regex = RegEx.new()
-			regex.compile(pattern)
-			var new_content = regex.sub(content, "$1: " + value, true)
-			if new_content != content:
-				content = new_content
-				replaced = true
-				break
-		
-		if not replaced:
-			content += "\n" + key + ": " + value
-	
-	file = FileAccess.open(full_path, FileAccess.WRITE)
-	if file == null:
-		push_error("[LaunchManager] Failed to write config file: " + full_path)
-		return false
-	
-	file.store_string(content)
-	file.close()
-	
-	return true
+			return
 
 ## Gets the install path for an emulator (searches recursively)
 func get_emulator_install_path(emulator_id: String) -> String:
@@ -1408,12 +1261,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	var step = install_steps[step_index]
 	var step_name = step.get("step", "")
-	var platforms = step.get("platforms", {})
-	
-	# Get platform config
-	var platform_config = platforms.get("all", {})
-	if platform_config.is_empty():
-		platform_config = platforms.get(platform_name, {})
+	var platform_config = _get_step_platform_config(step)
 	
 	if platform_config.is_empty():
 		push_error("[LaunchManager] No platform config for step '" + step_name + "' on platform: " + platform_name)
@@ -2150,14 +1998,7 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 		return true
 	
 	var step = install_steps[step_index]
-	var step_name = step.get("step", "")
-	var platforms = step.get("platforms", {})
-	
-	# Get platform config
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var platform_config = platforms.get("all", {})
-	if platform_config.is_empty():
-		platform_config = platforms.get(platform_name, {})
+	var platform_config = _get_step_platform_config(step)
 	
 	if platform_config.is_empty():
 		return false

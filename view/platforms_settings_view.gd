@@ -12,7 +12,6 @@ func _ready():
 	
 	# Connect to launch manager signals for extraction
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
-	LaunchManager.emulator_extraction_progress.connect(_on_emulator_extraction_progress)
 	LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
 	
 	super._ready()
@@ -353,10 +352,6 @@ func _on_emulator_extraction_started(emulator_id: String):
 		var effective_emu = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
 		if effective_emu == emulator_id:
 			card.refresh_ui()
-
-func _on_emulator_extraction_progress(emulator_id: String, progress: float):
-	# Progress is handled by notification
-	pass
 
 func _on_emulator_extraction_completed(emulator_id: String, success: bool):
 	# Refresh all cards that use this emulator (either explicitly or via auto)

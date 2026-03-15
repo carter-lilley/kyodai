@@ -50,20 +50,11 @@ func _ready():
 	_build_ui()
 	_update_display()
 	
-	# Connect to scan completion signal to refresh state
-	if LaunchManager:
-		if not LaunchManager.emulator_installations_scanned.is_connected(_on_installations_scanned):
-			LaunchManager.emulator_installations_scanned.connect(_on_installations_scanned)
-	
 	# Scan install state on ready to detect partial installs
 	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
 	if effective_emulator != "" and LaunchManager:
 		LaunchManager.scan_emulator_install_state(effective_emulator)
 		_update_status_indicator()
-
-func _on_installations_scanned():
-	# Refresh UI when disk scan completes
-	refresh_ui()
 
 func _build_ui():
 	var margin = MarginContainer.new()
