@@ -175,7 +175,8 @@ func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: S
 	for emulator in available_emulators:
 		var emu_id = emulator.get("id", "")
 		if emu_id != "":
-			install_status[emu_id] = LaunchManager.is_emulator_installed(emu_id)
+			var progress = LaunchManager.get_install_progress(emu_id)
+			install_status[emu_id] = progress["status"] == "complete"
 	card.set_emulator_install_status(install_status)
 	
 	# Connect signals
@@ -362,9 +363,10 @@ func _on_emulator_extraction_completed(emulator_id: String, success: bool):
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
 		var effective_emu = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
-		if effective_emu == emulator_id:
+		if 			effective_emu == emulator_id:
 			# Update install status
-			var is_installed = LaunchManager.is_emulator_installed(emulator_id)
+			var progress = LaunchManager.get_install_progress(emulator_id)
+			var is_installed = progress["status"] == "complete"
 			var install_status = {emulator_id: is_installed}
 			card.set_emulator_install_status(install_status)
 			card.refresh_ui()

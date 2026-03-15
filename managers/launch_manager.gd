@@ -62,22 +62,11 @@ func _get_saf_subdirectory(full_uri: String) -> String:
 	
 	return ""
 
-# Installation states
-enum InstallState {
-	NOT_INSTALLED,
-	DOWNLOADING,
-	EXTRACTING,
-	NEEDS_POST_INSTALL,
-	ENACTING_POST_INSTALL,
-	INSTALLED
-}
-
 # Registry data
 var _emulator_registry: Dictionary = {}
 var _platform_defaults: Dictionary = {}
 
-# Track installation states
-var _emulator_install_states: Dictionary = {}  # emulator_id -> InstallState
+# Track installation progress for UI display only
 var _emulator_install_progress: Dictionary = {}  # emulator_id -> progress text for UI
 
 # Track ongoing extractions
@@ -108,25 +97,13 @@ func _ready():
 	_load_registry()
 	_ensure_emulators_directory()
 	
-	# Connect to DownloadManager signals (using unified handlers only)
-	DownloadManager.extraction_started.connect(_on_download_manager_extraction_started)
-	DownloadManager.extraction_completed.connect(_on_unified_extraction_completed)
+	# Connect to DownloadManager signals
+	DownloadManager.extraction_completed.connect(_on_download_manager_extraction_completed)
 	DownloadManager.download_completed.connect(_on_unified_download_completed)
 	
 	# Scan existing installations to detect partial installs
 	# Wait a frame to ensure everything is initialized
 	await get_tree().process_frame
-	scan_emulator_installations()
-	
-	# DEBUG: Test PackageChecker plugin
-	if OS.get_name() == "Android":
-		# Try different variations of the name
-		var possible_names = ["PackageChecker", "packagechecker", "com.heckpoint.kyodai.PackageChecker"]
-		var found = false
-		for name in possible_names:
-			if Engine.has_singleton(name):
-				found = true
-				break
 
 func _load_registry():
 	if not FileAccess.file_exists(REGISTRY_PATH):
@@ -222,146 +199,9 @@ func get_emulator(emulator_id: String) -> Dictionary:
 	emulator["id"] = emulator_id
 	return emulator
 
-## Gets the current installation state of an emulator
-func get_emulator_install_state(emulator_id: String) -> InstallState:
-	return _emulator_install_states.get(emulator_id, InstallState.NOT_INSTALLED)
-
-## Checks if emulator is fully installed (including post-install steps)
-func is_emulator_fully_installed(emulator_id: String) -> bool:
-	return get_emulator_install_state(emulator_id) == InstallState.INSTALLED
-
 ## Gets the current installation progress text for UI display
 func get_emulator_install_progress(emulator_id: String) -> String:
 	return _emulator_install_progress.get(emulator_id, "")
-
-## Validates that emulator is properly installed by checking file existence
-## This is the source of truth - state enums are for tracking operations
-func validate_emulator_installation(emulator_id: String) -> bool:
-	var emulator = get_emulator(emulator_id)
-	if emulator.is_empty():
-		return false
-	
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var executable_name = emulator.get("executable_names", {}).get(platform_name, "")
-	
-	if executable_name == "":
-		return false
-	
-	# Check if main executable exists
-	var install_path = get_emulator_install_path(emulator_id)
-	if install_path == "" or not FileAccess.file_exists(install_path):
-		return false
-	
-	return true
-
-## Validates only that the main executable exists (no post-install check)
-func validate_emulator_executable(emulator_id: String) -> bool:
-	var emulator = get_emulator(emulator_id)
-	if emulator.is_empty():
-		return false
-	
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var executable_name = emulator.get("executable_names", {}).get(platform_name, "")
-	
-	if executable_name == "":
-		return false
-	
-	# Check if main executable exists
-	var install_path = get_emulator_install_path(emulator_id)
-	if install_path == "" or not FileAccess.file_exists(install_path):
-		return false
-	
-	return true
-
-## Validates post-install requirements (e.g., cores directory)
-## @param quiet: If true, suppresses "passed" log messages (only logs failures)
-## Legacy function - checks if main executable exists (deprecated, use validate_emulator_installation)
-func is_emulator_installed(emulator_id: String) -> bool:
-	return validate_emulator_installation(emulator_id)
-
-## Scans existing emulator installations and sets correct states
-## Call this on startup to detect partial installations
-func scan_emulator_installations():
-	var dir = DirAccess.open(get_emulators_directory())
-	if not dir:
-		return
-	
-	dir.list_dir_begin()
-	var folder_name = dir.get_next()
-	
-	while folder_name != "":
-		if folder_name == "." or folder_name == "..":
-			folder_name = dir.get_next()
-			continue
-		
-		# Check if this is an emulator directory (has emulator.json or matches registry)
-		if _emulator_registry.has(folder_name):
-			_check_emulator_disk_state(folder_name)
-		
-		folder_name = dir.get_next()
-	
-		dir.list_dir_end()
-	emulator_installations_scanned.emit()
-
-## Checks the actual disk state for a specific emulator and updates state accordingly
-## Public wrapper for individual emulator checks
-func check_emulator_disk_state(emulator_id: String):
-	_check_emulator_disk_state(emulator_id)
-
-## Internal implementation - checks disk state and updates _emulator_install_states
-func _check_emulator_disk_state(emulator_id: String):
-	_check_emulator_disk_state_internal(emulator_id, true)
-
-## Internal disk check with option to skip active operations
-func _check_emulator_disk_state_internal(emulator_id: String, skip_if_active: bool = true):
-	var emulator = get_emulator(emulator_id)
-	if emulator.is_empty():
-		return
-	
-	# Skip if currently in active download/install process (unless explicitly checking after completion)
-	if skip_if_active:
-		var current_state = get_emulator_install_state(emulator_id)
-		if current_state in [InstallState.DOWNLOADING, InstallState.EXTRACTING, 
-							InstallState.ENACTING_POST_INSTALL]:
-			return
-	
-	# Check if main executable exists
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var executable_name = emulator.get("executable_names", {}).get(platform_name, "")
-	var install_path = get_emulator_install_path(emulator_id)
-	
-	if install_path == "" or not FileAccess.file_exists(install_path):
-		# No executable found - truly not installed
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = ""
-		return
-	
-	# All validation passed - fully installed
-	_emulator_install_states[emulator_id] = InstallState.INSTALLED
-	_emulator_install_progress[emulator_id] = ""
-
-## Checks if emulator archive has been downloaded
-func is_emulator_downloaded(emulator_id: String) -> bool:
-	var archive_path = get_archive_path(emulator_id)
-	if archive_path == "":
-		return false
-	return FileAccess.file_exists(archive_path)
-
-## Gets the path to the downloaded archive
-func get_archive_path(emulator_id: String) -> String:
-	var emulator = get_emulator(emulator_id)
-	if emulator.is_empty():
-		return ""
-	
-	var platform_name = PlatformManager.get_platform_name().to_lower()
-	var download_urls = emulator.get("download_urls", {})
-	var download_url = download_urls.get(platform_name, "")
-	
-	if download_url == "":
-		return ""
-	
-	var filename = download_url.get_file()
-	return _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
 
 ## Checks if emulator is currently being extracted
 func is_emulator_extracting(emulator_id: String) -> bool:
@@ -370,28 +210,6 @@ func is_emulator_extracting(emulator_id: String) -> bool:
 		if item.name == emulator_id and item.status == "extracting":
 			return true
 	return false
-
-func extract_emulator(emulator_id: String) -> bool:
-	if is_emulator_installed(emulator_id):
-		return true
-	
-	if not is_emulator_downloaded(emulator_id):
-		push_error("[LaunchManager] Cannot extract - archive not downloaded: " + emulator_id)
-		return false
-	
-	var archive_path = get_archive_path(emulator_id)
-	var extract_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
-	
-	# Set state to extracting
-	_emulator_install_states[emulator_id] = InstallState.EXTRACTING
-	
-	# Queue extraction via DownloadManager
-	var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", emulator_id)
-	if item_id == "":
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		return false
-	
-	return true
 
 ## Helper: Get the bundled 7z binary path
 func _get_7z_binary_path() -> String:
@@ -442,74 +260,25 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 	dir.list_dir_end()
 	return ""
 
-## Called when DownloadManager starts an extraction
-## Updates emulator state to track extraction progress
-func _on_download_manager_extraction_started(item_id: String):
-	# Find which emulator this extraction belongs to
-	var item = DownloadManager.get_item(item_id)
-	if item == null:
-		return
-	
-	# Check if this is a cores or download_release extraction
-		if item.type == "cores" or item.type == "download_release":
-			# Find the emulator this download belongs to
-			for emulator_id in _emulator_install_states.keys():
-				if item.destination_path.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
-					var current_state = get_emulator_install_state(emulator_id)
-					if current_state == InstallState.NEEDS_POST_INSTALL:
-						_emulator_install_states[emulator_id] = InstallState.ENACTING_POST_INSTALL
-					return
-		else:
-			# Check if this is an emulator extraction
-			for emulator_id in _emulator_install_states.keys():
-				if item.destination_path.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
-					var current_state = get_emulator_install_state(emulator_id)
-					if current_state == InstallState.DOWNLOADING:
-						_emulator_install_states[emulator_id] = InstallState.EXTRACTING
-					return
-
 ## Called when DownloadManager completes an extraction
-## Updates emulator state based on extraction result
+## Registry-based validation handles actual installation checking
 func _on_download_manager_extraction_completed(item_id: String, success: bool, extract_dir: String):
-	# Find which emulator this extraction belongs to
-	for emulator_id in _emulator_install_states.keys():
+	# Check if this extraction has a pending callback (registry step tracking)
+	if _pending_emulator_downloads.has(item_id):
+		var task_info = _pending_emulator_downloads[item_id]
+		_pending_emulator_downloads.erase(item_id)
+		
+		if task_info.has("callback"):
+			task_info.callback.call(success, "")
+			return
+	
+	# Find which emulator this extraction belongs to (fallback for non-registry extractions)
+	for emulator_id in _emulator_install_progress.keys():
 		if extract_dir.begins_with(_get_emulator_directory(emulator_id).rstrip("/")):
 			if success:
-				
-				# Get current state before making changes
-				var current_state = get_emulator_install_state(emulator_id)
-				var emulator = get_emulator(emulator_id)
-				
-				if current_state == InstallState.ENACTING_POST_INSTALL:
-					# Post-install downloads are handled by unified system
-					# Let _on_unified_extraction_completed handle it
-					return
-				
-				elif current_state == InstallState.EXTRACTING:
-					# Main emulator extraction just completed
-					# Wait for filesystem to settle
-					await get_tree().create_timer(0.5).timeout
-					
-					# Check if executable exists (no post-install check here)
-					if not validate_emulator_executable(emulator_id):
-						push_error("[LaunchManager] Validation failed - executable not found after extraction: " + emulator_id)
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-						_emulator_install_progress[emulator_id] = "Validation failed - executable missing"
-						emulator_extraction_completed.emit(emulator_id, false)
-						return
-					
-					# Mark as installed
-					_emulator_install_states[emulator_id] = InstallState.INSTALLED
-					_emulator_install_progress[emulator_id] = ""
-					emulator_extraction_completed.emit(emulator_id, true)
-				else:
-					# Unexpected state
-					_emulator_install_states[emulator_id] = InstallState.INSTALLED
-					_emulator_install_progress[emulator_id] = ""
-					emulator_extraction_completed.emit(emulator_id, true)
-				return
+				_emulator_install_progress[emulator_id] = ""
+				emulator_extraction_completed.emit(emulator_id, true)
 			else:
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 				_emulator_install_progress[emulator_id] = "Extraction failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
@@ -974,19 +743,15 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] Invalid launch intent")
 		return false
 	
-	# Check if emulator is fully installed using step validation (consistent across all platforms)
+	# Check if emulator is fully installed using step validation (all emulators use registry steps)
 	var emulator = get_emulator(intent.emulator_id)
 	var is_actually_installed = false
-	if emulator.has("install"):
-		var install_steps = emulator.get("install", [])
-		is_actually_installed = true
-		for i in range(install_steps.size()):
-			if not _validate_install_step(intent.emulator_id, i, install_steps):
-				is_actually_installed = false
-				break
-	else:
-		# Fallback for legacy emulators
-		is_actually_installed = get_emulator_install_state(intent.emulator_id) == InstallState.INSTALLED
+	var install_steps = emulator.get("install", [])
+	is_actually_installed = true
+	for i in range(install_steps.size()):
+		if not _validate_install_step(intent.emulator_id, i, install_steps):
+			is_actually_installed = false
+			break
 	
 	if not is_actually_installed:
 		push_error("[LaunchManager] Emulator not fully installed: " + intent.emulator_id)
@@ -1422,19 +1187,14 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	var emulator_name = emulator.get("name", emulator_id)
 	
 	# Check if emulator is fully installed using step validation
-	# This works consistently across all platforms (Android, Windows, Linux, Mac)
+	# All emulators use registry-based install steps
 	var is_actually_installed = false
-	if emulator.has("install"):
-		# Use step validation for proper checking (package_installed, file_exists, etc.)
-		var install_steps = emulator.get("install", [])
-		is_actually_installed = true
-		for i in range(install_steps.size()):
-			if not _validate_install_step(emulator_id, i, install_steps):
-				is_actually_installed = false
-				break
-	else:
-		# Fallback to runtime state for legacy emulators without install steps
-		is_actually_installed = get_emulator_install_state(emulator_id) == InstallState.INSTALLED
+	var install_steps = emulator.get("install", [])
+	is_actually_installed = true
+	for i in range(install_steps.size()):
+		if not _validate_install_step(emulator_id, i, install_steps):
+			is_actually_installed = false
+			break
 	
 	if not is_actually_installed:
 		NotificationManager.show_notification("Setting up " + emulator_name + "...", Notification.Type.INFO)
@@ -1463,10 +1223,18 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 	if not success:
 		return
 	
-	# Check if emulator is actually fully installed (post-install might still be in progress)
-	if get_emulator_install_state(emulator_id) != InstallState.INSTALLED:
-		# Post-install is still running, wait for it to complete
-		return
+	# Check if emulator is actually fully installed by validating all registry steps
+	var emulator = get_emulator(emulator_id)
+	if not emulator.is_empty() and emulator.has("install"):
+		var install_steps = emulator.get("install", [])
+		var all_valid = true
+		for i in range(install_steps.size()):
+			if not _validate_install_step(emulator_id, i, install_steps):
+				all_valid = false
+				break
+		if not all_valid:
+			# Post-install is still running, wait for it to complete
+			return
 	
 	# Check if we have a pending launch for this emulator
 	if _pending_launches.has(emulator_id):
@@ -1594,14 +1362,10 @@ func _get_enabled_platforms() -> Dictionary:
 # ==================== EMULATOR DOWNLOAD ====================
 
 func download_emulator(emulator_id: String) -> bool:
-	var current_state = get_emulator_install_state(emulator_id)
-	
-	if current_state == InstallState.INSTALLED:
-		return false
-	
-	if current_state in [InstallState.DOWNLOADING, InstallState.EXTRACTING, 
-						InstallState.ENACTING_POST_INSTALL]:
-		return false
+	# Check if already downloading/extracting
+	for item_id in _pending_emulator_downloads:
+		if _pending_emulator_downloads[item_id].emulator_id == emulator_id:
+			return false
 	
 	var emulator = get_emulator(emulator_id)
 	if emulator.is_empty():
@@ -1637,7 +1401,8 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var install_steps = emulator.get("install", [])
 	
 	if step_index >= install_steps.size():
-		_emulator_install_states[emulator_id] = InstallState.INSTALLED
+		# All steps completed successfully
+		_emulator_install_progress[emulator_id] = ""
 		emulator_extraction_completed.emit(emulator_id, true)
 		return true
 	
@@ -1693,6 +1458,8 @@ func _retry_previous_step(emulator_id: String, current_step_index: int) -> bool:
 	return _execute_install_step(emulator_id, target_step)
 
 ## Executes APK install action for a step (Android only)
+## Uses simple file:// URI approach with OS.shell_open()
+## APKs are downloaded to user://temp_apk/ to avoid SAF complications
 func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config: Dictionary) -> bool:
 	var package_name = apk_config.get("package_name", "")
 	
@@ -1711,140 +1478,95 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		push_error("[LaunchManager] No expected_file specified for apk_install - cannot find APK to install")
 		return false
 	
-	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
+	print("[LaunchManager] Executing APK install step...")
+	print("[LaunchManager]   - package_name: '" + package_name + "'")
+	print("[LaunchManager]   - expected_file: '" + expected_file + "'")
+	
+	# APKs are always downloaded to user://temp_apk/ (not SAF)
+	var temp_apk_dir = "user://temp_apk/"
 	var apk_path = ""
-	var use_saf = false
-	var saf_apk_uri = ""
 	
-	# Check if the previous download step used SAF by looking at pending downloads
-	# The download should have completed and been removed from pending, but we can infer from the context
-	# Check if we're on Android with SAF paths
-	if PlatformManager.is_android():
-		# Try SAF path first - look in the SAF directory
-		if FileSystemManager.is_saf_path(emulator_dir):
-			use_saf = true
-			print("[LaunchManager] APK install: Checking SAF path: " + emulator_dir)
-			
-			# List files in SAF directory
-			var files = FileSystemManager.list_dir(emulator_dir)
-			print("[LaunchManager] APK install: Found " + str(files.size()) + " files in SAF directory")
-			
-			for file_name in files:
-				print("[LaunchManager] APK install: Checking file: " + file_name)
-				if file_name.match(expected_file):
-					saf_apk_uri = emulator_dir + "/" + file_name
-					print("[LaunchManager] APK install: Found APK in SAF: " + saf_apk_uri)
-					break
+	# Find the APK file in temp directory
+	var dir = DirAccess.open(temp_apk_dir)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if file_name.match(expected_file):
+				apk_path = temp_apk_dir + file_name
+				print("[LaunchManager] Found APK: " + apk_path)
+				break
+			file_name = dir.get_next()
+		dir.list_dir_end()
 	
-	# If not found in SAF (or not using SAF), check regular directory
-	if apk_path == "" and saf_apk_uri == "":
-		print("[LaunchManager] APK install: Checking regular directory: " + emulator_dir)
-		var dir = DirAccess.open(emulator_dir)
-		if dir:
-			dir.list_dir_begin()
-			var file_name = dir.get_next()
-			while file_name != "":
-				if file_name.match(expected_file):
-					apk_path = emulator_dir + "/" + file_name
-					print("[LaunchManager] APK install: Found APK in regular directory: " + apk_path)
-					break
-				file_name = dir.get_next()
-			dir.list_dir_end()
-	
-	# If no APK found matching the pattern, re-run the download step
-	if apk_path == "" and saf_apk_uri == "":
-		print("[LaunchManager] APK install: No APK found, retrying download step")
+	# If no APK found, retry download
+	if apk_path == "":
+		print("[LaunchManager] No APK found in temp directory, retrying download")
 		return _retry_previous_step(emulator_id, step_index)
 	
-	var apk_uri = ""
+	# Convert to absolute path for Android
+	var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
 	
-	# If we found the APK in SAF, use the content:// URI directly
-	if saf_apk_uri != "":
-		apk_uri = saf_apk_uri
-		print("[LaunchManager] APK install: Using SAF URI: " + apk_uri)
+	# Validate APK file exists and has content
+	var file = FileAccess.open(apk_path, FileAccess.READ)
+	if file:
+		var file_size = file.get_length()
+		file.close()
+		print("[LaunchManager] APK file size: " + str(file_size) + " bytes")
+		if file_size < 1000:
+			print("[LaunchManager] ERROR: APK file is too small or empty!")
+			NotificationManager.show_notification(
+				"APK download incomplete!\nFile size: " + str(file_size) + " bytes",
+				Notification.Type.ERROR,
+				null,
+				10.0
+			)
+			_emulator_install_progress[emulator_id] = "APK download incomplete"
+			return false
 	else:
-		# Regular path - convert to file:// URI
-		var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
-		apk_uri = "file://" + absolute_apk_path
-		print("[LaunchManager] APK install: Using file URI: " + apk_uri)
-	
-	if apk_uri == "":
-		push_error("[LaunchManager] Could not determine APK path for installation")
+		print("[LaunchManager] ERROR: Cannot open APK file!")
 		return _retry_previous_step(emulator_id, step_index)
 	
-	# Use PackageChecker plugin to launch APK installer with proper permissions
-	print("[LaunchManager] APK install: Launching installer via plugin")
-	var plugin = Engine.get_singleton("PackageChecker")
-	var install_success = false
+	var uri = "file://" + absolute_apk_path
 	
-	if plugin:
-		# Launch APK installer intent
-		# ACTION_VIEW with application/vnd.android.package-archive MIME type
-		install_success = plugin.call("launchAndroidIntent",
-			"android.intent.action.VIEW",  # action
-			"",  # packageName (system installer - empty for implicit intent)
-			"",  # className
-			apk_uri,  # data (APK URI)
-			"",  # corePath (not needed)
-			"intent_data",  # romDelivery - MUST be "intent_data" to set URI on intent
-			"{}",  # extrasJson (empty)
-			"application/vnd.android.package-archive",  # mimeType
-			false,  # clearTask
-			true,  # grantUriPermission (important for content:// URIs)
-			true   # useDocumentUri (true for content:// URIs)
-		)
-		print("[LaunchManager] APK install: Plugin launch result: " + str(install_success))
-	else:
-		push_error("[LaunchManager] PackageChecker plugin not available for APK install")
+	print("[LaunchManager] Installing APK: " + apk_path)
+	print("[LaunchManager] Absolute path: " + absolute_apk_path)
+	print("[LaunchManager] Opening APK with URI: " + uri)
 	
-	# Fallback to OS.shell_open if plugin method fails
-	if not install_success:
-		print("[LaunchManager] APK install: Plugin launch failed, trying OS.shell_open fallback")
-		var result = OS.shell_open(apk_uri)
-		install_success = (result == Error.OK)
-		print("[LaunchManager] APK install: OS.shell_open result: " + str(result))
+	# Open APK for installation using OS.shell_open
+	# Note: Requires "Install unknown apps" permission in Android Settings
+	var result = OS.shell_open(uri)
 	
-	if not install_success:
-		print("[LaunchManager] APK install: All launch methods failed")
-		# Show user-friendly message about manual installation
-		var display_path = apk_uri
-		if saf_apk_uri != "":
-			display_path = saf_apk_uri
-		else:
-			display_path = apk_uri.replace("file://", "")
+	if result != Error.OK:
+		print("[LaunchManager] APK install failed with error: " + str(result))
 		NotificationManager.show_notification(
-			"APK downloaded but install failed!\nPlease install it manually from:\n" + display_path,
+			"APK install failed!\nPlease install manually from:\n" + absolute_apk_path,
 			Notification.Type.ERROR,
-			null,  # icon
-			10.0   # Show for 10 seconds
+			null,
+			10.0
 		)
 		
-		# Try to open the folder so user can find the APK
-		var folder_path = ""
-		if saf_apk_uri != "":
-			# For SAF, try to open the parent directory
-			folder_path = saf_apk_uri.get_base_dir()
-			if folder_path.begins_with("content://"):
-				# Can't open SAF URIs directly, just show the path in notification
-				folder_path = ""
-		else:
-			folder_path = ProjectSettings.globalize_path(_get_emulator_directory(emulator_id).rstrip("/"))
+		# Try to open the folder
+		var folder_result = OS.shell_open(ProjectSettings.globalize_path(temp_apk_dir))
+		if folder_result == Error.OK:
+			print("[LaunchManager] Opened folder containing APK")
 		
-		if folder_path != "":
-			OS.shell_open(folder_path)
-		
-		# DO NOT progress to next step - install failed
-		# Return false so the step can be retried
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-		_emulator_install_progress[emulator_id] = "APK install failed - manual install required"
+		_emulator_install_progress[emulator_id] = "APK install failed"
 		return false
 	
-	print("[LaunchManager] APK install: Successfully opened package installer")
+	print("[LaunchManager] APK installer opened successfully")
+	print("[LaunchManager] User must complete installation in Android UI")
 	
-	# Mark as installing - user needs to complete the install via Android UI
-	_emulator_install_states[emulator_id] = InstallState.INSTALLED
+	# DEBUG: Don't delete APK so we can check it
+	print("[LaunchManager] DEBUG: Keeping APK for inspection: " + apk_path)
+	# TODO: Re-enable deletion after debugging
+	# var delete_result = DirAccess.remove_absolute(apk_path)
+	# if delete_result == OK:
+	# 	print("[LaunchManager] Deleted APK after install attempt")
+	# else:
+	# 	print("[LaunchManager] Could not delete APK: " + str(delete_result))
 	
-	# Validate installation (check if package is installed)
+	# Validate installation
 	var validate_config = apk_config.get("validate", {})
 	if not _validate_step(emulator_id, validate_config):
 		# Don't fail here - user might still be installing
@@ -1890,8 +1612,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var failed_cores = 0
 	var download_ids = []
 	
-	# Set state to downloading
-	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+	# Set progress text
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(total_cores) + ")"
 	
 	# Queue all downloads
@@ -1941,7 +1662,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 				if completed_cores >= total_cores:
 					if failed_cores > 0:
 						push_error("[LaunchManager] Batch download failed: " + str(failed_cores) + "/" + str(total_cores) + " cores failed")
-						_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+						_emulator_install_progress[emulator_id] = "Batch download failed"
 					else:
 						_execute_install_step(emulator_id, step_index + 1)
 			
@@ -2036,14 +1757,12 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	
 	var step_display_name = _get_step_display_name(step_name)
 	
-	_emulator_install_states[emulator_id] = InstallState.EXTRACTING
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
 	# Queue extraction via DownloadManager
 	var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name)
 	if item_id == "":
 		push_error("[LaunchManager] Failed to queue extraction for: " + emulator_id)
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		return false
 	
 	# Track extraction completion
@@ -2054,7 +1773,6 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		"step_config": extract_config,
 		"callback": func(success: bool, message: String):
 			if not success:
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 				_emulator_install_progress[emulator_id] = "Extraction failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
@@ -2067,7 +1785,6 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			var validate_config = extract_config.get("validate", {})
 			if not _validate_step(emulator_id, validate_config):
 				push_error("[LaunchManager] Validation failed after extraction: " + emulator_id)
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 				_emulator_install_progress[emulator_id] = "Validation failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
@@ -2188,7 +1905,6 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 		push_error("[LaunchManager] Invalid download_repo config for step: " + step_name)
 		return false
 	
-	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = "Fetching release info..."
 	
 	var step_display_name = _get_step_display_name(step_name)
@@ -2199,7 +1915,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 		func(url: String, error: String):
 			if error != "":
 				push_error("[LaunchManager] Failed to fetch GitHub release: " + error)
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+				_emulator_install_progress[emulator_id] = "Failed to fetch release"
 				return
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
 		release_tag
@@ -2216,7 +1932,6 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 		push_error("[LaunchManager] Invalid download_scrape config for step: " + step_name)
 		return false
 	
-	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
 	_emulator_install_progress[emulator_id] = "Scraping for latest version..."
 	
 	var step_display_name = _get_step_display_name(step_name)
@@ -2228,7 +1943,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 		func(url: String, error: String):
 			if error != "":
 				push_error("[LaunchManager] Failed to scrape release: " + error)
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
+				_emulator_install_progress[emulator_id] = "Failed to scrape release"
 				return
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
 	)
@@ -2482,12 +2197,6 @@ func get_install_progress(emulator_id: String) -> Dictionary:
 	var install_steps = emulator.get("install", [])
 	result["total_steps"] = install_steps.size()
 	
-	if install_steps.is_empty():
-		# Legacy format - check old validation
-		result["is_installed"] = validate_emulator_installation(emulator_id)
-		result["status"] = "complete" if result["is_installed"] else "not_started"
-		return result
-	
 	# Scan each step
 	for i in range(install_steps.size()):
 		var step = install_steps[i]
@@ -2519,14 +2228,11 @@ func scan_emulator_install_state(emulator_id: String):
 	var progress = get_install_progress(emulator_id)
 	
 	if progress["status"] == "complete":
-		_emulator_install_states[emulator_id] = InstallState.INSTALLED
 		_emulator_install_progress[emulator_id] = ""
 	elif progress["status"] == "partial":
 		# Mark as partial - UI will show "Resume: [Step Name]"
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		_emulator_install_progress[emulator_id] = "Resume: " + progress["next_step_display"]
 	else:
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		_emulator_install_progress[emulator_id] = ""
 
 ## Legacy unified download - kept for reference but not used
@@ -2550,7 +2256,17 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	else:
 		destination_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
 	
-	_emulator_install_states[emulator_id] = InstallState.DOWNLOADING
+	# Check if this is an APK download
+	var is_apk = filename.to_lower().ends_with(".apk")
+	
+	# For APKs, always use local storage even if SAF is configured
+	# This allows simple OS.shell_open() with file:// URI for installation
+	if is_apk and destination_path.begins_with("content://"):
+		print("[LaunchManager] APK detected - using local storage instead of SAF")
+		destination_path = "user://temp_apk/" + filename
+		# Ensure directory exists
+		DirAccess.make_dir_recursive_absolute("user://temp_apk")
+	
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
 	# Queue download WITHOUT auto-extract (extract is now a separate step)
@@ -2564,7 +2280,6 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	)
 	
 	if item_id == "":
-		_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 		return
 	
 	# Track download with step info for sequential execution
@@ -2574,10 +2289,10 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		"step_index": step_index,
 		"step_config": step_config,
 		"filename": filename,
+		"is_apk": is_apk,
 		"use_saf": destination_path.begins_with("content://"),
 		"callback": func(success: bool, message: String):
 			if not success:
-				_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 				_emulator_install_progress[emulator_id] = message if message != "" else "Download failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 	}
@@ -2771,7 +2486,6 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		_pending_emulator_downloads.erase(item_id)
 		
 		if not success:
-			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 			_emulator_install_progress[emulator_id] = "Download failed: " + message
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, message)
@@ -2781,7 +2495,6 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		var validate_config = step_config.get("validate", {})
 		if not _validate_step(emulator_id, validate_config):
 			push_error("[LaunchManager] Download validation failed for: " + emulator_id)
-			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 			_emulator_install_progress[emulator_id] = "Download validation failed"
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, "Validation failed")
@@ -2791,43 +2504,12 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		var step_success = _execute_install_step(emulator_id, step_index + 1)
 		if not step_success:
 			push_error("[LaunchManager] Install step " + str(step_index + 1) + " failed for: " + emulator_id)
-			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
 			_emulator_install_progress[emulator_id] = "Install step failed"
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, "Install step failed")
 		return
 
 ## Handles extraction completion
-func _on_unified_extraction_completed(item_id: String, success: bool, extract_dir: String):
-	if _pending_emulator_downloads.has(item_id):
-		var task_info = _pending_emulator_downloads[item_id]
-		var emulator_id = task_info.emulator_id
-		var context = task_info.get("context", "")
-		
-		if context == "extraction":
-			# Handled in the callback within _execute_extract_step
-			_pending_emulator_downloads.erase(item_id)
-			task_info.callback.call(success, "Extraction " + ("complete" if success else "failed"))
-			return
-		
-		_pending_emulator_downloads.erase(item_id)
-		
-		# Check if executable exists
-		if not validate_emulator_executable(emulator_id):
-			push_error("[LaunchManager] Validation failed - executable not found after extraction: " + emulator_id)
-			_emulator_install_states[emulator_id] = InstallState.NOT_INSTALLED
-			_emulator_install_progress[emulator_id] = "Validation failed - executable missing"
-			emulator_extraction_completed.emit(emulator_id, false)
-			task_info.callback.call(false, "Executable not found")
-			return
-		
-		# Mark as installed
-		_emulator_install_states[emulator_id] = InstallState.INSTALLED
-		_emulator_install_progress[emulator_id] = ""
-		emulator_extraction_completed.emit(emulator_id, true)
-		task_info.callback.call(true, "")
-		return
-
 # ==================== VITA3K HELPERS ====================
 
 ## Extracts TitleID from Vita game ZIP by reading root folder name

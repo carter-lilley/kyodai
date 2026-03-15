@@ -200,74 +200,59 @@ func _update_status_indicator():
 	var is_auto = selected_emulator == ""
 	var mode_text = " (auto)" if is_auto else ""
 	
-	# Get current install state
-	var install_state = LaunchManager.get_emulator_install_state(effective_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
+	# Get install progress from registry
+	var progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started", "completed_steps": 0, "total_steps": 0, "next_step_display": ""}
 	var progress_text = LaunchManager.get_emulator_install_progress(effective_emulator) if LaunchManager else ""
 	
-	match install_state:
-		LaunchManager.InstallState.INSTALLED:
-			_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed%s" % mode_text, "Emulator is ready to use")
-			if _download_button:
-				_download_button.visible = false
-		
-		LaunchManager.InstallState.DOWNLOADING:
-			var display_text = progress_text if progress_text != "" else "Downloading..."
-			_status_indicator.set_status(Indicator.Status.WARNING, display_text, "Emulator is being downloaded")
-			if _download_button:
-				_download_button.visible = true
-				_download_button.disabled = true
-				_download_button.text = "Downloading..."
-		
-		LaunchManager.InstallState.EXTRACTING:
-			var extract_text = progress_text if progress_text != "" else "Extracting..."
-			_status_indicator.set_status(Indicator.Status.WARNING, extract_text, "Extracting emulator files")
-			if _download_button:
-				_download_button.visible = true
-				_download_button.disabled = true
-				_download_button.text = "Installing..."
-		
-		LaunchManager.InstallState.NEEDS_POST_INSTALL:
-			_status_indicator.set_status(Indicator.Status.WARNING, "Needs post-install", "Main emulator installed but cores/extras missing")
-			if _download_button:
-				_download_button.visible = true
-				_download_button.disabled = false
-				_download_button.text = "Complete Install"
-		
-		LaunchManager.InstallState.ENACTING_POST_INSTALL:
-			var post_text = progress_text if progress_text != "" else "Completing installation..."
-			_status_indicator.set_status(Indicator.Status.WARNING, post_text, "Installing additional components")
-			if _download_button:
-				_download_button.visible = true
-				_download_button.disabled = true
-				_download_button.text = "Installing..."
-		
-		_:  # NOT_INSTALLED or any other state
-			# Check for partial install progress using new step-based validation
-			var install_progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started", "completed_steps": 0, "total_steps": 0, "next_step_display": ""}
-			
-			if install_progress["status"] == "partial":
-				# Partial install - show resume option
-				var next_step = install_progress["next_step_display"]
-				_status_indicator.set_status(Indicator.Status.WARNING, "Resume: %s" % next_step, "Installation incomplete - click to continue")
-				if _download_button:
-					_download_button.visible = true
-					_download_button.disabled = false
-					_download_button.text = "Resume"
-			elif install_progress["status"] == "not_started":
-				# Check legacy downloaded state
-				var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
-				if is_downloaded:
-					_status_indicator.set_status(Indicator.Status.WARNING, "Downloaded", "Ready to install")
-					if _download_button:
-						_download_button.visible = true
-						_download_button.disabled = false
-						_download_button.text = "Install"
-				else:
-					_status_indicator.set_status(Indicator.Status.ERROR, "Not downloaded", "Click Download to get the emulator")
-					if _download_button:
-						_download_button.visible = true
-						_download_button.disabled = false
-						_download_button.text = "Download"
+	# Check for active download/extraction via DownloadManager
+	var is_downloading = false
+	var is_extracting = false
+	# Check for active downloads via DownloadManager
+	if DownloadManager:
+		for item in DownloadManager.get_active():
+			if item.name == effective_emulator:
+				is_downloading = true
+				break
+	
+	# Check for active extraction via LaunchManager._emulator_install_progress
+	if LaunchManager and LaunchManager._emulator_install_progress.has(effective_emulator):
+		var progress_str = LaunchManager._emulator_install_progress[effective_emulator]
+		# Check if progress text indicates extraction
+		if progress_str.find("Extracting") >= 0 or progress_str.find("extracting") >= 0:
+			is_extracting = true
+	
+	if progress["status"] == "complete":
+		_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed%s" % mode_text, "Emulator is ready to use")
+		if _download_button:
+			_download_button.visible = false
+	elif is_downloading:
+		var display_text = progress_text if progress_text != "" else "Downloading..."
+		_status_indicator.set_status(Indicator.Status.WARNING, display_text, "Emulator is being downloaded")
+		if _download_button:
+			_download_button.visible = true
+			_download_button.disabled = true
+			_download_button.text = "Downloading..."
+	elif is_extracting:
+		var extract_text = progress_text if progress_text != "" else "Extracting..."
+		_status_indicator.set_status(Indicator.Status.WARNING, extract_text, "Extracting emulator files")
+		if _download_button:
+			_download_button.visible = true
+			_download_button.disabled = true
+			_download_button.text = "Installing..."
+	elif progress["status"] == "partial":
+		# Partial install - show resume option
+		var next_step = progress["next_step_display"]
+		_status_indicator.set_status(Indicator.Status.WARNING, "Resume: %s" % next_step, "Installation incomplete - click to continue")
+		if _download_button:
+			_download_button.visible = true
+			_download_button.disabled = false
+			_download_button.text = "Resume"
+	else:  # not_started
+		_status_indicator.set_status(Indicator.Status.ERROR, "Not downloaded", "Click Download to get the emulator")
+		if _download_button:
+			_download_button.visible = true
+			_download_button.disabled = false
+			_download_button.text = "Download"
 
 func set_available_emulators(emulators: Array[Dictionary]):
 	_available_emulators = emulators
@@ -299,36 +284,16 @@ func _on_download_pressed():
 	if effective_emulator == "":
 		return
 	
-	var install_state = LaunchManager.get_emulator_install_state(effective_emulator) if LaunchManager else LaunchManager.InstallState.NOT_INSTALLED
+	# Get install progress from registry
+	var progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started", "completed_steps": 0, "total_steps": 0, "next_step_display": ""}
 	
-	match install_state:
-		LaunchManager.InstallState.NEEDS_POST_INSTALL:
-			# Trigger post-install completion
-			LaunchManager.complete_post_install(effective_emulator)
-			refresh_ui()
-		
-		LaunchManager.InstallState.NOT_INSTALLED:
-			# Check for partial install using step-based validation
-			var install_progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started"}
-			
-			if install_progress["status"] == "partial":
-				# Resume from first incomplete step
-				await LaunchManager.download_emulator(effective_emulator)
-				refresh_ui()
-			else:
-				# Check legacy downloaded state
-				var is_downloaded = LaunchManager.is_emulator_downloaded(effective_emulator) if LaunchManager else false
-				if is_downloaded:
-					# Extract downloaded archive
-					LaunchManager.extract_emulator(effective_emulator)
-					refresh_ui()
-				else:
-					# Download the emulator
-					download_requested.emit(effective_emulator)
-		
-		_:
-			# For any other state, just request download
-			download_requested.emit(effective_emulator)
+	if progress["status"] == "partial":
+		# Resume installation from first incomplete step
+		await LaunchManager.download_emulator(effective_emulator)
+		refresh_ui()
+	else:
+		# For not_started, complete, or any other state, request download/install
+		download_requested.emit(effective_emulator)
 
 func refresh_ui():
 	# Called by parent to refresh button states (e.g., when download starts/completes)
