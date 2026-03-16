@@ -2113,6 +2113,57 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    /**
+     * Vibrates the device for haptic feedback.
+     * Requires the VIBRATE permission.
+     * 
+     * @param durationMs Duration of vibration in milliseconds
+     * @return true if vibration was triggered successfully
+     */
+    @UsedByGodot
+    public boolean vibrateDevice(int durationMs) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "vibrateDevice() called");
+        Log.d(TAG, "Duration: " + durationMs + "ms");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            android.os.Vibrator vibrator = (android.os.Vibrator) activity.getSystemService(Context.VIBRATOR_SERVICE);
+            
+            if (vibrator == null) {
+                Log.e(TAG, "ERROR: Vibrator service is null");
+                return false;
+            }
+            
+            if (!vibrator.hasVibrator()) {
+                Log.w(TAG, "WARNING: Device does not have a vibrator");
+                return false;
+            }
+            
+            // Vibrate for the specified duration with lower intensity
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                // Use VibrationEffect for API 26+ with lower amplitude (80 instead of DEFAULT_AMPLITUDE)
+                vibrator.vibrate(android.os.VibrationEffect.createOneShot(durationMs, 80));
+            } else {
+                // Deprecated method for older APIs
+                vibrator.vibrate(durationMs);
+            }
+            
+            Log.d(TAG, "SUCCESS: Vibration triggered");
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR vibrating device: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
+        }
+    }
+    
     // ============================================================================
     // Dual Screen / Display Detection Methods
     // ============================================================================

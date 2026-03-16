@@ -1320,8 +1320,8 @@
 		  },
 		  "android": {
 			"action_type": "download_repo",
-			"github_repo": "rfandango/xemu-android",
-			"asset_pattern": "app-debug\\.apk"
+			"github_repo": "izzy2lost/xemu",
+			"asset_pattern": "app-.*\\.apk"
 		  }
 		}
 	  },
@@ -1347,7 +1347,7 @@
 		  "android": {
 			"action_type": "apk_install",
 			"package_name": "com.izzy2lost.x1box",
-			"expected_file": "app-debug.apk",
+			"expected_file": "app-release.apk",
 			"validate": {
 			  "action_type": "package_installed",
 			  "package": "com.izzy2lost.x1box"

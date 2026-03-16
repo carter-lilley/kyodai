@@ -64,6 +64,14 @@ const ENTER_TWEEN_DURATION: float = 1.75
 var _enter_tween: Tween = null
 var _enter_tween_alpha: Tween = null
 
+# Android touch-and-hold detection
+const LONG_PRESS_DURATION: float = 0.6  # 600ms
+const LONG_PRESS_TOLERANCE: float = 20.0  # 20px position tolerance
+var _touch_start_time: float = 0.0
+var _touch_start_pos: Vector2 = Vector2.ZERO
+var _touch_is_holding: bool = false
+var _long_press_timer: Timer = null
+
 func _ready():
 	# Allow effects (like drop shadow) to render outside card bounds
 	clip_contents = false
@@ -96,6 +104,14 @@ func _ready():
 	if DownloadManager:
 		DownloadManager.download_progress.connect(_on_download_progress)
 		DownloadManager.download_completed.connect(_on_download_completed)
+	
+	# Setup long-press timer for Android
+	if PlatformManager.is_android():
+		_long_press_timer = Timer.new()
+		_long_press_timer.wait_time = LONG_PRESS_DURATION
+		_long_press_timer.one_shot = true
+		_long_press_timer.timeout.connect(_on_long_press_timeout)
+		add_child(_long_press_timer)
 
 func _setup_preview_mode():
 	_update_card_state_from_settings()
@@ -829,14 +845,57 @@ func _input(event: InputEvent) -> void:
 			var center_pos = global_position + (size / 2)
 			UIManager.show_game_context_menu(game.romm_id, center_pos, _get_show_delete())
 			get_viewport().set_input_as_handled()
+	
+	# Handle Android touch-and-hold
+	if PlatformManager.is_android() and event is InputEventScreenTouch:
+		if event.pressed:
+			# Check if touch is over this card
+			var touch_pos = event.position
+			if get_global_rect().has_point(touch_pos):
+				_touch_start_time = Time.get_ticks_msec() / 1000.0
+				_touch_start_pos = touch_pos
+				_touch_is_holding = true
+				if _long_press_timer:
+					_long_press_timer.start()
+		else:
+			# Touch released
+			if _touch_is_holding:
+				_touch_is_holding = false
+				if _long_press_timer:
+					_long_press_timer.stop()
+	
+	if PlatformManager.is_android() and event is InputEventScreenDrag:
+		if _touch_is_holding:
+			# Check if finger moved too far
+			var current_pos = event.position
+			var distance = _touch_start_pos.distance_to(current_pos)
+			if distance > LONG_PRESS_TOLERANCE:
+				# Cancel long press
+				_touch_is_holding = false
+				if _long_press_timer:
+					_long_press_timer.stop()
+
+func _on_long_press_timeout() -> void:
+	if _touch_is_holding and game and UIManager:
+		_touch_is_holding = false
+		# Play sound for long press
+		if AudioManager:
+			AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
+		# Show context menu at touch position
+		UIManager.show_game_context_menu(game.romm_id, _touch_start_pos, _get_show_delete())
 
 func _on_focus_entered() -> void:
 	# Play focus sound with slight pitch variation
 	if AudioManager:
 		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
 	
-	# Vibrate controller for tactile feedback
-	Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
+	# Vibrate for tactile feedback (platform-specific)
+	if PlatformManager.is_android():
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			plugin.call("vibrateDevice", 50)
+	else:
+		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
 	
 	# Scale up visual container when focused (not self, to avoid layout issues)
 	# Ensure pivot is set to center for proper scaling
