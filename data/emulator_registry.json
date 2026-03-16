@@ -1660,7 +1660,7 @@
 		  "android": {
 			"action_type": "download_repo",
 			"github_repo": "RPCSX/rpcsx-ui-android",
-			"asset_pattern": "rpcsx-android.*\\.apk"
+			"asset_pattern": "rpcsx-.*\\.apk"
 		  }
 		}
 	  },
@@ -1682,10 +1682,36 @@
 		  "android": {
 			"action_type": "apk_install",
 			"package_name": "net.rpcsx.ui",
-			"expected_file": "rpcsx-android.apk",
+			"expected_file": "rpcsx-release.apk",
 			"validate": {
 			  "action_type": "package_installed",
 			  "package": "net.rpcsx.ui"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "download_firmware",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_url",
+			"url": "http://dus01.ps3.update.playstation.net/update/ps3/image/us/2025_0305_c179ad173bbc08b55431d30947725a4b/PS3UPDAT.PUP",
+			"filename": "PS3UPDAT.PUP",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "PS3UPDAT.PUP"
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "download_url",
+			"url": "http://dus01.ps3.update.playstation.net/update/ps3/image/us/2025_0305_c179ad173bbc08b55431d30947725a4b/PS3UPDAT.PUP",
+			"filename": "PS3UPDAT.PUP",
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "PS3UPDAT.PUP"
 			}
 		  }
 		}
