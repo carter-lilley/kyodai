@@ -31,7 +31,7 @@ sync compelte needs home dimensions rebuilt?
 	implement: Game lists re-fetched every sync even if unchanged, ETag/Last-Modified handling
 	Fix: Add cache headers for static data
 	try scaling cropping algo(?)
-	further card image retries & priority management.
+	image priority management.
 	performance.add_custom_monitor for everything
 ## sync:
 	ft: background sync/notifs
@@ -42,15 +42,13 @@ sync compelte needs home dimensions rebuilt?
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-  	add: xenia, rpcs3, shadps4!
+  	add: shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis
 	all: hotkeys, graphics settings, confirm on exit, etc?
 	cemu:
 		title keys
-	rpcs3
-		zip extraction??
 ## registry:
 	hidden core systems toggle(?)
 	linux

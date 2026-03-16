@@ -1548,5 +1548,165 @@
 		}
 	  }
 	}
+  },
+  "xenia": {
+	"name": "Xenia",
+	"platforms": ["xbox360"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "xenia-canary/xenia-canary-releases",
+			"release_tag": "canary_experimental",
+			"asset_pattern": "xenia_canary_windows\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "xenia-canary/xenia-canary-releases",
+			"release_tag": "canary_experimental",
+			"asset_pattern": "xenia_canary_linux\\.tar\\.xz"
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "xenia_canary.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "xenia_canary"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "create_portable_file",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "portable.txt",
+				"content": ""
+			  }
+			],
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "portable.txt"
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "xenia_canary.exe",
+		  "template": ["{exe}", "{rom}", "--fullscreen"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "xenia_canary",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
+  },
+  "rpcs3": {
+	"name": "RPCS3",
+	"platforms": ["ps3"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "RPCS3/rpcs3-binaries-win",
+			"asset_pattern": "rpcs3-.*_win64_msvc\\.7z"
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "download_repo",
+			"github_repo": "RPCSX/rpcsx-ui-android",
+			"asset_pattern": "rpcsx-android.*\\.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "rpcs3.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "net.rpcsx.ui",
+			"expected_file": "rpcsx-android.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "net.rpcsx.ui"
+			}
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "rpcs3.exe",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action": "android.intent.action.VIEW",
+		  "package": "net.rpcsx.ui",
+		  "rom_delivery": "none"
+		}
+	  }
+	}
   }
 }

@@ -635,6 +635,10 @@ func _stop_sync_batch_mode():
 	if has_pending:
 		_flush_batch_notifications()
 
+func is_sync_in_progress() -> bool:
+	"""Check if a sync is currently in progress."""
+	return _sync_batch_mode
+
 func _queue_batch_notification(game: GameResource):
 	"""Queue a game notification during batch mode. Called via call_deferred from DB thread."""
 	_sync_batch_pending_mutex.lock()

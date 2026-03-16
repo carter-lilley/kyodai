@@ -680,12 +680,22 @@ func _load_cover(high_priority: bool = false):
 	_image_retry_count = 0
 	
 	var cache_path = ""
+	var cover_url = ""
 	if game.cover_path and FileAccess.file_exists(game.cover_path):
 		cache_path = game.cover_path
 	elif game.cover_url != "" and game.cover_url.begins_with("http"):
-		cache_path = _get_cached_cover_path(game.cover_url)
+		cover_url = game.cover_url
+		cache_path = _get_cached_cover_path(cover_url)
 		if not FileAccess.file_exists(cache_path):
-			cache_path = ""
+			# Cache file missing - check if sync is in progress
+			if DataManager.is_sync_in_progress():
+				# During sync: sync handles cover downloads, just show loading
+				_set_texture(_loading_texture)
+				return
+			else:
+				# After sync: trigger download as fallback
+				_download_cover_and_retry(cover_url, cache_path, high_priority)
+				return
 	
 	if cache_path == "":
 		_set_texture(_loading_texture)
@@ -740,6 +750,25 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 					_load_cached_cover(cache_path, high_priority)
 	
 	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority)
+
+func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false):
+	"""Trigger a cover download and retry loading when complete."""
+	var target_game_id = _loading_game_id
+	
+	# Show loading texture while downloading
+	_set_texture(_loading_texture)
+	
+	# Trigger download via DataManager
+	DataManager.load_image(cover_url, func(_texture: Texture2D):
+		# Called when download completes (or fails)
+		if not is_instance_valid(self):
+			return
+		if not game or game.id != target_game_id:
+			return
+		
+		# Retry loading the cover (file should now exist)
+		_load_cover(high_priority)
+	)
 
 func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
