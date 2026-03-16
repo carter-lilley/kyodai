@@ -759,10 +759,13 @@ func _on_card_pressed():
 	if not game:
 		return
 	
+	# Get the virtual index immediately while we still have focus context
+	var focus_index = self.get_meta("virtual_index", -1)
+	
 	# Skip file check for GameNative games - they don't have physical files
 	if game.source == "gamenative":
 		if LaunchManager:
-			LaunchManager.launch_game(game)
+			LaunchManager.launch_game(game, focus_index)
 		return
 	
 	if game.is_active_variant_downloaded():
@@ -793,7 +796,7 @@ func _on_card_pressed():
 				return
 		
 		if LaunchManager:
-			LaunchManager.launch_game(game)
+			LaunchManager.launch_game(game, focus_index)
 	else:
 		download_requested.emit(game)
 

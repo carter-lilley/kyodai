@@ -66,6 +66,10 @@ func _ready():
 	# Connect to UIManager for tab changes
 	UIManager.tab_changed.connect(_on_tab_changed)
 	
+	# Connect to LaunchManager to save focus before game launch
+	if LaunchManager:
+		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
+	
 	# Set initial view
 	_update_navigation_bar_for_view("Home")
 	
@@ -311,43 +315,77 @@ func _adjust_zoom(delta: float) -> void:
 func _get_focused_card_index() -> int:
 	"""Get the virtual index of the currently focused card, or -1 if none."""
 	var viewport = get_viewport()
+	print("[Main] _get_focused_card_index: viewport = ", viewport)
 	if not viewport:
+		print("[Main] _get_focused_card_index: no viewport")
 		return -1
 	
 	var focused = viewport.gui_get_focus_owner()
+	print("[Main] _get_focused_card_index: gui_get_focus_owner() = ", focused)
 	if not focused:
+		print("[Main] _get_focused_card_index: no focused control")
 		return -1
+	
+	print("[Main] _get_focused_card_index: focused control = ", focused.name, " (", focused.get_class(), ")")
+	print("[Main] _get_focused_card_index: focused path = ", focused.get_path())
 	
 	# Find the GameCard that contains the focused control
 	var parent = focused
+	var depth = 0
 	while parent:
+		print("[Main] _get_focused_card_index: checking parent at depth ", depth, ": ", parent.name, " has_meta virtual_index = ", parent.has_meta("virtual_index"))
 		if parent.has_meta("virtual_index"):
-			return parent.get_meta("virtual_index", -1)
+			var idx = parent.get_meta("virtual_index", -1)
+			print("[Main] _get_focused_card_index: found virtual_index ", idx, " at depth ", depth, " (", parent.name, ")")
+			return idx
 		parent = parent.get_parent()
+		depth += 1
 	
+	print("[Main] _get_focused_card_index: no virtual_index found in parent chain")
 	return -1
 
 func _restore_focus_to_card(index: int) -> void:
 	"""Restore focus to the card at the given virtual index."""
+	print("[Main] _restore_focus_to_card() called for index: ", index)
+	
 	# Get the current view
 	var current_view = UIManager.get_current_view()
 	if not current_view:
+		print("[Main] _restore_focus_to_card: no current view")
 		return
+	print("[Main] _restore_focus_to_card: current view = ", current_view.name)
+	
+	# For HomeView, always restore to index 0 since it reorders by last played
+	# For LibraryView, restore to the saved index
+	var target_index = index
+	if current_view is HomeView:
+		target_index = 0
+		print("[Main] _restore_focus_to_card: HomeView detected, forcing index to 0")
 	
 	var games_grid = _get_view_grid(current_view)
 	if not games_grid:
+		print("[Main] _restore_focus_to_card: no games_grid")
 		return
+	print("[Main] _restore_focus_to_card: found games_grid")
 	
-	# Get the card at the saved index
-	var card = games_grid.get_card_at_index(index)
+	# Get the card at the target index
+	var card = games_grid.get_card_at_index(target_index)
 	if not card:
+		print("[Main] _restore_focus_to_card: no card at index ", target_index)
 		return
+	print("[Main] _restore_focus_to_card: found card ", card.name, " at index ", target_index)
 	
-	# Grab focus on the card's input element
-	if card.has_node("CardInput"):
-		var card_input = card.get_node("CardInput")
+	# Grab focus on the card's input element (inside VisualContainer)
+	if card.has_node("VisualContainer/CardInput"):
+		var card_input = card.get_node("VisualContainer/CardInput")
 		if card_input and card_input is Control and card_input.focus_mode != Control.FOCUS_NONE:
+			print("[Main] _restore_focus_to_card: calling grab_focus() on CardInput")
 			card_input.grab_focus()
+			print("[Main] _restore_focus_to_card: grab_focus() completed")
+		else:
+			print("[Main] _restore_focus_to_card: CardInput invalid or not focusable")
+	else:
+		print("[Main] _restore_focus_to_card: card has no VisualContainer/CardInput node")
 
 func _on_delay_timeout():
 	if _held_dir != "":
@@ -376,3 +414,22 @@ func _on_screens_swapped(is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
 	# Update any UI state that depends on which screen is primary
 	# Note: No reparenting needed - AynThorManager handles rendering swap
+
+func _notification(what: int) -> void:
+	"""Handle application lifecycle notifications."""
+	if what == NOTIFICATION_APPLICATION_RESUMED:
+		print("[Main] NOTIFICATION_APPLICATION_RESUMED received, _last_focused_index = ", _last_focused_index)
+		# Restore focus when app returns to foreground (Android)
+		if _last_focused_index >= 0:
+			print("[Main] Calling _restore_focus_to_card deferred")
+			call_deferred("_restore_focus_to_card", _last_focused_index)
+		else:
+			print("[Main] No saved focus index, skipping restoration")
+
+func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
+	"""Save the focused card index when a game launch is initiated."""
+	print("[Main] _on_game_launch_initiated() called with focus_index: ", focus_index)
+	
+	# Store the focused card index (passed from card before focus is lost)
+	_last_focused_index = focus_index
+	print("[Main] Saved _last_focused_index: ", _last_focused_index)

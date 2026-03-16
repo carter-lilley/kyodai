@@ -106,6 +106,7 @@ signal launch_completed(success: bool, message: String)
 signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
 signal game_launched(game: GameResource)  # Emitted when a game is successfully launched
+signal game_launch_initiated(game: GameResource, focus_index: int)  # Emitted when a game launch is initiated (includes focus index for restoration)
 
 func _ready():
 	_load_registry()
@@ -970,7 +971,13 @@ func _get_emulator_name_from_path(install_path: String) -> String:
 	return "emulator"
 
 ## Main entry point for launching a game
-func launch_game(game: GameResource) -> void:
+func launch_game(game: GameResource, focus_index: int = -1) -> void:
+	print("[LaunchManager] launch_game() called for: ", game.get_display_name() if game else "null", " with focus_index: ", focus_index)
+	
+	# Emit signal immediately so focus can be saved before any suspension happens
+	print("[LaunchManager] Emitting game_launch_initiated signal")
+	game_launch_initiated.emit(game, focus_index)
+	
 	# Play launch sound
 	if AudioManager:
 		AudioManager.play_sfx("affirm_00")
