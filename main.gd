@@ -81,6 +81,20 @@ func _ready():
 	var ayn_thor_manager = get_node_or_null("AynThorManager")
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
+	
+	# DEBUG: Connect to global focus changed to see what's grabbing focus
+	get_viewport().gui_focus_changed.connect(_on_global_focus_changed)
+	
+	# Fix: Prevent SubViewportContainers from grabbing focus on touch
+	var main_viewport_container = get_node_or_null("DualScreenSetup/MainViewportContainer")
+	if main_viewport_container:
+		main_viewport_container.focus_mode = Control.FOCUS_NONE
+		print("[Main] Set MainViewportContainer focus_mode to FOCUS_NONE")
+	
+	var second_viewport_container = get_node_or_null("DualScreenSetup/SecondViewportContainer")
+	if second_viewport_container:
+		second_viewport_container.focus_mode = Control.FOCUS_NONE
+		print("[Main] Set SecondViewportContainer focus_mode to FOCUS_NONE")
 
 func _on_nav_button_pressed(view_name: String):
 	UIManager.switch_to_tab(view_name)
@@ -414,6 +428,13 @@ func _on_screens_swapped(is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
 	# Update any UI state that depends on which screen is primary
 	# Note: No reparenting needed - AynThorManager handles rendering swap
+
+func _on_global_focus_changed(control: Control) -> void:
+	"""DEBUG: Log whenever focus changes to see what's grabbing focus."""
+	if control:
+		print("[DEBUG Focus] Focus changed to: ", control.name, " (", control.get_class(), ") path: ", control.get_path())
+	else:
+		print("[DEBUG Focus] Focus cleared (null)")
 
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""

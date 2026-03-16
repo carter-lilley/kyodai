@@ -1005,6 +1005,12 @@ public class PackageCheckerPlugin extends GodotPlugin {
             return false;
         }
         
+        // Skip invalid directory names
+        if (dirName == null || dirName.isEmpty() || dirName.equals(".") || dirName.equals("..")) {
+            Log.d(TAG, "Skipping invalid directory name: " + dirName);
+            return true;
+        }
+        
         try {
             Uri treeUri = Uri.parse(treeUriString);
             DocumentFile pickedDir = DocumentFile.fromTreeUri(activity, treeUri);
@@ -1038,6 +1044,102 @@ public class PackageCheckerPlugin extends GodotPlugin {
             }
         } catch (Exception e) {
             Log.e(TAG, "ERROR creating SAF directory: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
+        }
+    }
+    
+    /**
+     * Creates a directory recursively in SAF storage given a full SAF path.
+     * Creates all parent directories as needed.
+     * Returns true if successful, false otherwise.
+     */
+    @UsedByGodot
+    public boolean createSafDirectoryFromFullPath(String fullPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "createSafDirectoryFromFullPath() called");
+        Log.d(TAG, "Full path: " + fullPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Parse the path to extract tree base and directory path
+            int treePos = fullPath.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "ERROR: Invalid SAF path format");
+                return false;
+            }
+            
+            int afterTree = treePos + 6;
+            int nextSlash = fullPath.indexOf("/", afterTree);
+            
+            if (nextSlash == -1) {
+                // Just the tree root, nothing to create
+                Log.d(TAG, "Path is tree root, nothing to create");
+                return true;
+            }
+            
+            // Extract tree base URI
+            String treeBase = fullPath.substring(0, nextSlash);
+            Log.d(TAG, "Tree base: " + treeBase);
+            
+            // Extract relative path from tree
+            String relativePath = fullPath.substring(nextSlash + 1);
+            Log.d(TAG, "Relative path: " + relativePath);
+            
+            // Skip invalid paths
+            if (relativePath.isEmpty() || relativePath.equals(".") || relativePath.equals("..")) {
+                Log.d(TAG, "Skipping invalid relative path: " + relativePath);
+                return true;
+            }
+            
+            // Navigate to/create each directory level
+            Uri treeUri = Uri.parse(treeBase);
+            DocumentFile currentDir = DocumentFile.fromTreeUri(activity, treeUri);
+            
+            if (currentDir == null) {
+                Log.e(TAG, "ERROR: Could not access tree root");
+                return false;
+            }
+            
+            String[] pathParts = relativePath.split("/");
+            
+            for (String dirName : pathParts) {
+                if (dirName.isEmpty() || dirName.equals(".") || dirName.equals("..")) {
+                    continue;
+                }
+                
+                Log.d(TAG, "Processing directory level: " + dirName);
+                
+                // Check if directory already exists
+                DocumentFile nextDir = currentDir.findFile(dirName);
+                if (nextDir != null && nextDir.isDirectory()) {
+                    Log.d(TAG, "Directory exists: " + dirName);
+                    currentDir = nextDir;
+                    continue;
+                }
+                
+                // Create the directory
+                Log.d(TAG, "Creating directory: " + dirName);
+                nextDir = currentDir.createDirectory(dirName);
+                if (nextDir == null) {
+                    Log.e(TAG, "ERROR: Failed to create directory: " + dirName);
+                    return false;
+                }
+                
+                Log.d(TAG, "Successfully created: " + dirName);
+                currentDir = nextDir;
+            }
+            
+            Log.d(TAG, "SUCCESS: Created all directories in path");
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR creating SAF directory from full path: " + e.getMessage());
             Log.e(TAG, "Exception type: " + e.getClass().getName());
             return false;
         }
@@ -1104,7 +1206,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 String[] pathParts = fileName.split("/");
                 for (int i = 0; i < pathParts.length - 1; i++) {
                     String dirName = pathParts[i];
-                    if (dirName.isEmpty()) continue;
+                    if (dirName.isEmpty() || dirName.equals(".") || dirName.equals("..")) continue;
                     
                     DocumentFile subDir = targetDir.findFile(dirName);
                     if (subDir == null || !subDir.isDirectory()) {

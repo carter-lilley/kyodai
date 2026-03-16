@@ -336,95 +336,107 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	# Android uses absolute paths, Desktop uses relative paths
 	var extract_path: String
 	if PlatformManager.is_android():
-		extract_path = extract_to
+		# Handle "." as current directory
+		if extract_to == ".":
+			extract_path = _get_emulator_directory(emulator_id).rstrip("/")
+		else:
+			extract_path = extract_to
 	else:
-		extract_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to
+		# Handle "." as current directory on desktop too
+		if extract_to == ".":
+			extract_path = _get_emulator_directory(emulator_id).rstrip("/")
+		else:
+			extract_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to
 	
-	var dir = DirAccess.open(extract_path)
-	if not dir:
-		return
+	# Normalize the path to remove "." and ".." components
+	extract_path = FileSystemManager.normalize_path(extract_path)
 	
-
+	# Use SAF-aware operations if this is a SAF path
+	var is_saf = FileSystemManager.is_saf_path(extract_path)
 	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
 		var target_path = extract_path + "/" + target_folder
 		
-		if not dir.dir_exists(target_folder):
+		# Check if target folder exists using SAF-aware method
+		if not FileSystemManager.dir_exists(target_path):
 			return
 		
-		var subdir = DirAccess.open(target_path)
-		if not subdir:
-			return
+		# Get list of items in the target folder
+		var items = FileSystemManager.list_dir(target_path)
 		
 		# Move all contents from the subdirectory to the parent
-		subdir.list_dir_begin()
-		var item_name = subdir.get_next()
-		while item_name != "":
-			if item_name != "." and item_name != "..":
-				var source_path = target_path + "/" + item_name
-				var dest_path = extract_path + "/" + item_name
-				
-				# Check if destination already exists
-				if dir.file_exists(item_name) or dir.dir_exists(item_name):
-					pass
-				else:
-					var error = dir.rename(source_path, dest_path)
-					if error != OK:
-						pass
+		for item_name in items:
+			if item_name == "." or item_name == "..":
+				continue
 			
-			item_name = subdir.get_next()
-		subdir.list_dir_end()
+			var source_path = target_path + "/" + item_name
+			var dest_path = extract_path + "/" + item_name
+			
+			# Check if destination already exists
+			if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
+				continue
+			
+			# Use SAF-aware move (can move to different parent directory)
+			if not FileSystemManager.move(source_path, dest_path):
+				push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 		
 		# Remove the now-empty subdirectory
-		var remove_error = subdir.remove(target_path)
+		# For SAF paths, the directory should be empty after moving all contents
+		# For regular paths, use DirAccess
+		if is_saf:
+			# SAF doesn't have a direct directory delete, but it will be cleaned up
+			pass
+		else:
+			var dir = DirAccess.open(extract_path)
+			if dir:
+				dir.remove(target_path)
 		return
 	
 	# No target folder specified, use original logic (single directory only)
-	# List all entries in the extract directory
-	var entries = []
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	while file_name != "":
-		if file_name != "." and file_name != "..":
-			entries.append(file_name)
-		file_name = dir.get_next()
-	dir.list_dir_end()
+	# List all entries in the extract directory using SAF-aware method
+	var entries = FileSystemManager.list_dir(extract_path)
+	
+	# Filter out . and ..
+	var filtered_entries = []
+	for entry in entries:
+		if entry != "." and entry != "..":
+			filtered_entries.append(entry)
 	
 	# If there's exactly one entry and it's a directory, flatten it
-	if entries.size() == 1:
-		var single_entry = entries[0]
+	if filtered_entries.size() == 1:
+		var single_entry = filtered_entries[0]
 		var single_entry_path = extract_path + "/" + single_entry
 		
 		# Check if the single entry is a directory
-		if dir.dir_exists(single_entry):
-			
-			var subdir = DirAccess.open(single_entry_path)
-			if not subdir:
-				return
+		if FileSystemManager.dir_exists(single_entry_path):
+			# Get all items in the subdirectory
+			var sub_items = FileSystemManager.list_dir(single_entry_path)
 			
 			# Move all contents from the subdirectory to the parent
-			subdir.list_dir_begin()
-			var item_name = subdir.get_next()
-			while item_name != "":
-				if item_name != "." and item_name != "..":
-					var source_path = single_entry_path + "/" + item_name
-					var dest_path = extract_path + "/" + item_name
-					
-					# Check if destination already exists
-					if dir.file_exists(item_name) or dir.dir_exists(item_name):
-						pass
-					else:
-						var error = dir.rename(source_path, dest_path)
-						if error != OK:
-							pass
+			for item_name in sub_items:
+				if item_name == "." or item_name == "..":
+					continue
 				
-				item_name = subdir.get_next()
-			subdir.list_dir_end()
+				var source_path = single_entry_path + "/" + item_name
+				var dest_path = extract_path + "/" + item_name
+				
+				# Check if destination already exists
+				if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
+					continue
+				
+				# Use SAF-aware move (can move to different parent directory)
+				if not FileSystemManager.move(source_path, dest_path):
+					push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 			
 			# Remove the now-empty subdirectory
-			var remove_error = subdir.remove(single_entry_path)
-			return
+			if is_saf:
+				# SAF doesn't have a direct directory delete
+				pass
+			else:
+				var dir = DirAccess.open(extract_path)
+				if dir:
+					dir.remove(single_entry_path)
 
 ## Gets the install path for an emulator (searches recursively)
 func get_emulator_install_path(emulator_id: String) -> String:
@@ -1527,8 +1539,14 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		if extract_to.begins_with("/") or extract_to.begins_with("content://"):
 			# Absolute path or SAF URI
 			extract_dir = extract_to
+		elif extract_to == ".":
+			# Current directory - use emulator directory directly (don't append ".")
+			extract_dir = _get_emulator_directory(emulator_id).rstrip("/")
 		else:
 			extract_dir = _get_emulator_directory(emulator_id) + extract_to
+		
+		# Normalize the path to remove "." and ".." components
+		extract_dir = FileSystemManager.normalize_path(extract_dir)
 		
 		# Download to emulator directory (for extraction, then delete)
 		var destination_path = _get_emulator_directory(emulator_id) + filename
@@ -1599,9 +1617,15 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	if extract_to.begins_with("/") or extract_to.begins_with("content://"):
 		# Absolute path (e.g., Android /storage/emulated/0/... or SAF URI)
 		extract_dir = extract_to
+	elif extract_to == ".":
+		# Current directory - use emulator directory directly (don't append ".")
+		extract_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	else:
 		# Relative path (default behavior for desktop)
 		extract_dir = _get_emulator_directory(emulator_id) + extract_to
+	
+	# Normalize the path to remove "." and ".." components
+	extract_dir = FileSystemManager.normalize_path(extract_dir)
 	
 	# NEW LOGIC: Check validation first (output files exist?)
 	if _validate_install_step(emulator_id, step_index, install_steps):

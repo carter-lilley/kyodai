@@ -63,6 +63,7 @@ func _setup_ui():
 	
 	var left_scroll = ScrollContainer.new()
 	left_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	left_scroll.follow_focus = true
 	left_panel.add_child(left_scroll)
 	
 	var left_vbox = VBoxContainer.new()

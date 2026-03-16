@@ -67,6 +67,7 @@ func _setup_ui():
 	
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.follow_focus = true
 	scroll.name = "ScrollContainer"
 	add_child(scroll)
 	

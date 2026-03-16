@@ -1,10 +1,11 @@
 #TODO.TXT
 check weird image conversion webp/jpg thing
+check melonds on desktop after bios restructure
 batch core download ONE notification
-we lose focus on touch inputs and when launching games
 scrolling in settings view (platform, designers, etc) doesnt follow focus
-downloaded games dont show up in home view on android
-on android downloaded games arent found
+install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
+newly-downloaded games show up weird. sometimes showing other games art, are dead links until reload?
+haptics androids
 ## UI
 	game title under card option
 	game title "bubble option"
@@ -32,6 +33,7 @@ on android downloaded games arent found
 	further card image retries & priority management.
 	performance.add_custom_monitor for everything
 ## sync:
+	ft: background sync/notifs
 	how to split important siblings
 	bug: refresh home scan after download
 	check: merge siblings for same cover
@@ -40,12 +42,11 @@ on android downloaded games arent found
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	bug: melonDS bios names on android(?)
   	add: ppsspp, xenia, rpcs3, shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis
-	all: controllers, hotkeys, graphics settings, confirm on exit, etc?
+	all: hotkeys, graphics settings, confirm on exit, etc?
 	cemu:
 		title keys
 	rpcs3

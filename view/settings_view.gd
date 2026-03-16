@@ -80,6 +80,7 @@ func _create_gamenative_tab() -> Control:
 func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.follow_focus = true
 	
 	var margin = MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)

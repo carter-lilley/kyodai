@@ -19,6 +19,7 @@ func _ready():
 func _build_view():
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.follow_focus = true
 	add_child(scroll)
 	
 	var margin = MarginContainer.new()

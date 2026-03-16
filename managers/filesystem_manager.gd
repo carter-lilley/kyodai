@@ -9,6 +9,65 @@ const SAF_PREFIX = "content://"
 static func is_saf_path(path: String) -> bool:
 	return path.begins_with(SAF_PREFIX)
 
+## Normalizes a path by removing redundant components like "." and ".."
+## and ensuring consistent separators
+static func normalize_path(path: String) -> String:
+	if path.is_empty():
+		return path
+	
+	# Handle SAF paths specially
+	if is_saf_path(path):
+		return _normalize_saf_path(path)
+	
+	# For regular paths, use simple normalization
+	# Remove "/./" patterns
+	var result = path
+	while result.find("/./") != -1:
+		result = result.replace("/./", "/")
+	
+	# Remove trailing "/."
+	if result.ends_with("/."):
+		result = result.substr(0, result.length() - 2)
+	
+	# Remove trailing "/" (except for root "/")
+	if result.length() > 1 and result.ends_with("/"):
+		result = result.substr(0, result.length() - 1)
+	
+	return result
+
+## Normalizes a SAF path
+static func _normalize_saf_path(path: String) -> String:
+	# SAF paths have format: content://authority/tree/treeId/path/to/file
+	# We need to preserve the tree URI portion and normalize the path portion
+	
+	var tree_pos = path.find("/tree/")
+	if tree_pos == -1:
+		return path
+	
+	var tree_uri_end = tree_pos + 6
+	var next_slash = path.find("/", tree_uri_end)
+	
+	if next_slash == -1:
+		# Just the tree root, no path to normalize
+		return path
+	
+	var tree_uri = path.substr(0, next_slash)
+	var subpath = path.substr(next_slash + 1)
+	
+	# Normalize the subpath by removing "." components
+	var parts = subpath.split("/")
+	var normalized_parts = []
+	
+	for part in parts:
+		if part == "." or part.is_empty():
+			continue
+		normalized_parts.append(part)
+	
+	if normalized_parts.is_empty():
+		return tree_uri
+	
+	return tree_uri + "/" + "/".join(normalized_parts)
+
 ## Checks if running on Android platform
 static func is_android() -> bool:
 	return PlatformManager.is_android() if Engine.has_singleton("PlatformManager") else OS.get_name() == "Android"
@@ -90,41 +149,8 @@ static func _saf_make_dir_recursive(full_path: String) -> bool:
 		push_error("[FileSystemManager] PackageChecker plugin not available for SAF directory creation")
 		return false
 	
-	# Parse SAF path: content://authority/tree/treeId/subdir1/subdir2
-	var tree_pos = full_path.find("/tree/")
-	if tree_pos == -1:
-		push_error("[FileSystemManager] Invalid SAF path format: " + full_path)
-		return false
-	
-	var after_tree = tree_pos + 6
-	var next_slash = full_path.find("/", after_tree)
-	
-	if next_slash == -1:
-		# Just the tree root, no subdirectories to create
-		return true
-	
-	var tree_uri = full_path.substr(0, next_slash)
-	var subdirs = full_path.substr(next_slash + 1)
-	
-	# Split subdirectories and create them one by one
-	var path_parts = subdirs.split("/")
-	var current_path = ""
-	
-	for part in path_parts:
-		if part.is_empty():
-			continue
-		
-		if current_path.is_empty():
-			current_path = part
-		else:
-			current_path += "/" + part
-		
-		var success = plugin.call("createSafDirectory", tree_uri, current_path)
-		if not success:
-			# Directory might already exist, continue
-			pass
-	
-	return true
+	# Use the new method that properly handles nested directories
+	return plugin.call("createSafDirectoryFromFullPath", full_path)
 
 ## Deletes a file (works with both regular paths and SAF URIs)
 ## Returns true on success, false on failure
@@ -140,6 +166,244 @@ static func delete_file(path: String) -> bool:
 	
 	var err = DirAccess.remove_absolute(path)
 	return err == OK
+
+## Checks if a path is a directory (works with both regular paths and SAF URIs)
+## Returns true if path exists and is a directory, false otherwise
+static func is_dir(path: String) -> bool:
+	if path.is_empty():
+		return false
+	
+	if is_saf_path(path) and is_android():
+		var plugin = _get_plugin()
+		if plugin:
+			return plugin.call("safDirExists", path)
+		return false
+	
+	var dir = DirAccess.open(path)
+	if dir:
+		return true
+	return false
+
+## Moves/Renames a file or directory within the same parent directory (works with both regular paths and SAF URIs)
+## source_path: Source path
+## dest_name: New name (just the filename/directory name, not full path)
+## Returns true on success, false on failure
+static func rename(source_path: String, dest_name: String) -> bool:
+	if source_path.is_empty() or dest_name.is_empty():
+		return false
+	
+	if is_saf_path(source_path) and is_android():
+		# For SAF paths, we need to use copy + delete since SAF doesn't have a direct rename
+		return _saf_rename(source_path, dest_name)
+	
+	var parent_dir = source_path.get_base_dir()
+	var dest_path = parent_dir + "/" + dest_name
+	
+	var err = DirAccess.rename_absolute(source_path, dest_path)
+	return err == OK
+
+## Moves a file or directory to a different location (works with both regular paths and SAF URIs)
+## Unlike rename(), this can move across different parent directories
+## source_path: Full source path
+## dest_path: Full destination path
+## Returns true on success, false on failure
+static func move(source_path: String, dest_path: String) -> bool:
+	if source_path.is_empty() or dest_path.is_empty():
+		return false
+	
+	# Check if source exists
+	if not file_exists(source_path) and not dir_exists(source_path):
+		push_error("[FileSystemManager] Source does not exist: " + source_path)
+		return false
+	
+	if is_saf_path(source_path) or is_saf_path(dest_path):
+		# For SAF paths, we need to use copy + delete
+		return _saf_move(source_path, dest_path)
+	
+	# For regular paths, use DirAccess
+	var err = DirAccess.rename_absolute(source_path, dest_path)
+	return err == OK
+
+## Internal helper for SAF move (copy + delete) - handles full paths
+static func _saf_move(source_path: String, dest_path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		push_error("[FileSystemManager] PackageChecker plugin not available for SAF move")
+		return false
+	
+	# Determine if source is a file or directory
+	var is_source_dir = dir_exists(source_path)
+	
+	if is_source_dir:
+		# For directories: recursively copy then delete
+		if not _saf_move_dir_recursive(source_path, dest_path):
+			return false
+		# Delete the source directory
+		return _saf_delete_dir_recursive(source_path)
+	else:
+		# For files: copy to temp, then copy to destination SAF location, then delete original
+		var temp_path = _saf_to_temp_path(source_path)
+		var temp_dir = temp_path.get_base_dir()
+		
+		# Ensure temp directory exists
+		if not DirAccess.dir_exists_absolute(temp_dir):
+			DirAccess.make_dir_recursive_absolute(temp_dir)
+		
+		# Copy SAF file to temp
+		if not plugin.call("copySafFileToLocal", source_path, temp_path):
+			push_error("[FileSystemManager] Failed to copy SAF file to temp for move: " + source_path)
+			return false
+		
+		# Ensure parent directory of destination exists
+		var dest_parent = dest_path.get_base_dir()
+		if not dir_exists(dest_parent):
+			if not make_dir_recursive(dest_parent):
+				push_error("[FileSystemManager] Failed to create destination parent directory: " + dest_parent)
+				DirAccess.remove_absolute(temp_path)
+				return false
+		
+		# Copy temp file to destination SAF location
+		var tree_uri = _extract_saf_tree_uri(dest_path)
+		var filename = _get_saf_filename(dest_path)
+		
+		if tree_uri.is_empty() or filename.is_empty():
+			push_error("[FileSystemManager] Invalid destination SAF path: " + dest_path)
+			DirAccess.remove_absolute(temp_path)
+			return false
+		
+		if not plugin.call("copyFileToSaf", temp_path, tree_uri, filename):
+			push_error("[FileSystemManager] Failed to copy temp file to SAF destination: " + dest_path)
+			DirAccess.remove_absolute(temp_path)
+			return false
+		
+		# Clean up temp file
+		DirAccess.remove_absolute(temp_path)
+		
+		# Delete the original SAF file
+		return plugin.call("deleteSafFile", source_path)
+
+## Internal helper for SAF rename (copy + delete)
+static func _saf_rename(source_path: String, dest_name: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		push_error("[FileSystemManager] PackageChecker plugin not available for SAF rename")
+		return false
+	
+	# Build destination path
+	var parent_path = source_path.get_base_dir()
+	var dest_path = parent_path + "/" + dest_name
+	
+	# For directories, we need a different approach
+	if is_dir(source_path):
+		# SAF doesn't have a direct move for directories, so we copy recursively then delete
+		if not _saf_move_dir_recursive(source_path, dest_path):
+			return false
+		# Delete the source directory
+		return _saf_delete_dir_recursive(source_path)
+	else:
+		# For files: copy to temp, then copy to new SAF location, then delete original
+		var temp_path = _saf_to_temp_path(source_path)
+		var temp_dir = temp_path.get_base_dir()
+		
+		# Ensure temp directory exists
+		if not DirAccess.dir_exists_absolute(temp_dir):
+			DirAccess.make_dir_recursive_absolute(temp_dir)
+		
+		# Copy SAF file to temp
+		if not plugin.call("copySafFileToLocal", source_path, temp_path):
+			push_error("[FileSystemManager] Failed to copy SAF file to temp for rename: " + source_path)
+			return false
+		
+		# Copy temp file to new SAF location
+		var tree_uri = _extract_saf_tree_uri(dest_path)
+		var filename = _get_saf_filename(dest_path)
+		
+		if tree_uri.is_empty() or filename.is_empty():
+			push_error("[FileSystemManager] Invalid destination SAF path: " + dest_path)
+			DirAccess.remove_absolute(temp_path)
+			return false
+		
+		if not plugin.call("copyFileToSaf", temp_path, tree_uri, filename):
+			push_error("[FileSystemManager] Failed to copy temp file to new SAF location: " + dest_path)
+			DirAccess.remove_absolute(temp_path)
+			return false
+		
+		# Clean up temp file
+		DirAccess.remove_absolute(temp_path)
+		
+		# Delete the original SAF file
+		return plugin.call("deleteSafFile", source_path)
+
+## Internal helper to recursively move a SAF directory
+static func _saf_move_dir_recursive(source_dir: String, dest_dir: String) -> bool:
+	# First, create the destination directory
+	if not make_dir_recursive(dest_dir):
+		push_error("[FileSystemManager] Failed to create destination directory: " + dest_dir)
+		return false
+	
+	# List and copy all items from source to destination
+	var items = list_dir(source_dir)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var source_item = source_dir + "/" + item
+		var dest_item = dest_dir + "/" + item
+		
+		if is_dir(source_item):
+			# Recursively move subdirectory
+			if not _saf_move_dir_recursive(source_item, dest_item):
+				return false
+		else:
+			# Move file
+			var temp_path = _saf_to_temp_path(source_item)
+			var plugin = _get_plugin()
+			
+			if plugin == null:
+				return false
+			
+			# Copy to temp
+			if not plugin.call("copySafFileToLocal", source_item, temp_path):
+				return false
+			
+			# Copy to destination
+			var tree_uri = _extract_saf_tree_uri(dest_item)
+			var filename = _get_saf_filename(dest_item)
+			
+			if not plugin.call("copyFileToSaf", temp_path, tree_uri, filename):
+				DirAccess.remove_absolute(temp_path)
+				return false
+			
+			DirAccess.remove_absolute(temp_path)
+	
+	return true
+
+## Internal helper to recursively delete a SAF directory
+static func _saf_delete_dir_recursive(dir_path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	
+	# List all items in the directory
+	var items = list_dir(dir_path)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var item_path = dir_path + "/" + item
+		
+		if is_dir(item_path):
+			# Recursively delete subdirectory
+			if not _saf_delete_dir_recursive(item_path):
+				return false
+		else:
+			# Delete file
+			if not plugin.call("deleteSafFile", item_path):
+				return false
+	
+	# Note: SAF doesn't have a direct directory delete, we rely on the directory being empty
+	# The directory will be cleaned up when empty or by the system
+	return true
 
 ## Lists files in a directory (works with both regular paths and SAF URIs)
 ## Returns array of filenames

@@ -675,13 +675,7 @@
 			}
 		  },
 		  "android": {
-			"action_type": "extract",
-			"extract_to": "{emulator_dir}/user/nand/system/Contents/registered",
-			"validate": {
-			  "action_type": "files_exist",
-			  "path": "{emulator_dir}/user/nand/system/Contents/registered",
-			  "pattern": "*"
-			}
+			"action_type": "none"
 		  }
 		}
 	  },
@@ -731,6 +725,7 @@
 		  },
 		  "android": {
 			"action_type": "extract",
+			"expected_file": "ProdKeys.Net-*.zip",
 			"extract_to": "{emulator_dir}/user/keys",
 			"strip_top_directory": true,
 			"validate": {
@@ -1228,7 +1223,7 @@
 		  "android": {
 			"action_type": "extract",
 			"expected_file": "melonds_bios.zip",
-			"extract_to": ".",
+			"extract_to": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
 			  "files": ["firmware.bin", "bios7.bin", "bios9.bin"]
