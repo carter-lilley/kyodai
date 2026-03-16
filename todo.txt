@@ -6,7 +6,6 @@ scrolling in settings view via controller (platform, designers, etc) doesnt foll
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch on bottom screen!
 ui scale
-ps3 on android
 if platform isnt selected in platform view but IS synced and we leave platform view, re-select it. 
 glass inset not working in card designer view
 ## UI
@@ -43,13 +42,11 @@ glass inset not working in card designer view
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-  	add: shadps4!
+  	add: ps3 on android...pkgs ps3 on desktop...shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis
 	all: hotkeys, graphics settings, confirm on exit, etc?
-	cemu:
-		title keys
 ## registry:
 	hidden core systems toggle(?)
 	linux

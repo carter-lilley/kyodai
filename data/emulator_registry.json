@@ -1681,11 +1681,11 @@
 		  },
 		  "android": {
 			"action_type": "apk_install",
-			"package_name": "net.rpcsx.ui",
+			"package_name": "net.rpcsx",
 			"expected_file": "rpcsx-release.apk",
 			"validate": {
 			  "action_type": "package_installed",
-			  "package": "net.rpcsx.ui"
+			  "package": "net.rpcsx"
 			}
 		  }
 		}
@@ -1730,7 +1730,7 @@
 		},
 		"android": {
 		  "action": "android.intent.action.VIEW",
-		  "package": "net.rpcsx.ui",
+		  "package": "net.rpcsx",
 		  "rom_delivery": "none"
 		}
 	  }
