@@ -183,6 +183,56 @@ static func delete_dir(path: String) -> bool:
 	var err = DirAccess.remove_absolute(path)
 	return err == OK
 
+## Recursively deletes a directory and all its contents
+## Works with both regular paths and SAF URIs
+## Returns true on success, false on failure
+static func delete_dir_recursive(path: String) -> bool:
+	if path.is_empty():
+		return false
+	
+	if not dir_exists(path):
+		return true  # Nothing to delete
+	
+	if is_saf_path(path) and is_android():
+		return _saf_delete_dir_recursive(path)
+	
+	# For regular paths, manually recurse and delete
+	var dir := DirAccess.open(path)
+	if not dir:
+		push_error("[FileSystemManager] Cannot open directory for deletion: " + path)
+		return false
+	
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	
+	while file_name != "":
+		if file_name == "." or file_name == "..":
+			file_name = dir.get_next()
+			continue
+		
+		var full_path := path + "/" + file_name
+		
+		if dir.current_is_dir():
+			# Recursively delete subdirectory
+			if not delete_dir_recursive(full_path):
+				dir.list_dir_end()
+				return false
+		else:
+			# Delete file
+			var err := DirAccess.remove_absolute(full_path)
+			if err != OK:
+				push_error("[FileSystemManager] Failed to delete file: " + full_path)
+				dir.list_dir_end()
+				return false
+		
+		file_name = dir.get_next()
+	
+	dir.list_dir_end()
+	
+	# Now delete the empty directory
+	var err := DirAccess.remove_absolute(path)
+	return err == OK
+
 ## Checks if a path is a directory (works with both regular paths and SAF URIs)
 ## Returns true if path exists and is a directory, false otherwise
 static func is_dir(path: String) -> bool:

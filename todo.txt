@@ -7,7 +7,6 @@ install flow doesnt refresh platform cards reliably anymore - especially if you 
 no touch on bottom screen!
 ui scale
 badge is broken
-sync compelte needs home dimensions rebuilt?
 ## UI
 	game title under card option
 	game title "bubble option"
