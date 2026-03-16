@@ -7,6 +7,8 @@ install flow doesnt refresh platform cards reliably anymore - especially if you 
 newly-downloaded games show up weird. sometimes showing other games art, are dead links until reload?
 no touch on bottom screen!
 ui scale
+badge is broken
+sync compelte needs home dimensions rebuilt?
 ## UI
 	game title under card option
 	game title "bubble option"
@@ -42,7 +44,7 @@ ui scale
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-  	add: ppsspp, xenia, rpcs3, shadps4!
+  	add: xenia, rpcs3, shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis
@@ -53,5 +55,4 @@ ui scale
 		zip extraction??
 ## registry:
 	hidden core systems toggle(?)
-	platform download/launch diffs (Linux)
-	Backport other implementations to multistep
+	linux

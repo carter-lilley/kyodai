@@ -383,7 +383,8 @@ func _start_download(item: QueueItem):
 		headers.append("Authorization: " + NetworkManager.get_auth_header())
 	
 	# Check if this is a large file that should use chunked downloading
-	var should_use_chunking = item.type == "game" and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD and not item.use_saf
+	# Note: SAF paths are now supported for chunked downloads
+	var should_use_chunking = item.type == "game" and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD
 	
 	if should_use_chunking:
 		print("[DownloadManager] Checking Range support for chunked download: " + item.name + " (size=" + str(item.expected_file_size) + ")")
@@ -973,137 +974,12 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 	print("[DownloadManager] _on_file_download_complete: use_saf=" + str(item.use_saf) + ", status=" + item.status)
 	
 	if item.use_saf:
-		print("[DownloadManager] Processing SAF copy for item: " + item.id)
-		NotificationManager.update_notification_text(item.notification_id, "Moving to storage: " + item.name + "...")
-		
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin == null:
-			push_error("[DownloadManager] PackageChecker plugin not available for SAF copy")
-			item.status = "failed"
-			item.error_message = "Plugin not available"
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			download_completed.emit(item.id, false, "Plugin not available")
-			queue_changed.emit()
-			_process_queue()
-			return
-		
-		# Extract tree URI and file name from SAF destination
-		# SAF path format: content://authority/tree/tree_id/document_id
-		var saf_path = item.saf_destination
-		var file_name = item.destination_path.get_file()
-		
-		# Extract the base tree URI (not including subdirectories)
-		var tree_uri = _extract_saf_tree_uri(saf_path)
-		if tree_uri == "":
-			push_error("[DownloadManager] Could not extract tree URI from: " + saf_path)
-			item.status = "failed"
-			item.error_message = "Invalid SAF path format"
-			NotificationManager.update_notification_text(item.notification_id, "Failed: " + item.name + " - Invalid path")
-			NotificationManager.show_notification("Download failed: Invalid storage path format", Notification.Type.ERROR, null, 5.0)
-			_active_items.erase(item.id)
-			download_completed.emit(item.id, false, "Invalid SAF path format")
-			queue_changed.emit()
-			_process_queue()
-			return
-		
-		# Extract subdirectory from the SAF path (e.g., "dc" from /tree/roms/dc/file.chd)
-		var subdir = ""
-		var tree_end_pos = saf_path.find("/", tree_uri.length() - 1)
-		if tree_end_pos != -1:
-			var file_name_pos = saf_path.rfind("/")
-			if file_name_pos > tree_end_pos:
-				subdir = saf_path.substr(tree_end_pos + 1, file_name_pos - tree_end_pos - 1)
-		
-		# DEBUG: Log all the paths
-		print("[DownloadManager] === SAF COPY DEBUG ===")
-		print("[DownloadManager] saf_path: " + saf_path)
-		print("[DownloadManager] tree_uri: " + tree_uri)
-		print("[DownloadManager] file_name: " + file_name)
-		print("[DownloadManager] subdir: '" + subdir + "'")
-		print("[DownloadManager] temp destination_path: " + item.destination_path)
-		
-		# Create subdirectory if needed
-		if subdir != "":
-			print("[DownloadManager] Creating subdirectory: " + subdir)
-			var dir_created = plugin.createSafDirectory(tree_uri, subdir)
-			print("[DownloadManager] createSafDirectory result: " + str(dir_created))
-			if not dir_created:
-				push_warning("[DownloadManager] Could not create subdirectory (may already exist)")
-		
-		# Convert Godot user:// path to absolute path for Java
-		var absolute_path = ProjectSettings.globalize_path(item.destination_path)
-		print("[DownloadManager] absolute_path: " + absolute_path)
-		
-		# Build the destination path for the plugin
-		var dest_path = subdir + "/" + file_name if subdir != "" else file_name
-		print("[DownloadManager] dest_path for plugin: " + dest_path)
-		
-		# Try to copy the file
-		print("[DownloadManager] Calling copyFileToSaf...")
-		var copy_success = plugin.call("copyFileToSaf", absolute_path, tree_uri, dest_path)
-		print("[DownloadManager] copyFileToSaf result: " + str(copy_success))
-		
-		if not copy_success:
-			push_error("[DownloadManager] Failed to copy file to SAF location")
-			item.status = "failed"
-			item.error_message = "Failed to copy to storage - check permissions"
-			NotificationManager.update_notification_text(item.notification_id, "Failed: " + item.name + " - No storage permission")
-			NotificationManager.show_notification("Download failed: No permission to write to storage folder. Please re-select the folder in Settings.", Notification.Type.ERROR, null, 8.0)
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			download_completed.emit(item.id, false, "Failed to copy to storage - check permissions")
-			queue_changed.emit()
-			_process_queue()
-			return
-		
-		# Save temp paths before updating destination_path
-		var temp_file_path = item.destination_path
-		var temp_dir_path = temp_file_path.get_base_dir()
-		
-		# Update destination_path to SAF path so extraction/callbacks use the correct location
-		item.destination_path = item.saf_destination
-		print("[DownloadManager] Updated destination_path to SAF location: " + item.destination_path)
-		
-		# Restore original extract_dir if it was saved
-		if item.has_meta("original_extract_dir"):
-			item.extract_dir = item.get_meta("original_extract_dir")
-			print("[DownloadManager] Restored extract_dir to: " + item.extract_dir)
-		
-		# Delete temp file and directory using saved paths
-		print("[DownloadManager] Cleaning up temp files: " + temp_file_path)
-		DirAccess.remove_absolute(temp_file_path)
-		DirAccess.remove_absolute(temp_dir_path)
+		# Queue SAF copy to extraction thread to avoid blocking main thread
+		_queue_saf_copy_to_thread(item)
+		return
 	
-	# Update game resource if applicable
-	if item.game_resource:
-		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
-		item.game_resource.mark_sibling_downloaded(downloaded_id)
-		# Use SAF destination if available, otherwise use regular destination
-		if item.use_saf:
-			item.game_resource.file_path = item.saf_destination
-		else:
-			item.game_resource.file_path = item.destination_path
-		DataManager.update_game(item.game_resource)
-	
-	# Call custom callback if provided
-	if item.callbacks.has("on_complete"):
-		item.callbacks.on_complete.call(true, item.destination_path)
-	
-	# Auto-extract if requested
-	if item.auto_extract:
-		item.status = "extract_pending"
-		item.progress = 0.0
-		_start_extraction(item)
-	else:
-		item.status = "completed"
-		item.progress = 1.0
-		_active_items.erase(item.id)
-		# Emit with SAF destination if available
-		var final_path = item.saf_destination if item.use_saf else item.destination_path
-		download_completed.emit(item.id, true, final_path)
-		queue_changed.emit()
-		_process_queue()
+	# For non-SAF downloads, finish immediately
+	_finish_download_completion(item)
 
 func _cleanup_download_tracking(item_id: String):
 	# Stop progress timer
@@ -1205,6 +1081,165 @@ func _start_extraction(item: QueueItem):
 		_cleanup_item(item)
 		_active_items.erase(item.id)
 		extraction_completed.emit(item.id, false, "Unknown archive format")
+		queue_changed.emit()
+		_process_queue()
+
+func _queue_saf_copy_to_thread(item: QueueItem):
+	"""Queue SAF file copy to extraction thread to avoid blocking main thread"""
+	print("[DownloadManager] Queueing SAF copy to background thread for item: " + item.id)
+	
+	# Dismiss the download progress notification and create a new one for SAF copy
+	if item.notification_id != -1:
+		NotificationManager.dismiss_notification(item.notification_id)
+	
+	# Get plugin and paths first
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_error("[DownloadManager] PackageChecker plugin not available for SAF copy")
+		item.status = "failed"
+		item.error_message = "Plugin not available"
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, "Plugin not available")
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Extract tree URI and file name from SAF destination
+	var saf_path = item.saf_destination
+	var file_name = item.destination_path.get_file()
+	var tree_uri = _extract_saf_tree_uri(saf_path)
+	
+	if tree_uri == "":
+		push_error("[DownloadManager] Could not extract tree URI from: " + saf_path)
+		item.status = "failed"
+		item.error_message = "Invalid SAF path format"
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, "Invalid SAF path format")
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Extract subdirectory
+	var subdir = ""
+	var tree_end_pos = saf_path.find("/", tree_uri.length() - 1)
+	if tree_end_pos != -1:
+		var file_name_pos = saf_path.rfind("/")
+		if file_name_pos > tree_end_pos:
+			subdir = saf_path.substr(tree_end_pos + 1, file_name_pos - tree_end_pos - 1)
+	
+	# Convert paths
+	var absolute_path = ProjectSettings.globalize_path(item.destination_path)
+	var dest_path = subdir + "/" + file_name if subdir != "" else file_name
+	
+	# Store temp paths for cleanup
+	var temp_file_path = item.destination_path
+	var temp_dir_path = temp_file_path.get_base_dir()
+	
+	# Store SAF copy progress in a dictionary that can be shared by reference
+	var saf_copy_data = {"progress": 0.0}
+	
+	# Create new notification with progress tracking for SAF copy
+	item.notification_id = NotificationManager.show_notification(
+		"Moving to storage: " + item.name + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			return saf_copy_data.progress / 100.0,  # Return 0.0 to 1.0
+		func(progress: float) -> String:
+			var percent = int(progress * 100)
+			return "Moving to storage: %s (%d%%)" % [item.name, percent]
+	)
+	
+	# Connect to SAF copy progress signal for real-time updates
+	var progress_callback = func(filename: String, progress: int):
+		print("[DownloadManager] SAF copy progress received: " + filename + " = " + str(progress) + "%")
+		saf_copy_data.progress = float(progress)
+	
+	if plugin.has_signal("saf_copy_progress"):
+		print("[DownloadManager] Connecting to saf_copy_progress signal")
+		plugin.saf_copy_progress.connect(progress_callback)
+	else:
+		print("[DownloadManager] WARNING: saf_copy_progress signal not available")
+	
+	# Create SAF copy callable for extraction thread
+	var saf_copy_callable = func() -> bool:
+		# Create subdirectory if needed
+		if subdir != "":
+			plugin.createSafDirectory(tree_uri, subdir)
+		
+		# Perform the copy
+		return plugin.call("copyFileToSaf", absolute_path, tree_uri, dest_path)
+	
+	# Queue to extraction thread
+	MemoryManager.queue_extraction_task(saf_copy_callable, func(success: bool):
+		# Disconnect progress signal
+		if plugin.has_signal("saf_copy_progress"):
+			plugin.saf_copy_progress.disconnect(progress_callback)
+		
+		if not success:
+			push_error("[DownloadManager] Failed to copy file to SAF location")
+			item.status = "failed"
+			item.error_message = "Failed to copy to storage"
+			if item.notification_id != -1:
+				NotificationManager.dismiss_notification(item.notification_id)
+				item.notification_id = -1
+			_cleanup_item(item)
+			_active_items.erase(item.id)
+			download_completed.emit(item.id, false, "SAF copy failed")
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		# Update destination to SAF path
+		item.destination_path = item.saf_destination
+		
+		# Restore original extract_dir
+		if item.has_meta("original_extract_dir"):
+			item.extract_dir = item.get_meta("original_extract_dir")
+		
+		# Clean up temp files
+		DirAccess.remove_absolute(temp_file_path)
+		DirAccess.remove_absolute(temp_dir_path)
+		
+		# Dismiss SAF copy notification before completion
+		if item.notification_id != -1:
+			NotificationManager.dismiss_notification(item.notification_id)
+			item.notification_id = -1
+		
+		# Finish download completion
+		_finish_download_completion(item)
+	)
+
+func _finish_download_completion(item: QueueItem):
+	"""Complete the download after file operations (SAF copy, etc.) are done"""
+	# Update game resource if applicable
+	if item.game_resource:
+		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
+		item.game_resource.mark_sibling_downloaded(downloaded_id)
+		if item.use_saf:
+			item.game_resource.file_path = item.saf_destination
+		else:
+			item.game_resource.file_path = item.destination_path
+		DataManager.update_game(item.game_resource)
+	
+	# Call custom callback if provided
+	if item.callbacks.has("on_complete"):
+		item.callbacks.on_complete.call(true, item.destination_path)
+	
+	# Auto-extract if requested
+	if item.auto_extract:
+		item.status = "extract_pending"
+		item.progress = 0.0
+		_start_extraction(item)
+	else:
+		item.status = "completed"
+		item.progress = 1.0
+		_active_items.erase(item.id)
+		var final_path = item.saf_destination if item.use_saf else item.destination_path
+		download_completed.emit(item.id, true, final_path)
 		queue_changed.emit()
 		_process_queue()
 

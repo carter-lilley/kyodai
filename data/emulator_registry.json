@@ -1539,7 +1539,7 @@
 		"windows": {
 		  "type": "command",
 		  "executable": "PPSSPPWindows64.exe",
-		  "template": ["{exe}", "{rom}"]
+		  "template": ["{exe}", "{rom}", "--fullscreen"]
 		},
 		"android": {
 		  "action": "android.intent.action.VIEW",

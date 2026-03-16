@@ -32,9 +32,12 @@ import androidx.documentfile.provider.DocumentFile;
 import org.godotengine.godot.Godot;
 import org.godotengine.godot.Dictionary;
 import org.godotengine.godot.plugin.GodotPlugin;
+import org.godotengine.godot.plugin.SignalInfo;
 import org.godotengine.godot.plugin.UsedByGodot;
 
 import java.io.File;
+import java.util.HashSet;
+import java.util.Set;
 import java.io.FileInputStream;
 import java.io.OutputStream;
 import java.net.URLDecoder;
@@ -56,6 +59,13 @@ public class PackageCheckerPlugin extends GodotPlugin {
     @Override
     public String getPluginName() {
         return "PackageChecker";
+    }
+    
+    @Override
+    public Set<SignalInfo> getPluginSignals() {
+        Set<SignalInfo> signals = new HashSet<>();
+        signals.add(new SignalInfo("saf_copy_progress", String.class, Integer.class));
+        return signals;
     }
     
     @UsedByGodot
@@ -1257,6 +1267,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
             int bytesRead;
             long totalBytesRead = 0;
             long lastProgressLog = 0;
+            long lastProgressEmit = 0;
             
             while ((bytesRead = inputStream.read(buffer)) != -1) {
                 outputStream.write(buffer, 0, bytesRead);
@@ -1267,6 +1278,13 @@ public class PackageCheckerPlugin extends GodotPlugin {
                     int progress = (int) ((totalBytesRead * 100) / fileSize);
                     Log.d(TAG, "Copy progress: " + progress + "% (" + totalBytesRead + "/" + fileSize + " bytes)");
                     lastProgressLog = totalBytesRead;
+                }
+                
+                // Emit signal to Godot every 10MB for UI updates
+                if (totalBytesRead - lastProgressEmit > 10 * 1024 * 1024) {
+                    int progressPercent = (int) ((totalBytesRead * 100) / fileSize);
+                    emitSignal("saf_copy_progress", actualFileName, progressPercent);
+                    lastProgressEmit = totalBytesRead;
                 }
             }
             
