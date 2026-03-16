@@ -296,12 +296,13 @@ func _instantiate_card_pool():
 		_card_pool.append(card)
 
 func set_total_count(count: int, preserve_cache: bool = false):
+	var count_changed = _total_items != count
 	_total_items = count
 	_update_layout()
 	
-	if preserve_cache:
-		pass
-	else:
+	# Clear cache if count changed (index-to-data mapping is now stale)
+	# or if preserve_cache is explicitly false
+	if count_changed or not preserve_cache:
 		_refresh_buffer()
 
 func _update_layout():
@@ -825,6 +826,7 @@ func _refresh_buffer():
 	_flow_container.custom_minimum_size = Vector2(0, 0)
 	_virtual_start = 0
 	_virtual_end = 0
+	_recalculate_layout()
 	_initial_load()
 
 func _reload_buffer_around_target(visible_start: int, visible_end: int):
