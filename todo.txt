@@ -8,7 +8,7 @@ no touch on bottom screen!
 ui scale
 ps3 on android
 if platform isnt selected in platform view but IS synced and we leave platform view, re-select it. 
-badge is broken
+glass inset not working in card designer view
 ## UI
 	game title under card option
 	game title "bubble option"

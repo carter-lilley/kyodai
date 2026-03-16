@@ -340,6 +340,10 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
+	# Sync badge effect state so it has correct container_size for ratio calculations
+	if _badge_effect and _badge_effect.visible:
+		_badge_effect.update_state(_card_state)
+	
 	_update_status_badge_layout()
 	_update_platform_badge()
 
