@@ -333,6 +333,7 @@ func _on_download_manager_download_completed(item_id: String, success: bool, mes
 ## Flattens an extracted directory by moving contents of a single top-level subdirectory up one level
 ## This handles zips that extract to a nested directory like "Archive-1.0/file.txt" -> "file.txt"
 func _flatten_extracted_directory(emulator_id: String, extract_to: String, target_folder: String = ""):
+	print("[LaunchManager] _flatten_extracted_directory called with extract_to=" + extract_to + ", target_folder=" + target_folder)
 	# Android uses absolute paths, Desktop uses relative paths
 	var extract_path: String
 	if PlatformManager.is_android():
@@ -350,9 +351,11 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	
 	# Normalize the path to remove "." and ".." components
 	extract_path = FileSystemManager.normalize_path(extract_path)
+	print("[LaunchManager] Flattening: normalized extract_path=" + extract_path)
 	
 	# Use SAF-aware operations if this is a SAF path
 	var is_saf = FileSystemManager.is_saf_path(extract_path)
+	print("[LaunchManager] Flattening: is_saf=" + str(is_saf))
 	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
@@ -396,6 +399,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	# No target folder specified, use original logic (single directory only)
 	# List all entries in the extract directory using SAF-aware method
 	var entries = FileSystemManager.list_dir(extract_path)
+	print("[LaunchManager] Flattening: entries in extract_path=" + str(entries))
 	
 	# Filter out . and ..
 	var filtered_entries = []
@@ -403,15 +407,21 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		if entry != "." and entry != "..":
 			filtered_entries.append(entry)
 	
+	print("[LaunchManager] Flattening: filtered_entries=" + str(filtered_entries) + ", size=" + str(filtered_entries.size()))
+	
 	# If there's exactly one entry and it's a directory, flatten it
 	if filtered_entries.size() == 1:
 		var single_entry = filtered_entries[0]
 		var single_entry_path = extract_path + "/" + single_entry
+		print("[LaunchManager] Flattening: single_entry=" + single_entry + ", path=" + single_entry_path)
 		
 		# Check if the single entry is a directory
-		if FileSystemManager.dir_exists(single_entry_path):
+		var is_dir = FileSystemManager.dir_exists(single_entry_path)
+		print("[LaunchManager] Flattening: is_dir=" + str(is_dir))
+		if is_dir:
 			# Get all items in the subdirectory
 			var sub_items = FileSystemManager.list_dir(single_entry_path)
+			print("[LaunchManager] Flattening: sub_items=" + str(sub_items))
 			
 			# Move all contents from the subdirectory to the parent
 			for item_name in sub_items:
@@ -420,23 +430,30 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 				
 				var source_path = single_entry_path + "/" + item_name
 				var dest_path = extract_path + "/" + item_name
+				print("[LaunchManager] Flattening: moving " + source_path + " -> " + dest_path)
 				
 				# Check if destination already exists
 				if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
+					print("[LaunchManager] Flattening: destination already exists, skipping")
 					continue
 				
 				# Use SAF-aware move (can move to different parent directory)
-				if not FileSystemManager.move(source_path, dest_path):
+				var move_success = FileSystemManager.move(source_path, dest_path)
+				print("[LaunchManager] Flattening: move result=" + str(move_success))
+				if not move_success:
 					push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 			
 			# Remove the now-empty subdirectory
 			if is_saf:
-				# SAF doesn't have a direct directory delete
-				pass
+				# Use SAF-aware directory deletion
+				var delete_success = FileSystemManager.delete_dir(single_entry_path)
+				print("[LaunchManager] Flattening: SAF directory delete result=" + str(delete_success))
 			else:
 				var dir = DirAccess.open(extract_path)
 				if dir:
 					dir.remove(single_entry_path)
+	else:
+		print("[LaunchManager] Flattening: filtered_entries.size() != 1, skipping flatten")
 
 ## Gets the install path for an emulator (searches recursively)
 func get_emulator_install_path(emulator_id: String) -> String:
@@ -1644,14 +1661,22 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# Single archive mode (default behavior)
 	# First, check for explicit expected_file pattern in extract_config
 	var expected_file = extract_config.get("expected_file", "")
+	print("[LaunchManager] _execute_extract_step: expected_file pattern='" + expected_file + "'")
 	if expected_file != "":
 		var files = FileSystemManager.list_dir(emulator_dir)
+		print("[LaunchManager] _execute_extract_step: files in emulator_dir=" + str(files))
 		for file_name in files:
+			print("[LaunchManager] _execute_extract_step: checking if '" + file_name + "' matches pattern '" + expected_file + "'")
 			if file_name.match(expected_file):
 				var full_path = emulator_dir + "/" + file_name
+				print("[LaunchManager] _execute_extract_step: MATCH! full_path=" + full_path)
 				if FileSystemManager.file_exists(full_path):
 					archive_path = full_path
+					print("[LaunchManager] _execute_extract_step: archive_path set to " + archive_path)
 					break
+				else:
+					print("[LaunchManager] _execute_extract_step: file exists check failed for " + full_path)
+		print("[LaunchManager] _execute_extract_step: after expected_file loop, archive_path=" + archive_path)
 	
 	# If no expected_file match, scan for common archive extensions (first match only)
 	if archive_path == "":
@@ -1696,8 +1721,12 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			return
 		
 		# Handle post-extraction flattening
+		print("[LaunchManager] Extraction callback called, strip_top=" + str(strip_top) + ", flatten_target=" + flatten_target)
 		if strip_top:
-			_flatten_extracted_directory(emulator_id, extract_to, flatten_target)
+			print("[LaunchManager] Calling _flatten_extracted_directory with extract_dir=" + extract_dir)
+			_flatten_extracted_directory(emulator_id, extract_dir, flatten_target)
+		else:
+			print("[LaunchManager] Skipping flattening, strip_top is false")
 		
 		# Validate extraction
 		var validate_config = extract_config.get("validate", {})

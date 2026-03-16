@@ -167,6 +167,22 @@ static func delete_file(path: String) -> bool:
 	var err = DirAccess.remove_absolute(path)
 	return err == OK
 
+## Deletes a directory (works with both regular paths and SAF URIs)
+## The directory must be empty
+## Returns true on success, false on failure
+static func delete_dir(path: String) -> bool:
+	if path.is_empty():
+		return false
+	
+	if is_saf_path(path) and is_android():
+		var plugin = _get_plugin()
+		if plugin:
+			return plugin.call("deleteSafDirectory", path)
+		return false
+	
+	var err = DirAccess.remove_absolute(path)
+	return err == OK
+
 ## Checks if a path is a directory (works with both regular paths and SAF URIs)
 ## Returns true if path exists and is a directory, false otherwise
 static func is_dir(path: String) -> bool:
@@ -271,7 +287,12 @@ static func _saf_move(source_path: String, dest_path: String) -> bool:
 			DirAccess.remove_absolute(temp_path)
 			return false
 		
-		if not plugin.call("copyFileToSaf", temp_path, tree_uri, filename):
+		# Convert temp_path to absolute for Java plugin
+		var abs_temp_path = temp_path
+		if temp_path.begins_with("user://"):
+			abs_temp_path = ProjectSettings.globalize_path(temp_path)
+		
+		if not plugin.call("copyFileToSaf", abs_temp_path, tree_uri, filename):
 			push_error("[FileSystemManager] Failed to copy temp file to SAF destination: " + dest_path)
 			DirAccess.remove_absolute(temp_path)
 			return false

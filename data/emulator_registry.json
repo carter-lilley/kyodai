@@ -883,10 +883,9 @@
 			"action_type": "download_url",
 			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_pre.pup",
-			"destination": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["{emulator_dir}/PSP2UPDAT_pre.pup"]
+			  "files": ["PSP2UPDAT_pre.pup"]
 			}
 		  }
 		}
@@ -910,10 +909,9 @@
 			"action_type": "download_url",
 			"url": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
 			"filename": "PSVUPDAT.pup",
-			"destination": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["{emulator_dir}/PSVUPDAT.pup"]
+			  "files": ["PSVUPDAT.pup"]
 			}
 		  }
 		}
@@ -937,10 +935,9 @@
 			"action_type": "download_url",
 			"url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP",
 			"filename": "PSP2UPDAT_sd.pup",
-			"destination": "{emulator_dir}",
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["{emulator_dir}/PSP2UPDAT_sd.pup"]
+			  "files": ["PSP2UPDAT_sd.pup"]
 			}
 		  }
 		}

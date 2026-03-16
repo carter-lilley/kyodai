@@ -1772,6 +1772,112 @@ public class PackageCheckerPlugin extends GodotPlugin {
     }
     
     /**
+     * Navigates to a file in SAF storage given a full SAF path.
+     * Returns the DocumentFile if found, null otherwise.
+     */
+    private DocumentFile navigateToSafFile(String fullPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "navigateToSafFile() called");
+        Log.d(TAG, "Full path: " + fullPath);
+        
+        try {
+            // Parse the path to extract tree base and file path
+            int treePos = fullPath.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "Invalid SAF path format - no /tree/ found");
+                return null;
+            }
+            
+            int afterTree = treePos + 6;
+            int nextSlash = fullPath.indexOf("/", afterTree);
+            
+            if (nextSlash == -1) {
+                // Just the tree root, can't be a file
+                Log.e(TAG, "Path is tree root, not a file");
+                return null;
+            }
+            
+            // Extract tree base URI
+            String treeBase = fullPath.substring(0, nextSlash);
+            String relativePath = fullPath.substring(nextSlash + 1);
+            
+            Log.d(TAG, "Tree base: " + treeBase);
+            Log.d(TAG, "Relative path: " + relativePath);
+            
+            // Navigate to the file
+            Uri treeUri = Uri.parse(treeBase);
+            Log.d(TAG, "Parsed tree URI: " + treeUri.toString());
+            
+            DocumentFile currentDir = DocumentFile.fromTreeUri(activity, treeUri);
+            
+            if (currentDir == null) {
+                Log.e(TAG, "Could not access tree root");
+                return null;
+            }
+            
+            Log.d(TAG, "Successfully accessed tree root");
+            
+            String[] pathParts = relativePath.split("/");
+            Log.d(TAG, "Path parts count: " + pathParts.length);
+            
+            for (int i = 0; i < pathParts.length; i++) {
+                String part = pathParts[i];
+                Log.d(TAG, "Processing part " + i + ": '" + part + "'");
+                
+                if (part.isEmpty() || part.equals(".") || part.equals("..")) {
+                    Log.d(TAG, "Skipping empty/./.. part");
+                    continue;
+                }
+                
+                boolean isLastPart = (i == pathParts.length - 1);
+                Log.d(TAG, "Looking for: '" + part + "', isLastPart=" + isLastPart);
+                
+                DocumentFile nextFile = currentDir.findFile(part);
+                
+                if (nextFile == null) {
+                    Log.e(TAG, "File/directory not found: '" + part + "'");
+                    // List what's available for debugging
+                    Log.d(TAG, "Available files in current directory:");
+                    for (DocumentFile file : currentDir.listFiles()) {
+                        Log.d(TAG, "  - " + file.getName() + " (isFile=" + file.isFile() + ", isDir=" + file.isDirectory() + ")");
+                    }
+                    return null;
+                }
+                
+                Log.d(TAG, "Found: '" + part + "' (isFile=" + nextFile.isFile() + ", isDir=" + nextFile.isDirectory() + ")");
+                
+                if (isLastPart) {
+                    // This should be the file
+                    if (!nextFile.isFile()) {
+                        Log.e(TAG, "Expected file but found directory: " + part);
+                        return null;
+                    }
+                    Log.d(TAG, "SUCCESS: Found target file");
+                    Log.d(TAG, "==========================================");
+                    return nextFile;
+                } else {
+                    // This should be a directory
+                    if (!nextFile.isDirectory()) {
+                        Log.e(TAG, "Expected directory but found file: " + part);
+                        return null;
+                    }
+                    currentDir = nextFile;
+                    Log.d(TAG, "Navigated into directory: " + part);
+                }
+            }
+            
+            Log.e(TAG, "Could not navigate to file");
+            return null;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR navigating to SAF file: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            e.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
      * Copies a file from SAF storage to a local file path.
      * Used to read SAF files by copying them to temp location first.
      * Returns true if successful, false otherwise.
@@ -1789,16 +1895,37 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         try {
-            // Create parent directories for local path
-            File localFile = new File(localPath);
-            File parentDir = localFile.getParentFile();
-            if (parentDir != null && !parentDir.exists()) {
-                parentDir.mkdirs();
+            // Convert Godot user:// path to absolute path if needed
+            String absolutePath = localPath;
+            if (localPath.startsWith("user:")) {
+                // Godot user:// maps to /data/data/[package]/files/
+                String userPath = localPath.substring(5); // Remove "user:" prefix
+                if (userPath.startsWith("/")) {
+                    userPath = userPath.substring(1);
+                }
+                absolutePath = activity.getFilesDir().getAbsolutePath() + "/" + userPath;
+                Log.d(TAG, "Converted user:// path to: " + absolutePath);
             }
             
-            // Get input stream from SAF
-            Uri uri = Uri.parse(safUri);
-            java.io.InputStream inputStream = activity.getContentResolver().openInputStream(uri);
+            // Create parent directories for local path
+            File localFile = new File(absolutePath);
+            File parentDir = localFile.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                boolean created = parentDir.mkdirs();
+                Log.d(TAG, "Created parent directories: " + created + " for " + parentDir.getAbsolutePath());
+            }
+            
+            // Navigate to the file using DocumentFile
+            DocumentFile sourceFile = navigateToSafFile(safUri);
+            if (sourceFile == null) {
+                Log.e(TAG, "ERROR: Could not find SAF file");
+                return false;
+            }
+            
+            // Get input stream from the file's URI
+            Uri fileUri = sourceFile.getUri();
+            Log.d(TAG, "File URI: " + fileUri.toString());
+            java.io.InputStream inputStream = activity.getContentResolver().openInputStream(fileUri);
             
             if (inputStream == null) {
                 Log.e(TAG, "ERROR: Could not open SAF input stream");
@@ -1806,7 +1933,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
             }
             
             // Create output stream to local file
-            java.io.FileOutputStream outputStream = new java.io.FileOutputStream(localFile);
+            java.io.FileOutputStream outputStream = new java.io.FileOutputStream(absolutePath);
             
             // Copy data
             byte[] buffer = new byte[8192];
@@ -1878,6 +2005,110 @@ public class PackageCheckerPlugin extends GodotPlugin {
             for (StackTraceElement element : e.getStackTrace()) {
                 Log.e(TAG, "  at " + element.toString());
             }
+            return false;
+        }
+    }
+    
+    /**
+     * Deletes a directory in SAF storage given a full SAF path.
+     * The directory must be empty.
+     * Returns true if successful, false otherwise.
+     */
+    @UsedByGodot
+    public boolean deleteSafDirectory(String fullPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "deleteSafDirectory() called");
+        Log.d(TAG, "Full path: " + fullPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            // Parse the path to extract tree base and directory path
+            int treePos = fullPath.indexOf("/tree/");
+            if (treePos == -1) {
+                Log.e(TAG, "ERROR: Invalid SAF path format");
+                return false;
+            }
+            
+            int afterTree = treePos + 6;
+            int nextSlash = fullPath.indexOf("/", afterTree);
+            
+            if (nextSlash == -1) {
+                // Just the tree root, cannot delete
+                Log.e(TAG, "ERROR: Cannot delete tree root");
+                return false;
+            }
+            
+            // Extract tree base URI
+            String treeBase = fullPath.substring(0, nextSlash);
+            String relativePath = fullPath.substring(nextSlash + 1);
+            
+            Log.d(TAG, "Tree base: " + treeBase);
+            Log.d(TAG, "Relative path: " + relativePath);
+            
+            // Navigate to the parent directory first
+            Uri treeUri = Uri.parse(treeBase);
+            DocumentFile currentDir = DocumentFile.fromTreeUri(activity, treeUri);
+            
+            if (currentDir == null) {
+                Log.e(TAG, "ERROR: Could not access tree root");
+                return false;
+            }
+            
+            String[] pathParts = relativePath.split("/");
+            String dirName = pathParts[pathParts.length - 1];
+            
+            // Navigate to parent directory
+            for (int i = 0; i < pathParts.length - 1; i++) {
+                String part = pathParts[i];
+                if (part.isEmpty() || part.equals(".") || part.equals("..")) {
+                    continue;
+                }
+                
+                DocumentFile nextDir = currentDir.findFile(part);
+                if (nextDir == null || !nextDir.isDirectory()) {
+                    Log.e(TAG, "ERROR: Directory not found in path: " + part);
+                    return false;
+                }
+                currentDir = nextDir;
+            }
+            
+            // Find the directory to delete
+            DocumentFile targetDir = currentDir.findFile(dirName);
+            if (targetDir == null) {
+                Log.d(TAG, "Directory not found (may already be deleted): " + dirName);
+                return true;
+            }
+            
+            if (!targetDir.isDirectory()) {
+                Log.e(TAG, "ERROR: Target is not a directory: " + dirName);
+                return false;
+            }
+            
+            // Check if directory is empty
+            DocumentFile[] children = targetDir.listFiles();
+            if (children.length > 0) {
+                Log.e(TAG, "ERROR: Directory is not empty, cannot delete: " + dirName);
+                return false;
+            }
+            
+            // Delete the directory
+            boolean deleted = targetDir.delete();
+            if (deleted) {
+                Log.d(TAG, "SUCCESS: Deleted directory: " + dirName);
+            } else {
+                Log.e(TAG, "ERROR: Failed to delete directory: " + dirName);
+            }
+            
+            Log.d(TAG, "==========================================");
+            return deleted;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR deleting SAF directory: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
             return false;
         }
     }

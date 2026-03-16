@@ -6,6 +6,7 @@ scrolling in settings view (platform, designers, etc) doesnt follow focus
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 newly-downloaded games show up weird. sometimes showing other games art, are dead links until reload?
 haptics androids
+no touch on bottom screen!
 ## UI
 	game title under card option
 	game title "bubble option"
