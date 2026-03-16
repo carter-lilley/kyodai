@@ -9,16 +9,20 @@ class_name MemoryManager
 var _db_thread: Thread
 var _image_threads: Array[Thread] = []
 var _extraction_thread: Thread
+var _download_threads: Array[Thread] = []
 var _db_queue: Array = []
 var _image_high_priority_queue: Array = []
 var _image_low_priority_queue: Array = []
 var _extraction_queue: Array = []
+var _download_queue: Array = []
 var _db_mutex: Mutex
 var _image_mutex: Mutex
 var _extraction_mutex: Mutex
+var _download_mutex: Mutex
 var _db_semaphore: Semaphore
 var _image_semaphore: Semaphore
 var _extraction_semaphore: Semaphore
+var _download_semaphore: Semaphore
 var _exit_flag: bool = false
 var _image_task_counter: int = 0
 var _image_tasks: Dictionary = {}
@@ -33,9 +37,11 @@ var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
 const IMAGE_THREAD_COUNT: int = 6
+const DOWNLOAD_THREAD_COUNT: int = 4
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
+const MAX_DOWNLOAD_QUEUE_SIZE = 20
 
 static var _instance: MemoryManager = null
 
@@ -49,6 +55,28 @@ enum BatchMode {
 	DB_THREAD,  # Process on DB thread (for DB operations)
 	IMAGE_THREAD # Process on image thread (for image operations)
 }
+
+## Represents a parallel download batch
+class DownloadBatch:
+	var items: Array
+	var process_item: Callable
+	var on_progress: Callable
+	var on_complete: Callable
+	var completed_count: int = 0
+	var total_count: int
+	var id: int
+	var is_complete: bool = false
+	
+	static var _next_id: int = 0
+	
+	func _init(p_items: Array, p_process_item: Callable, p_on_progress: Callable, p_on_complete: Callable):
+		items = p_items
+		process_item = p_process_item
+		on_progress = p_on_progress
+		on_complete = p_on_complete
+		total_count = items.size()
+		id = _next_id
+		_next_id += 1
 
 ## Represents a batch of work items to be processed across multiple frames
 class BatchProcess:
@@ -82,6 +110,10 @@ var _batch_processes: Array[BatchProcess] = []
 var _batch_mutex: Mutex = Mutex.new()
 var _batch_processing: bool = false
 
+# Parallel download batch tracking
+var _download_batches: Dictionary = {}  # id -> DownloadBatch
+var _download_batch_mutex: Mutex = Mutex.new()
+
 # ============================================================================
 # INITIALIZATION
 # ============================================================================
@@ -95,11 +127,13 @@ func _initialize_threads():
 	_db_mutex = Mutex.new()
 	_image_mutex = Mutex.new()
 	_extraction_mutex = Mutex.new()
+	_download_mutex = Mutex.new()
 	_texture_cache_mutex = Mutex.new()
 	_lp_callback_mutex = Mutex.new()
 	_db_semaphore = Semaphore.new()
 	_image_semaphore = Semaphore.new()
 	_extraction_semaphore = Semaphore.new()
+	_download_semaphore = Semaphore.new()
 	
 	_db_thread = Thread.new()
 	_db_thread.start(_db_worker)
@@ -111,6 +145,11 @@ func _initialize_threads():
 	
 	_extraction_thread = Thread.new()
 	_extraction_thread.start(_extraction_worker)
+	
+	for i in range(DOWNLOAD_THREAD_COUNT):
+		var thread = Thread.new()
+		thread.start(_download_worker)
+		_download_threads.append(thread)
 
 func _ready():
 	set_process(true)
@@ -212,6 +251,23 @@ static func _extraction_worker():
 		_instance._extraction_mutex.lock()
 		var task = _instance._extraction_queue.pop_front()
 		_instance._extraction_mutex.unlock()
+		
+		if task:
+			var result = task.callable.call()
+			
+			if task.callback.is_valid():
+				_instance.call_deferred("_execute_callback", task.callback, result)
+
+static func _download_worker():
+	while not _instance._exit_flag:
+		_instance._download_semaphore.wait()
+		
+		if _instance._exit_flag:
+			break
+		
+		_instance._download_mutex.lock()
+		var task = _instance._download_queue.pop_front()
+		_instance._download_mutex.unlock()
 		
 		if task:
 			var result = task.callable.call()
@@ -403,6 +459,107 @@ static func queue_extraction_task(callable: Callable, callback: Callable = Calla
 	_instance._extraction_mutex.unlock()
 	_instance._extraction_semaphore.post()
 
+## Queues a parallel download batch using dedicated download threads
+## Each item is processed in parallel across DOWNLOAD_THREAD_COUNT threads
+## Returns batch ID for tracking progress
+static func queue_parallel_downloads(
+	items: Array,
+	process_item: Callable,
+	on_progress: Callable = Callable(),
+	on_complete: Callable = Callable()
+) -> int:
+	if _instance == null:
+		push_error("[MemoryManager] Not initialized - cannot queue parallel downloads")
+		return -1
+	
+	if items.is_empty():
+		if on_complete.is_valid():
+			on_complete.call([])
+		return -1
+	
+	var batch = DownloadBatch.new(items, process_item, on_progress, on_complete)
+	
+	_instance._download_batch_mutex.lock()
+	_instance._download_batches[batch.id] = batch
+	_instance._download_batch_mutex.unlock()
+	
+	# Queue all items to the download thread pool
+	for i in range(items.size()):
+		var item = items[i]
+		var index = i
+		
+		_instance._download_mutex.lock()
+		var current_size = _instance._download_queue.size()
+		
+		if current_size >= MAX_DOWNLOAD_QUEUE_SIZE:
+			_instance._download_mutex.unlock()
+			push_error("[MemoryManager] Download queue full - cannot queue item")
+			continue
+		
+		_instance._download_queue.append({
+			"callable": func():
+				return process_item.call(item, index),
+			"callback": func(result):
+				_instance._on_download_chunk_complete(batch.id, index, result)
+		})
+		_instance._download_mutex.unlock()
+		_instance._download_semaphore.post()
+	
+	return batch.id
+
+static func _on_download_chunk_complete(batch_id: int, index: int, result):
+	_instance._download_batch_mutex.lock()
+	
+	if not _instance._download_batches.has(batch_id):
+		_instance._download_batch_mutex.unlock()
+		return
+	
+	var batch = _instance._download_batches[batch_id]
+	batch.completed_count += 1
+	
+	# Report progress
+	if batch.on_progress.is_valid():
+		batch.on_progress.call(batch.completed_count, batch.total_count)
+	
+	# Check if all items complete
+	if batch.completed_count >= batch.total_count and not batch.is_complete:
+		batch.is_complete = true
+		_instance._download_batch_mutex.unlock()
+		
+		# Collect results (we need to track them, for now just pass empty array)
+		# In a full implementation, we'd store results per index
+		if batch.on_complete.is_valid():
+			batch.on_complete.call([])
+		
+		# Remove batch
+		_instance._download_batch_mutex.lock()
+		_instance._download_batches.erase(batch_id)
+		_instance._download_batch_mutex.unlock()
+	else:
+		_instance._download_batch_mutex.unlock()
+
+static func get_download_batch_progress(batch_id: int) -> float:
+	if _instance == null:
+		return 0.0
+	
+	_instance._download_batch_mutex.lock()
+	if _instance._download_batches.has(batch_id):
+		var batch = _instance._download_batches[batch_id]
+		var progress = float(batch.completed_count) / float(batch.total_count)
+		_instance._download_batch_mutex.unlock()
+		return progress
+	_instance._download_batch_mutex.unlock()
+	return 1.0
+
+static func cancel_download_batch(batch_id: int) -> bool:
+	if _instance == null:
+		return false
+	
+	_instance._download_batch_mutex.lock()
+	var cancelled = _instance._download_batches.erase(batch_id)
+	_instance._download_batch_mutex.unlock()
+	return cancelled
+
 static func get_db_queue_size() -> int:
 	if _instance == null:
 		return 0
@@ -443,12 +600,17 @@ static func shutdown():
 	_instance._exit_flag = true
 	_instance._db_semaphore.post()
 	_instance._extraction_semaphore.post()
+	_instance._download_semaphore.post()
 	for i in range(IMAGE_THREAD_COUNT):
 		_instance._image_semaphore.post()
+	for i in range(DOWNLOAD_THREAD_COUNT):
+		_instance._download_semaphore.post()
 	_instance._db_thread.wait_to_finish()
 	for thread in _instance._image_threads:
 		thread.wait_to_finish()
 	_instance._extraction_thread.wait_to_finish()
+	for thread in _instance._download_threads:
+		thread.wait_to_finish()
 	_instance = null
 
 # ============================================================================

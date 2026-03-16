@@ -1466,5 +1466,87 @@
 		}
 	  }
 	}
+  },
+  "ppsspp": {
+	"name": "PPSSPP",
+	"platforms": ["psp"],
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://www.ppsspp.org/download/",
+			"version_pattern": "files/([0-9]+_[0-9]+_[0-9]+)/ppsspp_win\\.zip",
+			"url_template": "https://www.ppsspp.org/files/{version}/ppsspp_win.zip"
+		  },
+		  "android": {
+			"action_type": "download_scrape",
+			"scrape_url": "https://www.ppsspp.org/download/",
+			"version_pattern": "files/([0-9]+_[0-9]+_[0-9]+)/ppsspp\\.apk",
+			"url_template": "https://www.ppsspp.org/files/{version}/ppsspp.apk"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"expected_file": "ppsspp_win.zip",
+			"extract_to": ".",
+			"strip_top_directory": true,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "PPSSPPWindows64.exe"
+			}
+		  },
+		  "android": {
+			"action_type": "apk_install",
+			"package_name": "org.ppsspp.ppsspp",
+			"expected_file": "ppsspp.apk",
+			"validate": {
+			  "action_type": "package_installed",
+			  "package": "org.ppsspp.ppsspp"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_portable_file",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "portable.txt",
+				"content": ""
+			  }
+			],
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "portable.txt"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "PPSSPPWindows64.exe",
+		  "template": ["{exe}", "{rom}"]
+		},
+		"android": {
+		  "action": "android.intent.action.VIEW",
+		  "package": "org.ppsspp.ppsspp",
+		  "rom_delivery": "intent_data"
+		}
+	  }
+	}
   }
 }

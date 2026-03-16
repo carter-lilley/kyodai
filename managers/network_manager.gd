@@ -271,13 +271,13 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 	# Dynamic chunk size based on expected file size
 	# Note: download_file is only used for large files (games), images use http_get
 	if expected_size > 1024 * 1024 * 1024:  # > 1GB
-		http.download_chunk_size = 2 * 1024 * 1024  # 2MB chunks
+		http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks (was 2MB)
 	elif expected_size > 100 * 1024 * 1024:  # > 100MB
-		http.download_chunk_size = 1024 * 1024  # 1MB chunks
+		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks (was 1MB)
 	elif expected_size > 10 * 1024 * 1024:  # > 10MB
-		http.download_chunk_size = 256 * 1024  # 256KB chunks
+		http.download_chunk_size = 1024 * 1024  # 1MB chunks (was 256KB)
 	else:
-		http.download_chunk_size = 64 * 1024  # 64KB chunks
+		http.download_chunk_size = 256 * 1024  # 256KB chunks (was 64KB)
 	
 	var error = http.request(url, headers)
 	
@@ -341,6 +341,132 @@ func get_auth_header() -> String:
 ## Returns true if connected to RomM
 func is_romm_connected() -> bool:
 	return _is_online
+
+# ==================== CHUNKED DOWNLOAD SUPPORT ====================
+
+## Checks if the server supports HTTP Range requests
+## callback(supports_range: bool, error_message: String)
+func check_range_support(url: String, headers: Array = [], callback: Callable = Callable()) -> void:
+	var http = _get_pooled_request()
+	_active_request_count += 1
+	
+	# Add HEAD method to check capabilities without downloading
+	var error = http.request(url, headers, HTTPClient.METHOD_HEAD)
+	
+	if error != OK:
+		if callback.is_valid():
+			callback.call(false, "Failed to start HEAD request: " + str(error))
+		_active_request_count -= 1
+		_return_request(http)
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, body):
+		_active_request_count -= 1
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call(false, "HEAD request failed: " + str(result))
+			_return_request(http)
+			return
+		
+		# Check for Accept-Ranges header
+		var supports_range = false
+		for header in response_headers:
+			if header.to_lower().begins_with("accept-ranges:"):
+				var value = header.split(":", false, 1)[1].strip_edges().to_lower()
+				if value == "bytes":
+					supports_range = true
+					break
+		
+		if callback.is_valid():
+			callback.call(supports_range, "")
+		
+		_return_request(http)
+	)
+
+## Downloads a specific byte range (chunk) of a file
+## Used for parallel chunked downloads
+## This method is thread-safe and can be called from background threads
+## callback(success: bool, status_code: int, error_message: String)
+func http_download_chunk(url: String, destination_path: String, start_byte: int, end_byte: int, headers: Array = [], callback: Callable = Callable()) -> void:
+	# Normalize path separators for the platform
+	var normalized_path = destination_path.replace("\\", "/")
+	
+	# Verify directory exists before starting download
+	var dest_dir = normalized_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dest_dir):
+		var err = DirAccess.make_dir_recursive_absolute(dest_dir)
+		if err != OK:
+			if callback.is_valid():
+				callback.call(false, 0, "Failed to create destination directory")
+			return
+	
+	# Add Range header
+	var range_header = "Range: bytes=%d-%d" % [start_byte, end_byte]
+	headers.append(range_header)
+	
+	# Add User-Agent if not present
+	var has_user_agent = false
+	for header in headers:
+		if header.begins_with("User-Agent:"):
+			has_user_agent = true
+			break
+	if not has_user_agent:
+		headers.append("User-Agent: Kyodai-Launcher/1.0")
+	
+	# Queue the download to be started on the main thread
+	# This is necessary because HTTPRequest nodes can only be added to the SceneTree from the main thread
+	call_deferred("_start_chunk_download_on_main_thread", url, normalized_path, start_byte, end_byte, headers, callback)
+
+## Internal method to start chunk download on main thread
+## Called via call_deferred from http_download_chunk
+func _start_chunk_download_on_main_thread(url: String, normalized_path: String, start_byte: int, end_byte: int, headers: Array, callback: Callable):
+	var http = HTTPRequest.new()
+	add_child(http)
+	
+	# Configure HTTPRequest for chunk download
+	http.download_file = normalized_path
+	http.timeout = 0.0  # Never timeout - let caller handle this
+	http.use_threads = true  # Use background thread for better performance
+	http.accept_gzip = false  # Disable compression to get accurate file sizes
+	http.body_size_limit = -1  # No limit
+	http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for chunk downloads
+	
+	var error = http.request(url, headers)
+	
+	if error != OK:
+		if callback.is_valid():
+			callback.call(false, 0, "Failed to start chunk download: " + str(error))
+		http.queue_free()
+		return
+	
+	http.request_completed.connect(func(request_result, response_code, response_headers, body):
+		# Check callback validity first
+		if not callback.is_valid():
+			http.queue_free()
+			return
+		
+		if request_result != HTTPRequest.RESULT_SUCCESS:
+			callback.call(false, response_code, "Chunk download failed: " + str(request_result))
+			http.queue_free()
+			return
+		
+		if response_code >= 400:
+			if response_code == 401:
+				authentication_failed.emit()
+			callback.call(false, response_code, "HTTP error: " + str(response_code))
+			http.queue_free()
+			return
+		
+		if not FileAccess.file_exists(normalized_path):
+			callback.call(false, response_code, "Chunk file not created")
+			http.queue_free()
+			return
+		
+		# Success
+		callback.call(true, response_code, "")
+		http.queue_free()
+	)
 
 # ==================== UTILITY ====================
 

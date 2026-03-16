@@ -50,6 +50,51 @@ const DOWNLOAD_TIMEOUT_MS: int = 30 * 60 * 1000  # 30 minutes max
 const STALL_TIMEOUT_MS: int = 120 * 1000  # 120 seconds with no progress = stall
 const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at start
 
+# Chunked download constants
+const CHUNKED_DOWNLOAD_THRESHOLD: int = 500 * 1024 * 1024  # 500MB
+const MAX_CONCURRENT_CHUNKS: int = 4
+
+# Dynamic chunk sizes based on file size
+const CHUNK_SIZE_SMALL: int = 256 * 1024 * 1024   # 256MB for files < 2GB
+const CHUNK_SIZE_MEDIUM: int = 512 * 1024 * 1024  # 512MB for files 2-10GB
+const CHUNK_SIZE_LARGE: int = 1024 * 1024 * 1024  # 1GB for files > 10GB
+
+## Returns appropriate chunk size based on file size
+## Files < 2GB: 256MB chunks
+## Files 2-10GB: 512MB chunks
+## Files > 10GB: 1GB chunks
+func _get_chunk_size(file_size: int) -> int:
+	if file_size > 10 * 1024 * 1024 * 1024:  # > 10GB
+		return CHUNK_SIZE_LARGE
+	elif file_size > 2 * 1024 * 1024 * 1024:  # > 2GB
+		return CHUNK_SIZE_MEDIUM
+	else:
+		return CHUNK_SIZE_SMALL
+
+# Chunked download tracking
+var _chunked_downloads: Dictionary = {}  # item_id -> ChunkedDownloadInfo
+class ChunkedDownloadInfo:
+	var item: QueueItem
+	var chunks: Array[ChunkInfo] = []
+	var chunks_completed: int = 0
+	var total_chunks: int = 0
+	var temp_dir: String = ""
+	var final_path: String = ""
+	var use_chunking: bool = false
+	var active_downloads: int = 0
+	var download_callback: Callable
+	var progress_timer: Timer = null  # Timer for polling chunk progress
+	var last_progress_update: float = 0.0  # Last progress value to reduce emissions
+	
+class ChunkInfo:
+	var index: int
+	var start_byte: int
+	var end_byte: int
+	var temp_path: String
+	var completed: bool = false
+	var failed: bool = false
+	var in_progress: bool = false
+
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
@@ -337,6 +382,14 @@ func _start_download(item: QueueItem):
 	if item.type == "game":
 		headers.append("Authorization: " + NetworkManager.get_auth_header())
 	
+	# Check if this is a large file that should use chunked downloading
+	var should_use_chunking = item.type == "game" and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD and not item.use_saf
+	
+	if should_use_chunking:
+		print("[DownloadManager] Checking Range support for chunked download: " + item.name + " (size=" + str(item.expected_file_size) + ")")
+		_check_range_and_start_chunked(item, headers)
+		return
+	
 	# Use file-based download for:
 	# 1. Large files (games) - better for memory management
 	# 2. SAF paths - required for SAF copying after download
@@ -382,9 +435,10 @@ func _start_download(item: QueueItem):
 		_process_queue()
 		return
 	
-	# Setup progress timer
+	# Setup progress timer - use 3 second intervals for large files to reduce overhead
+	var poll_interval = 3.0 if item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD else 1.0
 	_progress_timers[item.id] = Timer.new()
-	_progress_timers[item.id].wait_time = 1.0  # Check every second
+	_progress_timers[item.id].wait_time = poll_interval
 	_progress_timers[item.id].autostart = true
 	add_child(_progress_timers[item.id])
 	
@@ -392,6 +446,377 @@ func _start_download(item: QueueItem):
 		_update_download_progress(item)
 		_check_download_timeout(item.id)
 	)
+
+# ==================== CHUNKED DOWNLOAD METHODS ====================
+
+func _check_range_and_start_chunked(item: QueueItem, headers: Array):
+	"""Check if server supports Range requests, then start chunked or regular download"""
+	NetworkManager.check_range_support(item.url, headers, func(supports_range: bool, error_msg: String):
+		if supports_range:
+			print("[DownloadManager] Server supports Range, starting chunked download for: " + item.name)
+			_start_chunked_download(item, headers)
+		else:
+			print("[DownloadManager] Server doesn't support Range, falling back to regular download for: " + item.name)
+			# Fall back to regular file-based download
+			item.download_info = NetworkManager.http_download_file(
+				item.url,
+				item.destination_path,
+				headers,
+				func(success: bool, status_code: int, err: String):
+					_on_file_download_complete(item, success, err),
+				item.expected_file_size
+			)
+			
+			if item.download_info.is_empty():
+				item.status = "failed"
+				item.error_message = "Failed to start download"
+				_cleanup_item(item)
+				_active_items.erase(item.id)
+				download_completed.emit(item.id, false, item.error_message)
+				queue_changed.emit()
+				_process_queue()
+				return
+			
+			item.http_request = item.download_info.get("http", null)
+			
+			# Setup progress timer for fallback download
+			_progress_timers[item.id] = Timer.new()
+			_progress_timers[item.id].wait_time = 1.0
+			_progress_timers[item.id].autostart = true
+			add_child(_progress_timers[item.id])
+			
+			_progress_timers[item.id].timeout.connect(func():
+				_update_download_progress(item)
+				_check_download_timeout(item.id)
+			)
+	)
+
+func _start_chunked_download(item: QueueItem, headers: Array):
+	"""Start a chunked download using parallel threads"""
+	var file_size = item.expected_file_size
+	var chunk_size = _get_chunk_size(file_size)
+	var num_chunks = ceili(float(file_size) / float(chunk_size))
+	
+	# Create temp directory for chunks
+	var temp_dir = "user://downloads/chunks/" + item.id
+	var err = DirAccess.make_dir_recursive_absolute(temp_dir)
+	if err != OK:
+		push_error("[DownloadManager] Failed to create chunk temp directory: " + temp_dir)
+		item.status = "failed"
+		item.error_message = "Failed to create temp directory"
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Create chunked download info
+	var chunked_info = ChunkedDownloadInfo.new()
+	chunked_info.item = item
+	chunked_info.temp_dir = temp_dir
+	chunked_info.final_path = item.destination_path
+	chunked_info.total_chunks = num_chunks
+	chunked_info.use_chunking = true
+	
+	# Create chunk infos
+	for i in range(num_chunks):
+		var chunk = ChunkInfo.new()
+		chunk.index = i
+		chunk.start_byte = i * chunk_size
+		chunk.end_byte = mini((i + 1) * chunk_size - 1, file_size - 1)
+		chunk.temp_path = temp_dir + "/chunk_" + str(i) + ".tmp"
+		chunked_info.chunks.append(chunk)
+	
+	_chunked_downloads[item.id] = chunked_info
+	
+	print("[DownloadManager] Starting chunked download with " + str(num_chunks) + " chunks for: " + item.name)
+	
+	# Store the chunked info
+	_chunked_downloads[item.id] = chunked_info
+	
+	# Start initial batch of concurrent downloads (up to MAX_CONCURRENT_CHUNKS)
+	_start_next_chunk_downloads(item.id, headers)
+	
+	# Start progress timer for smooth updates
+	_start_chunked_progress_timer(item.id)
+
+func _start_chunked_progress_timer(item_id: String):
+	"""Start a timer to poll chunk file sizes for smooth progress updates"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	# Create timer to poll every 500ms
+	chunked_info.progress_timer = Timer.new()
+	chunked_info.progress_timer.wait_time = 0.5  # 500ms
+	chunked_info.progress_timer.autostart = true
+	add_child(chunked_info.progress_timer)
+	
+	chunked_info.progress_timer.timeout.connect(func():
+		_update_chunked_progress(item_id)
+	)
+
+func _update_chunked_progress(item_id: String):
+	"""Update progress by summing bytes from all chunks"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	# Calculate total bytes downloaded across all chunks
+	var total_downloaded_bytes = 0
+	
+	for chunk in chunked_info.chunks:
+		if chunk.completed:
+			# Full chunk size
+			total_downloaded_bytes += (chunk.end_byte - chunk.start_byte + 1)
+		elif chunk.in_progress:
+			# Check current file size
+			if FileAccess.file_exists(chunk.temp_path):
+				var file = FileAccess.open(chunk.temp_path, FileAccess.READ)
+				if file:
+					total_downloaded_bytes += file.get_length()
+					file.close()
+	
+	# Calculate progress
+	var total_size = float(item.expected_file_size)
+	if total_size > 0:
+		var progress = float(total_downloaded_bytes) / total_size
+		# Cap at 0.99 until fully complete
+		progress = min(progress, 0.99)
+		
+		# Only emit if progress changed significantly (0.1% or more)
+		if abs(progress - chunked_info.last_progress_update) >= 0.001:
+			chunked_info.last_progress_update = progress
+			item.progress = progress
+			download_progress.emit(item_id, progress)
+
+func _stop_chunked_progress_timer(item_id: String):
+	"""Stop and clean up the progress timer"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	if chunked_info.progress_timer and is_instance_valid(chunked_info.progress_timer):
+		chunked_info.progress_timer.stop()
+		chunked_info.progress_timer.queue_free()
+		chunked_info.progress_timer = null
+
+func _start_next_chunk_downloads(item_id: String, headers: Array):
+	"""Start downloading the next batch of chunks up to MAX_CONCURRENT_CHUNKS"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	# Count how many chunks are currently downloading
+	var active_count = 0
+	for chunk in chunked_info.chunks:
+		if chunk.in_progress and not chunk.completed and not chunk.failed:
+			active_count += 1
+	
+	# Start more downloads until we hit MAX_CONCURRENT_CHUNKS
+	for chunk in chunked_info.chunks:
+		if active_count >= MAX_CONCURRENT_CHUNKS:
+			break
+		
+		if not chunk.in_progress and not chunk.completed and not chunk.failed:
+			chunk.in_progress = true
+			active_count += 1
+			
+			# Start this chunk download
+			_start_single_chunk_download(item_id, chunk, headers)
+
+func _start_single_chunk_download(item_id: String, chunk: ChunkInfo, headers: Array):
+	"""Start downloading a single chunk"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	# Add User-Agent if not present
+	var request_headers = headers.duplicate()
+	var has_user_agent = false
+	for header in request_headers:
+		if header.begins_with("User-Agent:"):
+			has_user_agent = true
+			break
+	if not has_user_agent:
+		request_headers.append("User-Agent: Kyodai-Launcher/1.0")
+	
+	# Start the download
+	print("[DownloadManager] Starting chunk " + str(chunk.index) + " for: " + item.name)
+	NetworkManager.http_download_chunk(
+		item.url,
+		chunk.temp_path,
+		chunk.start_byte,
+		chunk.end_byte,
+		request_headers,
+		func(success: bool, status_code: int, error_msg: String):
+			_on_chunk_download_complete(item_id, chunk.index, success, error_msg, headers)
+	)
+
+func _on_chunk_download_complete(item_id: String, chunk_index: int, success: bool, error_msg: String, headers: Array):
+	"""Called when a chunk download completes"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	var chunk = chunked_info.chunks[chunk_index]
+	
+	chunk.in_progress = false
+	
+	if success:
+		chunk.completed = true
+		chunked_info.chunks_completed += 1
+		print("[DownloadManager] Chunk " + str(chunk_index) + " completed for: " + item.name + " (" + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+		
+		# Note: Progress is now handled by _update_chunked_progress timer which tracks actual bytes
+		# This prevents progress jumps and provides smooth 0-100% updates
+		
+		# Check if all chunks are complete
+		if chunked_info.chunks_completed >= chunked_info.total_chunks:
+			print("[DownloadManager] All chunks complete for: " + item.name)
+			_stop_chunked_progress_timer(item_id)
+			_reassemble_chunks(item_id)
+		else:
+			# Start the next chunk
+			_start_next_chunk_downloads(item_id, headers)
+	else:
+		chunk.failed = true
+		push_error("[DownloadManager] Chunk " + str(chunk_index) + " failed: " + error_msg)
+		_stop_chunked_progress_timer(item_id)
+		item.status = "failed"
+		item.error_message = "Chunk download failed: " + error_msg
+		_cleanup_chunked_download(item_id)
+		_cleanup_item(item)
+		_active_items.erase(item_id)
+		download_completed.emit(item_id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+
+func _reassemble_chunks(item_id: String):
+	"""Reassemble all chunks into the final file - runs on extraction thread to avoid UI blocking"""
+	if not _chunked_downloads.has(item_id):
+		push_error("[DownloadManager] No chunked download found for item: " + item_id)
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	print("[DownloadManager] Queueing chunk reassembly for: " + item.name)
+	NotificationManager.update_notification_text(item.notification_id, "Assembling " + item.name + "...")
+	
+	# Store values needed for thread operation
+	var final_path = chunked_info.final_path
+	var temp_dir = chunked_info.temp_dir
+	var chunks_data = []
+	for chunk in chunked_info.chunks:
+		chunks_data.append({
+			"temp_path": chunk.temp_path,
+			"index": chunk.index
+		})
+	
+	# Create the reassembly callable for the extraction thread
+	var reassembly_callable = func() -> bool:
+		# Open final file for writing
+		var final_file = FileAccess.open(final_path, FileAccess.WRITE)
+		if not final_file:
+			push_error("[DownloadManager] Failed to create final file: " + final_path)
+			return false
+		
+		# Append each chunk to final file with buffered I/O to avoid memory spikes
+		const BUFFER_SIZE = 8 * 1024 * 1024  # 8MB buffer for streaming
+		
+		for chunk_data in chunks_data:
+			var chunk_path = chunk_data.temp_path
+			
+			if not FileAccess.file_exists(chunk_path):
+				push_error("[DownloadManager] Chunk file missing: " + chunk_path)
+				final_file.close()
+				return false
+			
+			var chunk_file = FileAccess.open(chunk_path, FileAccess.READ)
+			if not chunk_file:
+				push_error("[DownloadManager] Failed to open chunk file: " + chunk_path)
+				final_file.close()
+				return false
+			
+			# Stream the chunk file in 8MB buffers instead of loading all at once
+			var chunk_size = chunk_file.get_length()
+			var bytes_remaining = chunk_size
+			
+			while bytes_remaining > 0:
+				var read_size = mini(BUFFER_SIZE, bytes_remaining)
+				var buffer = chunk_file.get_buffer(read_size)
+				final_file.store_buffer(buffer)
+				bytes_remaining -= read_size
+			
+			chunk_file.close()
+		
+		final_file.close()
+		return true
+	
+	# Queue to extraction thread - callback runs on main thread
+	MemoryManager.queue_extraction_task(reassembly_callable, func(success: bool):
+		if not _chunked_downloads.has(item_id):
+			# Download was cancelled or cleaned up
+			return
+		
+		if not success:
+			# Clean up failed final file
+			if FileAccess.file_exists(final_path):
+				DirAccess.remove_absolute(final_path)
+			
+			item.status = "failed"
+			item.error_message = "Failed to reassemble chunks"
+			_cleanup_chunked_download(item_id)
+			_cleanup_item(item)
+			_active_items.erase(item_id)
+			download_completed.emit(item_id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		# Success! Clean up and complete
+		print("[DownloadManager] Chunked download complete for: " + item.name)
+		_cleanup_chunked_download(item_id)
+		
+		# Continue with normal completion flow
+		_on_file_download_complete(item, true, "")
+	)
+
+func _cleanup_chunked_download(item_id: String):
+	"""Clean up temp files for chunked download"""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	
+	# Stop progress timer
+	if chunked_info.progress_timer and is_instance_valid(chunked_info.progress_timer):
+		chunked_info.progress_timer.stop()
+		chunked_info.progress_timer.queue_free()
+		chunked_info.progress_timer = null
+	
+	# Clean up temp chunk files
+	for chunk in chunked_info.chunks:
+		if FileAccess.file_exists(chunk.temp_path):
+			DirAccess.remove_absolute(chunk.temp_path)
+	
+	# Clean up temp directory
+	if DirAccess.dir_exists_absolute(chunked_info.temp_dir):
+		_cleanup_temp_dir(chunked_info.temp_dir)
+	
+	# Remove from tracking
+	_chunked_downloads.erase(item_id)
 
 func _update_download_progress(item: QueueItem):
 	if item.http_request == null and item.download_info.is_empty():
@@ -802,6 +1227,11 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		var actual_archive_path = archive_path
 		var actual_extract_dir = temp_extract_dir if is_saf_dest else extract_dir
 		
+		print("[DownloadManager] Extraction worker started")
+		print("[DownloadManager] archive_path: " + archive_path)
+		print("[DownloadManager] actual_archive_path: " + actual_archive_path)
+		print("[DownloadManager] is_saf_dest: " + str(is_saf_dest))
+		
 		# On Android with SAF, content:// URIs can't be read directly by ZIPReader
 		# Convert to real file path using the PackageChecker plugin
 		if PlatformManager.is_android() and archive_path.begins_with("content://"):
@@ -817,11 +1247,24 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 			
 			actual_archive_path = real_path
 		
+		# Debug: Check if file exists before opening
+		print("[DownloadManager] Attempting to open ZIP at: " + actual_archive_path)
+		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(actual_archive_path)))
+		
+		if FileAccess.file_exists(actual_archive_path):
+			var test_file = FileAccess.open(actual_archive_path, FileAccess.READ)
+			if test_file:
+				print("[DownloadManager] File size: " + str(test_file.get_length()))
+				test_file.close()
+		
+		# Small delay to ensure file is fully written and closed
+		OS.delay_msec(100)
+		
 		var reader = ZIPReader.new()
 		var err = reader.open(actual_archive_path)
 		
 		if err != OK:
-			push_error("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")
+			push_error("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ", actual: " + actual_archive_path + ")")
 			return false
 		
 		var files = reader.get_files()
