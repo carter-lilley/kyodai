@@ -69,13 +69,13 @@ func _ready():
 	if original_main_size.x == 0:
 		original_main_size = Vector2i(1920, 1080)
 	
-	original_second_size = Vector2i(854, 480)
+	original_second_size = Vector2i(1080, 1240)
 	
 	if _main_viewport:
 		_main_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 		_main_viewport.size = original_main_size
 	if _second_viewport:
-		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 		_second_viewport.size = original_second_size
 
 	if _main_container:
@@ -151,49 +151,65 @@ func swap_screens():
 	force_hero_viewport_update()
 
 func force_hero_viewport_update():
-	"""Force the hero viewport (SecondViewport) to update once.
-	Call this when the hero image changes or after screen swap."""
-	if _second_viewport:
-		# Temporarily set to ALWAYS to force one render, then back to ONCE
-		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		# Use call_deferred to ensure the render happens this frame
-		call_deferred("_set_second_viewport_update_once")
-
-func _set_second_viewport_update_once():
-	"""Callback to set SecondViewport back to UPDATE_ONCE after forcing update."""
-	if _second_viewport:
-		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	"""Force the hero viewport (SecondViewport) to update.
+	Since we use UPDATE_ALWAYS, this just ensures rendering is active."""
+	# With UPDATE_ALWAYS mode, the viewport updates every frame automatically
+	# This function is kept for API compatibility but doesn't need to do anything
+	pass
 
 func _on_second_screen_input(action: int, x: float, y: float, pid: int):
-	var event = null
 	var current_pos = Vector2(x, y)
+	var target_vp = _main_viewport if is_swapped else _second_viewport
 	
+	if not target_vp:
+		return
+	
+	# Get the actual screen size from renderer (physical second screen resolution)
+	var screen_size = original_second_size
+	if renderer and renderer.is_window_available():
+		var s = renderer.get_second_screen_size()
+		if s != Vector2i.ZERO:
+			screen_size = s
+	
+	# Scale coordinates from screen space to viewport space
+	# This ensures touches map correctly regardless of which viewport is being displayed
+	var viewport_size = target_vp.size
+	var scale_x = float(viewport_size.x) / float(screen_size.x)
+	var scale_y = float(viewport_size.y) / float(screen_size.y)
+	var scaled_pos = Vector2(current_pos.x * scale_x, current_pos.y * scale_y)
+	
+	# Convert touch events to mouse events for UI control compatibility
 	if action == 0 or action == 5:
+		# Touch pressed -> Mouse button down
 		last_touch_positions[pid] = current_pos
-		var touch = InputEventScreenTouch.new()
-		touch.pressed = true
-		touch.index = pid
-		touch.position = current_pos
-		event = touch
-	elif action == 1 or action == 6:
-		last_touch_positions.erase(pid)
-		var touch = InputEventScreenTouch.new()
-		touch.pressed = false
-		touch.index = pid
-		touch.position = current_pos
-		event = touch
-	elif action == 2:
-		var drag = InputEventScreenDrag.new()
-		drag.index = pid
-		drag.position = current_pos
-		drag.relative = current_pos - last_touch_positions.get(pid, current_pos)
-		last_touch_positions[pid] = current_pos
-		event = drag
+		var mouse_event = InputEventMouseButton.new()
+		mouse_event.button_index = MOUSE_BUTTON_LEFT
+		mouse_event.pressed = true
+		mouse_event.position = scaled_pos
+		mouse_event.global_position = scaled_pos
+		target_vp.push_input(mouse_event)
 		
-	if event:
-		var target_vp = _main_viewport if is_swapped else _second_viewport
-		if target_vp:
-			target_vp.push_input(event)
+	elif action == 1 or action == 6:
+		# Touch released -> Mouse button up
+		last_touch_positions.erase(pid)
+		var mouse_event = InputEventMouseButton.new()
+		mouse_event.pressed = false
+		mouse_event.button_index = MOUSE_BUTTON_LEFT
+		mouse_event.position = scaled_pos
+		mouse_event.global_position = scaled_pos
+		target_vp.push_input(mouse_event)
+		
+	elif action == 2:
+		# Touch drag -> Mouse motion
+		var prev_pos = last_touch_positions.get(pid, current_pos)
+		var scaled_prev = Vector2(prev_pos.x * scale_x, prev_pos.y * scale_y)
+		var mouse_event = InputEventMouseMotion.new()
+		mouse_event.position = scaled_pos
+		mouse_event.global_position = scaled_pos
+		mouse_event.relative = scaled_pos - scaled_prev
+		mouse_event.button_mask = MOUSE_BUTTON_MASK_LEFT
+		target_vp.push_input(mouse_event)
+		last_touch_positions[pid] = current_pos
 
 func _on_screen_connected():
 	_try_update_second_screen_size()
