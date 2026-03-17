@@ -1062,6 +1062,7 @@ func _launch_gamenative_game(game: GameResource) -> void:
 	
 	var success = GameNativeManager.launch_game(game.steam_app_id)
 	if success:
+		_update_last_played(game)
 		game_launched.emit(game)
 	else:
 		push_error("[LaunchManager] Failed to launch GameNative game")

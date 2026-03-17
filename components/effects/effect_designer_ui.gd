@@ -7,6 +7,7 @@ signal save_requested(config: Dictionary)
 var _current_config: Dictionary = {}
 var _effects_list: VBoxContainer
 var _add_effect_button: MenuButton
+var _scroll_container: ScrollContainer
 
 # Maps dropdown IDs to effect IDs for filtering active effects
 var _effect_id_map: Dictionary = {
@@ -65,14 +66,17 @@ func _setup_ui():
 	# Set up this control to fill parent
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	
-	var scroll = ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	scroll.follow_focus = true
-	scroll.name = "ScrollContainer"
-	add_child(scroll)
+	_scroll_container = ScrollContainer.new()
+	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_scroll_container.follow_focus = true
+	_scroll_container.name = "ScrollContainer"
+	add_child(_scroll_container)
+	
+	# Connect to viewport focus changes to ensure focused items are visible
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 	
 	var vbox = VBoxContainer.new()
-	scroll.add_child(vbox)
+	_scroll_container.add_child(vbox)
 	
 	var title_label = Label.new()
 	title_label.text = "Effects"
@@ -245,3 +249,13 @@ func _on_effect_setting_changed(effect_index: int, setting_name: String, value: 
 
 func save_config():
 	save_requested.emit(_current_config.duplicate(true))
+
+func _on_focus_changed(control: Control) -> void:
+	"""Ensure focused controls are visible in the scroll container."""
+	if not control:
+		return
+	if not is_instance_valid(_scroll_container):
+		return
+	if not _scroll_container.is_ancestor_of(control):
+		return
+	_scroll_container.ensure_control_visible(control)

@@ -8,6 +8,9 @@ extends PanelContainer
 @export var auto_show:bool = true
 @export var animate:bool = true
 
+# Track controller connection state - keyboard only auto-shows when controller is connected
+var _controller_connected: bool = false
+
 @export_file var custom_layout_file
 @export var set_tool_tip := true
 @export_group("Style")
@@ -67,7 +70,17 @@ signal layout_changed
 func _enter_tree():
 	if not get_tree().get_root().size_changed.is_connected(size_changed):
 		get_tree().get_root().size_changed.connect(size_changed)
+	
+	# Set up controller detection for keyboard auto-show behavior
+	_controller_connected = Input.get_connected_joypads().size() > 0
+	if not Input.joy_connection_changed.is_connected(_on_joy_connection_changed):
+		Input.joy_connection_changed.connect(_on_joy_connection_changed)
+	
 	_init_keyboard()
+
+
+func _on_joy_connection_changed(device_id: int, connected: bool) -> void:
+	_controller_connected = Input.get_connected_joypads().size() > 0
 
 func reconnect_viewport() -> void:
 	"""Reconnect the keyboard to the current viewport's focus system.
@@ -153,6 +166,11 @@ var _previous_focus_object = null
 
 func _update_auto_display_on_input(event):
 	if auto_show == false:
+		return
+	
+	# Only show on-screen keyboard when a controller is connected
+	# Desktop users without controllers should use native OS keyboard
+	if not _controller_connected:
 		return
 
 	# Only open keyboard when LineEdit/TextEdit gets focused

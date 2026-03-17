@@ -183,6 +183,9 @@ func create_game_resources() -> Array[GameResource]:
 		game.is_master_entry = true
 		game.source = "gamenative"
 		game.steam_app_id = app_id
+		# Initialize last_played to epoch time so unplayed games sort at the end
+		# This will be updated when the game is launched
+		game.last_played = "1970-01-01T00:00:00"
 		
 		games.append(game)
 	

@@ -5,6 +5,7 @@ var _games_container: VBoxContainer
 var _app_id_input: LineEdit
 var _add_button: Button
 var _status_label: Label
+var _scroll_container: ScrollContainer
 
 func _ready():
 	view_name = "GameNative"
@@ -14,13 +15,16 @@ func _ready():
 	# Connect to manager signals
 	GameNativeManager.games_updated.connect(_on_games_updated)
 	
+	# Connect to viewport focus changes to ensure focused items are visible
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
 	super._ready()
 
 func _build_view():
-	var scroll = ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	scroll.follow_focus = true
-	add_child(scroll)
+	_scroll_container = ScrollContainer.new()
+	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_scroll_container.follow_focus = true
+	add_child(_scroll_container)
 	
 	var margin = MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -28,7 +32,7 @@ func _build_view():
 	margin.add_theme_constant_override("margin_top", 20)
 	margin.add_theme_constant_override("margin_right", 20)
 	margin.add_theme_constant_override("margin_bottom", 20)
-	scroll.add_child(margin)
+	_scroll_container.add_child(margin)
 	
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -215,3 +219,13 @@ func _load_cover_async(url: String, texture_rect: TextureRect) -> void:
 	var error = http.request(url)
 	if error != OK:
 		http.queue_free()
+
+func _on_focus_changed(control: Control) -> void:
+	"""Ensure focused controls are visible in the scroll container."""
+	if not control:
+		return
+	if not is_instance_valid(_scroll_container):
+		return
+	if not _scroll_container.is_ancestor_of(control):
+		return
+	_scroll_container.ensure_control_visible(control)

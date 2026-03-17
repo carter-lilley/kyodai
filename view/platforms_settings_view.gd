@@ -5,6 +5,11 @@ extends View
 var _platforms_container: VBoxContainer
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
+var _scroll_container: ScrollContainer
+
+# Track platform selection state for lock-in behavior
+var _original_enabled_platforms: Dictionary = {}  # Snapshot of platforms on entry
+var _sync_triggered: bool = false  # Tracks if sync button was pressed
 
 func _ready():
 	view_name = "Platforms"
@@ -14,13 +19,16 @@ func _ready():
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
 	LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
 	
+	# Connect to viewport focus changes to ensure focused items are visible
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
 	super._ready()
 
 func _build_view():
-	var scroll = ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	scroll.follow_focus = true
-	add_child(scroll)
+	_scroll_container = ScrollContainer.new()
+	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_scroll_container.follow_focus = true
+	add_child(_scroll_container)
 	
 	var margin = MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -28,7 +36,7 @@ func _build_view():
 	margin.add_theme_constant_override("margin_top", 20)
 	margin.add_theme_constant_override("margin_right", 20)
 	margin.add_theme_constant_override("margin_bottom", 20)
-	scroll.add_child(margin)
+	_scroll_container.add_child(margin)
 	
 	_platforms_container = VBoxContainer.new()
 	_platforms_container.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -403,6 +411,9 @@ func _on_emulator_extraction_completed(emulator_id: String, success: bool):
 			card.refresh_ui()
 
 func _on_sync_pressed():
+	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
+	_sync_triggered = true
+	
 	if not NetworkManager.is_online():
 		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
 		return
@@ -480,10 +491,81 @@ func _on_select_all_pressed():
 	select_all_button.text = "Deselect All" if new_state else "Select All"
 
 func on_view_show():
+	# Take snapshot of current enabled state before user makes changes
+	_original_enabled_platforms = _get_enabled_platforms().duplicate(true)
+	_sync_triggered = false
+	
 	# Refresh platform list every time the view is shown
 	_fetch_platforms()
 	super.on_view_show()
 
 func on_view_hide():
+	# If sync wasn't triggered, restore all platforms to their original state
+	if not _sync_triggered:
+		_restore_platform_selections()
+	
 	_save_settings()
 	super.on_view_hide()
+
+func _restore_platform_selections():
+	"""Restore all platforms to their original enabled state (revert all selection changes)."""
+	var current_enabled = _get_enabled_platforms()
+	
+	# Create a union of all platform slugs from both original and current states
+	var all_slugs: Array[String] = []
+	for slug in _original_enabled_platforms.keys():
+		if not slug in all_slugs:
+			all_slugs.append(slug)
+	for slug in current_enabled.keys():
+		if not slug in all_slugs:
+			all_slugs.append(slug)
+	
+	for slug in all_slugs:
+		var original_config = _original_enabled_platforms.get(slug, {})
+		var current_config = current_enabled.get(slug, {})
+		
+		# Get original enabled state (default to false if not in original)
+		var original_state = false
+		if original_config is bool:
+			original_state = original_config
+		elif original_config is Dictionary:
+			original_state = original_config.get("enabled", false)
+		
+		# Get current enabled state (default to false if not in current)
+		var current_state = false
+		if current_config is bool:
+			current_state = current_config
+		elif current_config is Dictionary:
+			current_state = current_config.get("enabled", false)
+		
+		# If state changed, restore to original
+		if current_state != original_state:
+			# Get platform ID from original config if available
+			var platform_id = 0
+			if original_config is Dictionary:
+				platform_id = original_config.get("id", 0)
+			
+			# Find platform ID from _platforms_data if not available
+			if platform_id == 0:
+				for platform_data in _platforms_data:
+					if platform_data.get("slug", "") == slug:
+						platform_id = platform_data.get("id", 0)
+						break
+			
+			# Restore to original state
+			_set_platform_enabled(slug, platform_id, original_state)
+			
+			# Update the card UI if it exists
+			var card = _platform_cards.get(slug)
+			if card:
+				card.is_sync_enabled = original_state
+
+func _on_focus_changed(control: Control) -> void:
+	"""Ensure focused controls are visible in the scroll container."""
+	if not control:
+		return
+	if not is_instance_valid(_scroll_container):
+		return
+	if not _scroll_container.is_ancestor_of(control):
+		return
+	_scroll_container.ensure_control_visible(control)

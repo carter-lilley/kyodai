@@ -360,7 +360,7 @@ func _get_focused_card_index() -> int:
 
 func _restore_focus_to_card(index: int) -> void:
 	"""Restore focus to the card at the given virtual index."""
-	print("[Main] _restore_focus_to_card() called for index: ", index)
+	#print("[Main] _restore_focus_to_card() called for index: ", index)
 	
 	# Get the current view
 	var current_view = UIManager.get_current_view()

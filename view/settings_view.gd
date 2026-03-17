@@ -2,6 +2,7 @@ class_name SettingsView
 extends View
 
 var _settings_container: TabContainer
+var _scroll_containers: Array[ScrollContainer] = []
 
 # Library Appearance tab specific
 var _library_appearance_config: Dictionary = {}
@@ -15,10 +16,15 @@ var _preset_dropdown: OptionButton = null
 var _current_presets: Array[ThemePreset] = []
 var _is_applying_preset: bool = false
 var _loaded_preset: ThemePreset = null
+var _current_settings_tab: int = -1
 
 func _ready():
 	view_name = "Settings"
 	_build_settings_view()
+	
+	# Connect to viewport focus changes to ensure focused items are visible
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
 	super._ready()
 
 func _build_settings_view():
@@ -81,6 +87,7 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.follow_focus = true
+	_scroll_containers.append(scroll)
 	
 	var margin = MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -673,6 +680,15 @@ func on_view_hide():
 	super.on_view_hide()
 
 func _on_settings_tab_changed(tab_idx: int):
+	# Call on_view_hide on the previously active tab (before showing new tab)
+	if _current_settings_tab >= 0 and _current_settings_tab != tab_idx:
+		var prev_tab = _settings_container.get_tab_control(_current_settings_tab)
+		if prev_tab and prev_tab.has_method("on_view_hide"):
+			prev_tab.on_view_hide()
+	
+	# Update current tab index
+	_current_settings_tab = tab_idx
+	
 	# Call on_view_show on the newly selected tab
 	var tab = _settings_container.get_tab_control(tab_idx)
 	if tab and tab.has_method("on_view_show"):
@@ -696,3 +712,16 @@ func _input(event: InputEvent):
 		_settings_container.current_tab = (current_tab - 1 + tab_count) % tab_count
 		_settings_container.get_tab_bar().grab_focus()
 		get_viewport().set_input_as_handled()
+
+func _on_focus_changed(control: Control) -> void:
+	"""Ensure focused controls are visible in their scroll container."""
+	if not control:
+		return
+	
+	# Find which scroll container (if any) contains this control
+	for scroll_container in _scroll_containers:
+		if not is_instance_valid(scroll_container):
+			continue
+		if scroll_container.is_ancestor_of(control):
+			scroll_container.ensure_control_visible(control)
+			break

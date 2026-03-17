@@ -11,7 +11,7 @@ colors = PackedColorArray(0.90588236, 0.94509804, 0.9098039, 1, 0.9607843, 0.968
 [resource]
 script = ExtResource("1_rp5om")
 name = "CafeOS"
-created_at = "2026-03-12T01:00:12"
+created_at = "2026-03-17T14:11:34"
 library_hero_layout_height = 4
 library_vertical_layout = false
 library_grid_padding = 23
@@ -23,7 +23,7 @@ library_icon_color = Color(0, 0, 0, 1)
 library_background_config = {
 "background_color": Color(0.20336914, 0.20336914, 0.46484375, 1),
 "background_gradient": SubResource("Gradient_hjtwh"),
-"effect_id": "wiiu",
+"effect_id": "cafeos",
 "settings": {}
 }
 card_effect_config = {

@@ -200,24 +200,21 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""
 	MemoryManager.queue_db_task(
 		func():
-			# Query more DB games than needed to account for GameNative insertions
-			# We need to find the games that would appear at the requested offset
-			# after merging with GameNative games
+			# To properly merge and paginate, we need to fetch enough DB games
+			# to ensure we can fill the requested window after merging with GameNative games.
+			# 
+			# Strategy: Fetch DB games from 0 up to (offset + limit + gamenative_count)
+			# This guarantees we have all DB games that could appear in the merged window.
+			# Then merge everything, and slice to get the exact window requested.
 			
-			# Strategy: Query a larger window from DB, then merge and slice
-			var db_offset = max(0, offset - _gamenative_games.size())
-			var db_limit = limit + _gamenative_games.size()
+			var db_limit = offset + limit + _gamenative_games.size()
+			var db_games = DataManager.get_downloaded_games_paginated(0, db_limit)
 			
-			var db_games = DataManager.get_downloaded_games_paginated(db_offset, db_limit)
+			# Merge ALL fetched DB games with GameNative games
+			var merged = _merge_all_games_by_last_played(db_games, _gamenative_games)
 			
-			# Merge DB games with GameNative games
-			var merged = _merge_games_by_last_played(db_games, _gamenative_games, db_offset)
-			
-			# Slice to get the requested window
+			# Slice to get exactly the requested window
 			var result: Array[GameResource] = []
-			var actual_offset = offset
-			
-			# Track which indices in this result are GameNative
 			var result_gamenative_indices: Dictionary = {}
 			
 			for i in range(limit):
@@ -250,39 +247,39 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				_is_initial_launch = false
 	)
 
-func _merge_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource], db_offset: int) -> Array[GameResource]:
+func _merge_all_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource]) -> Array[GameResource]:
 	"""Merge DB games with GameNative games, sorted by last_played descending.
 	
 	This creates a unified list where both types of games are interleaved
-	based on their last_played timestamp, eliminating the ghost entry issue.
+	based on their last_played timestamp.
 	"""
 	var merged: Array[GameResource] = []
 	
-	# Create a working copy of GameNative games that haven't been placed yet
-	var remaining_gamenative = gamenative_games.duplicate()
+	# Create working copies of both lists
+	var db_idx = 0
+	var gn_idx = 0
 	
-	# Track the virtual position (accounts for GameNative insertions before this DB game)
-	var virtual_position = 0
-	
-	for db_game in db_games:
-		# Place any GameNative games that should come before this DB game
-		while remaining_gamenative.size() > 0:
-			var gn_game = remaining_gamenative[0]
-			# Compare last_played: if GameNative has later timestamp, place it first
+	# Merge sort style: compare heads and take the larger last_played
+	while db_idx < db_games.size() or gn_idx < gamenative_games.size():
+		if db_idx >= db_games.size():
+			# Only GameNative games left
+			merged.append(gamenative_games[gn_idx])
+			gn_idx += 1
+		elif gn_idx >= gamenative_games.size():
+			# Only DB games left
+			merged.append(db_games[db_idx])
+			db_idx += 1
+		else:
+			# Compare timestamps and take the larger one (more recent)
+			var db_game = db_games[db_idx]
+			var gn_game = gamenative_games[gn_idx]
+			
 			if gn_game.last_played > db_game.last_played:
 				merged.append(gn_game)
-				remaining_gamenative.pop_front()
-				virtual_position += 1
+				gn_idx += 1
 			else:
-				break
-		
-		# Now place the DB game
-		merged.append(db_game)
-		virtual_position += 1
-	
-	# Append any remaining GameNative games at the end
-	for gn_game in remaining_gamenative:
-		merged.append(gn_game)
+				merged.append(db_game)
+				db_idx += 1
 	
 	return merged
 
@@ -387,23 +384,43 @@ func _on_game_updated(game: GameResource):
 
 func _on_game_launched(game: GameResource):
 	"""Called when a game is launched - refresh grid to resort by last_played."""
+	# Check if this is a GameNative game
+	if game.source == "gamenative":
+		# Update the cached GameNative game's last_played
+		var game_found = false
+		for gn_game in _gamenative_games:
+			if gn_game.romm_id == game.romm_id:
+				gn_game.last_played = game.last_played
+				game_found = true
+				break
+		
+		if game_found:
+			# Re-sort GameNative games by last_played descending
+			_gamenative_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
+				return a.last_played > b.last_played
+			)
+			# Clear GameNative indices since the order changed
+			_gamenative_indices.clear()
+	
 	# Reload data to get new sort order (don't preserve cache), then refresh dimensions
+	# Don't reload GameNative games - we just updated the cache with new timestamps
 	_load_total_count_with_callback(false, func():
 		games_grid.refresh_dimensions()
-	)
+	, false)
 
 func _on_gamenative_games_updated():
 	"""Called when GameNative games are added or removed - refresh grid."""
 	# Reload total count and refresh grid (don't preserve cache)
 	_load_total_count(false)
 
-func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
+func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable(), reload_gamenative: bool = true):
 	"""Get total downloaded game count and call callback when complete."""
 	_is_loading = true
 	_update_status("Refreshing...")
 	
-	# Reload GameNative games first
-	_load_gamenative_games()
+	# Reload GameNative games first (unless we're preserving our updated cache)
+	if reload_gamenative:
+		_load_gamenative_games()
 	
 	MemoryManager.queue_db_task(
 		func():

@@ -6,6 +6,7 @@ install flow doesnt refresh platform cards reliably anymore - especially if you 
 no touch on bottom screen!
 ui scale
 glass inset not working in card designer view
+improve M&KB experience. 
 ## UI
 	game title under card option
 	game title "bubble option"

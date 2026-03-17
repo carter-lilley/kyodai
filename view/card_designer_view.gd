@@ -9,6 +9,7 @@ var _effects_list: VBoxContainer
 var _add_effect_button: MenuButton
 var _orientation_btn: OptionButton
 var _corner_slider: HSlider
+var _left_scroll: ScrollContainer
 
 # Maps dropdown IDs to effect IDs for filtering active effects
 const EFFECT_ID_MAP: Dictionary = {
@@ -29,6 +30,9 @@ func _ready():
 	# Connect to settings changes so we refresh when a preset is applied
 	if SettingsManager:
 		SettingsManager.settings_saved.connect(_on_settings_saved)
+	
+	# Connect to viewport focus changes to ensure focused items are visible
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 
 func _on_settings_saved():
 	_load_current_config()
@@ -61,13 +65,13 @@ func _setup_ui():
 	left_panel.custom_minimum_size = Vector2(300, 0)
 	hsplit.add_child(left_panel)
 	
-	var left_scroll = ScrollContainer.new()
-	left_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	left_scroll.follow_focus = true
-	left_panel.add_child(left_scroll)
+	_left_scroll = ScrollContainer.new()
+	_left_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_left_scroll.follow_focus = true
+	left_panel.add_child(_left_scroll)
 	
 	var left_vbox = VBoxContainer.new()
-	left_scroll.add_child(left_vbox)
+	_left_scroll.add_child(left_vbox)
 	
 	var title_label = Label.new()
 	title_label.text = "Card Designer"
@@ -143,6 +147,7 @@ func _setup_ui():
 	
 	_preview_card = preload("res://components/game_card.tscn").instantiate()
 	_preview_card.preview_mode = true
+	_preview_card.focus_mode = Control.FOCUS_NONE
 	preview_container.add_child(_preview_card)
 
 func _load_current_config():
@@ -491,3 +496,13 @@ func _save_to_settings() -> void:
 	var config_setting = SettingsManager.get_setting("card_effect_config")
 	if config_setting:
 		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
+
+func _on_focus_changed(control: Control) -> void:
+	"""Ensure focused controls are visible in the scroll container."""
+	if not control:
+		return
+	if not is_instance_valid(_left_scroll):
+		return
+	if not _left_scroll.is_ancestor_of(control):
+		return
+	_left_scroll.ensure_control_visible(control)
