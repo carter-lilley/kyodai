@@ -2,11 +2,9 @@
 check weird image conversion webp/jpg thing
 check melonds on desktop after bios restructure
 batch core download ONE notification
-scrolling in settings view via controller (platform, designers, etc) doesnt follow focus
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch on bottom screen!
 ui scale
-if platform isnt selected in platform view but IS synced and we leave platform view, re-select it. 
 glass inset not working in card designer view
 ## UI
 	game title under card option

@@ -71,6 +71,9 @@ var _max_pool_size: int = 120
 var _data_cache: Dictionary = {}
 var _pending_loads: Dictionary = {}
 
+# Deduplication tracking - prevents duplicate game entries
+var _cached_game_ids: Dictionary = {}  # romm_id -> cache_key
+
 const MAX_CACHE_SIZE: int = 5000
 var _cache_access_order: Array[int] = []
 
@@ -768,14 +771,31 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	if items.is_empty():
 		return
 	
+	var duplicates_found: int = 0
+	
 	for i in range(items.size()):
 		var cache_key = offset + i
+		var game = items[i]
 		
+		# Deduplication check: skip if this game ID is already cached at a different index
+		if game and game.romm_id != 0:
+			if _cached_game_ids.has(game.romm_id):
+				var existing_key = _cached_game_ids[game.romm_id]
+				if existing_key != cache_key:
+					# Duplicate detected - skip this entry
+					duplicates_found += 1
+					push_warning("[VirtualScrollGridContainer] Duplicate game detected: '%s' (romm_id: %d) at indices %d and %d - skipping duplicate" % [game.title, game.romm_id, existing_key, cache_key])
+					continue
+			
 		if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
 			_evict_oldest_cache_entries(items.size())
 		
-		_data_cache[cache_key] = items[i]
+		_data_cache[cache_key] = game
+		_cached_game_ids[game.romm_id] = cache_key
 		_update_cache_access_order(cache_key)
+	
+	if duplicates_found > 0:
+		push_warning("[VirtualScrollGridContainer] Found and skipped %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
 	
 	var items_per_line = _get_items_per_line()
 	var visible_start_idx: int
@@ -817,6 +837,7 @@ func _refresh_buffer():
 		_recycle_card_at_index(0)
 	
 	_data_cache.clear()
+	_cached_game_ids.clear()
 	_cache_access_order.clear()
 	_pending_loads.clear()
 	_margin_container.add_theme_constant_override("margin_top", 0)
@@ -1114,14 +1135,26 @@ func _initial_load_from_increment():
 	_update_margin()
 
 func cache_items_at_offset(items: Array[GameResource], offset: int):
+	var duplicates_found: int = 0
+	
 	for i in range(items.size()):
 		if offset + i < _total_items:
 			var cache_key = offset + i
+			var game = items[i]
+			
+			# Deduplication check
+			if game and game.romm_id != 0:
+				if _cached_game_ids.has(game.romm_id):
+					var existing_key = _cached_game_ids[game.romm_id]
+					if existing_key != cache_key:
+						duplicates_found += 1
+						continue
 			
 			if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
 				_evict_oldest_cache_entries(items.size())
 			
-			_data_cache[cache_key] = items[i]
+			_data_cache[cache_key] = game
+			_cached_game_ids[game.romm_id] = cache_key
 			_update_cache_access_order(cache_key)
 	
 	if items.size() > 0:

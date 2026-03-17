@@ -7,8 +7,18 @@ signal hero_game_changed(game: GameResource)
 @onready var margin_container: MarginContainer = $MarginContainer
 
 var _total_games: int = 0
+var _db_games_count: int = 0
+var _gamenative_games_count: int = 0
 var _is_loading: bool = false
 var _is_initial_launch: bool = true
+
+# GameNative games storage - kept separate but merged by last_played
+var _gamenative_games: Array[GameResource] = []
+var _gamenative_loaded: bool = false
+
+# Track which indices in the grid are GameNative games
+# This maps virtual index -> true if it's a GameNative game
+var _gamenative_indices: Dictionary = {}
 
 # Animation timing controls
 @export var enter_animation_start_delay: float = .5  # Delay before first card animation starts
@@ -70,32 +80,58 @@ func _ready():
 	_load_total_count()
 
 func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
-	"""Get total downloaded game count for virtual scrolling setup."""
+	"""Get total downloaded game count for virtual scrolling setup.
+	
+	Loads both DB games count and GameNative games, storing GameNative games
+	for proper merging by last_played during pagination.
+	"""
 	_is_loading = true
 	_update_status("Loading recent games...")
+	
+	# Load GameNative games first (they're small and cached)
+	_load_gamenative_games()
 	
 	# Query total count asynchronously
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_downloaded_games_count()
-			# Add GameNative games count
-			count += GameNativeManager.get_game_count()
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
 				_is_loading = false
 				return
-			_total_games = count
-			games_grid.set_total_count(count, preserve_cache)
-			if count == 0:
+			
+			_db_games_count = count
+			_gamenative_games_count = _gamenative_games.size()
+			_total_games = _db_games_count + _gamenative_games_count
+			
+			# Clear the index tracking when total changes significantly
+			if not preserve_cache:
+				_gamenative_indices.clear()
+			
+			games_grid.set_total_count(_total_games, preserve_cache)
+			
+			if _total_games == 0:
 				_update_status("No downloaded games found")
 				# Trigger scan if no games found (may have been wiped from DB but files exist)
 				if trigger_scan_if_empty:
 					_scan_for_downloaded_games()
 			else:
-				_update_status("Showing 0-0 of %d games" % count)
+				_update_status("Showing 0-0 of %d games" % _total_games)
 			_is_loading = false
 	)
+
+func _load_gamenative_games() -> void:
+	"""Load and cache GameNative games for proper merging."""
+	if GameNativeManager.has_games():
+		_gamenative_games = GameNativeManager.create_game_resources()
+		# Sort by last_played descending (same as DB query)
+		_gamenative_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
+			return a.last_played > b.last_played
+		)
+	else:
+		_gamenative_games.clear()
+	_gamenative_loaded = true
 
 func _update_status(text: String):
 	# Emit signal to update global status bar
@@ -157,27 +193,98 @@ func _on_sync_completed(success: bool, message: String):
 		_scan_for_downloaded_games()
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
-	"""Handle database query requests from VirtualScrollGridContainer."""
+	"""Handle database query requests from VirtualScrollGridContainer.
+	
+	Merges DB games with GameNative games, sorted by last_played.
+	Properly tracks which indices are GameNative vs DB games.
+	"""
 	MemoryManager.queue_db_task(
 		func():
-			var games = DataManager.get_downloaded_games_paginated(offset, limit)
+			# Query more DB games than needed to account for GameNative insertions
+			# We need to find the games that would appear at the requested offset
+			# after merging with GameNative games
 			
-			# Add GameNative games (only on first page for now)
-			if offset == 0 and GameNativeManager.has_games():
-				var gamenative_games = GameNativeManager.create_game_resources()
-				# Prepend GameNative games to the list
-				var combined: Array[GameResource] = []
-				combined.append_array(gamenative_games)
-				combined.append_array(games)
-				games = combined
+			# Strategy: Query a larger window from DB, then merge and slice
+			var db_offset = max(0, offset - _gamenative_games.size())
+			var db_limit = limit + _gamenative_games.size()
 			
-			return games,
-		func(games: Array[GameResource]):
-			games_grid.on_items_loaded(games, offset, is_preload)
+			var db_games = DataManager.get_downloaded_games_paginated(db_offset, db_limit)
+			
+			# Merge DB games with GameNative games
+			var merged = _merge_games_by_last_played(db_games, _gamenative_games, db_offset)
+			
+			# Slice to get the requested window
+			var result: Array[GameResource] = []
+			var actual_offset = offset
+			
+			# Track which indices in this result are GameNative
+			var result_gamenative_indices: Dictionary = {}
+			
+			for i in range(limit):
+				var idx = offset + i
+				if idx < merged.size():
+					var game = merged[idx]
+					result.append(game)
+					# Check if this is a GameNative game
+					if game.source == "gamenative":
+						result_gamenative_indices[i] = true
+			
+			return {
+				"games": result,
+				"offset": offset,
+				"gamenative_indices": result_gamenative_indices
+			},
+		func(result: Dictionary):
+			var games = result["games"] as Array[GameResource]
+			var response_offset = result["offset"] as int
+			var gamenative_indices = result["gamenative_indices"] as Dictionary
+			
+			# Merge the GameNative index tracking
+			for idx in gamenative_indices.keys():
+				_gamenative_indices[response_offset + idx] = true
+			
+			games_grid.on_items_loaded(games, response_offset, is_preload)
+			
 			# Mark initial launch complete after first batch loads
-			if offset == 0 and _is_initial_launch:
+			if response_offset == 0 and _is_initial_launch:
 				_is_initial_launch = false
 	)
+
+func _merge_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource], db_offset: int) -> Array[GameResource]:
+	"""Merge DB games with GameNative games, sorted by last_played descending.
+	
+	This creates a unified list where both types of games are interleaved
+	based on their last_played timestamp, eliminating the ghost entry issue.
+	"""
+	var merged: Array[GameResource] = []
+	
+	# Create a working copy of GameNative games that haven't been placed yet
+	var remaining_gamenative = gamenative_games.duplicate()
+	
+	# Track the virtual position (accounts for GameNative insertions before this DB game)
+	var virtual_position = 0
+	
+	for db_game in db_games:
+		# Place any GameNative games that should come before this DB game
+		while remaining_gamenative.size() > 0:
+			var gn_game = remaining_gamenative[0]
+			# Compare last_played: if GameNative has later timestamp, place it first
+			if gn_game.last_played > db_game.last_played:
+				merged.append(gn_game)
+				remaining_gamenative.pop_front()
+				virtual_position += 1
+			else:
+				break
+		
+		# Now place the DB game
+		merged.append(db_game)
+		virtual_position += 1
+	
+	# Append any remaining GameNative games at the end
+	for gn_game in remaining_gamenative:
+		merged.append(gn_game)
+	
+	return merged
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
 	"""Update status label with current visible range."""
@@ -295,11 +402,12 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	_is_loading = true
 	_update_status("Refreshing...")
 	
+	# Reload GameNative games first
+	_load_gamenative_games()
+	
 	MemoryManager.queue_db_task(
 		func():
 			var count = DataManager.get_downloaded_games_count()
-			# Add GameNative games count
-			count += GameNativeManager.get_game_count()
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -307,15 +415,23 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 				if on_complete.is_valid():
 					on_complete.call()
 				return
-			_total_games = count
-			games_grid.set_total_count(count, preserve_cache)
-			if count == 0:
+			
+			_db_games_count = count
+			_gamenative_games_count = _gamenative_games.size()
+			_total_games = _db_games_count + _gamenative_games_count
+			
+			if not preserve_cache:
+				_gamenative_indices.clear()
+			
+			games_grid.set_total_count(_total_games, preserve_cache)
+			
+			if _total_games == 0:
 				_update_status("No downloaded games found")
 			else:
 				var range_info = games_grid.get_visible_range()
 				var start_num = range_info.start + 1
-				var end_num = mini(range_info.end, count)
-				_update_status("Showing %d-%d of %d games" % [start_num, end_num, count])
+				var end_num = mini(range_info.end, _total_games)
+				_update_status("Showing %d-%d of %d games" % [start_num, end_num, _total_games])
 			_is_loading = false
 			
 			if on_complete.is_valid():
@@ -326,7 +442,31 @@ func on_view_show():
 	super.on_view_show()
 	# Refresh the view when shown (in case downloads happened while away)
 	if not _is_loading:
-		_load_total_count(true, false)
+		# Check if cache is still valid before using it
+		if _validate_cached_data():
+			_load_total_count(true, false)
+		else:
+			# Cache is stale, reload fresh
+			_load_total_count(false, false)
+
+func _validate_cached_data() -> bool:
+	"""Validate that cached data is still consistent with current state.
+	
+	Returns true if cache is valid, false if it needs to be refreshed.
+	"""
+	# Quick validation: check if GameNative count matches
+	var current_gamenative_count = GameNativeManager.get_game_count()
+	if current_gamenative_count != _gamenative_games_count:
+		push_warning("[HomeView] GameNative count mismatch: cached=%d, current=%d" % [_gamenative_games_count, current_gamenative_count])
+		return false
+	
+	# Check if we have the expected number of games cached
+	var range_info = games_grid.get_visible_range()
+	if range_info.total != _total_games:
+		push_warning("[HomeView] Total games mismatch: cached=%d, expected=%d" % [range_info.total, _total_games])
+		return false
+	
+	return true
 
 func on_view_hide():
 	view_hidden.emit()
@@ -350,13 +490,39 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			if game:
 				# Show deleting notification
 				NotificationManager.show_notification("Deleting " + game.title + "...", Notification.Type.INFO)
+				
+				# Lock the grid UI during deletion to prevent interaction with stale cards
+				if games_grid:
+					games_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				
 				# Delete the game
 				DataManager.delete_game_download(game, func(success: bool):
 					if success:
 						NotificationManager.show_notification(game.title + " deleted", Notification.Type.SUCCESS)
+						
+						# Remove from GameNative cache if it's a GameNative game
+						if game.source == "gamenative":
+							var gn_idx = -1
+							for i in range(_gamenative_games.size()):
+								if _gamenative_games[i].romm_id == romm_id:
+									gn_idx = i
+									break
+							if gn_idx >= 0:
+								_gamenative_games.remove_at(gn_idx)
+								_gamenative_games_count = _gamenative_games.size()
+								_total_games = _db_games_count + _gamenative_games_count
+					
+						# Clear cache and refresh completely
+						_gamenative_indices.clear()
+						
 						# Force refresh the grid (don't preserve cache to remove the deleted game)
 						_load_total_count_with_callback(false, func():
 							games_grid.refresh_dimensions()
+							
+							# Re-enable grid interaction
+							if games_grid:
+								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							
 							# Reset focus to home button
 							if not is_inside_tree() or not get_tree():
 								return
@@ -368,6 +534,11 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 						)
 					else:
 						NotificationManager.show_notification("Failed to delete " + game.title, Notification.Type.ERROR)
+						
+						# Re-enable grid interaction on failure too
+						if games_grid:
+							games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+						
 						# Play error sound
 						if AudioManager:
 							AudioManager.play_sfx("error")
