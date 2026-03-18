@@ -37,11 +37,16 @@ var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
 const IMAGE_THREAD_COUNT: int = 6
-const DOWNLOAD_THREAD_COUNT: int = 4
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 const MAX_DOWNLOAD_QUEUE_SIZE = 20
+
+## Returns the number of download threads for the current platform
+static func get_download_thread_count() -> int:
+	if Engine.has_singleton("PlatformManager") and PlatformManager.is_android():
+		return 2  # Android: conservative for battery/heat
+	return 6  # Desktop: more threads for speed
 
 static var _instance: MemoryManager = null
 
@@ -146,7 +151,11 @@ func _initialize_threads():
 	_extraction_thread = Thread.new()
 	_extraction_thread.start(_extraction_worker)
 	
-	for i in range(DOWNLOAD_THREAD_COUNT):
+	# Get thread count from centralized function
+	var download_thread_count = get_download_thread_count()
+	print("[MemoryManager] Initializing " + str(download_thread_count) + " download threads")
+	
+	for i in range(download_thread_count):
 		var thread = Thread.new()
 		thread.start(_download_worker)
 		_download_threads.append(thread)
@@ -603,7 +612,8 @@ static func shutdown():
 	_instance._download_semaphore.post()
 	for i in range(IMAGE_THREAD_COUNT):
 		_instance._image_semaphore.post()
-	for i in range(DOWNLOAD_THREAD_COUNT):
+	# Post semaphore for each download thread that was created
+	for thread in _instance._download_threads:
 		_instance._download_semaphore.post()
 	_instance._db_thread.wait_to_finish()
 	for thread in _instance._image_threads:

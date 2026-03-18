@@ -52,7 +52,7 @@ const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at star
 
 # Chunked download constants
 const CHUNKED_DOWNLOAD_THRESHOLD: int = 500 * 1024 * 1024  # 500MB
-var max_concurrent_chunks: int = 2 if PlatformManager.is_android() else 4  # Conservative: 2 Android, 4 desktop
+var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # Always match thread count
 
 # Dynamic chunk sizes based on file size (50% smaller for better parallelization)
 const CHUNK_SIZE_SMALL: int = 384 * 1024 * 1024   # 384MB for files < 2GB
@@ -685,7 +685,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	# Wait for connection to establish
 	while http.get_status() == HTTPClient.STATUS_CONNECTING or http.get_status() == HTTPClient.STATUS_RESOLVING:
 		http.poll()
-		OS.delay_msec(10)
+		OS.delay_usec(100)  # 0.1ms polling for faster connection
 	
 	if http.get_status() != HTTPClient.STATUS_CONNECTED:
 		push_error("[DownloadManager] Failed to connect, status: " + str(http.get_status()))
@@ -777,8 +777,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			file.store_buffer(chunk)
 			bytes_downloaded += chunk.size()
 			
-			# Emit progress every 5MB
-			if bytes_downloaded - last_progress_emit >= 5 * 1024 * 1024:
+			# Emit progress every 10MB
+			if bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
 				call_deferred("_update_chunk_progress", chunk_data.item_id, chunk_index, bytes_downloaded)
 				last_progress_emit = bytes_downloaded
 				print("[DownloadManager] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / 1024 / 1024) + "MB")

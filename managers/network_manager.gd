@@ -304,15 +304,15 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 		else:
 			http.download_chunk_size = 256 * 1024  # 256KB chunks
 	else:
-		# Desktop: Conservative buffers to reduce CPU usage
+		# Desktop: Larger buffers for better performance (8MB for faster downloads)
 		if expected_size > 1024 * 1024 * 1024:  # > 1GB
-			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks (reduced from 8MB)
+			http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks
 		elif expected_size > 100 * 1024 * 1024:  # > 100MB
-			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks (reduced from 8MB)
+			http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks
 		elif expected_size > 10 * 1024 * 1024:  # > 10MB
-			http.download_chunk_size = 2 * 1024 * 1024  # 2MB chunks
+			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks
 		else:
-			http.download_chunk_size = 512 * 1024  # 512KB chunks
+			http.download_chunk_size = 1 * 1024 * 1024  # 1MB chunks
 	
 	var error = http.request(url, headers)
 	
@@ -470,7 +470,7 @@ func _start_chunk_download_on_main_thread(url: String, normalized_path: String, 
 	if PlatformManager.is_android():
 		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for Android (memory optimized)
 	else:
-		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for desktop (reduced from 8MB to save CPU)
+		http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks for desktop (performance)
 	
 	var error = http.request(url, headers)
 	
