@@ -2437,6 +2437,116 @@ public class PackageCheckerPlugin extends GodotPlugin {
     // ==================== FOREGROUND SERVICE FOR DOWNLOADS ====================
     
     /**
+     * Reassembles chunked download files into a single file.
+     * This runs natively to avoid Godot memory overhead during large file operations.
+     * 
+     * @param chunkPathsJson JSON array of chunk file paths in order
+     * @param outputPath Final output file path
+     * @return true if successful
+     */
+    @UsedByGodot
+    public boolean reassembleChunks(String chunkPathsJson, String outputPath) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "reassembleChunks() called");
+        Log.d(TAG, "Output path: " + outputPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        java.io.FileOutputStream outputStream = null;
+        java.io.FileInputStream inputStream = null;
+        
+        try {
+            // Parse chunk paths from JSON
+            org.json.JSONArray chunkPaths = new org.json.JSONArray(chunkPathsJson);
+            int chunkCount = chunkPaths.length();
+            Log.d(TAG, "Reassembling " + chunkCount + " chunks");
+            
+            // Create output file
+            java.io.File outputFile = new java.io.File(outputPath);
+            java.io.File parentDir = outputFile.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs();
+            }
+            
+            outputStream = new java.io.FileOutputStream(outputFile);
+            
+            // 16MB buffer for efficient copying
+            byte[] buffer = new byte[16 * 1024 * 1024];
+            long totalBytesWritten = 0;
+            long lastProgressLog = 0;
+            
+            // Copy each chunk
+            for (int i = 0; i < chunkCount; i++) {
+                String chunkPath = chunkPaths.getString(i);
+                java.io.File chunkFile = new java.io.File(chunkPath);
+                
+                if (!chunkFile.exists()) {
+                    Log.e(TAG, "ERROR: Chunk file not found: " + chunkPath);
+                    outputStream.close();
+                    outputFile.delete();
+                    return false;
+                }
+                
+                inputStream = new java.io.FileInputStream(chunkFile);
+                int bytesRead;
+                long chunkBytesWritten = 0;
+                
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                    totalBytesWritten += bytesRead;
+                    chunkBytesWritten += bytesRead;
+                }
+                
+                inputStream.close();
+                inputStream = null;
+                
+                // Log progress every 100MB
+                if (totalBytesWritten - lastProgressLog > 100 * 1024 * 1024) {
+                    Log.d(TAG, "Reassembly progress: " + (i + 1) + "/" + chunkCount + 
+                          " chunks, " + (totalBytesWritten / (1024 * 1024)) + " MB written");
+                    lastProgressLog = totalBytesWritten;
+                }
+            }
+            
+            outputStream.flush();
+            outputStream.close();
+            outputStream = null;
+            
+            Log.d(TAG, "SUCCESS: Reassembled " + chunkCount + " chunks, " + 
+                  totalBytesWritten + " bytes total");
+            Log.d(TAG, "Output file: " + outputFile.getAbsolutePath());
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR reassembling chunks: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            Log.e(TAG, "Stack trace:");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            
+            // Clean up on failure
+            try {
+                if (outputStream != null) outputStream.close();
+                if (inputStream != null) inputStream.close();
+                // Delete partial output file
+                java.io.File outputFile = new java.io.File(outputPath);
+                if (outputFile.exists()) {
+                    outputFile.delete();
+                }
+            } catch (Exception cleanupError) {
+                Log.e(TAG, "Error during cleanup: " + cleanupError.getMessage());
+            }
+            
+            return false;
+        }
+    }
+    
+    /**
      * Starts the foreground service to prevent Android from killing the app during downloads.
      * Shows a persistent notification while downloads are active.
      */
