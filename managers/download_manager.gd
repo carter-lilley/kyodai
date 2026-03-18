@@ -52,17 +52,17 @@ const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at star
 
 # Chunked download constants
 const CHUNKED_DOWNLOAD_THRESHOLD: int = 500 * 1024 * 1024  # 500MB
-const MAX_CONCURRENT_CHUNKS: int = 4
+var max_concurrent_chunks: int = 3 if PlatformManager.is_android() else 6  # Reduce on Android to save memory
 
 # Dynamic chunk sizes based on file size
-const CHUNK_SIZE_SMALL: int = 256 * 1024 * 1024   # 256MB for files < 2GB
-const CHUNK_SIZE_MEDIUM: int = 512 * 1024 * 1024  # 512MB for files 2-10GB
-const CHUNK_SIZE_LARGE: int = 1024 * 1024 * 1024  # 1GB for files > 10GB
+const CHUNK_SIZE_SMALL: int = 768 * 1024 * 1024   # 768MB for files < 2GB
+const CHUNK_SIZE_MEDIUM: int = 1024 * 1024 * 1024  # 1GB for files 2-10GB
+const CHUNK_SIZE_LARGE: int = 1536 * 1024 * 1024  # 1.5GB for files > 10GB
 
 ## Returns appropriate chunk size based on file size
-## Files < 2GB: 256MB chunks
-## Files 2-10GB: 512MB chunks
-## Files > 10GB: 1GB chunks
+## Files < 2GB: 768MB chunks
+## Files 2-10GB: 1GB chunks
+## Files > 10GB: 1.5GB chunks
 func _get_chunk_size(file_size: int) -> int:
 	if file_size > 10 * 1024 * 1024 * 1024:  # > 10GB
 		return CHUNK_SIZE_LARGE
@@ -94,6 +94,61 @@ class ChunkInfo:
 	var completed: bool = false
 	var failed: bool = false
 	var in_progress: bool = false
+
+# Foreground service tracking for Android
+var _foreground_service_active: bool = false
+var _active_download_count: int = 0
+
+## Starts the Android foreground service to prevent app kill during downloads
+func _start_foreground_service(game_name: String = "Game"):
+	if not PlatformManager.is_android():
+		return
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_warning("[DownloadManager] PackageChecker plugin not available for foreground service")
+		return
+	
+	# Note: has_method() is unreliable with Android plugins, just call directly
+	if _active_download_count == 0:
+		print("[DownloadManager] Starting foreground service for download: " + game_name)
+		plugin.startDownloadForegroundService(game_name)
+		_foreground_service_active = true
+	
+	_active_download_count += 1
+	print("[DownloadManager] Active downloads: " + str(_active_download_count))
+
+## Updates the foreground service notification with progress
+func _update_foreground_service(game_name: String, progress: int):
+	if not PlatformManager.is_android() or not _foreground_service_active:
+		return
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		return
+	
+	# Note: has_method() is unreliable with Android plugins, just call directly
+	plugin.updateDownloadForegroundService(game_name, progress)
+
+## Stops the Android foreground service when downloads complete
+func _stop_foreground_service():
+	if not PlatformManager.is_android():
+		return
+	
+	_active_download_count = max(0, _active_download_count - 1)
+	
+	if _active_download_count == 0 and _foreground_service_active:
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin != null:
+			# Note: has_method() is unreliable with Android plugins, just call directly
+			print("[DownloadManager] Stopping foreground service")
+			plugin.stopDownloadForegroundService()
+			_foreground_service_active = false
+		
+		# Restore normal CPU mode on Android
+		if PlatformManager.is_android():
+			OS.set_low_processor_usage_mode(false)
+			print("[DownloadManager] Disabled low processor mode")
 
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
@@ -346,6 +401,14 @@ func _start_download(item: QueueItem):
 	item.progress = 0.0
 	_active_items[item.id] = item
 	
+	# Start foreground service on Android to prevent app kill during large downloads
+	_start_foreground_service(item.name)
+	
+	# Reduce CPU usage on Android to prevent overheating during downloads
+	if PlatformManager.is_android():
+		OS.set_low_processor_usage_mode(true)
+		print("[DownloadManager] Enabled low processor mode for download")
+	
 	# Track start time for timeout detection
 	_download_start_times[item.id] = Time.get_ticks_msec()
 	_last_progress_times[item.id] = Time.get_ticks_msec()
@@ -436,8 +499,9 @@ func _start_download(item: QueueItem):
 		_process_queue()
 		return
 	
-	# Setup progress timer - use 3 second intervals for large files to reduce overhead
-	var poll_interval = 3.0 if item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD else 1.0
+	# Setup progress timer - use 8 second intervals to reduce CPU/disk overhead
+	# This helps prevent device overheating during long downloads
+	var poll_interval = 8.0
 	_progress_timers[item.id] = Timer.new()
 	_progress_timers[item.id].wait_time = poll_interval
 	_progress_timers[item.id].autostart = true
@@ -536,7 +600,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	# Store the chunked info
 	_chunked_downloads[item.id] = chunked_info
 	
-	# Start initial batch of concurrent downloads (up to MAX_CONCURRENT_CHUNKS)
+	# Start initial batch of concurrent downloads (up to max_concurrent_chunks)
 	_start_next_chunk_downloads(item.id, headers)
 	
 	# Start progress timer for smooth updates
@@ -550,9 +614,10 @@ func _start_chunked_progress_timer(item_id: String):
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
 	
-	# Create timer to poll every 500ms
+	# Create timer to poll every 8 seconds to reduce CPU/disk overhead
+	# This helps prevent device overheating during long downloads
 	chunked_info.progress_timer = Timer.new()
-	chunked_info.progress_timer.wait_time = 0.5  # 500ms
+	chunked_info.progress_timer.wait_time = 8.0  # 8 seconds
 	chunked_info.progress_timer.autostart = true
 	add_child(chunked_info.progress_timer)
 	
@@ -608,7 +673,7 @@ func _stop_chunked_progress_timer(item_id: String):
 		chunked_info.progress_timer = null
 
 func _start_next_chunk_downloads(item_id: String, headers: Array):
-	"""Start downloading the next batch of chunks up to MAX_CONCURRENT_CHUNKS"""
+	"""Start downloading the next batch of chunks up to max_concurrent_chunks"""
 	if not _chunked_downloads.has(item_id):
 		return
 	
@@ -621,9 +686,9 @@ func _start_next_chunk_downloads(item_id: String, headers: Array):
 		if chunk.in_progress and not chunk.completed and not chunk.failed:
 			active_count += 1
 	
-	# Start more downloads until we hit MAX_CONCURRENT_CHUNKS
+	# Start more downloads until we hit max_concurrent_chunks
 	for chunk in chunked_info.chunks:
-		if active_count >= MAX_CONCURRENT_CHUNKS:
+		if active_count >= max_concurrent_chunks:
 			break
 		
 		if not chunk.in_progress and not chunk.completed and not chunk.failed:
@@ -715,8 +780,24 @@ func _reassemble_chunks(item_id: String):
 	print("[DownloadManager] Queueing chunk reassembly for: " + item.name)
 	NotificationManager.update_notification_text(item.notification_id, "Assembling " + item.name + "...")
 	
+	# For SAF destinations, we must reassemble to a temp file first
+	# FileAccess cannot write directly to content:// URIs
+	var use_saf = item.use_saf
+	var reassembly_temp_path = chunked_info.final_path
+	
+	if use_saf:
+		# Create a temp assembly path in user:// since we can't write directly to SAF
+		# Extract the filename from the original destination (e.g., "13 Sentinels.nsp")
+		var original_filename = chunked_info.final_path.get_file()
+		reassembly_temp_path = "user://downloads/assembled/" + original_filename
+		var assembled_dir = "user://downloads/assembled"
+		if not DirAccess.dir_exists_absolute(assembled_dir):
+			DirAccess.make_dir_recursive_absolute(assembled_dir)
+		print("[DownloadManager] SAF download: assembling to temp file: " + reassembly_temp_path)
+		print("[DownloadManager] SAF destination: " + item.saf_destination)
+	
 	# Store values needed for thread operation
-	var final_path = chunked_info.final_path
+	var final_path = reassembly_temp_path
 	var temp_dir = chunked_info.temp_dir
 	var chunks_data = []
 	for chunk in chunked_info.chunks:
@@ -781,17 +862,25 @@ func _reassemble_chunks(item_id: String):
 			_cleanup_chunked_download(item_id)
 			_cleanup_item(item)
 			_active_items.erase(item_id)
-			download_completed.emit(item_id, false, item.error_message)
+			download_completed.emit(item.id, false, item.error_message)
 			queue_changed.emit()
 			_process_queue()
 			return
 		
-		# Success! Clean up and complete
+		# Success! Clean up chunk temp files
 		print("[DownloadManager] Chunked download complete for: " + item.name)
 		_cleanup_chunked_download(item_id)
 		
-		# Continue with normal completion flow
-		_on_file_download_complete(item, true, "")
+		# For SAF downloads, we need to copy the assembled file to SAF location
+		if use_saf:
+			print("[DownloadManager] SAF download complete, queueing copy to storage")
+			# Update item.destination_path to point to our temp file for the copy operation
+			item.destination_path = reassembly_temp_path
+			item.set_meta("temp_assembly_path", reassembly_temp_path)
+			_queue_saf_copy_to_thread(item)
+		else:
+			# Continue with normal completion flow
+			_on_file_download_complete(item, true, "")
 	)
 
 func _cleanup_chunked_download(item_id: String):
@@ -864,6 +953,9 @@ func _update_download_progress(item: QueueItem):
 			return
 		
 		download_progress.emit(item.id, item.progress)
+		
+		# Update foreground service notification on Android
+		_update_foreground_service(item.name, int(item.progress * 100))
 	else:
 		# For non-game downloads, use HTTPRequest progress
 		if item.http_request and is_instance_valid(item.http_request):
@@ -873,6 +965,9 @@ func _update_download_progress(item: QueueItem):
 			if body_size > 0:
 				item.progress = float(downloaded) / float(body_size)
 				download_progress.emit(item.id, item.progress)
+				
+				# Update foreground service notification on Android
+				_update_foreground_service(item.name, int(item.progress * 100))
 			
 			# Update stall time if making progress
 			var last_bytes = _last_downloaded_bytes.get(item.id, -1)
@@ -892,6 +987,7 @@ func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray
 		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, error_msg)
 		queue_changed.emit()
 		_process_queue()
@@ -905,6 +1001,7 @@ func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray
 		NotificationManager.update_notification_text(item.notification_id, "Failed to save: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, "Failed to write file")
 		queue_changed.emit()
 		_process_queue()
@@ -933,6 +1030,7 @@ func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray
 		item.status = "completed"
 		item.progress = 1.0
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on success
 		download_completed.emit(item.id, true, item.destination_path)
 		queue_changed.emit()
 		_process_queue()
@@ -953,6 +1051,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, error_msg)
 		queue_changed.emit()
 		_process_queue()
@@ -965,6 +1064,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, "Download file not found")
 		queue_changed.emit()
 		_process_queue()
@@ -1035,6 +1135,7 @@ func _fail_download(item_id: String, error_msg: String):
 	_cleanup_download_tracking(item_id)
 	_cleanup_item(item)
 	_active_items.erase(item_id)
+	_stop_foreground_service()  # Stop foreground service on failure
 	
 	NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
 	download_completed.emit(item_id, false, error_msg)
@@ -1204,6 +1305,13 @@ func _queue_saf_copy_to_thread(item: QueueItem):
 		DirAccess.remove_absolute(temp_file_path)
 		DirAccess.remove_absolute(temp_dir_path)
 		
+		# Also clean up temp assembly file for chunked downloads
+		if item.has_meta("temp_assembly_path"):
+			var assembly_path = item.get_meta("temp_assembly_path")
+			if FileAccess.file_exists(assembly_path):
+				DirAccess.remove_absolute(assembly_path)
+				print("[DownloadManager] Cleaned up temp assembly file: " + assembly_path)
+		
 		# Dismiss SAF copy notification before completion
 		if item.notification_id != -1:
 			NotificationManager.dismiss_notification(item.notification_id)
@@ -1238,6 +1346,7 @@ func _finish_download_completion(item: QueueItem):
 		item.status = "completed"
 		item.progress = 1.0
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on completion (no extraction)
 		var final_path = item.saf_destination if item.use_saf else item.destination_path
 		download_completed.emit(item.id, true, final_path)
 		queue_changed.emit()

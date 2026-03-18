@@ -87,23 +87,31 @@ func get_settings_key_for_emulator() -> String:
 
 ## Requests necessary permissions on Android
 func _request_android_permissions():
+	# Get currently granted permissions
+	var granted_permissions = OS.get_granted_permissions()
+	
 	# Check and request standard runtime permissions
 	var permissions_to_request = []
 	
 	# Check storage permissions
-	if not OS.request_permission("android.permission.READ_EXTERNAL_STORAGE"):
+	if not "android.permission.READ_EXTERNAL_STORAGE" in granted_permissions:
 		permissions_to_request.append("android.permission.READ_EXTERNAL_STORAGE")
 	
-	if not OS.request_permission("android.permission.WRITE_EXTERNAL_STORAGE"):
+	if not "android.permission.WRITE_EXTERNAL_STORAGE" in granted_permissions:
 		permissions_to_request.append("android.permission.WRITE_EXTERNAL_STORAGE")
 	
 	# Check internet permission (usually granted automatically)
-	if not OS.request_permission("android.permission.INTERNET"):
+	if not "android.permission.INTERNET" in granted_permissions:
 		permissions_to_request.append("android.permission.INTERNET")
 	
 	# Check network state permission
-	if not OS.request_permission("android.permission.ACCESS_NETWORK_STATE"):
+	if not "android.permission.ACCESS_NETWORK_STATE" in granted_permissions:
 		permissions_to_request.append("android.permission.ACCESS_NETWORK_STATE")
+	
+	# Check notification permission (Android 13+ / API 33+)
+	# Required for foreground service notifications during downloads
+	if not "android.permission.POST_NOTIFICATIONS" in granted_permissions:
+		permissions_to_request.append("android.permission.POST_NOTIFICATIONS")
 	
 	if permissions_to_request.size() > 0:
 		OS.request_permissions()

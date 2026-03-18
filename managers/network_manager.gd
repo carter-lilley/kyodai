@@ -14,9 +14,8 @@ var _password: String = ""
 var _is_online: bool = false
 var _is_configured: bool = false
 
-# HTTP Request Pool for efficient reuse during batch operations
-var _request_pool: Array[HTTPRequest] = []
-var _max_pool_size: int = 6
+# NOTE: HTTP pooling removed to save memory on Android
+# Each request creates a fresh HTTPRequest that is freed immediately after use
 var _active_request_count: int = 0
 
 func _ready():
@@ -58,33 +57,22 @@ func _check_configuration():
 	if _is_configured:
 		_check_connection()
 
-# ==================== HTTP REQUEST POOL ====================
+# ==================== HTTP REQUEST CREATION (NO POOLING) ====================
+# Note: HTTP pooling was removed to save memory on Android.
+# Each request creates a fresh HTTPRequest that is freed immediately after use.
+# This prevents memory accumulation during large file downloads.
 
-func _get_pooled_request() -> HTTPRequest:
-	"""Get an HTTPRequest from the pool or create a new one."""
-	if _request_pool.size() > 0:
-		var http = _request_pool.pop_back()
-		# Cancel any pending requests on reused node
-		http.cancel_request()
-		return http
-	
+func _create_http_request() -> HTTPRequest:
+	"""Create a new HTTPRequest instance (not pooled)."""
 	var http = HTTPRequest.new()
 	add_child(http)
 	return http
 
-func _return_request(http: HTTPRequest) -> void:
-	"""Return an HTTPRequest to the pool for reuse."""
+func _cleanup_http_request(http: HTTPRequest) -> void:
+	"""Free the HTTPRequest immediately after use."""
 	if http == null or not is_instance_valid(http):
 		return
-	
-	# Disconnect any existing signal connections
-	for conn in http.request_completed.get_connections():
-		http.request_completed.disconnect(conn.callable)
-	
-	if _request_pool.size() < _max_pool_size:
-		_request_pool.append(http)
-	else:
-		http.queue_free()
+	http.queue_free()
 
 func _get_auth_header() -> String:
 	var credentials = _username + ":" + _password
@@ -115,7 +103,7 @@ func _check_connection():
 # ==================== CORE HTTP METHOD ====================
 
 func make_request(endpoint: String, callback: Callable, authenticated: bool = true):
-	var http = _get_pooled_request()
+	var http = _create_http_request()
 	_active_request_count += 1
 	
 	var url = _base_url.rstrip("/") + "/api" + endpoint
@@ -130,12 +118,12 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 	if error != OK:
 		callback.call({}, "Failed to start request: " + str(error))
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		
 		if response_code == 401:
 			authentication_failed.emit()
@@ -206,7 +194,7 @@ func fetch_game_details(game_id: int, callback: Callable):
 ## Makes a generic HTTP GET request - returns body bytes and status via callback
 ## callback(success: bool, body: PackedByteArray, status_code: int, error_message: String)
 func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
-	var http = _get_pooled_request()
+	var http = _create_http_request()
 	_active_request_count += 1
 	
 	var error = http.request(url, headers)
@@ -215,12 +203,12 @@ func http_get(url: String, headers: Array = [], callback: Callable = Callable())
 		if callback.is_valid():
 			callback.call(false, PackedByteArray(), 0, "Failed to start request: " + str(error))
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		return null
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		
 		if not callback.is_valid():
 			return
@@ -347,7 +335,7 @@ func is_romm_connected() -> bool:
 ## Checks if the server supports HTTP Range requests
 ## callback(supports_range: bool, error_message: String)
 func check_range_support(url: String, headers: Array = [], callback: Callable = Callable()) -> void:
-	var http = _get_pooled_request()
+	var http = _create_http_request()
 	_active_request_count += 1
 	
 	# Add HEAD method to check capabilities without downloading
@@ -357,7 +345,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 		if callback.is_valid():
 			callback.call(false, "Failed to start HEAD request: " + str(error))
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
@@ -366,7 +354,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call(false, "HEAD request failed: " + str(result))
-			_return_request(http)
+			_cleanup_http_request(http)
 			return
 		
 		# Check for Accept-Ranges header
@@ -381,7 +369,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 		if callback.is_valid():
 			callback.call(supports_range, "")
 		
-		_return_request(http)
+		_cleanup_http_request(http)
 	)
 
 ## Downloads a specific byte range (chunk) of a file
@@ -512,7 +500,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 		url = base_url + "/repos/" + repo + "/releases/latest"
 	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
 	
-	var http = _get_pooled_request()
+	var http = _create_http_request()
 	_active_request_count += 1
 	
 	var error = http.request(url, headers)
@@ -520,12 +508,12 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	if error != OK:
 		callback.call("", "Failed to start request: " + str(error))
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "Request failed: " + str(result))
@@ -562,7 +550,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable):
-	var http = _get_pooled_request()
+	var http = _create_http_request()
 	_active_request_count += 1
 	
 	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
@@ -570,12 +558,12 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 	if error != OK:
 		callback.call("", "Failed to start request: " + str(error))
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, body):
 		_active_request_count -= 1
-		_return_request(http)
+		_cleanup_http_request(http)
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "Request failed: " + str(result))

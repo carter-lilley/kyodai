@@ -9,6 +9,13 @@
 	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
 		android:minSdkVersion="30" />
 	
+	<!-- Foreground service permission for downloads -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+	
+	<!-- Notification permission for Android 13+ (API 33+) -->
+	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+	
 	<!-- Explicitly declare packages we want to query -->
 	<queries>
 		<package android:name="com.retroarch" />
@@ -17,7 +24,8 @@
 		<package android:name="io.github.lime3ds.android" />
 	</queries>
 	
-	<application>
+	<application
+		android:largeHeap="true">
 		<!-- IMPORTANT: To enable SD card support, add to your app's AndroidManifest.xml: -->
 		<!-- 
 		<provider
@@ -35,6 +43,13 @@
 		<meta-data 
 			android:name="org.godotengine.plugin.v2.PackageChecker" 
 			android:value="com.heckpoint.kyodai.PackageCheckerPlugin" />
+		
+		<!-- Foreground service for downloads to prevent app kill during large file downloads -->
+		<service
+			android:name=".DownloadForegroundService"
+			android:enabled="true"
+			android:exported="false"
+			android:foregroundServiceType="dataSync" />
 	</application>
 
 </manifest>

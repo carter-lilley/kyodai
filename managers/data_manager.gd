@@ -1316,7 +1316,7 @@ func _row_to_game(row: Dictionary) -> GameResource:
 		for g in row["genres"].split(","):
 			genres.append(g)
 	game.genres = genres
-	game.rating = row.get("rating")
+	game.rating = row.get("rating", "")
 	
 	# Restore sibling data
 	if row.has("siblings") and row["siblings"] != "":

@@ -2433,4 +2433,86 @@ public class PackageCheckerPlugin extends GodotPlugin {
             return false;
         }
     }
+    
+    // ==================== FOREGROUND SERVICE FOR DOWNLOADS ====================
+    
+    /**
+     * Starts the foreground service to prevent Android from killing the app during downloads.
+     * Shows a persistent notification while downloads are active.
+     */
+    @UsedByGodot
+    public void startDownloadForegroundService(String gameName) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "startDownloadForegroundService() called");
+        Log.d(TAG, "Game: " + gameName);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, DownloadForegroundService.class);
+            intent.setAction("START_DOWNLOAD");
+            intent.putExtra("game_name", gameName);
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activity.startForegroundService(intent);
+            } else {
+                activity.startService(intent);
+            }
+            
+            Log.d(TAG, "Foreground service started successfully");
+            Log.d(TAG, "==========================================");
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR starting foreground service: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+        }
+    }
+    
+    /**
+     * Updates the foreground service notification with download progress.
+     */
+    @UsedByGodot
+    public void updateDownloadForegroundService(String gameName, int progress) {
+        if (activity == null) {
+            return;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, DownloadForegroundService.class);
+            intent.setAction("UPDATE_PROGRESS");
+            intent.putExtra("game_name", gameName);
+            intent.putExtra("progress", progress);
+            
+            activity.startService(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR updating foreground service: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Stops the foreground service when downloads are complete.
+     */
+    @UsedByGodot
+    public void stopDownloadForegroundService() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "stopDownloadForegroundService() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, DownloadForegroundService.class);
+            intent.setAction("STOP_DOWNLOAD");
+            activity.startService(intent);
+            
+            Log.d(TAG, "Foreground service stop requested");
+            Log.d(TAG, "==========================================");
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR stopping foreground service: " + e.getMessage());
+        }
+    }
 }

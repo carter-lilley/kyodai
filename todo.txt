@@ -3,10 +3,11 @@ check weird image conversion webp/jpg thing
 check melonds on desktop after bios restructure
 batch core download ONE notification
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
-no touch on bottom screen!
+no touch to launch on bottom screen
 ui scale
 glass inset not working in card designer view
 improve M&KB experience. 
+android download manager and file streaming
 ## UI
 	game title under card option
 	game title "bubble option"
