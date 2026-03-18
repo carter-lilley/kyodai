@@ -6,8 +6,9 @@ install flow doesnt refresh platform cards reliably anymore - especially if you 
 no touch to launch on bottom screen
 ui scale
 glass inset not working in card designer view
-improve M&KB experience. 
+improve M&KB experience, add search icon. 
 android download manager and file streaming
+saves
 ## UI
 	game title under card option
 	game title "bubble option"

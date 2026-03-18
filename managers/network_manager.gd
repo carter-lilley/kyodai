@@ -14,9 +14,15 @@ var _password: String = ""
 var _is_online: bool = false
 var _is_configured: bool = false
 
-# NOTE: HTTP pooling removed to save memory on Android
-# Each request creates a fresh HTTPRequest that is freed immediately after use
+# HTTP Request Pool for efficient reuse during batch operations
+# Note: Pooling is disabled on Android to save memory, enabled on desktop for performance
+var _request_pool: Array[HTTPRequest] = []
+var _max_pool_size: int = 6
 var _active_request_count: int = 0
+
+func _use_pooling() -> bool:
+	"""Check if we should use HTTP request pooling. Disabled on Android to save memory."""
+	return not PlatformManager.is_android()
 
 func _ready():
 	SettingsManager.setting_changed.connect(_on_setting_changed)
@@ -57,22 +63,48 @@ func _check_configuration():
 	if _is_configured:
 		_check_connection()
 
-# ==================== HTTP REQUEST CREATION (NO POOLING) ====================
-# Note: HTTP pooling was removed to save memory on Android.
-# Each request creates a fresh HTTPRequest that is freed immediately after use.
-# This prevents memory accumulation during large file downloads.
+# ==================== HTTP REQUEST POOLING ====================
+# Pooling is enabled on desktop for better performance (connection reuse)
+# Pooling is disabled on Android to save memory (fresh connections)
 
-func _create_http_request() -> HTTPRequest:
-	"""Create a new HTTPRequest instance (not pooled)."""
+func _get_pooled_request() -> HTTPRequest:
+	"""Get an HTTPRequest from the pool or create a new one."""
+	if _use_pooling() and _request_pool.size() > 0:
+		var http = _request_pool.pop_back()
+		# Cancel any pending requests on reused node
+		http.cancel_request()
+		return http
+	
 	var http = HTTPRequest.new()
 	add_child(http)
 	return http
 
-func _cleanup_http_request(http: HTTPRequest) -> void:
-	"""Free the HTTPRequest immediately after use."""
+func _return_request(http: HTTPRequest) -> void:
+	"""Return an HTTPRequest to the pool for reuse (desktop only)."""
 	if http == null or not is_instance_valid(http):
 		return
-	http.queue_free()
+	
+	# Always free on Android to save memory
+	if not _use_pooling():
+		http.queue_free()
+		return
+	
+	# On desktop, try to pool it
+	for conn in http.request_completed.get_connections():
+		http.request_completed.disconnect(conn.callable)
+	
+	if _request_pool.size() < _max_pool_size:
+		_request_pool.append(http)
+	else:
+		http.queue_free()
+
+func _create_http_request() -> HTTPRequest:
+	"""Deprecated: Use _get_pooled_request() instead."""
+	return _get_pooled_request()
+
+func _cleanup_http_request(http: HTTPRequest) -> void:
+	"""Deprecated: Use _return_request() instead."""
+	_return_request(http)
 
 func _get_auth_header() -> String:
 	var credentials = _username + ":" + _password
@@ -252,20 +284,35 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 	# Configure HTTPRequest for large file downloads
 	http.download_file = normalized_path
 	http.timeout = 0.0  # Never timeout - let DownloadManager handle this
-	http.use_threads = true  # Use background thread for better performance
+	# NOTE: Threading disabled on desktop to reduce CPU usage
+	# Only enable threading on Android where it helps prevent UI blocking
+	http.use_threads = PlatformManager.is_android()
 	http.accept_gzip = false  # Disable compression to get accurate file sizes
 	http.body_size_limit = -1  # No limit
 	
-	# Dynamic chunk size based on expected file size
+	# Dynamic chunk size based on expected file size and platform
 	# Note: download_file is only used for large files (games), images use http_get
-	if expected_size > 1024 * 1024 * 1024:  # > 1GB
-		http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks (was 2MB)
-	elif expected_size > 100 * 1024 * 1024:  # > 100MB
-		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks (was 1MB)
-	elif expected_size > 10 * 1024 * 1024:  # > 10MB
-		http.download_chunk_size = 1024 * 1024  # 1MB chunks (was 256KB)
+	# Desktop uses larger buffers for better throughput on fast connections
+	if PlatformManager.is_android():
+		# Android: Smaller buffers to conserve memory
+		if expected_size > 1024 * 1024 * 1024:  # > 1GB
+			http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks
+		elif expected_size > 100 * 1024 * 1024:  # > 100MB
+			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks
+		elif expected_size > 10 * 1024 * 1024:  # > 10MB
+			http.download_chunk_size = 1024 * 1024  # 1MB chunks
+		else:
+			http.download_chunk_size = 256 * 1024  # 256KB chunks
 	else:
-		http.download_chunk_size = 256 * 1024  # 256KB chunks (was 64KB)
+		# Desktop: Conservative buffers to reduce CPU usage
+		if expected_size > 1024 * 1024 * 1024:  # > 1GB
+			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks (reduced from 8MB)
+		elif expected_size > 100 * 1024 * 1024:  # > 100MB
+			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks (reduced from 8MB)
+		elif expected_size > 10 * 1024 * 1024:  # > 10MB
+			http.download_chunk_size = 2 * 1024 * 1024  # 2MB chunks
+		else:
+			http.download_chunk_size = 512 * 1024  # 512KB chunks
 	
 	var error = http.request(url, headers)
 	
@@ -415,10 +462,15 @@ func _start_chunk_download_on_main_thread(url: String, normalized_path: String, 
 	# Configure HTTPRequest for chunk download
 	http.download_file = normalized_path
 	http.timeout = 0.0  # Never timeout - let caller handle this
-	http.use_threads = true  # Use background thread for better performance
+	# NOTE: Threading disabled on desktop to reduce CPU usage
+	http.use_threads = PlatformManager.is_android()
 	http.accept_gzip = false  # Disable compression to get accurate file sizes
 	http.body_size_limit = -1  # No limit
-	http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for chunk downloads
+	# Platform-specific buffer size for chunked downloads
+	if PlatformManager.is_android():
+		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for Android (memory optimized)
+	else:
+		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for desktop (reduced from 8MB to save CPU)
 	
 	var error = http.request(url, headers)
 	

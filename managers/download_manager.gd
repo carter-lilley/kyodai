@@ -52,17 +52,21 @@ const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at star
 
 # Chunked download constants
 const CHUNKED_DOWNLOAD_THRESHOLD: int = 500 * 1024 * 1024  # 500MB
-var max_concurrent_chunks: int = 3 if PlatformManager.is_android() else 6  # Reduce on Android to save memory
+var max_concurrent_chunks: int = 2 if PlatformManager.is_android() else 4  # Conservative: 2 Android, 4 desktop
 
-# Dynamic chunk sizes based on file size
-const CHUNK_SIZE_SMALL: int = 768 * 1024 * 1024   # 768MB for files < 2GB
-const CHUNK_SIZE_MEDIUM: int = 1024 * 1024 * 1024  # 1GB for files 2-10GB
-const CHUNK_SIZE_LARGE: int = 1536 * 1024 * 1024  # 1.5GB for files > 10GB
+# Dynamic chunk sizes based on file size (50% smaller for better parallelization)
+const CHUNK_SIZE_SMALL: int = 384 * 1024 * 1024   # 384MB for files < 2GB
+const CHUNK_SIZE_MEDIUM: int = 512 * 1024 * 1024  # 512MB for files 2-10GB
+const CHUNK_SIZE_LARGE: int = 768 * 1024 * 1024   # 768MB for files > 10GB
+
+# Chunk retry settings
+const MAX_CHUNK_RETRIES: int = 3
+const CHUNK_RETRY_DELAY_SEC: float = 1.5  # 1.5 seconds between retries
 
 ## Returns appropriate chunk size based on file size
-## Files < 2GB: 768MB chunks
-## Files 2-10GB: 1GB chunks
-## Files > 10GB: 1.5GB chunks
+## Files < 2GB: 384MB chunks
+## Files 2-10GB: 512MB chunks
+## Files > 10GB: 768MB chunks
 func _get_chunk_size(file_size: int) -> int:
 	if file_size > 10 * 1024 * 1024 * 1024:  # > 10GB
 		return CHUNK_SIZE_LARGE
@@ -94,6 +98,7 @@ class ChunkInfo:
 	var completed: bool = false
 	var failed: bool = false
 	var in_progress: bool = false
+	var retry_count: int = 0  # Track retry attempts
 
 # Foreground service tracking for Android
 var _foreground_service_active: bool = false
@@ -499,9 +504,9 @@ func _start_download(item: QueueItem):
 		_process_queue()
 		return
 	
-	# Setup progress timer - use 8 second intervals to reduce CPU/disk overhead
-	# This helps prevent device overheating during long downloads
-	var poll_interval = 8.0
+	# Setup progress timer - use longer intervals to reduce CPU/disk overhead
+	# Desktop: 3s (reduced from 1s to save CPU), Android: 8s (for heat management)
+	var poll_interval = 8.0 if PlatformManager.is_android() else 3.0
 	_progress_timers[item.id] = Timer.new()
 	_progress_timers[item.id].wait_time = poll_interval
 	_progress_timers[item.id].autostart = true
@@ -614,10 +619,10 @@ func _start_chunked_progress_timer(item_id: String):
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
 	
-	# Create timer to poll every 8 seconds to reduce CPU/disk overhead
-	# This helps prevent device overheating during long downloads
+	# Create timer to poll progress - longer intervals to reduce CPU overhead
+	# Desktop: 2s (reduced from 0.5s), Android: 8s (for heat management)
 	chunked_info.progress_timer = Timer.new()
-	chunked_info.progress_timer.wait_time = 8.0  # 8 seconds
+	chunked_info.progress_timer.wait_time = 8.0 if PlatformManager.is_android() else 2.0
 	chunked_info.progress_timer.autostart = true
 	add_child(chunked_info.progress_timer)
 	
@@ -756,17 +761,44 @@ func _on_chunk_download_complete(item_id: String, chunk_index: int, success: boo
 			# Start the next chunk
 			_start_next_chunk_downloads(item_id, headers)
 	else:
-		chunk.failed = true
-		push_error("[DownloadManager] Chunk " + str(chunk_index) + " failed: " + error_msg)
-		_stop_chunked_progress_timer(item_id)
-		item.status = "failed"
-		item.error_message = "Chunk download failed: " + error_msg
-		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
-		_active_items.erase(item_id)
-		download_completed.emit(item_id, false, item.error_message)
-		queue_changed.emit()
-		_process_queue()
+		chunk.retry_count += 1
+		chunk.in_progress = false
+		
+		if chunk.retry_count <= MAX_CHUNK_RETRIES:
+			# Delete partial/failed chunk file
+			if FileAccess.file_exists(chunk.temp_path):
+				DirAccess.remove_absolute(chunk.temp_path)
+				print("[DownloadManager] Deleted failed chunk file: " + chunk.temp_path)
+			
+			# Update progress to show retry status
+			_update_chunked_progress(item_id)
+			
+			NotificationManager.update_notification_text(
+				item.notification_id,
+				"Retrying chunk " + str(chunk_index) + " (" + str(chunk.retry_count) + "/" + str(MAX_CHUNK_RETRIES) + "): " + item.name
+			)
+			
+			print("[DownloadManager] Chunk " + str(chunk_index) + " failed, retrying in " + str(CHUNK_RETRY_DELAY_SEC) + "s (" + str(chunk.retry_count) + "/" + str(MAX_CHUNK_RETRIES) + ")")
+			
+			# Wait before retry
+			await get_tree().create_timer(CHUNK_RETRY_DELAY_SEC).timeout
+			
+			# Retry the chunk
+			chunk.failed = false
+			_start_next_chunk_downloads(item_id, headers)
+		else:
+			# Max retries exceeded - fail the download
+			chunk.failed = true
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " failed after " + str(MAX_CHUNK_RETRIES) + " retries: " + error_msg)
+			_stop_chunked_progress_timer(item_id)
+			item.status = "failed"
+			item.error_message = "Chunk download failed after " + str(MAX_CHUNK_RETRIES) + " retries: " + error_msg
+			_cleanup_chunked_download(item_id)
+			_cleanup_item(item)
+			_active_items.erase(item_id)
+			download_completed.emit(item_id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
 
 func _reassemble_chunks(item_id: String):
 	"""Reassemble all chunks into the final file - runs on extraction thread to avoid UI blocking"""
