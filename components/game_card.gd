@@ -1066,6 +1066,7 @@ func _on_focus_entered() -> void:
 	# Scale up visual container when focused (not self, to avoid layout issues)
 	# Ensure pivot is set to center for proper scaling
 	visual_container.pivot_offset = visual_container.size / 2
+	z_index = 11
 	
 	if _focus_tween:
 		_focus_tween.kill()
@@ -1095,6 +1096,7 @@ func _on_focus_entered() -> void:
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 
 func _on_focus_exited() -> void:
+	z_index = 10
 	# Scale visual container back to normal when unfocused
 	if _focus_tween:
 		_focus_tween.kill()
@@ -1133,6 +1135,7 @@ func restore_focus_animation() -> void:
 	# Re-apply focus scale animation on visual container (not self)
 	# Ensure pivot is set to center for proper scaling
 	visual_container.pivot_offset = visual_container.size / 2
+	z_index = 11
 	
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_BACK)
