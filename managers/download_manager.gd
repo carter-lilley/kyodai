@@ -63,6 +63,10 @@ const CHUNK_SIZE_LARGE: int = 768 * 1024 * 1024   # 768MB for files > 10GB
 const MAX_CHUNK_RETRIES: int = 3
 const CHUNK_RETRY_DELAY_SEC: float = 1.5  # 1.5 seconds between retries
 
+# Polling interval for HTTPClient (2 seconds between polls when no data)
+const POLLING_INTERVAL_MS: int = 2000
+const POLLING_INTERVAL_US: int = 2000000
+
 ## Returns appropriate chunk size based on file size
 ## Files < 2GB: 384MB chunks
 ## Files 2-10GB: 512MB chunks
@@ -104,6 +108,14 @@ class ChunkInfo:
 # Foreground service tracking for Android
 var _foreground_service_active: bool = false
 var _active_download_count: int = 0
+
+# Connection pool for chunked downloads - per-thread persistent connections
+# Reduces TLS handshakes by reusing connections across chunks
+var _download_connection_pools: Dictionary = {}  # item_id -> Array[HTTPClient] (one per thread)
+var _connection_pool_mutex: Mutex = Mutex.new()
+
+# Track per-thread chunk completion times for debugging connection reuse
+var _thread_chunk_finish_times: Dictionary = {}  # "item_id_thread_index" -> finish_time_msec
 
 ## Starts the Android foreground service to prevent app kill during downloads
 func _start_foreground_service(game_name: String = "Game"):
@@ -518,6 +530,39 @@ func _start_download(item: QueueItem):
 		_check_download_timeout(item.id)
 	)
 
+# ==================== CONNECTION POOL HELPERS ====================
+## Creates a new HTTPClient connection for the given URL components
+func _create_connection(url_parts: Dictionary) -> HTTPClient:
+	var http = HTTPClient.new()
+	
+	var err: int
+	if url_parts.protocol == "https":
+		var tls_options = TLSOptions.client()
+		err = http.connect_to_host(url_parts.host, url_parts.port, tls_options)
+	else:
+		err = http.connect_to_host(url_parts.host, url_parts.port)
+	
+	if err != OK:
+		push_error("[DownloadManager] Failed to connect to host: " + url_parts.host + " error: " + str(err))
+		return null
+	
+	# Wait for connection to establish
+	while http.get_status() == HTTPClient.STATUS_CONNECTING or http.get_status() == HTTPClient.STATUS_RESOLVING:
+		http.poll()
+		OS.delay_usec(100)
+	
+	if http.get_status() != HTTPClient.STATUS_CONNECTED:
+		push_error("[DownloadManager] Failed to connect, status: " + str(http.get_status()))
+		return null
+	
+	return http
+
+## Checks if an HTTPClient connection is still valid and connected
+func _is_connection_valid(http: HTTPClient) -> bool:
+	if http == null:
+		return false
+	return http.get_status() == HTTPClient.STATUS_CONNECTED
+
 # ==================== CHUNKED DOWNLOAD METHODS ====================
 
 func _check_range_and_start_chunked(item: QueueItem, headers: Array):
@@ -601,13 +646,22 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	
 	_chunked_downloads[item.id] = chunked_info
 	
+	# Initialize connection pool for persistent TLS connections
+	var thread_count = MemoryManager.get_download_thread_count()
+	var connection_pool: Array[HTTPClient] = []
+	connection_pool.resize(thread_count)
+	_connection_pool_mutex.lock()
+	_download_connection_pools[item.id] = connection_pool
+	_connection_pool_mutex.unlock()
+	
 	print("[DownloadManager] Starting chunked download with " + str(num_chunks) + " chunks for: " + item.name)
-	print("[DownloadManager] Using thread pool for controlled parallelism")
+	print("[DownloadManager] Using " + str(thread_count) + " threads with connection pool")
 	
 	# Queue all chunks to the download thread pool
 	# This distributes chunks across threads for controlled parallelism
 	var chunk_items = []
 	for i in range(num_chunks):
+		var thread_index = i % thread_count
 		chunk_items.append({
 			"item_id": item.id,
 			"chunk_index": i,
@@ -615,7 +669,8 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 			"temp_path": chunked_info.chunks[i].temp_path,
 			"start_byte": chunked_info.chunks[i].start_byte,
 			"end_byte": chunked_info.chunks[i].end_byte,
-			"headers": headers
+			"headers": headers,
+			"thread_index": thread_index
 		})
 	
 	print("[DownloadManager] Queuing " + str(chunk_items.size()) + " chunks to thread pool for: " + item.name)
@@ -654,6 +709,7 @@ func _start_chunked_progress_timer(item_id: String):
 
 ## Downloads a single chunk on a worker thread using HTTPClient
 ## Called by the thread pool - runs on a background thread
+## Uses connection pooling to reuse TLS connections across chunks
 func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	var url = chunk_data.url
 	var temp_path = chunk_data.temp_path
@@ -662,33 +718,57 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	var headers = chunk_data.headers
 	var chunk_index = chunk_data.chunk_index
 	var item_id = chunk_data.item_id
+	var thread_index = chunk_data.thread_index
 	
-	print("[DownloadManager] Starting chunk " + str(chunk_index) + " download for item: " + item_id)
+	var chunk_start_time = Time.get_ticks_msec()
+	print("[DownloadManager] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
 	
 	# Parse URL to get components
 	var url_parts = _parse_url(url)
 	
-	# Create HTTPClient
-	var http = HTTPClient.new()
+	# Get or create connection from pool (thread-safe access)
+	var http: HTTPClient
+	var connection_created = false
+	var was_reused = false
 	
-	# Connect to host with TLS for HTTPS
-	var err: int
-	if url_parts.protocol == "https":
-		var tls_options = TLSOptions.client()
-		err = http.connect_to_host(url_parts.host, url_parts.port, tls_options)
+	_connection_pool_mutex.lock()
+	if _download_connection_pools.has(item_id):
+		var connection_pool = _download_connection_pools[item_id]
+		if thread_index < connection_pool.size():
+			http = connection_pool[thread_index]
+			var status_before = http.get_status() if http != null else -1
+			print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection status before check: " + str(status_before) + " (CONNECTED=" + str(HTTPClient.STATUS_CONNECTED) + ")")
+			
+			# Check for previous chunk finish time to calculate idle time
+			var thread_key = item_id + "_" + str(thread_index)
+			var prev_finish_time = _thread_chunk_finish_times.get(thread_key, 0)
+			if prev_finish_time > 0:
+				var idle_time = chunk_start_time - prev_finish_time
+				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " idle time between chunks: " + str(idle_time) + "ms")
+			
+			# Check if connection is still valid
+			if not _is_connection_valid(http):
+				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection invalid, creating new for chunk " + str(chunk_index))
+				http = _create_connection(url_parts)
+				if http != null:
+					connection_pool[thread_index] = http
+					connection_created = true
+					print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " created new connection (status=" + str(http.get_status()) + ")")
+			else:
+				was_reused = true
+				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
+		else:
+			push_error("[DownloadManager] Thread index out of bounds: " + str(thread_index))
+			_connection_pool_mutex.unlock()
+			return false
 	else:
-		err = http.connect_to_host(url_parts.host, url_parts.port)
-	if err != OK:
-		push_error("[DownloadManager] Failed to connect to host: " + url_parts.host + " error: " + str(err))
+		push_error("[DownloadManager] No connection pool found for item: " + item_id)
+		_connection_pool_mutex.unlock()
 		return false
+	_connection_pool_mutex.unlock()
 	
-	# Wait for connection to establish
-	while http.get_status() == HTTPClient.STATUS_CONNECTING or http.get_status() == HTTPClient.STATUS_RESOLVING:
-		http.poll()
-		OS.delay_usec(100)  # 0.1ms polling for faster connection
-	
-	if http.get_status() != HTTPClient.STATUS_CONNECTED:
-		push_error("[DownloadManager] Failed to connect, status: " + str(http.get_status()))
+	if http == null:
+		push_error("[DownloadManager] Failed to get/create connection for chunk " + str(chunk_index))
 		return false
 	
 	# Prepare headers
@@ -715,14 +795,14 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	if not has_user_agent:
 		request_headers.append("User-Agent: Kyodai-Launcher/1.0")
 	
-	# Add Connection header for HTTP/1.1
+	# Add Connection header for keep-alive
 	var has_connection = false
 	for header in request_headers:
 		if header.to_lower().begins_with("connection:"):
 			has_connection = true
 			break
 	if not has_connection:
-		request_headers.append("Connection: close")
+		request_headers.append("Connection: keep-alive")
 	
 	# Add Accept header
 	var has_accept = false
@@ -734,20 +814,40 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		request_headers.append("Accept: */*")
 	
 	# Make the request
-	print("[DownloadManager] HTTPClient request path: " + url_parts.path + url_parts.query)
-	print("[DownloadManager] Full headers: " + str(request_headers))
-	err = http.request(HTTPClient.METHOD_GET, url_parts.path + url_parts.query, request_headers)
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " making request, connection status: " + str(http.get_status()))
+	
+	var err = http.request(HTTPClient.METHOD_GET, url_parts.path + url_parts.query, request_headers)
 	if err != OK:
 		push_error("[DownloadManager] Failed to make request: " + str(err))
 		return false
 	
 	# Wait for response headers
+	var poll_count = 0
 	while http.get_status() == HTTPClient.STATUS_REQUESTING:
 		http.poll()
+		poll_count += 1
+		if poll_count % 100 == 0:
+			print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " still requesting... (poll " + str(poll_count) + ")")
 		OS.delay_msec(10)
+	
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " finished requesting after " + str(poll_count) + " polls, status: " + str(http.get_status()))
+	
+	# Get and log response headers
+	var response_headers = http.get_response_headers()
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " response headers: " + str(response_headers))
+	
+	# Check for Connection header in response
+	var connection_header = ""
+	for header in response_headers:
+		if header.to_lower().begins_with("connection:"):
+			connection_header = header.split(":", false, 1)[1].strip_edges().to_lower()
+			break
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " server Connection header: '" + connection_header + "' (was_reused=" + str(was_reused) + ")")
 	
 	# Check response code
 	var response_code = http.get_response_code()
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " response code: " + str(response_code))
+	
 	if response_code != 200 and response_code != 206:
 		# Read error response body
 		var error_body = ""
@@ -767,15 +867,27 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		push_error("[DownloadManager] Failed to create chunk file: " + temp_path)
 		return false
 	
-	# Download the chunk
+	# Download the chunk with improved polling
 	var bytes_downloaded = 0
 	var last_progress_emit = 0
+	var body_poll_count = 0
+	var last_poll_time = Time.get_ticks_msec()
+	var last_data_received_time = last_poll_time
+	
 	while http.get_status() == HTTPClient.STATUS_BODY:
-		http.poll()
+		var current_time = Time.get_ticks_msec()
+		
+		# Only poll every POLLING_INTERVAL_MS (2 seconds) to reduce CPU usage
+		if current_time - last_poll_time >= POLLING_INTERVAL_MS:
+			http.poll()
+			body_poll_count += 1
+			last_poll_time = current_time
+		
 		var chunk = http.read_response_body_chunk()
 		if chunk.size() > 0:
 			file.store_buffer(chunk)
 			bytes_downloaded += chunk.size()
+			last_data_received_time = current_time
 			
 			# Emit progress every 10MB
 			if bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
@@ -783,16 +895,27 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 				last_progress_emit = bytes_downloaded
 				print("[DownloadManager] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / 1024 / 1024) + "MB")
 		else:
-			OS.delay_usec(1000)
+			# No data available, wait a bit before checking again
+			OS.delay_usec(1000)  # 1ms micro-sleep to prevent busy-waiting
 	
 	file.close()
-	http.close()
+	
+	var chunk_end_time = Time.get_ticks_msec()
+	var download_duration = chunk_end_time - chunk_start_time
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " finished body after " + str(body_poll_count) + " polls, status: " + str(http.get_status()))
+	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " download duration: " + str(download_duration) + "ms")
+	
+	# Track finish time for this thread for debugging connection reuse
+	var thread_key = item_id + "_" + str(thread_index)
+	_thread_chunk_finish_times[thread_key] = chunk_end_time
+	
+	# DO NOT close the connection - leave it open for reuse by other chunks
 	
 	if bytes_downloaded == 0:
 		push_error("[DownloadManager] Downloaded 0 bytes for chunk " + str(chunk_index))
 		return false
 	
-	print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes")
+	print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes (connection left open, status=" + str(http.get_status()) + ")")
 	return true
 
 ## Parses URL into components
@@ -911,7 +1034,8 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 				"temp_path": chunk.temp_path,
 				"start_byte": chunk.start_byte,
 				"end_byte": chunk.end_byte,
-				"headers": headers
+				"headers": headers,
+				"thread_index": chunk.index % MemoryManager.get_download_thread_count()
 			})
 		
 		# Wait before retry
@@ -1337,6 +1461,16 @@ func _cleanup_chunked_download(item_id: String):
 	# Clean up temp directory
 	if DirAccess.dir_exists_absolute(chunked_info.temp_dir):
 		_cleanup_temp_dir(chunked_info.temp_dir)
+	
+	# Close and clean up connection pool
+	_connection_pool_mutex.lock()
+	if _download_connection_pools.has(item_id):
+		var connection_pool = _download_connection_pools[item_id]
+		for http in connection_pool:
+			if http != null and http.get_status() == HTTPClient.STATUS_CONNECTED:
+				http.close()
+		_download_connection_pools.erase(item_id)
+	_connection_pool_mutex.unlock()
 	
 	# Remove from tracking
 	_chunked_downloads.erase(item_id)
