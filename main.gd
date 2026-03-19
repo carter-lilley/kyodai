@@ -3,6 +3,7 @@ extends Control
 # UI Nodes - initialized in _ready()
 var tab_container: TabContainer
 var navigation_bar: NavigationBar
+var controls_bar: ControlsBar
 var hero_image: HeroImage
 var hero_spacer: Control
 var library_background: LibraryBackground
@@ -34,6 +35,7 @@ func _ready():
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
 	navigation_bar = get_node("NavigationBar")
+	controls_bar = get_node("ControlsBar")
 	hero_image = get_node("RootLayout/ContentWrapper/HeroImage")
 	hero_spacer = get_node("RootLayout/ContentWrapper/MainContentVBox/HeroSpacer")
 	library_background = get_node("RootLayout/ContentWrapper/LibraryBackground")
@@ -52,7 +54,8 @@ func _ready():
 		library_background,
 		content_wrapper,
 		main_content_vbox,
-		root_layout
+		root_layout,
+		controls_bar
 	)
 	
 	# Connect navigation bar signals

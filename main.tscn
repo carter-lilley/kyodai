@@ -8,6 +8,7 @@
 [ext_resource type="Script" uid="uid://b4lrijvkxphmr" path="res://components/fps_counter.gd" id="7_fpscounter"]
 [ext_resource type="Script" uid="uid://dpvnpkj275ewq" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
 [ext_resource type="Script" uid="uid://dnfalaub1s338" path="res://addons/AynThor/screen_resource.gd" id="9_screenres"]
+[ext_resource type="Script" uid="uid://controlsbar001" path="res://components/controls_bar.gd" id="10_controlsbar"]
 
 [sub_resource type="Resource" id="Screen_1"]
 script = ExtResource("9_screenres")
@@ -97,6 +98,16 @@ anchors_preset = 12
 anchor_top = 1.0
 offset_top = -23.0
 grow_vertical = 0
+
+[node name="ControlsBar" type="MarginContainer" parent="." unique_id=344391297]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 0
+script = ExtResource("10_controlsbar")
 
 [node name="UILayer" type="CanvasLayer" parent="." unique_id=777777777]
 layer = 1000

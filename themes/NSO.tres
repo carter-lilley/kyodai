@@ -3,19 +3,19 @@
 [ext_resource type="Script" path="res://resource/theme_preset.gd" id="1_ca4q8"]
 
 [sub_resource type="Gradient" id="Gradient_3yjc8"]
-colors = PackedColorArray(0.1015625, 0.1015625, 0.1015625, 1, 0.1015625, 0.1015625, 0.1015625, 1)
+colors = PackedColorArray(0.21176471, 0.21176471, 0.20784314, 1, 0.21176471, 0.21176471, 0.20784314, 1)
 
 [resource]
 script = ExtResource("1_ca4q8")
 name = "NSO"
-created_at = "2026-03-17T21:58:38"
+created_at = "2026-03-19T01:31:21"
 library_hero_layout_height = 4
 library_navigation_bar_position = 2
 library_grid_padding = 0
 library_grid_margin_x = 0
 library_grid_margin_y = 0
-library_card_zoom = 0.5
-library_bar_color = Color(0.90625, 0.1451416, 0.15115814, 1)
+library_card_zoom = 0.36
+library_bar_color = Color(0.99607843, 0.1254902, 0.003921569, 1)
 library_icon_color = Color(0.94140625, 0.94140625, 0.94140625, 1)
 library_background_config = {
 "background_gradient": SubResource("Gradient_3yjc8"),
@@ -26,16 +26,5 @@ library_background_config = {
 card_effect_config = {
 "card_orientation": 0,
 "corner_radius": 0.0,
-"effects": [{
-"effect_id": "badge",
-"settings": {
-"badge_color": Color(0, 0, 0, 1),
-"badge_inner_radius": 0.0,
-"badge_size": 0.8,
-"badge_type": 1,
-"hide_background": false,
-"icon_color": Color(1, 1, 1, 1),
-"icon_padding": 0.8
-}
-}]
+"effects": []
 }

@@ -376,6 +376,8 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.library_icon_color != b.library_icon_color:
 		return false
+	if a.library_show_title_on_all_cards != b.library_show_title_on_all_cards:
+		return false
 	
 	# Compare dictionaries using JSON stringify for reliable comparison
 	var card_a = JSON.stringify(a.card_effect_config)

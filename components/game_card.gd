@@ -18,15 +18,21 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 @onready var card_input: Button = $VisualContainer/CardInput
 @onready var status_badge: Panel = $VisualContainer/CardInput/StatusBadge
 @onready var platform_icon: TextureRect = $VisualContainer/CardInput/PlatformIcon
+@onready var game_title_label: Label = $VisualContainer/CardInput/GameTitleLabel
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
 var _is_downloading: bool = false
+var _is_focused: bool = false
+
+# Base font size for the title label (at zoom = 1.0)
+const BASE_TITLE_FONT_SIZE: int = 18
 
 # Ratio-based constants (as fraction of card width)
 const BADGE_SIZE_RATIO: float = 0.16  # Platform badge size (16% of card width)
 const BADGE_MARGIN_RATIO: float = 0.025  # Platform badge margin
 const STATUS_BADGE_SIZE_RATIO: float = 0.08  # Status badge size (8% of card width)
 const STATUS_BADGE_MARGIN_RATIO: float = 0.05  # Status badge margin - sits deeper in card
+const STATUS_BADGE_INSET_MARGIN: float = 0.015  # Additional margin to inset status badge from edges
 const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 
 # Debug
@@ -128,6 +134,9 @@ func _setup_preview_mode():
 	
 	if status_badge:
 		status_badge.visible = false
+	
+	if game_title_label:
+		game_title_label.visible = false
 	
 	if card_input:
 		card_input.disabled = true
@@ -340,6 +349,13 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
+	# Update title label font size based on zoom
+	if game_title_label:
+		var zoom = _card_state.zoom_level
+		# Scale font size with zoom, but keep it readable (min 10, no max)
+		var scaled_font_size = max(10, int(BASE_TITLE_FONT_SIZE * zoom))
+		game_title_label.add_theme_font_size_override("font_size", scaled_font_size)
+	
 	# Sync badge effect state so it has correct container_size for ratio calculations
 	if _badge_effect and _badge_effect.visible:
 		_badge_effect.update_state(_card_state)
@@ -369,10 +385,13 @@ func _update_status_badge_layout():
 	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
 	var corner_margin = effective_corner_radius * corner_midpoint_factor
 	
+	# Additional margin to inset the status badge from the edges
+	var inset_margin = STATUS_BADGE_INSET_MARGIN * card_width
+	
 	# Position in BOTTOM RIGHT corner (mirror of top-left logic)
-	# Start from bottom-right corner and move inward by total_inset + corner_margin
-	var safe_x = card_width - total_inset - corner_margin - badge_size
-	var safe_y = card_height - total_inset - corner_margin - badge_size
+	# Start from bottom-right corner and move inward by total_inset + corner_margin + inset_margin
+	var safe_x = card_width - total_inset - corner_margin - badge_size - inset_margin
+	var safe_y = card_height - total_inset - corner_margin - badge_size - inset_margin
 	
 	# Position the status badge
 	status_badge.offset_left = safe_x
@@ -416,6 +435,7 @@ func _update_display():
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(false)
+	_update_game_title_label()
 
 func _update_display_with_priority(high_priority: bool):
 	if not game:
@@ -425,6 +445,39 @@ func _update_display_with_priority(high_priority: bool):
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(high_priority)
+	_update_game_title_label()
+
+func _update_game_title_label():
+	if not game_title_label:
+		return
+	
+	if not game:
+		game_title_label.visible = false
+		return
+	
+	# Set the label text
+	game_title_label.text = game.title
+	
+	# Update visibility based on focus state and setting
+	_update_game_title_visibility()
+
+func _update_game_title_visibility():
+	if not game_title_label:
+		return
+	
+	if not game:
+		game_title_label.visible = false
+		return
+	
+	# Check the setting
+	var show_on_all = false
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("library_show_title_on_all_cards")
+		if setting:
+			show_on_all = setting.value
+	
+	# Show if: setting is enabled (show on all) OR card is focused
+	game_title_label.visible = show_on_all or _is_focused
 
 func load_cover_with_priority(high_priority: bool = false):
 	_load_cover(high_priority)
@@ -1051,6 +1104,9 @@ func _on_long_press_timeout() -> void:
 		UIManager.show_game_context_menu(game.romm_id, _touch_start_pos, _get_show_delete())
 
 func _on_focus_entered() -> void:
+	_is_focused = true
+	_update_game_title_visibility()
+	
 	# Play focus sound with slight pitch variation
 	if AudioManager:
 		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
@@ -1096,6 +1152,9 @@ func _on_focus_entered() -> void:
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 
 func _on_focus_exited() -> void:
+	_is_focused = false
+	_update_game_title_visibility()
+	
 	z_index = 10
 	# Scale visual container back to normal when unfocused
 	if _focus_tween:
@@ -1239,6 +1298,8 @@ func set_placeholder(is_placeholder: bool):
 		_set_texture(_loading_texture)
 		if status_badge:
 			status_badge.visible = false
+		if game_title_label:
+			game_title_label.visible = false
 	else:
 		_update_display()
 
@@ -1249,10 +1310,14 @@ func reset():
 	_loading_game_id = ""
 	_image_retry_count = 0
 	game = null
+	_is_focused = false
 	_set_texture(_loading_texture)
 	# Reset visual container scale when card is recycled
 	if visual_container:
 		visual_container.scale = Vector2.ONE
+	# Hide title label when card is reset
+	if game_title_label:
+		game_title_label.visible = false
 
 func refresh_settings():
 	#print("[GameCard] === refresh_settings called on ", name, " ===")
