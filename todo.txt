@@ -8,10 +8,12 @@ ui scale
 glass inset not working in card designer view
 improve M&KB experience, add search icon. 
 android download manager and file streaming
+dynamic chunk sizing
+chunk reassembly progress notif
 saves
 ## UI
-	game title under card option
-	game title "bubble option"
+	game title under/beside card option
+	game title "speech bubble option"
 	launch animation?
 	focused card in front
 	color presets (platform/game/custom)

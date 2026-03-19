@@ -40,13 +40,13 @@ const IMAGE_THREAD_COUNT: int = 6
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
-const MAX_DOWNLOAD_QUEUE_SIZE = 20
+const MAX_DOWNLOAD_QUEUE_SIZE = 100
 
 ## Returns the number of download threads for the current platform
 static func get_download_thread_count() -> int:
-	if Engine.has_singleton("PlatformManager") and PlatformManager.is_android():
+	if PlatformManager.is_android():
 		return 2  # Android: conservative for battery/heat
-	return 6  # Desktop: more threads for speed
+	return 12  # Desktop: more threads for speed
 
 static var _instance: MemoryManager = null
 

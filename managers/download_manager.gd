@@ -51,13 +51,14 @@ const STALL_TIMEOUT_MS: int = 120 * 1000  # 120 seconds with no progress = stall
 const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at start
 
 # Chunked download constants
-const CHUNKED_DOWNLOAD_THRESHOLD: int = 500 * 1024 * 1024  # 500MB
-var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # Always match thread count
+const CHUNKED_DOWNLOAD_THRESHOLD: int = 20 * 1024 * 1024  # 20MB minimum for chunking
+const MIN_CHUNK_SIZE: int = 10 * 1024 * 1024  # 10MB minimum chunk size
+const OVER_SUBSCRIPTION_MULTIPLIER_SMALL: float = 1.0  # 1x for files < 100MB
+const OVER_SUBSCRIPTION_MULTIPLIER_MEDIUM: float = 2.0  # 2x for files 100MB-1GB
+const OVER_SUBSCRIPTION_MULTIPLIER_LARGE: float = 3.0  # 3x for files 1GB-5GB
+const OVER_SUBSCRIPTION_MULTIPLIER_XL: float = 4.0  # 4x for files > 5GB
 
-# Dynamic chunk sizes based on file size (50% smaller for better parallelization)
-const CHUNK_SIZE_SMALL: int = 384 * 1024 * 1024   # 384MB for files < 2GB
-const CHUNK_SIZE_MEDIUM: int = 512 * 1024 * 1024  # 512MB for files 2-10GB
-const CHUNK_SIZE_LARGE: int = 768 * 1024 * 1024   # 768MB for files > 10GB
+var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # Always match thread count
 
 # Chunk retry settings
 const MAX_CHUNK_RETRIES: int = 3
@@ -67,17 +68,44 @@ const CHUNK_RETRY_DELAY_SEC: float = 1.5  # 1.5 seconds between retries
 const POLLING_INTERVAL_MS: int = 2000
 const POLLING_INTERVAL_US: int = 2000000
 
-## Returns appropriate chunk size based on file size
-## Files < 2GB: 384MB chunks
-## Files 2-10GB: 512MB chunks
-## Files > 10GB: 768MB chunks
-func _get_chunk_size(file_size: int) -> int:
-	if file_size > 10 * 1024 * 1024 * 1024:  # > 10GB
-		return CHUNK_SIZE_LARGE
-	elif file_size > 2 * 1024 * 1024 * 1024:  # > 2GB
-		return CHUNK_SIZE_MEDIUM
-	else:
-		return CHUNK_SIZE_SMALL
+## Calculates optimal chunk size and count using over-subscription strategy
+## Files < 100MB: 1x over-subscription (just fill threads)
+## Files 100MB-1GB: 2x over-subscription (twice as many chunks as threads)
+## Files 1GB-5GB: 3x over-subscription
+## Files > 5GB: 4x over-subscription (capped)
+## Minimum chunk size: 10MB to avoid overhead
+func _calculate_chunk_strategy(file_size: int) -> Dictionary:
+	var thread_count = MemoryManager.get_download_thread_count()
+	
+	# Determine over-subscription multiplier based on file size
+	var multiplier: float
+	if file_size < 100 * 1024 * 1024:  # < 100MB
+		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_SMALL
+	elif file_size < 1024 * 1024 * 1024:  # < 1GB
+		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_MEDIUM
+	elif file_size < 5 * 1024 * 1024 * 1024:  # < 5GB
+		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_LARGE
+	else:  # >= 5GB
+		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_XL
+	
+	# Calculate target number of chunks with over-subscription
+	var target_chunks = max(thread_count, int(multiplier * thread_count))
+	
+	# Calculate chunk size, ensuring minimum chunk size
+	var chunk_size = max(MIN_CHUNK_SIZE, file_size / target_chunks)
+	
+	# Recalculate actual number of chunks based on chunk size
+	var num_chunks = ceili(float(file_size) / float(chunk_size))
+	
+	print("[DownloadManager] Chunk strategy for %d bytes: %d chunks x %d bytes (multiplier=%.1f, threads=%d)" % [
+		file_size, num_chunks, chunk_size, multiplier, thread_count
+	])
+	
+	return {
+		"chunk_size": chunk_size,
+		"num_chunks": num_chunks,
+		"thread_count": thread_count
+	}
 
 # Chunked download tracking
 var _chunked_downloads: Dictionary = {}  # item_id -> ChunkedDownloadInfo
@@ -610,8 +638,12 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 func _start_chunked_download(item: QueueItem, headers: Array):
 	"""Start a chunked download using parallel threads"""
 	var file_size = item.expected_file_size
-	var chunk_size = _get_chunk_size(file_size)
-	var num_chunks = ceili(float(file_size) / float(chunk_size))
+	
+	# Use dynamic chunk strategy based on file size and thread count
+	var strategy = _calculate_chunk_strategy(file_size)
+	var chunk_size = strategy.chunk_size
+	var num_chunks = strategy.num_chunks
+	var thread_count = strategy.thread_count
 	
 	# Create temp directory for chunks
 	var temp_dir = "user://downloads/chunks/" + item.id
@@ -647,7 +679,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	_chunked_downloads[item.id] = chunked_info
 	
 	# Initialize connection pool for persistent TLS connections
-	var thread_count = MemoryManager.get_download_thread_count()
+	# Use thread_count from strategy (already calculated)
 	var connection_pool: Array[HTTPClient] = []
 	connection_pool.resize(thread_count)
 	_connection_pool_mutex.lock()
