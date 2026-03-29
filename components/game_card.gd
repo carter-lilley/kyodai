@@ -52,6 +52,7 @@ var _drop_shadow_effect: DropShadowEffect = null
 var _glow_effect: GlowEffect = null
 var _glass_effect: GlassEffect = null
 var _distort_effect: DistortEffect = null
+var _gradient_overlay_effect: GradientOverlayEffect = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -307,6 +308,23 @@ func _rebuild_effects():
 			_distort_effect.visible = true
 	elif _distort_effect != null:
 		_distort_effect.visible = false
+	
+	# Gradient overlay effect - optional full-screen gradient (rendered BETWEEN distort and glass)
+	var gradient_overlay_config = _get_effect_config("gradient_overlay")
+	if gradient_overlay_config:
+		if _gradient_overlay_effect == null:
+			_gradient_overlay_effect = GradientOverlayEffect.new()
+			_gradient_overlay_effect.name = "GradientOverlayEffect"
+			_gradient_overlay_effect.anchor_right = 1.0
+			_gradient_overlay_effect.anchor_bottom = 1.0
+			visual_container.add_child(_gradient_overlay_effect)
+			_gradient_overlay_effect.initialize(_card_state, gradient_overlay_config.get("settings", {}))
+		else:
+			_gradient_overlay_effect.update_state(_card_state)
+			_gradient_overlay_effect.update_settings(gradient_overlay_config.get("settings", {}))
+			_gradient_overlay_effect.visible = true
+	elif _gradient_overlay_effect != null:
+		_gradient_overlay_effect.visible = false
 	
 	# Glass effect - optional overlay (rendered AFTER distort so it appears on top)
 	var glass_config = _get_effect_config("glass")

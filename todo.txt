@@ -14,7 +14,6 @@ saves
 	game title "speech bubble option"
 	launch animation?
 	color presets (platform/game/custom)
-	font! rodin?
 	'controls/info bar'
 	focus glow
 	layer system inner-shadow/blur/HSV

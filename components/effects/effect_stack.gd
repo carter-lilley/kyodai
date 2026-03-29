@@ -16,6 +16,7 @@ const EFFECT_REGISTRY: Dictionary = {
 	"glow": "res://effects/shared/glow_effect.gd",
 	"glass": "res://effects/shared/glass_effect.gd",
 	"distort": "res://effects/shared/distort_effect.gd",
+	"gradient_overlay": "res://effects/shared/gradient_overlay_effect.gd",
 }
 
 # Layer order (z-index / child order) - lower = behind, higher = in front
@@ -23,10 +24,11 @@ const EFFECT_LAYER_ORDER: Array = [
 	"glow",       # -2: Behind everything
 	"drop_shadow",# -1: Behind card
 	"base",       # 0: Base texture
-	"distort",    # 1: Distortion overlay
-	"glass",      # 2: Glass overlay
-	"border",     # 3: Border overlay
-	"badge",      # 4: Badge overlay
+	"distort",         # 1: Distortion overlay
+	"gradient_overlay", # 2: Gradient overlay
+	"glass",            # 3: Glass overlay
+	"border",           # 4: Border overlay
+	"badge",            # 5: Badge overlay
 ]
 
 func _init(container_state: EffectContainerState = null):

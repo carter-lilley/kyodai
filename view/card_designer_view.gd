@@ -18,7 +18,8 @@ const EFFECT_ID_MAP: Dictionary = {
 	2: "drop_shadow",
 	3: "glow",
 	4: "glass",
-	5: "distort"
+	5: "distort",
+	6: "gradient_overlay"
 }
 
 func _ready():
@@ -366,6 +367,22 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
+	elif effect_data.get("effect_id") == "gradient_overlay":
+		var gradient_overlay_effect = GradientOverlayEffect.new()
+		var schema = gradient_overlay_effect.get_settings_schema()
+		gradient_overlay_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -429,6 +446,17 @@ func _on_add_effect(id: int):
 				"settings": {
 					"distortion": 0.5,
 					"opacity": 1.0
+				}
+			}
+		6:
+			var default_gradient = Gradient.new()
+			default_gradient.offsets = [0.0, 1.0]
+			default_gradient.colors = [Color.WHITE, Color.BLACK]
+			new_effect = {
+				"effect_id": "gradient_overlay",
+				"settings": {
+					"gradient": default_gradient,
+					"gradient_direction": 0
 				}
 			}
 	
