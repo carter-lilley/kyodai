@@ -433,11 +433,7 @@ func _on_screens_swapped(is_swapped: bool) -> void:
 	# Note: No reparenting needed - AynThorManager handles rendering swap
 
 func _on_global_focus_changed(control: Control) -> void:
-	"""DEBUG: Log whenever focus changes to see what's grabbing focus."""
-	if control:
-		print("[DEBUG Focus] Focus changed to: ", control.name, " (", control.get_class(), ") path: ", control.get_path())
-	else:
-		print("[DEBUG Focus] Focus cleared (null)")
+	pass
 
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""

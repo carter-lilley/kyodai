@@ -20,6 +20,15 @@ var _request_pool: Array[HTTPRequest] = []
 var _max_pool_size: int = 6
 var _active_request_count: int = 0
 
+# Response cache for client-side hash-based caching
+# endpoint -> {hash, data}
+var _response_cache: Dictionary = {}
+
+# Cache statistics for sync reporting
+var _cache_hits: int = 0
+var _cache_misses: int = 0
+var _games_from_cache: int = 0  # Number of games served from cache
+
 func _use_pooling() -> bool:
 	"""Check if we should use HTTP request pooling. Disabled on Android to save memory."""
 	return not PlatformManager.is_android()
@@ -111,6 +120,35 @@ func _get_auth_header() -> String:
 	var encoded = Marshalls.utf8_to_base64(credentials)
 	return "Basic " + encoded
 
+# ==================== CACHE HELPERS ====================
+
+func _get_cache_key(endpoint: String) -> String:
+	"""Generate a cache key for an endpoint."""
+	return endpoint
+
+func _get_cached_response(endpoint: String) -> Dictionary:
+	"""Get cached response data for an endpoint if it exists."""
+	var key = _get_cache_key(endpoint)
+	if _response_cache.has(key):
+		return _response_cache[key]
+	return {}
+
+func _store_cached_response(endpoint: String, hash: String, data: Variant):
+	"""Store response data in cache with its hash."""
+	var key = _get_cache_key(endpoint)
+	_response_cache[key] = {
+		"hash": hash,
+		"data": data
+	}
+
+func _extract_header(headers: PackedStringArray, header_name: String) -> String:
+	"""Extract a specific header value from response headers."""
+	var prefix = header_name.to_lower() + ": "
+	for header in headers:
+		if header.to_lower().begins_with(prefix):
+			return header.substr(prefix.length()).strip_edges()
+	return ""
+
 func is_configured() -> bool:
 	return _is_configured
 
@@ -134,7 +172,7 @@ func _check_connection():
 
 # ==================== CORE HTTP METHOD ====================
 
-func make_request(endpoint: String, callback: Callable, authenticated: bool = true):
+func make_request(endpoint: String, callback: Callable, authenticated: bool = true, use_cache: bool = false):
 	var http = _create_http_request()
 	_active_request_count += 1
 	
@@ -144,6 +182,9 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 	if authenticated:
 		var auth_header = _get_auth_header()
 		headers.append("Authorization: " + auth_header)
+	
+	# Get cached data for hash comparison
+	var cached = _get_cached_response(endpoint) if use_cache else {}
 	
 	var error = http.request(url, headers, HTTPClient.METHOD_GET)
 	
@@ -179,12 +220,55 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 			callback.call({}, "Failed to parse JSON: " + json.get_error_message())
 			return
 		
+		# Client-side hash-based caching: compute hash of sorted rom IDs
+		var body_hash = _compute_content_hash(json.data)
+		
+		if use_cache and not cached.is_empty():
+			var cached_hash = cached.get("hash", "")
+			if body_hash == cached_hash:
+				_cache_hits += 1
+				# Count games in cached response
+				var cached_data = cached.get("data", {})
+				var game_count = _count_games_in_data(cached_data)
+				print("[NetworkManager] CACHE HIT: %s - %d games" % [endpoint, game_count])
+				_games_from_cache += game_count
+				callback.call(cached_data, "")
+				return
+		
+		if use_cache:
+			_cache_misses += 1
+			_store_cached_response(endpoint, body_hash, json.data)
+		
 		callback.call(json.data, "")
 	)
 
+func _compute_content_hash(data: Variant) -> String:
+	"""Compute a stable hash of the response content (sorted rom IDs)."""
+	var rom_ids: Array[int] = []
+	
+	if data is Dictionary and data.has("items") and data["items"] is Array:
+		for item in data["items"]:
+			if item is Dictionary and item.has("id"):
+				rom_ids.append(int(item["id"]))
+	elif data is Array:
+		for item in data:
+			if item is Dictionary and item.has("id"):
+				rom_ids.append(int(item["id"]))
+	
+	rom_ids.sort()
+	return str(rom_ids).md5_text()
+
+func _count_games_in_data(data: Variant) -> int:
+	"""Count the number of games in the response data."""
+	if data is Dictionary and data.has("items") and data["items"] is Array:
+		return data["items"].size()
+	elif data is Array:
+		return data.size()
+	return 0
+
 # ==================== ROMM API OPERATIONS ====================
 
-func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0, limit: int = 250):
+func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0, limit: int = 250, use_cache: bool = true):
 	if not _is_online:
 		callback.call({}, "Not connected")
 		return
@@ -197,7 +281,7 @@ func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0
 		var success = error == ""
 		api_request_completed.emit("games", success, data if success else error)
 		callback.call(data, error)
-	)
+	, true, use_cache)  # authenticated=true, use_cache=parameter
 
 func fetch_platforms(callback: Callable):
 	if not _is_configured:
@@ -208,7 +292,19 @@ func fetch_platforms(callback: Callable):
 		var success = error == ""
 		api_request_completed.emit("platforms", success, data if success else error)
 		callback.call(data, error)
-	)
+	, true, true)  # authenticated=true, use_cache=true
+
+func get_and_reset_cache_stats() -> Dictionary:
+	"""Get cache statistics and reset counters."""
+	var stats = {
+		"hits": _cache_hits,
+		"misses": _cache_misses,
+		"games_from_cache": _games_from_cache
+	}
+	_cache_hits = 0
+	_cache_misses = 0
+	_games_from_cache = 0
+	return stats
 
 func fetch_game_details(game_id: int, callback: Callable):
 	if not _is_online:

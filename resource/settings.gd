@@ -30,6 +30,7 @@ const Type = SettingsVar.SettingType
 @export var romm_url := SettingsVar.new(Type.STRING, "", State.ENABLED, "RomM URL")
 @export var romm_username := SettingsVar.new(Type.STRING, "", State.ENABLED, "Username")
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
+@export var fold_duplicate_covers := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fold duplicate covers into siblings", "During sync, games with identical cover art will be grouped together like RomM siblings")
 @export_subgroup("Storage")
 @export var games_root_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Games Folder")
 @export var emulators_folder := SettingsVar.new(Type.PATH, "user://emulators/", State.ENABLED, "Emulators Folder", "Directory where emulators are installed")

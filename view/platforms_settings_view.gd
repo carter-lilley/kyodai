@@ -53,6 +53,28 @@ func _build_view():
 	spacer.custom_minimum_size = Vector2(0, 10)
 	_platforms_container.add_child(spacer)
 	
+	# Add fold duplicate covers toggle
+	var fold_covers_hbox = HBoxContainer.new()
+	fold_covers_hbox.name = "FoldCoversContainer"
+	
+	var fold_covers_checkbox = CheckBox.new()
+	fold_covers_checkbox.name = "FoldCoversCheckbox"
+	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
+	fold_covers_checkbox.button_pressed = fold_covers_setting.value if fold_covers_setting else false
+	fold_covers_checkbox.toggled.connect(_on_fold_covers_toggled)
+	
+	var fold_covers_label = Label.new()
+	fold_covers_label.text = "Fold duplicate covers into siblings"
+	fold_covers_label.tooltip_text = "During sync, games with identical cover art will be grouped together like RomM siblings"
+	
+	fold_covers_hbox.add_child(fold_covers_checkbox)
+	fold_covers_hbox.add_child(fold_covers_label)
+	_platforms_container.add_child(fold_covers_hbox)
+	
+	var spacer2 = Control.new()
+	spacer2.custom_minimum_size = Vector2(0, 10)
+	_platforms_container.add_child(spacer2)
+	
 	# Add select all/deselect all button
 	var select_all_button = Button.new()
 	select_all_button.text = "Select All"
@@ -60,9 +82,9 @@ func _build_view():
 	select_all_button.pressed.connect(_on_select_all_pressed)
 	_platforms_container.add_child(select_all_button)
 	
-	var spacer2 = Control.new()
-	spacer2.custom_minimum_size = Vector2(0, 10)
-	_platforms_container.add_child(spacer2)
+	var spacer3 = Control.new()
+	spacer3.custom_minimum_size = Vector2(0, 10)
+	_platforms_container.add_child(spacer3)
 	
 	# Add sync button
 	var sync_button = Button.new()
@@ -71,14 +93,14 @@ func _build_view():
 	sync_button.pressed.connect(_on_sync_pressed)
 	_platforms_container.add_child(sync_button)
 	
-	var spacer3 = Control.new()
-	spacer3.custom_minimum_size = Vector2(0, 20)
-	_platforms_container.add_child(spacer3)
+	var spacer4 = Control.new()
+	spacer4.custom_minimum_size = Vector2(0, 20)
+	_platforms_container.add_child(spacer4)
 
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "SelectAllButton"]:
+		if child.name in ["InfoLabel", "SyncButton", "SelectAllButton", "FoldCoversContainer"]:
 			continue
 		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -429,7 +451,7 @@ func _on_sync_pressed():
 			sync_button.text = "Sync Enabled Platforms"
 		
 		if success:
-			NotificationManager.show_notification("Sync complete! Synced %d games" % synced, Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Sync complete! %s" % message, Notification.Type.SUCCESS)
 		else:
 			NotificationManager.show_notification("Sync failed: %s" % message, Notification.Type.ERROR)
 	)
@@ -500,6 +522,11 @@ func on_view_show():
 func on_view_hide():
 	_save_settings()
 	super.on_view_hide()
+
+func _on_fold_covers_toggled(enabled: bool) -> void:
+	var setting = SettingsManager.get_setting("fold_duplicate_covers")
+	if setting:
+		SettingsManager.set_setting(enabled, setting)
 
 func _on_focus_changed(control: Control) -> void:
 	"""Ensure focused controls are visible in the scroll container."""

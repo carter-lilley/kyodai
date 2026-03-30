@@ -246,8 +246,8 @@ func _precalculate_totals(platforms: Array, callback: Callable):
 		return
 	
 	for platform in platforms:
-		# Fetch just the total count (offset=0, limit=1)
-		_fetch_batch(str(platform.id), 0, 1, func(data, error):
+		# Fetch just the total count (offset=0, limit=1) - don't cache pre-calc calls
+		_fetch_batch(str(platform.id), 0, 1, false, func(data, error):
 			if error == "" and data is Dictionary:
 				_precalc_total += int(data.get("total", 0))
 			
@@ -297,12 +297,24 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 		
 		# Clean up download tracking to free memory
 		_active_downloads.clear()
+		
+		# Get cache statistics
+		var cache_stats = NetworkManager.get_and_reset_cache_stats()
+		var games_from_cache = cache_stats.get("games_from_cache", 0)
+		
+		print("[DataManager] Sync complete: %d games synced, %d from cache" % [total_synced, games_from_cache])
+		
 		var completion_msg = "Synced " + str(total_synced) + " games"
-		if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+		if games_from_cache > 0:
+			completion_msg += " (" + str(games_from_cache) + " checked from cache"
+			if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+				completion_msg += ", " + str(_sync_skipped_no_cover) + " skipped"
+			completion_msg += ")"
+		elif _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
 			completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
 		sync_completed.emit(true, completion_msg)
 		if callback.is_valid():
-			callback.call(true, "", total_synced, 0)
+			callback.call(true, completion_msg, total_synced, 0)
 		return
 	
 	var platform = platforms[index]
@@ -335,8 +347,8 @@ func sync_platform_games(platform_id: int, platform_slug: String, platform_name:
 	
 	var batch_size = 250  # Increased from 100 for faster syncing
 	
-	# Fetch first batch
-	_fetch_batch(str(platform_id), 0, batch_size, func(data, error):
+	# Fetch first batch (use cache)
+	_fetch_batch(str(platform_id), 0, batch_size, true, func(data, error):
 		if error != "" or not data is Dictionary:
 			if callback.is_valid():
 				callback.call(false, error if error else "Invalid data", 0, 0)
@@ -362,7 +374,7 @@ func sync_platform_games(platform_id: int, platform_slug: String, platform_name:
 	)
 
 func _fetch_more_batches(platform_id: int, platform_slug: String, batch_size: int, total: int, synced: int, offset: int, callback: Callable):
-	_fetch_batch(str(platform_id), offset, batch_size, func(data, error):
+	_fetch_batch(str(platform_id), offset, batch_size, true, func(data, error):
 		if error != "" or not data is Dictionary:
 			if callback.is_valid():
 				callback.call(true, "", synced, total)
@@ -384,8 +396,8 @@ func _fetch_more_batches(platform_id: int, platform_slug: String, batch_size: in
 		)
 	)
 
-func _fetch_batch(platform_id: String, offset: int, limit: int, callback: Callable):
-	NetworkManager.fetch_games(callback, platform_id, offset, limit)
+func _fetch_batch(platform_id: String, offset: int, limit: int, use_cache: bool, callback: Callable):
+	NetworkManager.fetch_games(callback, platform_id, offset, limit, use_cache)
 
 func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 	"""Process a batch of games using the MemoryManager batch scheduler."""
@@ -413,6 +425,15 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 	if games.is_empty():
 		on_complete.call(0)
 		return
+	
+	# Phase 1.5: Group games by cover URL (if setting enabled)
+	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
+	if fold_covers_setting and fold_covers_setting.value:
+		_group_games_by_cover_url(games)
+		# Update sibling_check_data with new sibling info after cover grouping
+		for i in range(sibling_check_data.size()):
+			if i < games.size():
+				sibling_check_data[i]["siblings"] = games[i].siblings
 	
 	# Phase 2: Batch sibling checks (async, spread across frames)
 	var sibling_batch_id = MemoryManager.start_batch(
@@ -598,6 +619,71 @@ func _ensure_consistent_masters_in_batch(games: Array[GameResource]):
 		var lowest_id = sibling_group_lowest.get(group_key, game.romm_id)
 		if game.romm_id != lowest_id:
 			game.is_master_entry = false
+
+func _group_games_by_cover_url(games: Array[GameResource]):
+	"""Group games with identical cover URLs as siblings.
+	
+	This function identifies games that share the same cover URL and adds them
+	to each other's sibling lists. RomM siblings take precedence, so we only
+	add cover-based siblings that aren't already romm siblings."""
+	
+	if games.size() < 2:
+		return
+	
+	# Build a map of cover URL -> Array of game indices
+	var cover_groups: Dictionary = {}
+	
+	for i in range(games.size()):
+		var game = games[i]
+		if game.cover_url == "":
+			continue
+		
+		if not cover_groups.has(game.cover_url):
+			cover_groups[game.cover_url] = []
+		cover_groups[game.cover_url].append(i)
+	
+	# For each cover group with 2+ games, cross-reference them as siblings
+	for cover_url in cover_groups.keys():
+		var indices = cover_groups[cover_url]
+		if indices.size() < 2:
+			continue
+		
+		# Get all romm_ids in this cover group
+		var cover_group_ids: Array[int] = []
+		for idx in indices:
+			cover_group_ids.append(games[idx].romm_id)
+		
+		# For each game in the group, add other games as siblings (if not already)
+		for i in range(indices.size()):
+			var current_game = games[indices[i]]
+			var current_id = current_game.romm_id
+			
+			# Build set of existing sibling IDs (romm siblings + any already added)
+			var existing_sibling_ids: Dictionary = {}
+			for sibling in current_game.siblings:
+				existing_sibling_ids[sibling.get("id", 0)] = true
+			
+			# Add each other game in the cover group as a sibling if not already
+			for j in range(indices.size()):
+				if i == j:
+					continue
+				
+				var other_game = games[indices[j]]
+				var other_id = other_game.romm_id
+				
+				# Skip if already a sibling (romm sibling takes precedence)
+				if existing_sibling_ids.has(other_id):
+					continue
+				
+				# Add as a cover-based sibling
+				var sibling_entry = {
+					"id": other_id,
+					"name": other_game.title,
+					"file_name": other_game.file_name,
+					"file_size": other_game.file_size
+				}
+				current_game.siblings.append(sibling_entry)
+				existing_sibling_ids[other_id] = true
 
 # ==================== BATCH NOTIFICATION SYSTEM ====================
 
@@ -1329,9 +1415,9 @@ func _row_to_game(row: Dictionary) -> GameResource:
 					siblings.append(item)
 			game.siblings = siblings
 		else:
-			game.siblings = []
+			game.siblings = [] as Array[Dictionary]
 	else:
-		game.siblings = []
+		game.siblings = [] as Array[Dictionary]
 	
 	if row.has("selected_sibling_id"):
 		game.selected_sibling_id = row["selected_sibling_id"]
@@ -1360,9 +1446,9 @@ func _row_to_game(row: Dictionary) -> GameResource:
 					downloaded_ids.append(int(item))
 			game.downloaded_sibling_ids = downloaded_ids
 		else:
-			game.downloaded_sibling_ids = []
+			game.downloaded_sibling_ids = [] as Array[int]
 	else:
-		game.downloaded_sibling_ids = []
+		game.downloaded_sibling_ids = [] as Array[int]
 	
 	# Restore last_played timestamp
 	game.last_played = row.get("last_played", "")

@@ -1,5 +1,5 @@
 #TODO.TXT
-check melonds on desktop after bios restructure
+
 batch core download ONE notification
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch to launch on bottom screen
@@ -10,6 +10,7 @@ android download manager and file streaming
 chunk reassembly progress notif
 saves
 ## UI
+	always zoom to margin
 	game title under/beside card option
 	game title "speech bubble option"
 	launch animation?
@@ -27,8 +28,7 @@ saves
 	hero IGDB opt
 	hero fx (screenshots/cropping/shadows/etc)
 ## performance:
-	implement: Game lists re-fetched every sync even if unchanged, ETag/Last-Modified handling
-	Fix: Add cache headers for static data
+	implement: server side romm ETag/Last-Modified handling
 	try scaling cropping algo(?)
 	image priority management.
 	performance.add_custom_monitor for everything
@@ -42,6 +42,7 @@ saves
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
+	check melonds on desktop after bios restructure
   	add: ps3 on android...pkgs ps3 on desktop...shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates

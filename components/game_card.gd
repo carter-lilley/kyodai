@@ -187,7 +187,7 @@ func _update_card_state_from_settings():
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting:
 			if config_setting.value is Dictionary:
-				print("[GameCard] Loading from SettingsManager. focus_effects: ", config_setting.value.get("focus_effects", []))
+				#print("[GameCard] Loading from SettingsManager. focus_effects: ", config_setting.value.get("focus_effects", []))
 				_card_state.orientation = config_setting.value.get("card_orientation", 0)
 				_card_state.effect_settings = config_setting.value.get("effects", [])
 				_card_state.focus_effect_settings = config_setting.value.get("focus_effects", [])
@@ -377,12 +377,8 @@ func _rebuild_effects():
 
 func _rebuild_focus_effects():
 	"""Rebuild focus effects - shown only when card is focused."""
-	# Debug: Check what focus effects are configured
-	print("[GameCard] Rebuilding focus effects. Configured: ", _card_state.focus_effect_settings)
-	
 	# Focus Border effect
 	var focus_border_config = _get_focus_effect_config("border")
-	print("[GameCard] Border config: ", focus_border_config, " exists: ", not focus_border_config.is_empty())
 	if focus_border_config:
 		if _focus_border_effect == null:
 			_focus_border_effect = BorderEffect.new()
@@ -512,7 +508,6 @@ func _rebuild_focus_effects():
 	
 	# Focus Gradient Overlay effect
 	var focus_gradient_config = _get_focus_effect_config("gradient_overlay")
-	print("[GameCard] Gradient overlay config: ", focus_gradient_config, " exists: ", not focus_gradient_config.is_empty())
 	if focus_gradient_config:
 		if _focus_gradient_overlay_effect == null:
 			_focus_gradient_overlay_effect = GradientOverlayEffect.new()

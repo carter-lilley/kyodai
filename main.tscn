@@ -8,7 +8,7 @@
 [ext_resource type="Script" uid="uid://b4lrijvkxphmr" path="res://components/fps_counter.gd" id="7_fpscounter"]
 [ext_resource type="Script" uid="uid://dpvnpkj275ewq" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
 [ext_resource type="Script" uid="uid://dnfalaub1s338" path="res://addons/AynThor/screen_resource.gd" id="9_screenres"]
-[ext_resource type="Script" uid="uid://controlsbar001" path="res://components/controls_bar.gd" id="10_controlsbar"]
+[ext_resource type="Script" uid="uid://bwlvlm2jrv64m" path="res://components/controls_bar.gd" id="10_controlsbar"]
 
 [sub_resource type="Resource" id="Screen_1"]
 script = ExtResource("9_screenres")
