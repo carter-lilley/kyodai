@@ -22,6 +22,7 @@ uniform int badge_type = 0; // 0 = corner badge, 1 = top bar
 uniform bool show_safe_zone = false;
 uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (corner badge mode)
 uniform vec4 safe_zone_top_bar = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (top bar mode)
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // SDF that accepts radius in pixels (consistent with base_card.gdshader)
 float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
@@ -169,6 +170,9 @@ void fragment() {
 			}
 		}
 	}
+	
+	// Apply effect alpha
+	final_color.a *= effect_alpha;
 	
 	if (final_color.a <= 0.0) {
 		discard;

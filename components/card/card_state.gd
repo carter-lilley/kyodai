@@ -59,6 +59,7 @@ var glass_inset_ratio: float = 0.0:
 var card_size: Vector2 = VERTICAL_SIZE
 var game_texture: Texture2D = null
 var effect_settings: Array = []
+var focus_effect_settings: Array = []
 
 # Shared shape parameters for SDF calculations (calculated once, used by all effects)
 var corner_radius_pixels: float = 0.0
@@ -115,6 +116,7 @@ func duplicate() -> CardState:
 	new_state.glass_inset_ratio = glass_inset_ratio
 	new_state.game_texture = game_texture
 	new_state.effect_settings = effect_settings.duplicate(true)
+	new_state.focus_effect_settings = focus_effect_settings.duplicate(true)
 	# _update_dimensions will be called in _init, but card_size will be recalculated
 	new_state.card_size = card_size
 	return new_state

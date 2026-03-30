@@ -24,6 +24,7 @@ uniform float rim_sharpness : hint_range(2.0, 10.0) = 5.0;
 
 // Additional inset to push underlying image inward
 uniform float additional_inset_ratio : hint_range(0.0, 0.5) = 0.0;
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
@@ -180,7 +181,7 @@ void fragment() {
 	// - image_aa controls where the base image shows through (0 in corners)
 	// - lights always show through, even in corners
 	float content_alpha = max(image_aa, lights_intensity);
-	float final_alpha = edge_alpha * content_alpha;
+	float final_alpha = edge_alpha * content_alpha * effect_alpha;
 	
 	COLOR = vec4(final_rgb, final_alpha);
 }

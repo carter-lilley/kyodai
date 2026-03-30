@@ -21,6 +21,7 @@ uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
 // Shared shape parameters from CardState (calculated once, used by all effects)
 uniform float corner_radius_pixels = 0.0;
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // SDF that accepts radius in pixels (consistent with base_card.gdshader and badge.gdshader)
 float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
@@ -155,6 +156,9 @@ void fragment() {
 	// Fade out as we approach the outer boundary for smooth edges
 	float outer_edge_alpha = 1.0 - smoothstep(1.0 - aa_width, 1.0, dist);
 	final_color.a *= outer_edge_alpha;
+	
+	// Apply effect alpha
+	final_color.a *= effect_alpha;
 	
 	if (final_color.a <= 0.0) {
 		discard;

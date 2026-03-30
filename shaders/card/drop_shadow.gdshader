@@ -10,6 +10,7 @@ uniform vec2 shadow_offset = vec2(0.0, 10.0); // pixels
 uniform float shadow_softness = 8.0; // pixels
 uniform float shadow_spread : hint_range(0.0, 1.0) = 0.0;
 uniform float shadow_expand : hint_range(0.0, 0.5) = 0.02; // ratio of card width
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // Anti-aliasing width in pixels (1.0 is usually enough)
 const float aa_width = 1.5;
@@ -57,5 +58,5 @@ void fragment() {
 	// Shadow only appears outside the card
 	shadow_alpha *= (1.0 - card_alpha);
 	
-	COLOR = vec4(shadow_color.rgb, shadow_color.a * shadow_alpha);
+	COLOR = vec4(shadow_color.rgb, shadow_color.a * shadow_alpha * effect_alpha);
 }

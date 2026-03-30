@@ -10,6 +10,7 @@ uniform float blur_amount = 12.0;
 uniform float threshold = 0.1;
 uniform float glow_spread : hint_range(0.0, 0.5) = 0.05; // Expands glow outward like drop shadow
 uniform sampler2D game_texture : source_color;
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 float rounded_rect_sdf(vec2 pixel_pos, vec2 size, float radius) {
 	vec2 d = abs(pixel_pos) - (size * 0.5 - vec2(radius));
@@ -96,7 +97,7 @@ void fragment() {
 	
 	// Calculate brightness of glow for alpha
 	float glow_brightness = length(blurred);
-	glow_alpha *= glow_brightness * glow_intensity;
+	glow_alpha *= glow_brightness * glow_intensity * effect_alpha;
 	
 	COLOR = vec4(glow_color, glow_alpha);
 }

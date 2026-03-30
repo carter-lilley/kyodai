@@ -8,6 +8,7 @@ uniform sampler2D game_texture : filter_linear, repeat_disable;
 // Distortion parameters
 uniform float distortion : hint_range(0.0, 1.0) = 0.5;
 uniform float opacity : hint_range(0.0, 1.0) = 1.0;
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
@@ -100,8 +101,8 @@ void fragment() {
 	// Sample the distorted texture
 	vec4 tex_color = texture(game_texture, warped_uv);
 	
-	// Apply opacity
-	tex_color.a *= opacity * edge_alpha;
+	// Apply opacity and effect alpha
+	tex_color.a *= opacity * edge_alpha * effect_alpha;
 	
 	COLOR = tex_color;
 }

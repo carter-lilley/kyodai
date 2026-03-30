@@ -11,8 +11,23 @@ var _orientation_btn: OptionButton
 var _corner_slider: HSlider
 var _left_scroll: ScrollContainer
 
+# Focus effects UI elements
+var _focus_effects_list: VBoxContainer
+var _add_focus_effect_button: MenuButton
+
 # Maps dropdown IDs to effect IDs for filtering active effects
 const EFFECT_ID_MAP: Dictionary = {
+	0: "border",
+	1: "badge",
+	2: "drop_shadow",
+	3: "glow",
+	4: "glass",
+	5: "distort",
+	6: "gradient_overlay"
+}
+
+# Focus effects - excludes base (card needs texture always)
+const FOCUS_EFFECT_ID_MAP: Dictionary = {
 	0: "border",
 	1: "badge",
 	2: "drop_shadow",
@@ -134,6 +149,31 @@ func _setup_ui():
 	
 	left_vbox.add_child(HSeparator.new())
 	
+	var focus_effects_label = Label.new()
+	focus_effects_label.text = "Focus Effects"
+	focus_effects_label.add_theme_font_size_override("font_size", 16)
+	focus_effects_label.add_theme_color_override("font_color", Color(1, 0.8, 0.4))
+	left_vbox.add_child(focus_effects_label)
+	
+	var focus_effects_subtitle = Label.new()
+	focus_effects_subtitle.text = "Shown when card is focused"
+	focus_effects_subtitle.add_theme_font_size_override("font_size", 10)
+	focus_effects_subtitle.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	left_vbox.add_child(focus_effects_subtitle)
+	
+	_focus_effects_list = VBoxContainer.new()
+	left_vbox.add_child(_focus_effects_list)
+	
+	_add_focus_effect_button = MenuButton.new()
+	_add_focus_effect_button.text = "Add Focus Effect"
+	left_vbox.add_child(_add_focus_effect_button)
+	
+	var focus_popup = _add_focus_effect_button.get_popup()
+	focus_popup.id_pressed.connect(_on_add_focus_effect)
+	# Dropdown will be populated in _rebuild_add_focus_effect_dropdown based on active focus effects
+	
+	left_vbox.add_child(HSeparator.new())
+	
 	var right_panel = Panel.new()
 	hsplit.add_child(right_panel)
 	
@@ -179,10 +219,12 @@ func _load_current_config():
 	# Corner radius is now 0.0-1.0 ratio directly
 	_card_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	_card_state.effect_settings = _current_config.get("effects", [])
+	_card_state.focus_effect_settings = _current_config.get("focus_effects", [])
 
 func _get_default_config() -> Dictionary:
 	return {
 		"effects": [],
+		"focus_effects": [],
 		"card_orientation": 0,
 		"corner_radius": 0.06
 	}
@@ -196,12 +238,13 @@ func _setup_preview_card():
 	# Corner radius is now 0.0-1.0 ratio directly
 	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
+	state.focus_effect_settings = _current_config.get("focus_effects", []).duplicate(true)
 	state.zoom_level = 1.5
 	
 	_preview_card.set_card_state(state)
 
 func _rebuild_effects_ui():
-	# Save collapsed states before rebuilding
+	# Save collapsed states before rebuilding - regular effects
 	var collapsed_states: Dictionary = {}
 	for child in _effects_list.get_children():
 		if child is CollapsableVBoxContainer:
@@ -213,15 +256,37 @@ func _rebuild_effects_ui():
 	var effects = _current_config.get("effects", [])
 	for i in range(effects.size()):
 		var effect_data = effects[i]
-		_create_effect_ui(effect_data, i)
+		_create_effect_ui(effect_data, i, false)
 	
-	# Restore collapsed states after rebuilding
+	# Restore collapsed states after rebuilding - regular effects
 	for child in _effects_list.get_children():
 		if child is CollapsableVBoxContainer and collapsed_states.has(child.title):
 			child.collapsed = collapsed_states[child.title]
 	
 	# Update the Add Effect dropdown to only show inactive effects
 	_rebuild_add_effect_dropdown()
+	
+	# Save collapsed states before rebuilding - focus effects
+	var focus_collapsed_states: Dictionary = {}
+	for child in _focus_effects_list.get_children():
+		if child is CollapsableVBoxContainer:
+			focus_collapsed_states[child.title] = child.collapsed
+	
+	for child in _focus_effects_list.get_children():
+		child.queue_free()
+	
+	var focus_effects = _current_config.get("focus_effects", [])
+	for i in range(focus_effects.size()):
+		var effect_data = focus_effects[i]
+		_create_effect_ui(effect_data, i, true)
+	
+	# Restore collapsed states after rebuilding - focus effects
+	for child in _focus_effects_list.get_children():
+		if child is CollapsableVBoxContainer and focus_collapsed_states.has(child.title):
+			child.collapsed = focus_collapsed_states[child.title]
+	
+	# Update the Add Focus Effect dropdown
+	_rebuild_add_focus_effect_dropdown()
 
 func _rebuild_add_effect_dropdown() -> void:
 	"""Rebuild the Add Effect dropdown to only show effects that aren't already active."""
@@ -255,15 +320,22 @@ func _rebuild_add_effect_dropdown() -> void:
 	else:
 		_add_effect_button.text = "Add Effect"
 
-func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
+func _create_effect_ui(effect_data: Dictionary, index: int, is_focus_effect: bool = false) -> void:
 	var container = CollapsableVBoxContainer.new()
 	container.title = effect_data.get("effect_id", "Unknown").capitalize()
 	container.collapsed = false  # Start expanded
-	_effects_list.add_child(container)
+	
+	if is_focus_effect:
+		_focus_effects_list.add_child(container)
+	else:
+		_effects_list.add_child(container)
 	
 	var remove_btn = Button.new()
 	remove_btn.text = "X"
-	remove_btn.pressed.connect(func(): _on_remove_effect(index))
+	if is_focus_effect:
+		remove_btn.pressed.connect(func(): _on_remove_focus_effect(index))
+	else:
+		remove_btn.pressed.connect(func(): _on_remove_effect(index))
 	container.add_header_button(remove_btn)
 	
 	var content = container.get_content_container()
@@ -286,7 +358,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 					setting.value = saved_value
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
 	elif effect_data.get("effect_id") == "badge":
 		var badge_effect = BadgeEffect.new()
@@ -302,7 +377,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				setting.value = current_settings[setting.property_name]
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
 	elif effect_data.get("effect_id") == "drop_shadow":
 		var drop_shadow_effect = DropShadowEffect.new()
@@ -318,7 +396,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				setting.value = current_settings[setting.property_name]
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
 	elif effect_data.get("effect_id") == "glow":
 		var glow_effect = GlowEffect.new()
@@ -334,7 +415,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				setting.value = current_settings[setting.property_name]
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
 	elif effect_data.get("effect_id") == "distort":
 		var distort_effect = DistortEffect.new()
@@ -350,7 +434,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				setting.value = current_settings[setting.property_name]
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
 	elif effect_data.get("effect_id") == "glass":
 		var glass_effect = GlassEffect.new()
@@ -366,7 +453,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				setting.value = current_settings[setting.property_name]
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 	
 	elif effect_data.get("effect_id") == "gradient_overlay":
 		var gradient_overlay_effect = GradientOverlayEffect.new()
@@ -382,7 +472,10 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				setting.value = current_settings[setting.property_name]
 		
 		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -488,6 +581,142 @@ func _on_effect_setting_changed(effect_index: int, setting_name: String, value: 
 		_update_preview()
 		_save_to_settings()
 
+func _rebuild_add_focus_effect_dropdown() -> void:
+	"""Rebuild the Add Focus Effect dropdown to only show effects that aren't already active."""
+	if not _add_focus_effect_button:
+		return
+	
+	var popup = _add_focus_effect_button.get_popup()
+	popup.clear()
+	
+	# Get list of currently active focus effect IDs
+	var active_effects: Array[String] = []
+	var focus_effects = _current_config.get("focus_effects", [])
+	for effect in focus_effects:
+		var effect_id = effect.get("effect_id", "")
+		if effect_id:
+			active_effects.append(effect_id)
+	
+	# Add only inactive effects to the dropdown
+	var has_available_effects = false
+	for id in FOCUS_EFFECT_ID_MAP.keys():
+		var effect_id = FOCUS_EFFECT_ID_MAP[id]
+		if not effect_id in active_effects:
+			var display_name = effect_id.replace("_", " ").capitalize()
+			popup.add_item(display_name, id)
+			has_available_effects = true
+	
+	# Disable button if all effects are active
+	_add_focus_effect_button.disabled = not has_available_effects
+	if not has_available_effects:
+		_add_focus_effect_button.text = "All Effects Added"
+	else:
+		_add_focus_effect_button.text = "Add Focus Effect"
+
+func _on_add_focus_effect(id: int):
+	var new_effect: Dictionary
+	
+	match id:
+		0:
+			new_effect = {
+				"effect_id": "border",
+				"settings": {
+					"border_size": 0.05,
+					"border_fade_in": 0.0,
+					"border_color": Color.WHITE
+				}
+			}
+		1:
+			new_effect = {
+				"effect_id": "badge",
+				"settings": {
+					"hide_background": false,
+					"badge_size": 1.0,
+					"badge_inner_radius": 0.0,
+					"badge_color": Color.WHITE,
+					"icon_padding": 0.5,
+					"icon_color": Color.WHITE
+				}
+			}
+		2:
+			new_effect = {
+				"effect_id": "drop_shadow",
+				"settings": {
+					"shadow_color": Color(0, 0, 0, 0.5),
+					"shadow_offset_x": 0.0,
+					"shadow_offset_y": 0.05,
+					"shadow_softness": 0.04,
+					"shadow_spread": 0.0,
+					"shadow_expand": 0.02
+				}
+			}
+		3:
+			new_effect = {
+				"effect_id": "glow",
+				"settings": {
+					"glow_radius": 0.1,
+					"glow_intensity": 1.5,
+					"blur_amount": 12.0,
+					"threshold": 0.1,
+					"glow_spread": 0.05
+				}
+			}
+		4:
+			new_effect = {
+				"effect_id": "glass",
+				"settings": {
+					"distortion": 0.5,
+					"glass_color": Color(0.2, 0.4, 1.0, 0.3)
+				}
+			}
+		5:
+			new_effect = {
+				"effect_id": "distort",
+				"settings": {
+					"distortion": 0.5,
+					"opacity": 1.0
+				}
+			}
+		6:
+			var default_gradient = Gradient.new()
+			default_gradient.offsets = [0.0, 1.0]
+			default_gradient.colors = [Color.WHITE, Color.BLACK]
+			new_effect = {
+				"effect_id": "gradient_overlay",
+				"settings": {
+					"gradient": default_gradient,
+					"gradient_direction": 0
+				}
+			}
+	
+	if new_effect:
+		var focus_effects = _current_config.get("focus_effects", [])
+		focus_effects.append(new_effect)
+		_current_config["focus_effects"] = focus_effects
+		_card_state.focus_effect_settings = focus_effects
+		_rebuild_effects_ui()
+		_update_preview()
+		_save_to_settings()
+
+func _on_remove_focus_effect(index: int):
+	var focus_effects = _current_config.get("focus_effects", [])
+	if index >= 0 and index < focus_effects.size():
+		focus_effects.remove_at(index)
+		_current_config["focus_effects"] = focus_effects
+		_card_state.focus_effect_settings = focus_effects
+		_rebuild_effects_ui()
+		_update_preview()
+		_save_to_settings()
+
+func _on_focus_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):
+	var focus_effects = _current_config.get("focus_effects", [])
+	if effect_index >= 0 and effect_index < focus_effects.size():
+		if not focus_effects[effect_index].has("settings"):
+			focus_effects[effect_index]["settings"] = {}
+		focus_effects[effect_index]["settings"][setting_name] = value
+		_update_preview()
+		_save_to_settings()
+
 func _on_orientation_changed(index: int):
 	_current_config["card_orientation"] = index
 	_card_state.orientation = index
@@ -511,6 +740,7 @@ func _update_preview():
 	# Corner radius is now 0.0-1.0 ratio directly
 	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
+	state.focus_effect_settings = _current_config.get("focus_effects", []).duplicate(true)
 	state.zoom_level = 1.5
 	state.game_texture = _preview_card._current_texture
 	

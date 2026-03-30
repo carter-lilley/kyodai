@@ -27,6 +27,9 @@ func _update_shader_params() -> void:
 	var gradient = _settings.get("gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
 	
+	# Pass card dimensions and shape parameters for SDF clipping
+	_set_shader_param("card_size", _container_state.container_size)
+	_set_shader_param("corner_radius_pixels", _container_state.corner_radius_pixels)
 	_set_shader_param("gradient_direction", gradient_direction)
 	
 	if gradient is Gradient:
