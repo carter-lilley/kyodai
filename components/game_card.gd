@@ -117,6 +117,7 @@ func _ready():
 		card_input.gui_input.connect(_on_card_gui_input)
 		card_input.focus_entered.connect(_on_focus_entered)
 		card_input.focus_exited.connect(_on_focus_exited)
+		card_input.mouse_entered.connect(_on_card_mouse_entered)
 	
 	if DownloadManager:
 		DownloadManager.download_progress.connect(_on_download_progress)
@@ -1282,6 +1283,14 @@ func _on_card_gui_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if game and UIManager:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position(), _get_show_delete())
+
+func _on_card_mouse_entered() -> void:
+	# Only grab focus if mouse is recently active and controller doesn't have priority
+	if UIManager and UIManager.should_card_grab_focus_on_hover():
+		if card_input and not card_input.has_focus():
+			# Mark this focus change as mouse-initiated so smooth scroll can skip it
+			card_input.set_meta("mouse_hover_focus", true)
+			card_input.grab_focus()
 
 func _input(event: InputEvent) -> void:
 	# Handle ui_select (gamepad top button/Space) to open context menu

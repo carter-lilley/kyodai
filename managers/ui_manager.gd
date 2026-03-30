@@ -57,6 +57,13 @@ var _focus_indicator: FocusIndicator = null
 var _details_tab_idx: int = -1
 var _game_details_view: View = null
 
+# Input tracking for mouse hover focus
+const MOUSE_IDLE_THRESHOLD_MS: int = 1000  # Mouse must have moved within last 1 second
+const CONTROLLER_PRIORITY_MS: int = 2000   # Controller has priority for 2 seconds after use
+var _last_mouse_move_time: int = 0
+var _last_controller_input_time: int = 0
+var _last_mouse_position: Vector2 = Vector2.ZERO
+
 # Signals
 signal modal_shown(modal_id: String)
 signal modal_dismissed(modal_id: String)
@@ -178,6 +185,49 @@ func initialize(
 	
 	# Set initial focus
 	_set_initial_focus()
+
+## Input tracking for mouse hover focus
+func _input(event: InputEvent) -> void:
+	# Track mouse movement
+	if event is InputEventMouseMotion:
+		var current_pos = event.position
+		# Only update if mouse actually moved (not just received same position)
+		if current_pos != _last_mouse_position:
+			_last_mouse_move_time = Time.get_ticks_msec()
+			_last_mouse_position = current_pos
+	
+	# Track controller input (gamepad/joystick)
+	elif event is InputEventJoypadButton or event is InputEventJoypadMotion:
+		_last_controller_input_time = Time.get_ticks_msec()
+	
+	# Track keyboard navigation (arrow keys, tab, etc. - not typing)
+	elif event is InputEventKey:
+		if event.is_action("ui_left") or event.is_action("ui_right") or \
+		   event.is_action("ui_up") or event.is_action("ui_down") or \
+		   event.is_action("ui_accept") or event.is_action("ui_cancel"):
+			_last_controller_input_time = Time.get_ticks_msec()
+
+## Check if mouse has moved recently (within threshold)
+func is_mouse_recently_active() -> bool:
+	var now = Time.get_ticks_msec()
+	var time_since_move = now - _last_mouse_move_time
+	return time_since_move < MOUSE_IDLE_THRESHOLD_MS
+
+## Check if controller has priority over mouse (used recently)
+func controller_has_priority() -> bool:
+	var now = Time.get_ticks_msec()
+	var time_since_controller = now - _last_controller_input_time
+	return time_since_controller < CONTROLLER_PRIORITY_MS
+
+## Check if card should grab focus on mouse hover
+func should_card_grab_focus_on_hover() -> bool:
+	# Don't grab if mouse is idle
+	if not is_mouse_recently_active():
+		return false
+	# Don't grab if controller was used recently (controller has priority)
+	if controller_has_priority():
+		return false
+	return true
 
 func _setup_controls_bar() -> void:
 	"""Setup the Controls Bar with initial state from settings."""

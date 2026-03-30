@@ -66,6 +66,11 @@ func _on_focus_changed(control: Control) -> void:
 	if not is_ancestor_of(control):
 		return
 	
+	# Skip smooth scroll for mouse hover-initiated focus changes
+	if control.has_meta("mouse_hover_focus"):
+		control.remove_meta("mouse_hover_focus")
+		return
+	
 	# Calculate and smoothly scroll to centered position
 	_target_scroll = _get_centered_scroll_for_control(control)
 	_start_smooth_scroll()
