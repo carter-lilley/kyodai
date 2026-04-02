@@ -64,11 +64,56 @@ func _ready():
 	_ensure_memory_manager()
 	_initialize_database()
 	_ensure_cache_folder()
+	
+	# Connect to setting changes for dynamic cover folding
+	SettingsManager.setting_changed.connect(_on_setting_changed)
 
 func _ensure_memory_manager():
 	if MemoryManager._instance == null:
 		var mm = MemoryManager.new()
 		add_child(mm)
+
+func _on_setting_changed(value, setting):
+	if setting.property_name == "fold_duplicate_covers":
+		if value:
+			print("[CoverFolding] Setting enabled - applying cover folding...")
+			apply_cover_folding_to_database(func(folded_count: int):
+				print("[CoverFolding] Applied cover folding to %d games" % folded_count)
+				# Trigger grid refresh
+				sync_completed.emit(true, "Cover folding enabled - folded %d games" % folded_count)
+			)
+		else:
+			print("[CoverFolding] Setting disabled - removing cover-based siblings...")
+			_remove_cover_based_siblings()
+
+func _remove_cover_based_siblings():
+	"""Unfold all games by setting cover_group_master = 1 for all games in cover groups.
+	
+	This is the simple inverse of apply_cover_folding_to_database. Since cover_group_id
+	is preserved during sync, we just need to set cover_group_master = 1 for all games
+	that are in a cover group (cover_group_id != '').
+	"""
+	if not _is_db_ready:
+		return
+	
+	MemoryManager.queue_db_task(
+		func():
+			# Simple: set cover_group_master = 1 for all games in any cover group
+			var query = "UPDATE games SET cover_group_master = 1 WHERE cover_group_id != ''"
+			var success = _db.query(query)
+			
+			# Get count of affected games
+			var count_query = "SELECT changes() as count"
+			var unfolded_count = 0
+			if success and _db.query(count_query) and _db.query_result.size() > 0:
+				unfolded_count = _db.query_result[0].get("count", 0)
+			
+			return unfolded_count,
+		func(unfolded_count: int):
+			print("[CoverFolding] Unfolded %d games" % unfolded_count)
+			# Notify listeners that library needs refresh
+			sync_completed.emit(true, "Cover folding disabled - unfolded %d games" % unfolded_count)
+	)
 
 func _initialize_database():
 	var dir = DirAccess.open("user://")
@@ -108,7 +153,9 @@ func _create_tables():
 			downloaded_sibling_ids TEXT DEFAULT '[]',
 			has_cover_art INTEGER DEFAULT 1,
 			last_played TEXT DEFAULT '',
-			title_id TEXT DEFAULT ''
+			title_id TEXT DEFAULT '',
+			cover_group_id TEXT DEFAULT '',
+			cover_group_master INTEGER DEFAULT 1
 		)
 	""")
 	
@@ -127,6 +174,86 @@ func _create_tables():
 	
 	_db.query("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
 	_db.query("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
+	_db.query("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
+	
+	# Migrate old cover_folded column to new cover_group system if needed
+	_migrate_cover_folding_schema()
+
+func _migrate_cover_folding_schema():
+	"""Migrate from old cover_folded column to new cover_group system.
+	
+	This handles databases created before the cover_group system was implemented.
+	It converts cover_folded=1 games to have a cover_group_id and cover_group_master=0.
+	"""
+	# Check if old cover_folded column exists
+	var check_query = "PRAGMA table_info(games)"
+	if not _db.query(check_query):
+		return
+	
+	var has_cover_folded = false
+	var has_cover_group_id = false
+	var has_cover_group_master = false
+	
+	for row in _db.query_result:
+		var col_name = row.get("name", "")
+		if col_name == "cover_folded":
+			has_cover_folded = true
+		elif col_name == "cover_group_id":
+			has_cover_group_id = true
+		elif col_name == "cover_group_master":
+			has_cover_group_master = true
+	
+	# If we have new columns but not old, migration already done
+	if has_cover_group_id and has_cover_group_master and not has_cover_folded:
+		return
+	
+	# If we have old column but not new ones, migrate
+	if has_cover_folded and not has_cover_group_id:
+		print("[DataManager] Migrating cover folding schema...")
+		
+		# Add new columns
+		_db.query("ALTER TABLE games ADD COLUMN cover_group_id TEXT DEFAULT ''")
+		_db.query("ALTER TABLE games ADD COLUMN cover_group_master INTEGER DEFAULT 1")
+		
+		# Migrate data: games with cover_folded=1 get a cover_group_id based on their cover_url
+		var query = """
+			SELECT romm_id, cover_url, cover_folded 
+			FROM games 
+			WHERE cover_folded = 1 AND cover_url != '' AND cover_url IS NOT NULL
+		"""
+		if _db.query(query):
+			# Group by cover_url
+			var cover_groups: Dictionary = {}
+			for row in _db.query_result:
+				var cover_url = row.get("cover_url", "")
+				var romm_id = row.get("romm_id", 0)
+				if cover_url != "" and romm_id != 0:
+					if not cover_groups.has(cover_url):
+						cover_groups[cover_url] = []
+					cover_groups[cover_url].append(romm_id)
+			
+			# For each group, set cover_group_id and determine master
+			for cover_url in cover_groups.keys():
+				var ids = cover_groups[cover_url]
+				if ids.size() < 2:
+					continue
+				
+				var group_id = cover_url.md5_text()
+				var lowest_id = ids.min()
+				
+				for game_id in ids:
+					var is_master = 1 if game_id == lowest_id else 0
+					var update = """
+						UPDATE games 
+						SET cover_group_id = '%s', cover_group_master = %d
+						WHERE romm_id = %d
+					""" % [group_id, is_master, game_id]
+					_db.query(update)
+		
+		print("[DataManager] Cover folding schema migration complete")
+	
+	# Drop old column if it exists (optional - can keep for backwards compatibility)
+	# _db.query("ALTER TABLE games DROP COLUMN cover_folded")
 
 func is_database_ready() -> bool:
 	return _is_db_ready
@@ -304,17 +431,23 @@ func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: 
 		
 		print("[DataManager] Sync complete: %d games synced, %d from cache" % [total_synced, games_from_cache])
 		
-		var completion_msg = "Synced " + str(total_synced) + " games"
-		if games_from_cache > 0:
-			completion_msg += " (" + str(games_from_cache) + " checked from cache"
-			if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-				completion_msg += ", " + str(_sync_skipped_no_cover) + " skipped"
-			completion_msg += ")"
-		elif _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
-		sync_completed.emit(true, completion_msg)
-		if callback.is_valid():
-			callback.call(true, completion_msg, total_synced, 0)
+		# Apply global cover folding after all platforms complete
+		apply_cover_folding_to_database(func(folded_count: int):
+			var completion_msg = "Synced " + str(total_synced) + " games"
+			if games_from_cache > 0:
+				completion_msg += " (" + str(games_from_cache) + " checked from cache"
+				if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+					completion_msg += ", " + str(_sync_skipped_no_cover) + " skipped"
+				if folded_count > 0:
+					completion_msg += ", " + str(folded_count) + " folded by cover"
+				completion_msg += ")"
+			elif _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+				completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
+			
+			sync_completed.emit(true, completion_msg)
+			if callback.is_valid():
+				callback.call(true, completion_msg, total_synced, 0)
+		)
 		return
 	
 	var platform = platforms[index]
@@ -425,15 +558,6 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 	if games.is_empty():
 		on_complete.call(0)
 		return
-	
-	# Phase 1.5: Group games by cover URL (if setting enabled)
-	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
-	if fold_covers_setting and fold_covers_setting.value:
-		_group_games_by_cover_url(games)
-		# Update sibling_check_data with new sibling info after cover grouping
-		for i in range(sibling_check_data.size()):
-			if i < games.size():
-				sibling_check_data[i]["siblings"] = games[i].siblings
 	
 	# Phase 2: Batch sibling checks (async, spread across frames)
 	var sibling_batch_id = MemoryManager.start_batch(
@@ -685,6 +809,152 @@ func _group_games_by_cover_url(games: Array[GameResource]):
 				current_game.siblings.append(sibling_entry)
 				existing_sibling_ids[other_id] = true
 
+# ==================== COMPREHENSIVE COVER FOLDING ====================
+
+func apply_cover_folding_to_database(callback: Callable = Callable()):
+	"""Apply cover folding globally across all games in the database.
+	
+	This runs after all syncs complete and groups games with identical covers
+	across all batches and platforms. Skips games that are already RomM siblings.
+	
+	NEW TWO-TIER SYSTEM:
+	- Games with identical covers get the same cover_group_id (hash of cover_url)
+	- Within each cover group, only the game with the lowest romm_id is visible (cover_group_master = 1)
+	- RomM siblings remain untouched (they have their own is_master_entry system)
+	"""
+	if not _is_db_ready:
+		if callback.is_valid():
+			callback.call(0)
+		return
+	
+	# Check if cover folding is enabled
+	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
+	if not fold_covers_setting or not fold_covers_setting.value:
+		if callback.is_valid():
+			callback.call(0)
+		return
+	
+	print("[CoverFolding] Starting global cover folding...")
+	
+	# Show pulsing notification
+	var notification_id = NotificationManager.show_notification(
+		"Folding duplicate covers...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		Callable(),
+		Callable(),
+		true  # pulsing
+	)
+	
+	MemoryManager.queue_db_task(
+		func():
+			# Query all games with cover URLs that don't have RomM siblings
+			# We exclude games that already have siblings in the RomM system
+			var query = """
+				SELECT id, romm_id, title, file_name, file_size, cover_url, siblings
+				FROM games
+				WHERE cover_url != '' AND cover_url IS NOT NULL
+			"""
+			
+			if not _db.query(query):
+				return 0
+			
+			var rows = _db.query_result
+			
+			# Build cover groups from games WITHOUT RomM siblings
+			var cover_groups: Dictionary = {}
+			var games_with_romm_siblings: Dictionary = {}
+			
+			for row in rows:
+				var romm_id = row.get("romm_id", 0)
+				var cover_url = row.get("cover_url", "")
+				var siblings_json = row.get("siblings", "[]")
+				
+				if cover_url == "" or romm_id == 0:
+					continue
+				
+				# Check if this game has RomM siblings (not just cover siblings)
+				var has_romm_siblings = false
+				var json = JSON.new()
+				var err = json.parse(siblings_json)
+				if err == OK and json.data is Array:
+					for sibling in json.data:
+						if sibling is Dictionary:
+							var sibling_id = sibling.get("id", 0)
+							# Check if this sibling exists in DB as master (RomM sibling)
+							if sibling_id != 0 and sibling_id != romm_id:
+								var check_query = "SELECT COUNT(*) as count FROM games WHERE romm_id = %d AND is_master_entry = 1" % sibling_id
+								if _db.query(check_query) and _db.query_result.size() > 0:
+									if _db.query_result[0].get("count", 0) > 0:
+										has_romm_siblings = true
+										break
+				
+				if has_romm_siblings:
+					# Don't process games with RomM siblings
+					games_with_romm_siblings[romm_id] = true
+					continue
+				
+				# Add to cover group
+				if not cover_groups.has(cover_url):
+					cover_groups[cover_url] = []
+				
+				cover_groups[cover_url].append({
+					"romm_id": romm_id
+				})
+			
+			var groups_processed = 0
+			var games_folded = 0
+			
+			# Process each cover group with 2+ games
+			for cover_url in cover_groups.keys():
+				var games = cover_groups[cover_url]
+				if games.size() < 2:
+					continue
+				
+				groups_processed += 1
+				
+				# Generate group ID from cover URL hash
+				var group_id = cover_url.md5_text()
+				
+				# Find the lowest romm_id in this group (will be the master)
+				var lowest_id = games[0].romm_id
+				for game in games:
+					if game.romm_id < lowest_id:
+						lowest_id = game.romm_id
+				
+				# Update all games in this group
+				for game in games:
+					var is_master = 1 if game.romm_id == lowest_id else 0
+					
+					var update_query = """
+						UPDATE games 
+						SET cover_group_id = '%s', cover_group_master = %d
+						WHERE romm_id = %d
+					""" % [group_id, is_master, game.romm_id]
+					
+					_db.query(update_query)
+					
+					# Count non-master games as folded
+					if game.romm_id != lowest_id:
+						games_folded += 1
+			
+			print("[CoverFolding] Processed %d cover groups, folded %d games" % [groups_processed, games_folded])
+			return games_folded,
+		func(folded_count: int):
+			NotificationManager.dismiss_notification(notification_id)
+			
+			if folded_count > 0:
+				NotificationManager.show_notification(
+					"Folded %d duplicate covers" % folded_count,
+					Notification.Type.SUCCESS
+				)
+			
+			print("[CoverFolding] Complete - folded %d games" % folded_count)
+			if callback.is_valid():
+				callback.call(folded_count)
+	)
+
 # ==================== BATCH NOTIFICATION SYSTEM ====================
 
 func _start_sync_batch_mode():
@@ -853,7 +1123,7 @@ func _build_insert_query(game: GameResource) -> String:
 	var file_path = _escape_sql(game.file_path)
 	
 	if _is_db_ready and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path FROM games WHERE romm_id = %d" % game.romm_id
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master FROM games WHERE romm_id = %d" % game.romm_id
 		if _db.query(check_query) and _db.query_result.size() > 0:
 			var existing = _db.query_result[0]
 			# Preserve download status from existing record
@@ -867,13 +1137,18 @@ func _build_insert_query(game: GameResource) -> String:
 			var existing_path = existing.get("file_path", "")
 			if existing_path != "":
 				file_path = _escape_sql(existing_path)
+			# Preserve cover group fields (they're managed separately from sync)
+			var existing_cover_group_id = existing.get("cover_group_id", "")
+			if existing_cover_group_id != "":
+				game.cover_group_id = existing_cover_group_id
+				game.cover_group_master = existing.get("cover_group_master", 1) == 1
 	
 	return """
 		INSERT OR REPLACE INTO games 
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 		 file_name, file_path, file_size, has_local_copy, last_updated, 
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id)
-		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s', '%s')
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master)
+		VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s', '%s', '%s', %d)
 	""" % [
 		_escape_sql(game.id),
 		game.romm_id,
@@ -896,7 +1171,9 @@ func _build_insert_query(game: GameResource) -> String:
 		downloaded_sibling_ids,
 		1 if game.has_cover_art else 0,
 		_escape_sql(game.last_played),
-		_escape_sql(game.title_id)
+		_escape_sql(game.title_id),
+		_escape_sql(game.cover_group_id),
+		1 if game.cover_group_master else 0
 	]
 
 # ==================== DATABASE OPERATIONS ====================
@@ -911,8 +1188,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				INSERT OR REPLACE INTO games 
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 				 file_name, file_path, file_size, has_local_copy, last_updated, 
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id)
-				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s', '%s')
+				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master)
+				VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d, '%s', '%s', '%s', %f, '%s', %d, %d, '%s', %d, '%s', '%s', '%s', %d)
 			""" % [
 				_escape_sql(game.id),
 				game.romm_id,
@@ -935,7 +1212,9 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				_escape_sql(JSON.stringify(game.downloaded_sibling_ids)),
 				1 if game.has_cover_art else 0,
 				_escape_sql(game.last_played),
-				_escape_sql(game.title_id)
+				_escape_sql(game.title_id),
+				_escape_sql(game.cover_group_id),
+				1 if game.cover_group_master else 0
 			]
 			return _db.query(query),
 		func(success: bool):
@@ -943,8 +1222,9 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				# Use batch notification during sync, individual during normal operations
 				# Only notify for games with cover art (games without covers are hidden)
 				# Only notify for master entries (sibling ROMs are hidden from library view)
+				# AND only if it's a cover group master (or not in a cover group)
 				if _sync_batch_mode:
-					if game.has_cover_art and game.is_master_entry:
+					if game.has_cover_art and game.is_master_entry and game.cover_group_master:
 						_queue_batch_notification(game)
 				else:
 					game_added.emit(game)
@@ -980,7 +1260,9 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					downloaded_sibling_ids = '%s',
 					has_cover_art = %d,
 					last_played = '%s',
-					title_id = '%s'
+					title_id = '%s',
+					cover_group_id = '%s',
+					cover_group_master = %d
 				WHERE romm_id = %d
 			""" % [
 				_escape_sql(game.title),
@@ -1003,6 +1285,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.has_cover_art else 0,
 				_escape_sql(game.last_played),
 				_escape_sql(game.title_id),
+				_escape_sql(game.cover_group_id),
+				1 if game.cover_group_master else 0,
 				game.romm_id
 			]
 			return _db.query(query),
@@ -1170,7 +1454,7 @@ func get_all_games() -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY title")
+	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY title")
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -1179,7 +1463,7 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1 AND has_cover_art = 1 ORDER BY title" % platform_slug)
+	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY title" % platform_slug)
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -1193,9 +1477,9 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	var query: String
 	
 	if platform_slug.is_empty():
-		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
 	else:
-		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
+		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
 	
 	_db.query(query)
 	
@@ -1214,7 +1498,7 @@ func get_platforms_with_games() -> Array[Dictionary]:
 		SELECT g.platform_slug, p.name, COUNT(*) as game_count
 		FROM games g
 		LEFT JOIN platforms p ON g.platform_slug = p.slug
-		WHERE g.is_master_entry = 1 AND g.has_cover_art = 1
+		WHERE g.is_master_entry = 1 AND g.has_cover_art = 1 AND g.cover_group_master = 1
 		GROUP BY g.platform_slug
 		HAVING game_count > 0
 		ORDER BY g.platform_slug ASC
@@ -1245,9 +1529,9 @@ func get_total_games_count(platform_slug: String = "") -> int:
 	
 	var query: String
 	if platform_slug.is_empty():
-		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1"
+		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1"
 	else:
-		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND platform_slug = '%s'" % platform_slug
+		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 AND platform_slug = '%s'" % platform_slug
 	
 	var success = _db.query(query)
 	if success and _db.query_result.size() > 0:
@@ -1271,6 +1555,7 @@ func search_games_paginated(query: String, offset: int, limit: int) -> Array[Gam
 		SELECT * FROM games 
 		WHERE is_master_entry = 1 
 		AND has_cover_art = 1 
+		AND cover_group_master = 1
 		AND title LIKE '%%%s%%'
 		ORDER BY title ASC 
 		LIMIT %d OFFSET %d
@@ -1295,6 +1580,7 @@ func get_search_results_count(query: String) -> int:
 		SELECT COUNT(*) as count FROM games 
 		WHERE is_master_entry = 1 
 		AND has_cover_art = 1 
+		AND cover_group_master = 1
 		AND title LIKE '%%%s%%'
 	""" % sanitized_query
 	
@@ -1319,6 +1605,7 @@ func get_downloaded_games_count() -> int:
 		SELECT COUNT(*) as count FROM games 
 		WHERE is_master_entry = 1 
 		AND has_cover_art = 1
+		AND cover_group_master = 1
 		AND platform_slug IN (%s)
 		AND (
 			has_local_copy = 1 
@@ -1348,6 +1635,7 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 		SELECT * FROM games 
 		WHERE is_master_entry = 1 
 		AND has_cover_art = 1
+		AND cover_group_master = 1
 		AND platform_slug IN (%s)
 		AND (
 			has_local_copy = 1 
@@ -1456,6 +1744,17 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	# Restore title_id
 	game.title_id = row.get("title_id", "")
 	
+	# Restore cover group fields
+	if row.has("cover_group_id"):
+		game.cover_group_id = row.get("cover_group_id", "")
+	else:
+		game.cover_group_id = ""
+	
+	if row.has("cover_group_master"):
+		game.cover_group_master = row.get("cover_group_master", 1) == 1
+	else:
+		game.cover_group_master = true
+	
 	return game
 
 # ==================== COVER DOWNLOAD ====================
@@ -1520,7 +1819,7 @@ func _download_cover(url: String, callback: Callable):
 					return null
 				var buffer = file.get_buffer(file.get_length())
 				file.close()
-				return _load_image_from_memory(buffer),
+				return _load_image_from_memory(buffer, cache_path),
 			func(image):
 				var texture = null
 				if image:
@@ -1550,22 +1849,50 @@ func _download_cover(url: String, callback: Callable):
 	)
 
 func get_cached_image_path(url: String) -> String:
-	return CACHE_FOLDER + url.md5_text() + ".jpg"
+	# Extract extension from URL, default to jpg if not found
+	var extension = "jpg"
+	var query_start = url.find("?")
+	var url_without_query = url
+	if query_start != -1:
+		url_without_query = url.substr(0, query_start)
+	
+	var last_dot = url_without_query.rfind(".")
+	if last_dot != -1 and last_dot < url_without_query.length() - 1:
+		var ext = url_without_query.substr(last_dot + 1).to_lower()
+		if ext in ["jpg", "jpeg", "png", "webp"]:
+			extension = ext
+			if extension == "jpeg":
+				extension = "jpg"
+	
+	return CACHE_FOLDER + url.md5_text() + "." + extension
 
-func _load_image_from_memory(buffer: PackedByteArray) -> Image:
+func _load_image_from_memory(buffer: PackedByteArray, cache_path: String = "") -> Image:
 	if buffer.size() < 16:
 		return null
 	
-	var image = Image.new()
 	var err = FAILED
+	var image = Image.new()
 	
-	# Check magic bytes
+	# Always use magic bytes to detect actual format, regardless of file extension
+	# This handles cases where the extension doesn't match the actual content
 	if buffer[0] == 0xFF and buffer[1] == 0xD8:
+		# JPEG magic bytes
 		err = image.load_jpg_from_buffer(buffer)
 	elif buffer[0] == 0x89 and buffer[1] == 0x50:
+		# PNG magic bytes (0x89 0x50 0x4E 0x47)
 		err = image.load_png_from_buffer(buffer)
-	else:
+	elif buffer[0] == 0x52 and buffer[1] == 0x49:
+		# WebP magic bytes (RIFF header)
 		err = image.load_webp_from_buffer(buffer)
+	else:
+		# Try all formats as fallback
+		err = image.load_jpg_from_buffer(buffer)
+		if err != OK:
+			image = Image.new()
+			err = image.load_png_from_buffer(buffer)
+		if err != OK:
+			image = Image.new()
+			err = image.load_webp_from_buffer(buffer)
 	
 	if err == OK:
 		return image
@@ -1587,7 +1914,7 @@ func load_image(url: String, callback: Callable = Callable()):
 				if file:
 					var buffer = file.get_buffer(file.get_length())
 					file.close()
-					return _load_image_from_memory(buffer)
+					return _load_image_from_memory(buffer, cache_path)
 				return null,
 			func(image):
 				if image:
@@ -1623,7 +1950,7 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				if file:
 					var buffer = file.get_buffer(file.get_length())
 					file.close()
-					return _load_image_from_memory(buffer)
+					return _load_image_from_memory(buffer, cache_path)
 				return null,
 			func(image):
 				if image:
@@ -1791,7 +2118,7 @@ func get_random_game() -> GameResource:
 		return null
 	
 	# Get a random game that has a cover and is a master entry
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 ORDER BY RANDOM() LIMIT 1")
+	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
 	if _db.query_result.size() > 0:
 		return _row_to_game(_db.query_result[0])
 	return null
@@ -1806,7 +2133,7 @@ func get_random_cached_cover_path() -> String:
 	dir.list_dir_begin()
 	var file_name = dir.get_next()
 	while file_name != "":
-		if not dir.current_is_dir() and (file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg")):
+		if not dir.current_is_dir() and (file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg") or file_name.ends_with(".webp")):
 			image_files.append(CACHE_FOLDER + file_name)
 		file_name = dir.get_next()
 	

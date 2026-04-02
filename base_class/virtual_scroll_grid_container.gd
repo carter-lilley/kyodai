@@ -225,7 +225,7 @@ func _get_base_dimensions() -> Vector2:
 			var orientation_idx = config_setting.value.get("card_orientation", 0)
 			match orientation_idx:
 				1: # Horizontal
-					return Vector2(270.0, 202.0)
+					return Vector2(276.0, 129.0)
 				2: # Square
 					return Vector2(256.0, 256.0)
 				_: # 0 = Vertical (default)

@@ -9,7 +9,7 @@ signal shape_changed()
 
 # Base dimensions (unscaled reference sizes)
 const VERTICAL_SIZE: Vector2 = Vector2(202.0, 270.0)
-const HORIZONTAL_SIZE: Vector2 = Vector2(270.0, 202.0)
+const HORIZONTAL_SIZE: Vector2 = Vector2(276.0, 129.0)
 const SQUARE_SIZE: Vector2 = Vector2(256.0, 256.0)
 
 # Card properties - reactive

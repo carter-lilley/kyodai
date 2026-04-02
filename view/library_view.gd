@@ -575,11 +575,15 @@ func _on_sync_completed(success: bool, message: String):
 		_current_platform_slug = ""
 		
 		# Final consistency check - reload total count from database
-		_load_total_count(true)
-		
-		_update_status(message)
+		# Clear cache (false) to prevent duplicate detection errors after sync
+		# Use call_deferred to let sync completion finish before heavy grid refresh
+		call_deferred("_deferred_reload_after_sync")
 	else:
 		_update_status("Sync failed: " + message)
+
+func _deferred_reload_after_sync():
+	_load_total_count(false)
+	_update_status("Library reloaded after sync")
 
 func on_view_show():
 	super.on_view_show()

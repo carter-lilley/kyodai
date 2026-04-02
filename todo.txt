@@ -33,11 +33,9 @@ saves
 	image priority management.
 	performance.add_custom_monitor for everything
 ## sync:
-	check weird image conversion webp/jpg thing
 	ft: background sync/notifs
 	how to split important siblings
-	check: merge siblings for same cover
-	cache image colors, cropping data, and sibiling lookup on sync
+	cache image colors, cropping data on sync
 	check: are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
 	batch DB adds instead of single

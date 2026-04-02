@@ -68,6 +68,10 @@ var _image_retry_count: int = 0
 var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
+# Track download retries separately from image load retries
+var _download_retry_count: int = 0
+const MAX_DOWNLOAD_RETRIES: int = 2
+
 const FOCUSED_SCALE: float = 1.08
 const FOCUS_TWEEN_DURATION: float = 0.12
 const FOCUSED_BORDER_MULTIPLIER: float = 0.85  # Border is 65% of normal size when focused (smaller)
@@ -1095,6 +1099,7 @@ func _load_cover(high_priority: bool = false):
 	
 	_loading_game_id = game.id
 	_image_retry_count = 0
+	_download_retry_count = 0  # Reset download retry counter for new game
 	
 	var cache_path = ""
 	var cover_url = ""
@@ -1171,6 +1176,13 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false):
 	"""Trigger a cover download and retry loading when complete."""
 	var target_game_id = _loading_game_id
+	
+	# Check download retry limit
+	_download_retry_count += 1
+	if _download_retry_count > MAX_DOWNLOAD_RETRIES:
+		# Too many download attempts, just show loading texture
+		_set_texture(_loading_texture)
+		return
 	
 	# Show loading texture while downloading
 	_set_texture(_loading_texture)
@@ -1613,6 +1625,7 @@ func reset():
 		_current_image_task_id = -1
 	_loading_game_id = ""
 	_image_retry_count = 0
+	_download_retry_count = 0
 	game = null
 	_is_focused = false
 	_set_texture(_loading_texture)

@@ -230,7 +230,6 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 				# Count games in cached response
 				var cached_data = cached.get("data", {})
 				var game_count = _count_games_in_data(cached_data)
-				print("[NetworkManager] CACHE HIT: %s - %d games" % [endpoint, game_count])
 				_games_from_cache += game_count
 				callback.call(cached_data, "")
 				return

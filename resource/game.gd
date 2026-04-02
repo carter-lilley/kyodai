@@ -40,6 +40,11 @@ extends Resource
 ## Array of sibling IDs that have local copies
 @export var downloaded_sibling_ids: Array[int] = []
 
+## Cover grouping fields for "Fold Duplicate Covers" feature
+## Games with identical covers are grouped together with a cover_group_id
+@export var cover_group_id: String = ""  # Empty if no duplicate covers, otherwise hash of cover_url
+@export var cover_group_master: bool = true  # Is this the master of its cover group?
+
 ## Game source type: "romm" (default), "gamenative", etc.
 @export var source: String = "romm"
 
