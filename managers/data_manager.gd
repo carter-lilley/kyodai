@@ -14,6 +14,7 @@ signal cache_cleared()
 
 # NEW: Batch notification signals for efficient UI updates
 signal games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource])
+signal sync_started()  # Emitted when a sync begins - allows UI to clear cache
 
 const DB_PATH = "user://database/kyodai.db"
 const CACHE_FOLDER = "user://cache/covers/"
@@ -962,6 +963,9 @@ func _start_sync_batch_mode():
 	_sync_batch_mode = true
 	_sync_batch_pending.clear()
 	_sync_batch_last_emit_time = Time.get_ticks_msec()
+	
+	# Notify listeners that sync is starting - allows UI to clear cache before new data arrives
+	sync_started.emit()
 	
 	# Create timer to periodically flush notifications
 	if _sync_batch_timer:

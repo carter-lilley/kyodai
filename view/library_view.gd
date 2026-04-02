@@ -56,6 +56,9 @@ func _ready():
 	# NEW: Connect to batch updates for efficient UI during sync
 	DataManager.games_batch_added.connect(_on_games_batch_added)
 	
+	# Connect to sync_started to clear cache before new sync begins
+	DataManager.sync_started.connect(_on_sync_started)
+	
 	# Connect to download manager for downloads
 	DownloadManager.download_progress.connect(_on_download_progress)
 	DownloadManager.download_completed.connect(_on_download_completed)
@@ -584,6 +587,17 @@ func _on_sync_completed(success: bool, message: String):
 func _deferred_reload_after_sync():
 	_load_total_count(false)
 	_update_status("Library reloaded after sync")
+
+func _on_sync_started():
+	"""Clear grid cache when sync starts to prevent position mismatches.
+	
+	During a resync, games are added in API order but the database returns them
+	sorted by title. Clearing the cache at sync start prevents duplicate warnings
+	and ensures games appear at correct positions."""
+	if games_grid:
+		# Reset total to 0 with preserve_cache=false to clear everything
+		games_grid.set_total_count(0, false)
+		_update_status("Sync starting...")
 
 func on_view_show():
 	super.on_view_show()
