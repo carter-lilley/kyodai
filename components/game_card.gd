@@ -1195,8 +1195,13 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		if not game or game.id != target_game_id:
 			return
 		
-		# Retry loading the cover (file should now exist)
-		_load_cover(high_priority)
+		# Check if file actually exists now
+		if FileAccess.file_exists(cache_path):
+			# File exists - safe to retry loading
+			_load_cover(high_priority)
+		else:
+			# Download failed or file still missing - show loading texture
+			_set_texture(_loading_texture)
 	)
 
 func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
