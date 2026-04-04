@@ -31,13 +31,37 @@ var _verbose_sql: bool = false  # Set to true to see SQL queries
 const _DEBUG_HIDE_GAMES_WITHOUT_COVERS: bool = true  # Set to true to skip games without cover art
 var _sync_skipped_no_cover: int = 0  # Counter for skipped games
 
-# Sync state
+# Sync state machine
+enum SyncState {
+	IDLE,
+	PRECHECK_DISABLED,      # Remove disabled platforms
+	CALCULATING_TOTALS,     # Pre-calculate game counts
+	PLATFORM_ITERATING,     # Iterate through platforms
+	PLATFORM_FETCHING,      # Fetch batch from current platform
+	PLATFORM_PROCESSING,    # Process fetched batch
+	PLATFORM_BATCHING,      # Fetch more batches if needed
+	COVER_FOLDING,          # Apply cover folding
+	COMPLETING,             # Final cleanup
+	ERROR                   # Error state
+}
+
+var _sync_state: SyncState = SyncState.IDLE
+var _sync_platforms_list: Array = []        # Platforms to sync
+var _sync_current_platform_idx: int = 0     # Current platform index (0-based)
+var _sync_current_platform_data: Dictionary = {}  # Current platform info
+var _sync_current_offset: int = 0           # Current batch offset
+var _sync_current_total: int = 0            # Total games in current platform
+var _sync_current_synced: int = 0           # Games synced in current platform
+var _sync_total_synced: int = 0             # Total synced across all platforms
+var _sync_final_callback: Callable = Callable()
+
+# Legacy sync state (for compatibility)
 var _sync_current: int = 0
 var _sync_total: int = 0
 var _sync_platform: String = ""
 var _sync_platform_index: int = 0  # Current platform number (1-based)
 var _sync_platform_count: int = 0  # Total platforms
-var _sync_platform_total: int = 0  # Total games in current platform
+var _sync_platform_total: int = 0  # Games in current platform
 
 # NEW: Batch notification system for incremental UI updates
 var _sync_batch_mode: bool = false
@@ -45,7 +69,7 @@ var _sync_batch_pending: Array[GameResource] = []
 var _sync_batch_pending_mutex: Mutex = Mutex.new()  # Thread-safe access
 var _sync_batch_timer: Timer = null
 var _sync_batch_last_emit_time: int = 0
-const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 500ms during sync
+const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 800ms during sync
 
 # Batch processing state
 var _batch_remaining: int = 0
@@ -262,21 +286,48 @@ func is_database_ready() -> bool:
 func _escape_sql(text: String) -> String:
 	return text.replace("'", "''")
 
-# ==================== SYNC ====================
+# ==================== SYNC (ITERATIVE STATE MACHINE) ====================
 
 func sync_enabled_platforms(callback: Callable = Callable()) -> void:
+	print("[Sync] ==========================================")
+	print("[Sync] sync_enabled_platforms called")
+	print("[Sync] Current state: %s" % get_sync_state_name())
+	print("[Sync] Callback valid: %s" % callback.is_valid())
+	print("[Sync] ==========================================")
+	
+	# Dismiss any existing sync notification from previous syncs
+	if _sync_notification_id != -1:
+		print("[Sync] Dismissing existing notification ID: %d" % _sync_notification_id)
+		NotificationManager.dismiss_notification(_sync_notification_id)
+		_sync_notification_id = -1
+	
 	if not _is_db_ready:
+		print("[Sync] ERROR: Database not ready")
 		if callback.is_valid():
 			callback.call(false, "Database not ready", 0, 0)
 		return
 	
+	# Reset sync state
 	_sync_current = 0
 	_sync_total = 0
 	_sync_platform = ""
+	_sync_state = SyncState.PRECHECK_DISABLED
+	_sync_platforms_list = []
+	_sync_current_platform_idx = 0
+	_sync_current_offset = 0
+	_sync_current_total = 0
+	_sync_current_synced = 0
+	_sync_total_synced = 0
+	_sync_final_callback = callback
+	_sync_skipped_no_cover = 0
 	
 	var enabled = _get_enabled_platforms()
+	print("[Sync] Enabled platforms: %d" % enabled.size())
+	
 	# Get all platforms that currently have games in the database
 	var db_platforms = _get_db_platform_slugs()
+	print("[Sync] Platforms with games in DB: %d" % db_platforms.size())
+	
 	var enabled_slugs = enabled.map(func(p): return p.slug)
 	
 	# Find platforms that have games but are now disabled
@@ -285,61 +336,121 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 		if not slug in enabled_slugs:
 			disabled_platforms.append(slug)
 	
+	print("[Sync] Platforms to disable: %d" % disabled_platforms.size())
+	
 	if disabled_platforms.size() > 0:
-		_remove_disabled_platforms(disabled_platforms, enabled, callback)
+		print("[Sync] Starting disabled platform removal...")
+		_remove_disabled_platforms_iterative(disabled_platforms, enabled, callback)
 	else:
-		_start_sync(enabled, callback)
+		print("[Sync] No disabled platforms to remove, starting sync directly")
+		_start_sync_iterative(enabled, callback)
 
-func _remove_disabled_platforms(platforms: Array[String], enabled_platforms: Array, final_callback: Callable):
-	"""Remove games from disabled platforms one by one, then start sync"""
-	_remove_next_disabled(platforms, 0, enabled_platforms, final_callback)
+func _remove_disabled_platforms_iterative(platforms: Array[String], enabled_platforms: Array, final_callback: Callable):
+	"""Remove games from disabled platforms iteratively, then start sync"""
+	print("[Sync] Removing %d disabled platforms..." % platforms.size())
+	
+	var removed_count = 0
+	var total_to_remove = platforms.size()
+	
+	for i in range(platforms.size()):
+		var platform_slug = platforms[i]
+		print("[Sync] Removing platform %d/%d: %s" % [i + 1, total_to_remove, platform_slug])
+		var success = await _remove_platform_sync(platform_slug)
+		if success:
+			removed_count += 1
+			print("[Sync] Successfully removed %s" % platform_slug)
+		else:
+			print("[Sync] Failed to remove %s (continuing)" % platform_slug)
+		
+		# Small delay to prevent UI freezing
+		if i < platforms.size() - 1:
+			await get_tree().process_frame
+	
+	print("[Sync] Removed %d/%d disabled platforms, starting sync with %d enabled platforms" % [removed_count, total_to_remove, enabled_platforms.size()])
+	_start_sync_iterative(enabled_platforms, final_callback)
 
-func _remove_next_disabled(platforms: Array[String], index: int, enabled_platforms: Array, final_callback: Callable):
-	if index >= platforms.size():
-		# All disabled platforms removed, start the sync
-		_start_sync(enabled_platforms, final_callback)
-		return
+func _remove_platform_sync(platform_slug: String) -> bool:
+	"""Synchronous wrapper to remove a platform - returns success"""
+	print("[Sync] _remove_platform_sync called for: %s" % platform_slug)
 	
-	var platform_slug = platforms[index]
+	# Use a dictionary to hold state - more reliable than captured variables
+	var state = {
+		"success": false,
+		"completed": false
+	}
 	
-	remove_platform_games(platform_slug, func(_success):
-		# Continue to next platform regardless of success
-		_remove_next_disabled(platforms, index + 1, enabled_platforms, final_callback)
+	remove_platform_games(platform_slug, func(result):
+		print("[Sync] remove_platform_games callback fired with result: %s" % result)
+		state.success = result
+		state.completed = true
 	)
-
-func _get_db_platform_slugs() -> Array[String]:
-	"""Get list of platform slugs that have games in the database"""
-	var slugs: Array[String] = []
-	if not _is_db_ready:
-		return slugs
 	
-	_db.query("SELECT DISTINCT platform_slug FROM games ORDER BY platform_slug")
-	for row in _db.query_result:
-		var slug = row.get("platform_slug", "")
-		if slug != "":
-			slugs.append(slug)
+	print("[Sync] Waiting for removal completion...")
+	# Wait for completion with timeout safety
+	var timeout = 0.0
+	var max_timeout = 30.0  # 30 second timeout
 	
-	return slugs
+	while not state.completed:
+		await get_tree().process_frame
+		timeout += get_process_delta_time()
+		
+		if timeout > max_timeout:
+			print("[Sync] ERROR: Timeout waiting for platform removal!")
+			return false
+	
+	print("[Sync] Removal completed with success: %s" % state.success)
+	return state.success
 
-func _start_sync(enabled: Array, callback: Callable):
+func _start_sync_iterative(enabled: Array, callback: Callable):
 	"""Start the actual sync after cleaning up disabled platforms"""
+	print("[Sync] _start_sync_iterative called")
+	print("[Sync]   - enabled count: %d" % enabled.size())
+	print("[Sync]   - callback valid: %s" % callback.is_valid())
+	print("[Sync]   - callback hash: %d" % callback.hash())
+	
 	if enabled.size() == 0:
+		print("[Sync] No platforms enabled, completing immediately")
+		
+		# Dismiss any notification that might be showing
+		if _sync_notification_id != -1:
+			print("[Sync] Dismissing notification before early return")
+			NotificationManager.dismiss_notification(_sync_notification_id)
+			_sync_notification_id = -1
+		
+		# Stop batch mode if it was started
+		if _sync_batch_mode:
+			print("[Sync] Stopping batch mode")
+			_stop_sync_batch_mode()
+		
 		# Emit sync_completed so LibraryView refreshes even if no platforms to sync
+		print("[Sync] Emitting sync_completed signal")
 		sync_completed.emit(true, "No platforms enabled")
+		
+		# Call the callback
 		if callback.is_valid():
+			print("[Sync] Calling callback with success")
 			callback.call(true, "", 0, 0)
+		else:
+			print("[Sync] WARNING: Callback is not valid!")
+		
+		_sync_state = SyncState.IDLE
+		print("[Sync] State set to IDLE, returning")
+		print("[Sync] ==========================================")
 		return
 	
 	# Reset sync state
 	_sync_current = 0
 	_sync_platform_index = 0
 	_sync_platform_count = enabled.size()
-	_sync_skipped_no_cover = 0  # Reset skipped games counter
+	_sync_skipped_no_cover = 0
+	_sync_platforms_list = enabled
+	_sync_final_callback = callback
 	
 	# Start batch mode for efficient UI updates
 	_start_sync_batch_mode()
 	
 	# Pre-calculate total games across all platforms
+	_sync_state = SyncState.CALCULATING_TOTALS
 	_precalculate_totals(enabled, func(grand_total: int):
 		_sync_total = grand_total
 		
@@ -360,31 +471,161 @@ func _start_sync(enabled: Array, callback: Callable):
 				return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct]
 		)
 		
-		_sync_platforms(enabled, 0, 0, callback)
+		# Start iterating through platforms
+		_sync_state = SyncState.PLATFORM_ITERATING
+		_sync_current_platform_idx = 0
+		_process_next_platform()
 	)
 
-func _precalculate_totals(platforms: Array, callback: Callable):
-	"""Fetch total game count for all platforms upfront using instance vars (no closures)"""
-	_precalc_pending = platforms.size()
-	_precalc_total = 0
-	_precalc_callback = callback
-	
-	if _precalc_pending == 0:
-		callback.call(0)
+func _process_next_platform():
+	"""Process the next platform in the list (iterative instead of recursive)"""
+	if _sync_current_platform_idx >= _sync_platforms_list.size():
+		# All platforms complete - move to completion
+		_sync_state = SyncState.COMPLETING
+		_complete_sync()
 		return
 	
-	for platform in platforms:
-		# Fetch just the total count (offset=0, limit=1) - don't cache pre-calc calls
-		_fetch_batch(str(platform.id), 0, 1, false, func(data, error):
-			if error == "" and data is Dictionary:
-				_precalc_total += int(data.get("total", 0))
+	var platform = _sync_platforms_list[_sync_current_platform_idx]
+	_sync_platform = platform.name
+	_sync_platform_index = _sync_current_platform_idx + 1  # 1-based index for display
+	
+	# Look up platform ID if it's 0
+	var platform_id = platform.id
+	if platform_id == 0 and _is_db_ready:
+		var lookup_query = "SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform.slug)
+		if _db.query(lookup_query) and _db.query_result.size() > 0:
+			platform_id = _db.query_result[0].get("romm_id", 0)
+	
+	if platform_id == 0:
+		# Skip this platform and continue to next
+		print("[Sync] Skipping platform '%s' - no ID found" % platform.name)
+		_sync_current_platform_idx += 1
+		_process_next_platform()
+		return
+	
+	# Store current platform data
+	_sync_current_platform_data = {
+		"id": platform_id,
+		"slug": platform.slug,
+		"name": platform.name
+	}
+	
+	# Reset batch tracking for this platform
+	_sync_current_offset = 0
+	_sync_current_synced = 0
+	
+	# Start fetching this platform
+	_sync_state = SyncState.PLATFORM_FETCHING
+	_fetch_platform_batch()
+
+func _fetch_platform_batch():
+	"""Fetch a batch of games for the current platform"""
+	var batch_size = 250
+	var platform_id = _sync_current_platform_data.id
+	
+	_fetch_batch(str(platform_id), _sync_current_offset, batch_size, true, func(data, error):
+		if error != "" or not data is Dictionary:
+			# Error fetching - skip to next platform
+			print("[Sync] Error fetching platform '%s': %s" % [_sync_current_platform_data.name, error])
+			_sync_current_platform_idx += 1
+			_process_next_platform()
+			return
+		
+		var total = int(data.get("total", 0))
+		var items = data.get("items", [])
+		
+		if total == 0 or items.size() == 0:
+			# No games - move to next platform
+			_sync_current_platform_idx += 1
+			_process_next_platform()
+			return
+		
+		_sync_current_total = total
+		_sync_platform_total = total
+		
+		# Process this batch
+		_sync_state = SyncState.PLATFORM_PROCESSING
+		_process_batch(items, _sync_current_platform_data.slug, func(succeeded: int):
+			_sync_current_synced += succeeded
+			_sync_total_synced += succeeded
 			
-			_precalc_pending -= 1
-			if _precalc_pending <= 0:
-				var cb = _precalc_callback
-				_precalc_callback = Callable()
-				cb.call(_precalc_total)
+			# Check if we need more batches
+			if _sync_current_synced >= _sync_current_total:
+				# Platform complete - move to next
+				_sync_current_platform_idx += 1
+				_process_next_platform()
+			else:
+				# Need more batches - fetch next
+				_sync_current_offset += batch_size
+				_sync_state = SyncState.PLATFORM_BATCHING
+				_fetch_platform_batch()
 		)
+	)
+
+func _complete_sync():
+	"""Complete the sync process"""
+	if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+		print("[Sync] Skipped %d games without covers" % _sync_skipped_no_cover)
+	
+	# Flush any remaining batch notifications before stopping
+	_flush_batch_notifications()
+	
+	# Stop batch mode
+	_stop_sync_batch_mode()
+	
+	# Clean up download tracking to free memory
+	_active_downloads.clear()
+	
+	# Get cache statistics
+	var cache_stats = NetworkManager.get_and_reset_cache_stats()
+	var games_from_cache = cache_stats.get("games_from_cache", 0)
+	
+	print("[DataManager] Sync complete: %d games synced, %d from cache" % [_sync_total_synced, games_from_cache])
+	
+	# CRITICAL: Flush all pending DB operations before completing sync
+	# This prevents race conditions between DB thread and main thread
+	MemoryManager.queue_db_task(
+		func():
+			# Dummy task - just return true to signal all previous DB operations are done
+			return true,
+		func(_result):
+			# Now safe to proceed with sync completion on main thread
+			_apply_cover_folding_and_complete_sync(_sync_total_synced, games_from_cache, _sync_final_callback)
+	)
+
+func _apply_cover_folding_and_complete_sync(total_synced: int, games_from_cache: int, callback: Callable):
+	"""Apply cover folding and emit sync completion signals. Called after DB flush."""
+	apply_cover_folding_to_database(func(folded_count: int):
+		var completion_msg = "Synced " + str(total_synced) + " games"
+		if games_from_cache > 0:
+			completion_msg += " (" + str(games_from_cache) + " checked from cache"
+			if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+				completion_msg += ", " + str(_sync_skipped_no_cover) + " skipped"
+			if folded_count > 0:
+				completion_msg += ", " + str(folded_count) + " folded by cover"
+			completion_msg += ")"
+		elif _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
+			completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
+		
+		_sync_state = SyncState.IDLE
+		sync_completed.emit(true, completion_msg)
+		if callback.is_valid():
+			callback.call(true, completion_msg, total_synced, 0)
+	)
+
+func _get_db_platform_slugs() -> Array[String]:
+	"""Get list of platform slugs that have games in the database"""
+	var slugs: Array[String] = []
+	if not _is_db_ready:
+		return slugs
+	
+	_db.query("SELECT DISTINCT platform_slug FROM games ORDER BY platform_slug")
+	for row in _db.query_result:
+		var slug = row.get("platform_slug", "")
+		if slug != "":
+			slugs.append(slug)
+	
+	return slugs
 
 func _get_enabled_platforms() -> Array:
 	var result = []
@@ -412,143 +653,33 @@ func _get_enabled_platforms() -> Array:
 	
 	return result
 
-func _sync_platforms(platforms: Array, index: int, total_synced: int, callback: Callable):
-	if index >= platforms.size():
-		if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			pass
-		
-		# Flush any remaining batch notifications before stopping
-		_flush_batch_notifications()
-		
-		# Stop batch mode
-		_stop_sync_batch_mode()
-		
-		# Clean up download tracking to free memory
-		_active_downloads.clear()
-		
-		# Get cache statistics
-		var cache_stats = NetworkManager.get_and_reset_cache_stats()
-		var games_from_cache = cache_stats.get("games_from_cache", 0)
-		
-		print("[DataManager] Sync complete: %d games synced, %d from cache" % [total_synced, games_from_cache])
-		
-		# CRITICAL: Store completion data for the barrier callback
-		var _completion_total_synced = total_synced
-		var _completion_games_from_cache = games_from_cache
-		var _completion_callback = callback
-		
-		# CRITICAL: Flush all pending DB operations before completing sync
-		# This prevents race conditions between DB thread and main thread
-		MemoryManager.queue_db_task(
-			func():
-				# Dummy task - just return true to signal all previous DB operations are done
-				return true,
-			func(_result):
-				# Now safe to proceed with sync completion on main thread
-				_apply_cover_folding_and_complete_sync(_completion_total_synced, _completion_games_from_cache, _completion_callback)
-		)
+func _precalculate_totals(platforms: Array, callback: Callable):
+	"""Fetch total game count for all platforms upfront using instance vars (no closures)"""
+	_precalc_pending = platforms.size()
+	_precalc_total = 0
+	_precalc_callback = callback
+	
+	if _precalc_pending == 0:
+		callback.call(0)
 		return
 	
-	var platform = platforms[index]
-	_sync_platform = platform.name
-	_sync_platform_index = index + 1  # 1-based index for display
-	
-	# Look up platform ID if it's 0
-	var platform_id = platform.id
-	if platform_id == 0 and _is_db_ready:
-		var lookup_query = "SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform.slug)
-		if _db.query(lookup_query) and _db.query_result.size() > 0:
-			platform_id = _db.query_result[0].get("romm_id", 0)
-	
-	if platform_id == 0:
-		# Skip this platform and continue to next
-		_sync_platforms(platforms, index + 1, total_synced, callback)
-		return
-	
-	sync_platform_games(platform_id, platform.slug, platform.name, func(success, msg, synced, total):
-		if success:
-			total_synced += synced
-		_sync_platforms(platforms, index + 1, total_synced, callback)
-	)
-
-func _apply_cover_folding_and_complete_sync(total_synced: int, games_from_cache: int, callback: Callable):
-	"""Apply cover folding and emit sync completion signals. Called after DB flush."""
-	apply_cover_folding_to_database(func(folded_count: int):
-		var completion_msg = "Synced " + str(total_synced) + " games"
-		if games_from_cache > 0:
-			completion_msg += " (" + str(games_from_cache) + " checked from cache"
-			if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-				completion_msg += ", " + str(_sync_skipped_no_cover) + " skipped"
-			if folded_count > 0:
-				completion_msg += ", " + str(folded_count) + " folded by cover"
-			completion_msg += ")"
-		elif _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
-		
-		sync_completed.emit(true, completion_msg)
-		if callback.is_valid():
-			callback.call(true, completion_msg, total_synced, 0)
-	)
-
-func sync_platform_games(platform_id: int, platform_slug: String, platform_name: String, callback: Callable):
-	if not _is_db_ready:
-		if callback.is_valid():
-			callback.call(false, "Database not ready", 0, 0)
-		return
-	
-	var batch_size = 250  # Increased from 100 for faster syncing
-	
-	# Fetch first batch (use cache)
-	_fetch_batch(str(platform_id), 0, batch_size, true, func(data, error):
-		if error != "" or not data is Dictionary:
-			if callback.is_valid():
-				callback.call(false, error if error else "Invalid data", 0, 0)
-			return
-		
-		var total = int(data.get("total", 0))
-		var items = data.get("items", [])
-		
-		if total == 0:
-			if callback.is_valid():
-				callback.call(true, "", 0, 0)
-			return
-		
-		_process_batch(items, platform_slug, func(succeeded):
-			if succeeded >= total:
-				# All games in one batch
-				if callback.is_valid():
-					callback.call(true, "", succeeded, total)
-			else:
-				# Need more batches
-				_fetch_more_batches(platform_id, platform_slug, batch_size, total, succeeded, batch_size, callback)
+	for platform in platforms:
+		# Fetch just the total count (offset=0, limit=1) - don't cache pre-calc calls
+		_fetch_batch(str(platform.id), 0, 1, false, func(data, error):
+			if error == "" and data is Dictionary:
+				_precalc_total += int(data.get("total", 0))
+			
+			_precalc_pending -= 1
+			if _precalc_pending <= 0:
+				var cb = _precalc_callback
+				_precalc_callback = Callable()
+				cb.call(_precalc_total)
 		)
-	)
-
-func _fetch_more_batches(platform_id: int, platform_slug: String, batch_size: int, total: int, synced: int, offset: int, callback: Callable):
-	_fetch_batch(str(platform_id), offset, batch_size, true, func(data, error):
-		if error != "" or not data is Dictionary:
-			if callback.is_valid():
-				callback.call(true, "", synced, total)
-			return
-		
-		var items = data.get("items", [])
-		if items.size() == 0:
-			if callback.is_valid():
-				callback.call(true, "", synced, total)
-			return
-		
-		_process_batch(items, platform_slug, func(succeeded):
-			var new_synced = synced + succeeded
-			if new_synced >= total:
-				if callback.is_valid():
-					callback.call(true, "", new_synced, total)
-			else:
-				_fetch_more_batches(platform_id, platform_slug, batch_size, total, new_synced, offset + batch_size, callback)
-		)
-	)
 
 func _fetch_batch(platform_id: String, offset: int, limit: int, use_cache: bool, callback: Callable):
 	NetworkManager.fetch_games(callback, platform_id, offset, limit, use_cache)
+
+# ==================== BATCH PROCESSING (UNCHANGED) ====================
 
 func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 	"""Process a batch of games using the MemoryManager batch scheduler."""
@@ -1056,6 +1187,14 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 					# Count non-master games as folded
 					if game.romm_id != lowest_id:
 						games_folded += 1
+				
+						# Optimization: process in batches to avoid blocking too long
+						if games_folded % 100 == 0:
+							await get_tree().process_frame
+				
+				# Yield occasionally to prevent UI freeze on large libraries
+				if groups_processed % 50 == 0:
+					await get_tree().process_frame
 			
 			print("[CoverFolding] Processed %d cover groups, folded %d games" % [groups_processed, games_folded])
 			return games_folded,
@@ -1488,6 +1627,7 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 		# Method 1: Try using DirAccess with the parent directory
 		var parent_dir = abs_path.get_base_dir()
 		var file_name = abs_path.get_file()
+		
 		var dir = DirAccess.open(parent_dir)
 		
 		if dir:
@@ -2156,14 +2296,18 @@ func get_all_platforms() -> Array[PlatformResource]:
 	return platforms
 
 func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
+	print("[Sync] remove_platform_games called for: %s" % platform_slug)
 	if not _is_db_ready:
+		print("[Sync] ERROR: Database not ready in remove_platform_games")
 		if callback.is_valid():
 			callback.call(false)
 		return
 	
+	print("[Sync] Queueing DB task for platform removal...")
 	# Queue all database operations on the DB thread to avoid race conditions
 	MemoryManager.queue_db_task(
 		func():
+			print("[Sync] DB task executing for %s" % platform_slug)
 			# First, get all games for this platform to delete their covers
 			_db.query("SELECT cover_url FROM games WHERE platform_slug = '%s'" % platform_slug)
 			var cover_urls: Array[String] = []
@@ -2172,9 +2316,13 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				if url != "":
 					cover_urls.append(url)
 			
+			print("[Sync] Found %d games to remove for %s" % [_db.query_result.size(), platform_slug])
+			
 			# Delete games from database and get the count
 			var count_before = _db.query_result.size()
 			var success = _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug)
+			
+			print("[Sync] DB delete result: %s" % success)
 			
 			return {
 				"success": success,
@@ -2182,6 +2330,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				"count": count_before
 			},
 		func(result: Dictionary):
+			print("[Sync] remove_platform_games callback executing")
 			var success = result.get("success", false)
 			var cover_urls = result.get("cover_urls", [])
 			var count = result.get("count", 0)
@@ -2193,12 +2342,20 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 					var cache_path = get_cached_image_path(url)
 					if FileAccess.file_exists(cache_path):
 						DirAccess.remove_absolute(cache_path)
-				covers_deleted += 1
+						covers_deleted += 1
+				print("[Sync] Deleted %d/%d cover files for %s" % [covers_deleted, cover_urls.size(), platform_slug])
+			else:
+				print("[Sync] Removal failed for %s, not deleting covers" % platform_slug)
 			
+			print("[Sync] Emitting games_removed signal for %s" % platform_slug)
 			games_removed.emit(platform_slug)
 			
+			print("[Sync] remove_platform_games callback valid: %s" % callback.is_valid())
 			if callback.is_valid():
+				print("[Sync] Calling callback with success=%s" % success)
 				callback.call(success)
+			else:
+				print("[Sync] WARNING: Callback is not valid in remove_platform_games!")
 	)
 
 # ==================== CACHE ====================
@@ -2485,3 +2642,44 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 			if callback.is_valid():
 				callback.call(updated_count)
 	)
+
+func get_sync_state() -> int:
+	"""Get the current sync state for debugging/monitoring."""
+	return _sync_state
+
+func get_sync_state_name() -> String:
+	"""Get the current sync state as a readable string."""
+	match _sync_state:
+		SyncState.IDLE:
+			return "IDLE"
+		SyncState.PRECHECK_DISABLED:
+			return "PRECHECK_DISABLED"
+		SyncState.CALCULATING_TOTALS:
+			return "CALCULATING_TOTALS"
+		SyncState.PLATFORM_ITERATING:
+			return "PLATFORM_ITERATING"
+		SyncState.PLATFORM_FETCHING:
+			return "PLATFORM_FETCHING"
+		SyncState.PLATFORM_PROCESSING:
+			return "PLATFORM_PROCESSING"
+		SyncState.PLATFORM_BATCHING:
+			return "PLATFORM_BATCHING"
+		SyncState.COVER_FOLDING:
+			return "COVER_FOLDING"
+		SyncState.COMPLETING:
+			return "COMPLETING"
+		SyncState.ERROR:
+			return "ERROR"
+		_:
+			return "UNKNOWN"
+
+func get_current_platform_progress() -> Dictionary:
+	"""Get progress information for the current platform being synced."""
+	return {
+		"platform_index": _sync_platform_index,
+		"total_platforms": _sync_platform_count,
+		"platform_name": _sync_platform,
+		"games_synced": _sync_current_synced,
+		"games_total": _sync_current_total,
+		"batch_offset": _sync_current_offset
+	}
