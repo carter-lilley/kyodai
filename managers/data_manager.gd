@@ -85,6 +85,13 @@ var _precalc_callback: Callable = Callable()
 var _active_downloads: Dictionary = {}  # url -> {callbacks: Array[Callable], completed: bool, success: bool}
 var _active_downloads_mutex: Mutex = Mutex.new()  # Thread-safe access to _active_downloads
 
+# Performance tracking for background thread optimization
+var _perf_batch_start_time: int = 0
+var _perf_phase1_duration: int = 0  # GameResource creation (now on background thread)
+var _perf_phase2_duration: int = 0  # Sibling checks
+var _perf_phase3_duration: int = 0  # DB inserts
+var _perf_total_batches: int = 0
+
 func _ready():
 	_ensure_memory_manager()
 	_initialize_database()
@@ -679,45 +686,110 @@ func _precalculate_totals(platforms: Array, callback: Callable):
 func _fetch_batch(platform_id: String, offset: int, limit: int, use_cache: bool, callback: Callable):
 	NetworkManager.fetch_games(callback, platform_id, offset, limit, use_cache)
 
-# ==================== BATCH PROCESSING (UNCHANGED) ====================
+# ==================== BATCH PROCESSING (BACKGROUND THREAD) ====================
 
 func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
-	"""Process a batch of games using the MemoryManager batch scheduler."""
+	"""Process a batch of games using the MemoryManager batch scheduler.
+	
+	NEW: Phase 1 (GameResource creation) now runs on background thread to prevent UI lag.
+	Phases 2-3 continue to run asynchronously as before.
+	"""
 	var total = items.size()
 	if total == 0:
 		on_complete.call(0)
 		return
 	
-	# Phase 1: Create GameResources (fast, on main thread)
+	# Performance tracking
+	_perf_batch_start_time = Time.get_ticks_msec()
+	_perf_total_batches += 1
+	
+	# NEW: Phase 1 - Create GameResources on BACKGROUND thread (was on main thread)
+	# This prevents UI lag when processing large batches
+	print("[DataManager] Batch %d: Starting Phase 1 (GameResource creation) on background thread for %d games" % [_perf_total_batches, total])
+	
+	var game_creation_data: Array[Dictionary] = []
+	for i in range(items.size()):
+		game_creation_data.append({
+			"index": i,
+			"data": items[i],
+			"platform_slug": platform_slug
+		})
+	
+	# Use DB thread for GameResource creation (CPU-bound work)
+	var phase1_start = Time.get_ticks_msec()
+	var phase1_batch_id = MemoryManager.start_batch(
+		game_creation_data,
+		func(item: Dictionary, _idx: int) -> Dictionary:
+			# This runs on BACKGROUND thread
+			var game_data = item["data"]
+			var slug = item["platform_slug"]
+			var game = _create_game_from_data(game_data, slug, false)
+			return {
+				"game": game,
+				"index": item["index"],
+				"romm_id": game.romm_id if game else 0,
+				"siblings": game.siblings if game else []
+			},
+		MemoryManager.BatchMode.DB_THREAD,
+		20,  # Process 20 games per frame (tune based on performance)
+		func(processed: int, total_count: int):
+			# Progress callback - minimal work, just signal progress
+			var percent = float(processed) / float(total_count) * 100.0
+			emit_signal("sync_progress", percent * 0.1, processed, total_count),  # Phase 1 is 10% of total progress
+		func(phase1_results: Array):
+			# Phase 1 complete - track timing
+			_perf_phase1_duration = Time.get_ticks_msec() - phase1_start
+			print("[DataManager] Batch %d: Phase 1 complete in %dms (%.1fms per game) - now on main thread" % [
+				_perf_total_batches, 
+				_perf_phase1_duration, 
+				float(_perf_phase1_duration) / float(total)
+			])
+			# Continue with Phases 2-3
+			_process_phase2_sibling_checks(phase1_results, platform_slug, on_complete)
+	)
+
+func _process_phase2_sibling_checks(phase1_results: Array, platform_slug: String, on_complete: Callable):
+	"""Phase 2: Batch sibling checks (async, spread across frames).
+	
+	Called after Phase 1 (GameResource creation) completes on background thread.
+	"""
+	# Filter out null games and build data structures
 	var games: Array[GameResource] = []
 	var sibling_check_data: Array[Dictionary] = []
 	
-	for i in range(items.size()):
-		var game_data = items[i]
-		var game = _create_game_from_data(game_data, platform_slug, false)  # false = don't check siblings yet
-		
-		if game != null:
-			games.append(game)
-			sibling_check_data.append({
-				"index": i,
-				"romm_id": game.romm_id,
-				"siblings": game.siblings
-			})
+	for result in phase1_results:
+		if result is Dictionary and result.has("game"):
+			var game = result["game"]
+			if game != null:
+				games.append(game)
+				sibling_check_data.append({
+					"index": result["index"],
+					"romm_id": result["romm_id"],
+					"siblings": result["siblings"]
+				})
 	
 	if games.is_empty():
+		print("[DataManager] Batch %d: Phase 1 complete, no valid games to process" % _perf_total_batches)
 		on_complete.call(0)
 		return
 	
+	print("[DataManager] Batch %d: Starting Phase 2 (sibling checks) for %d games" % [_perf_total_batches, games.size()])
+	
 	# Phase 2: Batch sibling checks (async, spread across frames)
+	var phase2_start = Time.get_ticks_msec()
 	var sibling_batch_id = MemoryManager.start_batch(
 		sibling_check_data,
 		func(item: Dictionary, _idx: int) -> bool:
 			return _check_siblings_in_db(item["romm_id"], item["siblings"]),
 		MemoryManager.BatchMode.DB_THREAD,
-		15,  # 15 sibling checks per frame (increased for better performance)
+		15,  # 15 sibling checks per frame
 		func(processed: int, total_count: int):
-			pass,
+			pass,  # Progress tracked in Phase 3
 		func(sibling_results: Array):
+			# Phase 2 complete - track timing
+			_perf_phase2_duration = Time.get_ticks_msec() - phase2_start
+			print("[DataManager] Batch %d: Phase 2 complete in %dms" % [_perf_total_batches, _perf_phase2_duration])
+			
 			# Apply sibling results to games
 			for i in range(sibling_results.size()):
 				if i < games.size():
@@ -725,12 +797,16 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 					games[i].is_master_entry = not has_sibling
 			
 			# Apply consistent master selection by lowest ID within the batch
-			# This handles the case where multiple siblings are processed in the same batch
 			_ensure_consistent_masters_in_batch(games)
 			
 			# Phase 3: Batch DB inserts (async, spread across frames)
+			print("[DataManager] Batch %d: Starting Phase 3 (DB inserts)" % _perf_total_batches)
 			_db_insert_batch(games, on_complete)
 	)
+
+# ==================== OLD SYNC PROCESSING (DEPRECATED) ====================
+# The old _process_batch implementation that ran on main thread is removed.
+# All batch processing now uses background threads for Phase 1.
 
 func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	"""Insert multiple games within a single database transaction.
@@ -792,6 +868,9 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 		on_complete.call(0)
 		return
 	
+	# Phase 3 timing
+	var phase3_start = Time.get_ticks_msec()
+	
 	# Chunk games into transaction-sized batches (250 per transaction)
 	const TRANSACTION_BATCH_SIZE: int = 250
 	var transaction_batches: Array[Array] = []
@@ -815,7 +894,7 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 	var had_error: bool = false
 	var error_message: String = ""
 	
-	print("[DataManager] Inserting %d games in %d transaction batches of max %d" % [total_games, transaction_batches.size(), TRANSACTION_BATCH_SIZE])
+	print("[DataManager] Batch %d: Inserting %d games in %d transaction batches of max %d" % [_perf_total_batches, total_games, transaction_batches.size(), TRANSACTION_BATCH_SIZE])
 	
 	# Process each transaction batch
 	var batch_id = MemoryManager.start_batch(
@@ -833,6 +912,9 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 			var percent = float(completed_games) / float(total_games) * 100.0
 			emit_signal("sync_progress", percent, completed_games, total_games),
 		func(results: Array):
+			# Phase 3 complete - track timing
+			_perf_phase3_duration = Time.get_ticks_msec() - phase3_start
+			
 			# Check if any batch failed
 			var all_success = true
 			for result in results:
@@ -869,6 +951,17 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 					
 					# Update sync current count
 					_sync_current += games.size()
+					
+					# Print performance summary
+					var total_batch_time = Time.get_ticks_msec() - _perf_batch_start_time
+					print("[DataManager] Batch %d: COMPLETE - Total: %dms | Phase1 (Resource Creation): %dms | Phase2 (Sibling Checks): %dms | Phase3 (DB Inserts): %dms | Games: %d" % [
+						_perf_total_batches,
+						total_batch_time,
+						_perf_phase1_duration,
+						_perf_phase2_duration,
+						_perf_phase3_duration,
+						games.size()
+					])
 					
 					# Phase 4: Batch cover downloads
 					_cover_download_batch(games_with_covers, on_complete)
