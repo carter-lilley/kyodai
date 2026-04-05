@@ -34,7 +34,7 @@ var _sync_skipped_no_cover: int = 0  # Counter for skipped games
 # Sync state machine
 enum SyncState {
 	IDLE,
-	PRECHECK_DISABLED,      # Remove disabled platforms
+	PRECHECK_DISABLED,      # Remove games from disabled platforms
 	CALCULATING_TOTALS,     # Pre-calculate game counts
 	PLATFORM_ITERATING,     # Iterate through platforms
 	PLATFORM_FETCHING,      # Fetch batch from current platform
@@ -54,6 +54,10 @@ var _sync_current_total: int = 0            # Total games in current platform
 var _sync_current_synced: int = 0           # Games synced in current platform
 var _sync_total_synced: int = 0             # Total synced across all platforms
 var _sync_final_callback: Callable = Callable()
+
+# NEW: Incremental sync state
+var _sync_force_full: bool = false          # Force full sync flag
+var _sync_current_updated_after: String = ""  # updated_after timestamp for current platform
 
 # Legacy sync state (for compatibility)
 var _sync_current: int = 0
@@ -208,6 +212,14 @@ func _create_tables():
 	_db.query("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
 	_db.query("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
 	
+	# Create cache_metadata table for per-platform sync timestamps
+	_db.query("""
+		CREATE TABLE IF NOT EXISTS cache_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT
+		)
+	""")
+	
 	# Migrate old cover_folded column to new cover_group system if needed
 	_migrate_cover_folding_schema()
 
@@ -295,10 +307,11 @@ func _escape_sql(text: String) -> String:
 
 # ==================== SYNC (ITERATIVE STATE MACHINE) ====================
 
-func sync_enabled_platforms(callback: Callable = Callable()) -> void:
+func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bool = false) -> void:
 	print("[Sync] ==========================================")
 	print("[Sync] sync_enabled_platforms called")
 	print("[Sync] Current state: %s" % get_sync_state_name())
+	print("[Sync] Force full sync: %s" % force_full_sync)
 	print("[Sync] Callback valid: %s" % callback.is_valid())
 	print("[Sync] ==========================================")
 	
@@ -327,6 +340,8 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 	_sync_total_synced = 0
 	_sync_final_callback = callback
 	_sync_skipped_no_cover = 0
+	_sync_force_full = force_full_sync
+	_sync_current_updated_after = ""
 	
 	var enabled = _get_enabled_platforms()
 	print("[Sync] Enabled platforms: %d" % enabled.size())
@@ -350,7 +365,7 @@ func sync_enabled_platforms(callback: Callable = Callable()) -> void:
 		_remove_disabled_platforms_iterative(disabled_platforms, enabled, callback)
 	else:
 		print("[Sync] No disabled platforms to remove, starting sync directly")
-		_start_sync_iterative(enabled, callback)
+		_start_sync_iterative(enabled, callback, _sync_force_full)
 
 func _remove_disabled_platforms_iterative(platforms: Array[String], enabled_platforms: Array, final_callback: Callable):
 	"""Remove games from disabled platforms iteratively, then start sync"""
@@ -374,7 +389,7 @@ func _remove_disabled_platforms_iterative(platforms: Array[String], enabled_plat
 			await get_tree().process_frame
 	
 	print("[Sync] Removed %d/%d disabled platforms, starting sync with %d enabled platforms" % [removed_count, total_to_remove, enabled_platforms.size()])
-	_start_sync_iterative(enabled_platforms, final_callback)
+	_start_sync_iterative(enabled_platforms, final_callback, _sync_force_full)
 
 func _remove_platform_sync(platform_slug: String) -> bool:
 	"""Synchronous wrapper to remove a platform - returns success"""
@@ -408,12 +423,16 @@ func _remove_platform_sync(platform_slug: String) -> bool:
 	print("[Sync] Removal completed with success: %s" % state.success)
 	return state.success
 
-func _start_sync_iterative(enabled: Array, callback: Callable):
+func _start_sync_iterative(enabled: Array, callback: Callable, force_full_sync: bool = false):
 	"""Start the actual sync after cleaning up disabled platforms"""
 	print("[Sync] _start_sync_iterative called")
 	print("[Sync]   - enabled count: %d" % enabled.size())
+	print("[Sync]   - force full sync: %s" % force_full_sync)
 	print("[Sync]   - callback valid: %s" % callback.is_valid())
 	print("[Sync]   - callback hash: %d" % callback.hash())
+	
+	# Store force_full_sync flag for use during platform processing
+	_sync_force_full = force_full_sync
 	
 	if enabled.size() == 0:
 		print("[Sync] No platforms enabled, completing immediately")
@@ -517,6 +536,25 @@ func _process_next_platform():
 		"name": platform.name
 	}
 	
+	# Determine sync mode for this platform
+	_sync_current_updated_after = ""
+	if not _sync_force_full:
+		var last_sync = get_last_sync_time(platform.slug)
+		if last_sync != "":
+			# Check if it's been more than a week
+			var last_sync_time = Time.get_unix_time_from_datetime_string(last_sync)
+			var one_week_ago = Time.get_unix_time_from_system() - (7 * 24 * 60 * 60)
+			if last_sync_time > one_week_ago:
+				# Use incremental sync
+				_sync_current_updated_after = last_sync
+				print("[Sync] Platform '%s' - Using incremental sync (updated_after: %s)" % [platform.name, last_sync])
+			else:
+				print("[Sync] Platform '%s' - Last sync was over a week ago, using full sync" % platform.name)
+		else:
+			print("[Sync] Platform '%s' - No previous sync, using full sync" % platform.name)
+	else:
+		print("[Sync] Platform '%s' - Force full sync enabled" % platform.name)
+	
 	# Reset batch tracking for this platform
 	_sync_current_offset = 0
 	_sync_current_synced = 0
@@ -530,10 +568,13 @@ func _fetch_platform_batch():
 	var batch_size = 250
 	var platform_id = _sync_current_platform_data.id
 	
-	_fetch_batch(str(platform_id), _sync_current_offset, batch_size, true, func(data, error):
+	_fetch_batch(str(platform_id), _sync_current_offset, batch_size, true, _sync_current_updated_after, func(data, error):
 		if error != "" or not data is Dictionary:
-			# Error fetching - skip to next platform
+			# Error fetching - save sync timestamp and skip to next platform
 			print("[Sync] Error fetching platform '%s': %s" % [_sync_current_platform_data.name, error])
+			var current_time = Time.get_datetime_string_from_system(true)
+			set_last_sync_time(_sync_current_platform_data.slug, current_time)
+			print("[Sync] Platform '%s' error - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
 			_sync_current_platform_idx += 1
 			_process_next_platform()
 			return
@@ -542,7 +583,10 @@ func _fetch_platform_batch():
 		var items = data.get("items", [])
 		
 		if total == 0 or items.size() == 0:
-			# No games - move to next platform
+			# No games - save sync timestamp and move to next platform
+			var current_time = Time.get_datetime_string_from_system(true)
+			set_last_sync_time(_sync_current_platform_data.slug, current_time)
+			print("[Sync] Platform '%s' has no games - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
 			_sync_current_platform_idx += 1
 			_process_next_platform()
 			return
@@ -558,7 +602,10 @@ func _fetch_platform_batch():
 			
 			# Check if we need more batches
 			if _sync_current_synced >= _sync_current_total:
-				# Platform complete - move to next
+				# Platform complete - save sync timestamp and move to next
+				var current_time = Time.get_datetime_string_from_system(true)
+				set_last_sync_time(_sync_current_platform_data.slug, current_time)
+				print("[Sync] Platform '%s' complete - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
 				_sync_current_platform_idx += 1
 				_process_next_platform()
 			else:
@@ -672,7 +719,7 @@ func _precalculate_totals(platforms: Array, callback: Callable):
 	
 	for platform in platforms:
 		# Fetch just the total count (offset=0, limit=1) - don't cache pre-calc calls
-		_fetch_batch(str(platform.id), 0, 1, false, func(data, error):
+		_fetch_batch(str(platform.id), 0, 1, false, "", func(data, error):
 			if error == "" and data is Dictionary:
 				_precalc_total += int(data.get("total", 0))
 			
@@ -683,8 +730,8 @@ func _precalculate_totals(platforms: Array, callback: Callable):
 				cb.call(_precalc_total)
 		)
 
-func _fetch_batch(platform_id: String, offset: int, limit: int, use_cache: bool, callback: Callable):
-	NetworkManager.fetch_games(callback, platform_id, offset, limit, use_cache)
+func _fetch_batch(platform_id: String, offset: int, limit: int, use_cache: bool, updated_after: String, callback: Callable):
+	NetworkManager.fetch_games(callback, platform_id, offset, limit, use_cache, updated_after)
 
 # ==================== BATCH PROCESSING (BACKGROUND THREAD) ====================
 
@@ -2512,18 +2559,20 @@ func get_random_cached_cover_path() -> String:
 		return image_files[randi() % image_files.size()]
 	return ""
 
-func get_last_sync_time() -> String:
+func get_last_sync_time(platform_slug: String = "") -> String:
 	if not _is_db_ready:
 		return ""
-	_db.query("SELECT value FROM cache_metadata WHERE key = 'last_sync'")
+	var key = "last_sync_" + platform_slug if platform_slug != "" else "last_sync"
+	_db.query("SELECT value FROM cache_metadata WHERE key = '%s'" % key)
 	if _db.query_result.size() > 0:
 		return _db.query_result[0]["value"]
 	return ""
 
-func set_last_sync_time(timestamp: String):
+func set_last_sync_time(platform_slug: String, timestamp: String):
 	if not _is_db_ready:
 		return
-	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('last_sync', '%s')" % timestamp)
+	var key = "last_sync_" + platform_slug if platform_slug != "" else "last_sync"
+	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('%s', '%s')" % [key, timestamp])
 
 # ==================== DOWNLOADED GAMES SCAN ====================
 

@@ -93,6 +93,14 @@ func _build_view():
 	sync_button.pressed.connect(_on_sync_pressed)
 	_platforms_container.add_child(sync_button)
 	
+	# Add full sync button
+	var full_sync_button = Button.new()
+	full_sync_button.text = "Full Sync"
+	full_sync_button.name = "FullSyncButton"
+	full_sync_button.tooltip_text = "Force a complete resync of all platforms (ignores incremental sync)"
+	full_sync_button.pressed.connect(_on_full_sync_pressed)
+	_platforms_container.add_child(full_sync_button)
+	
 	var spacer4 = Control.new()
 	spacer4.custom_minimum_size = Vector2(0, 20)
 	_platforms_container.add_child(spacer4)
@@ -100,7 +108,7 @@ func _build_view():
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "SelectAllButton", "FoldCoversContainer"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "FoldCoversContainer"]:
 			continue
 		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -272,7 +280,7 @@ func _load_platforms_from_database():
 	
 	# Clear existing cards
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "SelectAllButton"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton"]:
 			continue
 		if child is PlatformCard:
 			child.queue_free()
@@ -455,6 +463,40 @@ func _on_sync_pressed():
 		else:
 			NotificationManager.show_notification("Sync failed: %s" % message, Notification.Type.ERROR)
 	)
+
+func _on_full_sync_pressed():
+	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
+	_sync_triggered = true
+	
+	if not NetworkManager.is_online():
+		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
+		return
+	
+	var full_sync_button: Button = _platforms_container.get_node("FullSyncButton")
+	var sync_button: Button = _platforms_container.get_node("SyncButton")
+	
+	if full_sync_button:
+		full_sync_button.disabled = true
+		full_sync_button.text = "Full Syncing..."
+	
+	if sync_button:
+		sync_button.disabled = true
+	
+	# Call sync with force_full_sync = true
+	DataManager.sync_enabled_platforms(func(success: bool, message: String, synced: int, total: int):
+		if full_sync_button:
+			full_sync_button.disabled = false
+			full_sync_button.text = "Full Sync"
+		
+		if sync_button:
+			sync_button.disabled = false
+			sync_button.text = "Sync Enabled Platforms"
+		
+		if success:
+			NotificationManager.show_notification("Full sync complete! %s" % message, Notification.Type.SUCCESS)
+		else:
+			NotificationManager.show_notification("Full sync failed: %s" % message, Notification.Type.ERROR)
+	, true)  # true = force_full_sync
 
 func _update_select_all_button_text():
 	var select_all_button: Button = _platforms_container.get_node("SelectAllButton")

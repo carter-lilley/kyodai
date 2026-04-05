@@ -267,7 +267,7 @@ func _count_games_in_data(data: Variant) -> int:
 
 # ==================== ROMM API OPERATIONS ====================
 
-func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0, limit: int = 250, use_cache: bool = true):
+func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0, limit: int = 250, use_cache: bool = true, updated_after: String = ""):
 	if not _is_online:
 		callback.call({}, "Not connected")
 		return
@@ -275,6 +275,8 @@ func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0
 	var endpoint = "/roms?offset=%d&limit=%d" % [offset, limit]
 	if platform_slug != "":
 		endpoint += "&platform_ids=" + platform_slug
+	if updated_after != "":
+		endpoint += "&updated_after=" + updated_after.uri_encode()
 	
 	make_request(endpoint, func(data, error):
 		var success = error == ""
