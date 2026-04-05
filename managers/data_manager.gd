@@ -51,6 +51,7 @@ var _sync_current_platform_idx: int = 0     # Current platform index (0-based)
 var _sync_current_platform_data: Dictionary = {}  # Current platform info
 var _sync_current_offset: int = 0           # Current batch offset
 var _sync_current_total: int = 0            # Total games in current platform
+var _sync_precalc_platform_total: int = 0   # Pre-calculated total for current platform
 var _sync_current_synced: int = 0           # Games synced in current platform
 var _sync_total_synced: int = 0             # Total synced across all platforms
 var _sync_final_callback: Callable = Callable()
@@ -84,6 +85,7 @@ var _batch_success_count: int = 0
 var _precalc_pending: int = 0
 var _precalc_total: int = 0
 var _precalc_callback: Callable = Callable()
+var _precalc_platform_totals: Dictionary = {}  # platform_id -> total count
 
 # Cover download deduplication - tracks in-flight downloads across entire sync
 var _active_downloads: Dictionary = {}  # url -> {callbacks: Array[Callable], completed: bool, success: bool}
@@ -558,6 +560,7 @@ func _process_next_platform():
 	# Reset batch tracking for this platform
 	_sync_current_offset = 0
 	_sync_current_synced = 0
+	_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
 	
 	# Start fetching this platform
 	_sync_state = SyncState.PLATFORM_FETCHING
@@ -583,7 +586,13 @@ func _fetch_platform_batch():
 		var items = data.get("items", [])
 		
 		if total == 0 or items.size() == 0:
-			# No games - save sync timestamp and move to next platform
+			# No games - for incremental sync with offset 0, increment progress by platform total
+			if _sync_current_offset == 0 and _sync_current_updated_after != "":
+				# Increment current by this platform's pre-calculated total
+				_sync_current += _sync_precalc_platform_total
+				print("[Sync] Platform '%s' - No changes, advanced progress by %d" % [_sync_current_platform_data.name, _sync_precalc_platform_total])
+			
+			# Save sync timestamp and move to next platform
 			var current_time = Time.get_datetime_string_from_system(true)
 			set_last_sync_time(_sync_current_platform_data.slug, current_time)
 			print("[Sync] Platform '%s' has no games - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
@@ -711,6 +720,7 @@ func _precalculate_totals(platforms: Array, callback: Callable):
 	"""Fetch total game count for all platforms upfront using instance vars (no closures)"""
 	_precalc_pending = platforms.size()
 	_precalc_total = 0
+	_precalc_platform_totals.clear()
 	_precalc_callback = callback
 	
 	if _precalc_pending == 0:
@@ -718,10 +728,13 @@ func _precalculate_totals(platforms: Array, callback: Callable):
 		return
 	
 	for platform in platforms:
+		var platform_id = str(platform.id)
 		# Fetch just the total count (offset=0, limit=1) - don't cache pre-calc calls
-		_fetch_batch(str(platform.id), 0, 1, false, "", func(data, error):
+		_fetch_batch(platform_id, 0, 1, false, "", func(data, error):
 			if error == "" and data is Dictionary:
-				_precalc_total += int(data.get("total", 0))
+				var platform_total = int(data.get("total", 0))
+				_precalc_total += platform_total
+				_precalc_platform_totals[platform_id] = platform_total
 			
 			_precalc_pending -= 1
 			if _precalc_pending <= 0:
