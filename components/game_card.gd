@@ -857,7 +857,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 			_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
 			_badge_effect.set_border_inset_pixels(total_inset)
 			# Pass the top bar safe zone (cyan debug overlay)
-			_badge_effect.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
+			_badge_effect.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, true)
 		
 		return
 	
@@ -910,7 +910,7 @@ func _update_platform_icon_rect(icon_texture: Texture2D):
 		_badge_effect.set_badge_dimensions(Vector2(badge_width, badge_height))
 		_badge_effect.set_border_inset_pixels(total_inset)
 		# Pass safe zone to shader for debugging (set last param to true to show debug)
-		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
+		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, true)
 	
 	# Apply padding to safe zone for icon placement
 	var padding = min(safe_width, safe_height) * icon_padding * 0.25

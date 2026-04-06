@@ -296,15 +296,16 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 		push_error("[MemoryManager] Not initialized - cannot queue DB task")
 		return
 	
-	_instance._db_mutex.lock()
 	var current_size = _instance._db_queue.size()
 	
-	if current_size >= MAX_DB_QUEUE_SIZE:
-		_instance._db_mutex.unlock()
-		OS.delay_msec(10)
+	# If queue is full, wait non-blocking with timer
+	while current_size >= MAX_DB_QUEUE_SIZE:
+		await _instance.get_tree().create_timer(0.01).timeout
 		_instance._db_mutex.lock()
 		current_size = _instance._db_queue.size()
+		_instance._db_mutex.unlock()
 	
+	_instance._db_mutex.lock()
 	_instance._db_queue.append({"callable": callable, "callback": callback})
 	_instance._db_mutex.unlock()
 	_instance._db_semaphore.post()

@@ -1070,8 +1070,8 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 				"thread_index": chunk.index % MemoryManager.get_download_thread_count()
 			})
 		
-		# Wait before retry
-		OS.delay_msec(int(CHUNK_RETRY_DELAY_SEC * 1000))
+		# Wait before retry using non-blocking timer
+		await get_tree().create_timer(CHUNK_RETRY_DELAY_SEC).timeout
 		
 		# Queue retry via thread pool
 		MemoryManager.queue_parallel_downloads(
