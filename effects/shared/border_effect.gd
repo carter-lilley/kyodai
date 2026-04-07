@@ -28,12 +28,6 @@ func _update_shader_params() -> void:
 	
 	var border_size = _settings.get("border_size", 0.05)
 	var border_fade_in = _settings.get("border_fade_in", 0.0)
-	
-	print("[BorderEffect] _update_shader_params: border_size=%.3f, effect_id=%s, visible=%s, alpha=%s" % [
-		border_size, effect_id, visible, 
-		material.get_shader_parameter("effect_alpha") if material is ShaderMaterial else "N/A"
-	])
-	
 	var border_gradient = _settings.get("border_gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
 	var inner_stroke_width = _settings.get("inner_stroke_width", 0.0)

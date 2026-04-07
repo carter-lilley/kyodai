@@ -899,12 +899,6 @@ func _show_focus_effects(show: bool) -> void:
 			var base_settings = focus_effect._base_effect._settings
 			var focus_settings = focus_effect._settings
 			
-			print("[GameCard] Overlapping effect '%s' - Base border_size: %s, Focus border_size: %s" % [
-				focus_effect.effect_id, 
-				base_settings.get("border_size", "N/A"), 
-				focus_settings.get("border_size", "N/A")
-			])
-			
 			# Tween from base to focus settings (or vice versa)
 			var from_settings = base_settings if show else focus_settings
 			var to_settings = focus_settings if show else base_settings

@@ -67,8 +67,6 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	to preserve the original focus effect configuration."""
 	var tweenables = get_tweenable_settings()
 	
-	print("[EffectBase:%s] tween_settings called, progress=%.2f, tweenables=%s" % [effect_id, progress, tweenables])
-	
 	# Create a temporary settings dict for interpolation
 	var temp_settings = _settings.duplicate()
 	
@@ -80,7 +78,6 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 			# Interpolate based on type
 			var current_val = _interpolate_value(from_val, to_val, progress)
 			temp_settings[setting_name] = current_val
-			print("[EffectBase:%s]   %s: %.2f -> %.2f = %.2f" % [effect_id, setting_name, from_val, to_val, current_val])
 	
 	# Apply the interpolated settings WITHOUT storing them in _settings
 	_apply_tweened_settings(temp_settings)
