@@ -10,8 +10,6 @@ android download manager and file streaming
 chunk reassembly progress notif
 saves
 
-refactor depreciated card shader code
-
 ## UI
 	always zoom to margin
 	scale from edges (sides) so no overlap

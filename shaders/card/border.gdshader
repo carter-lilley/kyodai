@@ -19,7 +19,7 @@ uniform bool use_outer_stroke_gradient = false;
 uniform sampler2D outer_stroke_gradient_texture : filter_linear, repeat_disable;
 uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
-// Shared shape parameters from CardState (calculated once, used by all effects)
+// Shared shape parameters from EffectContainerState (calculated once, used by all effects)
 uniform float corner_radius_pixels = 0.0;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
@@ -37,11 +37,11 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// Convert border ratios to pixels (corner_radius_pixels comes from CardState)
+	// Convert border ratios to pixels (corner_radius_pixels comes from EffectContainerState)
 	float border_width_pixels = border_width_ratio * card_size.x;
 	float border_fade_in_pixels = border_fade_in_ratio * card_size.x;
 	
-	// Use shared corner_radius_pixels from CardState for consistent rounding
+	// Use shared corner_radius_pixels from EffectContainerState for consistent rounding
 	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);

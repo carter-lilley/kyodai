@@ -3,7 +3,7 @@ shader_type canvas_item;
 uniform vec2 card_size = vec2(202.0, 270.0);
 uniform float corner_radius_ratio = 0.06;
 
-// Shared shape parameters from CardState (calculated once, used by all effects)
+// Shared shape parameters from EffectContainerState (calculated once, used by all effects)
 uniform float corner_radius_pixels = 0.0;
 uniform float total_inset_pixels = 0.0;
 uniform float inner_corner_radius_pixels = 0.0;  // Radius after glass inset
@@ -144,7 +144,7 @@ void fragment() {
 		}
 	}
 	
-	// Clip to card shape using shared shape parameters from CardState
+	// Clip to card shape using shared shape parameters from EffectContainerState
 	// Calculate inner size (after glass inset) and check SDF against that
 	float glass_inset_pixels = glass_inset_ratio * card_size.x;
 	vec2 inner_size = card_size - vec2(glass_inset_pixels * 2.0);

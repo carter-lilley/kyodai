@@ -17,7 +17,7 @@ uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
 uniform float smart_crop_overshoot = 0.15;
 
-// Shared shape parameters from CardState (calculated once, used by all effects)
+// Shared shape parameters from EffectContainerState (calculated once, used by all effects)
 uniform float corner_radius_pixels = 0.0;
 uniform float total_inset_pixels = 0.0;
 
@@ -207,7 +207,7 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// Use shared shape parameters from CardState
+	// Use shared shape parameters from EffectContainerState
 	// total_inset_pixels already includes border + glass insets
 	// Subtract padding to make base card sit deeper under the border
 	// (negative padding = larger card, extending further under the border edge)
@@ -221,7 +221,7 @@ void fragment() {
 	vec2 inner_offset = vec2(effective_border_inset);
 	
 	// Calculate the outer edge (base card shape)
-	// Use shared corner_radius_pixels from CardState for consistent rounding
+	// Use shared corner_radius_pixels from EffectContainerState for consistent rounding
 	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 	

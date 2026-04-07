@@ -1,7 +1,7 @@
 class_name CardDesignerView
 extends Control
 
-var _card_state: CardState = CardState.new()
+var _container_state: EffectContainerState = EffectContainerState.for_card()
 var _current_config: Dictionary = {}
 
 var _preview_card: GameCard
@@ -215,11 +215,11 @@ func _load_current_config():
 	_orientation_btn.select(_current_config.get("card_orientation", 0))
 	_corner_slider.value = _current_config.get("corner_radius", 0.06)
 	
-	_card_state.orientation = _current_config.get("card_orientation", 0)
+	_container_state.orientation = _current_config.get("card_orientation", 0)
 	# Corner radius is now 0.0-1.0 ratio directly
-	_card_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
-	_card_state.effect_settings = _current_config.get("effects", [])
-	_card_state.focus_effect_settings = _current_config.get("focus_effects", [])
+	_container_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
+	_container_state.effect_settings = _current_config.get("effects", [])
+	_container_state.focus_effect_settings = _current_config.get("focus_effects", [])
 
 func _get_default_config() -> Dictionary:
 	return {
@@ -233,7 +233,7 @@ func _setup_preview_card():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
-	var state = CardState.new()
+	var state = EffectContainerState.for_card()
 	state.orientation = _current_config.get("card_orientation", 0)
 	# Corner radius is now 0.0-1.0 ratio directly
 	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
@@ -557,7 +557,7 @@ func _on_add_effect(id: int):
 		var effects = _current_config.get("effects", [])
 		effects.append(new_effect)
 		_current_config["effects"] = effects
-		_card_state.effect_settings = effects
+		_container_state.effect_settings = effects
 		_rebuild_effects_ui()
 		_update_preview()
 		_save_to_settings()
@@ -567,7 +567,7 @@ func _on_remove_effect(index: int):
 	if index >= 0 and index < effects.size():
 		effects.remove_at(index)
 		_current_config["effects"] = effects
-		_card_state.effect_settings = effects
+		_container_state.effect_settings = effects
 		_rebuild_effects_ui()
 		_update_preview()
 		_save_to_settings()
@@ -693,7 +693,7 @@ func _on_add_focus_effect(id: int):
 		var focus_effects = _current_config.get("focus_effects", [])
 		focus_effects.append(new_effect)
 		_current_config["focus_effects"] = focus_effects
-		_card_state.focus_effect_settings = focus_effects
+		_container_state.focus_effect_settings = focus_effects
 		_rebuild_effects_ui()
 		_update_preview()
 		_save_to_settings()
@@ -703,7 +703,7 @@ func _on_remove_focus_effect(index: int):
 	if index >= 0 and index < focus_effects.size():
 		focus_effects.remove_at(index)
 		_current_config["focus_effects"] = focus_effects
-		_card_state.focus_effect_settings = focus_effects
+		_container_state.focus_effect_settings = focus_effects
 		_rebuild_effects_ui()
 		_update_preview()
 		_save_to_settings()
@@ -719,15 +719,15 @@ func _on_focus_effect_setting_changed(effect_index: int, setting_name: String, v
 
 func _on_orientation_changed(index: int):
 	_current_config["card_orientation"] = index
-	_card_state.orientation = index
-	_card_state.zoom_level = 1.5
+	_container_state.orientation = index
+	_container_state.zoom_level = 1.5
 	_update_preview()
 	_save_to_settings()
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
-	_card_state.corner_radius_ratio = value
-	_card_state.zoom_level = 1.5
+	_container_state.corner_radius_ratio = value
+	_container_state.zoom_level = 1.5
 	_update_preview()
 	_save_to_settings()
 
@@ -735,7 +735,7 @@ func _update_preview():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
-	var state = CardState.new()
+	var state = EffectContainerState.for_card()
 	state.orientation = _current_config.get("card_orientation", 0)
 	# Corner radius is now 0.0-1.0 ratio directly
 	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)

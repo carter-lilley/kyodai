@@ -223,13 +223,36 @@ func _rebuild_effects():
 	if border_config:
 		_original_border_size = border_config.get("settings", {}).get("border_size", 0.05)
 	
-	# Create focus EffectStack (starts invisible)
+	# Create focus EffectStack with its own state (duplicate to avoid clobbering normal stack's insets)
+	var focus_state = _card_state.duplicate()
+	focus_state.effect_settings = _card_state.focus_effect_settings.duplicate(true)
+	
+	# Create focus EffectStack (starts invisible, higher z-index than normal stack)
 	_focus_stack = EffectStack.new()
 	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_focus_stack.modulate.a = 0.0
+	_focus_stack.z_index = 100
 	_focus_stack.visible = false
 	visual_container.add_child(_focus_stack)
-	_focus_stack.initialize(_card_state, _card_state.focus_effect_settings)
+	_focus_stack.initialize(focus_state, _card_state.focus_effect_settings)
+	
+	# Remove base effect from focus stack - focus effects are overlays only,
+	# they should not draw the game texture (that's the normal stack's job)
+	var focus_base = _focus_stack.get_effect("base")
+	if focus_base:
+		focus_base.visible = false
+		focus_base.modulate.a = 0.0
+	
+	# Initialize focus effects with effect_alpha = 0.0 so they start hidden
+	# (shader default is 1.0, which would cause them to pop in before the tween)
+	# Exception: in preview mode, always show focus effects so designer can see them
+	var focus_alpha = 1.0 if preview_mode else 0.0
+	for child in _focus_stack.get_children():
+		if child is EffectBase and child.material is ShaderMaterial:
+			child.material.set_shader_parameter("effect_alpha", focus_alpha)
+	
+	# In preview mode, make focus stack visible
+	if preview_mode:
+		_focus_stack.visible = true
 	
 	# Ensure card_input is on top
 	if card_input:
@@ -887,29 +910,52 @@ func restore_focus_animation() -> void:
 	# Show focus effects
 	_show_focus_effects(true)
 
-## Shows or hides focus effects with a smooth fade transition via stack modulate
+## Shows or hides focus effects with a smooth fade transition via shader effect_alpha
 func _show_focus_effects(show: bool) -> void:
 	# In preview mode, always show focus effects so designer can see them
 	if preview_mode:
 		show = true
 	
-	var target_alpha: float = 1.0 if show else 0.0
-	
 	if show:
 		_focus_stack.visible = true
-		_focus_stack.modulate.a = 0.0
 	
-	var fade_tween = create_tween()
-	fade_tween.set_trans(Tween.TRANS_QUAD)
-	fade_tween.set_ease(Tween.EASE_OUT)
+	# Collect all effects with shader materials
+	var effects_to_fade: Array[EffectBase] = []
+	if _focus_stack:
+		for child in _focus_stack.get_children():
+			if child is EffectBase and child.material is ShaderMaterial:
+				effects_to_fade.append(child)
 	
+	if effects_to_fade.is_empty():
+		if not show:
+			_focus_stack.visible = false
+		return
+	
+	# Set initial alpha for each effect
+	if show:
+		for effect in effects_to_fade:
+			effect.material.set_shader_parameter("effect_alpha", 0.0)
+	
+	# Tween each effect's shader parameter
 	var start_alpha = 0.0 if show else 1.0
-	fade_tween.tween_method(func(t: float):
-		_focus_stack.modulate.a = t
-	, start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION)
+	var target_alpha = 1.0 if show else 0.0
+	
+	for effect in effects_to_fade:
+		var fade_tween = create_tween()
+		fade_tween.set_trans(Tween.TRANS_QUAD)
+		fade_tween.set_ease(Tween.EASE_OUT)
+		fade_tween.tween_method(func(t: float, eff: EffectBase = effect):
+			if eff.material is ShaderMaterial:
+				eff.material.set_shader_parameter("effect_alpha", t)
+		, start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION)
 	
 	if not show:
-		fade_tween.finished.connect(func(): _focus_stack.visible = false)
+		# Hide stack after all tweens finish
+		var hide_tween = create_tween()
+		hide_tween.set_trans(Tween.TRANS_QUAD)
+		hide_tween.set_ease(Tween.EASE_OUT)
+		hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
+		hide_tween.finished.connect(func(): _focus_stack.visible = false)
 
 ## Plays the enter animation: scales from 125% to 100% while fading opacity from 0% to 100%
 func play_enter_animation() -> void:
