@@ -8,6 +8,7 @@ var _badge_height: float = 0.0
 var _safe_zone: Vector4 = Vector4(0, 0, 0, 0)
 var _safe_zone_top_bar: Vector4 = Vector4(0, 0, 0, 0)
 var _show_safe_zone: bool = false
+var _icon_texture: Texture2D = null
 
 func _ready():
 	super._ready()
@@ -35,6 +36,8 @@ func _update_shader_params() -> void:
 	var badge_color = _settings.get("badge_color", Color.WHITE)
 	var badge_aspect = _settings.get("badge_aspect", Vector2(1.0, 1.0))
 	var badge_type = _settings.get("badge_type", 0)
+	var icon_padding = _settings.get("icon_padding", 0.5)
+	var icon_color = _settings.get("icon_color", Color.WHITE)
 	
 	_set_shader_param("card_size", _container_state.container_size)
 	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
@@ -72,6 +75,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("show_safe_zone", _show_safe_zone)
 	_set_shader_param("safe_zone", Vector4(_safe_zone.x, _safe_zone.y, _safe_zone.z, _safe_zone.w))
 	_set_shader_param("safe_zone_top_bar", Vector4(_safe_zone_top_bar.x, _safe_zone_top_bar.y, _safe_zone_top_bar.z, _safe_zone_top_bar.w))
+	_set_shader_param("icon_texture", _icon_texture)
+	_set_shader_param("has_icon_texture", _icon_texture != null)
+	_set_shader_param("icon_padding", icon_padding)
+	_set_shader_param("icon_color", icon_color)
 
 func set_border_width(width: float) -> void:
 	_border_width = width
@@ -104,6 +111,11 @@ func set_safe_zone_top_bar(safe_x: float, safe_y: float, safe_width: float, safe
 	_safe_zone_top_bar = Vector4(safe_x, safe_y, safe_width, safe_height)
 	_show_safe_zone = show_debug
 	_update_shader_params()
+
+func set_icon_texture(texture: Texture2D) -> void:
+	_icon_texture = texture
+	_update_shader_params()
+	queue_redraw()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

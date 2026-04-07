@@ -18,6 +18,12 @@ uniform float border_width_ratio = 0.0;
 uniform float border_inset_pixels = 0.0;
 uniform int badge_type = 0; // 0 = corner badge, 1 = top bar
 
+// Icon uniforms
+uniform sampler2D icon_texture;
+uniform bool has_icon_texture = false;
+uniform vec4 icon_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float icon_padding = 0.5;
+
 // Safe zone uniforms (set by GameCard for debugging)
 uniform bool show_safe_zone = false;
 uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (corner badge mode)
@@ -33,16 +39,13 @@ float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 }
 
 void fragment() {
-	if (hide_background) {
+	if (hide_background && !has_icon_texture) {
 		discard;
 	}
 	
 	vec2 pixel_pos = UV * card_size;
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
-	
-	// Note: corner_radius_pixels and total_inset_pixels are passed from CardState
-	// These are used for clipping the badge to the card shape
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
@@ -153,6 +156,64 @@ void fragment() {
 	
 	float card_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, inner_sdf);
 	final_color.a *= card_edge_alpha;
+	
+	// Draw icon within the safe zone
+	if (has_icon_texture) {
+		vec4 active_safe = badge_type == 0 ? safe_zone : safe_zone_top_bar;
+		float safe_x = active_safe.x;
+		float safe_y = active_safe.y;
+		float safe_w = active_safe.z;
+		float safe_h = active_safe.w;
+		
+		if (safe_w > 1.0 && safe_h > 1.0) {
+			// Apply padding inside safe zone
+			float padding = min(safe_w, safe_h) * icon_padding * 0.25;
+			float icon_x = safe_x + padding;
+			float icon_y = safe_y + padding;
+			float icon_w = max(safe_w - padding * 2.0, 1.0);
+			float icon_h = max(safe_h - padding * 2.0, 1.0);
+			
+			// Get texture dimensions for aspect ratio
+			vec2 tex_size = vec2(textureSize(icon_texture, 0));
+			float tex_aspect = tex_size.x / tex_size.y;
+			float safe_aspect = icon_w / icon_h;
+			
+			// Fit icon maintaining aspect ratio (contain)
+			float draw_w, draw_h;
+			if (tex_aspect > safe_aspect) {
+				draw_w = icon_w;
+				draw_h = icon_w / tex_aspect;
+			} else {
+				draw_h = icon_h;
+				draw_w = icon_h * tex_aspect;
+			}
+			
+			// Center within padded safe zone
+			float draw_x = icon_x + (icon_w - draw_w) * 0.5;
+			float draw_y = icon_y + (icon_h - draw_h) * 0.5;
+			
+			// Check if current pixel is within icon draw rect
+			if (pixel_pos.x >= draw_x && pixel_pos.x <= draw_x + draw_w &&
+				pixel_pos.y >= draw_y && pixel_pos.y <= draw_y + draw_h) {
+				// Convert to UV coordinates for icon texture
+				vec2 icon_uv = vec2(
+					(pixel_pos.x - draw_x) / draw_w,
+					(pixel_pos.y - draw_y) / draw_h
+				);
+				
+				vec4 tex_sample = texture(icon_texture, icon_uv);
+				
+				// Apply icon color (replace RGB, keep texture alpha - matches original icon_color_shader)
+				vec4 icon_col = vec4(icon_color.rgb, tex_sample.a);
+				
+				// Composite icon on top of badge background
+				final_color = vec4(
+					mix(final_color.rgb, icon_col.rgb, icon_col.a),
+					max(final_color.a, icon_col.a)
+				);
+			}
+		}
+	}
 	
 	// Debug: overlay safe zone in magenta for corner badge, cyan for top bar
 	if (show_safe_zone) {

@@ -17,7 +17,6 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 @onready var visual_container: Control = $VisualContainer
 @onready var card_input: Button = $VisualContainer/CardInput
 @onready var status_badge: Panel = $VisualContainer/CardInput/StatusBadge
-@onready var platform_icon: TextureRect = $VisualContainer/CardInput/PlatformIcon
 @onready var game_title_label: Label = $VisualContainer/CardInput/GameTitleLabel
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
@@ -37,13 +36,9 @@ const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 
 # Debug
 var _debug_safe_area: ColorRect = null
-const ICON_SIZE_RATIO: float = 0.16  # Icon slightly larger to fill badge
 
 var _current_texture: Texture2D = null
 var _card_state: CardState = CardState.new()
-
-# Static cache for icon materials to reduce shader compilation overhead
-static var _icon_material_cache: Dictionary = {}
 
 var _base_effect: BaseCardEffect = null
 var _border_effect: BorderEffect = null
@@ -728,280 +723,47 @@ func _update_status_icon():
 
 func _update_platform_badge():
 	if not _badge_effect:
-		if platform_icon:
-			platform_icon.visible = false
 		return
 	
 	if not game:
-		if platform_icon:
-			platform_icon.visible = false
+		_badge_effect.set_icon_texture(null)
 		return
 	
 	var platform_slug = game.platform_slug
 	var icon_texture: Texture2D = null
-	if platform_slug:
-		var icon_path = "res://assets/platforms/icon/icon_%s.png" % platform_slug
-		if ResourceLoader.exists(icon_path):
-			icon_texture = load(icon_path)
-	
-	if icon_texture:
-		_update_platform_icon_rect(icon_texture)
-	else:
-		if platform_icon:
-			platform_icon.visible = false
-
-func _update_platform_icon_rect(icon_texture: Texture2D):
-	if not platform_icon:
-		return
-	if not icon_texture:
-		platform_icon.visible = false
-		return
-	
-	platform_icon.visible = true
 	
 	var badge_config = _get_effect_config("badge")
 	var settings = badge_config.get("settings", {})
-	
+	var badge_type = settings.get("badge_type", 0)
 	var badge_size_setting = settings.get("badge_size", 1.0)
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
-	var icon_padding = settings.get("icon_padding", 0.5)
-	var icon_color = settings.get("icon_color", Color.WHITE)
-	var badge_type = settings.get("badge_type", 0)
-	
-	# For top bar mode, use wordmark instead of icon
-	var texture_to_use = icon_texture
-	if badge_type == 1 and game and game.platform_slug:
-		var wordmark_path = "res://assets/platforms/wordmark/wordmark_" + game.platform_slug + ".png"
-		if ResourceLoader.exists(wordmark_path):
-			var wordmark_tex = load(wordmark_path)
-			if wordmark_tex:
-				texture_to_use = wordmark_tex
 	
 	var card_width = _card_state.card_size.x
-	# Use pre-calculated shape parameters from CardState (shared by all effects)
 	var corner_radius_pixels = _card_state.corner_radius_pixels
 	var total_inset = _card_state.total_inset_pixels
-	
-	# Effective corner radius at the inset position (min-dimension based for card)
 	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
 	
-	# For badge: use the same calculation as the shader will use
-	var effective_corner_radius_badge = effective_corner_radius
-	
-	# Base badge size as ratio of card width
-	var base_badge_size = BADGE_SIZE_RATIO * card_width
-	var texture_size = texture_to_use.get_size()
-	var texture_aspect = texture_size.x / texture_size.y if texture_size.y > 0 else 1.0
-	
-	# Clamp aspect ratio to square
-	if badge_type != 1:
-		texture_aspect = 1.0
-	
-	# Handle top bar badge type differently
-	if badge_type == 1:
-		# Top bar: full width, height based on badge size
-		# Cap top bar height at 25% of card width (smaller than corner badge max)
-		var top_bar_max_size = card_width * 0.25
-		var bar_height = min(base_badge_size * badge_size_setting, top_bar_max_size)
-		
-		# Calculate top bar safe zone - Y always at top, X constrained by corner radius
-		# X: inset by radius from left/right rounded corners (inside point of bevel)
-		# Y: always at top (total_inset)
-		var top_bar_safe_x = total_inset + effective_corner_radius
-		var top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
-		var top_bar_safe_y = total_inset
-		var top_bar_safe_height = bar_height
-		
-		# Apply padding inside the safe zone (like corner mode)
-		# Padding reduces the drawable area, not the safe zone itself
-		var padding_x = top_bar_safe_width * icon_padding * 0.25
-		var padding_y = top_bar_safe_height * icon_padding * 0.25
-		var drawable_x = top_bar_safe_x + padding_x
-		var drawable_y = top_bar_safe_y + padding_y
-		var drawable_width = max(top_bar_safe_width - padding_x * 2, 10)
-		var drawable_height = max(top_bar_safe_height - padding_y * 2, 10)
-		
-		# Calculate wordmark dimensions to fit within drawable area
-		var draw_height = drawable_height
-		var draw_width = draw_height * texture_aspect
-		
-		# Clamp width to fit within drawable width
-		if draw_width > drawable_width:
-			draw_width = drawable_width
-			draw_height = draw_width / texture_aspect
-		
-		# Center within drawable area
-		var offset_x = drawable_x + (drawable_width - draw_width) * 0.5
-		var offset_y = drawable_y + (drawable_height - draw_height) * 0.5
-		
-		# Hide icon if drawable area is too small
-		if draw_width < 10.0 or draw_height < 10.0:
-			platform_icon.visible = false
+	if platform_slug:
+		if badge_type == 1:
+			var wordmark_path = "res://assets/platforms/wordmark/wordmark_" + platform_slug + ".png"
+			if ResourceLoader.exists(wordmark_path):
+				var wordmark_tex = load(wordmark_path)
+				if wordmark_tex:
+					icon_texture = wordmark_tex
 		else:
-			platform_icon.visible = true
-			platform_icon.texture = texture_to_use
-			platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-			platform_icon.offset_left = offset_x
-			platform_icon.offset_top = offset_y
-			platform_icon.offset_right = offset_x + draw_width
-			platform_icon.offset_bottom = offset_y + draw_height
-			platform_icon.modulate = Color.WHITE
-			
-			var shader_material = ShaderMaterial.new()
-			shader_material.shader = preload("res://shaders/icon_color_shader.gdshader")
-			shader_material.set_shader_parameter("icon_color", icon_color)
-			platform_icon.material = shader_material
-		
-		if _badge_effect:
-			# For top bar, pass full card width and bar height
-			_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
-			_badge_effect.set_border_inset_pixels(total_inset)
-			# Pass the top bar safe zone (cyan debug overlay)
-			_badge_effect.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, true)
-		
-		return
+			var icon_path = "res://assets/platforms/icon/icon_%s.png" % platform_slug
+			if ResourceLoader.exists(icon_path):
+				icon_texture = load(icon_path)
 	
-	
-	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-	# effective_corner_radius is already the actual radius in pixels (min-dim based)
-	# corner_margin is the distance from edge to the midpoint of the rounded curve
-	# Minimum 3px margin to prevent collapse with tiny radii
-	var corner_margin = effective_corner_radius * corner_midpoint_factor
-	
-	# Calculate badge size: independent of corner radius
-	# Scales from 15% to 45% of card width based on badge_size_setting (0.5 to 2.0)
-	# This ensures badge never disappears and has consistent sizing
-	var raw_badge_size = BADGE_SIZE_RATIO * card_width * badge_size_setting
-	var min_badge_size = card_width * 0.15  # 15% minimum - larger minimum for better visibility
-	var max_badge_size = card_width * 0.45  # 45% maximum - larger maximum for bigger badges
-	var target_badge_size = clamp(raw_badge_size, min_badge_size, max_badge_size)
-	
-	var badge_width: float
-	var badge_height: float
-	if texture_aspect >= 1.0:
-		badge_width = target_badge_size * texture_aspect
-		badge_height = target_badge_size
-	else:
-		badge_width = target_badge_size
-		badge_height = target_badge_size / texture_aspect
-	
-	var base_min_dim = min(badge_width, badge_height)
-	var base_inner_corner = (base_min_dim * 0.5) * clamp(inner_radius_setting, 0.0, 1.0)
-	var inner_corner_margin = base_inner_corner * corner_midpoint_factor
-	
-	# Safe zone calculation:
-	# Start at: total_inset + outer_corner_margin (after card's rounded edge midpoint)
-	# End at: total_inset + badge_size - inner_corner_margin (before badge's inner rounded corner)
-	# This creates a rectangular safe area between the two curved regions
-	# Cap corner_margin so it never exceeds 80% of badge size (prevents negative safe zone)
-	var max_corner_margin = badge_width * 0.8
-	var clamped_corner_margin = min(corner_margin, max_corner_margin)
-	
-	var safe_x = total_inset + clamped_corner_margin
-	var safe_y = total_inset + clamped_corner_margin
-	var safe_width = badge_width - clamped_corner_margin - inner_corner_margin
-	var safe_height = badge_height - clamped_corner_margin - inner_corner_margin
-	
-	# Safe zone can shrink to zero if needed - icon will scale proportionally or disappear
-	safe_width = max(safe_width, 0.0)
-	safe_height = max(safe_height, 0.0)
-	
-	if _badge_effect:
-		_badge_effect.set_badge_dimensions(Vector2(badge_width, badge_height))
-		_badge_effect.set_border_inset_pixels(total_inset)
-		# Pass safe zone to shader for debugging (set last param to true to show debug)
-		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, true)
-	
-	# Apply padding to safe zone for icon placement
-	var padding = min(safe_width, safe_height) * icon_padding * 0.25
-	safe_x += padding
-	safe_y += padding
-	safe_width -= padding * 2.0
-	safe_height -= padding * 2.0
-	safe_width = max(safe_width, 1.0)
-	safe_height = max(safe_height, 1.0)
-	
-	var icon_draw_width: float
-	var icon_draw_height: float
-	var safe_aspect = safe_width / safe_height
-	
-	if texture_aspect > safe_aspect:
-		icon_draw_width = safe_width
-		icon_draw_height = safe_width / texture_aspect
-	else:
-		icon_draw_height = safe_height
-		icon_draw_width = safe_height * texture_aspect
-	
-	var icon_offset_x = safe_x + (safe_width - icon_draw_width) * 0.5
-	var icon_offset_y = safe_y + (safe_height - icon_draw_height) * 0.5
-	
-	# Hide icon if safe zone is too small (less than 10px)
-	if safe_width < 10.0 or safe_height < 10.0:
-		platform_icon.visible = false
-		return
-	
-	platform_icon.visible = true
-	platform_icon.texture = texture_to_use
-	platform_icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	# Use manual offsets (scene has expand_mode=1, stretch_mode=5)
-	platform_icon.offset_left = icon_offset_x
-	platform_icon.offset_top = icon_offset_y
-	platform_icon.offset_right = icon_offset_x + icon_draw_width
-	platform_icon.offset_bottom = icon_offset_y + icon_draw_height
-	platform_icon.modulate = Color.WHITE
-	
-	# Use cached material for this color to reduce shader overhead
-	var cache_key = str(icon_color)
-	if not _icon_material_cache.has(cache_key):
-		var cached_material = ShaderMaterial.new()
-		cached_material.shader = preload("res://shaders/icon_color_shader.gdshader")
-		cached_material.set_shader_parameter("icon_color", icon_color)
-		_icon_material_cache[cache_key] = cached_material
-	platform_icon.material = _icon_material_cache[cache_key]
-
-# Helper function to update icon position during inset animation (focus/unfocus)
-func _update_platform_icon_position_from_inset(current_border_inset_ratio: float) -> void:
-	if not platform_icon:
-		return
-	
-	var badge_config = _get_effect_config("badge")
-	var settings = badge_config.get("settings", {})
-	
-	var badge_size_setting = settings.get("badge_size", 1.0)
-	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
-	var icon_padding = settings.get("icon_padding", 0.5)
-	var badge_type = settings.get("badge_type", 0)
-	
-	var card_width = _card_state.card_size.x
-	var corner_radius_pixels = _card_state.corner_radius_pixels
-	
-	# Calculate current total inset from the animated border inset ratio
-	var current_border_inset_pixels = current_border_inset_ratio * card_width
-	
-	# Get glass inset directly from config (more reliable than state during animation)
-	var glass_config = _get_effect_config("glass")
-	var glass_inset_ratio = 0.0
-	if glass_config:
-		glass_inset_ratio = glass_config.get("settings", {}).get("additional_inset_ratio", 0.0)
-	var glass_inset_pixels = glass_inset_ratio * card_width
-	
-	var total_inset = current_border_inset_pixels + glass_inset_pixels
-	
-	# Debug: Check if icon is being positioned off-screen
-	if total_inset > card_width * 0.5:
-		push_warning("[GameCard] total_inset (" + str(total_inset) + "px) is very large for card width " + str(card_width) + "px")
-	
-	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
-	var base_badge_size = BADGE_SIZE_RATIO * card_width
-	
-	var texture_size = platform_icon.texture.get_size() if platform_icon.texture else Vector2(32, 32)
-	var texture_aspect = texture_size.x / texture_size.y if texture_size.y > 0 else 1.0
-	
-	if badge_type != 1:
-		texture_aspect = 1.0
+	var texture_aspect = 1.0
+	if icon_texture:
+		var tex_size = icon_texture.get_size()
+		texture_aspect = tex_size.x / tex_size.y if tex_size.y > 0 else 1.0
+		if badge_type != 1:
+			texture_aspect = 1.0
 	
 	if badge_type == 1:
-		# Top bar mode
+		var base_badge_size = BADGE_SIZE_RATIO * card_width
 		var top_bar_max_size = card_width * 0.25
 		var bar_height = min(base_badge_size * badge_size_setting, top_bar_max_size)
 		
@@ -1010,32 +772,10 @@ func _update_platform_icon_position_from_inset(current_border_inset_ratio: float
 		var top_bar_safe_y = total_inset
 		var top_bar_safe_height = bar_height
 		
-		var padding_x = top_bar_safe_width * icon_padding * 0.25
-		var padding_y = top_bar_safe_height * icon_padding * 0.25
-		var drawable_x = top_bar_safe_x + padding_x
-		var drawable_y = top_bar_safe_y + padding_y
-		var drawable_width = max(top_bar_safe_width - padding_x * 2, 10)
-		var drawable_height = max(top_bar_safe_height - padding_y * 2, 10)
-		
-		var draw_height = drawable_height
-		var draw_width = draw_height * texture_aspect
-		
-		if draw_width > drawable_width:
-			draw_width = drawable_width
-			draw_height = draw_width / texture_aspect
-		
-		var offset_x = drawable_x + (drawable_width - draw_width) * 0.5
-		var offset_y = drawable_y + (drawable_height - draw_height) * 0.5
-		
-		platform_icon.offset_left = offset_x
-		platform_icon.offset_top = offset_y
-		platform_icon.offset_right = offset_x + draw_width
-		platform_icon.offset_bottom = offset_y + draw_height
+		_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
+		_badge_effect.set_border_inset_pixels(total_inset)
+		_badge_effect.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
 	else:
-		# Corner badge mode
-		var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-		var corner_margin = effective_corner_radius * corner_midpoint_factor
-		
 		var raw_badge_size = BADGE_SIZE_RATIO * card_width * badge_size_setting
 		var min_badge_size = card_width * 0.15
 		var max_badge_size = card_width * 0.45
@@ -1050,6 +790,8 @@ func _update_platform_icon_position_from_inset(current_border_inset_ratio: float
 			badge_width = target_badge_size
 			badge_height = target_badge_size / texture_aspect
 		
+		var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
+		var corner_margin = effective_corner_radius * corner_midpoint_factor
 		var base_min_dim = min(badge_width, badge_height)
 		var base_inner_corner = (base_min_dim * 0.5) * clamp(inner_radius_setting, 0.0, 1.0)
 		var inner_corner_margin = base_inner_corner * corner_midpoint_factor
@@ -1059,38 +801,14 @@ func _update_platform_icon_position_from_inset(current_border_inset_ratio: float
 		
 		var safe_x = total_inset + clamped_corner_margin
 		var safe_y = total_inset + clamped_corner_margin
-		var safe_width = badge_width - clamped_corner_margin - inner_corner_margin
-		var safe_height = badge_height - clamped_corner_margin - inner_corner_margin
+		var safe_width = max(badge_width - clamped_corner_margin - inner_corner_margin, 0.0)
+		var safe_height = max(badge_height - clamped_corner_margin - inner_corner_margin, 0.0)
 		
-		safe_width = max(safe_width, 0.0)
-		safe_height = max(safe_height, 0.0)
-		
-		var padding = min(safe_width, safe_height) * icon_padding * 0.25
-		safe_x += padding
-		safe_y += padding
-		safe_width -= padding * 2.0
-		safe_height -= padding * 2.0
-		safe_width = max(safe_width, 1.0)
-		safe_height = max(safe_height, 1.0)
-		
-		var icon_draw_width: float
-		var icon_draw_height: float
-		var safe_aspect = safe_width / safe_height
-		
-		if texture_aspect > safe_aspect:
-			icon_draw_width = safe_width
-			icon_draw_height = safe_width / texture_aspect
-		else:
-			icon_draw_height = safe_height
-			icon_draw_width = safe_height * texture_aspect
-		
-		var icon_offset_x = safe_x + (safe_width - icon_draw_width) * 0.5
-		var icon_offset_y = safe_y + (safe_height - icon_draw_height) * 0.5
-		
-		platform_icon.offset_left = icon_offset_x
-		platform_icon.offset_top = icon_offset_y
-		platform_icon.offset_right = icon_offset_x + icon_draw_width
-		platform_icon.offset_bottom = icon_offset_y + icon_draw_height
+		_badge_effect.set_badge_dimensions(Vector2(badge_width, badge_height))
+		_badge_effect.set_border_inset_pixels(total_inset)
+		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
+	
+	_badge_effect.set_icon_texture(icon_texture)
 
 func _load_cover(high_priority: bool = false):
 	if not game:
@@ -1399,8 +1117,6 @@ func _on_focus_entered() -> void:
 			if _badge_effect:
 				_badge_effect.set_border_width(current_inset)
 				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
-			# Update platform icon position with new inset
-			_update_platform_icon_position_from_inset(current_inset)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects with smooth fade
@@ -1435,8 +1151,6 @@ func _on_focus_exited() -> void:
 			if _badge_effect:
 				_badge_effect.set_border_width(current_inset)
 				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
-			# Update platform icon position with restored inset
-			_update_platform_icon_position_from_inset(current_inset)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 	
 	# Hide focus effects with smooth fade
@@ -1473,8 +1187,6 @@ func restore_focus_animation() -> void:
 			if _badge_effect:
 				_badge_effect.set_border_width(current_inset)
 				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
-			# Update platform icon position with new inset
-			_update_platform_icon_position_from_inset(current_inset)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects

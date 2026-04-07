@@ -46,20 +46,11 @@ theme_override_styles/disabled = SubResource("StyleBoxEmpty_button")
 theme_override_styles/focus = SubResource("StyleBoxEmpty_button")
 
 [node name="StatusBadge" type="Panel" parent="VisualContainer/CardInput" unique_id=689518864]
-layout_mode = 1
-offset_right = 32.0
-offset_bottom = 32.0
-mouse_filter = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_badge")
-
-[node name="PlatformIcon" type="TextureRect" parent="VisualContainer/CardInput" unique_id=816665265]
-texture_filter = 3
-layout_mode = 1
-offset_right = 32.0
-offset_bottom = 32.0
-mouse_filter = 2
-expand_mode = 1
-stretch_mode = 5
+	layout_mode = 1
+	offset_right = 32.0
+	offset_bottom = 32.0
+	mouse_filter = 2
+	theme_override_styles/panel = SubResource("StyleBoxFlat_badge")
 
 [node name="GameTitleLabel" type="Label" parent="VisualContainer/CardInput" unique_id=816665266]
 layout_mode = 1
