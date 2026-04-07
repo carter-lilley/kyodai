@@ -582,7 +582,7 @@ func _on_effect_setting_changed(effect_index: int, setting_name: String, value: 
 		_save_to_settings()
 
 func _rebuild_add_focus_effect_dropdown() -> void:
-	"""Rebuild the Add Focus Effect dropdown to only show effects that aren't already active."""
+	"""Rebuild the Add Focus Effect dropdown to show all effects, with overlapping ones marked."""
 	if not _add_focus_effect_button:
 		return
 	
@@ -597,16 +597,32 @@ func _rebuild_add_focus_effect_dropdown() -> void:
 		if effect_id:
 			active_effects.append(effect_id)
 	
-	# Add only inactive effects to the dropdown
-	var has_available_effects = false
+	# Get list of base effect IDs (for marking overlaps)
+	var base_effects: Array[String] = []
+	var normal_effects = _current_config.get("effects", [])
+	for effect in normal_effects:
+		var effect_id = effect.get("effect_id", "")
+		if effect_id:
+			base_effects.append(effect_id)
+	
+	# Add all effects to the dropdown (not just inactive ones)
+	# Disabled items are those already in focus effects
 	for id in FOCUS_EFFECT_ID_MAP.keys():
 		var effect_id = FOCUS_EFFECT_ID_MAP[id]
-		if not effect_id in active_effects:
-			var display_name = effect_id.replace("_", " ").capitalize()
-			popup.add_item(display_name, id)
-			has_available_effects = true
+		var display_name = effect_id.replace("_", " ").capitalize()
+		
+		# Mark if this effect overlaps with base
+		if effect_id in base_effects:
+			display_name += " (overrides base)"
+		
+		popup.add_item(display_name, id)
+		
+		# Disable if already in focus effects
+		if effect_id in active_effects:
+			popup.set_item_disabled(popup.get_item_index(id), true)
 	
 	# Disable button if all effects are active
+	var has_available_effects = active_effects.size() < FOCUS_EFFECT_ID_MAP.size()
 	_add_focus_effect_button.disabled = not has_available_effects
 	if not has_available_effects:
 		_add_focus_effect_button.text = "All Effects Added"
@@ -616,65 +632,85 @@ func _rebuild_add_focus_effect_dropdown() -> void:
 func _on_add_focus_effect(id: int):
 	var new_effect: Dictionary
 	
+	# Determine effect_id from the id
+	var effect_id = ""
+	match id:
+		0: effect_id = "border"
+		1: effect_id = "badge"
+		2: effect_id = "drop_shadow"
+		3: effect_id = "glow"
+		4: effect_id = "glass"
+		5: effect_id = "distort"
+		6: effect_id = "gradient_overlay"
+	
+	# Check if this effect already exists in base effects
+	var base_effect_settings = {}
+	var base_effects = _current_config.get("effects", [])
+	for effect in base_effects:
+		if effect.get("effect_id") == effect_id:
+			base_effect_settings = effect.get("settings", {}).duplicate(true)
+			break
+	
+	# Create new effect with appropriate defaults
 	match id:
 		0:
 			new_effect = {
 				"effect_id": "border",
 				"settings": {
-					"border_size": 0.05,
-					"border_fade_in": 0.0,
-					"border_color": Color.WHITE
+					"border_size": base_effect_settings.get("border_size", 0.05),
+					"border_fade_in": base_effect_settings.get("border_fade_in", 0.0),
+					"border_color": base_effect_settings.get("border_color", Color.WHITE)
 				}
 			}
 		1:
 			new_effect = {
 				"effect_id": "badge",
 				"settings": {
-					"hide_background": false,
-					"badge_size": 1.0,
-					"badge_inner_radius": 0.0,
-					"badge_color": Color.WHITE,
-					"icon_padding": 0.5,
-					"icon_color": Color.WHITE
+					"hide_background": base_effect_settings.get("hide_background", false),
+					"badge_size": base_effect_settings.get("badge_size", 1.0),
+					"badge_inner_radius": base_effect_settings.get("badge_inner_radius", 0.0),
+					"badge_color": base_effect_settings.get("badge_color", Color.WHITE),
+					"icon_padding": base_effect_settings.get("icon_padding", 0.5),
+					"icon_color": base_effect_settings.get("icon_color", Color.WHITE)
 				}
 			}
 		2:
 			new_effect = {
 				"effect_id": "drop_shadow",
 				"settings": {
-					"shadow_color": Color(0, 0, 0, 0.5),
-					"shadow_offset_x": 0.0,
-					"shadow_offset_y": 0.05,
-					"shadow_softness": 0.04,
-					"shadow_spread": 0.0,
-					"shadow_expand": 0.02
+					"shadow_color": base_effect_settings.get("shadow_color", Color(0, 0, 0, 0.5)),
+					"shadow_offset_x": base_effect_settings.get("shadow_offset_x", 0.0),
+					"shadow_offset_y": base_effect_settings.get("shadow_offset_y", 0.05),
+					"shadow_softness": base_effect_settings.get("shadow_softness", 0.04),
+					"shadow_spread": base_effect_settings.get("shadow_spread", 0.0),
+					"shadow_expand": base_effect_settings.get("shadow_expand", 0.02)
 				}
 			}
 		3:
 			new_effect = {
 				"effect_id": "glow",
 				"settings": {
-					"glow_radius": 0.1,
-					"glow_intensity": 1.5,
-					"blur_amount": 12.0,
-					"threshold": 0.1,
-					"glow_spread": 0.05
+					"glow_radius": base_effect_settings.get("glow_radius", 0.1),
+					"glow_intensity": base_effect_settings.get("glow_intensity", 1.5),
+					"blur_amount": base_effect_settings.get("blur_amount", 12.0),
+					"threshold": base_effect_settings.get("threshold", 0.1),
+					"glow_spread": base_effect_settings.get("glow_spread", 0.05)
 				}
 			}
 		4:
 			new_effect = {
 				"effect_id": "glass",
 				"settings": {
-					"distortion": 0.5,
-					"glass_color": Color(0.2, 0.4, 1.0, 0.3)
+					"distortion": base_effect_settings.get("distortion", 0.5),
+					"glass_color": base_effect_settings.get("glass_color", Color(0.2, 0.4, 1.0, 0.3))
 				}
 			}
 		5:
 			new_effect = {
 				"effect_id": "distort",
 				"settings": {
-					"distortion": 0.5,
-					"opacity": 1.0
+					"distortion": base_effect_settings.get("distortion", 0.5),
+					"opacity": base_effect_settings.get("opacity", 1.0)
 				}
 			}
 		6:
@@ -684,8 +720,8 @@ func _on_add_focus_effect(id: int):
 			new_effect = {
 				"effect_id": "gradient_overlay",
 				"settings": {
-					"gradient": default_gradient,
-					"gradient_direction": 0
+					"gradient": base_effect_settings.get("gradient", default_gradient),
+					"gradient_direction": base_effect_settings.get("gradient_direction", 0)
 				}
 			}
 	

@@ -4,7 +4,6 @@ batch core download ONE notification
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch to launch on bottom screen
 ui scale
-glass inset not working in card designer view
 improve M&KB experience, add search icon. 
 android download manager and file streaming
 chunk reassembly progress notif

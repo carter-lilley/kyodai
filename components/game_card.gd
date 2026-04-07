@@ -55,10 +55,8 @@ const MAX_DOWNLOAD_RETRIES: int = 2
 
 const FOCUSED_SCALE: float = 1.08
 const FOCUS_TWEEN_DURATION: float = 0.12
-const FOCUSED_BORDER_MULTIPLIER: float = 0.85  # Border is 85% of normal size when focused (smaller)
 const FOCUS_EFFECT_FADE_DURATION: float = 0.15  # Duration for focus effects fade in/out
 var _focus_tween: Tween = null
-var _original_border_size: float = 0.05  # Default border size, will be set from config
 
 # Enter animation constants
 const ENTER_START_SCALE: float = 3.0
@@ -218,11 +216,6 @@ func _rebuild_effects():
 	visual_container.add_child(_normal_stack)
 	_normal_stack.initialize(_card_state, _card_state.effect_settings)
 	
-	# Track original border size from config
-	var border_config = _get_effect_config("border")
-	if border_config:
-		_original_border_size = border_config.get("settings", {}).get("border_size", 0.05)
-	
 	# Create focus EffectStack with its own state (duplicate to avoid clobbering normal stack's insets)
 	var focus_state = _card_state.duplicate()
 	focus_state.effect_settings = _card_state.focus_effect_settings.duplicate(true)
@@ -241,6 +234,9 @@ func _rebuild_effects():
 	if focus_base:
 		focus_base.visible = false
 		focus_base.modulate.a = 0.0
+	
+	# Link overlapping focus effects to their base counterparts for tweening
+	_link_overlapping_effects()
 	
 	# Initialize focus effects with effect_alpha = 0.0 so they start hidden
 	# (shader default is 1.0, which would cause them to pop in before the tween)
@@ -263,6 +259,24 @@ func _rebuild_effects():
 	
 	_update_platform_badge()
 	_update_status_badge_layout()
+
+func _link_overlapping_effects() -> void:
+	"""Link focus effects that overlap with base effects so they can tween settings."""
+	if not _normal_stack or not _focus_stack:
+		return
+	
+	# Get base effect IDs
+	var base_effect_ids: Array[String] = []
+	for child in _normal_stack.get_children():
+		if child is EffectBase:
+			base_effect_ids.append(child.effect_id)
+	
+	# For each focus effect that exists in base, link them
+	for child in _focus_stack.get_children():
+		if child is EffectBase and child.effect_id in base_effect_ids:
+			var base_effect = _normal_stack.get_effect(child.effect_id)
+			if base_effect:
+				child.set_base_effect(base_effect)
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
@@ -415,6 +429,9 @@ func _update_status_icon():
 		_update_status_badge_style()
 
 func _update_platform_badge():
+	if not _normal_stack:
+		return
+	
 	var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
 	if not normal_badge:
 		return
@@ -813,27 +830,7 @@ func _on_focus_entered() -> void:
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
 	
-	# Reduce border size when focused
-	var normal_border = _normal_stack.get_effect("border") as BorderEffect
-	if normal_border:
-		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
-		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
-		var original_inset = _original_border_size + fade_in
-		var focused_inset = focused_border_size + fade_in
-		
-		# Tween border size and inset together
-		var border_tween = normal_border.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
-		border_tween.parallel().tween_method(func(t):
-			var current_inset = lerp(original_inset, focused_inset, t)
-			_card_state.border_inset_ratio = current_inset
-			# Update badge with new inset
-			var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
-			if normal_badge:
-				normal_badge.set_border_width(current_inset)
-				normal_badge.set_border_inset_pixels(current_inset * _card_state.card_size.x)
-		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
-	
-	# Show focus effects with smooth fade
+	# Show focus effects with smooth fade (overlapping effects will tween settings)
 	_show_focus_effects(true)
 
 func _on_focus_exited() -> void:
@@ -849,27 +846,7 @@ func _on_focus_exited() -> void:
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
 	
-	# Restore original border size and inset
-	var normal_border = _normal_stack.get_effect("border") as BorderEffect
-	if normal_border:
-		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
-		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
-		var focused_inset = focused_border_size + fade_in
-		var original_inset = _original_border_size + fade_in
-		
-		# Tween border size and inset together
-		var border_tween = normal_border.tween_border_size(_original_border_size, FOCUS_TWEEN_DURATION)
-		border_tween.parallel().tween_method(func(t):
-			var current_inset = lerp(focused_inset, original_inset, t)
-			_card_state.border_inset_ratio = current_inset
-			# Update badge with restored inset
-			var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
-			if normal_badge:
-				normal_badge.set_border_width(current_inset)
-				normal_badge.set_border_inset_pixels(current_inset * _card_state.card_size.x)
-		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
-	
-	# Hide focus effects with smooth fade
+	# Hide focus effects with smooth fade (overlapping effects will tween back)
 	_show_focus_effects(false)
 
 ## Restores the focus animation after layout changes (e.g., after queue_sort resets transforms)
@@ -889,28 +866,12 @@ func restore_focus_animation() -> void:
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
 	
-	# Re-apply border size reduction
-	var normal_border = _normal_stack.get_effect("border") as BorderEffect
-	if normal_border:
-		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
-		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
-		var original_inset = _original_border_size + fade_in
-		var focused_inset = focused_border_size + fade_in
-		
-		var border_tween = normal_border.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
-		border_tween.parallel().tween_method(func(t):
-			var current_inset = lerp(original_inset, focused_inset, t)
-			_card_state.border_inset_ratio = current_inset
-			var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
-			if normal_badge:
-				normal_badge.set_border_width(current_inset)
-				normal_badge.set_border_inset_pixels(current_inset * _card_state.card_size.x)
-		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
-	
-	# Show focus effects
+	# Show focus effects (overlapping effects will be in their focused state)
 	_show_focus_effects(true)
 
-## Shows or hides focus effects with a smooth fade transition via shader effect_alpha
+## Shows or hides focus effects with a smooth transition.
+## For overlapping effects (present in both base and focus), tweens shader settings.
+## For non-overlapping effects, fades in/out via alpha.
 func _show_focus_effects(show: bool) -> void:
 	# In preview mode, always show focus effects so designer can see them
 	if preview_mode:
@@ -919,38 +880,76 @@ func _show_focus_effects(show: bool) -> void:
 	if show:
 		_focus_stack.visible = true
 	
-	# Collect all effects with shader materials
-	var effects_to_fade: Array[EffectBase] = []
-	if _focus_stack:
-		for child in _focus_stack.get_children():
-			if child is EffectBase and child.material is ShaderMaterial:
-				effects_to_fade.append(child)
-	
-	if effects_to_fade.is_empty():
-		if not show:
-			_focus_stack.visible = false
+	# Process each focus effect
+	if not _focus_stack:
 		return
 	
-	# Set initial alpha for each effect
-	if show:
-		for effect in effects_to_fade:
-			effect.material.set_shader_parameter("effect_alpha", 0.0)
+	var has_overlapping_effects = false
 	
-	# Tween each effect's shader parameter
-	var start_alpha = 0.0 if show else 1.0
-	var target_alpha = 1.0 if show else 0.0
+	for child in _focus_stack.get_children():
+		if not (child is EffectBase):
+			continue
+		
+		var focus_effect = child as EffectBase
+		
+		# Check if this is an overlapping effect (has a base counterpart)
+		if focus_effect._base_effect != null:
+			has_overlapping_effects = true
+			# Get settings from both effects
+			var base_settings = focus_effect._base_effect._settings
+			var focus_settings = focus_effect._settings
+			
+			print("[GameCard] Overlapping effect '%s' - Base border_size: %s, Focus border_size: %s" % [
+				focus_effect.effect_id, 
+				base_settings.get("border_size", "N/A"), 
+				focus_settings.get("border_size", "N/A")
+			])
+			
+			# Tween from base to focus settings (or vice versa)
+			var from_settings = base_settings if show else focus_settings
+			var to_settings = focus_settings if show else base_settings
+			
+			# Create tween for this overlapping effect
+			var settings_tween = create_tween()
+			settings_tween.set_trans(Tween.TRANS_QUAD)
+			settings_tween.set_ease(Tween.EASE_OUT)
+			
+			# Capture copies of the settings dicts to avoid closure issues
+			var from_copy = from_settings.duplicate(true)
+			var to_copy = to_settings.duplicate(true)
+			
+			# Use a callable that captures values at creation time
+			var tween_callable = func(t: float):
+				focus_effect.tween_settings(from_copy, to_copy, t)
+			
+			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+			
+			# Keep effect fully visible (no alpha fade for overlapping effects)
+			if focus_effect.material is ShaderMaterial:
+				focus_effect.material.set_shader_parameter("effect_alpha", 1.0)
+		else:
+			# Non-overlapping effect: use traditional alpha fade
+			if focus_effect.material is ShaderMaterial:
+				var start_alpha = 0.0 if show else 1.0
+				var target_alpha = 1.0 if show else 0.0
+				
+				# Set initial alpha
+				if show:
+					focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
+				
+				# Tween alpha
+				var fade_tween = create_tween()
+				fade_tween.set_trans(Tween.TRANS_QUAD)
+				fade_tween.set_ease(Tween.EASE_OUT)
+				fade_tween.tween_method(
+					func(t: float, eff: EffectBase = focus_effect):
+						if eff.material is ShaderMaterial:
+							eff.material.set_shader_parameter("effect_alpha", t),
+					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
+				)
 	
-	for effect in effects_to_fade:
-		var fade_tween = create_tween()
-		fade_tween.set_trans(Tween.TRANS_QUAD)
-		fade_tween.set_ease(Tween.EASE_OUT)
-		fade_tween.tween_method(func(t: float, eff: EffectBase = effect):
-			if eff.material is ShaderMaterial:
-				eff.material.set_shader_parameter("effect_alpha", t)
-		, start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION)
-	
-	if not show:
-		# Hide stack after all tweens finish
+	# Hide stack after fade-out completes (only if no overlapping effects are visible)
+	if not show and not has_overlapping_effects:
 		var hide_tween = create_tween()
 		hide_tween.set_trans(Tween.TRANS_QUAD)
 		hide_tween.set_ease(Tween.EASE_OUT)
