@@ -38,25 +38,11 @@ const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
 var _debug_safe_area: ColorRect = null
 
 var _current_texture: Texture2D = null
-var _card_state: CardState = CardState.new()
+var _card_state: EffectContainerState = EffectContainerState.for_card()
 
-var _base_effect: BaseCardEffect = null
-var _border_effect: BorderEffect = null
-var _badge_effect: BadgeEffect = null
-var _drop_shadow_effect: DropShadowEffect = null
-var _glow_effect: GlowEffect = null
-var _glass_effect: GlassEffect = null
-var _distort_effect: DistortEffect = null
-var _gradient_overlay_effect: GradientOverlayEffect = null
-
-# Focus effects - shown only when card is focused
-var _focus_border_effect: BorderEffect = null
-var _focus_badge_effect: BadgeEffect = null
-var _focus_drop_shadow_effect: DropShadowEffect = null
-var _focus_glow_effect: GlowEffect = null
-var _focus_glass_effect: GlassEffect = null
-var _focus_distort_effect: DistortEffect = null
-var _focus_gradient_overlay_effect: GradientOverlayEffect = null
+# EffectStack system - normal and focus stacks share _card_state
+var _normal_stack: EffectStack = null
+var _focus_stack: EffectStack = null
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -69,7 +55,7 @@ const MAX_DOWNLOAD_RETRIES: int = 2
 
 const FOCUSED_SCALE: float = 1.08
 const FOCUS_TWEEN_DURATION: float = 0.12
-const FOCUSED_BORDER_MULTIPLIER: float = 0.85  # Border is 65% of normal size when focused (smaller)
+const FOCUSED_BORDER_MULTIPLIER: float = 0.85  # Border is 85% of normal size when focused (smaller)
 const FOCUS_EFFECT_FADE_DURATION: float = 0.15  # Duration for focus effects fade in/out
 var _focus_tween: Tween = null
 var _original_border_size: float = 0.05  # Default border size, will be set from config
@@ -103,7 +89,7 @@ func _ready():
 		_setup_preview_mode()
 		return
 	
-	# Connect to CardState signals for reactivity
+	# Connect to state signals for reactivity
 	_card_state.zoom_changed.connect(_on_zoom_changed)
 	_card_state.orientation_changed.connect(_on_orientation_changed)
 	
@@ -153,7 +139,7 @@ func _setup_preview_mode():
 		card_input.disabled = true
 		card_input.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-func set_card_state(state: CardState) -> void:
+func set_card_state(state: EffectContainerState) -> void:
 	# Disconnect old signals safely
 	if _card_state and _card_state.zoom_changed.is_connected(_on_zoom_changed):
 		_card_state.zoom_changed.disconnect(_on_zoom_changed)
@@ -171,7 +157,7 @@ func set_card_state(state: CardState) -> void:
 	_on_zoom_changed(_card_state.zoom_level)
 	_on_orientation_changed(_card_state.orientation)
 
-func get_card_state() -> CardState:
+func get_card_state() -> EffectContainerState:
 	return _card_state
 
 func get_focus_shape_params() -> Dictionary:
@@ -186,7 +172,6 @@ func _update_card_state_from_settings():
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting:
 			if config_setting.value is Dictionary:
-				#print("[GameCard] Loading from SettingsManager. focus_effects: ", config_setting.value.get("focus_effects", []))
 				_card_state.orientation = config_setting.value.get("card_orientation", 0)
 				_card_state.effect_settings = config_setting.value.get("effects", [])
 				_card_state.focus_effect_settings = config_setting.value.get("focus_effects", [])
@@ -204,164 +189,47 @@ func _get_effect_config(effect_id: String) -> Dictionary:
 			return effect_data
 	return {}
 
+func _get_focus_effect_config(effect_id: String) -> Dictionary:
+	for effect_data in _card_state.focus_effect_settings:
+		if effect_data.get("effect_id") == effect_id:
+			return effect_data
+	return {}
+
 func _rebuild_effects():
-	# Update or create effects - don't destroy existing ones
-	# This reduces GC pressure and shader compilation stutter during scroll
-	
 	if not visual_container:
 		push_warning("GameCard: visual_container is null, cannot add effects")
 		return
 	
+	# Remove old stacks if they exist
+	if _normal_stack:
+		_normal_stack.queue_free()
+		_normal_stack = null
+	if _focus_stack:
+		_focus_stack.queue_free()
+		_focus_stack = null
+	
+	# Reset border inset before rebuilding
 	_card_state.border_inset_ratio = 0.0
+	_card_state.glass_inset_ratio = 0.0
 	
-	# Base effect - required
-	if _base_effect == null:
-		_base_effect = BaseCardEffect.new()
-		_base_effect.name = "BaseEffect"
-		_base_effect.anchor_right = 1.0
-		_base_effect.anchor_bottom = 1.0
-		visual_container.add_child(_base_effect)
-		_base_effect.initialize(_card_state, {})
-	else:
-		_base_effect.update_state(_card_state)
+	# Create normal EffectStack
+	_normal_stack = EffectStack.new()
+	_normal_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
+	visual_container.add_child(_normal_stack)
+	_normal_stack.initialize(_card_state, _card_state.effect_settings)
 	
-	# Badge effect - optional
-	var badge_config = _get_effect_config("badge")
-	if badge_config:
-		if _badge_effect == null:
-			_badge_effect = BadgeEffect.new()
-			_badge_effect.name = "BadgeEffect"
-			_badge_effect.anchor_right = 1.0
-			_badge_effect.anchor_bottom = 1.0
-			visual_container.add_child(_badge_effect)
-			_badge_effect.initialize(_card_state, badge_config.get("settings", {}))
-		else:
-			_badge_effect.visible = true
-			_badge_effect.update_state(_card_state)
-			_badge_effect.update_settings(badge_config.get("settings", {}))
-	elif _badge_effect != null:
-		# Config removed but effect exists - hide it
-		_badge_effect.visible = false
-	
-	# Border effect - optional
+	# Track original border size from config
 	var border_config = _get_effect_config("border")
 	if border_config:
-		if _border_effect == null:
-			_border_effect = BorderEffect.new()
-			_border_effect.name = "BorderEffect"
-			_border_effect.anchor_right = 1.0
-			_border_effect.anchor_bottom = 1.0
-			visual_container.add_child(_border_effect)
-			_border_effect.initialize(_card_state, border_config.get("settings", {}))
-		else:
-			_border_effect.visible = true
-			_border_effect.update_state(_card_state)
-			_border_effect.update_settings(border_config.get("settings", {}))
-		
-		# Calculate border inset (only solid border affects inset, fade overlays on top)
-		var border_size = border_config.get("settings", {}).get("border_size", 0.05)
-		_original_border_size = border_size
-		_card_state.border_inset_ratio = border_size
-	elif _border_effect != null:
-		_border_effect.visible = false
+		_original_border_size = border_config.get("settings", {}).get("border_size", 0.05)
 	
-	# Configure badge with border info
-	if _badge_effect and _badge_effect.visible:
-		_badge_effect.set_border_width(_card_state.border_inset_ratio)
-		_badge_effect.set_border_inset_pixels(_card_state.border_inset_ratio * _card_state.card_size.x)
-	
-	# Glow effect - optional
-	var glow_config = _get_effect_config("glow")
-	if glow_config:
-		if _glow_effect == null:
-			_glow_effect = GlowEffect.new()
-			_glow_effect.name = "GlowEffect"
-			_glow_effect.set_anchors_preset(Control.PRESET_CENTER)
-			visual_container.add_child(_glow_effect)
-			_glow_effect.initialize(_card_state, glow_config.get("settings", {}))
-			visual_container.move_child(_glow_effect, 0)
-		else:
-			_glow_effect.update_state(_card_state)
-			_glow_effect.update_settings(glow_config.get("settings", {}))
-			_glow_effect.visible = true
-	elif _glow_effect != null:
-		_glow_effect.visible = false
-	
-	# Drop shadow effect - optional
-	var drop_shadow_config = _get_effect_config("drop_shadow")
-	if drop_shadow_config:
-		if _drop_shadow_effect == null:
-			_drop_shadow_effect = DropShadowEffect.new()
-			_drop_shadow_effect.name = "DropShadowEffect"
-			_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
-			visual_container.add_child(_drop_shadow_effect)
-			_drop_shadow_effect.initialize(_card_state, drop_shadow_config.get("settings", {}))
-			visual_container.move_child(_drop_shadow_effect, 0 if _glow_effect == null or not _glow_effect.visible else 1)
-		else:
-			_drop_shadow_effect.update_state(_card_state)
-			_drop_shadow_effect.update_settings(drop_shadow_config.get("settings", {}))
-			_drop_shadow_effect.visible = true
-	elif _drop_shadow_effect != null:
-		_drop_shadow_effect.visible = false
-	
-	# Distort effect - optional texture distortion (rendered BEFORE glass so it appears behind)
-	var distort_config = _get_effect_config("distort")
-	if distort_config:
-		if _distort_effect == null:
-			_distort_effect = DistortEffect.new()
-			_distort_effect.name = "DistortEffect"
-			_distort_effect.anchor_right = 1.0
-			_distort_effect.anchor_bottom = 1.0
-			visual_container.add_child(_distort_effect)
-			_distort_effect.initialize(_card_state, distort_config.get("settings", {}))
-		else:
-			_distort_effect.update_state(_card_state)
-			_distort_effect.update_settings(distort_config.get("settings", {}))
-			_distort_effect.visible = true
-	elif _distort_effect != null:
-		_distort_effect.visible = false
-	
-	# Gradient overlay effect - optional full-screen gradient (rendered BETWEEN distort and glass)
-	var gradient_overlay_config = _get_effect_config("gradient_overlay")
-	if gradient_overlay_config:
-		if _gradient_overlay_effect == null:
-			_gradient_overlay_effect = GradientOverlayEffect.new()
-			_gradient_overlay_effect.name = "GradientOverlayEffect"
-			_gradient_overlay_effect.anchor_right = 1.0
-			_gradient_overlay_effect.anchor_bottom = 1.0
-			visual_container.add_child(_gradient_overlay_effect)
-			_gradient_overlay_effect.initialize(_card_state, gradient_overlay_config.get("settings", {}))
-		else:
-			_gradient_overlay_effect.update_state(_card_state)
-			_gradient_overlay_effect.update_settings(gradient_overlay_config.get("settings", {}))
-			_gradient_overlay_effect.visible = true
-	elif _gradient_overlay_effect != null:
-		_gradient_overlay_effect.visible = false
-	
-	# Glass effect - optional overlay (rendered AFTER distort so it appears on top)
-	var glass_config = _get_effect_config("glass")
-	if glass_config:
-		if _glass_effect == null:
-			_glass_effect = GlassEffect.new()
-			_glass_effect.name = "GlassEffect"
-			_glass_effect.anchor_right = 1.0
-			_glass_effect.anchor_bottom = 1.0
-			visual_container.add_child(_glass_effect)
-			_glass_effect.initialize(_card_state, glass_config.get("settings", {}))
-		else:
-			_glass_effect.update_state(_card_state)
-			_glass_effect.update_settings(glass_config.get("settings", {}))
-			_glass_effect.visible = true
-		
-		# Calculate glass inset
-		var glass_inset = glass_config.get("settings", {}).get("additional_inset_ratio", 0.0)
-		_card_state.glass_inset_ratio = glass_inset
-	elif _glass_effect != null:
-		_glass_effect.visible = false
-		_card_state.glass_inset_ratio = 0.0
-	
-	# Build focus effects from CardState
-	_rebuild_focus_effects()
+	# Create focus EffectStack (starts invisible)
+	_focus_stack = EffectStack.new()
+	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_focus_stack.modulate.a = 0.0
+	_focus_stack.visible = false
+	visual_container.add_child(_focus_stack)
+	_focus_stack.initialize(_card_state, _card_state.focus_effect_settings)
 	
 	# Ensure card_input is on top
 	if card_input:
@@ -372,200 +240,6 @@ func _rebuild_effects():
 	
 	_update_platform_badge()
 	_update_status_badge_layout()
-
-
-func _rebuild_focus_effects():
-	"""Rebuild focus effects - shown only when card is focused."""
-	# Focus Border effect
-	var focus_border_config = _get_focus_effect_config("border")
-	if focus_border_config:
-		if _focus_border_effect == null:
-			_focus_border_effect = BorderEffect.new()
-			_focus_border_effect.name = "FocusBorderEffect"
-			_focus_border_effect.anchor_right = 1.0
-			_focus_border_effect.anchor_bottom = 1.0
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_border_effect)
-			_focus_border_effect.initialize(_card_state, focus_border_config.get("settings", {}))
-		else:
-			_focus_border_effect.visible = true
-			_focus_border_effect.update_state(_card_state)
-			_focus_border_effect.update_settings(focus_border_config.get("settings", {}))
-		if not _is_focused and not preview_mode:
-			if _focus_border_effect.material is ShaderMaterial:
-				_focus_border_effect.material.set_shader_parameter("effect_alpha", 0.0)
-		else:
-			if _focus_border_effect.material is ShaderMaterial:
-				_focus_border_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_border_effect != null:
-		print("[GameCard] Hiding border effect (removed from config)")
-		_focus_border_effect.visible = false
-		if _focus_border_effect.material is ShaderMaterial:
-			_focus_border_effect.material.set_shader_parameter("effect_alpha", 0.0)
-	
-	# Focus Badge effect
-	var focus_badge_config = _get_focus_effect_config("badge")
-	if focus_badge_config:
-		if _focus_badge_effect == null:
-			_focus_badge_effect = BadgeEffect.new()
-			_focus_badge_effect.name = "FocusBadgeEffect"
-			_focus_badge_effect.anchor_right = 1.0
-			_focus_badge_effect.anchor_bottom = 1.0
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_badge_effect)
-			_focus_badge_effect.initialize(_card_state, focus_badge_config.get("settings", {}))
-		else:
-			_focus_badge_effect.visible = true
-			_focus_badge_effect.update_state(_card_state)
-			_focus_badge_effect.update_settings(focus_badge_config.get("settings", {}))
-		if not _is_focused and not preview_mode:
-			if _focus_badge_effect.material is ShaderMaterial:
-				_focus_badge_effect.material.set_shader_parameter("effect_alpha", 0.0)
-		else:
-			if _focus_badge_effect.material is ShaderMaterial:
-				_focus_badge_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_badge_effect != null:
-		_focus_badge_effect.visible = false
-		if _focus_badge_effect.material is ShaderMaterial:
-			_focus_badge_effect.material.set_shader_parameter("effect_alpha", 0.0)
-	
-	# Focus Drop Shadow effect
-	var focus_drop_shadow_config = _get_focus_effect_config("drop_shadow")
-	if focus_drop_shadow_config:
-		if _focus_drop_shadow_effect == null:
-			_focus_drop_shadow_effect = DropShadowEffect.new()
-			_focus_drop_shadow_effect.name = "FocusDropShadowEffect"
-			_focus_drop_shadow_effect.set_anchors_preset(Control.PRESET_CENTER)
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_drop_shadow_effect)
-			_focus_drop_shadow_effect.initialize(_card_state, focus_drop_shadow_config.get("settings", {}))
-		else:
-			_focus_drop_shadow_effect.visible = true
-			_focus_drop_shadow_effect.update_state(_card_state)
-			_focus_drop_shadow_effect.update_settings(focus_drop_shadow_config.get("settings", {}))
-		if not _is_focused and not preview_mode:
-			if _focus_drop_shadow_effect.material is ShaderMaterial:
-				_focus_drop_shadow_effect.material.set_shader_parameter("effect_alpha", 0.0)
-		else:
-			if _focus_drop_shadow_effect.material is ShaderMaterial:
-				_focus_drop_shadow_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_drop_shadow_effect != null:
-		_focus_drop_shadow_effect.visible = false
-		if _focus_drop_shadow_effect.material is ShaderMaterial:
-			_focus_drop_shadow_effect.material.set_shader_parameter("effect_alpha", 0.0)
-	
-	# Focus Glow effect
-	var focus_glow_config = _get_focus_effect_config("glow")
-	if focus_glow_config:
-		if _focus_glow_effect == null:
-			_focus_glow_effect = GlowEffect.new()
-			_focus_glow_effect.name = "FocusGlowEffect"
-			_focus_glow_effect.set_anchors_preset(Control.PRESET_CENTER)
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_glow_effect)
-			_focus_glow_effect.initialize(_card_state, focus_glow_config.get("settings", {}))
-		else:
-			_focus_glow_effect.visible = true
-			_focus_glow_effect.update_state(_card_state)
-			_focus_glow_effect.update_settings(focus_glow_config.get("settings", {}))
-		if not _is_focused and not preview_mode:
-			if _focus_glow_effect.material is ShaderMaterial:
-				_focus_glow_effect.material.set_shader_parameter("effect_alpha", 0.0)
-		else:
-			if _focus_glow_effect.material is ShaderMaterial:
-				_focus_glow_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_glow_effect != null:
-		_focus_glow_effect.visible = false
-		if _focus_glow_effect.material is ShaderMaterial:
-			_focus_glow_effect.material.set_shader_parameter("effect_alpha", 0.0)
-	
-	# Focus Distort effect
-	var focus_distort_config = _get_focus_effect_config("distort")
-	if focus_distort_config:
-		if _focus_distort_effect == null:
-			_focus_distort_effect = DistortEffect.new()
-			_focus_distort_effect.name = "FocusDistortEffect"
-			_focus_distort_effect.anchor_right = 1.0
-			_focus_distort_effect.anchor_bottom = 1.0
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_distort_effect)
-			_focus_distort_effect.initialize(_card_state, focus_distort_config.get("settings", {}))
-		else:
-			_focus_distort_effect.visible = true
-			_focus_distort_effect.update_state(_card_state)
-			_focus_distort_effect.update_settings(focus_distort_config.get("settings", {}))
-		if not _is_focused and not preview_mode:
-			if _focus_distort_effect.material is ShaderMaterial:
-				_focus_distort_effect.material.set_shader_parameter("effect_alpha", 0.0)
-		else:
-			if _focus_distort_effect.material is ShaderMaterial:
-				_focus_distort_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_distort_effect != null:
-		_focus_distort_effect.visible = false
-		if _focus_distort_effect.material is ShaderMaterial:
-			_focus_distort_effect.material.set_shader_parameter("effect_alpha", 0.0)
-	
-	# Focus Gradient Overlay effect
-	var focus_gradient_config = _get_focus_effect_config("gradient_overlay")
-	if focus_gradient_config:
-		if _focus_gradient_overlay_effect == null:
-			_focus_gradient_overlay_effect = GradientOverlayEffect.new()
-			_focus_gradient_overlay_effect.name = "FocusGradientOverlayEffect"
-			_focus_gradient_overlay_effect.anchor_right = 1.0
-			_focus_gradient_overlay_effect.anchor_bottom = 1.0
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_gradient_overlay_effect)
-			_focus_gradient_overlay_effect.initialize(_card_state, focus_gradient_config.get("settings", {}))
-		else:
-			_focus_gradient_overlay_effect.visible = true
-			_focus_gradient_overlay_effect.update_state(_card_state)
-			_focus_gradient_overlay_effect.update_settings(focus_gradient_config.get("settings", {}))
-		if not _is_focused and not preview_mode:
-			if _focus_gradient_overlay_effect.material is ShaderMaterial:
-				_focus_gradient_overlay_effect.material.set_shader_parameter("effect_alpha", 0.0)
-		else:
-			if _focus_gradient_overlay_effect.material is ShaderMaterial:
-				_focus_gradient_overlay_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_gradient_overlay_effect != null:
-		print("[GameCard] Hiding gradient overlay effect (removed from config)")
-		_focus_gradient_overlay_effect.visible = false
-		if _focus_gradient_overlay_effect.material is ShaderMaterial:
-			_focus_gradient_overlay_effect.material.set_shader_parameter("effect_alpha", 0.0)
-	
-	# Focus Glass effect
-	var focus_glass_config = _get_focus_effect_config("glass")
-	if focus_glass_config:
-		if _focus_glass_effect == null:
-			_focus_glass_effect = GlassEffect.new()
-			_focus_glass_effect.name = "FocusGlassEffect"
-			_focus_glass_effect.anchor_right = 1.0
-			_focus_glass_effect.anchor_bottom = 1.0
-			# Set initial shader alpha (will be hidden via effect_alpha shader param)
-			visual_container.add_child(_focus_glass_effect)
-			_focus_glass_effect.initialize(_card_state, focus_glass_config.get("settings", {}))
-		else:
-			_focus_glass_effect.visible = true
-			_focus_glass_effect.update_state(_card_state)
-			_focus_glass_effect.update_settings(focus_glass_config.get("settings", {}))
-			if not _is_focused and not preview_mode:
-				if _focus_glass_effect.material is ShaderMaterial:
-					_focus_glass_effect.material.set_shader_parameter("effect_alpha", 0.0)
-			else:
-				if _focus_glass_effect.material is ShaderMaterial:
-					_focus_glass_effect.material.set_shader_parameter("effect_alpha", 1.0)
-	elif _focus_glass_effect != null:
-		_focus_glass_effect.visible = false
-		if _focus_glass_effect.material is ShaderMaterial:
-			_focus_glass_effect.material.set_shader_parameter("effect_alpha", 0.0)
-
-
-func _get_focus_effect_config(effect_id: String) -> Dictionary:
-	"""Get focus effect configuration from CardState."""
-	for effect_data in _card_state.focus_effect_settings:
-		if effect_data.get("effect_id") == effect_id:
-			return effect_data
-	return {}
-
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
@@ -581,10 +255,6 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 		# Scale font size with zoom, but keep it readable (min 10, no max)
 		var scaled_font_size = max(10, int(BASE_TITLE_FONT_SIZE * zoom))
 		game_title_label.add_theme_font_size_override("font_size", scaled_font_size)
-	
-	# Sync badge effect state so it has correct container_size for ratio calculations
-	if _badge_effect and _badge_effect.visible:
-		_badge_effect.update_state(_card_state)
 	
 	_update_status_badge_layout()
 	_update_platform_badge()
@@ -722,11 +392,12 @@ func _update_status_icon():
 		_update_status_badge_style()
 
 func _update_platform_badge():
-	if not _badge_effect:
+	var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
+	if not normal_badge:
 		return
 	
 	if not game:
-		_badge_effect.set_icon_texture(null)
+		normal_badge.set_icon_texture(null)
 		return
 	
 	var platform_slug = game.platform_slug
@@ -762,27 +433,37 @@ func _update_platform_badge():
 		if badge_type != 1:
 			texture_aspect = 1.0
 	
+	var bar_height: float = 0.0
+	var top_bar_safe_x: float = 0.0
+	var top_bar_safe_y: float = 0.0
+	var top_bar_safe_width: float = 0.0
+	var top_bar_safe_height: float = 0.0
+	var badge_width: float = 0.0
+	var badge_height: float = 0.0
+	var safe_x: float = 0.0
+	var safe_y: float = 0.0
+	var safe_width: float = 0.0
+	var safe_height: float = 0.0
+	
 	if badge_type == 1:
 		var base_badge_size = BADGE_SIZE_RATIO * card_width
 		var top_bar_max_size = card_width * 0.25
-		var bar_height = min(base_badge_size * badge_size_setting, top_bar_max_size)
+		bar_height = min(base_badge_size * badge_size_setting, top_bar_max_size)
 		
-		var top_bar_safe_x = total_inset + effective_corner_radius
-		var top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
-		var top_bar_safe_y = total_inset
-		var top_bar_safe_height = bar_height
+		top_bar_safe_x = total_inset + effective_corner_radius
+		top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
+		top_bar_safe_y = total_inset
+		top_bar_safe_height = bar_height
 		
-		_badge_effect.set_badge_dimensions(Vector2(card_width, bar_height))
-		_badge_effect.set_border_inset_pixels(total_inset)
-		_badge_effect.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
+		normal_badge.set_badge_dimensions(Vector2(card_width, bar_height))
+		normal_badge.set_border_inset_pixels(total_inset)
+		normal_badge.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
 	else:
 		var raw_badge_size = BADGE_SIZE_RATIO * card_width * badge_size_setting
 		var min_badge_size = card_width * 0.15
 		var max_badge_size = card_width * 0.45
 		var target_badge_size = clamp(raw_badge_size, min_badge_size, max_badge_size)
 		
-		var badge_width: float
-		var badge_height: float
 		if texture_aspect >= 1.0:
 			badge_width = target_badge_size * texture_aspect
 			badge_height = target_badge_size
@@ -799,16 +480,29 @@ func _update_platform_badge():
 		var max_corner_margin = badge_width * 0.8
 		var clamped_corner_margin = min(corner_margin, max_corner_margin)
 		
-		var safe_x = total_inset + clamped_corner_margin
-		var safe_y = total_inset + clamped_corner_margin
-		var safe_width = max(badge_width - clamped_corner_margin - inner_corner_margin, 0.0)
-		var safe_height = max(badge_height - clamped_corner_margin - inner_corner_margin, 0.0)
+		safe_x = total_inset + clamped_corner_margin
+		safe_y = total_inset + clamped_corner_margin
+		safe_width = max(badge_width - clamped_corner_margin - inner_corner_margin, 0.0)
+		safe_height = max(badge_height - clamped_corner_margin - inner_corner_margin, 0.0)
 		
-		_badge_effect.set_badge_dimensions(Vector2(badge_width, badge_height))
-		_badge_effect.set_border_inset_pixels(total_inset)
-		_badge_effect.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
+		normal_badge.set_badge_dimensions(Vector2(badge_width, badge_height))
+		normal_badge.set_border_inset_pixels(total_inset)
+		normal_badge.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 	
-	_badge_effect.set_icon_texture(icon_texture)
+	normal_badge.set_icon_texture(icon_texture)
+	
+	# Also update focus badge if it exists
+	var focus_badge = _focus_stack.get_effect("badge") as BadgeEffect
+	if focus_badge:
+		focus_badge.set_icon_texture(icon_texture)
+		if badge_type == 1:
+			focus_badge.set_badge_dimensions(Vector2(card_width, bar_height))
+			focus_badge.set_border_inset_pixels(total_inset)
+			focus_badge.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
+		else:
+			focus_badge.set_badge_dimensions(Vector2(badge_width, badge_height))
+			focus_badge.set_border_inset_pixels(total_inset)
+			focus_badge.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 
 func _load_cover(high_priority: bool = false):
 	if not game:
@@ -942,15 +636,10 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 
 func _set_texture(tex: Texture2D) -> void:
 	_current_texture = tex
-	if _base_effect:
-		_base_effect.set_game_texture(tex)
-	_card_state.game_texture = tex
-	# Update glow effect texture if it exists
-	if _glow_effect:
-		_glow_effect.set_game_texture(tex)
-	# Update distort effect texture if it exists
-	if _distort_effect:
-		_distort_effect.set_game_texture(tex)
+	if _normal_stack:
+		_normal_stack.set_game_texture(tex)
+	if _focus_stack:
+		_focus_stack.set_game_texture(tex)
 
 func _on_card_pressed():
 	if not game:
@@ -1102,21 +791,23 @@ func _on_focus_entered() -> void:
 	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
 	
 	# Reduce border size when focused
-	if _border_effect:
+	var normal_border = _normal_stack.get_effect("border") as BorderEffect
+	if normal_border:
 		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
 		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
 		var original_inset = _original_border_size + fade_in
 		var focused_inset = focused_border_size + fade_in
 		
 		# Tween border size and inset together
-		var border_tween = _border_effect.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
+		var border_tween = normal_border.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
 		border_tween.parallel().tween_method(func(t):
 			var current_inset = lerp(original_inset, focused_inset, t)
 			_card_state.border_inset_ratio = current_inset
 			# Update badge with new inset
-			if _badge_effect:
-				_badge_effect.set_border_width(current_inset)
-				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
+			var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
+			if normal_badge:
+				normal_badge.set_border_width(current_inset)
+				normal_badge.set_border_inset_pixels(current_inset * _card_state.card_size.x)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects with smooth fade
@@ -1136,21 +827,23 @@ func _on_focus_exited() -> void:
 	_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
 	
 	# Restore original border size and inset
-	if _border_effect:
+	var normal_border = _normal_stack.get_effect("border") as BorderEffect
+	if normal_border:
 		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
 		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
 		var focused_inset = focused_border_size + fade_in
 		var original_inset = _original_border_size + fade_in
 		
 		# Tween border size and inset together
-		var border_tween = _border_effect.tween_border_size(_original_border_size, FOCUS_TWEEN_DURATION)
+		var border_tween = normal_border.tween_border_size(_original_border_size, FOCUS_TWEEN_DURATION)
 		border_tween.parallel().tween_method(func(t):
 			var current_inset = lerp(focused_inset, original_inset, t)
 			_card_state.border_inset_ratio = current_inset
 			# Update badge with restored inset
-			if _badge_effect:
-				_badge_effect.set_border_width(current_inset)
-				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
+			var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
+			if normal_badge:
+				normal_badge.set_border_width(current_inset)
+				normal_badge.set_border_inset_pixels(current_inset * _card_state.card_size.x)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 	
 	# Hide focus effects with smooth fade
@@ -1174,81 +867,49 @@ func restore_focus_animation() -> void:
 	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
 	
 	# Re-apply border size reduction
-	if _border_effect:
+	var normal_border = _normal_stack.get_effect("border") as BorderEffect
+	if normal_border:
 		var focused_border_size = _original_border_size * FOCUSED_BORDER_MULTIPLIER
 		var fade_in = _get_effect_config("border").get("settings", {}).get("border_fade_in", 0.0)
 		var original_inset = _original_border_size + fade_in
 		var focused_inset = focused_border_size + fade_in
 		
-		var border_tween = _border_effect.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
+		var border_tween = normal_border.tween_border_size(focused_border_size, FOCUS_TWEEN_DURATION)
 		border_tween.parallel().tween_method(func(t):
 			var current_inset = lerp(original_inset, focused_inset, t)
 			_card_state.border_inset_ratio = current_inset
-			if _badge_effect:
-				_badge_effect.set_border_width(current_inset)
-				_badge_effect.set_border_inset_pixels(current_inset * _card_state.card_size.x)
+			var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
+			if normal_badge:
+				normal_badge.set_border_width(current_inset)
+				normal_badge.set_border_inset_pixels(current_inset * _card_state.card_size.x)
 		, 0.0, 1.0, FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects
 	_show_focus_effects(true)
 
-## Shows or hides focus effects with a smooth fade transition
+## Shows or hides focus effects with a smooth fade transition via stack modulate
 func _show_focus_effects(show: bool) -> void:
 	# In preview mode, always show focus effects so designer can see them
 	if preview_mode:
 		show = true
 	
-	# Map effect instances to their config check parameters
-	var effect_configs: Array[Array] = [
-		[_focus_border_effect, "border"],
-		[_focus_badge_effect, "badge"],
-		[_focus_drop_shadow_effect, "drop_shadow"],
-		[_focus_glow_effect, "glow"],
-		[_focus_glass_effect, "glass"],
-		[_focus_distort_effect, "distort"],
-		[_focus_gradient_overlay_effect, "gradient_overlay"]
-	]
-	
 	var target_alpha: float = 1.0 if show else 0.0
 	
-	for item in effect_configs:
-		var effect: CanvasItem = item[0]
-		var effect_id: String = item[1]
-		
-		if not effect:
-			continue
-		
-		# Skip showing effects that aren't configured (unless in preview mode)
-		if show and not preview_mode:
-			var config = _get_focus_effect_config(effect_id)
-			if config.is_empty():
-				continue
-		
-		# Make visible before fading in, or keep visible while fading out
-		if show:
-			effect.visible = true
-			# Set initial alpha to 0
-			if effect.material is ShaderMaterial:
-				effect.material.set_shader_parameter("effect_alpha", 0.0)
-		
-		# Only tween if effect should be visible at end (show=true) or is currently visible (show=false)
-		if show or effect.visible:
-			# Create tween for smooth alpha transition via shader parameter
-			var fade_tween = create_tween()
-			fade_tween.set_trans(Tween.TRANS_QUAD)
-			fade_tween.set_ease(Tween.EASE_OUT)
-			
-			# Tween the shader parameter instead of modulate
-			var start_alpha = 0.0 if show else 1.0
-			var end_alpha = target_alpha
-			fade_tween.tween_method(func(t: float):
-				if effect.material is ShaderMaterial:
-					effect.material.set_shader_parameter("effect_alpha", t)
-			, start_alpha, end_alpha, FOCUS_EFFECT_FADE_DURATION)
-			
-			# Hide after fade out completes
-			if not show:
-				fade_tween.finished.connect(func(): effect.visible = false)
+	if show:
+		_focus_stack.visible = true
+		_focus_stack.modulate.a = 0.0
+	
+	var fade_tween = create_tween()
+	fade_tween.set_trans(Tween.TRANS_QUAD)
+	fade_tween.set_ease(Tween.EASE_OUT)
+	
+	var start_alpha = 0.0 if show else 1.0
+	fade_tween.tween_method(func(t: float):
+		_focus_stack.modulate.a = t
+	, start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION)
+	
+	if not show:
+		fade_tween.finished.connect(func(): _focus_stack.visible = false)
 
 ## Plays the enter animation: scales from 125% to 100% while fading opacity from 0% to 100%
 func play_enter_animation() -> void:
@@ -1272,37 +933,36 @@ func play_enter_animation() -> void:
 	# Separate tween for opacity (smooth fade)
 	_enter_tween_alpha = create_tween()
 	_enter_tween_alpha.set_trans(Tween.TRANS_CIRC)
-	#_enter_tween_alpha.set_ease(Tween.EASE_)
 	
-	# Tween alpha on base effect using the shader uniform
-	if _base_effect:
-		_enter_tween_alpha.parallel().tween_method(func(t): _base_effect.set_alpha(t), 0.0, 1.0, ENTER_TWEEN_DURATION)
+	# Tween alpha on base effect using the stack
+	var base_effect = _normal_stack.get_effect("base") as BaseCardEffect
+	if base_effect:
+		_enter_tween_alpha.parallel().tween_method(func(t): base_effect.set_alpha(t), 0.0, 1.0, ENTER_TWEEN_DURATION)
 	
-	# Tween opacity on card input (covers UI elements like status icons, platform icons)
+	# Tween opacity on card input (covers UI elements like status icons)
 	if card_input:
 		_enter_tween_alpha.parallel().tween_property(card_input, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
 	
-	# Tween opacity on all CardEffect children inside VisualContainer (border, badge, drop shadow)
-	# Skip focus effects - they manage their own alpha via _show_focus_effects()
-	if visual_container:
-		for child in visual_container.get_children():
-			if child is CardEffect and not child.name.begins_with("Focus"):
+	# Tween opacity on all normal stack effects
+	if _normal_stack:
+		for child in _normal_stack.get_children():
+			if child is EffectBase:
 				_enter_tween_alpha.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
 
 ## Sets the card's alpha immediately (for initial state before animations)
 func set_card_alpha(alpha: float) -> void:
-	if _base_effect:
-		_base_effect.set_alpha(alpha)
+	var base_effect = _normal_stack.get_effect("base") as BaseCardEffect
+	if base_effect:
+		base_effect.set_alpha(alpha)
 	
-	# Set opacity on card input (covers UI elements like status icons, platform icons)
+	# Set opacity on card input (covers UI elements like status icons)
 	if card_input:
 		card_input.modulate = Color(1, 1, 1, alpha)
 	
-	# Set opacity on all CardEffect children inside VisualContainer (border, badge, drop shadow)
-	# Skip focus effects - they manage their own alpha via _show_focus_effects()
-	if visual_container:
-		for child in visual_container.get_children():
-			if child is CardEffect and not child.name.begins_with("Focus"):
+	# Set opacity on all normal stack effects
+	if _normal_stack:
+		for child in _normal_stack.get_children():
+			if child is EffectBase:
 				child.modulate = Color(1, 1, 1, alpha)
 
 func _on_download_progress(item_id: String, progress: float):
@@ -1352,33 +1012,14 @@ func reset():
 	# Hide title label when card is reset
 	if game_title_label:
 		game_title_label.visible = false
-	# Hide all focus effects when card is recycled
-	_hide_all_focus_effects()
-
-func _hide_all_focus_effects():
-	"""Hide all focus effects and reset their shader alpha."""
-	var focus_effects = [
-		_focus_border_effect,
-		_focus_badge_effect,
-		_focus_drop_shadow_effect,
-		_focus_glow_effect,
-		_focus_distort_effect,
-		_focus_gradient_overlay_effect,
-		_focus_glass_effect
-	]
-	
-	for effect in focus_effects:
-		if effect:
-			effect.visible = false
-			if effect.material is ShaderMaterial:
-				effect.material.set_shader_parameter("effect_alpha", 0.0)
+	# Hide focus stack when card is recycled
+	if _focus_stack:
+		_focus_stack.visible = false
+		_focus_stack.modulate.a = 0.0
 
 func refresh_settings():
-	#print("[GameCard] === refresh_settings called on ", name, " ===")
 	_update_card_state_from_settings()
-	#print("[GameCard] Rebuilding effects...")
 	_rebuild_effects()
-	#print("[GameCard] === refresh_settings complete ===")
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:

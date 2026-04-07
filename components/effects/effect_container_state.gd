@@ -62,11 +62,24 @@ var glass_inset_ratio: float = 0.0:
 # Computed dimensions
 var game_texture: Texture2D = null
 var effect_settings: Array = []
+var focus_effect_settings: Array = []
 
 # Shared shape parameters for SDF calculations (calculated once, used by all effects)
 var corner_radius_pixels: float = 0.0
 var total_inset_pixels: float = 0.0
 var inner_corner_radius_pixels: float = 0.0  # Radius after glass inset
+
+# Backward compatibility alias: card_size → container_size
+func _get(property: StringName):
+	if property == &"card_size":
+		return container_size
+	return null
+
+func _set(property: StringName, value: Variant) -> bool:
+	if property == &"card_size":
+		container_size = value
+		return true
+	return false
 
 func _init(p_base_size: Vector2 = Vector2(202.0, 270.0)) -> void:
 	base_size = p_base_size
@@ -111,6 +124,19 @@ func set_effect_config(effect_id: String, config: Dictionary) -> void:
 			return
 	effect_settings.append(config.duplicate())
 
+func get_focus_effect_config(effect_id: String) -> Dictionary:
+	for effect_data in focus_effect_settings:
+		if effect_data is Dictionary and effect_data.get("effect_id") == effect_id:
+			return effect_data
+	return {}
+
+func set_focus_effect_config(effect_id: String, config: Dictionary) -> void:
+	for i in range(focus_effect_settings.size()):
+		if focus_effect_settings[i] is Dictionary and focus_effect_settings[i].get("effect_id") == effect_id:
+			focus_effect_settings[i] = config.duplicate()
+			return
+	focus_effect_settings.append(config.duplicate())
+
 func duplicate() -> EffectContainerState:
 	var new_state = EffectContainerState.new(base_size)
 	new_state.zoom_level = zoom_level
@@ -120,6 +146,7 @@ func duplicate() -> EffectContainerState:
 	new_state.glass_inset_ratio = glass_inset_ratio
 	new_state.game_texture = game_texture
 	new_state.effect_settings = effect_settings.duplicate(true)
+	new_state.focus_effect_settings = focus_effect_settings.duplicate(true)
 	# _recalculate_dimensions will be called in _init, but container_size will be recalculated
 	new_state.container_size = container_size
 	return new_state

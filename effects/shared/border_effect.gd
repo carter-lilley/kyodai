@@ -1,5 +1,5 @@
 class_name BorderEffect
-extends CardEffect
+extends EffectBase
 
 var _gradient_texture: ImageTexture = null
 var _inner_stroke_gradient_texture: ImageTexture = null

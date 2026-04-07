@@ -1,5 +1,5 @@
 class_name GlowEffect
-extends CardEffect
+extends EffectBase
 
 # Base margin ratio for glow (0.08 = 8% of card width)
 const GLOW_MARGIN_RATIO = 0.08

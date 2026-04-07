@@ -1,5 +1,5 @@
 class_name DistortEffect
-extends CardEffect
+extends EffectBase
 
 func _ready():
 	super._ready()

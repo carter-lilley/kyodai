@@ -1,5 +1,5 @@
 class_name DropShadowEffect
-extends CardEffect
+extends EffectBase
 
 # Base margin ratio for shadow (0.05 = 5% of card width)
 const SHADOW_MARGIN_RATIO = 0.05

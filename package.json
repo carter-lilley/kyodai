@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@bdliyq/opencode-rate-limit-retry": "^1.0.3"
+  }
+}

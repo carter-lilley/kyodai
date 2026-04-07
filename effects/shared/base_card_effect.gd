@@ -1,5 +1,5 @@
 class_name BaseCardEffect
-extends CardEffect
+extends EffectBase
 
 var _current_texture: Texture2D = null
 

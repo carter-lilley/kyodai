@@ -1,5 +1,5 @@
 class_name BadgeEffect
-extends CardEffect
+extends EffectBase
 
 var _border_width: float = 0.0
 var _border_inset_pixels: float = 0.0

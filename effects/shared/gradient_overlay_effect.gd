@@ -1,5 +1,5 @@
 class_name GradientOverlayEffect
-extends CardEffect
+extends EffectBase
 
 var _gradient_texture: ImageTexture = null
 

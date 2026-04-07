@@ -10,11 +10,13 @@ android download manager and file streaming
 chunk reassembly progress notif
 saves
 
-merge badge + tex icon shader
 refactor depreciated card shader code
 
 ## UI
 	always zoom to margin
+	scale from edges (sides) so no overlap
+	same fx in both base and focus, animate between 
+	draggable ui elements?
 	game title under/beside card option
 	game title "speech bubble option"
 	launch animation?

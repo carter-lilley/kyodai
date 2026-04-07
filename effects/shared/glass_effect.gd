@@ -1,5 +1,5 @@
 class_name GlassEffect
-extends CardEffect
+extends EffectBase
 
 var _swoop_layer: ColorRect = null
 

@@ -1,5 +1,8 @@
 # Godot 4+ specific ignores
 .godot/
+.import
+
+node_modules/
 
 # Android build artifacts and cache
 android/.gradle/
