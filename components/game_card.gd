@@ -803,6 +803,78 @@ func _on_long_press_timeout() -> void:
 		# Show context menu at touch position
 		UIManager.show_game_context_menu(game.romm_id, _touch_start_pos, _get_show_delete())
 
+func _get_grid_pivot_offset() -> Vector2:
+	var container_size = visual_container.size
+	if container_size.x <= 0 or container_size.y <= 0:
+		return container_size / 2
+	
+	var virtual_index = get_meta("virtual_index", -1)
+	if virtual_index < 0:
+		return container_size / 2
+	
+	var grid_container = _find_virtual_scroll_grid_container()
+	if not grid_container:
+		return container_size / 2
+	
+	var items_per_line = grid_container._get_items_per_line() if grid_container.has_method("_get_items_per_line") else 1
+	var total_items = grid_container._total_items if "_total_items" in grid_container else virtual_index + 1
+	var vertical = grid_container.vertical if "vertical" in grid_container else true
+	
+	if vertical:
+		var column = virtual_index % items_per_line
+		var row = virtual_index / items_per_line
+		var total_rows = ceili(float(total_items) / items_per_line)
+		
+		var is_leftmost = column == 0
+		var is_rightmost = (column == items_per_line - 1) or (virtual_index == total_items - 1)
+		var is_topmost = row == 0
+		var is_bottommost = (row == total_rows - 1) or (virtual_index >= total_items - items_per_line)
+		
+		var pivot_x = container_size.x / 2
+		if is_leftmost:
+			pivot_x = 0
+		elif is_rightmost:
+			pivot_x = container_size.x
+		
+		var pivot_y = container_size.y / 2
+		if is_topmost:
+			pivot_y = 0
+		elif is_bottommost:
+			pivot_y = container_size.y
+		
+		return Vector2(pivot_x, pivot_y)
+	else:
+		var row = virtual_index % items_per_line
+		var column = virtual_index / items_per_line
+		var total_columns = ceili(float(total_items) / items_per_line)
+		
+		var is_topmost = row == 0
+		var is_bottommost = (row == items_per_line - 1) or (virtual_index == total_items - 1)
+		var is_leftmost = column == 0
+		var is_rightmost = (column == total_columns - 1) or (virtual_index >= total_items - items_per_line)
+		
+		var pivot_y = container_size.y / 2
+		if is_topmost:
+			pivot_y = 0
+		elif is_bottommost:
+			pivot_y = container_size.y
+		
+		var pivot_x = container_size.x / 2
+		if is_leftmost:
+			pivot_x = 0
+		elif is_rightmost:
+			pivot_x = container_size.x
+		
+		return Vector2(pivot_x, pivot_y)
+
+func _find_virtual_scroll_grid_container() -> Node:
+	var current = get_parent()
+	while current:
+		if current.has_method("_get_items_per_line"):
+			return current
+		current = current.get_parent()
+	return null
+
 func _on_focus_entered() -> void:
 	_is_focused = true
 	_update_game_title_visibility()
@@ -820,8 +892,8 @@ func _on_focus_entered() -> void:
 		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
 	
 	# Scale up visual container when focused (not self, to avoid layout issues)
-	# Ensure pivot is set to center for proper scaling
-	visual_container.pivot_offset = visual_container.size / 2
+	# Set pivot based on grid position to prevent clipping at edges
+	visual_container.pivot_offset = _get_grid_pivot_offset()
 	z_index = 11
 	
 	if _focus_tween:
@@ -858,8 +930,8 @@ func restore_focus_animation() -> void:
 		_focus_tween.kill()
 	
 	# Re-apply focus scale animation on visual container (not self)
-	# Ensure pivot is set to center for proper scaling
-	visual_container.pivot_offset = visual_container.size / 2
+	# Set pivot based on grid position to prevent clipping at edges
+	visual_container.pivot_offset = _get_grid_pivot_offset()
 	z_index = 11
 	
 	_focus_tween = create_tween()
@@ -973,8 +1045,8 @@ func play_enter_animation() -> void:
 		_enter_tween_alpha.kill()
 	
 	# Set initial scale on visual container
-	# Ensure pivot is set to center for proper scaling
-	visual_container.pivot_offset = visual_container.size / 2
+	# Use grid-based pivot for proper scaling at edges
+	visual_container.pivot_offset = _get_grid_pivot_offset()
 	visual_container.scale = Vector2(ENTER_START_SCALE, ENTER_START_SCALE)
 	
 	# Tween for scale (bouncy/elastic feel)

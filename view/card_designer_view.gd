@@ -23,7 +23,8 @@ const EFFECT_ID_MAP: Dictionary = {
 	3: "glow",
 	4: "glass",
 	5: "distort",
-	6: "gradient_overlay"
+	6: "gradient_overlay",
+	7: "hsl"
 }
 
 # Focus effects - excludes base (card needs texture always)
@@ -34,7 +35,8 @@ const FOCUS_EFFECT_ID_MAP: Dictionary = {
 	3: "glow",
 	4: "glass",
 	5: "distort",
-	6: "gradient_overlay"
+	6: "gradient_overlay",
+	7: "hsl"
 }
 
 func _ready():
@@ -476,6 +478,25 @@ func _create_effect_ui(effect_data: Dictionary, index: int, is_focus_effect: boo
 			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
 		else:
 			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
+	elif effect_data.get("effect_id") == "hsl":
+		var hsl_effect = HSLEffect.new()
+		var schema = hsl_effect.get_settings_schema()
+		hsl_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -550,6 +571,15 @@ func _on_add_effect(id: int):
 				"settings": {
 					"gradient": default_gradient,
 					"gradient_direction": 0
+				}
+			}
+		7:
+			new_effect = {
+				"effect_id": "hsl",
+				"settings": {
+					"hue_shift": 0.0,
+					"saturation_scale": 1.0,
+					"lightness_scale": 1.0
 				}
 			}
 	
@@ -642,6 +672,7 @@ func _on_add_focus_effect(id: int):
 		4: effect_id = "glass"
 		5: effect_id = "distort"
 		6: effect_id = "gradient_overlay"
+		7: effect_id = "hsl"
 	
 	# Check if this effect already exists in base effects
 	var base_effect_settings = {}
@@ -722,6 +753,15 @@ func _on_add_focus_effect(id: int):
 				"settings": {
 					"gradient": base_effect_settings.get("gradient", default_gradient),
 					"gradient_direction": base_effect_settings.get("gradient_direction", 0)
+				}
+			}
+		7:
+			new_effect = {
+				"effect_id": "hsl",
+				"settings": {
+					"hue_shift": base_effect_settings.get("hue_shift", 0.0),
+					"saturation_scale": base_effect_settings.get("saturation_scale", 1.0),
+					"lightness_scale": base_effect_settings.get("lightness_scale", 1.0)
 				}
 			}
 	

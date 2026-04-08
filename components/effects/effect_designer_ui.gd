@@ -16,7 +16,8 @@ var _effect_id_map: Dictionary = {
 	2: "drop_shadow",
 	3: "glow",
 	4: "glass",
-	5: "distort"
+	5: "distort",
+	6: "hsl"
 }
 
 # Effect default settings
@@ -56,6 +57,11 @@ var _effect_defaults: Dictionary = {
 	"distort": {
 		"distortion": 0.5,
 		"opacity": 1.0
+	},
+	"hsl": {
+		"hue_shift": 0.0,
+		"saturation_scale": 1.0,
+		"lightness_scale": 1.0
 	}
 }
 

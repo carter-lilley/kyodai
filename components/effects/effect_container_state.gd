@@ -69,6 +69,12 @@ var corner_radius_pixels: float = 0.0
 var total_inset_pixels: float = 0.0
 var inner_corner_radius_pixels: float = 0.0  # Radius after glass inset
 
+# UV transform parameters for effects that sample game_texture
+# Calculated by base_card_effect and used by other effects to match base card's sampling
+var uv_transform_scale: Vector2 = Vector2(1.0, 1.0)
+var uv_transform_offset: Vector2 = Vector2(0.0, 0.0)
+var vertical_offset: float = 0.0
+
 # Backward compatibility alias: card_size → container_size
 func _get(property: StringName):
 	if property == &"card_size":

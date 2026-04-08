@@ -10,7 +10,6 @@ chunk reassembly progress notif
 saves
 
 ## UI
-	always zoom to margin
 	scale from edges (change pivot to either side of grid) so no overlap
 	draggable ui elements?
 	game title under/beside card option

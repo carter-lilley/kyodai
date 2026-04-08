@@ -17,6 +17,7 @@ const EFFECT_REGISTRY: Dictionary = {
 	"glass": "res://effects/shared/glass_effect.gd",
 	"distort": "res://effects/shared/distort_effect.gd",
 	"gradient_overlay": "res://effects/shared/gradient_overlay_effect.gd",
+	"hsl": "res://effects/shared/hsl_effect.gd",
 }
 
 # Layer order (z-index / child order) - lower = behind, higher = in front
@@ -24,11 +25,12 @@ const EFFECT_LAYER_ORDER: Array = [
 	"glow",       # -2: Behind everything
 	"drop_shadow",# -1: Behind card
 	"base",       # 0: Base texture
-	"distort",         # 1: Distortion overlay
-	"gradient_overlay", # 2: Gradient overlay
-	"glass",            # 3: Glass overlay
-	"border",           # 4: Border overlay
-	"badge",            # 5: Badge overlay
+	"hsl",        # 1: HSL color adjustment
+	"distort",         # 2: Distortion overlay
+	"gradient_overlay", # 3: Gradient overlay
+	"glass",            # 4: Glass overlay
+	"border",           # 5: Border overlay
+	"badge",            # 6: Badge overlay
 ]
 
 func _init(container_state: EffectContainerState = null):
@@ -55,10 +57,11 @@ func update_effect_configs(effect_configs: Array):
 
 func set_game_texture(texture: Texture2D):
 	_container_state.game_texture = texture
-	if _effects.has("base"):
-		var base_effect = _effects["base"]
-		if base_effect and base_effect.has_method("set_game_texture"):
-			base_effect.set_game_texture(texture)
+	# Notify all effects that need the game texture
+	for effect_id in _effects:
+		var effect = _effects[effect_id]
+		if effect and effect.has_method("set_game_texture"):
+			effect.set_game_texture(texture)
 
 func get_container_state() -> EffectContainerState:
 	return _container_state
