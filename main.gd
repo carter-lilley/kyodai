@@ -151,13 +151,24 @@ func _on_zoom_changed(value: float):
 			if games_grid:
 				games_grid.target_card_width_ratio = value
 
-func _on_zoom_changed_finished(value: float):
-	"""Called when drag ends - saves the setting."""
-	# Save zoom to settings (only when drag ends)
+func _on_zoom_changed_finished(_value: float):
+	"""Called when drag ends - syncs slider to snapped value and saves setting."""
+	# Get the snapped zoom value from the Library view grid
+	var snapped_value = _value
+	var library_view = UIManager.get_view("Library")
+	if library_view:
+		var games_grid = _get_view_grid(library_view)
+		if games_grid:
+			snapped_value = games_grid.target_card_width_ratio
+	
+	# Update slider to match snapped value
+	navigation_bar.set_zoom_value(snapped_value)
+	
+	# Save snapped zoom to settings
 	if SettingsManager:
 		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 		if zoom_setting:
-			SettingsManager.set_setting(value, zoom_setting)
+			SettingsManager.set_setting(snapped_value, zoom_setting)
 			SettingsManager.save_settings()
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:

@@ -11,8 +11,7 @@ saves
 
 ## UI
 	always zoom to margin
-	scale from edges (sides) so no overlap
-	same fx in both base and focus, animate between 
+	scale from edges (change pivot to either side of grid) so no overlap
 	draggable ui elements?
 	game title under/beside card option
 	game title "speech bubble option"
