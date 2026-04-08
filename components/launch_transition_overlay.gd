@@ -27,37 +27,23 @@ func _ready():
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	
-	print("[LaunchTransitionOverlay] _ready() called")
-	print("[LaunchTransitionOverlay] _effect_stack: ", _effect_stack)
-	print("[LaunchTransitionOverlay] LaunchManager: ", LaunchManager)
-	
 	# Connect to LaunchManager signal
 	if LaunchManager:
-		print("[LaunchTransitionOverlay] Connecting to game_launch_initiated signal")
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
-	else:
-		print("[LaunchTransitionOverlay] ERROR: LaunchManager is null!")
 
 func _on_game_launch_initiated(game: GameResource, _focus_index: int):
-	print("[LaunchTransitionOverlay] _on_game_launch_initiated() called")
-	print("[LaunchTransitionOverlay] Game: ", game.get_display_name() if game else "null")
-	
 	# We get the texture from the focused card, not from the game resource
 	# This avoids filesystem access and works on Android
 	_start_transition()
 
 func _start_transition():
-	print("[LaunchTransitionOverlay] _start_transition() called")
-	
 	if _is_animating:
-		print("[LaunchTransitionOverlay] Already animating, skipping")
 		return
 	
 	_is_animating = true
 	is_transition_active = true  # Set global static flag
 	
 	# Get the focused card and its texture
-	print("[LaunchTransitionOverlay] Getting focused card and texture...")
 	var card_info = _get_focused_card_and_texture()
 	var texture = card_info.texture
 	var card_rect = card_info.rect
@@ -65,14 +51,13 @@ func _start_transition():
 	var start_corner_radius = card_info.corner_radius
 	
 	if not texture:
-		print("[LaunchTransitionOverlay] ERROR: Failed to get texture from card, aborting")
+		push_error("[LaunchTransitionOverlay] Failed to get texture from card, aborting")
 		_is_animating = false
 		is_transition_active = false  # Reset global flag
 		return
-	print("[LaunchTransitionOverlay] Texture retrieved successfully: ", texture)
 	
 	if card_rect.size.x <= 0 or card_rect.size.y <= 0:
-		print("[LaunchTransitionOverlay] ERROR: Invalid card rect (size <= 0), aborting")
+		push_error("[LaunchTransitionOverlay] Invalid card rect (size <= 0), aborting")
 		_is_animating = false
 		is_transition_active = false  # Reset global flag
 		return
@@ -115,11 +100,9 @@ func _start_transition():
 		_game_title_label.visible = true
 	
 	# Setup the EffectStack at the card's position
-	print("[LaunchTransitionOverlay] Setting up EffectStack at card position...")
 	_setup_effect_stack(texture, card_rect, start_corner_radius)
 	
 	# Show and animate
-	print("[LaunchTransitionOverlay] Making visible and starting animation")
 	visible = true
 	z_index = 1000
 	
@@ -127,21 +110,17 @@ func _start_transition():
 	_animate_transition()
 
 func _get_focused_card_and_texture() -> Dictionary:
-	print("[LaunchTransitionOverlay] _get_focused_card_and_texture() called")
-	
 	# Find the currently focused GameCard
 	var viewport = get_viewport()
-	print("[LaunchTransitionOverlay] Viewport: ", viewport)
 	
 	if not viewport:
-		print("[LaunchTransitionOverlay] ERROR: Viewport is null")
+		push_error("[LaunchTransitionOverlay] Viewport is null")
 		return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 	
 	var focused = viewport.gui_get_focus_owner()
-	print("[LaunchTransitionOverlay] Focused control: ", focused)
 	
 	if not focused:
-		print("[LaunchTransitionOverlay] ERROR: No focused control")
+		push_error("[LaunchTransitionOverlay] No focused control")
 		return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 	
 	# Traverse up to find GameCard
@@ -150,15 +129,11 @@ func _get_focused_card_and_texture() -> Dictionary:
 	while current:
 		depth += 1
 		if depth > 20:
-			print("[LaunchTransitionOverlay] ERROR: Exceeded max search depth")
+			push_error("[LaunchTransitionOverlay] Exceeded max search depth")
 			return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
-		
-		print("[LaunchTransitionOverlay] Checking node: ", current.name, " (", current.get_class(), ")")
 		
 		if current is GameCard:
 			var card = current as GameCard
-			print("[LaunchTransitionOverlay] Found GameCard!")
-			print("[LaunchTransitionOverlay] Card visual_container: ", card.visual_container)
 			
 			# Get the visual container's global rect
 			var card_rect = Rect2()
@@ -166,44 +141,34 @@ func _get_focused_card_and_texture() -> Dictionary:
 				var global_pos = card.visual_container.global_position
 				var size = card.visual_container.size
 				card_rect = Rect2(global_pos, size)
-				print("[LaunchTransitionOverlay] Visual container pos: ", global_pos, " size: ", size)
 			else:
-				print("[LaunchTransitionOverlay] ERROR: Card has no visual_container")
+				push_error("[LaunchTransitionOverlay] Card has no visual_container")
 			
 			# Get the texture directly from the card
 			var texture = card.get_current_texture()
-			print("[LaunchTransitionOverlay] Got texture from card: ", texture)
 			
 			# Get the card's corner radius
 			var card_state = card.get_card_state()
 			var corner_radius = card_state.corner_radius_ratio if card_state else 0.06
-			print("[LaunchTransitionOverlay] Card corner radius: ", corner_radius)
 			
 			return {"card": card, "texture": texture, "rect": card_rect, "corner_radius": corner_radius}
 		
 		current = current.get_parent()
 	
-	print("[LaunchTransitionOverlay] ERROR: No GameCard found in parent chain")
+	push_error("[LaunchTransitionOverlay] No GameCard found in parent chain")
 	return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 
 func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float):
-	print("[LaunchTransitionOverlay] _setup_effect_stack() called")
-	print("[LaunchTransitionOverlay] _effect_stack exists: ", _effect_stack != null)
-	print("[LaunchTransitionOverlay] Starting corner radius: ", start_corner_radius)
-	
 	if not _effect_stack:
-		print("[LaunchTransitionOverlay] ERROR: _effect_stack is null")
+		push_error("[LaunchTransitionOverlay] _effect_stack is null")
 		return
 	
 	# Position and size the EffectStack exactly at the card's location
 	# Add 2px overshoot to compensate for shader AA edge
-	print("[LaunchTransitionOverlay] Setting EffectStack position: ", card_rect.position)
-	print("[LaunchTransitionOverlay] Setting EffectStack size: ", card_rect.size)
 	_effect_stack.position = card_rect.position - Vector2(2, 2)
 	_effect_stack.size = card_rect.size + Vector2(4, 4)
 	
 	# Create a container state for the effect stack
-	print("[LaunchTransitionOverlay] Creating EffectContainerState...")
 	var container_state = EffectContainerState.for_card()
 	container_state.game_texture = texture
 	container_state.container_size = card_rect.size
@@ -221,27 +186,18 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 		{"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}},
 		{"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_direction": 1}}
 	]
-	print("[LaunchTransitionOverlay] Initializing effect stack with configs: ", effect_configs)
 	
 	_effect_stack.initialize(container_state, effect_configs)
-	print("[LaunchTransitionOverlay] Effect stack initialized")
 	
 	# Set the game texture on the base effect
 	var base_effect = _effect_stack.get_effect("base") as BaseCardEffect
-	print("[LaunchTransitionOverlay] Base effect: ", base_effect)
 	if base_effect and texture:
-		print("[LaunchTransitionOverlay] Setting game texture on base effect")
 		base_effect.set_game_texture(texture)
-	
-	print("[LaunchTransitionOverlay] EffectStack setup complete")
 
 func _animate_transition():
-	print("[LaunchTransitionOverlay] _animate_transition() called")
-	print("[LaunchTransitionOverlay] Creating tween...")
-	
 	var tween = create_tween()
 	if not tween:
-		print("[LaunchTransitionOverlay] ERROR: Failed to create tween")
+		push_error("[LaunchTransitionOverlay] Failed to create tween")
 		return
 	
 	# Calculate fullscreen target (screen aspect ratio) with slight overshoot to hide AA edge
@@ -250,15 +206,9 @@ func _animate_transition():
 	var target_size = viewport_size + Vector2(overshoot * 2, overshoot * 2)
 	var target_pos = Vector2(-overshoot, -overshoot)  # Center the overshoot
 	
-	print("[LaunchTransitionOverlay] Viewport size: ", viewport_size)
-	print("[LaunchTransitionOverlay] Target position: ", target_pos)
-	print("[LaunchTransitionOverlay] Target size: ", target_size)
-	print("[LaunchTransitionOverlay] Original card size: ", _original_card_rect.size)
-	
 	var container_state = _effect_stack.get_container_state()
 	
 	# PHASE 1: Scale and position with QUART + EASE_OUT
-	print("[LaunchTransitionOverlay] PHASE 1: Scale/position animation (QUART + EASE_OUT)...")
 	tween.set_trans(Tween.TRANS_QUART)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.set_parallel(true)
@@ -301,11 +251,9 @@ func _animate_transition():
 		)
 	
 	# Hold after phase 1
-	print("[LaunchTransitionOverlay] Hold for ", HOLD_DURATION, " seconds...")
 	tween.chain().tween_interval(HOLD_DURATION)
 	
 	# PHASE 2: HSL fade + Gradient fade with CIRC + EASE_IN (parallel)
-	print("[LaunchTransitionOverlay] PHASE 2: HSL fade + Gradient fade (CIRC + EASE_IN)...")
 	var hsl_effect = _effect_stack.get_effect("hsl") as HSLEffect
 	var gradient_effect = _effect_stack.get_effect("gradient_overlay") as GradientOverlayEffect
 	
@@ -325,11 +273,8 @@ func _animate_transition():
 				hsl_effect._update_shader_params(),
 			0.0, 1.0, PHASE2_DURATION
 		)
-	else:
-		print("[LaunchTransitionOverlay] WARNING: HSL effect not found")
 	
 	if gradient_effect:
-		print("[LaunchTransitionOverlay] Starting gradient fade animation...")
 		var start_color = Color(0, 0, 0, 0)
 		var end_color = Color(0, 0, 0, 1.0)
 		
@@ -342,28 +287,35 @@ func _animate_transition():
 					gradient_effect._update_shader_params(),
 			0.0, 1.0, PHASE2_DURATION
 		)
-	else:
-		print("[LaunchTransitionOverlay] WARNING: Gradient overlay effect not found")
 	
 	# Stop parallel after phase 2
 	tween.set_parallel(false)
 	
 	# Complete
-	print("[LaunchTransitionOverlay] Adding completion callback")
 	tween.chain().tween_callback(_on_animation_complete)
-	
-	print("[LaunchTransitionOverlay] Tween setup complete, animation should start now")
 
 func _on_animation_complete():
-	return # DEBUG: HOLD THE FINAL STATE, KEEP FOR NOW
-	print("[LaunchTransitionOverlay] _on_animation_complete() called")
+	# Animation is complete, but stay visible until emulator exits
+	# Connect to background_state_exited to know when to hide
+	if LaunchManager:
+		if not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+			LaunchManager.background_state_exited.connect(_on_background_state_exited)
+	
+	# Hide the title label but keep the black overlay
 	if _game_title_label:
 		_game_title_label.visible = false
-	visible = false
+	
 	_is_animating = false
-	is_transition_active = false  # Reset global static flag
+	is_transition_active = false
 	animation_completed.emit()
-	print("[LaunchTransitionOverlay] Animation complete, overlay hidden")
+
+func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
+	# Emulator has exited, hide the overlay
+	visible = false
+	# Disconnect to avoid memory leaks
+	if LaunchManager:
+		if LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
 
 func is_animating() -> bool:
 	return _is_animating

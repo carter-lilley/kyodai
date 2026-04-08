@@ -72,6 +72,9 @@ func _ready():
 	# Connect to LaunchManager to save focus before game launch
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
+		# Connect to background state signals for desktop
+		LaunchManager.background_state_entered.connect(_on_background_state_entered)
+		LaunchManager.background_state_exited.connect(_on_background_state_exited)
 	
 	# Set initial view
 	_update_navigation_bar_for_view("Home")
@@ -246,6 +249,11 @@ func _setup_repeat():
 	add_child(_repeat_timer)
 
 func _input(event: InputEvent):
+	# Block all input during background state (emulator running)
+	if LaunchManager and LaunchManager.is_in_background_state():
+		get_viewport().set_input_as_handled()
+		return
+	
 	var dirs = ["ui_left", "ui_right", "ui_up", "ui_down"]
 	
 	for dir in dirs:
@@ -464,3 +472,22 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	# Store the focused card index (passed from card before focus is lost)
 	_last_focused_index = focus_index
 	print("[Main] Saved _last_focused_index: ", _last_focused_index)
+
+func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
+	"""Handle entering background state - input is now blocked in _input."""
+	print("[Main] Background state entered - input blocked")
+	# Optional: Show overlay or dim the UI
+	# UIManager.set_dimmed(true)
+
+func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
+	"""Handle exiting background state - restore focus."""
+	print("[Main] Background state exited - restoring focus")
+	# Optional: Remove overlay
+	# UIManager.set_dimmed(false)
+	
+	# Restore focus to the last known position
+	if _last_focused_index >= 0:
+		call_deferred("_restore_focus_to_card", _last_focused_index)
+	else:
+		# Fallback to home button
+		call_deferred("reset_focus_to_home_button")

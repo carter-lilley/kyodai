@@ -107,6 +107,15 @@ signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
 signal game_launched(game: GameResource)  # Emitted when a game is successfully launched
 signal game_launch_initiated(game: GameResource, focus_index: int)  # Emitted when a game launch is initiated (includes focus index for restoration)
+signal background_state_entered(pid: int, game: GameResource)  # Emitted when entering background state (desktop only)
+signal background_state_exited(game: GameResource, exit_code: int)  # Emitted when exiting background state (desktop only)
+
+# Background state tracking (desktop only)
+var _background_active_pid: int = -1
+var _background_active_game: GameResource = null
+var _is_in_background_state: bool = false
+var _background_poll_timer: Timer = null
+const BACKGROUND_POLL_INTERVAL: float = 1.0
 
 func _ready():
 	_load_registry()
@@ -116,9 +125,137 @@ func _ready():
 	DownloadManager.extraction_completed.connect(_on_download_manager_extraction_completed)
 	DownloadManager.download_completed.connect(_on_unified_download_completed)
 	
+	# Initialize background state polling (desktop only)
+	if not PlatformManager.is_android():
+		_background_poll_timer = Timer.new()
+		_background_poll_timer.wait_time = BACKGROUND_POLL_INTERVAL
+		_background_poll_timer.one_shot = false
+		_background_poll_timer.timeout.connect(_on_background_poll_timeout)
+		add_child(_background_poll_timer)
+	
 	# Scan existing installations to detect partial installs
 	# Wait a frame to ensure everything is initialized
 	await get_tree().process_frame
+
+# ==================== BACKGROUND STATE (DESKTOP ONLY) ====================
+
+## Returns true if currently in background state (emulator running)
+func is_in_background_state() -> bool:
+	return _is_in_background_state
+
+## Returns the active process PID, or -1 if none
+func get_background_pid() -> int:
+	return _background_active_pid
+
+## Returns the active game during background state, or null
+func get_background_game() -> GameResource:
+	return _background_active_game
+
+## Enter background state with active PID
+func _enter_background_state(pid: int, game: GameResource) -> void:
+	if _is_in_background_state:
+		print("[LaunchManager] Warning: Already in background state, ignoring new PID ", pid)
+		return
+	
+	if pid <= 0:
+		push_error("[LaunchManager] Invalid PID for background state: " + str(pid))
+		return
+	
+	print("[LaunchManager] Entering background state with PID: ", pid)
+	_background_active_pid = pid
+	_background_active_game = game
+	_is_in_background_state = true
+	
+	if _background_poll_timer:
+		_background_poll_timer.start()
+	
+	background_state_entered.emit(pid, game)
+
+## Exit background state
+func _exit_background_state(exit_code: int = 0) -> void:
+	if not _is_in_background_state:
+		return
+	
+	print("[LaunchManager] Exiting background state. PID was: ", _background_active_pid)
+	
+	var game = _background_active_game
+	
+	if _background_poll_timer:
+		_background_poll_timer.stop()
+	
+	_background_active_pid = -1
+	_background_active_game = null
+	_is_in_background_state = false
+	
+	background_state_exited.emit(game, exit_code)
+
+## Poll callback - check if process is still running
+func _on_background_poll_timeout() -> void:
+	if not _is_in_background_state or _background_active_pid <= 0:
+		return
+	
+	print("[LaunchManager] Polling PID ", _background_active_pid, "...")
+	
+	if not _is_process_running(_background_active_pid):
+		print("[LaunchManager] Process ", _background_active_pid, " no longer running")
+		_exit_background_state(0)
+	else:
+		print("[LaunchManager] Process ", _background_active_pid, " still running")
+
+## Check if a process is running by PID (platform-specific)
+func _is_process_running(pid: int) -> bool:
+	if pid <= 0:
+		return false
+	
+	if PlatformManager.is_windows():
+		return _is_process_running_windows(pid)
+	else:
+		return _is_process_running_unix(pid)
+
+## Windows: Check if process is running using tasklist
+func _is_process_running_windows(pid: int) -> bool:
+	var output = []
+	var exit_code = OS.execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], output, true)
+	
+	if exit_code != 0:
+		return false
+	
+	if output.size() > 0:
+		var result = output[0].strip_edges()
+		return result != "" and not result.begins_with("INFO:")
+	
+	return false
+
+## Unix (Linux/Mac): Check if process is running using /proc or ps
+func _is_process_running_unix(pid: int) -> bool:
+	if PlatformManager.is_linux():
+		var dir = DirAccess.open("/proc/" + str(pid))
+		if dir:
+			return true
+	
+	var output = []
+	var exit_code = OS.execute("ps", ["-p", str(pid)], output, true)
+	return exit_code == 0
+
+## Force exit background state (for crashes/emergencies)
+func force_exit_background_state() -> void:
+	print("[LaunchManager] Force exiting background state")
+	_exit_background_state(-1)
+
+## Kill the active process (emergency use only)
+func kill_background_process() -> bool:
+	if not _is_in_background_state or _background_active_pid <= 0:
+		return false
+	
+	print("[LaunchManager] Killing background process: ", _background_active_pid)
+	
+	if PlatformManager.is_windows():
+		OS.execute("taskkill", ["/F", "/PID", str(_background_active_pid)], [], true)
+	else:
+		OS.execute("kill", ["-9", str(_background_active_pid)], [], true)
+	
+	_exit_background_state(-1)
+	return true
 
 func _load_registry():
 	if not FileAccess.file_exists(REGISTRY_PATH):
@@ -769,6 +906,9 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 		launch_completed.emit(false, "Failed to start emulator")
 		return false
 	
+	# Store PID and enter background state for desktop
+	_enter_background_state(pid, intent.game)
+	
 	launch_completed.emit(true, "Game launched successfully")
 	return true
 
@@ -1037,7 +1177,7 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	game_launch_initiated.emit(game, focus_index)
 	
 	# DEBUG: Uncomment the next line to disable actual game launching
-	return
+	# return
 	
 	# Play launch sound
 	if AudioManager:
