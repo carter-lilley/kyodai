@@ -1036,6 +1036,9 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	print("[LaunchManager] Emitting game_launch_initiated signal")
 	game_launch_initiated.emit(game, focus_index)
 	
+	# DEBUG: Uncomment the next line to disable actual game launching
+	return
+	
 	# Play launch sound
 	if AudioManager:
 		AudioManager.play_sfx("affirm_00")

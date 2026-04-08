@@ -1215,5 +1215,5 @@ func set_image_priority(high_priority: bool):
 func set_card_zoom(new_zoom: float) -> void:
 	_card_state.zoom_level = new_zoom
 
-func get_current_zoom() -> float:
-	return _card_state.zoom_level
+func get_current_texture() -> Texture2D:
+	return _current_texture

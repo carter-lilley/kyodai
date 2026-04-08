@@ -8,12 +8,12 @@ improve M&KB experience, add search icon.
 android download manager and file streaming
 chunk reassembly progress notif
 saves
-
+effect stacks to fill their parent base 
+	and pass the texture along the stack instead of re-cropping/rendering
 ## UI
 	draggable ui elements?
 	game title under/beside card option
 	game title "speech bubble option"
-	launch animation?
 	color presets (platform/game/custom)
 	'controls/info bar'
 	focus glow

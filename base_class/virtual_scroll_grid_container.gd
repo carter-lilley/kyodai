@@ -235,17 +235,10 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	# Calculate zoom from target card dimensions
 	var snapped_zoom = target_card_width / base_dims.x
 	
-	print("[SNAP] available_width: ", available_width, 
-		" | desired_items: ", desired_items_per_line, 
-		" | target_card_width: ", target_card_width,
-		" | snapped_zoom: ", snapped_zoom)
-	
 	# Convert back to ratio
 	var snapped_card_area = (base_dims.x * snapped_zoom) * (base_dims.y * snapped_zoom)
 	var snapped_ratio = sqrt(snapped_card_area / viewport_area)
-	
-	print("[SNAP] snapped_ratio: ", snapped_ratio, " | max_ratio: ", _calculate_max_ratio(), " | returning: ", clampf(snapped_ratio, 0.05, _calculate_max_ratio()))
-	
+
 	# Clamp to valid range
 	return clampf(snapped_ratio, 0.05, _calculate_max_ratio())
 
@@ -257,11 +250,6 @@ func _recalculate_layout():
 	var base_dims = _get_base_dimensions()
 	item_width = (base_dims.x * current_zoom) + grid_separation
 	item_height = (base_dims.y * current_zoom) + grid_separation
-	
-	print("[RECALC] zoom: ", current_zoom, 
-		" | item_width: ", item_width, 
-		" | size.x: ", size.x,
-		" | items_per_line: ", _get_items_per_line())
 	
 	# Guard against zero or negative item dimensions
 	if item_width <= 0 or item_height <= 0:
@@ -457,10 +445,6 @@ func _update_layout():
 	if vertical:
 		var card_width = item_width - grid_separation
 		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * grid_separation
-		print("[UPDATE] items_per_line: ", items_per_line, 
-			" | card_width: ", card_width,
-			" | row_width: ", row_width,
-			" | available: ", size.x)
 		_flow_container.custom_minimum_size.x = row_width
 	else:
 		var card_height = item_height - grid_separation
