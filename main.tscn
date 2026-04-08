@@ -9,13 +9,8 @@
 [ext_resource type="Script" uid="uid://dpvnpkj275ewq" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
 [ext_resource type="Script" uid="uid://dnfalaub1s338" path="res://addons/AynThor/screen_resource.gd" id="9_screenres"]
 [ext_resource type="Script" uid="uid://bwlvlm2jrv64m" path="res://components/controls_bar.gd" id="10_controlsbar"]
-[ext_resource type="FontVariation" uid="uid://bmavsnl4qxyvo" path="res://fonts/MPLUS1_GameCard_Variation.tres" id="10_dg77c"]
 [ext_resource type="Script" uid="uid://dt6xlxivwdgeh" path="res://components/launch_transition_overlay.gd" id="11_launchoverlay"]
 [ext_resource type="Script" uid="uid://kuhi06ldq5a7" path="res://components/effects/effect_stack.gd" id="12_effectstack"]
-
-[sub_resource type="LabelSettings" id="LabelSettings_ycdy4"]
-font = ExtResource("10_dg77c")
-font_size = 72
 
 [sub_resource type="Resource" id="Screen_1"]
 script = ExtResource("9_screenres")
@@ -166,20 +161,21 @@ offset_right = 202.0
 offset_bottom = 270.0
 script = ExtResource("12_effectstack")
 
-[node name="GameTitleLabel" type="Label" parent="UILayer/LaunchTransitionOverlay" unique_id=123456793]
-z_index = 1001
+[node name="MarginContainer" type="MarginContainer" parent="UILayer/LaunchTransitionOverlay" unique_id=123456794]
 layout_mode = 1
-anchors_preset = 12
-anchor_top = 1.0
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -105.0
 grow_horizontal = 2
-grow_vertical = 0
-text = "VIDEO GAME: THE VIDEO GAME"
-label_settings = SubResource("LabelSettings_ycdy4")
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="GameTitleLabel" type="Label" parent="UILayer/LaunchTransitionOverlay/MarginContainer" unique_id=123456793]
+z_index = 1001
+layout_mode = 2
+size_flags_vertical = 8
+text = "VIDEO GAME"
 vertical_alignment = 2
-autowrap_mode = 2
 
 [node name="AynThorManager" type="Node" parent="." unique_id=999999001]
 script = ExtResource("8_aynthor")

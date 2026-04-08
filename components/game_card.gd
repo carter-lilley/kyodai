@@ -2,6 +2,7 @@ class_name GameCard
 extends ColorRect
 
 signal download_requested(game: GameResource)
+signal enter_animation_completed()
 
 @export var game: GameResource:
 	set(value):
@@ -61,7 +62,7 @@ var _focus_effect_tweens: Array[Tween] = []  # Track tweens created in _show_foc
 
 # Enter animation constants
 const ENTER_START_SCALE: float = 3.0
-const ENTER_TWEEN_DURATION: float = 1.75
+const ENTER_TWEEN_DURATION: float = 1.2  # Animation duration - quicker (was 1.75)
 var _enter_tween: Tween = null
 var _enter_tween_alpha: Tween = null
 
@@ -79,23 +80,10 @@ func _ready():
 	# Cards render above UI backgrounds, shadows at -1 stay behind card but above backgrounds
 	z_index = 10
 	
-	# Set pivot to center for proper scaling on visual container
-	# Use custom_minimum_size as fallback since visual_container might not be laid out yet
-	var pivot_size = visual_container.size if visual_container.size.x > 0 else custom_minimum_size
-	visual_container.pivot_offset = pivot_size / 2
-	
-	if preview_mode:
-		_setup_preview_mode()
-		return
-	
-	# Connect to state signals for reactivity
-	_card_state.zoom_changed.connect(_on_zoom_changed)
-	_card_state.orientation_changed.connect(_on_orientation_changed)
-	
 	_update_card_state_from_settings()
 	_rebuild_effects()
-	_update_display()
 	
+	# Connect input signals
 	if card_input:
 		card_input.pressed.connect(_on_card_pressed)
 		card_input.gui_input.connect(_on_card_gui_input)
@@ -114,6 +102,29 @@ func _ready():
 		_long_press_timer.one_shot = true
 		_long_press_timer.timeout.connect(_on_long_press_timeout)
 		add_child(_long_press_timer)
+
+## Checks if animations are blocking focus - cards can't be focused during intro or launch animations
+func _can_accept_focus() -> bool:
+	# Check if we're in HomeView and intro animations are still running
+	var home_view = _find_home_view()
+	if home_view and home_view.has_method("are_intro_animations_complete"):
+		if not home_view.are_intro_animations_complete():
+			return false
+	
+	# Check if launch transition overlay is animating (static variable)
+	if LaunchTransitionOverlay.is_transition_active:
+		return false
+	
+	return true
+
+## Finds the parent HomeView if this card is in one
+func _find_home_view() -> Node:
+	var current = get_parent()
+	while current:
+		if current is HomeView:
+			return current
+		current = current.get_parent()
+	return null
 
 func _setup_preview_mode():
 	_update_card_state_from_settings()
@@ -750,6 +761,10 @@ func _on_card_gui_input(event: InputEvent) -> void:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position(), _get_show_delete())
 
 func _on_card_mouse_entered() -> void:
+	# Check if we can accept focus (animations complete)
+	if not _can_accept_focus():
+		return
+	
 	# Only grab focus if mouse is recently active and controller doesn't have priority
 	if UIManager and UIManager.should_card_grab_focus_on_hover():
 		if card_input and not card_input.has_focus():
@@ -758,6 +773,10 @@ func _on_card_mouse_entered() -> void:
 			card_input.grab_focus()
 
 func _input(event: InputEvent) -> void:
+	# Check if we can accept focus (animations complete)
+	if not _can_accept_focus():
+		return
+	
 	# Handle ui_select (gamepad top button/Space) to open context menu
 	if event.is_action_pressed("ui_select"):
 		# Check if any child of this card has focus (the button gets focus, not the card)
@@ -881,6 +900,10 @@ func _find_virtual_scroll_grid_container() -> Node:
 	return null
 
 func _on_focus_entered() -> void:
+	# Check if we can accept focus (animations complete)
+	if not _can_accept_focus():
+		return
+	
 	_is_focused = true
 	_update_game_title_visibility()
 	
@@ -1123,6 +1146,11 @@ func play_enter_animation() -> void:
 		for child in _normal_stack.get_children():
 			if child is EffectBase:
 				_enter_tween_alpha.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
+	
+	# Connect to completion signal
+	_enter_tween.finished.connect(func():
+		enter_animation_completed.emit()
+	)
 
 ## Sets the card's alpha immediately (for initial state before animations)
 func set_card_alpha(alpha: float) -> void:

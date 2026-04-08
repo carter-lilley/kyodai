@@ -7,8 +7,12 @@ extends Control
 
 signal animation_completed
 
+# Static variable to track if any launch transition is animating (accessible globally)
+static var is_transition_active: bool = false
+
 @onready var _effect_stack: EffectStack = $EffectStack
-@onready var _game_title_label: Label = $GameTitleLabel
+@onready var _margin_container: MarginContainer = $MarginContainer
+@onready var _game_title_label: Label = $MarginContainer/GameTitleLabel
 
 const PHASE1_DURATION: float = 0.5
 const HOLD_DURATION: float = 0.1
@@ -50,6 +54,7 @@ func _start_transition():
 		return
 	
 	_is_animating = true
+	is_transition_active = true  # Set global static flag
 	
 	# Get the focused card and its texture
 	print("[LaunchTransitionOverlay] Getting focused card and texture...")
@@ -62,29 +67,56 @@ func _start_transition():
 	if not texture:
 		print("[LaunchTransitionOverlay] ERROR: Failed to get texture from card, aborting")
 		_is_animating = false
+		is_transition_active = false  # Reset global flag
 		return
 	print("[LaunchTransitionOverlay] Texture retrieved successfully: ", texture)
 	
 	if card_rect.size.x <= 0 or card_rect.size.y <= 0:
 		print("[LaunchTransitionOverlay] ERROR: Invalid card rect (size <= 0), aborting")
 		_is_animating = false
+		is_transition_active = false  # Reset global flag
 		return
 	
 	_original_card_rect = card_rect
 	_game = card.game if card else null
 	
+	# Setup margin container with 3% padding
+	if _margin_container:
+		var viewport_size = get_viewport().size
+		var margin = int(viewport_size.x * 0.03)  # 3% of width
+		_margin_container.add_theme_constant_override("margin_left", margin)
+		_margin_container.add_theme_constant_override("margin_right", margin)
+		_margin_container.add_theme_constant_override("margin_top", margin)
+		_margin_container.add_theme_constant_override("margin_bottom", margin)
+	
+	# Setup the game title label
+	if _game_title_label and _game:
+		var game_name = _game.get_display_name().to_upper()
+		_game_title_label.text = game_name
+		
+		# Calculate font size to fit text in 30% of screen width
+		var viewport_width = get_viewport().size.x
+		var max_width = viewport_width * 0.50  # 50% of screen width
+		
+		# Get the font from the label
+		var label_font = _game_title_label.get_theme_font("font")
+		if not label_font:
+			label_font = ThemeDB.fallback_font
+		
+		# Start large and decrease until it fits
+		var font_size = 200  # Start very large
+		var text_width = label_font.get_string_size(game_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		
+		while text_width > max_width and font_size > 12:
+			font_size -= 5
+			text_width = label_font.get_string_size(game_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		
+		_game_title_label.add_theme_font_size_override("font_size", font_size)
+		_game_title_label.visible = true
+	
 	# Setup the EffectStack at the card's position
 	print("[LaunchTransitionOverlay] Setting up EffectStack at card position...")
 	_setup_effect_stack(texture, card_rect, start_corner_radius)
-	
-	# Setup the game title label
-	if _game_title_label:
-		_game_title_label.text = _game.get_display_name().to_upper() if _game else ""
-		# Set large font size for fullscreen display (10% of screen height)
-		var viewport_height = get_viewport().size.y
-		var font_size = int(viewport_height * 0.08)
-		_game_title_label.add_theme_font_size_override("font_size", font_size)
-		_game_title_label.visible = true
 	
 	# Show and animate
 	print("[LaunchTransitionOverlay] Making visible and starting animation")
@@ -177,11 +209,17 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	container_state.container_size = card_rect.size
 	container_state.corner_radius_ratio = start_corner_radius  # Start with card's corner radius
 	
-	# Setup minimal effect stack with just base + HSL
+	# Setup minimal effect stack with base + HSL + gradient overlay
 	# Disable smart crop for launch transition (scale from center, not bottom)
+	# Gradient overlay: vertical, 2 black stops, both initially transparent
+	var initial_gradient = Gradient.new()
+	initial_gradient.offsets = [0.0, 1.0]
+	initial_gradient.colors = [Color(0, 0, 0, 0), Color(0, 0, 0, 0)]  # Both transparent
+	
 	var effect_configs = [
 		{"effect_id": "base", "settings": {"smart_crop_enabled": false}},
-		{"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}}
+		{"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}},
+		{"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_direction": 1}}
 	]
 	print("[LaunchTransitionOverlay] Initializing effect stack with configs: ", effect_configs)
 	
@@ -266,12 +304,19 @@ func _animate_transition():
 	print("[LaunchTransitionOverlay] Hold for ", HOLD_DURATION, " seconds...")
 	tween.chain().tween_interval(HOLD_DURATION)
 	
-	# PHASE 2: HSL fade with CIRC + EASE_IN
-	print("[LaunchTransitionOverlay] PHASE 2: HSL fade (CIRC + EASE_IN)...")
+	# PHASE 2: HSL fade + Gradient fade with CIRC + EASE_IN (parallel)
+	print("[LaunchTransitionOverlay] PHASE 2: HSL fade + Gradient fade (CIRC + EASE_IN)...")
 	var hsl_effect = _effect_stack.get_effect("hsl") as HSLEffect
+	var gradient_effect = _effect_stack.get_effect("gradient_overlay") as GradientOverlayEffect
+	
+	# Chain to hold, then set parallel for phase 2
+	tween.chain()
+	tween.set_parallel(true)
+	tween.set_trans(Tween.TRANS_CIRC)
+	tween.set_ease(Tween.EASE_IN)
 	
 	if hsl_effect:
-		tween.chain().tween_method(
+		tween.tween_method(
 			func(t: float):
 				var sat = lerpf(1.0, 0.0, t)
 				var light = lerpf(1.0, 0.3, t)
@@ -279,9 +324,29 @@ func _animate_transition():
 				hsl_effect._settings["lightness_scale"] = light
 				hsl_effect._update_shader_params(),
 			0.0, 1.0, PHASE2_DURATION
-		).set_trans(Tween.TRANS_CIRC).set_ease(Tween.EASE_IN)
+		)
 	else:
 		print("[LaunchTransitionOverlay] WARNING: HSL effect not found")
+	
+	if gradient_effect:
+		print("[LaunchTransitionOverlay] Starting gradient fade animation...")
+		var start_color = Color(0, 0, 0, 0)
+		var end_color = Color(0, 0, 0, 1.0)
+		
+		tween.tween_method(
+			func(t: float):
+				var current_color = start_color.lerp(end_color, t)
+				var gradient = gradient_effect._settings.get("gradient")
+				if gradient and gradient is Gradient:
+					gradient.colors[1] = current_color
+					gradient_effect._update_shader_params(),
+			0.0, 1.0, PHASE2_DURATION
+		)
+	else:
+		print("[LaunchTransitionOverlay] WARNING: Gradient overlay effect not found")
+	
+	# Stop parallel after phase 2
+	tween.set_parallel(false)
 	
 	# Complete
 	print("[LaunchTransitionOverlay] Adding completion callback")
@@ -296,6 +361,7 @@ func _on_animation_complete():
 		_game_title_label.visible = false
 	visible = false
 	_is_animating = false
+	is_transition_active = false  # Reset global static flag
 	animation_completed.emit()
 	print("[LaunchTransitionOverlay] Animation complete, overlay hidden")
 

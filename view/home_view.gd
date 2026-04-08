@@ -12,6 +12,10 @@ var _gamenative_games_count: int = 0
 var _is_loading: bool = false
 var _is_initial_launch: bool = true
 
+# Intro animation tracking
+var _intro_animations_complete: bool = false
+var _cards_animating: int = 0
+
 # GameNative games storage - kept separate but merged by last_played
 var _gamenative_games: Array[GameResource] = []
 var _gamenative_loaded: bool = false
@@ -21,8 +25,8 @@ var _gamenative_loaded: bool = false
 var _gamenative_indices: Dictionary = {}
 
 # Animation timing controls
-@export var enter_animation_start_delay: float = .5  # Delay before first card animation starts
-@export var enter_animation_stagger: float = 0.05      # Delay between each card's animation
+@export var enter_animation_start_delay: float = 0.2  # Delay before first card animation starts (was 0.5)
+@export var enter_animation_stagger: float = 0.04      # Delay between each card's animation (was 0.05)
 
 # Animation mode
 enum AnimationMode { SEQUENTIAL, RANDOM }
@@ -331,18 +335,34 @@ func _get_animation_delay(index: int) -> float:
 			return enter_animation_start_delay + _delay_pool.pop_front()
 	return enter_animation_start_delay
 
+## Returns true when intro animations are complete and cards can accept focus
+func are_intro_animations_complete() -> bool:
+	return _intro_animations_complete
+
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
 		card.download_requested.connect(_on_download_requested)
 		# Play enter animation with staggered delay on initial launch
 		if _is_initial_launch:
+			# Track this card's animation
+			_cards_animating += 1
+			
 			# Start invisible immediately
 			card.set_card_alpha(0.0)
 			var delay = _get_animation_delay(index)
 			await get_tree().create_timer(delay).timeout
 			if is_instance_valid(card):
 				card.play_enter_animation()
+				# Connect to animation completion
+				card.enter_animation_completed.connect(_on_card_animation_complete)
+
+func _on_card_animation_complete():
+	"""Called when a card's enter animation completes."""
+	_cards_animating -= 1
+	if _cards_animating <= 0:
+		_intro_animations_complete = true
+		print("[HomeView] All intro animations complete - cards can now accept focus")
 
 func _on_download_requested(game: GameResource):
 	# Use the selected sibling's ID and file name if one is selected
