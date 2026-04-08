@@ -8,10 +8,11 @@ extends Control
 signal animation_completed
 
 @onready var _effect_stack: EffectStack = $EffectStack
+@onready var _game_title_label: Label = $GameTitleLabel
 
 const PHASE1_DURATION: float = 0.5
-const HOLD_DURATION: float = 0.12
-const PHASE2_DURATION: float = 0.7
+const HOLD_DURATION: float = 0.1
+const PHASE2_DURATION: float = 0.5
 
 var _is_animating: bool = false
 var _original_card_rect: Rect2
@@ -75,6 +76,15 @@ func _start_transition():
 	# Setup the EffectStack at the card's position
 	print("[LaunchTransitionOverlay] Setting up EffectStack at card position...")
 	_setup_effect_stack(texture, card_rect, start_corner_radius)
+	
+	# Setup the game title label
+	if _game_title_label:
+		_game_title_label.text = _game.get_display_name().to_upper() if _game else ""
+		# Set large font size for fullscreen display (10% of screen height)
+		var viewport_height = get_viewport().size.y
+		var font_size = int(viewport_height * 0.08)
+		_game_title_label.add_theme_font_size_override("font_size", font_size)
+		_game_title_label.visible = true
 	
 	# Show and animate
 	print("[LaunchTransitionOverlay] Making visible and starting animation")
@@ -154,10 +164,11 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 		return
 	
 	# Position and size the EffectStack exactly at the card's location
+	# Add 2px overshoot to compensate for shader AA edge
 	print("[LaunchTransitionOverlay] Setting EffectStack position: ", card_rect.position)
 	print("[LaunchTransitionOverlay] Setting EffectStack size: ", card_rect.size)
-	_effect_stack.position = card_rect.position
-	_effect_stack.size = card_rect.size
+	_effect_stack.position = card_rect.position - Vector2(2, 2)
+	_effect_stack.size = card_rect.size + Vector2(4, 4)
 	
 	# Create a container state for the effect stack
 	print("[LaunchTransitionOverlay] Creating EffectContainerState...")
@@ -165,12 +176,11 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	container_state.game_texture = texture
 	container_state.container_size = card_rect.size
 	container_state.corner_radius_ratio = start_corner_radius  # Start with card's corner radius
-	# Compensate for shader's hardcoded 5px padding to eliminate the gap
-	container_state.border_inset_ratio = -5.0 / card_rect.size.x
 	
 	# Setup minimal effect stack with just base + HSL
+	# Disable smart crop for launch transition (scale from center, not bottom)
 	var effect_configs = [
-		{"effect_id": "base", "settings": {}},
+		{"effect_id": "base", "settings": {"smart_crop_enabled": false}},
 		{"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}}
 	]
 	print("[LaunchTransitionOverlay] Initializing effect stack with configs: ", effect_configs)
@@ -196,10 +206,11 @@ func _animate_transition():
 		print("[LaunchTransitionOverlay] ERROR: Failed to create tween")
 		return
 	
-	# Calculate fullscreen target (screen aspect ratio)
+	# Calculate fullscreen target (screen aspect ratio) with slight overshoot to hide AA edge
 	var viewport_size = Vector2(get_viewport().size)
-	var target_size = viewport_size
-	var target_pos = Vector2.ZERO
+	var overshoot = 4.0  # Extend 4px beyond viewport to hide AA edge
+	var target_size = viewport_size + Vector2(overshoot * 2, overshoot * 2)
+	var target_pos = Vector2(-overshoot, -overshoot)  # Center the overshoot
 	
 	print("[LaunchTransitionOverlay] Viewport size: ", viewport_size)
 	print("[LaunchTransitionOverlay] Target position: ", target_pos)
@@ -218,12 +229,25 @@ func _animate_transition():
 	tween.tween_property(_effect_stack, "position", target_pos, PHASE1_DURATION)
 	tween.tween_property(_effect_stack, "size", target_size, PHASE1_DURATION)
 	
-	# Animate UV transforms and corner radius during scale
-	if container_state:
+	# Animate UV transforms, vertical offset, and corner radius during scale
+	if container_state and container_state.game_texture:
+		var tex_size = container_state.game_texture.get_size()
+		var tex_aspect = tex_size.x / tex_size.y
+		
 		tween.tween_method(
 			func(t: float):
 				var current_size = _original_card_rect.size.lerp(target_size, t)
 				container_state.container_size = current_size
+				
+				# Calculate vertical offset to keep image centered during aspect ratio change
+				var card_aspect = current_size.x / current_size.y
+				if card_aspect > tex_aspect:
+					# Scaling from portrait to landscape - image will be cropped vertically
+					var scale_y = tex_aspect / card_aspect
+					container_state.vertical_offset = (1.0 - scale_y) / 2.0
+				else:
+					container_state.vertical_offset = 0.0
+				
 				for effect_id in ["base", "hsl"]:
 					var effect = _effect_stack.get_effect(effect_id)
 					if effect:
@@ -266,12 +290,14 @@ func _animate_transition():
 	print("[LaunchTransitionOverlay] Tween setup complete, animation should start now")
 
 func _on_animation_complete():
+	return # DEBUG: HOLD THE FINAL STATE, KEEP FOR NOW
 	print("[LaunchTransitionOverlay] _on_animation_complete() called")
-	return
-	#visible = false
-	#_is_animating = false
-	#animation_completed.emit()
-	#print("[LaunchTransitionOverlay] Animation complete, overlay hidden")
+	if _game_title_label:
+		_game_title_label.visible = false
+	visible = false
+	_is_animating = false
+	animation_completed.emit()
+	print("[LaunchTransitionOverlay] Animation complete, overlay hidden")
 
 func is_animating() -> bool:
 	return _is_animating
