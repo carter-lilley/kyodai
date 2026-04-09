@@ -2,6 +2,7 @@ class_name SmoothScrollContainer
 extends ScrollContainer
 
 signal scroll_value_changed(value: float)
+signal scroll_completed()
 
 @export var smooth_scrolling: bool = true
 @export var smooth_scroll_duration: float = 2.0
@@ -22,6 +23,8 @@ var _is_smooth_scrolling: bool = false
 var _is_dragging_scrollbar: bool = false
 var _scrollbar_drag_start_mouse_pos: float = 0.0
 var _scrollbar_drag_start_value: float = 0.0
+var _focus_timer: Timer = null
+var _focus_callback: Callable = Callable()
 
 func _ready():
 	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
@@ -226,10 +229,16 @@ func _on_scrollbar_input(event: InputEvent):
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
-func _start_smooth_scroll():
+func _start_smooth_scroll(duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
+	
+	# Cancel any pending focus timer from previous scroll
+	if _focus_timer:
+		_focus_timer.stop()
+		_focus_timer.queue_free()
+		_focus_timer = null
 	
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
@@ -245,7 +254,19 @@ func _start_smooth_scroll():
 		var extra_duration = (extra_distance / smooth_scroll_big_jump_threshold) * (smooth_scroll_duration * (smooth_scroll_big_jump_multiplier - 1.0))
 		duration = smooth_scroll_duration + extra_duration
 	
+	# Apply duration multiplier for faster/slower animations
+	duration *= duration_multiplier
+	
 	_is_smooth_scrolling = true
+	
+	# Set up focus callback to fire at 60% completion
+	if focus_callback.is_valid():
+		_focus_timer = Timer.new()
+		_focus_timer.wait_time = duration * 0.6
+		_focus_timer.one_shot = true
+		_focus_timer.timeout.connect(focus_callback)
+		add_child(_focus_timer)
+		_focus_timer.start()
 	
 	_scroll_tween = create_tween()
 	_scroll_tween.set_trans(Tween.TRANS_EXPO)
@@ -261,6 +282,7 @@ func _start_smooth_scroll():
 	
 	_scroll_tween.finished.connect(func(): 
 		_is_smooth_scrolling = false
+		scroll_completed.emit()
 	)
 
 func get_target_scroll() -> float:
@@ -268,13 +290,13 @@ func get_target_scroll() -> float:
 		return _target_scroll
 	return _get_current_scroll()
 
-func scroll_to(target: float, animate: bool = true):
+func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
 	
 	if animate and smooth_scrolling:
 		_target_scroll = target
-		_start_smooth_scroll()
+		_start_smooth_scroll(duration_multiplier, focus_callback)
 	else:
 		_set_current_scroll(target)

@@ -1050,18 +1050,18 @@ func get_card_at_index(index: int) -> Control:
 			return card
 	return null
 
-func scroll_to_index(index: int, animate: bool = false):
+func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	if _scroll_container:
 		var items_per_line = _get_items_per_line()
 		if vertical:
 			var line = index / items_per_line
 			var target_y = line * item_height
-			_scroll_container.scroll_to(target_y, animate)
+			_scroll_container.scroll_to(target_y, animate, duration_multiplier, focus_callback)
 		else:
 			var line = index / items_per_line
 			var target_x = line * item_width
 			# SmoothScrollContainer might need scroll_to support for horizontal
-			_scroll_container.scroll_to(target_x, animate)
+			_scroll_container.scroll_to(target_x, animate, duration_multiplier, focus_callback)
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 	for card in _active_cards:

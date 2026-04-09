@@ -80,8 +80,22 @@ func _ready():
 	# Cards render above UI backgrounds, shadows at -1 stay behind card but above backgrounds
 	z_index = 10
 	
+	# Set pivot to center for proper scaling on visual container
+	# Use custom_minimum_size as fallback since visual_container might not be laid out yet
+	var pivot_size = visual_container.size if visual_container.size.x > 0 else custom_minimum_size
+	visual_container.pivot_offset = pivot_size / 2
+	
+	if preview_mode:
+		_setup_preview_mode()
+		return
+	
+	# Connect to state signals for reactivity
+	_card_state.zoom_changed.connect(_on_zoom_changed)
+	_card_state.orientation_changed.connect(_on_orientation_changed)
+	
 	_update_card_state_from_settings()
 	_rebuild_effects()
+	_update_display()
 	
 	# Connect input signals
 	if card_input:

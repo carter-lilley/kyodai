@@ -37,6 +37,13 @@ FileSystemManager="*res://managers/filesystem_manager.gd"
 
 enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/PackageChecker/plugin.cfg")
 
+[file_customization]
+
+folder_colors={
+"res://addons/": "purple",
+"res://assets/": "green"
+}
+
 [input]
 
 ui_accept={
@@ -98,6 +105,11 @@ ui_start={
 swap_screens={
 "deadzone": 0.2,
 "events": [Object(InputEventJoypadButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"button_index":4,"pressure":0.0,"pressed":false,"script":null)
+]
+}
+random_game={
+"deadzone": 0.2,
+"events": [Object(InputEventJoypadButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"button_index":7,"pressure":0.0,"pressed":false,"script":null)
 ]
 }
 
