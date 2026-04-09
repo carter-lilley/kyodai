@@ -68,21 +68,21 @@ func _setup_audio_buses() -> void:
 func _load_sfx_library() -> void:
 	# Load all SFX from assets/sfx/ directory
 	var sfx_files = {
-		"click_00": "res://assets/sfx/click_00.wav",
-		"click_01": "res://assets/sfx/click_01.wav",
-		"click_02": "res://assets/sfx/click_02.wav",
-		"click_03": "res://assets/sfx/click_03.wav",
-		"click_04": "res://assets/sfx/click_04.wav",
-		"click_05": "res://assets/sfx/click_05.wav",
-		"affirm_00": "res://assets/sfx/affirm_00.wav",
-		"affirm_01": "res://assets/sfx/affirm_01.wav",
-		"snap": "res://assets/sfx/snap.wav",
-		"loading": "res://assets/sfx/loading.wav",
-		"loading_2": "res://assets/sfx/loading_2.wav",
-		"error": "res://assets/sfx/error.wav",
-		"closing": "res://assets/sfx/closing.wav",
-		"return": "res://assets/sfx/return.wav",
-		"sfx": "res://assets/sfx/sfx.wav"
+		"click_00": "res://assets/audio/sfx/click_00.wav",
+		"click_01": "res://assets/audio/sfx/click_01.wav",
+		"click_02": "res://assets/audio/sfx/click_02.wav",
+		"click_03": "res://assets/audio/sfx/click_03.wav",
+		"click_04": "res://assets/audio/sfx/click_04.wav",
+		"click_05": "res://assets/audio/sfx/click_05.wav",
+		"affirm_00": "res://assets/audio/sfx/affirm_00.wav",
+		"affirm_01": "res://assets/audio/sfx/affirm_01.wav",
+		"snap": "res://assets/audio/sfx/snap.wav",
+		"loading": "res://assets/audio/sfx/loading.wav",
+		"loading_2": "res://assets/audio/sfx/loading_2.wav",
+		"error": "res://assets/audio/sfx/error.wav",
+		"closing": "res://assets/audio/sfx/closing.wav",
+		"return": "res://assets/audio/sfx/return.wav",
+		"sfx": "res://assets/audio/sfx/sfx.wav"
 	}
 	
 	for sfx_name in sfx_files.keys():

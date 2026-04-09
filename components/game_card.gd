@@ -615,7 +615,22 @@ func _load_cover(high_priority: bool = false):
 
 func _get_cached_cover_path(url: String) -> String:
 	const CACHE_FOLDER = "user://cache/covers/"
-	return CACHE_FOLDER + url.md5_text() + ".jpg"
+	# Extract extension from URL, default to jpg if not found
+	var extension = "jpg"
+	var query_start = url.find("?")
+	var url_without_query = url
+	if query_start != -1:
+		url_without_query = url.substr(0, query_start)
+	
+	var last_dot = url_without_query.rfind(".")
+	if last_dot != -1 and last_dot < url_without_query.length() - 1:
+		var ext = url_without_query.substr(last_dot + 1).to_lower()
+		if ext in ["jpg", "jpeg", "png", "webp"]:
+			extension = ext
+			if extension == "jpeg":
+				extension = "jpg"
+	
+	return CACHE_FOLDER + url.md5_text() + "." + extension
 
 func _load_cached_cover(cache_path: String, high_priority: bool = false):
 	var target_game_id = _loading_game_id
@@ -691,15 +706,29 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
 		return null
 	
-	var image = Image.new()
 	var err = FAILED
+	var image = Image.new()
 	
+	# Always use magic bytes to detect actual format, regardless of file extension
+	# This handles cases where the extension doesn't match the actual content
 	if buffer[0] == 0xFF and buffer[1] == 0xD8:
+		# JPEG magic bytes
 		err = image.load_jpg_from_buffer(buffer)
 	elif buffer[0] == 0x89 and buffer[1] == 0x50:
+		# PNG magic bytes (0x89 0x50 0x4E 0x47)
 		err = image.load_png_from_buffer(buffer)
-	else:
+	elif buffer[0] == 0x52 and buffer[1] == 0x49:
+		# WebP magic bytes (RIFF header)
 		err = image.load_webp_from_buffer(buffer)
+	else:
+		# Try all formats as fallback
+		err = image.load_jpg_from_buffer(buffer)
+		if err != OK:
+			image = Image.new()
+			err = image.load_png_from_buffer(buffer)
+		if err != OK:
+			image = Image.new()
+			err = image.load_webp_from_buffer(buffer)
 	
 	if err == OK:
 		return image

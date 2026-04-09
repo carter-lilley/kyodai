@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://gamecard0001"]
 
 [ext_resource type="Script" uid="uid://dxxbtr4c6pxjf" path="res://components/game_card.gd" id="1_gamecard"]
-[ext_resource type="FontVariation" uid="uid://bmavsnl4qxyvo" path="res://fonts/MPLUS1_GameCard_Variation.tres" id="2_b6mqg"]
+[ext_resource type="FontVariation" uid="uid://bmavsnl4qxyvo" path="res://assets/fonts/MPLUS1_GameCard_Variation.tres" id="2_b6mqg"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_button"]
 

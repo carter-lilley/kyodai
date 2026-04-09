@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://ds7jbghohu8ee"]
 
 [ext_resource type="Script" uid="uid://d1j38jywyfn3e" path="res://view/home_view.gd" id="1_homeview"]
-[ext_resource type="Script" uid="uid://c6n20pn08r6jn" path="res://base_class/virtual_scroll_grid_container.gd" id="2_vscroll"]
+[ext_resource type="Script" uid="uid://c6n20pn08r6jn" path="res://base_class/nodes/virtual_scroll_grid_container.gd" id="2_vscroll"]
 
 [node name="HomeView" type="Control" unique_id=575533096]
 layout_mode = 3

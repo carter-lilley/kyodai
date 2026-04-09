@@ -11,7 +11,7 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/background/library_background_cafeos.gdshader")
 	
 	# Load the icon atlas texture (x4 resolution)
-	var icon_atlas = load("res://assets/ui/background/wiiu_atlas_x4.png")
+	var icon_atlas = load("res://assets/icons/wiiu_atlas_x4.png")
 	if icon_atlas:
 		_set_shader_param("icon_atlas", icon_atlas)
 

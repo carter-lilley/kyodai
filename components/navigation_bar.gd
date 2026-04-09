@@ -130,7 +130,7 @@ func _build_horizontal_layout() -> HBoxContainer:
 	# L2 button icon (zoom out)
 	var h_l2_icon = TextureRect.new()
 	h_l2_icon.name = "L2Icon"
-	h_l2_icon.texture = preload("res://assets/ui/buttons/buttonL2.png")
+	h_l2_icon.texture = preload("res://assets/icons/buttonL2.png")
 	h_l2_icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	h_l2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	h_l2_icon.custom_minimum_size = Vector2(24, 24)
@@ -149,7 +149,7 @@ func _build_horizontal_layout() -> HBoxContainer:
 	# R2 button icon (zoom in)
 	var h_r2_icon = TextureRect.new()
 	h_r2_icon.name = "R2Icon"
-	h_r2_icon.texture = preload("res://assets/ui/buttons/buttonR2.png")
+	h_r2_icon.texture = preload("res://assets/icons/buttonR2.png")
 	h_r2_icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	h_r2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	h_r2_icon.custom_minimum_size = Vector2(24, 24)
@@ -193,7 +193,7 @@ func _build_vertical_layout() -> VBoxContainer:
 	# R2 button icon (zoom in) - at top for vertical (up = zoom in)
 	var v_r2_icon = TextureRect.new()
 	v_r2_icon.name = "R2Icon"
-	v_r2_icon.texture = preload("res://assets/ui/buttons/buttonR2.png")
+	v_r2_icon.texture = preload("res://assets/icons/buttonR2.png")
 	v_r2_icon.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
 	v_r2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	v_r2_icon.custom_minimum_size = Vector2(24, 24)
@@ -212,7 +212,7 @@ func _build_vertical_layout() -> VBoxContainer:
 	# L2 button icon (zoom out) - at bottom for vertical (down = zoom out)
 	var v_l2_icon = TextureRect.new()
 	v_l2_icon.name = "L2Icon"
-	v_l2_icon.texture = preload("res://assets/ui/buttons/buttonL2.png")
+	v_l2_icon.texture = preload("res://assets/icons/buttonL2.png")
 	v_l2_icon.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
 	v_l2_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	v_l2_icon.custom_minimum_size = Vector2(24, 24)

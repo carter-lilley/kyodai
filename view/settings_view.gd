@@ -71,7 +71,7 @@ func _create_card_designer_tab() -> Control:
 	return designer
 
 func _create_hero_designer_tab() -> Control:
-	var designer = preload("res://view/designer/hero_designer_view.tscn").instantiate()
+	var designer = preload("res://view/hero_designer_view.tscn").instantiate()
 	designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	return designer
 
@@ -80,7 +80,7 @@ func _create_platforms_tab() -> Control:
 	return platforms_view
 
 func _create_gamenative_tab() -> Control:
-	var gamenative_view = preload("res://view/settings/gamenative_settings_view.gd").new()
+	var gamenative_view = preload("res://view/gamenative_settings_view.gd").new()
 	return gamenative_view
 
 func _create_settings_tab(name: String, settings_vars: Array) -> Control:

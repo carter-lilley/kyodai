@@ -8,7 +8,8 @@ improve M&KB experience, add search icon.
 android download manager and file streaming
 chunk reassembly progress notif
 saves
-
+default rom location
+fix cover loading and slow scrolling?
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 ## UI

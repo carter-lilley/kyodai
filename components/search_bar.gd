@@ -49,7 +49,7 @@ func _ready():
 	search_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	search_icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	# Try to load a search icon, fallback to nothing if not found
-	var icon = load("res://assets/ui/icons/search.png")
+	var icon = load("res://assets/icons/search.png")
 	if icon:
 		search_icon.texture = icon
 	hbox.add_child(search_icon)
