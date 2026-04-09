@@ -1,6 +1,9 @@
 class_name BorderEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["hero", "base_card", "focus_card"]
+
 var _gradient_texture: ImageTexture = null
 var _inner_stroke_gradient_texture: ImageTexture = null
 var _outer_stroke_gradient_texture: ImageTexture = null

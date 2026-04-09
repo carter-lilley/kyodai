@@ -1,6 +1,9 @@
 class_name GradientOverlayEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["base_card", "focus_card"]
+
 var _gradient_texture: ImageTexture = null
 
 func _ready():

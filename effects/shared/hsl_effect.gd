@@ -1,6 +1,9 @@
 class_name HSLEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["hero", "base_card", "focus_card"]
+
 func _ready():
 	super._ready()
 	effect_name = "HSL"

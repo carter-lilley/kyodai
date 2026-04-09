@@ -1,6 +1,9 @@
 class_name GlowEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["hero", "base_card", "focus_card"]
+
 # Base margin ratio for glow (0.08 = 8% of card width)
 const GLOW_MARGIN_RATIO = 0.08
 

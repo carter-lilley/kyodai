@@ -1,6 +1,9 @@
 class_name BadgeEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["hero", "base_card", "focus_card"]
+
 var _border_width: float = 0.0
 var _border_inset_pixels: float = 0.0
 var _badge_width: float = 0.0

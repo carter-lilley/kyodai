@@ -43,22 +43,24 @@ vec3 rgb_to_hsl(vec3 color) {
     float min_val = min(min(color.r, color.g), color.b);
     float delta = max_val - min_val;
     
-    float l = (max_val + min_val) / 2.0;
-    float s = 0.0;
+    float l = (max_val + min_val) * 0.5;
+    
+    // Early exit for grayscale (no saturation)
+    if (delta < 0.0001) {
+        return vec3(0.0, 0.0, l);
+    }
+    
+    float s = l > 0.5 ? delta / (2.0 - max_val - min_val) : delta / (max_val + min_val);
     float h = 0.0;
     
-    if (delta > 0.0) {
-        s = l > 0.5 ? delta / (2.0 - max_val - min_val) : delta / (max_val + min_val);
-        
-        if (max_val == color.r) {
-            h = (color.g - color.b) / delta + (color.g < color.b ? 6.0 : 0.0);
-        } else if (max_val == color.g) {
-            h = (color.b - color.r) / delta + 2.0;
-        } else {
-            h = (color.r - color.g) / delta + 4.0;
-        }
-        h /= 6.0;
+    if (max_val == color.r) {
+        h = (color.g - color.b) / delta + (color.g < color.b ? 6.0 : 0.0);
+    } else if (max_val == color.g) {
+        h = (color.b - color.r) / delta + 2.0;
+    } else {
+        h = (color.r - color.g) / delta + 4.0;
     }
+    h /= 6.0;
     
     return vec3(h, s, l);
 }

@@ -1,6 +1,9 @@
 class_name BaseCardEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["base_card", "focus_card"]
+
 var _current_texture: Texture2D = null
 
 func _ready():

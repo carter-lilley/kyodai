@@ -1,6 +1,9 @@
 class_name GlassEffect
 extends EffectBase
 
+static func get_allowed_contexts() -> Array[String]:
+	return ["hero", "base_card", "focus_card"]
+
 var _swoop_layer: ColorRect = null
 
 func _ready():
