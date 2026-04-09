@@ -147,10 +147,10 @@ func _load_current_config():
 		_corner_slider.value = _current_config.get("corner_radius", 0.06)
 	
 	# Update height preset dropdown
-	if _height_preset_btn and SettingsManager:
-		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
-		if height_setting and height_setting.value is int:
-			_height_preset_btn.select(height_setting.value)
+	if _height_preset_btn:
+		var height_index = _current_config.get("hero_height", 0)
+		if height_index is int and height_index >= 0 and height_index < HEIGHT_RATIOS.size():
+			_height_preset_btn.select(height_index)
 	
 	# Update effect designer UI
 	if _effect_designer_ui:
@@ -163,7 +163,8 @@ func _load_current_config():
 func _get_default_config() -> Dictionary:
 	return {
 		"effects": [],
-		"corner_radius": 0.06
+		"corner_radius": 0.06,
+		"hero_height": 0
 	}
 
 func _setup_preview_hero():
@@ -211,15 +212,15 @@ func _on_corner_radius_changed(value: float):
 	_save_to_settings()
 
 func _on_height_preset_changed(index: int):
+	# Update the config with the new height value
+	_current_config["hero_height"] = index
+	
 	# Update the preview hero size
 	_update_preview_hero_size()
 	_update_preview()
 	
-	# Save the height preset to settings
-	if SettingsManager:
-		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
-		if height_setting:
-			SettingsManager.set_setting(index, height_setting)
+	# Save the config to settings
+	_save_to_settings()
 
 func _on_viewport_size_changed(_new_size: Vector2):
 	# Update preview size when viewport changes
@@ -236,12 +237,11 @@ func _do_update_preview_size():
 	if not _preview_container or not _preview_hero:
 		return
 	
-	# Get the height ratio from settings directly (not from dropdown)
+	# Get the height ratio from the current config
 	var height_ratio = HEIGHT_RATIOS[0]  # Default to full
-	if SettingsManager:
-		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
-		if height_setting and height_setting.value is int and height_setting.value >= 0 and height_setting.value < HEIGHT_RATIOS.size():
-			height_ratio = HEIGHT_RATIOS[height_setting.value]
+	var height_index = _current_config.get("hero_height", 0)
+	if height_index is int and height_index >= 0 and height_index < HEIGHT_RATIOS.size():
+		height_ratio = HEIGHT_RATIOS[height_index]
 	
 	# Check if parent is ready (has valid size)
 	var parent = _preview_container.get_parent()

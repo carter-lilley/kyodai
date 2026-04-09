@@ -681,7 +681,7 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	else:
 		# Fallback: construct path from components (for legacy or if file_path not set)
 		var root_folder = SettingsManager.get_setting("games_root_folder")
-		var root_path = root_folder.value if root_folder else "user://games"
+		var root_path = root_folder.value if root_folder else "user://roms/"
 		intent.rom_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 	
 	intent.platform_slug = game.platform_slug

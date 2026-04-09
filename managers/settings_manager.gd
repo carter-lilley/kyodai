@@ -276,8 +276,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 	if success:
 		# Emit setting_changed for all library settings so views get notified
 		# Emit the SETTING VALUE (settings.X.value), not the preset value
-		if settings.get("library_hero_layout_height") != null:
-			emit_signal("setting_changed", settings.library_hero_layout_height.value, settings.library_hero_layout_height)
+		if settings.get("hero_effect_config") != null:
+			emit_signal("setting_changed", settings.hero_effect_config.value, settings.hero_effect_config)
 		if settings.get("library_vertical_layout") != null:
 			emit_signal("setting_changed", settings.library_vertical_layout.value, settings.library_vertical_layout)
 		if settings.get("library_navigation_bar_position") != null:

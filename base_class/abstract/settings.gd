@@ -32,7 +32,7 @@ const Type = SettingsVar.SettingType
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
 @export var fold_duplicate_covers := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fold duplicate covers into siblings", "During sync, games with identical cover art will be grouped together like RomM siblings")
 @export_subgroup("Storage")
-@export var games_root_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Games Folder")
+@export var games_root_folder := SettingsVar.new(Type.PATH, "user://roms/", State.ENABLED, "Games Folder", "Directory where game ROMs are stored")
 @export var emulators_folder := SettingsVar.new(Type.PATH, "user://emulators/", State.ENABLED, "Emulators Folder", "Directory where emulators are installed")
 @export var steam_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Steam Installation Folder", "Path to your Steam installation (e.g., C:\\Program Files (x86)\\Steam)")
 
@@ -52,12 +52,12 @@ const Type = SettingsVar.SettingType
 # Internal hero effect configuration (managed by Hero Designer)
 @export var hero_effect_config := SettingsVar.new(Type.DICTIONARY, {
 	"effects": [],
-	"corner_radius": 0.06
+	"corner_radius": 0.06,
+	"hero_height": 0
 }, State.INTERNAL, "Hero Effect Configuration")
 
 @export_subgroup("Library Appearance")
 # General layout settings (always visible)
-@export var library_hero_layout_height := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Hero Height", "Height of hero image as percentage of viewport (0% = hidden)", 0.0, 4.0, 1.0, ["Full (100%)", "Two Thirds (66%)", "Half (50%)", "One Third (33%)", "Hidden (0%)"])
 @export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")
 @export var library_navigation_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Navigation Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)

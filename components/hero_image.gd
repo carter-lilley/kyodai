@@ -71,7 +71,8 @@ func _get_cache_path(game: GameResource) -> String:
 	if game.cover_path and ResourceLoader.exists(game.cover_path):
 		return game.cover_path
 	elif game.cover_url != "" and game.cover_url.begins_with("http"):
-		return "user://cache/covers/" + game.cover_url.md5_text() + ".jpg"
+		# Use DataManager's path calculation to ensure consistent extension handling
+		return DataManager.get_cached_image_path(game.cover_url)
 	return ""
 
 func set_game(game: GameResource):

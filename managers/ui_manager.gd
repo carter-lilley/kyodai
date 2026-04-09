@@ -534,14 +534,8 @@ func _update_layout_orientation() -> void:
 # ============================================================================
 
 func _update_hero_size() -> void:
-	"""Update hero image size and spacer. Only property changes, no tree manipulation."""
-	
-	# Safety checks - fail fast so we can see the actual issue
-	if _hero_image == null:
-		push_error("[UIManager] CRITICAL: _hero_image is null! This should have been set in initialize()")
-		return
-	if _hero_spacer == null:
-		push_error("[UIManager] CRITICAL: _hero_spacer is null! This should have been set in initialize()")
+	"""Update hero image size based on settings."""
+	if not _hero_image:
 		return
 	
 	if not is_instance_valid(_hero_image):
@@ -560,20 +554,16 @@ func _update_hero_size() -> void:
 	var raw_setting_value = null
 	
 	if SettingsManager:
-		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
-		if height_setting:
-			raw_setting_value = height_setting.value
+		var hero_config_setting = SettingsManager.get_setting("hero_effect_config")
+		if hero_config_setting and hero_config_setting.value is Dictionary:
+			var hero_config = hero_config_setting.value
+			var height_index = hero_config.get("hero_height", 0)
 			# Better type checking that handles float/int conversion
-			if height_setting.value is int or height_setting.value is float:
-				var index = int(height_setting.value)
+			if height_index is int or height_index is float:
+				var index = int(height_index)
 				if index >= 0 and index < HERO_HEIGHT_RATIOS.size():
 					height_ratio = HERO_HEIGHT_RATIOS[index]
-			else:
-				pass
-		else:
-			pass
-	else:
-		pass
+					raw_setting_value = index
 	
 	var target_height = viewport_size.y * height_ratio
 	if target_height < 1.0:
@@ -647,14 +637,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_current_bar_position = _get_bar_position_string(setting.value)
 		# Update layout orientation (only replaces InnerLayout if needed)
 		_update_layout_orientation()
-	elif setting.property_name == "library_hero_layout_height":
-		# Update hero image size when height setting changes
-		_update_hero_size()
-		# Mark views for rebuild so they reflect the new hero size
-		if _views.has("Home"):
-			_views["Home"].mark_for_rebuild("Hero height changed")
-		if _views.has("Library"):
-			_views["Library"].mark_for_rebuild("Hero height changed")
 	elif setting.property_name == "library_vertical_layout":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):
@@ -687,6 +669,13 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# Refresh hero image when hero effects change
 		if _hero_image and _hero_image.has_method("refresh_from_settings"):
 			_hero_image.refresh_from_settings()
+		# Update hero size when height changes
+		_update_hero_size()
+		# Mark views for rebuild so they reflect the new hero size
+		if _views.has("Home"):
+			_views["Home"].mark_for_rebuild("Hero height changed")
+		if _views.has("Library"):
+			_views["Library"].mark_for_rebuild("Hero height changed")
 	elif setting.property_name == "library_grid_padding":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):
@@ -932,12 +921,15 @@ func _update_hero_visibility(view_name: String) -> void:
 	# Check if hero height is set to 0% (hidden)
 	var height_ratio = HERO_SIZE_RATIO_DEFAULT
 	if SettingsManager:
-		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
-		# Better type checking that handles float/int conversion (same as _update_hero_size)
-		if height_setting and (height_setting.value is int or height_setting.value is float):
-			var index = int(height_setting.value)
-			if index >= 0 and index < HERO_HEIGHT_RATIOS.size():
-				height_ratio = HERO_HEIGHT_RATIOS[index]
+		var hero_config_setting = SettingsManager.get_setting("hero_effect_config")
+		if hero_config_setting and hero_config_setting.value is Dictionary:
+			var hero_config = hero_config_setting.value
+			var height_index = hero_config.get("hero_height", 0)
+			# Better type checking that handles float/int conversion (same as _update_hero_size)
+			if height_index is int or height_index is float:
+				var index = int(height_index)
+				if index >= 0 and index < HERO_HEIGHT_RATIOS.size():
+					height_ratio = HERO_HEIGHT_RATIOS[index]
 	var hero_enabled = height_ratio > 0.0
 	
 	# Show background for Home/Library/Downloads, hide for Settings
@@ -973,9 +965,12 @@ func _on_hero_game_changed(game: GameResource) -> void:
 	# Check if hero height is set to 0% (hidden)
 	var height_ratio = HERO_SIZE_RATIO_DEFAULT
 	if SettingsManager:
-		var height_setting = SettingsManager.get_setting("library_hero_layout_height")
-		if height_setting and height_setting.value is int and height_setting.value >= 0 and height_setting.value < HERO_HEIGHT_RATIOS.size():
-			height_ratio = HERO_HEIGHT_RATIOS[height_setting.value]
+		var hero_config_setting = SettingsManager.get_setting("hero_effect_config")
+		if hero_config_setting and hero_config_setting.value is Dictionary:
+			var hero_config = hero_config_setting.value
+			var height_index = hero_config.get("hero_height", 0)
+			if height_index is int and height_index >= 0 and height_index < HERO_HEIGHT_RATIOS.size():
+				height_ratio = HERO_HEIGHT_RATIOS[height_index]
 	if height_ratio == 0.0:
 		return
 	

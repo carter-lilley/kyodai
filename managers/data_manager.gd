@@ -1740,7 +1740,7 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	
 	# Construct the full path (same as launch_manager.gd line 1162)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
-	var root_path = root_folder.value if root_folder else "user://games"
+	var root_path = root_folder.value if root_folder else "user://roms/"
 	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 	
 	# Check if file exists (use PackageChecker for SAF paths on Android)

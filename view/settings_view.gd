@@ -358,8 +358,6 @@ func _check_preset_match() -> void:
 
 func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	# Compare all relevant fields
-	if a.library_hero_layout_height != b.library_hero_layout_height:
-		return false
 	if a.library_vertical_layout != b.library_vertical_layout:
 		return false
 	if a.library_navigation_bar_position != b.library_navigation_bar_position:
