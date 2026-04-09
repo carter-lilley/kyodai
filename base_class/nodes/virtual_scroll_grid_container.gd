@@ -36,13 +36,12 @@ var grid_separation: int = 10
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
 	set(value):
-		# Calculate dynamic max zoom (one card fills available space)
-		var max_ratio = _calculate_max_ratio()
-		var clamped = clampf(value, 0.05, max_ratio)
-		# Calculate snapped ratio to ensure whole cards fit per row/column
-		var snapped = _calculate_snapped_ratio(clamped)
-		if not is_equal_approx(target_card_width_ratio, snapped):
-			target_card_width_ratio = snapped
+		# DISABLED: Snap zoom functionality causing focus issues during scroll
+		# Revert to simple clamped value without snapping
+		# TODO: Fix snap zoom to not interfere with focus effects
+		var clamped = clampf(value, 0.05, 0.5)
+		if not is_equal_approx(target_card_width_ratio, clamped):
+			target_card_width_ratio = clamped
 			_recalculate_layout()
 
 # Computed zoom based on viewport size
@@ -372,16 +371,19 @@ func refresh_dimensions() -> void:
 	if _flow_container:
 		_flow_container.custom_minimum_size = Vector2(0, 0)
 	
+	# DISABLED: Snap zoom functionality causing focus issues during scroll
+	# Revert to simple layout refresh without re-snapping
+	# TODO: Fix snap zoom to not interfere with focus effects
 	# Re-snap zoom to ensure it fits the new dimensions/margins
-	var current_ratio = target_card_width_ratio
-	var snapped_ratio = _calculate_snapped_ratio(current_ratio)
-	if not is_equal_approx(current_ratio, snapped_ratio):
-		target_card_width_ratio = snapped_ratio
-	else:
-		# Just refresh layout with current zoom
-		var current_zoom = _calculate_zoom()
-		_recalculate_dimensions()
-		_recalculate_layout()
+	# var current_ratio = target_card_width_ratio
+	# var snapped_ratio = _calculate_snapped_ratio(current_ratio)
+	# if not is_equal_approx(current_ratio, snapped_ratio):
+	# 	target_card_width_ratio = snapped_ratio
+	# else:
+	# Just refresh layout with current zoom
+	var current_zoom = _calculate_zoom()
+	_recalculate_dimensions()
+	_recalculate_layout()
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):

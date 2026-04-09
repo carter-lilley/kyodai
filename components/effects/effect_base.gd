@@ -67,6 +67,12 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	to preserve the original focus effect configuration."""
 	var tweenables = get_tweenable_settings()
 	
+	# DEBUG: Print tween info for HSL effects
+	if effect_id == "hsl":
+		var from_sat = from_settings.get("saturation_scale", "N/A")
+		var to_sat = to_settings.get("saturation_scale", "N/A")
+		print("[HSL TWEEN] Progress: %.3f | From sat: %s | To sat: %s | Node: %s" % [progress, str(from_sat), str(to_sat), name])
+	
 	# Create a temporary settings dict for interpolation
 	var temp_settings = _settings.duplicate()
 	
@@ -126,6 +132,12 @@ func _update_shader_params() -> void:
 func _set_shader_param(param: String, value: Variant) -> void:
 	var mat = material as ShaderMaterial
 	if mat:
+		# DEBUG: Track saturation_scale changes for HSL
+		if effect_id == "hsl" and param == "saturation_scale":
+			var card = get_parent()
+			var is_focus = card and card.get_parent() and card.get_parent().name == "FocusEffects"
+			if is_focus:
+				print("[HSL SHADER] Setting saturation_scale: %.3f on %s" % [value, name])
 		mat.set_shader_parameter(param, value)
 
 # Reactive signal connections

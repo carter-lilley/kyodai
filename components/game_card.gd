@@ -1014,8 +1014,8 @@ func restore_focus_animation() -> void:
 	_show_focus_effects(true)
 
 ## Shows or hides focus effects with a smooth transition.
-## For overlapping effects (present in both base and focus), tweens shader settings.
-## For non-overlapping effects, fades in/out via alpha.
+## For overlapping effects (present in both base and focus), tweens the base effect's shader settings directly.
+## For non-overlapping effects, fades in/out via alpha overlay.
 func _show_focus_effects(show: bool) -> void:
 	# Kill any existing focus effect tweens to prevent callbacks on freed objects
 	for tween in _focus_effect_tweens:
@@ -1027,108 +1027,74 @@ func _show_focus_effects(show: bool) -> void:
 	if preview_mode:
 		show = true
 	
-	if show:
-		_focus_stack.visible = true
-	
-	# Process each focus effect
-	if not _focus_stack:
+	if not _focus_stack or not _normal_stack:
 		return
 	
-	var has_overlapping_effects = false
+	# Separate effects into overlapping and non-overlapping
+	var overlapping_effects: Array[EffectBase] = []
+	var non_overlapping_effects: Array[EffectBase] = []
 	
 	for child in _focus_stack.get_children():
 		if not (child is EffectBase):
 			continue
 		
 		var focus_effect = child as EffectBase
-		
-		# Check if this is an overlapping effect (has a base counterpart)
 		if focus_effect._base_effect != null:
-			has_overlapping_effects = true
-			# Get settings from both effects
-			var base_settings = focus_effect._base_effect._settings
-			var focus_settings = focus_effect._settings
-			
-			# Capture copies of the settings dicts to avoid closure issues
-			var base_copy = base_settings.duplicate(true)
-			var focus_copy = focus_settings.duplicate(true)
-			
-			if show:
-				# SHOWING: Start with base settings, alpha fade in, then tween to focus settings
-				
-				# Start with base settings
-				if focus_effect.material is ShaderMaterial:
-					focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
-				focus_effect.tween_settings(base_copy, base_copy, 1.0)
-				
-				# Chain: alpha fade (0->1) then settings tween (base->focus)
-				var alpha_tween = create_tween()
-				_focus_effect_tweens.append(alpha_tween)
-				alpha_tween.set_trans(Tween.TRANS_QUAD)
-				alpha_tween.set_ease(Tween.EASE_OUT)
-				alpha_tween.tween_method(
-					func(t: float, eff: EffectBase = focus_effect):
-						if eff and is_instance_valid(eff) and eff.material is ShaderMaterial:
-							eff.material.set_shader_parameter("effect_alpha", t),
-					0.0, 1.0, FOCUS_EFFECT_FADE_DURATION / 2.0
-				)
-				
-				# After alpha fade completes, tween settings
-				alpha_tween.finished.connect(func():
-					var settings_tween = create_tween()
-					_focus_effect_tweens.append(settings_tween)
-					settings_tween.set_trans(Tween.TRANS_QUAD)
-					settings_tween.set_ease(Tween.EASE_OUT)
-					
-					var tween_callable = func(t: float):
-						if focus_effect and is_instance_valid(focus_effect):
-							focus_effect.tween_settings(base_copy, focus_copy, t)
-					
-					settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
-				)
-			else:
-				# HIDING: Tween to base settings, then alpha fade out
-				
-				# Ensure alpha is at 1.0 during settings tween
-				if focus_effect.material is ShaderMaterial:
-					focus_effect.material.set_shader_parameter("effect_alpha", 1.0)
-				
-				# First tween settings from focus to base
-				var settings_tween = create_tween()
-				_focus_effect_tweens.append(settings_tween)
-				settings_tween.set_trans(Tween.TRANS_QUAD)
-				settings_tween.set_ease(Tween.EASE_OUT)
-				
-				var tween_callable = func(t: float):
-					if focus_effect and is_instance_valid(focus_effect):
-						focus_effect.tween_settings(focus_copy, base_copy, t)
-				
-				settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
-				
-				# After settings tween completes, fade alpha to 0
-				settings_tween.finished.connect(func():
-					var alpha_tween = create_tween()
-					_focus_effect_tweens.append(alpha_tween)
-					alpha_tween.set_trans(Tween.TRANS_QUAD)
-					alpha_tween.set_ease(Tween.EASE_OUT)
-					alpha_tween.tween_method(
-						func(t: float, eff: EffectBase = focus_effect):
-							if eff and is_instance_valid(eff) and eff.material is ShaderMaterial:
-								eff.material.set_shader_parameter("effect_alpha", t),
-						1.0, 0.0, FOCUS_EFFECT_FADE_DURATION / 2.0
-					)
-				)
+			overlapping_effects.append(focus_effect)
 		else:
-			# Non-overlapping effect: use traditional alpha fade
+			non_overlapping_effects.append(focus_effect)
+	
+	# Handle overlapping effects: tween the base effect directly, no overlay needed
+	for focus_effect in overlapping_effects:
+		var base_effect = focus_effect._base_effect
+		if not base_effect:
+			continue
+		
+		var base_settings = base_effect._settings
+		var focus_settings = focus_effect._settings
+		
+		# Capture copies to avoid closure issues
+		var base_copy = base_settings.duplicate(true)
+		var focus_copy = focus_settings.duplicate(true)
+		
+		if show:
+			# Focused: tween base effect from base settings to focus settings
+			var settings_tween = create_tween()
+			_focus_effect_tweens.append(settings_tween)
+			settings_tween.set_trans(Tween.TRANS_QUAD)
+			settings_tween.set_ease(Tween.EASE_OUT)
+			
+			var tween_callable = func(t: float):
+				if base_effect and is_instance_valid(base_effect):
+					base_effect.tween_settings(base_copy, focus_copy, t)
+			
+			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+		else:
+			# Unfocused: tween base effect from focus settings back to base settings
+			var settings_tween = create_tween()
+			_focus_effect_tweens.append(settings_tween)
+			settings_tween.set_trans(Tween.TRANS_QUAD)
+			settings_tween.set_ease(Tween.EASE_OUT)
+			
+			var tween_callable = func(t: float):
+				if base_effect and is_instance_valid(base_effect):
+					base_effect.tween_settings(focus_copy, base_copy, t)
+			
+			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+	
+	# Handle non-overlapping effects: use traditional alpha fade overlay
+	if non_overlapping_effects.size() > 0:
+		if show:
+			_focus_stack.visible = true
+		
+		for focus_effect in non_overlapping_effects:
 			if focus_effect.material is ShaderMaterial:
 				var start_alpha = 0.0 if show else 1.0
 				var target_alpha = 1.0 if show else 0.0
 				
-				# Set initial alpha
 				if show:
 					focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
 				
-				# Tween alpha
 				var fade_tween = create_tween()
 				_focus_effect_tweens.append(fade_tween)
 				fade_tween.set_trans(Tween.TRANS_QUAD)
@@ -1139,18 +1105,18 @@ func _show_focus_effects(show: bool) -> void:
 							eff.material.set_shader_parameter("effect_alpha", t),
 					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
 				)
-	
-	# Hide stack after fade-out completes (only if no overlapping effects are visible)
-	if not show and not has_overlapping_effects:
-		var hide_tween = create_tween()
-		_focus_effect_tweens.append(hide_tween)
-		hide_tween.set_trans(Tween.TRANS_QUAD)
-		hide_tween.set_ease(Tween.EASE_OUT)
-		hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
-		hide_tween.finished.connect(func(): 
-			if _focus_stack and is_instance_valid(_focus_stack):
-				_focus_stack.visible = false
-		)
+		
+		# Hide stack after fade-out completes
+		if not show:
+			var hide_tween = create_tween()
+			_focus_effect_tweens.append(hide_tween)
+			hide_tween.set_trans(Tween.TRANS_QUAD)
+			hide_tween.set_ease(Tween.EASE_OUT)
+			hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
+			hide_tween.finished.connect(func(): 
+				if _focus_stack and is_instance_valid(_focus_stack):
+					_focus_stack.visible = false
+			)
 
 ## Plays the enter animation: scales from 125% to 100% while fading opacity from 0% to 100%
 func play_enter_animation() -> void:

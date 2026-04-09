@@ -259,14 +259,18 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, focus_callback: Call
 	
 	_is_smooth_scrolling = true
 	
+	# DISABLED: Focus callback logic causing HSL flicker during scroll
+	# This was added for the "random game" feature but causes focus conflicts
+	# during smooth scrolling, making HSL effects flicker.
+	# TODO: Find alternative approach for focusing after scroll completes
 	# Set up focus callback to fire at 60% completion
-	if focus_callback.is_valid():
-		_focus_timer = Timer.new()
-		_focus_timer.wait_time = duration * 0.6
-		_focus_timer.one_shot = true
-		_focus_timer.timeout.connect(focus_callback)
-		add_child(_focus_timer)
-		_focus_timer.start()
+	#if focus_callback.is_valid():
+	#   _focus_timer = Timer.new()
+	#   _focus_timer.wait_time = duration * 0.6
+	#   _focus_timer.one_shot = true
+	#   _focus_timer.timeout.connect(focus_callback)
+	#   add_child(_focus_timer)
+	#   _focus_timer.start()
 	
 	_scroll_tween = create_tween()
 	_scroll_tween.set_trans(Tween.TRANS_EXPO)
@@ -297,6 +301,7 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 	
 	if animate and smooth_scrolling:
 		_target_scroll = target
-		_start_smooth_scroll(duration_multiplier, focus_callback)
+		# Focus callback disabled - see _start_smooth_scroll() for details
+		_start_smooth_scroll(duration_multiplier)
 	else:
 		_set_current_scroll(target)
