@@ -280,9 +280,6 @@ func _rebuild_effects():
 	if card_input:
 		visual_container.move_child(card_input, -1)
 	
-	if _current_texture:
-		_set_texture(_current_texture)
-	
 	_update_platform_badge()
 	_update_status_badge_layout()
 
@@ -304,8 +301,8 @@ func _link_overlapping_effects() -> void:
 			if base_effect:
 				child.set_base_effect(base_effect)
 				
-				# If card is not focused, immediately apply base settings to shader
-				# This ensures the shader starts at base values after rebuild
+				# Only reset to base settings if card is NOT focused
+				# Focused cards should keep their current tween state
 				if not _is_focused and base_effect._settings.size() > 0:
 					child.tween_settings(base_effect._settings, base_effect._settings, 1.0)
 
@@ -735,6 +732,9 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	return null
 
 func _set_texture(tex: Texture2D) -> void:
+	# Skip if texture hasn't changed
+	if tex == _current_texture:
+		return
 	_current_texture = tex
 	if _normal_stack:
 		_normal_stack.set_game_texture(tex)
@@ -1222,7 +1222,9 @@ func reset():
 	_download_retry_count = 0
 	game = null
 	_is_focused = false
-	_set_texture(_loading_texture)
+	# Only set texture if it's different from current (avoid unnecessary shader updates)
+	if _current_texture != _loading_texture:
+		_set_texture(_loading_texture)
 	# Reset visual container scale when card is recycled
 	if visual_container:
 		visual_container.scale = Vector2.ONE
@@ -1239,8 +1241,19 @@ func reset():
 				child.material.set_shader_parameter("effect_alpha", 0.0)
 
 func refresh_settings():
+	"""Refresh card settings from global config. Rebuilds effects only if orientation changed."""
+	var old_orientation = _card_state.orientation if _card_state else 0
+	var old_zoom = _card_state.zoom_level if _card_state else 1.0
 	_update_card_state_from_settings()
-	_rebuild_effects()
+	
+	# Update zoom if it changed
+	if _card_state.zoom_level != old_zoom:
+		_on_zoom_changed(_card_state.zoom_level)
+	
+	# Only rebuild effects if orientation changed or card is not focused
+	# Focused cards rebuild effects when unfocused
+	if not _is_focused and _card_state.orientation != old_orientation:
+		_rebuild_effects()
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:

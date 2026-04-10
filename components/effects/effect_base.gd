@@ -61,6 +61,8 @@ func get_tweenable_settings() -> Array[String]:
 	
 	return tweenable
 
+var _is_tweening: bool = false  # Track if currently in a tween to prevent shader resets
+
 func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress: float) -> void:
 	"""Apply settings interpolated between from and to based on progress (0.0-1.0).
 	Note: This applies interpolated values to the shader but does NOT modify _settings
@@ -72,6 +74,8 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 		var from_sat = from_settings.get("saturation_scale", "N/A")
 		var to_sat = to_settings.get("saturation_scale", "N/A")
 		print("[HSL TWEEN] Progress: %.3f | From sat: %s | To sat: %s | Node: %s" % [progress, str(from_sat), str(to_sat), name])
+	
+	_is_tweening = true
 	
 	# Create a temporary settings dict for interpolation
 	var temp_settings = _settings.duplicate()
@@ -87,6 +91,10 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	
 	# Apply the interpolated settings WITHOUT storing them in _settings
 	_apply_tweened_settings(temp_settings)
+	
+	# Mark tween as complete when progress reaches 1.0
+	if progress >= 1.0:
+		_is_tweening = false
 
 func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> Variant:
 	"""Interpolate between two values based on their type."""
@@ -168,19 +176,31 @@ func _disconnect_container_state_signals() -> void:
 		_container_state.shape_changed.disconnect(_on_shape_changed)
 
 func _on_zoom_changed(_new_zoom: float) -> void:
+	if _is_tweening:
+		return
 	_update_shader_params()
 
 func _on_size_changed(_new_size: Vector2) -> void:
+	if _is_tweening:
+		return
 	_update_shader_params()
 
 func _on_orientation_changed(_new_orientation: int) -> void:
+	if _is_tweening:
+		return
 	_update_shader_params()
 
 func _on_corner_radius_changed(_new_ratio: float) -> void:
+	if _is_tweening:
+		return
 	_update_shader_params()
 
 func _on_border_inset_changed(_new_ratio: float) -> void:
+	if _is_tweening:
+		return
 	_update_shader_params()
 
 func _on_shape_changed() -> void:
+	if _is_tweening:
+		return
 	_update_shader_params()

@@ -24,13 +24,6 @@ func _update_shader_params() -> void:
 	var saturation_scale = _settings.get("saturation_scale", 1.0)
 	var lightness_scale = _settings.get("lightness_scale", 1.0)
 	
-	# DEBUG: Print HSL values when they change significantly or during focus
-	# This will help diagnose the flickering issue during scroll
-	var card = get_parent()
-	if card and card.get_parent() and card.get_parent().name == "FocusEffects":
-		# Only print for focus effects to avoid spam
-		print("[HSL DEBUG] Focus effect - saturation_scale: %.3f, hue_shift: %.3f, lightness: %.3f" % [saturation_scale, hue_shift, lightness_scale])
-	
 	# HSL parameters
 	_set_shader_param("hue_shift", hue_shift)
 	_set_shader_param("saturation_scale", saturation_scale)

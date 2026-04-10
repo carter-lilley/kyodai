@@ -41,9 +41,9 @@ var target_card_width_ratio: float = 0.15:
 		var clamped = clampf(value, 0.05, max_ratio)
 		# Calculate snapped ratio to ensure whole cards fit per row/column
 		var snapped = _calculate_snapped_ratio(clamped)
-		if not is_equal_approx(target_card_width_ratio, snapped):
-			target_card_width_ratio = snapped
-			_recalculate_layout()
+		# Always update ratio and recalculate - _recalculate_layout handles optimization
+		target_card_width_ratio = snapped
+		_recalculate_layout()
 
 # Computed zoom based on viewport size
 var zoom: float = 1.0:
@@ -72,6 +72,16 @@ var batch_progress: float = 0.0
 var _card_pool: Array[Control] = []
 var _active_cards: Array[Control] = []
 var _max_pool_size: int = 120
+
+var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
+
+# Margin caching - only update when margins actually change
+var _last_margin_top: int = -1
+var _last_margin_bottom: int = -1
+var _last_margin_left: int = -1
+var _last_margin_right: int = -1
+var _last_flow_width: float = -1.0
+var _last_flow_height: float = -1.0
 
 var _data_cache: Dictionary = {}
 var _pending_loads: Dictionary = {}
@@ -277,10 +287,12 @@ func _recalculate_layout():
 		else:
 			_on_scroll_value_changed(_scroll_container.scroll_horizontal)
 	
-	# Update zoom on all active cards
-	for card in _active_cards:
-		if is_instance_valid(card) and card.has_method("set_card_zoom"):
-			card.set_card_zoom(current_zoom)
+	# Only update zoom on cards if it actually changed
+	if not is_equal_approx(current_zoom, _last_applied_zoom):
+		_last_applied_zoom = current_zoom
+		for card in _active_cards:
+			if is_instance_valid(card) and card.has_method("set_card_zoom"):
+				card.set_card_zoom(current_zoom)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -377,17 +389,18 @@ func refresh_dimensions() -> void:
 	# Re-snap zoom to ensure it fits the new dimensions/margins
 	var current_ratio = target_card_width_ratio
 	var snapped_ratio = _calculate_snapped_ratio(current_ratio)
-	if not is_equal_approx(current_ratio, snapped_ratio):
-		target_card_width_ratio = snapped_ratio
-	else:
-		# Just refresh layout with current zoom
-		var current_zoom = _calculate_zoom()
-		_recalculate_dimensions()
-		_recalculate_layout()
+	# Always update ratio - the setter will handle recalculation
+	target_card_width_ratio = snapped_ratio
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
-			card.set_card_zoom(_calculate_zoom())
+			var current_zoom = _calculate_zoom()
+			if not is_equal_approx(current_zoom, _last_applied_zoom):
+				_last_applied_zoom = current_zoom
+				card.set_card_zoom(current_zoom)
+				# Also refresh settings to update zoom in card state
+				if card.has_method("refresh_settings"):
+					card.refresh_settings()
 	
 	_update_margin()
 
@@ -396,9 +409,15 @@ func _on_zoom_changed():
 	_recalculate_dimensions()
 	_recalculate_layout()
 	
-	for card in _active_cards:
-		if is_instance_valid(card) and card.has_method("set_card_zoom"):
-			card.set_card_zoom(current_zoom)
+	# Only update zoom on cards if it actually changed
+	if not is_equal_approx(current_zoom, _last_applied_zoom):
+		_last_applied_zoom = current_zoom
+		for card in _active_cards:
+			if is_instance_valid(card) and card.has_method("set_card_zoom"):
+				card.set_card_zoom(current_zoom)
+				# Also refresh settings to update zoom in card state
+				if card.has_method("refresh_settings"):
+					card.refresh_settings()
 	
 	_update_margin()
 
@@ -495,6 +514,7 @@ func _initial_load():
 	
 	# Apply current zoom to all newly created cards
 	var current_zoom = _calculate_zoom()
+	_last_applied_zoom = current_zoom  # Initialize tracking for new cards
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(current_zoom)
@@ -683,6 +703,7 @@ func _add_card_at_end(virtual_index: int):
 	if card.has_method("set_card_zoom"):
 		card.set_card_zoom(_calculate_zoom())
 	
+	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
 		card.refresh_settings()
 	
@@ -713,6 +734,7 @@ func _add_card_at_start(virtual_index: int):
 	if card.has_method("set_card_zoom"):
 		card.set_card_zoom(_calculate_zoom())
 	
+	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
 		card.refresh_settings()
 	
@@ -778,13 +800,23 @@ func _disconnect_card_signals(card: Control):
 func _update_margin():
 	if _active_cards.size() == 0:
 		if vertical:
-			_margin_container.add_theme_constant_override("margin_top", 0)
-			_margin_container.add_theme_constant_override("margin_bottom", 0)
-			_flow_container.custom_minimum_size.y = 0
+			if _last_margin_top != 0 or _last_margin_bottom != 0:
+				_margin_container.add_theme_constant_override("margin_top", 0)
+				_margin_container.add_theme_constant_override("margin_bottom", 0)
+				_last_margin_top = 0
+				_last_margin_bottom = 0
+			if _last_flow_height != 0:
+				_flow_container.custom_minimum_size.y = 0
+				_last_flow_height = 0
 		else:
-			_margin_container.add_theme_constant_override("margin_left", 0)
-			_margin_container.add_theme_constant_override("margin_right", 0)
-			_flow_container.custom_minimum_size.x = 0
+			if _last_margin_left != 0 or _last_margin_right != 0:
+				_margin_container.add_theme_constant_override("margin_left", 0)
+				_margin_container.add_theme_constant_override("margin_right", 0)
+				_last_margin_left = 0
+				_last_margin_right = 0
+			if _last_flow_width != 0:
+				_flow_container.custom_minimum_size.x = 0
+				_last_flow_width = 0
 		return
 	
 	var first_idx = _active_cards[0].get_meta("virtual_index", 0)
@@ -806,9 +838,16 @@ func _update_margin():
 		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
 		var margin_bottom = lines_after * card_height + max(0, lines_after - 1) * grid_separation
 		
-		_margin_container.add_theme_constant_override("margin_top", int(margin_top))
-		_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
-		_flow_container.custom_minimum_size.y = flow_height
+		# Only update if values changed
+		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
+			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
+			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
+			_last_margin_top = int(margin_top)
+			_last_margin_bottom = int(margin_bottom)
+		
+		if not is_equal_approx(flow_height, _last_flow_height):
+			_flow_container.custom_minimum_size.y = flow_height
+			_last_flow_height = flow_height
 	else:
 		var card_width = item_width - grid_separation
 		
@@ -824,9 +863,16 @@ func _update_margin():
 		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
 		var margin_right = lines_after * card_width + max(0, lines_after - 1) * grid_separation
 		
-		_margin_container.add_theme_constant_override("margin_left", int(margin_left))
-		_margin_container.add_theme_constant_override("margin_right", int(margin_right))
-		_flow_container.custom_minimum_size.x = flow_width
+		# Only update if values changed
+		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
+			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
+			_margin_container.add_theme_constant_override("margin_right", int(margin_right))
+			_last_margin_left = int(margin_left)
+			_last_margin_right = int(margin_right)
+		
+		if not is_equal_approx(flow_width, _last_flow_width):
+			_flow_container.custom_minimum_size.x = flow_width
+			_last_flow_width = flow_width
 
 func _request_missing_data():
 	if _active_cards.size() == 0:
@@ -1261,6 +1307,7 @@ func _initial_load_from_increment():
 	
 	# Apply current zoom to all newly created cards
 	var current_zoom = _calculate_zoom()
+	_last_applied_zoom = current_zoom  # Initialize tracking
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(current_zoom)
