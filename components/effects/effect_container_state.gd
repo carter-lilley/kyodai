@@ -98,10 +98,13 @@ func _recalculate_dimensions() -> void:
 	container_size = base * zoom_level
 
 func _get_base_dimensions() -> Vector2:
-	match orientation:
-		1: return Vector2(base_size.y, base_size.x)  # Horizontal swap
-		2: return Vector2(base_size.x, base_size.x)  # Square
-		_: return base_size  # Vertical
+	return get_base_dimensions_for_orientation(orientation)
+
+static func get_base_dimensions_for_orientation(orientation_idx: int) -> Vector2:
+	match orientation_idx:
+		1: return Vector2(276.0, 129.0)  # Horizontal
+		2: return Vector2(256.0, 256.0)   # Square  
+		_: return Vector2(202.0, 270.0)   # Vertical (default)
 
 # Recalculates shape parameters that all shaders use
 func _recalculate_shape() -> void:

@@ -36,12 +36,13 @@ var grid_separation: int = 10
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
 	set(value):
-		# DISABLED: Snap zoom functionality causing focus issues during scroll
-		# Revert to simple clamped value without snapping
-		# TODO: Fix snap zoom to not interfere with focus effects
-		var clamped = clampf(value, 0.05, 0.5)
-		if not is_equal_approx(target_card_width_ratio, clamped):
-			target_card_width_ratio = clamped
+		# Calculate dynamic max zoom (one card fills available space)
+		var max_ratio = _calculate_max_ratio()
+		var clamped = clampf(value, 0.05, max_ratio)
+		# Calculate snapped ratio to ensure whole cards fit per row/column
+		var snapped = _calculate_snapped_ratio(clamped)
+		if not is_equal_approx(target_card_width_ratio, snapped):
+			target_card_width_ratio = snapped
 			_recalculate_layout()
 
 # Computed zoom based on viewport size
@@ -88,6 +89,14 @@ func _ready():
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_recalculate_layout")
+	
+	# Connect to settings saved signal to refresh layout when card orientation changes
+	if SettingsManager:
+		SettingsManager.settings_saved.connect(_on_settings_saved)
+
+func _on_settings_saved():
+	# Refresh dimensions when settings change (e.g., card orientation)
+	refresh_dimensions()
 
 func _on_resized():
 	# Recalculate layout with current snapped zoom
@@ -342,18 +351,12 @@ func _setup_ui():
 	_recalculate_dimensions()
 
 func _get_base_dimensions() -> Vector2:
+	var orientation_idx = 0  # Default vertical
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
-			var orientation_idx = config_setting.value.get("card_orientation", 0)
-			match orientation_idx:
-				1: # Horizontal
-					return Vector2(276.0, 129.0)
-				2: # Square
-					return Vector2(256.0, 256.0)
-				_: # 0 = Vertical (default)
-					return Vector2(202.0, 270.0)
-	return Vector2(202.0, 270.0)
+			orientation_idx = config_setting.value.get("card_orientation", 0)
+	return EffectContainerState.get_base_dimensions_for_orientation(orientation_idx)
 
 func _recalculate_dimensions():
 	var current_zoom = _calculate_zoom()
@@ -371,19 +374,16 @@ func refresh_dimensions() -> void:
 	if _flow_container:
 		_flow_container.custom_minimum_size = Vector2(0, 0)
 	
-	# DISABLED: Snap zoom functionality causing focus issues during scroll
-	# Revert to simple layout refresh without re-snapping
-	# TODO: Fix snap zoom to not interfere with focus effects
 	# Re-snap zoom to ensure it fits the new dimensions/margins
-	# var current_ratio = target_card_width_ratio
-	# var snapped_ratio = _calculate_snapped_ratio(current_ratio)
-	# if not is_equal_approx(current_ratio, snapped_ratio):
-	# 	target_card_width_ratio = snapped_ratio
-	# else:
-	# Just refresh layout with current zoom
-	var current_zoom = _calculate_zoom()
-	_recalculate_dimensions()
-	_recalculate_layout()
+	var current_ratio = target_card_width_ratio
+	var snapped_ratio = _calculate_snapped_ratio(current_ratio)
+	if not is_equal_approx(current_ratio, snapped_ratio):
+		target_card_width_ratio = snapped_ratio
+	else:
+		# Just refresh layout with current zoom
+		var current_zoom = _calculate_zoom()
+		_recalculate_dimensions()
+		_recalculate_layout()
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
