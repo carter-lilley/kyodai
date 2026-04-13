@@ -1324,7 +1324,7 @@
 		  },
 		  "android": {
 			"action_type": "download_repo",
-			"github_repo": "izzy2lost/xemu",
+			"github_repo": "rfandango/hakuX",
 			"asset_pattern": "app-.*\\.apk"
 		  }
 		}
@@ -1350,11 +1350,11 @@
 		  },
 		  "android": {
 			"action_type": "apk_install",
-			"package_name": "com.izzy2lost.x1box",
+			"package_name": "com.rfandango.haku_x",
 			"expected_file": "app-release.apk",
 			"validate": {
 			  "action_type": "package_installed",
-			  "package": "com.izzy2lost.x1box"
+			  "package": "com.rfandango.haku_x"
 			}
 		  }
 		}
@@ -1464,8 +1464,8 @@
 		},
 		"android": {
 		  "action": "android.intent.action.VIEW",
-		  "package": "com.izzy2lost.x1box",
-		  "class": "com.izzy2lost.x1box.MainActivity",
+		  "package": "com.rfandango.haku_x",
+		  "class": "com.rfandango.haku_x.LauncherActivity",
 		  "rom_delivery": "intent_data"
 		}
 	  }
