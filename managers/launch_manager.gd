@@ -2591,28 +2591,46 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 ## Extracts TitleID from Vita game ZIP by reading root folder name
 func _extract_vita_title_id(zip_path: String) -> String:
 	var actual_zip_path = zip_path
+	var use_buffer = false
+	var zip_buffer: PackedByteArray = PackedByteArray()
 	
 	# On Android with SAF, content:// URIs can't be read directly by ZIPReader
-	# Convert to real file path using the PackageChecker plugin
+	# due to Scoped Storage. Try reading the file bytes via SAF first.
 	if PlatformManager.is_android() and zip_path.begins_with("content://"):
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin == null:
 			push_error("[LaunchManager] PackageChecker plugin not available for SAF URI conversion")
 			return ""
 		
-		var real_path = plugin.getRealPathFromSafUri(zip_path)
-		if real_path == "":
-			push_error("[LaunchManager] Cannot convert SAF URI to real path: " + zip_path)
-			return ""
-		
-		actual_zip_path = real_path
+		# Try the new SAF byte reader first (works with SD cards)
+		if plugin.has_method("readSafFileBytes"):
+			print("[LaunchManager] Vita3K: Reading ZIP bytes via SAF...")
+			zip_buffer = plugin.readSafFileBytes(zip_path)
+			if zip_buffer.size() > 0:
+				use_buffer = true
+				print("[LaunchManager] Vita3K: Read " + str(zip_buffer.size()) + " bytes from SAF")
+			else:
+				push_error("[LaunchManager] Vita3K: readSafFileBytes returned empty for: " + zip_path)
+				return ""
+		else:
+			# Fallback to real path conversion (often fails on SD cards with Scoped Storage)
+			var real_path = plugin.getRealPathFromSafUri(zip_path)
+			if real_path == "":
+				push_error("[LaunchManager] Cannot convert SAF URI to real path: " + zip_path)
+				return ""
+			actual_zip_path = real_path
 	
-	if not FileAccess.file_exists(actual_zip_path):
+	if not use_buffer and not FileAccess.file_exists(actual_zip_path):
 		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + actual_zip_path)
 		return ""
 	
 	var reader = ZIPReader.new()
-	var err = reader.open(actual_zip_path)
+	var err
+	if use_buffer:
+		err = reader.open_buffer(zip_buffer)
+	else:
+		err = reader.open(actual_zip_path)
+	
 	if err != OK:
 		push_error("[LaunchManager] Failed to open ZIP for TitleID extraction: " + actual_zip_path)
 		return ""
@@ -2637,6 +2655,7 @@ func _extract_vita_title_id(zip_path: String) -> String:
 ## Returns true if ready to launch, false if error
 func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var rom_path = intent.rom_path
+	print("[LaunchManager] Vita3K: Preparing game from ROM path: " + rom_path)
 	
 	# Get emulator directory for checking existing games
 	# Platform-specific: Android uses fixed external storage path, desktop uses install path
@@ -2656,36 +2675,30 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		emulator_dir = emulator_path.get_base_dir()
 		ux0_app_path = emulator_dir + "/ux0/app"
 	
-	# Extract TitleID from ZIP if not already stored
-	if game.title_id == "":
-		# by scanning the ux0/app directory for any TitleID folder
-		var found_title_id = ""
-		if DirAccess.dir_exists_absolute(ux0_app_path):
-			var dir = DirAccess.open(ux0_app_path)
-			if dir:
-				dir.list_dir_begin()
-				var folder_name = dir.get_next()
-				while folder_name != "":
-					if folder_name != "." and folder_name != ".." and dir.current_is_dir():
-						# Found a TitleID folder - use it (Vita3K stores games by TitleID)
-						found_title_id = folder_name
-						break
-					folder_name = dir.get_next()
-				dir.list_dir_end()
-		
-		# If no existing game found, extract from ZIP
-		if found_title_id == "":
-			found_title_id = _extract_vita_title_id(rom_path)
-			if found_title_id == "":
-				push_error("[LaunchManager] Vita3K: Failed to extract TitleID from: " + rom_path)
-				NotificationManager.show_notification("Failed to extract Vita game TitleID", Notification.Type.ERROR)
-				return false
-		
-		game.title_id = found_title_id
+	print("[LaunchManager] Vita3K: ux0_app_path = " + ux0_app_path)
+	
+	# Always extract TitleID from ZIP to ensure we have the correct one for this ROM
+	print("[LaunchManager] Vita3K: Extracting TitleID from ZIP...")
+	var zip_title_id = _extract_vita_title_id(rom_path)
+	if zip_title_id == "":
+		push_error("[LaunchManager] Vita3K: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract Vita game TitleID", Notification.Type.ERROR)
+		return false
+	print("[LaunchManager] Vita3K: TitleID from ZIP: " + zip_title_id)
+	
+	# If stored title_id doesn't match the ZIP, update it
+	if game.title_id != "" and game.title_id != zip_title_id:
+		print("[LaunchManager] Vita3K: WARNING - Stored TitleID " + game.title_id + " doesn't match ZIP TitleID " + zip_title_id)
+		print("[LaunchManager] Vita3K: Updating to correct TitleID from ZIP")
+	
+	if game.title_id != zip_title_id:
+		game.title_id = zip_title_id
 		# Save only title_id to database (doesn't overwrite other fields)
-		DataManager.update_game_title_id(game.romm_id, found_title_id)
+		DataManager.update_game_title_id(game.romm_id, zip_title_id)
+		print("[LaunchManager] Vita3K: Updated database with TitleID: " + zip_title_id)
 	
 	var title_id = game.title_id
+	print("[LaunchManager] Vita3K: Using TitleID: " + title_id)
 	
 	# Platform-specific Vita3K app path
 	var vita_app_path: String
@@ -2695,38 +2708,78 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		# Desktop - use emulator directory (already obtained above)
 		vita_app_path = emulator_dir + "/ux0/app/" + title_id
 	
-	# Check if already extracted
-	var dir = DirAccess.open(vita_app_path)
-	if dir != null:
+	print("[LaunchManager] Vita3K: Checking extracted files at: " + vita_app_path)
+	
+	# Check if already extracted by looking for actual game files, not just directory existence
+	var is_extracted = _vita_app_has_game_files(vita_app_path)
+	print("[LaunchManager] Vita3K: has_game_files = " + str(is_extracted))
+	if is_extracted:
 		return true
 	
 	# Extract ZIP to Vita3K ux0/app directory (ZIP contains the TitleID folder)
 	# We extract to the parent directory (ux0/app) so the ZIP's root folder lands correctly
 	var extract_parent = vita_app_path.get_base_dir()
 	NotificationManager.show_notification("Extracting Vita game for first launch...", Notification.Type.INFO)
+	print("[LaunchManager] Vita3K: Extracting ZIP to: " + extract_parent)
 	
 	var extract_success = await _extract_vita_zip(rom_path, extract_parent, title_id)
 	if not extract_success:
 		push_error("[LaunchManager] Vita3K: Failed to extract game to " + vita_app_path)
 		return false
 	
+	print("[LaunchManager] Vita3K: Extraction successful")
 	return true
+
+## Checks whether the given Vita3K app path contains actual game files
+func _vita_app_has_game_files(vita_app_path: String) -> bool:
+	var dir = DirAccess.open(vita_app_path)
+	if dir == null:
+		return false
+	
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	var has_files = false
+	while file_name != "":
+		if file_name != "." and file_name != "..":
+			has_files = true
+			break
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	
+	return has_files
 
 ## Extracts Vita game ZIP with progress tracking
 func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -> bool:
+	print("[LaunchManager] Vita3K: _extract_vita_zip called with zip_path=" + zip_path + ", extract_to=" + extract_to)
+	
 	# Create parent directories if needed
 	var parent_dir = extract_to.get_base_dir()
+	print("[LaunchManager] Vita3K: Creating parent directory: " + parent_dir)
 	var err = DirAccess.make_dir_recursive_absolute(parent_dir)
 	if err != OK and err != ERR_ALREADY_EXISTS:
 		push_error("[LaunchManager] Failed to create Vita3K app directory: " + parent_dir)
 		return false
 	
+	# On Android, DownloadManager.queue_extraction may need a real file path instead of a SAF URI.
+	# Convert the SAF tree URI to a real path if necessary.
+	var actual_zip_path = zip_path
+	if PlatformManager.is_android() and zip_path.begins_with("content://"):
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin and plugin.has_method("getRealPathFromSafUri"):
+			actual_zip_path = plugin.getRealPathFromSafUri(zip_path)
+			print("[LaunchManager] Vita3K: Converted SAF URI to real path: " + actual_zip_path)
+			if actual_zip_path == "":
+				push_error("[LaunchManager] Vita3K: Failed to convert SAF URI to real path: " + zip_path)
+				return false
+	
 	# Use DownloadManager's extraction for progress tracking
 	# Pass false to preserve the ZIP file (don't delete after extraction)
-	var item_id = DownloadManager.queue_extraction(zip_path, extract_to, "vita_game", title_id, false)
+	print("[LaunchManager] Vita3K: Queueing extraction via DownloadManager")
+	var item_id = DownloadManager.queue_extraction(actual_zip_path, extract_to, "vita_game", title_id, false)
 	if item_id == "":
 		push_error("[LaunchManager] Failed to queue Vita game extraction")
 		return false
+	print("[LaunchManager] Vita3K: Extraction queued with item_id=" + item_id)
 	
 	# Wait for extraction to complete
 	var extraction_complete = false
@@ -2736,6 +2789,7 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 		if completed_item_id == item_id:
 			extraction_complete = true
 			extraction_success = success
+			print("[LaunchManager] Vita3K: Extraction callback received - success=" + str(success) + ", message=" + message)
 	
 	DownloadManager.extraction_completed.connect(on_complete)
 	
@@ -2749,9 +2803,10 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 	DownloadManager.extraction_completed.disconnect(on_complete)
 	
 	if not extraction_complete:
-		push_error("[LaunchManager] Vita3K: Extraction timed out")
+		push_error("[LaunchManager] Vita game extraction timed out")
 		return false
 	
+	print("[LaunchManager] Vita3K: Extraction result = " + str(extraction_success))
 	return extraction_success
 
 

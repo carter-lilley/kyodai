@@ -31,7 +31,7 @@ var _notification_id_counter: int = 0
 var _notification_width: float = 300.0
 var _max_notifications: int = 5
 var _fade_duration: float = 0.3
-var _check_interval: float = 0.1
+var _check_interval: float = 0.5
 var _stack_direction: StackDirection = StackDirection.UPWARD
 
 func _ready() -> void:

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:tools="http://schemas.android.com/tools"
 	package="com.heckpoint.kyodai">
 	
 	<!-- Permission to query all packages (Android 11+) -->
@@ -26,8 +27,10 @@
 	
 	<application
 		android:largeHeap="true">
-		<!-- IMPORTANT: To enable SD card support, add to your app's AndroidManifest.xml: -->
-		<!-- 
+		<!-- IMPORTANT: To enable SD card support via FileProvider, add this provider block to your
+		     app's main AndroidManifest.xml (custom build template) so it can replace Godot's default.
+		     Without a custom build template, SAF tree URIs are converted to real document URIs in code. -->
+		<!--
 		<provider
 			android:name="androidx.core.content.FileProvider"
 			android:authorities="${applicationId}.fileprovider"

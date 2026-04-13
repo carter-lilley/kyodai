@@ -572,7 +572,7 @@ func _process_next_platform():
 
 func _fetch_platform_batch():
 	"""Fetch a batch of games for the current platform"""
-	var batch_size = 250
+	var batch_size = 250 if not PlatformManager.is_android() else 150
 	var platform_id = _sync_current_platform_data.id
 	
 	_fetch_batch(str(platform_id), _sync_current_offset, batch_size, true, _sync_current_updated_after, func(data, error):
@@ -625,6 +625,8 @@ func _fetch_platform_batch():
 				# Need more batches - fetch next
 				_sync_current_offset += batch_size
 				_sync_state = SyncState.PLATFORM_BATCHING
+				if PlatformManager.is_android():
+					await get_tree().process_frame
 				_fetch_platform_batch()
 		)
 	)
@@ -795,7 +797,7 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 				"siblings": game.siblings if game else []
 			},
 		MemoryManager.BatchMode.DB_THREAD,
-		20,  # Process 20 games per frame (tune based on performance)
+		20 if not PlatformManager.is_android() else 15,  # Process 20 games per frame (tune based on performance)
 		func(processed: int, total_count: int):
 			# Progress callback - minimal work, just signal progress
 			var percent = float(processed) / float(total_count) * 100.0
@@ -808,6 +810,9 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 				_perf_phase1_duration, 
 				float(_perf_phase1_duration) / float(total)
 			])
+			# Free large transient arrays immediately to help GC on Android
+			items.clear()
+			game_creation_data.clear()
 			# Continue with Phases 2-3
 			_process_phase2_sibling_checks(phase1_results, platform_slug, on_complete)
 	)
@@ -831,6 +836,9 @@ func _process_phase2_sibling_checks(phase1_results: Array, platform_slug: String
 					"romm_id": result["romm_id"],
 					"siblings": result["siblings"]
 				})
+	
+	# Clear the large input array to help GC reclaim GameResource references sooner
+	phase1_results.clear()
 	
 	if games.is_empty():
 		print("[DataManager] Batch %d: Phase 1 complete, no valid games to process" % _perf_total_batches)
@@ -935,14 +943,14 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 	# Phase 3 timing
 	var phase3_start = Time.get_ticks_msec()
 	
-	# Chunk games into transaction-sized batches (250 per transaction)
-	const TRANSACTION_BATCH_SIZE: int = 250
+	# Chunk games into transaction-sized batches (smaller on Android to reduce memory pressure)
+	var transaction_batch_size: int = 250 if not PlatformManager.is_android() else 150
 	var transaction_batches: Array[Array] = []
 	var current_batch: Array[GameResource] = []
 	
 	for game in games:
 		current_batch.append(game)
-		if current_batch.size() >= TRANSACTION_BATCH_SIZE:
+		if current_batch.size() >= transaction_batch_size:
 			transaction_batches.append(current_batch.duplicate())
 			current_batch.clear()
 	
@@ -958,9 +966,10 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 	var had_error: bool = false
 	var error_message: String = ""
 	
-	print("[DataManager] Batch %d: Inserting %d games in %d transaction batches of max %d" % [_perf_total_batches, total_games, transaction_batches.size(), TRANSACTION_BATCH_SIZE])
+	print("[DataManager] Batch %d: Inserting %d games in %d transaction batches of max %d" % [_perf_total_batches, total_games, transaction_batches.size(), transaction_batch_size])
 	
 	# Process each transaction batch
+	var db_batches_per_frame: int = 2
 	var batch_id = MemoryManager.start_batch(
 		transaction_batches,
 		func(batch: Array[GameResource], _idx: int) -> bool:
@@ -969,10 +978,10 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 			
 			return _insert_games_transaction(batch),
 		MemoryManager.BatchMode.DB_THREAD,
-		2,  # Process 2 transaction batches per frame (500 games max per frame)
+		db_batches_per_frame,  # Process transaction batches per frame
 		func(completed_batches: int, total_batches: int):
 			# Progress callback - update sync progress
-			var completed_games = mini(completed_batches * TRANSACTION_BATCH_SIZE, total_games)
+			var completed_games = mini(completed_batches * transaction_batch_size, total_games)
 			var percent = float(completed_games) / float(total_games) * 100.0
 			emit_signal("sync_progress", percent, completed_games, total_games),
 		func(results: Array):
@@ -2247,10 +2256,12 @@ func _download_cover(url: String, callback: Callable):
 				file.close()
 				return _load_image_from_memory(buffer, cache_path),
 			func(image):
-				var texture = null
-				if image:
-					texture = ImageTexture.create_from_image(image)
-				var load_success = texture != null
+				var load_success = image != null
+				# During sync, skip creating ImageTexture to avoid GPU memory pressure.
+				# The texture will be created on-demand when the game card is displayed.
+				if load_success and not _sync_batch_mode:
+					var texture = ImageTexture.create_from_image(image)
+					load_success = texture != null
 				# Notify all waiting callbacks - thread-safe
 				_active_downloads_mutex.lock()
 				if _active_downloads.has(url):

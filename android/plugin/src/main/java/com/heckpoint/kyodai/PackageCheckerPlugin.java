@@ -448,11 +448,12 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 }
             }
             
+            Uri dataUri = null;
+            
             // Deliver ROM based on romDelivery mode
             if (romDelivery != null && !romDelivery.isEmpty()) {
                 switch (romDelivery) {
                     case "intent_data":
-                        Uri dataUri = null;
                         
                         // Priority: FileProvider URI > Converted Document URI > Original SAF URI
                         if (romContentUri != null) {
@@ -595,8 +596,20 @@ public class PackageCheckerPlugin extends GodotPlugin {
                                     break;
                                     
                                 case "content_uri":
-                                    // FileProvider content:// URI: content://org.godotengine.../external_storage/roms/game.3ds
-                                    value = value.replace("{rom}", romContentUri != null ? romContentUri.toString() : "");
+                                    // Pick the best available content:// URI for extras
+                                    String contentValue = "";
+                                    if (dataUri != null) {
+                                        contentValue = dataUri.toString();
+                                    } else if (useDocumentUri && romSafUri != null) {
+                                        contentValue = convertTreeUriToDocumentUri(romSafUri);
+                                    } else if (useFileUri && romFileUri != null) {
+                                        contentValue = romFileUri;
+                                    } else if (romContentUri != null) {
+                                        contentValue = romContentUri.toString();
+                                    } else if (romSafUri != null) {
+                                        contentValue = romSafUri;
+                                    }
+                                    value = value.replace("{rom}", contentValue);
                                     break;
                                     
                                 case "file_uri":
@@ -976,7 +989,29 @@ public class PackageCheckerPlugin extends GodotPlugin {
         String treeId = afterTree.substring(0, firstSlash);
         String path = afterTree.substring(firstSlash + 1);
         
-        // Build document URI with encoded path
+        // Try to resolve a real document URI via DocumentFile so we obtain a URI
+        // that the system recognizes as legitimately accessible under our tree grant.
+        try {
+            Uri treeBaseUri = Uri.parse(base + "/tree/" + treeId);
+            DocumentFile treeDir = DocumentFile.fromTreeUri(activity, treeBaseUri);
+            if (treeDir != null) {
+                DocumentFile target = treeDir;
+                for (String segment : path.split("/")) {
+                    if (segment.isEmpty()) continue;
+                    target = target.findFile(segment);
+                    if (target == null) {
+                        break;
+                    }
+                }
+                if (target != null) {
+                    return target.getUri().toString();
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "DocumentFile lookup failed, falling back to synthetic URI: " + e.getMessage());
+        }
+        
+        // Fallback: build document URI with encoded path
         return base + "/document/" + treeId + "%2F" + path.replace("/", "%2F");
     }
     
@@ -1895,6 +1930,61 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    /**
+     * Reads a file from SAF storage and returns its contents as a byte array.
+     * Returns null if the file cannot be read.
+     */
+    @UsedByGodot
+    public byte[] readSafFileBytes(String safUri) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "readSafFileBytes() called");
+        Log.d(TAG, "SAF URI: " + safUri);
+
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return null;
+        }
+
+        try {
+            DocumentFile sourceFile = navigateToSafFile(safUri);
+            if (sourceFile == null) {
+                Log.e(TAG, "ERROR: Could not find SAF file");
+                return null;
+            }
+
+            Uri fileUri = sourceFile.getUri();
+            Log.d(TAG, "File URI: " + fileUri.toString());
+            java.io.InputStream inputStream = activity.getContentResolver().openInputStream(fileUri);
+
+            if (inputStream == null) {
+                Log.e(TAG, "ERROR: Could not open SAF input stream");
+                return null;
+            }
+
+            java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            long totalBytes = 0;
+
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+                totalBytes += bytesRead;
+            }
+
+            inputStream.close();
+            outputStream.close();
+
+            Log.d(TAG, "SUCCESS: Read " + totalBytes + " bytes");
+            Log.d(TAG, "==========================================");
+            return outputStream.toByteArray();
+
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR reading SAF file bytes: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return null;
+        }
+    }
+
     /**
      * Copies a file from SAF storage to a local file path.
      * Used to read SAF files by copying them to temp location first.

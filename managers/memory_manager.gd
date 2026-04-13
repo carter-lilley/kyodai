@@ -32,6 +32,11 @@ var _texture_cache_order: Array[String] = []
 var _texture_cache_mutex: Mutex
 const MAX_TEXTURE_CACHE_SIZE: int = 400
 
+static func get_max_texture_cache_size() -> int:
+	if PlatformManager.is_android():
+		return 150
+	return MAX_TEXTURE_CACHE_SIZE
+
 var _lp_callbacks: Array = []
 var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
@@ -439,8 +444,9 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 		_instance._texture_cache_mutex.unlock()
 		return
 	
-	if _instance._texture_cache.size() >= MAX_TEXTURE_CACHE_SIZE:
-		var to_evict = _instance._texture_cache.size() - MAX_TEXTURE_CACHE_SIZE + 1
+	var cache_limit = get_max_texture_cache_size()
+	if _instance._texture_cache.size() >= cache_limit:
+		var to_evict = _instance._texture_cache.size() - cache_limit + 1
 		for i in range(to_evict):
 			if _instance._texture_cache_order.size() > 0:
 				var oldest_key = _instance._texture_cache_order.pop_front()

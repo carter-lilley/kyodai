@@ -342,7 +342,8 @@
 		  "package": "io.github.lime3ds.android",
 		  "class": "org.citra.citra_emu.activities.EmulationActivity",
 		  "rom_delivery": "intent_data",
-		  "grant_uri_permission": true
+		  "grant_uri_permission": true,
+		  "use_document_uri": true
 		}
 	  }
 	}
@@ -441,7 +442,8 @@
 		"android": {
 		  "action": "android.intent.action.VIEW",
 		  "package": "info.cemu.cemu",
-		  "rom_delivery": "intent_data"
+		  "rom_delivery": "intent_data",
+		  "use_document_uri": true
 		}
 	  }
 	}
@@ -538,6 +540,7 @@
 		  "package": "org.dolphinemu.dolphinemu",
 		  "class": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
 		  "rom_delivery": "extra",
+		  "use_document_uri": true,
 		  "extras": [
 			{
 			  "key": "AutoStartFile",
@@ -1289,6 +1292,7 @@
 		  "package": "me.magnum.melonds.nightly",
 		  "class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
 		  "rom_delivery": "intent_data",
+		  "use_document_uri": true,
 		  "extras": [
 			{
 			  "key": "uri",
@@ -1544,7 +1548,8 @@
 		"android": {
 		  "action": "android.intent.action.VIEW",
 		  "package": "org.ppsspp.ppsspp",
-		  "rom_delivery": "intent_data"
+		  "rom_delivery": "intent_data",
+		  "use_document_uri": true
 		}
 	  }
 	}
