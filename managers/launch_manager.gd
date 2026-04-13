@@ -12,9 +12,35 @@ func get_emulators_directory() -> String:
 			return setting.value
 	return "user://emulators/"
 
+## Returns the effective Vita3K data directory on Android.
+## Uses user setting if set, otherwise falls back to Vita3K's default path.
+func _get_vita3k_android_data_path() -> String:
+	if PlatformManager.is_android():
+		var setting = SettingsManager.get_setting("vita3k_data_folder_android")
+		if setting and setting.value != "" and setting.value != "user://roms/":
+			return setting.value.rstrip("/")
+	return "/storage/emulated/0/Android/data/org.vita3k.emulator/files/vita"
+
+## Converts a SAF content:// URI to a real filesystem path when possible.
+## Falls back to the original path if conversion fails.
+func _resolve_saf_to_real_path(path: String) -> String:
+	if PlatformManager.is_android() and path.begins_with("content://"):
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin and plugin.has_method("getRealPathFromSafUri"):
+			var real_path = plugin.getRealPathFromSafUri(path)
+			if real_path != "":
+				return real_path
+	return path
+
 ## Gets the full path to an emulator's directory
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
+	# Vita3K on Android uses its own external storage path, not the emulators folder
+	if emulator_id.begins_with("vita3k") and PlatformManager.is_android():
+		var vita_path = _get_vita3k_android_data_path()
+		if vita_path != "":
+			return vita_path + "/"
+	
 	var base_dir = get_emulators_directory()
 	
 	# Ensure proper path separator
@@ -2590,63 +2616,45 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 
 ## Extracts TitleID from Vita game ZIP by reading root folder name
 func _extract_vita_title_id(zip_path: String) -> String:
-	var actual_zip_path = zip_path
-	var use_buffer = false
-	var zip_buffer: PackedByteArray = PackedByteArray()
-	
-	# On Android with SAF, content:// URIs can't be read directly by ZIPReader
-	# due to Scoped Storage. Try reading the file bytes via SAF first.
+	# On Android with SAF, use the plugin to extract TitleID directly via ContentResolver.
+	# This avoids copying the ZIP and works around Scoped Storage restrictions.
 	if PlatformManager.is_android() and zip_path.begins_with("content://"):
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin == null:
 			push_error("[LaunchManager] PackageChecker plugin not available for SAF URI conversion")
 			return ""
 		
-		# Try the new SAF byte reader first (works with SD cards)
-		if plugin.has_method("readSafFileBytes"):
-			print("[LaunchManager] Vita3K: Reading ZIP bytes via SAF...")
-			zip_buffer = plugin.readSafFileBytes(zip_path)
-			if zip_buffer.size() > 0:
-				use_buffer = true
-				print("[LaunchManager] Vita3K: Read " + str(zip_buffer.size()) + " bytes from SAF")
-			else:
-				push_error("[LaunchManager] Vita3K: readSafFileBytes returned empty for: " + zip_path)
-				return ""
+		print("[LaunchManager] Vita3K: Extracting TitleID from SAF ZIP via plugin...")
+		var title_id = plugin.extractVitaTitleIdFromSafZip(zip_path)
+		if title_id != "":
+			print("[LaunchManager] Vita3K: Plugin returned TitleID: " + title_id)
+			return title_id
 		else:
-			# Fallback to real path conversion (often fails on SD cards with Scoped Storage)
-			var real_path = plugin.getRealPathFromSafUri(zip_path)
-			if real_path == "":
-				push_error("[LaunchManager] Cannot convert SAF URI to real path: " + zip_path)
-				return ""
-			actual_zip_path = real_path
+			push_error("[LaunchManager] Vita3K: Plugin failed to extract TitleID from: " + zip_path)
+			return ""
 	
-	if not use_buffer and not FileAccess.file_exists(actual_zip_path):
-		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + actual_zip_path)
+	# Desktop fallback: open ZIP directly with ZIPReader
+	if not FileAccess.file_exists(zip_path):
+		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + zip_path)
 		return ""
 	
 	var reader = ZIPReader.new()
-	var err
-	if use_buffer:
-		err = reader.open_buffer(zip_buffer)
-	else:
-		err = reader.open(actual_zip_path)
-	
+	var err = reader.open(zip_path)
 	if err != OK:
-		push_error("[LaunchManager] Failed to open ZIP for TitleID extraction: " + actual_zip_path)
+		push_error("[LaunchManager] Failed to open ZIP for TitleID extraction: " + zip_path)
 		return ""
 	
 	var files = reader.get_files()
 	reader.close()
 	
 	if files.is_empty():
-		push_error("[LaunchManager] ZIP is empty: " + actual_zip_path)
+		push_error("[LaunchManager] ZIP is empty: " + zip_path)
 		return ""
 	
-	# Get root folder from first file path
 	var first_file = files[0]
 	var parts = first_file.split("/")
 	if parts.is_empty():
-		push_error("[LaunchManager] Invalid ZIP structure: " + actual_zip_path)
+		push_error("[LaunchManager] Invalid ZIP structure: " + zip_path)
 		return ""
 	
 	return parts[0]
@@ -2663,8 +2671,9 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var ux0_app_path: String
 	
 	if PlatformManager.is_android():
-		# Android: Vita3K stores games in external storage
-		emulator_dir = "/storage/emulated/0/Vita3K"
+		# Android: Vita3K stores games in its external storage path (configurable in settings)
+		# Path may be SAF URI (content://) or real path - FileSystemManager handles both
+		emulator_dir = _get_vita3k_android_data_path()
 		ux0_app_path = emulator_dir + "/ux0/app"
 	else:
 		# Desktop: Get path from emulator installation
@@ -2703,7 +2712,8 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Platform-specific Vita3K app path
 	var vita_app_path: String
 	if PlatformManager.is_android():
-		vita_app_path = "/storage/emulated/0/Vita3K/ux0/app/" + title_id
+		# Path may be SAF URI or real path - FileSystemManager handles both
+		vita_app_path = _get_vita3k_android_data_path() + "/ux0/app/" + title_id
 	else:
 		# Desktop - use emulator directory (already obtained above)
 		vita_app_path = emulator_dir + "/ux0/app/" + title_id
@@ -2732,50 +2742,25 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 
 ## Checks whether the given Vita3K app path contains actual game files
 func _vita_app_has_game_files(vita_app_path: String) -> bool:
-	var dir = DirAccess.open(vita_app_path)
-	if dir == null:
-		return false
-	
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	var has_files = false
-	while file_name != "":
-		if file_name != "." and file_name != "..":
-			has_files = true
-			break
-		file_name = dir.get_next()
-	dir.list_dir_end()
-	
-	return has_files
+	# Use FileSystemManager which handles both regular paths and SAF URIs
+	var files = FileSystemManager.list_dir(vita_app_path)
+	return files.size() > 0
 
 ## Extracts Vita game ZIP with progress tracking
 func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -> bool:
 	print("[LaunchManager] Vita3K: _extract_vita_zip called with zip_path=" + zip_path + ", extract_to=" + extract_to)
 	
-	# Create parent directories if needed
+	# Create parent directories if needed using FileSystemManager (handles both regular paths and SAF URIs)
 	var parent_dir = extract_to.get_base_dir()
 	print("[LaunchManager] Vita3K: Creating parent directory: " + parent_dir)
-	var err = DirAccess.make_dir_recursive_absolute(parent_dir)
-	if err != OK and err != ERR_ALREADY_EXISTS:
+	if not FileSystemManager.make_dir_recursive(parent_dir):
 		push_error("[LaunchManager] Failed to create Vita3K app directory: " + parent_dir)
 		return false
 	
-	# On Android, DownloadManager.queue_extraction may need a real file path instead of a SAF URI.
-	# Convert the SAF tree URI to a real path if necessary.
-	var actual_zip_path = zip_path
-	if PlatformManager.is_android() and zip_path.begins_with("content://"):
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin and plugin.has_method("getRealPathFromSafUri"):
-			actual_zip_path = plugin.getRealPathFromSafUri(zip_path)
-			print("[LaunchManager] Vita3K: Converted SAF URI to real path: " + actual_zip_path)
-			if actual_zip_path == "":
-				push_error("[LaunchManager] Vita3K: Failed to convert SAF URI to real path: " + zip_path)
-				return false
-	
-	# Use DownloadManager's extraction for progress tracking
-	# Pass false to preserve the ZIP file (don't delete after extraction)
+	# Use DownloadManager's extraction for progress tracking.
+	# DownloadManager handles both regular paths and SAF URIs on a background thread.
 	print("[LaunchManager] Vita3K: Queueing extraction via DownloadManager")
-	var item_id = DownloadManager.queue_extraction(actual_zip_path, extract_to, "vita_game", title_id, false)
+	var item_id = DownloadManager.queue_extraction(zip_path, extract_to, "vita_game", title_id, false)
 	if item_id == "":
 		push_error("[LaunchManager] Failed to queue Vita game extraction")
 		return false

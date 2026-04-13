@@ -1972,25 +1972,29 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		print("[DownloadManager] Extraction worker started")
 		print("[DownloadManager] archive_path: " + archive_path)
-		print("[DownloadManager] actual_archive_path: " + actual_archive_path)
+		print("[DownloadManager] actual_extract_dir: " + actual_extract_dir)
 		print("[DownloadManager] is_saf_dest: " + str(is_saf_dest))
 		
-		# On Android with SAF, content:// URIs can't be read directly by ZIPReader
-		# Convert to real file path using the PackageChecker plugin
+		# On Android with SAF source URI, use the plugin to extract directly.
+		# This avoids Scoped Storage restrictions that prevent direct file access to SD cards.
 		if PlatformManager.is_android() and archive_path.begins_with("content://"):
 			var plugin = Engine.get_singleton("PackageChecker")
 			if plugin == null:
-				push_error("[DownloadManager] PackageChecker plugin not available for SAF URI conversion")
+				push_error("[DownloadManager] PackageChecker plugin not available for SAF extraction")
 				return false
 			
-			var real_path = plugin.getRealPathFromSafUri(archive_path)
-			if real_path == "":
-				push_error("[DownloadManager] Cannot convert SAF URI to real path: " + archive_path)
+			# Extract directly to the final destination (SAF or local), bypassing temp dir
+			var plugin_dest = extract_dir if is_saf_dest else actual_extract_dir
+			print("[DownloadManager] Using plugin extractSafZipToLocal for SAF URI to: " + plugin_dest)
+			var success = plugin.extractSafZipToLocal(archive_path, plugin_dest)
+			if success:
+				print("[DownloadManager] Plugin extraction successful")
+				return true
+			else:
+				push_error("[DownloadManager] Plugin extraction failed for: " + archive_path)
 				return false
-			
-			actual_archive_path = real_path
 		
-		# Debug: Check if file exists before opening
+		# Desktop/non-SAF fallback: use ZIPReader directly
 		print("[DownloadManager] Attempting to open ZIP at: " + actual_archive_path)
 		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(actual_archive_path)))
 		
@@ -2007,7 +2011,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		var err = reader.open(actual_archive_path)
 		
 		if err != OK:
-			push_error("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ", actual: " + actual_archive_path + ")")
+			push_error("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")
 			return false
 		
 		var files = reader.get_files()
@@ -2033,7 +2037,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		reader.close()
 		
-		# If destination is SAF, copy extracted files there
+		# If destination is SAF, copy extracted temp files there
 		if is_saf_dest:
 			if not FileSystemManager.copy_dir_to_saf(temp_extract_dir, extract_dir):
 				push_error("[DownloadManager] Failed to copy extracted files to SAF destination: " + extract_dir)

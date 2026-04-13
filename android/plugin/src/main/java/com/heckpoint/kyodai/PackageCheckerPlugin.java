@@ -1931,6 +1931,268 @@ public class PackageCheckerPlugin extends GodotPlugin {
     }
     
     /**
+     * Extracts a ZIP file from SAF storage to a local or SAF directory.
+     * Uses ContentResolver to read the ZIP and writes each entry to the destination.
+     * Supports both real filesystem paths and SAF content:// URIs as destination.
+     * Returns true if successful, false otherwise.
+     */
+    @UsedByGodot
+    public boolean extractSafZipToLocal(String safUri, String destDir) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "extractSafZipToLocal() called");
+        Log.d(TAG, "SAF URI: " + safUri);
+        Log.d(TAG, "Dest dir: " + destDir);
+
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+
+        try {
+            DocumentFile sourceFile = navigateToSafFile(safUri);
+            if (sourceFile == null) {
+                Log.e(TAG, "ERROR: Could not find SAF file");
+                return false;
+            }
+
+            Uri fileUri = sourceFile.getUri();
+            Log.d(TAG, "File URI: " + fileUri.toString());
+            java.io.InputStream inputStream = activity.getContentResolver().openInputStream(fileUri);
+
+            if (inputStream == null) {
+                Log.e(TAG, "ERROR: Could not open SAF input stream");
+                return false;
+            }
+
+            boolean destIsSaf = destDir != null && destDir.startsWith("content://");
+            DocumentFile destBaseDir = null;
+            String destRelativePath = "";
+            if (destIsSaf) {
+                // Parse the destination to find the actual tree root and relative path.
+                // DocumentFile.fromTreeUri only works with the exact tree root URI.
+                int treePos = destDir.indexOf("/tree/");
+                if (treePos == -1) {
+                    Log.e(TAG, "ERROR: Invalid SAF destination URI");
+                    inputStream.close();
+                    return false;
+                }
+                String afterTree = destDir.substring(treePos + 6);
+                int firstSlash = afterTree.indexOf("/");
+                String treeId;
+                if (firstSlash == -1) {
+                    treeId = afterTree;
+                    destRelativePath = "";
+                } else {
+                    treeId = afterTree.substring(0, firstSlash);
+                    destRelativePath = afterTree.substring(firstSlash + 1);
+                }
+                String treeUriStr = destDir.substring(0, treePos + 6) + treeId;
+                Log.d(TAG, "SAF tree root: " + treeUriStr);
+                Log.d(TAG, "SAF relative path: " + destRelativePath);
+                
+                DocumentFile destRoot = DocumentFile.fromTreeUri(activity, Uri.parse(treeUriStr));
+                if (destRoot == null) {
+                    Log.e(TAG, "ERROR: Could not open destination SAF tree");
+                    inputStream.close();
+                    return false;
+                }
+                
+                if (destRelativePath.isEmpty()) {
+                    destBaseDir = destRoot;
+                } else {
+                    destBaseDir = createSafDirectoryFromPath(destRoot, destRelativePath);
+                    if (destBaseDir == null) {
+                        Log.e(TAG, "ERROR: Could not create destination subdirectory: " + destRelativePath);
+                        inputStream.close();
+                        return false;
+                    }
+                }
+            }
+
+            java.util.zip.ZipInputStream zipStream = new java.util.zip.ZipInputStream(inputStream);
+            java.util.zip.ZipEntry entry;
+            long totalBytes = 0;
+            int fileCount = 0;
+
+            while ((entry = zipStream.getNextEntry()) != null) {
+                String entryName = entry.getName();
+
+                if (entry.isDirectory()) {
+                    if (destIsSaf) {
+                        createSafDirectoryFromPath(destBaseDir, entryName);
+                    } else {
+                        new File(destDir, entryName).mkdirs();
+                    }
+                    continue;
+                }
+
+                if (destIsSaf) {
+                    // Navigate/create parent directories under the SAF destination base
+                    String parentPath = "";
+                    int lastSlash = entryName.lastIndexOf('/');
+                    if (lastSlash > 0) {
+                        parentPath = entryName.substring(0, lastSlash);
+                    }
+                    String fileName = lastSlash >= 0 ? entryName.substring(lastSlash + 1) : entryName;
+
+                    DocumentFile parentDir = parentPath.isEmpty() ? destBaseDir : createSafDirectoryFromPath(destBaseDir, parentPath);
+                    if (parentDir == null) {
+                        Log.e(TAG, "ERROR: Could not create SAF parent directory for: " + entryName);
+                        zipStream.closeEntry();
+                        continue;
+                    }
+
+                    // Delete existing file if present
+                    DocumentFile existingFile = parentDir.findFile(fileName);
+                    if (existingFile != null) {
+                        existingFile.delete();
+                    }
+
+                    String mimeType = "application/octet-stream";
+                    DocumentFile newFile = parentDir.createFile(mimeType, fileName);
+                    if (newFile == null) {
+                        Log.e(TAG, "ERROR: Could not create SAF file: " + fileName);
+                        zipStream.closeEntry();
+                        continue;
+                    }
+
+                    java.io.OutputStream fos = activity.getContentResolver().openOutputStream(newFile.getUri());
+                    if (fos == null) {
+                        Log.e(TAG, "ERROR: Could not open output stream for SAF file: " + fileName);
+                        zipStream.closeEntry();
+                        continue;
+                    }
+
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = zipStream.read(buffer)) > 0) {
+                        fos.write(buffer, 0, len);
+                        totalBytes += len;
+                    }
+                    fos.close();
+                } else {
+                    File outFile = new File(destDir, entryName);
+                    outFile.getParentFile().mkdirs();
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(outFile);
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = zipStream.read(buffer)) > 0) {
+                        fos.write(buffer, 0, len);
+                        totalBytes += len;
+                    }
+                    fos.close();
+                }
+
+                fileCount++;
+                zipStream.closeEntry();
+            }
+
+            zipStream.close();
+            inputStream.close();
+
+            Log.d(TAG, "SUCCESS: Extracted " + fileCount + " files (" + totalBytes + " bytes)");
+            Log.d(TAG, "==========================================");
+            return true;
+
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR extracting SAF ZIP: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * Creates a directory hierarchy under a SAF DocumentFile tree root.
+     * Returns the final directory DocumentFile, or null on failure.
+     */
+    private DocumentFile createSafDirectoryFromPath(DocumentFile root, String relativePath) {
+        if (relativePath == null || relativePath.isEmpty()) {
+            return root;
+        }
+
+        DocumentFile current = root;
+        String[] parts = relativePath.split("/");
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            DocumentFile next = current.findFile(part);
+            if (next == null || !next.isDirectory()) {
+                if (next != null) {
+                    next.delete();
+                }
+                next = current.createDirectory(part);
+            }
+            if (next == null) {
+                Log.e(TAG, "ERROR: Failed to create SAF directory: " + part + " under " + current.getUri());
+                return null;
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    /**
+     * Extracts the root folder name (TitleID) from a Vita game ZIP stored in SAF.
+     * Uses ContentResolver to read the ZIP without needing direct file access.
+     * Returns empty string if extraction fails.
+     */
+    @UsedByGodot
+    public String extractVitaTitleIdFromSafZip(String safUri) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "extractVitaTitleIdFromSafZip() called");
+        Log.d(TAG, "SAF URI: " + safUri);
+
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return "";
+        }
+
+        try {
+            DocumentFile sourceFile = navigateToSafFile(safUri);
+            if (sourceFile == null) {
+                Log.e(TAG, "ERROR: Could not find SAF file");
+                return "";
+            }
+
+            Uri fileUri = sourceFile.getUri();
+            Log.d(TAG, "File URI: " + fileUri.toString());
+            java.io.InputStream inputStream = activity.getContentResolver().openInputStream(fileUri);
+
+            if (inputStream == null) {
+                Log.e(TAG, "ERROR: Could not open SAF input stream");
+                return "";
+            }
+
+            java.util.zip.ZipInputStream zipStream = new java.util.zip.ZipInputStream(inputStream);
+            java.util.zip.ZipEntry entry = zipStream.getNextEntry();
+            String titleId = "";
+
+            if (entry != null) {
+                String name = entry.getName();
+                Log.d(TAG, "First ZIP entry: " + name);
+                int slashPos = name.indexOf('/');
+                if (slashPos != -1) {
+                    titleId = name.substring(0, slashPos);
+                } else {
+                    titleId = name;
+                }
+            }
+
+            zipStream.close();
+            inputStream.close();
+
+            Log.d(TAG, "SUCCESS: Extracted TitleID: " + titleId);
+            Log.d(TAG, "==========================================");
+            return titleId;
+
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR extracting Vita TitleID: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return "";
+        }
+    }
+
+    /**
      * Reads a file from SAF storage and returns its contents as a byte array.
      * Returns null if the file cannot be read.
      */

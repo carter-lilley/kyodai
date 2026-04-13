@@ -220,14 +220,9 @@ func _focus_random_card() -> void:
 	# Generate random index within current filtered set
 	var random_index = randi() % _total_games
 	
-	# Create focus callback that will fire at 80% of scroll duration
-	# This feels snappier than waiting for the full ease-out to complete
-	var focus_callback = func():
-		_focus_card_at_index(random_index)
-	
-	# Scroll to the random index (auto-centers) - 5x faster animation
-	# Focus callback fires at 70% for snappier feel while maintaining smooth ease-out
-	games_grid.scroll_to_index(random_index, true, 0.2, focus_callback)
+	# Jump directly to the random index without scrolling
+	games_grid.scroll_to_index(random_index, false)
+	_focus_card_at_index(random_index)
 
 func _focus_card_at_index(index: int) -> void:
 	"""Focus the game card at the specified index."""

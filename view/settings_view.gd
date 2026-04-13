@@ -40,6 +40,11 @@ func _build_settings_view():
 	# Create a tab for each subgroup
 	for subgroup_name in subgroups.keys():
 		var settings_vars = subgroups[subgroup_name]
+		
+		# Filter out Android-only settings on non-Android platforms
+		if subgroup_name == "Storage" and not PlatformManager.is_android():
+			settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Vita3K Data Folder")
+		
 		var tab = _create_settings_tab(subgroup_name, settings_vars)
 		_settings_container.add_child(tab)
 		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, subgroup_name)
