@@ -1142,9 +1142,13 @@ func play_enter_animation() -> void:
 	_enter_tween_alpha.set_trans(Tween.TRANS_CIRC)
 	
 	# Tween alpha on base effect using the stack
-	var base_effect = _normal_stack.get_effect("base") as BaseCardEffect
-	if base_effect:
-		_enter_tween_alpha.parallel().tween_method(func(t): base_effect.set_alpha(t), 0.0, 1.0, ENTER_TWEEN_DURATION)
+	# Capture self (not the node) so the lambda survives card recycles
+	_enter_tween_alpha.parallel().tween_method(func(t):
+		if _normal_stack:
+			var be = _normal_stack.get_effect("base") as BaseCardEffect
+			if is_instance_valid(be):
+				be.set_alpha(t)
+	, 0.0, 1.0, ENTER_TWEEN_DURATION)
 	
 	# Tween opacity on card input (covers UI elements like status icons)
 	if card_input:
@@ -1163,19 +1167,19 @@ func play_enter_animation() -> void:
 
 ## Sets the card's alpha immediately (for initial state before animations)
 func set_card_alpha(alpha: float) -> void:
-	var base_effect = _normal_stack.get_effect("base") as BaseCardEffect
-	if base_effect:
-		base_effect.set_alpha(alpha)
+	if _normal_stack:
+		var base_effect = _normal_stack.get_effect("base") as BaseCardEffect
+		if base_effect:
+			base_effect.set_alpha(alpha)
+	
+		# Set opacity on all normal stack effects
+		for child in _normal_stack.get_children():
+			if child is EffectBase:
+				child.modulate = Color(1, 1, 1, alpha)
 	
 	# Set opacity on card input (covers UI elements like status icons)
 	if card_input:
 		card_input.modulate = Color(1, 1, 1, alpha)
-	
-	# Set opacity on all normal stack effects
-	if _normal_stack:
-		for child in _normal_stack.get_children():
-			if child is EffectBase:
-				child.modulate = Color(1, 1, 1, alpha)
 
 func _on_download_progress(item_id: String, progress: float):
 	if not DownloadManager:
@@ -1228,6 +1232,8 @@ func reset():
 	# Reset visual container scale when card is recycled
 	if visual_container:
 		visual_container.scale = Vector2.ONE
+	# Reset alpha to fully visible so recycled cards don't stay invisible
+	set_card_alpha(1.0)
 	# Hide title label when card is reset
 	if game_title_label:
 		game_title_label.visible = false

@@ -295,13 +295,17 @@ func _animate_transition():
 	tween.chain().tween_callback(_on_animation_complete)
 
 func _on_animation_complete():
-	# Animation is complete, but stay visible until emulator exits
-	# Connect to background_state_exited to know when to hide
-	if LaunchManager:
-		if not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-			LaunchManager.background_state_exited.connect(_on_background_state_exited)
+	# On Android, hide immediately since we can't track process exit (uses intents)
+	# On desktop, wait for background_state_exited signal when process polling detects exit
+	if PlatformManager.is_android():
+		visible = false
+	else:
+		# Connect to background_state_exited to know when to hide
+		if LaunchManager:
+			if not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+				LaunchManager.background_state_exited.connect(_on_background_state_exited)
 	
-	# Hide the title label but keep the black overlay
+	# Hide the title label but keep the black overlay (desktop only)
 	if _game_title_label:
 		_game_title_label.visible = false
 	

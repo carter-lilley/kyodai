@@ -455,6 +455,12 @@ func _update_inner_layout_children() -> void:
 	_content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
+	# Remove from current parents before reparenting (fixes Android dual-screen mode issue)
+	if _navigation_bar.get_parent():
+		_navigation_bar.get_parent().remove_child(_navigation_bar)
+	if _content_wrapper.get_parent():
+		_content_wrapper.get_parent().remove_child(_content_wrapper)
+	
 	# Add in correct order
 	match _current_bar_position:
 		"top", "left":

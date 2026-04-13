@@ -264,7 +264,17 @@ func _recalculate_layout():
 	if not _flow_container or not _scroll_container:
 		return
 	
+	# Skip if we haven't been allocated a size yet (resized signal will retry)
+	if size.x <= 0 or size.y <= 0:
+		return
+	
 	var current_zoom = _calculate_zoom()
+	
+	# Guard against invalid zoom during rapid changes
+	if current_zoom <= 0:
+		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
+		return
+	
 	var base_dims = _get_base_dimensions()
 	item_width = (base_dims.x * current_zoom) + grid_separation
 	item_height = (base_dims.y * current_zoom) + grid_separation
@@ -430,7 +440,8 @@ func setup(card_scene_resource: PackedScene, total_items: int):
 	# Wait for container sizing before initial load
 	await get_tree().process_frame
 	await get_tree().process_frame
-	_recalculate_layout()
+	if size.x > 0 and size.y > 0:
+		_recalculate_layout()
 	if _active_cards.size() == 0:
 		_initial_load()
 
@@ -1034,6 +1045,11 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 	var visible_count = visible_end - visible_start
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 	
+	# Guard against invalid calculations during rapid zoom changes
+	if total_card_count <= 0 or items_per_line <= 0:
+		push_warning("[VirtualScrollGridContainer] Invalid buffer calculation: total_card_count=%d, items_per_line=%d" % [total_card_count, items_per_line])
+		return
+	
 	var half_buffer = (total_card_count - visible_count) / 2
 	var new_start = max(0, visible_start - half_buffer)
 	var new_end = min(_total_items, new_start + total_card_count)
@@ -1042,6 +1058,13 @@ func _reload_buffer_around_target(visible_start: int, visible_end: int):
 		new_start = max(0, _total_items - total_card_count)
 	
 	new_start = (new_start / items_per_line) * items_per_line
+	
+	# Ensure we always have a valid range
+	if new_end <= new_start:
+		push_warning("[VirtualScrollGridContainer] Invalid buffer range: new_start=%d, new_end=%d" % [new_start, new_end])
+		# Fallback to visible range
+		new_start = visible_start
+		new_end = min(_total_items, visible_start + items_per_line)
 	
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)

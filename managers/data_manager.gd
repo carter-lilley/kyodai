@@ -154,6 +154,7 @@ func _remove_cover_based_siblings():
 	)
 
 func _initialize_database():
+	print("[DataManager] _initialize_database() starting...")
 	var dir = DirAccess.open("user://")
 	if not dir.dir_exists("database"):
 		dir.make_dir("database")
@@ -165,7 +166,10 @@ func _initialize_database():
 	if _db.open_db():
 		_create_tables()
 		_is_db_ready = true
+		print("[DataManager] Database ready - emitting signal")
 		database_ready.emit()
+	else:
+		print("[DataManager] ERROR: Failed to open database")
 
 func _create_tables():
 	_db.query("""
@@ -2070,6 +2074,14 @@ func _get_enabled_platform_slugs() -> Array[String]:
 	var enabled = _get_enabled_platforms()
 	for platform in enabled:
 		slugs.append(platform.slug)
+	
+	# Android/fallback: if no platforms are enabled in settings but we have games in the DB,
+	# return all distinct platform slugs from the database so home view isn't empty.
+	if slugs.size() == 0 and _is_db_ready:
+		var db_slugs = _get_db_platform_slugs()
+		if db_slugs.size() > 0:
+			print("[DataManager] enabled_platforms is empty; falling back to %d platform(s) found in database" % db_slugs.size())
+			return db_slugs
 	return slugs
 
 func update_game_last_played(romm_id: int, timestamp: String) -> bool:
@@ -2760,6 +2772,7 @@ func _scan_saf_directory(tree_uri: String, results: Array[String]) -> void:
 
 func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
 	"""Update database entries for matched games."""
+	print("[DEBUG] _update_matched_games_in_db called with %d matched games" % matched_games.size())
 	MemoryManager.queue_db_task(
 		func():
 			var updated_count: int = 0
@@ -2793,6 +2806,7 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 
 			return updated_count,
 		func(updated_count: int):
+			print("[DEBUG] Scan complete - updated %d games in DB" % updated_count)
 			scan_for_downloaded_games_completed.emit(updated_count)
 			if callback.is_valid():
 				callback.call(updated_count)

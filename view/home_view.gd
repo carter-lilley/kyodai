@@ -11,6 +11,7 @@ var _db_games_count: int = 0
 var _gamenative_games_count: int = 0
 var _is_loading: bool = false
 var _is_initial_launch: bool = true
+var _is_scanning: bool = false
 
 # Intro animation tracking
 var _intro_animations_complete: bool = false
@@ -61,6 +62,13 @@ func _ready():
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
+	print("[DEBUG] Connected to database_ready signal")
+	
+	# If database is already ready, trigger the callback manually (happens when DataManager loads first)
+	if DataManager.is_database_ready():
+		print("[DEBUG] Database already ready, calling _on_database_ready manually")
+		_on_database_ready()
+	
 	DataManager.game_updated.connect(_on_game_updated)
 	
 	# Connect to GameNativeManager signal to refresh when games are added/removed
@@ -80,8 +88,7 @@ func _ready():
 	# Connect to focus changes for hero image
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 	
-	# Initial load (will trigger scan if no games found)
-	_load_total_count()
+	# Initial load is handled by _on_database_ready() when the DB is ready
 
 func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
 	"""Get total downloaded game count for virtual scrolling setup.
@@ -115,11 +122,16 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			
 			games_grid.set_total_count(_total_games, preserve_cache)
 			
-			if _total_games == 0:
+			print("[DEBUG] _load_total_count: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+			
+			if _db_games_count == 0:
 				_update_status("No downloaded games found")
-				# Trigger scan if no games found (may have been wiped from DB but files exist)
+				# Trigger scan if no DB games found (may have been wiped from DB but files exist)
 				if trigger_scan_if_empty:
+					print("[DEBUG] Triggering scan because _db_games_count == 0")
 					_scan_for_downloaded_games()
+				else:
+					print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
 			else:
 				_update_status("Showing 0-0 of %d games" % _total_games)
 			_is_loading = false
@@ -177,8 +189,15 @@ func reconnect_viewport() -> void:
 
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
+	if _is_scanning:
+		print("[DEBUG] _scan_for_downloaded_games skipped - scan already in progress")
+		return
+	_is_scanning = true
+	print("[DEBUG] _scan_for_downloaded_games called")
 	_update_status("Scanning for downloaded games...")
 	DataManager.scan_for_downloaded_games(func(found_count: int):
+		_is_scanning = false
+		print("[DEBUG] Scan callback called with found_count: %d" % found_count)
 		if found_count > 0:
 			# Force complete grid refresh (don't preserve cache - we need fresh data from DB)
 			_load_total_count(false, false)
@@ -188,6 +207,7 @@ func _scan_for_downloaded_games():
 
 func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
+	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, Notification.Type.SUCCESS)
 
@@ -246,8 +266,8 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			
 			games_grid.on_items_loaded(games, response_offset, is_preload)
 			
-			# Mark initial launch complete after first batch loads
-			if response_offset == 0 and _is_initial_launch:
+			# Mark initial launch complete after first batch with actual games loads
+			if response_offset == 0 and _is_initial_launch and games.size() > 0:
 				_is_initial_launch = false
 	)
 
@@ -354,8 +374,9 @@ func _on_card_created(card: Control, index: int):
 			await get_tree().create_timer(delay).timeout
 			if is_instance_valid(card):
 				card.play_enter_animation()
-				# Connect to animation completion
-				card.enter_animation_completed.connect(_on_card_animation_complete)
+				# Connect to animation completion (guard against double-connect)
+				if not card.enter_animation_completed.is_connected(_on_card_animation_complete):
+					card.enter_animation_completed.connect(_on_card_animation_complete)
 
 func _on_card_animation_complete():
 	"""Called when a card's enter animation completes."""
@@ -391,6 +412,7 @@ func _on_download_completed(item_id: String, success: bool, message: String):
 		rebuild_grid()
 
 func _on_database_ready():
+	print("[DEBUG] _on_database_ready called")
 	_load_total_count()
 
 func _on_game_updated(game: GameResource):
