@@ -58,6 +58,7 @@ const FOCUS_TWEEN_DURATION: float = 0.12
 const FOCUS_EFFECT_FADE_DURATION: float = 0.15  # Duration for focus effects fade in/out
 var _focus_tween: Tween = null
 var _focus_effect_tweens: Array[Tween] = []  # Track tweens created in _show_focus_effects
+var focus_overlap: bool = true
 
 func _get_focus_scale() -> float:
 	if SettingsManager:
@@ -318,11 +319,26 @@ func _link_overlapping_effects() -> void:
 
 func _on_zoom_changed(_new_zoom: float) -> void:
 	var card_size = _card_state.card_size
-	custom_minimum_size = card_size
-	size = card_size
-	pivot_offset = card_size / 2
-	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if _is_focused:
+		var focus_scale = _get_focus_scale()
+		if focus_overlap:
+			custom_minimum_size = card_size
+			size = card_size
+			visual_container.pivot_offset = _get_grid_pivot_offset()
+		else:
+			var focused_size = card_size * focus_scale
+			custom_minimum_size = focused_size
+			size = focused_size
+			visual_container.size = card_size
+			var pivot = _get_grid_pivot_offset()
+			visual_container.pivot_offset = pivot
+			visual_container.position = pivot * (focus_scale - 1.0)
+	else:
+		custom_minimum_size = card_size
+		size = card_size
+		pivot_offset = card_size / 2
+		size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
 	# Update title label font size based on zoom
 	if game_title_label:
@@ -990,17 +1006,42 @@ func _on_focus_entered() -> void:
 	else:
 		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
 	
-	# Scale up visual container when focused (not self, to avoid layout issues)
-	# Set pivot based on grid position to prevent clipping at edges
-	visual_container.pivot_offset = _get_grid_pivot_offset()
+	var focus_scale = _get_focus_scale()
+	var card_size = _card_state.card_size
+	var pivot = _get_grid_pivot_offset()
 	z_index = 11
 	
-	if _focus_tween:
-		_focus_tween.kill()
-	_focus_tween = create_tween()
-	_focus_tween.set_trans(Tween.TRANS_BACK)
-	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(visual_container, "scale", Vector2(_get_focus_scale(), _get_focus_scale()), FOCUS_TWEEN_DURATION)
+	if focus_overlap:
+		# Old way: scale visual_container only, allow overlapping
+		visual_container.pivot_offset = pivot
+		
+		if _focus_tween:
+			_focus_tween.kill()
+		_focus_tween = create_tween()
+		_focus_tween.set_trans(Tween.TRANS_BACK)
+		_focus_tween.set_ease(Tween.EASE_OUT)
+		_focus_tween.tween_property(visual_container, "scale", Vector2(focus_scale, focus_scale), FOCUS_TWEEN_DURATION)
+	else:
+		# New way: grow GameCard itself so FlowContainer pushes neighbors away
+		var focused_size = card_size * focus_scale
+		custom_minimum_size = focused_size
+		size = focused_size
+		
+		# Detach visual_container from full-rect anchors so we can position it manually
+		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
+		visual_container.anchor_right = 0.0
+		visual_container.anchor_bottom = 0.0
+		visual_container.size = card_size
+		visual_container.pivot_offset = pivot
+		visual_container.position = Vector2.ZERO
+		
+		if _focus_tween:
+			_focus_tween.kill()
+		_focus_tween = create_tween()
+		_focus_tween.set_trans(Tween.TRANS_BACK)
+		_focus_tween.set_ease(Tween.EASE_OUT)
+		_focus_tween.parallel().tween_property(visual_container, "scale", Vector2(focus_scale, focus_scale), FOCUS_TWEEN_DURATION)
+		_focus_tween.parallel().tween_property(visual_container, "position", pivot * (focus_scale - 1.0), FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects with smooth fade (overlapping effects will tween settings)
 	_show_focus_effects(true)
@@ -1010,16 +1051,40 @@ func _on_focus_exited() -> void:
 	_update_game_title_visibility()
 	
 	z_index = 10
-	# Scale visual container back to normal when unfocused
-	if _focus_tween:
-		_focus_tween.kill()
-	_focus_tween = create_tween()
-	_focus_tween.set_trans(Tween.TRANS_QUAD)
-	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	
+	if focus_overlap:
+		# Old way: just scale visual_container back
+		if _focus_tween:
+			_focus_tween.kill()
+		_focus_tween = create_tween()
+		_focus_tween.set_trans(Tween.TRANS_QUAD)
+		_focus_tween.set_ease(Tween.EASE_OUT)
+		_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	else:
+		# New way: shrink card back and restore anchors
+		var card_size = _card_state.card_size
+		custom_minimum_size = card_size
+		size = card_size
+		
+		if _focus_tween:
+			_focus_tween.kill()
+		_focus_tween = create_tween()
+		_focus_tween.set_trans(Tween.TRANS_QUAD)
+		_focus_tween.set_ease(Tween.EASE_OUT)
+		_focus_tween.parallel().tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+		_focus_tween.parallel().tween_property(visual_container, "position", Vector2.ZERO, FOCUS_TWEEN_DURATION)
+		_focus_tween.finished.connect(_restore_visual_container_anchors, CONNECT_ONE_SHOT)
 	
 	# Hide focus effects with smooth fade (overlapping effects will tween back)
 	_show_focus_effects(false)
+
+func _restore_visual_container_anchors() -> void:
+	var card_size = _card_state.card_size
+	visual_container.anchors_preset = Control.PRESET_FULL_RECT
+	visual_container.anchor_right = 1.0
+	visual_container.anchor_bottom = 1.0
+	visual_container.position = Vector2.ZERO
+	visual_container.pivot_offset = card_size / 2
 
 ## Restores the focus animation after layout changes (e.g., after queue_sort resets transforms)
 ## Called by VirtualScrollGridContainer to re-apply focus scale without triggering full focus_entered logic
@@ -1028,15 +1093,32 @@ func restore_focus_animation() -> void:
 	if _focus_tween:
 		_focus_tween.kill()
 	
-	# Re-apply focus scale animation on visual container (not self)
-	# Set pivot based on grid position to prevent clipping at edges
-	visual_container.pivot_offset = _get_grid_pivot_offset()
+	var focus_scale = _get_focus_scale()
+	var card_size = _card_state.card_size
+	var pivot = _get_grid_pivot_offset()
 	z_index = 11
 	
-	_focus_tween = create_tween()
-	_focus_tween.set_trans(Tween.TRANS_BACK)
-	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(visual_container, "scale", Vector2(_get_focus_scale(), _get_focus_scale()), FOCUS_TWEEN_DURATION)
+	if focus_overlap:
+		custom_minimum_size = card_size
+		size = card_size
+		visual_container.anchors_preset = Control.PRESET_FULL_RECT
+		visual_container.anchor_right = 1.0
+		visual_container.anchor_bottom = 1.0
+		visual_container.position = Vector2.ZERO
+		visual_container.pivot_offset = pivot
+		visual_container.scale = Vector2(focus_scale, focus_scale)
+	else:
+		var focused_size = card_size * focus_scale
+		custom_minimum_size = focused_size
+		size = focused_size
+		
+		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
+		visual_container.anchor_right = 0.0
+		visual_container.anchor_bottom = 0.0
+		visual_container.size = card_size
+		visual_container.pivot_offset = pivot
+		visual_container.position = pivot * (focus_scale - 1.0)
+		visual_container.scale = Vector2(focus_scale, focus_scale)
 	
 	# Show focus effects (overlapping effects will be in their focused state)
 	_show_focus_effects(true)

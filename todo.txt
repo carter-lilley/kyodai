@@ -7,8 +7,6 @@ ui scale
 android download manager and file streaming
 chunk reassembly progress notif
 
-keep zoom in single modes as ratio 
-scale grid to 'largest' card can be in focus scale ratio
 alignment modes in single row
 
 saves
@@ -44,7 +42,6 @@ effect stacks to fill their parent base
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	
 	check: melonds on desktop after bios restructure
   	add: ps3 on android...pkgs ps3 on desktop
 	add: shadps4!

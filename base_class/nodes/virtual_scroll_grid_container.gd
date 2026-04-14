@@ -378,6 +378,16 @@ func _recalculate_layout():
 		for card in _active_cards:
 			if is_instance_valid(card) and card.has_method("set_card_zoom"):
 				card.set_card_zoom(current_zoom)
+	
+	# Propagate focus overlap mode to all active cards
+	var overlap = (force_items_per_line == 0)
+	for card in _active_cards:
+		if is_instance_valid(card) and "focus_overlap" in card:
+			if card.focus_overlap != overlap:
+				card.focus_overlap = overlap
+				if card.has_method("restore_focus_animation"):
+					if card.get("_is_focused") == true:
+						card.restore_focus_animation()
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -558,10 +568,16 @@ func _update_layout():
 	if vertical:
 		var card_width = item_width - grid_separation
 		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * grid_separation
+		# In non-overlapping mode, allow room for one focused card to expand without wrapping
+		if force_items_per_line > 0:
+			row_width += card_width * (focus_scale - 1.0)
 		_flow_container.custom_minimum_size.x = row_width
 	else:
 		var card_height = item_height - grid_separation
 		var col_height = items_per_line * card_height + max(0, items_per_line - 1) * grid_separation
+		# In non-overlapping mode, allow room for one focused card to expand without wrapping
+		if force_items_per_line > 0:
+			col_height += card_height * (focus_scale - 1.0)
 		_flow_container.custom_minimum_size.y = col_height
 
 func _initial_load():
@@ -788,6 +804,8 @@ func _add_card_at_end(virtual_index: int):
 		return
 	
 	card.set_meta("virtual_index", virtual_index)
+	if "focus_overlap" in card:
+		card.focus_overlap = (force_items_per_line == 0)
 	_active_cards.append(card)
 	_flow_container.add_child(card)
 	
@@ -818,6 +836,8 @@ func _add_card_at_start(virtual_index: int):
 		return
 	
 	card.set_meta("virtual_index", virtual_index)
+	if "focus_overlap" in card:
+		card.focus_overlap = (force_items_per_line == 0)
 	_active_cards.insert(0, card)
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
