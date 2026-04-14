@@ -692,10 +692,25 @@ func _do_rebuild(reason: String = "") -> void:
 	rebuild_grid(refresh_effects)
 
 func _update_grid_orientation() -> void:
-	if SettingsManager:
-		var vertical_setting = SettingsManager.get_setting("library_vertical_layout")
-		if vertical_setting:
-			games_grid.vertical = vertical_setting.value
+	if not SettingsManager:
+		return
+	
+	var mode_setting = SettingsManager.get_setting("library_layout_mode")
+	var layout_mode = mode_setting.value if mode_setting else 0
+	
+	match layout_mode:
+		0: # Vertical Grid
+			games_grid.vertical = true
+			games_grid.force_items_per_line = 0
+		1: # Horizontal Grid
+			games_grid.vertical = false
+			games_grid.force_items_per_line = 0
+		2: # Single Row
+			games_grid.vertical = false
+			games_grid.force_items_per_line = 1
+		3: # Single Column
+			games_grid.vertical = true
+			games_grid.force_items_per_line = 1
 
 func _update_grid_margins() -> void:
 	"""Update the grid margins from settings."""

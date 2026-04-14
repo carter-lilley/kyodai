@@ -32,6 +32,15 @@ const BASE_CARD_HEIGHT: float = 270.0
 # Grid separation (padding) - loaded from settings, defaults to 10
 var grid_separation: int = 10
 
+# If > 0, forces _get_items_per_line() to return this value.
+# Used for single-row (vertical=false) and single-column (vertical=true) layouts.
+var force_items_per_line: int = 0:
+	set(value):
+		if force_items_per_line != value:
+			force_items_per_line = value
+			_recalculate_layout()
+			_refresh_buffer()
+
 # Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
@@ -134,6 +143,34 @@ func _calculate_zoom() -> float:
 	var base_area = base_dims.x * base_dims.y
 	var viewport_area = size.x * size.y
 	
+	# In single row/column mode, ratio controls fraction of cross-axis space
+	if force_items_per_line > 0:
+		var margin_left = 0
+		var margin_right = 0
+		var margin_top = 0
+		var margin_bottom = 0
+		var parent = get_parent()
+		while parent != null:
+			if parent is MarginContainer:
+				margin_left = parent.get_theme_constant("margin_left")
+				margin_right = parent.get_theme_constant("margin_right")
+				margin_top = parent.get_theme_constant("margin_top")
+				margin_bottom = parent.get_theme_constant("margin_bottom")
+				break
+			parent = parent.get_parent()
+		var available_width = max(size.x - margin_left - margin_right, base_dims.x * 0.1)
+		var available_height = max(size.y - margin_top - margin_bottom, base_dims.y * 0.1)
+		# Clamp ratio so we don't exceed available space
+		var ratio = clampf(target_card_width_ratio, 0.05, _calculate_max_ratio())
+		if vertical:
+			var target_card_width = (available_width * ratio) - grid_separation
+			target_card_width = max(target_card_width, base_dims.x * 0.1)
+			return target_card_width / base_dims.x
+		else:
+			var target_card_height = (available_height * ratio) - grid_separation
+			target_card_height = max(target_card_height, base_dims.y * 0.1)
+			return target_card_height / base_dims.y
+	
 	# target_card_width_ratio represents "fraction of viewport area occupied by one card"
 	# For example, 0.15 = card takes up ~2.25% of viewport area (0.15^2)
 	var target_card_area = viewport_area * target_card_width_ratio * target_card_width_ratio
@@ -173,6 +210,10 @@ func _calculate_max_ratio() -> float:
 	available_width = max(available_width, base_dims.x * 0.1)
 	available_height = max(available_height, base_dims.y * 0.1)
 	
+	# For single row/column, max zoom means 100% of cross-axis
+	if force_items_per_line > 0:
+		return 1.0
+	
 	# Calculate zoom for one card to fill available space (maintaining aspect ratio)
 	var zoom_width = available_width / base_dims.x
 	var zoom_height = available_height / base_dims.y
@@ -193,6 +234,10 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	"""
 	if size.x <= 0 or size.y <= 0:
 		return desired_ratio
+	
+	# In single row/column mode, don't snap — just clamp to valid range
+	if force_items_per_line > 0:
+		return clampf(desired_ratio, 0.05, _calculate_max_ratio())
 	
 	var base_dims = _get_base_dimensions()
 	
@@ -230,7 +275,9 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	
 	# Determine items per line at desired zoom
 	var desired_items_per_line: int
-	if vertical:
+	if force_items_per_line > 0:
+		desired_items_per_line = force_items_per_line
+	elif vertical:
 		desired_items_per_line = max(1, int(available_width / desired_item_width))
 	else:
 		desired_items_per_line = max(1, int(available_height / desired_item_height))
@@ -307,6 +354,9 @@ func _recalculate_layout():
 func _get_items_per_line() -> int:
 	if not _scroll_container:
 		return 1
+	
+	if force_items_per_line > 0:
+		return force_items_per_line
 	
 	var result: int
 	if vertical:

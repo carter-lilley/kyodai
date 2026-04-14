@@ -6,13 +6,16 @@ no touch to launch on bottom screen
 ui scale
 android download manager and file streaming
 chunk reassembly progress notif
+
+keep zoom in single modes as ratio 
+scale grid to 'largest' card can be in focus scale ratio
+alignment modes in single row
+
 saves
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
-## UI
+## general UI
 	draggable ui elements?
-	game title under/beside card option
-	game title "speech bubble option"
 	color presets (platform/game/custom)
 	'controls/info bar'
 	focus glow
@@ -20,6 +23,9 @@ effect stacks to fill their parent base
 	add letters to library navigation?
 	badge effect placement opts
 	placeholders
+## game titles:
+	game title under/beside card option
+	game title "speech bubble option"
 ## hero
 	postcard-style [[img] name ]
 	card/image/poster style
@@ -38,8 +44,10 @@ effect stacks to fill their parent base
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	check melonds on desktop after bios restructure
-  	add: ps3 on android...pkgs ps3 on desktop...shadps4!
+	
+	check: melonds on desktop after bios restructure
+  	add: ps3 on android...pkgs ps3 on desktop
+	add: shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis

@@ -338,6 +338,10 @@ func _update_zoom_visibility():
 	_h_zoom_container.modulate.a = 1.0 if show_zoom else 0.0
 	_v_zoom_container.modulate.a = 1.0 if show_zoom else 0.0
 
+func set_zoom_visible(visible: bool) -> void:
+	_h_zoom_container.modulate.a = 1.0 if visible else 0.0
+	_v_zoom_container.modulate.a = 1.0 if visible else 0.0
+
 func set_status_text(text: String):
 	if _h_status_label:
 		_h_status_label.text = text

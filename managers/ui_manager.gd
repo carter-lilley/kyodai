@@ -619,6 +619,20 @@ func _update_bar_size() -> void:
 		_navigation_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_navigation_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
+func _update_zoom_range_for_current_view() -> void:
+	if not _navigation_bar:
+		return
+	var current_view_name = _current_view.view_name if _current_view else ""
+	if not current_view_name in ["Home", "Library"]:
+		return
+	if not _views.has(current_view_name):
+		return
+	var view = _views[current_view_name]
+	var grid = view.games_grid if "games_grid" in view else null
+	if grid:
+		var max_zoom = 1.0 if grid.force_items_per_line > 0 else 0.5
+		_navigation_bar.set_zoom_range(0.15, max_zoom, 0.01)
+
 # Keep other existing methods...
 func _apply_navigation_bar_colors() -> void:
 	"""Apply bar background and icon colors from settings."""
@@ -643,20 +657,21 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_current_bar_position = _get_bar_position_string(setting.value)
 		# Update layout orientation (only replaces InnerLayout if needed)
 		_update_layout_orientation()
-	elif setting.property_name == "library_vertical_layout":
+	elif setting.property_name == "library_layout_mode":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):
 			var home_view = _views["Home"]
 			if is_current_view("Home"):
 				home_view.rebuild_grid()
 			else:
-				home_view.mark_for_rebuild("Vertical layout changed")
+				home_view.mark_for_rebuild("Layout mode changed")
 		if _views.has("Library"):
 			var library_view = _views["Library"]
 			if is_current_view("Library"):
 				library_view.rebuild_grid()
 			else:
-				library_view.mark_for_rebuild("Vertical layout changed")
+				library_view.mark_for_rebuild("Layout mode changed")
+		_update_zoom_range_for_current_view()
 	elif setting.property_name == "card_effect_config":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):

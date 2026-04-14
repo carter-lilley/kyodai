@@ -90,12 +90,52 @@ func load_settings() -> void:
 	if FileAccess.file_exists(SAVE_PATH):
 		settings = ResourceLoader.load(SAVE_PATH) as Settings
 	if settings:
+		_refresh_setting_metadata(settings)
 		store_property_names(settings)
 		_decrypt_settings()
 		return
 	# fallback if load failed
 	settings = Settings.new()
 	store_property_names(settings)
+
+## Syncs metadata (options, ranges, names, etc.) from fresh defaults onto loaded settings.
+## Preserves the user's saved values.
+func _refresh_setting_metadata(_settings: Settings) -> void:
+	var defaults = Settings.new()
+	for prop in defaults.get_property_list():
+		var default_var = defaults.get(prop.name)
+		if not (default_var is SettingsVar):
+			continue
+		var saved_var = _settings.get(prop.name)
+		if not (saved_var is SettingsVar):
+			continue
+		
+		# Preserve user's value and property_name, refresh everything else from code
+		var old_value = saved_var.value
+		var old_property_name = saved_var.property_name
+		
+		saved_var.type = default_var.type
+		saved_var.state = default_var.state
+		saved_var.display_name = default_var.display_name
+		saved_var.description = default_var.description
+		saved_var.min_value = default_var.min_value
+		saved_var.max_value = default_var.max_value
+		saved_var.step = default_var.step
+		saved_var.options = default_var.options.duplicate()
+		saved_var.encrypted = default_var.encrypted
+		
+		# Clamp value to new valid range/options if needed
+		if default_var.type == SettingsVar.SettingType.ARRAY:
+			if old_value is int and old_value >= 0 and old_value < default_var.options.size():
+				saved_var.value = old_value
+			else:
+				saved_var.value = default_var.value
+		elif default_var.type == SettingsVar.SettingType.INT or default_var.type == SettingsVar.SettingType.FLOAT:
+			saved_var.value = clamp(old_value, default_var.min_value, default_var.max_value)
+		else:
+			saved_var.value = old_value
+		
+		saved_var.property_name = old_property_name
 
 # Here we're storing an internal reference to the properties the settingsvars are assigned to. 
 func store_property_names(_settings : Settings):
@@ -278,8 +318,6 @@ func apply_preset(preset: ThemePreset) -> bool:
 		# Emit the SETTING VALUE (settings.X.value), not the preset value
 		if settings.get("hero_effect_config") != null:
 			emit_signal("setting_changed", settings.hero_effect_config.value, settings.hero_effect_config)
-		if settings.get("library_vertical_layout") != null:
-			emit_signal("setting_changed", settings.library_vertical_layout.value, settings.library_vertical_layout)
 		if settings.get("library_navigation_bar_position") != null:
 			emit_signal("setting_changed", settings.library_navigation_bar_position.value, settings.library_navigation_bar_position)
 		if settings.get("library_grid_padding") != null:
@@ -298,6 +336,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_background_config.value, settings.library_background_config)
 		if settings.get("library_show_title_mode") != null:
 			emit_signal("setting_changed", settings.library_show_title_mode.value, settings.library_show_title_mode)
+		if settings.get("library_layout_mode") != null:
+			emit_signal("setting_changed", settings.library_layout_mode.value, settings.library_layout_mode)
 		# Emit for card effect config - this triggers grid rebuild
 		if settings.get("card_effect_config") != null:
 			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)

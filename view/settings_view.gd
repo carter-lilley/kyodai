@@ -363,7 +363,7 @@ func _check_preset_match() -> void:
 
 func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	# Compare all relevant fields
-	if a.library_vertical_layout != b.library_vertical_layout:
+	if a.library_layout_mode != b.library_layout_mode:
 		return false
 	if a.library_navigation_bar_position != b.library_navigation_bar_position:
 		return false
@@ -380,6 +380,8 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	if a.library_icon_color != b.library_icon_color:
 		return false
 	if a.library_show_title_mode != b.library_show_title_mode:
+		return false
+	if a.library_layout_mode != b.library_layout_mode:
 		return false
 	
 	# Compare dictionaries using JSON stringify for reliable comparison

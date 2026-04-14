@@ -143,6 +143,8 @@ func _update_navigation_bar_for_view(view_name: String):
 		var games_grid = _get_view_grid(view)
 		if games_grid:
 			navigation_bar.set_zoom_value(games_grid.target_card_width_ratio)
+			var max_zoom = 1.0 if games_grid.force_items_per_line > 0 else 0.5
+			navigation_bar.set_zoom_range(0.15, max_zoom, 0.01)
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""

@@ -896,6 +896,15 @@ func _get_grid_pivot_offset() -> Vector2:
 		var row = virtual_index / items_per_line
 		var total_rows = ceili(float(total_items) / items_per_line)
 		
+		# Single column: center horizontally instead of snapping to edges
+		if items_per_line == 1:
+			var pivot_y = container_size.y / 2
+			if row == 0:
+				pivot_y = 0
+			elif row == total_rows - 1 or virtual_index == total_items - 1:
+				pivot_y = container_size.y
+			return Vector2(container_size.x / 2, pivot_y)
+		
 		var is_leftmost = column == 0
 		var is_rightmost = (column == items_per_line - 1) or (virtual_index == total_items - 1)
 		var is_topmost = row == 0
@@ -918,6 +927,15 @@ func _get_grid_pivot_offset() -> Vector2:
 		var row = virtual_index % items_per_line
 		var column = virtual_index / items_per_line
 		var total_columns = ceili(float(total_items) / items_per_line)
+		
+		# Single row: center vertically instead of snapping to edges
+		if items_per_line == 1:
+			var pivot_x = container_size.x / 2
+			if column == 0:
+				pivot_x = 0
+			elif column == total_columns - 1 or virtual_index == total_items - 1:
+				pivot_x = container_size.x
+			return Vector2(pivot_x, container_size.y / 2)
 		
 		var is_topmost = row == 0
 		var is_bottommost = (row == items_per_line - 1) or (virtual_index == total_items - 1)

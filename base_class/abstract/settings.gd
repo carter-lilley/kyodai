@@ -59,7 +59,7 @@ const Type = SettingsVar.SettingType
 
 @export_subgroup("Library Appearance")
 # General layout settings (always visible)
-@export var library_vertical_layout := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Vertical Layout")
+@export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Layout Mode", "How game cards are arranged in the library", 0.0, 3.0, 1.0, ["Vertical Grid", "Horizontal Grid", "Single Row", "Single Column"])
 @export var library_navigation_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Navigation Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
 @export var library_grid_margin_x := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin X", "Left/right margin around the grid in pixels", 0.0, 600.0, 1.0)
