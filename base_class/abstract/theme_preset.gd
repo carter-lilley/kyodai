@@ -17,7 +17,7 @@ class_name ThemePreset
 @export var library_card_zoom: float = 1.0
 @export var library_bar_color: Color = Color(0.1, 0.1, 0.1, 1.0)
 @export var library_icon_color: Color = Color(0.8, 0.8, 0.8, 1.0)
-@export var library_show_title_on_all_cards: bool = false
+@export var library_show_title_mode: int = 1
 @export var library_background_config: Dictionary = {}
 
 # Card Designer Settings
@@ -45,7 +45,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_card_zoom = settings.library_card_zoom.value if settings.library_card_zoom else 1.0
 	preset.library_bar_color = settings.library_bar_color.value if settings.library_bar_color else Color(0.1, 0.1, 0.1, 1.0)
 	preset.library_icon_color = settings.library_icon_color.value if settings.library_icon_color else Color(0.8, 0.8, 0.8, 1.0)
-	preset.library_show_title_on_all_cards = settings.library_show_title_on_all_cards.value if settings.library_show_title_on_all_cards else false
+	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 1
 	preset.library_background_config = settings.library_background_config.value.duplicate() if settings.library_background_config else {}
 	
 	# Card settings
@@ -86,8 +86,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_bar_color.value = library_bar_color
 	if settings.get("library_icon_color") != null:
 		settings.library_icon_color.value = library_icon_color
-	if settings.get("library_show_title_on_all_cards") != null:
-		settings.library_show_title_on_all_cards.value = library_show_title_on_all_cards
+	if settings.get("library_show_title_mode") != null:
+		settings.library_show_title_mode.value = library_show_title_mode
 	if settings.get("library_background_config") != null:
 		settings.library_background_config.value = library_background_config.duplicate()
 	

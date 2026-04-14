@@ -18,7 +18,7 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 @onready var visual_container: Control = $VisualContainer
 @onready var card_input: Button = $VisualContainer/CardInput
 @onready var status_badge: Panel = $VisualContainer/CardInput/StatusBadge
-@onready var game_title_label: Label = $VisualContainer/CardInput/GameTitleLabel
+@onready var game_title_label: Label = $VisualContainer/GameTitleLabel
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
 var _is_downloading: bool = false
@@ -435,14 +435,14 @@ func _update_game_title_visibility():
 		return
 	
 	# Check the setting
-	var show_on_all = false
+	var mode = 1  # default "Focused"
 	if SettingsManager:
-		var setting = SettingsManager.get_setting("library_show_title_on_all_cards")
+		var setting = SettingsManager.get_setting("library_show_title_mode")
 		if setting:
-			show_on_all = setting.value
+			mode = setting.value
 	
-	# Show if: setting is enabled (show on all) OR card is focused
-	game_title_label.visible = show_on_all or _is_focused
+	# Show if: All (2) OR Focused (1) and card is focused
+	game_title_label.visible = (mode == 2) or (mode == 1 and _is_focused)
 
 func load_cover_with_priority(high_priority: bool = false):
 	_load_cover(high_priority)
@@ -1090,6 +1090,7 @@ func _show_focus_effects(show: bool) -> void:
 	if non_overlapping_effects.size() > 0:
 		if show:
 			_focus_stack.visible = true
+			_focus_stack.modulate = Color(1, 1, 1, 1)
 		
 		for focus_effect in non_overlapping_effects:
 			if focus_effect.material is ShaderMaterial:

@@ -14,7 +14,8 @@ signal effect_enabled_changed(enabled: bool)
 signal settings_changed(setting_name: String, value: Variant)
 
 func _ready():
-	material = ShaderMaterial.new()
+	if material == null:
+		material = ShaderMaterial.new()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Make the ColorRect transparent so shader can control visibility
 	color = Color.TRANSPARENT
