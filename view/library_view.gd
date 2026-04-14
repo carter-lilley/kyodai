@@ -727,3 +727,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		games_grid.refresh_dimensions()
 	elif setting.property_name == "card_effect_config":
 		mark_for_rebuild("Card effects changed")
+	elif setting.property_name == "library_show_title_mode":
+		if games_grid:
+			games_grid.refresh_all_card_effects()

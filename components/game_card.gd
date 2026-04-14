@@ -1272,6 +1272,9 @@ func refresh_settings():
 		# If focused, restore focus state after rebuild
 		if _is_focused:
 			_show_focus_effects(true)
+	
+	# Always update title visibility in case the setting changed
+	_update_game_title_visibility()
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:
