@@ -18,6 +18,9 @@ func _ready():
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Make the ColorRect transparent so shader can control visibility
 	color = Color.TRANSPARENT
+	# If initialize() ran before _ready() (deferred), push shader params now that material exists
+	if _container_state:
+		_update_shader_params()
 
 func initialize(container_state: EffectContainerState, settings: Dictionary) -> void:
 	_container_state = container_state
@@ -25,6 +28,7 @@ func initialize(container_state: EffectContainerState, settings: Dictionary) -> 
 	_setup_shader()
 	_apply_settings()
 	_connect_container_state_signals()
+	_update_shader_params()
 
 func set_base_effect(base: EffectBase) -> void:
 	"""Set the base effect that this focus effect should tween from."""

@@ -1163,7 +1163,6 @@ var _hero_copy_in_second_viewport: Node = null
 
 # Node reparenting state for Android dual screen
 var _main_ui_original_parent: Node = null
-var _navigation_bar_original_parent: Node = null
 var _ui_layer_original_parent: Node = null
 var _is_nodes_reparented: bool = false
 var _viewport_layout: Node = null
@@ -1266,26 +1265,26 @@ func _disable_dual_screen_mode() -> void:
 	_dual_screen_active = false
 
 func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
-	"""Reparent NavigationBar and RootLayout into MainViewport for dual screen."""
+	"""Reparent RootLayout into MainViewport for dual screen.
+	
+	The RootLayout contains the full UI hierarchy including InnerLayout (which holds
+	NavigationBar and ContentWrapper), so we only need to reparent RootLayout.
+	"""
 	if _is_nodes_reparented:
 		return
 	
-	# Store original parents
+	# Store original parent
 	if _root_control:
 		_main_ui_original_parent = _root_control.get_parent()
-	if _navigation_bar:
-		_navigation_bar_original_parent = _navigation_bar.get_parent()
 	
 	# Find and store UILayer original parent
 	var ui_layer = get_node_or_null("/root/Main/UILayer")
 	if ui_layer:
 		_ui_layer_original_parent = ui_layer.get_parent()
 	
-	# Remove from current parents
+	# Remove RootLayout from current parent (this includes NavigationBar via InnerLayout)
 	if _root_control and _root_control.get_parent():
 		_root_control.get_parent().remove_child(_root_control)
-	if _navigation_bar and _navigation_bar.get_parent():
-		_navigation_bar.get_parent().remove_child(_navigation_bar)
 	
 	# Remove UILayer from its current parent
 	if ui_layer and ui_layer.get_parent():
@@ -1297,13 +1296,9 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	_viewport_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
 	main_viewport.add_child(_viewport_layout)
 	
-	# Add RootLayout (fills most space)
+	# Add RootLayout (fills viewport, includes InnerLayout with Navbar + ContentWrapper)
 	_root_control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_viewport_layout.add_child(_root_control)
-	
-	# Add NavigationBar (fixed size at bottom)
-	_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_viewport_layout.add_child(_navigation_bar)
 	
 	# Add UILayer directly to MainViewport (CanvasLayer can't go in VBoxContainer)
 	if ui_layer:
@@ -1330,7 +1325,11 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 		library_view.reconnect_viewport()
 
 func _restore_ui_to_original_parents() -> void:
-	"""Restore NavigationBar and RootLayout to their original parents."""
+	"""Restore RootLayout to its original parent.
+	
+	RootLayout contains the full UI hierarchy including InnerLayout (which holds
+	NavigationBar and ContentWrapper), so restoring RootLayout restores everything.
+	"""
 	if not _is_nodes_reparented:
 		return
 	
@@ -1342,17 +1341,11 @@ func _restore_ui_to_original_parents() -> void:
 		_viewport_layout.queue_free()
 		_viewport_layout = null
 	
-	# Restore RootLayout
+	# Restore RootLayout (this restores the full hierarchy including InnerLayout with Navbar)
 	if _root_control and _main_ui_original_parent:
 		if _root_control.get_parent():
 			_root_control.get_parent().remove_child(_root_control)
 		_main_ui_original_parent.add_child(_root_control)
-	
-	# Restore NavigationBar
-	if _navigation_bar and _navigation_bar_original_parent:
-		if _navigation_bar.get_parent():
-			_navigation_bar.get_parent().remove_child(_navigation_bar)
-		_navigation_bar_original_parent.add_child(_navigation_bar)
 	
 	# Restore UILayer
 	var ui_layer = get_node_or_null("/root/Main/UILayer")
@@ -1363,7 +1356,6 @@ func _restore_ui_to_original_parents() -> void:
 	
 	_is_nodes_reparented = false
 	_main_ui_original_parent = null
-	_navigation_bar_original_parent = null
 	_ui_layer_original_parent = null
 	
 	# Reconnect FocusIndicator to original viewport after restoring

@@ -77,6 +77,7 @@ func _ready():
 		platform_indicator.platform_selected.connect(_on_platform_selected)
 		platform_indicator.cycle_prev_clicked.connect(_on_cycle_prev_clicked)
 		platform_indicator.cycle_next_clicked.connect(_on_cycle_next_clicked)
+		platform_indicator.search_clicked.connect(_show_search_overlay)
 	
 	# Initial load
 	_load_total_count()

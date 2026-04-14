@@ -30,7 +30,7 @@ func _ready():
 	var center_container = CenterContainer.new()
 	center_container.name = "CenterContainer"
 	center_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(center_container)
+	background.add_child(center_container)
 	
 	# Main container for search elements
 	var main_container = VBoxContainer.new()

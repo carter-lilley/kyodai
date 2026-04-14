@@ -4,8 +4,10 @@ extends Control
 signal platform_selected(platform_index: int)
 signal cycle_prev_clicked()
 signal cycle_next_clicked()
+signal search_clicked()
 
 @onready var _prev_button: Button
+@onready var _search_button: TextureButton
 @onready var _next_button: Button
 @onready var _platform_buttons: Array[Button] = []
 
@@ -59,6 +61,19 @@ func _setup_ui():
 	_next_button.add_theme_font_size_override("font_size", 20)
 	_next_button.pressed.connect(_on_next_clicked)
 	hbox.add_child(_next_button)
+	
+	# Search button
+	_search_button = TextureButton.new()
+	_search_button.name = "SearchButton"
+	_search_button.focus_mode = Control.FOCUS_NONE
+	_search_button.custom_minimum_size = Vector2(24, 24)
+	_search_button.ignore_texture_size = true
+	_search_button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	var search_icon = load("res://assets/icons/search.png")
+	if search_icon:
+		_search_button.texture_normal = search_icon
+	_search_button.pressed.connect(_on_search_clicked)
+	hbox.add_child(_search_button)
 
 func _create_platform_button(index: int) -> Button:
 	var btn = Button.new()
@@ -195,6 +210,10 @@ func _on_prev_clicked() -> void:
 func _on_next_clicked() -> void:
 	"""Handle click on next arrow."""
 	cycle_next_clicked.emit()
+
+func _on_search_clicked() -> void:
+	"""Handle click on search button."""
+	search_clicked.emit()
 
 func show_search_mode(query: String):
 	"""Show search mode with query text."""

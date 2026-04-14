@@ -241,6 +241,8 @@ func _rebuild_effects():
 	_normal_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
 	visual_container.add_child(_normal_stack)
 	_normal_stack.initialize(_card_state, _card_state.effect_settings)
+	if _current_texture:
+		_normal_stack.set_game_texture(_current_texture)
 	
 	# Create focus EffectStack with its own state (duplicate to avoid clobbering normal stack's insets)
 	var focus_state = _card_state.duplicate()
@@ -253,6 +255,8 @@ func _rebuild_effects():
 	_focus_stack.visible = false
 	visual_container.add_child(_focus_stack)
 	_focus_stack.initialize(focus_state, _card_state.focus_effect_settings)
+	if _current_texture:
+		_focus_stack.set_game_texture(_current_texture)
 	
 	# Remove base effect from focus stack - focus effects are overlays only,
 	# they should not draw the game texture (that's the normal stack's job)

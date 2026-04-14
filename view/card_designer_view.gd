@@ -242,6 +242,7 @@ func _setup_preview_card():
 	state.effect_settings = _current_config.get("effects", []).duplicate(true)
 	state.focus_effect_settings = _current_config.get("focus_effects", []).duplicate(true)
 	state.zoom_level = 1.5
+	state.game_texture = _preview_card._current_texture
 	
 	_preview_card.set_card_state(state)
 
