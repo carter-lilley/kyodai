@@ -402,15 +402,18 @@ func refresh_dimensions() -> void:
 	# Always update ratio - the setter will handle recalculation
 	target_card_width_ratio = snapped_ratio
 	
+	var current_zoom = _calculate_zoom()
+	var zoom_changed = not is_equal_approx(current_zoom, _last_applied_zoom)
+	if zoom_changed:
+		_last_applied_zoom = current_zoom
+	
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
-			var current_zoom = _calculate_zoom()
-			if not is_equal_approx(current_zoom, _last_applied_zoom):
-				_last_applied_zoom = current_zoom
+			if zoom_changed:
 				card.set_card_zoom(current_zoom)
-				# Also refresh settings to update zoom in card state
-				if card.has_method("refresh_settings"):
-					card.refresh_settings()
+			# Always refresh settings so orientation/corner-radius changes propagate
+			if card.has_method("refresh_settings"):
+				card.refresh_settings()
 	
 	_update_margin()
 

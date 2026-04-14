@@ -120,7 +120,7 @@ func _rebuild_effects():
 			# Set layer order
 			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)
 			if layer_index >= 0:
-				_effects[effect_id].z_index = layer_index - 2  # Base at 0, shadow at -1, glow at -2
+				_effects[effect_id].z_index = max(0, layer_index - 2)  # Clamp to prevent behind-background rendering
 	
 	# Ensure proper child order
 	for effect_id in EFFECT_LAYER_ORDER:

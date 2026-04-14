@@ -4,11 +4,9 @@ batch core download ONE notification
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch to launch on bottom screen
 ui scale
-improve M&KB experience, add search icon. 
 android download manager and file streaming
 chunk reassembly progress notif
 saves
-fix hero loading
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 ## UI

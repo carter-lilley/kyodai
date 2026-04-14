@@ -1251,19 +1251,26 @@ func reset():
 				child.material.set_shader_parameter("effect_alpha", 0.0)
 
 func refresh_settings():
-	"""Refresh card settings from global config. Rebuilds effects only if orientation changed."""
+	"""Refresh card settings from global config. Rebuilds effects if orientation or effect settings changed."""
 	var old_orientation = _card_state.orientation if _card_state else 0
 	var old_zoom = _card_state.zoom_level if _card_state else 1.0
+	var old_effects = _card_state.effect_settings.duplicate(true) if _card_state else []
+	var old_focus_effects = _card_state.focus_effect_settings.duplicate(true) if _card_state else []
 	_update_card_state_from_settings()
 	
 	# Update zoom if it changed
 	if _card_state.zoom_level != old_zoom:
 		_on_zoom_changed(_card_state.zoom_level)
 	
-	# Only rebuild effects if orientation changed or card is not focused
-	# Focused cards rebuild effects when unfocused
-	if not _is_focused and _card_state.orientation != old_orientation:
+	var effects_changed = _card_state.effect_settings != old_effects
+	var focus_effects_changed = _card_state.focus_effect_settings != old_focus_effects
+	
+	# Rebuild effects if orientation or effect settings changed
+	if _card_state.orientation != old_orientation or effects_changed or focus_effects_changed:
 		_rebuild_effects()
+		# If focused, restore focus state after rebuild
+		if _is_focused:
+			_show_focus_effects(true)
 
 func set_image_priority(high_priority: bool):
 	if _current_image_task_id > 0:
