@@ -365,6 +365,8 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	# Compare all relevant fields
 	if a.library_layout_mode != b.library_layout_mode:
 		return false
+	if a.library_focus_scale != b.library_focus_scale:
+		return false
 	if a.library_navigation_bar_position != b.library_navigation_bar_position:
 		return false
 	if a.library_grid_padding != b.library_grid_padding:

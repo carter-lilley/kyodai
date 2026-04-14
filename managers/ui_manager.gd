@@ -672,6 +672,20 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			else:
 				library_view.mark_for_rebuild("Layout mode changed")
 		_update_zoom_range_for_current_view()
+	elif setting.property_name == "library_focus_scale":
+		# Rebuild visible views immediately, mark hidden views for rebuild
+		if _views.has("Home"):
+			var home_view = _views["Home"]
+			if is_current_view("Home"):
+				home_view.rebuild_grid()
+			else:
+				home_view.mark_for_rebuild("Focus scale changed")
+		if _views.has("Library"):
+			var library_view = _views["Library"]
+			if is_current_view("Library"):
+				library_view.rebuild_grid()
+			else:
+				library_view.mark_for_rebuild("Focus scale changed")
 	elif setting.property_name == "card_effect_config":
 		# Rebuild visible views immediately, mark hidden views for rebuild
 		if _views.has("Home"):

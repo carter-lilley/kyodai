@@ -41,6 +41,15 @@ var force_items_per_line: int = 0:
 			_recalculate_layout()
 			_refresh_buffer()
 
+# Scale factor applied when a card is focused. Layout math divides available space by this
+# so that the focused card (normal size * focus_scale) always fits without clipping.
+var focus_scale: float = 1.08:
+	set(value):
+		if not is_equal_approx(focus_scale, value):
+			focus_scale = maxf(value, 1.0)
+			_recalculate_layout()
+			_refresh_buffer()
+
 # Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
@@ -104,9 +113,10 @@ var _cache_access_order: Array[int] = []
 func _ready():
 	_setup_ui()
 	resized.connect(_on_resized)
-	# Load initial grid separation from settings
+	# Load initial grid separation and focus scale from settings
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
+	call_deferred("_update_focus_scale_from_settings")
 	call_deferred("_recalculate_layout")
 	
 	# Connect to settings saved signal to refresh layout when card orientation changes
@@ -115,6 +125,7 @@ func _ready():
 
 func _on_settings_saved():
 	# Refresh dimensions when settings change (e.g., card orientation)
+	_update_focus_scale_from_settings()
 	refresh_dimensions()
 
 func _on_resized():
@@ -137,6 +148,15 @@ func _update_grid_separation_from_settings() -> void:
 	if _flow_container:
 		_flow_container.add_theme_constant_override("h_separation", grid_separation)
 		_flow_container.add_theme_constant_override("v_separation", grid_separation)
+
+func _update_focus_scale_from_settings() -> void:
+	if not SettingsManager:
+		return
+	var setting = SettingsManager.get_setting("library_focus_scale")
+	if setting and (setting.value is int or setting.value is float):
+		focus_scale = 1.0 + float(setting.value)
+	else:
+		focus_scale = 1.08
 
 func _calculate_zoom() -> float:
 	var base_dims = _get_base_dimensions()
@@ -163,11 +183,11 @@ func _calculate_zoom() -> float:
 		# Clamp ratio so we don't exceed available space
 		var ratio = clampf(target_card_width_ratio, 0.05, _calculate_max_ratio())
 		if vertical:
-			var target_card_width = (available_width * ratio) - grid_separation
+			var target_card_width = ((available_width / focus_scale) * ratio) - grid_separation
 			target_card_width = max(target_card_width, base_dims.x * 0.1)
 			return target_card_width / base_dims.x
 		else:
-			var target_card_height = (available_height * ratio) - grid_separation
+			var target_card_height = ((available_height / focus_scale) * ratio) - grid_separation
 			target_card_height = max(target_card_height, base_dims.y * 0.1)
 			return target_card_height / base_dims.y
 	
@@ -210,7 +230,11 @@ func _calculate_max_ratio() -> float:
 	available_width = max(available_width, base_dims.x * 0.1)
 	available_height = max(available_height, base_dims.y * 0.1)
 	
-	# For single row/column, max zoom means 100% of cross-axis
+	# All layout math is based on the focused card size, so divide available space by focus_scale
+	available_width /= focus_scale
+	available_height /= focus_scale
+	
+	# For single row/column, max zoom means focused card fills 100% of cross-axis
 	if force_items_per_line > 0:
 		return 1.0
 	
@@ -264,6 +288,10 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	# Ensure minimum available space
 	available_width = max(available_width, base_dims.x * 0.1)
 	available_height = max(available_height, base_dims.y * 0.1)
+	
+	# All layout math is based on the focused card size, so divide available space by focus_scale
+	available_width /= focus_scale
+	available_height /= focus_scale
 	
 	# Calculate how many items would fit at the desired ratio
 	# First, compute what the item dimensions would be

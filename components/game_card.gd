@@ -54,11 +54,17 @@ const MAX_IMAGE_RETRIES: int = 3
 var _download_retry_count: int = 0
 const MAX_DOWNLOAD_RETRIES: int = 2
 
-const FOCUSED_SCALE: float = 1.08
 const FOCUS_TWEEN_DURATION: float = 0.12
 const FOCUS_EFFECT_FADE_DURATION: float = 0.15  # Duration for focus effects fade in/out
 var _focus_tween: Tween = null
 var _focus_effect_tweens: Array[Tween] = []  # Track tweens created in _show_focus_effects
+
+func _get_focus_scale() -> float:
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("library_focus_scale")
+		if setting:
+			return 1.0 + setting.value
+	return 1.08
 
 # Enter animation constants
 const ENTER_START_SCALE: float = 3.0
@@ -994,7 +1000,7 @@ func _on_focus_entered() -> void:
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_BACK)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
+	_focus_tween.tween_property(visual_container, "scale", Vector2(_get_focus_scale(), _get_focus_scale()), FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects with smooth fade (overlapping effects will tween settings)
 	_show_focus_effects(true)
@@ -1030,7 +1036,7 @@ func restore_focus_animation() -> void:
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_BACK)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(visual_container, "scale", Vector2(FOCUSED_SCALE, FOCUSED_SCALE), FOCUS_TWEEN_DURATION)
+	_focus_tween.tween_property(visual_container, "scale", Vector2(_get_focus_scale(), _get_focus_scale()), FOCUS_TWEEN_DURATION)
 	
 	# Show focus effects (overlapping effects will be in their focused state)
 	_show_focus_effects(true)

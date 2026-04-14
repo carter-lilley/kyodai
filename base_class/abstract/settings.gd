@@ -68,6 +68,7 @@ const Type = SettingsVar.SettingType
 @export var library_bar_color := SettingsVar.new(Type.COLOR, Color(0.12, 0.12, 0.12, 0.95), State.ENABLED, "Bar Color", "Background color of the navigation bar")
 @export var library_icon_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Icon Color", "Color of navigation icons")
 @export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
+@export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.08, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
 @export var controls_bar_enabled := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Show Controls Bar", "Display the quick controls bar in game views")
 @export var controls_bar_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Controls Bar Mode", "How the controls bar is displayed", 0.0, 1.0, 1.0, ["Floating", "Docked"])
 

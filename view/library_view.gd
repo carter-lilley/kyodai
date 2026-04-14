@@ -711,6 +711,9 @@ func _update_grid_orientation() -> void:
 		3: # Single Column
 			games_grid.vertical = true
 			games_grid.force_items_per_line = 1
+	
+	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
+	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
 
 func _update_grid_margins() -> void:
 	"""Update the grid margins from settings."""
