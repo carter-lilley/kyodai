@@ -940,18 +940,9 @@ func _update_margin():
 	
 	if vertical:
 		var margin_top = _get_slot_position_for_index(first_idx)
-		var flow_height: float
-		var margin_bottom: float
-		
-		if force_items_per_line > 0:
-			# Exact content size for single column mode (no phantom trailing separation)
-			flow_height = num_active * focused_card_size.y + max(0, num_active - 1) * grid_separation
-			var trailing_items = max(0, _total_items - last_idx - 1)
-			margin_bottom = trailing_items * focused_card_size.y + max(0, trailing_items - 1) * grid_separation
-		else:
-			flow_height = _get_slot_position_for_index(last_idx + 1) - margin_top
-			var total_end = _get_slot_position_for_index(_total_items)
-			margin_bottom = total_end - _get_slot_position_for_index(last_idx + 1)
+		var flow_height = _get_slot_position_for_index(last_idx + 1) - margin_top
+		var total_end = _get_slot_position_for_index(_total_items)
+		var margin_bottom = total_end - _get_slot_position_for_index(last_idx + 1)
 		
 		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
 			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
@@ -964,18 +955,9 @@ func _update_margin():
 			_last_flow_height = flow_height
 	else:
 		var margin_left = _get_slot_position_for_index(first_idx)
-		var flow_width: float
-		var margin_right: float
-		
-		if force_items_per_line > 0:
-			# Exact content size for single row mode (no phantom trailing separation)
-			flow_width = num_active * focused_card_size.x + max(0, num_active - 1) * grid_separation
-			var trailing_items = max(0, _total_items - last_idx - 1)
-			margin_right = trailing_items * focused_card_size.x + max(0, trailing_items - 1) * grid_separation
-		else:
-			flow_width = _get_slot_position_for_index(last_idx + 1) - margin_left
-			var total_end = _get_slot_position_for_index(_total_items)
-			margin_right = total_end - _get_slot_position_for_index(last_idx + 1)
+		var flow_width = _get_slot_position_for_index(last_idx + 1) - margin_left
+		var total_end = _get_slot_position_for_index(_total_items)
+		var margin_right = total_end - _get_slot_position_for_index(last_idx + 1)
 		
 		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
 			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
