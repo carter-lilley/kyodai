@@ -24,7 +24,8 @@ const EFFECT_ID_MAP: Dictionary = {
 	4: "glass",
 	5: "distort",
 	6: "gradient_overlay",
-	7: "hsl"
+	7: "hsl",
+	8: "blur"
 }
 
 # Focus effects - excludes base (card needs texture always)
@@ -36,7 +37,8 @@ const FOCUS_EFFECT_ID_MAP: Dictionary = {
 	4: "glass",
 	5: "distort",
 	6: "gradient_overlay",
-	7: "hsl"
+	7: "hsl",
+	8: "blur"
 }
 
 func _ready():
@@ -498,6 +500,25 @@ func _create_effect_ui(effect_data: Dictionary, index: int, is_focus_effect: boo
 			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
 		else:
 			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	
+	elif effect_data.get("effect_id") == "blur":
+		var blur_effect = BlurEffect.new()
+		var schema = blur_effect.get_settings_schema()
+		blur_effect.queue_free()
+		
+		var settings_menu = SettingsMenu.new()
+		content.add_child(settings_menu)
+		
+		var current_settings = effect_data.get("settings", {})
+		for setting in schema:
+			if current_settings.has(setting.property_name):
+				setting.value = current_settings[setting.property_name]
+		
+		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		if is_focus_effect:
+			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+		else:
+			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary
@@ -581,6 +602,14 @@ func _on_add_effect(id: int):
 					"hue_shift": 0.0,
 					"saturation_scale": 1.0,
 					"lightness_scale": 1.0
+				}
+			}
+		8:
+			new_effect = {
+				"effect_id": "blur",
+				"settings": {
+					"blur_strength": 4.0,
+					"blur_samples": 8
 				}
 			}
 	
@@ -674,6 +703,7 @@ func _on_add_focus_effect(id: int):
 		5: effect_id = "distort"
 		6: effect_id = "gradient_overlay"
 		7: effect_id = "hsl"
+		8: effect_id = "blur"
 	
 	# Check if this effect already exists in base effects
 	var base_effect_settings = {}
@@ -763,6 +793,14 @@ func _on_add_focus_effect(id: int):
 					"hue_shift": base_effect_settings.get("hue_shift", 0.0),
 					"saturation_scale": base_effect_settings.get("saturation_scale", 1.0),
 					"lightness_scale": base_effect_settings.get("lightness_scale", 1.0)
+				}
+			}
+		8:
+			new_effect = {
+				"effect_id": "blur",
+				"settings": {
+					"blur_strength": base_effect_settings.get("blur_strength", 4.0),
+					"blur_samples": base_effect_settings.get("blur_samples", 8)
 				}
 			}
 	

@@ -338,6 +338,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_show_title_mode.value, settings.library_show_title_mode)
 		if settings.get("library_focus_scale") != null:
 			emit_signal("setting_changed", settings.library_focus_scale.value, settings.library_focus_scale)
+		if settings.get("library_card_alignment") != null:
+			emit_signal("setting_changed", settings.library_card_alignment.value, settings.library_card_alignment)
 		if settings.get("library_layout_mode") != null:
 			emit_signal("setting_changed", settings.library_layout_mode.value, settings.library_layout_mode)
 		# Emit for card effect config - this triggers grid rebuild

@@ -321,29 +321,26 @@ func _input(event: InputEvent):
 		return
 
 func _adjust_zoom(delta: float) -> void:
-	"""Adjust zoom level by delta and save to settings."""
 	if not navigation_bar:
 		return
 	
 	var current_zoom = navigation_bar.get_zoom_value()
-	var new_zoom = clampf(current_zoom + delta, 0.05, 0.5)
 	
-	# Only update if value actually changed
+	var max_zoom = 0.5
+	var current_view = UIManager.get_current_view()
+	if current_view:
+		var games_grid = _get_view_grid(current_view)
+		if games_grid and games_grid.force_items_per_line > 0:
+			max_zoom = 1.0
+	
+	var new_zoom = clampf(current_zoom + delta, 0.05, max_zoom)
+	
 	if not is_equal_approx(current_zoom, new_zoom):
-		# Save the currently focused card's index before zooming
 		var focused_index = _get_focused_card_index()
-		
-		# Update navigation bar slider (uses set_value_no_signal, so we need to manually trigger updates)
 		navigation_bar.set_zoom_value(new_zoom)
-		
-		# Manually trigger zoom update for grids (since set_zoom_value doesn't emit signals)
 		_on_zoom_changed(new_zoom)
-		
-		# Restore focus to the previously focused card after layout updates
 		if focused_index >= 0:
 			call_deferred("_restore_focus_to_card", focused_index)
-		
-		# Save to settings immediately
 		if SettingsManager:
 			var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 			if zoom_setting:

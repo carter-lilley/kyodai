@@ -19,6 +19,7 @@ class_name ThemePreset
 @export var library_icon_color: Color = Color(0.8, 0.8, 0.8, 1.0)
 @export var library_show_title_mode: int = 1
 @export var library_focus_scale: float = 0.08
+@export var library_card_alignment: int = 0
 @export var library_background_config: Dictionary = {}
 
 # Card Designer Settings
@@ -48,6 +49,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_icon_color = settings.library_icon_color.value if settings.library_icon_color else Color(0.8, 0.8, 0.8, 1.0)
 	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 1
 	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.08
+	preset.library_card_alignment = settings.library_card_alignment.value if settings.library_card_alignment else 0
 	preset.library_background_config = settings.library_background_config.value.duplicate() if settings.library_background_config else {}
 	
 	# Card settings
@@ -92,6 +94,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_show_title_mode.value = library_show_title_mode
 	if settings.get("library_focus_scale") != null:
 		settings.library_focus_scale.value = library_focus_scale
+	if settings.get("library_card_alignment") != null:
+		settings.library_card_alignment.value = library_card_alignment
 	if settings.get("library_background_config") != null:
 		settings.library_background_config.value = library_background_config.duplicate()
 	

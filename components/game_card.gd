@@ -59,6 +59,30 @@ const FOCUS_EFFECT_FADE_DURATION: float = 0.15  # Duration for focus effects fad
 var _focus_tween: Tween = null
 var _focus_effect_tweens: Array[Tween] = []  # Track tweens created in _show_focus_effects
 var focus_overlap: bool = true
+var alignment_offset: Vector2 = Vector2.ZERO
+
+func _get_alignment_pivot() -> Vector2:
+	var card_size = _card_state.card_size
+	var focus_scale = _get_focus_scale()
+	if focus_scale <= 1.0 or alignment_offset == Vector2.ZERO:
+		return card_size / 2.0
+	var pivot = Vector2.ZERO
+	if alignment_offset.x > 0.001:
+		pivot.x = alignment_offset.x / (focus_scale - 1.0)
+	else:
+		pivot.x = card_size.x / 2.0
+	if alignment_offset.y > 0.001:
+		pivot.y = alignment_offset.y / (focus_scale - 1.0)
+	else:
+		pivot.y = card_size.y / 2.0
+	return pivot
+
+func set_alignment_offset(offset: Vector2) -> void:
+	alignment_offset = offset
+	if visual_container and not focus_overlap:
+		var pivot = _get_alignment_pivot()
+		visual_container.pivot_offset = pivot
+		visual_container.position = alignment_offset
 
 func _get_focus_scale() -> float:
 	if SettingsManager:
@@ -318,32 +342,51 @@ func _link_overlapping_effects() -> void:
 					child.tween_settings(base_effect._settings, base_effect._settings, 1.0)
 
 func _on_zoom_changed(_new_zoom: float) -> void:
+	if not visual_container:
+		return
+	
 	var card_size = _card_state.card_size
-	if _is_focused:
-		var focus_scale = _get_focus_scale()
-		if focus_overlap:
-			custom_minimum_size = card_size
-			size = card_size
-			visual_container.pivot_offset = _get_grid_pivot_offset()
-		else:
-			var focused_size = card_size * focus_scale
-			custom_minimum_size = focused_size
-			size = focused_size
-			visual_container.size = card_size
-			var pivot = _get_grid_pivot_offset()
-			visual_container.pivot_offset = pivot
-			visual_container.position = pivot * (focus_scale - 1.0)
-	else:
+	var focus_scale = _get_focus_scale()
+	
+	if focus_overlap:
 		custom_minimum_size = card_size
 		size = card_size
 		pivot_offset = card_size / 2
 		size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		
+		visual_container.anchors_preset = Control.PRESET_FULL_RECT
+		visual_container.anchor_right = 1.0
+		visual_container.anchor_bottom = 1.0
+		visual_container.position = Vector2.ZERO
+		visual_container.size = card_size
+		visual_container.pivot_offset = _get_grid_pivot_offset()
+	else:
+		var focused_size = card_size * focus_scale
+		custom_minimum_size = focused_size
+		size = focused_size
+		pivot_offset = focused_size / 2
+		size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		
+		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
+		visual_container.anchor_right = 0.0
+		visual_container.anchor_bottom = 0.0
+		visual_container.size = card_size
+		
+		var pivot = _get_alignment_pivot()
+		visual_container.pivot_offset = pivot
+		
+		if _is_focused:
+			visual_container.scale = Vector2(focus_scale, focus_scale)
+			visual_container.position = alignment_offset
+		else:
+			visual_container.scale = Vector2.ONE
+			visual_container.position = alignment_offset
 	
 	# Update title label font size based on zoom
 	if game_title_label:
 		var zoom = _card_state.zoom_level
-		# Scale font size with zoom, but keep it readable (min 10, no max)
 		var scaled_font_size = max(10, int(BASE_TITLE_FONT_SIZE * zoom))
 		game_title_label.add_theme_font_size_override("font_size", scaled_font_size)
 	
@@ -897,7 +940,7 @@ func _on_long_press_timeout() -> void:
 		UIManager.show_game_context_menu(game.romm_id, _touch_start_pos, _get_show_delete())
 
 func _get_grid_pivot_offset() -> Vector2:
-	var container_size = visual_container.size
+	var container_size = _card_state.card_size
 	if container_size.x <= 0 or container_size.y <= 0:
 		return container_size / 2
 	
@@ -987,18 +1030,15 @@ func _find_virtual_scroll_grid_container() -> Node:
 	return null
 
 func _on_focus_entered() -> void:
-	# Check if we can accept focus (animations complete)
 	if not _can_accept_focus():
 		return
 	
 	_is_focused = true
 	_update_game_title_visibility()
 	
-	# Play focus sound with slight pitch variation
 	if AudioManager:
 		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
 	
-	# Vibrate for tactile feedback (platform-specific)
 	if PlatformManager.is_android():
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin:
@@ -1012,7 +1052,6 @@ func _on_focus_entered() -> void:
 	z_index = 11
 	
 	if focus_overlap:
-		# Old way: scale visual_container only, allow overlapping
 		visual_container.pivot_offset = pivot
 		
 		if _focus_tween:
@@ -1022,28 +1061,18 @@ func _on_focus_entered() -> void:
 		_focus_tween.set_ease(Tween.EASE_OUT)
 		_focus_tween.tween_property(visual_container, "scale", Vector2(focus_scale, focus_scale), FOCUS_TWEEN_DURATION)
 	else:
-		# New way: grow GameCard itself so FlowContainer pushes neighbors away
-		var focused_size = card_size * focus_scale
-		custom_minimum_size = focused_size
-		size = focused_size
-		
-		# Detach visual_container from full-rect anchors so we can position it manually
-		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
-		visual_container.anchor_right = 0.0
-		visual_container.anchor_bottom = 0.0
-		visual_container.size = card_size
-		visual_container.pivot_offset = pivot
-		visual_container.position = Vector2.ZERO
-		
 		if _focus_tween:
 			_focus_tween.kill()
 		_focus_tween = create_tween()
 		_focus_tween.set_trans(Tween.TRANS_BACK)
 		_focus_tween.set_ease(Tween.EASE_OUT)
 		_focus_tween.parallel().tween_property(visual_container, "scale", Vector2(focus_scale, focus_scale), FOCUS_TWEEN_DURATION)
-		_focus_tween.parallel().tween_property(visual_container, "position", pivot * (focus_scale - 1.0), FOCUS_TWEEN_DURATION)
+		_focus_tween.parallel().tween_property(visual_container, "position", alignment_offset, FOCUS_TWEEN_DURATION)
 	
-	# Show focus effects with smooth fade (overlapping effects will tween settings)
+	var grid = _find_virtual_scroll_grid_container()
+	if grid and grid.has_method("set_focused_card"):
+		grid.set_focused_card(get_meta("virtual_index"))
+	
 	_show_focus_effects(true)
 
 func _on_focus_exited() -> void:
@@ -1052,8 +1081,10 @@ func _on_focus_exited() -> void:
 	
 	z_index = 10
 	
+	var focus_scale = _get_focus_scale()
+	var card_size = _card_state.card_size
+	
 	if focus_overlap:
-		# Old way: just scale visual_container back
 		if _focus_tween:
 			_focus_tween.kill()
 		_focus_tween = create_tween()
@@ -1061,46 +1092,47 @@ func _on_focus_exited() -> void:
 		_focus_tween.set_ease(Tween.EASE_OUT)
 		_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
 	else:
-		# New way: shrink card back and restore anchors
-		var card_size = _card_state.card_size
-		custom_minimum_size = card_size
-		size = card_size
-		
 		if _focus_tween:
 			_focus_tween.kill()
 		_focus_tween = create_tween()
 		_focus_tween.set_trans(Tween.TRANS_QUAD)
 		_focus_tween.set_ease(Tween.EASE_OUT)
 		_focus_tween.parallel().tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
-		_focus_tween.parallel().tween_property(visual_container, "position", Vector2.ZERO, FOCUS_TWEEN_DURATION)
-		_focus_tween.finished.connect(_restore_visual_container_anchors, CONNECT_ONE_SHOT)
+		_focus_tween.parallel().tween_property(visual_container, "position", alignment_offset, FOCUS_TWEEN_DURATION)
 	
-	# Hide focus effects with smooth fade (overlapping effects will tween back)
+	var grid = _find_virtual_scroll_grid_container()
+	if grid and grid.has_method("set_focused_card"):
+		grid.set_focused_card(-1)
+	
 	_show_focus_effects(false)
 
 func _restore_visual_container_anchors() -> void:
-	var card_size = _card_state.card_size
-	visual_container.anchors_preset = Control.PRESET_FULL_RECT
-	visual_container.anchor_right = 1.0
-	visual_container.anchor_bottom = 1.0
-	visual_container.position = Vector2.ZERO
-	visual_container.pivot_offset = card_size / 2
+	if not focus_overlap:
+		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
+		visual_container.anchor_right = 0.0
+		visual_container.anchor_bottom = 0.0
+		visual_container.position = alignment_offset
+		visual_container.pivot_offset = _get_alignment_pivot()
+	else:
+		var card_size = _card_state.card_size
+		visual_container.anchors_preset = Control.PRESET_FULL_RECT
+		visual_container.anchor_right = 1.0
+		visual_container.anchor_bottom = 1.0
+		visual_container.position = Vector2.ZERO
+		visual_container.pivot_offset = card_size / 2
 
 ## Restores the focus animation after layout changes (e.g., after queue_sort resets transforms)
 ## Called by VirtualScrollGridContainer to re-apply focus scale without triggering full focus_entered logic
 func restore_focus_animation() -> void:
-	# Kill existing focus tween
 	if _focus_tween:
 		_focus_tween.kill()
 	
 	var focus_scale = _get_focus_scale()
 	var card_size = _card_state.card_size
-	var pivot = _get_grid_pivot_offset()
 	z_index = 11
 	
 	if focus_overlap:
-		custom_minimum_size = card_size
-		size = card_size
+		var pivot = _get_grid_pivot_offset()
 		visual_container.anchors_preset = Control.PRESET_FULL_RECT
 		visual_container.anchor_right = 1.0
 		visual_container.anchor_bottom = 1.0
@@ -1112,15 +1144,15 @@ func restore_focus_animation() -> void:
 		custom_minimum_size = focused_size
 		size = focused_size
 		
+		var align_pivot = _get_alignment_pivot()
 		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
 		visual_container.anchor_right = 0.0
 		visual_container.anchor_bottom = 0.0
 		visual_container.size = card_size
-		visual_container.pivot_offset = pivot
-		visual_container.position = pivot * (focus_scale - 1.0)
+		visual_container.pivot_offset = align_pivot
+		visual_container.position = alignment_offset
 		visual_container.scale = Vector2(focus_scale, focus_scale)
 	
-	# Show focus effects (overlapping effects will be in their focused state)
 	_show_focus_effects(true)
 
 ## Shows or hides focus effects with a smooth transition.
@@ -1327,32 +1359,38 @@ func reset():
 	if _current_image_task_id > 0:
 		MemoryManager.cancel_image_task(_current_image_task_id)
 		_current_image_task_id = -1
-	# Kill any running focus effect tweens to prevent callbacks on freed objects
 	for tween in _focus_effect_tweens:
 		if tween and is_instance_valid(tween):
 			tween.kill()
 	_focus_effect_tweens.clear()
+	if _focus_tween and is_instance_valid(_focus_tween):
+		_focus_tween.kill()
+	_focus_tween = null
+	alignment_offset = Vector2.ZERO
 	_loading_game_id = ""
 	_image_retry_count = 0
 	_download_retry_count = 0
 	game = null
 	_is_focused = false
-	# Only set texture if it's different from current (avoid unnecessary shader updates)
-	if _current_texture != _loading_texture:
-		_set_texture(_loading_texture)
-	# Reset visual container scale when card is recycled
+	if _card_state:
+		var sz = _card_state.card_size
+		custom_minimum_size = sz
+		size = sz
 	if visual_container:
 		visual_container.scale = Vector2.ONE
-	# Reset alpha to fully visible so recycled cards don't stay invisible
+		visual_container.position = Vector2.ZERO
+		visual_container.anchors_preset = Control.PRESET_FULL_RECT
+		visual_container.anchor_right = 1.0
+		visual_container.anchor_bottom = 1.0
+		visual_container.pivot_offset = (_card_state.card_size / 2) if _card_state else Vector2(100, 100)
+	if _current_texture != _loading_texture:
+		_set_texture(_loading_texture)
 	set_card_alpha(1.0)
-	# Hide title label when card is reset
 	if game_title_label:
 		game_title_label.visible = false
-	# Hide focus stack when card is recycled
 	if _focus_stack:
 		_focus_stack.visible = false
 		_focus_stack.modulate.a = 0.0
-		# Reset shader effect_alpha for all focus effects
 		for child in _focus_stack.get_children():
 			if child is EffectBase and child.material is ShaderMaterial:
 				child.material.set_shader_parameter("effect_alpha", 0.0)
@@ -1391,6 +1429,8 @@ func set_image_priority(high_priority: bool):
 # Called by VirtualScrollGridContainer when zoom changes
 func set_card_zoom(new_zoom: float) -> void:
 	_card_state.zoom_level = new_zoom
+	# Always refresh visual state even if zoom_level setter deduplicates
+	_on_zoom_changed(new_zoom)
 
 func get_current_texture() -> Texture2D:
 	return _current_texture

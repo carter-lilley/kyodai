@@ -72,6 +72,10 @@ var _effect_defaults: Dictionary = {
 		"hue_shift": 0.0,
 		"saturation_scale": 1.0,
 		"lightness_scale": 1.0
+	},
+	"blur": {
+		"blur_strength": 4.0,
+		"blur_samples": 8
 	}
 }
 

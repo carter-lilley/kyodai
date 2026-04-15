@@ -714,6 +714,9 @@ func _update_grid_orientation() -> void:
 	
 	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
 	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
+	
+	var alignment_setting = SettingsManager.get_setting("library_card_alignment")
+	games_grid.card_alignment = alignment_setting.value if alignment_setting else 0
 
 func _update_grid_margins() -> void:
 	"""Update the grid margins from settings."""

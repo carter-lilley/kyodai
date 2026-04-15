@@ -50,6 +50,13 @@ var focus_scale: float = 1.08:
 			_recalculate_layout()
 			_refresh_buffer()
 
+# Card alignment for single row/column modes: 0=Top/Left, 1=Center, 2=Bottom/Right
+var card_alignment: int = 0:
+	set(value):
+		if card_alignment != value:
+			card_alignment = clampi(value, 0, 2)
+			_recalculate_layout()
+
 # Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
@@ -70,8 +77,24 @@ var zoom: float = 1.0:
 	set(value):
 		push_warning("VirtualScrollGridContainer: Cannot set zoom directly. Set target_card_width_ratio instead.")
 
-var item_height: float = 280.0
-var item_width: float = 212.0
+# Unified size vocabulary - single source of truth
+var base_card_size: Vector2 = Vector2(BASE_CARD_WIDTH, BASE_CARD_HEIGHT)
+var card_size: Vector2 = Vector2(212.0, 280.0)
+var focused_card_size: Vector2 = Vector2(228.96, 302.4)
+
+# Cached margin container reference
+var _parent_margin_container: MarginContainer = null
+
+# Currently focused virtual index for dynamic stride math
+var _focused_virtual_index: int = -1
+
+# Backward compatibility - still compute these from card_size
+var item_height: float = 280.0:
+	get:
+		return card_size.y + grid_separation
+var item_width: float = 212.0:
+	get:
+		return card_size.x + grid_separation
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
@@ -110,6 +133,59 @@ var _cached_game_ids: Dictionary = {}  # romm_id -> cache_key
 const MAX_CACHE_SIZE: int = 5000
 var _cache_access_order: Array[int] = []
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PARENTED:
+		_find_parent_margin_container()
+
+func _find_parent_margin_container() -> void:
+	var parent = get_parent()
+	while parent != null:
+		if parent is MarginContainer:
+			_parent_margin_container = parent
+			return
+		parent = parent.get_parent()
+	_parent_margin_container = null
+
+func _get_available_size() -> Vector2:
+	var available = size
+	if _parent_margin_container:
+		available.x -= (_parent_margin_container.get_theme_constant("margin_left")
+					+ _parent_margin_container.get_theme_constant("margin_right"))
+		available.y -= (_parent_margin_container.get_theme_constant("margin_top")
+					+ _parent_margin_container.get_theme_constant("margin_bottom"))
+	return Vector2(max(available.x, 1.0), max(available.y, 1.0))
+
+func _get_normal_stride() -> float:
+	# In single row/column mode, every card reserves the focused slot size,
+	# so the normal stride must match the actual physical layout.
+	if force_items_per_line > 0:
+		return _get_focused_stride()
+	return (card_size.y + grid_separation) if vertical else (card_size.x + grid_separation)
+
+func _get_focused_stride() -> float:
+	return (focused_card_size.y + grid_separation) if vertical else (focused_card_size.x + grid_separation)
+
+func _get_slot_position_for_index(idx: int) -> float:
+	"""Returns the scroll-axis pixel position where slot `idx` begins."""
+	var items_per_line = _get_items_per_line()
+	var line = idx / items_per_line
+	if force_items_per_line == 0 or _focused_virtual_index < 0:
+		return line * _get_normal_stride()
+	var normal_s = _get_normal_stride()
+	var focused_s = _get_focused_stride()
+	var focused_line = _focused_virtual_index / items_per_line
+	if line <= focused_line:
+		return line * normal_s
+	var extra = focused_s - normal_s
+	return line * normal_s + extra
+
+func set_focused_card(virtual_index: int) -> void:
+	if _focused_virtual_index == virtual_index:
+		return
+	_focused_virtual_index = virtual_index
+	_update_layout()
+	_update_margin()
+
 func _ready():
 	_setup_ui()
 	resized.connect(_on_resized)
@@ -117,6 +193,7 @@ func _ready():
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
+	call_deferred("_update_card_alignment_from_settings")
 	call_deferred("_recalculate_layout")
 	
 	# Connect to settings saved signal to refresh layout when card orientation changes
@@ -126,6 +203,7 @@ func _ready():
 func _on_settings_saved():
 	# Refresh dimensions when settings change (e.g., card orientation)
 	_update_focus_scale_from_settings()
+	_update_card_alignment_from_settings()
 	refresh_dimensions()
 
 func _on_resized():
@@ -158,261 +236,177 @@ func _update_focus_scale_from_settings() -> void:
 	else:
 		focus_scale = 1.08
 
+func _update_card_alignment_from_settings() -> void:
+	if not SettingsManager:
+		return
+	var setting = SettingsManager.get_setting("library_card_alignment")
+	if setting and (setting.value is int or setting.value is float):
+		card_alignment = int(setting.value)
+	else:
+		card_alignment = 0
+
 func _calculate_zoom() -> float:
 	var base_dims = _get_base_dimensions()
-	var base_area = base_dims.x * base_dims.y
-	var viewport_area = size.x * size.y
 	
-	# In single row/column mode, ratio controls fraction of cross-axis space
 	if force_items_per_line > 0:
-		var margin_left = 0
-		var margin_right = 0
-		var margin_top = 0
-		var margin_bottom = 0
-		var parent = get_parent()
-		while parent != null:
-			if parent is MarginContainer:
-				margin_left = parent.get_theme_constant("margin_left")
-				margin_right = parent.get_theme_constant("margin_right")
-				margin_top = parent.get_theme_constant("margin_top")
-				margin_bottom = parent.get_theme_constant("margin_bottom")
-				break
-			parent = parent.get_parent()
-		var available_width = max(size.x - margin_left - margin_right, base_dims.x * 0.1)
-		var available_height = max(size.y - margin_top - margin_bottom, base_dims.y * 0.1)
-		# Clamp ratio so we don't exceed available space
+		var available = _get_available_size()
 		var ratio = clampf(target_card_width_ratio, 0.05, _calculate_max_ratio())
 		if vertical:
-			var target_card_width = ((available_width / focus_scale) * ratio) - grid_separation
-			target_card_width = max(target_card_width, base_dims.x * 0.1)
-			return target_card_width / base_dims.x
+			return (available.x * ratio) / (base_dims.x * focus_scale)
 		else:
-			var target_card_height = ((available_height / focus_scale) * ratio) - grid_separation
-			target_card_height = max(target_card_height, base_dims.y * 0.1)
-			return target_card_height / base_dims.y
+			return (available.y * ratio) / (base_dims.y * focus_scale)
 	
-	# target_card_width_ratio represents "fraction of viewport area occupied by one card"
-	# For example, 0.15 = card takes up ~2.25% of viewport area (0.15^2)
+	var viewport_area = size.x * size.y
+	var base_area = base_dims.x * base_dims.y
 	var target_card_area = viewport_area * target_card_width_ratio * target_card_width_ratio
-	
-	# Solve: (base_width * zoom) * (base_height * zoom) = target_card_area
-	# zoom^2 = target_card_area / base_area
 	return sqrt(target_card_area / base_area)
 
 func _calculate_max_ratio() -> float:
-	"""Calculate the maximum ratio where one card fills the entire available space."""
 	if size.x <= 0 or size.y <= 0:
-		return 0.5  # Fallback
+		return 0.5
 	
 	var base_dims = _get_base_dimensions()
+	var available = _get_available_size()
 	
-	# Get margins from parent MarginContainer if available
-	var margin_left = 0
-	var margin_right = 0
-	var margin_top = 0
-	var margin_bottom = 0
-	
-	var parent = get_parent()
-	while parent != null:
-		if parent is MarginContainer:
-			margin_left = parent.get_theme_constant("margin_left")
-			margin_right = parent.get_theme_constant("margin_right")
-			margin_top = parent.get_theme_constant("margin_top")
-			margin_bottom = parent.get_theme_constant("margin_bottom")
-			break
-		parent = parent.get_parent()
-	
-	# Calculate available space after margins
-	var available_width = size.x - margin_left - margin_right
-	var available_height = size.y - margin_top - margin_bottom
-	
-	# Ensure minimum available space
-	available_width = max(available_width, base_dims.x * 0.1)
-	available_height = max(available_height, base_dims.y * 0.1)
-	
-	# All layout math is based on the focused card size, so divide available space by focus_scale
-	available_width /= focus_scale
-	available_height /= focus_scale
-	
-	# For single row/column, max zoom means focused card fills 100% of cross-axis
 	if force_items_per_line > 0:
 		return 1.0
 	
-	# Calculate zoom for one card to fill available space (maintaining aspect ratio)
-	var zoom_width = available_width / base_dims.x
-	var zoom_height = available_height / base_dims.y
-	var zoom = min(zoom_width, zoom_height)  # Fit within available space
+	available.x /= focus_scale
+	available.y /= focus_scale
 	
-	# Convert zoom back to ratio
+	var zoom_width = available.x / base_dims.x
+	var zoom_height = available.y / base_dims.y
+	var zoom = min(zoom_width, zoom_height)
 	var viewport_area = size.x * size.y
 	var card_area = (base_dims.x * zoom) * (base_dims.y * zoom)
 	var ratio = sqrt(card_area / viewport_area)
 	
-	return max(ratio, 0.5)  # At least allow 0.5 for backwards compatibility
+	return max(ratio, 0.5)
 
 func _calculate_snapped_ratio(desired_ratio: float) -> float:
-	"""Calculate the snapped ratio that ensures whole cards fit per row/column.
-	
-	This works backwards from the desired ratio to find the nearest zoom level
-	where N cards fit perfectly (no gaps at margins).
-	"""
 	if size.x <= 0 or size.y <= 0:
 		return desired_ratio
 	
-	# In single row/column mode, don't snap — just clamp to valid range
 	if force_items_per_line > 0:
 		return clampf(desired_ratio, 0.05, _calculate_max_ratio())
 	
 	var base_dims = _get_base_dimensions()
+	var available = _get_available_size()
+	available.x /= focus_scale
+	available.y /= focus_scale
 	
-	# Get margins from parent MarginContainer if available
-	var margin_left = 0
-	var margin_right = 0
-	var margin_top = 0
-	var margin_bottom = 0
-	
-	var parent = get_parent()
-	while parent != null:
-		if parent is MarginContainer:
-			margin_left = parent.get_theme_constant("margin_left")
-			margin_right = parent.get_theme_constant("margin_right")
-			margin_top = parent.get_theme_constant("margin_top")
-			margin_bottom = parent.get_theme_constant("margin_bottom")
-			break
-		parent = parent.get_parent()
-	
-	# Calculate available space after margins
-	var available_width = size.x - margin_left - margin_right
-	var available_height = size.y - margin_top - margin_bottom
-	
-	# Ensure minimum available space
-	available_width = max(available_width, base_dims.x * 0.1)
-	available_height = max(available_height, base_dims.y * 0.1)
-	
-	# All layout math is based on the focused card size, so divide available space by focus_scale
-	available_width /= focus_scale
-	available_height /= focus_scale
-	
-	# Calculate how many items would fit at the desired ratio
-	# First, compute what the item dimensions would be
 	var viewport_area = size.x * size.y
 	var target_card_area = viewport_area * desired_ratio * desired_ratio
 	var desired_zoom = sqrt(target_card_area / (base_dims.x * base_dims.y))
 	var desired_item_width = (base_dims.x * desired_zoom) + grid_separation
 	var desired_item_height = (base_dims.y * desired_zoom) + grid_separation
 	
-	# Determine items per line at desired zoom
 	var desired_items_per_line: int
-	if force_items_per_line > 0:
-		desired_items_per_line = force_items_per_line
-	elif vertical:
-		desired_items_per_line = max(1, int(available_width / desired_item_width))
+	if vertical:
+		desired_items_per_line = max(1, int(available.x / desired_item_width))
 	else:
-		desired_items_per_line = max(1, int(available_height / desired_item_height))
+		desired_items_per_line = max(1, int(available.y / desired_item_height))
 	
-	# Calculate exact item size needed for that many items to fit perfectly
-	# Formula: N * item_width = available_space (where item_width = card_width + separation)
-	# Therefore: card_width = (available_space / N) - separation
 	var target_card_width: float
 	var target_card_height: float
 	
 	if vertical:
-		var target_item_width = available_width / desired_items_per_line
+		var target_item_width = available.x / desired_items_per_line
 		target_card_width = target_item_width - grid_separation
 		target_card_height = target_card_width * (base_dims.y / base_dims.x)
 	else:
-		var target_item_height = available_height / desired_items_per_line
+		var target_item_height = available.y / desired_items_per_line
 		target_card_height = target_item_height - grid_separation
 		target_card_width = target_card_height * (base_dims.x / base_dims.y)
 	
-	# Calculate zoom from target card dimensions
-	var snapped_zoom = target_card_width / base_dims.x
+	target_card_width = max(target_card_width, base_dims.x * 0.1)
+	target_card_height = max(target_card_height, base_dims.y * 0.1)
 	
-	# Convert back to ratio
-	var snapped_card_area = (base_dims.x * snapped_zoom) * (base_dims.y * snapped_zoom)
-	var snapped_ratio = sqrt(snapped_card_area / viewport_area)
-
-	# Clamp to valid range
+	target_card_area = target_card_width * target_card_height
+	var snapped_ratio = sqrt(target_card_area / viewport_area)
+	
 	return clampf(snapped_ratio, 0.05, _calculate_max_ratio())
 
 func _recalculate_layout():
 	if not _flow_container or not _scroll_container:
 		return
-	
-	# Skip if we haven't been allocated a size yet (resized signal will retry)
 	if size.x <= 0 or size.y <= 0:
 		return
 	
 	var current_zoom = _calculate_zoom()
 	
-	# Guard against invalid zoom during rapid changes
 	if current_zoom <= 0:
 		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
 		return
 	
 	var base_dims = _get_base_dimensions()
-	item_width = (base_dims.x * current_zoom) + grid_separation
-	item_height = (base_dims.y * current_zoom) + grid_separation
+	base_card_size = base_dims
+	card_size = base_dims * current_zoom
+	focused_card_size = card_size * focus_scale
 	
-	# Guard against zero or negative item dimensions
-	if item_width <= 0 or item_height <= 0:
-		item_width = max(item_width, base_dims.x * 0.1 + grid_separation)
-		item_height = max(item_height, base_dims.y * 0.1 + grid_separation)
-	
-	# Ensure FlowContainer separation is up to date
 	_flow_container.add_theme_constant_override("h_separation", grid_separation)
 	_flow_container.add_theme_constant_override("v_separation", grid_separation)
-	_flow_container.queue_sort()
 	
 	_update_layout()
 	_update_margin()
-	if _scroll_container:
-		if vertical:
-			_on_scroll_value_changed(_scroll_container.scroll_vertical)
-		else:
-			_on_scroll_value_changed(_scroll_container.scroll_horizontal)
+	_flow_container.queue_sort()
+	if vertical:
+		_on_scroll_value_changed(_scroll_container.scroll_vertical)
+	else:
+		_on_scroll_value_changed(_scroll_container.scroll_horizontal)
 	
-	# Only update zoom on cards if it actually changed
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
 		for card in _active_cards:
 			if is_instance_valid(card) and card.has_method("set_card_zoom"):
 				card.set_card_zoom(current_zoom)
 	
-	# Propagate focus overlap mode to all active cards
 	var overlap = (force_items_per_line == 0)
 	for card in _active_cards:
 		if is_instance_valid(card) and "focus_overlap" in card:
 			if card.focus_overlap != overlap:
 				card.focus_overlap = overlap
-				if card.has_method("restore_focus_animation"):
-					if card.get("_is_focused") == true:
-						card.restore_focus_animation()
+				if card.has_method("restore_focus_animation") and card.get("_is_focused") == true:
+					card.restore_focus_animation()
+	
+	var offset = _get_alignment_offset()
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_alignment_offset"):
+			card.set_alignment_offset(offset)
+
+func _get_alignment_offset() -> Vector2:
+	var offset = Vector2.ZERO
+	if force_items_per_line > 0 and card_alignment > 0:
+		var factor = float(card_alignment) / 2.0
+		if vertical:
+			offset.x = card_size.x * (focus_scale - 1.0) * factor
+		else:
+			offset.y = card_size.y * (focus_scale - 1.0) * factor
+	return offset
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
 		return 1
-	
 	if force_items_per_line > 0:
 		return force_items_per_line
 	
-	var result: int
+	var available = _get_available_size()
 	if vertical:
-		result = max(1, int(size.x / item_width))
+		return max(1, int(available.x / item_width))
 	else:
-		result = max(1, int(size.y / item_height))
-	return result
+		return max(1, int(available.y / item_height))
 
 func _get_visible_count() -> int:
 	var items_per_line = _get_items_per_line()
+	var eff = _get_normal_stride()
 	if vertical:
 		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / item_height)
-		return (visible_rows * items_per_line)+1
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+		return (visible_rows * items_per_line) + 1
 	else:
 		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / item_width)
-		return (visible_cols * items_per_line)+1
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+		return (visible_cols * items_per_line) + 1
 
 func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -471,8 +465,9 @@ func _get_base_dimensions() -> Vector2:
 func _recalculate_dimensions():
 	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions()
-	item_width = (base_dims.x * current_zoom) + grid_separation
-	item_height = (base_dims.y * current_zoom) + grid_separation
+	base_card_size = base_dims
+	card_size = base_dims * current_zoom
+	focused_card_size = card_size * focus_scale
 
 func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change or margin change)."""
@@ -566,45 +561,39 @@ func _update_layout():
 	var items_per_line = _get_items_per_line()
 	
 	if vertical:
-		var card_width = item_width - grid_separation
-		var row_width = items_per_line * card_width + max(0, items_per_line - 1) * grid_separation
-		# In non-overlapping mode, allow room for one focused card to expand without wrapping
 		if force_items_per_line > 0:
-			row_width += card_width * (focus_scale - 1.0)
-		_flow_container.custom_minimum_size.x = row_width
+			_flow_container.custom_minimum_size.x = focused_card_size.x
+		else:
+			var row_width = items_per_line * card_size.x
+			if items_per_line > 1:
+				row_width += (items_per_line - 1) * grid_separation
+			_flow_container.custom_minimum_size.x = max(row_width, 0.0)
 	else:
-		var card_height = item_height - grid_separation
-		var col_height = items_per_line * card_height + max(0, items_per_line - 1) * grid_separation
-		# In non-overlapping mode, allow room for one focused card to expand without wrapping
 		if force_items_per_line > 0:
-			col_height += card_height * (focus_scale - 1.0)
-		_flow_container.custom_minimum_size.y = col_height
+			_flow_container.custom_minimum_size.y = focused_card_size.y
+		else:
+			var col_height = items_per_line * card_size.y
+			if items_per_line > 1:
+				col_height += (items_per_line - 1) * grid_separation
+			_flow_container.custom_minimum_size.y = max(col_height, 0.0)
 
 func _initial_load():
-	# Guard against invalid size - don't load cards when view is not ready
-	# The resized signal will trigger recalculation when view becomes visible
 	if size.x <= 0 or size.y <= 0:
 		return
 	
-	# Guard against invalid item dimensions (would happen if zoom calculation failed)
-	if item_width <= 0 or item_height <= 0:
-		var base_dims = _get_base_dimensions()
-		item_width = max(item_width, base_dims.x * 0.1 + grid_separation)
-		item_height = max(item_height, base_dims.y * 0.1 + grid_separation)
-	
 	var items_per_line = _get_items_per_line()
+	var eff = _get_normal_stride()
 	var visible_count: int
 	if vertical:
 		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / item_height)
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
 		visible_count = visible_rows * items_per_line
 	else:
 		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / item_width)
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		visible_count = visible_cols * items_per_line
 	
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-	# Cap card count to pool size to prevent creating too many cards
 	var card_count = min(total_card_count, _total_items, _max_pool_size)
 	
 	_virtual_start = 0
@@ -620,9 +609,8 @@ func _initial_load():
 				card.refresh_settings()
 			item_created.emit(card, i)
 	
-	# Apply current zoom to all newly created cards
 	var current_zoom = _calculate_zoom()
-	_last_applied_zoom = current_zoom  # Initialize tracking for new cards
+	_last_applied_zoom = current_zoom
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("set_card_zoom"):
 			card.set_card_zoom(current_zoom)
@@ -643,10 +631,11 @@ func _on_scroll_value_changed(value: float):
 	var target_end: int
 	var total_card_count: int
 	
+	var eff = _get_normal_stride()
 	if vertical:
 		var viewport_height = size.y
-		var top_row = int(scroll_pos / item_height)
-		var visible_rows = ceili(viewport_height / item_height)
+		var top_row = int(scroll_pos / eff) if eff > 0 else 0
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
 		visible_start_idx = top_row * items_per_line
 		visible_end_idx = min(visible_start_idx + (visible_rows) * items_per_line, _total_items)-1
 		
@@ -661,8 +650,8 @@ func _on_scroll_value_changed(value: float):
 			target_start = max(0, _total_items - total_card_count)
 	else:
 		var viewport_width = size.x
-		var left_col = int(scroll_pos / item_width)
-		var visible_cols = ceili(viewport_width / item_width)
+		var left_col = int(scroll_pos / eff) if eff > 0 else 0
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		visible_start_idx = left_col * items_per_line
 		visible_end_idx = min(visible_start_idx + (visible_cols) * items_per_line, _total_items)-1
 		
@@ -809,9 +798,13 @@ func _add_card_at_end(virtual_index: int):
 	_active_cards.append(card)
 	_flow_container.add_child(card)
 	
-	# Ensure card has correct zoom immediately
+	# Fresh pool cards need zoom set after entering the tree (so @onready vars initialize)
 	if card.has_method("set_card_zoom"):
 		card.set_card_zoom(_calculate_zoom())
+	
+	# Apply alignment offset for single row/column modes
+	if card.has_method("set_alignment_offset"):
+		card.set_alignment_offset(_get_alignment_offset())
 	
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
@@ -842,9 +835,13 @@ func _add_card_at_start(virtual_index: int):
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
 	
-	# Ensure card has correct zoom immediately
+	# Fresh pool cards need zoom set after entering the tree (so @onready vars initialize)
 	if card.has_method("set_card_zoom"):
 		card.set_card_zoom(_calculate_zoom())
+	
+	# Apply alignment offset for single row/column modes
+	if card.has_method("set_alignment_offset"):
+		card.set_alignment_offset(_get_alignment_offset())
 	
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
@@ -867,18 +864,19 @@ func _is_index_visible(idx: int) -> bool:
 	var items_per_line = _get_items_per_line()
 	var visible_start_idx: int
 	var visible_end_idx: int
+	var eff = _get_normal_stride()
 	
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / item_height)
-		visible_start_idx = int(scroll_pos / item_height) * items_per_line
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+		visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / item_width)
-		visible_start_idx = int(scroll_pos / item_width) * items_per_line
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+		visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
 	
 	return idx >= visible_start_idx and idx < visible_end_idx
@@ -888,9 +886,13 @@ func _acquire_card() -> Control:
 		var card = _card_pool.pop_back()
 		if is_instance_valid(card):
 			card.set_meta("pooled", false)
-			card.visible = true
 			if card.has_method("reset"):
 				card.reset()
+			# Only set zoom now if the card already has a parent (recycled card).
+			# Fresh pool cards have null @onready nodes until added to the tree.
+			if card.has_method("set_card_zoom") and card.get_parent() != null:
+				card.set_card_zoom(_calculate_zoom())
+			card.visible = true
 			card.queue_redraw()
 			return card
 	
@@ -933,24 +935,24 @@ func _update_margin():
 	
 	var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
+	var num_active = last_idx - first_idx + 1
 	var items_per_line = _get_items_per_line()
 	
 	if vertical:
-		var card_height = item_height - grid_separation
+		var margin_top = _get_slot_position_for_index(first_idx)
+		var flow_height: float
+		var margin_bottom: float
 		
-		# Calculate virtual space before first card
-		var lines_before = first_idx / items_per_line
-		var margin_top = lines_before * card_height + max(0, lines_before - 1) * grid_separation
+		if force_items_per_line > 0:
+			# Exact content size for single column mode (no phantom trailing separation)
+			flow_height = num_active * focused_card_size.y + max(0, num_active - 1) * grid_separation
+			var trailing_items = max(0, _total_items - last_idx - 1)
+			margin_bottom = trailing_items * focused_card_size.y + max(0, trailing_items - 1) * grid_separation
+		else:
+			flow_height = _get_slot_position_for_index(last_idx + 1) - margin_top
+			var total_end = _get_slot_position_for_index(_total_items)
+			margin_bottom = total_end - _get_slot_position_for_index(last_idx + 1)
 		
-		# Calculate space for active cards
-		var active_lines = ceili(float(_active_cards.size()) / items_per_line)
-		var flow_height = active_lines * card_height + max(0, active_lines - 1) * grid_separation
-		
-		# Calculate virtual space after last card
-		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
-		var margin_bottom = lines_after * card_height + max(0, lines_after - 1) * grid_separation
-		
-		# Only update if values changed
 		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
 			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
 			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
@@ -961,21 +963,20 @@ func _update_margin():
 			_flow_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
 	else:
-		var card_width = item_width - grid_separation
+		var margin_left = _get_slot_position_for_index(first_idx)
+		var flow_width: float
+		var margin_right: float
 		
-		# Calculate virtual space before first card
-		var lines_before = first_idx / items_per_line
-		var margin_left = lines_before * card_width + max(0, lines_before - 1) * grid_separation
+		if force_items_per_line > 0:
+			# Exact content size for single row mode (no phantom trailing separation)
+			flow_width = num_active * focused_card_size.x + max(0, num_active - 1) * grid_separation
+			var trailing_items = max(0, _total_items - last_idx - 1)
+			margin_right = trailing_items * focused_card_size.x + max(0, trailing_items - 1) * grid_separation
+		else:
+			flow_width = _get_slot_position_for_index(last_idx + 1) - margin_left
+			var total_end = _get_slot_position_for_index(_total_items)
+			margin_right = total_end - _get_slot_position_for_index(last_idx + 1)
 		
-		# Calculate space for active cards
-		var active_lines = ceili(float(_active_cards.size()) / items_per_line)
-		var flow_width = active_lines * card_width + max(0, active_lines - 1) * grid_separation
-		
-		# Calculate virtual space after last card
-		var lines_after = ceili(float(_total_items - last_idx - 1) / items_per_line) if items_per_line > 0 else 0
-		var margin_right = lines_after * card_width + max(0, lines_after - 1) * grid_separation
-		
-		# Only update if values changed
 		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
 			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
 			_margin_container.add_theme_constant_override("margin_right", int(margin_right))
@@ -1091,18 +1092,19 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	var items_per_line = _get_items_per_line()
 	var visible_start_idx: int
 	var visible_end_idx: int
+	var eff = _get_normal_stride()
 	
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / item_height)
-		visible_start_idx = int(scroll_pos / item_height) * items_per_line
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+		visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / item_width)
-		visible_start_idx = int(scroll_pos / item_width) * items_per_line
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+		visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
 	
 	var updated_count = 0
@@ -1184,12 +1186,13 @@ func get_target_scroll() -> float:
 
 func get_visible_range() -> Dictionary:
 	var items_per_line = _get_items_per_line()
+	var eff = _get_normal_stride()
 	
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / item_height)
-		var visible_start = int(scroll_pos / item_height) * items_per_line
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
 		
 		return {
@@ -1203,8 +1206,8 @@ func get_visible_range() -> Dictionary:
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / item_width)
-		var visible_start = int(scroll_pos / item_width) * items_per_line
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
 		
 		return {
@@ -1225,15 +1228,16 @@ func get_card_at_index(index: int) -> Control:
 func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	if _scroll_container:
 		var items_per_line = _get_items_per_line()
+		var target_pos = _get_slot_position_for_index(index)
+		
 		if vertical:
-			var line = index / items_per_line
-			var target_y = line * item_height
-			_scroll_container.scroll_to(target_y, animate, duration_multiplier, focus_callback)
+			var viewport_height = size.y
+			var card_offset = target_pos + (card_size.y / 2.0) - (viewport_height / 2.0)
+			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 		else:
-			var line = index / items_per_line
-			var target_x = line * item_width
-			# SmoothScrollContainer might need scroll_to support for horizontal
-			_scroll_container.scroll_to(target_x, animate, duration_multiplier, focus_callback)
+			var viewport_width = size.x
+			var card_offset = target_pos + (card_size.x / 2.0) - (viewport_width / 2.0)
+			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 	for card in _active_cards:
@@ -1361,20 +1365,21 @@ func increment_total_count(amount: int = 1) -> int:
 		return start_index
 	
 	var items_per_line = _get_items_per_line()
+	var eff = _get_normal_stride()
 	
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / item_height)
-		var visible_start = int(scroll_pos / item_height) * items_per_line
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
 		
 		visible_range_changed.emit(visible_start, visible_end, _total_items)
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / item_width)
-		var visible_start = int(scroll_pos / item_width) * items_per_line
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
 		
 		visible_range_changed.emit(visible_start, visible_end, _total_items)
@@ -1382,22 +1387,17 @@ func increment_total_count(amount: int = 1) -> int:
 	return start_index
 
 func _initial_load_from_increment():
-	# Guard against invalid item dimensions (would happen if zoom calculation failed)
-	if item_width <= 0 or item_height <= 0:
-		var base_dims = _get_base_dimensions()
-		item_width = max(item_width, base_dims.x * 0.1 + grid_separation)
-		item_height = max(item_height, base_dims.y * 0.1 + grid_separation)
-	
 	var items_per_line = _get_items_per_line()
 	var visible_count: int
+	var eff = _get_normal_stride()
 	
 	if vertical:
 		var viewport_height = size.y if size.y > 0 else 600
-		var visible_rows = ceili(viewport_height / item_height)
+		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
 		visible_count = visible_rows * items_per_line
 	else:
 		var viewport_width = size.x if size.x > 0 else 800
-		var visible_cols = ceili(viewport_width / item_width)
+		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		visible_count = visible_cols * items_per_line
 	
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
@@ -1465,18 +1465,19 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 		var items_per_line = _get_items_per_line()
 		var visible_start_idx: int
 		var visible_end_idx: int
+		var eff = _get_normal_stride()
 		
 		if vertical:
 			var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 			var viewport_height = size.y
-			var visible_rows = ceili(viewport_height / item_height)
-			visible_start_idx = int(scroll_pos / item_height) * items_per_line
+			var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+			visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 			visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
 		else:
 			var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 			var viewport_width = size.x
-			var visible_cols = ceili(viewport_width / item_width)
-			visible_start_idx = int(scroll_pos / item_width) * items_per_line
+			var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+			visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 			visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
 		
 		for card in _active_cards:
@@ -1508,18 +1509,19 @@ func refresh_if_visible(start_index: int, end_index: int):
 		var items_per_line = _get_items_per_line()
 		var visible_start_idx: int
 		var visible_end_idx: int
+		var eff = _get_normal_stride()
 		
 		if vertical:
 			var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 			var viewport_height = size.y
-			var visible_rows = ceili(viewport_height / item_height)
-			visible_start_idx = int(scroll_pos / item_height) * items_per_line
+			var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
+			visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 			visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
 		else:
 			var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 			var viewport_width = size.x
-			var visible_cols = ceili(viewport_width / item_width)
-			visible_start_idx = int(scroll_pos / item_width) * items_per_line
+			var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
+			visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 			visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
 		
 		var updated_count = 0

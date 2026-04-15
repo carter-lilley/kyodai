@@ -18,6 +18,7 @@ const EFFECT_REGISTRY: Dictionary = {
 	"distort": "res://effects/shared/distort_effect.gd",
 	"gradient_overlay": "res://effects/shared/gradient_overlay_effect.gd",
 	"hsl": "res://effects/shared/hsl_effect.gd",
+	"blur": "res://effects/shared/blur_effect.gd",
 }
 
 # Layer order (z-index / child order) - lower = behind, higher = in front
@@ -26,7 +27,8 @@ const EFFECT_LAYER_ORDER: Array = [
 	"drop_shadow",# -1: Behind card
 	"base",       # 0: Base texture
 	"hsl",        # 1: HSL color adjustment
-	"distort",         # 2: Distortion overlay
+	"blur",       # 2: Blur overlay
+	"distort",         # 3: Distortion overlay
 	"gradient_overlay", # 3: Gradient overlay
 	"glass",            # 4: Glass overlay
 	"border",           # 5: Border overlay
