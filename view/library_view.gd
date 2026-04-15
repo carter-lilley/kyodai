@@ -77,7 +77,7 @@ func _ready():
 		platform_indicator.platform_selected.connect(_on_platform_selected)
 		platform_indicator.cycle_prev_clicked.connect(_on_cycle_prev_clicked)
 		platform_indicator.cycle_next_clicked.connect(_on_cycle_next_clicked)
-		platform_indicator.search_clicked.connect(_show_search_overlay)
+		platform_indicator.search_clicked.connect(_on_search_button_clicked)
 	
 	# Initial load
 	_load_total_count()
@@ -93,6 +93,16 @@ func _setup_search_overlay():
 	_search_overlay.search_submitted.connect(_on_search_submitted)
 	_search_overlay.search_cancelled.connect(_on_search_cancelled)
 	add_child(_search_overlay)
+
+func _on_search_button_clicked() -> void:
+	"""Handle search button click — clear active search or show overlay."""
+	if _is_search_active:
+		_clear_search()
+		if games_grid:
+			games_grid.grab_focus()
+		call_deferred("_focus_first_card")
+	else:
+		_show_search_overlay()
 
 func _show_search_overlay():
 	"""Show the search overlay."""
@@ -113,6 +123,7 @@ func _on_search_submitted(query: String):
 	# Update platform indicator to show SEARCH
 	if platform_indicator:
 		platform_indicator.show_search_mode(query)
+		platform_indicator.set_search_active(true)
 	
 	# Reload grid with search results
 	_load_total_count_with_search()
@@ -126,6 +137,13 @@ func _on_search_cancelled():
 		games_grid.grab_focus()
 	# Return focus to the first card in the grid
 	call_deferred("_focus_first_card")
+
+func try_clear_search() -> bool:
+	"""Clear active search if one is active. Returns true if search was cleared."""
+	if _is_search_active:
+		_clear_search()
+		return true
+	return false
 
 func _clear_search():
 	"""Clear active search and return to normal platform view."""
@@ -145,6 +163,7 @@ func _clear_search():
 		# Update platform indicator
 		if platform_indicator:
 			platform_indicator.update_display(_platforms, _current_platform_index)
+			platform_indicator.set_search_active(false)
 		
 		# Reload grid
 		_load_total_count_with_platform(false)
@@ -361,6 +380,10 @@ func _on_cycle_next_clicked() -> void:
 
 func _load_total_count(preserve_cache: bool = false):
 	"""Get total game count for virtual scrolling setup."""
+	if _is_search_active:
+		_load_total_count_with_search()
+		return
+	
 	_is_loading = true
 	_update_status("Loading library...")
 	
@@ -381,6 +404,26 @@ func _load_total_count(preserve_cache: bool = false):
 
 func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
 	"""Get total game count for current platform filter and call callback when complete."""
+	if _is_search_active:
+		_is_loading = true
+		MemoryManager.queue_db_task(
+			func():
+				var count = DataManager.get_search_results_count(_search_query)
+				return count,
+			func(count: int):
+				if not is_instance_valid(games_grid):
+					_is_loading = false
+					if on_complete.is_valid():
+						on_complete.call()
+					return
+				_total_games = count
+				games_grid.set_total_count(count, preserve_cache)
+				_is_loading = false
+				if on_complete.is_valid():
+					on_complete.call()
+		)
+		return
+	
 	_is_loading = true
 	_update_status("Loading library...")
 	
@@ -504,7 +547,10 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
-		_load_total_count(true)
+		if _is_search_active:
+			_load_total_count_with_search()
+		else:
+			_load_total_count(true)
 
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
@@ -633,10 +679,11 @@ func _on_sync_started():
 
 func on_view_show():
 	super.on_view_show()
+	# Ensure search overlay is hidden when returning to this view
+	if _search_overlay and _search_overlay.is_active():
+		_search_overlay.hide_overlay()
 
 func on_view_hide():
-	# Clear search when leaving the view
-	_clear_search()
 	view_hidden.emit()
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):

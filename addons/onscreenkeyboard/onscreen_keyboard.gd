@@ -149,6 +149,7 @@ func _init_keyboard():
 
 var focus_object = null
 var _active_line_edit: LineEdit = null
+var _passthrough_caret_column: int = 0
 
 func show():
 	_show_keyboard()
@@ -160,6 +161,7 @@ func reset_focus_tracking():
 	"""Reset focus tracking so keyboard will reopen on next LineEdit focus."""
 	_previous_focus_object = null
 	_active_line_edit = null
+	_passthrough_caret_column = 0
 
 var released = true
 var _previous_focus_object = null
@@ -180,13 +182,55 @@ func _update_auto_display_on_input(event):
 		_previous_focus_object = focus_object
 		if focus_object != null and is_keyboard_focus_object(focus_object):
 			_active_line_edit = focus_object
+			_passthrough_caret_column = _active_line_edit.caret_column
 			_show_keyboard()
 
-	# Hide keyboard on Enter key (completes input)
-	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_ENTER:
+	# Pass-through typing from physical keyboard while virtual keyboard is open
+	if visible and _active_line_edit != null and event is InputEventKey and event.pressed:
+		if event.keycode == KEY_BACKSPACE:
+			if _passthrough_caret_column > 0:
+				_active_line_edit.text = _active_line_edit.text.erase(_passthrough_caret_column - 1, 1)
+				_passthrough_caret_column -= 1
+				_active_line_edit.caret_column = _passthrough_caret_column
+				_active_line_edit.text_changed.emit(_active_line_edit.text)
+			get_viewport().set_input_as_handled()
+			return
+		elif event.unicode != 0 and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
+			var ch = char(event.unicode)
+			_active_line_edit.text = _active_line_edit.text.insert(_passthrough_caret_column, ch)
+			_passthrough_caret_column += 1
+			_active_line_edit.caret_column = _passthrough_caret_column
+			_active_line_edit.text_changed.emit(_active_line_edit.text)
+			get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_LEFT:
+			_passthrough_caret_column = max(0, _passthrough_caret_column - 1)
+			_active_line_edit.caret_column = _passthrough_caret_column
+			get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_RIGHT:
+			_passthrough_caret_column = min(_active_line_edit.text.length(), _passthrough_caret_column + 1)
+			_active_line_edit.caret_column = _passthrough_caret_column
+			get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_HOME:
+			_passthrough_caret_column = 0
+			_active_line_edit.caret_column = 0
+			get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_END:
+			_passthrough_caret_column = _active_line_edit.text.length()
+			_active_line_edit.caret_column = _passthrough_caret_column
+			get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			if _active_line_edit is LineEdit:
+				_active_line_edit.text_submitted.emit(_active_line_edit.text)
 			_active_line_edit = null
+			_passthrough_caret_column = 0
 			_hide_keyboard()
+			get_viewport().set_input_as_handled()
+			return
 	
 	# Hide keyboard on ui_cancel action (controller B button)
 	if event.is_action_pressed("ui_cancel"):

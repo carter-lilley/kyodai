@@ -310,6 +310,13 @@ func _input(event: InputEvent):
 			# Keyboard will handle ui_cancel to close itself
 			return
 		
+		# If in Library view with an active search, clear the search first
+		var current_view = UIManager.get_current_view()
+		if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_search"):
+			if current_view.try_clear_search():
+				get_viewport().set_input_as_handled()
+				return
+		
 		# Play return sound
 		if AudioManager:
 			AudioManager.play_sfx("return")
