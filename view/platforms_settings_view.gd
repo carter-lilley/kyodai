@@ -71,6 +71,24 @@ func _build_view():
 	fold_covers_hbox.add_child(fold_covers_label)
 	_platforms_container.add_child(fold_covers_hbox)
 	
+	# Add hide games without covers toggle
+	var hide_no_covers_hbox = HBoxContainer.new()
+	hide_no_covers_hbox.name = "HideNoCoversContainer"
+	
+	var hide_no_covers_checkbox = CheckBox.new()
+	hide_no_covers_checkbox.name = "HideNoCoversCheckbox"
+	var hide_no_covers_setting = SettingsManager.get_setting("hide_games_without_covers")
+	hide_no_covers_checkbox.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
+	hide_no_covers_checkbox.toggled.connect(_on_hide_no_covers_toggled)
+	
+	var hide_no_covers_label = Label.new()
+	hide_no_covers_label.text = "Hide games without cover art"
+	hide_no_covers_label.tooltip_text = "Games without cover art will be hidden from the library view"
+	
+	hide_no_covers_hbox.add_child(hide_no_covers_checkbox)
+	hide_no_covers_hbox.add_child(hide_no_covers_label)
+	_platforms_container.add_child(hide_no_covers_hbox)
+	
 	var spacer2 = Control.new()
 	spacer2.custom_minimum_size = Vector2(0, 10)
 	_platforms_container.add_child(spacer2)
@@ -108,7 +126,7 @@ func _build_view():
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "FoldCoversContainer"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "FoldCoversContainer", "HideNoCoversContainer"]:
 			continue
 		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -567,6 +585,11 @@ func on_view_hide():
 
 func _on_fold_covers_toggled(enabled: bool) -> void:
 	var setting = SettingsManager.get_setting("fold_duplicate_covers")
+	if setting:
+		SettingsManager.set_setting(enabled, setting)
+
+func _on_hide_no_covers_toggled(enabled: bool) -> void:
+	var setting = SettingsManager.get_setting("hide_games_without_covers")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 

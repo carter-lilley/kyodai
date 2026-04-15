@@ -31,6 +31,7 @@ const Type = SettingsVar.SettingType
 @export var romm_username := SettingsVar.new(Type.STRING, "", State.ENABLED, "Username")
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
 @export var fold_duplicate_covers := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fold duplicate covers into siblings", "During sync, games with identical cover art will be grouped together like RomM siblings")
+@export var hide_games_without_covers := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Hide games without cover art", "Games without cover art will be hidden from the library view")
 @export_subgroup("Save Sync")
 @export var save_sync_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Enable Save Sync", "Sync emulator save files with RomM server")
 @export var save_sync_auto := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Auto-sync saves", "Automatically upload saves after playing and download before launch")

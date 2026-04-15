@@ -9,11 +9,14 @@ chunk reassembly progress notif
 
 alignment modes in single row
 
-saves
+saves / conflic resolution
+platform bios from romm
+
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
+
 ## general UI
-	draggable ui elements?
+	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)
 	'controls/info bar'
 	focus glow

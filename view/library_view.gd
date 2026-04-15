@@ -549,10 +549,15 @@ func _on_game_added(game: GameResource):
 
 func _on_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
 	"""Handle batch game additions during sync without full grid rebuild."""
-	# Filter out games without cover art
+	# Filter out games without cover art based on setting
+	var hide_no_covers = true
+	var setting = SettingsManager.get_setting("hide_games_without_covers")
+	if setting:
+		hide_no_covers = setting.value
+	
 	var filtered_games: Array[GameResource] = []
 	for game in games:
-		if game.has_cover_art:
+		if not hide_no_covers or game.has_cover_art:
 			filtered_games.append(game)
 	
 	if filtered_games.size() == 0:

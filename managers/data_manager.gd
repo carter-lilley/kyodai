@@ -27,10 +27,6 @@ var _sync_notification_id: int = -1
 # Logging control
 var _verbose_sql: bool = false  # Set to true to see SQL queries
 
-# Debug toggle - hide games without cover art during sync
-const _DEBUG_HIDE_GAMES_WITHOUT_COVERS: bool = true  # Set to true to skip games without cover art
-var _sync_skipped_no_cover: int = 0  # Counter for skipped games
-
 # Sync state machine
 enum SyncState {
 	IDLE,
@@ -123,6 +119,19 @@ func _on_setting_changed(value, setting):
 		else:
 			print("[CoverFolding] Setting disabled - removing cover-based siblings...")
 			_remove_cover_based_siblings()
+	elif setting.property_name == "hide_games_without_covers":
+		print("[DataManager] Hide no-cover setting changed to %s" % value)
+		# Trigger grid refresh so library view updates filtering
+		sync_completed.emit(true, "Hide no-cover games %s" % ("enabled" if value else "disabled"))
+
+func _should_hide_no_cover_games() -> bool:
+	var setting = SettingsManager.get_setting("hide_games_without_covers")
+	if setting:
+		return setting.value
+	return true
+
+func _get_has_cover_art_clause() -> String:
+	return " AND has_cover_art = 1" if _should_hide_no_cover_games() else ""
 
 func _remove_cover_based_siblings():
 	"""Unfold all games by setting cover_group_master = 1 for all games in cover groups.
@@ -360,7 +369,6 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_current_synced = 0
 	_sync_total_synced = 0
 	_sync_final_callback = callback
-	_sync_skipped_no_cover = 0
 	_sync_force_full = force_full_sync
 	_sync_current_updated_after = ""
 	
@@ -489,7 +497,6 @@ func _start_sync_iterative(enabled: Array, callback: Callable, force_full_sync: 
 	_sync_current = 0
 	_sync_platform_index = 0
 	_sync_platform_count = enabled.size()
-	_sync_skipped_no_cover = 0
 	_sync_platforms_list = enabled
 	_sync_final_callback = callback
 	
@@ -648,9 +655,6 @@ func _fetch_platform_batch():
 
 func _complete_sync():
 	"""Complete the sync process"""
-	if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-		print("[Sync] Skipped %d games without covers" % _sync_skipped_no_cover)
-	
 	# Flush any remaining batch notifications before stopping
 	_flush_batch_notifications()
 	
@@ -683,13 +687,11 @@ func _apply_cover_folding_and_complete_sync(total_synced: int, games_from_cache:
 		var completion_msg = "Synced " + str(total_synced) + " games"
 		if games_from_cache > 0:
 			completion_msg += " (" + str(games_from_cache) + " checked from cache"
-			if _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-				completion_msg += ", " + str(_sync_skipped_no_cover) + " skipped"
 			if folded_count > 0:
 				completion_msg += ", " + str(folded_count) + " folded by cover"
 			completion_msg += ")"
-		elif _DEBUG_HIDE_GAMES_WITHOUT_COVERS and _sync_skipped_no_cover > 0:
-			completion_msg += " (" + str(_sync_skipped_no_cover) + " hidden, no covers)"
+		elif folded_count > 0:
+			completion_msg += " (" + str(folded_count) + " folded by cover)"
 		
 		_sync_state = SyncState.IDLE
 		sync_completed.emit(true, completion_msg)
@@ -1516,11 +1518,9 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 		# During batch sync, we'll check siblings separately
 		game.is_master_entry = true  # Default, will be updated by batch check
 	
-	# Debug: Mark games without cover art as hidden if toggle is enabled
-	if _DEBUG_HIDE_GAMES_WITHOUT_COVERS:
-		if game.cover_url == "" or game.cover_url == "null" or game.cover_url == "<null>" or game.cover_url == "None":
-			game.has_cover_art = false
-			_sync_skipped_no_cover += 1
+	# Mark games without cover art so filtering can be applied dynamically
+	if game.cover_url == "" or game.cover_url == "null" or game.cover_url == "<null>" or game.cover_url == "None":
+		game.has_cover_art = false
 	
 	return game
 
@@ -1896,7 +1896,7 @@ func get_all_games() -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY title")
+	_db.query("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -1905,7 +1905,7 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY title" % platform_slug)
+	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1" % platform_slug + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
 	for row in _db.query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -1919,9 +1919,9 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	var query: String
 	
 	if platform_slug.is_empty():
-		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+		query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
 	else:
-		query = "SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
+		query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
 	
 	_db.query(query)
 	
@@ -1936,15 +1936,8 @@ func get_platforms_with_games() -> Array[Dictionary]:
 		return platforms
 	
 	# Query for platforms with their game counts, sorted alphabetically
-	var query = """
-		SELECT g.platform_slug, p.name, COUNT(*) as game_count
-		FROM games g
-		LEFT JOIN platforms p ON g.platform_slug = p.slug
-		WHERE g.is_master_entry = 1 AND g.has_cover_art = 1 AND g.cover_group_master = 1
-		GROUP BY g.platform_slug
-		HAVING game_count > 0
-		ORDER BY g.platform_slug ASC
-	"""
+	var cover_clause = _get_has_cover_art_clause().replace("has_cover_art", "g.has_cover_art")
+	var query = "SELECT g.platform_slug, p.name, COUNT(*) as game_count FROM games g LEFT JOIN platforms p ON g.platform_slug = p.slug WHERE g.is_master_entry = 1" + cover_clause + " AND g.cover_group_master = 1 GROUP BY g.platform_slug HAVING game_count > 0 ORDER BY g.platform_slug ASC"
 	
 	var success = _db.query(query)
 	if success:
@@ -1971,9 +1964,9 @@ func get_total_games_count(platform_slug: String = "") -> int:
 	
 	var query: String
 	if platform_slug.is_empty():
-		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1"
+		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1"
 	else:
-		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 AND platform_slug = '%s'" % platform_slug
+		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug = '%s'" % platform_slug
 	
 	var success = _db.query(query)
 	if success and _db.query_result.size() > 0:
@@ -1993,15 +1986,7 @@ func search_games_paginated(query: String, offset: int, limit: int) -> Array[Gam
 	# Sanitize query to prevent SQL injection
 	var sanitized_query = query.replace("'", "''")
 	
-	var sql = """
-		SELECT * FROM games 
-		WHERE is_master_entry = 1 
-		AND has_cover_art = 1 
-		AND cover_group_master = 1
-		AND title LIKE '%%%s%%'
-		ORDER BY title ASC 
-		LIMIT %d OFFSET %d
-	""" % [sanitized_query, limit, offset]
+	var sql = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%' ORDER BY title ASC LIMIT %d OFFSET %d" % [sanitized_query, limit, offset]
 	
 	var success = _db.query(sql)
 	if success:
@@ -2018,13 +2003,7 @@ func get_search_results_count(query: String) -> int:
 	# Sanitize query to prevent SQL injection
 	var sanitized_query = query.replace("'", "''")
 	
-	var sql = """
-		SELECT COUNT(*) as count FROM games 
-		WHERE is_master_entry = 1 
-		AND has_cover_art = 1 
-		AND cover_group_master = 1
-		AND title LIKE '%%%s%%'
-	""" % sanitized_query
+	var sql = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%'" % sanitized_query
 	
 	var success = _db.query(sql)
 	if success and _db.query_result.size() > 0:
@@ -2043,17 +2022,7 @@ func get_downloaded_games_count() -> int:
 		return 0
 	
 	var slug_list = "'" + "','".join(enabled_slugs) + "'"
-	var query = """
-		SELECT COUNT(*) as count FROM games 
-		WHERE is_master_entry = 1 
-		AND has_cover_art = 1
-		AND cover_group_master = 1
-		AND platform_slug IN (%s)
-		AND (
-			has_local_copy = 1 
-			OR downloaded_sibling_ids != '[]'
-		)
-	""" % slug_list
+	var query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % slug_list
 	
 	var success = _db.query(query)
 	if success and _db.query_result.size() > 0:
@@ -2073,19 +2042,7 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 		return games
 	
 	var slug_list = "'" + "','".join(enabled_slugs) + "'"
-	var query = """
-		SELECT * FROM games 
-		WHERE is_master_entry = 1 
-		AND has_cover_art = 1
-		AND cover_group_master = 1
-		AND platform_slug IN (%s)
-		AND (
-			has_local_copy = 1 
-			OR downloaded_sibling_ids != '[]'
-		)
-		ORDER BY last_played DESC, title ASC
-		LIMIT %d OFFSET %d
-	""" % [slug_list, limit, offset]
+	var query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT %d OFFSET %d" % [slug_list, limit, offset]
 	
 	_db.query(query)
 	for row in _db.query_result:
@@ -2647,7 +2604,7 @@ func get_random_game() -> GameResource:
 		return null
 	
 	# Get a random game that has a cover and is a master entry
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1 AND has_cover_art = 1 AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
+	_db.query("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
 	if _db.query_result.size() > 0:
 		return _row_to_game(_db.query_result[0])
 	return null
