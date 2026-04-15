@@ -74,12 +74,6 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	to preserve the original focus effect configuration."""
 	var tweenables = get_tweenable_settings()
 	
-	# DEBUG: Print tween info for HSL effects
-	if effect_id == "hsl":
-		var from_sat = from_settings.get("saturation_scale", "N/A")
-		var to_sat = to_settings.get("saturation_scale", "N/A")
-		print("[HSL TWEEN] Progress: %.3f | From sat: %s | To sat: %s | Node: %s" % [progress, str(from_sat), str(to_sat), name])
-	
 	_is_tweening = true
 	
 	# Create a temporary settings dict for interpolation

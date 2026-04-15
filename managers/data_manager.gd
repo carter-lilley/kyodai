@@ -226,6 +226,21 @@ func _create_tables():
 		)
 	""")
 	
+	# Create save_sync table for tracking save file sync state
+	_db.query("""
+		CREATE TABLE IF NOT EXISTS save_sync (
+			id INTEGER PRIMARY KEY,
+			romm_id INTEGER NOT NULL,
+			emulator_id TEXT NOT NULL,
+			file_name TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			last_synced_at TEXT DEFAULT '',
+			remote_save_id INTEGER DEFAULT 0,
+			slot TEXT
+		)
+	""")
+	_db.query("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
+	
 	# Migrate old cover_folded column to new cover_group system if needed
 	_migrate_cover_folding_schema()
 
@@ -2103,6 +2118,66 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 		WHERE romm_id = %d
 	""" % [_escape_sql(timestamp), romm_id]
 	
+	return _db.query(query)
+
+func get_romm_device_id() -> String:
+	"""Get the registered RomM device ID."""
+	if not _is_db_ready:
+		return ""
+	_db.query("SELECT value FROM cache_metadata WHERE key = 'romm_device_id'")
+	if _db.query_result.size() > 0:
+		return _db.query_result[0].get("value", "")
+	return ""
+
+func set_romm_device_id(device_id: String) -> void:
+	"""Store the registered RomM device ID."""
+	if not _is_db_ready:
+		return
+	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('romm_device_id', '%s')" % device_id)
+
+func clear_romm_device_id() -> void:
+	"""Clear the stored RomM device ID (e.g. if server no longer recognizes it)."""
+	if not _is_db_ready:
+		return
+	_db.query("DELETE FROM cache_metadata WHERE key = 'romm_device_id'")
+
+func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dictionary]:
+	"""Get save sync records for a game. Optionally filter by emulator."""
+	if not _is_db_ready:
+		return []
+	var query = "SELECT * FROM save_sync WHERE romm_id = %d" % romm_id
+	if emulator_id != "":
+		query += " AND emulator_id = '%s'" % _escape_sql(emulator_id)
+	_db.query(query)
+	return _db.query_result.duplicate()
+
+func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
+	"""Insert or update a save sync record."""
+	if not _is_db_ready:
+		return false
+	
+	var delete_query = "DELETE FROM save_sync WHERE romm_id = %d AND emulator_id = '%s' AND file_name = '%s'" % [romm_id, _escape_sql(emulator_id), _escape_sql(file_name)]
+	if slot != "":
+		delete_query += " AND slot = '%s'" % _escape_sql(slot)
+	else:
+		delete_query += " AND (slot IS NULL OR slot = '')"
+	_db.query(delete_query)
+	
+	var insert_query = """
+		INSERT INTO save_sync (romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot)
+		VALUES (%d, '%s', '%s', '%s', '%s', %d, %s)
+	""" % [romm_id, _escape_sql(emulator_id), _escape_sql(file_name), _escape_sql(file_path), _escape_sql(last_synced_at), remote_save_id, ("'%s'" % _escape_sql(slot)) if slot != "" else "NULL"]
+	return _db.query(insert_query)
+
+func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: String, slot: String = "") -> bool:
+	"""Delete a save sync record."""
+	if not _is_db_ready:
+		return false
+	var query = "DELETE FROM save_sync WHERE romm_id = %d AND emulator_id = '%s' AND file_name = '%s'" % [romm_id, _escape_sql(emulator_id), _escape_sql(file_name)]
+	if slot != "":
+		query += " AND slot = '%s'" % _escape_sql(slot)
+	else:
+		query += " AND (slot IS NULL OR slot = '')"
 	return _db.query(query)
 
 func _row_to_game(row: Dictionary) -> GameResource:

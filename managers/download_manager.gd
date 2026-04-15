@@ -493,47 +493,37 @@ func _start_download(item: QueueItem):
 	
 	# Check if this is a large file that should use chunked downloading
 	# Note: SAF paths are now supported for chunked downloads
-	var should_use_chunking = item.type == "game" and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD
+	var is_large_file = item.type == "game" or item.type == "emulator" or item.type == "emulator_core"
+	var should_use_chunking = is_large_file and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD
 	
 	if should_use_chunking:
 		print("[DownloadManager] Checking Range support for chunked download: " + item.name + " (size=" + str(item.expected_file_size) + ")")
 		_check_range_and_start_chunked(item, headers)
 		return
 	
-	# Use file-based download for:
-	# 1. Large files (games) - better for memory management
-	# 2. SAF paths - required for SAF copying after download
-	# Note: HTTPRequest.download_file streams directly to disk
-	if item.type == "game" or item.use_saf:
-		print("[DownloadManager] Using file-based download for: " + item.name + " (type=" + item.type + ", use_saf=" + str(item.use_saf) + ")")
-		item.download_info = NetworkManager.http_download_file(
-			item.url,
-			item.destination_path,
-			headers,
-			func(success: bool, status_code: int, error_msg: String):
-				_on_file_download_complete(item, success, error_msg),
-			item.expected_file_size
-		)
-		
-		if item.download_info.is_empty():
-			item.status = "failed"
-			item.error_message = "Failed to start download"
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			download_completed.emit(item.id, false, item.error_message)
-			queue_changed.emit()
-			_process_queue()
-			return
-		
-		item.http_request = item.download_info.get("http", null)
-	else:
-		print("[DownloadManager] Using buffer-based download for: " + item.name + " (type=" + item.type + ")")
-		item.http_request = NetworkManager.http_get(
-			item.url,
-			headers,
-			func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
-				_on_download_complete(item, success, body, error_msg)
-		)
+	# All downloads now stream directly to disk via HTTPRequest.download_file
+	# This avoids memory issues with large files (games, emulators, cores)
+	print("[DownloadManager] Using file-based download for: " + item.name + " (type=" + item.type + ", use_saf=" + str(item.use_saf) + ")")
+	item.download_info = NetworkManager.http_download_file(
+		item.url,
+		item.destination_path,
+		headers,
+		func(success: bool, status_code: int, error_msg: String):
+			_on_file_download_complete(item, success, error_msg),
+		item.expected_file_size
+	)
+	
+	if item.download_info.is_empty():
+		item.status = "failed"
+		item.error_message = "Failed to start download"
+		_cleanup_item(item)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	item.http_request = item.download_info.get("http", null)
 	
 	if item.http_request == null:
 		item.status = "failed"
@@ -1511,8 +1501,8 @@ func _update_download_progress(item: QueueItem):
 	if item.http_request == null and item.download_info.is_empty():
 		return
 	
-	# For file-based downloads, check actual file on disk to avoid 32-bit overflow
-	if item.type == "game" and not item.download_info.is_empty():
+	# All downloads are now file-based; check actual file on disk to avoid 32-bit overflow
+	if not item.download_info.is_empty():
 		var file_path = item.download_info.get("path", item.destination_path)
 		
 		# Check file size on disk (64-bit, no overflow)
@@ -1555,84 +1545,6 @@ func _update_download_progress(item: QueueItem):
 		
 		# Update foreground service notification on Android
 		_update_foreground_service(item.name, int(item.progress * 100))
-	else:
-		# For non-game downloads, use HTTPRequest progress
-		if item.http_request and is_instance_valid(item.http_request):
-			var body_size = item.http_request.get_body_size()
-			var downloaded = item.http_request.get_downloaded_bytes()
-			
-			if body_size > 0:
-				item.progress = float(downloaded) / float(body_size)
-				download_progress.emit(item.id, item.progress)
-				
-				# Update foreground service notification on Android
-				_update_foreground_service(item.name, int(item.progress * 100))
-			
-			# Update stall time if making progress
-			var last_bytes = _last_downloaded_bytes.get(item.id, -1)
-			if downloaded > 0 and downloaded != last_bytes:
-				_last_progress_times[item.id] = Time.get_ticks_msec()
-				_last_downloaded_bytes[item.id] = downloaded
-
-func _on_download_complete(item: QueueItem, success: bool, body: PackedByteArray, error_msg: String):
-	# Stop progress timer and cleanup timeout tracking
-	_cleanup_download_tracking(item.id)
-	
-	item.http_request = null
-	
-	if not success:
-		item.status = "failed"
-		item.error_message = error_msg
-		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
-		_cleanup_item(item)
-		_active_items.erase(item.id)
-		_stop_foreground_service()  # Stop foreground service on failure
-		download_completed.emit(item.id, false, error_msg)
-		queue_changed.emit()
-		_process_queue()
-		return
-	
-	# Write file
-	var file = FileAccess.open(item.destination_path, FileAccess.WRITE)
-	if not file:
-		item.status = "failed"
-		item.error_message = "Failed to write file"
-		NotificationManager.update_notification_text(item.notification_id, "Failed to save: " + item.name)
-		_cleanup_item(item)
-		_active_items.erase(item.id)
-		_stop_foreground_service()  # Stop foreground service on failure
-		download_completed.emit(item.id, false, "Failed to write file")
-		queue_changed.emit()
-		_process_queue()
-		return
-	
-	file.store_buffer(body)
-	file.close()
-	
-	# Update game resource if applicable
-	if item.game_resource:
-		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
-		item.game_resource.mark_sibling_downloaded(downloaded_id)
-		item.game_resource.file_path = item.destination_path
-		DataManager.update_game(item.game_resource)
-	
-	# Call custom callback if provided
-	if item.callbacks.has("on_complete"):
-		item.callbacks.on_complete.call(true, item.destination_path)
-	
-	# Auto-extract if requested
-	if item.auto_extract:
-		item.status = "extract_pending"
-		item.progress = 0.0
-		_start_extraction(item)
-	else:
-		item.status = "completed"
-		item.progress = 1.0
-		_active_items.erase(item.id)
-		_stop_foreground_service()  # Stop foreground service on success
-		download_completed.emit(item.id, true, item.destination_path)
-		queue_changed.emit()
-		_process_queue()
 
 func _on_file_download_complete(item: QueueItem, success: bool, error_msg: String):
 	# Guard against double-calls
@@ -2103,12 +2015,9 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 			push_error("[DownloadManager] 7z extraction failed with exit code: " + str(exit_code))
 			return false
 		
-		# Clean up archive
 		# Clean up archive only if delete_after_extract is true
 		if item.delete_after_extract:
-			var dir = DirAccess.open("user://")
-			if dir:
-				dir.remove(archive_path.trim_prefix("user://"))
+			FileSystemManager.delete_file(archive_path)
 		
 		return true
 	

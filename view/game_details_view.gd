@@ -15,6 +15,8 @@ extends View
 # Sibling dropdown - will be null until added to scene
 @onready var sibling_dropdown: OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/InfoVBox/SiblingDropdown
 @onready var action_button: Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ActionButton
+@onready var sync_button: Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SyncButton
+@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SyncStatusLabel
 
 var _current_game: GameResource = null
 var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
@@ -27,6 +29,10 @@ func _ready():
 	# Connect action button
 	if action_button:
 		action_button.pressed.connect(_on_action_button_pressed)
+	
+	# Connect sync button
+	if sync_button:
+		sync_button.pressed.connect(_on_sync_button_pressed)
 	
 	# Connect to download manager to refresh button state when downloads complete
 	DownloadManager.download_completed.connect(_on_download_completed)
@@ -56,6 +62,7 @@ func set_game(game: GameResource) -> void:
 	_setup_sibling_dropdown(game)
 	_update_file_info_display(game)
 	_update_action_button()
+	_update_sync_ui()
 	
 	description_label.text = game.description if game.description else "No description available."
 	
@@ -117,6 +124,8 @@ func _on_sibling_selected(index: int) -> void:
 		_update_file_info_display(_current_game)
 		# Update action button based on new selection
 		_update_action_button()
+		# Update sync UI based on new selection
+		_update_sync_ui()
 		# Persist the selection
 		DataManager.update_game(_current_game)
 
@@ -144,10 +153,12 @@ func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 			# Update the display
 			_update_file_info_display(_current_game)
 			_update_action_button()
+			_update_sync_ui()
 		else:
 			# Still update display with what we have
 			_update_file_info_display(_current_game)
 			_update_action_button()
+			_update_sync_ui()
 			DataManager.update_game(_current_game)
 	)
 
@@ -205,6 +216,57 @@ func _update_action_button() -> void:
 		action_button.text = "Download"
 		# Use blue color for download button
 		action_button.modulate = Color(0.4, 0.6, 1.0)
+
+func _update_sync_ui() -> void:
+	if not sync_button or not sync_status_label or not _current_game:
+		return
+	
+	var setting = SettingsManager.get_setting("save_sync_enabled")
+	if not setting or not setting.value:
+		sync_button.visible = false
+		sync_status_label.visible = false
+		return
+	
+	var emulator_id = LaunchManager.resolve_emulator_for_game(_current_game)
+	if emulator_id == "":
+		sync_button.visible = false
+		sync_status_label.visible = false
+		return
+	
+	var extensions = SaveManager.get_save_extensions(emulator_id)
+	if extensions.is_empty():
+		sync_button.visible = false
+		sync_status_label.visible = false
+		return
+	
+	sync_button.visible = true
+	sync_status_label.visible = true
+	sync_button.text = "Sync Saves"
+	sync_button.modulate = Color.WHITE
+	sync_button.disabled = false
+	sync_status_label.text = SaveManager.get_save_sync_status_text(_current_game, emulator_id)
+
+func _on_sync_button_pressed() -> void:
+	if not _current_game:
+		return
+	
+	var emulator_id = LaunchManager.resolve_emulator_for_game(_current_game)
+	if emulator_id == "":
+		return
+	
+	sync_button.disabled = true
+	sync_button.text = "Syncing..."
+	
+	SaveManager.sync_saves_for_game(_current_game, emulator_id, func(success: bool, message: String):
+		sync_button.disabled = false
+		sync_button.text = "Sync Saves"
+		_update_sync_ui()
+		
+		if success:
+			NotificationManager.show_notification("Save sync complete", Notification.Type.INFO)
+		else:
+			NotificationManager.show_notification("Save sync: " + message, Notification.Type.ERROR)
+	)
 
 func _on_action_button_pressed() -> void:
 	if not _current_game:
@@ -278,6 +340,8 @@ func _on_download_completed(item_id: String, success: bool, message: String) -> 
 		_update_action_button()
 		# Also refresh the file info display
 		_update_file_info_display(_current_game)
+		# Also refresh the sync UI
+		_update_sync_ui()
 
 func clear() -> void:
 	_current_game = null

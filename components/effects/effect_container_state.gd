@@ -26,7 +26,7 @@ var container_size: Vector2 = base_size:
 			size_changed.emit(value)
 			_recalculate_shape()
 
-var orientation: int = 0:  # 0=vertical, 1=horizontal, 2=square
+var orientation: int = 0:  # 0=tall (2/3), 1=vertical (3/4), 2=square (1/1), 3=horizontal (16/11)
 	set(value):
 		if orientation != value:
 			orientation = value
@@ -102,9 +102,11 @@ func _get_base_dimensions() -> Vector2:
 
 static func get_base_dimensions_for_orientation(orientation_idx: int) -> Vector2:
 	match orientation_idx:
-		1: return Vector2(276.0, 129.0)  # Horizontal
-		2: return Vector2(256.0, 256.0)   # Square  
-		_: return Vector2(202.0, 270.0)   # Vertical (default)
+		0: return Vector2(190.0, 285.0)   # Tall (2/3)
+		1: return Vector2(202.0, 270.0)   # Vertical (3/4)
+		2: return Vector2(234.0, 234.0)   # Square (1/1)
+		3: return Vector2(282.0, 194.0)   # Horizontal (16/11)
+		_: return Vector2(202.0, 270.0)   # Vertical (3/4) default
 
 # Recalculates shape parameters that all shaders use
 func _recalculate_shape() -> void:

@@ -115,9 +115,10 @@ func _setup_ui():
 	left_vbox.add_child(orient_label)
 	
 	_orientation_btn = OptionButton.new()
-	_orientation_btn.add_item("Vertical", 0)
-	_orientation_btn.add_item("Horizontal", 1)
-	_orientation_btn.add_item("Square", 2)
+	_orientation_btn.add_item("2/3 (Tall)", 0)
+	_orientation_btn.add_item("3/4 (Vertical)", 1)
+	_orientation_btn.add_item("1/1 (Square)", 2)
+	_orientation_btn.add_item("16/11 (Horizontal)", 3)
 	_orientation_btn.item_selected.connect(_on_orientation_changed)
 	left_vbox.add_child(_orientation_btn)
 	

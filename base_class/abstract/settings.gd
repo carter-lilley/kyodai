@@ -31,6 +31,11 @@ const Type = SettingsVar.SettingType
 @export var romm_username := SettingsVar.new(Type.STRING, "", State.ENABLED, "Username")
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
 @export var fold_duplicate_covers := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fold duplicate covers into siblings", "During sync, games with identical cover art will be grouped together like RomM siblings")
+@export_subgroup("Save Sync")
+@export var save_sync_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Enable Save Sync", "Sync emulator save files with RomM server")
+@export var save_sync_auto := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Auto-sync saves", "Automatically upload saves after playing and download before launch")
+@export var global_save_folder_override := SettingsVar.new(Type.PATH, "", State.ENABLED, "Global Save Folder Override", "Override save directory for all emulators (leave empty to use per-emulator defaults)")
+
 @export_subgroup("Storage")
 @export var games_root_folder := SettingsVar.new(Type.PATH, "user://roms/", State.ENABLED, "Games Folder", "Directory where game ROMs are stored")
 @export var emulators_folder := SettingsVar.new(Type.PATH, "user://emulators/", State.ENABLED, "Emulators Folder", "Directory where emulators are installed")

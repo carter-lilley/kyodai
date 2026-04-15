@@ -82,6 +82,13 @@ func _get_pooled_request() -> HTTPRequest:
 		var http = _request_pool.pop_back()
 		# Cancel any pending requests on reused node
 		http.cancel_request()
+		# Reset all stateful properties so a prior file download doesn't leak into buffer-based requests
+		http.download_file = ""
+		http.download_chunk_size = 65536
+		http.body_size_limit = -1
+		http.timeout = 0.0
+		http.accept_gzip = true
+		http.use_threads = false
 		return http
 	
 	var http = HTTPRequest.new()
@@ -737,4 +744,266 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 		var download_url = url_template.replace("{version}", version)
 		
 		callback.call(download_url, "")
+	)
+
+# ==================== ROMM SAVE API OPERATIONS ====================
+
+## Upload a save file to RomM via multipart/form-data
+## callback(data: Dictionary, error: String)
+func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: String = "", device_id: String = "", overwrite: bool = true, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+	
+	if not FileAccess.file_exists(file_path):
+		if callback.is_valid():
+			callback.call({}, "File not found: " + file_path)
+		return
+	
+	var file = FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		if callback.is_valid():
+			callback.call({}, "Cannot open file: " + file_path)
+		return
+	var file_data = file.get_buffer(file.get_length())
+	file.close()
+	
+	var boundary = "----KyodaiBoundary" + str(Time.get_ticks_msec())
+	var file_name = file_path.get_file()
+	
+	var body = PackedByteArray()
+	body.append_array(("--" + boundary + "\r\n").to_utf8_buffer())
+	body.append_array(("Content-Disposition: form-data; name=\"saveFile\"; filename=\"" + file_name + "\"\r\n").to_utf8_buffer())
+	body.append_array("Content-Type: application/octet-stream\r\n\r\n".to_utf8_buffer())
+	body.append_array(file_data)
+	body.append_array(("\r\n--" + boundary + "--\r\n").to_utf8_buffer())
+	
+	var url = _base_url.rstrip("/") + "/api/saves?rom_id=" + str(rom_id) + "&overwrite=" + str(overwrite).to_lower()
+	if emulator != "":
+		url += "&emulator=" + emulator.uri_encode()
+	if slot != "":
+		url += "&slot=" + slot.uri_encode()
+	if device_id != "":
+		url += "&device_id=" + device_id.uri_encode()
+	
+	var headers = [
+		"Content-Type: multipart/form-data; boundary=" + boundary,
+		"Authorization: " + _get_auth_header()
+	]
+	
+	var http = _create_http_request()
+	_active_request_count += 1
+	
+	print("[NetworkManager] upload_save URL: " + url)
+	var error = http.request_raw(url, headers, HTTPClient.METHOD_POST, body)
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start upload: " + str(error))
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, response_body):
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Upload failed: " + str(result))
+			return
+		
+		var body_text = response_body.get_string_from_utf8()
+		
+		if response_code < 200 or response_code >= 300:
+			var error_msg = "HTTP error: " + str(response_code)
+			if response_code == 404:
+				error_msg = "RomM server does not support save syncing (404). Please update RomM to a version that includes the saves API."
+			print("[NetworkManager] upload_save failed: " + error_msg + " | body: " + body_text)
+			if callback.is_valid():
+				callback.call({}, error_msg)
+			return
+		
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		if parse_result != OK:
+			print("[NetworkManager] upload_save parse error: " + json.get_error_message() + " | body: " + body_text)
+			if callback.is_valid():
+				callback.call({}, "Failed to parse response: " + json.get_error_message())
+			return
+		
+		print("[NetworkManager] upload_save success: " + str(json.data))
+		if callback.is_valid():
+			callback.call(json.data, "")
+	)
+
+## Fetch remote saves for a ROM
+## callback(saves: Array, error: String)
+func fetch_saves(rom_id: int, device_id: String = "", callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call([], "Not connected")
+		return
+	
+	var endpoint = "/saves?rom_id=" + str(rom_id)
+	if device_id != "":
+		endpoint += "&device_id=" + device_id.uri_encode()
+	
+	print("[NetworkManager] fetch_saves URL: " + (_base_url.rstrip("/") + "/api" + endpoint))
+	
+	make_request(endpoint, func(data, error):
+		if error != "":
+			print("[NetworkManager] fetch_saves error: " + error)
+		else:
+			print("[NetworkManager] fetch_saves response: " + str(data))
+		if callback.is_valid():
+			if error == "":
+				if data is Array:
+					callback.call(data, "")
+				else:
+					callback.call([], "Invalid response format")
+			else:
+				if error == "HTTP error: 404":
+					error = "RomM server does not support save syncing (404). Please update RomM to a version that includes the saves API."
+				callback.call([], error)
+	)
+
+## Download a save file from RomM
+## Returns download info dictionary (same as http_download_file)
+func download_save(save_id: int, device_id: String, destination_path: String, callback: Callable = Callable()) -> Dictionary:
+	var url = _base_url.rstrip("/") + "/api/saves/" + str(save_id) + "/content"
+	if device_id != "":
+		url += "?device_id=" + device_id.uri_encode()
+	
+	var headers = ["Authorization: " + _get_auth_header()]
+	return http_download_file(url, destination_path, headers, callback)
+
+## Register a device with RomM for save syncing
+## callback(data: Dictionary, error: String)
+func register_device(name: String, platform: String, client: String, client_version: String, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+	
+	var url = _base_url.rstrip("/") + "/api/devices"
+	var body = JSON.stringify({
+		"name": name,
+		"platform": platform,
+		"client": client,
+		"client_version": client_version,
+		"allow_existing": true,
+		"allow_duplicate": false
+	})
+	var headers = [
+		"Content-Type: application/json",
+		"Authorization: " + _get_auth_header()
+	]
+	
+	var http = _create_http_request()
+	_active_request_count += 1
+	var error = http.request(url, headers, HTTPClient.METHOD_POST, body)
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start request: " + str(error))
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, response_body):
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Request failed: " + str(result))
+			return
+		
+		if response_code < 200 or response_code >= 300:
+			if callback.is_valid():
+				callback.call({}, "HTTP error: " + str(response_code))
+			return
+		
+		var body_text = response_body.get_string_from_utf8()
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		if parse_result != OK:
+			if callback.is_valid():
+				callback.call({}, "Failed to parse response")
+			return
+		
+		if callback.is_valid():
+			callback.call(json.data, "")
+	)
+
+## Confirm a save was downloaded successfully
+## callback(data: Dictionary, error: String)
+func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+	
+	var url = _base_url.rstrip("/") + "/api/saves/" + str(save_id) + "/downloaded"
+	var body = JSON.stringify({"device_id": device_id})
+	var headers = [
+		"Content-Type: application/json",
+		"Authorization: " + _get_auth_header()
+	]
+	
+	var http = _create_http_request()
+	_active_request_count += 1
+	var error = http.request(url, headers, HTTPClient.METHOD_POST, body)
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start request: " + str(error))
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, response_body):
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Request failed: " + str(result))
+			return
+		
+		if response_code < 200 or response_code >= 300:
+			var error_msg = "HTTP error: " + str(response_code)
+			if response_code == 404:
+				error_msg = "RomM server does not support save syncing (404). Please update RomM to a version that includes the saves API."
+			if callback.is_valid():
+				callback.call({}, error_msg)
+			return
+		
+		var body_text = response_body.get_string_from_utf8()
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		if parse_result != OK:
+			if callback.is_valid():
+				callback.call({}, "Failed to parse response")
+			return
+		
+		if callback.is_valid():
+			callback.call(json.data, "")
 	)

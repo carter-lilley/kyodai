@@ -509,8 +509,8 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		# Handle "." as current directory on desktop too
 		if extract_to == ".":
 			extract_path = _get_emulator_directory(emulator_id).rstrip("/")
-		elif extract_to.begins_with("/") or (extract_to.length() > 1 and extract_to[1] == ":"):
-			# extract_to is already an absolute path (Unix or Windows style)
+		elif extract_to.begins_with("/") or extract_to.begins_with("content://") or extract_to.begins_with("user://") or extract_to.begins_with("res://") or (extract_to.length() > 1 and extract_to[1] == ":"):
+			# extract_to is already an absolute path (Unix, Windows, SAF, or Godot virtual filesystem style)
 			extract_path = extract_to
 		else:
 			extract_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to

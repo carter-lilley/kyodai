@@ -455,7 +455,7 @@ func _setup_ui():
 	_recalculate_dimensions()
 
 func _get_base_dimensions() -> Vector2:
-	var orientation_idx = 0  # Default vertical
+	var orientation_idx = 0  # Default tall (2/3)
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:

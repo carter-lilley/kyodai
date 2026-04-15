@@ -471,6 +471,12 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	# Store the focused card index (passed from card before focus is lost)
 	_last_focused_index = focus_index
 	print("[Main] Saved _last_focused_index: ", _last_focused_index)
+	
+	# Auto-download saves before launch
+	if _game:
+		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
+		if emulator_id != "":
+			SaveManager.auto_download_saves_for_game(_game, emulator_id)
 
 func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
 	"""Handle entering background state - input is now blocked in _input."""
@@ -483,6 +489,12 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	print("[Main] Background state exited - restoring focus")
 	# Optional: Remove overlay
 	# UIManager.set_dimmed(false)
+	
+	# Auto-upload saves after playing
+	if _game:
+		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
+		if emulator_id != "":
+			SaveManager.auto_upload_saves_for_game(_game, emulator_id)
 	
 	# Restore focus to the last known position
 	if _last_focused_index >= 0:
