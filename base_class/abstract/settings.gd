@@ -79,6 +79,9 @@ const Type = SettingsVar.SettingType
 @export var controls_bar_enabled := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Show Controls Bar", "Display the quick controls bar in game views")
 @export var controls_bar_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Controls Bar Mode", "How the controls bar is displayed", 0.0, 1.0, 1.0, ["Floating", "Docked"])
 
+# Internal last search query (managed by Library search)
+@export var library_last_search := SettingsVar.new(Type.STRING, "", State.INTERNAL, "Last Search Query")
+
 # Internal background effect configuration (managed by Library Appearance settings)
 @export var library_background_config := SettingsVar.new(Type.DICTIONARY, {
 	"effect_id": "xmb",

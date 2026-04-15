@@ -108,12 +108,29 @@ func _show_search_overlay():
 	"""Show the search overlay."""
 	# Remember current platform before search
 	_pre_search_platform_index = _current_platform_index
+	
+	# Load last search from settings
+	var last_search = ""
+	if SettingsManager:
+		var last_search_setting = SettingsManager.get_setting("library_last_search")
+		if last_search_setting:
+			last_search = last_search_setting.value
+	_search_overlay.set_last_search(last_search)
+	
 	_search_overlay.show_overlay()
 
 func _on_search_submitted(query: String):
 	"""Handle search submission."""
 	_search_query = query
 	_is_search_active = true
+	
+	# Save last search to settings
+	if SettingsManager:
+		var last_search_setting = SettingsManager.get_setting("library_last_search")
+		if last_search_setting:
+			SettingsManager.set_setting(query, last_search_setting)
+			SettingsManager.save_settings()
+	
 	_search_overlay.hide_overlay()
 	
 	# Explicitly grab focus on the games grid to ensure keyboard closes and focus is set

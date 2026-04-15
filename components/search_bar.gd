@@ -84,6 +84,9 @@ func set_text(text: String):
 func clear():
 	line_edit.text = ""
 
+func get_line_edit() -> LineEdit:
+	return line_edit
+
 func grab_focus_on_input():
 	line_edit.grab_focus()
 

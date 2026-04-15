@@ -188,7 +188,6 @@
 		}
 	  }
 	],
-	
 	"launch": {
 	  "platforms": {
 		"windows": {
@@ -267,7 +266,7 @@
 		  "windows": {
 			"action_type": "download_repo",
 			"github_repo": "azahar-emu/azahar",
-			"asset_pattern": "azahar-.*-windows-msvc\\.zip"
+			"asset_pattern": "azahar-windows-msvc-.*\\.zip"
 		  },
 		  "linux": {
 			"action_type": "download_repo",

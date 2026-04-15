@@ -6,9 +6,11 @@ signal search_cancelled()
 
 @onready var search_bar: SearchBar
 @onready var results_label: Label
+@onready var last_search_button: Button
 @onready var background: ColorRect
 
 var _is_active: bool = false
+var _last_search_text: String = ""
 
 func _ready():
 	# Full screen overlay
@@ -45,6 +47,24 @@ func _ready():
 	search_bar.text_submitted.connect(_on_search_submitted)
 	main_container.add_child(search_bar)
 	
+	# Last search button
+	var last_search_button = Button.new()
+	last_search_button.name = "LastSearchButton"
+	last_search_button.text = ""
+	last_search_button.visible = false
+	last_search_button.focus_mode = Control.FOCUS_ALL
+	last_search_button.add_theme_font_size_override("font_size", 14)
+	last_search_button.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 1.0))
+	last_search_button.pressed.connect(_on_last_search_clicked)
+	main_container.add_child(last_search_button)
+	self.last_search_button = last_search_button
+	
+	# Set up focus neighbors so controller navigation cycles inside the overlay
+	var line_edit = search_bar.get_line_edit()
+	if line_edit:
+		line_edit.focus_neighbor_bottom = last_search_button.get_path()
+		last_search_button.focus_neighbor_top = line_edit.get_path()
+	
 	# Results label (shows "X results found" or live results)
 	var results_label = Label.new()
 	results_label.name = "ResultsLabel"
@@ -55,9 +75,26 @@ func _ready():
 	main_container.add_child(results_label)
 	self.results_label = results_label
 
+func set_last_search(text: String) -> void:
+	_last_search_text = text.strip_edges()
+	if last_search_button:
+		if _last_search_text.is_empty():
+			last_search_button.visible = false
+			last_search_button.text = ""
+		else:
+			last_search_button.visible = true
+			last_search_button.text = "Last search: \"%s\"" % _last_search_text
+
 func show_overlay():
 	visible = true
 	_is_active = true
+	set_last_search(_last_search_text)
+	
+	# Connect focus guard to prevent controller focus leaking behind overlay
+	var viewport = get_viewport()
+	if viewport and not viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.connect(_on_focus_changed)
+	
 	search_bar.grab_focus_on_input()
 
 func hide_overlay():
@@ -66,6 +103,11 @@ func hide_overlay():
 	search_bar.release_focus_from_input()
 	search_bar.clear()
 	results_label.text = ""
+	
+	# Disconnect focus guard
+	var viewport = get_viewport()
+	if viewport and viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
 	
 	# Explicitly hide keyboard if open
 	var keyboard = get_tree().get_root().get_node_or_null("Main/UILayer/OnscreenKeyboard")
@@ -87,6 +129,11 @@ func update_results_count(count: int):
 	else:
 		results_label.text = "%d results found" % count
 
+func _on_last_search_clicked() -> void:
+	if not _last_search_text.is_empty():
+		search_bar.set_text(_last_search_text)
+		search_submitted.emit(_last_search_text)
+
 func _on_search_text_changed(text: String):
 	# Update live results count via signal to parent
 	# Parent should call update_results_count() with actual count
@@ -101,6 +148,39 @@ func _on_search_submitted(text: String):
 func _on_background_clicked(event: InputEvent):
 	if event is InputEventMouseButton and event.pressed:
 		search_cancelled.emit()
+
+func _on_focus_changed(control: Control) -> void:
+	"""Focus guard: prevent controller focus from leaking behind the overlay."""
+	if not _is_active or control == null:
+		return
+	
+	# Allow focus inside the overlay
+	if _is_child_of_overlay(control):
+		return
+	
+	# Allow focus inside the on-screen keyboard
+	var keyboard = get_tree().get_root().get_node_or_null("Main/UILayer/OnscreenKeyboard")
+	if keyboard and _is_child_of_node(control, keyboard):
+		return
+	
+	# Focus leaked outside — pull it back to the search bar
+	search_bar.grab_focus_on_input()
+
+func _is_child_of_overlay(node: Node) -> bool:
+	var current = node
+	while current != null:
+		if current == self:
+			return true
+		current = current.get_parent()
+	return false
+
+func _is_child_of_node(node: Node, parent: Node) -> bool:
+	var current = node
+	while current != null:
+		if current == parent:
+			return true
+		current = current.get_parent()
+	return false
 
 func _input(event: InputEvent):
 	if not _is_active:

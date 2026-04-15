@@ -213,7 +213,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		return
 	
 	var state = {"completed": 0, "failed": 0}
-	var current_timestamp = Time.get_datetime_string_from_system(false, true)
+	var current_timestamp = Time.get_datetime_string_from_system(true, true)
 	
 	var check_complete = func():
 		state.completed += 1
@@ -306,7 +306,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			return
 		
 		var device_id = DataManager.get_romm_device_id()
-		var current_timestamp = Time.get_datetime_string_from_system(false, true)
+		var current_timestamp = Time.get_datetime_string_from_system(true, true)
 		var state = {"pending": local_saves.size(), "failed": 0}
 		
 		for local in local_saves:
@@ -372,7 +372,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 			for save in local_saves:
 				local_by_name[save.file_name] = save
 			
-			var current_timestamp = Time.get_datetime_string_from_system(false, true)
+			var current_timestamp = Time.get_datetime_string_from_system(true, true)
 			var state = {"pending": 0, "failed": 0}
 			
 			for remote in remote_saves:
