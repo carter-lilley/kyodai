@@ -759,6 +759,14 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 			NotificationManager.show_notification("Failed to prepare Wii U game", Notification.Type.ERROR)
 			return null
 	
+	# Dolphin special handling - extract Game ID from GameCube/Wii ROM
+	if intent.emulator_id == "dolphin":
+		var dolphin_ready = _prepare_dolphin_game(game, intent)
+		if not dolphin_ready:
+			push_error("[LaunchManager] Failed to prepare Dolphin game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare GameCube/Wii game", Notification.Type.ERROR)
+			return null
+	
 	return intent
 
 func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
@@ -2751,6 +2759,112 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 		game.title_id = title_id
 		DataManager.update_game_title_id(game.romm_id, title_id)
 		print("[LaunchManager] Cemu: Updated database with TitleID: " + title_id)
+	
+	return true
+
+func _is_valid_gamecube_game_id(game_id: String) -> bool:
+	if game_id.length() != 4:
+		return false
+	for c in game_id:
+		if not ((c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')):
+			return false
+	return true
+
+func _is_valid_maker_code(maker: String) -> bool:
+	if maker.length() != 2:
+		return false
+	for c in maker:
+		if not ((c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')):
+			return false
+	return true
+
+func _extract_gamecube_game_id(rom_path: String) -> String:
+	if not FileAccess.file_exists(rom_path):
+		return ""
+	
+	var file = FileAccess.open(rom_path, FileAccess.READ)
+	if not file:
+		return ""
+	
+	var file_size = file.get_length()
+	
+	# Scan first 1MB byte-by-byte for GameCube disc header patterns
+	var scan_size = mini(file_size, 1048576)
+	var data = file.get_buffer(scan_size)
+	file.close()
+	
+	for i in range(data.size() - 20):
+		var game_id = data.slice(i, i + 4).get_string_from_ascii()
+		var maker = data.slice(i + 4, i + 6).get_string_from_ascii()
+		
+		if not _is_valid_gamecube_game_id(game_id) or not _is_valid_maker_code(maker):
+			continue
+		
+		# Validate surrounding header bytes for higher confidence
+		var disc_number = data[i + 6]
+		var version = data[i + 7]
+		var audio_streaming = data[i + 8]
+		var stream_buffer_size = data[i + 9]
+		
+		# Disc number should be 0 or 1, version usually 0, audio streaming 0 or 1
+		if disc_number <= 1 and version <= 2 and audio_streaming <= 1 and stream_buffer_size <= 0x40:
+			return game_id
+	
+	return ""
+
+func _extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -> String:
+	var regions: Array[String] = ["USA", "EUR", "JAP", "KOR"]
+	for region in regions:
+		var card_dirs: Array[String] = ["Card A", "Card B"]
+		for card in card_dirs:
+			var card_path = emulator_dir + "/User/GC/" + region + "/" + card + "/"
+			if not FileSystemManager.dir_exists(card_path):
+				continue
+			var items = FileSystemManager.list_dir(card_path)
+			for item in items:
+				if item == "." or item == "..":
+					continue
+				if item.to_lower().ends_with(".gci"):
+					var gci_path = card_path + item
+					var file = FileAccess.open(gci_path, FileAccess.READ)
+					if not file:
+						continue
+					var header = file.get_buffer(6)
+					file.close()
+					if header.size() < 6:
+						continue
+					var game_id = header.slice(0, 4).get_string_from_ascii()
+					var maker = header.slice(4, 6).get_string_from_ascii()
+					if _is_valid_gamecube_game_id(game_id) and _is_valid_maker_code(maker):
+						return game_id
+	return ""
+
+func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] Dolphin: Preparing game from ROM path: " + intent.rom_path)
+	
+	var rom_path = intent.rom_path
+	var game_id = _extract_gamecube_game_id(rom_path)
+	
+	if game_id == "":
+		print("[LaunchManager] Dolphin: Could not extract Game ID from ROM, trying existing saves...")
+		var emulator_dir = LaunchManager._get_emulator_directory("dolphin")
+		game_id = _extract_gamecube_game_id_from_existing_saves(emulator_dir)
+	
+	if game_id == "":
+		push_error("[LaunchManager] Dolphin: Failed to extract Game ID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract GameCube/Wii game ID", Notification.Type.ERROR)
+		return false
+	
+	print("[LaunchManager] Dolphin: Game ID: " + game_id)
+	
+	if game.title_id != "" and game.title_id != game_id:
+		print("[LaunchManager] Dolphin: WARNING - Stored Game ID " + game.title_id + " doesn't match detected Game ID " + game_id)
+		print("[LaunchManager] Dolphin: Updating to correct Game ID")
+	
+	if game.title_id != game_id:
+		game.title_id = game_id
+		DataManager.update_game_title_id(game.romm_id, game_id)
+		print("[LaunchManager] Dolphin: Updated database with Game ID: " + game_id)
 	
 	return true
 

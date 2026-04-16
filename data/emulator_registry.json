@@ -472,8 +472,11 @@
 	"name": "Dolphin",
 	"platforms": ["ngc", "wii"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/User"
+	  },
+	  "extensions": ["gci"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {

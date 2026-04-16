@@ -158,6 +158,39 @@ func discover_local_cemu_save(directory: String, title_id: String) -> Array[Dict
 	
 	return results
 
+func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or game_id == "":
+		return results
+	
+	if not FileSystemManager.dir_exists(directory):
+		return results
+	
+	var regions: Array[String] = ["USA", "EUR", "JAP", "KOR"]
+	
+	for region in regions:
+		var card_dirs: Array[String] = ["Card A", "Card B"]
+		for card in card_dirs:
+			var card_path = directory + "GC/" + region + "/" + card + "/"
+			if not FileSystemManager.dir_exists(card_path):
+				continue
+			
+			var items = FileSystemManager.list_dir(card_path)
+			for item in items:
+				if item == "." or item == "..":
+					continue
+				if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
+					var mtime = _get_folder_mtime(card_path)
+					results.append({
+						"file_name": game_id + ".zip",
+						"file_path": card_path,
+						"modified_time": mtime,
+						"extension": ".zip"
+					})
+					return results
+	
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -288,6 +321,37 @@ func _zip_directory_with_root(source_dir: String, root_name: String, dest_zip: S
 	_remove_dir_recursive(stage_dir)
 	return zip_success
 
+func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) -> bool:
+	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+	var copy_success = false
+	
+	var items = FileSystemManager.list_dir(card_dir)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
+			var src = card_dir + item
+			var dst = stage_dir + item
+			var parent = dst.get_base_dir()
+			DirAccess.make_dir_recursive_absolute(parent)
+			var file = FileAccess.open(src, FileAccess.READ)
+			if file:
+				var data = file.get_buffer(file.get_length())
+				file.close()
+				var out = FileAccess.open(dst, FileAccess.WRITE)
+				if out:
+					out.store_buffer(data)
+					out.close()
+					copy_success = true
+	
+	if not copy_success:
+		_remove_dir_recursive(stage_dir)
+		return false
+	
+	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
+	_remove_dir_recursive(stage_dir)
+	return zip_success
+
 func _sanitize_filename(name: String) -> String:
 	return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
 
@@ -343,11 +407,24 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 	
 	var local_saves: Array[Dictionary]
 	if uses_folder_saves(emulator_id):
-		if game.title_id == "" or game.title_id.length() != 16:
+		if game.title_id == "":
 			if callback.is_valid():
 				callback.call(false, "No Title ID available for this game. Launch it once to extract the Title ID.")
 			return
-		local_saves = discover_local_folder_save(save_dir, game.title_id)
+		if emulator_id == "cemu":
+			if game.title_id.length() != 16:
+				if callback.is_valid():
+					callback.call(false, "Invalid Title ID for Cemu game.")
+				return
+			local_saves = discover_local_cemu_save(save_dir, game.title_id)
+		elif emulator_id == "dolphin":
+			local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+		else:
+			if game.title_id.length() != 16:
+				if callback.is_valid():
+					callback.call(false, "Invalid Title ID for this game.")
+				return
+			local_saves = discover_local_folder_save(save_dir, game.title_id)
 	else:
 		var rom_name_no_ext = game.get_active_file_name().get_basename()
 		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
@@ -446,14 +523,17 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		var original_path = upload.local.file_path
 		
 		if is_folder_save:
-			var short_title_id = game.title_id.substr(8, 8)
-			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + short_title_id + ".zip"
-			print("[SaveManager] Preparing folder save upload for " + short_title_id + " from base: " + original_path)
+			var save_name = game.title_id if emulator_id == "dolphin" else game.title_id.substr(8, 8)
+			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
+			print("[SaveManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
 			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
 			var zip_success = false
 			if emulator_id == "cemu":
 				print("[SaveManager] Zipping Cemu save with root folder to: " + zip_path)
-				zip_success = _zip_directory_with_root(original_path, short_title_id, zip_path)
+				zip_success = _zip_directory_with_root(original_path, save_name, zip_path)
+			elif emulator_id == "dolphin":
+				print("[SaveManager] Zipping Dolphin GC saves to: " + zip_path)
+				zip_success = _zip_dolphin_gc_saves(original_path, game.title_id, zip_path)
 			else:
 				print("[SaveManager] Zipping folder save to: " + zip_path)
 				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
@@ -519,10 +599,13 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			
 			if not download.local:
 				var save_dir = resolve_save_directory(emulator_id)
-				var short_title_id = game.title_id.substr(8, 8)
 				if emulator_id == "cemu":
+					var short_title_id = game.title_id.substr(8, 8)
 					record_path = save_dir + "00050000/" + short_title_id
+				elif emulator_id == "dolphin":
+					record_path = save_dir + "GC/USA/Card A"
 				else:
+					var short_title_id = game.title_id.substr(8, 8)
 					var id0 = _find_first_subdir(save_dir)
 					if id0 == "":
 						state.failed += 1
@@ -552,7 +635,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 				
 				if is_folder_save:
-					var extract_success = _extract_zip_to_directory(zip_path, record_path.get_base_dir())
+					var extract_dest = record_path.get_base_dir()
+					if emulator_id == "dolphin":
+						extract_dest = record_path
+					var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
@@ -594,6 +680,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			return
 		if emulator_id == "cemu":
 			local_saves = discover_local_cemu_save(save_dir, game.title_id)
+		elif emulator_id == "dolphin":
+			local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
 		else:
 			local_saves = discover_local_folder_save(save_dir, game.title_id)
 	else:
@@ -617,12 +705,14 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			var local_file_path = local.file_path
 			
 			if is_folder_save:
-				var short_title_id = game.title_id.substr(8, 8)
-				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + short_title_id + ".zip"
+				var save_name = game.title_id if emulator_id == "dolphin" else game.title_id.substr(8, 8)
+				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
 				var zip_success = false
 				if emulator_id == "cemu":
-					zip_success = _zip_directory_with_root(local_file_path, short_title_id, zip_path)
+					zip_success = _zip_directory_with_root(local_file_path, save_name, zip_path)
+				elif emulator_id == "dolphin":
+					zip_success = _zip_dolphin_gc_saves(local_file_path, game.title_id, zip_path)
 				else:
 					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				if not zip_success:
@@ -720,11 +810,17 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 			
 			var local_saves: Array[Dictionary]
 			if is_folder_save:
-				if game.title_id == "" or game.title_id.length() != 16:
+				if game.title_id == "":
 					return
 				if emulator_id == "cemu":
+					if game.title_id.length() != 16:
+						return
 					local_saves = discover_local_cemu_save(save_dir, game.title_id)
+				elif emulator_id == "dolphin":
+					local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
 				else:
+					if game.title_id.length() != 16:
+						return
 					local_saves = discover_local_folder_save(save_dir, game.title_id)
 			else:
 				var rom_name_no_ext = game.get_active_file_name().get_basename()
@@ -778,10 +874,13 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 						local_path = zip_path
 						
 						if not _local:
-							var short_title_id = game.title_id.substr(8, 8)
 							if emulator_id == "cemu":
+								var short_title_id = game.title_id.substr(8, 8)
 								record_path = save_dir + "00050000/" + short_title_id
+							elif emulator_id == "dolphin":
+								record_path = save_dir + "GC/USA/Card A"
 							else:
+								var short_title_id = game.title_id.substr(8, 8)
 								var id0 = _find_first_subdir(save_dir)
 								if id0 == "":
 									state.failed += 1
@@ -811,7 +910,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 							
 							if is_folder_save:
-								var extract_success = _extract_zip_to_directory(zip_path, record_path.get_base_dir())
+								var extract_dest = record_path.get_base_dir()
+								if emulator_id == "dolphin":
+									extract_dest = record_path
+								var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)

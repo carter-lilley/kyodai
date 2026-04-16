@@ -1014,6 +1014,7 @@ func _on_all_chunks_complete(item_id: String, headers: Array):
 	if chunked_info.chunks_completed >= chunked_info.total_chunks:
 		print("[DownloadManager] All chunks complete for: " + item.name)
 		_stop_chunked_progress_timer(item_id)
+		_cleanup_download_tracking(item_id)
 		_reassemble_chunks(item_id)
 	else:
 		# Some chunks failed - check if we should retry
@@ -1237,6 +1238,7 @@ func _on_chunk_download_complete(item_id: String, chunk_index: int, success: boo
 		if chunked_info.chunks_completed >= chunked_info.total_chunks:
 			print("[DownloadManager] All chunks complete for: " + item.name)
 			_stop_chunked_progress_timer(item_id)
+			_cleanup_download_tracking(item_id)
 			_reassemble_chunks(item_id)
 		else:
 			# Start the next chunk
@@ -1340,7 +1342,7 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	var chunk_paths_json = JSON.stringify(chunk_paths)
 	var output_absolute_path = ProjectSettings.globalize_path(reassembly_temp_path)
 	
-	print("[DownloadManager] Calling native reassembly with " + str(chunk_paths.size()) + " chunks")
+	print("[DownloadManager] [Reassembly] Calling native reassembly for: " + item.name + " (" + str(chunk_paths.size()) + " chunks) -> " + output_absolute_path)
 	
 	# Call native Java reassembly
 	var plugin = Engine.get_singleton("PackageChecker")
@@ -1360,8 +1362,10 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	# Perform reassembly in native code (runs in foreground service process)
 	var success = plugin.reassembleChunks(chunk_paths_json, output_absolute_path)
 	
+	print("[DownloadManager] [Reassembly] Native reassembly returned: " + str(success) + " for: " + item.name)
+	
 	if not success:
-		push_error("[DownloadManager] Native reassembly failed")
+		push_error("[DownloadManager] Native reassembly failed for: " + item.name)
 		# Clean up failed final file
 		if FileAccess.file_exists(reassembly_temp_path):
 			DirAccess.remove_absolute(reassembly_temp_path)
@@ -1393,10 +1397,12 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 	
 	# Create the reassembly callable for the extraction thread
 	var reassembly_callable = func() -> bool:
+		print("[DownloadManager] [Reassembly] Starting desktop reassembly for: " + item.name + " -> " + final_path)
+		
 		# Open final file for writing
 		var final_file = FileAccess.open(final_path, FileAccess.WRITE)
 		if not final_file:
-			push_error("[DownloadManager] Failed to create final file: " + final_path)
+			push_error("[DownloadManager] [Reassembly] Failed to create final file: " + final_path)
 			return false
 		
 		# Append each chunk to final file with buffered I/O to avoid memory spikes
@@ -1405,14 +1411,16 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		for chunk_data in chunks_data:
 			var chunk_path = chunk_data.temp_path
 			
+			print("[DownloadManager] [Reassembly] Appending chunk " + str(chunk_data.index + 1) + "/" + str(chunks_data.size()) + ": " + chunk_path)
+			
 			if not FileAccess.file_exists(chunk_path):
-				push_error("[DownloadManager] Chunk file missing: " + chunk_path)
+				push_error("[DownloadManager] [Reassembly] Chunk file missing: " + chunk_path)
 				final_file.close()
 				return false
 			
 			var chunk_file = FileAccess.open(chunk_path, FileAccess.READ)
 			if not chunk_file:
-				push_error("[DownloadManager] Failed to open chunk file: " + chunk_path)
+				push_error("[DownloadManager] [Reassembly] Failed to open chunk file: " + chunk_path)
 				final_file.close()
 				return false
 			
@@ -1427,17 +1435,31 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 				bytes_remaining -= read_size
 			
 			chunk_file.close()
+			print("[DownloadManager] [Reassembly] Finished chunk " + str(chunk_data.index + 1) + " (" + str(chunk_size) + " bytes)")
 		
 		final_file.close()
+		
+		var final_size = 0
+		if FileAccess.file_exists(final_path):
+			var size_file = FileAccess.open(final_path, FileAccess.READ)
+			if size_file:
+				final_size = size_file.get_length()
+				size_file.close()
+		
+		print("[DownloadManager] [Reassembly] Desktop reassembly complete for: " + item.name + ". Final size: " + str(final_size) + " bytes")
 		return true
+	
+	print("[DownloadManager] [Reassembly] Queueing desktop reassembly to extraction thread for: " + item.name)
 	
 	# Queue to extraction thread - callback runs on main thread
 	MemoryManager.queue_extraction_task(reassembly_callable, func(success: bool):
 		if not _chunked_downloads.has(item_id):
-			# Download was cancelled or cleaned up
+			print("[DownloadManager] [Reassembly] Reassembly callback ignored: download was cancelled or cleaned up for: " + item.name)
 			return
 		
 		if not success:
+			push_error("[DownloadManager] [Reassembly] Desktop reassembly failed for: " + item.name)
+			
 			# Clean up failed final file
 			if FileAccess.file_exists(final_path):
 				DirAccess.remove_absolute(final_path)
@@ -1452,6 +1474,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 			_process_queue()
 			return
 		
+		print("[DownloadManager] [Reassembly] Desktop reassembly callback success for: " + item.name)
 		# Success - clean up and finish
 		_finish_reassembly_success(item_id, item, use_saf, reassembly_temp_path)
 	)
@@ -1461,12 +1484,19 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, use_saf: bool,
 	if not _chunked_downloads.has(item_id):
 		return
 	
-	print("[DownloadManager] Chunked download complete for: " + item.name)
+	var final_size = 0
+	if FileAccess.file_exists(reassembly_temp_path):
+		var size_file = FileAccess.open(reassembly_temp_path, FileAccess.READ)
+		if size_file:
+			final_size = size_file.get_length()
+			size_file.close()
+	
+	print("[DownloadManager] [Reassembly] Finishing reassembly success for: " + item.name + " path=" + reassembly_temp_path + " size=" + str(final_size) + " bytes")
 	_cleanup_chunked_download(item_id)
 	
 	# For SAF downloads, we need to copy the assembled file to SAF location
 	if use_saf:
-		print("[DownloadManager] SAF download complete, queueing copy to storage")
+		print("[DownloadManager] [Reassembly] SAF download complete, queueing copy to storage for: " + item.name)
 		# Update item.destination_path to point to our temp file for the copy operation
 		item.destination_path = reassembly_temp_path
 		item.set_meta("temp_assembly_path", reassembly_temp_path)
@@ -1869,6 +1899,9 @@ func _finish_download_completion(item: QueueItem):
 	else:
 		item.status = "completed"
 		item.progress = 1.0
+		if item.notification_id != -1:
+			NotificationManager.dismiss_notification(item.notification_id)
+			item.notification_id = -1
 		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on completion (no extraction)
 		var final_path = item.saf_destination if item.use_saf else item.destination_path
