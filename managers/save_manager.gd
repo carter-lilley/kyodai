@@ -133,6 +133,31 @@ func discover_local_folder_save(directory: String, title_id: String) -> Array[Di
 	
 	return results
 
+func discover_local_cemu_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "" or title_id.length() != 16:
+		return results
+	
+	if not FileSystemManager.dir_exists(directory):
+		return results
+	
+	var short_title_id = title_id.substr(8, 8)
+	var prefixes: Array[String] = ["00050000", "00050010", "0005000e", "0005000c"]
+	
+	for prefix in prefixes:
+		var save_path = directory + prefix + "/" + short_title_id
+		if FileSystemManager.dir_exists(save_path):
+			var mtime = _get_folder_mtime(save_path)
+			results.append({
+				"file_name": short_title_id + ".zip",
+				"file_path": save_path,
+				"modified_time": mtime,
+				"extension": ".zip"
+			})
+			return results
+	
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -213,6 +238,55 @@ func _remove_dir_recursive(dir_path: String) -> void:
 		item = dir.get_next()
 	dir.list_dir_end()
 	DirAccess.remove_absolute(dir_path)
+
+func _copy_dir_recursive(source: String, dest: String) -> bool:
+	if not DirAccess.dir_exists_absolute(dest):
+		DirAccess.make_dir_recursive_absolute(dest)
+	
+	var dir = DirAccess.open(source)
+	if dir == null:
+		return false
+	
+	dir.list_dir_begin()
+	var item = dir.get_next()
+	var success = true
+	
+	while item != "":
+		if item != "." and item != "..":
+			var src_path = source.rstrip("/") + "/" + item
+			var dst_path = dest.rstrip("/") + "/" + item
+			if dir.current_is_dir():
+				if not _copy_dir_recursive(src_path, dst_path):
+					success = false
+			else:
+				var file = FileAccess.open(src_path, FileAccess.READ)
+				if file:
+					var data = file.get_buffer(file.get_length())
+					file.close()
+					var out = FileAccess.open(dst_path, FileAccess.WRITE)
+					if out:
+						out.store_buffer(data)
+						out.close()
+					else:
+						success = false
+				else:
+					success = false
+		item = dir.get_next()
+	
+	dir.list_dir_end()
+	return success
+
+func _zip_directory_with_root(source_dir: String, root_name: String, dest_zip: String) -> bool:
+	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+	var stage_root = stage_dir + root_name
+	DirAccess.make_dir_recursive_absolute(stage_root)
+	var copy_success = _copy_dir_recursive(source_dir, stage_root)
+	if not copy_success:
+		_remove_dir_recursive(stage_dir)
+		return false
+	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
+	_remove_dir_recursive(stage_dir)
+	return zip_success
 
 func _sanitize_filename(name: String) -> String:
 	return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
@@ -376,8 +450,14 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + short_title_id + ".zip"
 			print("[SaveManager] Preparing folder save upload for " + short_title_id + " from base: " + original_path)
 			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
-			print("[SaveManager] Zipping console profile to: " + zip_path)
-			if not FileSystemManager.zip_directory(original_path, zip_path):
+			var zip_success = false
+			if emulator_id == "cemu":
+				print("[SaveManager] Zipping Cemu save with root folder to: " + zip_path)
+				zip_success = _zip_directory_with_root(original_path, short_title_id, zip_path)
+			else:
+				print("[SaveManager] Zipping folder save to: " + zip_path)
+				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
+			if not zip_success:
 				state.failed += 1
 				push_error("[SaveManager] Failed to zip folder for upload: " + original_path)
 				check_complete.call()
@@ -439,21 +519,24 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			
 			if not download.local:
 				var save_dir = resolve_save_directory(emulator_id)
-				var id0 = _find_first_subdir(save_dir)
-				if id0 == "":
-					state.failed += 1
-					push_error("[SaveManager] Cannot download folder save: no id0 folder found in " + save_dir)
-					check_complete.call()
-					continue
-				var id1 = _find_first_subdir(save_dir + id0 + "/")
-				if id1 == "":
-					state.failed += 1
-					push_error("[SaveManager] Cannot download folder save: no id1 folder found in " + save_dir + id0 + "/")
-					check_complete.call()
-					continue
-				var category = game.title_id.substr(0, 8)
 				var short_title_id = game.title_id.substr(8, 8)
-				record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+				if emulator_id == "cemu":
+					record_path = save_dir + "00050000/" + short_title_id
+				else:
+					var id0 = _find_first_subdir(save_dir)
+					if id0 == "":
+						state.failed += 1
+						push_error("[SaveManager] Cannot download folder save: no id0 folder found in " + save_dir)
+						check_complete.call()
+						continue
+					var id1 = _find_first_subdir(save_dir + id0 + "/")
+					if id1 == "":
+						state.failed += 1
+						push_error("[SaveManager] Cannot download folder save: no id1 folder found in " + save_dir + id0 + "/")
+						check_complete.call()
+						continue
+					var category = game.title_id.substr(0, 8)
+					record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
 		else:
 			local_path = record_path
 		
@@ -509,7 +592,10 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if is_folder_save:
 		if game.title_id == "":
 			return
-		local_saves = discover_local_folder_save(save_dir, game.title_id)
+		if emulator_id == "cemu":
+			local_saves = discover_local_cemu_save(save_dir, game.title_id)
+		else:
+			local_saves = discover_local_folder_save(save_dir, game.title_id)
 	else:
 		var rom_name_no_ext = game.get_active_file_name().get_basename()
 		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
@@ -534,7 +620,12 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				var short_title_id = game.title_id.substr(8, 8)
 				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + short_title_id + ".zip"
 				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
-				if not FileSystemManager.zip_directory(local_file_path, zip_path):
+				var zip_success = false
+				if emulator_id == "cemu":
+					zip_success = _zip_directory_with_root(local_file_path, short_title_id, zip_path)
+				else:
+					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
+				if not zip_success:
 					state.failed += 1
 					push_error("[SaveManager] Failed to zip folder for auto-upload: " + local_file_path)
 					state.pending -= 1
@@ -631,7 +722,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 			if is_folder_save:
 				if game.title_id == "" or game.title_id.length() != 16:
 					return
-				local_saves = discover_local_folder_save(save_dir, game.title_id)
+				if emulator_id == "cemu":
+					local_saves = discover_local_cemu_save(save_dir, game.title_id)
+				else:
+					local_saves = discover_local_folder_save(save_dir, game.title_id)
 			else:
 				var rom_name_no_ext = game.get_active_file_name().get_basename()
 				local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
@@ -684,21 +778,24 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 						local_path = zip_path
 						
 						if not _local:
-							var id0 = _find_first_subdir(save_dir)
-							if id0 == "":
-								state.failed += 1
-								push_error("[SaveManager] Cannot auto-download folder save: no id0 folder found")
-								state.pending -= 1
-								continue
-							var id1 = _find_first_subdir(save_dir + id0 + "/")
-							if id1 == "":
-								state.failed += 1
-								push_error("[SaveManager] Cannot auto-download folder save: no id1 folder found")
-								state.pending -= 1
-								continue
-							var category = game.title_id.substr(0, 8)
 							var short_title_id = game.title_id.substr(8, 8)
-							record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+							if emulator_id == "cemu":
+								record_path = save_dir + "00050000/" + short_title_id
+							else:
+								var id0 = _find_first_subdir(save_dir)
+								if id0 == "":
+									state.failed += 1
+									push_error("[SaveManager] Cannot auto-download folder save: no id0 folder found")
+									state.pending -= 1
+									continue
+								var id1 = _find_first_subdir(save_dir + id0 + "/")
+								if id1 == "":
+									state.failed += 1
+									push_error("[SaveManager] Cannot auto-download folder save: no id1 folder found")
+									state.pending -= 1
+									continue
+								var category = game.title_id.substr(0, 8)
+								record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
 					else:
 						local_path = record_path
 					

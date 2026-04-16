@@ -365,8 +365,11 @@
 	"name": "Cemu",
 	"platforms": ["wiiu"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/portable/mlc01/usr/save"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {

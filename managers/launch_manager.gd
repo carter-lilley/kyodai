@@ -751,6 +751,14 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 			NotificationManager.show_notification("Failed to prepare 3DS game", Notification.Type.ERROR)
 			return null
 	
+	# Cemu special handling - extract TitleID from WUA file
+	if intent.emulator_id == "cemu":
+		var cemu_ready = _prepare_cemu_game(game, intent)
+		if not cemu_ready:
+			push_error("[LaunchManager] Failed to prepare Cemu game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare Wii U game", Notification.Type.ERROR)
+			return null
+	
 	return intent
 
 func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
@@ -2682,6 +2690,67 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 		game.title_id = title_id
 		DataManager.update_game_title_id(game.romm_id, title_id)
 		print("[LaunchManager] Azahar: Updated database with TitleID: " + title_id)
+	
+	return true
+
+func _extract_wiiu_title_id(rom_path: String) -> String:
+	if not FileAccess.file_exists(rom_path):
+		return ""
+	
+	var file = FileAccess.open(rom_path, FileAccess.READ)
+	if not file:
+		return ""
+	
+	var file_size = file.get_length()
+	var tail_size = mini(file_size, 262144)
+	file.seek(file_size - tail_size)
+	var tail = file.get_buffer(tail_size)
+	file.close()
+	
+	# Search raw bytes for pattern: 16 hex chars followed by "_v" and digits
+	for i in range(tail.size() - 20):
+		if tail[i] == 95 and tail[i + 1] == 118:  # "_v"
+			var j = i + 2
+			while j < tail.size() and tail[j] >= 48 and tail[j] <= 57:
+				j += 1
+			
+			if j > i + 2 and i >= 16:
+				var is_hex = true
+				var title_id = ""
+				for k in range(i - 16, i):
+					var c = tail[k]
+					if (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70):
+						title_id += char(c)
+					else:
+						is_hex = false
+						break
+				
+				if is_hex and title_id.length() == 16:
+					print("[LaunchManager] Found TitleID in WUA footer: " + title_id.to_lower())
+					return title_id.to_lower()
+	
+	return ""
+
+func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] Cemu: Preparing game from ROM path: " + intent.rom_path)
+	
+	var rom_path = intent.rom_path
+	var title_id = _extract_wiiu_title_id(rom_path)
+	if title_id == "":
+		push_error("[LaunchManager] Cemu: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract Wii U game TitleID", Notification.Type.ERROR)
+		return false
+	
+	print("[LaunchManager] Cemu: TitleID from WUA: " + title_id)
+	
+	if game.title_id != "" and game.title_id != title_id:
+		print("[LaunchManager] Cemu: WARNING - Stored TitleID " + game.title_id + " doesn't match WUA TitleID " + title_id)
+		print("[LaunchManager] Cemu: Updating to correct TitleID from WUA")
+	
+	if game.title_id != title_id:
+		game.title_id = title_id
+		DataManager.update_game_title_id(game.romm_id, title_id)
+		print("[LaunchManager] Cemu: Updated database with TitleID: " + title_id)
 	
 	return true
 
