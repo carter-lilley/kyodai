@@ -10,6 +10,7 @@ extends View
 @onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/InfoVBox/FileInfoLabel
 @onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/InfoVBox/FileSizeLabel
 @onready var status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/InfoVBox/StatusLabel
+@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/InfoVBox/TitleIdLabel
 @onready var description_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/DescriptionLabel
 
 # Sibling dropdown - will be null until added to scene
@@ -177,6 +178,14 @@ func _update_file_info_display(game: GameResource) -> void:
 	else:
 		status_label.text = "☐ Not downloaded"
 		status_label.modulate = Color.GRAY
+	
+	# Show Title ID for platforms that use it
+	if title_id_label:
+		if game.title_id != "":
+			title_id_label.text = "Title ID: " + game.title_id
+			title_id_label.visible = true
+		else:
+			title_id_label.visible = false
 
 func _load_cover(game: GameResource) -> void:
 	cover_texture.texture = null
@@ -353,4 +362,6 @@ func clear() -> void:
 	file_info_label.text = ""
 	file_size_label.text = ""
 	status_label.text = ""
+	if title_id_label:
+		title_id_label.text = ""
 	description_label.text = ""

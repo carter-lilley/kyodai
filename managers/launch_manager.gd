@@ -743,6 +743,14 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 			NotificationManager.show_notification("Failed to prepare PS3 game", Notification.Type.ERROR)
 			return null
 	
+	# Azahar special handling - extract TitleID from 3DS ROM
+	if intent.emulator_id == "azahar":
+		var azahar_ready = _prepare_azahar_game(game, intent)
+		if not azahar_ready:
+			push_error("[LaunchManager] Failed to prepare Azahar game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare 3DS game", Notification.Type.ERROR)
+			return null
+	
 	return intent
 
 func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
@@ -2615,6 +2623,68 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 # ==================== VITA3K HELPERS ====================
 
 ## Extracts TitleID from Vita game ZIP by reading root folder name
+func _extract_3ds_title_id(rom_path: String) -> String:
+	if not FileAccess.file_exists(rom_path):
+		push_error("[LaunchManager] Cannot extract TitleID - file not found: " + rom_path)
+		return ""
+	
+	var file = FileAccess.open(rom_path, FileAccess.READ)
+	if not file:
+		push_error("[LaunchManager] Failed to open 3DS ROM: " + rom_path)
+		return ""
+	
+	# Read first 0x200 bytes
+	var header = file.get_buffer(0x200)
+	if header.size() < 0x200:
+		file.close()
+		push_error("[LaunchManager] 3DS ROM too small: " + rom_path)
+		return ""
+	
+	var title_id_val = 0
+	var magic = header.slice(0x100, 0x104).get_string_from_ascii()
+	
+	if magic == "NCCH":
+		# NCCH format (.cxi, some .cci)
+		title_id_val = header.decode_u64(0x118)
+	elif magic == "NCSD":
+		# NCSD format (.3ds, .cci cartridge dumps)
+		title_id_val = header.decode_u64(0x108)
+	else:
+		# Fallback: signature-stripped dump where NCSD is at 0x0
+		var ncsd_magic = header.slice(0x0, 0x4).get_string_from_ascii()
+		if ncsd_magic == "NCSD":
+			title_id_val = header.decode_u64(0x008)
+		else:
+			file.close()
+			push_error("[LaunchManager] Unknown 3DS ROM format: " + rom_path)
+			return ""
+	
+	file.close()
+	return "%016x" % title_id_val
+
+func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
+	
+	var rom_path = intent.rom_path
+	var title_id = _extract_3ds_title_id(rom_path)
+	if title_id == "":
+		push_error("[LaunchManager] Azahar: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract 3DS game TitleID", Notification.Type.ERROR)
+		return false
+	
+	print("[LaunchManager] Azahar: TitleID from ROM: " + title_id)
+	
+	if game.title_id != "" and game.title_id != title_id:
+		print("[LaunchManager] Azahar: WARNING - Stored TitleID " + game.title_id + " doesn't match ROM TitleID " + title_id)
+		print("[LaunchManager] Azahar: Updating to correct TitleID from ROM")
+	
+	if game.title_id != title_id:
+		game.title_id = title_id
+		DataManager.update_game_title_id(game.romm_id, title_id)
+		print("[LaunchManager] Azahar: Updated database with TitleID: " + title_id)
+	
+	return true
+
 func _extract_vita_title_id(zip_path: String) -> String:
 	# On Android with SAF, use the plugin to extract TitleID directly via ContentResolver.
 	# This avoids copying the ZIP and works around Scoped Storage restrictions.

@@ -94,6 +94,136 @@ func _search_directory_for_saves(dir_path: String, rom_name_no_ext: String, exte
 						"extension": dot_ext
 					})
 
+func uses_folder_saves(emulator_id: String) -> bool:
+	var emulator = LaunchManager.get_emulator(emulator_id)
+	if emulator.is_empty():
+		return false
+	var save_config = emulator.get("save_config", {})
+	return save_config.get("uses_folder_saves", false)
+
+func discover_local_folder_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "" or title_id.length() != 16:
+		return results
+	
+	if not FileSystemManager.dir_exists(directory):
+		return results
+	
+	var category = title_id.substr(0, 8)
+	var short_title_id = title_id.substr(8, 8)
+	
+	var id0_dirs = FileSystemManager.list_dir(directory)
+	for id0 in id0_dirs:
+		if id0 == "." or id0 == ".." or not FileSystemManager.dir_exists(directory + id0):
+			continue
+		var id1_dirs = FileSystemManager.list_dir(directory + id0 + "/")
+		for id1 in id1_dirs:
+			if id1 == "." or id1 == ".." or not FileSystemManager.dir_exists(directory + id0 + "/" + id1):
+				continue
+			var title_path = directory + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+			if FileSystemManager.dir_exists(title_path):
+				var mtime = _get_folder_mtime(title_path)
+				results.append({
+					"file_name": short_title_id + ".zip",
+					"file_path": title_path,
+					"modified_time": mtime,
+					"extension": ".zip"
+				})
+				return results
+	
+	return results
+
+func _get_folder_mtime(dir_path: String) -> int:
+	var latest = 0
+	var dirs_to_check: Array[String] = [dir_path]
+	while not dirs_to_check.is_empty():
+		var current = dirs_to_check.pop_back()
+		var items = FileSystemManager.list_dir(current)
+		for item in items:
+			if item == "." or item == "..":
+				continue
+			var full = current.rstrip("/") + "/" + item
+			if FileSystemManager.dir_exists(full):
+				dirs_to_check.append(full)
+			elif FileSystemManager.file_exists(full) and not FileSystemManager.is_saf_path(full):
+				var mtime = FileAccess.get_modified_time(full)
+				if mtime > latest:
+					latest = mtime
+	return latest
+
+func _extract_zip_to_directory(zip_path: String, dest_dir: String) -> bool:
+	var reader = ZIPReader.new()
+	var err = reader.open(zip_path)
+	if err != OK:
+		push_error("[SaveManager] Failed to open ZIP for extraction: " + zip_path)
+		return false
+	
+	var files = reader.get_files()
+	var is_saf_dest = FileSystemManager.is_saf_path(dest_dir) and FileSystemManager.is_android()
+	var actual_dest = dest_dir
+	var temp_dest = ""
+	
+	if is_saf_dest:
+		temp_dest = "user://extract_temp/save_sync_" + str(Time.get_ticks_msec()) + "/"
+		actual_dest = ProjectSettings.globalize_path(temp_dest)
+		if not DirAccess.dir_exists_absolute(actual_dest):
+			DirAccess.make_dir_recursive_absolute(actual_dest)
+	
+	for file in files:
+		var file_dest = actual_dest.rstrip("/") + "/" + file
+		if file.ends_with("/"):
+			DirAccess.make_dir_recursive_absolute(file_dest)
+			continue
+		
+		var parent = file_dest.get_base_dir()
+		DirAccess.make_dir_recursive_absolute(parent)
+		
+		var data = reader.read_file(file)
+		var file_obj = FileAccess.open(file_dest, FileAccess.WRITE)
+		if file_obj:
+			file_obj.store_buffer(data)
+			file_obj.close()
+		else:
+			push_error("[SaveManager] Failed to write extracted file: " + file_dest)
+			reader.close()
+			return false
+	
+	reader.close()
+	
+	if is_saf_dest:
+		var success = FileSystemManager.copy_dir_to_saf(temp_dest, dest_dir)
+		_remove_dir_recursive(actual_dest)
+		return success
+	
+	return true
+
+func _remove_dir_recursive(dir_path: String) -> void:
+	var dir = DirAccess.open(dir_path)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var item = dir.get_next()
+	while item != "":
+		if item != "." and item != "..":
+			var full = dir_path.rstrip("/") + "/" + item
+			if dir.current_is_dir():
+				_remove_dir_recursive(full)
+			else:
+				DirAccess.remove_absolute(full)
+		item = dir.get_next()
+	dir.list_dir_end()
+	DirAccess.remove_absolute(dir_path)
+
+func _sanitize_filename(name: String) -> String:
+	return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
+
+func _find_first_subdir(dir_path: String) -> String:
+	var items = FileSystemManager.list_dir(dir_path)
+	for item in items:
+		if item != "." and item != ".." and FileSystemManager.dir_exists(dir_path + item):
+			return item
+	return ""
+
 func _ensure_device_registered(callback: Callable) -> void:
 	var device_id = DataManager.get_romm_device_id()
 	if device_id != "":
@@ -137,8 +267,16 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			callback.call(false, "No save configuration for emulator: " + emulator_id)
 		return
 	
-	var rom_name_no_ext = game.get_active_file_name().get_basename()
-	var local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+	var local_saves: Array[Dictionary]
+	if uses_folder_saves(emulator_id):
+		if game.title_id == "" or game.title_id.length() != 16:
+			if callback.is_valid():
+				callback.call(false, "No Title ID available for this game. Launch it once to extract the Title ID.")
+			return
+		local_saves = discover_local_folder_save(save_dir, game.title_id)
+	else:
+		var rom_name_no_ext = game.get_active_file_name().get_basename()
+		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
 	
 	_ensure_device_registered(func(success: bool, error: String):
 		if not success:
@@ -227,37 +365,100 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				if callback.is_valid():
 					callback.call(true, "Save sync completed")
 	
+	var is_folder_save = uses_folder_saves(emulator_id)
+	
 	for upload in pending_uploads:
-		var local_path = upload.local.file_path
-		NetworkManager.upload_save(
-			game.romm_id,
-			local_path,
-			emulator_id,
-			SLOT_DEFAULT,
-			device_id,
-			true,
-			func(data: Dictionary, error: String):
-				if error != "":
-					state.failed += 1
-					push_error("[SaveManager] Upload failed for " + local_path + ": " + error)
-				else:
-					var remote_id = data.get("id", 0)
-					DataManager.update_save_sync_record(game.romm_id, emulator_id, upload.local.file_name, local_path, current_timestamp, remote_id, SLOT_DEFAULT)
+		var upload_file_name = upload.local.file_name
+		var original_path = upload.local.file_path
+		
+		if is_folder_save:
+			var short_title_id = game.title_id.substr(8, 8)
+			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + short_title_id + ".zip"
+			print("[SaveManager] Preparing folder save upload for " + short_title_id + " from base: " + original_path)
+			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+			print("[SaveManager] Zipping console profile to: " + zip_path)
+			if not FileSystemManager.zip_directory(original_path, zip_path):
+				state.failed += 1
+				push_error("[SaveManager] Failed to zip folder for upload: " + original_path)
 				check_complete.call()
-		)
+				continue
+			
+			NetworkManager.upload_save(
+				game.romm_id,
+				zip_path,
+				emulator_id,
+				SLOT_DEFAULT,
+				device_id,
+				true,
+				func(data: Dictionary, error: String):
+					if FileAccess.file_exists(zip_path):
+						DirAccess.remove_absolute(zip_path)
+					if error != "":
+						state.failed += 1
+						push_error("[SaveManager] Upload failed for " + original_path + ": " + error)
+					else:
+						var remote_id = data.get("id", 0)
+						DataManager.update_save_sync_record(game.romm_id, emulator_id, upload_file_name, original_path, current_timestamp, remote_id, SLOT_DEFAULT)
+					check_complete.call()
+			)
+		else:
+			NetworkManager.upload_save(
+				game.romm_id,
+				original_path,
+				emulator_id,
+				SLOT_DEFAULT,
+				device_id,
+				true,
+				func(data: Dictionary, error: String):
+					if error != "":
+						state.failed += 1
+						push_error("[SaveManager] Upload failed for " + original_path + ": " + error)
+					else:
+						var remote_id = data.get("id", 0)
+						DataManager.update_save_sync_record(game.romm_id, emulator_id, upload_file_name, original_path, current_timestamp, remote_id, SLOT_DEFAULT)
+					check_complete.call()
+			)
 	
 	for download in pending_downloads:
 		var remote = download.remote
 		var save_id = remote.get("id", 0)
 		var file_name = remote.get("file_name", "save")
 		var local_path = ""
-		if download.local:
-			local_path = download.local.file_path
-		else:
-			local_path = resolve_save_directory(emulator_id) + file_name
+		var record_path = ""
+		var zip_path = ""
 		
-		NetworkManager.download_save(save_id, device_id, local_path, func(success: bool, status_code: int, error_msg: String):
-			if not success:
+		if download.local:
+			record_path = download.local.file_path
+		else:
+			record_path = resolve_save_directory(emulator_id) + file_name
+		
+		if is_folder_save:
+			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
+			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+			local_path = zip_path
+			
+			if not download.local:
+				var save_dir = resolve_save_directory(emulator_id)
+				var id0 = _find_first_subdir(save_dir)
+				if id0 == "":
+					state.failed += 1
+					push_error("[SaveManager] Cannot download folder save: no id0 folder found in " + save_dir)
+					check_complete.call()
+					continue
+				var id1 = _find_first_subdir(save_dir + id0 + "/")
+				if id1 == "":
+					state.failed += 1
+					push_error("[SaveManager] Cannot download folder save: no id1 folder found in " + save_dir + id0 + "/")
+					check_complete.call()
+					continue
+				var category = game.title_id.substr(0, 8)
+				var short_title_id = game.title_id.substr(8, 8)
+				record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+		else:
+			local_path = record_path
+		
+		NetworkManager.download_save(save_id, device_id, local_path, func(_success: bool, status_code: int, error_msg: String):
+			if not _success:
 				state.failed += 1
 				push_error("[SaveManager] Download failed for save " + str(save_id) + ": " + error_msg)
 				check_complete.call()
@@ -267,7 +468,15 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				if confirm_error != "":
 					push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 				
-				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, local_path, current_timestamp, save_id, SLOT_DEFAULT)
+				if is_folder_save:
+					var extract_success = _extract_zip_to_directory(zip_path, record_path.get_base_dir())
+					if not extract_success:
+						state.failed += 1
+						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
+					if FileAccess.file_exists(zip_path):
+						DirAccess.remove_absolute(zip_path)
+				
+				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 				check_complete.call()
 			)
 		)
@@ -295,8 +504,16 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if save_dir == "" or extensions.is_empty():
 		return
 	
-	var rom_name_no_ext = game.get_active_file_name().get_basename()
-	var local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+	var is_folder_save = uses_folder_saves(emulator_id)
+	var local_saves: Array[Dictionary]
+	if is_folder_save:
+		if game.title_id == "":
+			return
+		local_saves = discover_local_folder_save(save_dir, game.title_id)
+	else:
+		var rom_name_no_ext = game.get_active_file_name().get_basename()
+		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+	
 	if local_saves.is_empty():
 		return
 	
@@ -310,28 +527,71 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		var state = {"pending": local_saves.size(), "failed": 0}
 		
 		for local in local_saves:
-			NetworkManager.upload_save(
-				game.romm_id,
-				local.file_path,
-				emulator_id,
-				SLOT_DEFAULT,
-				device_id,
-				true,
-				func(data: Dictionary, error: String):
-					if error != "":
-						state.failed += 1
-						push_error("[SaveManager] Auto-upload failed: " + error)
-					else:
-						var remote_id = data.get("id", 0)
-						print("[SaveManager] Auto-upload success for " + local.file_name + " -> remote save id: " + str(remote_id))
-						DataManager.update_save_sync_record(game.romm_id, emulator_id, local.file_name, local.file_path, current_timestamp, remote_id, SLOT_DEFAULT)
+			var local_file_name = local.file_name
+			var local_file_path = local.file_path
+			
+			if is_folder_save:
+				var short_title_id = game.title_id.substr(8, 8)
+				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + short_title_id + ".zip"
+				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+				if not FileSystemManager.zip_directory(local_file_path, zip_path):
+					state.failed += 1
+					push_error("[SaveManager] Failed to zip folder for auto-upload: " + local_file_path)
 					state.pending -= 1
 					if state.pending <= 0:
 						if state.failed > 0:
 							NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
 						else:
 							NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
-			)
+					continue
+				
+				NetworkManager.upload_save(
+					game.romm_id,
+					zip_path,
+					emulator_id,
+					SLOT_DEFAULT,
+					device_id,
+					true,
+					func(data: Dictionary, error: String):
+						if FileAccess.file_exists(zip_path):
+							DirAccess.remove_absolute(zip_path)
+						if error != "":
+							state.failed += 1
+							push_error("[SaveManager] Auto-upload failed: " + error)
+						else:
+							var remote_id = data.get("id", 0)
+							print("[SaveManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
+							DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
+						state.pending -= 1
+						if state.pending <= 0:
+							if state.failed > 0:
+								NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+							else:
+								NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+				)
+			else:
+				NetworkManager.upload_save(
+					game.romm_id,
+					local_file_path,
+					emulator_id,
+					SLOT_DEFAULT,
+					device_id,
+					true,
+					func(data: Dictionary, error: String):
+						if error != "":
+							state.failed += 1
+							push_error("[SaveManager] Auto-upload failed: " + error)
+						else:
+							var remote_id = data.get("id", 0)
+							print("[SaveManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
+							DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
+						state.pending -= 1
+						if state.pending <= 0:
+							if state.failed > 0:
+								NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+							else:
+								NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+				)
 	)
 
 ## Auto-download saves before launch (pre-launch hook)
@@ -348,7 +608,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 	if save_dir == "" or extensions.is_empty():
 		return
 	
-	var rom_name_no_ext = game.get_active_file_name().get_basename()
+	var is_folder_save = uses_folder_saves(emulator_id)
 	
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
@@ -367,7 +627,15 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 			for rec in db_records:
 				db_by_name[rec.file_name] = rec
 			
-			var local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+			var local_saves: Array[Dictionary]
+			if is_folder_save:
+				if game.title_id == "" or game.title_id.length() != 16:
+					return
+				local_saves = discover_local_folder_save(save_dir, game.title_id)
+			else:
+				var rom_name_no_ext = game.get_active_file_name().get_basename()
+				local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+			
 			var local_by_name: Dictionary = {}
 			for save in local_saves:
 				local_by_name[save.file_name] = save
@@ -401,11 +669,38 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 				if should_download:
 					state.pending += 1
 					var _local = local_by_name.get(file_name)
+					var record_path = ""
 					var local_path = ""
+					var zip_path = ""
+					
 					if _local:
-						local_path = _local.file_path
+						record_path = _local.file_path
 					else:
-						local_path = save_dir + file_name
+						record_path = save_dir + file_name
+					
+					if is_folder_save:
+						zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
+						DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+						local_path = zip_path
+						
+						if not _local:
+							var id0 = _find_first_subdir(save_dir)
+							if id0 == "":
+								state.failed += 1
+								push_error("[SaveManager] Cannot auto-download folder save: no id0 folder found")
+								state.pending -= 1
+								continue
+							var id1 = _find_first_subdir(save_dir + id0 + "/")
+							if id1 == "":
+								state.failed += 1
+								push_error("[SaveManager] Cannot auto-download folder save: no id1 folder found")
+								state.pending -= 1
+								continue
+							var category = game.title_id.substr(0, 8)
+							var short_title_id = game.title_id.substr(8, 8)
+							record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+					else:
+						local_path = record_path
 					
 					NetworkManager.download_save(save_id, device_id, local_path, func(success: bool, status_code: int, error_msg: String):
 						if not success:
@@ -418,7 +713,15 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 							if confirm_error != "":
 								push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 							
-							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, local_path, current_timestamp, save_id, SLOT_DEFAULT)
+							if is_folder_save:
+								var extract_success = _extract_zip_to_directory(zip_path, record_path.get_base_dir())
+								if not extract_success:
+									state.failed += 1
+									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
+								if FileAccess.file_exists(zip_path):
+									DirAccess.remove_absolute(zip_path)
+							
+							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
 							if state.pending <= 0 and state.failed == 0:
 								NotificationManager.show_notification("Saves downloaded from RomM", Notification.Type.INFO)

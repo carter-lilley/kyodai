@@ -1294,7 +1294,20 @@ func _reassemble_chunks(item_id: String):
 	var item = chunked_info.item
 	
 	print("[DownloadManager] Starting chunk reassembly for: " + item.name)
-	NotificationManager.update_notification_text(item.notification_id, "Assembling " + item.name + "...")
+	
+	# Dismiss the download progress notification and show a pulsing reassembly notification
+	if item.notification_id != -1:
+		NotificationManager.dismiss_notification(item.notification_id)
+	
+	item.notification_id = NotificationManager.show_notification(
+		"Assembling " + item.name + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		Callable(),  # No progress callable - using pulsing
+		Callable(),  # No text formatter
+		true  # pulsing = true
+	)
 	
 	# For SAF destinations, we must reassemble to a temp file first
 	var use_saf = item.use_saf

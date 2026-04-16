@@ -775,3 +775,88 @@ static func _saf_write_file(saf_path: String, content: String) -> bool:
 		DirAccess.remove_absolute(temp_path)
 	
 	return success
+
+## Creates a ZIP archive from a directory
+## source_dir: Directory to zip
+## dest_zip: Destination ZIP file path
+## Returns true on success
+static func zip_directory(source_dir: String, dest_zip: String) -> bool:
+	if not dir_exists(source_dir):
+		push_error("[FileSystemManager] Source directory does not exist: " + source_dir)
+		return false
+	
+	var is_saf_dest = is_saf_path(dest_zip) and is_android()
+	var actual_zip_path = dest_zip
+	
+	# For SAF destinations, write to temp first then copy
+	if is_saf_dest:
+		actual_zip_path = _saf_to_temp_path(dest_zip)
+	
+	# Ensure parent directory exists
+	var parent_dir = actual_zip_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(parent_dir):
+		var err = DirAccess.make_dir_recursive_absolute(parent_dir)
+		if err != OK:
+			push_error("[FileSystemManager] Failed to create ZIP parent directory: " + parent_dir)
+			return false
+	
+	var packer = ZIPPacker.new()
+	var err = packer.open(actual_zip_path)
+	if err != OK:
+		push_error("[FileSystemManager] Failed to open ZIPPacker for: " + actual_zip_path)
+		return false
+	
+	var success = _zip_directory_recursive(packer, source_dir, "")
+	packer.close()
+	
+	if not success:
+		return false
+	
+	if is_saf_dest:
+		if not copy_to_saf(actual_zip_path, dest_zip):
+			return false
+		# Clean up temp file
+		if FileAccess.file_exists(actual_zip_path):
+			DirAccess.remove_absolute(actual_zip_path)
+	
+	return true
+
+static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_prefix: String) -> bool:
+	var dir = DirAccess.open(dir_path)
+	if dir == null:
+		push_error("[FileSystemManager] Failed to open directory for zipping: " + dir_path)
+		return false
+	
+	dir.list_dir_begin()
+	var filename = dir.get_next()
+	var success = true
+	
+	while filename != "":
+		if filename != "." and filename != "..":
+			var full_path = dir_path + "/" + filename
+			var zip_path = zip_prefix + filename
+			
+			if dir.current_is_dir():
+				packer.start_file(zip_path + "/")
+				packer.close_file()
+				if not _zip_directory_recursive(packer, full_path, zip_path + "/"):
+					success = false
+			else:
+				var file = FileAccess.open(full_path, FileAccess.READ)
+				if file == null:
+					push_error("[FileSystemManager] Failed to read file for zipping: " + full_path)
+					success = false
+				else:
+					var data = file.get_buffer(file.get_length())
+					file.close()
+					packer.start_file(zip_path)
+					packer.write_file(data)
+					packer.close_file()
+			
+			if not success:
+				break
+		
+		filename = dir.get_next()
+	
+	dir.list_dir_end()
+	return success

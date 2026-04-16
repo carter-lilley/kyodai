@@ -256,8 +256,11 @@
 	"name": "Azahar",
 	"platforms": ["3ds"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/user/sdmc/Nintendo 3DS"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {

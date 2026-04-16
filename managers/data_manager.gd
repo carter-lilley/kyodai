@@ -1370,14 +1370,6 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 					# Count non-master games as folded
 					if game.romm_id != lowest_id:
 						games_folded += 1
-				
-						# Optimization: process in batches to avoid blocking too long
-						if games_folded % 100 == 0:
-							await get_tree().process_frame
-				
-				# Yield occasionally to prevent UI freeze on large libraries
-				if groups_processed % 50 == 0:
-					await get_tree().process_frame
 			
 			print("[CoverFolding] Processed %d cover groups, folded %d games" % [groups_processed, games_folded])
 			return games_folded,
