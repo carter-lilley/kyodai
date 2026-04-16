@@ -191,6 +191,44 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 	
 	return results
 
+func _game_id_to_hex(game_id: String) -> String:
+	var hex = ""
+	for c in game_id:
+		hex += "%02x" % c.unicode_at(0)
+	return hex
+
+func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or game_id == "":
+		return results
+	
+	var title_path = directory + "Wii/title/"
+	if not FileSystemManager.dir_exists(title_path):
+		return results
+	
+	var hex_id = _game_id_to_hex(game_id)
+	
+	var prefix_dirs = FileSystemManager.list_dir(title_path)
+	for prefix in prefix_dirs:
+		if prefix == "." or prefix == "..":
+			continue
+		var prefix_path = title_path + prefix + "/"
+		if not FileSystemManager.dir_exists(prefix_path):
+			continue
+		
+		var game_path = prefix_path + hex_id
+		if FileSystemManager.dir_exists(game_path):
+			var mtime = _get_folder_mtime(game_path)
+			results.append({
+				"file_name": hex_id + ".zip",
+				"file_path": game_path,
+				"modified_time": mtime,
+				"extension": ".zip"
+			})
+			return results
+	
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -352,6 +390,23 @@ func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) 
 	_remove_dir_recursive(stage_dir)
 	return zip_success
 
+func _zip_dolphin_wii_save(source_dir: String, dest_zip: String) -> bool:
+	var parts = source_dir.rstrip("/").split("/")
+	if parts.size() < 2:
+		return false
+	var hex_id = parts[-1]
+	var prefix = parts[-2]
+	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+	var stage_root = stage_dir + "Wii/title/" + prefix + "/" + hex_id
+	DirAccess.make_dir_recursive_absolute(stage_root)
+	var copy_success = _copy_dir_recursive(source_dir, stage_root)
+	if not copy_success:
+		_remove_dir_recursive(stage_dir)
+		return false
+	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
+	_remove_dir_recursive(stage_dir)
+	return zip_success
+
 func _sanitize_filename(name: String) -> String:
 	return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
 
@@ -418,7 +473,10 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 				return
 			local_saves = discover_local_cemu_save(save_dir, game.title_id)
 		elif emulator_id == "dolphin":
-			local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+			if game.platform_slug == "wii":
+				local_saves = discover_local_dolphin_wii_save(save_dir, game.title_id)
+			else:
+				local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
 		else:
 			if game.title_id.length() != 16:
 				if callback.is_valid():
@@ -523,7 +581,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		var original_path = upload.local.file_path
 		
 		if is_folder_save:
+			var is_wii = emulator_id == "dolphin" and game.platform_slug == "wii"
 			var save_name = game.title_id if emulator_id == "dolphin" else game.title_id.substr(8, 8)
+			if is_wii:
+				save_name = _game_id_to_hex(game.title_id)
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 			print("[SaveManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
 			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
@@ -532,8 +593,12 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				print("[SaveManager] Zipping Cemu save with root folder to: " + zip_path)
 				zip_success = _zip_directory_with_root(original_path, save_name, zip_path)
 			elif emulator_id == "dolphin":
-				print("[SaveManager] Zipping Dolphin GC saves to: " + zip_path)
-				zip_success = _zip_dolphin_gc_saves(original_path, game.title_id, zip_path)
+				if is_wii:
+					print("[SaveManager] Zipping Dolphin Wii save to: " + zip_path)
+					zip_success = _zip_dolphin_wii_save(original_path, zip_path)
+				else:
+					print("[SaveManager] Zipping Dolphin GC saves to: " + zip_path)
+					zip_success = _zip_dolphin_gc_saves(original_path, game.title_id, zip_path)
 			else:
 				print("[SaveManager] Zipping folder save to: " + zip_path)
 				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
@@ -596,14 +661,17 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
 			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
 			local_path = zip_path
+			var save_dir = resolve_save_directory(emulator_id)
 			
 			if not download.local:
-				var save_dir = resolve_save_directory(emulator_id)
 				if emulator_id == "cemu":
 					var short_title_id = game.title_id.substr(8, 8)
 					record_path = save_dir + "00050000/" + short_title_id
 				elif emulator_id == "dolphin":
-					record_path = save_dir + "GC/USA/Card A"
+					if game.platform_slug == "wii":
+						record_path = save_dir + "Wii/title/00010000/" + _game_id_to_hex(game.title_id)
+					else:
+						record_path = save_dir + "GC/USA/Card A"
 				else:
 					var short_title_id = game.title_id.substr(8, 8)
 					var id0 = _find_first_subdir(save_dir)
@@ -637,7 +705,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				if is_folder_save:
 					var extract_dest = record_path.get_base_dir()
 					if emulator_id == "dolphin":
-						extract_dest = record_path
+						if game.platform_slug == "wii":
+							extract_dest = resolve_save_directory(emulator_id)
+						else:
+							extract_dest = record_path
 					var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
@@ -681,7 +752,10 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		if emulator_id == "cemu":
 			local_saves = discover_local_cemu_save(save_dir, game.title_id)
 		elif emulator_id == "dolphin":
-			local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+			if game.platform_slug == "wii":
+				local_saves = discover_local_dolphin_wii_save(save_dir, game.title_id)
+			else:
+				local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
 		else:
 			local_saves = discover_local_folder_save(save_dir, game.title_id)
 	else:
@@ -705,14 +779,20 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			var local_file_path = local.file_path
 			
 			if is_folder_save:
+				var is_wii = emulator_id == "dolphin" and game.platform_slug == "wii"
 				var save_name = game.title_id if emulator_id == "dolphin" else game.title_id.substr(8, 8)
+				if is_wii:
+					save_name = _game_id_to_hex(game.title_id)
 				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
 				var zip_success = false
 				if emulator_id == "cemu":
 					zip_success = _zip_directory_with_root(local_file_path, save_name, zip_path)
 				elif emulator_id == "dolphin":
-					zip_success = _zip_dolphin_gc_saves(local_file_path, game.title_id, zip_path)
+					if is_wii:
+						zip_success = _zip_dolphin_wii_save(local_file_path, zip_path)
+					else:
+						zip_success = _zip_dolphin_gc_saves(local_file_path, game.title_id, zip_path)
 				else:
 					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				if not zip_success:
@@ -817,7 +897,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 						return
 					local_saves = discover_local_cemu_save(save_dir, game.title_id)
 				elif emulator_id == "dolphin":
-					local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+					if game.platform_slug == "wii":
+						local_saves = discover_local_dolphin_wii_save(save_dir, game.title_id)
+					else:
+						local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
 				else:
 					if game.title_id.length() != 16:
 						return
@@ -878,7 +961,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								var short_title_id = game.title_id.substr(8, 8)
 								record_path = save_dir + "00050000/" + short_title_id
 							elif emulator_id == "dolphin":
-								record_path = save_dir + "GC/USA/Card A"
+								if game.platform_slug == "wii":
+									record_path = save_dir + "Wii/title/00010000/" + _game_id_to_hex(game.title_id)
+								else:
+									record_path = save_dir + "GC/USA/Card A"
 							else:
 								var short_title_id = game.title_id.substr(8, 8)
 								var id0 = _find_first_subdir(save_dir)
@@ -912,7 +998,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 							if is_folder_save:
 								var extract_dest = record_path.get_base_dir()
 								if emulator_id == "dolphin":
-									extract_dest = record_path
+									if game.platform_slug == "wii":
+										extract_dest = save_dir
+									else:
+										extract_dest = record_path
 								var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
