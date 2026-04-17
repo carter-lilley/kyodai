@@ -31,16 +31,21 @@ jobs:
         cmake-version: '3.28'
     
     - name: Build
-      working-directory: bin/libchdr
+      working-directory: bin/src/libchdr
       run: |
         cmake -B build -G "Visual Studio 17 2022" -A x64
         cmake --build build --config Release
+    
+    - name: Copy Binary
+      run: |
+        mkdir -p bin/libchdr/win
+        cp bin/src/libchdr/build/Release/chd_reader.exe bin/libchdr/win/
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: chd_reader-windows-x64
-        path: bin/libchdr/build/Release/chd_reader.exe
+        path: bin/libchdr/win/chd_reader.exe
 
   build-linux:
     runs-on: ubuntu-latest
@@ -55,16 +60,22 @@ jobs:
         sudo apt-get install -y cmake build-essential
     
     - name: Build
-      working-directory: bin/libchdr
+      working-directory: bin/src/libchdr
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build --parallel
+    
+    - name: Copy Binary
+      run: |
+        mkdir -p bin/libchdr/linux
+        cp bin/src/libchdr/build/chd_reader bin/libchdr/linux/
+        chmod +x bin/libchdr/linux/chd_reader
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: chd_reader-linux-x64
-        path: bin/libchdr/build/chd_reader
+        path: bin/libchdr/linux/chd_reader
 
   build-macos:
     runs-on: macos-latest
@@ -74,27 +85,28 @@ jobs:
         submodules: recursive
     
     - name: Build Intel
-      working-directory: bin/libchdr
+      working-directory: bin/src/libchdr
       run: |
         cmake -B build-x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
         cmake --build build-x64 --parallel
     
     - name: Build ARM64
-      working-directory: bin/libchdr
+      working-directory: bin/src/libchdr
       run: |
         cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
         cmake --build build-arm64 --parallel
     
     - name: Create Universal Binary
-      working-directory: bin/libchdr
       run: |
-        lipo -create build-x64/chd_reader build-arm64/chd_reader -output chd_reader-macos-universal
+        mkdir -p bin/libchdr/macos
+        lipo -create bin/src/libchdr/build-x64/chd_reader bin/src/libchdr/build-arm64/chd_reader -output bin/libchdr/macos/chd_reader
+        chmod +x bin/libchdr/macos/chd_reader
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: chd_reader-macos-universal
-        path: bin/libchdr/chd_reader-macos-universal
+        path: bin/libchdr/macos/chd_reader
 
   build-android:
     runs-on: ubuntu-latest
@@ -111,7 +123,7 @@ jobs:
         add-to-path: true
     
     - name: Build ARM64
-      working-directory: bin/libchdr
+      working-directory: bin/src/libchdr
       run: |
         cmake -B build-android \
           -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
@@ -121,7 +133,7 @@ jobs:
         cmake --build build-android --parallel
     
     - name: Build ARMv7
-      working-directory: bin/libchdr
+      working-directory: bin/src/libchdr
       run: |
         cmake -B build-android-armv7 \
           -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
@@ -130,13 +142,18 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
         cmake --build build-android-armv7 --parallel
     
+    - name: Copy Binaries
+      run: |
+        mkdir -p bin/libchdr/android
+        cp bin/src/libchdr/build-android/chd_reader bin/libchdr/android/chd_reader-arm64
+        cp bin/src/libchdr/build-android-armv7/chd_reader bin/libchdr/android/chd_reader-armv7
+        chmod +x bin/libchdr/android/*
+    
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: chd_reader-android
-        path: |
-          bin/libchdr/build-android/chd_reader
-          bin/libchdr/build-android-armv7/chd_reader
+        path: bin/libchdr/android/*
 
   release:
     needs: [build-windows, build-linux, build-macos, build-android]
@@ -153,9 +170,9 @@ jobs:
         mkdir release
         cp artifacts/chd_reader-windows-x64/chd_reader.exe release/chd_reader-windows-x64.exe
         cp artifacts/chd_reader-linux-x64/chd_reader release/chd_reader-linux-x64
-        cp artifacts/chd_reader-macos-universal/chd_reader-macos-universal release/chd_reader-macos-universal
-        cp artifacts/chd_reader-android/build-android/chd_reader release/chd_reader-android-arm64
-        cp artifacts/chd_reader-android/build-android-armv7/chd_reader release/chd_reader-android-armv7
+        cp artifacts/chd_reader-macos-universal/chd_reader release/chd_reader-macos-universal
+        cp artifacts/chd_reader-android/chd_reader-arm64 release/chd_reader-android-arm64
+        cp artifacts/chd_reader-android/chd_reader-armv7 release/chd_reader-android-armv7
         chmod +x release/*
     
     - name: Create Release
