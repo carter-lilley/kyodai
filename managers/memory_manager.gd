@@ -45,7 +45,7 @@ const IMAGE_THREAD_COUNT: int = 6
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
-const MAX_DOWNLOAD_QUEUE_SIZE = 100
+const MAX_DOWNLOAD_QUEUE_SIZE = 500
 
 ## Returns the number of download threads for the current platform
 static func get_download_thread_count() -> int:
@@ -505,12 +505,12 @@ static func queue_parallel_downloads(
 		var index = i
 		
 		_instance._download_mutex.lock()
-		var current_size = _instance._download_queue.size()
 		
-		if current_size >= MAX_DOWNLOAD_QUEUE_SIZE:
+		# If queue is full, wait non-blocking with timer
+		while _instance._download_queue.size() >= MAX_DOWNLOAD_QUEUE_SIZE:
 			_instance._download_mutex.unlock()
-			push_error("[MemoryManager] Download queue full - cannot queue item")
-			continue
+			await _instance.get_tree().create_timer(0.01).timeout
+			_instance._download_mutex.lock()
 		
 		_instance._download_queue.append({
 			"callable": func():
@@ -813,8 +813,10 @@ static func queue_sibling_checks(
 		var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % id_list
 		
 		var success = db_instance.query(query)
-		if success and db_instance.query_result.size() > 0:
-			return db_instance.query_result[0]["count"] > 0
+		if success:
+			var query_result = db_instance.query_result.duplicate()
+			if query_result.size() > 0:
+				return query_result[0]["count"] > 0
 		
 		return false
 	

@@ -525,10 +525,22 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
-		var target_path = extract_path + "/" + target_folder
+		var target_path = ""
 		
-		# Check if target folder exists using SAF-aware method
-		if not FileSystemManager.dir_exists(target_path):
+		# First try exact match
+		var exact_path = extract_path + "/" + target_folder
+		if FileSystemManager.dir_exists(exact_path):
+			target_path = exact_path
+		else:
+			# Try wildcard match against entries in extract_path
+			var candidates = FileSystemManager.list_dir(extract_path)
+			for entry in candidates:
+				if entry != "." and entry != ".." and entry.match(target_folder):
+					if FileSystemManager.dir_exists(extract_path + "/" + entry):
+						target_path = extract_path + "/" + entry
+						break
+		
+		if target_path == "":
 			return
 		
 		# Get list of items in the target folder
@@ -757,6 +769,14 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 		if not cemu_ready:
 			push_error("[LaunchManager] Failed to prepare Cemu game: " + game.get_display_name())
 			NotificationManager.show_notification("Failed to prepare Wii U game", Notification.Type.ERROR)
+			return null
+	
+	# Eden special handling - extract TitleID from Switch ROM
+	if intent.emulator_id == "eden":
+		var eden_ready = _prepare_eden_game(game, intent)
+		if not eden_ready:
+			push_error("[LaunchManager] Failed to prepare Eden game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare Switch game", Notification.Type.ERROR)
 			return null
 	
 	# Dolphin special handling - extract Game ID from GameCube/Wii ROM
@@ -2759,6 +2779,515 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 		game.title_id = title_id
 		DataManager.update_game_title_id(game.romm_id, title_id)
 		print("[LaunchManager] Cemu: Updated database with TitleID: " + title_id)
+	
+	return true
+
+func _read_prod_keys_header_key(emulator_id: String) -> String:
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
+	var keys_path = emulator_dir + "/user/keys/prod.keys"
+	if not FileAccess.file_exists(keys_path):
+		return ""
+	
+	var file = FileAccess.open(keys_path, FileAccess.READ)
+	if not file:
+		return ""
+	
+	var content = file.get_as_text()
+	file.close()
+	
+	var lines = content.split("\n")
+	for i in range(lines.size()):
+		var line = lines[i].strip_edges()
+		if line.begins_with("header_key ="):
+			var parts = line.split("=", false, 1)
+			if parts.size() == 2:
+				var key = parts[1].strip_edges().replace(" ", "").replace("\t", "")
+				# Handle multi-line value if next line is continuation
+				if key == "" and i + 1 < lines.size():
+					key = lines[i + 1].strip_edges().replace(" ", "").replace("\t", "")
+				if key.length() == 64:
+					return key
+	return ""
+
+func _aes_xts_decrypt(data: PackedByteArray, key: PackedByteArray, sector_size: int, sector_start: int) -> PackedByteArray:
+	var key1 = key.slice(0, 16)
+	var key2 = key.slice(16, 32)
+	
+	var aes_tweak = AESContext.new()
+	aes_tweak.start(AESContext.MODE_ECB_ENCRYPT, key2)
+	
+	var aes_data = AESContext.new()
+	aes_data.start(AESContext.MODE_ECB_DECRYPT, key1)
+	
+	var result = PackedByteArray()
+	result.resize(data.size())
+	
+	var sectors = data.size() / sector_size
+	for sector in range(sectors):
+		var sector_data = data.slice(sector * sector_size, (sector + 1) * sector_size)
+		
+		# Tweak: bytes 0-7 zero, bytes 8-15 = sector number big-endian
+		var tweak_block = PackedByteArray()
+		tweak_block.resize(16)
+		tweak_block[8] = (sector_start + sector) >> 56
+		tweak_block[9] = ((sector_start + sector) >> 48) & 0xFF
+		tweak_block[10] = ((sector_start + sector) >> 40) & 0xFF
+		tweak_block[11] = ((sector_start + sector) >> 32) & 0xFF
+		tweak_block[12] = ((sector_start + sector) >> 24) & 0xFF
+		tweak_block[13] = ((sector_start + sector) >> 16) & 0xFF
+		tweak_block[14] = ((sector_start + sector) >> 8) & 0xFF
+		tweak_block[15] = (sector_start + sector) & 0xFF
+		
+		var t = aes_tweak.update(tweak_block)
+		var blocks = sector_size / 16
+		
+		for block in range(blocks):
+			var block_data = PackedByteArray()
+			block_data.resize(16)
+			for j in range(16):
+				block_data[j] = sector_data[block * 16 + j] ^ t[j]
+			
+			var decrypted = aes_data.update(block_data)
+			for j in range(16):
+				result[sector * sector_size + block * 16 + j] = decrypted[j] ^ t[j]
+			
+			# Multiply by x in GF(2^128)
+			var b = 0
+			var b2 = 0
+			for j in range(16):
+				b2 = t[j] >> 7
+				t[j] = ((t[j] << 1) | b) & 0xFF
+				b = b2
+			if b2 > 0:
+				t[0] ^= 135
+	
+	return result
+
+func _parse_hfs0(file: FileAccess, offset: int) -> Dictionary:
+	var result = {
+		"valid": false,
+		"file_count": 0,
+		"entries": []
+	}
+	
+	file.seek(offset)
+	var header = file.get_buffer(0x10)
+	if header.size() < 0x10:
+		return result
+	
+	var magic = header.slice(0, 4).get_string_from_ascii()
+	if magic != "HFS0":
+		return result
+	
+	var file_count = header.decode_u32(0x04)
+	var string_table_size = header.decode_u32(0x08)
+	
+	var entries = []
+	for i in range(file_count):
+		file.seek(offset + 0x10 + i * 0x40)
+		var entry = file.get_buffer(0x40)
+		if entry.size() < 0x40:
+			continue
+		var rel_off = entry.decode_u64(0x00)
+		var size = entry.decode_u64(0x08)
+		var str_off = entry.decode_u32(0x10)
+		entries.append({
+			"rel_offset": rel_off,
+			"size": size,
+			"string_offset": str_off
+		})
+	
+	file.seek(offset + 0x10 + file_count * 0x40)
+	var string_table = file.get_buffer(string_table_size)
+	
+	var data_start = offset + 0x10 + file_count * 0x40 + string_table_size
+	
+	for i in range(entries.size()):
+		var str_off = entries[i].string_offset
+		var name_end = str_off
+		while name_end < string_table.size() and string_table[name_end] != 0:
+			name_end += 1
+		entries[i].name = string_table.slice(str_off, name_end).get_string_from_ascii()
+		entries[i].offset = data_start + entries[i].rel_offset
+	
+	result.valid = true
+	result.file_count = file_count
+	result.entries = entries
+	return result
+
+func _extract_xci_title_id(rom_path: String, emulator_id: String) -> String:
+	if not FileAccess.file_exists(rom_path):
+		return ""
+	
+	var header_key_hex = _read_prod_keys_header_key(emulator_id)
+	if header_key_hex == "":
+		print("[LaunchManager] XCI extraction: no header_key found in prod.keys")
+		return ""
+	
+	var header_key = PackedByteArray()
+	for i in range(0, header_key_hex.length(), 2):
+		header_key.append(header_key_hex.substr(i, 2).hex_to_int())
+	if header_key.size() != 32:
+		print("[LaunchManager] XCI extraction: invalid header_key length")
+		return ""
+	
+	var file = FileAccess.open(rom_path, FileAccess.READ)
+	if not file:
+		return ""
+	
+	# Read XCI header
+	file.seek(0x130)
+	var hfs0_offset = file.get_64()
+	var hfs0_size = file.get_64()
+	
+	# Parse root HFS0
+	var root = _parse_hfs0(file, hfs0_offset)
+	if not root.valid:
+		file.close()
+		return ""
+	
+	# Find secure partition
+	var secure_offset = -1
+	for entry in root.entries:
+		if entry.name == "secure":
+			secure_offset = entry.offset
+			break
+	
+	if secure_offset < 0:
+		file.close()
+		return ""
+	
+	# Parse secure HFS0
+	var secure = _parse_hfs0(file, secure_offset)
+	if not secure.valid or secure.entries.is_empty():
+		file.close()
+		return ""
+	
+	# Find largest NCA (main game)
+	var largest_idx = -1
+	var largest_size = 0
+	for i in range(secure.entries.size()):
+		if secure.entries[i].size > largest_size:
+			largest_size = secure.entries[i].size
+			largest_idx = i
+	
+	if largest_idx < 0:
+		file.close()
+		return ""
+	
+	var nca_offset = secure.entries[largest_idx].offset
+	file.seek(nca_offset)
+	var nca_header = file.get_buffer(0x400)
+	file.close()
+	
+	if nca_header.size() < 0x400:
+		return ""
+	
+	# Decrypt NCA header with AES-128-XTS
+	var decrypted = _aes_xts_decrypt(nca_header, header_key, 0x200, 0)
+	
+	var magic = decrypted.slice(0x200, 0x204).get_string_from_ascii()
+	if magic != "NCA3" and magic != "NCA2" and magic != "NCA1" and magic != "NCA0":
+		print("[LaunchManager] XCI extraction: NCA header decryption failed (bad magic: " + magic + ")")
+		return ""
+	
+	var title_id = ""
+	for i in range(7, -1, -1):
+		title_id += "%02x" % decrypted[0x210 + i]
+	title_id = title_id.to_upper()
+	
+	if title_id.begins_with("01") and title_id.length() == 16:
+		print("[LaunchManager] XCI extraction: TitleID from NCA header: " + title_id)
+		return title_id
+	
+	# Fallback: rights_id at 0x230 (first 8 bytes)
+	var rights_id_empty = true
+	for b in range(16):
+		if decrypted[0x230 + b] != 0:
+			rights_id_empty = false
+			break
+	if not rights_id_empty:
+		title_id = ""
+		for i in range(7, -1, -1):
+			title_id += "%02x" % decrypted[0x230 + i]
+		title_id = title_id.to_upper()
+		if title_id.begins_with("01") and title_id.length() == 16:
+			print("[LaunchManager] XCI extraction: TitleID from NCA rights_id: " + title_id)
+			return title_id
+	
+	return ""
+
+func _extract_switch_title_id(rom_path: String) -> String:
+	if not FileAccess.file_exists(rom_path):
+		return ""
+	
+	var ext = rom_path.get_extension().to_lower()
+	var file = FileAccess.open(rom_path, FileAccess.READ)
+	if not file:
+		return ""
+	
+	if ext == "xci":
+		file.close()
+		return _extract_xci_title_id(rom_path, "eden")
+	
+	if ext in ["nsp", "nsz"]:
+		var header = file.get_buffer(0x2000)
+		file.close()
+		print("[LaunchManager] NSP: read " + str(header.size()) + " bytes header")
+		if header.size() < 0x10:
+			print("[LaunchManager] NSP: header too small")
+			return ""
+		
+		var magic = header.slice(0, 4).get_string_from_ascii()
+		print("[LaunchManager] NSP: magic = '" + magic + "'")
+		if magic != "PFS0":
+			print("[LaunchManager] NSP: not a PFS0")
+			return ""
+		
+		var file_count = header.decode_u32(0x04)
+		var string_table_size = header.decode_u32(0x08)
+		print("[LaunchManager] NSP: file_count=" + str(file_count) + ", str_table_size=" + str(string_table_size))
+		
+		var entries_size = file_count * 0x18
+		var total_header = 0x10 + entries_size + string_table_size
+		
+		if header.size() < total_header:
+			print("[LaunchManager] NSP: header buffer too small for total_header=" + str(total_header))
+			return ""
+		
+		var string_table_offset = 0x10 + entries_size
+		var filenames: Array[String] = []
+		
+		for i in range(file_count):
+			var entry_offset = 0x10 + (i * 0x18)
+			var string_offset = header.decode_u32(entry_offset + 0x10)
+			var name_start = string_table_offset + string_offset
+			
+			var name_end = name_start
+			while name_end < total_header and header[name_end] != 0:
+				name_end += 1
+			
+			var filename = header.slice(name_start, name_end).get_string_from_ascii()
+			filenames.append(filename)
+			print("[LaunchManager] NSP: file " + str(i) + " = '" + filename + "'")
+		
+		# First pass: look for .tik file (most reliable)
+		for i in range(file_count):
+			var filename = filenames[i]
+			if filename.to_lower().ends_with(".tik"):
+				var basename = filename.get_basename()
+				print("[LaunchManager] NSP: found .tik basename=" + basename)
+				if basename.length() == 16:
+					var is_hex = true
+					for c in basename:
+						if not ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')):
+							is_hex = false
+							break
+					if is_hex and basename.to_upper().begins_with("01"):
+						print("[LaunchManager] NSP: TitleID from .tik=" + basename.to_upper())
+						return basename.to_upper()
+		
+		# Second pass: decrypt NCA headers with AES-XTS (hashed dumps)
+		var header_key_hex = _read_prod_keys_header_key("eden")
+		if header_key_hex != "":
+			var header_key = PackedByteArray()
+			for k in range(0, header_key_hex.length(), 2):
+				header_key.append(header_key_hex.substr(k, 2).hex_to_int())
+			if header_key.size() == 32:
+				var data_start = 0x10 + entries_size + string_table_size
+				for i in range(file_count):
+					var filename = filenames[i]
+					if not filename.to_lower().ends_with(".nca"):
+						continue
+					var entry_offset = 0x10 + (i * 0x18)
+					var data_offset = header.decode_u64(entry_offset + 0x00)
+					var data_size = header.decode_u64(entry_offset + 0x08)
+					if data_size < 0x400:
+						continue
+					
+					var nca_file = FileAccess.open(rom_path, FileAccess.READ)
+					if nca_file:
+						nca_file.seek(data_start + data_offset)
+						var nca_header = nca_file.get_buffer(0x400)
+						nca_file.close()
+						
+						if nca_header.size() < 0x400:
+							continue
+						
+						var decrypted = _aes_xts_decrypt(nca_header, header_key, 0x200, 0)
+						var nca_magic = decrypted.slice(0x200, 0x204).get_string_from_ascii()
+						if nca_magic in ["NCA3", "NCA2", "NCA1", "NCA0"]:
+							# Try program_id at 0x210
+							var title_id = ""
+							for b in range(7, -1, -1):
+								title_id += "%02x" % decrypted[0x210 + b]
+							title_id = title_id.to_upper()
+							if title_id.begins_with("01") and title_id.length() == 16:
+								print("[LaunchManager] NSP: TitleID from NCA program_id=" + title_id)
+								return title_id
+							
+							# Fallback to rights_id at 0x230 (first 8 bytes)
+							var rights_id_empty = true
+							for b in range(16):
+								if decrypted[0x230 + b] != 0:
+									rights_id_empty = false
+									break
+							if not rights_id_empty:
+								title_id = ""
+								for b in range(7, -1, -1):
+									title_id += "%02x" % decrypted[0x230 + b]
+								title_id = title_id.to_upper()
+								if title_id.begins_with("01") and title_id.length() == 16:
+									print("[LaunchManager] NSP: TitleID from NCA rights_id=" + title_id)
+									return title_id
+		
+		# Third pass: scan any filename for a 16-char hex title ID starting with 01
+		for filename in filenames:
+			var upper = filename.to_upper()
+			for j in range(upper.length() - 15):
+				var substr = upper.substr(j, 16)
+				if substr.begins_with("01"):
+					var is_hex = true
+					for c in substr:
+						if not ((c >= '0' and c <= '9') or (c >= 'A' and c <= 'F')):
+							is_hex = false
+							break
+					if is_hex:
+						print("[LaunchManager] NSP: TitleID from filename scan=" + substr)
+						return substr
+		
+		print("[LaunchManager] NSP: no TitleID found")
+		return ""
+	
+	file.close()
+	return ""
+
+func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> String:
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
+	var search_roots: Array[String] = [emulator_dir + "/user"]
+	if PlatformManager.is_windows():
+		var appdata = OS.get_environment("APPDATA")
+		if appdata != "":
+			search_roots.append(appdata + "/eden")
+			search_roots.append(appdata + "/yuzu")
+	elif PlatformManager.is_linux():
+		var home = OS.get_environment("HOME")
+		if home != "":
+			search_roots.append(home + "/.local/share/eden")
+			search_roots.append(home + "/.local/share/yuzu")
+	
+	for root in search_roots:
+		var db_path = root + "/cache/game_list/game_list.db"
+		print("[LaunchManager] Eden DB lookup: checking " + db_path)
+		if not FileAccess.file_exists(db_path):
+			print("[LaunchManager] Eden DB lookup: file does not exist")
+			continue
+		print("[LaunchManager] Eden DB lookup: file exists, opening...")
+		var db = SQLite.new()
+		db.path = db_path
+		db.verbosity_level = SQLite.VERBOSE
+		if not db.open_db():
+			print("[LaunchManager] Eden DB lookup: failed to open DB")
+			continue
+		print("[LaunchManager] Eden DB lookup: DB opened")
+		
+		var tables = db.query("SELECT name FROM sqlite_master WHERE type='table';")
+		if tables == null or not tables is Array:
+			print("[LaunchManager] Eden DB lookup: no tables found")
+			db.close_db()
+			continue
+		print("[LaunchManager] Eden DB lookup: tables count = " + str(tables.size()))
+		
+		for table_dict in tables:
+			var table_name = table_dict.get("name", "")
+			if table_name == "" or table_name.begins_with("sqlite_"):
+				continue
+			
+			var cols_result = db.query("PRAGMA table_info(" + table_name + ");")
+			if cols_result == null or not cols_result is Array:
+				continue
+			
+			var id_col = ""
+			var name_col = ""
+			for col in cols_result:
+				var col_name = str(col.get("name", "")).to_lower()
+				if id_col == "" and col_name in ["title_id", "program_id", "id"]:
+					id_col = str(col.get("name", ""))
+				if name_col == "" and ("name" in col_name or "title" in col_name):
+					name_col = str(col.get("name", ""))
+			
+			if id_col == "" or name_col == "":
+				continue
+			
+			print("[LaunchManager] Eden DB lookup: scanning table '" + table_name + "' (id_col=" + id_col + ", name_col=" + name_col + ")")
+			var query = "SELECT " + id_col + " FROM " + table_name + " WHERE " + name_col + " LIKE ? LIMIT 1;"
+			var rows = db.query_with_bindings(query, ["%" + game_name + "%"])
+			if rows != null and rows is Array and rows.size() > 0:
+				var raw = rows[0].get(id_col, "")
+				var tid = ""
+				if raw is int:
+					tid = "%016x" % raw
+				elif raw is String:
+					tid = raw.to_upper().replace("0X", "")
+				print("[LaunchManager] Eden DB lookup: raw result = " + str(raw) + ", parsed tid = " + tid)
+				if tid.length() == 16:
+					var valid = true
+					for c in tid:
+						if not ((c >= '0' and c <= '9') or (c >= 'A' and c <= 'F')):
+							valid = false
+							break
+					if valid and tid.begins_with("01"):
+						db.close_db()
+						print("[LaunchManager] Eden: TitleID from DB (" + root + "): " + tid)
+						return tid
+					else:
+						print("[LaunchManager] Eden DB lookup: parsed tid invalid or doesn't start with 01")
+			else:
+				print("[LaunchManager] Eden DB lookup: no match in table '" + table_name + "' for '" + game_name + "'")
+		
+		db.close_db()
+	
+	print("[LaunchManager] Eden DB lookup: exhausted all roots, no title id found")
+	return ""
+
+func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] Eden: Preparing game from ROM path: " + intent.rom_path)
+	
+	var rom_path = intent.rom_path
+	var title_id = ""
+	
+	# Use existing title_id from database/RomM if it's already valid
+	if game.title_id.length() == 16:
+		var valid = true
+		for c in game.title_id:
+			if not ((c >= '0' and c <= '9') or (c >= 'A' and c <= 'F') or (c >= 'a' and c <= 'f')):
+				valid = false
+				break
+		if valid and game.title_id.to_upper().begins_with("01"):
+			title_id = game.title_id.to_upper()
+			print("[LaunchManager] Eden: Using stored TitleID from database: " + title_id)
+	
+	if title_id == "":
+		title_id = _extract_switch_title_id(rom_path)
+	if title_id == "":
+		print("[LaunchManager] Eden: ROM extraction failed, trying game_list.db lookup...")
+		title_id = _resolve_eden_title_id_from_db(game.get_display_name(), intent.emulator_id)
+	
+	if title_id == "":
+		push_error("[LaunchManager] Eden: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract Switch game TitleID", Notification.Type.ERROR)
+		return false
+	
+	print("[LaunchManager] Eden: TitleID resolved: " + title_id)
+	
+	if game.title_id != "" and game.title_id != title_id:
+		print("[LaunchManager] Eden: WARNING - Stored TitleID " + game.title_id + " doesn't match resolved TitleID " + title_id)
+		print("[LaunchManager] Eden: Updating to correct TitleID")
+	
+	if game.title_id != title_id:
+		game.title_id = title_id
+		DataManager.update_game_title_id(game.romm_id, title_id)
+		print("[LaunchManager] Eden: Updated database with TitleID: " + title_id)
 	
 	return true
 

@@ -21,6 +21,27 @@ const CACHE_FOLDER = "user://cache/covers/"
 
 var _db: SQLite = null
 var _is_db_ready: bool = false
+
+var _db_mutex: Mutex = Mutex.new()
+
+func _db_lock():
+	_db_mutex.lock()
+
+func _db_unlock():
+	_db_mutex.unlock()
+
+func _db_query_array(query: String) -> Array:
+	_db_lock()
+	var success = _db.query(query)
+	var result = _db.query_result.duplicate() if success else []
+	_db_unlock()
+	return result
+
+func _db_query_bool(query: String) -> bool:
+	_db_lock()
+	var success = _db.query(query)
+	_db_unlock()
+	return success
 var _loading_images: Dictionary = {}
 var _sync_notification_id: int = -1
 
@@ -147,13 +168,14 @@ func _remove_cover_based_siblings():
 		func():
 			# Simple: set cover_group_master = 1 for all games in any cover group
 			var query = "UPDATE games SET cover_group_master = 1 WHERE cover_group_id != ''"
-			var success = _db.query(query)
+			var success = _db_query_bool(query)
 			
 			# Get count of affected games
 			var count_query = "SELECT changes() as count"
 			var unfolded_count = 0
-			if success and _db.query(count_query) and _db.query_result.size() > 0:
-				unfolded_count = _db.query_result[0].get("count", 0)
+			var query_result = _db_query_array(count_query)
+			if success and query_result.size() > 0:
+				unfolded_count = query_result[0].get("count", 0)
 			
 			return unfolded_count,
 		func(unfolded_count: int):
@@ -181,7 +203,7 @@ func _initialize_database():
 		print("[DataManager] ERROR: Failed to open database")
 
 func _create_tables():
-	_db.query("""
+	_db_query_bool("""
 		CREATE TABLE IF NOT EXISTS games (
 			id TEXT PRIMARY KEY,
 			romm_id INTEGER UNIQUE NOT NULL,
@@ -210,7 +232,7 @@ func _create_tables():
 		)
 	""")
 	
-	_db.query("""
+	_db_query_bool("""
 		CREATE TABLE IF NOT EXISTS platforms (
 			id TEXT PRIMARY KEY,
 			romm_id INTEGER UNIQUE NOT NULL,
@@ -223,12 +245,12 @@ func _create_tables():
 		)
 	""")
 	
-	_db.query("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
-	_db.query("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
-	_db.query("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
+	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
+	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
+	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
 	
 	# Create cache_metadata table for per-platform sync timestamps
-	_db.query("""
+	_db_query_bool("""
 		CREATE TABLE IF NOT EXISTS cache_metadata (
 			key TEXT PRIMARY KEY,
 			value TEXT
@@ -236,7 +258,7 @@ func _create_tables():
 	""")
 	
 	# Create save_sync table for tracking save file sync state
-	_db.query("""
+	_db_query_bool("""
 		CREATE TABLE IF NOT EXISTS save_sync (
 			id INTEGER PRIMARY KEY,
 			romm_id INTEGER NOT NULL,
@@ -248,7 +270,7 @@ func _create_tables():
 			slot TEXT
 		)
 	""")
-	_db.query("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
+	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
 	
 	# Migrate old cover_folded column to new cover_group system if needed
 	_migrate_cover_folding_schema()
@@ -261,14 +283,14 @@ func _migrate_cover_folding_schema():
 	"""
 	# Check if old cover_folded column exists
 	var check_query = "PRAGMA table_info(games)"
-	if not _db.query(check_query):
+	var query_result = _db_query_array(check_query)
+	if query_result.is_empty():
 		return
-	
 	var has_cover_folded = false
 	var has_cover_group_id = false
 	var has_cover_group_master = false
 	
-	for row in _db.query_result:
+	for row in query_result:
 		var col_name = row.get("name", "")
 		if col_name == "cover_folded":
 			has_cover_folded = true
@@ -286,8 +308,8 @@ func _migrate_cover_folding_schema():
 		print("[DataManager] Migrating cover folding schema...")
 		
 		# Add new columns
-		_db.query("ALTER TABLE games ADD COLUMN cover_group_id TEXT DEFAULT ''")
-		_db.query("ALTER TABLE games ADD COLUMN cover_group_master INTEGER DEFAULT 1")
+		_db_query_bool("ALTER TABLE games ADD COLUMN cover_group_id TEXT DEFAULT ''")
+		_db_query_bool("ALTER TABLE games ADD COLUMN cover_group_master INTEGER DEFAULT 1")
 		
 		# Migrate data: games with cover_folded=1 get a cover_group_id based on their cover_url
 		var query = """
@@ -295,10 +317,10 @@ func _migrate_cover_folding_schema():
 			FROM games 
 			WHERE cover_folded = 1 AND cover_url != '' AND cover_url IS NOT NULL
 		"""
-		if _db.query(query):
+		if _db_query_bool(query):
 			# Group by cover_url
 			var cover_groups: Dictionary = {}
-			for row in _db.query_result:
+			for row in query_result:
 				var cover_url = row.get("cover_url", "")
 				var romm_id = row.get("romm_id", 0)
 				if cover_url != "" and romm_id != 0:
@@ -322,7 +344,7 @@ func _migrate_cover_folding_schema():
 						SET cover_group_id = '%s', cover_group_master = %d
 						WHERE romm_id = %d
 					""" % [group_id, is_master, game_id]
-					_db.query(update)
+					_db_query_bool(update)
 		
 		print("[DataManager] Cover folding schema migration complete")
 	
@@ -547,8 +569,9 @@ func _process_next_platform():
 	var platform_id = platform.id
 	if platform_id == 0 and _is_db_ready:
 		var lookup_query = "SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform.slug)
-		if _db.query(lookup_query) and _db.query_result.size() > 0:
-			platform_id = _db.query_result[0].get("romm_id", 0)
+		var query_result = _db_query_array(lookup_query)
+		if query_result.size() > 0:
+			platform_id = query_result[0].get("romm_id", 0)
 	
 	if platform_id == 0:
 		# Skip this platform and continue to next
@@ -705,8 +728,8 @@ func _get_db_platform_slugs() -> Array[String]:
 	if not _is_db_ready:
 		return slugs
 	
-	_db.query("SELECT DISTINCT platform_slug FROM games ORDER BY platform_slug")
-	for row in _db.query_result:
+	var query_result = _db_query_array("SELECT DISTINCT platform_slug FROM games ORDER BY platform_slug")
+	for row in query_result:
 		var slug = row.get("platform_slug", "")
 		if slug != "":
 			slugs.append(slug)
@@ -911,11 +934,13 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	"""
 	if not _is_db_ready or games.is_empty():
 		return false
+	_db_lock()
 	
 	# Start transaction
 	var begin_result = _db.query("BEGIN TRANSACTION")
 	if not begin_result:
 		print("[DataManager] ERROR: Failed to begin transaction")
+		_db_unlock()
 		return false
 	
 	var success = true
@@ -937,14 +962,17 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if success:
 		var commit_result = _db.query("COMMIT")
 		if commit_result:
+			_db_unlock()
 			return true
 		else:
 			print("[DataManager] ERROR: Failed to commit transaction")
 			_db.query("ROLLBACK")
+			_db_unlock()
 			return false
 	else:
 		print("[DataManager] ERROR: Transaction failed with %d errors, rolling back %d games" % [error_count, games.size()])
 		_db.query("ROLLBACK")
+		_db_unlock()
 		return false
 
 func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
@@ -1119,10 +1147,10 @@ func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
 	var id_list = ", ".join(ids_to_check.map(func(id): return str(id)))
 	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % id_list
 	
-	var success = _db.query(query)
-	if success and _db.query_result.size() > 0:
-		return _db.query_result[0]["count"] > 0
-	
+	var query_result = _db_query_array(query)
+	if query_result.size() > 0:
+		return query_result[0]["count"] > 0
+
 	return false
 
 func _ensure_consistent_masters_in_batch(games: Array[GameResource]):
@@ -1289,10 +1317,10 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 				WHERE cover_url != '' AND cover_url IS NOT NULL
 			"""
 			
-			if not _db.query(query):
+			var query_result = _db_query_array(query)
+			if query_result.is_empty():
 				return 0
-			
-			var rows = _db.query_result
+			var rows = query_result
 			
 			# Build cover groups from games WITHOUT RomM siblings
 			var cover_groups: Dictionary = {}
@@ -1317,8 +1345,9 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 							# Check if this sibling exists in DB as master (RomM sibling)
 							if sibling_id != 0 and sibling_id != romm_id:
 								var check_query = "SELECT COUNT(*) as count FROM games WHERE romm_id = %d AND is_master_entry = 1" % sibling_id
-								if _db.query(check_query) and _db.query_result.size() > 0:
-									if _db.query_result[0].get("count", 0) > 0:
+								var sibling_result = _db_query_array(check_query)
+								if sibling_result.size() > 0:
+									if sibling_result[0].get("count", 0) > 0:
 										has_romm_siblings = true
 										break
 				
@@ -1365,7 +1394,7 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 						WHERE romm_id = %d
 					""" % [group_id, is_master, game.romm_id]
 					
-					_db.query(update_query)
+					_db_query_bool(update_query)
 					
 					# Count non-master games as folded
 					if game.romm_id != lowest_id:
@@ -1535,10 +1564,10 @@ func _has_sibling_in_database(romm_id: int, siblings: Array[Dictionary]) -> bool
 	# Check if any siblings already exist as master entries
 	var id_list = ", ".join(ids_to_check.map(func(id): return str(id)))
 	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % id_list
-	_db.query(query)
+	var query_result = _db_query_array(query)
 	
-	if _db.query_result.size() > 0:
-		var count = _db.query_result[0]["count"]
+	if query_result.size() > 0:
+		var count = query_result[0]["count"]
 		return count > 0
 	
 	return false
@@ -1557,8 +1586,9 @@ func _build_insert_query(game: GameResource) -> String:
 	
 	if _is_db_ready and game.romm_id > 0:
 		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master FROM games WHERE romm_id = %d" % game.romm_id
-		if _db.query(check_query) and _db.query_result.size() > 0:
-			var existing = _db.query_result[0]
+		var query_result = _db_query_array(check_query)
+		if query_result.size() > 0:
+			var existing = query_result[0]
 			# Preserve download status from existing record
 			if existing.get("has_local_copy", 0) == 1:
 				has_local_copy = 1
@@ -1649,7 +1679,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				_escape_sql(game.cover_group_id),
 				1 if game.cover_group_master else 0
 			]
-			return _db.query(query),
+			return _db_query_bool(query),
+
 		func(success: bool):
 			if success:
 				# Use batch notification during sync, individual during normal operations
@@ -1722,7 +1753,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.cover_group_master else 0,
 				game.romm_id
 			]
-			return _db.query(query),
+			return _db_query_bool(query),
+
 		func(success: bool):
 			if success:
 				game_updated.emit(game)
@@ -1867,7 +1899,8 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 					title_id = '%s'
 				WHERE romm_id = %d
 			""" % [_escape_sql(title_id), romm_id]
-			return _db.query(query),
+			return _db_query_bool(query),
+
 		func(success: bool):
 			if success:
 				pass
@@ -1879,17 +1912,17 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 func get_game_by_id(romm_id: int) -> GameResource:
 	if not _is_db_ready:
 		return null
-	_db.query("SELECT * FROM games WHERE romm_id = %d" % romm_id)
-	if _db.query_result.size() > 0:
-		return _row_to_game(_db.query_result[0])
+	var query_result = _db_query_array("SELECT * FROM games WHERE romm_id = %d" % romm_id)
+	if query_result.size() > 0:
+		return _row_to_game(query_result[0])
 	return null
 
 func get_all_games() -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
-	for row in _db.query_result:
+	var query_result = _db_query_array("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
+	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
 
@@ -1897,8 +1930,8 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	_db.query("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1" % platform_slug + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
-	for row in _db.query_result:
+	var query_result = _db_query_array("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1" % platform_slug + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
+	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
 
@@ -1915,9 +1948,9 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	else:
 		query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
 	
-	_db.query(query)
+	var query_result = _db_query_array(query)
 	
-	for row in _db.query_result:
+	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
 
@@ -1931,23 +1964,22 @@ func get_platforms_with_games() -> Array[Dictionary]:
 	var cover_clause = _get_has_cover_art_clause().replace("has_cover_art", "g.has_cover_art")
 	var query = "SELECT g.platform_slug, p.name, COUNT(*) as game_count FROM games g LEFT JOIN platforms p ON g.platform_slug = p.slug WHERE g.is_master_entry = 1" + cover_clause + " AND g.cover_group_master = 1 GROUP BY g.platform_slug HAVING game_count > 0 ORDER BY g.platform_slug ASC"
 	
-	var success = _db.query(query)
-	if success:
-		for row in _db.query_result:
-			var slug = row.get("platform_slug", "")
-			var name = row.get("name", "")
-			var count = int(row.get("game_count", 0))
-			
-			# Fallback to capitalized slug if no name in platforms table
-			if name == null or name == "":
-				name = slug.capitalize()
-			
-			platforms.append({
-				"slug": slug,
-				"name": name,
-				"count": count
-			})
-	
+	var query_result = _db_query_array(query)
+	for row in query_result:
+		var slug = row.get("platform_slug", "")
+		var name = row.get("name", "")
+		var count = int(row.get("game_count", 0))
+		
+		# Fallback to capitalized slug if no name in platforms table
+		if name == null or name == "":
+			name = slug.capitalize()
+		
+		platforms.append({
+			"slug": slug,
+			"name": name,
+			"count": count
+		})
+
 	return platforms
 
 func get_total_games_count(platform_slug: String = "") -> int:
@@ -1960,9 +1992,9 @@ func get_total_games_count(platform_slug: String = "") -> int:
 	else:
 		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug = '%s'" % platform_slug
 	
-	var success = _db.query(query)
-	if success and _db.query_result.size() > 0:
-		var result = _db.query_result
+	var query_result = _db_query_array(query)
+	if query_result.size() > 0:
+		var result = query_result
 		if result != null and result.size() > 0:
 			var row = result[0]
 			if row != null and row.has("count"):
@@ -1980,11 +2012,10 @@ func search_games_paginated(query: String, offset: int, limit: int) -> Array[Gam
 	
 	var sql = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%' ORDER BY title ASC LIMIT %d OFFSET %d" % [sanitized_query, limit, offset]
 	
-	var success = _db.query(sql)
-	if success:
-		for row in _db.query_result:
-			games.append(_row_to_game(row))
-	
+	var query_result = _db_query_array(sql)
+	for row in query_result:
+		games.append(_row_to_game(row))
+
 	return games
 
 func get_search_results_count(query: String) -> int:
@@ -1997,9 +2028,9 @@ func get_search_results_count(query: String) -> int:
 	
 	var sql = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%'" % sanitized_query
 	
-	var success = _db.query(sql)
-	if success and _db.query_result.size() > 0:
-		var row = _db.query_result[0]
+	var query_result = _db_query_array(sql)
+	if query_result.size() > 0:
+		var row = query_result[0]
 		if row.has("count"):
 			return int(row["count"])
 	return 0
@@ -2016,9 +2047,9 @@ func get_downloaded_games_count() -> int:
 	var slug_list = "'" + "','".join(enabled_slugs) + "'"
 	var query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % slug_list
 	
-	var success = _db.query(query)
-	if success and _db.query_result.size() > 0:
-		var row = _db.query_result[0]
+	var query_result = _db_query_array(query)
+	if query_result.size() > 0:
+		var row = query_result[0]
 		if row.has("count"):
 			return int(row["count"])
 	return 0
@@ -2036,8 +2067,8 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 	var slug_list = "'" + "','".join(enabled_slugs) + "'"
 	var query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT %d OFFSET %d" % [slug_list, limit, offset]
 	
-	_db.query(query)
-	for row in _db.query_result:
+	var query_result = _db_query_array(query)
+	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
 
@@ -2067,28 +2098,28 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 		WHERE romm_id = %d
 	""" % [_escape_sql(timestamp), romm_id]
 	
-	return _db.query(query)
+	return _db_query_bool(query)
 
 func get_romm_device_id() -> String:
 	"""Get the registered RomM device ID."""
 	if not _is_db_ready:
 		return ""
-	_db.query("SELECT value FROM cache_metadata WHERE key = 'romm_device_id'")
-	if _db.query_result.size() > 0:
-		return _db.query_result[0].get("value", "")
+	var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = 'romm_device_id'")
+	if query_result.size() > 0:
+		return query_result[0].get("value", "")
 	return ""
 
 func set_romm_device_id(device_id: String) -> void:
 	"""Store the registered RomM device ID."""
 	if not _is_db_ready:
 		return
-	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('romm_device_id', '%s')" % device_id)
+	_db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('romm_device_id', '%s')" % device_id)
 
 func clear_romm_device_id() -> void:
 	"""Clear the stored RomM device ID (e.g. if server no longer recognizes it)."""
 	if not _is_db_ready:
 		return
-	_db.query("DELETE FROM cache_metadata WHERE key = 'romm_device_id'")
+	_db_query_bool("DELETE FROM cache_metadata WHERE key = 'romm_device_id'")
 
 func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dictionary]:
 	"""Get save sync records for a game. Optionally filter by emulator."""
@@ -2097,8 +2128,8 @@ func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dict
 	var query = "SELECT * FROM save_sync WHERE romm_id = %d" % romm_id
 	if emulator_id != "":
 		query += " AND emulator_id = '%s'" % _escape_sql(emulator_id)
-	_db.query(query)
-	return _db.query_result.duplicate()
+	var query_result = _db_query_array(query)
+	return query_result.duplicate()
 
 func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
 	"""Insert or update a save sync record."""
@@ -2110,13 +2141,13 @@ func update_save_sync_record(romm_id: int, emulator_id: String, file_name: Strin
 		delete_query += " AND slot = '%s'" % _escape_sql(slot)
 	else:
 		delete_query += " AND (slot IS NULL OR slot = '')"
-	_db.query(delete_query)
+	_db_query_bool(delete_query)
 	
 	var insert_query = """
 		INSERT INTO save_sync (romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot)
 		VALUES (%d, '%s', '%s', '%s', '%s', %d, %s)
 	""" % [romm_id, _escape_sql(emulator_id), _escape_sql(file_name), _escape_sql(file_path), _escape_sql(last_synced_at), remote_save_id, ("'%s'" % _escape_sql(slot)) if slot != "" else "NULL"]
-	return _db.query(insert_query)
+	return _db_query_bool(insert_query)
 
 func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: String, slot: String = "") -> bool:
 	"""Delete a save sync record."""
@@ -2127,7 +2158,7 @@ func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: Strin
 		query += " AND slot = '%s'" % _escape_sql(slot)
 	else:
 		query += " AND (slot IS NULL OR slot = '')"
-	return _db.query(query)
+	return _db_query_bool(query)
 
 func _row_to_game(row: Dictionary) -> GameResource:
 	var game = GameResource.new()
@@ -2472,15 +2503,15 @@ func add_platform(platform: PlatformResource) -> bool:
 		_escape_sql(",".join(platform.extensions))
 	]
 	
-	return _db.query(query)
+	return _db_query_bool(query)
 
 func get_all_platforms() -> Array[PlatformResource]:
 	var platforms: Array[PlatformResource] = []
 	if not _is_db_ready:
 		return platforms
 	
-	_db.query("SELECT * FROM platforms ORDER BY name")
-	for row in _db.query_result:
+	var query_result = _db_query_array("SELECT * FROM platforms ORDER BY name")
+	for row in query_result:
 		var platform = PlatformResource.new()
 		platform.id = row["id"]
 		platform.romm_id = row["romm_id"]
@@ -2508,22 +2539,24 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 	MemoryManager.queue_db_task(
 		func():
 			print("[Sync] DB task executing for %s" % platform_slug)
+			_db_lock()
 			# First, get all games for this platform to delete their covers
-			_db.query("SELECT cover_url FROM games WHERE platform_slug = '%s'" % platform_slug)
+			var query_result = _db_query_array("SELECT cover_url FROM games WHERE platform_slug = '%s'" % platform_slug)
 			var cover_urls: Array[String] = []
-			for row in _db.query_result:
+			for row in query_result:
 				var url = row.get("cover_url", "")
 				if url != "":
 					cover_urls.append(url)
 			
-			print("[Sync] Found %d games to remove for %s" % [_db.query_result.size(), platform_slug])
+			print("[Sync] Found %d games to remove for %s" % [query_result.size(), platform_slug])
 			
 			# Delete games from database and get the count
-			var count_before = _db.query_result.size()
+			var count_before = query_result.size()
 			var success = _db.query("DELETE FROM games WHERE platform_slug = '%s'" % platform_slug)
 			
 			print("[Sync] DB delete result: %s" % success)
 			
+			_db_unlock()
 			return {
 				"success": success,
 				"cover_urls": cover_urls,
@@ -2596,9 +2629,9 @@ func get_random_game() -> GameResource:
 		return null
 	
 	# Get a random game that has a cover and is a master entry
-	_db.query("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
-	if _db.query_result.size() > 0:
-		return _row_to_game(_db.query_result[0])
+	var query_result = _db_query_array("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
+	if query_result.size() > 0:
+		return _row_to_game(query_result[0])
 	return null
 
 func get_random_cached_cover_path() -> String:
@@ -2623,16 +2656,16 @@ func get_last_sync_time(platform_slug: String = "") -> String:
 	if not _is_db_ready:
 		return ""
 	var key = "last_sync_" + platform_slug if platform_slug != "" else "last_sync"
-	_db.query("SELECT value FROM cache_metadata WHERE key = '%s'" % key)
-	if _db.query_result.size() > 0:
-		return _db.query_result[0]["value"]
+	var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = '%s'" % key)
+	if query_result.size() > 0:
+		return query_result[0]["value"]
 	return ""
 
 func set_last_sync_time(platform_slug: String, timestamp: String):
 	if not _is_db_ready:
 		return
 	var key = "last_sync_" + platform_slug if platform_slug != "" else "last_sync"
-	_db.query("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('%s', '%s')" % [key, timestamp])
+	_db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('%s', '%s')" % [key, timestamp])
 
 # ==================== DOWNLOADED GAMES SCAN ====================
 
@@ -2836,7 +2869,7 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 					WHERE romm_id = %d
 				""" % [_escape_sql(new_file_path), _escape_sql(downloaded_ids_json), romm_id]
 				
-				if _db.query(query):
+				if _db_query_bool(query):
 					updated_count += 1
 
 			return updated_count,

@@ -229,6 +229,50 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	
 	return results
 
+func discover_local_eden_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "" or title_id.length() != 16:
+		print("[SaveManager] discover_local_eden_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return results
+	
+	var dir_exists = FileSystemManager.dir_exists(directory)
+	print("[SaveManager] discover_local_eden_save: dir_exists(" + directory + ") = " + str(dir_exists))
+	if not dir_exists:
+		return results
+	
+	var best_path = ""
+	var best_mtime = 0
+	
+	var profile_dirs = FileSystemManager.list_dir(directory)
+	print("[SaveManager] discover_local_eden_save: profile_dirs = " + str(profile_dirs))
+	for profile in profile_dirs:
+		if profile == "." or profile == "..":
+			continue
+		var profile_path = directory + profile + "/"
+		if not FileSystemManager.dir_exists(profile_path):
+			continue
+		
+		var save_path = profile_path + title_id
+		var save_exists = FileSystemManager.dir_exists(save_path)
+		print("[SaveManager] discover_local_eden_save: checking " + save_path + " -> " + str(save_exists))
+		if save_exists:
+			var mtime = _get_folder_mtime(save_path)
+			print("[SaveManager] discover_local_eden_save: found save with mtime=" + str(mtime))
+			if mtime > best_mtime:
+				best_mtime = mtime
+				best_path = save_path
+	
+	if best_path != "":
+		results.append({
+			"file_name": title_id + ".zip",
+			"file_path": best_path,
+			"modified_time": best_mtime,
+			"extension": ".zip"
+		})
+	
+	print("[SaveManager] discover_local_eden_save: results = " + str(results))
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -477,6 +521,12 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 				local_saves = discover_local_dolphin_wii_save(save_dir, game.title_id)
 			else:
 				local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+		elif emulator_id == "eden":
+			if game.title_id.length() != 16:
+				if callback.is_valid():
+					callback.call(false, "Invalid Title ID for Eden game.")
+				return
+			local_saves = discover_local_eden_save(save_dir, game.title_id)
 		else:
 			if game.title_id.length() != 16:
 				if callback.is_valid():
@@ -599,6 +649,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				else:
 					print("[SaveManager] Zipping Dolphin GC saves to: " + zip_path)
 					zip_success = _zip_dolphin_gc_saves(original_path, game.title_id, zip_path)
+			elif emulator_id == "eden":
+				print("[SaveManager] Zipping Eden save to: " + zip_path)
+				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
 			else:
 				print("[SaveManager] Zipping folder save to: " + zip_path)
 				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
@@ -672,6 +725,11 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 						record_path = save_dir + "Wii/title/00010000/" + _game_id_to_hex(game.title_id)
 					else:
 						record_path = save_dir + "GC/USA/Card A"
+				elif emulator_id == "eden":
+					var profile = _find_first_subdir(save_dir)
+					if profile == "":
+						profile = "0000000000000000"
+					record_path = save_dir + profile + "/" + game.title_id
 				else:
 					var short_title_id = game.title_id.substr(8, 8)
 					var id0 = _find_first_subdir(save_dir)
@@ -709,6 +767,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 							extract_dest = resolve_save_directory(emulator_id)
 						else:
 							extract_dest = record_path
+					elif emulator_id == "eden":
+						extract_dest = record_path
 					var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
@@ -732,16 +792,21 @@ func _parse_iso_to_unix(iso_string: String) -> int:
 
 ## Auto-upload saves after playing (post-exit hook)
 func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void:
+	print("[SaveManager] auto_upload_saves_for_game called for " + game.get_display_name() + " (" + emulator_id + ")")
 	if not _is_sync_enabled():
+		print("[SaveManager] Auto-upload aborted: sync not enabled")
 		return
 	if not SettingsManager.get_setting("save_sync_auto").value:
+		print("[SaveManager] Auto-upload aborted: save_sync_auto is off")
 		return
 	if not NetworkManager.is_romm_connected():
+		print("[SaveManager] Auto-upload aborted: not connected to RomM")
 		return
 	
 	var save_dir = resolve_save_directory(emulator_id)
 	var extensions = get_save_extensions(emulator_id)
 	if save_dir == "" or extensions.is_empty():
+		print("[SaveManager] Auto-upload aborted: no save dir or extensions (dir=" + save_dir + ", ext count=" + str(extensions.size()) + ")")
 		return
 	
 	var is_folder_save = uses_folder_saves(emulator_id)
@@ -756,6 +821,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				local_saves = discover_local_dolphin_wii_save(save_dir, game.title_id)
 			else:
 				local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+		elif emulator_id == "eden":
+			local_saves = discover_local_eden_save(save_dir, game.title_id)
 		else:
 			local_saves = discover_local_folder_save(save_dir, game.title_id)
 	else:
@@ -763,6 +830,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
 	
 	if local_saves.is_empty():
+		print("[SaveManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.title_id + ", dir: " + save_dir + "), skipping.")
 		return
 	
 	_ensure_device_registered(func(_success: bool, error: String):
@@ -793,6 +861,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 						zip_success = _zip_dolphin_wii_save(local_file_path, zip_path)
 					else:
 						zip_success = _zip_dolphin_gc_saves(local_file_path, game.title_id, zip_path)
+				elif emulator_id == "eden":
+					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				else:
 					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				if not zip_success:
@@ -901,6 +971,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 						local_saves = discover_local_dolphin_wii_save(save_dir, game.title_id)
 					else:
 						local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
+				elif emulator_id == "eden":
+					if game.title_id.length() != 16:
+						return
+					local_saves = discover_local_eden_save(save_dir, game.title_id)
 				else:
 					if game.title_id.length() != 16:
 						return
@@ -965,6 +1039,11 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 									record_path = save_dir + "Wii/title/00010000/" + _game_id_to_hex(game.title_id)
 								else:
 									record_path = save_dir + "GC/USA/Card A"
+							elif emulator_id == "eden":
+								var profile = _find_first_subdir(save_dir)
+								if profile == "":
+									profile = "0000000000000000"
+								record_path = save_dir + profile + "/" + game.title_id
 							else:
 								var short_title_id = game.title_id.substr(8, 8)
 								var id0 = _find_first_subdir(save_dir)
@@ -973,14 +1052,14 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 									push_error("[SaveManager] Cannot auto-download folder save: no id0 folder found")
 									state.pending -= 1
 									continue
-								var id1 = _find_first_subdir(save_dir + id0 + "/")
-								if id1 == "":
-									state.failed += 1
-									push_error("[SaveManager] Cannot auto-download folder save: no id1 folder found")
-									state.pending -= 1
-									continue
-								var category = game.title_id.substr(0, 8)
-								record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+									var id1 = _find_first_subdir(save_dir + id0 + "/")
+									if id1 == "":
+										state.failed += 1
+										push_error("[SaveManager] Cannot auto-download folder save: no id1 folder found")
+										state.pending -= 1
+										continue
+									var category = game.title_id.substr(0, 8)
+									record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
 					else:
 						local_path = record_path
 					
@@ -1002,6 +1081,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 										extract_dest = save_dir
 									else:
 										extract_dest = record_path
+								elif emulator_id == "eden":
+									extract_dest = record_path
 								var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1

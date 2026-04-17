@@ -698,7 +698,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	print("[DownloadManager] Queuing " + str(chunk_items.size()) + " chunks to thread pool for: " + item.name)
 	
 	# Use MemoryManager's download thread pool
-	MemoryManager.queue_parallel_downloads(
+	await MemoryManager.queue_parallel_downloads(
 		chunk_items,
 		func(chunk_data, index):
 			return _download_chunk_on_thread(chunk_data),
@@ -1065,7 +1065,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		await get_tree().create_timer(CHUNK_RETRY_DELAY_SEC).timeout
 		
 		# Queue retry via thread pool
-		MemoryManager.queue_parallel_downloads(
+		await MemoryManager.queue_parallel_downloads(
 			retry_items,
 			func(chunk_data, index):
 				return _download_chunk_on_thread(chunk_data),

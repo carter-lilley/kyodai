@@ -500,8 +500,13 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	# Auto-upload saves after playing
 	if _game:
 		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
+		print("[Main] Auto-upload check - emulator_id: " + emulator_id)
 		if emulator_id != "":
 			SaveManager.auto_upload_saves_for_game(_game, emulator_id)
+		else:
+			print("[Main] Auto-upload skipped: no emulator resolved")
+	else:
+		print("[Main] Auto-upload skipped: _game is null")
 	
 	# Restore focus to the last known position
 	if _last_focused_index >= 0:

@@ -583,8 +583,13 @@
 	"name": "Eden",
 	"platforms": ["switch"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/user/nand/user/save/0000000000000000",
+		"linux": "{emulator_dir}/user/nand/user/save/0000000000000000",
+		"android": "{emulator_dir}/user/nand/user/save/0000000000000000"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {
@@ -694,6 +699,7 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "extract",
+			"expected_file": "Firmware*.zip",
 			"extract_to": "user/nand/system/Contents/registered",
 			"validate": {
 			  "action_type": "folder_exists",
@@ -702,6 +708,7 @@
 		  },
 		  "linux": {
 			"action_type": "extract",
+			"expected_file": "Firmware*.zip",
 			"extract_to": "user/nand/system/Contents/registered",
 			"validate": {
 			  "action_type": "folder_exists",
@@ -720,19 +727,19 @@
 			"action_type": "download_scrape",
 			"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
 			"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-			"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip"
+			"url_template": "https://files.prodkeys.net/ProdKeys.NET-v{version}.zip"
 		  },
 		  "linux": {
 			"action_type": "download_scrape",
 			"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
 			"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-			"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip"
+			"url_template": "https://files.prodkeys.net/ProdKeys.NET-v{version}.zip"
 		  },
 		  "android": {
 			"action_type": "download_scrape",
 			"scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
 			"version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-			"url_template": "https://files.prodkeys.net/ProdKeys.Net-{version}.zip"
+			"url_template": "https://files.prodkeys.net/ProdKeys.NET-v{version}.zip"
 		  }
 		}
 	  },
@@ -741,8 +748,10 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "extract",
+			"expected_file": "ProdKeys.NET-*.zip",
 			"extract_to": "user/keys",
 			"strip_top_directory": true,
+			"flatten_target": "Keys-*",
 			"validate": {
 			  "action_type": "files_exist",
 			  "files": ["user/keys/prod.keys", "user/keys/title.keys"]
@@ -750,8 +759,10 @@
 		  },
 		  "linux": {
 			"action_type": "extract",
+			"expected_file": "ProdKeys.NET-*.zip",
 			"extract_to": "user/keys",
 			"strip_top_directory": true,
+			"flatten_target": "Keys-*",
 			"validate": {
 			  "action_type": "files_exist",
 			  "files": ["user/keys/prod.keys", "user/keys/title.keys"]
@@ -759,7 +770,7 @@
 		  },
 		  "android": {
 			"action_type": "extract",
-			"expected_file": "ProdKeys.Net-*.zip",
+			"expected_file": "ProdKeys.NET-*.zip",
 			"extract_to": "{emulator_dir}/user/keys",
 			"strip_top_directory": true,
 			"validate": {
@@ -1279,7 +1290,11 @@
 		"platforms": {
 		  "windows": {
 			"action_type": "create_files",
-			"files": ["melonDS.toml"],
+			"files": [
+			  {
+				"name": "melonDS.toml",
+				"content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/dsi/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/dsi/bios9.bin\"\nBIOS7Path = \"{emulator_dir}/dsi/bios7.bin\"\nNANDPath = \"{emulator_dir}/dsi/nand.bin\""}
+			],
 			"validate": {
 			  "action_type": "files_exist",
 			  "files": ["melonDS.toml"]
@@ -1297,17 +1312,7 @@
 		"step": "configure_bios_paths",
 		"platforms": {
 		  "windows": {
-			"action_type": "edit_file",
-			"file": "melonDS.toml",
-			"edits": [
-			  {
-				"content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/biosdsi9.bin\"\nBIOS7Path = \"{emulator_dir}/biosdsi7.bin\"\nNANDPath = \"{emulator_dir}/nand.bin\""
-			  }
-			],
-			"validate": {
-			  "action_type": "files_exist",
-			  "files": ["melonDS.toml"]
-			}
+			"action_type": "none"
 		  },
 		  "linux": {
 			"action_type": "none"
