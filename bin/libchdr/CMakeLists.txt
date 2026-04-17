@@ -15,7 +15,6 @@ target_include_directories(miniz PUBLIC ${LIBCHDIR}/deps/miniz-3.1.1)
 # lzma
 set(LZMA_SOURCES 
     ${LIBCHDIR}/deps/lzma-25.01/src/LzmaDec.c
-    ${LIBCHDIR}/deps/lzma-25.01/src/Alloc.c
 )
 add_library(lzma STATIC ${LZMA_SOURCES})
 target_include_directories(lzma PUBLIC ${LIBCHDIR}/deps/lzma-25.01/include)
