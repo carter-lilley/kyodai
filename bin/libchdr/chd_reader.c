@@ -20,7 +20,7 @@ typedef struct {
     int last_hunk;
 } chd_context;
 
-static chd_context* chd_open_file(const char *path) {
+static chd_context* open_chd_file(const char *path) {
     chd_file *chd = NULL;
     chd_error err = chd_open(path, CHD_OPEN_READ, NULL, &chd);
     if (err != CHDERR_NONE) {
@@ -93,7 +93,7 @@ static int chd_read_sector(chd_context *ctx, uint32_t lba, uint8_t *output) {
     return 0;
 }
 
-static void chd_close_file(chd_context *ctx) {
+static void close_chd_file(chd_context *ctx) {
     if (!ctx) return;
     if (ctx->chd) chd_close(ctx->chd);
     free(ctx->hunk_buffer);
@@ -108,16 +108,65 @@ int main(int argc, char *argv[]) {
     }
 
     const char *path = argv[1];
-    chd_context *ctx = chd_open_file(path);
+    chd_context *ctx = open_chd_file(path);
     if (!ctx) {
-        fprintf(stderr, "Failed to open CHD: %s\\n", path);
+        fprintf(stderr, "Failed to open CHD: %s\n", path);
         return 1;
     }
 
     if (strcmp(argv[2], "dump") == 0) {
         if (argc < 6) {
-            fprintf(stderr, "Usage: %s <chd_file> dump <start_lba> <count> <output_prefix>\\n", argv[0]);
-            chd_close_file(ctx);
+            fprintf(stderr, "Usage: %s <chd_file> dump <start_lba> <count> <output_prefix>\n", argv[0]);
+            close_chd_file(ctx);
+            return 1;
+        }
+        
+        uint32_t start_lba = atoi(argv[3]);
+        uint32_t count = atoi(argv[4]);
+        const char *prefix = argv[5];
+        
+        uint8_t sector[SECTOR_SIZE];
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t lba = start_lba + i;
+            if (chd_read_sector(ctx, lba, sector) != 0) {
+                fprintf(stderr, "Failed to read sector %u\n", lba);
+                break;
+            }
+            
+            char filename[256];
+            snprintf(filename, sizeof(filename), "%s_%08u.bin", prefix, lba);
+            FILE *fp = fopen(filename, "wb");
+            if (fp) {
+                fwrite(sector, 1, SECTOR_SIZE, fp);
+                fclose(fp);
+            }
+        }
+        printf("Dumped %u sectors to %s_*.bin\n", count, prefix);
+    } else {
+        uint32_t lba = atoi(argv[2]);
+        uint8_t sector[SECTOR_SIZE];
+        
+        if (chd_read_sector(ctx, lba, sector) != 0) {
+            fprintf(stderr, "Failed to read sector %u\n", lba);
+            close_chd_file(ctx);
+            return 1;
+        }
+        
+        if (argc >= 4) {
+            FILE *fp = fopen(argv[3], "wb");
+            if (!fp) {
+                fprintf(stderr, "Failed to open output file: %s\n", argv[3]);
+                close_chd_file(ctx);
+                return 1;
+            }
+            fwrite(sector, 1, SECTOR_SIZE, fp);
+            fclose(fp);
+        } else {
+            fwrite(sector, 1, SECTOR_SIZE, stdout);
+        }
+    }
+
+    close_chd_file(ctx);
             return 1;
         }
         
