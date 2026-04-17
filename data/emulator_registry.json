@@ -1017,8 +1017,12 @@
 	"name": "PCSX2",
 	"platforms": ["ps2"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/memcards",
+		"linux": "{emulator_dir}/memcards"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
 	},
 	"requires_native_paths": true,
 	"install": [
@@ -1141,16 +1145,102 @@
 			  "path": "bios"
 			}
 		  }
-		}
 	  }
-	],
-	"launch": {
+	},
+	{
+	  "step": "create_config_dir",
 	  "platforms": {
 		"windows": {
-		  "type": "command",
-		  "executable": "pcsx2-qt.exe",
-		  "template": ["{exe}", "-nogui", "-fullscreen", "{rom}"]
+		  "action_type": "create_folders",
+		  "folders": ["inis"],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "inis"
+		  }
 		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "create_config",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "inis/PCSX2.ini",
+			  "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
+			}
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": ["inis/PCSX2.ini"]
+		  }
+		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "create_memcards_dir",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_folders",
+		  "folders": ["memcards/main.ps2"],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "memcards/main.ps2"
+		  }
+		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "create_superblock",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "memcards/main.ps2/_pcsx2_superblock",
+			  "content": ""
+			}
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": ["memcards/main.ps2/_pcsx2_superblock"]
+		  }
+		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
+  ],
+  "launch": {
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "pcsx2-qt.exe",
+		"template": ["{exe}", "-nogui", "-fullscreen", "{rom}"]
+	  },
 		"linux": {
 		  "type": "command",
 		  "executable": "pcsx2-qt",

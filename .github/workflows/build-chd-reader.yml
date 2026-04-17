@@ -1,0 +1,163 @@
+name: Build CHD Reader
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'bin/libchdr/**'
+  pull_request:
+    paths:
+      - 'bin/libchdr/**'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup CMake
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: '3.28'
+    
+    - name: Build
+      working-directory: bin/libchdr
+      run: |
+        cmake -B build -G "Visual Studio 17 2022" -A x64
+        cmake --build build --config Release
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: chd_reader-windows-x64
+        path: bin/libchdr/build/Release/chd_reader.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+    
+    - name: Build
+      working-directory: bin/libchdr
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --parallel
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: chd_reader-linux-x64
+        path: bin/libchdr/build/chd_reader
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Build Intel
+      working-directory: bin/libchdr
+      run: |
+        cmake -B build-x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
+        cmake --build build-x64 --parallel
+    
+    - name: Build ARM64
+      working-directory: bin/libchdr
+      run: |
+        cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+        cmake --build build-arm64 --parallel
+    
+    - name: Create Universal Binary
+      working-directory: bin/libchdr
+      run: |
+        lipo -create build-x64/chd_reader build-arm64/chd_reader -output chd_reader-macos-universal
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: chd_reader-macos-universal
+        path: bin/libchdr/chd_reader-macos-universal
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      id: setup-ndk
+      with:
+        ndk-version: r25c
+        add-to-path: true
+    
+    - name: Build ARM64
+      working-directory: bin/libchdr
+      run: |
+        cmake -B build-android \
+          -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-android --parallel
+    
+    - name: Build ARMv7
+      working-directory: bin/libchdr
+      run: |
+        cmake -B build-android-armv7 \
+          -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=armeabi-v7a \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-android-armv7 --parallel
+    
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: chd_reader-android
+        path: |
+          bin/libchdr/build-android/chd_reader
+          bin/libchdr/build-android-armv7/chd_reader
+
+  release:
+    needs: [build-windows, build-linux, build-macos, build-android]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+    - name: Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Prepare Release Assets
+      run: |
+        mkdir release
+        cp artifacts/chd_reader-windows-x64/chd_reader.exe release/chd_reader-windows-x64.exe
+        cp artifacts/chd_reader-linux-x64/chd_reader release/chd_reader-linux-x64
+        cp artifacts/chd_reader-macos-universal/chd_reader-macos-universal release/chd_reader-macos-universal
+        cp artifacts/chd_reader-android/build-android/chd_reader release/chd_reader-android-arm64
+        cp artifacts/chd_reader-android/build-android-armv7/chd_reader release/chd_reader-android-armv7
+        chmod +x release/*
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: chd_reader-${{ github.sha }}
+        name: CHD Reader Build ${{ github.run_number }}
+        files: release/*
+        draft: false
+        prerelease: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -278,6 +278,61 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 	print("[SaveManager] discover_local_eden_save: results = " + str(results))
 	return results
 
+func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "":
+		print("[SaveManager] discover_local_pcsx2_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return results
+	
+	# Normalize title_id: remove hyphen and prefix with BA
+	var normalized_id = title_id.replace("-", "")
+	var ba_id = "BA" + normalized_id
+	
+	print("[SaveManager] discover_local_pcsx2_save: searching for " + ba_id + " in " + directory)
+	
+	# Recursively search memcards directory for matching save folder
+	var best_path = ""
+	var best_mtime = 0
+	
+	var dirs_to_check: Array[String] = [directory]
+	while not dirs_to_check.is_empty():
+		var current = dirs_to_check.pop_back()
+		if not FileSystemManager.dir_exists(current):
+			continue
+		
+		var items = FileSystemManager.list_dir(current)
+		for item in items:
+			if item == "." or item == "..":
+				continue
+			
+			var full_path = current.rstrip("/") + "/" + item
+			
+			if FileSystemManager.dir_exists(full_path):
+				# Check if folder name matches our BA serial (with or without suffix)
+				var folder_name = item.to_upper()
+				if folder_name.begins_with(ba_id):
+					print("[SaveManager] discover_local_pcsx2_save: found match at " + full_path)
+					var mtime = _get_folder_mtime(full_path)
+					if mtime > best_mtime:
+						best_mtime = mtime
+						best_path = full_path
+				else:
+					# Continue searching deeper
+					dirs_to_check.append(full_path)
+	
+	if best_path != "":
+		results.append({
+			"file_name": ba_id + ".zip",
+			"file_path": best_path,
+			"modified_time": best_mtime,
+			"extension": ".zip"
+		})
+		print("[SaveManager] discover_local_pcsx2_save: returning save at " + best_path)
+	else:
+		print("[SaveManager] discover_local_pcsx2_save: no saves found")
+	
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -532,6 +587,12 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 					callback.call(false, "Invalid Title ID for Eden game.")
 				return
 			local_saves = discover_local_eden_save(save_dir, game.title_id)
+		elif emulator_id == "pcsx2":
+			if game.title_id == "":
+				if callback.is_valid():
+					callback.call(false, "No serial available for this PS2 game. Launch it once to extract the serial.")
+				return
+			local_saves = discover_local_pcsx2_save(save_dir, game.title_id)
 		else:
 			if game.title_id.length() != 16:
 				if callback.is_valid():
@@ -774,6 +835,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 							extract_dest = record_path
 					elif emulator_id == "eden":
 						extract_dest = record_path
+					elif emulator_id == "pcsx2":
+						# PCSX2 saves extract to memcards directory
+						extract_dest = resolve_save_directory(emulator_id)
 					var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
@@ -828,6 +892,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				local_saves = discover_local_dolphin_gc_save(save_dir, game.title_id)
 		elif emulator_id == "eden":
 			local_saves = discover_local_eden_save(save_dir, game.title_id)
+		elif emulator_id == "pcsx2":
+			local_saves = discover_local_pcsx2_save(save_dir, game.title_id)
 		else:
 			local_saves = discover_local_folder_save(save_dir, game.title_id)
 	else:
@@ -980,6 +1046,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 					if game.title_id.length() != 16:
 						return
 					local_saves = discover_local_eden_save(save_dir, game.title_id)
+				elif emulator_id == "pcsx2":
+					if game.title_id == "":
+						return
+					local_saves = discover_local_pcsx2_save(save_dir, game.title_id)
 				else:
 					if game.title_id.length() != 16:
 						return
