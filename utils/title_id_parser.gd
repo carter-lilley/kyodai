@@ -627,229 +627,102 @@ static func _iso_extract_ps2_serial(rom_path: String) -> String:
 
 # CHD v5 parsing
 
-const _CHD_SIGNATURE = "MComprHD"
-const _CHD_V5_VERSION = 5
+static func _get_chd_reader_path() -> String:
+	var base_path = "res://bin/libchdr/"
+	if PlatformManager.is_windows():
+		return base_path + "win/chd_reader.exe"
+	elif PlatformManager.is_linux():
+		return base_path + "linux/chd_reader"
+	elif PlatformManager.is_macos():
+		return base_path + "macos/chd_reader"
+	elif PlatformManager.is_android():
+		return base_path + "android/chd_reader-arm64"
+	else:
+		push_error("[TitleIDParser] Unsupported platform for CHD reading")
+		return ""
 
-static func _be_u32(bytes: PackedByteArray, offset: int) -> int:
-	return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]
-
-static func _be_u64(bytes: PackedByteArray, offset: int) -> int:
-	return (bytes[offset] << 56) | (bytes[offset + 1] << 48) | (bytes[offset + 2] << 40) | (bytes[offset + 3] << 32) | (bytes[offset + 4] << 24) | (bytes[offset + 5] << 16) | (bytes[offset + 6] << 8) | bytes[offset + 7]
-
-static func _chd_read_header(file: FileAccess) -> Dictionary:
-	var result = {
-		"valid": false,
-		"version": 0,
-		"hunk_size": 0,
-		"total_hunks": 0,
-		"map_offset": 0,
-		"compressed": true
-	}
-	
-	file.seek(0)
-	var header = file.get_buffer(124)
-	
-	if header.size() < 124:
-		push_error("[TitleIDParser] CHD file too small for header")
-		return result
-	
-	var sig = header.slice(0, 8).get_string_from_ascii()
-	if sig != _CHD_SIGNATURE:
-		push_error("[TitleIDParser] CHD invalid signature: " + sig)
-		return result
-	
-	# CHD uses big-endian (Motorola byte ordering)
-	result.version = _be_u32(header, 12)
-	if result.version != _CHD_V5_VERSION:
-		push_error("[TitleIDParser] CHD unsupported version: " + str(result.version))
-		return result
-	
-	# Check compressors - if first is 0, entire file is uncompressed
-	var compressor0 = _be_u32(header, 16)
-	if compressor0 == 0:
-		result.compressed = false
-	
-	result.hunk_size = _be_u32(header, 56)
-	var logicalbytes = _be_u64(header, 32)
-	result.total_hunks = (logicalbytes + result.hunk_size - 1) / result.hunk_size
-	result.map_offset = _be_u64(header, 40)
-	result.valid = true
-	
-	return result
-
-static func _chd_read_hunk_map(file: FileAccess, header: Dictionary) -> Array:
-	var map_entries = []
-	var map_offset = header.map_offset
-	var total_hunks = header.total_hunks
-	var hunk_size = header.hunk_size
-	
-	file.seek(map_offset)
-	
-	if not header.compressed:
-		# Uncompressed map: each entry is just a uint32_t offset
-		# Read all map entries directly
-		for i in range(total_hunks):
-			var entry_bytes = file.get_buffer(4)
-			if entry_bytes.size() < 4:
-				break
-			var entry_offset = _be_u32(entry_bytes, 0)
-			# For uncompressed, offset is in units of hunk_size
-			var actual_offset = entry_offset * hunk_size
-			
-			map_entries.append({
-				"offset": actual_offset,
-				"length": hunk_size,
-				"flags": 0  # 0 = uncompressed
-			})
-		
-		return map_entries
-	
-	# Compressed map - try zlib decompression
-	# V5 compressed map header (16 bytes, big-endian)
-	var map_header = file.get_buffer(16)
-	var map_length = _be_u32(map_header, 0)
-	
-	var compressed_map = file.get_buffer(map_length)
-	
-	# Try zlib decompression
-	var decompressed = compressed_map.decompress(compressed_map.size() * 4, 1)
-	
-	if decompressed.is_empty():
-		push_error("[TitleIDParser] CHD failed to decompress hunk map. Compressed CHD v5 maps use custom Huffman encoding not supported by standard zlib. Consider converting to ISO or using an uncompressed CHD.")
-		return map_entries
-	
-	var offset = 0
-	for i in range(total_hunks):
-		# V5 compressed map entry: compression(8) + complength(24) + offset(48) + crc(16) = 12 bytes
-		var compression = decompressed[offset]
-		var complength = (decompressed[offset + 1] << 16) | (decompressed[offset + 2] << 8) | decompressed[offset + 3]
-		var entry_offset = ((decompressed[offset + 4] << 40) | (decompressed[offset + 5] << 32) | (decompressed[offset + 6] << 24) | (decompressed[offset + 7] << 16) | (decompressed[offset + 8] << 8) | decompressed[offset + 9])
-		var crc = (decompressed[offset + 10] << 8) | decompressed[offset + 11]
-		
-		map_entries.append({
-			"offset": entry_offset,
-			"length": complength,
-			"flags": compression
-		})
-		offset += 12
-	
-	return map_entries
-
-static func _chd_read_hunk(file: FileAccess, map_entry: Dictionary, hunk_size: int) -> PackedByteArray:
-	var flags = map_entry.flags
-	
-	if flags == 0:
-		# Uncompressed
-		file.seek(map_entry.offset)
-		return file.get_buffer(hunk_size)
-	
-	if flags == 1:
-		# Compressed (zlib)
-		file.seek(map_entry.offset)
-		var compressed = file.get_buffer(map_entry.length)
-		
-		var decompressed = compressed.decompress(hunk_size, 1)
-		
-		if decompressed.is_empty() or decompressed.size() != hunk_size:
-			push_error("[TitleIDParser] CHD failed to decompress hunk")
-			return PackedByteArray()
-		
-		return decompressed
-	
-	if flags == 2:
-		# Self-referencing (copy from another hunk)
-		push_error("[TitleIDParser] CHD self-referencing hunk not supported")
+static func _chd_read_sector_binary(chd_path: String, lba: int) -> PackedByteArray:
+	var reader_path = _get_chd_reader_path()
+	if reader_path == "":
 		return PackedByteArray()
 	
-	if flags == 3:
-		# Parent hunk (copy from parent CHD)
-		push_error("[TitleIDParser] CHD parent hunk not supported")
+	var abs_reader = ProjectSettings.globalize_path(reader_path)
+	var abs_chd = ProjectSettings.globalize_path(chd_path)
+	
+	# Create temp file for sector output
+	var temp_path = OS.get_user_data_dir() + "/chd_sector_" + str(lba) + ".tmp"
+	
+	var output = []
+	var args = [abs_chd, str(lba), temp_path]
+	var exit_code = OS.execute(abs_reader, args, output, true)
+	
+	if exit_code != 0:
+		push_error("[TitleIDParser] chd_reader failed with exit code: " + str(exit_code))
+		if FileAccess.file_exists(temp_path):
+			DirAccess.remove_absolute(temp_path)
 		return PackedByteArray()
 	
-	push_error("[TitleIDParser] CHD unknown hunk type: " + str(flags))
-	return PackedByteArray()
-
-static func _chd_read_sectors(file: FileAccess, header: Dictionary, map_entries: Array, start_sector: int, count: int) -> PackedByteArray:
-	var hunk_size = header.hunk_size
-	var sectors_per_hunk = hunk_size / _ISO_SECTOR_SIZE
+	if not FileAccess.file_exists(temp_path):
+		push_error("[TitleIDParser] chd_reader did not create output file")
+		return PackedByteArray()
 	
-	var result = PackedByteArray()
+	var file = FileAccess.open(temp_path, FileAccess.READ)
+	if not file:
+		push_error("[TitleIDParser] Failed to read temp sector file")
+		DirAccess.remove_absolute(temp_path)
+		return PackedByteArray()
 	
-	for i in range(count):
-		var sector = start_sector + i
-		var hunk_index = sector / sectors_per_hunk
-		var sector_in_hunk = sector % sectors_per_hunk
-		
-		if hunk_index >= map_entries.size():
-			push_error("[TitleIDParser] CHD hunk index out of bounds: " + str(hunk_index))
-			return PackedByteArray()
-		
-		var hunk = _chd_read_hunk(file, map_entries[hunk_index], hunk_size)
-		if hunk.is_empty():
-			return PackedByteArray()
-		
-		var sector_offset = sector_in_hunk * _ISO_SECTOR_SIZE
-		var sector_data = hunk.slice(sector_offset, sector_offset + _ISO_SECTOR_SIZE)
-		result.append_array(sector_data)
+	var data = file.get_buffer(file.get_length())
+	file.close()
+	DirAccess.remove_absolute(temp_path)
 	
-	return result
+	return data
 
 static func _chd_extract_ps2_serial(rom_path: String) -> String:
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		push_error("[TitleIDParser] Failed to open CHD: " + rom_path)
+	# Read PVD from sector 16
+	var pvd_sector = _chd_read_sector_binary(rom_path, 16)
+	if pvd_sector.is_empty() or pvd_sector.size() < 2048:
+		push_error("[TitleIDParser] Failed to read CHD PVD sector")
 		return ""
 	
-	var header = _chd_read_header(file)
-	if not header.valid:
-		file.close()
-		return ""
-	
-	var map_entries = _chd_read_hunk_map(file, header.map_offset, header.total_hunks)
-	if map_entries.is_empty():
-		file.close()
-		return ""
-	
-	var pvd_sector = _chd_read_sectors(file, header, map_entries, 16, 1)
-	if pvd_sector.is_empty():
-		file.close()
-		return ""
-	
+	# Verify PVD
 	if pvd_sector[0] != 0x01:
 		push_error("[TitleIDParser] CHD invalid PVD descriptor type")
-		file.close()
 		return ""
 	
 	var sig = pvd_sector.slice(1, 6).get_string_from_ascii()
 	if sig != "CD001":
 		push_error("[TitleIDParser] CHD invalid PVD signature: " + sig)
-		file.close()
 		return ""
 	
-	var root_lba = pvd_sector.decode_u32(156 + 2)
-	var root_length = pvd_sector.decode_u32(156 + 10)
+	# Get root directory info (little-endian in ISO)
+	var root_lba = pvd_sector.decode_u32(158)
+	var root_length = pvd_sector.decode_u32(166)
 	
-	var dir_sectors = (root_length + _ISO_SECTOR_SIZE - 1) / _ISO_SECTOR_SIZE
-	var dir_data = _chd_read_sectors(file, header, map_entries, root_lba, dir_sectors)
+	# Read root directory sectors
+	var dir_sectors = (root_length + 2047) / 2048
+	var dir_data = PackedByteArray()
 	
-	if dir_data.is_empty():
-		file.close()
-		return ""
+	for i in range(dir_sectors):
+		var sector = _chd_read_sector_binary(rom_path, root_lba + i)
+		if sector.is_empty():
+			push_error("[TitleIDParser] Failed to read CHD root directory")
+			return ""
+		dir_data.append_array(sector)
 	
-	var cnf_lba = 0
-	var cnf_length = 0
-	var found = false
+	# Find SYSTEM.CNF in directory
 	var offset = 0
+	var cnf_lba = 0
+	var found = false
 	
 	while offset < root_length:
 		var entry_length = dir_data[offset]
 		if entry_length == 0:
-			offset = (offset / _ISO_SECTOR_SIZE + 1) * _ISO_SECTOR_SIZE
+			offset = (offset / 2048 + 1) * 2048
 			continue
 		
 		var name_length = dir_data[offset + 32]
-		var name_bytes = dir_data.slice(offset + 33, offset + 33 + name_length)
-		var name = name_bytes.get_string_from_ascii()
+		var name = dir_data.slice(offset + 33, offset + 33 + name_length).get_string_from_ascii()
 		
 		var semicolon = name.find(";")
 		if semicolon >= 0:
@@ -857,7 +730,6 @@ static func _chd_extract_ps2_serial(rom_path: String) -> String:
 		
 		if name.to_upper() == "SYSTEM.CNF":
 			cnf_lba = dir_data.decode_u32(offset + 2)
-			cnf_length = dir_data.decode_u32(offset + 10)
 			found = true
 			break
 		
@@ -865,17 +737,16 @@ static func _chd_extract_ps2_serial(rom_path: String) -> String:
 	
 	if not found:
 		push_error("[TitleIDParser] CHD SYSTEM.CNF not found")
-		file.close()
 		return ""
 	
-	var cnf_data = _chd_read_sectors(file, header, map_entries, cnf_lba, 1)
-	file.close()
-	
+	# Read SYSTEM.CNF
+	var cnf_data = _chd_read_sector_binary(rom_path, cnf_lba)
 	if cnf_data.is_empty():
 		return ""
 	
 	var cnf_content = cnf_data.get_string_from_utf8()
 	
+	# Parse serial
 	var regex = RegEx.new()
 	regex.compile(r"BOOT2\s*=\s*cdrom0:\\\\?([A-Z]{4})[_.](\d{3})\.(\d{2});")
 	
