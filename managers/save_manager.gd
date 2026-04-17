@@ -39,6 +39,11 @@ func resolve_save_directory(emulator_id: String) -> String:
 		var emulator_dir = LaunchManager._get_emulator_directory(emulator_id).rstrip("/")
 		dir = dir.replace("{emulator_dir}", emulator_dir)
 	
+	if dir.begins_with("{games_dir}"):
+		var games_folder_setting = SettingsManager.get_setting("games_root_folder")
+		var games_dir = games_folder_setting.value.rstrip("/") if games_folder_setting else "user://roms"
+		dir = dir.replace("{games_dir}", games_dir)
+	
 	return dir.rstrip("/") + "/"
 
 ## Gets the save file extensions for an emulator

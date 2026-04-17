@@ -45,7 +45,6 @@ effect stacks to fill their parent base
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
-	check: melonds on desktop after bios restructure
   	add: ps3 on android...pkgs ps3 on desktop
 	add: shadps4!
 	ft: scrape-style download action for retroarch

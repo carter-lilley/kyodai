@@ -1176,8 +1176,12 @@
 	"name": "melonDS",
 	"platforms": ["nds"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{games_dir}/nds",
+		"linux": "{games_dir}/nds",
+		"android": "{games_dir}/nds"
+	  },
+	  "extensions": [".sav"]
 	},
 	"install": [
 	  {
