@@ -844,6 +844,11 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
 					if FileAccess.file_exists(zip_path):
 						DirAccess.remove_absolute(zip_path)
+					
+					# Rebuild PCSX2 superblock after extracting saves
+					if emulator_id == "pcsx2":
+						print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
+						PS2MCRebuilder.rebuild_superblock(extract_dest)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 				check_complete.call()
@@ -1158,12 +1163,19 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 										extract_dest = record_path
 								elif emulator_id == "eden":
 									extract_dest = record_path
+								elif emulator_id == "pcsx2":
+									extract_dest = save_dir
 								var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
 								if FileAccess.file_exists(zip_path):
 									DirAccess.remove_absolute(zip_path)
+								
+								# Rebuild PCSX2 superblock after extracting saves
+								if emulator_id == "pcsx2":
+									print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
+									PS2MCRebuilder.rebuild_superblock(save_dir)
 							
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
