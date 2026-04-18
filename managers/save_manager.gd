@@ -284,11 +284,12 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 		print("[SaveManager] discover_local_pcsx2_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
 	
-	# Normalize title_id: remove hyphen and prefix with BA
-	var normalized_id = title_id.replace("-", "")
-	var ba_id = "BA" + normalized_id
+	# PCSX2 folders contain the serial number somewhere in the name
+	# e.g., BESCES-50760ico, BASLUS-20152AC04, BISLPS-25534TwSt
+	var serial_with_hyphen = title_id.to_upper()
+	var serial_no_hyphen = title_id.replace("-", "").to_upper()
 	
-	print("[SaveManager] discover_local_pcsx2_save: searching for " + ba_id + " in " + directory)
+	print("[SaveManager] discover_local_pcsx2_save: searching for serial " + serial_with_hyphen + " (or " + serial_no_hyphen + ") in " + directory)
 	
 	# Recursively search memcards directory for matching save folder
 	var best_path = ""
@@ -308,10 +309,14 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 			var full_path = current.rstrip("/") + "/" + item
 			
 			if FileSystemManager.dir_exists(full_path):
-				# Check if folder name matches our BA serial (with or without suffix)
+				# Check if folder name contains the serial number (with or without hyphen)
 				var folder_name = item.to_upper()
-				if folder_name.begins_with(ba_id):
+				var folder_name_no_hyphen = folder_name.replace("-", "")
+				
+				# Match if folder contains the serial anywhere in the name
+				if folder_name.find(serial_with_hyphen) != -1 or folder_name_no_hyphen.find(serial_no_hyphen) != -1:
 					print("[SaveManager] discover_local_pcsx2_save: found match at " + full_path)
+					print("[SaveManager]   Folder: " + folder_name + " | Serial: " + serial_with_hyphen)
 					var mtime = _get_folder_mtime(full_path)
 					if mtime > best_mtime:
 						best_mtime = mtime
@@ -321,15 +326,17 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 					dirs_to_check.append(full_path)
 	
 	if best_path != "":
+		# Use actual folder name for the save file name
+		var folder_name = best_path.get_file()
 		results.append({
-			"file_name": ba_id + ".zip",
+			"file_name": folder_name + ".zip",
 			"file_path": best_path,
 			"modified_time": best_mtime,
 			"extension": ".zip"
 		})
-		print("[SaveManager] discover_local_pcsx2_save: returning save at " + best_path)
+		print("[SaveManager] discover_local_pcsx2_save: returning save at " + best_path + " as " + folder_name + ".zip")
 	else:
-		print("[SaveManager] discover_local_pcsx2_save: no saves found")
+		print("[SaveManager] discover_local_pcsx2_save: no saves found for serial " + serial_with_hyphen)
 	
 	return results
 
@@ -924,7 +931,14 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			
 			if is_folder_save:
 				var is_wii = emulator_id == "dolphin" and game.platform_slug == "wii"
-				var save_name = game.title_id if emulator_id == "dolphin" else game.title_id.substr(8, 8)
+				var save_name = ""
+				if emulator_id == "dolphin":
+					save_name = game.title_id
+				elif emulator_id == "pcsx2":
+					# Use actual folder name for PCSX2 saves
+					save_name = local_file_path.get_file()
+				else:
+					save_name = game.title_id.substr(8, 8)
 				if is_wii:
 					save_name = _game_id_to_hex(game.title_id)
 				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"

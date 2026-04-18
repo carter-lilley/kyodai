@@ -15,6 +15,7 @@ const DF_EXECUTE = 0x0004
 const DF_RWX = 0x0007
 const DF_DIR = 0x0020
 const DF_0400 = 0x0400
+const DF_HIDDEN = 0x2000
 const DF_EXISTS = 0x8000
 
 # FAT constants
@@ -32,22 +33,35 @@ const GOOD_BLOCK2 = 1022
 static func rebuild_superblock(memcard_path: String) -> bool:
 	var superblock_path = memcard_path + "/_pcsx2_superblock"
 	
+	print("[PS2MCRebuilder] Starting rebuild for: " + memcard_path)
+	print("[PS2MCRebuilder] Superblock path: " + superblock_path)
+	
 	# Create fresh superblock
+	print("[PS2MCRebuilder] Creating fresh superblock...")
 	var superblock = _create_fresh_superblock()
 	
 	# Get existing save folders
+	print("[PS2MCRebuilder] Scanning for save folders...")
 	var folders = _scan_save_folders(memcard_path)
+	print("[PS2MCRebuilder] Found " + str(folders.size()) + " save folders")
+	for folder in folders:
+		print("[PS2MCRebuilder]  - " + folder)
+	
 	if folders.is_empty():
-		print("[PS2MCRebuilder] No save folders found in: " + memcard_path)
+		print("[PS2MCRebuilder] No save folders found, skipping rebuild")
 		return false
 	
 	# Build directory entries
+	print("[PS2MCRebuilder] Building directory entries...")
 	var entries = _build_directory_entries(folders)
+	print("[PS2MCRebuilder] Total entries: " + str(entries.size()) + " (including . and ..)")
 	
 	# Inject entries into superblock
+	print("[PS2MCRebuilder] Injecting entries into superblock...")
 	_inject_entries(superblock, entries)
 	
 	# Save superblock
+	print("[PS2MCRebuilder] Writing superblock to disk...")
 	var file = FileAccess.open(superblock_path, FileAccess.WRITE)
 	if not file:
 		push_error("[PS2MCRebuilder] Failed to write superblock: " + superblock_path)
@@ -56,7 +70,7 @@ static func rebuild_superblock(memcard_path: String) -> bool:
 	file.store_buffer(superblock)
 	file.close()
 	
-	print("[PS2MCRebuilder] Rebuilt superblock with " + str(entries.size() - 2) + " save entries")
+	print("[PS2MCRebuilder] SUCCESS: Rebuilt superblock with " + str(entries.size() - 2) + " save entries")
 	return true
 
 static func _create_fresh_superblock() -> PackedByteArray:
@@ -135,22 +149,30 @@ static func _create_fresh_superblock() -> PackedByteArray:
 static func _scan_save_folders(memcard_path: String) -> Array[String]:
 	var folders: Array[String] = []
 	
+	print("[PS2MCRebuilder] Scanning directory: " + memcard_path)
+	
 	if not FileSystemManager.dir_exists(memcard_path):
+		print("[PS2MCRebuilder] Directory does not exist: " + memcard_path)
 		return folders
 	
 	var items = FileSystemManager.list_dir(memcard_path)
+	print("[PS2MCRebuilder] Found " + str(items.size()) + " items in directory")
+	
 	for item in items:
 		if item == "." or item == ".." or item == "_pcsx2_superblock":
 			continue
 		
 		var full_path = memcard_path.rstrip("/") + "/" + item
 		if FileSystemManager.dir_exists(full_path):
+			print("[PS2MCRebuilder] Found folder: " + item)
 			# Validate name length (max 32 bytes for PS2)
 			if item.length() > 32:
 				push_warning("[PS2MCRebuilder] Save folder name too long (max 32 chars), skipping: " + item)
 				continue
 			
 			folders.append(item)
+		else:
+			print("[PS2MCRebuilder] Skipping non-directory: " + item)
 	
 	return folders
 
@@ -220,6 +242,8 @@ static func _inject_entries(superblock: PackedByteArray, entries: Array[Dictiona
 	# Each entry is 512 bytes
 	# For PCSX2 folder cards, entries are packed sequentially
 	
+	print("[PS2MCRebuilder] Injecting " + str(entries.size()) + " entries into superblock")
+	
 	for i in range(entries.size()):
 		var entry = entries[i]
 		var offset = i * DIRENT_SIZE
@@ -254,7 +278,10 @@ static func _inject_entries(superblock: PackedByteArray, entries: Array[Dictiona
 		# Rest is already zero from fill(0)
 	
 	# Fill remaining directory space with 0xFF (unallocated entries)
-	for i in range(entries.size() * DIRENT_SIZE, SUPERBLOCK_SIZE):
+	var used_bytes = entries.size() * DIRENT_SIZE
+	print("[PS2MCRebuilder] Used " + str(used_bytes) + " bytes for " + str(entries.size()) + " entries")
+	print("[PS2MCRebuilder] Filling remaining " + str(SUPERBLOCK_SIZE - used_bytes) + " bytes with 0xFF")
+	for i in range(used_bytes, SUPERBLOCK_SIZE):
 		superblock[i] = 0xFF
 
 static func _pack_timestamp(data: PackedByteArray, offset: int, timestamp: Array[int]):
