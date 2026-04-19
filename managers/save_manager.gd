@@ -843,8 +843,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					elif emulator_id == "eden":
 						extract_dest = record_path
 					elif emulator_id == "pcsx2":
-						# PCSX2 saves extract to memcards directory
-						extract_dest = resolve_save_directory(emulator_id)
+						# PCSX2 folder saves extract INTO the folder memory card (main.ps2) in a subfolder named after the zip
+						var folder_name = file_name.get_basename()
+						extract_dest = resolve_save_directory(emulator_id) + "main.ps2/" + folder_name + "/"
 					var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
@@ -855,7 +856,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					# Rebuild PCSX2 superblock after extracting saves
 					if emulator_id == "pcsx2":
 						print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
-						PS2MCRebuilder.rebuild_superblock(extract_dest)
+						var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
+						PS2MCRebuilder.rebuild_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 				check_complete.call()
@@ -951,6 +953,10 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 						zip_success = _zip_dolphin_wii_save(local_file_path, zip_path)
 					else:
 						zip_success = _zip_dolphin_gc_saves(local_file_path, game.get_active_title_id(), zip_path)
+				elif emulator_id == "pcsx2":
+					# PCSX2 saves must preserve the folder name (e.g. BASLUS-20152AC04)
+					var folder_name = local_file_path.get_file()
+					zip_success = _zip_directory_with_root(local_file_path, folder_name, zip_path)
 				elif emulator_id == "eden":
 					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				else:
@@ -1178,7 +1184,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								elif emulator_id == "eden":
 									extract_dest = record_path
 								elif emulator_id == "pcsx2":
-									extract_dest = save_dir
+									# PCSX2 folder saves extract INTO the folder memory card (main.ps2) in a subfolder named after the zip
+									var folder_name = file_name.get_basename()
+									extract_dest = save_dir + "main.ps2/" + folder_name + "/"
 								var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
@@ -1189,7 +1197,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								# Rebuild PCSX2 superblock after extracting saves
 								if emulator_id == "pcsx2":
 									print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
-									PS2MCRebuilder.rebuild_superblock(save_dir)
+									var memcard_path = save_dir + "main.ps2/"
+									PS2MCRebuilder.rebuild_superblock(memcard_path)
 							
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
