@@ -76,6 +76,7 @@ class DownloadBatch:
 	var total_count: int
 	var id: int
 	var is_complete: bool = false
+	var results: Dictionary = {}  # batch_index -> result
 	
 	static var _next_id: int = 0
 	
@@ -532,20 +533,19 @@ static func _on_download_chunk_complete(batch_id: int, index: int, result):
 	
 	var batch = _instance._download_batches[batch_id]
 	batch.completed_count += 1
+	batch.results[index] = result
 	
-	# Report progress
+	# Report progress (include index and result for per-item tracking)
 	if batch.on_progress.is_valid():
-		batch.on_progress.call(batch.completed_count, batch.total_count)
+		batch.on_progress.call(batch.completed_count, batch.total_count, index, result)
 	
 	# Check if all items complete
 	if batch.completed_count >= batch.total_count and not batch.is_complete:
 		batch.is_complete = true
 		_instance._download_batch_mutex.unlock()
 		
-		# Collect results (we need to track them, for now just pass empty array)
-		# In a full implementation, we'd store results per index
 		if batch.on_complete.is_valid():
-			batch.on_complete.call([])
+			batch.on_complete.call(batch.results)
 		
 		# Remove batch
 		_instance._download_batch_mutex.lock()

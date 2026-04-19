@@ -701,11 +701,17 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	await MemoryManager.queue_parallel_downloads(
 		chunk_items,
 		func(chunk_data, index):
-			return _download_chunk_on_thread(chunk_data),
-		func(completed, total):
-			_update_chunk_download_progress(item.id, completed, total),
+			var success = _download_chunk_on_thread(chunk_data)
+			return {
+				"success": success,
+				"chunk_index": chunk_data.chunk_index
+			},
+		func(completed, total, batch_index, result):
+			var success = result.get("success", false) if result is Dictionary else result
+			var chunk_index = result.get("chunk_index", batch_index) if result is Dictionary else batch_index
+			_update_chunk_download_progress(item.id, chunk_index, success),
 		func(results):
-			_on_all_chunks_complete(item.id, headers)
+			_on_all_chunks_complete(item.id, headers, results)
 	)
 	
 	# Progress updates now come from worker threads only (no polling timer to avoid race conditions)
@@ -922,6 +928,23 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	
 	file.close()
 	
+	# Verify chunk file exists and has correct size
+	if not FileAccess.file_exists(temp_path):
+		push_error("[DownloadManager] Chunk file not found after download: " + temp_path)
+		return false
+	
+	var verify_file = FileAccess.open(temp_path, FileAccess.READ)
+	if not verify_file:
+		push_error("[DownloadManager] Failed to open chunk file for verification: " + temp_path)
+		return false
+	
+	var actual_size = verify_file.get_length()
+	verify_file.close()
+	
+	if actual_size != bytes_downloaded:
+		push_error("[DownloadManager] Chunk " + str(chunk_index) + " size mismatch: expected " + str(bytes_downloaded) + " bytes, got " + str(actual_size) + " bytes")
+		return false
+	
 	var chunk_end_time = Time.get_ticks_msec()
 	var download_duration = chunk_end_time - chunk_start_time
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " finished body after " + str(body_poll_count) + " polls, status: " + str(http.get_status()))
@@ -976,32 +999,49 @@ func _parse_url(url: String) -> Dictionary:
 	
 	return result
 
-## Updates progress when chunks complete via thread pool
-func _update_chunk_download_progress(item_id: String, completed: int, total: int):
+## Updates progress when a chunk completes via thread pool
+func _update_chunk_download_progress(item_id: String, chunk_index: int, success: bool):
 	if not _chunked_downloads.has(item_id):
+		return
+	
+	if chunk_index < 0 or chunk_index >= _chunked_downloads[item_id].chunks.size():
+		push_error("[DownloadManager] Invalid chunk index in progress update: " + str(chunk_index))
 		return
 	
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
+	var chunk = chunked_info.chunks[chunk_index]
 	
-	# Debug logging
-	print("[DownloadManager] Thread pool progress: " + str(completed) + "/" + str(total) + " chunks completed")
-	
-	# Mark chunks as completed
-	var newly_completed = 0
-	for i in range(chunked_info.chunks.size()):
-		if i < completed and not chunked_info.chunks[i].completed:
-			chunked_info.chunks[i].completed = true
-			chunked_info.chunks[i].in_progress = false
+	if success:
+		if not chunk.completed:
+			chunk.completed = true
+			chunk.in_progress = false
 			chunked_info.chunks_completed += 1
-			newly_completed += 1
-			print("[DownloadManager] Marked chunk " + str(i) + " as completed")
+			print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully (total: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+	else:
+		chunk.in_progress = false
+		chunk.failed = true
+		print("[DownloadManager] Chunk " + str(chunk_index) + " failed (total completed: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
 	
-	if newly_completed > 0:
-		print("[DownloadManager] " + str(newly_completed) + " chunks completed via thread pool for: " + item.name + " (total: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+	# Update overall progress based on actual bytes
+	var total_downloaded_bytes = 0
+	for c in chunked_info.chunks:
+		if c.completed:
+			total_downloaded_bytes += (c.end_byte - c.start_byte + 1)
+		else:
+			total_downloaded_bytes += c.temp_bytes_downloaded
+	
+	var total_size = float(item.expected_file_size)
+	if total_size > 0:
+		var progress = float(total_downloaded_bytes) / total_size
+		progress = min(progress, 0.99)
+		if abs(progress - chunked_info.last_progress_update) >= 0.001:
+			chunked_info.last_progress_update = progress
+			item.progress = progress
+			download_progress.emit(item_id, progress)
 
 ## Called when all chunks have been processed by the thread pool
-func _on_all_chunks_complete(item_id: String, headers: Array):
+func _on_all_chunks_complete(item_id: String, headers: Array, results: Dictionary = {}):
 	if not _chunked_downloads.has(item_id):
 		return
 	
@@ -1012,7 +1052,35 @@ func _on_all_chunks_complete(item_id: String, headers: Array):
 	
 	# Check if all chunks completed successfully
 	if chunked_info.chunks_completed >= chunked_info.total_chunks:
-		print("[DownloadManager] All chunks complete for: " + item.name)
+		print("[DownloadManager] All chunks marked complete for: " + item.name + ", verifying files before reassembly...")
+		
+		# Verify chunk files actually exist on disk (protects against race conditions / external deletion)
+		var missing_or_bad_chunks = []
+		for chunk in chunked_info.chunks:
+			if not FileAccess.file_exists(chunk.temp_path):
+				push_error("[DownloadManager] Chunk file missing despite being marked complete: " + chunk.temp_path)
+				missing_or_bad_chunks.append(chunk)
+			else:
+				var verify_file = FileAccess.open(chunk.temp_path, FileAccess.READ)
+				if verify_file:
+					var actual_size = verify_file.get_length()
+					verify_file.close()
+					var expected_size = chunk.end_byte - chunk.start_byte + 1
+					if actual_size != expected_size:
+						push_error("[DownloadManager] Chunk " + str(chunk.index) + " size mismatch despite being marked complete: expected " + str(expected_size) + ", got " + str(actual_size))
+						missing_or_bad_chunks.append(chunk)
+				else:
+					push_error("[DownloadManager] Cannot open chunk file despite being marked complete: " + chunk.temp_path)
+					missing_or_bad_chunks.append(chunk)
+		
+		if missing_or_bad_chunks.size() > 0:
+			print("[DownloadManager] Found " + str(missing_or_bad_chunks.size()) + " chunks marked complete but files missing/bad. Resetting for retry...")
+			for chunk in missing_or_bad_chunks:
+				chunk.completed = false
+				chunked_info.chunks_completed -= 1
+			_handle_failed_chunks_thread_pool(item_id, headers)
+			return
+		
 		_stop_chunked_progress_timer(item_id)
 		_cleanup_download_tracking(item_id)
 		_reassemble_chunks(item_id)
@@ -1068,11 +1136,17 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		await MemoryManager.queue_parallel_downloads(
 			retry_items,
 			func(chunk_data, index):
-				return _download_chunk_on_thread(chunk_data),
-			func(completed, total):
-				_update_chunk_download_progress(item_id, chunked_info.chunks_completed + completed, chunked_info.total_chunks),
+				var success = _download_chunk_on_thread(chunk_data)
+				return {
+					"success": success,
+					"chunk_index": chunk_data.chunk_index
+				},
+			func(completed, total, batch_index, result):
+				var success = result.get("success", false) if result is Dictionary else result
+				var chunk_index = result.get("chunk_index", batch_index) if result is Dictionary else batch_index
+				_update_chunk_download_progress(item_id, chunk_index, success),
 			func(results):
-				_on_all_chunks_complete(item_id, headers)
+				_on_all_chunks_complete(item_id, headers, results)
 		)
 	else:
 		# No more retries available
@@ -1324,6 +1398,37 @@ func _reassemble_chunks(item_id: String):
 			DirAccess.make_dir_recursive_absolute(assembled_dir)
 		print("[DownloadManager] SAF download: assembling to temp file: " + reassembly_temp_path)
 		print("[DownloadManager] SAF destination: " + item.saf_destination)
+	
+	# Pre-reassembly verification: ensure all chunk files exist and have correct sizes
+	var missing_chunks = []
+	for chunk in chunked_info.chunks:
+		if not FileAccess.file_exists(chunk.temp_path):
+			push_error("[DownloadManager] [Reassembly] Pre-check: chunk file missing: " + chunk.temp_path)
+			missing_chunks.append(chunk)
+		else:
+			var verify_file = FileAccess.open(chunk.temp_path, FileAccess.READ)
+			if verify_file:
+				var actual_size = verify_file.get_length()
+				verify_file.close()
+				var expected_size = chunk.end_byte - chunk.start_byte + 1
+				if actual_size != expected_size:
+					push_error("[DownloadManager] [Reassembly] Pre-check: chunk " + str(chunk.index) + " size mismatch: expected " + str(expected_size) + ", got " + str(actual_size))
+					missing_chunks.append(chunk)
+			else:
+				push_error("[DownloadManager] [Reassembly] Pre-check: cannot open chunk file: " + chunk.temp_path)
+				missing_chunks.append(chunk)
+	
+	if missing_chunks.size() > 0:
+		print("[DownloadManager] [Reassembly] Found " + str(missing_chunks.size()) + " missing/bad chunks before reassembly. This should have been caught earlier - failing download.")
+		item.status = "failed"
+		item.error_message = "Chunk files missing or corrupted before reassembly"
+		_cleanup_chunked_download(item_id)
+		_cleanup_item(item)
+		_active_items.erase(item_id)
+		download_completed.emit(item_id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
 	
 	# Platform-specific reassembly
 	if PlatformManager.is_android():
