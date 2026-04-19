@@ -144,6 +144,10 @@ func _on_setting_changed(value, setting):
 		print("[DataManager] Hide no-cover setting changed to %s" % value)
 		# Trigger grid refresh so library view updates filtering
 		sync_completed.emit(true, "Hide no-cover games %s" % ("enabled" if value else "disabled"))
+	elif setting.property_name == "fold_romm_siblings":
+		print("[DataManager] Fold RomM siblings setting changed to %s" % value)
+		# Trigger grid refresh so library view updates filtering
+		sync_completed.emit(true, "RomM sibling folding %s" % ("enabled" if value else "disabled"))
 
 func _should_hide_no_cover_games() -> bool:
 	var setting = SettingsManager.get_setting("hide_games_without_covers")
@@ -151,8 +155,17 @@ func _should_hide_no_cover_games() -> bool:
 		return setting.value
 	return true
 
+func _should_fold_romm_siblings() -> bool:
+	var setting = SettingsManager.get_setting("fold_romm_siblings")
+	if setting:
+		return setting.value
+	return true
+
 func _get_has_cover_art_clause() -> String:
 	return " AND has_cover_art = 1" if _should_hide_no_cover_games() else ""
+
+func _get_is_master_entry_clause() -> String:
+	return " AND is_master_entry = 1" if _should_fold_romm_siblings() else ""
 
 func _remove_cover_based_siblings():
 	"""Unfold all games by setting cover_group_master = 1 for all games in cover groups.
@@ -1523,7 +1536,8 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 					"id": sibling_data.get("id", 0),
 					"name": str(sibling_data.get("name", "")),
 					"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
-					"file_size": sibling_data.get("fs_size_bytes", 0)
+					"file_size": sibling_data.get("fs_size_bytes", 0),
+					"title_id": ""  # Will be extracted on launch
 				}
 				siblings.append(sibling)
 	else:
@@ -1909,6 +1923,28 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 	)
 	return true
 
+## Updates only the siblings field for a game (used to persist sibling title_ids)
+func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: Callable = Callable()) -> bool:
+	if not _is_db_ready:
+		return false
+	
+	MemoryManager.queue_db_task(
+		func():
+			var query = """
+				UPDATE games SET
+					siblings = '%s'
+				WHERE romm_id = %d
+			""" % [_escape_sql(JSON.stringify(siblings)), romm_id]
+			return _db_query_bool(query),
+
+		func(success: bool):
+			if success:
+				pass
+			if callback.is_valid():
+				callback.call(success)
+	)
+	return true
+
 func get_game_by_id(romm_id: int) -> GameResource:
 	if not _is_db_ready:
 		return null
@@ -1921,7 +1957,7 @@ func get_all_games() -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	var query_result = _db_query_array("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
+	var query_result = _db_query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
 	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -1930,7 +1966,7 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	var query_result = _db_query_array("SELECT * FROM games WHERE platform_slug = '%s' AND is_master_entry = 1" % platform_slug + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
+	var query_result = _db_query_array("SELECT * FROM games WHERE platform_slug = '%s'" % platform_slug + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
 	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
@@ -1944,9 +1980,9 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	var query: String
 	
 	if platform_slug.is_empty():
-		query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
+		query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
 	else:
-		query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug = '%s' ORDER BY %s %s LIMIT %d OFFSET %d" % [platform_slug, sort_field, order, limit, offset]
+		query = "SELECT * FROM games WHERE platform_slug = '%s'" % platform_slug + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT %d OFFSET %d" % [sort_field, order, limit, offset]
 	
 	var query_result = _db_query_array(query)
 	
@@ -1962,7 +1998,8 @@ func get_platforms_with_games() -> Array[Dictionary]:
 	
 	# Query for platforms with their game counts, sorted alphabetically
 	var cover_clause = _get_has_cover_art_clause().replace("has_cover_art", "g.has_cover_art")
-	var query = "SELECT g.platform_slug, p.name, COUNT(*) as game_count FROM games g LEFT JOIN platforms p ON g.platform_slug = p.slug WHERE g.is_master_entry = 1" + cover_clause + " AND g.cover_group_master = 1 GROUP BY g.platform_slug HAVING game_count > 0 ORDER BY g.platform_slug ASC"
+	var master_clause = _get_is_master_entry_clause().replace("is_master_entry", "g.is_master_entry")
+	var query = "SELECT g.platform_slug, p.name, COUNT(*) as game_count FROM games g LEFT JOIN platforms p ON g.platform_slug = p.slug WHERE 1=1" + master_clause + cover_clause + " AND g.cover_group_master = 1 GROUP BY g.platform_slug HAVING game_count > 0 ORDER BY g.platform_slug ASC"
 	
 	var query_result = _db_query_array(query)
 	for row in query_result:
@@ -1988,9 +2025,9 @@ func get_total_games_count(platform_slug: String = "") -> int:
 	
 	var query: String
 	if platform_slug.is_empty():
-		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1"
+		query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1"
 	else:
-		query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug = '%s'" % platform_slug
+		query = "SELECT COUNT(*) as count FROM games WHERE platform_slug = '%s'" % platform_slug + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1"
 	
 	var query_result = _db_query_array(query)
 	if query_result.size() > 0:
@@ -2010,7 +2047,7 @@ func search_games_paginated(query: String, offset: int, limit: int) -> Array[Gam
 	# Sanitize query to prevent SQL injection
 	var sanitized_query = query.replace("'", "''")
 	
-	var sql = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%' ORDER BY title ASC LIMIT %d OFFSET %d" % [sanitized_query, limit, offset]
+	var sql = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%' ORDER BY title ASC LIMIT %d OFFSET %d" % [sanitized_query, limit, offset]
 	
 	var query_result = _db_query_array(sql)
 	for row in query_result:
@@ -2026,7 +2063,7 @@ func get_search_results_count(query: String) -> int:
 	# Sanitize query to prevent SQL injection
 	var sanitized_query = query.replace("'", "''")
 	
-	var sql = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%'" % sanitized_query
+	var sql = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE '%%%s%%'" % sanitized_query
 	
 	var query_result = _db_query_array(sql)
 	if query_result.size() > 0:
@@ -2045,7 +2082,7 @@ func get_downloaded_games_count() -> int:
 		return 0
 	
 	var slug_list = "'" + "','".join(enabled_slugs) + "'"
-	var query = "SELECT COUNT(*) as count FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % slug_list
+	var query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % slug_list
 	
 	var query_result = _db_query_array(query)
 	if query_result.size() > 0:
@@ -2065,7 +2102,7 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 		return games
 	
 	var slug_list = "'" + "','".join(enabled_slugs) + "'"
-	var query = "SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT %d OFFSET %d" % [slug_list, limit, offset]
+	var query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT %d OFFSET %d" % [slug_list, limit, offset]
 	
 	var query_result = _db_query_array(query)
 	for row in query_result:
@@ -2629,7 +2666,7 @@ func get_random_game() -> GameResource:
 		return null
 	
 	# Get a random game that has a cover and is a master entry
-	var query_result = _db_query_array("SELECT * FROM games WHERE is_master_entry = 1" + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
+	var query_result = _db_query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
 	if query_result.size() > 0:
 		return _row_to_game(query_result[0])
 	return null

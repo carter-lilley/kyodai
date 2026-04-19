@@ -89,6 +89,24 @@ func _build_view():
 	hide_no_covers_hbox.add_child(hide_no_covers_label)
 	_platforms_container.add_child(hide_no_covers_hbox)
 	
+	# Add fold RomM siblings toggle
+	var fold_romm_hbox = HBoxContainer.new()
+	fold_romm_hbox.name = "FoldRommSiblingsContainer"
+	
+	var fold_romm_checkbox = CheckBox.new()
+	fold_romm_checkbox.name = "FoldRommSiblingsCheckbox"
+	var fold_romm_setting = SettingsManager.get_setting("fold_romm_siblings")
+	fold_romm_checkbox.button_pressed = fold_romm_setting.value if fold_romm_setting else true
+	fold_romm_checkbox.toggled.connect(_on_fold_romm_siblings_toggled)
+	
+	var fold_romm_label = Label.new()
+	fold_romm_label.text = "Fold RomM siblings"
+	fold_romm_label.tooltip_text = "RomM-designated regional variants (siblings) will be grouped under a single library entry"
+	
+	fold_romm_hbox.add_child(fold_romm_checkbox)
+	fold_romm_hbox.add_child(fold_romm_label)
+	_platforms_container.add_child(fold_romm_hbox)
+	
 	var spacer2 = Control.new()
 	spacer2.custom_minimum_size = Vector2(0, 10)
 	_platforms_container.add_child(spacer2)
@@ -126,7 +144,7 @@ func _build_view():
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "FoldCoversContainer", "HideNoCoversContainer"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "FoldCoversContainer", "HideNoCoversContainer", "FoldRommSiblingsContainer"]:
 			continue
 		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -590,6 +608,11 @@ func _on_fold_covers_toggled(enabled: bool) -> void:
 
 func _on_hide_no_covers_toggled(enabled: bool) -> void:
 	var setting = SettingsManager.get_setting("hide_games_without_covers")
+	if setting:
+		SettingsManager.set_setting(enabled, setting)
+
+func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
+	var setting = SettingsManager.get_setting("fold_romm_siblings")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 

@@ -181,8 +181,9 @@ func _update_file_info_display(game: GameResource) -> void:
 	
 	# Show Title ID for platforms that use it
 	if title_id_label:
-		if game.title_id != "":
-			title_id_label.text = "Title ID: " + game.title_id
+		var active_title_id = game.get_active_title_id()
+		if active_title_id != "":
+			title_id_label.text = "Title ID: " + active_title_id
 			title_id_label.visible = true
 		else:
 			title_id_label.visible = false

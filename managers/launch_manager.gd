@@ -2667,6 +2667,23 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 # ==================== VITA3K HELPERS ====================
 
 ## Extracts TitleID from Vita game ZIP by reading root folder name
+
+## Helper to store title_id for the active game or sibling
+func _store_title_id(game: GameResource, title_id: String) -> void:
+	var active_id = game.get_active_game_id()
+	if active_id == game.romm_id:
+		# Main game
+		if game.title_id != title_id:
+			game.title_id = title_id
+			DataManager.update_game_title_id(game.romm_id, title_id)
+	else:
+		# Sibling - update in the siblings array
+		var current_title_id = game.get_active_title_id()
+		if current_title_id != title_id:
+			game.set_sibling_title_id(active_id, title_id)
+			# Persist the updated siblings array to DB
+			DataManager.update_game_siblings(game.romm_id, game.siblings)
+
 func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[LaunchManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
 	
@@ -2679,13 +2696,13 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] Azahar: TitleID from ROM: " + title_id)
 	
-	if game.title_id != "" and game.title_id != title_id:
-		print("[LaunchManager] Azahar: WARNING - Stored TitleID " + game.title_id + " doesn't match ROM TitleID " + title_id)
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != title_id:
+		print("[LaunchManager] Azahar: WARNING - Stored TitleID " + active_title_id + " doesn't match ROM TitleID " + title_id)
 		print("[LaunchManager] Azahar: Updating to correct TitleID from ROM")
 	
-	if game.title_id != title_id:
-		game.title_id = title_id
-		DataManager.update_game_title_id(game.romm_id, title_id)
+	if active_title_id != title_id:
+		_store_title_id(game, title_id)
 		print("[LaunchManager] Azahar: Updated database with TitleID: " + title_id)
 	
 	return true
@@ -2702,13 +2719,13 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] Cemu: TitleID from WUA: " + title_id)
 	
-	if game.title_id != "" and game.title_id != title_id:
-		print("[LaunchManager] Cemu: WARNING - Stored TitleID " + game.title_id + " doesn't match WUA TitleID " + title_id)
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != title_id:
+		print("[LaunchManager] Cemu: WARNING - Stored TitleID " + active_title_id + " doesn't match WUA TitleID " + title_id)
 		print("[LaunchManager] Cemu: Updating to correct TitleID from WUA")
 	
-	if game.title_id != title_id:
-		game.title_id = title_id
-		DataManager.update_game_title_id(game.romm_id, title_id)
+	if active_title_id != title_id:
+		_store_title_id(game, title_id)
 		print("[LaunchManager] Cemu: Updated database with TitleID: " + title_id)
 	
 	return true
@@ -2831,13 +2848,13 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] Eden: TitleID resolved: " + title_id)
 	
-	if game.title_id != "" and game.title_id != title_id:
-		print("[LaunchManager] Eden: WARNING - Stored TitleID " + game.title_id + " doesn't match resolved TitleID " + title_id)
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != title_id:
+		print("[LaunchManager] Eden: WARNING - Stored TitleID " + active_title_id + " doesn't match resolved TitleID " + title_id)
 		print("[LaunchManager] Eden: Updating to correct TitleID")
 	
-	if game.title_id != title_id:
-		game.title_id = title_id
-		DataManager.update_game_title_id(game.romm_id, title_id)
+	if active_title_id != title_id:
+		_store_title_id(game, title_id)
 		print("[LaunchManager] Eden: Updated database with TitleID: " + title_id)
 	
 	return true
@@ -2860,13 +2877,13 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] Dolphin: Game ID: " + game_id)
 	
-	if game.title_id != "" and game.title_id != game_id:
-		print("[LaunchManager] Dolphin: WARNING - Stored Game ID " + game.title_id + " doesn't match detected Game ID " + game_id)
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != game_id:
+		print("[LaunchManager] Dolphin: WARNING - Stored Game ID " + active_title_id + " doesn't match detected Game ID " + game_id)
 		print("[LaunchManager] Dolphin: Updating to correct Game ID")
 	
-	if game.title_id != game_id:
-		game.title_id = game_id
-		DataManager.update_game_title_id(game.romm_id, game_id)
+	if active_title_id != game_id:
+		_store_title_id(game, game_id)
 		print("[LaunchManager] Dolphin: Updated database with Game ID: " + game_id)
 	
 	return true
@@ -2888,13 +2905,13 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 		NotificationManager.show_notification("Failed to extract PS2 game serial", Notification.Type.ERROR)
 		return false
 	
-	if game.title_id != "" and game.title_id != serial:
-		print("[LaunchManager] PCSX2: WARNING - Stored serial " + game.title_id + " doesn't match detected serial " + serial)
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != serial:
+		print("[LaunchManager] PCSX2: WARNING - Stored serial " + active_title_id + " doesn't match detected serial " + serial)
 		print("[LaunchManager] PCSX2: Updating to correct serial")
 	
-	if game.title_id != serial:
-		game.title_id = serial
-		DataManager.update_game_title_id(game.romm_id, serial)
+	if active_title_id != serial:
+		_store_title_id(game, serial)
 		print("[LaunchManager] PCSX2: Updated database with serial: " + serial)
 	
 	return true
@@ -2936,17 +2953,16 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[LaunchManager] Vita3K: TitleID from ZIP: " + zip_title_id)
 	
 	# If stored title_id doesn't match the ZIP, update it
-	if game.title_id != "" and game.title_id != zip_title_id:
-		print("[LaunchManager] Vita3K: WARNING - Stored TitleID " + game.title_id + " doesn't match ZIP TitleID " + zip_title_id)
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != zip_title_id:
+		print("[LaunchManager] Vita3K: WARNING - Stored TitleID " + active_title_id + " doesn't match ZIP TitleID " + zip_title_id)
 		print("[LaunchManager] Vita3K: Updating to correct TitleID from ZIP")
 	
-	if game.title_id != zip_title_id:
-		game.title_id = zip_title_id
-		# Save only title_id to database (doesn't overwrite other fields)
-		DataManager.update_game_title_id(game.romm_id, zip_title_id)
+	if active_title_id != zip_title_id:
+		_store_title_id(game, zip_title_id)
 		print("[LaunchManager] Vita3K: Updated database with TitleID: " + zip_title_id)
 	
-	var title_id = game.title_id
+	var title_id = game.get_active_title_id()
 	print("[LaunchManager] Vita3K: Using TitleID: " + title_id)
 	
 	# Platform-specific Vita3K app path
@@ -3304,8 +3320,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		return true
 	
 	# Save TitleID to database (always overwrite with correct value)
-	game.title_id = extracted_title_id
-	DataManager.update_game_title_id(game.romm_id, extracted_title_id)
+	_store_title_id(game, extracted_title_id)
 	print("[LaunchManager] RPCS3: Saved TitleID to database: " + extracted_title_id)
 	
 	# Move game to final location

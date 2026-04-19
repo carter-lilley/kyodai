@@ -21,7 +21,7 @@ extends Resource
 @export var preferred_emulator_id: String = ""
 
 ## Sibling ROMs - variants of the same game (different regions, versions, etc.)
-@export var siblings: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
+@export var siblings: Array[Dictionary] = []  # [{id, name, file_name, file_size, title_id}, ...]
 @export var selected_sibling_id: int = 0  # 0 means use this game itself
 
 ## Whether this is the "master" entry shown in the library view
@@ -62,6 +62,24 @@ func get_active_game_id() -> int:
 	if selected_sibling_id != 0:
 		return selected_sibling_id
 	return romm_id
+
+## Returns the title_id of the active game/sibling
+func get_active_title_id() -> String:
+	if selected_sibling_id != 0:
+		for sibling in siblings:
+			if sibling.get("id", 0) == selected_sibling_id:
+				return sibling.get("title_id", "")
+	return title_id
+
+## Sets the title_id for a specific sibling
+func set_sibling_title_id(sibling_id: int, new_title_id: String) -> void:
+	if sibling_id == romm_id:
+		title_id = new_title_id
+		return
+	for sibling in siblings:
+		if sibling.get("id", 0) == sibling_id:
+			sibling["title_id"] = new_title_id
+			return
 
 ## Returns the file name of the active game/sibling
 func get_active_file_name() -> String:
