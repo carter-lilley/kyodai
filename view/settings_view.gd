@@ -165,12 +165,13 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	
 	# Apply current values to schema
 	for setting in gradient_schema:
-		if setting.property_name == "background_gradient":
-			var gradient_data = _library_appearance_config.get("background_gradient")
-			if gradient_data is Gradient:
-				setting.value = gradient_data
-		elif setting.property_name == "gradient_direction":
-			setting.value = _library_appearance_config.get("gradient_direction", 0)
+		match setting.property_name:
+			"background_gradient":
+				var gradient_data = _library_appearance_config.get("background_gradient")
+				if gradient_data is Gradient:
+					setting.value = gradient_data
+			"gradient_direction":
+				setting.value = _library_appearance_config.get("gradient_direction", 0)
 	
 	_library_gradient_menu.build_controls_from_settingsvars(gradient_schema, "Gradient Settings")
 	_library_gradient_menu.setting_changed.connect(_on_library_gradient_setting_changed)

@@ -276,10 +276,11 @@ func _apply_initial_volumes() -> void:
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	# Update volumes when settings change
-	if setting.property_name == "dblevel_music":
-		set_music_volume(setting.value)
-	elif setting.property_name == "dblevel_sfx":
-		set_sfx_volume(setting.value)
+	match setting.property_name:
+		"dblevel_music":
+			set_music_volume(setting.value)
+		"dblevel_sfx":
+			set_sfx_volume(setting.value)
 
 func _play_startup_sound() -> void:
 	play_sfx("affirm_01")

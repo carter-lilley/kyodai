@@ -647,114 +647,64 @@ func _apply_navigation_bar_colors() -> void:
 	if icon_color_setting:
 		_navigation_bar.set_icon_color(icon_color_setting.value)
 
+func _rebuild_views(reason: String, use_true: bool = false) -> void:
+	"""Rebuild visible views immediately, mark hidden views for rebuild."""
+	if _views.has("Home"):
+		var home_view = _views["Home"]
+		if is_current_view("Home"):
+			home_view.rebuild_grid(use_true)
+		else:
+			home_view.mark_for_rebuild(reason)
+	if _views.has("Library"):
+		var library_view = _views["Library"]
+		if is_current_view("Library"):
+			library_view.rebuild_grid(use_true)
+		else:
+			library_view.mark_for_rebuild(reason)
+
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
-	if setting.property_name == "library_background_config":
-		# Update the library background with new effect configuration
-		if _library_background and _value is Dictionary:
-			_library_background.set_background_config(_value.duplicate())
-	elif setting.property_name == "library_navigation_bar_position":
-		_current_bar_position = _get_bar_position_string(setting.value)
-		# Update layout orientation (only replaces InnerLayout if needed)
-		_update_layout_orientation()
-	elif setting.property_name == "library_layout_mode":
-		# Rebuild visible views immediately, mark hidden views for rebuild
-		if _views.has("Home"):
-			var home_view = _views["Home"]
-			if is_current_view("Home"):
-				home_view.rebuild_grid()
-			else:
-				home_view.mark_for_rebuild("Layout mode changed")
-		if _views.has("Library"):
-			var library_view = _views["Library"]
-			if is_current_view("Library"):
-				library_view.rebuild_grid()
-			else:
-				library_view.mark_for_rebuild("Layout mode changed")
-		_update_zoom_range_for_current_view()
-	elif setting.property_name == "library_focus_scale":
-		# Rebuild visible views immediately, mark hidden views for rebuild
-		if _views.has("Home"):
-			var home_view = _views["Home"]
-			if is_current_view("Home"):
-				home_view.rebuild_grid()
-			else:
-				home_view.mark_for_rebuild("Focus scale changed")
-		if _views.has("Library"):
-			var library_view = _views["Library"]
-			if is_current_view("Library"):
-				library_view.rebuild_grid()
-			else:
-				library_view.mark_for_rebuild("Focus scale changed")
-	elif setting.property_name == "library_card_alignment":
-		# Rebuild visible views immediately, mark hidden views for rebuild
-		if _views.has("Home"):
-			var home_view = _views["Home"]
-			if is_current_view("Home"):
-				home_view.rebuild_grid()
-			else:
-				home_view.mark_for_rebuild("Card alignment changed")
-		if _views.has("Library"):
-			var library_view = _views["Library"]
-			if is_current_view("Library"):
-				library_view.rebuild_grid()
-			else:
-				library_view.mark_for_rebuild("Card alignment changed")
-	elif setting.property_name == "card_effect_config":
-		# Rebuild visible views immediately, mark hidden views for rebuild
-		if _views.has("Home"):
-			var home_view = _views["Home"]
-			if is_current_view("Home"):
-				home_view.rebuild_grid(true)
-			else:
-				home_view.mark_for_rebuild("Card effects changed")
-		if _views.has("Library"):
-			var library_view = _views["Library"]
-			if is_current_view("Library"):
-				library_view.rebuild_grid(true)
-			else:
-				library_view.mark_for_rebuild("Card effects changed")
-	elif setting.property_name == "hero_effect_config":
-		# Refresh hero image when hero effects change
-		if _hero_image and _hero_image.has_method("refresh_from_settings"):
-			_hero_image.refresh_from_settings()
-		# Update hero size when height changes
-		_update_hero_size()
-		# Mark views for rebuild so they reflect the new hero size
-		if _views.has("Home"):
-			_views["Home"].mark_for_rebuild("Hero height changed")
-		if _views.has("Library"):
-			_views["Library"].mark_for_rebuild("Hero height changed")
-	elif setting.property_name == "library_grid_padding":
-		# Rebuild visible views immediately, mark hidden views for rebuild
-		if _views.has("Home"):
-			var home_view = _views["Home"]
-			if is_current_view("Home"):
-				home_view.rebuild_grid()
-			else:
-				home_view.mark_for_rebuild("Grid padding changed")
-		if _views.has("Library"):
-			var library_view = _views["Library"]
-			if is_current_view("Library"):
-				library_view.rebuild_grid()
-			else:
-				library_view.mark_for_rebuild("Grid padding changed")
-	elif setting.property_name == "library_bar_color":
-		if _navigation_bar:
-			_navigation_bar.set_bar_background_color(setting.value)
-	elif setting.property_name == "library_icon_color":
-		if _navigation_bar:
-			_navigation_bar.set_icon_color(setting.value)
-	elif setting.property_name == "controls_bar_enabled":
-		_controls_bar_enabled = setting.value
-		if _current_view:
-			_update_controls_bar_visibility(_current_view.view_name)
-	elif setting.property_name == "controls_bar_mode":
-		_controls_bar_mode = setting.value
-		_update_controls_bar_layout()
-		# Update visibility in case mode change affects it
-		if _current_view:
-			_update_controls_bar_visibility(_current_view.view_name)
+	match setting.property_name:
+		"library_background_config":
+			if _library_background and _value is Dictionary:
+				_library_background.set_background_config(_value.duplicate())
+		"library_navigation_bar_position":
+			_current_bar_position = _get_bar_position_string(setting.value)
+			_update_layout_orientation()
+		"library_layout_mode":
+			_rebuild_views("Layout mode changed")
+			_update_zoom_range_for_current_view()
+		"library_focus_scale":
+			_rebuild_views("Focus scale changed")
+		"library_card_alignment":
+			_rebuild_views("Card alignment changed")
+		"card_effect_config":
+			_rebuild_views("Card effects changed", true)
+		"hero_effect_config":
+			if _hero_image and _hero_image.has_method("refresh_from_settings"):
+				_hero_image.refresh_from_settings()
+			_update_hero_size()
+			if _views.has("Home"):
+				_views["Home"].mark_for_rebuild("Hero height changed")
+			if _views.has("Library"):
+				_views["Library"].mark_for_rebuild("Hero height changed")
+		"library_grid_padding":
+			_rebuild_views("Grid padding changed")
+		"library_bar_color":
+			if _navigation_bar:
+				_navigation_bar.set_bar_background_color(setting.value)
+		"library_icon_color":
+			if _navigation_bar:
+				_navigation_bar.set_icon_color(setting.value)
+		"controls_bar_enabled":
+			_controls_bar_enabled = setting.value
+			if _current_view:
+				_update_controls_bar_visibility(_current_view.view_name)
+		"controls_bar_mode":
+			_controls_bar_mode = setting.value
+			_update_controls_bar_layout()
+			if _current_view:
+				_update_controls_bar_visibility(_current_view.view_name)
 
 func _setup_home_tab():
 	var home_idx = _get_tab_index("Home")

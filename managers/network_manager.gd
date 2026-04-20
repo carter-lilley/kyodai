@@ -38,15 +38,16 @@ func _ready():
 	_load_credentials()
 
 func _on_setting_changed(value, setting):
-	if setting.property_name == "romm_url":
-		_base_url = value if value else ""
-		_load_credentials()
-	elif setting.property_name == "romm_username":
-		_username = value if value else ""
-		_load_credentials()
-	elif setting.property_name == "romm_password":
-		_password = value if value else ""
-		_load_credentials()
+	match setting.property_name:
+		"romm_url":
+			_base_url = value if value else ""
+			_load_credentials()
+		"romm_username":
+			_username = value if value else ""
+			_load_credentials()
+		"romm_password":
+			_password = value if value else ""
+			_load_credentials()
 
 func _load_credentials():
 	# Load credentials from settings

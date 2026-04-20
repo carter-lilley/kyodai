@@ -114,10 +114,11 @@ func _rebuild_effects():
 					effect.initialize(_container_state, settings)
 			
 			# Update insets based on effect settings
-			if effect_id == "border":
-				_container_state.border_inset_ratio = settings.get("border_size", 0.05)
-			elif effect_id == "glass":
-				_container_state.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
+			match effect_id:
+				"border":
+					_container_state.border_inset_ratio = settings.get("border_size", 0.05)
+				"glass":
+					_container_state.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
 			
 			# Set layer order
 			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)

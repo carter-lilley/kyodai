@@ -326,6 +326,24 @@ func _rebuild_add_effect_dropdown() -> void:
 	else:
 		_add_effect_button.text = "Add Effect"
 
+func _build_effect_settings(effect: EffectBase, effect_data: Dictionary, content: Control, index: int, is_focus_effect: bool) -> void:
+	var schema = effect.get_settings_schema()
+	effect.queue_free()
+	
+	var settings_menu = SettingsMenu.new()
+	content.add_child(settings_menu)
+	
+	var current_settings = effect_data.get("settings", {})
+	for setting in schema:
+		if current_settings.has(setting.property_name):
+			setting.value = current_settings[setting.property_name]
+	
+	settings_menu.build_controls_from_settingsvars(schema, "Settings")
+	if is_focus_effect:
+		settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
+	else:
+		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+
 func _create_effect_ui(effect_data: Dictionary, index: int, is_focus_effect: bool = false) -> void:
 	var container = CollapsableVBoxContainer.new()
 	container.title = effect_data.get("effect_id", "Unknown").capitalize()
@@ -346,180 +364,25 @@ func _create_effect_ui(effect_data: Dictionary, index: int, is_focus_effect: boo
 	
 	var content = container.get_content_container()
 	
-	if effect_data.get("effect_id") == "border":
-		var border_effect = BorderEffect.new()
-		var schema = border_effect.get_settings_schema()
-		border_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				var saved_value = current_settings[setting.property_name]
-				if saved_value is Gradient:
-					setting.value = saved_value
-				else:
-					setting.value = saved_value
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "badge":
-		var badge_effect = BadgeEffect.new()
-		var schema = badge_effect.get_settings_schema()
-		badge_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "drop_shadow":
-		var drop_shadow_effect = DropShadowEffect.new()
-		var schema = drop_shadow_effect.get_settings_schema()
-		drop_shadow_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "glow":
-		var glow_effect = GlowEffect.new()
-		var schema = glow_effect.get_settings_schema()
-		glow_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "distort":
-		var distort_effect = DistortEffect.new()
-		var schema = distort_effect.get_settings_schema()
-		distort_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "glass":
-		var glass_effect = GlassEffect.new()
-		var schema = glass_effect.get_settings_schema()
-		glass_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "gradient_overlay":
-		var gradient_overlay_effect = GradientOverlayEffect.new()
-		var schema = gradient_overlay_effect.get_settings_schema()
-		gradient_overlay_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "hsl":
-		var hsl_effect = HSLEffect.new()
-		var schema = hsl_effect.get_settings_schema()
-		hsl_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-	
-	elif effect_data.get("effect_id") == "blur":
-		var blur_effect = BlurEffect.new()
-		var schema = blur_effect.get_settings_schema()
-		blur_effect.queue_free()
-		
-		var settings_menu = SettingsMenu.new()
-		content.add_child(settings_menu)
-		
-		var current_settings = effect_data.get("settings", {})
-		for setting in schema:
-			if current_settings.has(setting.property_name):
-				setting.value = current_settings[setting.property_name]
-		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
-		if is_focus_effect:
-			settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-		else:
-			settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
+	match effect_data.get("effect_id"):
+		"border":
+			_build_effect_settings(BorderEffect.new(), effect_data, content, index, is_focus_effect)
+		"badge":
+			_build_effect_settings(BadgeEffect.new(), effect_data, content, index, is_focus_effect)
+		"drop_shadow":
+			_build_effect_settings(DropShadowEffect.new(), effect_data, content, index, is_focus_effect)
+		"glow":
+			_build_effect_settings(GlowEffect.new(), effect_data, content, index, is_focus_effect)
+		"distort":
+			_build_effect_settings(DistortEffect.new(), effect_data, content, index, is_focus_effect)
+		"glass":
+			_build_effect_settings(GlassEffect.new(), effect_data, content, index, is_focus_effect)
+		"gradient_overlay":
+			_build_effect_settings(GradientOverlayEffect.new(), effect_data, content, index, is_focus_effect)
+		"hsl":
+			_build_effect_settings(HSLEffect.new(), effect_data, content, index, is_focus_effect)
+		"blur":
+			_build_effect_settings(BlurEffect.new(), effect_data, content, index, is_focus_effect)
 
 func _on_add_effect(id: int):
 	var new_effect: Dictionary

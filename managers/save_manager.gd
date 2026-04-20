@@ -358,6 +358,121 @@ func _get_folder_mtime(dir_path: String) -> int:
 					latest = mtime
 	return latest
 
+## Validates that a game's title ID is valid for the given emulator
+## Returns empty string on success, error message on failure
+func _validate_emulator_title_id(emulator_id: String, title_id: String) -> String:
+	match emulator_id:
+		"cemu", "eden":
+			if title_id.length() != 16:
+				return "Invalid Title ID for %s game." % emulator_id.capitalize()
+		"pcsx2":
+			if title_id == "":
+				return "No serial available for this PS2 game. Launch it once to extract the serial."
+		_:
+			if title_id.length() != 16:
+				return "Invalid Title ID for this game."
+	return ""
+
+## Discovers local saves for a specific emulator and game
+## Returns an array of save dictionaries
+func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameResource) -> Array[Dictionary]:
+	var title_id = game.get_active_title_id()
+	match emulator_id:
+		"cemu":
+			return discover_local_cemu_save(save_dir, title_id)
+		"dolphin":
+			if game.platform_slug == "wii":
+				return discover_local_dolphin_wii_save(save_dir, title_id)
+			return discover_local_dolphin_gc_save(save_dir, title_id)
+		"eden":
+			return discover_local_eden_save(save_dir, title_id)
+		"pcsx2":
+			return discover_local_pcsx2_save(save_dir, title_id)
+		_:
+			return discover_local_folder_save(save_dir, title_id)
+
+## Resolves the save path for the default emulator folder structure
+## Returns a dictionary with "path" and "error" keys
+func _resolve_default_save_path(save_dir: String, title_id: String) -> Dictionary:
+	var short_title_id = title_id.substr(8, 8)
+	var id0 = _find_first_subdir(save_dir)
+	if id0 == "":
+		return {"path": "", "error": "no_id0"}
+	var id1 = _find_first_subdir(save_dir + id0 + "/")
+	if id1 == "":
+		return {"path": "", "error": "no_id1"}
+	var category = title_id.substr(0, 8)
+	return {
+		"path": save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id,
+		"error": ""
+	}
+
+## Resolves the save path for a specific emulator and game
+## Returns the resolved path string (empty string on failure)
+func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: GameResource) -> String:
+	var title_id = game.get_active_title_id()
+	match emulator_id:
+		"cemu":
+			return save_dir + "00050000/" + title_id.substr(8, 8)
+		"dolphin":
+			if game.platform_slug == "wii":
+				return save_dir + "Wii/title/00010000/" + _game_id_to_hex(title_id)
+			return save_dir + "GC/USA/Card A"
+		"eden":
+			var profile = _find_first_subdir(save_dir)
+			if profile == "":
+				profile = "0000000000000000"
+			return save_dir + profile + "/" + title_id
+		"pcsx2":
+			return save_dir + "main.ps2/" + title_id + "/"
+		_:
+			var result = _resolve_default_save_path(save_dir, title_id)
+			return result.path
+
+## Determines the extraction destination for downloaded saves based on emulator
+## Returns the destination directory path
+func _get_extract_dest(emulator_id: String, save_dir: String, record_path: String, game: GameResource) -> String:
+	match emulator_id:
+		"dolphin":
+			if game.platform_slug == "wii":
+				return save_dir
+			return record_path
+		"pcsx2":
+			return save_dir + "main.ps2/"
+		_:
+			return record_path.get_base_dir()
+
+## Determines the save name for upload based on emulator and game
+## Returns the save name string
+func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_file_path: String = "") -> String:
+	var title_id = game.get_active_title_id()
+	match emulator_id:
+		"dolphin":
+			if game.platform_slug == "wii":
+				return _game_id_to_hex(title_id)
+			return title_id
+		"pcsx2":
+			# Use actual folder name for PCSX2 saves
+			return local_file_path.get_file() if local_file_path != "" else title_id
+		_:
+			return title_id.substr(8, 8)
+
+## Creates a ZIP archive for a specific emulator's save
+## Returns true on success
+func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: String, game: GameResource) -> bool:
+	match emulator_id:
+		"cemu":
+			var save_name = game.get_active_title_id().substr(8, 8)
+			return FileSystemManager.zip_directory_with_root(source_path, save_name, zip_path)
+		"dolphin":
+			if game.platform_slug == "wii":
+				return _zip_dolphin_wii_save(source_path, zip_path)
+			return _zip_dolphin_gc_saves(source_path, game.get_active_title_id(), zip_path)
+		"pcsx2":
+			return FileSystemManager.zip_directory(source_path, zip_path)
+		_:
+			return FileSystemManager.zip_directory(source_path, zip_path)
+
 func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) -> bool:
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
 	var copy_success = false
@@ -465,35 +580,12 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			if callback.is_valid():
 				callback.call(false, "No Title ID available for this game. Launch it once to extract the Title ID.")
 			return
-		if emulator_id == "cemu":
-			if game.get_active_title_id().length() != 16:
-				if callback.is_valid():
-					callback.call(false, "Invalid Title ID for Cemu game.")
-				return
-			local_saves = discover_local_cemu_save(save_dir, game.get_active_title_id())
-		elif emulator_id == "dolphin":
-			if game.platform_slug == "wii":
-				local_saves = discover_local_dolphin_wii_save(save_dir, game.get_active_title_id())
-			else:
-				local_saves = discover_local_dolphin_gc_save(save_dir, game.get_active_title_id())
-		elif emulator_id == "eden":
-			if game.get_active_title_id().length() != 16:
-				if callback.is_valid():
-					callback.call(false, "Invalid Title ID for Eden game.")
-				return
-			local_saves = discover_local_eden_save(save_dir, game.get_active_title_id())
-		elif emulator_id == "pcsx2":
-			if game.get_active_title_id() == "":
-				if callback.is_valid():
-					callback.call(false, "No serial available for this PS2 game. Launch it once to extract the serial.")
-				return
-			local_saves = discover_local_pcsx2_save(save_dir, game.get_active_title_id())
-		else:
-			if game.get_active_title_id().length() != 16:
-				if callback.is_valid():
-					callback.call(false, "Invalid Title ID for this game.")
-				return
-			local_saves = discover_local_folder_save(save_dir, game.get_active_title_id())
+		var validation_error = _validate_emulator_title_id(emulator_id, game.get_active_title_id())
+		if validation_error != "":
+			if callback.is_valid():
+				callback.call(false, validation_error)
+			return
+		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 	else:
 		var rom_name_no_ext = game.get_active_file_name().get_basename()
 		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
@@ -592,33 +684,11 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		var original_path = upload.local.file_path
 		
 		if is_folder_save:
-			var is_wii = emulator_id == "dolphin" and game.platform_slug == "wii"
-			var save_name = game.get_active_title_id() if emulator_id == "dolphin" else game.get_active_title_id().substr(8, 8)
-			if is_wii:
-				save_name = _game_id_to_hex(game.get_active_title_id())
+			var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 			print("[SaveManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
 			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
-			var zip_success = false
-			if emulator_id == "cemu":
-				print("[SaveManager] Zipping Cemu save with root folder to: " + zip_path)
-				zip_success = FileSystemManager.zip_directory_with_root(original_path, save_name, zip_path)
-			elif emulator_id == "dolphin":
-				if is_wii:
-					print("[SaveManager] Zipping Dolphin Wii save to: " + zip_path)
-					zip_success = _zip_dolphin_wii_save(original_path, zip_path)
-				else:
-					print("[SaveManager] Zipping Dolphin GC saves to: " + zip_path)
-					zip_success = _zip_dolphin_gc_saves(original_path, game.get_active_title_id(), zip_path)
-			elif emulator_id == "pcsx2":
-				print("[SaveManager] Zipping PCSX2 save to: " + zip_path)
-				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
-			elif emulator_id == "eden":
-				print("[SaveManager] Zipping Eden save to: " + zip_path)
-				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
-			else:
-				print("[SaveManager] Zipping folder save to: " + zip_path)
-				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
+			var zip_success = _zip_emulator_save(emulator_id, original_path, zip_path, game)
 			if not zip_success:
 				state.failed += 1
 				push_error("[SaveManager] Failed to zip folder for upload: " + original_path)
@@ -681,35 +751,15 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var save_dir = resolve_save_directory(emulator_id)
 			
 			if not download.local:
-				if emulator_id == "cemu":
-					var short_title_id = game.get_active_title_id().substr(8, 8)
-					record_path = save_dir + "00050000/" + short_title_id
-				elif emulator_id == "dolphin":
-					if game.platform_slug == "wii":
-						record_path = save_dir + "Wii/title/00010000/" + _game_id_to_hex(game.get_active_title_id())
-					else:
-						record_path = save_dir + "GC/USA/Card A"
-				elif emulator_id == "eden":
-					var profile = _find_first_subdir(save_dir)
-					if profile == "":
-						profile = "0000000000000000"
-					record_path = save_dir + profile + "/" + game.get_active_title_id()
-				else:
-					var short_title_id = game.get_active_title_id().substr(8, 8)
-					var id0 = _find_first_subdir(save_dir)
-					if id0 == "":
+				record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
+				if record_path == "":
+					var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
+					if result.error != "":
 						state.failed += 1
-						push_error("[SaveManager] Cannot download folder save: no id0 folder found in " + save_dir)
+						push_error("[SaveManager] Cannot download folder save: no " + result.error + " folder found")
 						check_complete.call()
 						continue
-					var id1 = _find_first_subdir(save_dir + id0 + "/")
-					if id1 == "":
-						state.failed += 1
-						push_error("[SaveManager] Cannot download folder save: no id1 folder found in " + save_dir + id0 + "/")
-						check_complete.call()
-						continue
-					var category = game.get_active_title_id().substr(0, 8)
-					record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+					record_path = result.path
 		else:
 			local_path = record_path
 		
@@ -725,17 +775,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 				
 				if is_folder_save:
-					var extract_dest = record_path.get_base_dir()
-					if emulator_id == "dolphin":
-						if game.platform_slug == "wii":
-							extract_dest = resolve_save_directory(emulator_id)
-						else:
-							extract_dest = record_path
-					elif emulator_id == "eden":
-						extract_dest = record_path
-					elif emulator_id == "pcsx2":
-						# PCSX2 zips contain loose files, extract into subfolder matching zip name
-						extract_dest = resolve_save_directory(emulator_id) + "main.ps2/"
+					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id), record_path, game)
 					var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, file_name.get_basename())
 					if not extract_success:
 						state.failed += 1
@@ -743,11 +783,11 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					if FileAccess.file_exists(zip_path):
 						DirAccess.remove_absolute(zip_path)
 					
-					# Rebuild PCSX2 superblock after extracting saves
-					if emulator_id == "pcsx2":
-						print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
-						var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
-						create_pcsx2_superblock(memcard_path)
+				# Rebuild PCSX2 superblock after extracting saves
+				if emulator_id == "pcsx2":
+					print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
+					var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
+					create_pcsx2_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 				check_complete.call()
@@ -787,19 +827,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if is_folder_save:
 		if game.get_active_title_id() == "":
 			return
-		if emulator_id == "cemu":
-			local_saves = discover_local_cemu_save(save_dir, game.get_active_title_id())
-		elif emulator_id == "dolphin":
-			if game.platform_slug == "wii":
-				local_saves = discover_local_dolphin_wii_save(save_dir, game.get_active_title_id())
-			else:
-				local_saves = discover_local_dolphin_gc_save(save_dir, game.get_active_title_id())
-		elif emulator_id == "eden":
-			local_saves = discover_local_eden_save(save_dir, game.get_active_title_id())
-		elif emulator_id == "pcsx2":
-			local_saves = discover_local_pcsx2_save(save_dir, game.get_active_title_id())
-		else:
-			local_saves = discover_local_folder_save(save_dir, game.get_active_title_id())
+		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 	else:
 		var rom_name_no_ext = game.get_active_file_name().get_basename()
 		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
@@ -822,33 +850,10 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			var local_file_path = local.file_path
 			
 			if is_folder_save:
-				var is_wii = emulator_id == "dolphin" and game.platform_slug == "wii"
-				var save_name = ""
-				if emulator_id == "dolphin":
-					save_name = game.get_active_title_id()
-				elif emulator_id == "pcsx2":
-					# Use actual folder name for PCSX2 saves
-					save_name = local_file_path.get_file()
-				else:
-					save_name = game.get_active_title_id().substr(8, 8)
-				if is_wii:
-					save_name = _game_id_to_hex(game.get_active_title_id())
+				var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
 				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
-				var zip_success = false
-				if emulator_id == "cemu":
-					zip_success = FileSystemManager.zip_directory_with_root(local_file_path, save_name, zip_path)
-				elif emulator_id == "dolphin":
-					if is_wii:
-						zip_success = _zip_dolphin_wii_save(local_file_path, zip_path)
-					else:
-						zip_success = _zip_dolphin_gc_saves(local_file_path, game.get_active_title_id(), zip_path)
-				elif emulator_id == "pcsx2":
-					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
-				elif emulator_id == "eden":
-					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
-				else:
-					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
+				var zip_success = _zip_emulator_save(emulator_id, local_file_path, zip_path, game)
 				if not zip_success:
 					state.failed += 1
 					push_error("[SaveManager] Failed to zip folder for auto-upload: " + local_file_path)
@@ -946,27 +951,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 			if is_folder_save:
 				if game.get_active_title_id() == "":
 					return
-				if emulator_id == "cemu":
-					if game.get_active_title_id().length() != 16:
-						return
-					local_saves = discover_local_cemu_save(save_dir, game.get_active_title_id())
-				elif emulator_id == "dolphin":
-					if game.platform_slug == "wii":
-						local_saves = discover_local_dolphin_wii_save(save_dir, game.get_active_title_id())
-					else:
-						local_saves = discover_local_dolphin_gc_save(save_dir, game.get_active_title_id())
-				elif emulator_id == "eden":
-					if game.get_active_title_id().length() != 16:
-						return
-					local_saves = discover_local_eden_save(save_dir, game.get_active_title_id())
-				elif emulator_id == "pcsx2":
-					if game.get_active_title_id() == "":
-						return
-					local_saves = discover_local_pcsx2_save(save_dir, game.get_active_title_id())
-				else:
-					if game.get_active_title_id().length() != 16:
-						return
-					local_saves = discover_local_folder_save(save_dir, game.get_active_title_id())
+				var validation_error = _validate_emulator_title_id(emulator_id, game.get_active_title_id())
+				if validation_error != "":
+					return
+				local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 			else:
 				var rom_name_no_ext = game.get_active_file_name().get_basename()
 				local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
@@ -1019,35 +1007,15 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 						local_path = zip_path
 						
 						if not _local:
-							if emulator_id == "cemu":
-								var short_title_id = game.get_active_title_id().substr(8, 8)
-								record_path = save_dir + "00050000/" + short_title_id
-							elif emulator_id == "dolphin":
-								if game.platform_slug == "wii":
-									record_path = save_dir + "Wii/title/00010000/" + _game_id_to_hex(game.get_active_title_id())
-								else:
-									record_path = save_dir + "GC/USA/Card A"
-							elif emulator_id == "eden":
-								var profile = _find_first_subdir(save_dir)
-								if profile == "":
-									profile = "0000000000000000"
-								record_path = save_dir + profile + "/" + game.get_active_title_id()
-							else:
-								var short_title_id = game.get_active_title_id().substr(8, 8)
-								var id0 = _find_first_subdir(save_dir)
-								if id0 == "":
+							record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
+							if record_path == "":
+								var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
+								if result.error != "":
 									state.failed += 1
-									push_error("[SaveManager] Cannot auto-download folder save: no id0 folder found")
+									push_error("[SaveManager] Cannot auto-download folder save: no " + result.error + " folder found")
 									state.pending -= 1
 									continue
-									var id1 = _find_first_subdir(save_dir + id0 + "/")
-									if id1 == "":
-										state.failed += 1
-										push_error("[SaveManager] Cannot auto-download folder save: no id1 folder found")
-										state.pending -= 1
-										continue
-									var category = game.get_active_title_id().substr(0, 8)
-									record_path = save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+								record_path = result.path
 					else:
 						local_path = record_path
 					
@@ -1063,17 +1031,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 							
 							if is_folder_save:
-								var extract_dest = record_path.get_base_dir()
-								if emulator_id == "dolphin":
-									if game.platform_slug == "wii":
-										extract_dest = save_dir
-									else:
-										extract_dest = record_path
-								elif emulator_id == "eden":
-									extract_dest = record_path
-								elif emulator_id == "pcsx2":
-									# PCSX2 zips contain loose files, extract into subfolder matching zip name
-									extract_dest = save_dir + "main.ps2/"
+								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game)
 								var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, file_name.get_basename())
 								if not extract_success:
 									state.failed += 1
@@ -1081,11 +1039,13 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								if FileAccess.file_exists(zip_path):
 									DirAccess.remove_absolute(zip_path)
 								
-								# Rebuild PCSX2 superblock after extracting saves
-								if emulator_id == "pcsx2":
-									print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
-									var memcard_path = save_dir + "main.ps2/"
-									create_pcsx2_superblock(memcard_path)
+							# Rebuild PCSX2 superblock after extracting saves
+							if emulator_id == "pcsx2":
+								print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
+								var memcard_path = save_dir + "main.ps2/"
+								create_pcsx2_superblock(memcard_path)
+								# Small delay to let filesystem settle before emulator launch
+								OS.delay_msec(500)
 							
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
