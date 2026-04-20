@@ -1213,20 +1213,20 @@
 	  "step": "create_superblock",
 	  "platforms": {
 		"windows": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "memcards/main.ps2/_pcsx2_superblock",
-			  "content": ""
-			}
-		  ],
+		  "action_type": "create_pcsx2_superblock",
+		  "path": "memcards/main.ps2",
 		  "validate": {
 			"action_type": "files_exist",
 			"files": ["memcards/main.ps2/_pcsx2_superblock"]
 		  }
 		},
 		"linux": {
-		  "action_type": "none"
+		  "action_type": "create_pcsx2_superblock",
+		  "path": "memcards/main.ps2",
+		  "validate": {
+			"action_type": "files_exist",
+			"files": ["memcards/main.ps2/_pcsx2_superblock"]
+		  }
 		},
 		"android": {
 		  "action_type": "none"

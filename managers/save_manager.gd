@@ -358,118 +358,6 @@ func _get_folder_mtime(dir_path: String) -> int:
 					latest = mtime
 	return latest
 
-func _extract_zip_to_directory(zip_path: String, dest_dir: String) -> bool:
-	var reader = ZIPReader.new()
-	var err = reader.open(zip_path)
-	if err != OK:
-		push_error("[SaveManager] Failed to open ZIP for extraction: " + zip_path)
-		return false
-	
-	var files = reader.get_files()
-	var is_saf_dest = FileSystemManager.is_saf_path(dest_dir) and FileSystemManager.is_android()
-	var actual_dest = dest_dir
-	var temp_dest = ""
-	
-	if is_saf_dest:
-		temp_dest = "user://extract_temp/save_sync_" + str(Time.get_ticks_msec()) + "/"
-		actual_dest = ProjectSettings.globalize_path(temp_dest)
-		if not DirAccess.dir_exists_absolute(actual_dest):
-			DirAccess.make_dir_recursive_absolute(actual_dest)
-	
-	for file in files:
-		var file_dest = actual_dest.rstrip("/") + "/" + file
-		if file.ends_with("/"):
-			DirAccess.make_dir_recursive_absolute(file_dest)
-			continue
-		
-		var parent = file_dest.get_base_dir()
-		DirAccess.make_dir_recursive_absolute(parent)
-		
-		var data = reader.read_file(file)
-		var file_obj = FileAccess.open(file_dest, FileAccess.WRITE)
-		if file_obj:
-			file_obj.store_buffer(data)
-			file_obj.close()
-		else:
-			push_error("[SaveManager] Failed to write extracted file: " + file_dest)
-			reader.close()
-			return false
-	
-	reader.close()
-	
-	if is_saf_dest:
-		var success = FileSystemManager.copy_dir_to_saf(temp_dest, dest_dir)
-		_remove_dir_recursive(actual_dest)
-		return success
-	
-	return true
-
-func _remove_dir_recursive(dir_path: String) -> void:
-	var dir = DirAccess.open(dir_path)
-	if dir == null:
-		return
-	dir.list_dir_begin()
-	var item = dir.get_next()
-	while item != "":
-		if item != "." and item != "..":
-			var full = dir_path.rstrip("/") + "/" + item
-			if dir.current_is_dir():
-				_remove_dir_recursive(full)
-			else:
-				DirAccess.remove_absolute(full)
-		item = dir.get_next()
-	dir.list_dir_end()
-	DirAccess.remove_absolute(dir_path)
-
-func _copy_dir_recursive(source: String, dest: String) -> bool:
-	if not DirAccess.dir_exists_absolute(dest):
-		DirAccess.make_dir_recursive_absolute(dest)
-	
-	var dir = DirAccess.open(source)
-	if dir == null:
-		return false
-	
-	dir.list_dir_begin()
-	var item = dir.get_next()
-	var success = true
-	
-	while item != "":
-		if item != "." and item != "..":
-			var src_path = source.rstrip("/") + "/" + item
-			var dst_path = dest.rstrip("/") + "/" + item
-			if dir.current_is_dir():
-				if not _copy_dir_recursive(src_path, dst_path):
-					success = false
-			else:
-				var file = FileAccess.open(src_path, FileAccess.READ)
-				if file:
-					var data = file.get_buffer(file.get_length())
-					file.close()
-					var out = FileAccess.open(dst_path, FileAccess.WRITE)
-					if out:
-						out.store_buffer(data)
-						out.close()
-					else:
-						success = false
-				else:
-					success = false
-		item = dir.get_next()
-	
-	dir.list_dir_end()
-	return success
-
-func _zip_directory_with_root(source_dir: String, root_name: String, dest_zip: String) -> bool:
-	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
-	var stage_root = stage_dir + root_name
-	DirAccess.make_dir_recursive_absolute(stage_root)
-	var copy_success = _copy_dir_recursive(source_dir, stage_root)
-	if not copy_success:
-		_remove_dir_recursive(stage_dir)
-		return false
-	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
-	_remove_dir_recursive(stage_dir)
-	return zip_success
-
 func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) -> bool:
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
 	var copy_success = false
@@ -494,11 +382,11 @@ func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) 
 					copy_success = true
 	
 	if not copy_success:
-		_remove_dir_recursive(stage_dir)
+		FileSystemManager.delete_dir_recursive(stage_dir)
 		return false
 	
 	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
-	_remove_dir_recursive(stage_dir)
+	FileSystemManager.delete_dir_recursive(stage_dir)
 	return zip_success
 
 func _zip_dolphin_wii_save(source_dir: String, dest_zip: String) -> bool:
@@ -510,12 +398,12 @@ func _zip_dolphin_wii_save(source_dir: String, dest_zip: String) -> bool:
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
 	var stage_root = stage_dir + "Wii/title/" + prefix + "/" + hex_id
 	DirAccess.make_dir_recursive_absolute(stage_root)
-	var copy_success = _copy_dir_recursive(source_dir, stage_root)
+	var copy_success = FileSystemManager.copy_dir(source_dir, stage_root)
 	if not copy_success:
-		_remove_dir_recursive(stage_dir)
+		FileSystemManager.delete_dir_recursive(stage_dir)
 		return false
 	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
-	_remove_dir_recursive(stage_dir)
+	FileSystemManager.delete_dir_recursive(stage_dir)
 	return zip_success
 
 func _sanitize_filename(name: String) -> String:
@@ -714,7 +602,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var zip_success = false
 			if emulator_id == "cemu":
 				print("[SaveManager] Zipping Cemu save with root folder to: " + zip_path)
-				zip_success = _zip_directory_with_root(original_path, save_name, zip_path)
+				zip_success = FileSystemManager.zip_directory_with_root(original_path, save_name, zip_path)
 			elif emulator_id == "dolphin":
 				if is_wii:
 					print("[SaveManager] Zipping Dolphin Wii save to: " + zip_path)
@@ -722,6 +610,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				else:
 					print("[SaveManager] Zipping Dolphin GC saves to: " + zip_path)
 					zip_success = _zip_dolphin_gc_saves(original_path, game.get_active_title_id(), zip_path)
+			elif emulator_id == "pcsx2":
+				print("[SaveManager] Zipping PCSX2 save to: " + zip_path)
+				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
 			elif emulator_id == "eden":
 				print("[SaveManager] Zipping Eden save to: " + zip_path)
 				zip_success = FileSystemManager.zip_directory(original_path, zip_path)
@@ -843,10 +734,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					elif emulator_id == "eden":
 						extract_dest = record_path
 					elif emulator_id == "pcsx2":
-						# PCSX2 folder saves extract INTO the folder memory card (main.ps2) in a subfolder named after the zip
-						var folder_name = file_name.get_basename()
-						extract_dest = resolve_save_directory(emulator_id) + "main.ps2/" + folder_name + "/"
-					var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
+						# PCSX2 zips contain loose files, extract into subfolder matching zip name
+						extract_dest = resolve_save_directory(emulator_id) + "main.ps2/"
+					var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, file_name.get_basename())
 					if not extract_success:
 						state.failed += 1
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
@@ -857,7 +747,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					if emulator_id == "pcsx2":
 						print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
 						var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
-						PS2MCRebuilder.rebuild_superblock(memcard_path)
+						create_pcsx2_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 				check_complete.call()
@@ -947,16 +837,14 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
 				var zip_success = false
 				if emulator_id == "cemu":
-					zip_success = _zip_directory_with_root(local_file_path, save_name, zip_path)
+					zip_success = FileSystemManager.zip_directory_with_root(local_file_path, save_name, zip_path)
 				elif emulator_id == "dolphin":
 					if is_wii:
 						zip_success = _zip_dolphin_wii_save(local_file_path, zip_path)
 					else:
 						zip_success = _zip_dolphin_gc_saves(local_file_path, game.get_active_title_id(), zip_path)
 				elif emulator_id == "pcsx2":
-					# PCSX2 saves must preserve the folder name (e.g. BASLUS-20152AC04)
-					var folder_name = local_file_path.get_file()
-					zip_success = _zip_directory_with_root(local_file_path, folder_name, zip_path)
+					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				elif emulator_id == "eden":
 					zip_success = FileSystemManager.zip_directory(local_file_path, zip_path)
 				else:
@@ -1184,10 +1072,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								elif emulator_id == "eden":
 									extract_dest = record_path
 								elif emulator_id == "pcsx2":
-									# PCSX2 folder saves extract INTO the folder memory card (main.ps2) in a subfolder named after the zip
-									var folder_name = file_name.get_basename()
-									extract_dest = save_dir + "main.ps2/" + folder_name + "/"
-								var extract_success = _extract_zip_to_directory(zip_path, extract_dest)
+									# PCSX2 zips contain loose files, extract into subfolder matching zip name
+									extract_dest = save_dir + "main.ps2/"
+								var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, file_name.get_basename())
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
@@ -1198,7 +1085,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								if emulator_id == "pcsx2":
 									print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
 									var memcard_path = save_dir + "main.ps2/"
-									PS2MCRebuilder.rebuild_superblock(memcard_path)
+									create_pcsx2_superblock(memcard_path)
 							
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
@@ -1208,6 +1095,72 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 					)
 		)
 	)
+
+## Creates a valid PS2 memory card superblock header for PCSX2 folder memory cards.
+## PCSX2 handles directory scanning itself; we only need to provide the card metadata header.
+func create_pcsx2_superblock(memcard_path: String) -> bool:
+	var superblock_path = memcard_path.rstrip("/") + "/_pcsx2_superblock"
+	print("[SaveManager] Creating PCSX2 superblock at: " + superblock_path)
+	
+	var sb = PackedByteArray()
+	sb.resize(8192)
+	sb.fill(0)
+	
+	# Magic string: "Sony PS2 Memory Card Format " (28 bytes)
+	var magic = "Sony PS2 Memory Card Format "
+	for i in range(magic.length()):
+		sb[i] = magic.unicode_at(i)
+	
+	# Version: "1.2.0.0" (12 bytes)
+	var version = "1.2.0.0"
+	for i in range(version.length()):
+		sb[0x1C + i] = version.unicode_at(i)
+	
+	# Page size: 512
+	sb.encode_u16(0x28, 512)
+	# Pages per cluster: 2
+	sb.encode_u16(0x2A, 2)
+	# Pages per erase block: 16
+	sb.encode_u16(0x2C, 16)
+	# Unused: 0xFF00
+	sb.encode_u16(0x2E, 0xFF00)
+	# Clusters per card: 8192 (8MB)
+	sb.encode_u32(0x30, 8192)
+	# Allocatable cluster offset: 41
+	sb.encode_u32(0x34, 41)
+	# Allocatable cluster end: 8135
+	sb.encode_u32(0x38, 8135)
+	# Rootdir cluster: 0
+	sb.encode_u32(0x3C, 0)
+	# Good block 1: 1023
+	sb.encode_u32(0x40, 1023)
+	# Good block 2: 1022
+	sb.encode_u32(0x44, 1022)
+	# Indirect FAT cluster list: cluster 8 at offset 0x50
+	sb.encode_u32(0x50, 8)
+	for i in range(1, 32):
+		sb.encode_u32(0x50 + (i * 4), 0xFFFFFFFF)
+	# Bad erase block list: all 0xFFFFFFFF
+	for i in range(32):
+		sb.encode_u32(0xD0 + (i * 4), 0xFFFFFFFF)
+	# Card type: 2
+	sb[0x150] = 2
+	# Card flags: 0x2B
+	sb[0x151] = 0x2B
+	
+	# Fill remaining bytes with 0xFF
+	for i in range(512, 8192):
+		sb[i] = 0xFF
+	
+	var file = FileAccess.open(superblock_path, FileAccess.WRITE)
+	if not file:
+		push_error("[SaveManager] Failed to write PCSX2 superblock: " + superblock_path)
+		return false
+	
+	file.store_buffer(sb)
+	file.close()
+	print("[SaveManager] PCSX2 superblock created successfully")
+	return true
 
 ## Returns a human-readable sync status for the UI
 func get_save_sync_status_text(game: GameResource, emulator_id: String) -> String:

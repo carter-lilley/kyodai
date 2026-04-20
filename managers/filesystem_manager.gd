@@ -821,6 +821,120 @@ static func zip_directory(source_dir: String, dest_zip: String) -> bool:
 	
 	return true
 
+## Extracts a ZIP archive to a directory
+## Works with both regular paths and SAF URIs
+## Returns true on success
+static func extract_zip(zip_path: String, dest_dir: String) -> bool:
+	var reader = ZIPReader.new()
+	var err = reader.open(zip_path)
+	if err != OK:
+		push_error("[FileSystemManager] Failed to open ZIP for extraction: " + zip_path)
+		return false
+	
+	var files = reader.get_files()
+	var is_saf_dest = is_saf_path(dest_dir) and is_android()
+	var actual_dest = dest_dir
+	var temp_dest = ""
+	
+	if is_saf_dest:
+		temp_dest = "user://extract_temp/fs_" + str(Time.get_ticks_msec()) + "/"
+		actual_dest = ProjectSettings.globalize_path(temp_dest)
+		if not DirAccess.dir_exists_absolute(actual_dest):
+			DirAccess.make_dir_recursive_absolute(actual_dest)
+	
+	for file in files:
+		var file_dest = actual_dest.rstrip("/") + "/" + file
+		if file.ends_with("/"):
+			DirAccess.make_dir_recursive_absolute(file_dest)
+			continue
+		
+		var parent = file_dest.get_base_dir()
+		DirAccess.make_dir_recursive_absolute(parent)
+		
+		var data = reader.read_file(file)
+		var file_obj = FileAccess.open(file_dest, FileAccess.WRITE)
+		if file_obj:
+			file_obj.store_buffer(data)
+			file_obj.close()
+		else:
+			push_error("[FileSystemManager] Failed to write extracted file: " + file_dest)
+			reader.close()
+			return false
+	
+	reader.close()
+	
+	if is_saf_dest:
+		var success = copy_dir_to_saf(temp_dest, dest_dir)
+		delete_dir_recursive(temp_dest)
+		return success
+	
+	return true
+
+## Extracts a ZIP archive to a directory, optionally placing contents inside a named subfolder
+## If subfolder_name is provided, creates dest_dir/subfolder_name/ and extracts there
+## Otherwise extracts directly into dest_dir
+## Works with both regular paths and SAF URIs
+## Returns true on success
+static func extract_zip_to_dir(zip_path: String, dest_dir: String, subfolder_name: String = "") -> bool:
+	var actual_dest = dest_dir.rstrip("/") + "/"
+	if subfolder_name != "":
+		actual_dest += subfolder_name + "/"
+	return extract_zip(zip_path, actual_dest)
+
+## Recursively copies a local directory to another local directory
+## Returns true on success
+static func copy_dir(source: String, dest: String) -> bool:
+	if not DirAccess.dir_exists_absolute(dest):
+		DirAccess.make_dir_recursive_absolute(dest)
+	
+	var dir = DirAccess.open(source)
+	if dir == null:
+		return false
+	
+	dir.list_dir_begin()
+	var item = dir.get_next()
+	var success = true
+	
+	while item != "":
+		if item != "." and item != "..":
+			var src_path = source.rstrip("/") + "/" + item
+			var dst_path = dest.rstrip("/") + "/" + item
+			if dir.current_is_dir():
+				if not copy_dir(src_path, dst_path):
+					success = false
+			else:
+				var file = FileAccess.open(src_path, FileAccess.READ)
+				if file:
+					var data = file.get_buffer(file.get_length())
+					file.close()
+					var out = FileAccess.open(dst_path, FileAccess.WRITE)
+					if out:
+						out.store_buffer(data)
+						out.close()
+					else:
+						success = false
+				else:
+					success = false
+		item = dir.get_next()
+	
+	dir.list_dir_end()
+	return success
+
+## Creates a ZIP archive from a directory with a root folder inside
+## e.g., zipping /path/to/data with root_name "save" creates save/... inside the zip
+## Returns true on success
+static func zip_directory_with_root(source_dir: String, root_name: String, dest_zip: String) -> bool:
+	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+	var stage_root = stage_dir + root_name
+	DirAccess.make_dir_recursive_absolute(stage_root)
+	var copy_success = copy_dir(source_dir, stage_root)
+	if not copy_success:
+		delete_dir_recursive(stage_dir)
+		return false
+	var zip_success = zip_directory(stage_dir, dest_zip)
+	delete_dir_recursive(stage_dir)
+	return zip_success
+
 static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_prefix: String) -> bool:
 	var dir = DirAccess.open(dir_path)
 	if dir == null:

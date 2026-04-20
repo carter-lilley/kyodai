@@ -1621,6 +1621,8 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 			return _handle_create_folders_step(emulator_id, step_name, step_index, platform_config)
 		"create_files":
 			return _handle_create_files_step(emulator_id, step_name, step_index, platform_config)
+		"create_pcsx2_superblock":
+			return _handle_create_pcsx2_superblock_step(emulator_id, step_name, step_index, platform_config)
 		"edit_file":
 			return _handle_edit_file_step(emulator_id, step_name, step_index, platform_config)
 		"none":
@@ -2335,6 +2337,23 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 				file.close()
 		else:
 			pass
+	
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Helper function for creating PCSX2 folder memory card superblock
+func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var path = platform_config.get("path", "")
+	if path == "":
+		push_error("[LaunchManager] No path specified for create_pcsx2_superblock step: " + step_name)
+		return false
+	
+	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
+	var memcard_path = emulator_dir + "/" + path
+	
+	var success = SaveManager.create_pcsx2_superblock(memcard_path)
+	if not success:
+		push_error("[LaunchManager] Failed to create PCSX2 superblock at: " + memcard_path)
+		return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
