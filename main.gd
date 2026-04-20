@@ -479,11 +479,7 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	_last_focused_index = focus_index
 	print("[Main] Saved _last_focused_index: ", _last_focused_index)
 	
-	# Auto-download saves before launch
-	if _game:
-		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
-		if emulator_id != "":
-			SaveManager.auto_download_saves_for_game(_game, emulator_id)
+	# Note: Pre-launch save sync is now handled inside LaunchManager.launch_game()
 
 func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
 	"""Handle entering background state - input is now blocked in _input."""

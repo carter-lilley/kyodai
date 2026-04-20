@@ -783,11 +783,11 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					if FileAccess.file_exists(zip_path):
 						DirAccess.remove_absolute(zip_path)
 					
-				# Rebuild PCSX2 superblock after extracting saves
+							# Ensure PCSX2 superblock is valid after extracting saves
 				if emulator_id == "pcsx2":
-					print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
+					print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
 					var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
-					create_pcsx2_superblock(memcard_path)
+					ensure_pcsx2_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 				check_complete.call()
@@ -915,17 +915,26 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	)
 
 ## Auto-download saves before launch (pre-launch hook)
-func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> void:
+## If on_complete callback is provided, it will be called when sync finishes
+func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_complete: Callable = Callable()) -> void:
 	if not _is_sync_enabled():
+		if on_complete.is_valid():
+			on_complete.call()
 		return
 	if not SettingsManager.get_setting("save_sync_auto").value:
+		if on_complete.is_valid():
+			on_complete.call()
 		return
 	if not NetworkManager.is_romm_connected():
+		if on_complete.is_valid():
+			on_complete.call()
 		return
 	
 	var save_dir = resolve_save_directory(emulator_id)
 	var extensions = get_save_extensions(emulator_id)
 	if save_dir == "" or extensions.is_empty():
+		if on_complete.is_valid():
+			on_complete.call()
 		return
 	
 	var is_folder_save = uses_folder_saves(emulator_id)
@@ -933,6 +942,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
 			push_error("[SaveManager] Auto-download aborted: " + error)
+			if on_complete.is_valid():
+				on_complete.call()
 			return
 		
 		var device_id = DataManager.get_romm_device_id()
@@ -940,6 +951,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 		NetworkManager.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, error: String):
 			if error != "":
 				push_warning("[SaveManager] Pre-launch fetch failed: " + error)
+				if on_complete.is_valid():
+					on_complete.call()
 				return
 			
 			var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
@@ -965,6 +978,11 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 			
 			var current_timestamp = Time.get_datetime_string_from_system(true, true)
 			var state = {"pending": 0, "failed": 0}
+			
+			var check_complete = func():
+				if state.pending <= 0:
+					if on_complete.is_valid():
+						on_complete.call()
 			
 			for remote in remote_saves:
 				var slot = remote.get("slot", "")
@@ -1014,6 +1032,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 									state.failed += 1
 									push_error("[SaveManager] Cannot auto-download folder save: no " + result.error + " folder found")
 									state.pending -= 1
+									check_complete.call()
 									continue
 								record_path = result.path
 					else:
@@ -1024,6 +1043,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 							state.failed += 1
 							push_error("[SaveManager] Pre-launch download failed: " + error_msg)
 							state.pending -= 1
+							check_complete.call()
 							return
 						
 						NetworkManager.confirm_save_downloaded(save_id, device_id, func(_data, confirm_error):
@@ -1039,24 +1059,45 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String) -> vo
 								if FileAccess.file_exists(zip_path):
 									DirAccess.remove_absolute(zip_path)
 								
-							# Rebuild PCSX2 superblock after extracting saves
+				# Ensure PCSX2 superblock is valid after extracting saves
 							if emulator_id == "pcsx2":
-								print("[SaveManager] Rebuilding PCSX2 superblock after save sync...")
+								print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
 								var memcard_path = save_dir + "main.ps2/"
-								create_pcsx2_superblock(memcard_path)
-								# Small delay to let filesystem settle before emulator launch
-								OS.delay_msec(500)
-							
+								ensure_pcsx2_superblock(memcard_path)
+							# Small delay to let filesystem settle before emulator launch
+							OS.delay_msec(100)
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
 							if state.pending <= 0 and state.failed == 0:
 								NotificationManager.show_notification("Saves downloaded from RomM", Notification.Type.INFO)
+							check_complete.call()
 						)
 					)
+			# If no downloads were queued, call completion immediately
+			if state.pending == 0:
+				check_complete.call()
 		)
 	)
 
+## Validates that a PCSX2 superblock exists and has a valid header.
+## Returns true if valid, false if missing or invalid.
+func validate_pcsx2_superblock(memcard_path: String) -> bool:
+	var superblock_path = memcard_path.rstrip("/") + "/_pcsx2_superblock"
+	if not FileAccess.file_exists(superblock_path):
+		return false
+	var existing = FileAccess.open(superblock_path, FileAccess.READ)
+	if not existing:
+		return false
+	var header = existing.get_buffer(28)
+	existing.close()
+	var magic = "Sony PS2 Memory Card Format "
+	for i in range(min(header.size(), magic.length())):
+		if header[i] != magic.unicode_at(i):
+			return false
+	return true
+
 ## Creates a valid PS2 memory card superblock header for PCSX2 folder memory cards.
+## Always writes a fresh superblock regardless of existing state.
 ## PCSX2 handles directory scanning itself; we only need to provide the card metadata header.
 func create_pcsx2_superblock(memcard_path: String) -> bool:
 	var superblock_path = memcard_path.rstrip("/") + "/_pcsx2_superblock"
@@ -1121,6 +1162,13 @@ func create_pcsx2_superblock(memcard_path: String) -> bool:
 	file.close()
 	print("[SaveManager] PCSX2 superblock created successfully")
 	return true
+
+## Validates the PCSX2 superblock and creates it only if invalid or missing.
+## Returns true if valid (or successfully created), false on error.
+func ensure_pcsx2_superblock(memcard_path: String) -> bool:
+	if validate_pcsx2_superblock(memcard_path):
+		return true
+	return create_pcsx2_superblock(memcard_path)
 
 ## Returns a human-readable sync status for the UI
 func get_save_sync_status_text(game: GameResource, emulator_id: String) -> String:

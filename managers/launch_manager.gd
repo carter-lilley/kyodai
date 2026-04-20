@@ -1271,8 +1271,16 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 		_queue_game_download_then_launch(game)
 		return
 	
-	# Game is downloaded, proceed with launch
-	_launch_with_emulator_check(game)
+	# Game is downloaded, sync saves first then proceed with launch
+	var emulator_id = resolve_emulator_for_game(game)
+	if emulator_id != "":
+		print("[LaunchManager] Starting pre-launch save sync...")
+		SaveManager.auto_download_saves_for_game(game, emulator_id, func():
+			print("[LaunchManager] Pre-launch save sync complete, proceeding with launch")
+			_launch_with_emulator_check(game)
+		)
+	else:
+		_launch_with_emulator_check(game)
 
 ## Launch a GameNative game via intent
 func _launch_gamenative_game(game: GameResource) -> void:
@@ -1308,10 +1316,16 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 	var on_download_complete = func(success: bool, _path: String):
 		if success:
 			var updated_game = DataManager.get_game_by_id(game.romm_id)
-			if updated_game:
-				_launch_with_emulator_check(updated_game)
+			var game_to_launch = updated_game if updated_game else game
+			var emulator_id = resolve_emulator_for_game(game_to_launch)
+			if emulator_id != "":
+				print("[LaunchManager] Starting pre-launch save sync after game download...")
+				SaveManager.auto_download_saves_for_game(game_to_launch, emulator_id, func():
+					print("[LaunchManager] Pre-launch save sync complete, proceeding with launch")
+					_launch_with_emulator_check(game_to_launch)
+				)
 			else:
-				_launch_with_emulator_check(game)
+				_launch_with_emulator_check(game_to_launch)
 		else:
 			NotificationManager.show_notification("Download failed for " + game.get_display_name(), Notification.Type.ERROR)
 	
@@ -2346,7 +2360,7 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 	if path == "":
 		push_error("[LaunchManager] No path specified for create_pcsx2_superblock step: " + step_name)
 		return false
-	
+
 	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
 	var memcard_path = emulator_dir + "/" + path
 	
