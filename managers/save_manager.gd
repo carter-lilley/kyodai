@@ -5,6 +5,45 @@ extends Manager
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
 const SLOT_DEFAULT := ""
+const MAX_FILE_SIZE := 100 * 1024 * 1024
+
+func _ready() -> void:
+	# Clean up orphaned temp directories on startup
+	_cleanup_all_temp_dirs()
+
+## Cleans up all temp directories under user://temp_saves/
+func _cleanup_all_temp_dirs() -> void:
+	var temp_base = "user://temp_saves"
+	if not FileSystemManager.dir_exists(temp_base):
+		return
+	var items = FileSystemManager.list_dir(temp_base + "/")
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		var full_path = temp_base + "/" + item
+		if FileSystemManager.dir_exists(full_path):
+			print("[SaveManager] Cleaning up temp directory: " + full_path)
+			FileSystemManager.delete_dir_recursive(full_path)
+
+## Cleans up empty parent directories after removing a temp file
+func _cleanup_temp_dir(file_path: String) -> void:
+	var parent = file_path.get_base_dir()
+	while parent != "" and parent != "user://" and parent != "res://":
+		if FileSystemManager.dir_exists(parent):
+			var items = FileSystemManager.list_dir(parent + "/")
+			var has_files = false
+			for item in items:
+				if item != "." and item != "..":
+					has_files = true
+					break
+			if not has_files:
+				print("[SaveManager] Removing empty temp directory: " + parent)
+				DirAccess.remove_absolute(parent)
+				parent = parent.get_base_dir()
+			else:
+				break
+		else:
+			break
 
 ## Returns the configured global save folder override, or empty string if not set
 func _get_global_save_override() -> String:
@@ -533,7 +572,6 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			# For individual uploads, zip the specific folder with its name as root
 			# This ensures extraction creates the correct subfolder (e.g., NPJH50333DAT/)
 			# Skip files over 100MB (DLC/install data) to avoid Cloudflare 413 errors
-			const MAX_FILE_SIZE := 100 * 1024 * 1024
 			var folder_name = source_path.get_file()
 			return FileSystemManager.zip_directory_with_root(source_path, folder_name, zip_path, MAX_FILE_SIZE)
 		_:
@@ -820,6 +858,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				func(data: Dictionary, error: String):
 					if FileAccess.file_exists(zip_path):
 						DirAccess.remove_absolute(zip_path)
+					# Clean up empty parent directories
+					_cleanup_temp_dir(zip_path)
 					if error != "":
 						state.failed += 1
 						push_error("[SaveManager] Upload failed for " + original_path + ": " + error)
@@ -898,8 +938,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
 					if FileAccess.file_exists(zip_path):
 						DirAccess.remove_absolute(zip_path)
+					# Clean up empty parent directories
+					_cleanup_temp_dir(zip_path)
 					
-							# Ensure PCSX2 superblock is valid after extracting saves
+						# Ensure PCSX2 superblock is valid after extracting saves
 				if emulator_id == "pcsx2":
 					print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
 					var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
@@ -993,6 +1035,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 					func(data: Dictionary, error: String):
 						if FileAccess.file_exists(zip_path):
 							DirAccess.remove_absolute(zip_path)
+						# Clean up empty parent directories
+						_cleanup_temp_dir(zip_path)
 						if error != "":
 							state.failed += 1
 							push_error("[SaveManager] Auto-upload failed: " + error)
@@ -1177,7 +1221,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
 								if FileAccess.file_exists(zip_path):
 									DirAccess.remove_absolute(zip_path)
-								
+								# Clean up empty parent directories
+								_cleanup_temp_dir(zip_path)
+							
 				# Ensure PCSX2 superblock is valid after extracting saves
 							if emulator_id == "pcsx2":
 								print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
