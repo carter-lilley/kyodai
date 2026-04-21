@@ -77,37 +77,6 @@ jobs:
         name: chd_reader-linux-x64
         path: bin/libchdr/linux/chd_reader
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    
-    - name: Build Intel
-      working-directory: bin/src/libchdr
-      run: |
-        cmake -B build-x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
-        cmake --build build-x64 --parallel
-    
-    - name: Build ARM64
-      working-directory: bin/src/libchdr
-      run: |
-        cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
-        cmake --build build-arm64 --parallel
-    
-    - name: Create Universal Binary
-      run: |
-        mkdir -p bin/libchdr/macos
-        lipo -create bin/src/libchdr/build-x64/chd_reader bin/src/libchdr/build-arm64/chd_reader -output bin/libchdr/macos/chd_reader
-        chmod +x bin/libchdr/macos/chd_reader
-    
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: chd_reader-macos-universal
-        path: bin/libchdr/macos/chd_reader
-
   build-android:
     runs-on: ubuntu-latest
     steps:
@@ -156,7 +125,7 @@ jobs:
         path: bin/libchdr/android/*
 
   release:
-    needs: [build-windows, build-linux, build-macos, build-android]
+    needs: [build-windows, build-linux, build-android]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
@@ -170,7 +139,6 @@ jobs:
         mkdir release
         cp artifacts/chd_reader-windows-x64/chd_reader.exe release/chd_reader-windows-x64.exe
         cp artifacts/chd_reader-linux-x64/chd_reader release/chd_reader-linux-x64
-        cp artifacts/chd_reader-macos-universal/chd_reader release/chd_reader-macos-universal
         cp artifacts/chd_reader-android/chd_reader-arm64 release/chd_reader-android-arm64
         cp artifacts/chd_reader-android/chd_reader-armv7 release/chd_reader-android-armv7
         chmod +x release/*

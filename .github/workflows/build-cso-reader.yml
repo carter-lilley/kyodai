@@ -82,35 +82,6 @@ jobs:
         name: cso_reader-linux-x64
         path: bin/cso_reader/linux/cso_reader
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Build Intel
-      working-directory: bin/src/cso_reader
-      run: |
-        cmake -B build-x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
-        cmake --build build-x64 --parallel
-    
-    - name: Build ARM64
-      working-directory: bin/src/cso_reader
-      run: |
-        cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
-        cmake --build build-arm64 --parallel
-    
-    - name: Create Universal Binary
-      run: |
-        mkdir -p bin/cso_reader/macos
-        lipo -create bin/src/cso_reader/build-x64/cso_reader bin/src/cso_reader/build-arm64/cso_reader -output bin/cso_reader/macos/cso_reader
-        chmod +x bin/cso_reader/macos/cso_reader
-    
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: cso_reader-macos-universal
-        path: bin/cso_reader/macos/cso_reader
-
   build-android:
     runs-on: ubuntu-latest
     steps:
@@ -157,7 +128,7 @@ jobs:
         path: bin/cso_reader/android/*
 
   commit-binaries:
-    needs: [build-windows, build-linux, build-macos, build-android]
+    needs: [build-windows, build-linux, build-android]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
@@ -172,18 +143,15 @@ jobs:
       run: |
         mkdir -p bin/cso_reader/win
         mkdir -p bin/cso_reader/linux
-        mkdir -p bin/cso_reader/macos
         mkdir -p bin/cso_reader/android
         
         cp artifacts/cso_reader-windows/cso_reader.exe bin/cso_reader/win/ || true
         cp artifacts/cso_reader-windows/cso_reader-arm64.exe bin/cso_reader/win/ || true
         cp artifacts/cso_reader-linux-x64/cso_reader bin/cso_reader/linux/ || true
-        cp artifacts/cso_reader-macos-universal/cso_reader bin/cso_reader/macos/ || true
         cp artifacts/cso_reader-android/cso_reader-arm64 bin/cso_reader/android/ || true
         cp artifacts/cso_reader-android/cso_reader-armv7 bin/cso_reader/android/ || true
         
         chmod +x bin/cso_reader/linux/cso_reader || true
-        chmod +x bin/cso_reader/macos/cso_reader || true
         chmod +x bin/cso_reader/android/* || true
     
     - name: Commit and push
