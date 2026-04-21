@@ -65,7 +65,7 @@ const MAX_CHUNK_RETRIES: int = 3
 const CHUNK_RETRY_DELAY_SEC: float = 1.5  # 1.5 seconds between retries
 
 # Polling interval for HTTPClient (2 seconds between polls when no data)
-const POLLING_INTERVAL_MS: int = 2000
+const POLLING_INTERVAL_MS: int = 100
 const POLLING_INTERVAL_US: int = 2000000
 
 ## Calculates optimal chunk size and count using over-subscription strategy
@@ -585,9 +585,22 @@ func _is_connection_valid(http: HTTPClient) -> bool:
 
 func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 	"""Check if server supports Range requests, then start chunked or regular download"""
-	NetworkManager.check_range_support(item.url, headers, func(supports_range: bool, error_msg: String):
+	NetworkManager.check_range_support(item.url, headers, func(supports_range: bool, error_msg: String, content_length: int = 0):
 		if supports_range:
 			print("[DownloadManager] Server supports Range, starting chunked download for: " + item.name)
+			
+			# Validate and update expected file size from server's Content-Length
+			if content_length > 0:
+				if item.expected_file_size != content_length:
+					print("[DownloadManager] File size mismatch for " + item.name + ": expected " + str(item.expected_file_size) + " bytes, server reports " + str(content_length) + " bytes")
+					print("[DownloadManager] Using server-reported size: " + str(content_length) + " bytes")
+					item.expected_file_size = content_length
+					# Also update the game resource if available
+					if item.game_resource:
+						item.game_resource.file_size = content_length
+				else:
+					print("[DownloadManager] Warning: Server did not provide Content-Length for " + item.name + ", using expected size: " + str(item.expected_file_size))
+			
 			_start_chunked_download(item, headers)
 		else:
 			print("[DownloadManager] Server doesn't support Range, falling back to regular download for: " + item.name)
@@ -889,6 +902,41 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		push_error("[DownloadManager] Chunk " + str(chunk_index) + " HTTP error " + str(response_code) + ": " + error_body)
 		return false
 	
+	# Validate Content-Range header for 206 responses
+	if response_code == 206:
+		var content_range_valid = false
+		var content_range_header = ""
+		for header in response_headers:
+			if header.to_lower().begins_with("content-range:"):
+				content_range_header = header.split(":", false, 1)[1].strip_edges()
+				break
+		
+		if content_range_header != "":
+			# Parse "bytes start-end/total" format using RegEx
+			var regex = RegEx.new()
+			var regex_compile = regex.compile("bytes (\\d+)-(\\d+)/(\\d+)")
+			if regex_compile == OK:
+				var range_match = regex.search(content_range_header)
+				if range_match:
+					var range_start = int(range_match.get_string(1))
+					var range_end = int(range_match.get_string(2))
+					var range_total = int(range_match.get_string(3))
+					
+					if range_start == start_byte and range_end == end_byte:
+						content_range_valid = true
+						print("[DownloadManager] Chunk " + str(chunk_index) + " Content-Range validated: " + content_range_header)
+					else:
+						push_error("[DownloadManager] Chunk " + str(chunk_index) + " Content-Range mismatch. Expected: bytes=" + str(start_byte) + "-" + str(end_byte) + ", Got: " + content_range_header)
+				else:
+					push_error("[DownloadManager] Chunk " + str(chunk_index) + " Invalid Content-Range format: " + content_range_header)
+			else:
+				push_error("[DownloadManager] Chunk " + str(chunk_index) + " Failed to compile Content-Range regex")
+		else:
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " Missing Content-Range header for 206 response")
+		
+		if not content_range_valid:
+			return false
+	
 	# Open file for writing
 	var file = FileAccess.open(temp_path, FileAccess.WRITE)
 	if not file:
@@ -905,7 +953,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		var current_time = Time.get_ticks_msec()
 		
-		# Only poll every POLLING_INTERVAL_MS (2 seconds) to reduce CPU usage
+		# Poll every POLLING_INTERVAL_MS to balance responsiveness with CPU usage
 		if current_time - last_poll_time >= POLLING_INTERVAL_MS:
 			http.poll()
 			body_poll_count += 1
@@ -1537,7 +1585,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 				var read_size = mini(BUFFER_SIZE, bytes_remaining)
 				var buffer = chunk_file.get_buffer(read_size)
 				final_file.store_buffer(buffer)
-				bytes_remaining -= read_size
+				bytes_remaining -= buffer.size()
 			
 			chunk_file.close()
 			print("[DownloadManager] [Reassembly] Finished chunk " + str(chunk_data.index + 1) + " (" + str(chunk_size) + " bytes)")
@@ -1597,6 +1645,29 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, use_saf: bool,
 			size_file.close()
 	
 	print("[DownloadManager] [Reassembly] Finishing reassembly success for: " + item.name + " path=" + reassembly_temp_path + " size=" + str(final_size) + " bytes")
+	
+	# Validate final size against expected size
+	if item.expected_file_size > 0 and final_size != item.expected_file_size:
+		push_error("[DownloadManager] [Reassembly] Final size mismatch for: " + item.name + ". Expected: " + str(item.expected_file_size) + " bytes, Got: " + str(final_size) + " bytes")
+		item.status = "failed"
+		item.error_message = "Download corrupted: size mismatch (expected " + str(item.expected_file_size) + ", got " + str(final_size) + ")"
+		_cleanup_chunked_download(item_id)
+		_cleanup_item(item)
+		_active_items.erase(item_id)
+		
+		# Clean up the corrupted file
+		if FileAccess.file_exists(reassembly_temp_path):
+			DirAccess.remove_absolute(reassembly_temp_path)
+		
+		if item.notification_id != -1:
+			NotificationManager.dismiss_notification(item.notification_id)
+			item.notification_id = -1
+		
+		download_completed.emit(item_id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
 	_cleanup_chunked_download(item_id)
 	
 	# For SAF downloads, we need to copy the assembled file to SAF location

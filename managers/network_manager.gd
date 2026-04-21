@@ -495,7 +495,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 	
 	if error != OK:
 		if callback.is_valid():
-			callback.call(false, "Failed to start HEAD request: " + str(error))
+			callback.call(false, "Failed to start HEAD request: " + str(error), 0)
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
@@ -505,21 +505,25 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
-				callback.call(false, "HEAD request failed: " + str(result))
+				callback.call(false, "HEAD request failed: " + str(result), 0)
 			_cleanup_http_request(http)
 			return
 		
 		# Check for Accept-Ranges header
 		var supports_range = false
+		var content_length = 0
 		for header in response_headers:
-			if header.to_lower().begins_with("accept-ranges:"):
+			var lower_header = header.to_lower()
+			if lower_header.begins_with("accept-ranges:"):
 				var value = header.split(":", false, 1)[1].strip_edges().to_lower()
 				if value == "bytes":
 					supports_range = true
-					break
+			elif lower_header.begins_with("content-length:"):
+				var length_str = header.split(":", false, 1)[1].strip_edges()
+				content_length = int(length_str)
 		
 		if callback.is_valid():
-			callback.call(supports_range, "")
+			callback.call(supports_range, "", content_length)
 		
 		_cleanup_http_request(http)
 	)
