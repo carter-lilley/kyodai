@@ -8,6 +8,14 @@
 #define CSO_HEADER_SIZE 24
 #define CSO_MAGIC "CISO"
 
+/* Cross-platform packed struct support */
+#ifdef _MSC_VER
+#define PACKED
+#pragma pack(push, 1)
+#else
+#define PACKED __attribute__((packed))
+#endif
+
 /* CSO file format structures */
 typedef struct {
     char magic[4];
@@ -17,7 +25,7 @@ typedef struct {
     uint8_t version;
     uint8_t alignment;
     uint8_t reserved[2];
-} __attribute__((packed)) cso_header_t;
+} PACKED cso_header_t;
 
 /* ISO9660 directory entry */
 typedef struct {
@@ -35,7 +43,7 @@ typedef struct {
     uint16_t vol_seq_msb;
     uint8_t name_len;
     char name[1];
-} __attribute__((packed)) iso_dir_entry_t;
+} PACKED iso_dir_entry_t;
 
 /* SFO file format structures */
 typedef struct {
@@ -44,7 +52,7 @@ typedef struct {
     uint32_t key_table_start;
     uint32_t data_table_start;
     uint32_t index_entries;
-} __attribute__((packed)) sfo_header_t;
+} PACKED sfo_header_t;
 
 typedef struct {
     uint16_t key_offset;
@@ -52,7 +60,11 @@ typedef struct {
     uint32_t data_len;
     uint32_t data_max_len;
     uint32_t data_offset;
-} __attribute__((packed)) sfo_index_entry_t;
+} PACKED sfo_index_entry_t;
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#endif
 
 static int read_cso_block(FILE *fp, const cso_header_t *hdr, uint32_t *index_table, 
                           uint32_t block_idx, uint8_t *output) {

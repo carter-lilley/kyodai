@@ -14,6 +14,8 @@ FetchContent_Declare(
 
 # Configure zlib build
 set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(zlib)
 
 # Create executable
