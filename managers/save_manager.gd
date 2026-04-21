@@ -340,6 +340,39 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 	
 	return results
 
+## Discovers local PPSSPP saves for a PSP game
+## Returns an array of save dictionaries, one per matching folder
+## PSP games can have multiple save folders (e.g., ULUS10509DAT, ULUS10509DLC)
+func discover_local_psp_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "":
+		return results
+	
+	var savedata_dir = directory.rstrip("/") + "/SAVEDATA/"
+	if not FileSystemManager.dir_exists(savedata_dir):
+		return results
+	
+	var items = FileSystemManager.list_dir(savedata_dir)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var full_path = savedata_dir + item
+		if not FileSystemManager.dir_exists(full_path):
+			continue
+		
+		# Match folders starting with title_id (case-insensitive)
+		if item.to_upper().begins_with(title_id.to_upper()):
+			var mtime = _get_folder_mtime(full_path)
+			results.append({
+				"file_name": item + ".zip",
+				"file_path": full_path,
+				"modified_time": mtime,
+				"extension": ".zip"
+			})
+	
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -368,6 +401,9 @@ func _validate_emulator_title_id(emulator_id: String, title_id: String) -> Strin
 		"pcsx2":
 			if title_id == "":
 				return "No serial available for this PS2 game. Launch it once to extract the serial."
+		"ppsspp":
+			if title_id == "":
+				return "No game ID available for this PSP game. Launch it once to extract the ID."
 		_:
 			if title_id.length() != 16:
 				return "Invalid Title ID for this game."
@@ -388,6 +424,8 @@ func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameR
 			return discover_local_eden_save(save_dir, title_id)
 		"pcsx2":
 			return discover_local_pcsx2_save(save_dir, title_id)
+		"ppsspp":
+			return discover_local_psp_save(save_dir, title_id)
 		_:
 			return discover_local_folder_save(save_dir, title_id)
 
@@ -425,6 +463,8 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			return save_dir + profile + "/" + title_id
 		"pcsx2":
 			return save_dir + "main.ps2/" + title_id + "/"
+		"ppsspp":
+			return save_dir + "SAVEDATA/" + title_id + "/"
 		_:
 			var result = _resolve_default_save_path(save_dir, title_id)
 			return result.path
@@ -439,6 +479,8 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 			return record_path
 		"pcsx2":
 			return save_dir + "main.ps2/"
+		"ppsspp":
+			return save_dir + "SAVEDATA/"
 		_:
 			return record_path.get_base_dir()
 
@@ -454,6 +496,15 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 		"pcsx2":
 			# Use actual folder name for PCSX2 saves
 			return local_file_path.get_file() if local_file_path != "" else title_id
+		"ppsspp":
+			# For PSP, check if there are multiple save folders
+			var save_dir = resolve_save_directory("ppsspp")
+			var saves = discover_local_psp_save(save_dir, title_id)
+			if saves.size() > 1:
+				return title_id  # Multi-folder: use base title_id
+			elif saves.size() == 1:
+				return saves[0].file_path.get_file()  # Single folder: use folder name
+			return title_id
 		_:
 			return title_id.substr(8, 8)
 
@@ -470,8 +521,33 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			return _zip_dolphin_gc_saves(source_path, game.get_active_title_id(), zip_path)
 		"pcsx2":
 			return FileSystemManager.zip_directory(source_path, zip_path)
+		"ppsspp":
+			return _zip_psp_save(source_path, game.get_active_title_id(), zip_path)
 		_:
 			return FileSystemManager.zip_directory(source_path, zip_path)
+
+## Zips all PSP save folders matching the title_id into a single archive
+## Returns true on success
+func _zip_psp_save(source_path: String, title_id: String, zip_path: String) -> bool:
+	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+	var saves = discover_local_psp_save(source_path, title_id)
+	
+	if saves.is_empty():
+		return false
+	
+	# Copy all matching save folders to staging directory
+	for save in saves:
+		var folder_name = save.file_path.get_file()
+		var dest = stage_dir + folder_name
+		var success = FileSystemManager.copy_dir(save.file_path, dest)
+		if not success:
+			FileSystemManager.delete_dir_recursive(stage_dir)
+			return false
+	
+	# Zip the staging directory
+	var zip_success = FileSystemManager.zip_directory(stage_dir, zip_path)
+	FileSystemManager.delete_dir_recursive(stage_dir)
+	return zip_success
 
 func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) -> bool:
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"

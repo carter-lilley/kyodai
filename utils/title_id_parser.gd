@@ -769,5 +769,150 @@ static func extract_ps2_serial(rom_path: String) -> String:
 			push_error("[TitleIDParser] Unsupported PS2 ROM format: " + ext)
 			return ""
 
+# ==================== PSP (PPSSPP) ====================
+# ISO9660 + PARAM.SFO parsing for PSP game IDs
+
+static func _parse_paramsfo_disc_id(sfo_data: PackedByteArray) -> String:
+	if sfo_data.size() < 0x14:
+		return ""
+	
+	var magic = sfo_data.decode_u32(0x00)
+	if magic != 0x46535000:  # "PSF\0"
+		return ""
+	
+	var key_table_start = sfo_data.decode_u32(0x08)
+	var data_table_start = sfo_data.decode_u32(0x0C)
+	var index_entries = sfo_data.decode_u32(0x10)
+	
+	var index_offset = 0x14
+	for i in range(index_entries):
+		if index_offset + 0x10 > sfo_data.size():
+			break
+		
+		var key_offset = sfo_data.decode_u16(index_offset + 0x00)
+		var data_fmt = sfo_data.decode_u16(index_offset + 0x02)
+		var data_len = sfo_data.decode_u32(index_offset + 0x04)
+		var data_max_len = sfo_data.decode_u32(index_offset + 0x08)
+		var data_offset = sfo_data.decode_u32(index_offset + 0x0C)
+		
+		# Read key name (null-terminated)
+		var key_name = ""
+		var key_abs = key_table_start + key_offset
+		while key_abs < sfo_data.size() and sfo_data[key_abs] != 0:
+			key_name += char(sfo_data[key_abs])
+			key_abs += 1
+		
+		if key_name == "DISC_ID" and data_fmt == 0x0204:
+			var id_abs = data_table_start + data_offset
+			var disc_id = ""
+			for j in range(data_len):
+				if id_abs + j >= sfo_data.size():
+					break
+				var c = sfo_data[id_abs + j]
+				if c == 0:
+					break
+				disc_id += char(c)
+			return disc_id.to_upper()
+		
+		index_offset += 0x10
+	
+	return ""
+
+static func _iso_extract_psp_game_id(rom_path: String) -> String:
+	var file = FileAccess.open(rom_path, FileAccess.READ)
+	if not file:
+		push_error("[TitleIDParser] Failed to open PSP ISO: " + rom_path)
+		return ""
+	
+	var pvd = _iso_read_pvd(file)
+	if not pvd.valid:
+		file.close()
+		return ""
+	
+	# Find PSP_GAME directory in root
+	var psp_game = _iso_find_file(file, pvd.root_lba, pvd.root_length, "PSP_GAME")
+	if not psp_game.found:
+		push_error("[TitleIDParser] PSP_GAME directory not found")
+		file.close()
+		return ""
+	
+	# Find PARAM.SFO inside PSP_GAME
+	var paramsfo = _iso_find_file(file, psp_game.lba, psp_game.length, "PARAM.SFO")
+	if not paramsfo.found:
+		push_error("[TitleIDParser] PARAM.SFO not found in PSP_GAME")
+		file.close()
+		return ""
+	
+	file.seek(paramsfo.lba * _ISO_SECTOR_SIZE)
+	var sfo_data = file.get_buffer(paramsfo.length)
+	file.close()
+	
+	var disc_id = _parse_paramsfo_disc_id(sfo_data)
+	
+	# Normalize: remove hyphen if present, return 9-char format
+	if disc_id.length() == 10 and disc_id[4] == "-":
+		disc_id = disc_id.replace("-", "")
+	
+	if disc_id.length() == 9:
+		return disc_id
+	
+	push_error("[TitleIDParser] Failed to extract valid PSP game ID from PARAM.SFO")
+	return ""
+
+static func _get_cso_reader_path() -> String:
+	var base_path = "res://bin/cso_reader/"
+	if PlatformManager.is_windows():
+		return base_path + "win/cso_reader.exe"
+	elif PlatformManager.is_linux():
+		return base_path + "linux/cso_reader"
+	elif PlatformManager.is_macos():
+		return base_path + "macos/cso_reader"
+	elif PlatformManager.is_android():
+		return base_path + "android/cso_reader-arm64"
+	else:
+		push_error("[TitleIDParser] Unsupported platform for CSO reading")
+		return ""
+
+static func _cso_extract_psp_game_id(rom_path: String) -> String:
+	print("[TitleIDParser] Extracting PSP game ID from CSO using binary: " + rom_path)
+	
+	var reader_path = _get_cso_reader_path()
+	if reader_path == "":
+		return ""
+	
+	var abs_reader = ProjectSettings.globalize_path(reader_path)
+	var abs_cso = ProjectSettings.globalize_path(rom_path)
+	
+	var output = []
+	var args = [abs_cso]
+	var exit_code = OS.execute(abs_reader, args, output, true)
+	
+	if exit_code != 0:
+		push_error("[TitleIDParser] cso_reader failed with exit code: " + str(exit_code))
+		return ""
+	
+	# Parse output
+	var game_id = ""
+	if output.size() > 0:
+		game_id = output[0].strip_edges()
+	
+	if game_id.length() == 9:
+		return game_id
+	
+	push_error("[TitleIDParser] Failed to extract valid PSP game ID from CSO")
+	return ""
+
+static func extract_psp_game_id(rom_path: String) -> String:
+	var ext = rom_path.get_extension().to_lower()
+	
+	match ext:
+		"iso":
+			return _iso_extract_psp_game_id(rom_path)
+		"cso":
+			return _cso_extract_psp_game_id(rom_path)
+		_:
+			push_error("[TitleIDParser] Unsupported PSP ROM format: " + ext)
+			return ""
+
 static func mini(a: int, b: int) -> int:
 	return a if a < b else b

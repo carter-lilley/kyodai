@@ -249,7 +249,7 @@
 	  "snes": "snes9x",
 	  "tg16": "mednafen_pce",
 	  "turbografx-cd": "mednafen_pce",
-	  "virtualboy": "mednafen_vb",
+	  "virtualboy": "mednafen_vb"
   }
 },
 "azahar": {
@@ -1621,8 +1621,12 @@
 	"name": "PPSSPP",
 	"platforms": ["psp"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/memstick/PSP/SAVEDATA",
+		"android": "{emulator_dir}/PSP/SAVEDATA"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {
@@ -1684,6 +1688,27 @@
 		  },
 		  "android": {
 			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "create_savedata_dir",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_folders",
+			"folders": ["memstick/PSP/SAVEDATA"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "memstick/PSP/SAVEDATA"
+			}
+		  },
+		  "android": {
+			"action_type": "create_folders",
+			"folders": ["PSP/SAVEDATA"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "PSP/SAVEDATA"
+			}
 		  }
 		}
 	  }

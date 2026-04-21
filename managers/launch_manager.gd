@@ -795,6 +795,14 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 			NotificationManager.show_notification("Failed to prepare PS2 game", Notification.Type.ERROR)
 			return null
 	
+	# PPSSPP special handling - extract game ID from PSP ROM
+	if intent.emulator_id == "ppsspp":
+		var ppsspp_ready = _prepare_ppsspp_game(game, intent)
+		if not ppsspp_ready:
+			push_error("[LaunchManager] Failed to prepare PPSSPP game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
+			return null
+	
 	return intent
 
 func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
@@ -1271,8 +1279,36 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 		_queue_game_download_then_launch(game)
 		return
 	
-	# Game is downloaded, sync saves first then proceed with launch
+	# Game is downloaded, prepare emulator-specific data first
 	var emulator_id = resolve_emulator_for_game(game)
+	print("[LaunchManager] Resolved emulator for game: '" + emulator_id + "'")
+	
+	# PPSSPP special handling - extract game ID before save sync
+	if emulator_id == "ppsspp":
+		print("[LaunchManager] PPSSPP: Extracting game ID before save sync...")
+		print("[LaunchManager] PPSSPP: game.file_path = '" + game.file_path + "'")
+		print("[LaunchManager] PPSSPP: game.platform_slug = '" + game.platform_slug + "'")
+		print("[LaunchManager] PPSSPP: game.get_active_file_name() = '" + game.get_active_file_name() + "'")
+		# Build a temporary intent for ROM path
+		var temp_intent = LaunchIntent.new()
+		if game.file_path != "":
+			temp_intent.rom_path = game.file_path
+			print("[LaunchManager] PPSSPP: Using game.file_path")
+		else:
+			var root_folder = SettingsManager.get_setting("games_root_folder")
+			var root_path = root_folder.value if root_folder else "user://roms/"
+			temp_intent.rom_path = root_path + "/" + game.platform_slug + "/" + game.get_active_file_name()
+			print("[LaunchManager] PPSSPP: Constructed path: " + temp_intent.rom_path)
+		
+		print("[LaunchManager] PPSSPP: Calling _prepare_ppsspp_game with rom_path: " + temp_intent.rom_path)
+		var ppsspp_ready = _prepare_ppsspp_game(game, temp_intent)
+		if not ppsspp_ready:
+			push_error("[LaunchManager] Failed to prepare PPSSPP game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
+			return
+		print("[LaunchManager] PPSSPP: Game ID extraction complete, proceeding with save sync")
+	
+	# Sync saves first then proceed with launch
 	if emulator_id != "":
 		print("[LaunchManager] Starting pre-launch save sync...")
 		SaveManager.auto_download_saves_for_game(game, emulator_id, func():
@@ -1318,6 +1354,25 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			var updated_game = DataManager.get_game_by_id(game.romm_id)
 			var game_to_launch = updated_game if updated_game else game
 			var emulator_id = resolve_emulator_for_game(game_to_launch)
+			
+			# PPSSPP special handling - extract game ID before save sync
+			if emulator_id == "ppsspp":
+				print("[LaunchManager] PPSSPP: Extracting game ID after download...")
+				var temp_intent = LaunchIntent.new()
+				if game_to_launch.file_path != "":
+					temp_intent.rom_path = game_to_launch.file_path
+				else:
+					var _root_folder = SettingsManager.get_setting("games_root_folder")
+					var _root_path = _root_folder.value if _root_folder else "user://roms/"
+					temp_intent.rom_path = _root_path + "/" + game_to_launch.platform_slug + "/" + game_to_launch.get_active_file_name()
+				
+				var ppsspp_ready = _prepare_ppsspp_game(game_to_launch, temp_intent)
+				if not ppsspp_ready:
+					push_error("[LaunchManager] Failed to prepare PPSSPP game after download: " + game_to_launch.get_display_name())
+					NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
+					return
+				print("[LaunchManager] PPSSPP: Game ID extraction complete after download")
+			
 			if emulator_id != "":
 				print("[LaunchManager] Starting pre-launch save sync after game download...")
 				SaveManager.auto_download_saves_for_game(game_to_launch, emulator_id, func():
@@ -2946,6 +3001,36 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if active_title_id != serial:
 		_store_title_id(game, serial)
 		print("[LaunchManager] PCSX2: Updated database with serial: " + serial)
+	
+	return true
+
+## Handles PPSSPP game extraction and launch preparation
+## Returns true if ready to launch, false if error
+func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] PPSSPP: Preparing game from ROM path: " + intent.rom_path)
+	
+	var rom_path = intent.rom_path
+	var game_id = ""
+	
+	# Try extracting game ID from ROM
+	if FileAccess.file_exists(rom_path):
+		game_id = TitleIDParser.extract_psp_game_id(rom_path)
+		if game_id != "":
+			print("[LaunchManager] PPSSPP: Game ID from ROM: " + game_id)
+	
+	if game_id == "":
+		push_error("[LaunchManager] PPSSPP: Failed to extract game ID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract PSP game ID", Notification.Type.ERROR)
+		return false
+	
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != game_id:
+		print("[LaunchManager] PPSSPP: WARNING - Stored ID " + active_title_id + " doesn't match detected ID " + game_id)
+		print("[LaunchManager] PPSSPP: Updating to correct ID")
+	
+	if active_title_id != game_id:
+		_store_title_id(game, game_id)
+		print("[LaunchManager] PPSSPP: Updated database with game ID: " + game_id)
 	
 	return true
 
