@@ -3115,10 +3115,24 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Extract ZIP to Vita3K ux0/app directory (ZIP contains the TitleID folder)
 	# We extract to the parent directory (ux0/app) so the ZIP's root folder lands correctly
 	var extract_parent = vita_app_path.get_base_dir()
-	NotificationManager.show_notification("Extracting Vita game for first launch...", Notification.Type.INFO)
+	
+	# Show persistent pulsing notification during extraction
+	var notify_id = NotificationManager.show_notification(
+		"Extracting " + game.get_display_name() + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,  # Never auto-dismiss
+		Callable(),
+		Callable(),
+		true  # Pulsing
+	)
 	print("[LaunchManager] Vita3K: Extracting ZIP to: " + extract_parent)
 	
 	var extract_success = await _extract_vita_zip(rom_path, extract_parent, title_id)
+	
+	# Dismiss the extraction notification
+	NotificationManager.dismiss_notification(notify_id)
+	
 	if not extract_success:
 		push_error("[LaunchManager] Vita3K: Failed to extract game to " + vita_app_path)
 		return false
@@ -3323,9 +3337,23 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Extract directly to games/[romm_id]_temp/
 	var temp_install_dir: String = emulator_dir + "/romm_" + str(game.romm_id) + "_temp"
 	print("[LaunchManager] RPCS3: Extracting to: " + temp_install_dir)
+	
+	# Show persistent pulsing notification during extraction
+	var rpcs3_notify_id = NotificationManager.show_notification(
+		"Extracting " + game.get_display_name() + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		Callable(),
+		Callable(),
+		true
+	)
 	print("[LaunchManager] RPCS3: About to call _extract_ps3_zip...")
 	
 	var extract_success := await _extract_ps3_zip(rom_path, temp_install_dir)
+	
+	# Dismiss the extraction notification
+	NotificationManager.dismiss_notification(rpcs3_notify_id)
 	
 	print("[LaunchManager] RPCS3: _extract_ps3_zip returned: " + str(extract_success))
 	
