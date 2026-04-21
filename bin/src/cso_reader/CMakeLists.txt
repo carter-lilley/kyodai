@@ -10,12 +10,14 @@ FetchContent_Declare(
     zlib
     GIT_REPOSITORY https://github.com/madler/zlib.git
     GIT_TAG v1.3.1
+    OVERRIDE_FIND_PACKAGE
 )
 
-# Configure zlib build
+# Configure zlib build (must be set BEFORE FetchContent_MakeAvailable)
 set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(zlib)
 
 # Create executable

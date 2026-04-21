@@ -147,7 +147,7 @@ static int find_file_in_iso(FILE *fp, const cso_header_t *hdr, uint32_t *index_t
             char *semicolon = strchr(name, ';');
             if (semicolon) *semicolon = '\0';
             
-            if (strcasecmp(name, filename) == 0) {
+            if (_stricmp(name, filename) == 0) {
                 *out_lba = entry->extent_lsb;
                 *out_size = entry->size_lsb;
                 free(sector);
