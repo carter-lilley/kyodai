@@ -874,7 +874,7 @@ static func _get_cso_reader_path() -> String:
 		return ""
 
 static func _cso_extract_psp_game_id(rom_path: String) -> String:
-	print("[TitleIDParser] Extracting PSP game ID from CSO using binary: " + rom_path)
+	print("[TitleIDParser] Extracting PSP game ID from CSO: " + rom_path)
 	
 	var reader_path = _get_cso_reader_path()
 	if reader_path == "":
