@@ -739,69 +739,10 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	# Build launch arguments based on platform
 	_build_launch_args(intent, emulator)
 	
-	# Vita3K special handling - extract game and prepare TitleID (all platforms)
-	if intent.emulator_id.begins_with("vita3k"):
-		var vita_ready = await _prepare_vita3k_game(game, intent)
-		if not vita_ready:
-			push_error("[LaunchManager] Failed to prepare Vita3K game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
-			return null
-	
-	# RPCS3 special handling - extract PS3 game and prepare TitleID (all platforms)
-	if intent.emulator_id.begins_with("rpcs3"):
-		var rpcs3_ready = await _prepare_rpcs3_game(game, intent)
-		if not rpcs3_ready:
-			push_error("[LaunchManager] Failed to prepare RPCS3 game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare PS3 game", Notification.Type.ERROR)
-			return null
-	
-	# Azahar special handling - extract TitleID from 3DS ROM
-	if intent.emulator_id == "azahar":
-		var azahar_ready = _prepare_azahar_game(game, intent)
-		if not azahar_ready:
-			push_error("[LaunchManager] Failed to prepare Azahar game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare 3DS game", Notification.Type.ERROR)
-			return null
-	
-	# Cemu special handling - extract TitleID from WUA file
-	if intent.emulator_id == "cemu":
-		var cemu_ready = _prepare_cemu_game(game, intent)
-		if not cemu_ready:
-			push_error("[LaunchManager] Failed to prepare Cemu game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare Wii U game", Notification.Type.ERROR)
-			return null
-	
-	# Eden special handling - extract TitleID from Switch ROM
-	if intent.emulator_id == "eden":
-		var eden_ready = _prepare_eden_game(game, intent)
-		if not eden_ready:
-			push_error("[LaunchManager] Failed to prepare Eden game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare Switch game", Notification.Type.ERROR)
-			return null
-	
-	# Dolphin special handling - extract Game ID from GameCube/Wii ROM
-	if intent.emulator_id == "dolphin":
-		var dolphin_ready = _prepare_dolphin_game(game, intent)
-		if not dolphin_ready:
-			push_error("[LaunchManager] Failed to prepare Dolphin game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare GameCube/Wii game", Notification.Type.ERROR)
-			return null
-	
-	# PCSX2 special handling - extract serial from PS2 ROM
-	if intent.emulator_id == "pcsx2":
-		var pcsx2_ready = _prepare_pcsx2_game(game, intent)
-		if not pcsx2_ready:
-			push_error("[LaunchManager] Failed to prepare PCSX2 game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare PS2 game", Notification.Type.ERROR)
-			return null
-	
-	# PPSSPP special handling - extract game ID from PSP ROM
-	if intent.emulator_id == "ppsspp":
-		var ppsspp_ready = _prepare_ppsspp_game(game, intent)
-		if not ppsspp_ready:
-			push_error("[LaunchManager] Failed to prepare PPSSPP game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
-			return null
+	# NOTE: Emulator-specific preparation (TitleID extraction, game file extraction, etc.)
+	# is done upstream in launch_game(), _queue_game_download_then_launch(), or
+	# _on_emulator_installed_for_launch() BEFORE save sync. create_launch_intent()
+	# only builds the launch arguments and should not perform any file I/O.
 	
 	return intent
 
@@ -1283,57 +1224,15 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	var emulator_id = resolve_emulator_for_game(game)
 	print("[LaunchManager] Resolved emulator for game: '" + emulator_id + "'")
 	
-	# PPSSPP special handling - extract game ID before save sync
-	if emulator_id == "ppsspp":
-		print("[LaunchManager] PPSSPP: Extracting game ID before save sync...")
-		print("[LaunchManager] PPSSPP: game.file_path = '" + game.file_path + "'")
-		print("[LaunchManager] PPSSPP: game.platform_slug = '" + game.platform_slug + "'")
-		print("[LaunchManager] PPSSPP: game.get_active_file_name() = '" + game.get_active_file_name() + "'")
-		# Build a temporary intent for ROM path
-		var temp_intent = LaunchIntent.new()
-		if game.file_path != "":
-			temp_intent.rom_path = game.file_path
-			print("[LaunchManager] PPSSPP: Using game.file_path")
-		else:
-			var root_folder = SettingsManager.get_setting("games_root_folder")
-			var root_path = root_folder.value if root_folder else "user://roms/"
-			temp_intent.rom_path = root_path + "/" + game.platform_slug + "/" + game.get_active_file_name()
-			print("[LaunchManager] PPSSPP: Constructed path: " + temp_intent.rom_path)
-		
-		print("[LaunchManager] PPSSPP: Calling _prepare_ppsspp_game with rom_path: " + temp_intent.rom_path)
-		var ppsspp_ready = _prepare_ppsspp_game(game, temp_intent)
-		if not ppsspp_ready:
-			push_error("[LaunchManager] Failed to prepare PPSSPP game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
-			return
-		print("[LaunchManager] PPSSPP: Game ID extraction complete, proceeding with save sync")
-	
-	# Vita3K special handling - extract TitleID before save sync
-	if emulator_id.begins_with("vita3k"):
-		print("[LaunchManager] Vita3K: Extracting TitleID before save sync...")
-		print("[LaunchManager] Vita3K: game.file_path = '" + game.file_path + "'")
-		print("[LaunchManager] Vita3K: game.platform_slug = '" + game.platform_slug + "'")
-		print("[LaunchManager] Vita3K: game.get_active_file_name() = '" + game.get_active_file_name() + "'")
-		# Build a temporary intent for ROM path
-		var temp_intent = LaunchIntent.new()
-		if game.file_path != "":
-			temp_intent.rom_path = game.file_path
-			print("[LaunchManager] Vita3K: Using game.file_path")
-		else:
-			var root_folder = SettingsManager.get_setting("games_root_folder")
-			var root_path = root_folder.value if root_folder else "user://roms/"
-			temp_intent.rom_path = root_path + "/" + game.platform_slug + "/" + game.get_active_file_name()
-			print("[LaunchManager] Vita3K: Constructed path: " + temp_intent.rom_path)
-		
-		print("[LaunchManager] Vita3K: Calling _prepare_vita3k_game with rom_path: " + temp_intent.rom_path)
-		# Set emulator_id on temp_intent so _prepare_vita3k_game can resolve the install path on desktop
-		temp_intent.emulator_id = emulator_id
-		var vita_ready = await _prepare_vita3k_game(game, temp_intent)
-		if not vita_ready:
-			push_error("[LaunchManager] Failed to prepare Vita3K game: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
-			return
-		print("[LaunchManager] Vita3K: TitleID extraction complete, proceeding with save sync")
+	# Prepare emulator-specific data (extract TitleIDs, game files, etc.)
+	# This must happen before save sync so the title_id is available
+	print("[LaunchManager] launch_game: Preparing game for emulator: " + emulator_id)
+	var prep_success = await _prepare_game_for_launch(game, emulator_id)
+	if not prep_success:
+		push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
+		NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
+		return
+	print("[LaunchManager] launch_game: Game preparation complete")
 	
 	# Sync saves first then proceed with launch
 	if emulator_id != "":
@@ -1382,43 +1281,14 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			var game_to_launch = updated_game if updated_game else game
 			var emulator_id = resolve_emulator_for_game(game_to_launch)
 			
-			# PPSSPP special handling - extract game ID before save sync
-			if emulator_id == "ppsspp":
-				print("[LaunchManager] PPSSPP: Extracting game ID after download...")
-				var temp_intent = LaunchIntent.new()
-				if game_to_launch.file_path != "":
-					temp_intent.rom_path = game_to_launch.file_path
-				else:
-					var _root_folder = SettingsManager.get_setting("games_root_folder")
-					var _root_path = _root_folder.value if _root_folder else "user://roms/"
-					temp_intent.rom_path = _root_path + "/" + game_to_launch.platform_slug + "/" + game_to_launch.get_active_file_name()
-				
-				var ppsspp_ready = _prepare_ppsspp_game(game_to_launch, temp_intent)
-				if not ppsspp_ready:
-					push_error("[LaunchManager] Failed to prepare PPSSPP game after download: " + game_to_launch.get_display_name())
-					NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
-					return
-				print("[LaunchManager] PPSSPP: Game ID extraction complete after download")
-			
-			# Vita3K special handling - extract TitleID before save sync
-			if emulator_id.begins_with("vita3k"):
-				print("[LaunchManager] Vita3K: Extracting TitleID after download...")
-				var temp_intent = LaunchIntent.new()
-				if game_to_launch.file_path != "":
-					temp_intent.rom_path = game_to_launch.file_path
-				else:
-					var _root_folder = SettingsManager.get_setting("games_root_folder")
-					var _root_path = _root_folder.value if _root_folder else "user://roms/"
-					temp_intent.rom_path = _root_path + "/" + game_to_launch.platform_slug + "/" + game_to_launch.get_active_file_name()
-				
-				# Set emulator_id on temp_intent so _prepare_vita3k_game can resolve the install path on desktop
-				temp_intent.emulator_id = emulator_id
-				var vita_ready = await _prepare_vita3k_game(game_to_launch, temp_intent)
-				if not vita_ready:
-					push_error("[LaunchManager] Failed to prepare Vita3K game after download: " + game_to_launch.get_display_name())
-					NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
-					return
-				print("[LaunchManager] Vita3K: TitleID extraction complete after download")
+			# Prepare emulator-specific data after download (extract TitleIDs, game files, etc.)
+			print("[LaunchManager] _queue_game_download_then_launch: Preparing game for emulator: " + emulator_id)
+			var prep_success = await _prepare_game_for_launch(game_to_launch, emulator_id)
+			if not prep_success:
+				push_error("[LaunchManager] Failed to prepare game after download: " + game_to_launch.get_display_name())
+				NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
+				return
+			print("[LaunchManager] _queue_game_download_then_launch: Game preparation complete")
 			
 			if emulator_id != "":
 				print("[LaunchManager] Starting pre-launch save sync after game download...")
@@ -1449,6 +1319,8 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 
 ## Check emulator status and launch game (game must be downloaded)
 func _launch_with_emulator_check(game: GameResource) -> void:
+	print("[LaunchManager] _launch_with_emulator_check: ENTER for " + game.get_display_name())
+	
 	# Determine which emulator to use
 	var emulator_id = resolve_emulator_for_game(game)
 	
@@ -1496,7 +1368,9 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 		return
 	
 	# Emulator is already installed, launch immediately
+	print("[LaunchManager] _launch_with_emulator_check: Emulator installed, launching game")
 	_launch_game_internal(game, emulator_id)
+	print("[LaunchManager] _launch_with_emulator_check: EXIT")
 
 ## Handler for when emulator extraction completes - retries pending launches
 func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
@@ -1525,25 +1399,44 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 		# Give a small delay for file system to settle
 		await get_tree().create_timer(0.5).timeout
 		
+		# Prepare game data before launching (extract TitleIDs, etc.)
+		print("[LaunchManager] _on_emulator_installed_for_launch: Preparing game for emulator: " + emulator_id)
+		var prep_success = await _prepare_game_for_launch(game, emulator_id)
+		if not prep_success:
+			push_error("[LaunchManager] Failed to prepare game after emulator install: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
+			return
+		print("[LaunchManager] _on_emulator_installed_for_launch: Game preparation complete")
+		
 		# Retry the launch
 		await _launch_game_internal(game, emulator_id)
 
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
+	print("[LaunchManager] _launch_game_internal: ENTER for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
+	
 	var intent = await create_launch_intent(game)
 	
 	if not intent:
+		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")
 		NotificationManager.show_notification("Failed to create launch intent", Notification.Type.ERROR)
+		print("[LaunchManager] _launch_game_internal: EXIT (null intent)")
 		return
 	
+	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
 	var success = await execute_launch(intent)
 	
 	if not success:
+		push_error("[LaunchManager] _launch_game_internal: execute_launch returned false")
 		NotificationManager.show_notification("Failed to launch " + game.get_display_name(), Notification.Type.ERROR)
+		print("[LaunchManager] _launch_game_internal: EXIT (launch failed)")
 		return
+	
+	print("[LaunchManager] _launch_game_internal: Launch successful")
 	
 	# Update last_played timestamp on successful launch
 	_update_last_played(game)
+	print("[LaunchManager] _launch_game_internal: EXIT (success)")
 
 ## Update the last_played timestamp for a game
 func _update_last_played(game: GameResource) -> void:
@@ -2819,6 +2712,66 @@ func _store_title_id(game: GameResource, title_id: String) -> void:
 			# Persist the updated siblings array to DB
 			DataManager.update_game_siblings(game.romm_id, game.siblings)
 
+## Prepares a game for launch by extracting title IDs and game files
+## This must be called BEFORE save sync so that the title_id is available
+## Returns true if preparation succeeded (or no prep needed), false on error
+func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
+	print("[LaunchManager] _prepare_game_for_launch: START for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
+	
+	# Build a temporary intent for ROM path
+	var temp_intent = LaunchIntent.new()
+	if game.file_path != "":
+		temp_intent.rom_path = game.file_path
+		print("[LaunchManager] _prepare_game_for_launch: Using game.file_path = " + game.file_path)
+	else:
+		var root_folder = SettingsManager.get_setting("games_root_folder")
+		var root_path = root_folder.value if root_folder else "user://roms/"
+		temp_intent.rom_path = root_path + "/" + game.platform_slug + "/" + game.get_active_file_name()
+		print("[LaunchManager] _prepare_game_for_launch: Constructed path = " + temp_intent.rom_path)
+	
+	temp_intent.emulator_id = emulator_id
+	
+	var result = true
+	
+	match emulator_id:
+		"azahar":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing Azahar game...")
+			result = _prepare_azahar_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: Azahar prep result = " + str(result))
+		"cemu":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing Cemu game...")
+			result = _prepare_cemu_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: Cemu prep result = " + str(result))
+		"eden":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing Eden game...")
+			result = _prepare_eden_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: Eden prep result = " + str(result))
+		"dolphin":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing Dolphin game...")
+			result = _prepare_dolphin_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: Dolphin prep result = " + str(result))
+		"pcsx2":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing PCSX2 game...")
+			result = _prepare_pcsx2_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: PCSX2 prep result = " + str(result))
+		"ppsspp":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing PPSSPP game...")
+			result = _prepare_ppsspp_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: PPSSPP prep result = " + str(result))
+		"vita3k", "vita3k-canary":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing Vita3K game...")
+			result = await _prepare_vita3k_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: Vita3K prep result = " + str(result))
+		"rpcs3", "rpcsx":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing RPCS3 game...")
+			result = await _prepare_rpcs3_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: RPCS3 prep result = " + str(result))
+		_:
+			print("[LaunchManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
+	
+	print("[LaunchManager] _prepare_game_for_launch: END result = " + str(result))
+	return result
+
 func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[LaunchManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
 	
@@ -3084,6 +3037,8 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## Handles Vita3K game extraction and launch preparation
 ## Returns true if ready to launch, false if error
 func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] _prepare_vita3k_game: ENTER for " + game.get_display_name())
+	
 	var rom_path = intent.rom_path
 	print("[LaunchManager] Vita3K: Preparing game from ROM path: " + rom_path)
 	
@@ -3169,23 +3124,31 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		return false
 	
 	print("[LaunchManager] Vita3K: Extraction successful")
+	print("[LaunchManager] _prepare_vita3k_game: EXIT with true")
 	return true
 
 ## Checks whether the given Vita3K app path contains actual game files
 func _vita_app_has_game_files(vita_app_path: String) -> bool:
 	# Use FileSystemManager which handles both regular paths and SAF URIs
 	var files = FileSystemManager.list_dir(vita_app_path)
-	return files.size() > 0
+	# Filter out . and .. entries - they don't count as game files
+	var actual_files = 0
+	for f in files:
+		if f != "." and f != "..":
+			actual_files += 1
+	print("[LaunchManager] Vita3K: _vita_app_has_game_files: found " + str(actual_files) + " actual files in " + vita_app_path)
+	return actual_files > 0
 
 ## Extracts Vita game ZIP with progress tracking
 func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -> bool:
-	print("[LaunchManager] Vita3K: _extract_vita_zip called with zip_path=" + zip_path + ", extract_to=" + extract_to)
+	print("[LaunchManager] _extract_vita_zip: ENTER zip_path=" + zip_path + ", extract_to=" + extract_to)
 	
 	# Create parent directories if needed using FileSystemManager (handles both regular paths and SAF URIs)
 	var parent_dir = extract_to.get_base_dir()
 	print("[LaunchManager] Vita3K: Creating parent directory: " + parent_dir)
 	if not FileSystemManager.make_dir_recursive(parent_dir):
 		push_error("[LaunchManager] Failed to create Vita3K app directory: " + parent_dir)
+		print("[LaunchManager] _extract_vita_zip: EXIT false (mkdir failed)")
 		return false
 	
 	# Use DownloadManager's extraction for progress tracking.
@@ -3194,17 +3157,18 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 	var item_id = DownloadManager.queue_extraction(zip_path, extract_to, "vita_game", title_id, false)
 	if item_id == "":
 		push_error("[LaunchManager] Failed to queue Vita game extraction")
+		print("[LaunchManager] _extract_vita_zip: EXIT false (queue failed)")
 		return false
 	print("[LaunchManager] Vita3K: Extraction queued with item_id=" + item_id)
 	
-	# Wait for extraction to complete
-	var extraction_complete = false
-	var extraction_success = false
+	# Use Dictionary for thread-safe state tracking (reference type)
+	var future = {"complete": false, "success": false, "message": ""}
 	
 	var on_complete = func(completed_item_id: String, success: bool, message: String):
 		if completed_item_id == item_id:
-			extraction_complete = true
-			extraction_success = success
+			future.complete = true
+			future.success = success
+			future.message = message
 			print("[LaunchManager] Vita3K: Extraction callback received - success=" + str(success) + ", message=" + message)
 	
 	DownloadManager.extraction_completed.connect(on_complete)
@@ -3212,18 +3176,20 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 	# Wait for completion (with timeout)
 	var timeout = 300.0  # 5 minutes timeout
 	var elapsed = 0.0
-	while not extraction_complete and elapsed < timeout:
+	print("[LaunchManager] _extract_vita_zip: Starting poll loop")
+	while not future.complete and elapsed < timeout:
 		await get_tree().process_frame
 		elapsed += get_process_delta_time()
 	
 	DownloadManager.extraction_completed.disconnect(on_complete)
 	
-	if not extraction_complete:
+	if not future.complete:
 		push_error("[LaunchManager] Vita game extraction timed out")
+		print("[LaunchManager] _extract_vita_zip: EXIT false (timeout)")
 		return false
 	
-	print("[LaunchManager] Vita3K: Extraction result = " + str(extraction_success))
-	return extraction_success
+	print("[LaunchManager] _extract_vita_zip: EXIT " + str(future.success))
+	return future.success
 
 
 ## Recursively searches for PARAM.SFO file in a directory
