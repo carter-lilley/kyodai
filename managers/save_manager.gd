@@ -419,6 +419,37 @@ func discover_local_psp_save(directory: String, title_id: String) -> Array[Dicti
 	
 	return results
 
+## Discovers local Vita3K saves for a PSVita game
+## Vita3K saves are folders directly in savedata/ named by TitleID (e.g., PCSA00152)
+func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "":
+		print("[SaveManager] discover_local_vita3k_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return results
+	
+	var savedata_dir = directory.rstrip("/") + "/"
+	print("[SaveManager] discover_local_vita3k_save: searching in " + savedata_dir + " for title_id " + title_id)
+	
+	if not FileSystemManager.dir_exists(savedata_dir):
+		print("[SaveManager] discover_local_vita3k_save: savedata dir doesn't exist yet")
+		return results
+	
+	# Look for exact match folder
+	var save_path = savedata_dir + title_id
+	if FileSystemManager.dir_exists(save_path):
+		var mtime = _get_folder_mtime(save_path)
+		results.append({
+			"file_name": title_id + ".zip",
+			"file_path": save_path,
+			"modified_time": mtime,
+			"extension": ".zip"
+		})
+		print("[SaveManager] discover_local_vita3k_save: found save at " + save_path)
+	else:
+		print("[SaveManager] discover_local_vita3k_save: no save found for " + title_id)
+	
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -450,6 +481,9 @@ func _validate_emulator_title_id(emulator_id: String, title_id: String) -> Strin
 		"ppsspp":
 			if title_id == "":
 				return "No game ID available for this PSP game. Launch it once to extract the ID."
+		"vita3k":
+			if title_id == "":
+				return "No Title ID available for this Vita game. Launch it once to extract the Title ID."
 		_:
 			if title_id.length() != 16:
 				return "Invalid Title ID for this game."
@@ -472,6 +506,8 @@ func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameR
 			return discover_local_pcsx2_save(save_dir, title_id)
 		"ppsspp":
 			return discover_local_psp_save(save_dir, title_id)
+		"vita3k":
+			return discover_local_vita3k_save(save_dir, title_id)
 		_:
 			return discover_local_folder_save(save_dir, title_id)
 
@@ -508,8 +544,10 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 				profile = "0000000000000000"
 			return save_dir + profile + "/" + title_id
 		"pcsx2":
-			return save_dir + "main.ps2/" + title_id + "/"
+			return save_dir + "main.ps2/"
 		"ppsspp":
+			return save_dir + title_id + "/"
+		"vita3k":
 			return save_dir + title_id + "/"
 		_:
 			var result = _resolve_default_save_path(save_dir, title_id)
@@ -531,6 +569,8 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 			return save_dir + "main.ps2/"
 		"ppsspp":
 			return save_dir
+		"vita3k":
+			return save_dir
 		_:
 			return record_path.get_base_dir()
 
@@ -551,6 +591,9 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 			# This allows multiple saves (e.g., NPJH50333DAT, NPJH50333USER00) to be uploaded separately
 			if local_file_path != "":
 				return local_file_path.get_file()
+			return title_id
+		"vita3k":
+			# For Vita3K, use the TitleID as the save name
 			return title_id
 		_:
 			return title_id.substr(8, 8)
@@ -574,6 +617,10 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			# Skip files over 100MB (DLC/install data) to avoid Cloudflare 413 errors
 			var folder_name = source_path.get_file()
 			return FileSystemManager.zip_directory_with_root(source_path, folder_name, zip_path, MAX_FILE_SIZE)
+		"vita3k":
+			# For Vita3K, zip the save folder with TitleID as root
+			var vita_folder_name = source_path.get_file()
+			return FileSystemManager.zip_directory_with_root(source_path, vita_folder_name, zip_path)
 		_:
 			return FileSystemManager.zip_directory(source_path, zip_path)
 
@@ -1125,9 +1172,13 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			var local_saves: Array[Dictionary]
 			if is_folder_save:
 				if game.get_active_title_id() == "":
+					if on_complete.is_valid():
+						on_complete.call()
 					return
 				var validation_error = _validate_emulator_title_id(emulator_id, game.get_active_title_id())
 				if validation_error != "":
+					if on_complete.is_valid():
+						on_complete.call()
 					return
 				local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 			else:

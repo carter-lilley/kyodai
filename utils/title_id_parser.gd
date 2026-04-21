@@ -482,15 +482,32 @@ static func extract_vita_title_id(zip_path: String) -> String:
 			push_error("[TitleIDParser] Plugin failed to extract TitleID from: " + zip_path)
 			return ""
 	
+	# Check if file exists (handles both regular paths and Godot virtual paths)
 	if not FileAccess.file_exists(zip_path):
-		push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + zip_path)
-		return ""
+		# Try resolving to global path if it's a Godot virtual path
+		var global_path = ProjectSettings.globalize_path(zip_path)
+		if global_path != zip_path and FileAccess.file_exists(global_path):
+			zip_path = global_path
+		else:
+			push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + zip_path)
+			return ""
 	
 	var reader = ZIPReader.new()
+	# Try the path as-is first (ZIPReader on Windows often prefers forward slashes)
 	var err = reader.open(zip_path)
 	if err != OK:
-		push_error("[TitleIDParser] Failed to open ZIP for TitleID extraction: " + zip_path)
-		return ""
+		# Try with globalized path as fallback
+		var global_path = ProjectSettings.globalize_path(zip_path)
+		if global_path != zip_path:
+			err = reader.open(global_path)
+		if err != OK:
+			# Last resort: try with backslashes on Windows
+			if OS.get_name() == "Windows":
+				var backslash_path = zip_path.replace("/", "\\")
+				err = reader.open(backslash_path)
+			if err != OK:
+				push_error("[TitleIDParser] Failed to open ZIP for TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
+				return ""
 	
 	var files = reader.get_files()
 	reader.close()

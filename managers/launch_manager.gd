@@ -1308,6 +1308,33 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 			return
 		print("[LaunchManager] PPSSPP: Game ID extraction complete, proceeding with save sync")
 	
+	# Vita3K special handling - extract TitleID before save sync
+	if emulator_id.begins_with("vita3k"):
+		print("[LaunchManager] Vita3K: Extracting TitleID before save sync...")
+		print("[LaunchManager] Vita3K: game.file_path = '" + game.file_path + "'")
+		print("[LaunchManager] Vita3K: game.platform_slug = '" + game.platform_slug + "'")
+		print("[LaunchManager] Vita3K: game.get_active_file_name() = '" + game.get_active_file_name() + "'")
+		# Build a temporary intent for ROM path
+		var temp_intent = LaunchIntent.new()
+		if game.file_path != "":
+			temp_intent.rom_path = game.file_path
+			print("[LaunchManager] Vita3K: Using game.file_path")
+		else:
+			var root_folder = SettingsManager.get_setting("games_root_folder")
+			var root_path = root_folder.value if root_folder else "user://roms/"
+			temp_intent.rom_path = root_path + "/" + game.platform_slug + "/" + game.get_active_file_name()
+			print("[LaunchManager] Vita3K: Constructed path: " + temp_intent.rom_path)
+		
+		print("[LaunchManager] Vita3K: Calling _prepare_vita3k_game with rom_path: " + temp_intent.rom_path)
+		# Set emulator_id on temp_intent so _prepare_vita3k_game can resolve the install path on desktop
+		temp_intent.emulator_id = emulator_id
+		var vita_ready = await _prepare_vita3k_game(game, temp_intent)
+		if not vita_ready:
+			push_error("[LaunchManager] Failed to prepare Vita3K game: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
+			return
+		print("[LaunchManager] Vita3K: TitleID extraction complete, proceeding with save sync")
+	
 	# Sync saves first then proceed with launch
 	if emulator_id != "":
 		print("[LaunchManager] Starting pre-launch save sync...")
@@ -1372,6 +1399,26 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 					NotificationManager.show_notification("Failed to prepare PSP game", Notification.Type.ERROR)
 					return
 				print("[LaunchManager] PPSSPP: Game ID extraction complete after download")
+			
+			# Vita3K special handling - extract TitleID before save sync
+			if emulator_id.begins_with("vita3k"):
+				print("[LaunchManager] Vita3K: Extracting TitleID after download...")
+				var temp_intent = LaunchIntent.new()
+				if game_to_launch.file_path != "":
+					temp_intent.rom_path = game_to_launch.file_path
+				else:
+					var _root_folder = SettingsManager.get_setting("games_root_folder")
+					var _root_path = _root_folder.value if _root_folder else "user://roms/"
+					temp_intent.rom_path = _root_path + "/" + game_to_launch.platform_slug + "/" + game_to_launch.get_active_file_name()
+				
+				# Set emulator_id on temp_intent so _prepare_vita3k_game can resolve the install path on desktop
+				temp_intent.emulator_id = emulator_id
+				var vita_ready = await _prepare_vita3k_game(game_to_launch, temp_intent)
+				if not vita_ready:
+					push_error("[LaunchManager] Failed to prepare Vita3K game after download: " + game_to_launch.get_display_name())
+					NotificationManager.show_notification("Failed to prepare Vita game", Notification.Type.ERROR)
+					return
+				print("[LaunchManager] Vita3K: TitleID extraction complete after download")
 			
 			if emulator_id != "":
 				print("[LaunchManager] Starting pre-launch save sync after game download...")
@@ -3052,11 +3099,21 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		ux0_app_path = emulator_dir + "/ux0/app"
 	else:
 		# Desktop: Get path from emulator installation
-		var emulator_path = get_emulator_install_path(intent.emulator_id)
-		if emulator_path == "":
-			push_error("[LaunchManager] Vita3K: Cannot find emulator install path")
-			return false
-		emulator_dir = emulator_path.get_base_dir()
+		var emulator_path = ""
+		if intent.emulator_id != "":
+			emulator_path = get_emulator_install_path(intent.emulator_id)
+		else:
+			# Fallback: try to find any vita3k emulator
+			emulator_path = get_emulator_install_path("vita3k")
+		
+		if emulator_path != "":
+			emulator_dir = emulator_path.get_base_dir()
+		else:
+			# Emulator not installed yet, use the default emulator directory
+			# We can still extract the TitleID and prepare the game files
+			emulator_dir = _get_emulator_directory("vita3k").rstrip("/")
+			print("[LaunchManager] Vita3K: Emulator not installed yet, using default directory: " + emulator_dir)
+		
 		ux0_app_path = emulator_dir + "/ux0/app"
 	
 	print("[LaunchManager] Vita3K: ux0_app_path = " + ux0_app_path)

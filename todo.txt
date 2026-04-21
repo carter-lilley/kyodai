@@ -6,12 +6,8 @@ no touch to launch on bottom screen
 ui scale
 android download manager and file streaming
 chunk reassembly progress notif
-
 alignment modes in single row
-
 saves / conflic resolution
-platform bios from romm
-
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 
@@ -45,12 +41,12 @@ effect stacks to fill their parent base
 	move max_cache_size to memory manager?
 	batch DB adds instead of single
 ## launch:
+	add: psp, melonds, ps2, dolphin retroarch sync
   	add: ps3 on android...pkgs ps3 on desktop
 	add: shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis
-	all: hotkeys, graphics settings, confirm on exit, etc?
-## registry:
-	hidden core systems toggle(?)
+	all: optional hotkeys, graphics settings, confirm on exit, etc?
+	rework: core systems -> romm firmware
 	linux
