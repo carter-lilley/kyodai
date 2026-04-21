@@ -780,7 +780,7 @@ static func _saf_write_file(saf_path: String, content: String) -> bool:
 ## source_dir: Directory to zip
 ## dest_zip: Destination ZIP file path
 ## Returns true on success
-static func zip_directory(source_dir: String, dest_zip: String) -> bool:
+static func zip_directory(source_dir: String, dest_zip: String, max_file_size: int = -1) -> bool:
 	if not dir_exists(source_dir):
 		push_error("[FileSystemManager] Source directory does not exist: " + source_dir)
 		return false
@@ -806,7 +806,7 @@ static func zip_directory(source_dir: String, dest_zip: String) -> bool:
 		push_error("[FileSystemManager] Failed to open ZIPPacker for: " + actual_zip_path)
 		return false
 	
-	var success = _zip_directory_recursive(packer, source_dir, "")
+	var success = _zip_directory_recursive(packer, source_dir, "", max_file_size)
 	packer.close()
 	
 	if not success:
@@ -922,8 +922,9 @@ static func copy_dir(source: String, dest: String) -> bool:
 
 ## Creates a ZIP archive from a directory with a root folder inside
 ## e.g., zipping /path/to/data with root_name "save" creates save/... inside the zip
+## max_file_size: maximum file size in bytes to include (-1 for no limit)
 ## Returns true on success
-static func zip_directory_with_root(source_dir: String, root_name: String, dest_zip: String) -> bool:
+static func zip_directory_with_root(source_dir: String, root_name: String, dest_zip: String, max_file_size: int = -1) -> bool:
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
 	var stage_root = stage_dir + root_name
 	DirAccess.make_dir_recursive_absolute(stage_root)
@@ -931,11 +932,11 @@ static func zip_directory_with_root(source_dir: String, root_name: String, dest_
 	if not copy_success:
 		delete_dir_recursive(stage_dir)
 		return false
-	var zip_success = zip_directory(stage_dir, dest_zip)
+	var zip_success = zip_directory(stage_dir, dest_zip, max_file_size)
 	delete_dir_recursive(stage_dir)
 	return zip_success
 
-static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_prefix: String) -> bool:
+static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_prefix: String, max_file_size: int = -1) -> bool:
 	var dir = DirAccess.open(dir_path)
 	if dir == null:
 		push_error("[FileSystemManager] Failed to open directory for zipping: " + dir_path)
@@ -953,19 +954,25 @@ static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_pr
 			if dir.current_is_dir():
 				packer.start_file(zip_path + "/")
 				packer.close_file()
-				if not _zip_directory_recursive(packer, full_path, zip_path + "/"):
+				if not _zip_directory_recursive(packer, full_path, zip_path + "/", max_file_size):
 					success = false
 			else:
+				# Check file size if max_file_size is set
 				var file = FileAccess.open(full_path, FileAccess.READ)
 				if file == null:
 					push_error("[FileSystemManager] Failed to read file for zipping: " + full_path)
 					success = false
 				else:
-					var data = file.get_buffer(file.get_length())
-					file.close()
-					packer.start_file(zip_path)
-					packer.write_file(data)
-					packer.close_file()
+					var file_size = file.get_length()
+					if max_file_size > 0 and file_size > max_file_size:
+						print("[FileSystemManager] Skipping oversized file (" + str(file_size) + " bytes): " + full_path)
+						file.close()
+					else:
+						var data = file.get_buffer(file_size)
+						file.close()
+						packer.start_file(zip_path)
+						packer.write_file(data)
+						packer.close_file()
 			
 			if not success:
 				break

@@ -480,6 +480,10 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 ## Returns the destination directory path
 func _get_extract_dest(emulator_id: String, save_dir: String, record_path: String, game: GameResource) -> String:
 	match emulator_id:
+		"cemu":
+			# Cemu saves are in save_dir/{prefix}/{short_id}/
+			# The zip root is {short_id}/, so extract to the prefix directory
+			return record_path.get_base_dir()
 		"dolphin":
 			if game.platform_slug == "wii":
 				return save_dir
@@ -504,13 +508,10 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 			# Use actual folder name for PCSX2 saves
 			return local_file_path.get_file() if local_file_path != "" else title_id
 		"ppsspp":
-			# For PSP, check if there are multiple save folders
-			var save_dir = resolve_save_directory("ppsspp")
-			var saves = discover_local_psp_save(save_dir, title_id)
-			if saves.size() > 1:
-				return title_id  # Multi-folder: use base title_id
-			elif saves.size() == 1:
-				return saves[0].file_path.get_file()  # Single folder: use folder name
+			# For PSP, always use the specific folder name as the save name
+			# This allows multiple saves (e.g., NPJH50333DAT, NPJH50333USER00) to be uploaded separately
+			if local_file_path != "":
+				return local_file_path.get_file()
 			return title_id
 		_:
 			return title_id.substr(8, 8)
@@ -529,30 +530,61 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 		"pcsx2":
 			return FileSystemManager.zip_directory(source_path, zip_path)
 		"ppsspp":
-			return _zip_psp_save(source_path, game.get_active_title_id(), zip_path)
+			# For individual uploads, zip the specific folder with its name as root
+			# This ensures extraction creates the correct subfolder (e.g., NPJH50333DAT/)
+			# Skip files over 100MB (DLC/install data) to avoid Cloudflare 413 errors
+			const MAX_FILE_SIZE := 100 * 1024 * 1024
+			var folder_name = source_path.get_file()
+			return FileSystemManager.zip_directory_with_root(source_path, folder_name, zip_path, MAX_FILE_SIZE)
 		_:
 			return FileSystemManager.zip_directory(source_path, zip_path)
 
 ## Zips all PSP save folders matching the title_id into a single archive
+## max_file_size: maximum file size in bytes to include (-1 for no limit)
 ## Returns true on success
-func _zip_psp_save(source_path: String, title_id: String, zip_path: String) -> bool:
-	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
-	var saves = discover_local_psp_save(source_path, title_id)
+func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_file_size: int = -1) -> bool:
+	# Normalize source path - remove trailing slashes to ensure get_file() works correctly
+	var normalized_path = source_path.rstrip("/").rstrip("\\")
+	
+	# Use timestamp + random to avoid stage dir collisions when called rapidly
+	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "_" + str(randi()) + "/"
+	
+	# Determine if source_path is an individual save folder or the SAVEDATA directory
+	# Individual save folders contain the title_id in their name (e.g., NPJH50333DAT)
+	var folder_name = normalized_path.get_file().to_upper()
+	var savedata_dir = normalized_path
+	
+	if folder_name != "" and folder_name.contains(title_id.to_upper()):
+		# It's an individual save folder, use parent directory
+		savedata_dir = normalized_path.get_base_dir()
+	
+	print("[SaveManager] _zip_psp_save: normalized_path=" + normalized_path + ", folder_name=" + folder_name + ", savedata_dir=" + savedata_dir)
+	
+	var saves = discover_local_psp_save(savedata_dir, title_id)
 	
 	if saves.is_empty():
+		print("[SaveManager] _zip_psp_save: no saves found in " + savedata_dir)
 		return false
+	
+	print("[SaveManager] _zip_psp_save: found " + str(saves.size()) + " save(s) to zip")
 	
 	# Copy all matching save folders to staging directory
 	for save in saves:
-		var folder_name = save.file_path.get_file()
-		var dest = stage_dir + folder_name
+		var save_folder_name = save.file_path.get_file()
+		var dest = stage_dir + save_folder_name
+		print("[SaveManager] _zip_psp_save: copying " + save.file_path + " to " + dest)
 		var success = FileSystemManager.copy_dir(save.file_path, dest)
 		if not success:
+			push_error("[SaveManager] _zip_psp_save: failed to copy " + save.file_path)
 			FileSystemManager.delete_dir_recursive(stage_dir)
 			return false
 	
 	# Zip the staging directory
-	var zip_success = FileSystemManager.zip_directory(stage_dir, zip_path)
+	print("[SaveManager] _zip_psp_save: creating zip at " + zip_path)
+	var zip_success = FileSystemManager.zip_directory(stage_dir, zip_path, max_file_size)
+	if not zip_success:
+		push_error("[SaveManager] _zip_psp_save: failed to create zip " + zip_path)
+	
 	FileSystemManager.delete_dir_recursive(stage_dir)
 	return zip_success
 
@@ -859,7 +891,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				
 				if is_folder_save:
 					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id), record_path, game)
-					var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, file_name.get_basename())
+					# Don't use subfolder - the zip already contains the correct folder structure
+					var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, "")
 					if not extract_success:
 						state.failed += 1
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
@@ -926,6 +959,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		
 		var device_id = DataManager.get_romm_device_id()
 		var current_timestamp = Time.get_datetime_string_from_system(true, true)
+		
+		# Standard per-save upload for all emulators
 		var state = {"pending": local_saves.size(), "failed": 0}
 		
 		for local in local_saves:
@@ -1135,7 +1170,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							
 							if is_folder_save:
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game)
-								var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, file_name.get_basename())
+								# Don't use subfolder - the zip already contains the correct folder structure
+								var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, "")
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
