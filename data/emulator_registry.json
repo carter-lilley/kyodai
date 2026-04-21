@@ -1622,8 +1622,8 @@
 	"platforms": ["psp"],
 	"save_config": {
 	  "directories": {
-		"windows": "{emulator_dir}/memstick/PSP",
-		"android": "{emulator_dir}/PSP"
+		"windows": "{emulator_dir}/memstick/PSP/SAVEDATA",
+		"android": "{emulator_dir}/PSP/SAVEDATA"
 	  },
 	  "extensions": ["*"],
 	  "uses_folder_saves": true

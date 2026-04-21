@@ -366,7 +366,9 @@ func discover_local_psp_save(directory: String, title_id: String) -> Array[Dicti
 		print("[SaveManager] discover_local_psp_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return []
 	
-	var savedata_dir = directory.rstrip("/") + "/SAVEDATA/"
+	# PPSSPP save_config already includes SAVEDATA in the path
+	# e.g., {emulator_dir}/memstick/PSP/SAVEDATA
+	var savedata_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_psp_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
 	if not FileSystemManager.dir_exists(savedata_dir):
@@ -469,7 +471,7 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 		"pcsx2":
 			return save_dir + "main.ps2/" + title_id + "/"
 		"ppsspp":
-			return save_dir + "SAVEDATA/" + title_id + "/"
+			return save_dir + title_id + "/"
 		_:
 			var result = _resolve_default_save_path(save_dir, title_id)
 			return result.path
@@ -485,7 +487,7 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 		"pcsx2":
 			return save_dir + "main.ps2/"
 		"ppsspp":
-			return save_dir + "SAVEDATA/"
+			return save_dir
 		_:
 			return record_path.get_base_dir()
 
