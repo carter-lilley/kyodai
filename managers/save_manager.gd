@@ -278,20 +278,19 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 	print("[SaveManager] discover_local_eden_save: results = " + str(results))
 	return results
 
-func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dictionary]:
+## Generalized fuzzy folder save discovery
+## Searches for folders whose names contain the given search_id
+## Options: recursive_search (bool), return_all_matches (bool)
+## Returns array of save dictionaries
+func discover_local_fuzzy_folder_save(directory: String, search_id: String, recursive_search: bool = false, return_all_matches: bool = true) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
-	if directory == "" or title_id == "":
-		print("[SaveManager] discover_local_pcsx2_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+	if directory == "" or search_id == "":
 		return results
 	
-	# PCSX2 folders contain the serial number somewhere in the name
-	# e.g., BESCES-50760ico, BASLUS-20152AC04, BISLPS-25534TwSt
-	var serial_with_hyphen = title_id.to_upper()
-	var serial_no_hyphen = title_id.replace("-", "").to_upper()
+	# Handle both hyphenated and non-hyphenated versions
+	var id_with_hyphen = search_id.to_upper()
+	var id_no_hyphen = search_id.replace("-", "").to_upper()
 	
-	print("[SaveManager] discover_local_pcsx2_save: searching for serial " + serial_with_hyphen + " (or " + serial_no_hyphen + ") in " + directory)
-	
-	# Recursively search memcards directory for matching save folder
 	var best_path = ""
 	var best_mtime = 0
 	
@@ -309,24 +308,31 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 			var full_path = current.rstrip("/") + "/" + item
 			
 			if FileSystemManager.dir_exists(full_path):
-				# Check if folder name contains the serial number (with or without hyphen)
 				var folder_name = item.to_upper()
 				var folder_name_no_hyphen = folder_name.replace("-", "")
 				
-				# Match if folder contains the serial anywhere in the name
-				if folder_name.find(serial_with_hyphen) != -1 or folder_name_no_hyphen.find(serial_no_hyphen) != -1:
-					print("[SaveManager] discover_local_pcsx2_save: found match at " + full_path)
-					print("[SaveManager]   Folder: " + folder_name + " | Serial: " + serial_with_hyphen)
+				# Match if folder contains the search_id anywhere in the name
+				var is_match = folder_name.find(id_with_hyphen) != -1 or folder_name_no_hyphen.find(id_no_hyphen) != -1
+				
+				if is_match:
 					var mtime = _get_folder_mtime(full_path)
-					if mtime > best_mtime:
-						best_mtime = mtime
-						best_path = full_path
-				else:
+					if return_all_matches:
+						results.append({
+							"file_name": item + ".zip",
+							"file_path": full_path,
+							"modified_time": mtime,
+							"extension": ".zip"
+						})
+					else:
+						# Only keep the most recent
+						if mtime > best_mtime:
+							best_mtime = mtime
+							best_path = full_path
+				elif recursive_search:
 					# Continue searching deeper
 					dirs_to_check.append(full_path)
 	
-	if best_path != "":
-		# Use actual folder name for the save file name
+	if not return_all_matches and best_path != "":
 		var folder_name = best_path.get_file()
 		results.append({
 			"file_name": folder_name + ".zip",
@@ -334,9 +340,21 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 			"modified_time": best_mtime,
 			"extension": ".zip"
 		})
-		print("[SaveManager] discover_local_pcsx2_save: returning save at " + best_path + " as " + folder_name + ".zip")
+	
+	return results
+
+func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dictionary]:
+	if directory == "" or title_id == "":
+		print("[SaveManager] discover_local_pcsx2_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return []
+	
+	print("[SaveManager] discover_local_pcsx2_save: searching for serial " + title_id + " in " + directory)
+	var results = discover_local_fuzzy_folder_save(directory, title_id, true, false)
+	
+	if results.is_empty():
+		print("[SaveManager] discover_local_pcsx2_save: no saves found for serial " + title_id)
 	else:
-		print("[SaveManager] discover_local_pcsx2_save: no saves found for serial " + serial_with_hyphen)
+		print("[SaveManager] discover_local_pcsx2_save: returning save at " + results[0].file_path)
 	
 	return results
 
@@ -344,32 +362,19 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 ## Returns an array of save dictionaries, one per matching folder
 ## PSP games can have multiple save folders (e.g., ULUS10509DAT, ULUS10509DLC)
 func discover_local_psp_save(directory: String, title_id: String) -> Array[Dictionary]:
-	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "":
-		return results
+		print("[SaveManager] discover_local_psp_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return []
 	
 	var savedata_dir = directory.rstrip("/") + "/SAVEDATA/"
-	if not FileSystemManager.dir_exists(savedata_dir):
-		return results
+	print("[SaveManager] discover_local_psp_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
-	var items = FileSystemManager.list_dir(savedata_dir)
-	for item in items:
-		if item == "." or item == "..":
-			continue
-		
-		var full_path = savedata_dir + item
-		if not FileSystemManager.dir_exists(full_path):
-			continue
-		
-		# Match folders starting with title_id (case-insensitive)
-		if item.to_upper().begins_with(title_id.to_upper()):
-			var mtime = _get_folder_mtime(full_path)
-			results.append({
-				"file_name": item + ".zip",
-				"file_path": full_path,
-				"modified_time": mtime,
-				"extension": ".zip"
-			})
+	if not FileSystemManager.dir_exists(savedata_dir):
+		print("[SaveManager] discover_local_psp_save: SAVEDATA dir doesn't exist yet")
+		return []
+	
+	var results = discover_local_fuzzy_folder_save(savedata_dir, title_id, false, true)
+	print("[SaveManager] discover_local_psp_save: found " + str(results.size()) + " matching save folders")
 	
 	return results
 
