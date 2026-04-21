@@ -8,6 +8,11 @@
 #define CSO_HEADER_SIZE 24
 #define CSO_MAGIC "CISO"
 
+/* Cross-platform string comparison */
+#ifdef _WIN32
+#define strcasecmp _stricmp
+#endif
+
 /* Cross-platform packed struct support */
 #ifdef _MSC_VER
 #define PACKED
@@ -147,7 +152,7 @@ static int find_file_in_iso(FILE *fp, const cso_header_t *hdr, uint32_t *index_t
             char *semicolon = strchr(name, ';');
             if (semicolon) *semicolon = '\0';
             
-            if (_stricmp(name, filename) == 0) {
+            if (strcasecmp(name, filename) == 0) {
                 *out_lba = entry->extent_lsb;
                 *out_size = entry->size_lsb;
                 free(sector);
