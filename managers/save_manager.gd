@@ -861,6 +861,28 @@ func _ensure_device_registered(callback: Callable) -> void:
 		callback.call(true, "")
 	)
 
+## Shows the save conflict dialog and waits for user choice
+## Returns: "local", "server", "cancel", or "" (on error)
+func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int) -> String:
+	var dialog = preload("res://components/save_conflict_dialog.tscn").instantiate()
+	dialog.setup(game.get_display_name(), server_time, local_time)
+	
+	var choice = {"value": ""}
+	
+	dialog.server_selected.connect(func(): choice.value = "server")
+	dialog.local_selected.connect(func(): choice.value = "local")
+	dialog.cancelled.connect(func(): choice.value = "cancel")
+	
+	# Add to scene tree
+	get_tree().root.add_child(dialog)
+	
+	# Wait for user choice
+	while choice.value == "":
+		await get_tree().process_frame
+	
+	return choice.value
+
+
 ## Main sync entry point for manual and auto sync
 func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Callable = Callable()) -> void:
 	if not _is_sync_enabled():
@@ -935,6 +957,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 	
 	var pending_uploads: Array[Dictionary] = []
 	var pending_downloads: Array[Dictionary] = []
+	var sync_aborted = false
 	
 	for local in local_saves:
 		var file_name = local.file_name
@@ -949,7 +972,16 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var remote_updated_unix = _parse_iso_to_unix(remote.get("updated_at", ""))
 			
 			if local_mtime > last_synced_unix and remote_updated_unix > last_synced_unix:
-				pending_uploads.append({"local": local, "remote": remote})
+				# CONFLICT: Both changed since last sync - show dialog
+				var choice = await _show_conflict_dialog(game, local_mtime, remote_updated_unix)
+				match choice:
+					"local":
+						pending_uploads.append({"local": local, "remote": remote})
+					"server":
+						pending_downloads.append({"local": local, "remote": remote})
+					"cancel", "":
+						sync_aborted = true
+						break
 			elif local_mtime > last_synced_unix:
 				pending_uploads.append({"local": local, "remote": remote})
 			elif remote_updated_unix > last_synced_unix:
@@ -957,6 +989,12 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		else:
 			if local_mtime > last_synced_unix or last_synced_unix == 0:
 				pending_uploads.append({"local": local, "remote": null})
+	
+	if sync_aborted:
+		save_sync_completed.emit(game, false, "Save sync cancelled by user")
+		if callback.is_valid():
+			callback.call(false, "Save sync cancelled by user")
+		return
 	
 	for remote in remote_by_name.values():
 		var file_name = remote.file_name
@@ -1116,6 +1154,7 @@ func _parse_iso_to_unix(iso_string: String) -> int:
 	return int(Time.get_unix_time_from_datetime_dict(dict))
 
 ## Auto-upload saves after playing (post-exit hook)
+## Checks for conflicts and shows dialog if both local and server saves have changed
 func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void:
 	print("[SaveManager] auto_upload_saves_for_game called for " + game.get_display_name() + " (" + emulator_id + ")")
 	if not _is_sync_enabled():
@@ -1154,81 +1193,143 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			return
 		
 		var device_id = DataManager.get_romm_device_id()
-		var current_timestamp = Time.get_datetime_string_from_system(true, true)
 		
-		# Standard per-save upload for all emulators
-		var state = {"pending": local_saves.size(), "failed": 0}
-		
-		for local in local_saves:
-			var local_file_name = local.file_name
-			var local_file_path = local.file_path
+		# Check for conflicts with remote saves before uploading
+		NetworkManager.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+			if fetch_error != "":
+				push_warning("[SaveManager] Auto-upload conflict check failed: " + fetch_error)
+				# Continue with upload anyway if we can't check
+				_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
+				return
 			
-			if is_folder_save:
-				var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
-				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
-				FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
-				var zip_success = _zip_emulator_save(emulator_id, local_file_path, zip_path, game)
-				if not zip_success:
-					state.failed += 1
-					push_error("[SaveManager] Failed to zip folder for auto-upload: " + local_file_path)
+			# Check if any local save conflicts with remote
+			var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
+			var db_by_name: Dictionary = {}
+			for rec in db_records:
+				db_by_name[rec.file_name] = rec
+			
+			var has_conflict = false
+			var conflict_local_time = 0
+			var conflict_server_time = 0
+			
+			for local in local_saves:
+				var file_name = local.file_name
+				var db_rec = db_by_name.get(file_name)
+				var last_synced_unix = 0
+				if db_rec:
+					last_synced_unix = _parse_iso_to_unix(db_rec.last_synced_at)
+				
+				for remote in remote_saves:
+					if remote.file_name == file_name:
+						var remote_updated_unix = _parse_iso_to_unix(remote.get("updated_at", ""))
+						if local.modified_time > last_synced_unix and remote_updated_unix > last_synced_unix:
+							has_conflict = true
+							conflict_local_time = local.modified_time
+							conflict_server_time = remote_updated_unix
+							break
+				
+				if has_conflict:
+					break
+			
+			if has_conflict:
+				# Show conflict dialog
+				print("[SaveManager] Auto-upload detected conflict, showing dialog")
+				var choice = await _show_conflict_dialog(game, conflict_local_time, conflict_server_time)
+				
+				match choice:
+					"local":
+						# User chose to keep local, proceed with upload
+						print("[SaveManager] User chose to keep local save, proceeding with upload")
+						_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
+					"server":
+						# User chose to keep server, skip upload (will download on next launch)
+						print("[SaveManager] User chose to keep server save, skipping upload")
+						NotificationManager.show_notification("Save sync: keeping server version", Notification.Type.INFO)
+					"cancel", "":
+						# User cancelled
+						print("[SaveManager] User cancelled auto-upload")
+						NotificationManager.show_notification("Save sync cancelled", Notification.Type.INFO)
+			else:
+				# No conflict, proceed with upload
+				_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
+		)
+	)
+
+
+## Internal function to perform the actual auto-upload after conflict checks
+func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: Array, device_id: String, is_folder_save: bool) -> void:
+	var current_timestamp = Time.get_datetime_string_from_system(true, true)
+	var state = {"pending": local_saves.size(), "failed": 0}
+	
+	for local in local_saves:
+		var local_file_name = local.file_name
+		var local_file_path = local.file_path
+		
+		if is_folder_save:
+			var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
+			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
+			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+			var zip_success = _zip_emulator_save(emulator_id, local_file_path, zip_path, game)
+			if not zip_success:
+				state.failed += 1
+				push_error("[SaveManager] Failed to zip folder for auto-upload: " + local_file_path)
+				state.pending -= 1
+				if state.pending <= 0:
+					if state.failed > 0:
+						NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+					else:
+						NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+				continue
+			
+			NetworkManager.upload_save(
+				game.romm_id,
+				zip_path,
+				emulator_id,
+				SLOT_DEFAULT,
+				device_id,
+				true,
+				func(data: Dictionary, error: String):
+					if FileSystemManager.file_exists(zip_path):
+						FileSystemManager.delete_file(zip_path)
+					# Clean up empty parent directories
+					_cleanup_temp_dir(zip_path)
+					if error != "":
+						state.failed += 1
+						push_error("[SaveManager] Auto-upload failed: " + error)
+					else:
+						var remote_id = data.get("id", 0)
+						print("[SaveManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
+						DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
 					state.pending -= 1
 					if state.pending <= 0:
 						if state.failed > 0:
 							NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
 						else:
 							NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
-					continue
-				
-				NetworkManager.upload_save(
-					game.romm_id,
-					zip_path,
-					emulator_id,
-					SLOT_DEFAULT,
-					device_id,
-					true,
-					func(data: Dictionary, error: String):
-						if FileSystemManager.file_exists(zip_path):
-							FileSystemManager.delete_file(zip_path)
-						# Clean up empty parent directories
-						_cleanup_temp_dir(zip_path)
-						if error != "":
-							state.failed += 1
-							push_error("[SaveManager] Auto-upload failed: " + error)
-						else:
-							var remote_id = data.get("id", 0)
-							print("[SaveManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
-							DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
-						state.pending -= 1
-						if state.pending <= 0:
-							if state.failed > 0:
-								NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
-							else:
-								NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
-				)
-			else:
-				NetworkManager.upload_save(
-					game.romm_id,
-					local_file_path,
-					emulator_id,
-					SLOT_DEFAULT,
-					device_id,
-					true,
-					func(data: Dictionary, error: String):
-						if error != "":
-							state.failed += 1
-							push_error("[SaveManager] Auto-upload failed: " + error)
-						else:
-							var remote_id = data.get("id", 0)
-							print("[SaveManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
-							DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
-						state.pending -= 1
-						if state.pending <= 0:
-							if state.failed > 0:
-								NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
-							else:
-								NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
-				)
-	)
+			)
+		else:
+			NetworkManager.upload_save(
+				game.romm_id,
+				local_file_path,
+				emulator_id,
+				SLOT_DEFAULT,
+				device_id,
+				true,
+			func(data: Dictionary, error: String):
+				if error != "":
+					state.failed += 1
+					push_error("[SaveManager] Auto-upload failed: " + error)
+				else:
+					var remote_id = data.get("id", 0)
+					print("[SaveManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
+					DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
+				state.pending -= 1
+				if state.pending <= 0:
+					if state.failed > 0:
+						NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+					else:
+						NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+			)
 
 ## Auto-download saves before launch (pre-launch hook)
 ## If on_complete callback is provided, it will be called when sync finishes

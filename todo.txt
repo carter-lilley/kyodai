@@ -5,9 +5,8 @@ install flow doesnt refresh platform cards reliably anymore - especially if you 
 no touch to launch on bottom screen
 ui scale
 android download manager and file streaming
-chunk reassembly progress notif
+
 alignment modes in single row
-saves / conflic resolution
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 
@@ -43,7 +42,6 @@ effect stacks to fill their parent base
 ## launch:
 	add: psp, melonds, ps2, dolphin retroarch sync
   	add: ps3 on android
-	add: shadps4!
 	ft: scrape-style download action for retroarch
 	ft: check for emulator updates
 	dolphin: controller inis

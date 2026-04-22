@@ -2051,5 +2051,105 @@
 		}
 	  }
 	}
+  },
+  "shadps4": {
+	"name": "shadPS4",
+	"platforms": ["ps4"],
+	"save_config": {
+	  "directories": {
+		"windows": "{emulator_dir}/user/savedata",
+		"linux": "{emulator_dir}/user/savedata"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
+	},
+	"requires_working_dir": true,
+	"install": [
+	  {
+		"step": "download_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "download_repo",
+			"github_repo": "shadps4-emu/shadps4-qtlauncher",
+			"asset_pattern": "shadPS4QtLauncher-win64-qt-.*\\.zip"
+		  },
+		  "linux": {
+			"action_type": "download_repo",
+			"github_repo": "shadps4-emu/shadps4-qtlauncher",
+			"asset_pattern": "shadPS4QtLauncher-linux-qt-.*\\.zip"
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "install_emulator",
+		"platforms": {
+		  "windows": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": false,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "shadPS4QtLauncher.exe"
+			}
+		  },
+		  "linux": {
+			"action_type": "extract",
+			"extract_to": ".",
+			"strip_top_directory": false,
+			"validate": {
+			  "action_type": "file_exists",
+			  "file": "shadPS4QtLauncher"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "create_user_directory",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_folders",
+			"folders": ["user", "user/savedata"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user/savedata"
+			}
+		  },
+		  "linux": {
+			"action_type": "create_folders",
+			"folders": ["user", "user/savedata"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "user/savedata"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  }
+	],
+	"launch": {
+	  "platforms": {
+		"windows": {
+		  "type": "command",
+		  "executable": "shadPS4QtLauncher.exe",
+		  "template": ["{exe}", "{rom}", "--fullscreen", "true"]
+		},
+		"linux": {
+		  "type": "command",
+		  "executable": "shadPS4QtLauncher",
+		  "template": ["{exe}", "{rom}", "--fullscreen", "true"]
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
   }
 }
