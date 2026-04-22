@@ -38,7 +38,7 @@ func _cleanup_temp_dir(file_path: String) -> void:
 					break
 			if not has_files:
 				print("[SaveManager] Removing empty temp directory: " + parent)
-				DirAccess.remove_absolute(parent)
+				FileSystemManager.delete_dir(parent)
 				parent = parent.get_base_dir()
 			else:
 				break
@@ -799,17 +799,9 @@ func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) 
 		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
 			var src = card_dir + item
 			var dst = stage_dir + item
-			var parent = dst.get_base_dir()
-			DirAccess.make_dir_recursive_absolute(parent)
-			var file = FileAccess.open(src, FileAccess.READ)
-			if file:
-				var data = file.get_buffer(file.get_length())
-				file.close()
-				var out = FileAccess.open(dst, FileAccess.WRITE)
-				if out:
-					out.store_buffer(data)
-					out.close()
-					copy_success = true
+			FileSystemManager.make_dir_recursive(dst.get_base_dir())
+			if FileSystemManager.copy_file(src, dst):
+				copy_success = true
 	
 	if not copy_success:
 		FileSystemManager.delete_dir_recursive(stage_dir)
@@ -827,7 +819,7 @@ func _zip_dolphin_wii_save(source_dir: String, dest_zip: String) -> bool:
 	var prefix = parts[-2]
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
 	var stage_root = stage_dir + "Wii/title/" + prefix + "/" + hex_id
-	DirAccess.make_dir_recursive_absolute(stage_root)
+	FileSystemManager.make_dir_recursive(stage_root)
 	var copy_success = FileSystemManager.copy_dir(source_dir, stage_root)
 	if not copy_success:
 		FileSystemManager.delete_dir_recursive(stage_dir)
@@ -1002,7 +994,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 			print("[SaveManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
-			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
 			var zip_success = _zip_emulator_save(emulator_id, original_path, zip_path, game)
 			if not zip_success:
 				state.failed += 1
@@ -1018,8 +1010,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				device_id,
 				true,
 				func(data: Dictionary, error: String):
-					if FileAccess.file_exists(zip_path):
-						DirAccess.remove_absolute(zip_path)
+					if FileSystemManager.file_exists(zip_path):
+						FileSystemManager.delete_file(zip_path)
 					# Clean up empty parent directories
 					_cleanup_temp_dir(zip_path)
 					if error != "":
@@ -1063,7 +1055,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		
 		if is_folder_save:
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
-			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
 			local_path = zip_path
 			var save_dir = resolve_save_directory(emulator_id)
 			
@@ -1098,8 +1090,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					if not extract_success:
 						state.failed += 1
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
-					if FileAccess.file_exists(zip_path):
-						DirAccess.remove_absolute(zip_path)
+					if FileSystemManager.file_exists(zip_path):
+						FileSystemManager.delete_file(zip_path)
 					# Clean up empty parent directories
 					_cleanup_temp_dir(zip_path)
 					
@@ -1174,7 +1166,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			if is_folder_save:
 				var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
 				var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
-				DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+				FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
 				var zip_success = _zip_emulator_save(emulator_id, local_file_path, zip_path, game)
 				if not zip_success:
 					state.failed += 1
@@ -1195,8 +1187,8 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 					device_id,
 					true,
 					func(data: Dictionary, error: String):
-						if FileAccess.file_exists(zip_path):
-							DirAccess.remove_absolute(zip_path)
+						if FileSystemManager.file_exists(zip_path):
+							FileSystemManager.delete_file(zip_path)
 						# Clean up empty parent directories
 						_cleanup_temp_dir(zip_path)
 						if error != "":
@@ -1349,7 +1341,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					
 					if is_folder_save:
 						zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
-						DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(zip_path.get_base_dir()))
+						FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
 						local_path = zip_path
 						
 						if not _local:
@@ -1385,8 +1377,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
-								if FileAccess.file_exists(zip_path):
-									DirAccess.remove_absolute(zip_path)
+								if FileSystemManager.file_exists(zip_path):
+									FileSystemManager.delete_file(zip_path)
 								# Clean up empty parent directories
 								_cleanup_temp_dir(zip_path)
 							
@@ -1414,9 +1406,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 ## Returns true if valid, false if missing or invalid.
 func validate_pcsx2_superblock(memcard_path: String) -> bool:
 	var superblock_path = memcard_path.rstrip("/") + "/_pcsx2_superblock"
-	if not FileAccess.file_exists(superblock_path):
+	if not FileSystemManager.file_exists(superblock_path):
 		return false
-	var existing = FileAccess.open(superblock_path, FileAccess.READ)
+	var existing = FileSystemManager.open_file_read(superblock_path)
 	if not existing:
 		return false
 	var header = existing.get_buffer(28)
@@ -1484,13 +1476,10 @@ func create_pcsx2_superblock(memcard_path: String) -> bool:
 	for i in range(512, 8192):
 		sb[i] = 0xFF
 	
-	var file = FileAccess.open(superblock_path, FileAccess.WRITE)
-	if not file:
+	if not FileSystemManager.write_file_bytes(superblock_path, sb):
 		push_error("[SaveManager] Failed to write PCSX2 superblock: " + superblock_path)
 		return false
 	
-	file.store_buffer(sb)
-	file.close()
 	print("[SaveManager] PCSX2 superblock created successfully")
 	return true
 

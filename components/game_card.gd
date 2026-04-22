@@ -359,7 +359,7 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 		visual_container.anchor_right = 1.0
 		visual_container.anchor_bottom = 1.0
 		visual_container.position = Vector2.ZERO
-		visual_container.size = card_size
+		visual_container.set_deferred("size", card_size)
 		visual_container.pivot_offset = _get_grid_pivot_offset()
 	else:
 		var focused_size = card_size * focus_scale

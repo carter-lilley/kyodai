@@ -1410,7 +1410,7 @@ func _setup_desktop_dual_screen(second_screen_index: int) -> void:
 	_hero_image.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_hero_image.offset_bottom = 0
 	_hero_image.position = Vector2.ZERO
-	_hero_image.size = Vector2(screen_rect.size)
+	_hero_image.set_deferred("size", Vector2(screen_rect.size))
 	
 	# Add window to scene tree
 	get_tree().root.add_child(_hero_secondary_window)

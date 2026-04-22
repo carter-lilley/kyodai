@@ -274,8 +274,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 		else:
 			item.extract_dir = original_extract_dir
 		# Create temp directory
-		var result = DirAccess.make_dir_recursive_absolute(temp_dir)
-		if result != OK:
+		if not FileSystemManager.make_dir_recursive(temp_dir):
 			push_error("[DownloadManager] Failed to create temp directory: " + temp_dir)
 			return ""
 	else:
@@ -285,24 +284,10 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 		var dest_dir = destination.get_base_dir()
 		var dir: DirAccess
 		
-		# Handle absolute vs relative paths
-		if dest_dir.begins_with("user://") or dest_dir.begins_with("res://"):
-			dir = DirAccess.open(dest_dir.get_base_dir())
-			if dir and not dir.dir_exists(dest_dir.get_file()):
-				var result = dir.make_dir_recursive(dest_dir.get_file())
-				if result != OK:
-					push_error("[DownloadManager] Failed to create directory: " + dest_dir)
-					return ""
-		else:
-			# Absolute path (e.g., D:/Emulation/roms/switch)
-			dir = DirAccess.open(dest_dir)
-			if dir == null:
-				# Directory doesn't exist, try to create it using OS
-				var global_path = ProjectSettings.globalize_path(dest_dir) if dest_dir.begins_with("res://") else dest_dir
-				var result = DirAccess.make_dir_recursive_absolute(global_path)
-				if result != OK:
-					push_error("[DownloadManager] Failed to create directory: " + global_path + " (error: " + str(result) + ")")
-					return ""
+		# Ensure destination directory exists (handles SAF and regular paths)
+		if not FileSystemManager.make_dir_recursive(dest_dir):
+			push_error("[DownloadManager] Failed to create directory: " + dest_dir)
+			return ""
 	
 	_queue.append(item)
 	
@@ -650,8 +635,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	
 	# Create temp directory for chunks
 	var temp_dir = "user://downloads/chunks/" + item.id
-	var err = DirAccess.make_dir_recursive_absolute(temp_dir)
-	if err != OK:
+	if not FileSystemManager.make_dir_recursive(temp_dir):
 		push_error("[DownloadManager] Failed to create chunk temp directory: " + temp_dir)
 		item.status = "failed"
 		item.error_message = "Failed to create temp directory"
@@ -1163,8 +1147,8 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			chunk.temp_bytes_downloaded = 0  # Reset progress tracking
 			
 			# Delete partial file
-			if FileAccess.file_exists(chunk.temp_path):
-				DirAccess.remove_absolute(chunk.temp_path)
+			if FileSystemManager.file_exists(chunk.temp_path):
+				FileSystemManager.delete_file(chunk.temp_path)
 			
 			retry_items.append({
 				"item_id": item_id,
@@ -1374,8 +1358,8 @@ func _on_chunk_download_complete(item_id: String, chunk_index: int, success: boo
 		
 		if chunk.retry_count <= MAX_CHUNK_RETRIES:
 			# Delete partial/failed chunk file
-			if FileAccess.file_exists(chunk.temp_path):
-				DirAccess.remove_absolute(chunk.temp_path)
+			if FileSystemManager.file_exists(chunk.temp_path):
+				FileSystemManager.delete_file(chunk.temp_path)
 				print("[DownloadManager] Deleted failed chunk file: " + chunk.temp_path)
 			
 			# Update progress to show retry status
@@ -1442,8 +1426,7 @@ func _reassemble_chunks(item_id: String):
 		var original_filename = chunked_info.final_path.get_file()
 		reassembly_temp_path = "user://downloads/assembled/" + original_filename
 		var assembled_dir = "user://downloads/assembled"
-		if not DirAccess.dir_exists_absolute(assembled_dir):
-			DirAccess.make_dir_recursive_absolute(assembled_dir)
+		FileSystemManager.make_dir_recursive(assembled_dir)
 		print("[DownloadManager] SAF download: assembling to temp file: " + reassembly_temp_path)
 		print("[DownloadManager] SAF destination: " + item.saf_destination)
 	
@@ -1520,8 +1503,8 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	if not success:
 		push_error("[DownloadManager] Native reassembly failed for: " + item.name)
 		# Clean up failed final file
-		if FileAccess.file_exists(reassembly_temp_path):
-			DirAccess.remove_absolute(reassembly_temp_path)
+		if FileSystemManager.file_exists(reassembly_temp_path):
+			FileSystemManager.delete_file(reassembly_temp_path)
 		
 		_stop_chunked_progress_timer(item_id)
 		item.status = "failed"
@@ -1614,8 +1597,8 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 			push_error("[DownloadManager] [Reassembly] Desktop reassembly failed for: " + item.name)
 			
 			# Clean up failed final file
-			if FileAccess.file_exists(final_path):
-				DirAccess.remove_absolute(final_path)
+			if FileSystemManager.file_exists(final_path):
+				FileSystemManager.delete_file(final_path)
 			
 			item.status = "failed"
 			item.error_message = "Failed to reassemble chunks"
@@ -1656,8 +1639,8 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, use_saf: bool,
 		_active_items.erase(item_id)
 		
 		# Clean up the corrupted file
-		if FileAccess.file_exists(reassembly_temp_path):
-			DirAccess.remove_absolute(reassembly_temp_path)
+		if FileSystemManager.file_exists(reassembly_temp_path):
+			FileSystemManager.delete_file(reassembly_temp_path)
 		
 		if item.notification_id != -1:
 			NotificationManager.dismiss_notification(item.notification_id)
@@ -1696,11 +1679,11 @@ func _cleanup_chunked_download(item_id: String):
 	
 	# Clean up temp chunk files
 	for chunk in chunked_info.chunks:
-		if FileAccess.file_exists(chunk.temp_path):
-			DirAccess.remove_absolute(chunk.temp_path)
+		if FileSystemManager.file_exists(chunk.temp_path):
+			FileSystemManager.delete_file(chunk.temp_path)
 	
 	# Clean up temp directory
-	if DirAccess.dir_exists_absolute(chunked_info.temp_dir):
+	if FileSystemManager.dir_exists(chunked_info.temp_dir):
 		_cleanup_temp_dir(chunked_info.temp_dir)
 	
 	# Close and clean up connection pool
@@ -2032,14 +2015,14 @@ func _queue_saf_copy_to_thread(item: QueueItem):
 			item.extract_dir = item.get_meta("original_extract_dir")
 		
 		# Clean up temp files
-		DirAccess.remove_absolute(temp_file_path)
-		DirAccess.remove_absolute(temp_dir_path)
+		FileSystemManager.delete_file(temp_file_path)
+		FileSystemManager.delete_file(temp_dir_path)
 		
 		# Also clean up temp assembly file for chunked downloads
 		if item.has_meta("temp_assembly_path"):
 			var assembly_path = item.get_meta("temp_assembly_path")
-			if FileAccess.file_exists(assembly_path):
-				DirAccess.remove_absolute(assembly_path)
+			if FileSystemManager.file_exists(assembly_path):
+				FileSystemManager.delete_file(assembly_path)
 				print("[DownloadManager] Cleaned up temp assembly file: " + assembly_path)
 		
 		# Dismiss SAF copy notification before completion
@@ -2089,96 +2072,16 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 	# Show extraction notification immediately
 	NotificationManager.update_notification_text(item.notification_id, item.name + "...")
 	
-	# Check if destination is a SAF path
-	var is_saf_dest = FileSystemManager.is_saf_path(extract_dir)
-	var temp_extract_dir = ""
-	
-	if is_saf_dest:
-		# Extract to temp location first, then copy to SAF
-		temp_extract_dir = "user://extract_temp/" + item.id
-		if not DirAccess.dir_exists_absolute(temp_extract_dir.get_base_dir()):
-			DirAccess.make_dir_recursive_absolute(temp_extract_dir.get_base_dir())
-	
 	# Create extraction callable for MemoryManager
 	var extraction_callable = func() -> bool:
-		var actual_archive_path = archive_path
-		var actual_extract_dir = temp_extract_dir if is_saf_dest else extract_dir
+		print("[DownloadManager] Extraction worker started: " + archive_path + " -> " + extract_dir)
 		
-		print("[DownloadManager] Extraction worker started")
-		print("[DownloadManager] archive_path: " + archive_path)
-		print("[DownloadManager] actual_extract_dir: " + actual_extract_dir)
-		print("[DownloadManager] is_saf_dest: " + str(is_saf_dest))
+		# Delegate to FileSystemManager for all ZIP extraction (handles SAF source/dest)
+		var success = FileSystemManager.extract_zip(archive_path, extract_dir)
 		
-		# On Android with SAF source URI, use the plugin to extract directly.
-		# This avoids Scoped Storage restrictions that prevent direct file access to SD cards.
-		if PlatformManager.is_android() and archive_path.begins_with("content://"):
-			var plugin = Engine.get_singleton("PackageChecker")
-			if plugin == null:
-				push_error("[DownloadManager] PackageChecker plugin not available for SAF extraction")
-				return false
-			
-			# Extract directly to the final destination (SAF or local), bypassing temp dir
-			var plugin_dest = extract_dir if is_saf_dest else actual_extract_dir
-			print("[DownloadManager] Using plugin extractSafZipToLocal for SAF URI to: " + plugin_dest)
-			var success = plugin.extractSafZipToLocal(archive_path, plugin_dest)
-			if success:
-				print("[DownloadManager] Plugin extraction successful")
-				return true
-			else:
-				push_error("[DownloadManager] Plugin extraction failed for: " + archive_path)
-				return false
-		
-		# Desktop/non-SAF fallback: use ZIPReader directly
-		print("[DownloadManager] Attempting to open ZIP at: " + actual_archive_path)
-		print("[DownloadManager] File exists check: " + str(FileAccess.file_exists(actual_archive_path)))
-		
-		if FileAccess.file_exists(actual_archive_path):
-			var test_file = FileAccess.open(actual_archive_path, FileAccess.READ)
-			if test_file:
-				print("[DownloadManager] File size: " + str(test_file.get_length()))
-				test_file.close()
-		
-		# Small delay to ensure file is fully written and closed
-		OS.delay_msec(100)
-		
-		var reader = ZIPReader.new()
-		var err = reader.open(actual_archive_path)
-		
-		if err != OK:
-			push_error("[DownloadManager] Failed to open ZIP: " + str(err) + " (path: " + archive_path + ")")
+		if not success:
+			push_error("[DownloadManager] Extraction failed for: " + archive_path)
 			return false
-		
-		var files = reader.get_files()
-		
-		for file in files:
-			var dest_path = actual_extract_dir + "/" + file
-			
-			# Create directory if needed
-			if file.ends_with("/"):
-				FileSystemManager.make_dir_recursive(dest_path)
-				continue
-			
-			# Extract file
-			var buffer = reader.read_file(file)
-			if buffer.size() > 0:
-				var file_dir = dest_path.get_base_dir()
-				FileSystemManager.make_dir_recursive(file_dir)
-				
-				var f = FileAccess.open(dest_path, FileAccess.WRITE)
-				if f:
-					f.store_buffer(buffer)
-					f.close()
-		
-		reader.close()
-		
-		# If destination is SAF, copy extracted temp files there
-		if is_saf_dest:
-			if not FileSystemManager.copy_dir_to_saf(temp_extract_dir, extract_dir):
-				push_error("[DownloadManager] Failed to copy extracted files to SAF destination: " + extract_dir)
-				return false
-			
-			# Clean up temp directory
-			_cleanup_temp_dir(temp_extract_dir)
 		
 		# Clean up archive only if delete_after_extract is true
 		if item.delete_after_extract:
@@ -2363,11 +2266,11 @@ func _cleanup_temp_dir(dir_path: String) -> void:
 			if dir.current_is_dir():
 				_cleanup_temp_dir(full_path)
 			else:
-				DirAccess.remove_absolute(full_path)
+				FileSystemManager.delete_file(full_path)
 		file_name = dir.get_next()
 	
 	dir.list_dir_end()
-	DirAccess.remove_absolute(dir_path)
+	FileSystemManager.delete_dir(dir_path)
 
 ## Extracts the base tree URI from a full SAF path
 ## SAF format: content://authority/tree/<tree_id>/subdir1/subdir2/file

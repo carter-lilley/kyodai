@@ -378,9 +378,8 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 	
 	# Verify directory exists before starting download
 	var dest_dir = normalized_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dest_dir):
-		var err = DirAccess.make_dir_recursive_absolute(dest_dir)
-		if err != OK:
+	if not FileSystemManager.dir_exists(dest_dir):
+		if not FileSystemManager.make_dir_recursive(dest_dir):
 			if callback.is_valid():
 				callback.call(false, 0, "Failed to create destination directory")
 			http.queue_free()
@@ -455,7 +454,7 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 			http.queue_free()
 			return
 		
-		if not FileAccess.file_exists(normalized_path):
+		if not FileSystemManager.file_exists(normalized_path):
 			result["error"] = "Download file not created"
 			callback.call(false, response_code, result.error)
 			http.queue_free()
@@ -538,9 +537,8 @@ func http_download_chunk(url: String, destination_path: String, start_byte: int,
 	
 	# Verify directory exists before starting download
 	var dest_dir = normalized_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dest_dir):
-		var err = DirAccess.make_dir_recursive_absolute(dest_dir)
-		if err != OK:
+	if not FileSystemManager.dir_exists(dest_dir):
+		if not FileSystemManager.make_dir_recursive(dest_dir):
 			if callback.is_valid():
 				callback.call(false, 0, "Failed to create destination directory")
 			return
@@ -607,7 +605,7 @@ func _start_chunk_download_on_main_thread(url: String, normalized_path: String, 
 			http.queue_free()
 			return
 		
-		if not FileAccess.file_exists(normalized_path):
+		if not FileSystemManager.file_exists(normalized_path):
 			callback.call(false, response_code, "Chunk file not created")
 			http.queue_free()
 			return
@@ -761,12 +759,12 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 			callback.call({}, "Not connected")
 		return
 	
-	if not FileAccess.file_exists(file_path):
+	if not FileSystemManager.file_exists(file_path):
 		if callback.is_valid():
 			callback.call({}, "File not found: " + file_path)
 		return
 	
-	var file = FileAccess.open(file_path, FileAccess.READ)
+	var file = FileSystemManager.open_file_read(file_path)
 	if not file:
 		if callback.is_valid():
 			callback.call({}, "Cannot open file: " + file_path)

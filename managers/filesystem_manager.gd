@@ -748,6 +748,48 @@ static func write_file(path: String, content: String) -> bool:
 	file.close()
 	return true
 
+## Writes binary data to a file (works with both regular paths and SAF URIs)
+## Returns true on success
+static func write_file_bytes(path: String, data: PackedByteArray) -> bool:
+	if is_saf_path(path) and is_android():
+		return _saf_write_file_bytes(path, data)
+	
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return false
+	
+	file.store_buffer(data)
+	file.close()
+	return true
+
+## Internal helper for SAF binary file writing
+static func _saf_write_file_bytes(saf_path: String, data: PackedByteArray) -> bool:
+	var plugin = _get_plugin()
+	if plugin and plugin.has_method("writeSafFileBytes"):
+		return plugin.call("writeSafFileBytes", saf_path, data)
+	
+	# Fallback: write to temp then copy
+	var temp_path = _saf_to_temp_path(saf_path)
+	var temp_dir = temp_path.get_base_dir()
+	
+	if not DirAccess.dir_exists_absolute(temp_dir):
+		DirAccess.make_dir_recursive_absolute(temp_dir)
+	
+	var file = FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	
+	file.store_buffer(data)
+	file.close()
+	
+	var success = copy_to_saf(temp_path, saf_path)
+	
+	# Clean up temp file
+	if FileAccess.file_exists(temp_path):
+		DirAccess.remove_absolute(temp_path)
+	
+	return success
+
 ## Internal helper for SAF file writing
 static func _saf_write_file(saf_path: String, content: String) -> bool:
 	var plugin = _get_plugin()
@@ -822,9 +864,26 @@ static func zip_directory(source_dir: String, dest_zip: String, max_file_size: i
 	return true
 
 ## Extracts a ZIP archive to a directory
-## Works with both regular paths and SAF URIs
+## Works with both regular paths and SAF URIs for both source and destination
 ## Returns true on success
 static func extract_zip(zip_path: String, dest_dir: String) -> bool:
+	# Handle SAF source URI on Android - use native plugin for extraction
+	if is_saf_path(zip_path) and is_android():
+		var plugin = _get_plugin()
+		if plugin == null:
+			push_error("[FileSystemManager] PackageChecker plugin not available for SAF ZIP extraction")
+			return false
+		
+		print("[FileSystemManager] Using plugin extractSafZipToLocal for SAF URI: " + zip_path + " -> " + dest_dir)
+		var success = plugin.call("extractSafZipToLocal", zip_path, dest_dir)
+		if success:
+			print("[FileSystemManager] Plugin SAF extraction successful")
+			return true
+		else:
+			push_error("[FileSystemManager] Plugin SAF extraction failed for: " + zip_path)
+			return false
+	
+	# Handle local ZIP files with ZIPReader
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
 	if err != OK:
@@ -899,6 +958,75 @@ static func extract_zip_to_dir(zip_path: String, dest_dir: String, subfolder_nam
 		actual_dest += subfolder_name + "/"
 	return extract_zip(zip_path, actual_dest)
 
+## Copies a single file (works with both regular paths and SAF URIs)
+## Returns true on success
+static func copy_file(source_path: String, dest_path: String) -> bool:
+	if not file_exists(source_path):
+		push_error("[FileSystemManager] Source file does not exist: " + source_path)
+		return false
+	
+	# Handle SAF destination
+	if is_saf_path(dest_path) and is_android():
+		var temp_path = _saf_to_temp_path(dest_path)
+		var temp_dir = temp_path.get_base_dir()
+		
+		if not DirAccess.dir_exists_absolute(temp_dir):
+			DirAccess.make_dir_recursive_absolute(temp_dir)
+		
+		var file = FileAccess.open(source_path, FileAccess.READ)
+		if file == null:
+			return false
+		
+		var data = file.get_buffer(file.get_length())
+		file.close()
+		
+		var out = FileAccess.open(temp_path, FileAccess.WRITE)
+		if out == null:
+			return false
+		
+		out.store_buffer(data)
+		out.close()
+		
+		var success = copy_to_saf(temp_path, dest_path)
+		
+		if FileAccess.file_exists(temp_path):
+			DirAccess.remove_absolute(temp_path)
+		
+		return success
+	
+	# Handle SAF source
+	if is_saf_path(source_path) and is_android():
+		var file = open_file_read(source_path)
+		if file == null:
+			return false
+		
+		var data = file.get_buffer(file.get_length())
+		file.close()
+		
+		var out = FileAccess.open(dest_path, FileAccess.WRITE)
+		if out == null:
+			return false
+		
+		out.store_buffer(data)
+		out.close()
+		return true
+	
+	# Regular file copy
+	var file = FileAccess.open(source_path, FileAccess.READ)
+	if file == null:
+		return false
+	
+	var data = file.get_buffer(file.get_length())
+	file.close()
+	
+	var out = FileAccess.open(dest_path, FileAccess.WRITE)
+	if out == null:
+		return false
+	
+	out.store_buffer(data)
+	out.close()
+	return true
+
 ## Recursively copies a local directory to another local directory
 ## Returns true on success
 static func copy_dir(source: String, dest: String) -> bool:
@@ -921,17 +1049,7 @@ static func copy_dir(source: String, dest: String) -> bool:
 				if not copy_dir(src_path, dst_path):
 					success = false
 			else:
-				var file = FileAccess.open(src_path, FileAccess.READ)
-				if file:
-					var data = file.get_buffer(file.get_length())
-					file.close()
-					var out = FileAccess.open(dst_path, FileAccess.WRITE)
-					if out:
-						out.store_buffer(data)
-						out.close()
-					else:
-						success = false
-				else:
+				if not copy_file(src_path, dst_path):
 					success = false
 		item = dir.get_next()
 	

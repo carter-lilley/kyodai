@@ -1089,18 +1089,15 @@ func _validate_controller_config(file_path: String, validate: Dictionary) -> boo
 			return false
 
 func _validate_section_contains(file_path: String, validate: Dictionary) -> bool:
-	if not FileAccess.file_exists(file_path):
+	if not FileSystemManager.file_exists(file_path):
 		return false
 	
-	var file = FileAccess.open(file_path, FileAccess.READ)
-	if not file:
+	var content = FileSystemManager.read_file(file_path)
+	if content == "":
 		return false
 	
 	var section = validate.get("section", "")
 	var pattern = validate.get("pattern", "")
-	
-	var content = file.get_as_text()
-	file.close()
 	
 	# Find the section
 	var section_start = content.find("[" + section + "]")
@@ -1121,11 +1118,8 @@ func _validate_section_contains(file_path: String, validate: Dictionary) -> bool
 func _execute_controller_file_edit(file_path: String, content: String) -> void:
 	var existing_content = ""
 	
-	if FileAccess.file_exists(file_path):
-		var file = FileAccess.open(file_path, FileAccess.READ)
-		if file:
-			existing_content = file.get_as_text()
-			file.close()
+	if FileSystemManager.file_exists(file_path):
+		existing_content = FileSystemManager.read_file(file_path)
 	
 	# Parse the new content to find sections we need to replace
 	var new_sections = _parse_ini_sections(content)
@@ -1136,13 +1130,9 @@ func _execute_controller_file_edit(file_path: String, content: String) -> void:
 		var section_content = new_sections[section_name]
 		final_content = _replace_or_append_section(final_content, section_name, section_content)
 	
-	var write_file = FileAccess.open(file_path, FileAccess.WRITE)
-	if not write_file:
+	if not FileSystemManager.write_file(file_path, final_content):
 		push_error("[LaunchManager] Failed to write: " + file_path)
 		return
-	
-	write_file.store_string(final_content)
-	write_file.close()
 
 ## Parse INI content into sections dictionary
 func _parse_ini_sections(content: String) -> Dictionary:
@@ -3224,7 +3214,7 @@ func _find_param_sfo_recursive(search_dir: String) -> String:
 			var full_path := search_dir + "/" + file_name
 			
 			# Check if this is the PARAM.SFO file we're looking for
-			if file_name == "PARAM.SFO" and FileAccess.file_exists(full_path):
+			if file_name == "PARAM.SFO" and FileSystemManager.file_exists(full_path):
 				dir.list_dir_end()
 				return full_path
 			
@@ -3272,9 +3262,8 @@ func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
 					break
 			else:
 				# Copy file
-				var err := DirAccess.copy_absolute(source_path, dest_path)
-				if err != OK:
-					push_error("[LaunchManager] RPCS3: Failed to copy file: " + source_path + " to " + dest_path + " (error: " + str(err) + ")")
+				if not FileSystemManager.copy_file(source_path, dest_path):
+					push_error("[LaunchManager] RPCS3: Failed to copy file: " + source_path + " to " + dest_path)
 					success = false
 					break
 		
@@ -3332,8 +3321,8 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 			break
 		
 		# Check if this directory contains game indicators
-		var has_param_sfo = FileAccess.file_exists(potential_wrapper + "/PARAM.SFO")
-		var has_disc_sfb = FileAccess.file_exists(potential_wrapper + "/PS3_DISC.SFB")
+		var has_param_sfo = FileSystemManager.file_exists(potential_wrapper + "/PARAM.SFO")
+		var has_disc_sfb = FileSystemManager.file_exists(potential_wrapper + "/PS3_DISC.SFB")
 		var has_ps3_game = FileSystemManager.dir_exists(potential_wrapper + "/PS3_GAME")
 		
 		if has_param_sfo or has_disc_sfb or has_ps3_game:
@@ -3350,7 +3339,7 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 						var source := potential_wrapper + "/" + wrapper_file
 						var dest := install_path + "/" + wrapper_file
 						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from game folder")
-						DirAccess.rename_absolute(source, dest)
+						FileSystemManager.move(source, dest)
 					wrapper_file = wrapper_dir.get_next()
 				wrapper_dir.list_dir_end()
 				FileSystemManager.delete_dir_recursive(potential_wrapper)
@@ -3370,7 +3359,7 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 						var source := potential_wrapper + "/" + wrapper_file
 						var dest := install_path + "/" + wrapper_file
 						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from wrapper")
-						DirAccess.rename_absolute(source, dest)
+						FileSystemManager.move(source, dest)
 					wrapper_file = wrapper_dir.get_next()
 				wrapper_dir.list_dir_end()
 				FileSystemManager.delete_dir_recursive(potential_wrapper)
@@ -3380,7 +3369,7 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 ## Determines if a PS3 game ZIP is disc or digital format by checking file paths
 ## Returns "disc" if ZIP contains PS3_GAME/ folder, "digital" otherwise
 func _determine_ps3_game_format(zip_path: String) -> String:
-	if not FileAccess.file_exists(zip_path):
+	if not FileSystemManager.file_exists(zip_path):
 		push_error("[LaunchManager] RPCS3: Cannot determine format - file not found: " + zip_path)
 		return "digital"  # Default to digital on error
 	

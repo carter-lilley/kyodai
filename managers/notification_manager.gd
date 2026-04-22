@@ -47,7 +47,7 @@ func _ready() -> void:
 	_stack_control.offset_bottom = -20
 	_stack_control.custom_minimum_size = Vector2(_notification_width, 200)
 	_stack_control.top_level = true
-	_stack_control.z_index = 100
+	_stack_control.z_index = 1001
 	add_child(_stack_control)
 	
 	# Connect to viewport resize to update positioning
