@@ -886,9 +886,11 @@ static func extract_zip(zip_path: String, dest_dir: String) -> bool:
 	# Handle local ZIP files with ZIPReader
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
+	
+	# If ZIPReader fails (e.g., ZIP64 large files), try 7-Zip fallback
 	if err != OK:
-		push_error("[FileSystemManager] Failed to open ZIP for extraction: " + zip_path)
-		return false
+		print("[FileSystemManager] ZIPReader failed, trying 7-Zip fallback for: " + zip_path)
+		return extract_zip_with_7z(zip_path, dest_dir)
 	
 	var files = reader.get_files()
 	var is_saf_dest = is_saf_path(dest_dir) and is_android()
@@ -928,6 +930,50 @@ static func extract_zip(zip_path: String, dest_dir: String) -> bool:
 		return success
 	
 	return true
+
+
+## 7-Zip fallback for extracting ZIP files that ZIPReader cannot handle (e.g., ZIP64, large files)
+## Uses bundled 7z binary to extract the entire archive
+static func extract_zip_with_7z(zip_path: String, dest_dir: String) -> bool:
+	var binary_path = _get_7z_binary_path()
+	if binary_path == "":
+		push_error("[FileSystemManager] 7-Zip binary not available for extraction fallback")
+		return false
+	
+	print("[FileSystemManager] Using 7-Zip fallback for extraction: " + zip_path)
+	
+	# Ensure destination directory exists
+	var abs_dest = ProjectSettings.globalize_path(dest_dir)
+	if not DirAccess.dir_exists_absolute(abs_dest):
+		DirAccess.make_dir_recursive_absolute(abs_dest)
+	
+	# Extract with 7-Zip: x = extract with full paths, -y = assume yes to all prompts
+	var args = ["x", zip_path, "-o" + abs_dest, "-y"]
+	var output = []
+	var exit_code = OS.execute(binary_path, args, output, true)
+	
+	if exit_code != 0:
+		push_error("[FileSystemManager] 7-Zip extraction failed with exit code: " + str(exit_code))
+		return false
+	
+	print("[FileSystemManager] 7-Zip extraction successful")
+	return true
+
+
+## Gets the bundled 7z binary path for the current platform
+static func _get_7z_binary_path() -> String:
+	var platform_name = ""
+	match OS.get_name():
+		"Windows":
+			platform_name = "windows"
+		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+			platform_name = "linux"
+		_:
+			return ""
+	
+	var binary_name = "7za.exe" if OS.get_name() == "Windows" else "7z"
+	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
+
 
 ## Gets the last modified time of a file (works with both regular paths and SAF URIs)
 ## Returns Unix timestamp (int), or 0 on failure

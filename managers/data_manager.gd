@@ -1897,8 +1897,60 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 		# Sibling - remove from downloaded list
 		game.downloaded_sibling_ids.erase(active_id)
 	
+	# Clean up extracted game files for platforms that extract during launch
+	_cleanup_extracted_game_files(game)
+	
 	# Persist to database
 	return update_game(game, callback)
+
+
+## Cleans up extracted game files when a game is deleted
+## Platforms that extract: PS3 (RPCS3), Vita (Vita3K)
+func _cleanup_extracted_game_files(game: GameResource) -> void:
+	if not game or game.title_id == "":
+		return
+	
+	var title_id = game.title_id
+	
+	match game.platform_slug:
+		"ps3":
+			# PS3 games are extracted to emulator directories
+			var emulator_dir = _get_emulator_directory("rpcs3")
+			if emulator_dir != "":
+				# Check both disc and digital locations
+				var disc_path = emulator_dir + "/games/" + title_id
+				var digital_path = emulator_dir + "/dev_hdd0/game/" + title_id
+				
+				if FileSystemManager.dir_exists(disc_path):
+					print("[DataManager] Cleaning up extracted PS3 disc game: " + disc_path)
+					FileSystemManager.delete_dir_recursive(disc_path)
+				
+				if FileSystemManager.dir_exists(digital_path):
+					print("[DataManager] Cleaning up extracted PS3 digital game: " + digital_path)
+					FileSystemManager.delete_dir_recursive(digital_path)
+		
+		"psvita":
+			# Vita games are extracted to ux0/app/TITLEID
+			var emulator_dir = _get_emulator_directory("vita3k")
+			if emulator_dir != "":
+				var vita_path = emulator_dir + "/ux0/app/" + title_id
+				
+				if FileSystemManager.dir_exists(vita_path):
+					print("[DataManager] Cleaning up extracted Vita game: " + vita_path)
+					FileSystemManager.delete_dir_recursive(vita_path)
+
+
+## Gets the emulator directory (helper to avoid circular dependency with LaunchManager)
+func _get_emulator_directory(emulator_id: String) -> String:
+	var emulator = LaunchManager.get_emulator(emulator_id)
+	if emulator.is_empty():
+		return ""
+	
+	var install_path = LaunchManager.get_emulator_install_path(emulator_id)
+	if install_path == "":
+		return ""
+	
+	return install_path.get_base_dir()
 
 ## Updates only the title_id field for a game (used by Vita3K during launch)
 ## This avoids overwriting other fields like file_path and has_local_copy

@@ -830,7 +830,21 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# RPCS3 special handling for desktop - replace ROM path with game folder path
 		if intent.emulator_id.begins_with("rpcs3") and intent.game and intent.game.title_id != "":
-			var game_path: String = install_dir + "/games/" + intent.game.title_id
+			# Check both disc and digital install locations
+			var disc_path: String = install_dir + "/games/" + intent.game.title_id
+			var digital_path: String = install_dir + "/dev_hdd0/game/" + intent.game.title_id
+			
+			var game_path: String
+			if FileSystemManager.dir_exists(disc_path):
+				game_path = disc_path
+			elif FileSystemManager.dir_exists(digital_path):
+				game_path = digital_path
+			else:
+				# Fallback to disc path if neither exists (will fail gracefully later)
+				game_path = disc_path
+			
+			print("[LaunchManager] RPCS3: Using game path: " + game_path)
+			
 			# Replace the ROM path (ZIP) with the game folder path
 			for i in range(intent.launch_args.size()):
 				if intent.launch_args[i] == global_rom_path:
@@ -3375,9 +3389,11 @@ func _determine_ps3_game_format(zip_path: String) -> String:
 	
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
+	
 	if err != OK:
-		push_error("[LaunchManager] RPCS3: Failed to open ZIP for format detection: " + zip_path)
-		return "digital"
+		# ZIPReader failed (likely ZIP64/large file), try 7-Zip fallback
+		print("[LaunchManager] RPCS3: ZIPReader failed for format detection, trying 7-Zip fallback")
+		return _determine_ps3_game_format_with_7z(zip_path)
 	
 	var files = reader.get_files()
 	reader.close()
@@ -3392,6 +3408,32 @@ func _determine_ps3_game_format(zip_path: String) -> String:
 			return "disc"
 	
 	print("[LaunchManager] RPCS3: Detected digital format (no PS3_GAME/ in ZIP)")
+	return "digital"
+
+
+## 7-Zip fallback for format detection on large/ZIP64 archives
+func _determine_ps3_game_format_with_7z(zip_path: String) -> String:
+	var binary_path = _get_7z_binary_path()
+	if binary_path == "":
+		print("[LaunchManager] RPCS3: 7-Zip binary not available for format detection")
+		return "digital"
+	
+	var list_args = ["l", zip_path]
+	var output = []
+	var exit_code = OS.execute(binary_path, list_args, output, true)
+	
+	if exit_code != 0:
+		push_error("[LaunchManager] RPCS3: 7-Zip list failed for format detection")
+		return "digital"
+	
+	var output_str = output[0] if output.size() > 0 else ""
+	
+	# Check if any line contains PS3_GAME/
+	if output_str.find("PS3_GAME/") != -1 or output_str.find("PS3_GAME\\") != -1:
+		print("[LaunchManager] RPCS3: Detected disc format via 7-Zip (found PS3_GAME/)")
+		return "disc"
+	
+	print("[LaunchManager] RPCS3: Detected digital format via 7-Zip (no PS3_GAME/)")
 	return "digital"
 
 

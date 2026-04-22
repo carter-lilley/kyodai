@@ -166,7 +166,10 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	# Position and size the EffectStack exactly at the card's location
 	# Add 2px overshoot to compensate for shader AA edge
 	_effect_stack.position = card_rect.position - Vector2(2, 2)
-	_effect_stack.set_deferred("size", card_rect.size + Vector2(4, 4))
+	# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
+	# and causes wrong sizes when the parent resizes between deferral and execution.
+	# Anchors handle sizing automatically.
+	# _effect_stack.set_deferred("size", card_rect.size + Vector2(4, 4))
 	
 	# Create a container state for the effect stack
 	var container_state = EffectContainerState.for_card()

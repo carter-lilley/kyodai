@@ -2038,7 +2038,7 @@
 		"windows": {
 		  "type": "command",
 		  "executable": "rpcs3.exe",
-		  "template": ["{exe}", "{rom}"],
+		  "template": ["{exe}", "{rom}", "--no-gui"],
 		  "rom_delivery": "none"
 		},
 		"linux": {

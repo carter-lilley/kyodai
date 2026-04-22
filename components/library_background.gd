@@ -23,8 +23,11 @@ func _initialize_background() -> void:
 	_background_gradient_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_background_gradient_rect.z_index = -1
 	# Initial size in case parent already has size
-	if size.x > 0 and size.y > 0:
-		_background_gradient_rect.set_deferred("size", size)
+	# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
+	# and causes wrong sizes when the parent resizes between deferral and execution.
+	# Anchors handle sizing automatically.
+	# if size.x > 0 and size.y > 0:
+	# 	_background_gradient_rect.set_deferred("size", size)
 	
 	# Create shader material for gradient
 	var shader_material = ShaderMaterial.new()
@@ -91,8 +94,11 @@ func _apply_background_state() -> void:
 		_current_effect.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_current_effect.visible = true
 		# Initial size in case parent already has size
-		if size.x > 0 and size.y > 0:
-			_current_effect.set_deferred("size", size)
+		# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
+		# and causes wrong sizes when the parent resizes between deferral and execution.
+		# Anchors handle sizing automatically.
+		# if size.x > 0 and size.y > 0:
+		# 	_current_effect.set_deferred("size", size)
 		_current_effect.initialize(_background_state.effect_settings)
 
 func _gradient_to_texture(gradient: Gradient) -> ImageTexture:

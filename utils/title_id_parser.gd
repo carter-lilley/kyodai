@@ -1071,7 +1071,13 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 	
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
+	
+	# If ZIPReader fails (e.g., ZIP64 large files), try 7-Zip fallback
 	if err != OK:
+		print("[TitleIDParser] ZIPReader failed, attempting 7-Zip fallback for: " + zip_path)
+		var title_id_from_7z = _extract_ps3_title_id_with_7z(zip_path)
+		if title_id_from_7z != "":
+			return title_id_from_7z
 		push_error("[TitleIDParser] Failed to open ZIP for PS3 TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
 		return ""
 	
@@ -1112,6 +1118,105 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 	
 	print("[TitleIDParser] PS3 TitleID extracted from ZIP: " + title_id)
 	return title_id
+
+
+## 7-Zip fallback for extracting PS3 TitleID from large/ZIP64 archives
+## Uses bundled 7z binary to extract PARAM.SFO, then parses it
+static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
+	var binary_path = _get_7z_binary_path()
+	if binary_path == "":
+		print("[TitleIDParser] 7-Zip binary not available")
+		return ""
+	
+	print("[TitleIDParser] Using 7-Zip fallback: " + binary_path)
+	
+	# Step 1: List archive contents to find PARAM.SFO path
+	var list_args = ["l", "-slt", zip_path]
+	var output = []
+	var exit_code = OS.execute(binary_path, list_args, output, true)
+	
+	if exit_code != 0:
+		push_error("[TitleIDParser] 7-Zip list failed with exit code: " + str(exit_code))
+		return ""
+	
+	var output_str = ""
+	if output.size() > 0:
+		output_str = output[0]
+	
+	# Parse output to find PARAM.SFO path
+	var sfo_path = ""
+	var lines = output_str.split("\n")
+	for line in lines:
+		if line.find("PARAM.SFO") != -1 and not line.ends_with("/") and not line.ends_with("\\"):
+			# Extract path from "Path = ..." line
+			if line.begins_with("Path = "):
+				sfo_path = line.substr(7).strip_edges()
+				break
+	
+	if sfo_path == "":
+		push_error("[TitleIDParser] PARAM.SFO not found via 7-Zip listing")
+		return ""
+	
+	print("[TitleIDParser] Found PARAM.SFO via 7-Zip at: " + sfo_path)
+	
+	# Step 2: Extract PARAM.SFO to temp directory
+	var temp_dir = "user://temp_ps3_sfo/"
+	if not DirAccess.dir_exists_absolute(temp_dir):
+		DirAccess.make_dir_recursive_absolute(temp_dir)
+	
+	var extract_args = ["e", zip_path, sfo_path, "-o" + ProjectSettings.globalize_path(temp_dir), "-y"]
+	exit_code = OS.execute(binary_path, extract_args, output, true)
+	
+	if exit_code != 0:
+		push_error("[TitleIDParser] 7-Zip extract failed with exit code: " + str(exit_code))
+		return ""
+	
+	# Step 3: Read extracted PARAM.SFO
+	var extracted_sfo = temp_dir + "PARAM.SFO"
+	if not FileAccess.file_exists(extracted_sfo):
+		push_error("[TitleIDParser] Extracted PARAM.SFO not found at: " + extracted_sfo)
+		return ""
+	
+	var sfo_file = FileAccess.open(extracted_sfo, FileAccess.READ)
+	if not sfo_file:
+		push_error("[TitleIDParser] Failed to open extracted PARAM.SFO")
+		return ""
+	
+	var sfo_bytes = sfo_file.get_buffer(sfo_file.get_length())
+	sfo_file.close()
+	
+	# Clean up temp file
+	DirAccess.remove_absolute(extracted_sfo)
+	
+	if sfo_bytes.is_empty():
+		push_error("[TitleIDParser] Failed to read extracted PARAM.SFO")
+		return ""
+	
+	# Step 4: Parse TitleID
+	var title_id = get_title_id_from_sfo_bytes(sfo_bytes)
+	
+	if title_id == "":
+		push_error("[TitleIDParser] Failed to extract TitleID from 7-Zip extracted PARAM.SFO")
+		return ""
+	
+	print("[TitleIDParser] PS3 TitleID extracted via 7-Zip fallback: " + title_id)
+	return title_id
+
+
+## Gets the bundled 7z binary path for the current platform
+static func _get_7z_binary_path() -> String:
+	var platform_name = ""
+	match OS.get_name():
+		"Windows":
+			platform_name = "windows"
+		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+			platform_name = "linux"
+		_:
+			return ""
+	
+	var binary_name = "7za.exe" if OS.get_name() == "Windows" else "7z"
+	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
+
 
 # ============================================================================
 # PARAM.SFO PARSER (merged from param_sfo_parser.gd)

@@ -1410,7 +1410,10 @@ func _setup_desktop_dual_screen(second_screen_index: int) -> void:
 	_hero_image.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_hero_image.offset_bottom = 0
 	_hero_image.position = Vector2.ZERO
-	_hero_image.set_deferred("size", Vector2(screen_rect.size))
+	# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
+	# and causes wrong sizes when the parent resizes between deferral and execution.
+	# Anchors handle sizing automatically.
+	# _hero_image.set_deferred("size", Vector2(screen_rect.size))
 	
 	# Add window to scene tree
 	get_tree().root.add_child(_hero_secondary_window)

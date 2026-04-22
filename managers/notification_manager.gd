@@ -35,6 +35,12 @@ var _check_interval: float = 0.5
 var _stack_direction: StackDirection = StackDirection.UPWARD
 
 func _ready() -> void:
+	# Create a CanvasLayer so notifications render above all UI layers (including launch overlay at 1000)
+	var canvas_layer = CanvasLayer.new()
+	canvas_layer.name = "NotificationCanvasLayer"
+	canvas_layer.layer = 1001
+	add_child(canvas_layer)
+
 	# Create the stack control for positioning
 	_stack_control = Control.new()
 	_stack_control.name = "NotificationStack"
@@ -46,9 +52,7 @@ func _ready() -> void:
 	_stack_control.offset_right = -20
 	_stack_control.offset_bottom = -20
 	_stack_control.custom_minimum_size = Vector2(_notification_width, 200)
-	_stack_control.top_level = true
-	_stack_control.z_index = 1001
-	add_child(_stack_control)
+	canvas_layer.add_child(_stack_control)
 	
 	# Connect to viewport resize to update positioning
 	get_viewport().size_changed.connect(_on_viewport_size_changed)

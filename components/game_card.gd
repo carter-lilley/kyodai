@@ -359,7 +359,10 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 		visual_container.anchor_right = 1.0
 		visual_container.anchor_bottom = 1.0
 		visual_container.position = Vector2.ZERO
-		visual_container.set_deferred("size", card_size)
+		# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
+		# and causes wrong sizes when the parent resizes between deferral and execution.
+		# Anchors handle sizing automatically.
+		# visual_container.set_deferred("size", card_size)
 		visual_container.pivot_offset = _get_grid_pivot_offset()
 	else:
 		var focused_size = card_size * focus_scale
