@@ -7,13 +7,14 @@ class_name TitleIDParser
 # ============================================================================
 
 ## Opens a file for reading and calls the callback. Handles error checking and cleanup.
+## Uses FileSystemManager for SAF-aware file access.
 ## Returns the callback's result, or empty string on failure.
 static func _with_open_file(path: String, callback: Callable) -> String:
-	if not FileAccess.file_exists(path):
+	if not FileSystemManager.file_exists(path):
 		push_error("[TitleIDParser] File not found: " + path)
 		return ""
 	
-	var file = FileAccess.open(path, FileAccess.READ)
+	var file = FileSystemManager.open_file_read(path)
 	if not file:
 		push_error("[TitleIDParser] Failed to open file: " + path)
 		return ""
@@ -75,16 +76,16 @@ static func _resolve_zip_path(zip_path: String) -> String:
 	# On Windows, prefer backslash paths for ZIPReader compatibility
 	if OS.get_name() == "Windows":
 		var backslash_path = zip_path.replace("/", "\\")
-		if FileAccess.file_exists(backslash_path):
+		if FileSystemManager.file_exists(backslash_path):
 			return backslash_path
 	
 	# Try original path
-	if FileAccess.file_exists(zip_path):
+	if FileSystemManager.file_exists(zip_path):
 		return zip_path
 	
 	# Try globalized path (resolves user://, res://, etc.)
 	var global_path = ProjectSettings.globalize_path(zip_path)
-	if global_path != zip_path and FileAccess.file_exists(global_path):
+	if global_path != zip_path and FileSystemManager.file_exists(global_path):
 		return global_path
 	
 	return ""
@@ -153,15 +154,12 @@ static func extract_wiiu_title_id(rom_path: String) -> String:
 
 static func _read_prod_keys_header_key(emulator_dir: String) -> String:
 	var keys_path = emulator_dir.rstrip("/") + "/user/keys/prod.keys"
-	if not FileAccess.file_exists(keys_path):
+	if not FileSystemManager.file_exists(keys_path):
 		return ""
 	
-	var file = FileAccess.open(keys_path, FileAccess.READ)
-	if not file:
+	var content = FileSystemManager.read_file(keys_path)
+	if content == "":
 		return ""
-	
-	var content = file.get_as_text()
-	file.close()
 	
 	var lines = content.split("\n")
 	for i in range(lines.size()):
@@ -281,7 +279,7 @@ static func _parse_hfs0(file: FileAccess, offset: int) -> Dictionary:
 	return result
 
 static func extract_xci_title_id(rom_path: String, emulator_dir: String) -> String:
-	if not FileAccess.file_exists(rom_path):
+	if not FileSystemManager.file_exists(rom_path):
 		return ""
 	
 	var header_key_hex = _read_prod_keys_header_key(emulator_dir)
@@ -294,84 +292,77 @@ static func extract_xci_title_id(rom_path: String, emulator_dir: String) -> Stri
 	if header_key.size() != 32:
 		return ""
 	
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		return ""
-	
-	file.seek(0x130)
-	var hfs0_offset = file.get_64()
-	var hfs0_size = file.get_64()
-	
-	var root = _parse_hfs0(file, hfs0_offset)
-	if not root.valid:
-		file.close()
-		return ""
-	
-	var secure_offset = -1
-	for entry in root.entries:
-		if entry.name == "secure":
-			secure_offset = entry.offset
-			break
-	
-	if secure_offset < 0:
-		file.close()
-		return ""
-	
-	var secure = _parse_hfs0(file, secure_offset)
-	if not secure.valid or secure.entries.is_empty():
-		file.close()
-		return ""
-	
-	var largest_idx = -1
-	var largest_size = 0
-	for i in range(secure.entries.size()):
-		if secure.entries[i].size > largest_size:
-			largest_size = secure.entries[i].size
-			largest_idx = i
-	
-	if largest_idx < 0:
-		file.close()
-		return ""
-	
-	var nca_offset = secure.entries[largest_idx].offset
-	file.seek(nca_offset)
-	var nca_header = file.get_buffer(0x400)
-	file.close()
-	
-	if nca_header.size() < 0x400:
-		return ""
-	
-	var decrypted = _aes_xts_decrypt(nca_header, header_key, 0x200, 0)
-	
-	var magic = decrypted.slice(0x200, 0x204).get_string_from_ascii()
-	if magic != "NCA3" and magic != "NCA2" and magic != "NCA1" and magic != "NCA0":
-		return ""
-	
-	var title_id = ""
-	for i in range(7, -1, -1):
-		title_id += "%02x" % decrypted[0x210 + i]
-	title_id = title_id.to_upper()
-	
-	if title_id.begins_with("01") and title_id.length() == 16:
-		return title_id
-	
-	var rights_id_empty = true
-	for b in range(16):
-		if decrypted[0x230 + b] != 0:
-			rights_id_empty = false
-			break
-	if not rights_id_empty:
-		title_id = ""
+	return _with_open_file(rom_path, func(file: FileAccess) -> String:
+		file.seek(0x130)
+		var hfs0_offset = file.get_64()
+		var hfs0_size = file.get_64()
+		
+		var root = _parse_hfs0(file, hfs0_offset)
+		if not root.valid:
+			return ""
+		
+		var secure_offset = -1
+		for entry in root.entries:
+			if entry.name == "secure":
+				secure_offset = entry.offset
+				break
+		
+		if secure_offset < 0:
+			return ""
+		
+		var secure = _parse_hfs0(file, secure_offset)
+		if not secure.valid or secure.entries.is_empty():
+			return ""
+		
+		var largest_idx = -1
+		var largest_size = 0
+		for i in range(secure.entries.size()):
+			if secure.entries[i].size > largest_size:
+				largest_size = secure.entries[i].size
+				largest_idx = i
+		
+		if largest_idx < 0:
+			return ""
+		
+		var nca_offset = secure.entries[largest_idx].offset
+		file.seek(nca_offset)
+		var nca_header = file.get_buffer(0x400)
+		
+		if nca_header.size() < 0x400:
+			return ""
+		
+		var decrypted = _aes_xts_decrypt(nca_header, header_key, 0x200, 0)
+		
+		var magic = decrypted.slice(0x200, 0x204).get_string_from_ascii()
+		if magic != "NCA3" and magic != "NCA2" and magic != "NCA1" and magic != "NCA0":
+			return ""
+		
+		var title_id = ""
 		for i in range(7, -1, -1):
-			title_id += "%02x" % decrypted[0x230 + i]
+			title_id += "%02x" % decrypted[0x210 + i]
 		title_id = title_id.to_upper()
+		
 		if title_id.begins_with("01") and title_id.length() == 16:
 			return title_id
-	
-	return ""
+		
+		var rights_id_empty = true
+		for b in range(16):
+			if decrypted[0x230 + b] != 0:
+				rights_id_empty = false
+				break
+		if not rights_id_empty:
+			title_id = ""
+			for i in range(7, -1, -1):
+				title_id += "%02x" % decrypted[0x230 + i]
+			title_id = title_id.to_upper()
+			if title_id.begins_with("01") and title_id.length() == 16:
+				return title_id
+		
+		return ""
+	)
 
 static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> String:
-	if not FileAccess.file_exists(rom_path):
+	if not FileSystemManager.file_exists(rom_path):
 		return ""
 	
 	var ext = rom_path.get_extension().to_lower()
@@ -380,75 +371,68 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 		return extract_xci_title_id(rom_path, emulator_dir)
 	
 	if ext in ["nsp", "nsz"]:
-		var file = FileAccess.open(rom_path, FileAccess.READ)
-		if not file:
-			return ""
-		
-		var header = file.get_buffer(0x2000)
-		file.close()
-		
-		if header.size() < 0x10:
-			return ""
-		
-		var magic = header.slice(0, 4).get_string_from_ascii()
-		if magic != "PFS0":
-			return ""
-		
-		var file_count = header.decode_u32(0x04)
-		var string_table_size = header.decode_u32(0x08)
-		
-		var entries_size = file_count * 0x18
-		var total_header = 0x10 + entries_size + string_table_size
-		
-		if header.size() < total_header:
-			return ""
-		
-		var string_table_offset = 0x10 + entries_size
-		var filenames: Array[String] = []
-		
-		for i in range(file_count):
-			var entry_offset = 0x10 + (i * 0x18)
-			var string_offset = header.decode_u32(entry_offset + 0x10)
-			var name_start = string_table_offset + string_offset
+		return _with_open_file(rom_path, func(file: FileAccess) -> String:
+			var header = file.get_buffer(0x2000)
 			
-			var name_end = name_start
-			while name_end < total_header and header[name_end] != 0:
-				name_end += 1
+			if header.size() < 0x10:
+				return ""
 			
-			var filename = header.slice(name_start, name_end).get_string_from_ascii()
-			filenames.append(filename)
-		
-		for i in range(file_count):
-			var filename = filenames[i]
-			if filename.to_lower().ends_with(".tik"):
-				var basename = filename.get_basename()
-				if basename.length() == 16:
-					var is_hex = true
-					for c in basename:
-						if not ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')):
-							is_hex = false
-							break
-					if is_hex and basename.to_upper().begins_with("01"):
-						return basename.to_upper()
-		
-		var header_key_hex = _read_prod_keys_header_key(emulator_dir)
-		if header_key_hex != "":
-			var header_key = PackedByteArray()
-			for i in range(0, header_key_hex.length(), 2):
-				header_key.append(header_key_hex.substr(i, 2).hex_to_int())
+			var magic = header.slice(0, 4).get_string_from_ascii()
+			if magic != "PFS0":
+				return ""
 			
-			if header_key.size() == 32:
-				for i in range(file_count):
-					var filename = filenames[i]
-					if filename.to_lower().ends_with(".nca"):
-						var nca_offset = header.decode_u64(0x10 + (i * 0x18))
-						var nca_size = header.decode_u64(0x10 + (i * 0x18) + 0x08)
-						
-						var nca_file = FileAccess.open(rom_path, FileAccess.READ)
-						if nca_file:
-							nca_file.seek(nca_offset)
-							var nca_header = nca_file.get_buffer(0x400)
-							nca_file.close()
+			var file_count = header.decode_u32(0x04)
+			var string_table_size = header.decode_u32(0x08)
+			
+			var entries_size = file_count * 0x18
+			var total_header = 0x10 + entries_size + string_table_size
+			
+			if header.size() < total_header:
+				return ""
+			
+			var string_table_offset = 0x10 + entries_size
+			var filenames: Array[String] = []
+			
+			for i in range(file_count):
+				var entry_offset = 0x10 + (i * 0x18)
+				var string_offset = header.decode_u32(entry_offset + 0x10)
+				var name_start = string_table_offset + string_offset
+				
+				var name_end = name_start
+				while name_end < total_header and header[name_end] != 0:
+					name_end += 1
+				
+				var filename = header.slice(name_start, name_end).get_string_from_ascii()
+				filenames.append(filename)
+			
+			for i in range(file_count):
+				var filename = filenames[i]
+				if filename.to_lower().ends_with(".tik"):
+					var basename = filename.get_basename()
+					if basename.length() == 16:
+						var is_hex = true
+						for c in basename:
+							if not ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')):
+								is_hex = false
+								break
+						if is_hex and basename.to_upper().begins_with("01"):
+							return basename.to_upper()
+			
+			var header_key_hex = _read_prod_keys_header_key(emulator_dir)
+			if header_key_hex != "":
+				var header_key = PackedByteArray()
+				for i in range(0, header_key_hex.length(), 2):
+					header_key.append(header_key_hex.substr(i, 2).hex_to_int())
+				
+				if header_key.size() == 32:
+					for i in range(file_count):
+						var filename = filenames[i]
+						if filename.to_lower().ends_with(".nca"):
+							var nca_offset = header.decode_u64(0x10 + (i * 0x18))
+							var nca_size = header.decode_u64(0x10 + (i * 0x18) + 0x08)
+							
+							file.seek(nca_offset)
+							var nca_header = file.get_buffer(0x400)
 							
 							if nca_header.size() >= 0x400:
 								var decrypted = _aes_xts_decrypt(nca_header, header_key, 0x200, 0)
@@ -460,6 +444,9 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 									nca_title_id = nca_title_id.to_upper()
 									if nca_title_id.begins_with("01") and nca_title_id.length() == 16:
 										return nca_title_id
+			
+			return ""
+		)
 	
 	return ""
 
@@ -1117,7 +1104,7 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 		return ""
 	
 	# Parse TitleID from SFO bytes
-	var title_id = ParamSFOParser.get_title_id_from_bytes(sfo_bytes)
+	var title_id = get_title_id_from_sfo_bytes(sfo_bytes)
 	
 	if title_id == "":
 		push_error("[TitleIDParser] Failed to extract TitleID from PARAM.SFO in: " + zip_path)
@@ -1125,6 +1112,181 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 	
 	print("[TitleIDParser] PS3 TitleID extracted from ZIP: " + title_id)
 	return title_id
+
+# ============================================================================
+# PARAM.SFO PARSER (merged from param_sfo_parser.gd)
+# ============================================================================
+
+## Reads a PARAM.SFO file from disk and returns a dictionary with all fields
+## Uses FileSystemManager for SAF-aware file access
+## Returns empty dictionary if file cannot be parsed
+static func read_sfo(path: String) -> Dictionary:
+	if not FileSystemManager.file_exists(path):
+		push_error("[TitleIDParser] SFO file not found: " + path)
+		return {}
+	
+	var file := FileSystemManager.open_file_read(path)
+	if not file:
+		push_error("[TitleIDParser] Failed to open SFO file: " + path)
+		return {}
+	
+	var data := file.get_buffer(file.get_length())
+	file.close()
+	
+	return _read_sfo_from_bytes(data)
+
+
+## Parses PARAM.SFO data from a byte array
+## Returns empty dictionary if data cannot be parsed
+static func _read_sfo_from_bytes(data: PackedByteArray) -> Dictionary:
+	# Check minimum file size (header is 20 bytes)
+	if data.size() < 20:
+		push_error("[TitleIDParser] SFO data too small: " + str(data.size()) + " bytes")
+		return {}
+	
+	# Parse header
+	var pos := 0
+	var magic := data.decode_u32(pos)
+	pos += 4
+	
+	# Magic should be "PSF\0" = 0x46535000 (little-endian)
+	if magic != 0x46535000:
+		push_error("[TitleIDParser] Invalid SFO magic: 0x" + String.num_uint64(magic, 16) + " (expected 0x46535000 for PSF)")
+		return {}
+	
+	var version := data.decode_u32(pos)
+	pos += 4
+	
+	var key_table_offset := data.decode_u32(pos)
+	pos += 4
+	
+	var data_table_offset := data.decode_u32(pos)
+	pos += 4
+	
+	var num_entries := data.decode_u32(pos)
+	pos += 4
+	
+	print("[TitleIDParser] SFO Header: version=" + str(version) + ", entries=" + str(num_entries))
+	print("[TitleIDParser] SFO Key table at offset " + str(key_table_offset) + ", data table at offset " + str(data_table_offset))
+	
+	# Read index table entries
+	var entries := []
+	for i in range(num_entries):
+		if pos + 16 > data.size():
+			push_error("[TitleIDParser] Unexpected end of file reading SFO entry " + str(i))
+			break
+		
+		var entry := {}
+		entry["key_offset"] = data.decode_u16(pos)
+		pos += 2
+		entry["data_fmt"] = data.decode_u16(pos)
+		pos += 2
+		entry["data_len"] = data.decode_u32(pos)
+		pos += 4
+		entry["data_max_len"] = data.decode_u32(pos)
+		pos += 4
+		entry["data_offset"] = data.decode_u32(pos)
+		pos += 4
+		
+		entries.append(entry)
+	
+	# Read key table (null-terminated strings)
+	var keys := {}
+	var key_pos := key_table_offset
+	var key_index := 0
+	
+	while key_pos < data_table_offset and key_index < entries.size():
+		var key_name := ""
+		while key_pos < data.size() and data[key_pos] != 0:
+			key_name += char(data[key_pos])
+			key_pos += 1
+		key_pos += 1  # Skip null terminator
+		
+		if key_name != "":
+			keys[key_index] = key_name
+			key_index += 1
+	
+	# Read data table values
+	var result: Dictionary = {}
+	for i in range(entries.size()):
+		if i >= keys.size():
+			break
+		
+		var entry: Dictionary = entries[i]
+		var key_name: String = keys.get(i, "unknown_" + str(i))
+		var data_pos: int = data_table_offset + int(entry["data_offset"])
+		
+		# Read data as raw bytes regardless of format - this handles all PARAM.SFO formats
+		var value: String = ""
+		var max_read: int = mini(entry["data_len"], data.size() - data_pos)
+		for j in range(max_read):
+			var byte_val: int = data[data_pos + j]
+			if byte_val == 0:
+				break
+			# Only include printable ASCII characters
+			if byte_val >= 32 and byte_val < 127:
+				value += char(byte_val)
+			else:
+				break
+		
+		result[key_name] = value
+	
+	return result
+
+
+## Extracts the TitleID from a PARAM.SFO file
+## Returns empty string if TitleID cannot be found
+static func get_sfo_title_id(path: String) -> String:
+	print("[TitleIDParser] get_sfo_title_id called for: " + path)
+	
+	var sfo_data := read_sfo(path)
+	return _extract_title_id_from_sfo_data(sfo_data)
+
+
+## Extracts the TitleID from PARAM.SFO byte data
+## Returns empty string if TitleID cannot be found
+static func get_title_id_from_sfo_bytes(data: PackedByteArray) -> String:
+	print("[TitleIDParser] get_title_id_from_sfo_bytes called")
+	
+	var sfo_data := _read_sfo_from_bytes(data)
+	return _extract_title_id_from_sfo_data(sfo_data)
+
+
+static func _extract_title_id_from_sfo_data(sfo_data: Dictionary) -> String:
+	if sfo_data.is_empty():
+		print("[TitleIDParser] SFO data is empty")
+		return ""
+	
+	print("[TitleIDParser] SFO data keys: " + str(sfo_data.keys()))
+	
+	# TitleID is stored in the "TITLE_ID" field
+	var title_id: String = sfo_data.get("TITLE_ID", "")
+	print("[TitleIDParser] TITLE_ID value: '" + title_id + "'")
+	
+	if title_id == "" or title_id == "<binary>":
+		# Try alternative field names
+		title_id = sfo_data.get("title_id", "")
+		if title_id != "":
+			print("[TitleIDParser] Found title_id (lowercase): '" + title_id + "'")
+	
+	return title_id
+
+
+## Extracts the game title from a PARAM.SFO file
+## Returns empty string if title cannot be found  
+static func get_sfo_title(path: String) -> String:
+	var sfo_data := read_sfo(path)
+	if sfo_data.is_empty():
+		return ""
+	
+	# Title is stored in the "TITLE" field
+	var title: String = sfo_data.get("TITLE", "")
+	
+	if title == "" or title == "<binary>":
+		# Try shorter title field
+		title = sfo_data.get("STITLE", "")
+	
+	return title
 
 # ==================== PSP (PPSSPP) ====================
 # ISO9660 + PARAM.SFO parsing for PSP game IDs
@@ -1176,45 +1338,38 @@ static func _parse_paramsfo_disc_id(sfo_data: PackedByteArray) -> String:
 	return ""
 
 static func _iso_extract_psp_game_id(rom_path: String) -> String:
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		push_error("[TitleIDParser] Failed to open PSP ISO: " + rom_path)
+	return _with_open_file(rom_path, func(file: FileAccess) -> String:
+		var pvd = _iso_read_pvd(file)
+		if not pvd.valid:
+			return ""
+		
+		# Find PSP_GAME directory in root
+		var psp_game = _iso_find_file(file, pvd.root_lba, pvd.root_length, "PSP_GAME")
+		if not psp_game.found:
+			push_error("[TitleIDParser] PSP_GAME directory not found")
+			return ""
+		
+		# Find PARAM.SFO inside PSP_GAME
+		var paramsfo = _iso_find_file(file, psp_game.lba, psp_game.length, "PARAM.SFO")
+		if not paramsfo.found:
+			push_error("[TitleIDParser] PARAM.SFO not found in PSP_GAME")
+			return ""
+		
+		file.seek(paramsfo.lba * _ISO_SECTOR_SIZE)
+		var sfo_data = file.get_buffer(paramsfo.length)
+		
+		var disc_id = _parse_paramsfo_disc_id(sfo_data)
+		
+		# Normalize: remove hyphen if present, return 9-char format
+		if disc_id.length() == 10 and disc_id[4] == "-":
+			disc_id = disc_id.replace("-", "")
+		
+		if disc_id.length() == 9:
+			return disc_id
+		
+		push_error("[TitleIDParser] Failed to extract valid PSP game ID from PARAM.SFO")
 		return ""
-	
-	var pvd = _iso_read_pvd(file)
-	if not pvd.valid:
-		file.close()
-		return ""
-	
-	# Find PSP_GAME directory in root
-	var psp_game = _iso_find_file(file, pvd.root_lba, pvd.root_length, "PSP_GAME")
-	if not psp_game.found:
-		push_error("[TitleIDParser] PSP_GAME directory not found")
-		file.close()
-		return ""
-	
-	# Find PARAM.SFO inside PSP_GAME
-	var paramsfo = _iso_find_file(file, psp_game.lba, psp_game.length, "PARAM.SFO")
-	if not paramsfo.found:
-		push_error("[TitleIDParser] PARAM.SFO not found in PSP_GAME")
-		file.close()
-		return ""
-	
-	file.seek(paramsfo.lba * _ISO_SECTOR_SIZE)
-	var sfo_data = file.get_buffer(paramsfo.length)
-	file.close()
-	
-	var disc_id = _parse_paramsfo_disc_id(sfo_data)
-	
-	# Normalize: remove hyphen if present, return 9-char format
-	if disc_id.length() == 10 and disc_id[4] == "-":
-		disc_id = disc_id.replace("-", "")
-	
-	if disc_id.length() == 9:
-		return disc_id
-	
-	push_error("[TitleIDParser] Failed to extract valid PSP game ID from PARAM.SFO")
-	return ""
+	)
 
 static func _get_cso_reader_path() -> String:
 	var base_path = "res://bin/cso_reader/"

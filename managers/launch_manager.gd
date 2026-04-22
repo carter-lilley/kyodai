@@ -2286,20 +2286,9 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 		else:
 			full_path = _get_emulator_directory(emulator_id) + folder_path
 		
-		# On Android with SAF paths, use plugin to create directory
-		if PlatformManager.is_android() and full_path.begins_with("content://"):
-			var plugin = Engine.get_singleton("PackageChecker")
-			if plugin and plugin.has_method("createSafDirectory"):
-				var tree_uri = _extract_saf_tree_uri(full_path)
-				var subdir = _get_saf_subdirectory(full_path)
-				if subdir != "":
-					plugin.call("createSafDirectory", tree_uri, subdir)
-			continue
-		
-		# Create the full path recursively (handles nested folders like user/nand/system/Contents)
-		var error = DirAccess.make_dir_recursive_absolute(full_path)
-		if error != OK:
-			push_error("[LaunchManager] Failed to create folder: " + full_path + " (error: " + str(error) + ")")
+		# Use FileSystemManager for all directory creation (handles SAF on Android)
+		if not FileSystemManager.make_dir_recursive(full_path):
+			push_error("[LaunchManager] Failed to create folder: " + full_path)
 			return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)
@@ -2336,16 +2325,10 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		# Resolve placeholders in content
 		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
 		
-		if not FileAccess.file_exists(full_path):
-			var file = FileAccess.open(full_path, FileAccess.WRITE)
-			if file == null:
+		if not FileSystemManager.file_exists(full_path):
+			if not FileSystemManager.write_file(full_path, file_content):
 				push_error("[LaunchManager] Failed to create file: " + full_path)
 				return false
-			else:
-				file.store_string(file_content)
-				file.close()
-		else:
-			pass
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
@@ -2380,17 +2363,14 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	else:
 		full_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + file_path
 	
-	if not FileAccess.file_exists(full_path):
+	if not FileSystemManager.file_exists(full_path):
 		push_error("[LaunchManager] File not found for editing: " + full_path)
 		return false
 	
-	var file = FileAccess.open(full_path, FileAccess.READ)
-	if file == null:
-		push_error("[LaunchManager] Failed to open file for editing: " + full_path)
+	var content = FileSystemManager.read_file(full_path)
+	if content == "":
+		push_error("[LaunchManager] Failed to read file for editing: " + full_path)
 		return false
-	
-	var content = file.get_as_text()
-	file.close()
 	
 	for edit in edits:
 		var old_text = edit.get("old", "")
@@ -2401,13 +2381,9 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 		
 		content = content.replace(old_text, new_text)
 	
-	file = FileAccess.open(full_path, FileAccess.WRITE)
-	if file == null:
+	if not FileSystemManager.write_file(full_path, content):
 		push_error("[LaunchManager] Failed to write edited file: " + full_path)
 		return false
-	
-	file.store_string(content)
-	file.close()
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 

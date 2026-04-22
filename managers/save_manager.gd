@@ -128,9 +128,7 @@ func _search_directory_for_saves(dir_path: String, rom_name_no_ext: String, exte
 			if item_no_ext == rom_name_no_ext:
 				var dot_ext = "." + item_ext
 				if dot_ext in extensions:
-					var modified_time = 0
-					if not FileSystemManager.is_saf_path(full_path):
-						modified_time = FileAccess.get_modified_time(full_path)
+					var modified_time = FileSystemManager.get_modified_time(full_path)
 					results.append({
 						"file_name": item,
 						"file_path": full_path,
@@ -538,8 +536,8 @@ func _get_folder_mtime(dir_path: String) -> int:
 			var full = current.rstrip("/") + "/" + item
 			if FileSystemManager.dir_exists(full):
 				dirs_to_check.append(full)
-			elif FileSystemManager.file_exists(full) and not FileSystemManager.is_saf_path(full):
-				var mtime = FileAccess.get_modified_time(full)
+			elif FileSystemManager.file_exists(full):
+				var mtime = FileSystemManager.get_modified_time(full)
 				if mtime > latest:
 					latest = mtime
 	return latest

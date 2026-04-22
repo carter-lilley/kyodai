@@ -870,6 +870,24 @@ static func extract_zip(zip_path: String, dest_dir: String) -> bool:
 	
 	return true
 
+## Gets the last modified time of a file (works with both regular paths and SAF URIs)
+## Returns Unix timestamp (int), or 0 on failure
+static func get_modified_time(path: String) -> int:
+	if path.is_empty():
+		return 0
+	
+	if is_saf_path(path) and is_android():
+		var plugin = _get_plugin()
+		if plugin:
+			var result = plugin.call("safGetModifiedTime", path)
+			if result is int:
+				return result
+			elif result is String and result.is_valid_int():
+				return result.to_int()
+		return 0
+	
+	return FileAccess.get_modified_time(path)
+
 ## Extracts a ZIP archive to a directory, optionally placing contents inside a named subfolder
 ## If subfolder_name is provided, creates dest_dir/subfolder_name/ and extracts there
 ## Otherwise extracts directly into dest_dir
