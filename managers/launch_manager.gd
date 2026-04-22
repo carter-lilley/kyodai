@@ -3308,11 +3308,133 @@ func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
 	return success
 
 
-## Prepares a PS3 game for RPCS3 by extracting ZIP directly to games/ and renaming to TitleID
-## Mirrors the Vita3K pattern but extracts directly to final location
+## Checks whether the given RPCS3 game path contains actual game files
+func _rpcs3_game_has_files(game_path: String) -> bool:
+	if not FileSystemManager.dir_exists(game_path):
+		return false
+	var files = FileSystemManager.list_dir(game_path)
+	var actual_files = 0
+	for f in files:
+		if f != "." and f != "..":
+			actual_files += 1
+	print("[LaunchManager] RPCS3: _rpcs3_game_has_files: found " + str(actual_files) + " actual files in " + game_path)
+	return actual_files > 0
+
+
+## Recursively flattens wrapper folders in a PS3 game installation
+## Handles multiple nesting levels (e.g., "Game Name/TitleID/..." -> "TitleID/...")
+## Stops when it finds a game indicator (PARAM.SFO, PS3_DISC.SFB, or PS3_GAME/ folder)
+func _flatten_rpcs3_wrappers(install_path: String) -> void:
+	var max_iterations = 5  # Safety limit to prevent infinite loops
+	
+	for i in range(max_iterations):
+		var dir := DirAccess.open(install_path)
+		if not dir:
+			break
+		
+		dir.list_dir_begin()
+		var entries := []
+		var file_name := dir.get_next()
+		while file_name != "":
+			if file_name != "." and file_name != "..":
+				entries.append(file_name)
+			file_name = dir.get_next()
+		dir.list_dir_end()
+		
+		print("[LaunchManager] RPCS3: Flatten iteration " + str(i + 1) + " - found " + str(entries.size()) + " entries")
+		
+		# Stop if there are multiple entries or no entries
+		if entries.size() != 1:
+			print("[LaunchManager] RPCS3: Stopping flatten - not a single wrapper (" + str(entries.size()) + " entries)")
+			break
+		
+		var potential_wrapper: String = install_path + "/" + entries[0]
+		
+		# Only flatten if it's a directory
+		if not FileSystemManager.dir_exists(potential_wrapper):
+			print("[LaunchManager] RPCS3: Stopping flatten - single entry is not a directory")
+			break
+		
+		# Check if this directory contains game indicators
+		var has_param_sfo = FileAccess.file_exists(potential_wrapper + "/PARAM.SFO")
+		var has_disc_sfb = FileAccess.file_exists(potential_wrapper + "/PS3_DISC.SFB")
+		var has_ps3_game = FileSystemManager.dir_exists(potential_wrapper + "/PS3_GAME")
+		
+		if has_param_sfo or has_disc_sfb or has_ps3_game:
+			print("[LaunchManager] RPCS3: Found game indicators in: " + entries[0])
+			
+			# Flatten this level (move game folder contents up)
+			print("[LaunchManager] RPCS3: Flattening game folder: " + entries[0])
+			var wrapper_dir := DirAccess.open(potential_wrapper)
+			if wrapper_dir:
+				wrapper_dir.list_dir_begin()
+				var wrapper_file := wrapper_dir.get_next()
+				while wrapper_file != "":
+					if wrapper_file != "." and wrapper_file != "..":
+						var source := potential_wrapper + "/" + wrapper_file
+						var dest := install_path + "/" + wrapper_file
+						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from game folder")
+						DirAccess.rename_absolute(source, dest)
+					wrapper_file = wrapper_dir.get_next()
+				wrapper_dir.list_dir_end()
+				FileSystemManager.delete_dir_recursive(potential_wrapper)
+				print("[LaunchManager] RPCS3: Flattened game folder")
+			
+			# Stop after flattening the game folder
+			break
+		else:
+			# This is just a wrapper, flatten it
+			print("[LaunchManager] RPCS3: Found wrapper folder: " + entries[0])
+			var wrapper_dir := DirAccess.open(potential_wrapper)
+			if wrapper_dir:
+				wrapper_dir.list_dir_begin()
+				var wrapper_file := wrapper_dir.get_next()
+				while wrapper_file != "":
+					if wrapper_file != "." and wrapper_file != "..":
+						var source := potential_wrapper + "/" + wrapper_file
+						var dest := install_path + "/" + wrapper_file
+						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from wrapper")
+						DirAccess.rename_absolute(source, dest)
+					wrapper_file = wrapper_dir.get_next()
+				wrapper_dir.list_dir_end()
+				FileSystemManager.delete_dir_recursive(potential_wrapper)
+				print("[LaunchManager] RPCS3: Flattened wrapper folder")
+
+
+## Determines if a PS3 game ZIP is disc or digital format by checking file paths
+## Returns "disc" if ZIP contains PS3_GAME/ folder, "digital" otherwise
+func _determine_ps3_game_format(zip_path: String) -> String:
+	if not FileAccess.file_exists(zip_path):
+		push_error("[LaunchManager] RPCS3: Cannot determine format - file not found: " + zip_path)
+		return "digital"  # Default to digital on error
+	
+	var reader = ZIPReader.new()
+	var err = reader.open(zip_path)
+	if err != OK:
+		push_error("[LaunchManager] RPCS3: Failed to open ZIP for format detection: " + zip_path)
+		return "digital"
+	
+	var files = reader.get_files()
+	reader.close()
+	
+	if files.is_empty():
+		return "digital"
+	
+	# Check if any file path contains PS3_GAME/
+	for file_path in files:
+		if file_path.find("PS3_GAME/") != -1:
+			print("[LaunchManager] RPCS3: Detected disc format (found PS3_GAME/ in ZIP)")
+			return "disc"
+	
+	print("[LaunchManager] RPCS3: Detected digital format (no PS3_GAME/ in ZIP)")
+	return "digital"
+
+
+## Prepares a PS3 game for RPCS3 by extracting ZIP directly to final location
+## Follows the Vita3K pattern: extract TitleID first, check if installed, skip if present
+## Extracts directly to games/ or dev_hdd0/game/ based on format detection - no temp directory
 func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[LaunchManager] RPCS3: _prepare_rpcs3_game called for: " + game.get_display_name())
-	print("[LaunchManager] RPCS3: game.title_id = '" + game.title_id + "'")
 	
 	if not game or not intent:
 		print("[LaunchManager] RPCS3: ERROR - game or intent is null")
@@ -3325,46 +3447,70 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] RPCS3: No ROM path for game: " + game.get_display_name())
 		return false
 	
-	# Determine emulator directory
+	# Step 1: Extract TitleID from ZIP upfront (like Vita3K)
+	print("[LaunchManager] RPCS3: Extracting TitleID from ZIP...")
+	var zip_title_id = TitleIDParser.extract_ps3_title_id(rom_path)
+	if zip_title_id == "":
+		push_error("[LaunchManager] RPCS3: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract PS3 game TitleID", Notification.Type.ERROR)
+		return false
+	print("[LaunchManager] RPCS3: TitleID from ZIP: " + zip_title_id)
+	
+	# If stored title_id doesn't match the ZIP, update it
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != zip_title_id:
+		print("[LaunchManager] RPCS3: WARNING - Stored TitleID " + active_title_id + " doesn't match ZIP TitleID " + zip_title_id)
+		print("[LaunchManager] RPCS3: Updating to correct TitleID from ZIP")
+	
+	if active_title_id != zip_title_id:
+		_store_title_id(game, zip_title_id)
+		print("[LaunchManager] RPCS3: Updated database with TitleID: " + zip_title_id)
+	
+	var title_id = game.get_active_title_id()
+	print("[LaunchManager] RPCS3: Using TitleID: " + title_id)
+	
+	# Step 2: Determine emulator directory
 	var emulator_dir: String
 	
 	if PlatformManager.is_android():
 		# Android: RPCSX uses app-private storage
-		emulator_dir = "/storage/emulated/0/Android/data/net.rpcsx.ui/files/games"
+		emulator_dir = "/storage/emulated/0/Android/data/net.rpcsx.ui/files"
 		print("[LaunchManager] RPCS3: Android mode - emulator_dir: " + emulator_dir)
 	else:
 		# Desktop: Use emulator install directory
 		var install_path = get_emulator_install_path(intent.emulator_id)
 		print("[LaunchManager] RPCS3: Desktop mode - install_path: " + install_path)
-		var base_dir = install_path.get_base_dir()
-		print("[LaunchManager] RPCS3: Desktop mode - base_dir: " + base_dir)
-		emulator_dir = base_dir + "/games"
+		emulator_dir = install_path.get_base_dir()
 		print("[LaunchManager] RPCS3: Desktop mode - emulator_dir: " + emulator_dir)
 	
-	# Check if TitleID is already known and the game folder exists
-	if game.title_id != "":
-		var existing_game_path: String = emulator_dir + "/" + game.title_id
-		print("[LaunchManager] RPCS3: Checking for existing game at: " + existing_game_path)
-		if FileSystemManager.dir_exists(existing_game_path):
-			print("[LaunchManager] RPCS3: Game already installed at: " + existing_game_path)
-			return true
-		else:
-			print("[LaunchManager] RPCS3: TitleID known but folder not found, will re-extract")
+	# Step 3: Detect game format from ZIP before extraction
+	var game_format = _determine_ps3_game_format(rom_path)
+	print("[LaunchManager] RPCS3: Game format: " + game_format)
 	
-	# Create dev_hdd0 directory structure
-	print("[LaunchManager] RPCS3: Ensuring games exists")
-	if not FileSystemManager.dir_exists(emulator_dir):
-		print("[LaunchManager] RPCS3: Creating games: " + emulator_dir)
-		var base_dir = emulator_dir.get_base_dir().get_base_dir()  # Strip /game and /dev_hdd0
-		var dev_hdd0_dir = base_dir + "/dev_hdd0"
-		if not FileSystemManager.dir_exists(dev_hdd0_dir):
-			FileSystemManager.make_dir_recursive(dev_hdd0_dir)
-		FileSystemManager.make_dir_recursive(emulator_dir)
+	# Step 4: Determine final install location based on format
+	var install_path: String
+	if game_format == "disc":
+		install_path = emulator_dir + "/games/" + title_id
+	else:
+		install_path = emulator_dir + "/dev_hdd0/game/" + title_id
 	
-	# Extract directly to games/[romm_id]_temp/
-	var temp_install_dir: String = emulator_dir + "/romm_" + str(game.romm_id) + "_temp"
-	print("[LaunchManager] RPCS3: Extracting to: " + temp_install_dir)
+	print("[LaunchManager] RPCS3: Install path: " + install_path)
 	
+	# Step 5: Check if already installed
+	if _rpcs3_game_has_files(install_path):
+		print("[LaunchManager] RPCS3: Game already installed at: " + install_path)
+		return true
+	
+	print("[LaunchManager] RPCS3: Game not installed, will extract to: " + install_path)
+	
+	# Step 6: Create install directory
+	if not FileSystemManager.dir_exists(install_path):
+		print("[LaunchManager] RPCS3: Creating install directory: " + install_path)
+		if not FileSystemManager.make_dir_recursive(install_path):
+			push_error("[LaunchManager] RPCS3: Failed to create install directory: " + install_path)
+			return false
+	
+	# Step 7: Extract ZIP directly to install location (no temp directory!)
 	# Show persistent pulsing notification during extraction
 	var rpcs3_notify_id = NotificationManager.show_notification(
 		"Extracting " + game.get_display_name() + "...",
@@ -3375,9 +3521,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		Callable(),
 		true
 	)
-	print("[LaunchManager] RPCS3: About to call _extract_ps3_zip...")
+	print("[LaunchManager] RPCS3: Extracting directly to: " + install_path)
 	
-	var extract_success := await _extract_ps3_zip(rom_path, temp_install_dir)
+	var extract_success := await _extract_ps3_zip(rom_path, install_path)
 	
 	# Dismiss the extraction notification
 	NotificationManager.dismiss_notification(rpcs3_notify_id)
@@ -3388,201 +3534,13 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] RPCS3: Failed to extract PS3 game ZIP: " + rom_path)
 		return false
 	
-	print("[LaunchManager] RPCS3: Extraction complete, checking structure...")
+	print("[LaunchManager] RPCS3: Extraction complete, flattening wrapper folders...")
 	
-	# Check if there's a wrapper folder (common in PS3 game ZIPs)
-	# Structure might be: temp_dir/GameName/PS3_GAME/ or temp_dir/PS3_GAME/
-	var actual_game_dir: String = temp_install_dir
+	# Step 8: Recursively flatten wrapper folders until we find game files
+	# Handles multiple nesting levels: "Tokyo Jungle/NPUA80523/..."
+	_flatten_rpcs3_wrappers(install_path)
 	
-	# List contents of temp_install_dir to check for wrapper folder
-	var dir := DirAccess.open(temp_install_dir)
-	if dir:
-		dir.list_dir_begin()
-		var entries := []
-		var file_name := dir.get_next()
-		while file_name != "":
-			if file_name != "." and file_name != "..":
-				entries.append(file_name)
-			file_name = dir.get_next()
-		dir.list_dir_end()
-		
-		print("[LaunchManager] RPCS3: Found " + str(entries.size()) + " entries in temp dir: " + str(entries))
-		
-		# If there's exactly one subdirectory and no files at root, it's likely a wrapper
-		if entries.size() == 1:
-			var potential_wrapper: String = temp_install_dir + "/" + entries[0]
-			if FileSystemManager.dir_exists(potential_wrapper):
-				print("[LaunchManager] RPCS3: Found wrapper folder, flattening: " + entries[0])
-				# Move all contents from wrapper to temp_install_dir
-				var wrapper_dir := DirAccess.open(potential_wrapper)
-				if wrapper_dir:
-					wrapper_dir.list_dir_begin()
-					var wrapper_file := wrapper_dir.get_next()
-					while wrapper_file != "":
-						if wrapper_file != "." and wrapper_file != "..":
-							var source := potential_wrapper + "/" + wrapper_file
-							var dest := temp_install_dir + "/" + wrapper_file
-							print("[LaunchManager] RPCS3: Moving " + wrapper_file + " from wrapper to root")
-							DirAccess.rename_absolute(source, dest)
-						wrapper_file = wrapper_dir.get_next()
-					wrapper_dir.list_dir_end()
-					# Remove empty wrapper folder
-					FileSystemManager.delete_dir_recursive(potential_wrapper)
-					print("[LaunchManager] RPCS3: Flattened wrapper folder")
-	
-	# Read PARAM.SFO from extracted folder
-	# Structure varies:
-	# - Disc games: temp_dir/TITLEID/PS3_GAME/PARAM.SFO (has PS3_GAME folder)
-	# - eShop games: temp_dir/TITLEID/PARAM.SFO (no PS3_GAME folder)
-	# We need to find it recursively
-	var sfo_path := _find_param_sfo_recursive(temp_install_dir)
-	print("[LaunchManager] RPCS3: Looking for PARAM.SFO at: " + sfo_path if sfo_path != "" else "[LaunchManager] RPCS3: PARAM.SFO not found in temp directory")
-	
-	# Check if file exists first
-	if sfo_path == "" or not FileAccess.file_exists(sfo_path):
-		push_error("[LaunchManager] RPCS3: PARAM.SFO not found in temp directory: " + temp_install_dir)
-		# Debug: list what's actually in the temp dir
-		var debug_dir := DirAccess.open(temp_install_dir)
-		if debug_dir:
-			debug_dir.list_dir_begin()
-			var debug_file := debug_dir.get_next()
-			print("[LaunchManager] RPCS3: DEBUG - Contents of temp dir:")
-			while debug_file != "":
-				print("[LaunchManager] RPCS3:   - " + debug_file)
-				debug_file = debug_dir.get_next()
-			debug_dir.list_dir_end()
-		return false
-	
-	# Determine if this is disc or eShop format based on path structure
-	var title_id_folder: String = ""
-	
-	# Check if PARAM.SFO is inside a PS3_GAME folder
-	var ps3_game_index: int = sfo_path.find("/PS3_GAME/")
-	
-	if ps3_game_index != -1:
-		# Disc format: .../TITLEID/PS3_GAME/PARAM.SFO
-		# Get the path up to and including PS3_GAME
-		var path_to_ps3_game: String = sfo_path.substr(0, ps3_game_index + "/PS3_GAME".length())
-		# Get the parent directory of PS3_GAME (this is the TitleID folder)
-		var ps3_game_parent: String = path_to_ps3_game.get_base_dir()
-		
-		print("[LaunchManager] RPCS3: PS3_GAME at: " + path_to_ps3_game)
-		print("[LaunchManager] RPCS3: PS3_GAME parent: " + ps3_game_parent)
-		print("[LaunchManager] RPCS3: temp_install_dir: " + temp_install_dir)
-		
-		if ps3_game_parent == temp_install_dir:
-			# After flattening: temp/PS3_GAME/PARAM.SFO (disc without TitleID wrapper)
-			print("[LaunchManager] RPCS3: Detected disc game format (PS3_GAME at root)")
-			title_id_folder = ""
-		else:
-			# Disc format with TitleID: temp/TITLEID/PS3_GAME/PARAM.SFO
-			title_id_folder = ps3_game_parent.get_file()
-			print("[LaunchManager] RPCS3: Detected disc game format with TitleID folder: " + title_id_folder)
-	else:
-		# eShop format: temp/TITLEID/PARAM.SFO (no PS3_GAME folder)
-		# The folder containing PARAM.SFO is the TitleID
-		var sfo_parent: String = sfo_path.get_base_dir()
-		title_id_folder = sfo_parent.get_file()
-		print("[LaunchManager] RPCS3: Detected eShop game format, TitleID folder: " + title_id_folder)
-	
-	print("[LaunchManager] RPCS3: PARAM.SFO found, parsing...")
-	var extracted_title_id: String = ParamSFOParser.get_title_id(sfo_path)
-	print("[LaunchManager] RPCS3: Parser returned TitleID: '" + extracted_title_id + "'")
-	
-	# Validate TitleID format (should be like "BLUS12345" or "BLES12345")
-	if extracted_title_id == "" or extracted_title_id.begins_with("<") or extracted_title_id.length() != 9:
-		push_error("[LaunchManager] RPCS3: Invalid TitleID format: '" + extracted_title_id + "'")
-		return false
-	
-	print("[LaunchManager] RPCS3: Found TitleID: '" + extracted_title_id + "'")
-	
-	# Check if this TitleID already exists in either location - if so, just use it
-	var disc_path: String = emulator_dir + "/" + extracted_title_id
-	var eshop_path: String = emulator_dir.get_base_dir() + "/dev_hdd0/game/" + extracted_title_id
-	
-	if FileSystemManager.dir_exists(disc_path):
-		print("[LaunchManager] RPCS3: TitleID folder already exists at (disc location): " + disc_path)
-		print("[LaunchManager] RPCS3: Cleaning up temp and using existing installation")
-		FileSystemManager.delete_dir_recursive(temp_install_dir)
-		game.title_id = extracted_title_id
-		DataManager.update_game_title_id(game.romm_id, extracted_title_id)
-		return true
-	elif FileSystemManager.dir_exists(eshop_path):
-		print("[LaunchManager] RPCS3: TitleID folder already exists at (eShop location): " + eshop_path)
-		print("[LaunchManager] RPCS3: Cleaning up temp and using existing installation")
-		FileSystemManager.delete_dir_recursive(temp_install_dir)
-		game.title_id = extracted_title_id
-		DataManager.update_game_title_id(game.romm_id, extracted_title_id)
-		return true
-	
-	# Save TitleID to database (always overwrite with correct value)
-	_store_title_id(game, extracted_title_id)
-	print("[LaunchManager] RPCS3: Saved TitleID to database: " + extracted_title_id)
-	
-	# Move game to final location
-	# Disc games go to /games/, eShop games go to /dev_hdd0/game/
-	if title_id_folder == "":
-		# Disc format: files are at temp_install_dir/PS3_GAME/
-		# Move to /games/TITLEID/
-		print("[LaunchManager] RPCS3: Disc format - creating " + disc_path)
-		
-		if not FileSystemManager.make_dir_recursive(disc_path):
-			push_error("[LaunchManager] RPCS3: Failed to create final directory: " + disc_path)
-			return false
-		
-		var ps3_game_source := temp_install_dir + "/PS3_GAME"
-		var ps3_game_dest := disc_path + "/PS3_GAME"
-		
-		print("[LaunchManager] RPCS3: Moving PS3_GAME from temp to final")
-		if DirAccess.rename_absolute(ps3_game_source, ps3_game_dest) != OK:
-			push_error("[LaunchManager] RPCS3: Failed to move PS3_GAME folder")
-			return false
-		
-		FileSystemManager.delete_dir_recursive(temp_install_dir)
-		print("[LaunchManager] RPCS3: Game installed successfully at: " + disc_path)
-	else:
-		# eShop format: TitleID folder is at temp_install_dir/TITLEID/
-		# Need to flatten: move temp/TITLEID/* up to temp/*, then rename temp to dev_hdd0/game/TITLEID
-		var titleid_folder_path := temp_install_dir + "/" + title_id_folder
-		
-		print("[LaunchManager] RPCS3: eShop format - flattening TitleID folder")
-		
-		# Move all contents from temp/TITLEID/ up to temp/
-		var titleid_dir := DirAccess.open(titleid_folder_path)
-		if titleid_dir:
-			titleid_dir.list_dir_begin()
-			var file_name := titleid_dir.get_next()
-			while file_name != "":
-				if file_name != "." and file_name != "..":
-					var source := titleid_folder_path + "/" + file_name
-					var dest := temp_install_dir + "/" + file_name
-					print("[LaunchManager] RPCS3: Moving " + file_name + " up from TitleID folder")
-					DirAccess.rename_absolute(source, dest)
-				file_name = titleid_dir.get_next()
-			titleid_dir.list_dir_end()
-		
-		# Delete empty TitleID folder
-		FileSystemManager.delete_dir_recursive(titleid_folder_path)
-		
-		# eShop games go to /dev_hdd0/game/
-		var dev_hdd0_game_dir := emulator_dir.get_base_dir() + "/dev_hdd0/game"
-		var eshop_final_path := dev_hdd0_game_dir + "/" + extracted_title_id
-		
-		# Create dev_hdd0/game directory if it doesn't exist
-		if not FileSystemManager.dir_exists(dev_hdd0_game_dir):
-			print("[LaunchManager] RPCS3: Creating dev_hdd0/game directory: " + dev_hdd0_game_dir)
-			if not FileSystemManager.make_dir_recursive(dev_hdd0_game_dir):
-				push_error("[LaunchManager] RPCS3: Failed to create dev_hdd0/game directory")
-				return false
-		
-		print("[LaunchManager] RPCS3: Renaming temp folder to " + eshop_final_path)
-		if DirAccess.rename_absolute(temp_install_dir, eshop_final_path) != OK:
-			push_error("[LaunchManager] RPCS3: Failed to rename temp folder")
-			return false
-		
-		print("[LaunchManager] RPCS3: Game installed successfully at: " + eshop_final_path)
-	
-	print("[LaunchManager] RPCS3: Game installed successfully at: " + emulator_dir + "/" + extracted_title_id)
+	print("[LaunchManager] RPCS3: Game installed successfully at: " + install_path)
 	return true
 
 

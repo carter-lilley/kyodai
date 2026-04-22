@@ -2,80 +2,152 @@
 ## Extracts game identifiers from ROM files for save sync purposes
 class_name TitleIDParser
 
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+## Opens a file for reading and calls the callback. Handles error checking and cleanup.
+## Returns the callback's result, or empty string on failure.
+static func _with_open_file(path: String, callback: Callable) -> String:
+	if not FileAccess.file_exists(path):
+		push_error("[TitleIDParser] File not found: " + path)
+		return ""
+	
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		push_error("[TitleIDParser] Failed to open file: " + path)
+		return ""
+	
+	var result = callback.call(file)
+	file.close()
+	return result
+
+## Converts a PackedByteArray to a hex string
+static func _bytes_to_hex(bytes: PackedByteArray) -> String:
+	var hex = ""
+	for b in bytes:
+		hex += "%02x" % b
+	return hex
+
+## Verifies magic bytes at a specific offset in a buffer
+static func _verify_magic(buffer: PackedByteArray, offset: int, expected: String) -> bool:
+	if buffer.size() < offset + expected.length():
+		return false
+	return buffer.slice(offset, offset + expected.length()).get_string_from_ascii() == expected
+
+## Reads little-endian uint16 from byte array
+static func _read_le16(bytes: PackedByteArray, offset: int) -> int:
+	return bytes.decode_u16(offset)
+
+## Reads little-endian uint32 from byte array
+static func _read_le32(bytes: PackedByteArray, offset: int) -> int:
+	return bytes.decode_u32(offset)
+
+## Reads little-endian uint64 from byte array
+static func _read_le64(bytes: PackedByteArray, offset: int) -> int:
+	return bytes.decode_u64(offset)
+
+## Reads big-endian uint16 from byte array
+static func _read_be16(bytes: PackedByteArray, offset: int) -> int:
+	return (bytes[offset] << 8) | bytes[offset + 1]
+
+## Reads big-endian uint32 from byte array
+static func _read_be32(bytes: PackedByteArray, offset: int) -> int:
+	return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]
+
+## Reads a null-terminated string from a byte array starting at offset
+static func _read_cstring(bytes: PackedByteArray, offset: int) -> String:
+	var end = offset
+	while end < bytes.size() and bytes[end] != 0:
+		end += 1
+	if end > offset:
+		return bytes.slice(offset, end).get_string_from_ascii()
+	return ""
+
+## Returns the minimum of two integers
+static func mini(a: int, b: int) -> int:
+	return a if a < b else b
+
+## Resolves a ZIP file path for opening with ZIPReader
+## Handles Godot virtual paths, globalizes them, and tries Windows backslashes
+## Returns the resolved path or empty string if file cannot be found
+static func _resolve_zip_path(zip_path: String) -> String:
+	# On Windows, prefer backslash paths for ZIPReader compatibility
+	if OS.get_name() == "Windows":
+		var backslash_path = zip_path.replace("/", "\\")
+		if FileAccess.file_exists(backslash_path):
+			return backslash_path
+	
+	# Try original path
+	if FileAccess.file_exists(zip_path):
+		return zip_path
+	
+	# Try globalized path (resolves user://, res://, etc.)
+	var global_path = ProjectSettings.globalize_path(zip_path)
+	if global_path != zip_path and FileAccess.file_exists(global_path):
+		return global_path
+	
+	return ""
+
+# ============================================================================
+# PLATFORM-SPECIFIC EXTRACTORS
+# ============================================================================
+
 # ==================== 3DS (Azahar) ====================
 
 static func extract_3ds_title_id(rom_path: String) -> String:
-	if not FileAccess.file_exists(rom_path):
-		push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + rom_path)
-		return ""
-	
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		push_error("[TitleIDParser] Failed to open 3DS ROM: " + rom_path)
-		return ""
-	
-	var header = file.get_buffer(0x200)
-	if header.size() < 0x200:
-		file.close()
-		push_error("[TitleIDParser] 3DS ROM too small: " + rom_path)
-		return ""
-	
-	var title_id_val = 0
-	var magic = header.slice(0x100, 0x104).get_string_from_ascii()
-	
-	if magic == "NCCH":
-		title_id_val = header.decode_u64(0x118)
-	elif magic == "NCSD":
-		title_id_val = header.decode_u64(0x108)
-	else:
-		var ncsd_magic = header.slice(0x0, 0x4).get_string_from_ascii()
-		if ncsd_magic == "NCSD":
-			title_id_val = header.decode_u64(0x008)
+	return _with_open_file(rom_path, func(file: FileAccess) -> String:
+		var header = file.get_buffer(0x200)
+		if header.size() < 0x200:
+			push_error("[TitleIDParser] 3DS ROM too small: " + rom_path)
+			return ""
+		
+		var title_id_val = 0
+		
+		if _verify_magic(header, 0x100, "NCCH"):
+			title_id_val = _read_le64(header, 0x118)
+		elif _verify_magic(header, 0x100, "NCSD"):
+			title_id_val = _read_le64(header, 0x108)
+		elif _verify_magic(header, 0x0, "NCSD"):
+			title_id_val = _read_le64(header, 0x008)
 		else:
-			file.close()
 			push_error("[TitleIDParser] Unknown 3DS ROM format: " + rom_path)
 			return ""
-	
-	file.close()
-	return "%016x" % title_id_val
+		
+		return "%016x" % title_id_val
+	)
 
 # ==================== Wii U (Cemu) ====================
 
 static func extract_wiiu_title_id(rom_path: String) -> String:
-	if not FileAccess.file_exists(rom_path):
-		return ""
-	
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		return ""
-	
-	var file_size = file.get_length()
-	var tail_size = mini(file_size, 262144)
-	file.seek(file_size - tail_size)
-	var tail = file.get_buffer(tail_size)
-	file.close()
-	
-	for i in range(tail.size() - 20):
-		if tail[i] == 95 and tail[i + 1] == 118:
-			var j = i + 2
-			while j < tail.size() and tail[j] >= 48 and tail[j] <= 57:
-				j += 1
-			
-			if j > i + 2 and i >= 16:
-				var is_hex = true
-				var title_id = ""
-				for k in range(i - 16, i):
-					var c = tail[k]
-					if (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70):
-						title_id += char(c)
-					else:
-						is_hex = false
-						break
+	return _with_open_file(rom_path, func(file: FileAccess) -> String:
+		var file_size = file.get_length()
+		var tail_size = mini(file_size, 262144)
+		file.seek(file_size - tail_size)
+		var tail = file.get_buffer(tail_size)
+		
+		for i in range(tail.size() - 20):
+			if tail[i] == 95 and tail[i + 1] == 118:
+				var j = i + 2
+				while j < tail.size() and tail[j] >= 48 and tail[j] <= 57:
+					j += 1
 				
-				if is_hex and title_id.length() == 16:
-					return title_id.to_lower()
-	
-	return ""
+				if j > i + 2 and i >= 16:
+					var is_hex = true
+					var title_id = ""
+					for k in range(i - 16, i):
+						var c = tail[k]
+						if (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70):
+							title_id += char(c)
+						else:
+							is_hex = false
+							break
+					
+					if is_hex and title_id.length() == 16:
+						return title_id.to_lower()
+		
+		return ""
+	)
 
 # ==================== Switch (Eden) ====================
 
@@ -410,34 +482,28 @@ static func _is_valid_maker_code(maker: String) -> bool:
 	return true
 
 static func extract_gamecube_game_id(rom_path: String) -> String:
-	if not FileAccess.file_exists(rom_path):
+	return _with_open_file(rom_path, func(file: FileAccess) -> String:
+		var file_size = file.get_length()
+		var scan_size = mini(file_size, 1048576)
+		var data = file.get_buffer(scan_size)
+		
+		for i in range(data.size() - 20):
+			var game_id = data.slice(i, i + 4).get_string_from_ascii()
+			var maker = data.slice(i + 4, i + 6).get_string_from_ascii()
+			
+			if not _is_valid_gamecube_game_id(game_id) or not _is_valid_maker_code(maker):
+				continue
+			
+			var disc_number = data[i + 6]
+			var version = data[i + 7]
+			var audio_streaming = data[i + 8]
+			var stream_buffer_size = data[i + 9]
+			
+			if disc_number <= 1 and version <= 2 and audio_streaming <= 1 and stream_buffer_size <= 0x40:
+				return game_id
+		
 		return ""
-	
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		return ""
-	
-	var file_size = file.get_length()
-	var scan_size = mini(file_size, 1048576)
-	var data = file.get_buffer(scan_size)
-	file.close()
-	
-	for i in range(data.size() - 20):
-		var game_id = data.slice(i, i + 4).get_string_from_ascii()
-		var maker = data.slice(i + 4, i + 6).get_string_from_ascii()
-		
-		if not _is_valid_gamecube_game_id(game_id) or not _is_valid_maker_code(maker):
-			continue
-		
-		var disc_number = data[i + 6]
-		var version = data[i + 7]
-		var audio_streaming = data[i + 8]
-		var stream_buffer_size = data[i + 9]
-		
-		if disc_number <= 1 and version <= 2 and audio_streaming <= 1 and stream_buffer_size <= 0x40:
-			return game_id
-	
-	return ""
+	)
 
 static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -> String:
 	var regions: Array[String] = ["USA", "EUR", "JAP", "KOR"]
@@ -453,17 +519,18 @@ static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -
 					continue
 				if item.to_lower().ends_with(".gci"):
 					var gci_path = card_path + item
-					var file = FileAccess.open(gci_path, FileAccess.READ)
-					if not file:
-						continue
-					var header = file.get_buffer(6)
-					file.close()
-					if header.size() < 6:
-						continue
-					var game_id = header.slice(0, 4).get_string_from_ascii()
-					var maker = header.slice(4, 6).get_string_from_ascii()
-					if _is_valid_gamecube_game_id(game_id) and _is_valid_maker_code(maker):
-						return game_id
+					var result = _with_open_file(gci_path, func(file: FileAccess) -> String:
+						var header = file.get_buffer(6)
+						if header.size() < 6:
+							return ""
+						var game_id = header.slice(0, 4).get_string_from_ascii()
+						var maker = header.slice(4, 6).get_string_from_ascii()
+						if _is_valid_gamecube_game_id(game_id) and _is_valid_maker_code(maker):
+							return game_id
+						return ""
+					)
+					if result != "":
+						return result
 	return ""
 
 # ==================== Vita (Vita3K) ====================
@@ -482,32 +549,18 @@ static func extract_vita_title_id(zip_path: String) -> String:
 			push_error("[TitleIDParser] Plugin failed to extract TitleID from: " + zip_path)
 			return ""
 	
-	# Check if file exists (handles both regular paths and Godot virtual paths)
-	if not FileAccess.file_exists(zip_path):
-		# Try resolving to global path if it's a Godot virtual path
-		var global_path = ProjectSettings.globalize_path(zip_path)
-		if global_path != zip_path and FileAccess.file_exists(global_path):
-			zip_path = global_path
-		else:
-			push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + zip_path)
-			return ""
+	# Resolve ZIP path with fallbacks for Godot virtual paths and Windows backslashes
+	var resolved_path = _resolve_zip_path(zip_path)
+	if resolved_path == "":
+		push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + zip_path)
+		return ""
+	zip_path = resolved_path
 	
 	var reader = ZIPReader.new()
-	# Try the path as-is first (ZIPReader on Windows often prefers forward slashes)
 	var err = reader.open(zip_path)
 	if err != OK:
-		# Try with globalized path as fallback
-		var global_path = ProjectSettings.globalize_path(zip_path)
-		if global_path != zip_path:
-			err = reader.open(global_path)
-		if err != OK:
-			# Last resort: try with backslashes on Windows
-			if OS.get_name() == "Windows":
-				var backslash_path = zip_path.replace("/", "\\")
-				err = reader.open(backslash_path)
-			if err != OK:
-				push_error("[TitleIDParser] Failed to open ZIP for TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
-				return ""
+		push_error("[TitleIDParser] Failed to open ZIP for TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
+		return ""
 	
 	var files = reader.get_files()
 	reader.close()
@@ -530,92 +583,70 @@ const _XEX_SECTOR_SIZE = 2048
 const _GDFX_MAGIC = "MICROSOFT*XBOX*MEDIA"
 const _XEX_HEADER_EXECUTION_INFO = 0x00040006
 
-## Reads big-endian uint16 from byte array
-static func _decode_be16(bytes: PackedByteArray, offset: int) -> int:
-	return (bytes[offset] << 8) | bytes[offset + 1]
-
-## Reads big-endian uint32 from byte array
-static func _decode_be32(bytes: PackedByteArray, offset: int) -> int:
-	return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]
-
 ## Extracts Xbox 360 Title ID from an ISO file
 ## Parses the GDFX filesystem to find default.xex, then extracts Title ID from XEX header
 ## Returns 8-character hex string (e.g., "545407DF")
 static func extract_xbox360_title_id(iso_path: String) -> String:
-	if not FileAccess.file_exists(iso_path):
-		push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + iso_path)
-		return ""
-	
-	var file = FileAccess.open(iso_path, FileAccess.READ)
-	if not file:
-		push_error("[TitleIDParser] Failed to open Xbox 360 ISO: " + iso_path)
-		return ""
-	
-	print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
-	
-	# Step 1: Find GDFX partition
-	var game_offset = _find_gdfx_partition(file)
-	if game_offset < 0:
-		file.close()
-		push_error("[TitleIDParser] Failed to find GDFX partition in Xbox 360 ISO: " + iso_path)
-		return ""
-	
-	print("[TitleIDParser] GDFX partition found at offset: 0x" + "%x" % game_offset)
-	
-	# Step 2: Read root directory info from sector 32
-	file.seek(game_offset + (32 * _XEX_SECTOR_SIZE) + 20)
-	var root_sector_bytes = file.get_buffer(4)
-	var root_size_bytes = file.get_buffer(4)
-	
-	if root_sector_bytes.size() < 4 or root_size_bytes.size() < 4:
-		file.close()
-		push_error("[TitleIDParser] Failed to read GDFX root directory info")
-		return ""
-	
-	# GDFX format uses little-endian
-	var root_sector = root_sector_bytes.decode_u32(0)
-	var root_size = root_size_bytes.decode_u32(0)
-	var root_offset = game_offset + (root_sector * _XEX_SECTOR_SIZE)
-	
-	print("[TitleIDParser] GDFX root directory: sector=" + str(root_sector) + ", size=" + str(root_size) + ", offset=0x" + "%x" % root_offset)
-	
-	# Validate root directory is within file bounds
-	if root_offset > file.get_length():
-		file.close()
-		push_error("[TitleIDParser] GDFX root directory offset exceeds file size")
-		return ""
-	
-	# Step 3: Parse directory tree to find default.xex
-	print("[TitleIDParser] Searching for default.xex in GDFX directory tree...")
-	var xex_entry = _find_file_in_gdfx(file, game_offset, root_offset, "default.xex")
-	
-	# Step 4: If default.xex not found, try GameInfo.bin (XNA/Indie games)
-	if xex_entry.is_empty():
-		print("[TitleIDParser] default.xex not found, trying GameInfo.bin...")
-		var gameinfo_entry = _find_file_in_gdfx(file, game_offset, root_offset, "GameInfo.bin")
-		if not gameinfo_entry.is_empty():
-			var title_id = _parse_gameinfo_title_id(file, gameinfo_entry)
-			if title_id != "":
-				print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + title_id.to_upper())
-				file.close()
-				return title_id.to_upper()
+	return _with_open_file(iso_path, func(file: FileAccess) -> String:
+		print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
 		
-		file.close()
-		push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ISO")
+		# Step 1: Find GDFX partition
+		var game_offset = _find_gdfx_partition(file)
+		if game_offset < 0:
+			push_error("[TitleIDParser] Failed to find GDFX partition in Xbox 360 ISO: " + iso_path)
+			return ""
+		
+		print("[TitleIDParser] GDFX partition found at offset: 0x" + "%x" % game_offset)
+		
+		# Step 2: Read root directory info from sector 32
+		file.seek(game_offset + (32 * _XEX_SECTOR_SIZE) + 20)
+		var root_sector_bytes = file.get_buffer(4)
+		var root_size_bytes = file.get_buffer(4)
+		
+		if root_sector_bytes.size() < 4 or root_size_bytes.size() < 4:
+			push_error("[TitleIDParser] Failed to read GDFX root directory info")
+			return ""
+		
+		var root_sector = _read_le32(root_sector_bytes, 0)
+		var root_size = _read_le32(root_size_bytes, 0)
+		var root_offset = game_offset + (root_sector * _XEX_SECTOR_SIZE)
+		
+		print("[TitleIDParser] GDFX root directory: sector=" + str(root_sector) + ", size=" + str(root_size) + ", offset=0x" + "%x" % root_offset)
+		
+		# Validate root directory is within file bounds
+		if root_offset > file.get_length():
+			push_error("[TitleIDParser] GDFX root directory offset exceeds file size")
+			return ""
+		
+		# Step 3: Parse directory tree to find default.xex
+		print("[TitleIDParser] Searching for default.xex in GDFX directory tree...")
+		var xex_entry = _find_file_in_gdfx(file, game_offset, root_offset, "default.xex")
+		
+		# Step 4: If default.xex not found, try GameInfo.bin (XNA/Indie games)
+		if xex_entry.is_empty():
+			print("[TitleIDParser] default.xex not found, trying GameInfo.bin...")
+			var gameinfo_entry = _find_file_in_gdfx(file, game_offset, root_offset, "GameInfo.bin")
+			if not gameinfo_entry.is_empty():
+				var title_id = _parse_gameinfo_title_id(file, gameinfo_entry)
+				if title_id != "":
+					print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + title_id.to_upper())
+					return title_id.to_upper()
+			
+			push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ISO")
+			return ""
+		
+		print("[TitleIDParser] Found default.xex at offset 0x" + "%x" % xex_entry["offset"] + ", length=" + str(xex_entry["length"]))
+		
+		# Step 5: Read XEX header and extract Title ID
+		var title_id = _read_xex_title_id(file, xex_entry["offset"], xex_entry["length"])
+		
+		if title_id != "":
+			print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
+			return title_id.to_upper()
+		
+		push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ISO")
 		return ""
-	
-	print("[TitleIDParser] Found default.xex at offset 0x" + "%x" % xex_entry["offset"] + ", length=" + str(xex_entry["length"]))
-	
-	# Step 5: Read XEX header and extract Title ID
-	var title_id = _read_xex_title_id(file, xex_entry["offset"], xex_entry["length"])
-	file.close()
-	
-	if title_id != "":
-		print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
-		return title_id.to_upper()
-	
-	push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ISO")
-	return ""
+	)
 
 ## Searches for GDFX partition by looking for "MICROSOFT*XBOX*MEDIA" magic at known offsets
 ## Returns the game partition base offset, or -1 if not found
@@ -720,7 +751,7 @@ static func _read_xex_title_id(file: FileAccess, xex_offset: int, xex_length: in
 		push_error("[TitleIDParser] Invalid XEX magic: " + magic)
 		return ""
 	
-	var header_count = _decode_be32(xex_header, 0x14)
+	var header_count = _read_be32(xex_header, 0x14)
 	if header_count == 0 or header_count > 100:
 		push_error("[TitleIDParser] Invalid XEX header count: " + str(header_count))
 		return ""
@@ -732,8 +763,8 @@ static func _read_xex_title_id(file: FileAccess, xex_offset: int, xex_length: in
 		if opt_header.size() < 8:
 			break
 		
-		var key = _decode_be32(opt_header, 0)
-		var value = _decode_be32(opt_header, 4)
+		var key = _read_be32(opt_header, 0)
+		var value = _read_be32(opt_header, 4)
 		
 		# Check if this is XEX_HEADER_EXECUTION_INFO
 		if key == _XEX_HEADER_EXECUTION_INFO:
@@ -873,33 +904,26 @@ static func _iso_extract_serial_from_cnf(cnf_content: String) -> String:
 	return ""
 
 static func _iso_extract_ps2_serial(rom_path: String) -> String:
-	var file = FileAccess.open(rom_path, FileAccess.READ)
-	if not file:
-		push_error("[TitleIDParser] Failed to open ISO: " + rom_path)
-		return ""
-	
-	var pvd = _iso_read_pvd(file)
-	if not pvd.valid:
-		file.close()
-		return ""
-	
-	var cnf = _iso_find_file(file, pvd.root_lba, pvd.root_length, "SYSTEM.CNF")
-	if not cnf.found:
-		push_error("[TitleIDParser] ISO SYSTEM.CNF not found")
-		file.close()
-		return ""
-	
-	file.seek(cnf.lba * _ISO_SECTOR_SIZE)
-	var cnf_data = file.get_buffer(cnf.length)
-	file.close()
-	
-	var cnf_content = cnf_data.get_string_from_utf8()
-	var serial = _iso_extract_serial_from_cnf(cnf_content)
-	
-	if serial == "":
-		push_error("[TitleIDParser] ISO failed to extract serial from SYSTEM.CNF")
-	
-	return serial
+	return _with_open_file(rom_path, func(file: FileAccess) -> String:
+		var pvd = _iso_read_pvd(file)
+		if not pvd.valid:
+			return ""
+		
+		var cnf = _iso_find_file(file, pvd.root_lba, pvd.root_length, "SYSTEM.CNF")
+		if not cnf.found:
+			push_error("[TitleIDParser] ISO SYSTEM.CNF not found")
+			return ""
+		
+		file.seek(cnf.lba * _ISO_SECTOR_SIZE)
+		var cnf_data = file.get_buffer(cnf.length)
+		var cnf_content = cnf_data.get_string_from_utf8()
+		var serial = _iso_extract_serial_from_cnf(cnf_content)
+		
+		if serial == "":
+			push_error("[TitleIDParser] ISO failed to extract serial from SYSTEM.CNF")
+		
+		return serial
+	)
 
 # CHD v5 parsing
 
@@ -1045,6 +1069,63 @@ static func extract_ps2_serial(rom_path: String) -> String:
 			push_error("[TitleIDParser] Unsupported PS2 ROM format: " + ext)
 			return ""
 
+# ==================== PS3 (RPCS3) ====================
+
+## Extracts PS3 Title ID from a ZIP file by reading PARAM.SFO directly from the archive
+## Supports both disc format (PS3_GAME/PARAM.SFO) and digital format (TITLEID/PARAM.SFO)
+## Returns Title ID string (e.g., "BLUS12345") or empty string on failure
+static func extract_ps3_title_id(zip_path: String) -> String:
+	# Resolve ZIP path with fallbacks for Godot virtual paths and Windows backslashes
+	var resolved_path = _resolve_zip_path(zip_path)
+	if resolved_path == "":
+		push_error("[TitleIDParser] File not found: " + zip_path)
+		return ""
+	zip_path = resolved_path
+	
+	var reader = ZIPReader.new()
+	var err = reader.open(zip_path)
+	if err != OK:
+		push_error("[TitleIDParser] Failed to open ZIP for PS3 TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
+		return ""
+	
+	var files = reader.get_files()
+	if files.is_empty():
+		push_error("[TitleIDParser] ZIP is empty: " + zip_path)
+		reader.close()
+		return ""
+	
+	# Find PARAM.SFO in the ZIP (could be PS3_GAME/PARAM.SFO or TITLEID/PARAM.SFO)
+	var sfo_path := ""
+	for file_path in files:
+		if file_path.ends_with("PARAM.SFO") or file_path.ends_with("PARAM.sfo"):
+			sfo_path = file_path
+			break
+	
+	if sfo_path == "":
+		push_error("[TitleIDParser] PARAM.SFO not found in PS3 ZIP: " + zip_path)
+		reader.close()
+		return ""
+	
+	print("[TitleIDParser] Found PARAM.SFO in ZIP at: " + sfo_path)
+	
+	# Read PARAM.SFO bytes from ZIP
+	var sfo_bytes = reader.read_file(sfo_path)
+	reader.close()
+	
+	if sfo_bytes.is_empty():
+		push_error("[TitleIDParser] Failed to read PARAM.SFO from ZIP: " + zip_path)
+		return ""
+	
+	# Parse TitleID from SFO bytes
+	var title_id = ParamSFOParser.get_title_id_from_bytes(sfo_bytes)
+	
+	if title_id == "":
+		push_error("[TitleIDParser] Failed to extract TitleID from PARAM.SFO in: " + zip_path)
+		return ""
+	
+	print("[TitleIDParser] PS3 TitleID extracted from ZIP: " + title_id)
+	return title_id
+
 # ==================== PSP (PPSSPP) ====================
 # ISO9660 + PARAM.SFO parsing for PSP game IDs
 
@@ -1189,6 +1270,3 @@ static func extract_psp_game_id(rom_path: String) -> String:
 		_:
 			push_error("[TitleIDParser] Unsupported PSP ROM format: " + ext)
 			return ""
-
-static func mini(a: int, b: int) -> int:
-	return a if a < b else b

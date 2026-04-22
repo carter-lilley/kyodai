@@ -1925,8 +1925,13 @@
 	"name": "RPCS3",
 	"platforms": ["ps3"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"windows": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
+		"linux": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
+		"android": "{emulator_dir}/dev_hdd0/home/00000001/savedata"
+	  },
+	  "extensions": ["*"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {
@@ -1995,6 +2000,34 @@
 			"validate": {
 			  "action_type": "file_exists",
 			  "file": "PS3UPDAT.PUP"
+			}
+		  }
+		}
+	  },
+	  {
+		"step": "create_save_directories",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_folders",
+			"folders": [
+			  "dev_hdd0/home/00000001/savedata"
+			],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "dev_hdd0/home/00000001/savedata"
+			}
+		  },
+		  "linux": {
+			"action_type": "none"
+		  },
+		  "android": {
+			"action_type": "create_folders",
+			"folders": [
+			  "dev_hdd0/home/00000001/savedata"
+			],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "dev_hdd0/home/00000001/savedata"
 			}
 		  }
 		}

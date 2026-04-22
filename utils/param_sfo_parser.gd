@@ -4,7 +4,7 @@
 
 class_name ParamSFOParser
 
-## Reads a PARAM.SFO file and returns a dictionary with all fields
+## Reads a PARAM.SFO file from disk and returns a dictionary with all fields
 ## Returns empty dictionary if file cannot be parsed
 static func read_sfo(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
@@ -19,9 +19,15 @@ static func read_sfo(path: String) -> Dictionary:
 	var data := file.get_buffer(file.get_length())
 	file.close()
 	
+	return read_sfo_from_bytes(data)
+
+
+## Parses PARAM.SFO data from a byte array
+## Returns empty dictionary if data cannot be parsed
+static func read_sfo_from_bytes(data: PackedByteArray) -> Dictionary:
 	# Check minimum file size (header is 20 bytes)
 	if data.size() < 20:
-		push_error("[ParamSFOParser] File too small: " + str(data.size()) + " bytes")
+		push_error("[ParamSFOParser] Data too small: " + str(data.size()) + " bytes")
 		return {}
 	
 	# Parse header
@@ -30,7 +36,6 @@ static func read_sfo(path: String) -> Dictionary:
 	pos += 4
 	
 	# Magic should be "PSF\0" = 0x46535000 (little-endian)
-	# Note: Some sources say 0x53434500 (SCE) but actual files use 0x46535000 (PSF)
 	if magic != 0x46535000:
 		push_error("[ParamSFOParser] Invalid magic: 0x" + String.num_uint64(magic, 16) + " (expected 0x46535000 for PSF)")
 		return {}
@@ -121,8 +126,21 @@ static func get_title_id(path: String) -> String:
 	print("[ParamSFOParser] get_title_id called for: " + path)
 	
 	var sfo_data := read_sfo(path)
+	return _extract_title_id_from_data(sfo_data)
+
+
+## Extracts the TitleID from PARAM.SFO byte data
+## Returns empty string if TitleID cannot be found
+static func get_title_id_from_bytes(data: PackedByteArray) -> String:
+	print("[ParamSFOParser] get_title_id_from_bytes called")
+	
+	var sfo_data := read_sfo_from_bytes(data)
+	return _extract_title_id_from_data(sfo_data)
+
+
+static func _extract_title_id_from_data(sfo_data: Dictionary) -> String:
 	if sfo_data.is_empty():
-		print("[ParamSFOParser] read_sfo returned empty data")
+		print("[ParamSFOParser] SFO data is empty")
 		return ""
 	
 	print("[ParamSFOParser] SFO data keys: " + str(sfo_data.keys()))
