@@ -2766,6 +2766,10 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
 			print("[LaunchManager] _prepare_game_for_launch: Preparing RPCS3 game...")
 			result = await _prepare_rpcs3_game(game, temp_intent)
 			print("[LaunchManager] _prepare_game_for_launch: RPCS3 prep result = " + str(result))
+		"xenia":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing Xenia game...")
+			result = _prepare_xenia_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: Xenia prep result = " + str(result))
 		_:
 			print("[LaunchManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
 	
@@ -2973,6 +2977,29 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if active_title_id != game_id:
 		_store_title_id(game, game_id)
 		print("[LaunchManager] Dolphin: Updated database with Game ID: " + game_id)
+	
+	return true
+
+func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] Xenia: Preparing game from ROM path: " + intent.rom_path)
+	
+	var rom_path = intent.rom_path
+	var title_id = TitleIDParser.extract_xbox360_title_id(rom_path)
+	if title_id == "":
+		push_error("[LaunchManager] Xenia: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract Xbox 360 game TitleID", Notification.Type.ERROR)
+		return false
+	
+	print("[LaunchManager] Xenia: TitleID from ISO: " + title_id)
+	
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != title_id:
+		print("[LaunchManager] Xenia: WARNING - Stored TitleID " + active_title_id + " doesn't match ISO TitleID " + title_id)
+		print("[LaunchManager] Xenia: Updating to correct TitleID from ISO")
+	
+	if active_title_id != title_id:
+		_store_title_id(game, title_id)
+		print("[LaunchManager] Xenia: Updated database with TitleID: " + title_id)
 	
 	return true
 

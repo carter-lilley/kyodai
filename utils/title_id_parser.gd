@@ -524,6 +524,265 @@ static func extract_vita_title_id(zip_path: String) -> String:
 	
 	return parts[0]
 
+# ==================== Xbox 360 (Xenia) ====================
+
+const _XEX_SECTOR_SIZE = 2048
+const _GDFX_MAGIC = "MICROSOFT*XBOX*MEDIA"
+const _XEX_HEADER_EXECUTION_INFO = 0x00040006
+
+## Reads big-endian uint16 from byte array
+static func _decode_be16(bytes: PackedByteArray, offset: int) -> int:
+	return (bytes[offset] << 8) | bytes[offset + 1]
+
+## Reads big-endian uint32 from byte array
+static func _decode_be32(bytes: PackedByteArray, offset: int) -> int:
+	return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]
+
+## Extracts Xbox 360 Title ID from an ISO file
+## Parses the GDFX filesystem to find default.xex, then extracts Title ID from XEX header
+## Returns 8-character hex string (e.g., "545407DF")
+static func extract_xbox360_title_id(iso_path: String) -> String:
+	if not FileAccess.file_exists(iso_path):
+		push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + iso_path)
+		return ""
+	
+	var file = FileAccess.open(iso_path, FileAccess.READ)
+	if not file:
+		push_error("[TitleIDParser] Failed to open Xbox 360 ISO: " + iso_path)
+		return ""
+	
+	print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
+	
+	# Step 1: Find GDFX partition
+	var game_offset = _find_gdfx_partition(file)
+	if game_offset < 0:
+		file.close()
+		push_error("[TitleIDParser] Failed to find GDFX partition in Xbox 360 ISO: " + iso_path)
+		return ""
+	
+	print("[TitleIDParser] GDFX partition found at offset: 0x" + "%x" % game_offset)
+	
+	# Step 2: Read root directory info from sector 32
+	file.seek(game_offset + (32 * _XEX_SECTOR_SIZE) + 20)
+	var root_sector_bytes = file.get_buffer(4)
+	var root_size_bytes = file.get_buffer(4)
+	
+	if root_sector_bytes.size() < 4 or root_size_bytes.size() < 4:
+		file.close()
+		push_error("[TitleIDParser] Failed to read GDFX root directory info")
+		return ""
+	
+	# GDFX format uses little-endian
+	var root_sector = root_sector_bytes.decode_u32(0)
+	var root_size = root_size_bytes.decode_u32(0)
+	var root_offset = game_offset + (root_sector * _XEX_SECTOR_SIZE)
+	
+	print("[TitleIDParser] GDFX root directory: sector=" + str(root_sector) + ", size=" + str(root_size) + ", offset=0x" + "%x" % root_offset)
+	
+	# Validate root directory is within file bounds
+	if root_offset > file.get_length():
+		file.close()
+		push_error("[TitleIDParser] GDFX root directory offset exceeds file size")
+		return ""
+	
+	# Step 3: Parse directory tree to find default.xex
+	print("[TitleIDParser] Searching for default.xex in GDFX directory tree...")
+	var xex_entry = _find_file_in_gdfx(file, game_offset, root_offset, "default.xex")
+	
+	# Step 4: If default.xex not found, try GameInfo.bin (XNA/Indie games)
+	if xex_entry.is_empty():
+		print("[TitleIDParser] default.xex not found, trying GameInfo.bin...")
+		var gameinfo_entry = _find_file_in_gdfx(file, game_offset, root_offset, "GameInfo.bin")
+		if not gameinfo_entry.is_empty():
+			var title_id = _parse_gameinfo_title_id(file, gameinfo_entry)
+			if title_id != "":
+				print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + title_id.to_upper())
+				file.close()
+				return title_id.to_upper()
+		
+		file.close()
+		push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ISO")
+		return ""
+	
+	print("[TitleIDParser] Found default.xex at offset 0x" + "%x" % xex_entry["offset"] + ", length=" + str(xex_entry["length"]))
+	
+	# Step 5: Read XEX header and extract Title ID
+	var title_id = _read_xex_title_id(file, xex_entry["offset"], xex_entry["length"])
+	file.close()
+	
+	if title_id != "":
+		print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
+		return title_id.to_upper()
+	
+	push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ISO")
+	return ""
+
+## Searches for GDFX partition by looking for "MICROSOFT*XBOX*MEDIA" magic at known offsets
+## Returns the game partition base offset, or -1 if not found
+static func _find_gdfx_partition(file: FileAccess) -> int:
+	var likely_offsets = [0x00000000, 0x0000FB20, 0x00020600, 0x02080000, 0x0FD90000]
+	var file_size = file.get_length()
+	
+	for base_offset in likely_offsets:
+		var magic_offset = base_offset + (32 * _XEX_SECTOR_SIZE)
+		if magic_offset >= file_size:
+			continue
+		
+		file.seek(magic_offset)
+		var magic = file.get_buffer(20)
+		if magic.size() < 20:
+			continue
+		
+		var magic_str = magic.get_string_from_ascii()
+		if magic_str == _GDFX_MAGIC:
+			return base_offset
+	
+	return -1
+
+## Recursively searches GDFX directory tree for a file by name
+## Returns dictionary with "offset", "length", "attributes" or empty dictionary if not found
+static func _find_file_in_gdfx(file: FileAccess, game_offset: int, dir_offset: int, filename: String) -> Dictionary:
+	var result = {}
+	var max_depth = 100  # Prevent infinite loops
+	
+	# Use a stack for iterative tree traversal
+	# Each entry is [buffer_offset, parent_dir_offset]
+	var stack = [[0, dir_offset]]
+	var depth = 0
+	
+	while not stack.is_empty() and depth < max_depth:
+		var current = stack.pop_back()
+		var entry_ordinal = current[0]
+		var buffer_offset = current[1]
+		
+		file.seek(buffer_offset + (entry_ordinal * 4))
+		var entry_data = file.get_buffer(14)
+		if entry_data.size() < 14:
+			continue
+		
+		# GDFX directory entries are little-endian
+		var node_l = entry_data.decode_u16(0)
+		var node_r = entry_data.decode_u16(2)
+		var sector = entry_data.decode_u32(4)
+		var length = entry_data.decode_u32(8)
+		var attributes = entry_data[12]
+		var name_length = entry_data[13]
+		
+		# Read filename
+		var name_bytes = file.get_buffer(name_length)
+		if name_bytes.size() < name_length:
+			continue
+		var name = name_bytes.get_string_from_ascii()
+		
+		# Check if this is our target file
+		if name.to_lower() == filename.to_lower():
+			if not (attributes & 0x10):  # Not a directory
+				result = {
+					"offset": game_offset + (sector * _XEX_SECTOR_SIZE),
+					"length": length,
+					"attributes": attributes
+				}
+				return result
+		
+		# If directory and has children, add to stack
+		if (attributes & 0x10) and length > 0 and name != "" and name != "." and name != "..":
+			var child_offset = game_offset + (sector * _XEX_SECTOR_SIZE)
+			stack.append([0, child_offset])
+		
+		# Add siblings to stack (right child)
+		if node_r != 0:
+			stack.append([node_r, buffer_offset])
+		
+		# Add left child to stack
+		if node_l != 0:
+			stack.append([node_l, buffer_offset])
+		
+		depth += 1
+	
+	return result
+
+## Reads Title ID from XEX file
+## XEX structure: magic "XEX2" at 0x0, header_count at 0x14, headers[] at 0x18
+## Looks for XEX_HEADER_EXECUTION_INFO (0x00040006) and reads title_id at offset + 0x0C
+static func _read_xex_title_id(file: FileAccess, xex_offset: int, xex_length: int) -> String:
+	if xex_length < 0x20:
+		push_error("[TitleIDParser] XEX file too small")
+		return ""
+	
+	file.seek(xex_offset)
+	var xex_header = file.get_buffer(0x18)
+	if xex_header.size() < 0x18:
+		push_error("[TitleIDParser] Failed to read XEX header")
+		return ""
+	
+	var magic = xex_header.slice(0, 4).get_string_from_ascii()
+	if magic != "XEX2" and magic != "XEX1":
+		push_error("[TitleIDParser] Invalid XEX magic: " + magic)
+		return ""
+	
+	var header_count = _decode_be32(xex_header, 0x14)
+	if header_count == 0 or header_count > 100:
+		push_error("[TitleIDParser] Invalid XEX header count: " + str(header_count))
+		return ""
+	
+	# Read optional headers
+	file.seek(xex_offset + 0x18)
+	for i in range(header_count):
+		var opt_header = file.get_buffer(8)
+		if opt_header.size() < 8:
+			break
+		
+		var key = _decode_be32(opt_header, 0)
+		var value = _decode_be32(opt_header, 4)
+		
+		# Check if this is XEX_HEADER_EXECUTION_INFO
+		if key == _XEX_HEADER_EXECUTION_INFO:
+			# For key 0x00040006, value is an offset from XEX header start
+			var exec_info_offset = xex_offset + value
+			file.seek(exec_info_offset + 0x0C)  # Title ID is at +0x0C in execution info
+			var title_id_bytes = file.get_buffer(4)
+			if title_id_bytes.size() < 4:
+				return ""
+			
+			var title_id = ""
+			for b in title_id_bytes:
+				title_id += "%02x" % b
+			
+			if title_id.length() == 8:
+				return title_id
+	
+	return ""
+
+## Parses GameInfo.bin to extract Title ID (for XNA/Indie games)
+## GameInfo.bin structure: Starts with "XGI1" magic, Title ID at offset 0x14
+static func _parse_gameinfo_title_id(file: FileAccess, entry: Dictionary) -> String:
+	if entry.is_empty() or entry["length"] < 0x18:
+		return ""
+	
+	file.seek(entry["offset"])
+	var header = file.get_buffer(4)
+	if header.size() < 4:
+		return ""
+	
+	var magic = header.get_string_from_ascii()
+	if magic != "XGI1":
+		return ""
+	
+	# Title ID is at offset 0x14 in GameInfo.bin
+	file.seek(entry["offset"] + 0x14)
+	var title_id_bytes = file.get_buffer(4)
+	if title_id_bytes.size() < 4:
+		return ""
+	
+	var title_id = ""
+	for b in title_id_bytes:
+		title_id += "%02x" % b
+	
+	if title_id.length() == 8:
+		return title_id
+	
+	return ""
+
 # ==================== PS2 (PCSX2) ====================
 # ISO9660 and CHD parsing for PS2 disc images
 

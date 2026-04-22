@@ -1825,8 +1825,11 @@
 	"name": "Xenia",
 	"platforms": ["xbox360"],
 	"save_config": {
-	  "directories": {},
-	  "extensions": []
+	  "directories": {
+		"all": "{emulator_dir}/content"
+	  },
+	  "extensions": [".zip"],
+	  "uses_folder_saves": true
 	},
 	"install": [
 	  {

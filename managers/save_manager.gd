@@ -450,6 +450,51 @@ func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Di
 	
 	return results
 
+## Discovers local Xenia saves for an Xbox 360 game
+## Xenia saves are in content/PROFILE_ID/TITLE_ID/ (PROFILE_ID varies per user)
+## We search recursively from the content directory for matching TITLE_ID folders
+func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "":
+		print("[SaveManager] discover_local_xenia_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return results
+	
+	var content_dir = directory.rstrip("/") + "/"
+	print("[SaveManager] discover_local_xenia_save: searching in " + content_dir + " for title_id " + title_id)
+	
+	if not FileSystemManager.dir_exists(content_dir):
+		print("[SaveManager] discover_local_xenia_save: content dir doesn't exist yet")
+		return results
+	
+	# Search recursively through all profile subdirectories
+	var dirs_to_check: Array[String] = [content_dir]
+	while not dirs_to_check.is_empty():
+		var current = dirs_to_check.pop_back()
+		var items = FileSystemManager.list_dir(current)
+		for item in items:
+			if item == "." or item == "..":
+				continue
+			
+			var full_path = current.rstrip("/") + "/" + item
+			if FileSystemManager.dir_exists(full_path):
+				# Check if this directory matches our Title ID
+				if item.to_upper() == title_id.to_upper():
+					var mtime = _get_folder_mtime(full_path)
+					results.append({
+						"file_name": title_id.to_upper() + ".zip",
+						"file_path": full_path,
+						"modified_time": mtime,
+						"extension": ".zip"
+					})
+					print("[SaveManager] discover_local_xenia_save: found save at " + full_path)
+					return results
+				else:
+					# Continue searching deeper (profile subdirectories)
+					dirs_to_check.append(full_path)
+	
+	print("[SaveManager] discover_local_xenia_save: no save found for " + title_id)
+	return results
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
 	var dirs_to_check: Array[String] = [dir_path]
@@ -484,6 +529,11 @@ func _validate_emulator_title_id(emulator_id: String, title_id: String) -> Strin
 		"vita3k":
 			if title_id == "":
 				return "No Title ID available for this Vita game. Launch it once to extract the Title ID."
+		"xenia":
+			if title_id == "":
+				return "No Title ID available for this Xbox 360 game. Launch it once to extract the Title ID."
+			if title_id.length() != 8:
+				return "Invalid Title ID for Xbox 360 game."
 		_:
 			if title_id.length() != 16:
 				return "Invalid Title ID for this game."
@@ -508,6 +558,8 @@ func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameR
 			return discover_local_psp_save(save_dir, title_id)
 		"vita3k":
 			return discover_local_vita3k_save(save_dir, title_id)
+		"xenia":
+			return discover_local_xenia_save(save_dir, title_id)
 		_:
 			return discover_local_folder_save(save_dir, title_id)
 
@@ -549,6 +601,13 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			return save_dir + title_id + "/"
 		"vita3k":
 			return save_dir + title_id + "/"
+		"xenia":
+			# Xenia saves are in content/PROFILE_ID/TITLE_ID/
+			# We need to find the profile directory first
+			var profile = _find_first_subdir(save_dir)
+			if profile == "":
+				profile = "0000000000000000"
+			return save_dir + profile + "/" + title_id + "/"
 		_:
 			var result = _resolve_default_save_path(save_dir, title_id)
 			return result.path
@@ -570,6 +629,8 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 		"ppsspp":
 			return save_dir
 		"vita3k":
+			return save_dir
+		"xenia":
 			return save_dir
 		_:
 			return record_path.get_base_dir()
@@ -594,6 +655,9 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 			return title_id
 		"vita3k":
 			# For Vita3K, use the TitleID as the save name
+			return title_id
+		"xenia":
+			# For Xenia, use the TitleID as the save name
 			return title_id
 		_:
 			return title_id.substr(8, 8)
@@ -621,6 +685,10 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			# For Vita3K, zip the save folder with TitleID as root
 			var vita_folder_name = source_path.get_file()
 			return FileSystemManager.zip_directory_with_root(source_path, vita_folder_name, zip_path)
+		"xenia":
+			# For Xenia, zip the save folder with TitleID as root
+			var xenia_folder_name = source_path.get_file()
+			return FileSystemManager.zip_directory_with_root(source_path, xenia_folder_name, zip_path)
 		_:
 			return FileSystemManager.zip_directory(source_path, zip_path)
 
