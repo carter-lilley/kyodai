@@ -1,11 +1,12 @@
 #TODO.TXT
 
-batch core download ONE notification
+
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch to launch on bottom screen
 ui scale
 android download manager and file streaming
 alignment modes in single row
+
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 	
@@ -40,8 +41,6 @@ effect stacks to fill their parent base
 ## launch:
 	add: psp, melonds, ps2, dolphin retroarch sync
   	add: ps3 on android
-	ft: scrape-style download action for retroarch
-	ft: check for emulator updates
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?
 	rework: core systems -> romm firmware

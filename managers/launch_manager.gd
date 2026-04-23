@@ -2303,6 +2303,194 @@ func _save_emulator_version(emulator_id: String, version: String):
 			SettingsManager.set_setting(versions, setting)
 			SettingsManager.save_settings()
 
+## Normalizes a version string for comparison/display
+func _normalize_version(version: String) -> String:
+	return version.trim_prefix("v").trim_prefix("V").replace("_", ".")
+
+## Checks if a version string looks like semver
+func _is_semver(version: String) -> bool:
+	var normalized = _normalize_version(version)
+	var regex = RegEx.new()
+	regex.compile("^[0-9]+(\\.[0-9]+)*")
+	return regex.search(normalized) != null
+
+## Compares two version strings
+## Returns: -1 (a < b), 0 (equal), 1 (a > b), 2 (incomparable)
+func _compare_versions(a: String, b: String) -> int:
+	var na = _normalize_version(a)
+	var nb = _normalize_version(b)
+	
+	if na == nb:
+		return 0
+	
+	var regex = RegEx.new()
+	regex.compile("^([0-9]+(?:\\.[0-9]+)*)")
+	var match_a = regex.search(na)
+	var match_b = regex.search(nb)
+	
+	if match_a and match_b:
+		# Both have numeric prefixes - compare semver-style
+		var parts_a = match_a.get_string(1).split(".")
+		var parts_b = match_b.get_string(1).split(".")
+		var max_len = max(parts_a.size(), parts_b.size())
+		for i in range(max_len):
+			var va = int(parts_a[i]) if i < parts_a.size() else 0
+			var vb = int(parts_b[i]) if i < parts_b.size() else 0
+			if va < vb:
+				return -1
+			elif va > vb:
+				return 1
+		return 0
+	
+	# Opaque strings - incomparable
+	return 2
+
+## Checks for updates across all installed emulators
+## callback(updated: Array, up_to_date: Array, failed: Array)
+func check_for_updates(callback: Callable):
+	if not SettingsManager:
+		callback.call([], [], [])
+		return
+	
+	var version_setting = SettingsManager.get_setting("installed_emulator_versions")
+	if not version_setting:
+		callback.call([], [], [])
+		return
+	
+	var installed_versions = version_setting.value as Dictionary
+	if installed_versions == null or installed_versions.is_empty():
+		callback.call([], [], [])
+		return
+	
+	var results = {
+		"updated": [],
+		"up_to_date": [],
+		"failed": [],
+		"pending": 0
+	}
+	
+	for emulator_id in installed_versions.keys():
+		var installed_version = installed_versions[emulator_id]
+		var emulator = get_emulator(emulator_id)
+		if emulator.is_empty():
+			continue
+		
+		# Find the first download step to determine how to check
+		var install_steps = emulator.get("install", [])
+		var platform_config = null
+		
+		for step in install_steps:
+			var config = _get_step_platform_config(step)
+			if not config.is_empty():
+				var action = config.get("action_type", "")
+				if action == "download_scrape" or action == "download_repo" or action == "download_url":
+					platform_config = config
+					break
+		
+		if not platform_config:
+			continue
+		
+		var action_type = platform_config.get("action_type", "")
+		
+		match action_type:
+			"download_scrape":
+				results.pending += 1
+				_check_scrape_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback)
+			"download_repo":
+				results.pending += 1
+				_check_repo_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback)
+			"download_url":
+				# Hardcoded URL - can't check for updates automatically
+				results.up_to_date.append(emulator_id)
+	
+	# If nothing was pending, call callback immediately
+	if results.pending == 0:
+		callback.call(results.updated, results.up_to_date, results.failed)
+
+## Internal helper to check if all pending checks are done
+func _check_updates_complete(results: Dictionary, callback: Callable):
+	results.pending -= 1
+	if results.pending <= 0:
+		callback.call(results.updated, results.up_to_date, results.failed)
+
+## Checks for a scrape-based update
+func _check_scrape_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable):
+	var scrape_url = platform_config.get("scrape_url", "")
+	var version_pattern = platform_config.get("version_pattern", "")
+	var url_template = platform_config.get("url_template", "")
+	var match_strategy = platform_config.get("match_strategy", "first")
+	
+	if scrape_url == "" or version_pattern == "" or url_template == "":
+		results.failed.append(emulator_id)
+		_check_updates_complete(results, callback)
+		return
+	
+	NetworkManager.fetch_scraped_release(
+		scrape_url,
+		version_pattern,
+		url_template,
+		func(url: String, version: String, error: String):
+			if error != "" or version == "":
+				results.failed.append(emulator_id)
+				_check_updates_complete(results, callback)
+				return
+			
+			var comparison = _compare_versions(installed_version, version)
+			if comparison == -1 or comparison == 2:
+				# Update available or incomparable (treat as update)
+				results.updated.append(emulator_id)
+				_trigger_emulator_update(emulator_id, emulator_name, platform_config)
+			else:
+				results.up_to_date.append(emulator_id)
+			
+			_check_updates_complete(results, callback),
+		match_strategy
+	)
+
+## Checks for a repo-based update
+func _check_repo_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable):
+	var github_repo = platform_config.get("github_repo", "")
+	var asset_pattern = platform_config.get("asset_pattern", "")
+	var release_tag = platform_config.get("release_tag", "")
+	var api_base_url = platform_config.get("api_base_url", "")
+	
+	if github_repo == "" or asset_pattern == "":
+		results.failed.append(emulator_id)
+		_check_updates_complete(results, callback)
+		return
+	
+	NetworkManager.fetch_repo_release(
+		github_repo,
+		asset_pattern,
+		func(url: String, tag: String, error: String):
+			if error != "" or tag == "":
+				results.failed.append(emulator_id)
+				_check_updates_complete(results, callback)
+				return
+			
+			var comparison = _compare_versions(installed_version, tag)
+			if comparison == -1 or comparison == 2:
+				# Update available or incomparable (treat as update)
+				results.updated.append(emulator_id)
+				_trigger_emulator_update(emulator_id, emulator_name, platform_config)
+			else:
+				results.up_to_date.append(emulator_id)
+			
+			_check_updates_complete(results, callback),
+		release_tag,
+		api_base_url
+	)
+
+## Triggers re-installation of an emulator for update
+func _trigger_emulator_update(emulator_id: String, emulator_name: String, platform_config: Dictionary):
+	print("[LaunchManager] Triggering update for: " + emulator_id)
+	
+	# Clear install progress to force fresh install
+	_emulator_install_progress.erase(emulator_id)
+	
+	# Start installation from step 0
+	_execute_install_step(emulator_id, 0)
+
 ## Helper function for create_folders action
 func _handle_create_folders_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var folders = platform_config.get("folders", [])

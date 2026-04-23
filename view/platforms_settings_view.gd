@@ -112,6 +112,18 @@ func _build_view():
 	spacer2.custom_minimum_size = Vector2(0, 10)
 	_platforms_container.add_child(spacer2)
 	
+	# Add check for updates button
+	var check_updates_button = Button.new()
+	check_updates_button.text = "Check for Updates"
+	check_updates_button.name = "CheckUpdatesButton"
+	check_updates_button.tooltip_text = "Check all installed emulators for updates and install them automatically"
+	check_updates_button.pressed.connect(_on_check_updates_pressed)
+	_platforms_container.add_child(check_updates_button)
+	
+	var spacer2b = Control.new()
+	spacer2b.custom_minimum_size = Vector2(0, 10)
+	_platforms_container.add_child(spacer2b)
+	
 	# Add select all/deselect all button
 	var select_all_button = Button.new()
 	select_all_button.text = "Select All"
@@ -145,7 +157,7 @@ func _build_view():
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "FoldCoversContainer", "HideNoCoversContainer", "FoldRommSiblingsContainer"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "CheckUpdatesButton", "FoldCoversContainer", "HideNoCoversContainer", "FoldRommSiblingsContainer"]:
 			continue
 		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -317,7 +329,7 @@ func _load_platforms_from_database():
 	
 	# Clear existing cards
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "CheckUpdatesButton"]:
 			continue
 		if child is PlatformCard:
 			child.queue_free()
@@ -475,6 +487,27 @@ func _on_emulator_extraction_completed(emulator_id: String, success: bool):
 			var install_status = {emulator_id: is_installed}
 			card.set_emulator_install_status(install_status)
 			card.refresh_ui()
+
+func _on_check_updates_pressed():
+	var check_button: Button = _platforms_container.get_node("CheckUpdatesButton")
+	if check_button:
+		check_button.disabled = true
+		check_button.text = "Checking..."
+	
+	NotificationManager.show_notification("Checking for emulator updates...", Notification.Type.INFO)
+	
+	LaunchManager.check_for_updates(func(updated: Array, up_to_date: Array, failed: Array):
+		if check_button:
+			check_button.disabled = false
+			check_button.text = "Check for Updates"
+		
+		if updated.size() > 0:
+			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % updated.size(), Notification.Type.SUCCESS)
+		elif failed.size() > 0:
+			NotificationManager.show_notification("Failed to check %d emulator(s)" % failed.size(), Notification.Type.WARNING)
+		else:
+			NotificationManager.show_notification("All emulators are up to date", Notification.Type.INFO)
+	)
 
 func _on_sync_pressed():
 	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)

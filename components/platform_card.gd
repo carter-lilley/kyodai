@@ -228,7 +228,9 @@ func _update_status_indicator():
 			if version_setting:
 				var versions = version_setting.value as Dictionary
 				if versions and versions.has(effective_emulator):
-					_version_label.text = "v%s" % versions[effective_emulator]
+					var raw_version = versions[effective_emulator]
+					var display_version = raw_version.trim_prefix("v").trim_prefix("V")
+					_version_label.text = "v%s" % display_version
 					_version_label.visible = true
 				else:
 					_version_label.visible = false

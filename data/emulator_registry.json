@@ -2073,95 +2073,95 @@
 	  "uses_folder_saves": true
 	},
 	"requires_working_dir": true,
-	"install": [
-	  {
-		"step": "download_qt_launcher",
-		"platforms": {
-		  "windows": {
-			"action_type": "download_repo",
-			"github_repo": "shadps4-emu/shadps4-qtlauncher",
-			"asset_pattern": "shadPS4QtLauncher-win64-qt-.*\\.zip"
-		  },
-		  "linux": {
-			"action_type": "download_repo",
-			"github_repo": "shadps4-emu/shadps4-qtlauncher",
-			"asset_pattern": "shadPS4QtLauncher-linux-qt-.*\\.zip"
-		  },
-		  "android": {
-			"action_type": "none"
-		  }
-		}
-	  },
-	  {
-		"step": "install_qt_launcher",
-		"platforms": {
-		  "windows": {
-			"action_type": "extract",
-			"extract_to": ".",
-			"strip_top_directory": false,
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "shadPS4QtLauncher.exe"
-			}
-		  },
-		  "linux": {
-			"action_type": "extract",
-			"extract_to": ".",
-			"strip_top_directory": false,
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "shadPS4QtLauncher"
-			}
-		  },
-		  "android": {
-			"action_type": "none"
-		  }
-		}
-	  },
-	  {
-		"step": "download_core",
-		"platforms": {
-		  "windows": {
-			"action_type": "download_repo",
-			"github_repo": "shadps4-emu/shadPS4",
-			"asset_pattern": "shadps4-win64-sdl-.*\\.zip"
-		  },
-		  "linux": {
-			"action_type": "download_repo",
-			"github_repo": "shadps4-emu/shadPS4",
-			"asset_pattern": "shadps4-linux-sdl-.*\\.zip"
-		  },
-		  "android": {
-			"action_type": "none"
-		  }
-		}
-	  },
-	  {
-		"step": "install_core",
-		"platforms": {
-		  "windows": {
-			"action_type": "extract",
-			"extract_to": ".",
-			"strip_top_directory": false,
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "shadps4.exe"
-			}
-		  },
-		  "linux": {
-			"action_type": "extract",
-			"extract_to": ".",
-			"strip_top_directory": false,
-			"validate": {
-			  "action_type": "file_exists",
-			  "file": "shadps4"
-			}
-		  },
-		  "android": {
-			"action_type": "none"
-		  }
-		}
-	  },
+  	"install": [
+  	  {
+  		"step": "download_core",
+  		"platforms": {
+  		  "windows": {
+  			"action_type": "download_repo",
+  			"github_repo": "shadps4-emu/shadPS4",
+  			"asset_pattern": "shadps4-win64-sdl-.*\\.zip"
+  		  },
+  		  "linux": {
+  			"action_type": "download_repo",
+  			"github_repo": "shadps4-emu/shadPS4",
+  			"asset_pattern": "shadps4-linux-sdl-.*\\.zip"
+  		  },
+  		  "android": {
+  			"action_type": "none"
+  		  }
+  		}
+  	  },
+  	  {
+  		"step": "install_core",
+  		"platforms": {
+  		  "windows": {
+  			"action_type": "extract",
+  			"extract_to": ".",
+  			"strip_top_directory": false,
+  			"validate": {
+  			  "action_type": "file_exists",
+  			  "file": "shadps4.exe"
+  			}
+  		  },
+  		  "linux": {
+  			"action_type": "extract",
+  			"extract_to": ".",
+  			"strip_top_directory": false,
+  			"validate": {
+  			  "action_type": "file_exists",
+  			  "file": "shadps4"
+  			}
+  		  },
+  		  "android": {
+  			"action_type": "none"
+  		  }
+  		}
+  	  },
+  	  {
+  		"step": "download_qt_launcher",
+  		"platforms": {
+  		  "windows": {
+  			"action_type": "download_repo",
+  			"github_repo": "shadps4-emu/shadps4-qtlauncher",
+  			"asset_pattern": "shadPS4QtLauncher-win64-qt-.*\\.zip"
+  		  },
+  		  "linux": {
+  			"action_type": "download_repo",
+  			"github_repo": "shadps4-emu/shadps4-qtlauncher",
+  			"asset_pattern": "shadPS4QtLauncher-linux-qt-.*\\.zip"
+  		  },
+  		  "android": {
+  			"action_type": "none"
+  		  }
+  		}
+  	  },
+  	  {
+  		"step": "install_qt_launcher",
+  		"platforms": {
+  		  "windows": {
+  			"action_type": "extract",
+  			"extract_to": ".",
+  			"strip_top_directory": false,
+  			"validate": {
+  			  "action_type": "file_exists",
+  			  "file": "shadPS4QtLauncher.exe"
+  			}
+  		  },
+  		  "linux": {
+  			"action_type": "extract",
+  			"extract_to": ".",
+  			"strip_top_directory": false,
+  			"validate": {
+  			  "action_type": "file_exists",
+  			  "file": "shadPS4QtLauncher"
+  			}
+  		  },
+  		  "android": {
+  			"action_type": "none"
+  		  }
+  		}
+  	  },
   	  {
 		"step": "create_user_directory",
 		"platforms": {
