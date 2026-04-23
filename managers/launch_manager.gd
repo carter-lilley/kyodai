@@ -2246,11 +2246,14 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(url: String, error: String):
+		func(url: String, tag: String, error: String):
 			if error != "":
 				push_error("[LaunchManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = "Failed to fetch release"
 				return
+			var version_to_save = tag if tag != "" else release_tag
+			if version_to_save != "":
+				_save_emulator_version(emulator_id, version_to_save)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
 		release_tag,
 		api_base_url
@@ -2262,6 +2265,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 	var scrape_url = platform_config.get("scrape_url", "")
 	var version_pattern = platform_config.get("version_pattern", "")
 	var url_template = platform_config.get("url_template", "")
+	var match_strategy = platform_config.get("match_strategy", "first")
 	
 	if scrape_url == "" or version_pattern == "" or url_template == "":
 		push_error("[LaunchManager] Invalid download_scrape config for step: " + step_name)
@@ -2275,14 +2279,29 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 		scrape_url,
 		version_pattern,
 		url_template,
-		func(url: String, error: String):
+		func(url: String, version: String, error: String):
 			if error != "":
 				push_error("[LaunchManager] Failed to scrape release: " + error)
 				_emulator_install_progress[emulator_id] = "Failed to scrape release"
 				return
-			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
+			if version != "":
+				_save_emulator_version(emulator_id, version)
+			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
+		match_strategy
 	)
 	return true
+
+## Saves the installed emulator version to settings for update checking
+func _save_emulator_version(emulator_id: String, version: String):
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("installed_emulator_versions")
+		if setting:
+			var versions = setting.value as Dictionary
+			if versions == null:
+				versions = {}
+			versions[emulator_id] = version
+			SettingsManager.set_setting(versions, setting)
+			SettingsManager.save_settings()
 
 ## Helper function for create_folders action
 func _handle_create_folders_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:

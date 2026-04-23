@@ -83,6 +83,9 @@ const Type = SettingsVar.SettingType
 # Internal last search query (managed by Library search)
 @export var library_last_search := SettingsVar.new(Type.STRING, "", State.INTERNAL, "Last Search Query")
 
+# Internal installed emulator versions (tracked for update checking)
+@export var installed_emulator_versions := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Installed Emulator Versions")
+
 # Internal background effect configuration (managed by Library Appearance settings)
 @export var library_background_config := SettingsVar.new(Type.DICTIONARY, {
 	"effect_id": "xmb",

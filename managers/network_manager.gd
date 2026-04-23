@@ -665,7 +665,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	var error = http.request(url, headers)
 	
 	if error != OK:
-		callback.call("", "Failed to start request: " + str(error))
+		callback.call("", "", "Failed to start request: " + str(error))
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
@@ -675,11 +675,11 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 		_cleanup_http_request(http)
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
-			callback.call("", "Request failed: " + str(result))
+			callback.call("", "", "Request failed: " + str(result))
 			return
 		
 		if response_code != 200:
-			callback.call("", "HTTP error: " + str(response_code))
+			callback.call("", "", "HTTP error: " + str(response_code))
 			return
 		
 		var body_text = body.get_string_from_utf8()
@@ -687,35 +687,37 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 		var parse_result = json.parse(body_text)
 		
 		if parse_result != OK:
-			callback.call("", "Failed to parse JSON: " + json.get_error_message())
+			callback.call("", "", "Failed to parse JSON: " + json.get_error_message())
 			return
 		
 		var data = json.data
 		if not data.has("assets"):
-			callback.call("", "No assets in release")
+			callback.call("", "", "No assets in release")
 			return
 		
 		var regex = RegEx.new()
 		regex.compile(asset_pattern)
 		
+		var tag_name = data.get("tag_name", "")
+		
 		for asset in data.assets:
 			var name = asset.get("name", "")
 			if regex.search(name) != null:
 				var download_url = asset.get("browser_download_url", "")
-				callback.call(download_url, "")
+				callback.call(download_url, tag_name, "")
 				return
 		
-		callback.call("", "No asset matched pattern: " + asset_pattern)
+		callback.call("", "", "No asset matched pattern: " + asset_pattern)
 	)
 
-func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable):
+func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first"):
 	var http = _create_http_request()
 	_active_request_count += 1
 	
 	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
 	
 	if error != OK:
-		callback.call("", "Failed to start request: " + str(error))
+		callback.call("", "", "Failed to start request: " + str(error))
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
@@ -725,11 +727,11 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 		_cleanup_http_request(http)
 		
 		if result != HTTPRequest.RESULT_SUCCESS:
-			callback.call("", "Request failed: " + str(result))
+			callback.call("", "", "Request failed: " + str(result))
 			return
 		
 		if response_code != 200:
-			callback.call("", "HTTP error: " + str(response_code))
+			callback.call("", "", "HTTP error: " + str(response_code))
 			return
 		
 		var body_text = body.get_string_from_utf8()
@@ -737,16 +739,50 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 		var regex = RegEx.new()
 		regex.compile(version_pattern)
 		
-		var match_result = regex.search(body_text)
+		var version: String = ""
 		
-		if match_result == null:
-			callback.call("", "Could not find version pattern in page")
-			return
+		if match_strategy == "latest_semver":
+			var all_matches = regex.search_all(body_text)
+			if all_matches.is_empty():
+				callback.call("", "", "Could not find version pattern in page")
+				return
+			
+			var versions: Array[String] = []
+			for m in all_matches:
+				var v = m.get_string(1)
+				if v not in versions:
+					versions.append(v)
+			
+			if versions.is_empty():
+				callback.call("", "", "Could not find version pattern in page")
+				return
+			
+			# Parse and sort by semver (descending)
+			versions.sort_custom(func(a: String, b: String) -> int:
+				var a_parts = a.split(".")
+				var b_parts = b.split(".")
+				var max_len = max(a_parts.size(), b_parts.size())
+				for i in range(max_len):
+					var av = int(a_parts[i]) if i < a_parts.size() else 0
+					var bv = int(b_parts[i]) if i < b_parts.size() else 0
+					if av > bv:
+						return true
+					elif av < bv:
+						return false
+				return false
+			)
+			version = versions[0]
+		else:
+			# Default: first match
+			var match_result = regex.search(body_text)
+			if match_result == null:
+				callback.call("", "", "Could not find version pattern in page")
+				return
+			version = match_result.get_string(1)
 		
-		var version = match_result.get_string(1)
 		var download_url = url_template.replace("{version}", version)
 		
-		callback.call(download_url, "")
+		callback.call(download_url, version, "")
 	)
 
 # ==================== ROMM SAVE API OPERATIONS ====================

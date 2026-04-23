@@ -45,6 +45,7 @@ var _emulator_install_status: Dictionary = {}  # emulator_id -> bool
 @onready var _emulator_dropdown: OptionButton
 @onready var _status_indicator: Indicator
 @onready var _download_button: Button
+@onready var _version_label: Label
 
 func _ready():
 	_build_ui()
@@ -110,7 +111,7 @@ func _build_ui():
 	
 	_status_indicator = Indicator.new()
 	_status_indicator.dot_size = Vector2(12, 12)
-	_status_indicator.custom_minimum_size = Vector2(120, 20)
+	_status_indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_row.add_child(_status_indicator)
 	
 	# Download button (shown when emulator not installed)
@@ -119,6 +120,13 @@ func _build_ui():
 	_download_button.visible = false
 	_download_button.pressed.connect(_on_download_pressed)
 	bottom_row.add_child(_download_button)
+	
+	# Version label (shown when emulator is installed)
+	_version_label = Label.new()
+	_version_label.add_theme_font_size_override("font_size", 10)
+	_version_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	_version_label.visible = false
+	bottom_row.add_child(_version_label)
 
 func _update_display():
 	if not is_node_ready():
@@ -212,6 +220,22 @@ func _update_status_indicator():
 		# Check if progress text indicates extraction
 		if progress_str.find("Extracting") >= 0 or progress_str.find("extracting") >= 0:
 			is_extracting = true
+	
+	# Update version label
+	if _version_label:
+		if progress["status"] == "complete" and SettingsManager:
+			var version_setting = SettingsManager.get_setting("installed_emulator_versions")
+			if version_setting:
+				var versions = version_setting.value as Dictionary
+				if versions and versions.has(effective_emulator):
+					_version_label.text = "v%s" % versions[effective_emulator]
+					_version_label.visible = true
+				else:
+					_version_label.visible = false
+			else:
+				_version_label.visible = false
+		else:
+			_version_label.visible = false
 	
 	if progress["status"] == "complete":
 		_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed%s" % mode_text, "Emulator is ready to use")
