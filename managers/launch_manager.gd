@@ -851,16 +851,15 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 					intent.launch_args[i] = game_path
 					break
 		
-		# shadPS4 special handling for desktop - replace ROM path with extracted game folder
+		# shadPS4 special handling for desktop - replace ROM path with TitleID
+		# shadPS4 searches configured installDirs for matching TitleID folder
 		if intent.emulator_id == "shadps4" and intent.game and intent.game.title_id != "":
-			var game_path: String = intent.rom_path.get_base_dir() + "/" + intent.game.title_id
+			print("[LaunchManager] shadPS4: Using TitleID: " + intent.game.title_id)
 			
-			print("[LaunchManager] shadPS4: Using game path: " + game_path)
-			
-			# Replace the ROM path (ZIP) with the extracted game folder path
+			# Replace the ROM path (ZIP) with just the TitleID
 			for i in range(intent.launch_args.size()):
 				if intent.launch_args[i] == global_rom_path:
-					intent.launch_args[i] = game_path
+					intent.launch_args[i] = intent.game.title_id
 					break
 
 ## Executes a launch intent

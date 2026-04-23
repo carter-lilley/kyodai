@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://c7x4n4x4x4x4"]
 
-[ext_resource type="Script" path="res://components/save_conflict_dialog.gd" id="1_x4x4x"]
+[ext_resource type="Script" uid="uid://21v66vgngl5s" path="res://components/save_conflict_dialog.gd" id="1_x4x4x"]
 
-[node name="SaveConflictDialog" type="PanelContainer"]
+[node name="SaveConflictDialog" type="PanelContainer" unique_id=1765588476]
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5

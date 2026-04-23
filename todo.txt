@@ -5,11 +5,10 @@ install flow doesnt refresh platform cards reliably anymore - especially if you 
 no touch to launch on bottom screen
 ui scale
 android download manager and file streaming
-
 alignment modes in single row
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
-
+	
 ## general UI
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)
@@ -33,12 +32,11 @@ effect stacks to fill their parent base
 	image priority management.
 	performance.add_custom_monitor for everything
 ## sync:
-	ft: background sync/notifs
+	ft: android background sync/notifs
 	how to split important siblings
 	cache image colors, cropping data on sync
 	check: are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
-	batch DB adds instead of single
 ## launch:
 	add: psp, melonds, ps2, dolphin retroarch sync
   	add: ps3 on android
