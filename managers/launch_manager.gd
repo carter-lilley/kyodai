@@ -850,6 +850,18 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 				if intent.launch_args[i] == global_rom_path:
 					intent.launch_args[i] = game_path
 					break
+		
+		# shadPS4 special handling for desktop - replace ROM path with extracted game folder
+		if intent.emulator_id == "shadps4" and intent.game and intent.game.title_id != "":
+			var game_path: String = intent.rom_path.get_base_dir() + "/" + intent.game.title_id
+			
+			print("[LaunchManager] shadPS4: Using game path: " + game_path)
+			
+			# Replace the ROM path (ZIP) with the extracted game folder path
+			for i in range(intent.launch_args.size()):
+				if intent.launch_args[i] == global_rom_path:
+					intent.launch_args[i] = game_path
+					break
 
 ## Executes a launch intent
 func execute_launch(intent: LaunchIntent) -> bool:
@@ -2329,6 +2341,11 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		# Resolve placeholders in content
 		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
 		
+		# Resolve {games_dir} placeholder
+		var games_folder_setting = SettingsManager.get_setting("games_root_folder")
+		var games_dir = games_folder_setting.value.rstrip("/") if games_folder_setting else "user://roms"
+		file_content = file_content.replace("{games_dir}", games_dir)
+		
 		if not FileSystemManager.file_exists(full_path):
 			if not FileSystemManager.write_file(full_path, file_content):
 				push_error("[LaunchManager] Failed to create file: " + full_path)
@@ -2746,6 +2763,10 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
 			print("[LaunchManager] _prepare_game_for_launch: Preparing RPCS3 game...")
 			result = await _prepare_rpcs3_game(game, temp_intent)
 			print("[LaunchManager] _prepare_game_for_launch: RPCS3 prep result = " + str(result))
+		"shadps4":
+			print("[LaunchManager] _prepare_game_for_launch: Preparing shadPS4 game...")
+			result = await _prepare_shadps4_game(game, temp_intent)
+			print("[LaunchManager] _prepare_game_for_launch: shadPS4 prep result = " + str(result))
 		"xenia":
 			print("[LaunchManager] _prepare_game_for_launch: Preparing Xenia game...")
 			result = _prepare_xenia_game(game, temp_intent)
@@ -3592,4 +3613,148 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 		return false
 	
 	print("[LaunchManager] RPCS3: _extract_ps3_zip returning: " + str(completion_tracker.success))
+	return completion_tracker.success
+
+
+## Prepares a PS4 game for launch by extracting the TitleID and extracting game files
+## PS4 games are ZIP files containing a CUSAxxxxx directory at the root
+## Returns true if preparation succeeded, false on error
+func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
+	print("[LaunchManager] shadPS4: _prepare_shadps4_game called for: " + game.get_display_name())
+	
+	if not game or not intent:
+		print("[LaunchManager] shadPS4: ERROR - game or intent is null")
+		return false
+	
+	var rom_path := game.file_path
+	print("[LaunchManager] shadPS4: ROM path: " + rom_path)
+	
+	if rom_path == "":
+		push_error("[LaunchManager] shadPS4: No ROM path for game: " + game.get_display_name())
+		return false
+	
+	# Step 1: Extract TitleID from ZIP
+	print("[LaunchManager] shadPS4: Extracting TitleID from ZIP...")
+	var zip_title_id = TitleIDParser.extract_ps4_title_id(rom_path)
+	if zip_title_id == "":
+		push_error("[LaunchManager] shadPS4: Failed to extract TitleID from: " + rom_path)
+		NotificationManager.show_notification("Failed to extract PS4 game TitleID", Notification.Type.ERROR)
+		return false
+	print("[LaunchManager] shadPS4: TitleID from ZIP: " + zip_title_id)
+	
+	# If stored title_id doesn't match the ZIP, update it
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != zip_title_id:
+		print("[LaunchManager] shadPS4: WARNING - Stored TitleID " + active_title_id + " doesn't match ZIP TitleID " + zip_title_id)
+		print("[LaunchManager] shadPS4: Updating to correct TitleID from ZIP")
+	
+	if active_title_id != zip_title_id:
+		_store_title_id(game, zip_title_id)
+		print("[LaunchManager] shadPS4: Updated database with TitleID: " + zip_title_id)
+	
+	var title_id = game.get_active_title_id()
+	print("[LaunchManager] shadPS4: Using TitleID: " + title_id)
+	
+	# Step 2: Determine extraction path (next to the ZIP in the ps4 roms folder)
+	var rom_parent_dir = rom_path.get_base_dir()
+	var extract_path = rom_parent_dir + "/" + title_id
+	print("[LaunchManager] shadPS4: Extraction path: " + extract_path)
+	
+	# Step 3: Check if already extracted
+	if _shadps4_game_has_files(extract_path):
+		print("[LaunchManager] shadPS4: Game already extracted at: " + extract_path)
+		return true
+	
+	print("[LaunchManager] shadPS4: Game not extracted, will extract to: " + extract_path)
+	
+	# Step 4: Create extraction directory
+	if not FileSystemManager.dir_exists(extract_path):
+		print("[LaunchManager] shadPS4: Creating extraction directory: " + extract_path)
+		if not FileSystemManager.make_dir_recursive(extract_path):
+			push_error("[LaunchManager] shadPS4: Failed to create extraction directory: " + extract_path)
+			return false
+	
+	# Step 5: Extract ZIP to extraction path
+	var shadps4_notify_id = NotificationManager.show_notification(
+		"Extracting " + game.get_display_name() + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		Callable(),
+		Callable(),
+		true
+	)
+	print("[LaunchManager] shadPS4: Extracting ZIP to: " + extract_path)
+	
+	var extract_success := await _extract_shadps4_zip(rom_path, extract_path)
+	
+	# Dismiss the extraction notification
+	NotificationManager.dismiss_notification(shadps4_notify_id)
+	
+	print("[LaunchManager] shadPS4: _extract_shadps4_zip returned: " + str(extract_success))
+	
+	if not extract_success:
+		push_error("[LaunchManager] shadPS4: Failed to extract PS4 game ZIP: " + rom_path)
+		return false
+	
+	print("[LaunchManager] shadPS4: Extraction complete")
+	
+	return true
+
+
+## Checks if a shadPS4 game directory has actual game files
+func _shadps4_game_has_files(game_path: String) -> bool:
+	if not FileSystemManager.dir_exists(game_path):
+		return false
+	
+	var entries = FileSystemManager.list_dir(game_path)
+	var actual_files = 0
+	for entry in entries:
+		if entry == "." or entry == "..":
+			continue
+		actual_files += 1
+	
+	print("[LaunchManager] shadPS4: _shadps4_game_has_files: found " + str(actual_files) + " entries in " + game_path)
+	return actual_files > 0
+
+
+## Extracts a PS4 game ZIP file to the specified directory (NO TIMEOUT)
+func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
+	print("[LaunchManager] shadPS4: Extracting ZIP: " + zip_path + " to: " + extract_to)
+	
+	# Use DownloadManager's extraction functionality
+	var item_id := DownloadManager.queue_extraction(zip_path, extract_to, "ps4_game", "Extracting PS4 Game", false)
+	
+	if item_id == "":
+		push_error("[LaunchManager] shadPS4: Failed to queue extraction")
+		return false
+	
+	print("[LaunchManager] shadPS4: Waiting for extraction to complete (no timeout)...")
+	
+	# Use a completion tracker object
+	var completion_tracker := {"complete": false, "success": false}
+	
+	var on_complete = func(completed_item_id: String, success: bool, message: String):
+		if completed_item_id == item_id:
+			completion_tracker.complete = true
+			completion_tracker.success = success
+			print("[LaunchManager] shadPS4: Extraction callback - success=" + str(success))
+	
+	DownloadManager.extraction_completed.connect(on_complete)
+	
+	# Wait for extraction to complete (NO TIMEOUT - PS4 games can be very large)
+	print("[LaunchManager] shadPS4: Waiting for extraction (no timeout)...")
+	while not completion_tracker.complete:
+		await get_tree().process_frame
+	
+	DownloadManager.extraction_completed.disconnect(on_complete)
+	
+	print("[LaunchManager] shadPS4: Extraction wait loop ended")
+	print("[LaunchManager] shadPS4: completion_tracker.complete=" + str(completion_tracker.complete) + ", completion_tracker.success=" + str(completion_tracker.success))
+	
+	if not completion_tracker.complete:
+		push_error("[LaunchManager] shadPS4: Extraction callback never fired")
+		return false
+	
+	print("[LaunchManager] shadPS4: _extract_shadps4_zip returning: " + str(completion_tracker.success))
 	return completion_tracker.success

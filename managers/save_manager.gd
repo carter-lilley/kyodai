@@ -479,6 +479,37 @@ func discover_local_rpcs3_save(directory: String, title_id: String) -> Array[Dic
 	
 	return results
 
+## Discovers local shadPS4 saves for a PS4 game
+## shadPS4 saves are folders in user/savedata/ named by TitleID (e.g., CUSA01130)
+func discover_local_shadps4_save(directory: String, title_id: String) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if directory == "" or title_id == "":
+		print("[SaveManager] discover_local_shadps4_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		return results
+	
+	var savedata_dir = directory.rstrip("/") + "/"
+	print("[SaveManager] discover_local_shadps4_save: searching in " + savedata_dir + " for title_id " + title_id)
+	
+	if not FileSystemManager.dir_exists(savedata_dir):
+		print("[SaveManager] discover_local_shadps4_save: savedata dir doesn't exist yet")
+		return results
+	
+	# Look for exact match folder
+	var save_path = savedata_dir + title_id
+	if FileSystemManager.dir_exists(save_path):
+		var mtime = _get_folder_mtime(save_path)
+		results.append({
+			"file_name": title_id + ".zip",
+			"file_path": save_path,
+			"modified_time": mtime,
+			"extension": ".zip"
+		})
+		print("[SaveManager] discover_local_shadps4_save: found save at " + save_path)
+	else:
+		print("[SaveManager] discover_local_shadps4_save: no save found for " + title_id)
+	
+	return results
+
 ## Discovers local Xenia saves for an Xbox 360 game
 ## Xenia saves are in content/PROFILE_ID/TITLE_ID/ (PROFILE_ID varies per user)
 ## We search recursively from the content directory for matching TITLE_ID folders
@@ -563,6 +594,11 @@ func _validate_emulator_title_id(emulator_id: String, title_id: String) -> Strin
 				return "No Title ID available for this PS3 game. Launch it once to extract the Title ID."
 			if title_id.length() != 9:
 				return "Invalid Title ID for PS3 game."
+		"shadps4":
+			if title_id == "":
+				return "No Title ID available for this PS4 game. Launch it once to extract the Title ID."
+			if title_id.length() != 9:
+				return "Invalid Title ID for PS4 game."
 		"xenia":
 			if title_id == "":
 				return "No Title ID available for this Xbox 360 game. Launch it once to extract the Title ID."
@@ -594,6 +630,8 @@ func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameR
 			return discover_local_vita3k_save(save_dir, title_id)
 		"rpcs3":
 			return discover_local_rpcs3_save(save_dir, title_id)
+		"shadps4":
+			return discover_local_shadps4_save(save_dir, title_id)
 		"xenia":
 			return discover_local_xenia_save(save_dir, title_id)
 		_:
@@ -639,6 +677,8 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			return save_dir + title_id + "/"
 		"rpcs3":
 			return save_dir + title_id + "/"
+		"shadps4":
+			return save_dir + title_id + "/"
 		"xenia":
 			# Xenia saves are in content/PROFILE_ID/TITLE_ID/
 			# We need to find the profile directory first
@@ -670,6 +710,8 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 			return save_dir
 		"rpcs3":
 			return save_dir
+		"shadps4":
+			return save_dir
 		"xenia":
 			return save_dir
 		_:
@@ -698,6 +740,9 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 			return title_id
 		"rpcs3":
 			# For RPCS3, use the TitleID as the save name
+			return title_id
+		"shadps4":
+			# For shadPS4, use the TitleID as the save name
 			return title_id
 		"xenia":
 			# For Xenia, use the TitleID as the save name
@@ -732,6 +777,10 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			# For RPCS3, zip the save folder with TitleID as root
 			var rpcs3_folder_name = source_path.get_file()
 			return FileSystemManager.zip_directory_with_root(source_path, rpcs3_folder_name, zip_path)
+		"shadps4":
+			# For shadPS4, zip the save folder with TitleID as root
+			var shadps4_folder_name = source_path.get_file()
+			return FileSystemManager.zip_directory_with_root(source_path, shadps4_folder_name, zip_path)
 		"xenia":
 			# For Xenia, zip the save folder with TitleID as root
 			var xenia_folder_name = source_path.get_file()

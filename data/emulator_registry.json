@@ -1323,10 +1323,10 @@
 		"android": {
 		  "action_type": "none"
 		}
+		}
 	  }
-	}
-  ],
-  "launch": {
+	],
+	"launch": {
 	"platforms": {
 	  "windows": {
 		"type": "command",
@@ -2126,6 +2126,40 @@
 			"validate": {
 			  "action_type": "folder_exists",
 			  "path": "user/savedata"
+			}
+		  },
+		  "android": {
+			"action_type": "none"
+		  }
+		}
+	  },
+	  {
+		"step": "create_config",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "user/config.toml",
+				"content": "[GUI]\ninstallDirs = ['{games_dir}/ps4']\ninstallDirsEnabled = [true]"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["user/config.toml"]
+			}
+		  },
+		  "linux": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "user/config.toml",
+				"content": "[GUI]\ninstallDirs = ['{games_dir}/ps4']\ninstallDirsEnabled = [true]"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["user/config.toml"]
 			}
 		  },
 		  "android": {

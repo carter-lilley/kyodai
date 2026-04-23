@@ -1056,6 +1056,105 @@ static func extract_ps2_serial(rom_path: String) -> String:
 			push_error("[TitleIDParser] Unsupported PS2 ROM format: " + ext)
 			return ""
 
+# ==================== PS4 (shadPS4) ====================
+
+## Extracts PS4 Title ID from a ZIP file by reading the root directory names
+## PS4 game ZIPs contain a CUSAxxxxx directory at the root level
+## Returns Title ID string (e.g., "CUSA01130") or empty string on failure
+static func extract_ps4_title_id(zip_path: String) -> String:
+	var resolved_path = _resolve_zip_path(zip_path)
+	if resolved_path == "":
+		push_error("[TitleIDParser] File not found: " + zip_path)
+		return ""
+	zip_path = resolved_path
+	
+	var reader = ZIPReader.new()
+	var err = reader.open(zip_path)
+	
+	# If ZIPReader fails (e.g., ZIP64 large files), try 7-Zip fallback
+	if err != OK:
+		print("[TitleIDParser] ZIPReader failed, attempting 7-Zip fallback for: " + zip_path)
+		var title_id_from_7z = _extract_ps4_title_id_with_7z(zip_path)
+		if title_id_from_7z != "":
+			return title_id_from_7z
+		push_error("[TitleIDParser] Failed to open ZIP for PS4 TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
+		return ""
+	
+	var files = reader.get_files()
+	if files.is_empty():
+		push_error("[TitleIDParser] ZIP is empty: " + zip_path)
+		reader.close()
+		return ""
+	
+	# Find the root-level CUSA directory
+	var title_id := ""
+	for file_path in files:
+		# Look for paths like "CUSAxxxxx/..." at the root level
+		var parts = file_path.split("/", false)
+		if parts.size() > 0:
+			var potential_id = parts[0]
+			if potential_id.begins_with("CUSA") and potential_id.length() == 9:
+				title_id = potential_id
+				print("[TitleIDParser] Found PS4 TitleID in ZIP: " + title_id + " (from path: " + file_path + ")")
+				break
+	
+	reader.close()
+	
+	if title_id == "":
+		push_error("[TitleIDParser] No CUSA TitleID found in PS4 ZIP: " + zip_path)
+		return ""
+	
+	print("[TitleIDParser] PS4 TitleID extracted from ZIP: " + title_id)
+	return title_id
+
+
+## 7-Zip fallback for extracting PS4 TitleID from large/ZIP64 archives
+static func _extract_ps4_title_id_with_7z(zip_path: String) -> String:
+	var binary_path = _get_7z_binary_path()
+	if binary_path == "":
+		print("[TitleIDParser] 7-Zip binary not available")
+		return ""
+	
+	print("[TitleIDParser] Using 7-Zip fallback for PS4 TitleID: " + binary_path)
+	
+	# List archive contents
+	var list_args = ["l", "-slt", zip_path]
+	var output = []
+	var exit_code = OS.execute(binary_path, list_args, output, true)
+	
+	if exit_code != 0:
+		push_error("[TitleIDParser] 7-Zip list failed with exit code: " + str(exit_code))
+		return ""
+	
+	var output_str = ""
+	if output.size() > 0:
+		output_str = output[0]
+	
+	# Parse output to find root-level CUSA directory
+	var title_id = ""
+	var lines = output_str.split("\n")
+	for line in lines:
+		if line.begins_with("Path = "):
+			var path = line.substr(7).strip_edges()
+			# Normalize path separators (Windows uses backslashes)
+			path = path.replace("\\", "/")
+			# Check if this is a root-level CUSA directory
+			var parts = path.split("/", false)
+			if parts.size() > 0:
+				var potential_id = parts[0]
+				if potential_id.begins_with("CUSA") and potential_id.length() == 9:
+					title_id = potential_id
+					print("[TitleIDParser] Found PS4 TitleID in 7-Zip output: " + title_id + " (from path: " + path + ")")
+					break
+	
+	if title_id == "":
+		push_error("[TitleIDParser] No CUSA TitleID found via 7-Zip listing")
+		return ""
+	
+	print("[TitleIDParser] PS4 TitleID extracted via 7-Zip fallback: " + title_id)
+	return title_id
+
+
 # ==================== PS3 (RPCS3) ====================
 
 ## Extracts PS3 Title ID from a ZIP file by reading PARAM.SFO directly from the archive
