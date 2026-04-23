@@ -904,8 +904,10 @@ static func extract_zip(zip_path: String, dest_dir: String) -> bool:
 			DirAccess.make_dir_recursive_absolute(actual_dest)
 	
 	for file in files:
-		var file_dest = actual_dest.rstrip("/") + "/" + file
-		if file.ends_with("/"):
+		# Normalize backslashes to forward slashes (Windows-created zips use backslashes)
+		var normalized_file = file.replace("\\", "/")
+		var file_dest = actual_dest.rstrip("/") + "/" + normalized_file
+		if normalized_file.ends_with("/"):
 			DirAccess.make_dir_recursive_absolute(file_dest)
 			continue
 		

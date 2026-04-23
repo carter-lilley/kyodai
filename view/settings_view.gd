@@ -82,6 +82,9 @@ func _create_hero_designer_tab() -> Control:
 
 func _create_platforms_tab() -> Control:
 	var platforms_view = preload("res://view/platforms_settings_view.gd").new()
+	platforms_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	platforms_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	platforms_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	return platforms_view
 
 func _create_gamenative_tab() -> Control:

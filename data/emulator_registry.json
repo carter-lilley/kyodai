@@ -70,14 +70,14 @@
 		  "windows": {
 			"action_type": "download_scrape",
 			"scrape_url": "https://buildbot.libretro.com/stable/",
-			"version_pattern": "href=\"([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+			"version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
 			"url_template": "https://buildbot.libretro.com/stable/{version}/windows/x86_64/RetroArch.7z",
 			"match_strategy": "latest_semver"
 		  },
 		  "android": {
 			"action_type": "download_scrape",
 			"scrape_url": "https://buildbot.libretro.com/stable/",
-			"version_pattern": "href=\"([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+			"version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
 			"url_template": "https://buildbot.libretro.com/stable/{version}/android/RetroArch.apk",
 			"match_strategy": "latest_semver"
 		  }
@@ -112,7 +112,7 @@
 		  "windows": {
 			"action_type": "download_scrape",
 			"scrape_url": "https://buildbot.libretro.com/stable/",
-			"version_pattern": "href=\"([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+			"version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
 			"url_template": "https://buildbot.libretro.com/stable/{version}/windows/x86_64/RetroArch_cores.7z",
 			"match_strategy": "latest_semver"
 		  },

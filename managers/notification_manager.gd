@@ -52,6 +52,7 @@ func _ready() -> void:
 	_stack_control.offset_right = -20
 	_stack_control.offset_bottom = -20
 	_stack_control.custom_minimum_size = Vector2(_notification_width, 200)
+	_stack_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas_layer.add_child(_stack_control)
 	
 	# Connect to viewport resize to update positioning
@@ -62,6 +63,7 @@ func _ready() -> void:
 	_notification_container.alignment = BoxContainer.ALIGNMENT_END
 	_notification_container.add_theme_constant_override("separation", 8)
 	_notification_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_notification_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_stack_control.add_child(_notification_container)
 	
 	_apply_stack_direction()
