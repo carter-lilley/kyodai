@@ -1225,6 +1225,9 @@ func _enable_dual_screen_viewport_mode() -> void:
 	
 	_dual_screen_active = true
 	_dual_screen_viewport_mode = true
+	
+	# Apply SubViewport-based UI scaling (disables Window scaling, scales inside SubViewports)
+	DisplayManager.enter_subviewport_dual_screen_mode()
 
 func _disable_dual_screen_mode() -> void:
 	"""Disable dual screen mode - restore HeroImage to main layout."""
@@ -1245,6 +1248,9 @@ func _disable_dual_screen_mode() -> void:
 	else:
 		# Desktop: close secondary window
 		_disable_dual_screen_mode_desktop()
+	
+	# Clear SubViewport-based UI scaling and restore Window scaling
+	DisplayManager.exit_subviewport_dual_screen_mode()
 	
 	# Show hero in main UI again
 	if _hero_image:

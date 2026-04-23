@@ -16,6 +16,13 @@ var _dual_screen_enabled: bool = false
 var _second_screen_index: int = -1
 var _android_plugin = null
 
+# UI scale state for SubViewport dual screen mode
+var _subviewport_dual_screen_active: bool = false
+var _saved_ui_scale: float = 1.0
+var _last_main_viewport_size: Vector2i = Vector2i.ZERO
+var _last_second_viewport_size: Vector2i = Vector2i.ZERO
+var _ayn_thor_manager: Node = null
+
 func _ready() -> void:
 	settings_man.connect("setting_changed", _on_setting_changed)
 	
@@ -27,6 +34,21 @@ func _ready() -> void:
 	
 	# Initialize display detection
 	_initialize_display_detection()
+	
+	# Apply initial UI scale
+	_apply_ui_scale()
+	
+	# Try to connect to AynThor screen swap signal (may not exist yet)
+	call_deferred("_connect_ayn_thor_signals")
+
+func _connect_ayn_thor_signals() -> void:
+	_ayn_thor_manager = get_node_or_null("/root/Main/AynThorManager")
+	if _ayn_thor_manager and _ayn_thor_manager.has_signal("screens_swapped"):
+		_ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
+
+func _process(_delta: float) -> void:
+	if _subviewport_dual_screen_active:
+		_check_subviewport_size_changes()
 
 func _initialize_display_detection() -> void:
 	"""Initialize dual screen detection based on platform."""
@@ -65,6 +87,92 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 		"dual_screen_mode":
 			# Trigger a display check when dual screen setting changes
 			_check_for_dual_screen()
+		"ui_scale":
+			_apply_ui_scale()
+
+func _apply_ui_scale() -> void:
+	var ui_scale_setting = settings_man.get_setting("ui_scale")
+	if ui_scale_setting:
+		var scale_value = float(ui_scale_setting.value)
+		if scale_value > 0:
+			_saved_ui_scale = scale_value
+			if _subviewport_dual_screen_active:
+				# In SubViewport dual screen mode, disable Window scaling
+				# and apply scaling to SubViewports instead
+				get_tree().root.content_scale_factor = 1.0
+				_apply_subviewport_scale(scale_value)
+			else:
+				get_tree().root.content_scale_factor = scale_value
+
+func _check_subviewport_size_changes() -> void:
+	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
+	var second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	
+	var main_changed = false
+	var second_changed = false
+	
+	if main_viewport and main_viewport.size != _last_main_viewport_size:
+		_last_main_viewport_size = main_viewport.size
+		main_changed = true
+	
+	if second_viewport and second_viewport.size != _last_second_viewport_size:
+		_last_second_viewport_size = second_viewport.size
+		second_changed = true
+	
+	if main_changed or second_changed:
+		_apply_subviewport_scale(_saved_ui_scale)
+
+func _apply_subviewport_scale(scale: float) -> void:
+	if scale <= 0:
+		scale = 1.0
+	
+	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
+	var second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	
+	if main_viewport:
+		var original_size = main_viewport.size
+		main_viewport.size_2d_override = Vector2i(int(original_size.x / scale), int(original_size.y / scale))
+		main_viewport.size_2d_override_stretch = true
+		_last_main_viewport_size = original_size
+	
+	if second_viewport:
+		var original_size = second_viewport.size
+		second_viewport.size_2d_override = Vector2i(int(original_size.x / scale), int(original_size.y / scale))
+		second_viewport.size_2d_override_stretch = true
+		_last_second_viewport_size = original_size
+
+func _clear_subviewport_scale() -> void:
+	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
+	var second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	
+	if main_viewport:
+		main_viewport.size_2d_override = Vector2i.ZERO
+		main_viewport.size_2d_override_stretch = false
+	
+	if second_viewport:
+		second_viewport.size_2d_override = Vector2i.ZERO
+		second_viewport.size_2d_override_stretch = false
+	
+	_last_main_viewport_size = Vector2i.ZERO
+	_last_second_viewport_size = Vector2i.ZERO
+
+func _on_screens_swapped(_swapped: bool) -> void:
+	if _subviewport_dual_screen_active:
+		# Re-apply scale after screen swap since viewport sizes change
+		_apply_subviewport_scale(_saved_ui_scale)
+
+func enter_subviewport_dual_screen_mode() -> void:
+	if _subviewport_dual_screen_active:
+		return
+	_subviewport_dual_screen_active = true
+	_apply_ui_scale()
+
+func exit_subviewport_dual_screen_mode() -> void:
+	if not _subviewport_dual_screen_active:
+		return
+	_subviewport_dual_screen_active = false
+	_clear_subviewport_scale()
+	_apply_ui_scale()
 
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]

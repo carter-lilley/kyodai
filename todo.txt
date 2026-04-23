@@ -3,7 +3,6 @@
 
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch to launch on bottom screen
-ui scale
 android download manager and file streaming
 alignment modes in single row
 

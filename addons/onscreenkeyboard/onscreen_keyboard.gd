@@ -103,6 +103,21 @@ func reconnect_viewport() -> void:
 
 func _input(event):
 	_update_auto_display_on_input(event)
+	
+	# Dismiss keyboard when clicking or touching outside of it
+	if visible and not _is_hiding:
+		var click_pos = null
+		if event is InputEventMouseButton and event.pressed:
+			click_pos = event.position
+		elif event is InputEventScreenTouch and event.pressed:
+			click_pos = event.position
+		
+		if click_pos != null and not get_global_rect().has_point(click_pos):
+			var line_edit_to_focus = _active_line_edit
+			_hide_keyboard()
+			# Return focus to the LineEdit after dismissing
+			if line_edit_to_focus != null:
+				call_deferred("_deferred_focus_grab", line_edit_to_focus)
 
 
 func size_changed():
@@ -162,9 +177,19 @@ func reset_focus_tracking():
 	_previous_focus_object = null
 	_active_line_edit = null
 	_passthrough_caret_column = 0
+	_dismissed_line_edit = null
+	_is_hiding = false
 
 var released = true
 var _previous_focus_object = null
+
+# Track which LineEdit was active when keyboard was dismissed.
+# Prevents the keyboard from immediately reopening when focus returns
+# to that LineEdit after a deferred focus grab or controller navigation.
+var _dismissed_line_edit: Control = null
+
+# True while a hide animation is in progress to prevent duplicate hide calls.
+var _is_hiding: bool = false
 
 func _update_auto_display_on_input(event):
 	if auto_show == false:
@@ -180,7 +205,18 @@ func _update_auto_display_on_input(event):
 	var focus_object = get_viewport().gui_get_focus_owner()
 	if focus_object != _previous_focus_object:
 		_previous_focus_object = focus_object
+		
+		# If focus moved somewhere other than the dismissed LineEdit (and not within
+		# the keyboard itself, which can happen during deferred focus transitions),
+		# clear the dismissal so the keyboard can reopen on future LineEdit focus.
+		if focus_object != _dismissed_line_edit and not is_focus_within_keyboard(focus_object):
+			_dismissed_line_edit = null
+		
 		if focus_object != null and is_keyboard_focus_object(focus_object):
+			# Don't reopen if focus is returning to the LineEdit we just dismissed from.
+			if focus_object == _dismissed_line_edit:
+				return
+			
 			_active_line_edit = focus_object
 			_passthrough_caret_column = _active_line_edit.caret_column
 			_show_keyboard()
@@ -226,6 +262,7 @@ func _update_auto_display_on_input(event):
 		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 			if _active_line_edit is LineEdit:
 				_active_line_edit.text_submitted.emit(_active_line_edit.text)
+			_dismissed_line_edit = _active_line_edit
 			_active_line_edit = null
 			_passthrough_caret_column = 0
 			_hide_keyboard()
@@ -234,6 +271,9 @@ func _update_auto_display_on_input(event):
 	
 	# Hide keyboard on ui_cancel action (controller B button)
 	if event.is_action_pressed("ui_cancel"):
+		# Mark as dismissed so auto-show won't reopen when focus returns
+		if _active_line_edit != null:
+			_dismissed_line_edit = _active_line_edit
 		# Return focus to the LineEdit before hiding
 		if _active_line_edit != null:
 			_active_line_edit.grab_focus()
@@ -243,6 +283,9 @@ func _update_auto_display_on_input(event):
 	if event.is_action_pressed("ui_start"):
 		if _active_line_edit is LineEdit:
 			_active_line_edit.text_submitted.emit(_active_line_edit.text)
+		# Mark as dismissed so auto-show won't reopen when focus returns
+		if _active_line_edit != null:
+			_dismissed_line_edit = _active_line_edit
 		# Return focus and hide keyboard
 		if _active_line_edit != null:
 			_active_line_edit.grab_focus()
@@ -250,13 +293,16 @@ func _update_auto_display_on_input(event):
 
 
 func _hide_keyboard(key_data=null):
-	# Don't hide if already hidden - prevents animation toggling visibility
-	if not visible:
+	# Don't hide if already hidden or already hiding - prevents animation toggling visibility
+	if not visible or _is_hiding:
 		return
 	
-	# Set _previous_focus_object to the LineEdit before clearing so auto-show
-	# doesn't reopen keyboard when focus returns to it
+	_is_hiding = true
+	
+	# Remember which LineEdit was active so we can suppress auto-reopen when
+	# focus returns to it after dismissal.
 	if _active_line_edit != null:
+		_dismissed_line_edit = _active_line_edit
 		_previous_focus_object = _active_line_edit
 	_active_line_edit = null
 	if animate:
@@ -282,6 +328,8 @@ func _deferred_focus_grab(control: Control):
 
 
 func _show_keyboard(key_data=null):
+	_is_hiding = false
+	_dismissed_line_edit = null
 	var was_hidden = not visible
 	change_visibility(true)
 	if animate:
@@ -406,6 +454,9 @@ func _key_released(key_data):
 				# Trigger submit/confirmation on the LineEdit
 				if _active_line_edit is LineEdit:
 					_active_line_edit.text_submitted.emit(_active_line_edit.text)
+				# Mark as dismissed so auto-show won't reopen when focus returns
+				if _active_line_edit != null:
+					_dismissed_line_edit = _active_line_edit
 				# Return focus and hide keyboard
 				if _active_line_edit != null:
 					_active_line_edit.grab_focus()

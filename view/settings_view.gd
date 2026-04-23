@@ -41,9 +41,12 @@ func _build_settings_view():
 	for subgroup_name in subgroups.keys():
 		var settings_vars = subgroups[subgroup_name]
 		
-		# Filter out Android-only settings on non-Android platforms
-		if subgroup_name == "Storage" and not PlatformManager.is_android():
-			settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Vita3K Data Folder")
+		# Filter out platform-specific settings
+		if subgroup_name == "Storage":
+			if not PlatformManager.is_android():
+				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Vita3K Data Folder")
+			if not (PlatformManager.is_windows() or PlatformManager.is_linux()):
+				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Steam Installation Folder")
 		
 		var tab = _create_settings_tab(subgroup_name, settings_vars)
 		_settings_container.add_child(tab)
