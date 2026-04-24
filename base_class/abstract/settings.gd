@@ -12,7 +12,7 @@ const Type = SettingsVar.SettingType
 
 @export_subgroup("Display")
 @export var windowed := SettingsVar.new(Type.BOOL,true,State.ENABLED,"Windowed")
-@export var ui_scale := SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "UI Scale", "Scale all interface elements (restart may be needed on some platforms)", 0.5, 2.0, 0.05)
+@export var ui_scale := SettingsVar.new(Type.FLOAT, 1.5, State.ENABLED, "UI Scale", "Scale all interface elements (restart may be needed on some platforms)", 0.5, 2.0, 0.05)
 @export var resolutions: Array = [
 	Vector2i(2560,1080),
 	Vector2i(1920,1080),
@@ -80,6 +80,9 @@ const Type = SettingsVar.SettingType
 @export var library_card_alignment := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Card Alignment", "Alignment of unfocused cards relative to the focused card", 0.0, 2.0, 1.0, ["Top / Left", "Center", "Bottom / Right"])
 @export var controls_bar_enabled := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Show Controls Bar", "Display the quick controls bar in game views")
 @export var controls_bar_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Controls Bar Mode", "How the controls bar is displayed", 0.0, 1.0, 1.0, ["Floating", "Docked"])
+
+# Internal first-run flag (tracks if OOBE wizard has been completed)
+@export var first_run_completed := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "First Run Completed")
 
 # Internal last search query (managed by Library search)
 @export var library_last_search := SettingsVar.new(Type.STRING, "", State.INTERNAL, "Last Search Query")

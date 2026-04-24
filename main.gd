@@ -14,6 +14,9 @@ var root_layout: Control
 # Cached reference to the on-screen keyboard (survives reparenting in dual-screen mode)
 var _keyboard: PanelContainer = null
 
+# Cached reference to UILayer (survives reparenting in dual-screen mode)
+var _ui_layer: CanvasLayer = null
+
 # Auto-repeat navigation
 var _held_dir: String = ""
 var _delay_timer: Timer
@@ -46,7 +49,8 @@ func _ready():
 	main_content_vbox = get_node("RootLayout/ContentWrapper/MainContentVBox")
 	root_layout = get_node("RootLayout")
 	
-	# Cache the on-screen keyboard reference (survives reparenting in dual-screen mode)
+	# Cache the on-screen keyboard and UILayer references (survive reparenting in dual-screen mode)
+	_ui_layer = get_node_or_null("UILayer")
 	_keyboard = get_node_or_null("UILayer/OnscreenKeyboard")
 	
 	# Initialize UIManager with all the pre-built nodes
@@ -105,6 +109,34 @@ func _ready():
 	if second_viewport_container:
 		second_viewport_container.focus_mode = Control.FOCUS_NONE
 		print("[Main] Set SecondViewportContainer focus_mode to FOCUS_NONE")
+	
+	# Check if first-run wizard needs to be shown
+	_show_oobe_wizard_if_needed()
+
+func _show_oobe_wizard_if_needed():
+	var first_run_setting = SettingsManager.get_setting("first_run_completed")
+	var is_first_run = true
+	if first_run_setting:
+		is_first_run = not first_run_setting.value
+	
+	if is_first_run:
+		print("[Main] First run detected, showing OOBE wizard")
+		var wizard_scene = preload("res://components/oobe_wizard.tscn")
+		var wizard = wizard_scene.instantiate()
+		
+		if _ui_layer:
+			_ui_layer.add_child(wizard)
+			wizard.start_wizard()
+			wizard.wizard_completed.connect(_on_oobe_wizard_completed)
+		else:
+			push_error("[Main] UILayer not found, cannot show OOBE wizard")
+
+func _on_oobe_wizard_completed():
+	print("[Main] OOBE wizard completed")
+	# Refresh any views that might need updated settings
+	UIManager.rebuild_game_grid()
+	# Restore focus to the home button
+	call_deferred("reset_focus_to_home_button")
 
 func _on_nav_button_pressed(view_name: String):
 	UIManager.switch_to_tab(view_name)
@@ -259,6 +291,12 @@ func _input(event: InputEvent):
 	if LaunchManager and LaunchManager.is_in_background_state():
 		get_viewport().set_input_as_handled()
 		return
+	
+	# Block input if OOBE wizard is visible
+	if _ui_layer:
+		for child in _ui_layer.get_children():
+			if child.has_method("start_wizard") and child.visible:
+				return
 	
 	var dirs = ["ui_left", "ui_right", "ui_up", "ui_down"]
 	
