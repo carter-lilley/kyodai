@@ -33,6 +33,7 @@ class QueueItem:
 	var saf_destination: String = ""  # Original SAF URI if using SAF storage
 	var use_saf: bool = false  # Whether this download uses SAF
 	var delete_after_extract: bool = false  # Whether to delete archive after extraction
+	var suppress_notification: bool = false  # If true, don't show per-item notifications
 
 # Unified queue
 var _queue: Array[QueueItem] = []
@@ -199,7 +200,7 @@ func _stop_foreground_service():
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true) -> String:
+func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
@@ -227,6 +228,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.callbacks = callbacks
 	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
 	item.delete_after_extract = delete_after_extract
+	item.suppress_notification = suppress_notification
 	
 	# Store expected file size for progress tracking
 	if game:
@@ -298,7 +300,8 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 
 ## Queues an extraction task (for already-downloaded archives)
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true)
-func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", name: String = "", delete_after_extract: bool = true) -> String:
+## suppress_notification: If true, skips showing extraction notifications (for batch operations)
+func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", name: String = "", delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
 	var item_id = "extract_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
 	# Check if already extracting this archive
@@ -316,6 +319,7 @@ func queue_extraction(archive_path: String, extract_dir: String, type: String = 
 	item.auto_extract = false  # Already an extraction task
 	item.extract_dir = extract_dir
 	item.delete_after_extract = delete_after_extract
+	item.suppress_notification = suppress_notification
 	
 	_queue.append(item)
 	
@@ -445,21 +449,22 @@ func _start_download(item: QueueItem):
 	_last_progress_times[item.id] = Time.get_ticks_msec()
 	_last_downloaded_bytes[item.id] = 0
 	
-	# Show notification with progress
-	item.notification_id = NotificationManager.show_notification(
-		item.name + "...",
-		Notification.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			return item.progress,
-		func(progress: float) -> String:
-			if item.expected_file_size > 0:
-				var mb_downloaded = int(item.expected_file_size * progress / (1024 * 1024))
-				var mb_total = int(item.expected_file_size / (1024 * 1024))
-				return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
-			return item.name + ": %d%%" % int(progress * 100)
-	)
+	# Show notification with progress (unless suppressed for batch downloads)
+	if not item.suppress_notification:
+		item.notification_id = NotificationManager.show_notification(
+			item.name + "...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			func() -> float:
+				return item.progress,
+			func(progress: float) -> String:
+				if item.expected_file_size > 0:
+					var mb_downloaded = int(item.expected_file_size * progress / (1024 * 1024))
+					var mb_total = int(item.expected_file_size / (1024 * 1024))
+					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
+				return item.name + ": %d%%" % int(progress * 100)
+		)
 	
 	download_started.emit(item.id)
 	
@@ -1861,19 +1866,20 @@ func _start_extraction(item: QueueItem):
 		_active_items[item.id] = item
 	
 	# Show extraction notification with pulsing progress (indeterminate)
-	# Dismiss old notification first, then create new one
-	if item.notification_id != -1:
-		NotificationManager.dismiss_notification(item.notification_id)
-	
-	item.notification_id = NotificationManager.show_notification(
-		"Extracting " + item.name + "...",
-		Notification.Type.INFO,
-		null,
-		0.0,
-		Callable(),  # No progress callable - using pulsing
-		Callable(),  # No text formatter
-		true  # pulsing = true
-	)
+	# Dismiss old notification first, then create new one (unless suppressed for batch)
+	if not item.suppress_notification:
+		if item.notification_id != -1:
+			NotificationManager.dismiss_notification(item.notification_id)
+		
+		item.notification_id = NotificationManager.show_notification(
+			"Extracting " + item.name + "...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			Callable(),  # No progress callable - using pulsing
+			Callable(),  # No text formatter
+			true  # pulsing = true
+		)
 	
 	extraction_started.emit(item.id)
 	

@@ -11,6 +11,9 @@ var content_wrapper: Control
 var main_content_vbox: VBoxContainer
 var root_layout: Control
 
+# Cached reference to the on-screen keyboard (survives reparenting in dual-screen mode)
+var _keyboard: PanelContainer = null
+
 # Auto-repeat navigation
 var _held_dir: String = ""
 var _delay_timer: Timer
@@ -43,7 +46,8 @@ func _ready():
 	main_content_vbox = get_node("RootLayout/ContentWrapper/MainContentVBox")
 	root_layout = get_node("RootLayout")
 	
-
+	# Cache the on-screen keyboard reference (survives reparenting in dual-screen mode)
+	_keyboard = get_node_or_null("UILayer/OnscreenKeyboard")
 	
 	# Initialize UIManager with all the pre-built nodes
 	UIManager.initialize(
@@ -305,8 +309,7 @@ func _input(event: InputEvent):
 	# Handle ui_cancel to go back to Home (unless keyboard is open)
 	if event.is_action_pressed("ui_cancel"):
 		# Check if keyboard is visible - if so, let keyboard handle it
-		var keyboard = $UILayer/OnscreenKeyboard
-		if keyboard and keyboard.visible:
+		if _keyboard and _keyboard.visible:
 			# Keyboard will handle ui_cancel to close itself
 			return
 		

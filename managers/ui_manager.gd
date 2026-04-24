@@ -1322,6 +1322,12 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	var library_view = get_view("Library")
 	if library_view and library_view.has_method("reconnect_viewport"):
 		library_view.reconnect_viewport()
+	
+	# Reconnect all other views that support viewport reconnection
+	for view_name in ["Settings", "Downloads", "Platforms"]:
+		var view = get_view(view_name)
+		if view and view.has_method("reconnect_viewport"):
+			view.reconnect_viewport()
 
 func _restore_ui_to_original_parents() -> void:
 	"""Restore RootLayout to its original parent.

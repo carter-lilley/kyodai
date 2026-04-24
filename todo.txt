@@ -1,14 +1,13 @@
 #TODO.TXT
 
-
 install flow doesnt refresh platform cards reliably anymore - especially if you leave/launch the apk(?)
 no touch to launch on bottom screen
 android download manager and file streaming
 alignment modes in single row
-
+clicking settings should focus tab
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
-	
+card designer use effect designer ui
 ## general UI
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)

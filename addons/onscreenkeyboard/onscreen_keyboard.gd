@@ -102,9 +102,22 @@ func reconnect_viewport() -> void:
 #    pass
 
 func _input(event):
+	# If keyboard is hidden and user taps/clicks anywhere, clear the dismissal
+	# so that if the tap lands on a LineEdit it can reopen. We defer the actual
+	# check because _gui_input() (where LineEdit grabs focus) runs AFTER _input().
+	if not visible and _dismissed_line_edit != null:
+		if (event is InputEventMouseButton and event.pressed) or \
+		   (event is InputEventScreenTouch and event.pressed):
+			_dismissed_line_edit = null
+			_previous_focus_object = null
+			call_deferred("_deferred_show_keyboard_check")
+			return
+
 	_update_auto_display_on_input(event)
 	
-	# Dismiss keyboard when clicking or touching outside of it
+	# Dismiss keyboard when clicking or touching outside of it.
+	# Use the keyboard's intended (target) position for the check, because
+	# during a slide-in animation get_global_rect() is still off-screen.
 	if visible and not _is_hiding:
 		var click_pos = null
 		if event is InputEventMouseButton and event.pressed:
@@ -112,10 +125,20 @@ func _input(event):
 		elif event is InputEventScreenTouch and event.pressed:
 			click_pos = event.position
 		
-		if click_pos != null and not get_global_rect().has_point(click_pos):
+		if click_pos != null:
+			# 1. Touch is inside the keyboard's intended area -> keep open
+			var keyboard_top = get_viewport().get_visible_rect().size.y - size.y
+			if click_pos.y >= keyboard_top:
+				return
+			
+			# 2. Touch is on the active LineEdit -> keep open (tapping the
+			#    text field while editing should not dismiss)
+			if _active_line_edit != null and _active_line_edit.get_global_rect().has_point(click_pos):
+				return
+			
+			# 3. Otherwise dismiss and return focus to the LineEdit
 			var line_edit_to_focus = _active_line_edit
 			_hide_keyboard()
-			# Return focus to the LineEdit after dismissing
 			if line_edit_to_focus != null:
 				call_deferred("_deferred_focus_grab", line_edit_to_focus)
 
@@ -206,12 +229,6 @@ func _update_auto_display_on_input(event):
 	if focus_object != _previous_focus_object:
 		_previous_focus_object = focus_object
 		
-		# If focus moved somewhere other than the dismissed LineEdit (and not within
-		# the keyboard itself, which can happen during deferred focus transitions),
-		# clear the dismissal so the keyboard can reopen on future LineEdit focus.
-		if focus_object != _dismissed_line_edit and not is_focus_within_keyboard(focus_object):
-			_dismissed_line_edit = null
-		
 		if focus_object != null and is_keyboard_focus_object(focus_object):
 			# Don't reopen if focus is returning to the LineEdit we just dismissed from.
 			if focus_object == _dismissed_line_edit:
@@ -278,6 +295,7 @@ func _update_auto_display_on_input(event):
 		if _active_line_edit != null:
 			_active_line_edit.grab_focus()
 		_hide_keyboard()
+		get_viewport().set_input_as_handled()
 	
 	# Handle ui_start (Start/Enter button) same as virtual keyboard Enter
 	if event.is_action_pressed("ui_start"):
@@ -303,7 +321,6 @@ func _hide_keyboard(key_data=null):
 	# focus returns to it after dismissal.
 	if _active_line_edit != null:
 		_dismissed_line_edit = _active_line_edit
-		_previous_focus_object = _active_line_edit
 	_active_line_edit = null
 	if animate:
 		var new_y_pos = get_viewport().get_visible_rect().size.y + 10
@@ -322,9 +339,26 @@ func _on_hide_keyboard_clicked(key_data=null):
 
 
 func _deferred_focus_grab(control: Control):
-	"""Grab focus on a control after a frame delay."""
-	if is_instance_valid(control):
+	"""Grab focus on a control after a frame delay.
+	Only steals focus if nothing else has taken it (e.g. empty-space click).
+	If another interactive element grabbed focus from the click, respect it."""
+	if not is_instance_valid(control):
+		return
+	var current_focus = get_viewport().gui_get_focus_owner()
+	# Only grab focus if nothing currently has focus, or focus is still
+	# stuck on a hidden keyboard key (not a real UI element)
+	if current_focus == null or is_focus_within_keyboard(current_focus):
 		control.grab_focus()
+
+
+func _deferred_show_keyboard_check():
+	"""Check if a LineEdit has focus after a touch/click event and open keyboard.
+	Called deferred so LineEdit's _gui_input() has already grabbed focus."""
+	var focus_object = get_viewport().gui_get_focus_owner()
+	if focus_object != null and is_keyboard_focus_object(focus_object):
+		_active_line_edit = focus_object
+		_passthrough_caret_column = _active_line_edit.caret_column
+		_show_keyboard()
 
 
 func _show_keyboard(key_data=null):

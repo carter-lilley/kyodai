@@ -55,16 +55,42 @@ func _resolve_emulator_path(path: String, emulator_id: String) -> String:
 		return path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
 	return path
 
-## Resolves validation paths (handles {emulator_dir} and absolute paths)
-func _resolve_validation_path(emulator_id: String, path: String) -> String:
+## Checks if a path is absolute (not relative to emulator dir)
+## Handles: Unix absolute (/...), Windows absolute (C:\...), SAF URIs (content://),
+## Godot virtual paths (user://, res://)
+func _is_absolute_path(path: String) -> bool:
+	if path.is_empty():
+		return false
+	return path.begins_with("/") \
+		or path.begins_with("content://") \
+		or path.begins_with("user://") \
+		or path.begins_with("res://") \
+		or (path.length() > 1 and path[1] == ":")
+
+## Universal path resolver for install steps
+## 1. Resolves {emulator_dir} templates
+## 2. Returns absolute paths as-is
+## 3. Resolves relative paths against emulator directory
+func _resolve_install_path(path: String, emulator_id: String) -> String:
+	# Step 1: Resolve {emulator_dir} template
 	if path.begins_with("{emulator_dir}"):
-		return path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
-	if path.begins_with("/") or path.begins_with("content://"):
-		# Absolute path or SAF URI - use as-is
+		path = path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
+	
+	# Step 2: If already absolute, return as-is
+	if _is_absolute_path(path):
 		return path
-	else:
-		# Relative path - prepend emulator directory
-		return _get_emulator_directory(emulator_id) + path
+	
+	# Step 3: Handle special relative path "."
+	if path == ".":
+		return _get_emulator_directory(emulator_id).rstrip("/")
+	
+	# Step 4: Prepend emulator directory for relative paths
+	return _get_emulator_directory(emulator_id) + path
+
+## Resolves validation paths (handles {emulator_dir} and absolute paths)
+## DEPRECATED: Use _resolve_install_path() instead for consistency
+func _resolve_validation_path(emulator_id: String, path: String) -> String:
+	return _resolve_install_path(path, emulator_id)
 
 ## Extracts the base tree URI from a SAF path for permission checks
 func _extract_saf_tree_uri(full_uri: String) -> String:
@@ -1667,7 +1693,7 @@ func _retry_previous_step(emulator_id: String, current_step_index: int) -> bool:
 
 ## Executes APK install action for a step (Android only)
 ## Uses simple file:// URI approach with OS.shell_open()
-## APKs are downloaded to user://temp_apk/ to avoid SAF complications
+## APKs are downloaded to the emulator directory for consistency
 func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config: Dictionary) -> bool:
 	var package_name = apk_config.get("package_name", "")
 	
@@ -1690,18 +1716,18 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	print("[LaunchManager]   - package_name: '" + package_name + "'")
 	print("[LaunchManager]   - expected_file: '" + expected_file + "'")
 	
-	# APKs are always downloaded to user://temp_apk/ (not SAF)
-	var temp_apk_dir = "user://temp_apk/"
+	# APKs are downloaded to the emulator directory (same as other platforms)
+	var emulator_dir = _get_emulator_directory(emulator_id)
 	var apk_path = ""
 	
-	# Find the APK file in temp directory
-	var dir = DirAccess.open(temp_apk_dir)
+	# Find the APK file in emulator directory
+	var dir = DirAccess.open(emulator_dir)
 	if dir:
 		dir.list_dir_begin()
 		var file_name = dir.get_next()
 		while file_name != "":
 			if file_name.match(expected_file):
-				apk_path = temp_apk_dir + file_name
+				apk_path = emulator_dir + file_name
 				print("[LaunchManager] Found APK: " + apk_path)
 				break
 			file_name = dir.get_next()
@@ -1709,7 +1735,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	
 	# If no APK found, retry download
 	if apk_path == "":
-		print("[LaunchManager] No APK found in temp directory, retrying download")
+		print("[LaunchManager] No APK found in emulator directory, retrying download")
 		return _retry_previous_step(emulator_id, step_index)
 	
 	# Convert to absolute path for Android
@@ -1755,7 +1781,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		)
 		
 		# Try to open the folder
-		var folder_result = OS.shell_open(ProjectSettings.globalize_path(temp_apk_dir))
+		var folder_result = OS.shell_open(ProjectSettings.globalize_path(emulator_dir))
 		if folder_result == Error.OK:
 			print("[LaunchManager] Opened folder containing APK")
 		
@@ -1822,22 +1848,26 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	# Set progress text
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(total_cores) + ")"
 	
+	# Create a single batch progress notification
+	var batch_notification_id = NotificationManager.show_notification(
+		step_display_name + " (0/" + str(total_cores) + ")",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			return float(progress.completed) / float(total_cores),
+		func(p: float) -> String:
+			return step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
+	)
+	
 	# Queue all downloads
 	for core_name in cores:
 		# Construct URL from pattern
 		var filename = url_pattern.replace("{name}", core_name)
 		var full_url = base_url + filename
 		
-		# Determine extract directory
-		var extract_dir: String
-		if extract_to.begins_with("/") or extract_to.begins_with("content://"):
-			# Absolute path or SAF URI
-			extract_dir = extract_to
-		elif extract_to == ".":
-			# Current directory - use emulator directory directly (don't append ".")
-			extract_dir = _get_emulator_directory(emulator_id).rstrip("/")
-		else:
-			extract_dir = _get_emulator_directory(emulator_id) + extract_to
+		# Resolve extract directory using universal path resolver
+		var extract_dir = _resolve_install_path(extract_to, emulator_id)
 		
 		# Normalize the path to remove "." and ".." components
 		extract_dir = FileSystemManager.normalize_path(extract_dir)
@@ -1846,17 +1876,19 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		var destination_path = _get_emulator_directory(emulator_id) + filename
 		
 		# Queue download without auto-extract (extraction happens in separate step)
+		# suppress_notification=true to avoid dozens of individual notifications
 		var item_id = DownloadManager.queue_download(
 			full_url,
 			destination_path,
 			"emulator_core",
 			core_name,
-			false,  # auto_extract - extraction handled by install_cores step
-			"",     # extract_dir - not used here
-			null,   # game
-			{},     # callbacks
-			0,      # romm_id
-			false   # delete_after_extract - keep zips for extraction step
+			false,   # auto_extract - extraction handled by install_cores step
+			"",      # extract_dir - not used here
+			null,    # game
+			{},      # callbacks
+			0,       # romm_id
+			false,   # delete_after_extract - keep zips for extraction step
+			true     # suppress_notification - use batch notification instead
 		)
 		
 		if item_id == "":
@@ -1873,6 +1905,8 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 				_emulator_install_progress[emulator_id] = step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
 				# Check if all downloads are complete
 				if progress.completed >= total_cores:
+					# Dismiss the batch notification
+					NotificationManager.dismiss_notification(batch_notification_id)
 					if progress.failed > 0:
 						push_error("[LaunchManager] Batch download failed: " + str(progress.failed) + "/" + str(total_cores) + " cores failed")
 						_emulator_install_progress[emulator_id] = "Batch download failed"
@@ -1890,6 +1924,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	
 	if download_ids.is_empty():
 		push_error("[LaunchManager] No downloads could be queued for batch_url_download")
+		NotificationManager.dismiss_notification(batch_notification_id)
 		return false
 	
 	return true
@@ -1903,20 +1938,8 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var emulator = get_emulator(emulator_id)
 	var install_steps = emulator.get("install", [])
 	
-	# Resolve {emulator_dir} templates
-	extract_to = _resolve_emulator_path(extract_to, emulator_id)
-	
-	# Handle extract_to: absolute paths are used directly, relative paths are relative to emulator dir
-	var extract_dir: String
-	if extract_to.begins_with("/") or extract_to.begins_with("content://"):
-		# Absolute path (e.g., Android /storage/emulated/0/... or SAF URI)
-		extract_dir = extract_to
-	elif extract_to == ".":
-		# Current directory - use emulator directory directly (don't append ".")
-		extract_dir = _get_emulator_directory(emulator_id).rstrip("/")
-	else:
-		# Relative path (default behavior for desktop)
-		extract_dir = _get_emulator_directory(emulator_id) + extract_to
+	# Resolve path using universal resolver
+	var extract_dir = _resolve_install_path(extract_to, emulator_id)
 	
 	# Normalize the path to remove "." and ".." components
 	extract_dir = FileSystemManager.normalize_path(extract_dir)
@@ -2079,7 +2102,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	
 	# Queue extraction for all archives
 	for archive_path in archive_paths:
-		var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name)
+		var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name, true, true)
 		if item_id == "":
 			push_error("[LaunchManager] Failed to queue extraction for: " + archive_path)
 			progress.failed += 1
@@ -2498,15 +2521,8 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	for folder_path in folders:
-		# Resolve {emulator_dir} templates
-		folder_path = _resolve_emulator_path(folder_path, emulator_id)
-		
-		var full_path: String
-		if folder_path.begins_with("/") or folder_path.begins_with("content://"):
-			# Absolute path or SAF URI - use as-is
-			full_path = folder_path
-		else:
-			full_path = _get_emulator_directory(emulator_id) + folder_path
+		# Resolve path using universal resolver
+		var full_path = _resolve_install_path(folder_path, emulator_id)
 		
 		# Use FileSystemManager for all directory creation (handles SAF on Android)
 		if not FileSystemManager.make_dir_recursive(full_path):
@@ -2538,11 +2554,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		if file_name == "":
 			continue
 		
-		var full_path: String
-		if file_name.begins_with("/"):
-			full_path = file_name
-		else:
-			full_path = emulator_dir + "/" + file_name
+		var full_path = _resolve_install_path(file_name, emulator_id)
 		
 		# Resolve placeholders in content
 		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
@@ -2584,11 +2596,7 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	if file_path == "" or edits.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
-	var full_path: String
-	if file_path.begins_with("/"):
-		full_path = file_path
-	else:
-		full_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + file_path
+	var full_path = _resolve_install_path(file_path, emulator_id)
 	
 	if not FileSystemManager.file_exists(full_path):
 		push_error("[LaunchManager] File not found for editing: " + full_path)
@@ -2803,17 +2811,6 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	else:
 		destination_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
 	
-	# Check if this is an APK download
-	var is_apk = filename.to_lower().ends_with(".apk")
-	
-	# For APKs, always use local storage even if SAF is configured
-	# This allows simple OS.shell_open() with file:// URI for installation
-	if is_apk and destination_path.begins_with("content://"):
-		print("[LaunchManager] APK detected - using local storage instead of SAF")
-		destination_path = "user://temp_apk/" + filename
-		# Ensure directory exists
-		DirAccess.make_dir_recursive_absolute("user://temp_apk")
-	
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
 	# Queue download WITHOUT auto-extract (extract is now a separate step)
@@ -2836,7 +2833,6 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		"step_index": step_index,
 		"step_config": step_config,
 		"filename": filename,
-		"is_apk": is_apk,
 		"use_saf": destination_path.begins_with("content://"),
 		"callback": func(success: bool, message: String):
 			if not success:

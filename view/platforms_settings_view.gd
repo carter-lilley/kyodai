@@ -650,6 +650,18 @@ func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 
+func reconnect_viewport() -> void:
+	"""Reconnect to the current viewport's gui_focus_changed signal.
+	Call this after reparenting into a SubViewport."""
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	
+	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	viewport.gui_focus_changed.connect(_on_focus_changed)
+
 func _on_focus_changed(control: Control) -> void:
 	"""Ensure focused controls are visible in the scroll container."""
 	if not control:

@@ -25,8 +25,38 @@ func _ready():
 	if DisplayManager:
 		DisplayManager.viewport_size_changed.connect(_on_viewport_size_changed)
 	
+	# Connect to viewport focus changes to ensure focused items are visible
+	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
 	# Setup preview after UI is built
 	call_deferred("_setup_preview_hero")
+
+func reconnect_viewport() -> void:
+	"""Reconnect to the current viewport's gui_focus_changed signal.
+	Call this after reparenting into a SubViewport."""
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	
+	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	viewport.gui_focus_changed.connect(_on_focus_changed)
+	
+	# Reconnect nested EffectDesignerUI viewport
+	if _effect_designer_ui and _effect_designer_ui.has_method("reconnect_viewport"):
+		_effect_designer_ui.reconnect_viewport()
+
+func _on_focus_changed(control: Control) -> void:
+	"""Ensure focused controls are visible."""
+	if not control:
+		return
+	
+	# EffectDesignerUI has its own ScrollContainer, forward to it if needed
+	if _effect_designer_ui and _effect_designer_ui.is_ancestor_of(control):
+		# EffectDesignerUI handles its own scroll via ensure_control_visible
+		if _effect_designer_ui._scroll_container:
+			_effect_designer_ui._scroll_container.ensure_control_visible(control)
 
 func _on_settings_saved():
 	_load_current_config()
@@ -37,6 +67,8 @@ func _exit_tree():
 		SettingsManager.settings_saved.disconnect(_on_settings_saved)
 	if DisplayManager and DisplayManager.viewport_size_changed.is_connected(_on_viewport_size_changed):
 		DisplayManager.viewport_size_changed.disconnect(_on_viewport_size_changed)
+	if get_viewport() and get_viewport().gui_focus_changed.is_connected(_on_focus_changed):
+		get_viewport().gui_focus_changed.disconnect(_on_focus_changed)
 
 func on_view_hide():
 	pass
