@@ -152,6 +152,10 @@ var _pending_emulator_downloads: Dictionary = {}
 var _validation_cache: Dictionary = {}
 var _cache_ttl_ms: int = 5000  # 5 second cache TTL
 
+## Clears the validation cache. Call after external install state changes (e.g., APK install).
+func clear_validation_cache() -> void:
+	_validation_cache.clear()
+
 # Signals
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
@@ -2881,7 +2885,13 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			task_info.callback.call(false, "Validation failed")
 			return
 		
-		# Progress to next step
+		# For batch downloads, let the callback handle progress tracking and step advancement
+		# The callback only advances when ALL items in the batch are complete
+		if task_info.get("context", "") == "batch_download":
+			task_info.callback.call(true, "")
+			return
+		
+		# For non-batch downloads, proceed to next step
 		var step_success = _execute_install_step(emulator_id, step_index + 1)
 		if not step_success:
 			push_error("[LaunchManager] Install step " + str(step_index + 1) + " failed for: " + emulator_id)

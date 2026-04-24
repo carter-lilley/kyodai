@@ -623,6 +623,13 @@ func _on_select_all_pressed():
 	# Update button text
 	select_all_button.text = "Deselect All" if new_state else "Select All"
 
+func refresh_cards() -> void:
+	"""Refresh UI for all existing platform cards without re-fetching from network."""
+	for slug in _platform_cards.keys():
+		var card = _platform_cards[slug]
+		if is_instance_valid(card):
+			card.refresh_ui()
+
 func on_view_show():
 	# Take snapshot of current enabled state before user makes changes
 	_sync_triggered = false

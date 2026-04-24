@@ -473,6 +473,17 @@ func _notification(what: int) -> void:
 			call_deferred("_restore_focus_to_card", _last_focused_index)
 		else:
 			print("[Main] No saved focus index, skipping restoration")
+		
+		# Clear emulator validation cache and refresh platform cards
+		# This handles APK installs that completed while the app was in the background
+		if LaunchManager:
+			LaunchManager.clear_validation_cache()
+		var settings_view = UIManager.get_view("Settings")
+		if settings_view and settings_view.has_method("get_platforms_settings_view"):
+			var platforms_view = settings_view.get_platforms_settings_view()
+			if platforms_view and platforms_view.has_method("refresh_cards"):
+				platforms_view.refresh_cards()
+				print("[Main] Refreshed platform cards after resume")
 
 func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	"""Save the focused card index when a game launch is initiated."""

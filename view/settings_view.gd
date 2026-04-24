@@ -18,6 +18,9 @@ var _is_applying_preset: bool = false
 var _loaded_preset: ThemePreset = null
 var _current_settings_tab: int = -1
 
+# Platforms tab reference
+var _platforms_settings_view: PlatformsSettingsView = null
+
 func _ready():
 	view_name = "Settings"
 	_build_settings_view()
@@ -88,7 +91,11 @@ func _create_platforms_tab() -> Control:
 	platforms_view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	platforms_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	platforms_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_platforms_settings_view = platforms_view
 	return platforms_view
+
+func get_platforms_settings_view() -> PlatformsSettingsView:
+	return _platforms_settings_view
 
 func _create_gamenative_tab() -> Control:
 	var gamenative_view = preload("res://view/gamenative_settings_view.gd").new()

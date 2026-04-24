@@ -288,7 +288,7 @@
 		  "android": {
 			"action_type": "download_repo",
 			"github_repo": "azahar-emu/azahar",
-			"asset_pattern": "azahar-.*-android-vanilla\\.apk"
+			"asset_pattern": "azahar-android-vanilla-.*\\.apk"
 		  }
 		}
 	  },
@@ -313,11 +313,11 @@
 		  },
 		  "android": {
 			"action_type": "apk_install",
-			"package_name": "io.github.lime3ds.android",
-			"expected_file": "azahar-*-android-vanilla.apk",
+			"package_name": "org.azahar_emu.azahar",
+			"expected_file": "azahar-android-vanilla-*.apk",
 			"validate": {
 			  "action_type": "package_installed",
-			  "package": "io.github.lime3ds.android"
+			  "package": "org.azahar_emu.azahar"
 			}
 		  }
 		}
