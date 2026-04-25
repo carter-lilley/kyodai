@@ -31,6 +31,11 @@ var _is_first_focus: bool = true
 var _target_position: Vector2 = Vector2.ZERO
 var _target_size: Vector2 = Vector2.ZERO
 
+# Keyboard override - when virtual keyboard is open, lock indicator on the LineEdit
+var _keyboard_override: bool = false
+var _keyboard_target: Control = null
+var _keyboard_node: Node = null
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top_level = true
@@ -52,6 +57,52 @@ func _ready() -> void:
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 	
 	await get_tree().process_frame
+	var focused = get_viewport().gui_get_focus_owner()
+	if focused:
+		_on_focus_changed(focused)
+	
+	# Find and connect to the on-screen keyboard for override behavior
+	_connect_to_keyboard()
+
+func _connect_to_keyboard() -> void:
+	"""Find the OnscreenKeyboard node and connect to its signals."""
+	# Try to find the keyboard in the scene tree
+	var keyboard = get_tree().root.find_child("OnscreenKeyboard", true, false)
+	if keyboard == null:
+		# Try alternative names/paths
+		keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")
+	
+	if keyboard != null and keyboard.has_signal("keyboard_opened") and keyboard.has_signal("keyboard_closed"):
+		_keyboard_node = keyboard
+		if not keyboard.keyboard_opened.is_connected(_on_keyboard_opened):
+			keyboard.keyboard_opened.connect(_on_keyboard_opened)
+		if not keyboard.keyboard_closed.is_connected(_on_keyboard_closed):
+			keyboard.keyboard_closed.connect(_on_keyboard_closed)
+		
+		# If keyboard is already open, apply override immediately
+		if keyboard.visible and keyboard.has_method("is_keyboard_focus_object"):
+			var active_edit = keyboard.get("_active_line_edit")
+			if active_edit != null:
+				_on_keyboard_opened(active_edit)
+
+func _on_keyboard_opened(active_line_edit: LineEdit) -> void:
+	"""Lock the focus indicator on the active LineEdit while keyboard is open."""
+	_keyboard_override = true
+	_keyboard_target = active_line_edit
+	_target_control = active_line_edit
+	
+	# Show indicator on the LineEdit (normally it hides for LineEdit)
+	_update_shader_params()
+	visible = true
+	_snap_to_target()
+
+func _on_keyboard_closed() -> void:
+	"""Release keyboard override and return to normal focus behavior."""
+	_keyboard_override = false
+	_keyboard_target = null
+	visible = false
+	
+	# Let the next focus change restore normal behavior
 	var focused = get_viewport().gui_get_focus_owner()
 	if focused:
 		_on_focus_changed(focused)
@@ -83,6 +134,10 @@ func reconnect_viewport() -> void:
 		_on_focus_changed(focused)
 
 func _on_focus_changed(control: Control) -> void:
+	# If keyboard override is active, ignore all focus changes and stay on the LineEdit
+	if _keyboard_override and _keyboard_target != null and is_instance_valid(_keyboard_target):
+		return
+	
 	if not is_instance_valid(control):
 		visible = false
 		_target_control = null

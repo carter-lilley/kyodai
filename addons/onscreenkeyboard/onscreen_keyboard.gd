@@ -62,6 +62,8 @@ var style_special_keys:StyleBoxFlat = null
 ###########################
 
 signal layout_changed
+signal keyboard_opened(active_line_edit: LineEdit)
+signal keyboard_closed()
 
 ###########################
 ## PANEL 
@@ -76,6 +78,13 @@ func _enter_tree():
 	if not Input.joy_connection_changed.is_connected(_on_joy_connection_changed):
 		Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	
+	# Connect to viewport focus changes to catch deferred focus (e.g. TabContainer -> LineEdit)
+	var viewport = get_viewport()
+	if viewport != null:
+		if viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+			viewport.gui_focus_changed.disconnect(_on_viewport_focus_changed)
+		viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
+	
 	# Ensure keyboard always renders on top of other UI elements
 	z_index = 4096
 	
@@ -85,9 +94,50 @@ func _enter_tree():
 func _on_joy_connection_changed(device_id: int, connected: bool) -> void:
 	_controller_connected = Input.get_connected_joypads().size() > 0
 
+func _on_viewport_focus_changed(control: Control) -> void:
+	"""Handle focus changes from the viewport - catches deferred focus (e.g. TabContainer -> LineEdit)."""
+	if auto_show == false:
+		return
+	
+	if not _controller_connected:
+		return
+	
+	if control == null:
+		return
+	
+	# Ignore focus changes within the keyboard itself
+	if is_focus_within_keyboard(control):
+		return
+	
+	# If focus landed on a new LineEdit/TextEdit, open keyboard for it
+	if is_keyboard_focus_object(control):
+		# Don't reopen if focus is returning to the LineEdit we just dismissed from
+		if control == _dismissed_line_edit:
+			return
+		
+		# If keyboard is already open and focus moved to a different LineEdit, switch to it
+		if visible and _active_line_edit != null and control != _active_line_edit:
+			_active_line_edit = control
+			_previous_focus_object = control
+			_passthrough_caret_column = control.caret_column
+			keyboard_opened.emit(control)
+			return
+		
+		# If keyboard is hidden, open it for the newly focused LineEdit
+		if not visible:
+			_previous_focus_object = control
+			_active_line_edit = control
+			_passthrough_caret_column = control.caret_column
+			_show_keyboard()
+
 func reconnect_viewport() -> void:
 	"""Reconnect the keyboard to the current viewport's focus system.
 	Call this after reparenting the keyboard to a different viewport."""
+	# Disconnect from old viewport's focus signal
+	var old_viewport = get_viewport()
+	if old_viewport != null and old_viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+		old_viewport.gui_focus_changed.disconnect(_on_viewport_focus_changed)
+	
 	# Reset focus tracking to ensure keyboard detects focus in new viewport
 	reset_focus_tracking()
 	# Force a re-check of current focus owner in case something is already focused
@@ -95,6 +145,11 @@ func reconnect_viewport() -> void:
 		var current_focus = get_viewport().gui_get_focus_owner()
 		if current_focus != null and is_keyboard_focus_object(current_focus):
 			_previous_focus_object = current_focus
+	
+	# Connect to new viewport's focus signal
+	var new_viewport = get_viewport()
+	if new_viewport != null and not new_viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+		new_viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
 			_active_line_edit = current_focus
 			_show_keyboard()
 
@@ -139,11 +194,21 @@ func _input(event):
 			if _active_line_edit != null and _active_line_edit.get_global_rect().has_point(click_pos):
 				return
 			
-			# 3. Otherwise dismiss and return focus to the LineEdit
-			var line_edit_to_focus = _active_line_edit
+			# 3. Check if touch is on a DIFFERENT LineEdit -> switch to it
+			var clicked_line_edit = _find_line_edit_at_position(click_pos)
+			if clicked_line_edit != null and clicked_line_edit != _active_line_edit:
+				# Switch to the new LineEdit without dismissing keyboard
+				_active_line_edit = clicked_line_edit
+				_previous_focus_object = clicked_line_edit
+				_passthrough_caret_column = clicked_line_edit.caret_column
+				_dismissed_line_edit = null
+				# Emit signal so FocusIndicator updates
+				keyboard_opened.emit(clicked_line_edit)
+				return
+			
+			# 4. Otherwise dismiss
+			# Don't grab focus back - let the click naturally focus whatever was clicked
 			_hide_keyboard()
-			if line_edit_to_focus != null:
-				call_deferred("_deferred_focus_grab", line_edit_to_focus)
 
 
 func size_changed():
@@ -320,6 +385,9 @@ func _hide_keyboard(key_data=null):
 	
 	_is_hiding = true
 	
+	# Emit signal BEFORE clearing active line edit so listeners know which control to return to
+	keyboard_closed.emit()
+	
 	# Remember which LineEdit was active so we can suppress auto-reopen when
 	# focus returns to it after dismissal.
 	if _active_line_edit != null:
@@ -371,6 +439,9 @@ func _show_keyboard(key_data=null):
 	# Ensure keyboard renders on top of other UI elements
 	move_to_front()
 	change_visibility(true)
+	# Emit signal BEFORE grabbing focus on keys so listeners can prepare
+	if _active_line_edit != null:
+		keyboard_opened.emit(_active_line_edit)
 	if animate:
 		var new_y_pos = get_viewport().get_visible_rect().size.y - size.y
 		animate_position(Vector2(position.x, new_y_pos))
@@ -703,3 +774,31 @@ func is_focus_within_keyboard(focus_object):
 			return true
 		parent = parent.get_parent()
 	return false
+
+func _find_line_edit_at_position(pos: Vector2) -> LineEdit:
+	"""Find a LineEdit at the given screen position."""
+	# Search all LineEdits in the scene tree
+	return _find_line_edit_recursive(get_tree().root, pos)
+
+func _find_line_edit_recursive(node: Node, pos: Vector2) -> LineEdit:
+	"""Recursively search for a LineEdit at the given position."""
+	if node == null:
+		return null
+	
+	# Skip the keyboard itself and its children
+	if node == self:
+		return null
+	
+	# Check if this node is a LineEdit and contains the point
+	if node is LineEdit:
+		var control = node as Control
+		if control.get_global_rect().has_point(pos) and control.visible:
+			return control
+	
+	# Check children recursively
+	for child in node.get_children():
+		var result = _find_line_edit_recursive(child, pos)
+		if result != null:
+			return result
+	
+	return null
