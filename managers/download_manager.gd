@@ -249,7 +249,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 			
 			# Check if we have permission for this directory
 			# Extract the base tree URI (up to /tree/.../), not including subdirectories
-			var tree_uri = _extract_saf_tree_uri(destination)
+			var tree_uri = FileSystemManager.extract_saf_tree_uri(destination)
 			if tree_uri == "":
 				push_error("[DownloadManager] Could not extract tree URI from: " + destination)
 				NotificationManager.show_notification("Download Error: Invalid storage path format.", Notification.Type.ERROR, null, 5.0)
@@ -1929,7 +1929,7 @@ func _queue_saf_copy_to_thread(item: QueueItem):
 	# Extract tree URI and file name from SAF destination
 	var saf_path = item.saf_destination
 	var file_name = item.destination_path.get_file()
-	var tree_uri = _extract_saf_tree_uri(saf_path)
+	var tree_uri = FileSystemManager.extract_saf_tree_uri(saf_path)
 	
 	if tree_uri == "":
 		push_error("[DownloadManager] Could not extract tree URI from: " + saf_path)
@@ -2280,29 +2280,3 @@ func _cleanup_temp_dir(dir_path: String) -> void:
 	
 	dir.list_dir_end()
 	FileSystemManager.delete_dir(dir_path)
-
-## Extracts the base tree URI from a full SAF path
-## SAF format: content://authority/tree/<tree_id>/subdir1/subdir2/file
-## Returns: content://authority/tree/<tree_id> (no trailing slash)
-func _extract_saf_tree_uri(full_uri: String) -> String:
-	# Find the position of "/tree/"
-	var tree_pos = full_uri.find("/tree/")
-	if tree_pos == -1:
-		return ""
-	
-	# Find the next "/" after the tree ID (which marks the end of tree base)
-	# The tree ID is the segment immediately after /tree/
-	var after_tree = tree_pos + 6  # Length of "/tree/"
-	var next_slash = full_uri.find("/", after_tree)
-	
-	# If there's no slash after tree ID, the entire string is the tree base
-	if next_slash == -1:
-		# Remove trailing slash if present to match persistSafPermission format
-		if full_uri.ends_with("/"):
-			return full_uri.substr(0, full_uri.length() - 1)
-		return full_uri
-	
-	# Extract up to (but NOT including) the slash after tree ID
-	# This matches the format that persistSafPermission receives
-	var tree_base = full_uri.substr(0, next_slash)
-	return tree_base

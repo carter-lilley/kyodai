@@ -5,6 +5,15 @@ extends Manager
 
 const SAF_PREFIX = "content://"
 
+## Path format options for resolve_path()
+enum PathFormat {
+	DEFAULT,      ## Resolve placeholders, normalize slashes, keep SAF/virtual as-is
+	REAL_PATH,    ## Convert SAF → real filesystem path, globalize user://
+	ABSOLUTE,     ## Full absolute path (globalize + SAF→real)
+	NORMALIZED,   ## Just clean slashes and ./ ../
+	PLATFORM      ## Platform-appropriate separators (\ on Windows, / elsewhere)
+}
+
 ## Checks if a path is a SAF (Storage Access Framework) URI
 static func is_saf_path(path: String) -> bool:
 	return path.begins_with(SAF_PREFIX)
@@ -68,8 +77,22 @@ static func _normalize_saf_path(path: String) -> String:
 	
 	return tree_uri + "/" + "/".join(normalized_parts)
 
-## Joins two path components safely, handling trailing/leading slashes
-static func join_paths(a: String, b: String) -> String:
+## Joins path components safely, handling trailing/leading slashes
+## Supports up to 6 path segments. For more, chain calls.
+static func join_paths(path1: String, path2: String, path3: String = "", path4: String = "", path5: String = "", path6: String = "") -> String:
+	var result = _join_paths_2(path1, path2)
+	if path3 != "":
+		result = _join_paths_2(result, path3)
+	if path4 != "":
+		result = _join_paths_2(result, path4)
+	if path5 != "":
+		result = _join_paths_2(result, path5)
+	if path6 != "":
+		result = _join_paths_2(result, path6)
+	return result
+
+## Internal: Joins two path components
+static func _join_paths_2(a: String, b: String) -> String:
 	if a.is_empty():
 		return b
 	if b.is_empty():
@@ -93,6 +116,103 @@ static func join_paths(a: String, b: String) -> String:
 		b = b.substr(1)
 	
 	return result + b
+
+## Universal path resolver - handles all path formats and transformations
+##
+## Options:
+##   "base_dir": String        - REQUIRED for relative paths (errors if missing)
+##   "placeholders": Dictionary - {"{key}": "value", ...} for custom placeholders
+##   "format": PathFormat      - Output format (default: DEFAULT)
+##   "platform": String        - Override platform for PLATFORM format
+##
+## Returns empty string on error (with push_error)
+static func resolve_path(path: String, options: Dictionary = {}) -> String:
+	if path.is_empty():
+		return ""
+	
+	var result = path
+	var format = options.get("format", PathFormat.DEFAULT)
+	
+	# Step 1: Resolve placeholders
+	var placeholders = options.get("placeholders", {})
+	for key in placeholders:
+		result = result.replace(key, str(placeholders[key]))
+	
+	# Step 2: Handle relative paths
+	if not _is_absolute_path(result):
+		var base_dir = options.get("base_dir", "")
+		if base_dir.is_empty():
+			push_error("[FileSystemManager] Relative path requires base_dir: " + path)
+			return ""
+		result = join_paths(base_dir, result)
+	
+	# Step 3: Apply format
+	match format:
+		PathFormat.DEFAULT:
+			result = normalize_path(result)
+		PathFormat.NORMALIZED:
+			result = normalize_path(result)
+		PathFormat.REAL_PATH:
+			result = _resolve_saf_to_real_path(normalize_path(result))
+		PathFormat.ABSOLUTE:
+			result = _resolve_saf_to_real_path(ProjectSettings.globalize_path(normalize_path(result)))
+		PathFormat.PLATFORM:
+			result = normalize_path(result)
+			var platform = options.get("platform", "")
+			if platform == "":
+				if Engine.has_singleton("PlatformManager"):
+					platform = PlatformManager.get_platform_name()
+				else:
+					platform = OS.get_name().to_lower()
+			if platform == "windows":
+				result = result.replace("/", "\\")
+			else:
+				result = result.replace("\\", "/")
+		_:
+			result = normalize_path(result)
+	
+	return result
+
+## Convenience wrapper for emulator paths
+## Automatically provides {emulator_dir} placeholder + base_dir
+static func resolve_emulator_path(path: String, emulator_base_dir: String, format: PathFormat = PathFormat.DEFAULT) -> String:
+	return resolve_path(path, {
+		"base_dir": emulator_base_dir,
+		"placeholders": {"{emulator_dir}": emulator_base_dir},
+		"format": format
+	})
+
+## Checks if a path is absolute (not relative)
+static func _is_absolute_path(path: String) -> bool:
+	if path.is_empty():
+		return false
+	return path.begins_with("/") \
+		or path.begins_with("content://") \
+		or path.begins_with("user://") \
+		or path.begins_with("res://") \
+		or (path.length() > 1 and path[1] == ":")
+
+## Converts a SAF URI to a real filesystem path when possible
+static func _resolve_saf_to_real_path(path: String) -> String:
+	if not is_saf_path(path):
+		return path
+	
+	print("[FileSystemManager] _resolve_saf_to_real_path called with: " + path)
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_warning("[FileSystemManager] PackageChecker plugin is null")
+		return path
+	
+	print("[FileSystemManager] Calling getRealPathFromSafUri...")
+	var real_path = plugin.getRealPathFromSafUri(path)
+	print("[FileSystemManager] getRealPathFromSafUri returned: '" + real_path + "'")
+	
+	if real_path != "" and real_path != path:
+		return real_path
+	
+	push_warning("[FileSystemManager] getRealPathFromSafUri failed, returning original path")
+	return path
 
 ## Gets the size of a file in bytes (works with both regular paths and SAF URIs)
 ## Returns -1 if file doesn't exist or size cannot be determined
@@ -382,7 +502,7 @@ static func _saf_move(source_path: String, dest_path: String) -> bool:
 				return false
 		
 		# Copy temp file to destination SAF location
-		var tree_uri = _extract_saf_tree_uri(dest_path)
+		var tree_uri = extract_saf_tree_uri(dest_path)
 		var filename = _get_saf_filename(dest_path)
 		
 		if tree_uri.is_empty() or filename.is_empty():
@@ -439,7 +559,7 @@ static func _saf_rename(source_path: String, dest_name: String) -> bool:
 			return false
 		
 		# Copy temp file to new SAF location
-		var tree_uri = _extract_saf_tree_uri(dest_path)
+		var tree_uri = extract_saf_tree_uri(dest_path)
 		var filename = _get_saf_filename(dest_path)
 		
 		if tree_uri.is_empty() or filename.is_empty():
@@ -491,7 +611,7 @@ static func _saf_move_dir_recursive(source_dir: String, dest_dir: String) -> boo
 				return false
 			
 			# Copy to destination
-			var tree_uri = _extract_saf_tree_uri(dest_item)
+			var tree_uri = extract_saf_tree_uri(dest_item)
 			var filename = _get_saf_filename(dest_item)
 			
 			if not plugin.call("copyFileToSaf", temp_path, tree_uri, filename):
@@ -656,7 +776,7 @@ static func commit_saf_write(temp_path: String) -> bool:
 		return false
 	
 	# Extract tree URI and filename from SAF path
-	var tree_uri = _extract_saf_tree_uri(saf_path)
+	var tree_uri = extract_saf_tree_uri(saf_path)
 	var filename = _get_saf_filename(saf_path)
 	
 	if tree_uri.is_empty() or filename.is_empty():
@@ -674,7 +794,8 @@ static func commit_saf_write(temp_path: String) -> bool:
 
 ## Extracts the tree URI from a full SAF path
 ## Example: content://authority/tree/treeId/subdir/file -> content://authority/tree/treeId
-static func _extract_saf_tree_uri(full_uri: String) -> String:
+## Extracts the base tree URI from a SAF path
+static func extract_saf_tree_uri(full_uri: String) -> String:
 	var tree_pos = full_uri.find("/tree/")
 	if tree_pos == -1:
 		return ""
@@ -722,7 +843,7 @@ static func copy_to_saf(source_path: String, dest_saf_path: String) -> bool:
 		abs_source = ProjectSettings.globalize_path(source_path)
 	
 	# Extract tree URI and filename
-	var tree_uri = _extract_saf_tree_uri(dest_saf_path)
+	var tree_uri = extract_saf_tree_uri(dest_saf_path)
 	var filename = _get_saf_filename(dest_saf_path)
 	
 	if tree_uri.is_empty() or filename.is_empty():
@@ -818,7 +939,7 @@ static func write_file_bytes(path: String, data: PackedByteArray) -> bool:
 ## Internal helper for SAF binary file writing
 static func _saf_write_file_bytes(saf_path: String, data: PackedByteArray) -> bool:
 	var plugin = _get_plugin()
-	if plugin and plugin.has_method("writeSafFileBytes"):
+	if plugin:
 		return plugin.call("writeSafFileBytes", saf_path, data)
 	
 	# Fallback: write to temp then copy

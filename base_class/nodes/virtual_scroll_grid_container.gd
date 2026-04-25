@@ -408,6 +408,10 @@ func _get_visible_count() -> int:
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		return (visible_cols * items_per_line) + 1
 
+## Returns the number of items that fit in the current viewport
+func get_visible_count() -> int:
+	return _get_visible_count()
+
 func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL

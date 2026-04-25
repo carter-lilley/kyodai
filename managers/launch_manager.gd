@@ -21,17 +21,6 @@ func _get_vita3k_android_data_path() -> String:
 			return setting.value.rstrip("/")
 	return "/storage/emulated/0/Android/data/org.vita3k.emulator/files/vita"
 
-## Converts a SAF content:// URI to a real filesystem path when possible.
-## Falls back to the original path if conversion fails.
-func _resolve_saf_to_real_path(path: String) -> String:
-	if PlatformManager.is_android() and path.begins_with("content://"):
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin and plugin.has_method("getRealPathFromSafUri"):
-			var real_path = plugin.getRealPathFromSafUri(path)
-			if real_path != "":
-				return real_path
-	return path
-
 ## Gets the full path to an emulator's directory
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
@@ -42,88 +31,7 @@ func _get_emulator_directory(emulator_id: String) -> String:
 			return vita_path + "/"
 	
 	var base_dir = get_emulators_directory()
-	
-	# Ensure proper path separator
-	if base_dir.ends_with("/") or base_dir.ends_with("\\"):
-		return base_dir + emulator_id + "/"
-	else:
-		return base_dir + "/" + emulator_id + "/"
-
-## Resolves {emulator_dir} placeholders in paths
-func _resolve_emulator_path(path: String, emulator_id: String) -> String:
-	if path.begins_with("{emulator_dir}"):
-		return path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
-	return path
-
-## Checks if a path is absolute (not relative to emulator dir)
-## Handles: Unix absolute (/...), Windows absolute (C:\...), SAF URIs (content://),
-## Godot virtual paths (user://, res://)
-func _is_absolute_path(path: String) -> bool:
-	if path.is_empty():
-		return false
-	return path.begins_with("/") \
-		or path.begins_with("content://") \
-		or path.begins_with("user://") \
-		or path.begins_with("res://") \
-		or (path.length() > 1 and path[1] == ":")
-
-## Universal path resolver for install steps
-## 1. Resolves {emulator_dir} templates
-## 2. Returns absolute paths as-is
-## 3. Resolves relative paths against emulator directory
-func _resolve_install_path(path: String, emulator_id: String) -> String:
-	# Step 1: Resolve {emulator_dir} template
-	if path.begins_with("{emulator_dir}"):
-		path = path.replace("{emulator_dir}", _get_emulator_directory(emulator_id).rstrip("/"))
-	
-	# Step 2: If already absolute, return as-is
-	if _is_absolute_path(path):
-		return path
-	
-	# Step 3: Handle special relative path "."
-	if path == ".":
-		return _get_emulator_directory(emulator_id).rstrip("/")
-	
-	# Step 4: Prepend emulator directory for relative paths
-	return _get_emulator_directory(emulator_id) + path
-
-## Resolves validation paths (handles {emulator_dir} and absolute paths)
-## DEPRECATED: Use _resolve_install_path() instead for consistency
-func _resolve_validation_path(emulator_id: String, path: String) -> String:
-	return _resolve_install_path(path, emulator_id)
-
-## Extracts the base tree URI from a SAF path for permission checks
-func _extract_saf_tree_uri(full_uri: String) -> String:
-	var tree_pos = full_uri.find("/tree/")
-	if tree_pos == -1:
-		return ""
-	
-	var after_tree = tree_pos + 6
-	
-	# For SAF URIs with encoded paths, the tree URI includes everything up to the last component
-	var last_sep = full_uri.rfind("%2F")
-	if last_sep == -1:
-		last_sep = full_uri.rfind("/")
-	
-	if last_sep > after_tree:
-		return full_uri.substr(0, last_sep)
-	
-	return full_uri
-
-## Gets the subdirectory portion from a SAF path
-func _get_saf_subdirectory(full_uri: String) -> String:
-	var tree_pos = full_uri.find("/tree/")
-	if tree_pos == -1:
-		return ""
-	
-	var last_sep = full_uri.rfind("%2F")
-	if last_sep == -1:
-		last_sep = full_uri.rfind("/")
-	
-	if last_sep > tree_pos + 6:
-		return full_uri.substr(last_sep + 1)
-	
-	return ""
+	return FileSystemManager.join_paths(base_dir, emulator_id)
 
 # Registry data
 var _emulator_registry: Dictionary = {}
@@ -750,7 +658,7 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 		# Fallback: construct path from components (for legacy or if file_path not set)
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		var root_path = root_folder.value if root_folder else "user://roms/"
-		intent.rom_path = root_path + "/" + game.platform_slug + "/" + active_file_name
+		intent.rom_path = FileSystemManager.join_paths(root_path, game.platform_slug, active_file_name)
 	
 	intent.platform_slug = game.platform_slug
 	
@@ -819,17 +727,12 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var install_path = get_emulator_install_path(intent.emulator_id)
 		
 		# Convert paths to absolute system paths for OS.execute
-		var global_install_path = ProjectSettings.globalize_path(install_path)
-		var global_rom_path = ProjectSettings.globalize_path(intent.rom_path)
-		
-		# Normalize paths to remove double slashes
-		global_install_path = global_install_path.replace("//", "/")
-		global_rom_path = global_rom_path.replace("//", "/")
-		
-		# On Windows, some emulators require native backslash paths
+		var format = FileSystemManager.PathFormat.ABSOLUTE
 		if PlatformManager.is_windows() and emulator.get("requires_native_paths", false):
-			global_install_path = global_install_path.replace("/", "\\")
-			global_rom_path = global_rom_path.replace("/", "\\")
+			format = FileSystemManager.PathFormat.PLATFORM
+		
+		var global_install_path = FileSystemManager.resolve_path(install_path, {"format": format})
+		var global_rom_path = FileSystemManager.resolve_path(intent.rom_path, {"format": format})
 		
 		# Build absolute core path
 		var install_dir = global_install_path.get_base_dir()
@@ -1313,7 +1216,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
 		return
 	
-	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
+	var destination_path = FileSystemManager.join_paths(root_folder.value, game.platform_slug, active_file_name)
 	
 	NotificationManager.show_notification("Downloading " + game.get_display_name() + "...", Notification.Type.INFO)
 	
@@ -1499,36 +1402,39 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		return false
 	
 	# Check if we need MANAGE_EXTERNAL_STORAGE permission for FileProvider to work with SD cards
-	if plugin.has_method("hasManageExternalStoragePermission"):
-		if not plugin.hasManageExternalStoragePermission():
-			push_warning("[LaunchManager] MANAGE_EXTERNAL_STORAGE permission not granted - FileProvider may fail for SD card files")
-			# Show dialog to user explaining they need to grant the permission manually
-			if UIManager:
-				var dialog = ConfirmationDialog.new()
-				dialog.title = "Permission Required"
-				dialog.dialog_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
-				dialog.ok_button_text = "Open Settings"
-				dialog.cancel_button_text = "Cancel"
-				
-				var on_confirmed = func():
-					if plugin.has_method("requestManageExternalStoragePermission"):
-						plugin.requestManageExternalStoragePermission()
-				
-				dialog.confirmed.connect(on_confirmed)
-				UIManager.add_child(dialog)
-				dialog.popup_centered()
-			return false
+	if not plugin.hasManageExternalStoragePermission():
+		push_warning("[LaunchManager] MANAGE_EXTERNAL_STORAGE permission not granted - FileProvider may fail for SD card files")
+		# Show dialog to user explaining they need to grant the permission manually
+		if UIManager:
+			var dialog = ConfirmationDialog.new()
+			dialog.title = "Permission Required"
+			dialog.dialog_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
+			dialog.ok_button_text = "Open Settings"
+			dialog.cancel_button_text = "Cancel"
+			
+			var on_confirmed = func():
+				plugin.requestManageExternalStoragePermission()
+			
+			dialog.confirmed.connect(on_confirmed)
+			UIManager.add_child(dialog)
+			dialog.popup_centered()
+		return false
 	
 	# Format the core path for RetroArch
 	var core_path = ""
 	
 	# Check if using CoreSideloadActivity (for testing sideloaded cores)
 	if intent.android_class == "com.retroarch.browser.debug.CoreSideloadActivity":
-		# Use downloaded core from shared storage
+		# Use downloaded core from emulator directory
 		if intent.core_name != "":
 			var core_filename = intent.core_name + "_libretro_android.so"
-			# Cores are downloaded to shared RetroArch directory
-			core_path = "/storage/emulated/0/RetroArch/cores/" + core_filename
+			# Cores are downloaded to {emulator_dir}/cores
+			var emulator_dir = _get_emulator_directory(intent.emulator_id)
+			core_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, emulator_dir, FileSystemManager.PathFormat.REAL_PATH)
+			print("[LaunchManager] Core path resolved to: " + core_path)
+			# Also log what the original SAF path was for debugging
+			var original_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, emulator_dir, FileSystemManager.PathFormat.DEFAULT)
+			print("[LaunchManager] Core path (original SAF): " + original_path)
 	else:
 		# Regular RetroArch launch - use internal core path
 		if intent.core_name != "":
@@ -1770,11 +1676,11 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 				10.0
 			)
 			return false
-		var absolute_apk_path = ProjectSettings.globalize_path(temp_apk_path)
+		var absolute_apk_path = FileSystemManager.resolve_path(temp_apk_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 		install_uri = "file://" + absolute_apk_path
 		print("[LaunchManager] Using temp APK for install: " + temp_apk_path)
 	else:
-		var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
+		var absolute_apk_path = FileSystemManager.resolve_path(apk_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 		install_uri = "file://" + absolute_apk_path
 	
 	print("[LaunchManager] Installing APK: " + apk_path)
@@ -1795,7 +1701,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		
 		# Try to open the folder
 		if not is_saf_apk:
-			var folder_result = OS.shell_open(ProjectSettings.globalize_path(emulator_dir))
+			var folder_result = OS.shell_open(FileSystemManager.resolve_path(emulator_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE}))
 			if folder_result == Error.OK:
 				print("[LaunchManager] Opened folder containing APK")
 		
@@ -1834,7 +1740,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var extract_to = batch_config.get("extract_to", ".")
 	
 	# Resolve {emulator_dir} templates
-	extract_to = _resolve_emulator_path(extract_to, emulator_id)
+	extract_to = FileSystemManager.resolve_emulator_path(extract_to, _get_emulator_directory(emulator_id))
 	
 	if base_url == "":
 		push_error("[LaunchManager] No base_url specified for batch_url_download")
@@ -1881,13 +1787,13 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		var full_url = base_url + filename
 		
 		# Resolve extract directory using universal path resolver
-		var extract_dir = _resolve_install_path(extract_to, emulator_id)
+		var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, _get_emulator_directory(emulator_id))
 		
 		# Normalize the path to remove "." and ".." components
 		extract_dir = FileSystemManager.normalize_path(extract_dir)
 		
 		# Download to emulator directory (for extraction, then delete)
-		var destination_path = _get_emulator_directory(emulator_id) + filename
+		var destination_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), filename)
 		
 		# Queue download without auto-extract (extraction happens in separate step)
 		# suppress_notification=true to avoid dozens of individual notifications
@@ -1953,7 +1859,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var install_steps = emulator.get("install", [])
 	
 	# Resolve path using universal resolver
-	var extract_dir = _resolve_install_path(extract_to, emulator_id)
+	var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, _get_emulator_directory(emulator_id))
 	
 	# Normalize the path to remove "." and ".." components
 	extract_dir = FileSystemManager.normalize_path(extract_dir)
@@ -2198,14 +2104,14 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			var file_path = validate_config.get("file", "")
 			if file_path == "":
 				return true
-			var full_path = _resolve_validation_path(emulator_id, file_path)
+			var full_path = FileSystemManager.resolve_emulator_path(file_path, _get_emulator_directory(emulator_id))
 			return FileSystemManager.file_exists(full_path)
 		
 		"folder_exists":
 			var folder_path = validate_config.get("path", "")
 			if folder_path == "":
 				return true
-			var full_path = _resolve_validation_path(emulator_id, folder_path)
+			var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
 			return FileSystemManager.dir_exists(full_path)
 		
 		"files_exist":
@@ -2217,7 +2123,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if files_array.size() > 0:
 				# Check if all files in the array exist
 				for file_name in files_array:
-					var full_file_path = _resolve_validation_path(emulator_id, file_name)
+					var full_file_path = FileSystemManager.resolve_emulator_path(file_name, _get_emulator_directory(emulator_id))
 					if not FileSystemManager.file_exists(full_file_path):
 						return false
 				return true
@@ -2225,7 +2131,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if folder_path == "":
 				return true
 			
-			var full_path = _resolve_validation_path(emulator_id, folder_path)
+			var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
 			
 			# For all paths (including SAF), use FileSystemManager for listing
 			var entries = FileSystemManager.list_dir(full_path)
@@ -2536,7 +2442,7 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 	
 	for folder_path in folders:
 		# Resolve path using universal resolver
-		var full_path = _resolve_install_path(folder_path, emulator_id)
+		var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
 		
 		# Use FileSystemManager for all directory creation (handles SAF on Android)
 		if not FileSystemManager.make_dir_recursive(full_path):
@@ -2553,7 +2459,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 	
 	# Get the emulator directory path for placeholder resolution
 	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
-	var global_emulator_dir = ProjectSettings.globalize_path(emulator_dir)
+	var global_emulator_dir = FileSystemManager.resolve_path(emulator_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 	
 	for file_entry in files:
 		var file_name = ""
@@ -2568,7 +2474,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		if file_name == "":
 			continue
 		
-		var full_path = _resolve_install_path(file_name, emulator_id)
+		var full_path = FileSystemManager.resolve_emulator_path(file_name, _get_emulator_directory(emulator_id))
 		
 		# Resolve placeholders in content
 		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
@@ -2609,7 +2515,7 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	if file_path == "" or edits.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
-	var full_path = _resolve_install_path(file_path, emulator_id)
+	var full_path = FileSystemManager.resolve_emulator_path(file_path, _get_emulator_directory(emulator_id))
 	
 	if not FileSystemManager.file_exists(full_path):
 		push_error("[LaunchManager] File not found for editing: " + full_path)
@@ -2940,7 +2846,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
 	else:
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		var root_path = root_folder.value if root_folder else "user://roms/"
-		temp_intent.rom_path = root_path + "/" + game.platform_slug + "/" + game.get_active_file_name()
+		temp_intent.rom_path = FileSystemManager.join_paths(root_path, game.platform_slug, game.get_active_file_name())
 		print("[LaunchManager] _prepare_game_for_launch: Constructed path = " + temp_intent.rom_path)
 	
 	temp_intent.emulator_id = emulator_id
@@ -3463,7 +3369,7 @@ func _find_param_sfo_recursive(search_dir: String) -> String:
 	
 	while file_name != "":
 		if file_name != "." and file_name != "..":
-			var full_path := search_dir + "/" + file_name
+			var full_path := FileSystemManager.join_paths(search_dir, file_name)
 			
 			# Check if this is the PARAM.SFO file we're looking for
 			if file_name == "PARAM.SFO" and FileSystemManager.file_exists(full_path):
@@ -3504,8 +3410,8 @@ func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
 	
 	while file_name != "":
 		if file_name != "." and file_name != "..":
-			var source_path := source_dir + "/" + file_name
-			var dest_path := dest_dir + "/" + file_name
+			var source_path := FileSystemManager.join_paths(source_dir, file_name)
+			var dest_path := FileSystemManager.join_paths(dest_dir, file_name)
 			
 			if FileSystemManager.dir_exists(source_path):
 				# Recursively copy subdirectory
@@ -3565,7 +3471,7 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 			print("[LaunchManager] RPCS3: Stopping flatten - not a single wrapper (" + str(entries.size()) + " entries)")
 			break
 		
-		var potential_wrapper: String = install_path + "/" + entries[0]
+		var potential_wrapper: String = FileSystemManager.join_paths(install_path, entries[0])
 		
 		# Only flatten if it's a directory
 		if not FileSystemManager.dir_exists(potential_wrapper):
@@ -3573,9 +3479,9 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 			break
 		
 		# Check if this directory contains game indicators
-		var has_param_sfo = FileSystemManager.file_exists(potential_wrapper + "/PARAM.SFO")
-		var has_disc_sfb = FileSystemManager.file_exists(potential_wrapper + "/PS3_DISC.SFB")
-		var has_ps3_game = FileSystemManager.dir_exists(potential_wrapper + "/PS3_GAME")
+		var has_param_sfo = FileSystemManager.file_exists(FileSystemManager.join_paths(potential_wrapper, "PARAM.SFO"))
+		var has_disc_sfb = FileSystemManager.file_exists(FileSystemManager.join_paths(potential_wrapper, "PS3_DISC.SFB"))
+		var has_ps3_game = FileSystemManager.dir_exists(FileSystemManager.join_paths(potential_wrapper, "PS3_GAME"))
 		
 		if has_param_sfo or has_disc_sfb or has_ps3_game:
 			print("[LaunchManager] RPCS3: Found game indicators in: " + entries[0])
@@ -3588,8 +3494,8 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 				var wrapper_file := wrapper_dir.get_next()
 				while wrapper_file != "":
 					if wrapper_file != "." and wrapper_file != "..":
-						var source := potential_wrapper + "/" + wrapper_file
-						var dest := install_path + "/" + wrapper_file
+						var source := FileSystemManager.join_paths(potential_wrapper, wrapper_file)
+						var dest := FileSystemManager.join_paths(install_path, wrapper_file)
 						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from game folder")
 						FileSystemManager.move(source, dest)
 					wrapper_file = wrapper_dir.get_next()
@@ -3608,8 +3514,8 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 				var wrapper_file := wrapper_dir.get_next()
 				while wrapper_file != "":
 					if wrapper_file != "." and wrapper_file != "..":
-						var source := potential_wrapper + "/" + wrapper_file
-						var dest := install_path + "/" + wrapper_file
+						var source := FileSystemManager.join_paths(potential_wrapper, wrapper_file)
+						var dest := FileSystemManager.join_paths(install_path, wrapper_file)
 						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from wrapper")
 						FileSystemManager.move(source, dest)
 					wrapper_file = wrapper_dir.get_next()
@@ -3874,7 +3780,7 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	# Step 2: Determine extraction path (next to the ZIP in the ps4 roms folder)
 	var rom_parent_dir = rom_path.get_base_dir()
-	var extract_path = rom_parent_dir + "/" + title_id
+	var extract_path = FileSystemManager.join_paths(rom_parent_dir, title_id)
 	print("[LaunchManager] shadPS4: Extraction path: " + extract_path)
 	
 	# Step 3: Check if already extracted

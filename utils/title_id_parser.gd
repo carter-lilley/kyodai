@@ -83,10 +83,10 @@ static func _resolve_zip_path(zip_path: String) -> String:
 	if FileSystemManager.file_exists(zip_path):
 		return zip_path
 	
-	# Try globalized path (resolves user://, res://, etc.)
-	var global_path = ProjectSettings.globalize_path(zip_path)
-	if global_path != zip_path and FileSystemManager.file_exists(global_path):
-		return global_path
+	# Try absolute path (resolves user://, res://, etc.)
+	var abs_path = FileSystemManager.resolve_path(zip_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	if abs_path != zip_path and FileSystemManager.file_exists(abs_path):
+		return abs_path
 	
 	return ""
 
@@ -933,8 +933,8 @@ static func _chd_read_sector_binary(chd_path: String, lba: int) -> PackedByteArr
 	if reader_path == "":
 		return PackedByteArray()
 	
-	var abs_reader = ProjectSettings.globalize_path(reader_path)
-	var abs_chd = ProjectSettings.globalize_path(chd_path)
+	var abs_reader = FileSystemManager.resolve_path(reader_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	var abs_chd = FileSystemManager.resolve_path(chd_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 	
 	# Create temp file for sector output
 	var temp_path = OS.get_user_data_dir() + "/chd_sector_" + str(lba) + ".tmp"
@@ -1263,7 +1263,7 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 	if not DirAccess.dir_exists_absolute(temp_dir):
 		DirAccess.make_dir_recursive_absolute(temp_dir)
 	
-	var extract_args = ["e", zip_path, sfo_path, "-o" + ProjectSettings.globalize_path(temp_dir), "-y"]
+	var extract_args = ["e", zip_path, sfo_path, 		"-o" + FileSystemManager.resolve_path(temp_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE}), "-y"]
 	exit_code = OS.execute(binary_path, extract_args, output, true)
 	
 	if exit_code != 0:
@@ -1596,8 +1596,8 @@ static func _cso_extract_psp_game_id(rom_path: String) -> String:
 	if reader_path == "":
 		return ""
 	
-	var abs_reader = ProjectSettings.globalize_path(reader_path)
-	var abs_cso = ProjectSettings.globalize_path(rom_path)
+	var abs_reader = FileSystemManager.resolve_path(reader_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	var abs_cso = FileSystemManager.resolve_path(rom_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 	
 	var output = []
 	var args = [abs_cso]

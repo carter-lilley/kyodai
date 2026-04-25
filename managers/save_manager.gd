@@ -74,14 +74,18 @@ func resolve_save_directory(emulator_id: String) -> String:
 	if dir == "":
 		return ""
 	
-	if dir.begins_with("{emulator_dir}"):
-		var emulator_dir = LaunchManager._get_emulator_directory(emulator_id).rstrip("/")
-		dir = dir.replace("{emulator_dir}", emulator_dir)
+	# Use universal path resolver with emulator and games placeholders
+	var emulator_dir = LaunchManager._get_emulator_directory(emulator_id)
+	var games_folder_setting = SettingsManager.get_setting("games_root_folder")
+	var games_dir = games_folder_setting.value if games_folder_setting else "user://roms"
 	
-	if dir.begins_with("{games_dir}"):
-		var games_folder_setting = SettingsManager.get_setting("games_root_folder")
-		var games_dir = games_folder_setting.value.rstrip("/") if games_folder_setting else "user://roms"
-		dir = dir.replace("{games_dir}", games_dir)
+	dir = FileSystemManager.resolve_path(dir, {
+		"base_dir": emulator_dir,
+		"placeholders": {
+			"{emulator_dir}": emulator_dir.rstrip("/"),
+			"{games_dir}": games_dir.rstrip("/")
+		}
+	})
 	
 	return dir.rstrip("/") + "/"
 
@@ -156,13 +160,14 @@ func discover_local_folder_save(directory: String, title_id: String) -> Array[Di
 	
 	var id0_dirs = FileSystemManager.list_dir(directory)
 	for id0 in id0_dirs:
-		if id0 == "." or id0 == ".." or not FileSystemManager.dir_exists(directory + id0):
+		if id0 == "." or id0 == ".." or not FileSystemManager.dir_exists(FileSystemManager.join_paths(directory, id0)):
 			continue
-		var id1_dirs = FileSystemManager.list_dir(directory + id0 + "/")
+		var id0_path = FileSystemManager.join_paths(directory, id0)
+		var id1_dirs = FileSystemManager.list_dir(id0_path)
 		for id1 in id1_dirs:
-			if id1 == "." or id1 == ".." or not FileSystemManager.dir_exists(directory + id0 + "/" + id1):
+			if id1 == "." or id1 == ".." or not FileSystemManager.dir_exists(FileSystemManager.join_paths(id0_path, id1)):
 				continue
-			var title_path = directory + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id
+			var title_path = FileSystemManager.join_paths(id0_path, id1, "title", category, short_title_id)
 			if FileSystemManager.dir_exists(title_path):
 				var mtime = _get_folder_mtime(title_path)
 				results.append({
@@ -187,7 +192,7 @@ func discover_local_cemu_save(directory: String, title_id: String) -> Array[Dict
 	var prefixes: Array[String] = ["00050000", "00050010", "0005000e", "0005000c"]
 	
 	for prefix in prefixes:
-		var save_path = directory + prefix + "/" + short_title_id
+		var save_path = FileSystemManager.join_paths(directory, prefix, short_title_id)
 		if FileSystemManager.dir_exists(save_path):
 			var mtime = _get_folder_mtime(save_path)
 			results.append({
@@ -213,7 +218,7 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 	for region in regions:
 		var card_dirs: Array[String] = ["Card A", "Card B"]
 		for card in card_dirs:
-			var card_path = directory + "GC/" + region + "/" + card + "/"
+			var card_path = FileSystemManager.join_paths(directory, "GC", region, card)
 			if not FileSystemManager.dir_exists(card_path):
 				continue
 			
@@ -244,7 +249,7 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	if directory == "" or game_id == "":
 		return results
 	
-	var title_path = directory + "Wii/title/"
+	var title_path = FileSystemManager.join_paths(directory, "Wii", "title")
 	if not FileSystemManager.dir_exists(title_path):
 		return results
 	
@@ -254,11 +259,11 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	for prefix in prefix_dirs:
 		if prefix == "." or prefix == "..":
 			continue
-		var prefix_path = title_path + prefix + "/"
+		var prefix_path = FileSystemManager.join_paths(title_path, prefix)
 		if not FileSystemManager.dir_exists(prefix_path):
 			continue
 		
-		var game_path = prefix_path + hex_id
+		var game_path = FileSystemManager.join_paths(prefix_path, hex_id)
 		if FileSystemManager.dir_exists(game_path):
 			var mtime = _get_folder_mtime(game_path)
 			results.append({
@@ -342,7 +347,7 @@ func discover_local_fuzzy_folder_save(directory: String, search_id: String, recu
 			if item == "." or item == "..":
 				continue
 			
-			var full_path = current.rstrip("/") + "/" + item
+			var full_path = FileSystemManager.join_paths(current, item)
 			
 			if FileSystemManager.dir_exists(full_path):
 				var folder_name = item.to_upper()
@@ -564,7 +569,7 @@ func _get_folder_mtime(dir_path: String) -> int:
 		for item in items:
 			if item == "." or item == "..":
 				continue
-			var full = current.rstrip("/") + "/" + item
+			var full = FileSystemManager.join_paths(current, item)
 			if FileSystemManager.dir_exists(full):
 				dirs_to_check.append(full)
 			elif FileSystemManager.file_exists(full):
@@ -644,12 +649,12 @@ func _resolve_default_save_path(save_dir: String, title_id: String) -> Dictionar
 	var id0 = _find_first_subdir(save_dir)
 	if id0 == "":
 		return {"path": "", "error": "no_id0"}
-	var id1 = _find_first_subdir(save_dir + id0 + "/")
+	var id1 = _find_first_subdir(FileSystemManager.join_paths(save_dir, id0))
 	if id1 == "":
 		return {"path": "", "error": "no_id1"}
 	var category = title_id.substr(0, 8)
 	return {
-		"path": save_dir + id0 + "/" + id1 + "/title/" + category + "/" + short_title_id,
+		"path": FileSystemManager.join_paths(save_dir, id0, id1, "title", category, short_title_id),
 		"error": ""
 	}
 
@@ -659,33 +664,33 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 	var title_id = game.get_active_title_id()
 	match emulator_id:
 		"cemu":
-			return save_dir + "00050000/" + title_id.substr(8, 8)
+			return FileSystemManager.join_paths(save_dir, "00050000", title_id.substr(8, 8))
 		"dolphin":
 			if game.platform_slug == "wii":
-				return save_dir + "Wii/title/00010000/" + _game_id_to_hex(title_id)
-			return save_dir + "GC/USA/Card A"
+				return FileSystemManager.join_paths(save_dir, "Wii", "title", "00010000", _game_id_to_hex(title_id))
+			return FileSystemManager.join_paths(save_dir, "GC", "USA", "Card A")
 		"eden":
 			var profile = _find_first_subdir(save_dir)
 			if profile == "":
 				profile = "0000000000000000"
-			return save_dir + profile + "/" + title_id
+			return FileSystemManager.join_paths(save_dir, profile, title_id)
 		"pcsx2":
-			return save_dir + "main.ps2/"
+			return FileSystemManager.join_paths(save_dir, "main.ps2")
 		"ppsspp":
-			return save_dir + title_id + "/"
+			return FileSystemManager.join_paths(save_dir, title_id)
 		"vita3k":
-			return save_dir + title_id + "/"
+			return FileSystemManager.join_paths(save_dir, title_id)
 		"rpcs3":
-			return save_dir + title_id + "/"
+			return FileSystemManager.join_paths(save_dir, title_id)
 		"shadps4":
-			return save_dir + title_id + "/"
+			return FileSystemManager.join_paths(save_dir, title_id)
 		"xenia":
 			# Xenia saves are in content/PROFILE_ID/TITLE_ID/
 			# We need to find the profile directory first
 			var profile = _find_first_subdir(save_dir)
 			if profile == "":
 				profile = "0000000000000000"
-			return save_dir + profile + "/" + title_id + "/"
+			return FileSystemManager.join_paths(save_dir, profile, title_id)
 		_:
 			var result = _resolve_default_save_path(save_dir, title_id)
 			return result.path
@@ -820,7 +825,7 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 	# Copy all matching save folders to staging directory
 	for save in saves:
 		var save_folder_name = save.file_path.get_file()
-		var dest = stage_dir + save_folder_name
+		var dest = FileSystemManager.join_paths(stage_dir, save_folder_name)
 		print("[SaveManager] _zip_psp_save: copying " + save.file_path + " to " + dest)
 		var success = FileSystemManager.copy_dir(save.file_path, dest)
 		if not success:
@@ -846,8 +851,8 @@ func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) 
 		if item == "." or item == "..":
 			continue
 		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
-			var src = card_dir + item
-			var dst = stage_dir + item
+			var src = FileSystemManager.join_paths(card_dir, item)
+			var dst = FileSystemManager.join_paths(stage_dir, item)
 			FileSystemManager.make_dir_recursive(dst.get_base_dir())
 			if FileSystemManager.copy_file(src, dst):
 				copy_success = true
@@ -867,7 +872,7 @@ func _zip_dolphin_wii_save(source_dir: String, dest_zip: String) -> bool:
 	var hex_id = parts[-1]
 	var prefix = parts[-2]
 	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
-	var stage_root = stage_dir + "Wii/title/" + prefix + "/" + hex_id
+	var stage_root = FileSystemManager.join_paths(stage_dir, "Wii", "title", prefix, hex_id)
 	FileSystemManager.make_dir_recursive(stage_root)
 	var copy_success = FileSystemManager.copy_dir(source_dir, stage_root)
 	if not copy_success:
@@ -883,7 +888,7 @@ func _sanitize_filename(name: String) -> String:
 func _find_first_subdir(dir_path: String) -> String:
 	var items = FileSystemManager.list_dir(dir_path)
 	for item in items:
-		if item != "." and item != ".." and FileSystemManager.dir_exists(dir_path + item):
+		if item != "." and item != ".." and FileSystemManager.dir_exists(FileSystemManager.join_paths(dir_path, item)):
 			return item
 	return ""
 
@@ -1138,7 +1143,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		if download.local:
 			record_path = download.local.file_path
 		else:
-			record_path = resolve_save_directory(emulator_id) + file_name
+			record_path = FileSystemManager.join_paths(resolve_save_directory(emulator_id), file_name)
 		
 		if is_folder_save:
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"

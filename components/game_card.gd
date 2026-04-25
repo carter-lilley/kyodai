@@ -1369,6 +1369,15 @@ func reset():
 	if _focus_tween and is_instance_valid(_focus_tween):
 		_focus_tween.kill()
 	_focus_tween = null
+	# Kill enter animation tweens to prevent orphaned animations when card is recycled
+	if _enter_tween and is_instance_valid(_enter_tween):
+		_enter_tween.kill()
+		# Notify listeners that the animation was cancelled (so counters can be decremented)
+		enter_animation_completed.emit()
+	_enter_tween = null
+	if _enter_tween_alpha and is_instance_valid(_enter_tween_alpha):
+		_enter_tween_alpha.kill()
+	_enter_tween_alpha = null
 	alignment_offset = Vector2.ZERO
 	_loading_game_id = ""
 	_image_retry_count = 0

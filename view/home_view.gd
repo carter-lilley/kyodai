@@ -10,12 +10,7 @@ var _total_games: int = 0
 var _db_games_count: int = 0
 var _gamenative_games_count: int = 0
 var _is_loading: bool = false
-var _is_initial_launch: bool = true
 var _is_scanning: bool = false
-
-# Intro animation tracking
-var _intro_animations_complete: bool = false
-var _cards_animating: int = 0
 
 # GameNative games storage - kept separate but merged by last_played
 var _gamenative_games: Array[GameResource] = []
@@ -25,16 +20,7 @@ var _gamenative_loaded: bool = false
 # This maps virtual index -> true if it's a GameNative game
 var _gamenative_indices: Dictionary = {}
 
-# Animation timing controls
-@export var enter_animation_start_delay: float = 0.2  # Delay before first card animation starts (was 0.5)
-@export var enter_animation_stagger: float = 0.04      # Delay between each card's animation (was 0.05)
 
-# Animation mode
-enum AnimationMode { SEQUENTIAL, RANDOM }
-@export var enter_animation_mode: AnimationMode = AnimationMode.RANDOM
-
-# Delay pool for random mode
-var _delay_pool: Array[float] = []
 
 func _ready():
 	view_name = "Home"
@@ -265,10 +251,6 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				_gamenative_indices[response_offset + idx] = true
 			
 			games_grid.on_items_loaded(games, response_offset, is_preload)
-			
-			# Mark initial launch complete after first batch with actual games loads
-			if response_offset == 0 and _is_initial_launch and games.size() > 0:
-				_is_initial_launch = false
 	)
 
 func _merge_all_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource]) -> Array[GameResource]:
@@ -334,56 +316,15 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 		games_grid.refresh_dimensions()
 		_load_total_count(true)
 
-func _regenerate_delay_pool(count: int) -> void:
-	"""Generate a shuffled pool of animation delays for random mode."""
-	_delay_pool.clear()
-	for i in range(count):
-		_delay_pool.append(i * enter_animation_stagger)
-	_delay_pool.shuffle()
-
-func _get_animation_delay(index: int) -> float:
-	"""Calculate delay for a card based on current animation mode."""
-	match enter_animation_mode:
-		AnimationMode.SEQUENTIAL:
-			return enter_animation_start_delay + (index * enter_animation_stagger)
-		AnimationMode.RANDOM:
-			if _delay_pool.is_empty():
-				# Estimate visible cards and regenerate pool
-				var visible_range = games_grid.get_visible_range()
-				var visible_count = visible_range.buffer_size if visible_range else 20
-				_regenerate_delay_pool(visible_count)
-			return enter_animation_start_delay + _delay_pool.pop_front()
-	return enter_animation_start_delay
-
 ## Returns true when intro animations are complete and cards can accept focus
+## Note: Intro animations have been removed, so this always returns true
 func are_intro_animations_complete() -> bool:
-	return _intro_animations_complete
+	return true
 
 func _on_card_created(card: Control, index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
 		card.download_requested.connect(_on_download_requested)
-		# Play enter animation with staggered delay on initial launch
-		if _is_initial_launch:
-			# Track this card's animation
-			_cards_animating += 1
-			
-			# Start invisible immediately
-			card.set_card_alpha(0.0)
-			var delay = _get_animation_delay(index)
-			await get_tree().create_timer(delay).timeout
-			if is_instance_valid(card):
-				card.play_enter_animation()
-				# Connect to animation completion (guard against double-connect)
-				if not card.enter_animation_completed.is_connected(_on_card_animation_complete):
-					card.enter_animation_completed.connect(_on_card_animation_complete)
-
-func _on_card_animation_complete():
-	"""Called when a card's enter animation completes."""
-	_cards_animating -= 1
-	if _cards_animating <= 0:
-		_intro_animations_complete = true
-		print("[HomeView] All intro animations complete - cards can now accept focus")
 
 func _on_download_requested(game: GameResource):
 	# Use the selected sibling's ID and file name if one is selected
@@ -500,7 +441,8 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 func on_view_show():
 	super.on_view_show()
 	# Refresh the view when shown (in case downloads happened while away)
-	if not _is_loading:
+	# Skip if we haven't loaded data yet (avoid double-load during startup)
+	if not _is_loading and _total_games > 0:
 		# Check if cache is still valid before using it
 		if _validate_cached_data():
 			_load_total_count(true, false)
@@ -748,15 +690,10 @@ func _add_game_to_steam(game: GameResource) -> void:
 		return
 	
 	# Globalize the path for Steam (needs absolute system path)
-	exe_path = ProjectSettings.globalize_path(exe_path)
-	exe_path = exe_path.replace("//", "/")
-	# Convert to native path separators (backslashes on Windows)
-	exe_path = exe_path.replace("/", "\\")
+	exe_path = FileSystemManager.resolve_path(exe_path, {"format": FileSystemManager.PathFormat.PLATFORM})
 	
 	# Get the ROM path and ensure it's quoted
-	var rom_path: String = ProjectSettings.globalize_path(launch_intent.rom_path)
-	rom_path = rom_path.replace("//", "/")
-	rom_path = rom_path.replace("/", "\\")
+	var rom_path: String = FileSystemManager.resolve_path(launch_intent.rom_path, {"format": FileSystemManager.PathFormat.PLATFORM})
 	
 	# Build the full command line: "exe" args "rom"
 	# Start with quoted exe path
@@ -778,10 +715,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	var working_dir: String = launch_intent.working_directory
 	if working_dir.is_empty():
 		working_dir = exe_path.get_base_dir()
-	working_dir = ProjectSettings.globalize_path(working_dir)
-	working_dir = working_dir.replace("//", "/")
-	# Convert to native path separators (backslashes on Windows)
-	working_dir = working_dir.replace("/", "\\")
+	working_dir = FileSystemManager.resolve_path(working_dir, {"format": FileSystemManager.PathFormat.PLATFORM})
 	
 	# Get the cached cover art path (same as GameCard uses)
 	var cover_art_path: String = ""
@@ -789,15 +723,15 @@ func _add_game_to_steam(game: GameResource) -> void:
 	
 	# Try to get the cached cover path from cover_url
 	if not game.cover_url.is_empty() and game.cover_url.begins_with("http"):
-		cover_art_path = CACHE_FOLDER + game.cover_url.md5_text() + ".jpg"
-		cover_art_path = ProjectSettings.globalize_path(cover_art_path)
+		cover_art_path = FileSystemManager.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
+		cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 	elif not game.cover_path.is_empty():
 		# Fallback to cover_path if it's a valid local path
 		cover_art_path = game.cover_path
 		if cover_art_path.find("?") != -1:
 			cover_art_path = cover_art_path.substr(0, cover_art_path.find("?"))
 		if FileAccess.file_exists(cover_art_path):
-			cover_art_path = ProjectSettings.globalize_path(cover_art_path)
+			cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 	
 	# Build game data for Steam
 	# exe = full command with args (used as Steam target in VDF)
