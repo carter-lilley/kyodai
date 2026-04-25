@@ -174,6 +174,8 @@ func _build_storage_paths_page():
 	
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.add_child(vbox)
 	
 	var desc = Label.new()
@@ -228,6 +230,8 @@ func _build_android_permissions_page():
 	
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	page.add_child(vbox)
 	
 	var desc = Label.new()
@@ -238,29 +242,32 @@ func _build_android_permissions_page():
 	vbox.add_child(HSeparator.new())
 	
 	# Storage permission
-	_perm_storage_indicator = _add_permission_row(vbox, "Storage Access", "Required to access game files and emulator data")
+	var storage_row = _add_permission_row(vbox, "Storage Access", "Required to access game files and emulator data")
+	_perm_storage_indicator = storage_row.indicator
 	_perm_storage_button = Button.new()
 	_perm_storage_button.text = "Grant"
 	_perm_storage_button.pressed.connect(_request_storage_permission)
-	vbox.add_child(_perm_storage_button)
+	storage_row.container.add_child(_perm_storage_button)
 	
 	vbox.add_child(HSeparator.new())
 	
 	# Install unknown apps
-	_perm_install_indicator = _add_permission_row(vbox, "Install Unknown Apps", "Required to install emulator APKs")
+	var install_row = _add_permission_row(vbox, "Install Unknown Apps", "Required to install emulator APKs. You'll be prompted when installing your first emulator.")
+	_perm_install_indicator = install_row.indicator
 	_perm_install_button = Button.new()
 	_perm_install_button.text = "Open Settings"
 	_perm_install_button.pressed.connect(_open_install_settings)
-	vbox.add_child(_perm_install_button)
+	install_row.container.add_child(_perm_install_button)
 	
 	vbox.add_child(HSeparator.new())
 	
 	# Notifications
-	_perm_notifications_indicator = _add_permission_row(vbox, "Notifications", "Required for download progress alerts")
+	var notif_row = _add_permission_row(vbox, "Notifications", "Required for download progress alerts")
+	_perm_notifications_indicator = notif_row.indicator
 	_perm_notifications_button = Button.new()
 	_perm_notifications_button.text = "Grant"
 	_perm_notifications_button.pressed.connect(_request_notifications_permission)
-	vbox.add_child(_perm_notifications_button)
+	notif_row.container.add_child(_perm_notifications_button)
 
 func _build_romm_connection_page():
 	var page = _create_page("romm")
@@ -361,6 +368,8 @@ func _add_path_row(parent: VBoxContainer, label_text: String, default_value: Str
 	var edit = LineEdit.new()
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	edit.text = default_value
+	edit.virtual_keyboard_enabled = false
+	edit.focus_mode = Control.FOCUS_NONE
 	container.add_child(edit)
 	
 	var browse = Button.new()
@@ -370,23 +379,33 @@ func _add_path_row(parent: VBoxContainer, label_text: String, default_value: Str
 	
 	return edit
 
-func _add_permission_row(parent: VBoxContainer, title: String, description: String) -> Indicator:
-	var container = HBoxContainer.new()
-	container.custom_minimum_size = Vector2(0, 30)
+func _add_permission_row(parent: VBoxContainer, title: String, description: String) -> Dictionary:
+	var container = VBoxContainer.new()
+	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(container)
 	
-	var label = Label.new()
-	label.text = title + "\n" + description
-	label.add_theme_font_size_override("font_size", 12)
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	container.add_child(label)
+	# Title row with indicator
+	var title_row = HBoxContainer.new()
+	title_row.custom_minimum_size = Vector2(0, 30)
+	container.add_child(title_row)
+	
+	var title_label = Label.new()
+	title_label.text = title
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(title_label)
 	
 	var indicator = Indicator.new()
-	indicator.size_flags_horizontal = Control.SIZE_SHRINK_END
-	container.add_child(indicator)
+	indicator.custom_minimum_size = Vector2(80, 0)
+	title_row.add_child(indicator)
 	
-	return indicator
+	# Description
+	var desc_label = Label.new()
+	desc_label.text = description
+	desc_label.add_theme_font_size_override("font_size", 11)
+	desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	container.add_child(desc_label)
+	
+	return {"container": container, "indicator": indicator}
 
 # Navigation
 
@@ -410,6 +429,10 @@ func _show_page(page_idx: int):
 			Page.DONE:
 				title_label.text = "Setup Complete"
 	
+	# Refresh permission indicators when showing the permissions page
+	if page_idx == Page.ANDROID_PERMISSIONS and PlatformManager.is_android():
+		_update_permission_indicators()
+	
 	# Move focus to first interactive element on the new page
 	call_deferred("_focus_first_element")
 
@@ -419,8 +442,8 @@ func _focus_first_element():
 			if _next_button:
 				_next_button.grab_focus()
 		Page.STORAGE_PATHS:
-			if _games_path_edit:
-				_games_path_edit.grab_focus()
+			if _next_button:
+				_next_button.grab_focus()
 		Page.ANDROID_PERMISSIONS:
 			if _perm_storage_button and _perm_storage_button.visible:
 				_perm_storage_button.grab_focus()
@@ -559,7 +582,6 @@ func _request_storage_permission():
 	if not PlatformManager.is_android():
 		return
 	
-	var permissions = ["android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"]
 	OS.request_permissions()
 	_update_permission_indicators()
 
@@ -567,7 +589,6 @@ func _request_notifications_permission():
 	if not PlatformManager.is_android():
 		return
 	
-	var permissions = ["android.permission.POST_NOTIFICATIONS"]
 	OS.request_permissions()
 	_update_permission_indicators()
 
@@ -585,7 +606,10 @@ func _update_permission_indicators():
 	var granted = OS.get_granted_permissions()
 	
 	if _perm_storage_indicator:
-		var has_storage = "android.permission.READ_EXTERNAL_STORAGE" in granted and "android.permission.WRITE_EXTERNAL_STORAGE" in granted
+		# Android 11+ uses MANAGE_EXTERNAL_STORAGE (all files access) instead of READ/WRITE
+		var has_old_storage = "android.permission.READ_EXTERNAL_STORAGE" in granted and "android.permission.WRITE_EXTERNAL_STORAGE" in granted
+		var has_manage_storage = "android.permission.MANAGE_EXTERNAL_STORAGE" in granted
+		var has_storage = has_old_storage or has_manage_storage
 		_perm_storage_indicator.set_status(Indicator.Status.SUCCESS if has_storage else Indicator.Status.ERROR, "Granted" if has_storage else "Not Granted")
 		if _perm_storage_button:
 			_perm_storage_button.text = "Granted" if has_storage else "Grant"
@@ -700,6 +724,14 @@ func _input(event: InputEvent) -> void:
 			_on_back_pressed()
 		get_viewport().set_input_as_handled()
 		return
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED:
+		# User returned from system dialog or settings - refresh permission status
+		if _current_page == Page.ANDROID_PERMISSIONS and PlatformManager.is_android():
+			# Small delay to ensure Android has updated permission state
+			await get_tree().create_timer(0.5).timeout
+			_update_permission_indicators()
 
 func start_wizard():
 	visible = true

@@ -32,6 +32,7 @@ func _build_view():
 	var margin = MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_theme_constant_override("margin_left", 20)
 	margin.add_theme_constant_override("margin_top", 20)
 	margin.add_theme_constant_override("margin_right", 20)
@@ -40,6 +41,8 @@ func _build_view():
 	
 	_platforms_container = VBoxContainer.new()
 	_platforms_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_platforms_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_platforms_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_platforms_container.add_theme_constant_override("separation", 10)
 	margin.add_child(_platforms_container)
 	

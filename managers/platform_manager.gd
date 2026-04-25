@@ -18,8 +18,10 @@ func _setup_platform_specific_behavior():
 	if is_android():
 		# Disable native Android virtual keyboard - we use our own onscreen keyboard
 		get_tree().node_added.connect(_on_node_added_android)
-		# Check and request permissions on Android
-		_request_android_permissions()
+		# Check and request permissions on Android (skip during first-run OOBE)
+		var first_run_completed = SettingsManager.get_setting("first_run_completed")
+		if first_run_completed and first_run_completed.value:
+			_request_android_permissions()
 
 func _on_node_added_android(node: Node):
 	# When a LineEdit/TextEdit is added on Android, disable the native virtual keyboard
@@ -124,10 +126,11 @@ func open_install_unknown_apps_settings():
 	if not is_android():
 		return
 	
-	# On Android, we need to open the system settings for this app
-	# The user must manually enable "Install unknown apps" permission
-	# We use a generic settings intent since we can't directly open the specific page
-	OS.shell_open("android.settings.APPLICATION_SETTINGS")
+	# Open the app's info page in Android Settings.
+	# From there the user can toggle "Install unknown apps" permission.
+	# MANAGE_UNKNOWN_APP_SOURCES intent is unreliable across devices/versions.
+	var package_name = "com.heckpoint.kyodai"
+	OS.shell_open("android.settings.APPLICATION_DETAILS_SETTINGS" + "?" + "package=" + package_name)
 
 ## Checks if a specific permission is granted on Android
 func has_permission(permission_name: String) -> bool:
@@ -136,6 +139,16 @@ func has_permission(permission_name: String) -> bool:
 	
 	var granted_permissions = OS.get_granted_permissions()
 	return permission_name in granted_permissions
+
+## Checks if storage access is granted (handles both old and new Android permission models)
+func has_storage_permission() -> bool:
+	if not is_android():
+		return true
+	
+	var granted = OS.get_granted_permissions()
+	var has_old = "android.permission.READ_EXTERNAL_STORAGE" in granted and "android.permission.WRITE_EXTERNAL_STORAGE" in granted
+	var has_manage = "android.permission.MANAGE_EXTERNAL_STORAGE" in granted
+	return has_old or has_manage
 
 ## Opens Android Settings to enable install permissions
 ## Called when user tries to install an emulator without the required permission

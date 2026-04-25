@@ -149,6 +149,8 @@ func match_var_type(settingsvar : SettingsVar):
 			line_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			line_edit.text = settingsvar.value if settingsvar.value else ""
 			line_edit.editable = settingsvar.state == 0
+			line_edit.virtual_keyboard_enabled = false
+			line_edit.focus_mode = Control.FOCUS_NONE
 			path_container.add_child(line_edit)
 			controls[settingsvar.property_name] = line_edit
 			

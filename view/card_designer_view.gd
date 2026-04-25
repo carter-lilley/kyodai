@@ -91,6 +91,8 @@ func _setup_ui():
 	left_panel.add_child(_left_scroll)
 	
 	var left_vbox = VBoxContainer.new()
+	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_left_scroll.add_child(left_vbox)
 	
 	var title_label = Label.new()

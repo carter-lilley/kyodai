@@ -76,6 +76,9 @@ func _enter_tree():
 	if not Input.joy_connection_changed.is_connected(_on_joy_connection_changed):
 		Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	
+	# Ensure keyboard always renders on top of other UI elements
+	z_index = 4096
+	
 	_init_keyboard()
 
 
@@ -365,6 +368,8 @@ func _show_keyboard(key_data=null):
 	_is_hiding = false
 	_dismissed_line_edit = null
 	var was_hidden = not visible
+	# Ensure keyboard renders on top of other UI elements
+	move_to_front()
 	change_visibility(true)
 	if animate:
 		var new_y_pos = get_viewport().get_visible_rect().size.y - size.y

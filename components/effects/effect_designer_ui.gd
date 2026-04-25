@@ -137,6 +137,8 @@ func _setup_ui():
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 	
 	var vbox = VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.add_child(vbox)
 	
 	_title_label = Label.new()
