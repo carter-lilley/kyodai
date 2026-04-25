@@ -68,6 +68,59 @@ static func _normalize_saf_path(path: String) -> String:
 	
 	return tree_uri + "/" + "/".join(normalized_parts)
 
+## Joins two path components safely, handling trailing/leading slashes
+static func join_paths(a: String, b: String) -> String:
+	if a.is_empty():
+		return b
+	if b.is_empty():
+		return a
+	
+	# Handle SAF paths specially - don't add extra slashes in the tree URI portion
+	if is_saf_path(a):
+		if b.begins_with("/"):
+			if a.ends_with("/"):
+				return a + b.substr(1)
+			return a + b
+		if a.ends_with("/"):
+			return a + b
+		return a + "/" + b
+	
+	# Regular paths
+	var result = a
+	if not result.ends_with("/") and not result.ends_with("\\"):
+		result += "/"
+	if b.begins_with("/") or b.begins_with("\\"):
+		b = b.substr(1)
+	
+	return result + b
+
+## Gets the size of a file in bytes (works with both regular paths and SAF URIs)
+## Returns -1 if file doesn't exist or size cannot be determined
+static func get_file_size(path: String) -> int:
+	if path.is_empty():
+		return -1
+	
+	if not file_exists(path):
+		return -1
+	
+	if is_saf_path(path) and is_android():
+		# For SAF paths, we need to copy to temp and check size
+		var temp_file = open_file_read(path)
+		if temp_file:
+			var size = temp_file.get_length()
+			temp_file.close()
+			return size
+		return -1
+	
+	# For regular paths, use FileAccess
+	var file = FileAccess.open(path, FileAccess.READ)
+	if file:
+		var size = file.get_length()
+		file.close()
+		return size
+	
+	return -1
+
 ## Checks if running on Android platform
 static func is_android() -> bool:
 	return PlatformManager.is_android() if Engine.has_singleton("PlatformManager") else OS.get_name() == "Android"
@@ -1051,6 +1104,11 @@ static func copy_file(source_path: String, dest_path: String) -> bool:
 		var data = file.get_buffer(file.get_length())
 		file.close()
 		
+		# Ensure destination directory exists
+		var dest_dir = dest_path.get_base_dir()
+		if not DirAccess.dir_exists_absolute(dest_dir):
+			DirAccess.make_dir_recursive_absolute(dest_dir)
+		
 		var out = FileAccess.open(dest_path, FileAccess.WRITE)
 		if out == null:
 			return false
@@ -1066,6 +1124,11 @@ static func copy_file(source_path: String, dest_path: String) -> bool:
 	
 	var data = file.get_buffer(file.get_length())
 	file.close()
+	
+	# Ensure destination directory exists
+	var dest_dir = dest_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dest_dir):
+		DirAccess.make_dir_recursive_absolute(dest_dir)
 	
 	var out = FileAccess.open(dest_path, FileAccess.WRITE)
 	if out == null:

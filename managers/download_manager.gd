@@ -1412,15 +1412,16 @@ func _reassemble_chunks(item_id: String):
 	if item.notification_id != -1:
 		NotificationManager.dismiss_notification(item.notification_id)
 	
-	item.notification_id = NotificationManager.show_notification(
-		"Assembling " + item.name + "...",
-		Notification.Type.INFO,
-		null,
-		0.0,
-		Callable(),  # No progress callable - using pulsing
-		Callable(),  # No text formatter
-		true  # pulsing = true
-	)
+	if not item.suppress_notification:
+		item.notification_id = NotificationManager.show_notification(
+			"Assembling " + item.name + "...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			Callable(),  # No progress callable - using pulsing
+			Callable(),  # No text formatter
+			true  # pulsing = true
+		)
 	
 	# For SAF destinations, we must reassemble to a temp file first
 	var use_saf = item.use_saf
@@ -1960,18 +1961,20 @@ func _queue_saf_copy_to_thread(item: QueueItem):
 	# Store SAF copy progress in a dictionary that can be shared by reference
 	var saf_copy_data = {"progress": 0.0}
 	
-	# Create new notification with progress tracking for SAF copy
-	item.notification_id = NotificationManager.show_notification(
-		"Moving to storage: " + item.name + "...",
-		Notification.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			return saf_copy_data.progress / 100.0,  # Return 0.0 to 1.0
-		func(progress: float) -> String:
-			var percent = int(progress * 100)
-			return "Moving to storage: %s (%d%%)" % [item.name, percent]
-	)
+	# Only show SAF copy notification if not suppressed (e.g., for batch operations)
+	if not item.suppress_notification:
+		# Create new notification with progress tracking for SAF copy
+		item.notification_id = NotificationManager.show_notification(
+			"Moving to storage: " + item.name + "...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			func() -> float:
+				return saf_copy_data.progress / 100.0,  # Return 0.0 to 1.0
+			func(progress: float) -> String:
+				var percent = int(progress * 100)
+				return "Moving to storage: %s (%d%%)" % [item.name, percent]
+		)
 	
 	# Connect to SAF copy progress signal for real-time updates
 	var progress_callback = func(filename: String, progress: int):

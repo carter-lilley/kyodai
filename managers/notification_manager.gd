@@ -193,6 +193,12 @@ func dismiss_notification(id: int) -> void:
 			_start_fade_out(entry)
 			return
 
+func dismiss_all_notifications() -> void:
+	"""Dismiss all active notifications"""
+	for entry in _notifications.duplicate():
+		if not entry.fade_out_started:
+			_start_fade_out(entry)
+
 func update_notification_text(id: int, text: String) -> void:
 	"""Update the text of an existing notification"""
 	for entry in _notifications:

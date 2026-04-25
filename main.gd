@@ -522,6 +522,11 @@ func _notification(what: int) -> void:
 			if platforms_view and platforms_view.has_method("refresh_cards"):
 				platforms_view.refresh_cards()
 				print("[Main] Refreshed platform cards after resume")
+		
+		# Dismiss any stale notifications (e.g., extraction notifications that completed while backgrounded)
+		if NotificationManager:
+			NotificationManager.dismiss_all_notifications()
+			print("[Main] Dismissed all notifications after resume")
 
 func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	"""Save the focused card index when a game launch is initiated."""

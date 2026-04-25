@@ -150,8 +150,6 @@ func reconnect_viewport() -> void:
 	var new_viewport = get_viewport()
 	if new_viewport != null and not new_viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
 		new_viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
-			_active_line_edit = current_focus
-			_show_keyboard()
 
 #func _exit_tree():
 #    pass

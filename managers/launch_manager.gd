@@ -451,34 +451,27 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 	if current_depth >= max_depth:
 		return ""
 	
-	var dir = DirAccess.open(dir_path)
-	if not dir:
+	# Use SAF-aware FileSystemManager for directory listing
+	var entries = FileSystemManager.list_dir(dir_path)
+	if entries.is_empty() and not FileSystemManager.dir_exists(dir_path):
 		return ""
 	
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	
-	while file_name != "":
+	for file_name in entries:
 		if file_name == "." or file_name == "..":
-			file_name = dir.get_next()
 			continue
 		
-		var full_path = dir_path + "/" + file_name
+		var full_path = FileSystemManager.join_paths(dir_path, file_name)
 		
-		if dir.current_is_dir():
+		# Use SAF-aware FileSystemManager to check if entry is a directory
+		if FileSystemManager.is_dir(full_path):
 			var result = _find_executable_recursive(full_path, executable_name, max_depth, current_depth + 1)
 			if result != "":
-				dir.list_dir_end()
 				return result
 		else:
 			# Check if this is the executable we're looking for
 			if file_name.to_lower() == executable_name.to_lower():
-				dir.list_dir_end()
 				return full_path
-		
-		file_name = dir.get_next()
 	
-	dir.list_dir_end()
 	return ""
 
 ## Called when DownloadManager completes an extraction
@@ -510,7 +503,13 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 			else:
 				_emulator_install_progress[emulator_id] = "Extraction failed"
 				emulator_extraction_completed.emit(emulator_id, false)
-				return
+			
+			# Fallback: dismiss any lingering extraction notifications for this emulator
+			# This handles cases where the notification dismissal failed while backgrounded
+			if NotificationManager:
+				NotificationManager.dismiss_all_notifications()
+			
+			return
 
 ## Called when DownloadManager completes a download
 ## Cleans up pending game downloads tracking
@@ -543,7 +542,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			# extract_to is already an absolute path (Unix, Windows, SAF, or Godot virtual filesystem style)
 			extract_path = extract_to
 		else:
-			extract_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + extract_to
+			extract_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), extract_to)
 	
 	# Normalize the path to remove "." and ".." components
 	extract_path = FileSystemManager.normalize_path(extract_path)
@@ -558,7 +557,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		var target_path = ""
 		
 		# First try exact match
-		var exact_path = extract_path + "/" + target_folder
+		var exact_path = FileSystemManager.join_paths(extract_path, target_folder)
 		if FileSystemManager.dir_exists(exact_path):
 			target_path = exact_path
 		else:
@@ -566,8 +565,9 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			var candidates = FileSystemManager.list_dir(extract_path)
 			for entry in candidates:
 				if entry != "." and entry != ".." and entry.match(target_folder):
-					if FileSystemManager.dir_exists(extract_path + "/" + entry):
-						target_path = extract_path + "/" + entry
+					var entry_path = FileSystemManager.join_paths(extract_path, entry)
+					if FileSystemManager.dir_exists(entry_path):
+						target_path = entry_path
 						break
 		
 		if target_path == "":
@@ -581,8 +581,8 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			if item_name == "." or item_name == "..":
 				continue
 			
-			var source_path = target_path + "/" + item_name
-			var dest_path = extract_path + "/" + item_name
+			var source_path = FileSystemManager.join_paths(target_path, item_name)
+			var dest_path = FileSystemManager.join_paths(extract_path, item_name)
 			
 			# Check if destination already exists
 			if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
@@ -620,7 +620,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	# If there's exactly one entry and it's a directory, flatten it
 	if filtered_entries.size() == 1:
 		var single_entry = filtered_entries[0]
-		var single_entry_path = extract_path + "/" + single_entry
+		var single_entry_path = FileSystemManager.join_paths(extract_path, single_entry)
 		print("[LaunchManager] Flattening: single_entry=" + single_entry + ", path=" + single_entry_path)
 		
 		# Check if the single entry is a directory
@@ -636,8 +636,8 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 				if item_name == "." or item_name == "..":
 					continue
 				
-				var source_path = single_entry_path + "/" + item_name
-				var dest_path = extract_path + "/" + item_name
+				var source_path = FileSystemManager.join_paths(single_entry_path, item_name)
+				var dest_path = FileSystemManager.join_paths(extract_path, item_name)
 				print("[LaunchManager] Flattening: moving " + source_path + " -> " + dest_path)
 				
 				# Check if destination already exists
@@ -683,12 +683,12 @@ func get_emulator_install_path(emulator_id: String) -> String:
 		return ""
 	
 	# First check direct path
-	var direct_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + executable_name
-	if FileAccess.file_exists(direct_path):
+	var direct_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), executable_name)
+	if FileSystemManager.file_exists(direct_path):
 		return direct_path
 	
 	# Search recursively up to 3 levels deep
-	var search_dir = _get_emulator_directory(emulator_id).rstrip("/") + "/"
+	var search_dir = _get_emulator_directory(emulator_id)
 	var found_path = _find_executable_recursive(search_dir, executable_name, 3)
 	
 	if found_path != "":
@@ -1064,14 +1064,12 @@ func _execute_controller_task(task: Dictionary, install_path: String) -> bool:
 func _execute_controller_create_folders(task: Dictionary, install_path: String) -> void:
 	var folders = task.get("folders", [])
 	for folder in folders:
-		var path = install_path + "/" + folder
-		var dir = DirAccess.open(install_path)
-		if dir:
-			dir.make_dir_recursive(folder)
+		var path = FileSystemManager.join_paths(install_path, folder)
+		FileSystemManager.make_dir_recursive(path)
 
 func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bool:
 	var file_path = task.get("file", "")
-	var full_path = install_path + "/" + file_path
+	var full_path = FileSystemManager.join_paths(install_path, file_path)
 	
 	# Validate existing config
 	var validate = task.get("validate", {})
@@ -1724,70 +1722,82 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	var emulator_dir = _get_emulator_directory(emulator_id)
 	var apk_path = ""
 	
-	# Find the APK file in emulator directory
-	var dir = DirAccess.open(emulator_dir)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if file_name.match(expected_file):
-				apk_path = emulator_dir + file_name
-				print("[LaunchManager] Found APK: " + apk_path)
-				break
-			file_name = dir.get_next()
-		dir.list_dir_end()
+	# Find the APK file in emulator directory using SAF-aware FileSystemManager
+	var entries = FileSystemManager.list_dir(emulator_dir)
+	for file_name in entries:
+		if file_name.match(expected_file):
+			apk_path = FileSystemManager.join_paths(emulator_dir, file_name)
+			print("[LaunchManager] Found APK: " + apk_path)
+			break
 	
 	# If no APK found, retry download
 	if apk_path == "":
 		print("[LaunchManager] No APK found in emulator directory, retrying download")
 		return _retry_previous_step(emulator_id, step_index)
 	
-	# Convert to absolute path for Android
-	var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
+	# Validate APK file exists and has content using SAF-aware FileSystemManager
+	var file_size = FileSystemManager.get_file_size(apk_path)
+	print("[LaunchManager] APK file size: " + str(file_size) + " bytes")
+	if file_size < 0:
+		print("[LaunchManager] ERROR: Cannot access APK file!")
+		return _retry_previous_step(emulator_id, step_index)
+	elif file_size < 1000:
+		print("[LaunchManager] ERROR: APK file is too small or empty!")
+		NotificationManager.show_notification(
+			"APK download incomplete!\nFile size: " + str(file_size) + " bytes",
+			Notification.Type.ERROR,
+			null,
+			10.0
+		)
+		_emulator_install_progress[emulator_id] = "APK download incomplete"
+		return false
 	
-	# Validate APK file exists and has content
-	var file = FileAccess.open(apk_path, FileAccess.READ)
-	if file:
-		var file_size = file.get_length()
-		file.close()
-		print("[LaunchManager] APK file size: " + str(file_size) + " bytes")
-		if file_size < 1000:
-			print("[LaunchManager] ERROR: APK file is too small or empty!")
+	# For installation, we need a file:// URI. If the APK is on SAF storage,
+	# copy it to user://temp/ first so OS.shell_open() can access it.
+	var install_uri = ""
+	var is_saf_apk = FileSystemManager.is_saf_path(apk_path)
+	
+	if is_saf_apk:
+		var temp_apk_path = "user://temp_apk/" + apk_path.get_file()
+		print("[LaunchManager] Copying SAF APK to temp: " + temp_apk_path)
+		var copy_success = FileSystemManager.copy_file(apk_path, temp_apk_path)
+		if not copy_success:
+			print("[LaunchManager] ERROR: Failed to copy APK from SAF to temp location")
 			NotificationManager.show_notification(
-				"APK download incomplete!\nFile size: " + str(file_size) + " bytes",
+				"Failed to prepare APK for installation",
 				Notification.Type.ERROR,
 				null,
 				10.0
 			)
-			_emulator_install_progress[emulator_id] = "APK download incomplete"
 			return false
+		var absolute_apk_path = ProjectSettings.globalize_path(temp_apk_path)
+		install_uri = "file://" + absolute_apk_path
+		print("[LaunchManager] Using temp APK for install: " + temp_apk_path)
 	else:
-		print("[LaunchManager] ERROR: Cannot open APK file!")
-		return _retry_previous_step(emulator_id, step_index)
-	
-	var uri = "file://" + absolute_apk_path
+		var absolute_apk_path = ProjectSettings.globalize_path(apk_path)
+		install_uri = "file://" + absolute_apk_path
 	
 	print("[LaunchManager] Installing APK: " + apk_path)
-	print("[LaunchManager] Absolute path: " + absolute_apk_path)
-	print("[LaunchManager] Opening APK with URI: " + uri)
+	print("[LaunchManager] Opening APK with URI: " + install_uri)
 	
 	# Open APK for installation using OS.shell_open
 	# Note: Requires "Install unknown apps" permission in Android Settings
-	var result = OS.shell_open(uri)
+	var result = OS.shell_open(install_uri)
 	
 	if result != Error.OK:
 		print("[LaunchManager] APK install failed with error: " + str(result))
 		NotificationManager.show_notification(
-			"APK install failed!\nPlease install manually from:\n" + absolute_apk_path,
+			"APK install failed!\nPlease install manually from:\n" + apk_path,
 			Notification.Type.ERROR,
 			null,
 			10.0
 		)
 		
 		# Try to open the folder
-		var folder_result = OS.shell_open(ProjectSettings.globalize_path(emulator_dir))
-		if folder_result == Error.OK:
-			print("[LaunchManager] Opened folder containing APK")
+		if not is_saf_apk:
+			var folder_result = OS.shell_open(ProjectSettings.globalize_path(emulator_dir))
+			if folder_result == Error.OK:
+				print("[LaunchManager] Opened folder containing APK")
 		
 		_emulator_install_progress[emulator_id] = "APK install failed"
 		return false
@@ -1972,7 +1982,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		for file_name in files:
 			print("[LaunchManager] _execute_extract_step: checking if '" + file_name + "' matches pattern '" + expected_file + "'")
 			if file_name.match(expected_file):
-				var full_path = emulator_dir + "/" + file_name
+				var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
 				print("[LaunchManager] _execute_extract_step: MATCH! full_path=" + full_path)
 				if FileSystemManager.file_exists(full_path):
 					archive_path = full_path
@@ -1990,7 +2000,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			var lower_name = file_name.to_lower()
 			for ext in archive_extensions:
 				if lower_name.ends_with(ext):
-					var full_path = emulator_dir + "/" + file_name
+					var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
 					if FileSystemManager.file_exists(full_path):
 						archive_path = full_path
 						break
@@ -2056,7 +2066,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 
 ## Executes batch extraction for multiple archives
 func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_config: Dictionary, extract_dir: String, strip_top: bool, flatten_target: String) -> bool:
-	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
+	var emulator_dir = _get_emulator_directory(emulator_id)
 	var archive_paths = []
 	
 	# First, check for explicit expected_file pattern in extract_config
@@ -2065,7 +2075,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 		var files = FileSystemManager.list_dir(emulator_dir)
 		for file_name in files:
 			if file_name.match(expected_file):
-				var full_path = emulator_dir + "/" + file_name
+				var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
 				if FileSystemManager.file_exists(full_path):
 					archive_paths.append(full_path)
 	
@@ -2077,7 +2087,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 			var lower_name = file_name.to_lower()
 			for ext in archive_extensions:
 				if lower_name.ends_with(ext):
-					var full_path = emulator_dir + "/" + file_name
+					var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
 					if FileSystemManager.file_exists(full_path):
 						archive_paths.append(full_path)
 						break
@@ -2104,6 +2114,18 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	var progress = {"completed": 0, "failed": 0}
 	var extraction_ids = []
 	
+	# Create a single batch progress notification
+	var batch_notification_id = NotificationManager.show_notification(
+		step_display_name + " (0/" + str(total_archives) + ")",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			return float(progress.completed) / float(total_archives),
+		func(p: float) -> String:
+			return step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")"
+	)
+	
 	# Queue extraction for all archives
 	for archive_path in archive_paths:
 		var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name, true, true)
@@ -2115,6 +2137,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	
 	if extraction_ids.is_empty():
 		push_error("[LaunchManager] No extractions could be queued for batch: " + emulator_id)
+		NotificationManager.dismiss_notification(batch_notification_id)
 		return false
 	
 	# Create callback for batch extraction (shared by all archives)
@@ -2129,6 +2152,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 		
 		# Check if all extractions are complete
 		if progress.completed >= total_archives:
+			# Dismiss batch notification
+			NotificationManager.dismiss_notification(batch_notification_id)
+			
 			if progress.failed > 0:
 				_emulator_install_progress[emulator_id] = "Extraction failed"
 				emulator_extraction_completed.emit(emulator_id, false)
@@ -2201,28 +2227,12 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			
 			var full_path = _resolve_validation_path(emulator_id, folder_path)
 			
-			# For SAF paths, we can't easily list files with patterns
-			# So we just check if the directory exists
-			if full_path.begins_with("content://"):
-				return FileSystemManager.dir_exists(full_path)
-			
-			# For regular paths, use DirAccess to list and match files
-			var dir = DirAccess.open(full_path)
-			
-			if not dir:
-				return false
-			
-			dir.list_dir_begin()
-			var file_name = dir.get_next()
-			
-			while file_name != "":
+			# For all paths (including SAF), use FileSystemManager for listing
+			var entries = FileSystemManager.list_dir(full_path)
+			for file_name in entries:
 				if file_name != "." and file_name != "..":
 					if pattern == "" or file_name.match(pattern):
-						dir.list_dir_end()
 						return true
-				file_name = dir.get_next()
-			
-			dir.list_dir_end()
 			return false
 		
 		"package_installed":
@@ -2582,8 +2592,7 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 		push_error("[LaunchManager] No path specified for create_pcsx2_superblock step: " + step_name)
 		return false
 
-	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
-	var memcard_path = emulator_dir + "/" + path
+	var memcard_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), path)
 	
 	var success = SaveManager.create_pcsx2_superblock(memcard_path)
 	if not success:
@@ -2805,15 +2814,11 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	var custom_destination = step_config.get("destination", "")
 	var destination_path: String
 	if custom_destination != "":
-		# Ensure the custom destination directory exists
-		var base_dir = custom_destination.get_base_dir()
-		var dir_name = custom_destination.get_file()
-		var dir = DirAccess.open(base_dir)
-		if dir and not dir.dir_exists(dir_name):
-			dir.make_dir_recursive(dir_name)
-		destination_path = custom_destination + "/" + filename
+		# Ensure the custom destination directory exists using SAF-aware FileSystemManager
+		FileSystemManager.make_dir_recursive(custom_destination)
+		destination_path = FileSystemManager.join_paths(custom_destination, filename)
 	else:
-		destination_path = _get_emulator_directory(emulator_id).rstrip("/") + "/" + filename
+		destination_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), filename)
 	
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
