@@ -23,6 +23,24 @@ static func _with_open_file(path: String, callback: Callable) -> String:
 	file.close()
 	return result
 
+## Reads a specific byte range from a file.
+## Opens the file, seeks to the offset, and reads the requested length.
+## Returns the bytes read, or empty array on failure.
+static func _read_file_range(path: String, offset: int, length: int) -> PackedByteArray:
+	if not FileAccess.file_exists(path):
+		push_error("[TitleIDParser] File not found: " + path)
+		return PackedByteArray()
+	
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		push_error("[TitleIDParser] Failed to open file: " + path)
+		return PackedByteArray()
+	
+	file.seek(offset)
+	var bytes = file.get_buffer(length)
+	file.close()
+	return bytes
+
 ## Converts a PackedByteArray to a hex string
 static func _bytes_to_hex(bytes: PackedByteArray) -> String:
 	var hex = ""
@@ -97,58 +115,58 @@ static func _resolve_zip_path(zip_path: String) -> String:
 # ==================== 3DS (Azahar) ====================
 
 static func extract_3ds_title_id(rom_path: String) -> String:
-	return _with_open_file(rom_path, func(file: FileAccess) -> String:
-		var header = file.get_buffer(0x200)
-		if header.size() < 0x200:
-			push_error("[TitleIDParser] 3DS ROM too small: " + rom_path)
-			return ""
-		
-		var title_id_val = 0
-		
-		if _verify_magic(header, 0x100, "NCCH"):
-			title_id_val = _read_le64(header, 0x118)
-		elif _verify_magic(header, 0x100, "NCSD"):
-			title_id_val = _read_le64(header, 0x108)
-		elif _verify_magic(header, 0x0, "NCSD"):
-			title_id_val = _read_le64(header, 0x008)
-		else:
-			push_error("[TitleIDParser] Unknown 3DS ROM format: " + rom_path)
-			return ""
-		
-		return "%016x" % title_id_val
-	)
+	var header = _read_file_range(rom_path, 0, 0x200)
+	if header.size() < 0x200:
+		push_error("[TitleIDParser] 3DS ROM too small: " + rom_path)
+		return ""
+	
+	var title_id_val = 0
+	
+	if _verify_magic(header, 0x100, "NCCH"):
+		title_id_val = _read_le64(header, 0x118)
+	elif _verify_magic(header, 0x100, "NCSD"):
+		title_id_val = _read_le64(header, 0x108)
+	elif _verify_magic(header, 0x0, "NCSD"):
+		title_id_val = _read_le64(header, 0x008)
+	else:
+		push_error("[TitleIDParser] Unknown 3DS ROM format: " + rom_path)
+		return ""
+	
+	return "%016x" % title_id_val
 
 # ==================== Wii U (Cemu) ====================
 
 static func extract_wiiu_title_id(rom_path: String) -> String:
-	return _with_open_file(rom_path, func(file: FileAccess) -> String:
-		var file_size = file.get_length()
-		var tail_size = mini(file_size, 262144)
-		file.seek(file_size - tail_size)
-		var tail = file.get_buffer(tail_size)
-		
-		for i in range(tail.size() - 20):
-			if tail[i] == 95 and tail[i + 1] == 118:
-				var j = i + 2
-				while j < tail.size() and tail[j] >= 48 and tail[j] <= 57:
-					j += 1
-				
-				if j > i + 2 and i >= 16:
-					var is_hex = true
-					var title_id = ""
-					for k in range(i - 16, i):
-						var c = tail[k]
-						if (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70):
-							title_id += char(c)
-						else:
-							is_hex = false
-							break
-					
-					if is_hex and title_id.length() == 16:
-						return title_id.to_lower()
-		
+	var file_size = FileSystemManager.get_file_size(rom_path)
+	if file_size <= 0:
 		return ""
-	)
+	
+	var tail_size = mini(file_size, 262144)
+	var tail = _read_file_range(rom_path, file_size - tail_size, tail_size)
+	if tail.is_empty():
+		return ""
+	
+	for i in range(tail.size() - 20):
+		if tail[i] == 95 and tail[i + 1] == 118:
+			var j = i + 2
+			while j < tail.size() and tail[j] >= 48 and tail[j] <= 57:
+				j += 1
+			
+			if j > i + 2 and i >= 16:
+				var is_hex = true
+				var title_id = ""
+				for k in range(i - 16, i):
+					var c = tail[k]
+					if (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70):
+						title_id += char(c)
+					else:
+						is_hex = false
+						break
+				
+				if is_hex and title_id.length() == 16:
+					return title_id.to_lower()
+	
+	return ""
 
 # ==================== Switch (Eden) ====================
 
@@ -469,28 +487,31 @@ static func _is_valid_maker_code(maker: String) -> bool:
 	return true
 
 static func extract_gamecube_game_id(rom_path: String) -> String:
-	return _with_open_file(rom_path, func(file: FileAccess) -> String:
-		var file_size = file.get_length()
-		var scan_size = mini(file_size, 1048576)
-		var data = file.get_buffer(scan_size)
-		
-		for i in range(data.size() - 20):
-			var game_id = data.slice(i, i + 4).get_string_from_ascii()
-			var maker = data.slice(i + 4, i + 6).get_string_from_ascii()
-			
-			if not _is_valid_gamecube_game_id(game_id) or not _is_valid_maker_code(maker):
-				continue
-			
-			var disc_number = data[i + 6]
-			var version = data[i + 7]
-			var audio_streaming = data[i + 8]
-			var stream_buffer_size = data[i + 9]
-			
-			if disc_number <= 1 and version <= 2 and audio_streaming <= 1 and stream_buffer_size <= 0x40:
-				return game_id
-		
+	var file_size = FileSystemManager.get_file_size(rom_path)
+	if file_size <= 0:
 		return ""
-	)
+	
+	var scan_size = mini(file_size, 1048576)
+	var data = _read_file_range(rom_path, 0, scan_size)
+	if data.is_empty():
+		return ""
+	
+	for i in range(data.size() - 20):
+		var game_id = data.slice(i, i + 4).get_string_from_ascii()
+		var maker = data.slice(i + 4, i + 6).get_string_from_ascii()
+		
+		if not _is_valid_gamecube_game_id(game_id) or not _is_valid_maker_code(maker):
+			continue
+		
+		var disc_number = data[i + 6]
+		var version = data[i + 7]
+		var audio_streaming = data[i + 8]
+		var stream_buffer_size = data[i + 9]
+		
+		if disc_number <= 1 and version <= 2 and audio_streaming <= 1 and stream_buffer_size <= 0x40:
+			return game_id
+	
+	return ""
 
 static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -> String:
 	var regions: Array[String] = ["USA", "EUR", "JAP", "KOR"]
@@ -523,19 +544,6 @@ static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -
 # ==================== Vita (Vita3K) ====================
 
 static func extract_vita_title_id(zip_path: String) -> String:
-	if PlatformManager.is_android() and zip_path.begins_with("content://"):
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin == null:
-			push_error("[TitleIDParser] PackageChecker plugin not available for SAF URI conversion")
-			return ""
-		
-		var title_id = plugin.extractVitaTitleIdFromSafZip(zip_path)
-		if title_id != "":
-			return title_id
-		else:
-			push_error("[TitleIDParser] Plugin failed to extract TitleID from: " + zip_path)
-			return ""
-	
 	# Resolve ZIP path with fallbacks for Godot virtual paths and Windows backslashes
 	var resolved_path = _resolve_zip_path(zip_path)
 	if resolved_path == "":
@@ -1628,4 +1636,37 @@ static func extract_psp_game_id(rom_path: String) -> String:
 			return _cso_extract_psp_game_id(rom_path)
 		_:
 			push_error("[TitleIDParser] Unsupported PSP ROM format: " + ext)
+			return ""
+
+## Extracts TitleID/serial for a game based on its platform
+## Returns empty string if extraction fails or not needed
+static func extract_for_game(game: GameResource) -> String:
+	var rom_path = game.file_path
+	if rom_path == "":
+		return ""
+	
+	match game.platform_slug:
+		"3ds":
+			return extract_3ds_title_id(rom_path)
+		"wiiu":
+			return extract_wiiu_title_id(rom_path)
+		"ngc", "wii":
+			return extract_gamecube_game_id(rom_path)
+		"ps2":
+			return extract_ps2_serial(rom_path)
+		"psp":
+			return extract_psp_game_id(rom_path)
+		"ps3":
+			return extract_ps3_title_id(rom_path)
+		"ps4":
+			return extract_ps4_title_id(rom_path)
+		"switch":
+			# Switch needs emulator directory for prod.keys lookup
+			var emulator_dir = LaunchManager._get_emulator_directory("eden")
+			return extract_switch_title_id(rom_path, emulator_dir)
+		"vita":
+			return extract_vita_title_id(rom_path)
+		"xbox360":
+			return extract_xbox360_title_id(rom_path)
+		_:
 			return ""

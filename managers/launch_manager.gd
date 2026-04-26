@@ -456,10 +456,6 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	extract_path = FileSystemManager.normalize_path(extract_path)
 	print("[LaunchManager] Flattening: normalized extract_path=" + extract_path)
 	
-	# Use SAF-aware operations if this is a SAF path
-	var is_saf = FileSystemManager.is_saf_path(extract_path)
-	print("[LaunchManager] Flattening: is_saf=" + str(is_saf))
-	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
 		var target_path = ""
@@ -496,20 +492,12 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
 				continue
 			
-			# Use SAF-aware move (can move to different parent directory)
+			# Move to parent directory
 			if not FileSystemManager.move(source_path, dest_path):
 				push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 		
 		# Remove the now-empty subdirectory
-		# For SAF paths, the directory should be empty after moving all contents
-		# For regular paths, use DirAccess
-		if is_saf:
-			# SAF doesn't have a direct directory delete, but it will be cleaned up
-			pass
-		else:
-			var dir = DirAccess.open(extract_path)
-			if dir:
-				dir.remove(target_path)
+		DirAccess.remove_absolute(target_path)
 		return
 	
 	# No target folder specified, use original logic (single directory only)
@@ -553,21 +541,14 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 					print("[LaunchManager] Flattening: destination already exists, skipping")
 					continue
 				
-				# Use SAF-aware move (can move to different parent directory)
+				# Move to parent directory
 				var move_success = FileSystemManager.move(source_path, dest_path)
 				print("[LaunchManager] Flattening: move result=" + str(move_success))
 				if not move_success:
 					push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 			
 			# Remove the now-empty subdirectory
-			if is_saf:
-				# Use SAF-aware directory deletion
-				var delete_success = FileSystemManager.delete_dir(single_entry_path)
-				print("[LaunchManager] Flattening: SAF directory delete result=" + str(delete_success))
-			else:
-				var dir = DirAccess.open(extract_path)
-				if dir:
-					dir.remove(single_entry_path)
+			DirAccess.remove_absolute(single_entry_path)
 	else:
 		print("[LaunchManager] Flattening: filtered_entries.size() != 1, skipping flatten")
 
@@ -650,7 +631,7 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 	# Get the correct file path for the active variant
 	var active_file_name = game.get_active_file_name()
 	
-	# Use the actual file_path from game resource (contains content:// URI for SAF on Android)
+	# Use the actual file_path from game resource
 	# Only fall back to constructing path if file_path is empty
 	if game.file_path != "":
 		intent.rom_path = game.file_path
@@ -1172,6 +1153,7 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	
 	# Prepare emulator-specific data (extract TitleIDs, game files, etc.)
 	# This must happen before save sync so the title_id is available
+	# NOTE: TitleID extraction now uses fast range-read (512 bytes) instead of copying entire files
 	print("[LaunchManager] launch_game: Preparing game for emulator: " + emulator_id)
 	var prep_success = await _prepare_game_for_launch(game, emulator_id)
 	if not prep_success:
@@ -1228,6 +1210,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			var emulator_id = resolve_emulator_for_game(game_to_launch)
 			
 			# Prepare emulator-specific data after download (extract TitleIDs, game files, etc.)
+			# NOTE: TitleID extraction now uses fast range-read (512 bytes) instead of copying entire files
 			print("[LaunchManager] _queue_game_download_then_launch: Preparing game for emulator: " + emulator_id)
 			var prep_success = await _prepare_game_for_launch(game_to_launch, emulator_id)
 			if not prep_success:
@@ -1346,6 +1329,7 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 		await get_tree().create_timer(0.5).timeout
 		
 		# Prepare game data before launching (extract TitleIDs, etc.)
+		# NOTE: TitleID extraction now uses fast range-read (512 bytes) instead of copying entire files
 		print("[LaunchManager] _on_emulator_installed_for_launch: Preparing game for emulator: " + emulator_id)
 		var prep_success = await _prepare_game_for_launch(game, emulator_id)
 		if not prep_success:
@@ -1430,11 +1414,9 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			var core_filename = intent.core_name + "_libretro_android.so"
 			# Cores are downloaded to {emulator_dir}/cores
 			var emulator_dir = _get_emulator_directory(intent.emulator_id)
-			core_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, emulator_dir, FileSystemManager.PathFormat.REAL_PATH)
-			print("[LaunchManager] Core path resolved to: " + core_path)
-			# Also log what the original SAF path was for debugging
-			var original_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, emulator_dir, FileSystemManager.PathFormat.DEFAULT)
-			print("[LaunchManager] Core path (original SAF): " + original_path)
+			# Use real filesystem path - with MANAGE_EXTERNAL_STORAGE, RetroArch can read directly
+			core_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, emulator_dir, FileSystemManager.PathFormat.ABSOLUTE)
+			print("[LaunchManager] Core path for sideload: " + core_path)
 	else:
 		# Regular RetroArch launch - use internal core path
 		if intent.core_name != "":
@@ -1658,30 +1640,9 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		_emulator_install_progress[emulator_id] = "APK download incomplete"
 		return false
 	
-	# For installation, we need a file:// URI. If the APK is on SAF storage,
-	# copy it to user://temp/ first so OS.shell_open() can access it.
-	var install_uri = ""
-	var is_saf_apk = FileSystemManager.is_saf_path(apk_path)
-	
-	if is_saf_apk:
-		var temp_apk_path = "user://temp_apk/" + apk_path.get_file()
-		print("[LaunchManager] Copying SAF APK to temp: " + temp_apk_path)
-		var copy_success = FileSystemManager.copy_file(apk_path, temp_apk_path)
-		if not copy_success:
-			print("[LaunchManager] ERROR: Failed to copy APK from SAF to temp location")
-			NotificationManager.show_notification(
-				"Failed to prepare APK for installation",
-				Notification.Type.ERROR,
-				null,
-				10.0
-			)
-			return false
-		var absolute_apk_path = FileSystemManager.resolve_path(temp_apk_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-		install_uri = "file://" + absolute_apk_path
-		print("[LaunchManager] Using temp APK for install: " + temp_apk_path)
-	else:
-		var absolute_apk_path = FileSystemManager.resolve_path(apk_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-		install_uri = "file://" + absolute_apk_path
+	# For installation, we need a file:// URI
+	var absolute_apk_path = FileSystemManager.resolve_path(apk_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	var install_uri = "file://" + absolute_apk_path
 	
 	print("[LaunchManager] Installing APK: " + apk_path)
 	print("[LaunchManager] Opening APK with URI: " + install_uri)
@@ -1700,10 +1661,9 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		)
 		
 		# Try to open the folder
-		if not is_saf_apk:
-			var folder_result = OS.shell_open(FileSystemManager.resolve_path(emulator_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE}))
-			if folder_result == Error.OK:
-				print("[LaunchManager] Opened folder containing APK")
+		var folder_result = OS.shell_open(FileSystemManager.resolve_path(emulator_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE}))
+		if folder_result == Error.OK:
+			print("[LaunchManager] Opened folder containing APK")
 		
 		_emulator_install_progress[emulator_id] = "APK install failed"
 		return false
@@ -2748,7 +2708,7 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		"step_index": step_index,
 		"step_config": step_config,
 		"filename": filename,
-		"use_saf": destination_path.begins_with("content://"),
+		"use_saf": false,
 		"callback": func(success: bool, message: String):
 			if not success:
 				_emulator_install_progress[emulator_id] = message if message != "" else "Download failed"
@@ -2901,6 +2861,8 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
 	return result
 
 func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -2924,6 +2886,8 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	return true
 
 func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] Cemu: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -3035,6 +2999,8 @@ func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> S
 	return ""
 
 func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] Eden: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -3076,6 +3042,8 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	return true
 
 func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] Dolphin: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -3105,6 +3073,8 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	return true
 
 func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] Xenia: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -3128,6 +3098,8 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
 	return true
 
 func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] PCSX2: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -3158,6 +3130,8 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## Handles PPSSPP game extraction and launch preparation
 ## Returns true if ready to launch, false if error
 func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] PPSSPP: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
@@ -3188,6 +3162,8 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## Handles Vita3K game extraction and launch preparation
 ## Returns true if ready to launch, false if error
 func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] _prepare_vita3k_game: ENTER for " + game.get_display_name())
 	
 	var rom_path = intent.rom_path
@@ -3200,7 +3176,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if PlatformManager.is_android():
 		# Android: Vita3K stores games in its external storage path (configurable in settings)
-		# Path may be SAF URI (content://) or real path - FileSystemManager handles both
+		# Path is a real filesystem path
 		emulator_dir = _get_vita3k_android_data_path()
 		ux0_app_path = emulator_dir + "/ux0/app"
 	else:
@@ -3294,7 +3270,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 
 ## Checks whether the given Vita3K app path contains actual game files
 func _vita_app_has_game_files(vita_app_path: String) -> bool:
-	# Use FileSystemManager which handles both regular paths and SAF URIs
+	# Use FileSystemManager to list files
 	var files = FileSystemManager.list_dir(vita_app_path)
 	# Filter out . and .. entries - they don't count as game files
 	var actual_files = 0
@@ -3585,6 +3561,8 @@ func _determine_ps3_game_format_with_7z(zip_path: String) -> String:
 ## Follows the Vita3K pattern: extract TitleID first, check if installed, skip if present
 ## Extracts directly to games/ or dev_hdd0/game/ based on format detection - no temp directory
 func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] RPCS3: _prepare_rpcs3_game called for: " + game.get_display_name())
 	
 	if not game or not intent:
@@ -3743,6 +3721,8 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 ## PS4 games are ZIP files containing a CUSAxxxxx directory at the root
 ## Returns true if preparation succeeded, false on error
 func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if game.get_active_title_id() != "":
+		return true
 	print("[LaunchManager] shadPS4: _prepare_shadps4_game called for: " + game.get_display_name())
 	
 	if not game or not intent:

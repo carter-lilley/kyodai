@@ -150,6 +150,14 @@ func has_storage_permission() -> bool:
 	var has_manage = "android.permission.MANAGE_EXTERNAL_STORAGE" in granted
 	return has_old or has_manage
 
+## Opens Android Settings to enable MANAGE_EXTERNAL_STORAGE permission
+func open_manage_storage_settings():
+	if not is_android():
+		return
+	
+	# Open the "All files access" settings page
+	OS.shell_open("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION")
+
 ## Opens Android Settings to enable install permissions
 ## Called when user tries to install an emulator without the required permission
 func show_install_permission_dialog():

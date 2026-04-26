@@ -833,19 +833,8 @@ func _on_card_pressed():
 			var active_file_name = game.get_active_file_name()
 			var file_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
 			
-			var file_exists = false
-			
-			# On Android with SAF paths, use plugin to check file existence
-			if PlatformManager.is_android() and file_path.begins_with("content://"):
-				var plugin = Engine.get_singleton("PackageChecker")
-				if plugin:
-					file_exists = plugin.call("safFileExists", file_path)
-				else:
-					push_warning("PackageChecker plugin not available for SAF file check")
-					file_exists = false
-			else:
-				# Standard file check for regular paths
-				file_exists = FileAccess.file_exists(file_path)
+			# Check if file exists using standard file access
+			var file_exists = FileAccess.file_exists(file_path)
 			
 			if not file_exists:
 				if NotificationManager:

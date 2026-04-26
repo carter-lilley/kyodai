@@ -27,21 +27,17 @@
 	
 	<application
 		android:largeHeap="true">
-		<!-- IMPORTANT: To enable SD card support via FileProvider, add this provider block to your
-		     app's main AndroidManifest.xml (custom build template) so it can replace Godot's default.
-		     Without a custom build template, SAF tree URIs are converted to real document URIs in code. -->
-		<!--
+		<!-- FileProvider for serving ROM files to emulators via content:// URIs -->
+		<!-- Uses a unique authority to avoid conflict with Godot's built-in FileProvider -->
 		<provider
-			android:name="androidx.core.content.FileProvider"
-			android:authorities="${applicationId}.fileprovider"
+			android:name="com.heckpoint.kyodai.KyodaiFileProvider"
+			android:authorities="${applicationId}.kyodai.fileprovider"
 			android:exported="false"
-			android:grantUriPermissions="true"
-			tools:replace="android:authorities,android:resource">
+			android:grantUriPermissions="true">
 			<meta-data
 				android:name="android.support.FILE_PROVIDER_PATHS"
 				android:resource="@xml/file_paths" />
 		</provider>
-		-->
 		
 		<meta-data 
 			android:name="org.godotengine.plugin.v2.PackageChecker" 

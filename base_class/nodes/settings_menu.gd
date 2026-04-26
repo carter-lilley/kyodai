@@ -170,18 +170,9 @@ func match_var_type(settingsvar : SettingsVar):
 				add_child(dialog)
 				
 				dialog.dir_selected.connect(func(dir: String):
-					line_edit.text = dir
-					emit_signal("setting_changed", dir, settingsvar)
-					
-					# On Android, persist SAF permission immediately when folder is selected
-					if dir.begins_with("content://") and PlatformManager.is_android():
-						var plugin = Engine.get_singleton("PackageChecker")
-						if plugin:
-							# Try to call the method directly (Godot 4.x plugin method exposure can be tricky)
-							plugin.call("persistSafPermission", dir)
-						else:
-							push_error("[SettingsMenu] PackageChecker plugin not available")
-					
+					var resolved_dir = FileSystemManager.resolve_content_uri(dir)
+					line_edit.text = resolved_dir
+					emit_signal("setting_changed", resolved_dir, settingsvar)
 					dialog.queue_free()
 				)
 				

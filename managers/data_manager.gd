@@ -1809,21 +1809,8 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	var root_path = root_folder.value if root_folder else "user://roms/"
 	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 	
-	# Check if file exists (use PackageChecker for SAF paths on Android)
-	var file_exists = false
-	if PlatformManager.is_android() and abs_path.begins_with("content://"):
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin:
-			file_exists = plugin.call("safFileExists", abs_path)
-		else:
-			push_error("[DataManager] PackageChecker plugin not available for SAF file check")
-			if callback.is_valid():
-				callback.call(false)
-			return false
-	else:
-		file_exists = FileAccess.file_exists(abs_path)
-	
-	if not file_exists:
+	# Check if file exists
+	if not FileAccess.file_exists(abs_path):
 		push_error("[DataManager] File does not exist: " + abs_path)
 		if callback.is_valid():
 			callback.call(false)
@@ -1833,38 +1820,28 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	var file_deleted = false
 	var error_msg = ""
 	
-	# Check if this is an Android SAF path
-	if PlatformManager.is_android() and abs_path.begins_with("content://"):
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin:
-			file_deleted = plugin.call("deleteSafFile", abs_path)
-			if not file_deleted:
-				error_msg = "PackageChecker.deleteSafFile returned false"
+	# Method 1: Try using DirAccess with the parent directory
+	var parent_dir = abs_path.get_base_dir()
+	var file_name = abs_path.get_file()
+	
+	var dir = DirAccess.open(parent_dir)
+	
+	if dir:
+		var err = dir.remove(file_name)
+		if err == OK:
+			file_deleted = true
 		else:
-			error_msg = "PackageChecker plugin not available for SAF file deletion"
+			error_msg = "DirAccess.remove failed with error: " + str(err)
 	else:
-		# Method 1: Try using DirAccess with the parent directory
-		var parent_dir = abs_path.get_base_dir()
-		var file_name = abs_path.get_file()
-		
-		var dir = DirAccess.open(parent_dir)
-		
-		if dir:
-			var err = dir.remove(file_name)
-			if err == OK:
-				file_deleted = true
-			else:
-				error_msg = "DirAccess.remove failed with error: " + str(err)
+		error_msg = "Failed to open directory: " + parent_dir
+	
+	# Method 2: If first method failed, try remove_absolute
+	if not file_deleted:
+		var err = DirAccess.remove_absolute(abs_path)
+		if err == OK:
+			file_deleted = true
 		else:
-			error_msg = "Failed to open directory: " + parent_dir
-		
-		# Method 2: If first method failed, try remove_absolute
-		if not file_deleted:
-			var err = DirAccess.remove_absolute(abs_path)
-			if err == OK:
-				file_deleted = true
-			else:
-				error_msg += " | remove_absolute failed with error: " + str(err)
+			error_msg += " | remove_absolute failed with error: " + str(err)
 	
 	# If file deletion failed, don't update the database
 	if not file_deleted:
@@ -1873,14 +1850,8 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 			callback.call(false)
 		return false
 	
-	# Verify file was actually deleted (use PackageChecker for SAF paths on Android)
-	var file_still_exists = false
-	if PlatformManager.is_android() and abs_path.begins_with("content://"):
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin:
-			file_still_exists = plugin.call("safFileExists", abs_path)
-	else:
-		file_still_exists = FileAccess.file_exists(abs_path)
+	# Verify file was actually deleted
+	var file_still_exists = FileAccess.file_exists(abs_path)
 	
 	if file_still_exists:
 		push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
@@ -2854,17 +2825,8 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 			callback.call(0)
 
 func _scan_games_directory(root_path: String, sub_path: String, results: Array[String]) -> void:
-	"""Recursively scan the games directory for ROM files.
+	"""Recursively scan the games directory for ROM files."""
 	
-	On Android with SAF (Storage Access Framework), uses the PackageChecker plugin
-	to enumerate files in content:// URIs. Falls back to DirAccess for file paths."""
-	
-	# Check if this is a SAF (Storage Access Framework) path on Android
-	if root_path.begins_with("content://") and PlatformManager.is_android():
-		_scan_saf_directory(root_path, results)
-		return
-	
-	# Standard file system scanning (desktop or Android file paths)
 	var full_path = root_path
 	if sub_path != "":
 		full_path = root_path + "/" + sub_path
@@ -2894,38 +2856,6 @@ func _scan_games_directory(root_path: String, sub_path: String, results: Array[S
 			results.append(current_path)
 		
 		file_name = dir.get_next()
-
-func _scan_saf_directory(tree_uri: String, results: Array[String]) -> void:
-	"""Scan a SAF (Storage Access Framework) directory using the PackageChecker plugin.
-	
-	The plugin returns a JSON array of file paths like: ["gb/game.gb", "snes/game.smc"]"""
-	
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		push_error("[DataManager] PackageChecker plugin not available for SAF scanning")
-		return
-	
-	# Call the plugin method to list files
-	var json_result = plugin.call("listSafFiles", tree_uri)
-	if json_result == null or json_result == "[]":
-		return
-	
-	# Parse the JSON array
-	var json = JSON.new()
-	var parse_result = json.parse(json_result)
-	if parse_result != OK:
-		push_error("[DataManager] Failed to parse SAF file list: " + json_result)
-		return
-	
-	var files = json.get_data()
-	if not files is Array:
-		push_error("[DataManager] SAF file list is not an array")
-		return
-	
-	# Add all files to results
-	for file_path in files:
-		if file_path is String and file_path != "":
-			results.append(file_path)
 
 func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
 	"""Update database entries for matched games."""

@@ -242,10 +242,10 @@ func _build_android_permissions_page():
 	vbox.add_child(HSeparator.new())
 	
 	# Storage permission
-	var storage_row = _add_permission_row(vbox, "Storage Access", "Required to access game files and emulator data")
+	var storage_row = _add_permission_row(vbox, "All Files Access", "Required to access game files on internal and SD card storage. You will be taken to system settings to enable this.")
 	_perm_storage_indicator = storage_row.indicator
 	_perm_storage_button = Button.new()
-	_perm_storage_button.text = "Grant"
+	_perm_storage_button.text = "Open Settings"
 	_perm_storage_button.pressed.connect(_request_storage_permission)
 	storage_row.container.add_child(_perm_storage_button)
 	
@@ -559,14 +559,7 @@ func _on_browse_pressed(edit: LineEdit):
 	add_child(dialog)
 	
 	dialog.dir_selected.connect(func(dir: String):
-		edit.text = dir
-		
-		# On Android, persist SAF permission
-		if dir.begins_with("content://") and PlatformManager.is_android():
-			var plugin = Engine.get_singleton("PackageChecker")
-			if plugin:
-				plugin.call("persistSafPermission", dir)
-		
+		edit.text = FileSystemManager.resolve_content_uri(dir)
 		dialog.queue_free()
 	)
 	
@@ -582,7 +575,14 @@ func _request_storage_permission():
 	if not PlatformManager.is_android():
 		return
 	
-	OS.request_permissions()
+	var granted = OS.get_granted_permissions()
+	var has_manage = "android.permission.MANAGE_EXTERNAL_STORAGE" in granted
+	
+	if has_manage:
+		return
+	
+	# MANAGE_EXTERNAL_STORAGE must be granted via system settings
+	PlatformManager.open_manage_storage_settings()
 	_update_permission_indicators()
 
 func _request_notifications_permission():
@@ -606,14 +606,12 @@ func _update_permission_indicators():
 	var granted = OS.get_granted_permissions()
 	
 	if _perm_storage_indicator:
-		# Android 11+ uses MANAGE_EXTERNAL_STORAGE (all files access) instead of READ/WRITE
-		var has_old_storage = "android.permission.READ_EXTERNAL_STORAGE" in granted and "android.permission.WRITE_EXTERNAL_STORAGE" in granted
+		# Android 11+ requires MANAGE_EXTERNAL_STORAGE (all files access)
 		var has_manage_storage = "android.permission.MANAGE_EXTERNAL_STORAGE" in granted
-		var has_storage = has_old_storage or has_manage_storage
-		_perm_storage_indicator.set_status(Indicator.Status.SUCCESS if has_storage else Indicator.Status.ERROR, "Granted" if has_storage else "Not Granted")
+		_perm_storage_indicator.set_status(Indicator.Status.SUCCESS if has_manage_storage else Indicator.Status.ERROR, "Granted" if has_manage_storage else "Required")
 		if _perm_storage_button:
-			_perm_storage_button.text = "Granted" if has_storage else "Grant"
-			_perm_storage_button.disabled = has_storage
+			_perm_storage_button.text = "Granted" if has_manage_storage else "Open Settings"
+			_perm_storage_button.disabled = has_manage_storage
 	
 	if _perm_notifications_indicator:
 		var has_notif = "android.permission.POST_NOTIFICATIONS" in granted
@@ -686,6 +684,10 @@ func _save_storage_settings():
 	var games_path = _games_path_edit.text.strip_edges()
 	var emulators_path = _emulators_path_edit.text.strip_edges()
 	
+	# Resolve content:// URIs to real paths before saving
+	games_path = FileSystemManager.resolve_content_uri(games_path)
+	emulators_path = FileSystemManager.resolve_content_uri(emulators_path)
+	
 	if not games_path.is_empty():
 		var games_setting = SettingsManager.get_setting("games_root_folder")
 		if games_setting:
@@ -701,14 +703,16 @@ func _save_storage_settings():
 		FileSystemManager.make_dir_recursive(emulators_path)
 	
 	if _steam_path_edit and not _steam_path_edit.text.strip_edges().is_empty():
+		var steam_path = FileSystemManager.resolve_content_uri(_steam_path_edit.text.strip_edges())
 		var steam_setting = SettingsManager.get_setting("steam_folder")
 		if steam_setting:
-			SettingsManager.set_setting(_steam_path_edit.text.strip_edges(), steam_setting)
+			SettingsManager.set_setting(steam_path, steam_setting)
 	
 	if _vita3k_path_edit and not _vita3k_path_edit.text.strip_edges().is_empty():
+		var vita_path = FileSystemManager.resolve_content_uri(_vita3k_path_edit.text.strip_edges())
 		var vita_setting = SettingsManager.get_setting("vita3k_data_folder_android")
 		if vita_setting:
-			SettingsManager.set_setting(_vita3k_path_edit.text.strip_edges(), vita_setting)
+			SettingsManager.set_setting(vita_path, vita_setting)
 
 # Public API
 

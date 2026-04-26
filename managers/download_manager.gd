@@ -30,8 +30,6 @@ class QueueItem:
 	var romm_id: int = 0  # The actual RomM ID being downloaded (could be a sibling)
 	var download_info: Dictionary = {}  # For file-based downloads: {http, callback, path, completed}
 	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
-	var saf_destination: String = ""  # Original SAF URI if using SAF storage
-	var use_saf: bool = false  # Whether this download uses SAF
 	var delete_after_extract: bool = false  # Whether to delete archive after extraction
 	var suppress_notification: bool = false  # If true, don't show per-item notifications
 
@@ -234,62 +232,13 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	if game:
 		item.expected_file_size = game.get_active_file_size()
 	
-	# Check if destination is a SAF (Storage Access Framework) path
-	print("[DownloadManager] queue_download: destination=" + destination)
-	print("[DownloadManager] destination starts with content://: " + str(destination.begins_with("content://")))
+	# Set extract_dir and ensure destination directory exists
+	item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
+	var dest_dir = destination.get_base_dir()
 	
-	if destination.begins_with("content://"):
-		# On Android, verify SAF permissions before starting download
-		if PlatformManager.is_android():
-			var plugin = Engine.get_singleton("PackageChecker")
-			if plugin == null:
-				push_error("[DownloadManager] PackageChecker plugin not available")
-				NotificationManager.show_notification("Download Error: Storage plugin not available", Notification.Type.ERROR, null, 5.0)
-				return ""
-			
-			# Check if we have permission for this directory
-			# Extract the base tree URI (up to /tree/.../), not including subdirectories
-			var tree_uri = FileSystemManager.extract_saf_tree_uri(destination)
-			if tree_uri == "":
-				push_error("[DownloadManager] Could not extract tree URI from: " + destination)
-				NotificationManager.show_notification("Download Error: Invalid storage path format.", Notification.Type.ERROR, null, 5.0)
-				return ""
-			
-			var has_permission = plugin.checkSafPermission(tree_uri)
-			if not has_permission:
-				push_error("[DownloadManager] No permission for SAF tree: " + tree_uri)
-				NotificationManager.show_notification("Download Error: No permission for storage directory. Please re-select the folder in Settings > Storage.", Notification.Type.ERROR, null, 8.0)
-				return ""
-		
-		item.use_saf = true
-		item.saf_destination = destination
-		# Change destination to temp location
-		var file_name = destination.get_file()
-		var temp_dir = "user://downloads/saf_temp/" + item_id
-		item.destination_path = temp_dir + "/" + file_name
-		# Save original extract_dir for restoration after SAF copy
-		var original_extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
-		item.set_meta("original_extract_dir", original_extract_dir)
-		# Also set extract_dir to temp location if auto-extract is enabled
-		if item.auto_extract:
-			item.extract_dir = temp_dir + "/extracted"
-		else:
-			item.extract_dir = original_extract_dir
-		# Create temp directory
-		if not FileSystemManager.make_dir_recursive(temp_dir):
-			push_error("[DownloadManager] Failed to create temp directory: " + temp_dir)
-			return ""
-	else:
-		# Set extract_dir for regular paths
-		item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
-		# Ensure destination directory exists for regular paths
-		var dest_dir = destination.get_base_dir()
-		var dir: DirAccess
-		
-		# Ensure destination directory exists (handles SAF and regular paths)
-		if not FileSystemManager.make_dir_recursive(dest_dir):
-			push_error("[DownloadManager] Failed to create directory: " + dest_dir)
-			return ""
+	if not FileSystemManager.make_dir_recursive(dest_dir):
+		push_error("[DownloadManager] Failed to create directory: " + dest_dir)
+		return ""
 	
 	_queue.append(item)
 	
@@ -482,7 +431,6 @@ func _start_download(item: QueueItem):
 		headers.append("Authorization: " + NetworkManager.get_auth_header())
 	
 	# Check if this is a large file that should use chunked downloading
-	# Note: SAF paths are now supported for chunked downloads
 	var is_large_file = item.type == "game" or item.type == "emulator" or item.type == "emulator_core"
 	var should_use_chunking = is_large_file and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD
 	
@@ -493,7 +441,7 @@ func _start_download(item: QueueItem):
 	
 	# All downloads now stream directly to disk via HTTPRequest.download_file
 	# This avoids memory issues with large files (games, emulators, cores)
-	print("[DownloadManager] Using file-based download for: " + item.name + " (type=" + item.type + ", use_saf=" + str(item.use_saf) + ")")
+	print("[DownloadManager] Using file-based download for: " + item.name + " (type=" + item.type + ")")
 	item.download_info = NetworkManager.http_download_file(
 		item.url,
 		item.destination_path,
@@ -570,6 +518,14 @@ func _is_connection_valid(http: HTTPClient) -> bool:
 	if http == null:
 		return false
 	return http.get_status() == HTTPClient.STATUS_CONNECTED
+
+## Checks if a platform needs TitleID extraction for save sync
+func _needs_title_id(game: GameResource) -> bool:
+	match game.platform_slug:
+		"3ds", "wiiu", "ngc", "wii", "ps2", "psp", "ps3", "ps4", "switch", "vita", "xbox360":
+			return true
+		_:
+			return false
 
 # ==================== CHUNKED DOWNLOAD METHODS ====================
 
@@ -1423,18 +1379,8 @@ func _reassemble_chunks(item_id: String):
 			true  # pulsing = true
 		)
 	
-	# For SAF destinations, we must reassemble to a temp file first
-	var use_saf = item.use_saf
+	# Reassemble chunks to the final destination path
 	var reassembly_temp_path = chunked_info.final_path
-	
-	if use_saf:
-		# Create a temp assembly path in user:// since we can't write directly to SAF
-		var original_filename = chunked_info.final_path.get_file()
-		reassembly_temp_path = "user://downloads/assembled/" + original_filename
-		var assembled_dir = "user://downloads/assembled"
-		FileSystemManager.make_dir_recursive(assembled_dir)
-		print("[DownloadManager] SAF download: assembling to temp file: " + reassembly_temp_path)
-		print("[DownloadManager] SAF destination: " + item.saf_destination)
 	
 	# Pre-reassembly verification: ensure all chunk files exist and have correct sizes
 	var missing_chunks = []
@@ -1469,11 +1415,11 @@ func _reassemble_chunks(item_id: String):
 	
 	# Platform-specific reassembly
 	if PlatformManager.is_android():
-		_reassemble_chunks_android(item_id, chunked_info, item, use_saf, reassembly_temp_path)
+		_reassemble_chunks_android(item_id, chunked_info, item, reassembly_temp_path)
 	else:
-		_reassemble_chunks_desktop(item_id, chunked_info, item, use_saf, reassembly_temp_path)
+		_reassemble_chunks_desktop(item_id, chunked_info, item, reassembly_temp_path)
 
-func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadInfo, item: QueueItem, use_saf: bool, reassembly_temp_path: String):
+func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadInfo, item: QueueItem, reassembly_temp_path: String):
 	"""Reassemble chunks using native Java on Android (low memory footprint)"""
 	# Build JSON array of chunk paths
 	var chunk_paths = []
@@ -1524,9 +1470,9 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 		return
 	
 	# Success! Clean up chunk temp files and continue
-	_finish_reassembly_success(item_id, item, use_saf, reassembly_temp_path)
+	_finish_reassembly_success(item_id, item, reassembly_temp_path)
 
-func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadInfo, item: QueueItem, use_saf: bool, reassembly_temp_path: String):
+func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadInfo, item: QueueItem, reassembly_temp_path: String):
 	"""Reassemble chunks using Godot threading on Desktop"""
 	# Store values needed for thread operation
 	var final_path = reassembly_temp_path
@@ -1618,10 +1564,10 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		
 		print("[DownloadManager] [Reassembly] Desktop reassembly callback success for: " + item.name)
 		# Success - clean up and finish
-		_finish_reassembly_success(item_id, item, use_saf, reassembly_temp_path)
+		_finish_reassembly_success(item_id, item, reassembly_temp_path)
 	)
 
-func _finish_reassembly_success(item_id: String, item: QueueItem, use_saf: bool, reassembly_temp_path: String):
+func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_temp_path: String):
 	"""Handle successful reassembly completion (shared between Android and Desktop)"""
 	if not _chunked_downloads.has(item_id):
 		return
@@ -1659,16 +1605,8 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, use_saf: bool,
 	
 	_cleanup_chunked_download(item_id)
 	
-	# For SAF downloads, we need to copy the assembled file to SAF location
-	if use_saf:
-		print("[DownloadManager] [Reassembly] SAF download complete, queueing copy to storage for: " + item.name)
-		# Update item.destination_path to point to our temp file for the copy operation
-		item.destination_path = reassembly_temp_path
-		item.set_meta("temp_assembly_path", reassembly_temp_path)
-		_queue_saf_copy_to_thread(item)
-	else:
-		# Continue with normal completion flow
-		_on_file_download_complete(item, true, "")
+	# Continue with normal completion flow
+	_on_file_download_complete(item, true, "")
 
 func _cleanup_chunked_download(item_id: String):
 	"""Clean up temp files for chunked download"""
@@ -1789,15 +1727,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		_process_queue()
 		return
 	
-	# Handle SAF (Storage Access Framework) copy if needed
-	print("[DownloadManager] _on_file_download_complete: use_saf=" + str(item.use_saf) + ", status=" + item.status)
-	
-	if item.use_saf:
-		# Queue SAF copy to extraction thread to avoid blocking main thread
-		_queue_saf_copy_to_thread(item)
-		return
-	
-	# For non-SAF downloads, finish immediately
+	# Finish download completion
 	_finish_download_completion(item)
 
 func _cleanup_download_tracking(item_id: String):
@@ -1889,7 +1819,6 @@ func _start_extraction(item: QueueItem):
 	var extract_dir = item.extract_dir
 	
 	print("[DownloadManager] _start_extraction: archive_path=" + archive_path + ", extract_dir=" + extract_dir)
-	print("[DownloadManager] item.use_saf=" + str(item.use_saf) + ", item.saf_destination=" + item.saf_destination)
 	
 	if archive_path.ends_with(".zip"):
 		_extract_zip(item, archive_path, extract_dir)
@@ -1905,155 +1834,30 @@ func _start_extraction(item: QueueItem):
 		queue_changed.emit()
 		_process_queue()
 
-func _queue_saf_copy_to_thread(item: QueueItem):
-	"""Queue SAF file copy to extraction thread to avoid blocking main thread"""
-	print("[DownloadManager] Queueing SAF copy to background thread for item: " + item.id)
-	
-	# Dismiss the download progress notification and create a new one for SAF copy
-	if item.notification_id != -1:
-		NotificationManager.dismiss_notification(item.notification_id)
-	
-	# Get plugin and paths first
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		push_error("[DownloadManager] PackageChecker plugin not available for SAF copy")
-		item.status = "failed"
-		item.error_message = "Plugin not available"
-		_cleanup_item(item)
-		_active_items.erase(item.id)
-		download_completed.emit(item.id, false, "Plugin not available")
-		queue_changed.emit()
-		_process_queue()
-		return
-	
-	# Extract tree URI and file name from SAF destination
-	var saf_path = item.saf_destination
-	var file_name = item.destination_path.get_file()
-	var tree_uri = FileSystemManager.extract_saf_tree_uri(saf_path)
-	
-	if tree_uri == "":
-		push_error("[DownloadManager] Could not extract tree URI from: " + saf_path)
-		item.status = "failed"
-		item.error_message = "Invalid SAF path format"
-		_cleanup_item(item)
-		_active_items.erase(item.id)
-		download_completed.emit(item.id, false, "Invalid SAF path format")
-		queue_changed.emit()
-		_process_queue()
-		return
-	
-	# Extract subdirectory
-	var subdir = ""
-	var tree_end_pos = saf_path.find("/", tree_uri.length() - 1)
-	if tree_end_pos != -1:
-		var file_name_pos = saf_path.rfind("/")
-		if file_name_pos > tree_end_pos:
-			subdir = saf_path.substr(tree_end_pos + 1, file_name_pos - tree_end_pos - 1)
-	
-	# Convert paths
-	var absolute_path = ProjectSettings.globalize_path(item.destination_path)
-	var dest_path = subdir + "/" + file_name if subdir != "" else file_name
-	
-	# Store temp paths for cleanup
-	var temp_file_path = item.destination_path
-	var temp_dir_path = temp_file_path.get_base_dir()
-	
-	# Store SAF copy progress in a dictionary that can be shared by reference
-	var saf_copy_data = {"progress": 0.0}
-	
-	# Only show SAF copy notification if not suppressed (e.g., for batch operations)
-	if not item.suppress_notification:
-		# Create new notification with progress tracking for SAF copy
-		item.notification_id = NotificationManager.show_notification(
-			"Moving to storage: " + item.name + "...",
-			Notification.Type.INFO,
-			null,
-			0.0,
-			func() -> float:
-				return saf_copy_data.progress / 100.0,  # Return 0.0 to 1.0
-			func(progress: float) -> String:
-				var percent = int(progress * 100)
-				return "Moving to storage: %s (%d%%)" % [item.name, percent]
-		)
-	
-	# Connect to SAF copy progress signal for real-time updates
-	var progress_callback = func(filename: String, progress: int):
-		print("[DownloadManager] SAF copy progress received: " + filename + " = " + str(progress) + "%")
-		saf_copy_data.progress = float(progress)
-	
-	if plugin.has_signal("saf_copy_progress"):
-		print("[DownloadManager] Connecting to saf_copy_progress signal")
-		plugin.saf_copy_progress.connect(progress_callback)
-	else:
-		print("[DownloadManager] WARNING: saf_copy_progress signal not available")
-	
-	# Create SAF copy callable for extraction thread
-	var saf_copy_callable = func() -> bool:
-		# Create subdirectory if needed
-		if subdir != "":
-			plugin.createSafDirectory(tree_uri, subdir)
-		
-		# Perform the copy
-		return plugin.call("copyFileToSaf", absolute_path, tree_uri, dest_path)
-	
-	# Queue to extraction thread
-	MemoryManager.queue_extraction_task(saf_copy_callable, func(success: bool):
-		# Disconnect progress signal
-		if plugin.has_signal("saf_copy_progress"):
-			plugin.saf_copy_progress.disconnect(progress_callback)
-		
-		if not success:
-			push_error("[DownloadManager] Failed to copy file to SAF location")
-			item.status = "failed"
-			item.error_message = "Failed to copy to storage"
-			if item.notification_id != -1:
-				NotificationManager.dismiss_notification(item.notification_id)
-				item.notification_id = -1
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			download_completed.emit(item.id, false, "SAF copy failed")
-			queue_changed.emit()
-			_process_queue()
-			return
-		
-		# Update destination to SAF path
-		item.destination_path = item.saf_destination
-		
-		# Restore original extract_dir
-		if item.has_meta("original_extract_dir"):
-			item.extract_dir = item.get_meta("original_extract_dir")
-		
-		# Clean up temp files
-		FileSystemManager.delete_file(temp_file_path)
-		FileSystemManager.delete_file(temp_dir_path)
-		
-		# Also clean up temp assembly file for chunked downloads
-		if item.has_meta("temp_assembly_path"):
-			var assembly_path = item.get_meta("temp_assembly_path")
-			if FileSystemManager.file_exists(assembly_path):
-				FileSystemManager.delete_file(assembly_path)
-				print("[DownloadManager] Cleaned up temp assembly file: " + assembly_path)
-		
-		# Dismiss SAF copy notification before completion
-		if item.notification_id != -1:
-			NotificationManager.dismiss_notification(item.notification_id)
-			item.notification_id = -1
-		
-		# Finish download completion
-		_finish_download_completion(item)
-	)
-
 func _finish_download_completion(item: QueueItem):
-	"""Complete the download after file operations (SAF copy, etc.) are done"""
+	"""Complete the download after file operations are done"""
 	# Update game resource if applicable
 	if item.game_resource:
 		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
 		item.game_resource.mark_sibling_downloaded(downloaded_id)
-		if item.use_saf:
-			item.game_resource.file_path = item.saf_destination
-		else:
-			item.game_resource.file_path = item.destination_path
+		item.game_resource.file_path = item.destination_path
 		DataManager.update_game(item.game_resource)
+		
+		# Extract TitleID in background if needed
+		if item.game_resource.get_active_title_id() == "" and _needs_title_id(item.game_resource):
+			var game = item.game_resource
+			NotificationManager.show_notification("Extracting TitleID for " + game.title + "...", Notification.Type.INFO, null, 3.0, Callable(), Callable(), true)
+			MemoryManager.queue_extraction_task(func():
+				var title_id = TitleIDParser.extract_for_game(game)
+				return title_id
+			, func(title_id: String):
+				if title_id != "":
+					DataManager.update_game_title_id(game.romm_id, title_id)
+					NotificationManager.show_notification("TitleID " + title_id + " found for " + game.title + "!", Notification.Type.SUCCESS, null, 3.0)
+					print("[DownloadManager] TitleID extracted post-download: " + title_id + " for " + game.title)
+				else:
+					print("[DownloadManager] TitleID extraction failed for " + game.title)
+			)
 	
 	# Call custom callback if provided
 	if item.callbacks.has("on_complete"):
@@ -2072,8 +1876,7 @@ func _finish_download_completion(item: QueueItem):
 			item.notification_id = -1
 		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on completion (no extraction)
-		var final_path = item.saf_destination if item.use_saf else item.destination_path
-		download_completed.emit(item.id, true, final_path)
+		download_completed.emit(item.id, true, item.destination_path)
 		queue_changed.emit()
 		_process_queue()
 
@@ -2085,7 +1888,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 	var extraction_callable = func() -> bool:
 		print("[DownloadManager] Extraction worker started: " + archive_path + " -> " + extract_dir)
 		
-		# Delegate to FileSystemManager for all ZIP extraction (handles SAF source/dest)
+		# Delegate to FileSystemManager for all ZIP extraction
 		var success = FileSystemManager.extract_zip(archive_path, extract_dir)
 		
 		if not success:

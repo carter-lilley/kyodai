@@ -218,7 +218,7 @@
 			{
 			  "key": "LIBRETRO",
 			  "value": "{core_path}",
-			  "type": "string"
+			  "type": "file_path"
 			}
 		  ]
 		}
@@ -359,13 +359,10 @@
 		  "executable": "azahar.AppImage",
 		  "template": ["{exe}", "{rom}"]
 		},
-		"android": {
+        "android": {
 		  "action": "android.intent.action.VIEW",
-		  "package": "io.github.lime3ds.android",
-		  "class": "org.citra.citra_emu.activities.EmulationActivity",
-		  "rom_delivery": "intent_data",
-		  "grant_uri_permission": true,
-		  "use_document_uri": true
+		  "package": "org.azahar_emu.azahar",
+		  "rom_delivery": "intent_data"
 		}
 	  }
 	}
@@ -471,8 +468,7 @@
 		"android": {
 		  "action": "android.intent.action.VIEW",
 		  "package": "info.cemu.cemu",
-		  "rom_delivery": "intent_data",
-		  "use_document_uri": true
+		  "rom_delivery": "intent_data"
 		}
 	  }
 	}
@@ -576,7 +572,6 @@
 		  "package": "org.dolphinemu.dolphinemu",
 		  "class": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
 		  "rom_delivery": "extra",
-		  "use_document_uri": true,
 		  "extras": [
 			{
 			  "key": "AutoStartFile",
@@ -805,8 +800,8 @@
 		"android": {
 		  "action": "android.intent.action.VIEW",
 		  "package": "dev.eden.eden_emulator",
-		  "rom_delivery": "intent_data",
-		  "use_document_uri": true
+		  "rom_delivery": "intent_data"
+
 		}
 	  }
 	}
@@ -1535,7 +1530,6 @@
 		  "package": "me.magnum.melonds.nightly",
 		  "class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
 		  "rom_delivery": "intent_data",
-		  "use_document_uri": true,
 		  "extras": [
 			{
 			  "key": "uri",
@@ -1824,8 +1818,8 @@
 		"android": {
 		  "action": "android.intent.action.VIEW",
 		  "package": "org.ppsspp.ppsspp",
-		  "rom_delivery": "intent_data",
-		  "use_document_uri": true
+		  "rom_delivery": "intent_data"
+
 		}
 	  }
 	}
