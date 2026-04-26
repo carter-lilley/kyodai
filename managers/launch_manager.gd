@@ -1337,7 +1337,6 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 			NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
 			return
 		print("[LaunchManager] _on_emulator_installed_for_launch: Game preparation complete")
-		
 		# Retry the launch
 		await _launch_game_internal(game, emulator_id)
 
