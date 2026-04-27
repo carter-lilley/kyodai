@@ -1353,6 +1353,21 @@ func _on_chunk_download_complete(item_id: String, chunk_index: int, success: boo
 			queue_changed.emit()
 			_process_queue()
 
+## Helper to show reassembly notification on main thread (called via call_deferred)
+func _show_reassembly_notification(item_id: String, item_name: String) -> void:
+	if not _chunked_downloads.has(item_id):
+		return
+	var item = _chunked_downloads[item_id].item
+	item.notification_id = NotificationManager.show_notification(
+		"Assembling " + item_name + "...",
+		Notification.Type.INFO,
+		null,
+		0.0,
+		Callable(),  # No progress callable - using pulsing
+		Callable(),  # No text formatter
+		true  # pulsing = true
+	)
+
 func _reassemble_chunks(item_id: String):
 	"""Reassemble all chunks into the final file - platform-specific implementation"""
 	if not _chunked_downloads.has(item_id):
@@ -1369,15 +1384,8 @@ func _reassemble_chunks(item_id: String):
 		NotificationManager.dismiss_notification(item.notification_id)
 	
 	if not item.suppress_notification:
-		item.notification_id = NotificationManager.show_notification(
-			"Assembling " + item.name + "...",
-			Notification.Type.INFO,
-			null,
-			0.0,
-			Callable(),  # No progress callable - using pulsing
-			Callable(),  # No text formatter
-			true  # pulsing = true
-		)
+		# Use call_deferred to show notification on main thread (avoids threading issues on Android)
+		call_deferred("_show_reassembly_notification", item_id, item.name)
 	
 	# Reassemble chunks to the final destination path
 	var reassembly_temp_path = chunked_info.final_path

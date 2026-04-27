@@ -89,6 +89,26 @@ func resolve_save_directory(emulator_id: String) -> String:
 	
 	return dir.rstrip("/") + "/"
 
+## Ensures the save directory for an emulator exists, creating it if necessary
+## Returns true if directory exists or was created successfully
+func _ensure_save_directory_exists(emulator_id: String) -> bool:
+	var save_dir = resolve_save_directory(emulator_id)
+	if save_dir == "":
+		print("[SaveManager] No save directory configured for: " + emulator_id)
+		return false
+	
+	if FileSystemManager.dir_exists(save_dir):
+		return true
+	
+	print("[SaveManager] Creating save directory for " + emulator_id + ": " + save_dir)
+	var success = FileSystemManager.make_dir_recursive(save_dir)
+	if not success:
+		push_error("[SaveManager] Failed to create save directory for " + emulator_id + ": " + save_dir)
+		return false
+	
+	print("[SaveManager] Successfully created save directory for " + emulator_id)
+	return true
+
 ## Gets the save file extensions for an emulator
 func get_save_extensions(emulator_id: String) -> Array[String]:
 	var emulator = LaunchManager.get_emulator(emulator_id)
@@ -582,6 +602,9 @@ func _validate_emulator_title_id(emulator_id: String, title_id: String) -> Strin
 		"cemu", "eden":
 			if title_id.length() != 16:
 				return "Invalid Title ID for %s game." % emulator_id.capitalize()
+		"dolphin":
+			if title_id == "":
+				return "No game ID available for this Dolphin game."
 		"pcsx2":
 			if title_id == "":
 				return "No serial available for this PS2 game. Launch it once to extract the serial."
@@ -1190,6 +1213,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				var parent_dir = record_path.get_base_dir()
 				FileSystemManager.make_dir_recursive(parent_dir)
 		
+		# Ensure save directory exists before downloading
+		_ensure_save_directory_exists(emulator_id)
+		
 		NetworkManager.download_save(save_id, device_id, local_path, func(_success: bool, status_code: int, error_msg: String):
 			if not _success:
 				state.failed += 1
@@ -1227,11 +1253,35 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 func _parse_iso_to_unix(iso_string: String) -> int:
 	if iso_string == "":
 		return 0
-	var cleaned = iso_string.replace("Z", "+00:00")
-	var dict = Time.get_datetime_dict_from_datetime_string(cleaned, false)
+	
+	# Extract date/time without timezone (Godot's parser ignores timezone offsets)
+	var dt_string = iso_string.substr(0, 19).replace("T", " ")
+	
+	var dict = Time.get_datetime_dict_from_datetime_string(dt_string, false)
 	if dict.is_empty():
 		return 0
-	return int(Time.get_unix_time_from_datetime_dict(dict))
+	
+	# Godot treats the parsed time as local time, but the server sends UTC
+	# We need to adjust by the timezone offset
+	var parsed_unix = Time.get_unix_time_from_datetime_dict(dict)
+	
+	# Calculate timezone offset by comparing local and UTC representations of "now"
+	var correct_now_unix = Time.get_unix_time_from_system()
+	var utc_date = Time.get_date_dict_from_system(true)
+	var utc_time = Time.get_time_dict_from_system(true)
+	var utc_now_dict = {
+		"year": utc_date.year,
+		"month": utc_date.month,
+		"day": utc_date.day,
+		"hour": utc_time.hour,
+		"minute": utc_time.minute,
+		"second": utc_time.second
+	}
+	var wrong_now_unix = Time.get_unix_time_from_datetime_dict(utc_now_dict)
+	var tz_offset_seconds = correct_now_unix - wrong_now_unix
+	
+	# Adjust: the ISO time was UTC but treated as local
+	return int(parsed_unix + tz_offset_seconds)
 
 ## Auto-upload saves after playing (post-exit hook)
 ## Checks for conflicts and shows dialog if both local and server saves have changed
@@ -1563,6 +1613,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 						if emulator_id == "retroarch":
 							var parent_dir = record_path.get_base_dir()
 							FileSystemManager.make_dir_recursive(parent_dir)
+					
+					# Ensure save directory exists before downloading
+					_ensure_save_directory_exists(emulator_id)
 					
 					print("[SaveManager] auto_download: downloading save '" + file_name + "' to: " + local_path)
 					

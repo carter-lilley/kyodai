@@ -1,9 +1,10 @@
 ## Save Conflict Dialog Component
 ## Mimics Steam Cloud Conflict UI
 ## Shows when local and server saves have both changed since last sync
+## Layout follows OOBE wizard pattern with centered dialog over dark overlay
 
 class_name SaveConflictDialog
-extends PanelContainer
+extends Control
 
 signal server_selected()
 signal local_selected()
@@ -17,18 +18,44 @@ func setup(game_name: String, server_time_unix: int, local_time_unix: int) -> vo
 	_game_name = game_name
 	_server_time = server_time_unix
 	_local_time = local_time_unix
-	
 	_update_ui()
 
 func _ready() -> void:
-	# Ensure we're modal and on top
-	z_index = 100
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	_build_ui()
+	_update_ui()
+
+func _build_ui():
+	# Background overlay (matches OOBE pattern)
+	var overlay = ColorRect.new()
+	overlay.name = "Overlay"
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.color = Color(0, 0, 0, 0.85)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(overlay)
 	
-	# Create UI layout
-	var vbox = VBoxContainer.new()
-	vbox.name = "MainVBox"
-	vbox.add_theme_constant_override("separation", 12)
-	add_child(vbox)
+	# Center container (matches OOBE pattern)
+	var center = CenterContainer.new()
+	center.name = "CenterContainer"
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(center)
+	
+	# Dialog panel (matches OOBE ContentPanel pattern)
+	var dialog_panel = PanelContainer.new()
+	dialog_panel.name = "DialogPanel"
+	dialog_panel.custom_minimum_size = Vector2(600, 400)
+	center.add_child(dialog_panel)
+	
+	# Main VBox layout
+	var main_vbox = VBoxContainer.new()
+	main_vbox.name = "MainVBox"
+	main_vbox.add_theme_constant_override("separation", 12)
+	main_vbox.add_theme_constant_override("margin_left", 24)
+	main_vbox.add_theme_constant_override("margin_right", 24)
+	main_vbox.add_theme_constant_override("margin_top", 20)
+	main_vbox.add_theme_constant_override("margin_bottom", 20)
+	dialog_panel.add_child(main_vbox)
 	
 	# Title
 	var title_label = Label.new()
@@ -36,67 +63,63 @@ func _ready() -> void:
 	title_label.text = "Save Conflict"
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title_label.add_theme_font_size_override("font_size", 24)
-	vbox.add_child(title_label)
+	main_vbox.add_child(title_label)
+	
+	# Separator
+	main_vbox.add_child(HSeparator.new())
 	
 	# Description
 	var desc_label = Label.new()
 	desc_label.name = "DescLabel"
-	desc_label.text = "Your local save data conflicts with what is stored on the server.\nWhichever save data you choose to keep will be synced to this device and the cloud.\nThe option you choose not to keep will be overwritten."
+	desc_label.text = "Your local save data for %s conflicts with what is stored on the server.\n\nWhichever save data you choose to keep will be synced to this device and the cloud. The option you choose not to keep will be overwritten." % _game_name
 	desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(desc_label)
+	main_vbox.add_child(desc_label)
 	
 	# Spacer
 	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(0, 8)
-	vbox.add_child(spacer)
+	spacer.custom_minimum_size = Vector2(0, 16)
+	main_vbox.add_child(spacer)
 	
-	# Server save button
+	# Server save button (large, Steam-style with timestamp)
 	var server_btn = Button.new()
 	server_btn.name = "ServerButton"
-	server_btn.custom_minimum_size = Vector2(400, 60)
+	server_btn.custom_minimum_size = Vector2(0, 80)
 	server_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	server_btn.pressed.connect(_on_server_pressed)
-	vbox.add_child(server_btn)
+	main_vbox.add_child(server_btn)
 	
-	# Local save button
+	# Local save button (large, Steam-style with timestamp)
 	var local_btn = Button.new()
 	local_btn.name = "LocalButton"
-	local_btn.custom_minimum_size = Vector2(400, 60)
+	local_btn.custom_minimum_size = Vector2(0, 80)
 	local_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	local_btn.pressed.connect(_on_local_pressed)
-	vbox.add_child(local_btn)
+	main_vbox.add_child(local_btn)
 	
-	# Spacer
+	# Spacer to push cancel to bottom
 	var spacer2 = Control.new()
-	spacer2.custom_minimum_size = Vector2(0, 8)
-	vbox.add_child(spacer2)
+	spacer2.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(spacer2)
 	
-	# Cancel button (right-aligned)
+	# Cancel button (right-aligned, smaller)
 	var cancel_btn = Button.new()
 	cancel_btn.name = "CancelButton"
 	cancel_btn.text = "Cancel"
 	cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 	cancel_btn.pressed.connect(_on_cancel_pressed)
-	vbox.add_child(cancel_btn)
+	main_vbox.add_child(cancel_btn)
 	
-	# Update text if setup was called before _ready
-	if _game_name != "":
-		_update_ui()
-	
-	# Center the dialog
-	_center_dialog()
-	
-	# Handle cancel/back input
+	# Block input to scene below
 	process_mode = Node.PROCESS_MODE_ALWAYS
 
 func _update_ui() -> void:
-	var vbox = get_node_or_null("MainVBox")
-	if not vbox:
+	var main_vbox = get_node_or_null("CenterContainer/DialogPanel/MainVBox")
+	if not main_vbox:
 		return
 	
-	var server_btn = vbox.get_node_or_null("ServerButton")
-	var local_btn = vbox.get_node_or_null("LocalButton")
+	var server_btn = main_vbox.get_node_or_null("ServerButton")
+	var local_btn = main_vbox.get_node_or_null("LocalButton")
 	
 	var server_date = _format_timestamp(_server_time)
 	var local_date = _format_timestamp(_local_time)
@@ -106,6 +129,11 @@ func _update_ui() -> void:
 	
 	if local_btn:
 		local_btn.text = "Local Save\nModified: " + local_date
+	
+	# Update description with game name if available
+	var desc_label = main_vbox.get_node_or_null("DescLabel")
+	if desc_label and _game_name != "":
+		desc_label.text = "Your local save data for %s conflicts with what is stored on the server.\n\nWhichever save data you choose to keep will be synced to this device and the cloud. The option you choose not to keep will be overwritten." % _game_name
 
 func _format_timestamp(unix_time: int) -> String:
 	if unix_time <= 0:
@@ -129,12 +157,6 @@ func _format_timestamp(unix_time: int) -> String:
 	
 	return "%s %d, %d at %d:%02d %s" % [month, day, year, hour, minute, ampm]
 
-func _center_dialog() -> void:
-	var viewport_size = get_viewport_rect().size
-	var dialog_size = Vector2(500, 300)
-	position = (viewport_size - dialog_size) / 2
-	size = dialog_size
-
 func _on_server_pressed() -> void:
 	server_selected.emit()
 	queue_free()
@@ -151,7 +173,3 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		_on_cancel_pressed()
 		get_viewport().set_input_as_handled()
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_SIZE_CHANGED:
-		_center_dialog()

@@ -170,7 +170,13 @@ static func extract_wiiu_title_id(rom_path: String) -> String:
 # ==================== Switch (Eden) ====================
 
 static func _read_prod_keys_header_key(emulator_dir: String) -> String:
-	var keys_path = emulator_dir.rstrip("/") + "/user/keys/prod.keys"
+	var keys_path = ""
+	
+	if PlatformManager.is_android():
+		keys_path = "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/keys/prod.keys"
+	else:
+		keys_path = emulator_dir.rstrip("/") + "/user/keys/prod.keys"
+	
 	if not FileSystemManager.file_exists(keys_path):
 		return ""
 	
@@ -380,9 +386,11 @@ static func extract_xci_title_id(rom_path: String, emulator_dir: String) -> Stri
 
 static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> String:
 	if not FileSystemManager.file_exists(rom_path):
+		print("[TitleIDParser] extract_switch_title_id: file not found: " + rom_path)
 		return ""
 	
 	var ext = rom_path.get_extension().to_lower()
+	print("[TitleIDParser] extract_switch_title_id: ext=" + ext + ", rom=" + rom_path.get_file())
 	
 	if ext == "xci":
 		return extract_xci_title_id(rom_path, emulator_dir)
@@ -390,21 +398,27 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 	if ext in ["nsp", "nsz"]:
 		return _with_open_file(rom_path, func(file: FileAccess) -> String:
 			var header = file.get_buffer(0x2000)
+			print("[TitleIDParser] NSP header size: " + str(header.size()))
 			
 			if header.size() < 0x10:
+				print("[TitleIDParser] NSP header too small")
 				return ""
 			
 			var magic = header.slice(0, 4).get_string_from_ascii()
+			print("[TitleIDParser] NSP magic: " + magic)
 			if magic != "PFS0":
+				print("[TitleIDParser] NSP magic mismatch, expected PFS0")
 				return ""
 			
 			var file_count = header.decode_u32(0x04)
 			var string_table_size = header.decode_u32(0x08)
+			print("[TitleIDParser] NSP file_count=" + str(file_count) + ", string_table_size=" + str(string_table_size))
 			
 			var entries_size = file_count * 0x18
 			var total_header = 0x10 + entries_size + string_table_size
 			
 			if header.size() < total_header:
+				print("[TitleIDParser] NSP header size " + str(header.size()) + " < total_header " + str(total_header))
 				return ""
 			
 			var string_table_offset = 0x10 + entries_size
@@ -422,25 +436,39 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 				var filename = header.slice(name_start, name_end).get_string_from_ascii()
 				filenames.append(filename)
 			
+			print("[TitleIDParser] NSP filenames: " + str(filenames))
+			
 			for i in range(file_count):
 				var filename = filenames[i]
 				if filename.to_lower().ends_with(".tik"):
 					var basename = filename.get_basename()
-					if basename.length() == 16:
+					print("[TitleIDParser] Found .tik: " + filename + ", basename=" + basename)
+					
+					# .tik files use rights_id (32 hex chars), TitleID is first 16 chars
+					var possible_ids: Array[String] = []
+					if basename.length() == 32:
+						possible_ids.append(basename.substr(0, 16))
+					elif basename.length() == 16:
+						possible_ids.append(basename)
+					
+					for possible_id in possible_ids:
 						var is_hex = true
-						for c in basename:
+						for c in possible_id:
 							if not ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')):
 								is_hex = false
 								break
-						if is_hex and basename.to_upper().begins_with("01"):
-							return basename.to_upper()
+						if is_hex and possible_id.to_upper().begins_with("01"):
+							print("[TitleIDParser] Returning TitleID from .tik: " + possible_id.to_upper())
+							return possible_id.to_upper()
 			
 			var header_key_hex = _read_prod_keys_header_key(emulator_dir)
+			print("[TitleIDParser] header_key_hex length: " + str(header_key_hex.length()))
 			if header_key_hex != "":
 				var header_key = PackedByteArray()
 				for i in range(0, header_key_hex.length(), 2):
 					header_key.append(header_key_hex.substr(i, 2).hex_to_int())
 				
+				print("[TitleIDParser] header_key size: " + str(header_key.size()))
 				if header_key.size() == 32:
 					for i in range(file_count):
 						var filename = filenames[i]
@@ -451,16 +479,21 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 							file.seek(nca_offset)
 							var nca_header = file.get_buffer(0x400)
 							
+							print("[TitleIDParser] Trying NCA: " + filename + ", offset=" + str(nca_offset) + ", header_size=" + str(nca_header.size()))
 							if nca_header.size() >= 0x400:
 								var decrypted = _aes_xts_decrypt(nca_header, header_key, 0x200, 0)
 								var nca_magic = decrypted.slice(0x200, 0x204).get_string_from_ascii()
+								print("[TitleIDParser] NCA magic: " + nca_magic)
 								if nca_magic == "NCA3" or nca_magic == "NCA2" or nca_magic == "NCA1" or nca_magic == "NCA0":
 									var nca_title_id = ""
 									for j in range(7, -1, -1):
 										nca_title_id += "%02x" % decrypted[0x210 + j]
 									nca_title_id = nca_title_id.to_upper()
+									print("[TitleIDParser] Found TitleID in NCA: " + nca_title_id)
 									if nca_title_id.begins_with("01") and nca_title_id.length() == 16:
 										return nca_title_id
+			else:
+				print("[TitleIDParser] No header key found")
 			
 			return ""
 		)

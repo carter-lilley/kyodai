@@ -1550,6 +1550,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	if step_index >= install_steps.size():
 		# All steps completed successfully
+		_create_emulator_save_directory(emulator_id)
 		_emulator_install_progress[emulator_id] = ""
 		emulator_extraction_completed.emit(emulator_id, true)
 		return true
@@ -2527,6 +2528,25 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 ## Helper function for none action (skip)
 func _handle_none_step(emulator_id: String, step_name: String, step_index: int) -> bool:
 	return _execute_install_step(emulator_id, step_index + 1)
+
+## Creates the save directory for an emulator if it doesn't exist
+## Called automatically at the end of successful install flow
+func _create_emulator_save_directory(emulator_id: String) -> void:
+	var save_dir = SaveManager.resolve_save_directory(emulator_id)
+	if save_dir == "":
+		print("[LaunchManager] No save directory configured for: " + emulator_id)
+		return
+	
+	if FileSystemManager.dir_exists(save_dir):
+		print("[LaunchManager] Save directory already exists for " + emulator_id + ": " + save_dir)
+		return
+	
+	print("[LaunchManager] Creating save directory for " + emulator_id + ": " + save_dir)
+	var success = FileSystemManager.make_dir_recursive(save_dir)
+	if not success:
+		push_error("[LaunchManager] Failed to create save directory for " + emulator_id + ": " + save_dir)
+	else:
+		print("[LaunchManager] Successfully created save directory for " + emulator_id)
 
 ## Executes install steps from new step-based format (entry point)
 func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:

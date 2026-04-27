@@ -466,7 +466,7 @@ func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	var success = await LaunchManager.download_emulator(emulator_id)
 	if success:
 		# Update install status for the emulator
-		var install_status = {emulator_id: LaunchManager.get_emulator_install_state(emulator_id)}
+		var install_status = {emulator_id: LaunchManager.scan_emulator_install_state(emulator_id)}
 		card.set_emulator_install_status(install_status)
 		card.refresh_ui()
 

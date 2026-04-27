@@ -301,7 +301,7 @@
 	"platforms": ["3ds"],
 	"save_config": {
 	  "directories": {
-		"windows": "{emulator_dir}/user/sdmc/Nintendo 3DS",
+		"windows": "{emulator_dir}/user/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
 		"android": "/storage/emulated/0/Android/data/org.azahar_emu.azahar/files/sdmc/Nintendo 3DS"
 	  },
 	  "extensions": ["*"],
@@ -355,30 +355,6 @@
 			  "action_type": "package_installed",
 			  "package": "org.azahar_emu.azahar"
 			}
-		  }
-		}
-	  },
-	  {
-		"step": "setup_user_folder",
-		"platforms": {
-		  "windows": {
-			"action_type": "create_folders",
-			"folders": ["user"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "user"
-			}
-		  },
-		  "linux": {
-			"action_type": "create_folders",
-			"folders": ["user"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "user"
-			}
-		  },
-		  "android": {
-			"action_type": "none"
 		  }
 		}
 	  }
@@ -464,30 +440,6 @@
 			}
 		  }
 		}
-	  },
-	  {
-		"step": "setup_portable_mode",
-		"platforms": {
-		  "windows": {
-			"action_type": "create_folders",
-			"folders": ["portable"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "portable"
-			}
-		  },
-		  "linux": {
-			"action_type": "create_folders",
-			"folders": ["portable"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "portable"
-			}
-		  },
-		  "android": {
-			"action_type": "none"
-		  }
-		}
 	  }
 	],
 	"launch": {
@@ -515,7 +467,8 @@
 	"platforms": ["ngc", "wii"],
 	"save_config": {
 	  "directories": {
-		"windows": "{emulator_dir}/User"
+		"windows": "{emulator_dir}/User",
+		"android": "/storage/emulated/0/Android/data/org.dolphinemu.dolphinemu/files/"
 	  },
 	  "extensions": ["gci"],
 	  "uses_folder_saves": true
@@ -627,7 +580,7 @@
 	  "directories": {
 		"windows": "{emulator_dir}/user/nand/user/save/0000000000000000",
 		"linux": "{emulator_dir}/user/nand/user/save/0000000000000000",
-		"android": "{emulator_dir}/user/nand/user/save/0000000000000000"
+		"android": "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/user/save/0000000000000000"
 	  },
 	  "extensions": ["*"],
 	  "uses_folder_saves": true
@@ -757,7 +710,13 @@
 			}
 		  },
 		  "android": {
-			"action_type": "none"
+			"action_type": "extract",
+			"expected_file": "Firmware*.zip",
+			"extract_to": "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/system/Contents/registered",
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/system/Contents/registered"
+			}
 		  }
 		}
 	  },
@@ -812,11 +771,11 @@
 		  "android": {
 			"action_type": "extract",
 			"expected_file": "ProdKeys.NET-*.zip",
-			"extract_to": "{emulator_dir}/user/keys",
+			"extract_to": "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/keys",
 			"strip_top_directory": true,
 			"validate": {
 			  "action_type": "files_exist",
-			  "files": ["{emulator_dir}/user/keys/prod.keys", "{emulator_dir}/user/keys/title.keys"]
+			  "files": ["/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/keys/prod.keys", "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/keys/title.keys"]
 			}
 		  }
 		}
@@ -1023,8 +982,8 @@
 		}
 	  },
 	  "android": {
-		"action_type": "none"
-	  }
+			"action_type": "none"
+		  }
 	}
   },
   {

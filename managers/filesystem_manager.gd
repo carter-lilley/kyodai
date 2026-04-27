@@ -732,7 +732,12 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 		return false
 	
 	var files = reader.get_files()
+	var success = true
 	for file_path in files:
+		# Skip directory entries (paths ending with /)
+		if file_path.ends_with("/"):
+			continue
+		
 		var dest_path = join_paths(extract_dir, file_path)
 		var dest_dir = dest_path.get_base_dir()
 		
@@ -740,10 +745,16 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 			make_dir_recursive(dest_dir)
 		
 		var data = reader.read_file(file_path)
-		write_file_bytes(dest_path, data)
+		if data.is_empty():
+			push_warning("[FileSystemManager] Empty file in ZIP: " + file_path)
+			continue
+		
+		if not write_file_bytes(dest_path, data):
+			push_error("[FileSystemManager] Failed to write extracted file: " + dest_path)
+			success = false
 	
 	reader.close()
-	return true
+	return success
 
 ## Gets available storage space in bytes for a given path
 static func get_available_space(path: String) -> int:
