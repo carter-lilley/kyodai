@@ -7,6 +7,13 @@ clicking settings should focus tab
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 card designer use effect designer ui
+
+## saves
+user save folder
+reading save path configs where possible
+3ds: create {emulator_dir}\user\sdmc\Nintendo 3DS\00000000000000000000000000000000\00000000000000000000000000000000\title\00040000
+
+
 ## general UI
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)

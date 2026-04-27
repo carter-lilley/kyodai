@@ -38,7 +38,7 @@ func _cleanup_temp_dir(file_path: String) -> void:
 					break
 			if not has_files:
 				print("[SaveManager] Removing empty temp directory: " + parent)
-				FileSystemManager.delete_dir(parent)
+				FileSystemManager.delete_dir_recursive(parent)
 				parent = parent.get_base_dir()
 			else:
 				break
@@ -189,19 +189,16 @@ func discover_local_cemu_save(directory: String, title_id: String) -> Array[Dict
 		return results
 	
 	var short_title_id = title_id.substr(8, 8)
-	var prefixes: Array[String] = ["00050000", "00050010", "0005000e", "0005000c"]
-	
-	for prefix in prefixes:
-		var save_path = FileSystemManager.join_paths(directory, prefix, short_title_id)
-		if FileSystemManager.dir_exists(save_path):
-			var mtime = _get_folder_mtime(save_path)
-			results.append({
-				"file_name": short_title_id + ".zip",
-				"file_path": save_path,
-				"modified_time": mtime,
-				"extension": ".zip"
-			})
-			return results
+	var save_path = FileSystemManager.join_paths(directory, short_title_id)
+	if FileSystemManager.dir_exists(save_path):
+		var mtime = _get_folder_mtime(save_path)
+		results.append({
+			"file_name": short_title_id + ".zip",
+			"file_path": save_path,
+			"modified_time": mtime,
+			"extension": ".zip"
+		})
+		return results
 	
 	return results
 
@@ -664,7 +661,7 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 	var title_id = game.get_active_title_id()
 	match emulator_id:
 		"cemu":
-			return FileSystemManager.join_paths(save_dir, "00050000", title_id.substr(8, 8))
+			return FileSystemManager.join_paths(save_dir, title_id.substr(8, 8))
 		"dolphin":
 			if game.platform_slug == "wii":
 				return FileSystemManager.join_paths(save_dir, "Wii", "title", "00010000", _game_id_to_hex(title_id))
@@ -691,9 +688,31 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			if profile == "":
 				profile = "0000000000000000"
 			return FileSystemManager.join_paths(save_dir, profile, title_id)
+		"retroarch":
+			return _resolve_retroarch_save_path(save_dir, game)
 		_:
 			var result = _resolve_default_save_path(save_dir, title_id)
 			return result.path
+
+## Resolves the save path for RetroArch with core-specific subdirectories
+## Returns the full file path where the .srm should be stored
+func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> String:
+	var platform_slug = game.platform_slug
+	var core_name = LaunchManager.get_core_for_platform("retroarch", platform_slug)
+	if core_name == "":
+		push_error("[SaveManager] No core mapping for platform: " + platform_slug)
+		return ""
+	
+	var emulator = LaunchManager.get_emulator("retroarch")
+	var save_config = emulator.get("save_config", {})
+	var core_save_names = save_config.get("core_save_names", {})
+	var core_save_name = core_save_names.get(platform_slug, "")
+	if core_save_name == "":
+		push_error("[SaveManager] No core_save_name mapping for platform: " + platform_slug)
+		return ""
+	
+	var rom_name_no_ext = game.get_active_file_name().get_basename()
+	return FileSystemManager.join_paths(save_dir, core_save_name, rom_name_no_ext + ".srm")
 
 ## Determines the extraction destination for downloaded saves based on emulator
 ## Returns the destination directory path
@@ -761,7 +780,7 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 	match emulator_id:
 		"cemu":
 			var save_name = game.get_active_title_id().substr(8, 8)
-			return FileSystemManager.zip_directory_with_root(source_path, save_name, zip_path)
+			return FileSystemManager.zip_directory(source_path, zip_path, -1, save_name)
 		"dolphin":
 			if game.platform_slug == "wii":
 				return _zip_dolphin_wii_save(source_path, zip_path)
@@ -773,23 +792,23 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			# This ensures extraction creates the correct subfolder (e.g., NPJH50333DAT/)
 			# Skip files over 100MB (DLC/install data) to avoid Cloudflare 413 errors
 			var folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory_with_root(source_path, folder_name, zip_path, MAX_FILE_SIZE)
+			return FileSystemManager.zip_directory(source_path, zip_path, MAX_FILE_SIZE, folder_name)
 		"vita3k":
 			# For Vita3K, zip the save folder with TitleID as root
 			var vita_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory_with_root(source_path, vita_folder_name, zip_path)
+			return FileSystemManager.zip_directory(source_path, zip_path, -1, vita_folder_name)
 		"rpcs3":
 			# For RPCS3, zip the save folder with TitleID as root
 			var rpcs3_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory_with_root(source_path, rpcs3_folder_name, zip_path)
+			return FileSystemManager.zip_directory(source_path, zip_path, -1, rpcs3_folder_name)
 		"shadps4":
 			# For shadPS4, zip the save folder with TitleID as root
 			var shadps4_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory_with_root(source_path, shadps4_folder_name, zip_path)
+			return FileSystemManager.zip_directory(source_path, zip_path, -1, shadps4_folder_name)
 		"xenia":
 			# For Xenia, zip the save folder with TitleID as root
 			var xenia_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory_with_root(source_path, xenia_folder_name, zip_path)
+			return FileSystemManager.zip_directory(source_path, zip_path, -1, xenia_folder_name)
 		_:
 			return FileSystemManager.zip_directory(source_path, zip_path)
 
@@ -1143,7 +1162,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		if download.local:
 			record_path = download.local.file_path
 		else:
-			record_path = FileSystemManager.join_paths(resolve_save_directory(emulator_id), file_name)
+			if emulator_id == "retroarch":
+				record_path = _resolve_emulator_save_path(emulator_id, resolve_save_directory(emulator_id), game)
+			else:
+				record_path = FileSystemManager.join_paths(resolve_save_directory(emulator_id), file_name)
 		
 		if is_folder_save:
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
@@ -1163,6 +1185,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					record_path = result.path
 		else:
 			local_path = record_path
+			# Ensure parent directory exists for RetroArch core-specific saves
+			if emulator_id == "retroarch":
+				var parent_dir = record_path.get_base_dir()
+				FileSystemManager.make_dir_recursive(parent_dir)
 		
 		NetworkManager.download_save(save_id, device_id, local_path, func(_success: bool, status_code: int, error_msg: String):
 			if not _success:
@@ -1178,7 +1204,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				if is_folder_save:
 					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id), record_path, game)
 					# Don't use subfolder - the zip already contains the correct folder structure
-					var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, "")
+					var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
@@ -1388,22 +1414,29 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 ## Auto-download saves before launch (pre-launch hook)
 ## If on_complete callback is provided, it will be called when sync finishes
 func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_complete: Callable = Callable()) -> void:
+	print("[SaveManager] auto_download: START for game=" + game.get_display_name() + " emulator=" + emulator_id)
+	
 	if not _is_sync_enabled():
+		print("[SaveManager] auto_download: ABORT - save_sync_enabled is false")
 		if on_complete.is_valid():
 			on_complete.call()
 		return
 	if not SettingsManager.get_setting("save_sync_auto").value:
+		print("[SaveManager] auto_download: ABORT - save_sync_auto is false")
 		if on_complete.is_valid():
 			on_complete.call()
 		return
 	if not NetworkManager.is_romm_connected():
+		print("[SaveManager] auto_download: ABORT - not connected to RomM")
 		if on_complete.is_valid():
 			on_complete.call()
 		return
 	
 	var save_dir = resolve_save_directory(emulator_id)
 	var extensions = get_save_extensions(emulator_id)
+	print("[SaveManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions))
 	if save_dir == "" or extensions.is_empty():
+		print("[SaveManager] auto_download: ABORT - no save_dir or extensions")
 		if on_complete.is_valid():
 			on_complete.call()
 		return
@@ -1426,6 +1459,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					on_complete.call()
 				return
 			
+			print("[SaveManager] auto_download: fetched " + str(remote_saves.size()) + " remote saves for romm_id=" + str(game.romm_id))
+			
 			var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
 			var db_by_name: Dictionary = {}
 			for rec in db_records:
@@ -1446,6 +1481,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			else:
 				var rom_name_no_ext = game.get_active_file_name().get_basename()
 				local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+			
+			print("[SaveManager] auto_download: found " + str(local_saves.size()) + " local saves in " + save_dir)
 			
 			var local_by_name: Dictionary = {}
 			for save in local_saves:
@@ -1470,6 +1507,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				var save_id = remote.get("id", 0)
 				var remote_updated_unix = _parse_iso_to_unix(remote.get("updated_at", ""))
 				
+				print("[SaveManager] auto_download: checking remote save id=" + str(save_id) + " file_name='" + file_name + "' updated=" + str(remote_updated_unix))
+				
 				var local = local_by_name.get(file_name)
 				var db_rec = db_by_name.get(file_name)
 				var last_synced_unix = 0
@@ -1479,8 +1518,12 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				var should_download = false
 				if not local:
 					should_download = true
+					print("[SaveManager] auto_download: no local save for '" + file_name + "', will download")
 				elif remote_updated_unix > last_synced_unix and remote_updated_unix > local.modified_time:
 					should_download = true
+					print("[SaveManager] auto_download: remote is newer for '" + file_name + "', will download")
+				else:
+					print("[SaveManager] auto_download: skipping '" + file_name + "' (local is up to date)")
 				
 				if should_download:
 					state.pending += 1
@@ -1492,7 +1535,11 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					if _local:
 						record_path = _local.file_path
 					else:
-						record_path = save_dir + file_name
+						if emulator_id == "retroarch":
+							record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
+							print("[SaveManager] auto_download: resolved retroarch save path: " + record_path)
+						else:
+							record_path = save_dir + file_name
 					
 					if is_folder_save:
 						zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
@@ -1512,6 +1559,12 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								record_path = result.path
 					else:
 						local_path = record_path
+						# Ensure parent directory exists for RetroArch core-specific saves
+						if emulator_id == "retroarch":
+							var parent_dir = record_path.get_base_dir()
+							FileSystemManager.make_dir_recursive(parent_dir)
+					
+					print("[SaveManager] auto_download: downloading save '" + file_name + "' to: " + local_path)
 					
 					NetworkManager.download_save(save_id, device_id, local_path, func(success: bool, status_code: int, error_msg: String):
 						if not success:
@@ -1528,7 +1581,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							if is_folder_save:
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game)
 								# Don't use subfolder - the zip already contains the correct folder structure
-								var extract_success = FileSystemManager.extract_zip_to_dir(zip_path, extract_dest, "")
+								var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
@@ -1537,7 +1590,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								# Clean up empty parent directories
 								_cleanup_temp_dir(zip_path)
 							
-				# Ensure PCSX2 superblock is valid after extracting saves
+							# Ensure PCSX2 superblock is valid after extracting saves
 							if emulator_id == "pcsx2":
 								print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
 								var memcard_path = save_dir + "main.ps2/"

@@ -505,6 +505,12 @@ func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		print("[Main] NOTIFICATION_APPLICATION_RESUMED received, _last_focused_index = ", _last_focused_index)
+		
+		# On Android, exiting background state when we resume triggers save upload
+		if LaunchManager and LaunchManager.is_in_background_state():
+			print("[Main] In background state on resume, exiting to trigger save upload")
+			LaunchManager.force_exit_background_state()
+		
 		# Restore focus when app returns to foreground (Android)
 		if _last_focused_index >= 0:
 			print("[Main] Calling _restore_focus_to_card deferred")

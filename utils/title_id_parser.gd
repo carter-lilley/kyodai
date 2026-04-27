@@ -7,7 +7,6 @@ class_name TitleIDParser
 # ============================================================================
 
 ## Opens a file for reading and calls the callback. Handles error checking and cleanup.
-## Uses FileSystemManager for SAF-aware file access.
 ## Returns the callback's result, or empty string on failure.
 static func _with_open_file(path: String, callback: Callable) -> String:
 	if not FileSystemManager.file_exists(path):
@@ -1330,7 +1329,6 @@ static func _get_7z_binary_path() -> String:
 # ============================================================================
 
 ## Reads a PARAM.SFO file from disk and returns a dictionary with all fields
-## Uses FileSystemManager for SAF-aware file access
 ## Returns empty dictionary if file cannot be parsed
 static func read_sfo(path: String) -> Dictionary:
 	if not FileSystemManager.file_exists(path):

@@ -135,6 +135,21 @@ func _enter_background_state(pid: int, game: GameResource) -> void:
 	
 	background_state_entered.emit(pid, game)
 
+## Enter background state for Android (no PID polling)
+func _enter_background_state_android(game: GameResource) -> void:
+	if _is_in_background_state:
+		print("[LaunchManager] Warning: Already in background state, ignoring Android entry")
+		return
+	
+	print("[LaunchManager] Entering background state for Android launch")
+	_background_active_pid = -1  # No PID on Android
+	_background_active_game = game
+	_is_in_background_state = true
+	
+	# Don't start poll timer on Android - we rely on resume notification
+	
+	background_state_entered.emit(-1, game)
+
 ## Exit background state
 func _exit_background_state(exit_code: int = 0) -> void:
 	if not _is_in_background_state:
@@ -359,7 +374,6 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 	if current_depth >= max_depth:
 		return ""
 	
-	# Use SAF-aware FileSystemManager for directory listing
 	var entries = FileSystemManager.list_dir(dir_path)
 	if entries.is_empty() and not FileSystemManager.dir_exists(dir_path):
 		return ""
@@ -370,7 +384,6 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 		
 		var full_path = FileSystemManager.join_paths(dir_path, file_name)
 		
-		# Use SAF-aware FileSystemManager to check if entry is a directory
 		if FileSystemManager.is_dir(full_path):
 			var result = _find_executable_recursive(full_path, executable_name, max_depth, current_depth + 1)
 			if result != "":
@@ -447,7 +460,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		if extract_to == ".":
 			extract_path = _get_emulator_directory(emulator_id).rstrip("/")
 		elif extract_to.begins_with("/") or extract_to.begins_with("content://") or extract_to.begins_with("user://") or extract_to.begins_with("res://") or (extract_to.length() > 1 and extract_to[1] == ":"):
-			# extract_to is already an absolute path (Unix, Windows, SAF, or Godot virtual filesystem style)
+			# extract_to is already an absolute path (Unix, Windows, or Godot virtual filesystem style)
 			extract_path = extract_to
 		else:
 			extract_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), extract_to)
@@ -501,7 +514,6 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		return
 	
 	# No target folder specified, use original logic (single directory only)
-	# List all entries in the extract directory using SAF-aware method
 	var entries = FileSystemManager.list_dir(extract_path)
 	print("[LaunchManager] Flattening: entries in extract_path=" + str(entries))
 	
@@ -1442,13 +1454,19 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		extras_array = intent.android_config.get("extras", [])
 	
 	# Convert extras to JSON using proper JSON.stringify to handle escaping correctly
+	# Replace {core_path} placeholder with actual core path
 	var extras_json = "[]"
 	if extras_array.size() > 0:
 		var extras_to_serialize = []
 		for extra in extras_array:
+			var value = extra.get("value", "")
+			if value.contains("{core_path}"):
+				value = value.replace("{core_path}", core_path)
+				print("[LaunchManager] Replaced {core_path} with: " + core_path)
+			
 			extras_to_serialize.append({
 				"key": extra.get("key", ""),
-				"value": extra.get("value", ""),
+				"value": value,
 				"type": extra.get("type", "string")
 			})
 		var json_result = JSON.stringify(extras_to_serialize)
@@ -1475,8 +1493,12 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	
 	if not success:
 		push_error("[LaunchManager] Failed to launch Android intent")
+		return false
 	
-	return success
+	# Enter background state for Android - we track the game and exit on resume
+	_enter_background_state_android(intent.game)
+	
+	return true
 
 ## Helper: Get enabled platforms from settings
 func _get_enabled_platforms() -> Dictionary:
@@ -1504,7 +1526,7 @@ func download_emulator(emulator_id: String) -> bool:
 		push_error("[LaunchManager] No install steps defined for: " + emulator_id)
 		return false
 	
-	# Ensure emulator directory exists before starting install (creates on desktop and SAF)
+	# Ensure emulator directory exists before starting install
 	var emulator_dir = _get_emulator_directory(emulator_id)
 	if not FileSystemManager.dir_exists(emulator_dir):
 		print("[LaunchManager] Creating emulator directory: " + emulator_dir)
@@ -1609,7 +1631,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	var emulator_dir = _get_emulator_directory(emulator_id)
 	var apk_path = ""
 	
-	# Find the APK file in emulator directory using SAF-aware FileSystemManager
+	# Find the APK file in emulator directory
 	var entries = FileSystemManager.list_dir(emulator_dir)
 	for file_name in entries:
 		if file_name.match(expected_file):
@@ -1622,7 +1644,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		print("[LaunchManager] No APK found in emulator directory, retrying download")
 		return _retry_previous_step(emulator_id, step_index)
 	
-	# Validate APK file exists and has content using SAF-aware FileSystemManager
+	# Validate APK file exists and has content
 	var file_size = FileSystemManager.get_file_size(apk_path)
 	print("[LaunchManager] APK file size: " + str(file_size) + " bytes")
 	if file_size < 0:
@@ -1639,16 +1661,20 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		_emulator_install_progress[emulator_id] = "APK download incomplete"
 		return false
 	
-	# For installation, we need a file:// URI
-	var absolute_apk_path = FileSystemManager.resolve_path(apk_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-	var install_uri = "file://" + absolute_apk_path
-	
 	print("[LaunchManager] Installing APK: " + apk_path)
-	print("[LaunchManager] Opening APK with URI: " + install_uri)
 	
-	# Open APK for installation using OS.shell_open
-	# Note: Requires "Install unknown apps" permission in Android Settings
-	var result = OS.shell_open(install_uri)
+	# On Android, use plugin to install APK with content:// URI (required for Android N+)
+	var plugin = null
+	if Engine.has_singleton("PackageChecker"):
+		plugin = Engine.get_singleton("PackageChecker")
+	
+	var result = Error.FAILED
+	if plugin != null:
+		var success = plugin.call("installApk", apk_path)
+		if success:
+			result = Error.OK
+	else:
+		push_error("[LaunchManager] PackageChecker plugin not available for APK install")
 	
 	if result != Error.OK:
 		print("[LaunchManager] APK install failed with error: " + str(result))
@@ -2092,7 +2118,6 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			
 			var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
 			
-			# For all paths (including SAF), use FileSystemManager for listing
 			var entries = FileSystemManager.list_dir(full_path)
 			for file_name in entries:
 				if file_name != "." and file_name != "..":
@@ -2403,7 +2428,6 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 		# Resolve path using universal resolver
 		var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
 		
-		# Use FileSystemManager for all directory creation (handles SAF on Android)
 		if not FileSystemManager.make_dir_recursive(full_path):
 			push_error("[LaunchManager] Failed to create folder: " + full_path)
 			return false
@@ -2679,7 +2703,6 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	var custom_destination = step_config.get("destination", "")
 	var destination_path: String
 	if custom_destination != "":
-		# Ensure the custom destination directory exists using SAF-aware FileSystemManager
 		FileSystemManager.make_dir_recursive(custom_destination)
 		destination_path = FileSystemManager.join_paths(custom_destination, filename)
 	else:
@@ -2707,7 +2730,6 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 		"step_index": step_index,
 		"step_config": step_config,
 		"filename": filename,
-		"use_saf": false,
 		"callback": func(success: bool, message: String):
 			if not success:
 				_emulator_install_progress[emulator_id] = message if message != "" else "Download failed"
@@ -3224,7 +3246,6 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Platform-specific Vita3K app path
 	var vita_app_path: String
 	if PlatformManager.is_android():
-		# Path may be SAF URI or real path - FileSystemManager handles both
 		vita_app_path = _get_vita3k_android_data_path() + "/ux0/app/" + title_id
 	else:
 		# Desktop - use emulator directory (already obtained above)
@@ -3283,7 +3304,6 @@ func _vita_app_has_game_files(vita_app_path: String) -> bool:
 func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -> bool:
 	print("[LaunchManager] _extract_vita_zip: ENTER zip_path=" + zip_path + ", extract_to=" + extract_to)
 	
-	# Create parent directories if needed using FileSystemManager (handles both regular paths and SAF URIs)
 	var parent_dir = extract_to.get_base_dir()
 	print("[LaunchManager] Vita3K: Creating parent directory: " + parent_dir)
 	if not FileSystemManager.make_dir_recursive(parent_dir):
@@ -3292,7 +3312,6 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 		return false
 	
 	# Use DownloadManager's extraction for progress tracking.
-	# DownloadManager handles both regular paths and SAF URIs on a background thread.
 	print("[LaunchManager] Vita3K: Queueing extraction via DownloadManager")
 	var item_id = DownloadManager.queue_extraction(zip_path, extract_to, "vita_game", title_id, false)
 	if item_id == "":

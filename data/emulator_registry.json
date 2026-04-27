@@ -61,7 +61,42 @@
 		"windows": "{emulator_dir}/saves",
 		"android": "/storage/emulated/0/RetroArch/saves"
 	  },
-	  "extensions": [".srm"]
+	  "extensions": [".srm"],
+	  "core_save_names": {
+		"3do": "Opera",
+		"arcade": "MAME 2003-Plus",
+		"atari2600": "Stella",
+		"lynx": "Handy",
+		"atomiswave": "Flycast",
+		"c64": "VICE x64",
+		"dos": "DOSBox-pure",
+		"dc": "Flycast",
+		"fds": "Nestopia",
+		"g-and-w": "Game & Watch",
+		"gb": "Gambatte",
+		"gba": "mGBA",
+		"gbc": "Gambatte",
+		"msx": "blueMSX",
+		"naomi": "Flycast",
+		"naomi2": "Flycast",
+		"neogeoaes": "FinalBurn Neo",
+		"neo-geo-pocket-color": "Beetle NeoPop",
+		"n64": "Mupen64Plus-Next",
+		"nes": "Nestopia",
+		"win3x": "DOSBox-pure",
+		"psx": "SwanStation",
+		"sega32": "PicoDrive",
+		"segacd": "Genesis Plus GX",
+		"gamegear": "Genesis Plus GX",
+		"sms": "Genesis Plus GX",
+		"genesis": "Genesis Plus GX",
+		"saturn": "YabaSanshiro",
+		"sg1000": "Genesis Plus GX",
+		"snes": "Snes9x",
+		"tg16": "Beetle PCE",
+		"turbografx-cd": "Beetle PCE",
+		"virtualboy": "Beetle VB"
+	  }
 	},
 	"install": [
 	  {
@@ -266,7 +301,8 @@
 	"platforms": ["3ds"],
 	"save_config": {
 	  "directories": {
-		"windows": "{emulator_dir}/user/sdmc/Nintendo 3DS"
+		"windows": "{emulator_dir}/user/sdmc/Nintendo 3DS",
+		"android": "/storage/emulated/0/Android/data/org.azahar_emu.azahar/files/sdmc/Nintendo 3DS"
 	  },
 	  "extensions": ["*"],
 	  "uses_folder_saves": true
@@ -359,7 +395,7 @@
 		  "executable": "azahar.AppImage",
 		  "template": ["{exe}", "{rom}"]
 		},
-        "android": {
+		"android": {
 		  "action": "android.intent.action.VIEW",
 		  "package": "org.azahar_emu.azahar",
 		  "rom_delivery": "intent_data"
@@ -372,7 +408,8 @@
 	"platforms": ["wiiu"],
 	"save_config": {
 	  "directories": {
-		"windows": "{emulator_dir}/portable/mlc01/usr/save"
+		"windows": "{emulator_dir}/portable/mlc01/usr/save/00050000",
+		"android": "/storage/emulated/0/Android/data/info.cemu.cemu/files/mlc01/usr/save/00050000"
 	  },
 	  "extensions": ["*"],
 	  "uses_folder_saves": true

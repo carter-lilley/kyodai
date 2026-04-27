@@ -622,6 +622,552 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    // ============================================================================
+    // DocumentsContract File Access for /Android/data/ and /Android/obb/
+    // ============================================================================
+    
+    /**
+     * Checks if a path requires DocumentsContract to access.
+     * On Android 11+, /Android/data/ and /Android/obb/ are restricted
+     * even with MANAGE_EXTERNAL_STORAGE.
+     */
+    @UsedByGodot
+    public boolean requiresDocumentsContract(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return false; // Android 10 and below can access directly
+        }
+        
+        // Check if path is in restricted directories
+        return path.contains("/Android/data/") || path.contains("/Android/obb/");
+    }
+    
+    /**
+     * Converts a file path to a DocumentsContract URI for accessing /Android/data/.
+     * Format: content://com.android.externalstorage.documents/document/primary:Android/data/...
+     */
+    private Uri pathToDocumentUri(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            // Handle primary storage
+            if (path.startsWith("/storage/emulated/0/")) {
+                String relativePath = path.substring("/storage/emulated/0/".length());
+                String docId = "primary:" + relativePath;
+                return android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    Uri.parse("content://com.android.externalstorage.documents/tree/primary"),
+                    docId
+                );
+            }
+            
+            // Handle SD cards: /storage/XXXX-XXXX/...
+            if (path.startsWith("/storage/")) {
+                String[] parts = path.split("/");
+                if (parts.length >= 3) {
+                    String storageId = parts[2];
+                    String relativePath = path.substring(("/storage/" + storageId + "/").length());
+                    String docId = storageId + ":" + relativePath;
+                    return android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                        Uri.parse("content://com.android.externalstorage.documents/tree/" + storageId),
+                        docId
+                    );
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error converting path to document URI: " + e.getMessage());
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Checks if a file exists, using DocumentsContract for restricted paths.
+     */
+    @UsedByGodot
+    public boolean androidFileExists(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        
+        // Try direct access first
+        File file = new File(path);
+        if (file.exists()) {
+            return true;
+        }
+        
+        // Fall back to DocumentsContract for restricted paths
+        if (requiresDocumentsContract(path)) {
+            try {
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                        docUri, 
+                        new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                        null, null, null
+                    );
+                    if (cursor != null) {
+                        boolean exists = cursor.moveToFirst();
+                        cursor.close();
+                        return exists;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "DocumentsContract fileExists failed: " + e.getMessage());
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Checks if a directory exists, using DocumentsContract for restricted paths.
+     * Verifies the document is actually a directory (MIME_TYPE_DIR), not just any document.
+     */
+    @UsedByGodot
+    public boolean androidDirExists(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        
+        // Try direct access first
+        File file = new File(path);
+        if (file.exists() && file.isDirectory()) {
+            return true;
+        }
+        
+        // Fall back to DocumentsContract for restricted paths
+        if (requiresDocumentsContract(path)) {
+            try {
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                        docUri, 
+                        new String[]{
+                            android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                        },
+                        null, null, null
+                    );
+                    if (cursor != null) {
+                        boolean isDir = false;
+                        if (cursor.moveToFirst()) {
+                            int mimeTypeIndex = cursor.getColumnIndex(
+                                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                            );
+                            if (mimeTypeIndex >= 0) {
+                                String mimeType = cursor.getString(mimeTypeIndex);
+                                isDir = android.provider.DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType);
+                            }
+                        }
+                        cursor.close();
+                        return isDir;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "DocumentsContract dirExists failed: " + e.getMessage());
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Reads a file and returns its contents as a base64-encoded string.
+     * Uses DocumentsContract for restricted paths.
+     */
+    @UsedByGodot
+    public String androidReadFile(String path) {
+        if (path == null || path.isEmpty()) {
+            return "";
+        }
+        
+        try {
+            java.io.InputStream inputStream = null;
+            
+            // Try direct access first
+            File file = new File(path);
+            if (file.exists() && file.canRead()) {
+                inputStream = new java.io.FileInputStream(file);
+            } else if (requiresDocumentsContract(path)) {
+                // Use DocumentsContract
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    inputStream = activity.getContentResolver().openInputStream(docUri);
+                }
+            }
+            
+            if (inputStream == null) {
+                return "";
+            }
+            
+            // Read all bytes
+            java.io.ByteArrayOutputStream byteStream = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                byteStream.write(buffer, 0, bytesRead);
+            }
+            inputStream.close();
+            
+            // Encode as base64
+            String base64 = android.util.Base64.encodeToString(byteStream.toByteArray(), android.util.Base64.NO_WRAP);
+            return base64;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error reading file: " + path + " - " + e.getMessage());
+            return "";
+        }
+    }
+    
+    /**
+     * Writes base64-encoded data to a file.
+     * Uses DocumentsContract for restricted paths.
+     */
+    @UsedByGodot
+    public boolean androidWriteFile(String path, String base64Data) {
+        if (path == null || path.isEmpty() || base64Data == null) {
+            return false;
+        }
+        
+        try {
+            byte[] data = android.util.Base64.decode(base64Data, android.util.Base64.NO_WRAP);
+            
+            // Try direct access first
+            File file = new File(path);
+            File parentDir = file.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs();
+            }
+            
+            if (parentDir != null && parentDir.canWrite()) {
+                java.io.FileOutputStream outputStream = new java.io.FileOutputStream(file);
+                outputStream.write(data);
+                outputStream.close();
+                return true;
+            }
+            
+            // Fall back to DocumentsContract for restricted paths
+            if (requiresDocumentsContract(path)) {
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    java.io.OutputStream outputStream = activity.getContentResolver().openOutputStream(docUri, "w");
+                    if (outputStream != null) {
+                        outputStream.write(data);
+                        outputStream.close();
+                        return true;
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error writing file: " + path + " - " + e.getMessage());
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Lists files in a directory.
+     * Returns a JSON array of filenames.
+     * Uses DocumentsContract for restricted paths.
+     */
+    @UsedByGodot
+    public String androidListDir(String path) {
+        if (path == null || path.isEmpty()) {
+            return "[]";
+        }
+        
+        java.util.List<String> files = new java.util.ArrayList<>();
+        
+        // Try direct access first
+        File dir = new File(path);
+        if (dir.exists() && dir.isDirectory() && dir.canRead()) {
+            String[] children = dir.list();
+            if (children != null) {
+                for (String child : children) {
+                    files.add(child);
+                }
+            }
+            return new org.json.JSONArray(files).toString();
+        }
+        
+        // Fall back to DocumentsContract for restricted paths
+        if (requiresDocumentsContract(path)) {
+            try {
+                Uri dirUri = pathToDocumentUri(path);
+                if (dirUri != null) {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                        android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(dirUri, 
+                            android.provider.DocumentsContract.getDocumentId(dirUri)),
+                        new String[]{
+                            android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                            android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                        },
+                        null, null, null
+                    );
+                    
+                    if (cursor != null) {
+                        while (cursor.moveToNext()) {
+                            String name = cursor.getString(0);
+                            files.add(name);
+                        }
+                        cursor.close();
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "DocumentsContract listDir failed: " + e.getMessage());
+            }
+        }
+        
+        return new org.json.JSONArray(files).toString();
+    }
+    
+    /**
+     * Gets the last modified time of a file.
+     * Returns 0 if file doesn't exist or can't be accessed.
+     */
+    @UsedByGodot
+    public long androidGetModifiedTime(String path) {
+        if (path == null || path.isEmpty()) {
+            return 0;
+        }
+        
+        // Try direct access first
+        File file = new File(path);
+        if (file.exists()) {
+            return file.lastModified();
+        }
+        
+        // Fall back to DocumentsContract for restricted paths
+        if (requiresDocumentsContract(path)) {
+            try {
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                        docUri,
+                        new String[]{android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED},
+                        null, null, null
+                    );
+                    if (cursor != null && cursor.moveToFirst()) {
+                        long modified = cursor.getLong(0);
+                        cursor.close();
+                        return modified;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "DocumentsContract getModifiedTime failed: " + e.getMessage());
+            }
+        }
+        
+        return 0;
+    }
+    
+    /**
+     * Creates a directory (and parents) using DocumentsContract for restricted paths.
+     */
+    @UsedByGodot
+    public boolean androidCreateDir(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        
+        // Try direct access first
+        File dir = new File(path);
+        if (dir.exists() && dir.isDirectory()) {
+            return true;
+        }
+        if (dir.mkdirs()) {
+            return true;
+        }
+        
+        // For restricted paths, DocumentsContract doesn't support directory creation well
+        // Return false - caller should handle this differently
+        return false;
+    }
+    
+    /**
+     * Deletes a file using DocumentsContract for restricted paths.
+     */
+    @UsedByGodot
+    public boolean androidDeleteFile(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        
+        // Try direct access first
+        File file = new File(path);
+        if (file.exists() && file.isFile()) {
+            return file.delete();
+        }
+        
+        // Fall back to DocumentsContract for restricted paths
+        if (requiresDocumentsContract(path)) {
+            try {
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    return android.provider.DocumentsContract.deleteDocument(
+                        activity.getContentResolver(), docUri
+                    );
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "DocumentsContract delete failed: " + e.getMessage());
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Launches an Android intent with the specified parameters.
+     * Uses FileProvider for content:// URIs when needed.
+     */
+    @UsedByGodot
+    public boolean launchAndroidIntent(String action, String packageName, String className,
+                                        String romPath, String corePath, String romDelivery,
+                                        String extrasJson, String mimeType, boolean clearTask,
+                                        boolean grantUriPermission, boolean useDocumentUri,
+                                        boolean useFileUri) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "launchAndroidIntent() called");
+        Log.d(TAG, "Action: " + action);
+        Log.d(TAG, "Package: " + packageName);
+        Log.d(TAG, "Class: " + className);
+        Log.d(TAG, "ROM path: " + romPath);
+        Log.d(TAG, "Core path: " + corePath);
+        Log.d(TAG, "ROM delivery: " + romDelivery);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            Intent intent = new Intent();
+            
+            // Set action
+            if (action != null && !action.isEmpty()) {
+                intent.setAction(action);
+            }
+            
+            // Set component (package/class)
+            if (packageName != null && !packageName.isEmpty()) {
+                if (className != null && !className.isEmpty()) {
+                    intent.setComponent(new ComponentName(packageName, className));
+                } else {
+                    intent.setPackage(packageName);
+                }
+            }
+            
+            // Handle ROM data based on delivery method
+            if (romPath != null && !romPath.isEmpty()) {
+                if ("intent_data".equals(romDelivery)) {
+                    // ROM as intent data
+                    Uri romUri;
+                    File romFile = new File(romPath);
+                    
+                    if (useFileUri) {
+                        // Use file:// URI (only for specific cases)
+                        romUri = Uri.fromFile(romFile);
+                    } else {
+                        // Use FileProvider content:// URI
+                        romUri = FileProvider.getUriForFile(activity, 
+                            activity.getPackageName() + ".kyodai.fileprovider", romFile);
+                    }
+                    
+                    intent.setDataAndType(romUri, mimeType);
+                    
+                    if (grantUriPermission) {
+                        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    }
+                } else if ("extra".equals(romDelivery)) {
+                    // ROM as extra parameter
+                    Uri romUri;
+                    File romFile = new File(romPath);
+                    
+                    if (useFileUri) {
+                        romUri = Uri.fromFile(romFile);
+                    } else {
+                        romUri = FileProvider.getUriForFile(activity,
+                            activity.getPackageName() + ".kyodai.fileprovider", romFile);
+                    }
+                    
+                    intent.putExtra("ROM", romUri.toString());
+                    
+                    if (grantUriPermission) {
+                        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    }
+                }
+            }
+            
+            // Add core path as extra if provided
+            if (corePath != null && !corePath.isEmpty()) {
+                intent.putExtra("LIBRETRO", corePath);
+            }
+            
+            // Parse and add extras from JSON
+            if (extrasJson != null && !extrasJson.isEmpty() && !"[]".equals(extrasJson)) {
+                try {
+                    org.json.JSONArray extrasArray = new org.json.JSONArray(extrasJson);
+                    for (int i = 0; i < extrasArray.length(); i++) {
+                        org.json.JSONObject extra = extrasArray.getJSONObject(i);
+                        String key = extra.getString("key");
+                        String value = extra.getString("value");
+                        String type = extra.getString("type");
+                        
+                        // Replace {rom} placeholder with actual ROM path
+                        if (value != null && value.contains("{rom}")) {
+                            value = value.replace("{rom}", romPath != null ? romPath : "");
+                            Log.d(TAG, "Replaced {rom} placeholder in extra " + key + ": " + value);
+                        }
+                        
+                        if ("file_path".equals(type)) {
+                            // Pass raw file path - with MANAGE_EXTERNAL_STORAGE, target apps can read directly
+                            intent.putExtra(key, value);
+                            Log.d(TAG, "Added file path extra: " + key + "=" + value);
+                        } else if ("int".equals(type)) {
+                            intent.putExtra(key, Integer.parseInt(value));
+                        } else if ("bool".equals(type) || "boolean".equals(type)) {
+                            intent.putExtra(key, Boolean.parseBoolean(value));
+                        } else {
+                            // Default to string
+                            intent.putExtra(key, value);
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to parse extras JSON: " + e.getMessage());
+                }
+            }
+            
+            // Add flags
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            
+            if (clearTask) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            }
+            
+            // Launch the intent
+            activity.startActivity(intent);
+            
+            Log.d(TAG, "SUCCESS: Intent launched");
+            Log.d(TAG, "==========================================");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR launching intent: " + e.getMessage());
+            Log.e(TAG, "Stack trace: ");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            Log.d(TAG, "==========================================");
+            return false;
+        }
+    }
+    
     /**
      * Stops the foreground service when downloads are complete.
      */
@@ -644,6 +1190,57 @@ public class PackageCheckerPlugin extends GodotPlugin {
             Log.d(TAG, "==========================================");
         } catch (Exception e) {
             Log.e(TAG, "ERROR stopping foreground service: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Installs an APK file using PackageInstaller with FileProvider content URI.
+     * Required for Android N+ where file:// URIs are forbidden.
+     */
+    @UsedByGodot
+    public boolean installApk(String apkPath) {
+        if (apkPath == null || apkPath.isEmpty()) {
+            Log.e(TAG, "installApk: Empty path");
+            return false;
+        }
+        
+        if (activity == null) {
+            Log.e(TAG, "installApk: Activity is null");
+            return false;
+        }
+        
+        try {
+            File apkFile = new File(apkPath);
+            if (!apkFile.exists()) {
+                Log.e(TAG, "installApk: File does not exist: " + apkPath);
+                return false;
+            }
+            
+            // Create content:// URI via FileProvider
+            Uri apkUri = FileProvider.getUriForFile(activity,
+                activity.getPackageName() + ".kyodai.fileprovider", apkFile);
+            
+            Log.d(TAG, "installApk: Using URI: " + apkUri);
+            
+            // Create install intent
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            
+            // Grant permission to package installer
+            activity.grantUriPermission("com.android.packageinstaller", apkUri, 
+                Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            
+            activity.startActivity(intent);
+            
+            Log.d(TAG, "installApk: Install intent launched successfully");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "installApk: Failed to install APK: " + e.getMessage());
+            e.printStackTrace();
+            return false;
         }
     }
 }

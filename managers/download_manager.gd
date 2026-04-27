@@ -1846,11 +1846,12 @@ func _finish_download_completion(item: QueueItem):
 		# Extract TitleID in background if needed
 		if item.game_resource.get_active_title_id() == "" and _needs_title_id(item.game_resource):
 			var game = item.game_resource
-			NotificationManager.show_notification("Extracting TitleID for " + game.title + "...", Notification.Type.INFO, null, 3.0, Callable(), Callable(), true)
+			var notify_id = NotificationManager.show_notification("Extracting TitleID for " + game.title + "...", Notification.Type.INFO, null, 3.0, Callable(), Callable(), true)
 			MemoryManager.queue_extraction_task(func():
 				var title_id = TitleIDParser.extract_for_game(game)
 				return title_id
 			, func(title_id: String):
+				NotificationManager.dismiss_notification(notify_id)
 				if title_id != "":
 					DataManager.update_game_title_id(game.romm_id, title_id)
 					NotificationManager.show_notification("TitleID " + title_id + " found for " + game.title + "!", Notification.Type.SUCCESS, null, 3.0)
@@ -2082,4 +2083,4 @@ func _cleanup_temp_dir(dir_path: String) -> void:
 		file_name = dir.get_next()
 	
 	dir.list_dir_end()
-	FileSystemManager.delete_dir(dir_path)
+	FileSystemManager.delete_dir_recursive(dir_path)

@@ -1,6 +1,6 @@
 # FileSystemManager - Unified file system operations
-# Now uses MANAGE_EXTERNAL_STORAGE on Android for direct filesystem access
-# No more SAF (Storage Access Framework) handling
+# Uses MANAGE_EXTERNAL_STORAGE on Android for direct filesystem access
+# DocumentsContract used for /Android/data/ and /Android/obb/ paths
 
 extends Manager
 
@@ -22,14 +22,60 @@ static func normalize_path(path: String) -> String:
 	# Convert content:// URIs to real paths
 	path = resolve_content_uri(path)
 	
-	# Remove "/./" patterns
-	var result = path
-	while result.find("/./") != -1:
-		result = result.replace("/./", "/")
+	# Preserve Godot virtual paths - don't normalize slashes in user:// or res://
+	if path.begins_with("user://") or path.begins_with("res://"):
+		# Only resolve . and .. after the protocol prefix
+		var prefix = ""
+		var rest = path
+		if path.begins_with("user://"):
+			prefix = "user://"
+			rest = path.substr(7)
+		elif path.begins_with("res://"):
+			prefix = "res://"
+			rest = path.substr(6)
+		
+		# Normalize the rest of the path
+		var has_leading_slash = rest.begins_with("/")
+		var segments = rest.split("/", false)
+		var resolved: Array[String] = []
+		for segment in segments:
+			if segment == ".":
+				continue
+			elif segment == "..":
+				if resolved.size() > 0:
+					resolved.pop_back()
+			else:
+				resolved.append(segment)
+		
+		var result = "/".join(resolved)
+		if has_leading_slash:
+			result = "/" + result
+		if result.length() > 1 and result.ends_with("/"):
+			result = result.substr(0, result.length() - 1)
+		
+		return prefix + result
 	
-	# Remove trailing "/."
-	if result.ends_with("/."):
-		result = result.substr(0, result.length() - 2)
+	# Detect leading slash (absolute path)
+	var has_leading_slash = path.begins_with("/")
+	
+	# Split into segments and resolve . and ..
+	var segments = path.split("/", false)
+	var resolved: Array[String] = []
+	for segment in segments:
+		if segment == ".":
+			continue
+		elif segment == "..":
+			if resolved.size() > 0:
+				resolved.pop_back()
+		else:
+			resolved.append(segment)
+	
+	# Rejoin segments
+	var result = "/".join(resolved)
+	
+	# Restore leading slash for absolute paths
+	if has_leading_slash:
+		result = "/" + result
 	
 	# Remove trailing "/" (except for root "/")
 	if result.length() > 1 and result.ends_with("/"):
@@ -186,6 +232,84 @@ static func _get_plugin():
 static func is_android() -> bool:
 	return PlatformManager.is_android() if Engine.has_singleton("PlatformManager") else OS.get_name() == "Android"
 
+## Checks if a path requires DocumentsContract on Android 11+
+static func _is_restricted_android_path(path: String) -> bool:
+	if not is_android():
+		return false
+	if path.is_empty():
+		return false
+	# Normalize to resolve any ".." segments before checking
+	var normalized = normalize_path(path)
+	return normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
+
+## Delegates file_exists to plugin for restricted paths
+static func _plugin_file_exists(path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	return plugin.call("androidFileExists", path)
+
+## Delegates dir_exists to plugin for restricted paths (verifies it's actually a directory)
+static func _plugin_dir_exists(path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	return plugin.call("androidDirExists", path)
+
+## Delegates dir listing to plugin for restricted paths
+static func _plugin_list_dir(path: String) -> Array[String]:
+	var result: Array[String] = []
+	var plugin = _get_plugin()
+	if plugin == null:
+		return result
+	
+	var json_str = plugin.call("androidListDir", path)
+	if json_str.is_empty() or json_str == "[]":
+		return result
+	
+	var json = JSON.new()
+	var error = json.parse(json_str)
+	if error == OK and json.data is Array:
+		for item in json.data:
+			result.append(str(item))
+	
+	return result
+
+## Delegates file read to plugin for restricted paths
+static func _plugin_read_file(path: String) -> PackedByteArray:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return PackedByteArray()
+	
+	var base64_data = plugin.call("androidReadFile", path)
+	if base64_data.is_empty():
+		return PackedByteArray()
+	
+	return Marshalls.base64_to_raw(base64_data)
+
+## Delegates file write to plugin for restricted paths
+static func _plugin_write_file(path: String, data: PackedByteArray) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	
+	var base64_data = Marshalls.raw_to_base64(data)
+	return plugin.call("androidWriteFile", path, base64_data)
+
+## Delegates file delete to plugin for restricted paths
+static func _plugin_delete_file(path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	return plugin.call("androidDeleteFile", path)
+
+## Delegates get modified time to plugin for restricted paths
+static func _plugin_get_modified_time(path: String) -> int:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return 0
+	return plugin.call("androidGetModifiedTime", path)
+
 ## Checks if a file exists
 static func file_exists(path: String) -> bool:
 	if path.is_empty():
@@ -197,6 +321,10 @@ static func file_exists(path: String) -> bool:
 	# Handle Godot virtual paths
 	if path.begins_with("user://") or path.begins_with("res://"):
 		return FileAccess.file_exists(path)
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_file_exists(path)
 	
 	# For real paths
 	return FileAccess.file_exists(path)
@@ -212,6 +340,10 @@ static func dir_exists(path: String) -> bool:
 	# Handle Godot virtual paths
 	if path.begins_with("user://") or path.begins_with("res://"):
 		return DirAccess.dir_exists_absolute(path)
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_dir_exists(path)
 	
 	# For real paths
 	return DirAccess.dir_exists_absolute(path)
@@ -275,6 +407,10 @@ static func list_dir(path: String) -> Array[String]:
 	
 	# Convert content:// URIs to real paths
 	path = resolve_content_uri(path)
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_list_dir(path)
 	
 	var dir = DirAccess.open(path)
 	if dir == null:
@@ -341,11 +477,155 @@ static func copy_file(source_path: String, dest_path: String) -> bool:
 	
 	return true
 
+## Recursively copies a directory to another location
+## Returns true on success
+static func copy_dir(source: String, dest: String) -> bool:
+	if not DirAccess.dir_exists_absolute(dest):
+		DirAccess.make_dir_recursive_absolute(dest)
+	
+	var dir = DirAccess.open(source)
+	if dir == null:
+		push_error("[FileSystemManager] Failed to open source directory: " + source)
+		return false
+	
+	dir.list_dir_begin()
+	var item = dir.get_next()
+	var success = true
+	
+	while item != "":
+		if item != "." and item != "..":
+			var src_path = source.rstrip("/") + "/" + item
+			var dst_path = dest.rstrip("/") + "/" + item
+			if dir.current_is_dir():
+				if not copy_dir(src_path, dst_path):
+					success = false
+			else:
+				if not copy_file(src_path, dst_path):
+					success = false
+		item = dir.get_next()
+	
+	dir.list_dir_end()
+	return success
+
+## Creates a ZIP archive from a directory
+## When root_name is provided, creates a root folder inside the zip with that name
+## max_file_size: maximum file size in bytes to include (-1 for no limit)
+## Returns true on success
+static func zip_directory(source_dir: String, dest_zip: String, max_file_size: int = -1, root_name: String = "") -> bool:
+	if not dir_exists(source_dir):
+		push_error("[FileSystemManager] Source directory does not exist: " + source_dir)
+		return false
+	
+	# If root_name is provided, stage to temp directory first
+	var actual_source = source_dir
+	var stage_dir = ""
+	
+	if not root_name.is_empty():
+		stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+		var stage_root = stage_dir + root_name
+		DirAccess.make_dir_recursive_absolute(stage_root)
+		var copy_success = copy_dir(source_dir, stage_root)
+		if not copy_success:
+			delete_dir_recursive(stage_dir)
+			return false
+		actual_source = stage_dir
+	
+	# Ensure parent directory exists
+	var parent_dir = dest_zip.get_base_dir()
+	if not parent_dir.is_empty() and not dir_exists(parent_dir):
+		if not make_dir_recursive(parent_dir):
+			if not stage_dir.is_empty():
+				delete_dir_recursive(stage_dir)
+			return false
+	
+	var packer = ZIPPacker.new()
+	var err = packer.open(dest_zip)
+	if err != OK:
+		push_error("[FileSystemManager] Failed to open ZIPPacker for: " + dest_zip)
+		if not stage_dir.is_empty():
+			delete_dir_recursive(stage_dir)
+		return false
+	
+	var success = _zip_directory_recursive(packer, actual_source, "", max_file_size)
+	packer.close()
+	
+	# Clean up staging directory if used
+	if not stage_dir.is_empty():
+		delete_dir_recursive(stage_dir)
+	
+	return success
+
+## Internal: Recursively adds directory contents to a ZIPPacker
+static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_prefix: String, max_file_size: int = -1) -> bool:
+	var dir = DirAccess.open(dir_path)
+	if dir == null:
+		push_error("[FileSystemManager] Failed to open directory for zipping: " + dir_path)
+		return false
+	
+	dir.list_dir_begin()
+	var filename = dir.get_next()
+	var success = true
+	
+	while filename != "":
+		if filename != "." and filename != "..":
+			var full_path = dir_path + "/" + filename
+			var zip_path = zip_prefix + filename
+			
+			if dir.current_is_dir():
+				packer.start_file(zip_path + "/")
+				packer.close_file()
+				if not _zip_directory_recursive(packer, full_path, zip_path + "/", max_file_size):
+					success = false
+			else:
+				# Check file size if max_file_size is set
+				var file = FileAccess.open(full_path, FileAccess.READ)
+				if file == null:
+					push_error("[FileSystemManager] Failed to read file for zipping: " + full_path)
+					success = false
+				else:
+					var file_size = file.get_length()
+					if max_file_size > 0 and file_size > max_file_size:
+						print("[FileSystemManager] Skipping oversized file (" + str(file_size) + " bytes): " + full_path)
+						file.close()
+					else:
+						var data = file.get_buffer(file_size)
+						file.close()
+						packer.start_file(zip_path)
+						packer.write_file(data)
+						packer.close_file()
+			
+			if not success:
+				break
+		
+		filename = dir.get_next()
+	
+	dir.list_dir_end()
+	return success
+
 ## Deletes a file
 static func delete_file(path: String) -> bool:
 	if path.is_empty():
 		return false
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_delete_file(path)
+	
 	return DirAccess.remove_absolute(path) == OK
+
+## Gets file modification time
+static func get_modified_time(path: String) -> int:
+	if path.is_empty():
+		return 0
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_get_modified_time(path)
+	
+	if not FileAccess.file_exists(path):
+		return 0
+	
+	return FileAccess.get_modified_time(path)
 
 ## Opens a file for reading
 ## Returns FileAccess object or null on failure
@@ -370,6 +650,10 @@ static func write_file(path: String, content: String) -> bool:
 	if path.is_empty():
 		return false
 	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_write_file(path, content.to_utf8_buffer())
+	
 	var file = FileAccess.open(path, FileAccess.WRITE)
 	if not file:
 		return false
@@ -382,6 +666,10 @@ static func write_file(path: String, content: String) -> bool:
 static func write_file_bytes(path: String, data: PackedByteArray) -> bool:
 	if path.is_empty():
 		return false
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_write_file(path, data)
 	
 	var file = FileAccess.open(path, FileAccess.WRITE)
 	if not file:
@@ -396,6 +684,11 @@ static func read_file(path: String) -> String:
 	if path.is_empty() or not file_exists(path):
 		return ""
 	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		var bytes = _plugin_read_file(path)
+		return bytes.get_string_from_utf8()
+	
 	var file = FileAccess.open(path, FileAccess.READ)
 	if not file:
 		return ""
@@ -408,6 +701,10 @@ static func read_file(path: String) -> String:
 static func read_file_bytes(path: String) -> PackedByteArray:
 	if path.is_empty() or not file_exists(path):
 		return PackedByteArray()
+	
+	# Check if restricted Android path
+	if _is_restricted_android_path(path):
+		return _plugin_read_file(path)
 	
 	var file = FileAccess.open(path, FileAccess.READ)
 	if not file:
