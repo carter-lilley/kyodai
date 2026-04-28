@@ -1,0 +1,282 @@
+{
+  "meta": {
+    "id": "pcsx2",
+    "name": "PCSX2",
+    "platforms": [
+      "ps2"
+    ]
+  },
+  "paths": {
+    "saves": {
+      "_default": {
+        "directories": {
+          "windows": "{emulator_dir}/memcards",
+          "linux": "{emulator_dir}/memcards"
+        },
+        "extensions": [
+          "*"
+        ],
+        "uses_folder_saves": true
+      }
+    }
+  },
+  "launch": {
+    "platforms": {
+      "windows": {
+        "type": "command",
+        "executable": "pcsx2-qt.exe",
+        "template": [
+          "{exe}",
+          "-nogui",
+          "-fullscreen",
+          "{rom}"
+        ]
+      },
+      "linux": {
+        "type": "command",
+        "executable": "pcsx2-qt",
+        "template": [
+          "{exe}",
+          "-batch",
+          "{rom}"
+        ]
+      },
+      "android": {
+        "action": "android.intent.action.MAIN",
+        "package": "xyz.aethersx2.android",
+        "class": "xyz.aethersx2.android.EmulationActivity",
+        "rom_delivery": "extra",
+        "extras": [
+          {
+            "key": "bootPath",
+            "value": "{rom}",
+            "type": "file_path"
+          }
+        ]
+      }
+    }
+  },
+  "install": [
+    {
+      "step": "download_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "download_repo",
+          "github_repo": "PCSX2/pcsx2",
+          "asset_pattern": "pcsx2-.*-windows-x64-Qt\\.7z"
+        },
+        "linux": {
+          "action_type": "download_repo",
+          "github_repo": "PCSX2/pcsx2",
+          "asset_pattern": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
+        },
+        "android": {
+          "action_type": "download_repo",
+          "github_repo": "Trixarian/NetherSX2-patch",
+          "asset_pattern": "NetherSX2-.*-.*\\.apk"
+        }
+      }
+    },
+    {
+      "step": "install_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "extract",
+          "extract_to": ".",
+          "strip_top_directory": true,
+          "validate": {
+            "action_type": "file_exists",
+            "file": "pcsx2-qt.exe"
+          }
+        },
+        "linux": {
+          "action_type": "none",
+          "validate": {
+            "action_type": "file_exists",
+            "file": "pcsx2-qt"
+          }
+        },
+        "android": {
+          "action_type": "apk_install",
+          "package_name": "xyz.aethersx2.android",
+          "expected_file": "NetherSX2-*.apk",
+          "validate": {
+            "action_type": "package_installed",
+            "package": "xyz.aethersx2.android"
+          }
+        }
+      }
+    },
+    {
+      "step": "create_portable_mode",
+      "platforms": {
+        "windows": {
+          "action_type": "create_files",
+          "files": [
+            "portable.txt"
+          ],
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "portable.txt"
+            ]
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    },
+    {
+      "step": "download_bios",
+      "platforms": {
+        "windows": {
+          "action_type": "download_url",
+          "url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+          "filename": "LRPS2_bios.zip"
+        },
+        "linux": {
+          "action_type": "download_url",
+          "url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+          "filename": "LRPS2_bios.zip"
+        },
+        "android": {
+          "action_type": "download_url",
+          "url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
+          "filename": "LRPS2_bios.zip"
+        }
+      }
+    },
+    {
+      "step": "extract_bios",
+      "platforms": {
+        "windows": {
+          "action_type": "extract",
+          "expected_file": "LRPS2_bios.zip",
+          "extract_to": ".",
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "bios"
+          }
+        },
+        "linux": {
+          "action_type": "extract",
+          "expected_file": "LRPS2_bios.zip",
+          "extract_to": ".",
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "bios"
+          }
+        },
+        "android": {
+          "action_type": "extract",
+          "expected_file": "LRPS2_bios.zip",
+          "extract_to": ".",
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "bios"
+          }
+        }
+      }
+    },
+    {
+      "step": "create_config_dir",
+      "platforms": {
+        "windows": {
+          "action_type": "create_folders",
+          "folders": [
+            "inis"
+          ],
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "inis"
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    },
+    {
+      "step": "create_config",
+      "platforms": {
+        "windows": {
+          "action_type": "create_files",
+          "files": [
+            {
+              "name": "inis/PCSX2.ini",
+              "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
+            }
+          ],
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "inis/PCSX2.ini"
+            ]
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    },
+    {
+      "step": "create_memcards_dir",
+      "platforms": {
+        "windows": {
+          "action_type": "create_folders",
+          "folders": [
+            "memcards/main.ps2"
+          ],
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "memcards/main.ps2"
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    },
+    {
+      "step": "create_superblock",
+      "platforms": {
+        "windows": {
+          "action_type": "create_pcsx2_superblock",
+          "path": "memcards/main.ps2",
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "memcards/main.ps2/_pcsx2_superblock"
+            ]
+          }
+        },
+        "linux": {
+          "action_type": "create_pcsx2_superblock",
+          "path": "memcards/main.ps2",
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "memcards/main.ps2/_pcsx2_superblock"
+            ]
+          }
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    }
+  ]
+}

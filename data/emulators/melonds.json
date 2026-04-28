@@ -1,0 +1,217 @@
+{
+  "meta": {
+    "id": "melonds",
+    "name": "melonDS",
+    "platforms": [
+      "nds"
+    ]
+  },
+  "paths": {
+    "saves": {
+      "_default": {
+        "directories": {
+          "windows": "{games_dir}/nds",
+          "linux": "{games_dir}/nds",
+          "android": "{games_dir}/nds"
+        },
+        "extensions": [
+          ".sav"
+        ],
+        "uses_folder_saves": false
+      }
+    }
+  },
+  "launch": {
+    "platforms": {
+      "windows": {
+        "type": "command",
+        "executable": "melonDS.exe",
+        "template": [
+          "{exe}",
+          "{rom}",
+          "--fullscreen"
+        ]
+      },
+      "linux": {
+        "type": "command",
+        "executable": "melonDS",
+        "template": [
+          "{exe}",
+          "{rom}"
+        ]
+      },
+      "android": {
+        "action": "me.magnum.melonds.nightly.LAUNCH_ROM",
+        "package": "me.magnum.melonds.nightly",
+        "class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
+        "rom_delivery": "intent_data",
+        "extras": [
+          {
+            "key": "uri",
+            "value": "{rom}",
+            "type": "content_uri"
+          }
+        ]
+      }
+    }
+  },
+  "install": [
+    {
+      "step": "download_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "download_repo",
+          "github_repo": "melonDS-emu/melonDS",
+          "asset_pattern": "melonDS-.*-windows-x86_64\\.zip"
+        },
+        "linux": {
+          "action_type": "download_repo",
+          "github_repo": "melonDS-emu/melonDS",
+          "asset_pattern": "melonDS-.*-appimage-x86_64\\.zip"
+        },
+        "android": {
+          "action_type": "download_repo",
+          "github_repo": "rafaelvcaetano/melonDS-android",
+          "asset_pattern": "app-gitHub-nightly-release\\.apk",
+          "release_tag": "nightly-release"
+        }
+      }
+    },
+    {
+      "step": "install_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "extract",
+          "extract_to": ".",
+          "strip_top_directory": false,
+          "validate": {
+            "action_type": "file_exists",
+            "file": "melonDS.exe"
+          }
+        },
+        "linux": {
+          "action_type": "extract",
+          "extract_to": ".",
+          "strip_top_directory": false,
+          "validate": {
+            "action_type": "file_exists",
+            "file": "melonDS"
+          }
+        },
+        "android": {
+          "action_type": "apk_install",
+          "package_name": "me.magnum.melonds.nightly",
+          "expected_file": "app-gitHub-nightly-release.apk",
+          "validate": {
+            "action_type": "package_installed",
+            "package": "me.magnum.melonds.nightly"
+          }
+        }
+      }
+    },
+    {
+      "step": "download_bios",
+      "platforms": {
+        "windows": {
+          "action_type": "download_url",
+          "url": "https://files.lilley.video/other_assets/melonds_bios.zip",
+          "filename": "melonds_bios.zip"
+        },
+        "linux": {
+          "action_type": "download_url",
+          "url": "https://files.lilley.video/other_assets/melonds_bios.zip",
+          "filename": "melonds_bios.zip"
+        },
+        "android": {
+          "action_type": "download_url",
+          "url": "https://files.lilley.video/other_assets/melonds_bios.zip",
+          "filename": "melonds_bios.zip"
+        }
+      }
+    },
+    {
+      "step": "extract_bios",
+      "platforms": {
+        "windows": {
+          "action_type": "extract",
+          "expected_file": "melonds_bios.zip",
+          "extract_to": ".",
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "firmware.bin",
+              "bios7.bin",
+              "bios9.bin"
+            ]
+          }
+        },
+        "linux": {
+          "action_type": "extract",
+          "expected_file": "melonds_bios.zip",
+          "extract_to": ".",
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "firmware.bin",
+              "bios7.bin",
+              "bios9.bin"
+            ]
+          }
+        },
+        "android": {
+          "action_type": "extract",
+          "expected_file": "melonds_bios.zip",
+          "extract_to": "{emulator_dir}",
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "firmware.bin",
+              "bios7.bin",
+              "bios9.bin"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step": "create_config",
+      "platforms": {
+        "windows": {
+          "action_type": "create_files",
+          "files": [
+            {
+              "name": "melonDS.toml",
+              "content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/dsi/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/dsi/bios9.bin\"\nBIOS7Path = \"{emulator_dir}/dsi/bios7.bin\"\nNANDPath = \"{emulator_dir}/dsi/nand.bin\""
+            }
+          ],
+          "validate": {
+            "action_type": "files_exist",
+            "files": [
+              "melonDS.toml"
+            ]
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    },
+    {
+      "step": "configure_bios_paths",
+      "platforms": {
+        "windows": {
+          "action_type": "none"
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "none"
+        }
+      }
+    }
+  ]
+}

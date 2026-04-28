@@ -1,0 +1,275 @@
+{
+  "meta": {
+	"id": "retroarch",
+	"name": "RetroArch",
+	"platforms": [
+	  "3do",
+	  "arcade",
+	  "atari2600",
+	  "lynx",
+	  "atomiswave",
+	  "c64",
+	  "dos",
+	  "dc",
+	  "fds",
+	  "g-and-w",
+	  "gb",
+	  "gba",
+	  "gbc",
+	  "msx",
+	  "naomi",
+	  "naomi2",
+	  "neogeoaes",
+	  "neo-geo-pocket-color",
+	  "n64",
+	  "nes",
+	  "win3x",
+	  "pico8",
+	  "psx",
+	  "sega32",
+	  "segacd",
+	  "gamegear",
+	  "sms",
+	  "genesis",
+	  "saturn",
+	  "sg1000",
+	  "snes",
+	  "tg16",
+	  "turbografx-cd",
+      "virtualboy"
+	]
+  },
+  "paths": {
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/saves/{core_name}",
+		  "android": "/storage/emulated/0/RetroArch/saves/{core_name}"
+		},
+		"extensions": [
+          ".srm"
+		],
+		"uses_folder_saves": false
+	  }
+	}
+  },
+  "launch": {
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "retroarch.exe",
+		"template": [
+		  "{exe}",
+		  "-L",
+		  "{core}",
+		  "{rom}",
+          "-f"
+		]
+	  },
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "com.retroarch",
+		"class": "com.retroarch.browser.debug.CoreSideloadActivity",
+		"rom_delivery": "extra",
+		"extras": [
+		  {
+			"key": "ROM",
+			"value": "{rom}",
+			"type": "file_path"
+		  },
+		  {
+			"key": "LIBRETRO",
+			"value": "{core_path}",
+			"type": "file_path"
+		  }
+		]
+	  }
+	}
+  },
+  "install": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_scrape",
+		  "scrape_url": "https://buildbot.libretro.com/stable/",
+		  "version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+		  "url_template": "https://buildbot.libretro.com/stable/{version}/windows/x86_64/RetroArch.7z",
+		  "match_strategy": "latest_semver"
+		},
+		"android": {
+		  "action_type": "download_scrape",
+		  "scrape_url": "https://buildbot.libretro.com/stable/",
+		  "version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+		  "url_template": "https://buildbot.libretro.com/stable/{version}/android/RetroArch.apk",
+		  "match_strategy": "latest_semver"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "retroarch.exe"
+		  }
+		},
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "com.retroarch",
+		  "expected_file": "RetroArch.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "com.retroarch"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "download_cores",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_scrape",
+		  "scrape_url": "https://buildbot.libretro.com/stable/",
+		  "version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+		  "url_template": "https://buildbot.libretro.com/stable/{version}/windows/x86_64/RetroArch_cores.7z",
+		  "match_strategy": "latest_semver"
+		},
+		"android": {
+		  "action_type": "batch_url_download",
+		  "base_url": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/",
+		  "url_pattern": "{name}_libretro_android.so.zip",
+		  "cores": [
+			"opera",
+			"mame2003_plus",
+			"stella",
+			"handy",
+			"flycast",
+			"vice_x64",
+			"dosbox_pure",
+			"nestopia",
+			"gw",
+			"gambatte",
+			"mgba",
+			"bluemsx",
+			"fbneo",
+			"mednafen_ngp",
+			"mupen64plus_next_gles3",
+			"swanstation",
+			"picodrive",
+			"genesis_plus_gx",
+			"yabasanshiro",
+			"snes9x",
+			"mednafen_pce",
+            "mednafen_vb"
+		  ],
+		  "extract_to": "{emulator_dir}/cores",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "{emulator_dir}/cores",
+			"pattern": "*_libretro_android.so"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "install_cores",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "flatten_target": "RetroArch-Win64",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "cores",
+			"pattern": "*.dll"
+		  }
+		},
+		"android": {
+		  "action_type": "extract",
+		  "extract_to": "{emulator_dir}/cores",
+		  "batch": true,
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "{emulator_dir}/cores",
+			"pattern": "*_libretro_android.so"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "download_system_files",
+	  "platforms": {
+		"all": {
+		  "action_type": "download_url",
+		  "url": "https://files.lilley.video/other_assets/retroarch_bios.zip"
+		}
+	  }
+	},
+	{
+	  "step": "install_system_files",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": "system",
+		  "strip_top_directory": true,
+		  "flatten_target": "bios",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "system"
+		  }
+		},
+		"android": {
+		  "action_type": "extract",
+		  "extract_to": "{emulator_dir}/system",
+		  "strip_top_directory": true,
+		  "flatten_target": "bios",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "{emulator_dir}/system"
+		  }
+		}
+	  }
+	}
+  ],
+  "cores": {
+	"3do": {"mapping": "opera", "save_name": "Opera"},
+	"arcade": {"mapping": "mame2003_plus", "save_name": "MAME 2003-Plus"},
+	"atari2600": {"mapping": "stella", "save_name": "Stella"},
+	"lynx": {"mapping": "handy", "save_name": "Handy"},
+	"atomiswave": {"mapping": "flycast", "save_name": "Flycast"},
+	"c64": {"mapping": "vice_x64", "save_name": "VICE x64"},
+	"dos": {"mapping": "dosbox_pure", "save_name": "DOSBox-pure"},
+	"dc": {"mapping": "flycast", "save_name": "Flycast"},
+	"fds": {"mapping": "nestopia", "save_name": "Nestopia"},
+	"g-and-w": {"mapping": "gw", "save_name": "Game & Watch"},
+	"gb": {"mapping": "gambatte", "save_name": "Gambatte"},
+	"gba": {"mapping": "mgba", "save_name": "mGBA"},
+	"gbc": {"mapping": "gambatte", "save_name": "Gambatte"},
+	"msx": {"mapping": "bluemsx", "save_name": "blueMSX"},
+	"naomi": {"mapping": "flycast", "save_name": "Flycast"},
+	"naomi2": {"mapping": "flycast", "save_name": "Flycast"},
+	"neogeoaes": {"mapping": "fbneo", "save_name": "FinalBurn Neo"},
+	"neo-geo-pocket-color": {"mapping": "mednafen_ngp", "save_name": "Beetle NeoPop"},
+	"n64": {"mapping": "mupen64plus_next_gles3", "save_name": "Mupen64Plus-Next"},
+	"nes": {"mapping": "nestopia", "save_name": "Nestopia"},
+	"win3x": {"mapping": "dosbox_pure", "save_name": "DOSBox-pure"},
+	"psx": {"mapping": "swanstation", "save_name": "SwanStation"},
+	"sega32": {"mapping": "picodrive", "save_name": "PicoDrive"},
+	"segacd": {"mapping": "genesis_plus_gx", "save_name": "Genesis Plus GX"},
+	"gamegear": {"mapping": "genesis_plus_gx", "save_name": "Genesis Plus GX"},
+	"sms": {"mapping": "genesis_plus_gx", "save_name": "Genesis Plus GX"},
+	"genesis": {"mapping": "genesis_plus_gx", "save_name": "Genesis Plus GX"},
+	"saturn": {"mapping": "yabasanshiro", "save_name": "YabaSanshiro"},
+	"sg1000": {"mapping": "genesis_plus_gx", "save_name": "Genesis Plus GX"},
+	"snes": {"mapping": "snes9x", "save_name": "Snes9x"},
+	"tg16": {"mapping": "mednafen_pce", "save_name": "Beetle PCE"},
+	"turbografx-cd": {"mapping": "mednafen_pce", "save_name": "Beetle PCE"},
+	"virtualboy": {"mapping": "mednafen_vb", "save_name": "Beetle VB"}
+  }
+}

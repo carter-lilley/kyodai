@@ -167,12 +167,40 @@ static func resolve_path(path: String, options: Dictionary = {}) -> String:
 	
 	return result
 
-## Convenience wrapper for emulator paths
-## Automatically provides {emulator_dir} placeholder + base_dir
-static func resolve_emulator_path(path: String, emulator_base_dir: String, format: PathFormat = PathFormat.DEFAULT) -> String:
+## Resolves emulator paths with full wildcard support
+## Handles {emulator_dir}, {app_data}, {games_dir}, and {core_name}
+## This is the preferred method for resolving emulator-related paths
+func resolve_emulator_path(path: String, emulator_id: String, platform_slug: String = "", format: PathFormat = PathFormat.DEFAULT) -> String:
+	if path.is_empty():
+		return ""
+	
+	var placeholders = {}
+	
+	# Resolve {emulator_dir}
+	if Engine.has_singleton("LaunchManager"):
+		var emulator_dir = LaunchManager._get_emulator_directory(emulator_id)
+		placeholders["{emulator_dir}"] = emulator_dir.rstrip("/")
+		
+		# Resolve {app_data}
+		var app_data = LaunchManager.get_app_data_path(emulator_id)
+		if app_data != "":
+			placeholders["{app_data}"] = app_data.rstrip("/")
+		
+		# Resolve {core_name}
+		if platform_slug != "":
+			var core_name = LaunchManager.get_retroarch_core_name(platform_slug)
+			if core_name != "":
+				placeholders["{core_name}"] = core_name
+	
+	# Resolve {games_dir}
+	if Engine.has_singleton("SettingsManager"):
+		var games_folder_setting = SettingsManager.get_setting("games_root_folder")
+		var games_dir = games_folder_setting.value if games_folder_setting else "user://roms"
+		placeholders["{games_dir}"] = games_dir.rstrip("/")
+	
 	return resolve_path(path, {
-		"base_dir": emulator_base_dir,
-		"placeholders": {"{emulator_dir}": emulator_base_dir},
+		"base_dir": placeholders.get("{emulator_dir}", ""),
+		"placeholders": placeholders,
 		"format": format
 	})
 

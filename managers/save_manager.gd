@@ -57,7 +57,8 @@ func _get_global_save_override() -> String:
 
 ## Resolves the save directory for an emulator
 ## Priority: 1. Global override, 2. Registry per-platform directory
-func resolve_save_directory(emulator_id: String) -> String:
+## Optional platform_slug for resolving platform-specific paths (e.g., RetroArch {core_name})
+func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> String:
 	var override = _get_global_save_override()
 	if override != "":
 		return override + "/"
@@ -66,8 +67,10 @@ func resolve_save_directory(emulator_id: String) -> String:
 	if emulator.is_empty():
 		return ""
 	
-	var save_config = emulator.get("save_config", {})
-	var directories = save_config.get("directories", {})
+	var paths = emulator.get("paths", {})
+	var saves = paths.get("saves", {})
+	var default_config = saves.get("_default", {})
+	var directories = default_config.get("directories", {})
 	var platform_name = PlatformManager.get_platform_name().to_lower()
 	
 	var dir = directories.get(platform_name, "")
@@ -77,18 +80,8 @@ func resolve_save_directory(emulator_id: String) -> String:
 	if dir == "":
 		return ""
 	
-	# Use universal path resolver with emulator and games placeholders
-	var emulator_dir = LaunchManager._get_emulator_directory(emulator_id)
-	var games_folder_setting = SettingsManager.get_setting("games_root_folder")
-	var games_dir = games_folder_setting.value if games_folder_setting else "user://roms"
-	
-	dir = FileSystemManager.resolve_path(dir, {
-		"base_dir": emulator_dir,
-		"placeholders": {
-			"{emulator_dir}": emulator_dir.rstrip("/"),
-			"{games_dir}": games_dir.rstrip("/")
-		}
-	})
+	# Use the full emulator path resolver with all wildcards
+	dir = FileSystemManager.resolve_emulator_path(dir, emulator_id, platform_slug)
 	
 	return dir.rstrip("/") + "/"
 
@@ -118,8 +111,10 @@ func get_save_extensions(emulator_id: String) -> Array[String]:
 	if emulator.is_empty():
 		return []
 	
-	var save_config = emulator.get("save_config", {})
-	var extensions = save_config.get("extensions", [])
+	var paths = emulator.get("paths", {})
+	var saves = paths.get("saves", {})
+	var default_config = saves.get("_default", {})
+	var extensions = default_config.get("extensions", [])
 	var result: Array[String] = []
 	for ext in extensions:
 		if ext is String:
@@ -167,8 +162,10 @@ func uses_folder_saves(emulator_id: String) -> bool:
 	var emulator = LaunchManager.get_emulator(emulator_id)
 	if emulator.is_empty():
 		return false
-	var save_config = emulator.get("save_config", {})
-	return save_config.get("uses_folder_saves", false)
+	var paths = emulator.get("paths", {})
+	var saves = paths.get("saves", {})
+	var default_config = saves.get("_default", {})
+	return default_config.get("uses_folder_saves", false)
 
 func discover_local_folder_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
@@ -477,7 +474,7 @@ func discover_local_psp_save(directory: String, title_id: String) -> Array[Dicti
 		print("[SaveManager] discover_local_psp_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return []
 	
-	# PPSSPP save_config already includes SAVEDATA in the path
+	# PPSSPP save path already includes SAVEDATA in the path
 	# e.g., {emulator_dir}/memstick/PSP/SAVEDATA
 	var savedata_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_psp_save: searching in " + savedata_dir + " for title_id " + title_id)
@@ -780,11 +777,11 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 		return ""
 	
 	var emulator = LaunchManager.get_emulator("retroarch")
-	var save_config = emulator.get("save_config", {})
-	var core_save_names = save_config.get("core_save_names", {})
-	var core_save_name = core_save_names.get(platform_slug, "")
+	var cores = emulator.get("cores", {})
+	var core = cores.get(platform_slug, {})
+	var core_save_name = core.get("save_name", "")
 	if core_save_name == "":
-		push_error("[SaveManager] No core_save_name mapping for platform: " + platform_slug)
+		push_error("[SaveManager] No save_name for platform: " + platform_slug)
 		return ""
 	
 	var rom_name_no_ext = game.get_active_file_name().get_basename()
@@ -1054,7 +1051,7 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			callback.call(false, "Not connected to RomM")
 		return
 	
-	var save_dir = resolve_save_directory(emulator_id)
+	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
 	var extensions = get_save_extensions(emulator_id)
 	
 	if save_dir == "" or extensions.is_empty():
@@ -1249,15 +1246,15 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			record_path = download.local.file_path
 		else:
 			if emulator_id == "retroarch":
-				record_path = _resolve_emulator_save_path(emulator_id, resolve_save_directory(emulator_id), game)
+				record_path = _resolve_emulator_save_path(emulator_id, resolve_save_directory(emulator_id, game.platform_slug), game)
 			else:
-				record_path = FileSystemManager.join_paths(resolve_save_directory(emulator_id), file_name)
+				record_path = FileSystemManager.join_paths(resolve_save_directory(emulator_id, game.platform_slug), file_name)
 		
 		if is_folder_save:
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
 			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
 			local_path = zip_path
-			var save_dir = resolve_save_directory(emulator_id)
+			var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
 			
 			if not download.local:
 				record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
@@ -1291,7 +1288,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 				
 				if is_folder_save:
-					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id), record_path, game)
+					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id, game.platform_slug), record_path, game)
 					# Don't use subfolder - the zip already contains the correct folder structure
 					var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
 					if not extract_success:
@@ -1305,7 +1302,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 						# Ensure PCSX2 superblock is valid after extracting saves
 				if emulator_id == "pcsx2":
 					print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
-					var memcard_path = resolve_save_directory(emulator_id) + "main.ps2/"
+					var memcard_path = resolve_save_directory(emulator_id, game.platform_slug) + "main.ps2/"
 					ensure_pcsx2_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
@@ -1360,7 +1357,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		print("[SaveManager] Auto-upload aborted: not connected to RomM")
 		return
 	
-	var save_dir = resolve_save_directory(emulator_id)
+	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
 	var extensions = get_save_extensions(emulator_id)
 	if save_dir == "" or extensions.is_empty():
 		print("[SaveManager] Auto-upload aborted: no save dir or extensions (dir=" + save_dir + ", ext count=" + str(extensions.size()) + ")")
@@ -1545,7 +1542,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			on_complete.call()
 		return
 	
-	var save_dir = resolve_save_directory(emulator_id)
+	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
 	var extensions = get_save_extensions(emulator_id)
 	print("[SaveManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions))
 	if save_dir == "" or extensions.is_empty():

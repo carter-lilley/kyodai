@@ -1,0 +1,101 @@
+{
+  "meta": {
+	"id": "azahar",
+	"name": "Azahar",
+	"platforms": [
+      "3ds"
+	]
+  },
+  "paths": {
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/user/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+		  "android": "{app_data}/sdmc/Nintendo 3DS"
+		},
+		"extensions": [
+          "*"
+		],
+		"uses_folder_saves": true
+	  }
+	}
+  },
+  "launch": {
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "azahar.exe",
+		"template": [
+		  "{exe}",
+		  "-f",
+          "{rom}"
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "azahar.AppImage",
+		"template": [
+		  "{exe}",
+          "{rom}"
+		]
+	  },
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "org.azahar_emu.azahar",
+		"rom_delivery": "intent_data"
+	  }
+	}
+  },
+  "install": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_repo",
+		  "github_repo": "azahar-emu/azahar",
+		  "asset_pattern": "azahar-windows-msvc-.*\\.zip"
+		},
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "azahar-emu/azahar",
+		  "asset_pattern": "azahar\\.AppImage"
+		},
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "azahar-emu/azahar",
+		  "asset_pattern": "azahar-android-vanilla-.*\\.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "azahar.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "none",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "azahar.AppImage"
+		  }
+		},
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "org.azahar_emu.azahar",
+		  "expected_file": "azahar-android-vanilla-*.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "org.azahar_emu.azahar"
+		  }
+		}
+	  }
+	}
+  ]
+}

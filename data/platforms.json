@@ -1,0 +1,227 @@
+{
+  "_meta": {
+	"version": "1.0",
+	"description": "Platform definitions for Kyodai launcher"
+  },
+  "3do": {
+	"name": "3Do",
+	"default_emulator": "retroarch",
+	"retroarch_core": "opera"
+  },
+  "arcade": {
+	"name": "Arcade",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mame2003_plus"
+  },
+  "atari2600": {
+	"name": "Atari2600",
+	"default_emulator": "retroarch",
+	"retroarch_core": "stella"
+  },
+  "lynx": {
+	"name": "Lynx",
+	"default_emulator": "retroarch",
+	"retroarch_core": "handy"
+  },
+  "atomiswave": {
+	"name": "Atomiswave",
+	"default_emulator": "retroarch",
+	"retroarch_core": "flycast"
+  },
+  "c64": {
+	"name": "C64",
+	"default_emulator": "retroarch",
+	"retroarch_core": "vice_x64"
+  },
+  "dos": {
+	"name": "Dos",
+	"default_emulator": "retroarch",
+	"retroarch_core": "dosbox_pure"
+  },
+  "dc": {
+	"name": "Dc",
+	"default_emulator": "retroarch",
+	"retroarch_core": "flycast"
+  },
+  "fds": {
+	"name": "Fds",
+	"default_emulator": "retroarch",
+	"retroarch_core": "nestopia"
+  },
+  "g-and-w": {
+	"name": "G And W",
+	"default_emulator": "retroarch",
+	"retroarch_core": "gw"
+  },
+  "gb": {
+	"name": "Gb",
+	"default_emulator": "retroarch",
+	"retroarch_core": "gambatte"
+  },
+  "gba": {
+	"name": "Gba",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mgba"
+  },
+  "gbc": {
+	"name": "Gbc",
+	"default_emulator": "retroarch",
+	"retroarch_core": "gambatte"
+  },
+  "msx": {
+	"name": "Msx",
+	"default_emulator": "retroarch",
+	"retroarch_core": "bluemsx"
+  },
+  "naomi": {
+	"name": "Naomi",
+	"default_emulator": "retroarch",
+	"retroarch_core": "flycast"
+  },
+  "naomi2": {
+	"name": "Naomi2",
+	"default_emulator": "retroarch",
+	"retroarch_core": "flycast"
+  },
+  "neogeoaes": {
+	"name": "Neogeoaes",
+	"default_emulator": "retroarch",
+	"retroarch_core": "fbneo"
+  },
+  "neo-geo-pocket-color": {
+	"name": "Neo Geo Pocket Color",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mednafen_ngp"
+  },
+  "3ds": {
+	"name": "3Ds",
+	"default_emulator": "azahar"
+  },
+  "n64": {
+	"name": "N64",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mupen64plus_next_gles3"
+  },
+  "nds": {
+	"name": "Nds",
+	"default_emulator": "melonds"
+  },
+  "nes": {
+	"name": "Nes",
+	"default_emulator": "retroarch",
+	"retroarch_core": "nestopia"
+  },
+  "ngc": {
+	"name": "Ngc",
+	"default_emulator": "dolphin"
+  },
+  "win3x": {
+	"name": "Win3X",
+	"default_emulator": "retroarch",
+	"retroarch_core": "dosbox_pure"
+  },
+  "pico8": {
+	"name": "Pico8",
+	"default_emulator": "retroarch"
+  },
+  "psx": {
+	"name": "Psx",
+	"default_emulator": "retroarch",
+	"retroarch_core": "swanstation"
+  },
+  "ps2": {
+	"name": "Ps2",
+	"default_emulator": "pcsx2"
+  },
+  "ps3": {
+	"name": "Ps3",
+	"default_emulator": "rpcs3"
+  },
+  "ps4": {
+	"name": "Ps4",
+	"default_emulator": "shadps4"
+  },
+  "psp": {
+	"name": "Psp",
+	"default_emulator": "ppsspp"
+  },
+  "psvita": {
+	"name": "Psvita",
+	"default_emulator": "vita3k"
+  },
+  "sega32": {
+	"name": "Sega32",
+	"default_emulator": "retroarch",
+	"retroarch_core": "picodrive"
+  },
+  "segacd": {
+	"name": "Segacd",
+	"default_emulator": "retroarch",
+	"retroarch_core": "genesis_plus_gx"
+  },
+  "gamegear": {
+	"name": "Gamegear",
+	"default_emulator": "retroarch",
+	"retroarch_core": "genesis_plus_gx"
+  },
+  "sms": {
+	"name": "Sms",
+	"default_emulator": "retroarch",
+	"retroarch_core": "genesis_plus_gx"
+  },
+  "genesis": {
+	"name": "Genesis",
+	"default_emulator": "retroarch",
+	"retroarch_core": "genesis_plus_gx"
+  },
+  "saturn": {
+	"name": "Saturn",
+	"default_emulator": "retroarch",
+	"retroarch_core": "yabasanshiro"
+  },
+  "sg1000": {
+	"name": "Sg1000",
+	"default_emulator": "retroarch",
+	"retroarch_core": "genesis_plus_gx"
+  },
+  "snes": {
+	"name": "Snes",
+	"default_emulator": "retroarch",
+	"retroarch_core": "snes9x"
+  },
+  "tg16": {
+	"name": "Tg16",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mednafen_pce"
+  },
+  "turbografx-cd": {
+	"name": "Turbografx Cd",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mednafen_pce"
+  },
+  "virtualboy": {
+	"name": "Virtualboy",
+	"default_emulator": "retroarch",
+	"retroarch_core": "mednafen_vb"
+  },
+  "wii": {
+	"name": "Wii",
+	"default_emulator": "dolphin"
+  },
+  "wiiu": {
+	"name": "Wiiu",
+	"default_emulator": "cemu"
+  },
+  "switch": {
+	"name": "Switch",
+	"default_emulator": "eden"
+  },
+  "xbox": {
+	"name": "Xbox",
+	"default_emulator": "xemu"
+  },
+  "xbox360": {
+	"name": "Xbox360",
+	"default_emulator": "xenia"
+  }
+}

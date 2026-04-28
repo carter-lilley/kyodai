@@ -1,0 +1,104 @@
+{
+  "meta": {
+    "id": "cemu",
+    "name": "Cemu",
+    "platforms": [
+      "wiiu"
+    ]
+  },
+  "paths": {
+    "saves": {
+      "_default": {
+        "directories": {
+          "windows": "{emulator_dir}/portable/mlc01/usr/save/00050000",
+          "android": "{app_data}/mlc01/usr/save/00050000"
+        },
+        "extensions": [
+          "*"
+        ],
+        "uses_folder_saves": true
+      }
+    }
+  },
+  "launch": {
+    "platforms": {
+      "windows": {
+        "type": "command",
+        "executable": "Cemu.exe",
+        "template": [
+          "{exe}",
+          "-g",
+          "{rom}",
+          "-f"
+        ]
+      },
+      "linux": {
+        "type": "command",
+        "executable": "cemu.AppImage",
+        "template": [
+          "{exe}",
+          "-g",
+          "{rom}",
+          "-f"
+        ]
+      },
+      "android": {
+        "action": "android.intent.action.VIEW",
+        "package": "info.cemu.cemu",
+        "rom_delivery": "intent_data"
+      }
+    }
+  },
+  "install": [
+    {
+      "step": "download_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "download_repo",
+          "github_repo": "cemu-project/Cemu",
+          "asset_pattern": "cemu-.*-windows-x64\\.zip"
+        },
+        "linux": {
+          "action_type": "download_repo",
+          "github_repo": "cemu-project/Cemu",
+          "asset_pattern": "cemu-.*-linux\\.AppImage"
+        },
+        "android": {
+          "action_type": "download_repo",
+          "github_repo": "SSimco/Cemu",
+          "asset_pattern": "Cemu-.*\\.apk"
+        }
+      }
+    },
+    {
+      "step": "install_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "extract",
+          "extract_to": ".",
+          "strip_top_directory": true,
+          "validate": {
+            "action_type": "file_exists",
+            "file": "Cemu.exe"
+          }
+        },
+        "linux": {
+          "action_type": "none",
+          "validate": {
+            "action_type": "file_exists",
+            "file": "cemu.AppImage"
+          }
+        },
+        "android": {
+          "action_type": "apk_install",
+          "package_name": "info.cemu.cemu",
+          "expected_file": "Cemu-*.apk",
+          "validate": {
+            "action_type": "package_installed",
+            "package": "info.cemu.cemu"
+          }
+        }
+      }
+    }
+  ]
+}

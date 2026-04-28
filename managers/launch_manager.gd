@@ -2,7 +2,8 @@ extends Manager
 
 ## Manages emulator registry, launch intents, and game execution
 
-const REGISTRY_PATH := "res://data/emulator_registry.json"
+const REGISTRY_DIR := "res://data/emulators/"
+const PLATFORMS_PATH := "res://data/platforms.json"
 
 ## Returns the configured emulators directory from settings, or default if not set
 func get_emulators_directory() -> String:
@@ -11,15 +12,6 @@ func get_emulators_directory() -> String:
 		if setting and setting.value != "":
 			return setting.value
 	return "user://emulators/"
-
-## Returns the effective Vita3K data directory on Android.
-## Uses user setting if set, otherwise falls back to Vita3K's default path.
-func _get_vita3k_android_data_path() -> String:
-	if PlatformManager.is_android():
-		var setting = SettingsManager.get_setting("vita3k_data_folder_android")
-		if setting and setting.value != "" and setting.value != "user://roms/":
-			return setting.value.rstrip("/")
-	return "/storage/emulated/0/Android/data/org.vita3k.emulator/files/vita"
 
 ## Gets the full path to an emulator's directory
 ## Handles path separators correctly for all platforms
@@ -32,6 +24,7 @@ func _get_emulator_directory(emulator_id: String) -> String:
 # Registry data
 var _emulator_registry: Dictionary = {}
 var _platform_defaults: Dictionary = {}
+var _platforms_data: Dictionary = {}
 
 # Track installation progress for UI display only
 var _emulator_install_progress: Dictionary = {}  # emulator_id -> progress text for UI
@@ -233,54 +226,53 @@ func kill_background_process() -> bool:
 	return true
 
 func _load_registry():
-	if not FileAccess.file_exists(REGISTRY_PATH):
-		push_error("[LaunchManager] Emulator registry not found at: " + REGISTRY_PATH)
-		emulator_registry_loaded.emit(false)
-		return
+	# Load platforms.json
+	if FileAccess.file_exists(PLATFORMS_PATH):
+		var platforms_file = FileAccess.open(PLATFORMS_PATH, FileAccess.READ)
+		if platforms_file:
+			var platforms_json = JSON.new()
+			var platforms_error = platforms_json.parse(platforms_file.get_as_text())
+			platforms_file.close()
+			if platforms_error == OK:
+				_platforms_data = platforms_json.data
+				for platform_id in _platforms_data.keys():
+					if platform_id.begins_with("_"):
+						continue
+					var platform = _platforms_data[platform_id]
+					var default_emulator = platform.get("default_emulator", "")
+					if default_emulator != "":
+						_platform_defaults[platform_id] = default_emulator
 	
-	var file = FileAccess.open(REGISTRY_PATH, FileAccess.READ)
-	if not file:
-		push_error("[LaunchManager] Failed to open registry file")
-		emulator_registry_loaded.emit(false)
-		return
-	
-	var json = JSON.new()
-	var error = json.parse(file.get_as_text())
-	file.close()
-	
-	if error != OK:
-		push_error("[LaunchManager] Failed to parse registry JSON: " + json.get_error_message())
-		emulator_registry_loaded.emit(false)
-		return
-	
-	_emulator_registry = json.data
-	_build_platform_defaults()
-	
-	emulator_registry_loaded.emit(true)
-
-func _build_platform_defaults():
-	_platform_defaults.clear()
-	
-	# First, check for explicit platform defaults in registry
-	if _emulator_registry.has("_platform_defaults"):
-		var explicit_defaults = _emulator_registry["_platform_defaults"]
-		if explicit_defaults is Dictionary:
-			for platform in explicit_defaults.keys():
-				var emulator_id = explicit_defaults[platform]
-				if _emulator_registry.has(emulator_id):
-					_platform_defaults[platform] = emulator_id
-					#print("[LaunchManager] Explicit default for %s: %s" % [platform, emulator_id])
-	
-	# Then, for any platforms not explicitly set, use first available emulator
-	for emulator_id in _emulator_registry.keys():
-		if emulator_id.begins_with("_"):
-			continue
-		var emulator = _emulator_registry[emulator_id]
-		var platforms = emulator.get("platforms", [])
+	# Load individual emulator files from emulators/ directory
+	var dir = DirAccess.open(REGISTRY_DIR)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if file_name.ends_with(".json"):
+				var filepath = REGISTRY_DIR + file_name
+				var file = FileAccess.open(filepath, FileAccess.READ)
+				if file:
+					var json = JSON.new()
+					var error = json.parse(file.get_as_text())
+					file.close()
+					if error == OK:
+						var emulator_data = json.data
+						var emulator_id = emulator_data.get("meta", {}).get("id", "")
+						if emulator_id != "":
+							_emulator_registry[emulator_id] = emulator_data
+							
+							# For platforms without an explicit default, use first available emulator
+							var platforms = emulator_data.get("meta", {}).get("platforms", [])
+							for platform in platforms:
+								if not _platform_defaults.has(platform):
+									_platform_defaults[platform] = emulator_id
+			file_name = dir.get_next()
 		
-		for platform in platforms:
-			if not _platform_defaults.has(platform):
-				_platform_defaults[platform] = emulator_id
+		emulator_registry_loaded.emit(true)
+	else:
+		push_error("[LaunchManager] Failed to open emulators directory: " + REGISTRY_DIR)
+		emulator_registry_loaded.emit(false)
 
 func _ensure_emulators_directory():
 	var dir = DirAccess.open("user://")
@@ -606,8 +598,32 @@ func get_core_for_platform(emulator_id: String, platform_slug: String) -> String
 	if emulator.is_empty():
 		return ""
 	
-	var core_mappings = emulator.get("core_mappings", {})
-	return core_mappings.get(platform_slug, "")
+	var cores = emulator.get("cores", {})
+	var core = cores.get(platform_slug, {})
+	return core.get("mapping", "")
+
+## Gets the app data directory for an emulator on Android
+## Resolves to /storage/emulated/0/Android/data/{package}/files/
+func get_app_data_path(emulator_id: String) -> String:
+	var emulator = get_emulator(emulator_id)
+	if emulator.is_empty():
+		return ""
+	
+	var launch = emulator.get("launch", {})
+	var platforms = launch.get("platforms", {})
+	var android = platforms.get("android", {})
+	var package = android.get("package", "")
+	
+	if package == "":
+		return ""
+	
+	return "/storage/emulated/0/Android/data/" + package + "/files/"
+
+## Gets the RetroArch core name for a platform from platforms.json
+## This is the display name used for save directories (e.g., "SwanStation", "Snes9x")
+func get_retroarch_core_name(platform_slug: String) -> String:
+	var platform = _platforms_data.get(platform_slug, {})
+	return platform.get("retroarch_core", "")
 
 ## Resolves which emulator to use for a game
 ## Priority: 1. Game override, 2. User platform setting, 3. Registry default
@@ -1432,7 +1448,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			# Cores are downloaded to {emulator_dir}/cores
 			var emulator_dir = _get_emulator_directory(intent.emulator_id)
 			# Use real filesystem path - with MANAGE_EXTERNAL_STORAGE, RetroArch can read directly
-			core_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, emulator_dir, FileSystemManager.PathFormat.ABSOLUTE)
+			core_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, intent.emulator_id, "", FileSystemManager.PathFormat.ABSOLUTE)
 			print("[LaunchManager] Core path for sideload: " + core_path)
 	else:
 		# Regular RetroArch launch - use internal core path
@@ -1732,7 +1748,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var extract_to = batch_config.get("extract_to", ".")
 	
 	# Resolve {emulator_dir} templates
-	extract_to = FileSystemManager.resolve_emulator_path(extract_to, _get_emulator_directory(emulator_id))
+	extract_to = FileSystemManager.resolve_emulator_path(extract_to, emulator_id)
 	
 	if base_url == "":
 		push_error("[LaunchManager] No base_url specified for batch_url_download")
@@ -1779,7 +1795,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		var full_url = base_url + filename
 		
 		# Resolve extract directory using universal path resolver
-		var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, _get_emulator_directory(emulator_id))
+		var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, emulator_id)
 		
 		# Normalize the path to remove "." and ".." components
 		extract_dir = FileSystemManager.normalize_path(extract_dir)
@@ -1851,7 +1867,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var install_steps = emulator.get("install", [])
 	
 	# Resolve path using universal resolver
-	var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, _get_emulator_directory(emulator_id))
+	var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, emulator_id)
 	
 	# Normalize the path to remove "." and ".." components
 	extract_dir = FileSystemManager.normalize_path(extract_dir)
@@ -2096,14 +2112,14 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			var file_path = validate_config.get("file", "")
 			if file_path == "":
 				return true
-			var full_path = FileSystemManager.resolve_emulator_path(file_path, _get_emulator_directory(emulator_id))
+			var full_path = FileSystemManager.resolve_emulator_path(file_path, emulator_id)
 			return FileSystemManager.file_exists(full_path)
 		
 		"folder_exists":
 			var folder_path = validate_config.get("path", "")
 			if folder_path == "":
 				return true
-			var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
+			var full_path = FileSystemManager.resolve_emulator_path(folder_path, emulator_id)
 			return FileSystemManager.dir_exists(full_path)
 		
 		"files_exist":
@@ -2115,7 +2131,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if files_array.size() > 0:
 				# Check if all files in the array exist
 				for file_name in files_array:
-					var full_file_path = FileSystemManager.resolve_emulator_path(file_name, _get_emulator_directory(emulator_id))
+					var full_file_path = FileSystemManager.resolve_emulator_path(file_name, emulator_id)
 					if not FileSystemManager.file_exists(full_file_path):
 						return false
 				return true
@@ -2123,7 +2139,7 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if folder_path == "":
 				return true
 			
-			var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
+			var full_path = FileSystemManager.resolve_emulator_path(folder_path, emulator_id)
 			
 			var entries = FileSystemManager.list_dir(full_path)
 			for file_name in entries:
@@ -2433,7 +2449,7 @@ func _handle_create_folders_step(emulator_id: String, step_name: String, step_in
 	
 	for folder_path in folders:
 		# Resolve path using universal resolver
-		var full_path = FileSystemManager.resolve_emulator_path(folder_path, _get_emulator_directory(emulator_id))
+		var full_path = FileSystemManager.resolve_emulator_path(folder_path, emulator_id)
 		
 		if not FileSystemManager.make_dir_recursive(full_path):
 			push_error("[LaunchManager] Failed to create folder: " + full_path)
@@ -2464,7 +2480,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		if file_name == "":
 			continue
 		
-		var full_path = FileSystemManager.resolve_emulator_path(file_name, _get_emulator_directory(emulator_id))
+		var full_path = FileSystemManager.resolve_emulator_path(file_name, emulator_id)
 		
 		# Resolve placeholders in content
 		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
@@ -2505,7 +2521,7 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 	if file_path == "" or edits.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
-	var full_path = FileSystemManager.resolve_emulator_path(file_path, _get_emulator_directory(emulator_id))
+	var full_path = FileSystemManager.resolve_emulator_path(file_path, emulator_id)
 	
 	if not FileSystemManager.file_exists(full_path):
 		push_error("[LaunchManager] File not found for editing: " + full_path)
@@ -2537,22 +2553,48 @@ func _handle_none_step(emulator_id: String, step_name: String, step_index: int) 
 
 ## Creates the save directory for an emulator if it doesn't exist
 ## Called automatically at the end of successful install flow
+## For multi-platform emulators (e.g., RetroArch), creates directories for all supported platforms
 func _create_emulator_save_directory(emulator_id: String) -> void:
-	var save_dir = SaveManager.resolve_save_directory(emulator_id)
-	if save_dir == "":
-		print("[LaunchManager] No save directory configured for: " + emulator_id)
+	var emulator = get_emulator(emulator_id)
+	if emulator.is_empty():
 		return
 	
-	if FileSystemManager.dir_exists(save_dir):
-		print("[LaunchManager] Save directory already exists for " + emulator_id + ": " + save_dir)
-		return
+	var platforms = emulator.get("meta", {}).get("platforms", [])
 	
-	print("[LaunchManager] Creating save directory for " + emulator_id + ": " + save_dir)
-	var success = FileSystemManager.make_dir_recursive(save_dir)
-	if not success:
-		push_error("[LaunchManager] Failed to create save directory for " + emulator_id + ": " + save_dir)
+	# For single-platform emulators, just create the base directory
+	if platforms.size() == 1:
+		var save_dir = SaveManager.resolve_save_directory(emulator_id)
+		if save_dir == "":
+			print("[LaunchManager] No save directory configured for: " + emulator_id)
+			return
+		
+		if FileSystemManager.dir_exists(save_dir):
+			print("[LaunchManager] Save directory already exists for " + emulator_id + ": " + save_dir)
+			return
+		
+		print("[LaunchManager] Creating save directory for " + emulator_id + ": " + save_dir)
+		var success = FileSystemManager.make_dir_recursive(save_dir)
+		if not success:
+			push_error("[LaunchManager] Failed to create save directory for " + emulator_id + ": " + save_dir)
+		else:
+			print("[LaunchManager] Successfully created save directory for " + emulator_id)
 	else:
-		print("[LaunchManager] Successfully created save directory for " + emulator_id)
+		# Multi-platform emulator: create save directories for each platform
+		print("[LaunchManager] Creating save directories for multi-platform emulator: " + emulator_id)
+		for platform in platforms:
+			var save_dir = SaveManager.resolve_save_directory(emulator_id, platform)
+			if save_dir == "":
+				continue
+			
+			if FileSystemManager.dir_exists(save_dir):
+				continue
+			
+			print("[LaunchManager] Creating save directory for " + emulator_id + " / " + platform + ": " + save_dir)
+			var success = FileSystemManager.make_dir_recursive(save_dir)
+			if not success:
+				push_error("[LaunchManager] Failed to create save directory for " + emulator_id + " / " + platform + ": " + save_dir)
+			else:
+				print("[LaunchManager] Successfully created save directory for " + emulator_id + " / " + platform)
 
 ## Executes install steps from new step-based format (entry point)
 func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:
@@ -3224,7 +3266,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if PlatformManager.is_android():
 		# Android: Vita3K stores games in its external storage path (configurable in settings)
 		# Path is a real filesystem path
-		emulator_dir = _get_vita3k_android_data_path()
+		emulator_dir = get_app_data_path("vita3k") + "/vita"
 		ux0_app_path = emulator_dir + "/ux0/app"
 	else:
 		# Desktop: Get path from emulator installation
@@ -3275,7 +3317,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Platform-specific Vita3K app path
 	var vita_app_path: String
 	if PlatformManager.is_android():
-		vita_app_path = _get_vita3k_android_data_path() + "/ux0/app/" + title_id
+		vita_app_path = get_app_data_path("vita3k") + "/vita/ux0/app/" + title_id
 	else:
 		# Desktop - use emulator directory (already obtained above)
 		vita_app_path = emulator_dir + "/ux0/app/" + title_id

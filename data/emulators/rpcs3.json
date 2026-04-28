@@ -1,0 +1,146 @@
+{
+  "meta": {
+    "id": "rpcs3",
+    "name": "RPCS3",
+    "platforms": [
+      "ps3"
+    ]
+  },
+  "paths": {
+    "saves": {
+      "_default": {
+        "directories": {
+          "windows": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
+          "linux": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
+          "android": "{emulator_dir}/dev_hdd0/home/00000001/savedata"
+        },
+        "extensions": [
+          "*"
+        ],
+        "uses_folder_saves": true
+      }
+    }
+  },
+  "launch": {
+    "platforms": {
+      "windows": {
+        "type": "command",
+        "executable": "rpcs3.exe",
+        "template": [
+          "{exe}",
+          "{rom}",
+          "--no-gui"
+        ],
+        "rom_delivery": "none"
+      },
+      "linux": {
+        "action_type": "none"
+      },
+      "android": {
+        "action": "android.intent.action.VIEW",
+        "package": "net.rpcsx",
+        "rom_delivery": "none"
+      }
+    }
+  },
+  "install": [
+    {
+      "step": "download_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "download_repo",
+          "github_repo": "RPCS3/rpcs3-binaries-win",
+          "asset_pattern": "rpcs3-.*_win64_msvc\\.7z"
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "download_repo",
+          "github_repo": "RPCSX/rpcsx-ui-android",
+          "asset_pattern": "rpcsx-.*\\.apk"
+        }
+      }
+    },
+    {
+      "step": "install_emulator",
+      "platforms": {
+        "windows": {
+          "action_type": "extract",
+          "extract_to": ".",
+          "strip_top_directory": true,
+          "validate": {
+            "action_type": "file_exists",
+            "file": "rpcs3.exe"
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "apk_install",
+          "package_name": "net.rpcsx",
+          "expected_file": "rpcsx-release.apk",
+          "validate": {
+            "action_type": "package_installed",
+            "package": "net.rpcsx"
+          }
+        }
+      }
+    },
+    {
+      "step": "download_firmware",
+      "platforms": {
+        "windows": {
+          "action_type": "download_url",
+          "url": "http://dus01.ps3.update.playstation.net/update/ps3/image/us/2025_0305_c179ad173bbc08b55431d30947725a4b/PS3UPDAT.PUP",
+          "filename": "PS3UPDAT.PUP",
+          "validate": {
+            "action_type": "file_exists",
+            "file": "PS3UPDAT.PUP"
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "download_url",
+          "url": "http://dus01.ps3.update.playstation.net/update/ps3/image/us/2025_0305_c179ad173bbc08b55431d30947725a4b/PS3UPDAT.PUP",
+          "filename": "PS3UPDAT.PUP",
+          "validate": {
+            "action_type": "file_exists",
+            "file": "PS3UPDAT.PUP"
+          }
+        }
+      }
+    },
+    {
+      "step": "create_save_directories",
+      "platforms": {
+        "windows": {
+          "action_type": "create_folders",
+          "folders": [
+            "dev_hdd0/home/00000001/savedata"
+          ],
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "dev_hdd0/home/00000001/savedata"
+          }
+        },
+        "linux": {
+          "action_type": "none"
+        },
+        "android": {
+          "action_type": "create_folders",
+          "folders": [
+            "dev_hdd0/home/00000001/savedata"
+          ],
+          "validate": {
+            "action_type": "folder_exists",
+            "path": "dev_hdd0/home/00000001/savedata"
+          }
+        }
+      }
+    }
+  ]
+}
