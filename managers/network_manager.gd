@@ -460,6 +460,9 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 			http.queue_free()
 			return
 		
+		var file_size = FileSystemManager.get_file_size(normalized_path)
+		print("[NetworkManager] Download complete: " + normalized_path + " (response=" + str(response_code) + ", size=" + str(file_size) + " bytes)")
+		
 		# Only mark as completed on success
 		result.completed = true
 		callback.call(true, response_code, "")

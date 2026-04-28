@@ -442,6 +442,7 @@ func _start_download(item: QueueItem):
 	# All downloads now stream directly to disk via HTTPRequest.download_file
 	# This avoids memory issues with large files (games, emulators, cores)
 	print("[DownloadManager] Using file-based download for: " + item.name + " (type=" + item.type + ")")
+	print("[DownloadManager] Destination path: " + item.destination_path)
 	item.download_info = NetworkManager.http_download_file(
 		item.url,
 		item.destination_path,
@@ -1536,7 +1537,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		final_file.close()
 		
 		var final_size = 0
-		if FileAccess.file_exists(final_path):
+		if FileSystemManager.file_exists(final_path):
 			var size_file = FileAccess.open(final_path, FileAccess.READ)
 			if size_file:
 				final_size = size_file.get_length()
@@ -1660,11 +1661,16 @@ func _update_download_progress(item: QueueItem):
 		var file_path = item.download_info.get("path", item.destination_path)
 		
 		# Check file size on disk (64-bit, no overflow)
-		if FileAccess.file_exists(file_path):
+		# Use FileSystemManager for Android external storage compatibility
+		if FileSystemManager.file_exists(file_path):
 			var file = FileAccess.open(file_path, FileAccess.READ)
+			var current_size = 0
 			if file:
-				var current_size = file.get_length()
+				current_size = file.get_length()
 				file.close()
+			else:
+				# Fallback to plugin file size for Android external storage
+				current_size = FileSystemManager.get_file_size(file_path)
 				
 				# Use expected_file_size from game data for accurate progress
 				if item.expected_file_size > 0:
@@ -1713,6 +1719,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 	if not success:
 		item.status = "failed"
 		item.error_message = error_msg
+		print("[DownloadManager] Download failed for " + item.name + ": " + error_msg)
 		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
@@ -1727,6 +1734,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 	if not FileSystemManager.file_exists(item.destination_path):
 		item.status = "failed"
 		item.error_message = "Download file not found"
+		print("[DownloadManager] Download file not found after completion: " + item.destination_path)
 		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)

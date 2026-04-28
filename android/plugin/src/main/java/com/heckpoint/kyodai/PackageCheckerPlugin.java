@@ -1133,6 +1133,20 @@ public class PackageCheckerPlugin extends GodotPlugin {
                             intent.putExtra(key, Integer.parseInt(value));
                         } else if ("bool".equals(type) || "boolean".equals(type)) {
                             intent.putExtra(key, Boolean.parseBoolean(value));
+                        } else if ("string_array".equals(type)) {
+                            // Parse JSON array string into String[]
+                            try {
+                                org.json.JSONArray jsonArray = new org.json.JSONArray(value);
+                                String[] stringArray = new String[jsonArray.length()];
+                                for (int j = 0; j < jsonArray.length(); j++) {
+                                    stringArray[j] = jsonArray.getString(j);
+                                }
+                                intent.putExtra(key, stringArray);
+                                Log.d(TAG, "Added string array extra: " + key + "=" + value);
+                            } catch (Exception e) {
+                                Log.w(TAG, "Failed to parse string array extra " + key + ": " + e.getMessage());
+                                intent.putExtra(key, value);
+                            }
                         } else {
                             // Default to string
                             intent.putExtra(key, value);

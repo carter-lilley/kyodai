@@ -25,7 +25,9 @@ func _get_vita3k_android_data_path() -> String:
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
 	var base_dir = get_emulators_directory()
-	return FileSystemManager.join_paths(base_dir, emulator_id)
+	var result = FileSystemManager.join_paths(base_dir, emulator_id)
+	print("[LaunchManager] Emulator directory for " + emulator_id + ": " + result)
+	return result
 
 # Registry data
 var _emulator_registry: Dictionary = {}
@@ -691,21 +693,28 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# Vita3K special handling - pass TitleID as command-line args via AppStartParameters
 		# Vita3K expects StringArray extra with key "AppStartParameters" containing ["-r", "TitleID"]
-		if intent.emulator_id.begins_with("vita3k") and intent.game and intent.game.title_id != "":
+		var vita_title_id = intent.game.get_active_title_id() if intent.game else ""
+		print("[LaunchManager] Vita3K launch: game.title_id='" + (intent.game.title_id if intent.game else "") + "', get_active_title_id='" + vita_title_id + "'")
+		if intent.emulator_id.begins_with("vita3k") and vita_title_id != "":
 			intent.android_extras.append({
 				"key": "AppStartParameters",
-				"value": JSON.stringify(["-r", intent.game.title_id]),
+				"value": JSON.stringify(["-r", vita_title_id]),
 				"type": "string_array"
 			})
+			print("[LaunchManager] Vita3K launch: Added AppStartParameters extra with TitleID: " + vita_title_id)
+		elif intent.emulator_id.begins_with("vita3k"):
+			print("[LaunchManager] Vita3K launch: WARNING - No TitleID available for launch intent!")
 		
 		# RPCS3/RPCSX special handling - pass boot path to the game folder
-		if intent.emulator_id.begins_with("rpcs3") and intent.game and intent.game.title_id != "":
-			var boot_path := "/storage/emulated/0/Android/data/net.rpcsx.ui/files/games/" + intent.game.title_id
+		var rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
+		if intent.emulator_id.begins_with("rpcs3") and rpcs3_title_id != "":
+			var boot_path = "/storage/emulated/0/Android/data/net.rpcsx.ui/files/games/" + rpcs3_title_id
 			intent.android_extras.append({
 				"key": "bootPath",
 				"value": boot_path,
 				"type": "string"
 			})
+		
 	else:
 		# Desktop uses command-line arguments
 		var platform_config = platforms.get(platform_name, {})
@@ -740,19 +749,21 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 			intent.launch_args.append(formatted_arg)
 		
 		# Vita3K special handling for desktop - replace ROM path with TitleID
-		if intent.emulator_id.begins_with("vita3k") and intent.game and intent.game.title_id != "":
+		var desktop_vita_title_id = intent.game.get_active_title_id() if intent.game else ""
+		if intent.emulator_id.begins_with("vita3k") and desktop_vita_title_id != "":
 			# Replace the ROM path (ZIP) with the TitleID flag
 			for i in range(intent.launch_args.size()):
 				if intent.launch_args[i] == global_rom_path:
 					intent.launch_args[i] = "-r"
-					intent.launch_args.insert(i + 1, intent.game.title_id)
+					intent.launch_args.insert(i + 1, desktop_vita_title_id)
 					break
 		
 		# RPCS3 special handling for desktop - replace ROM path with game folder path
-		if intent.emulator_id.begins_with("rpcs3") and intent.game and intent.game.title_id != "":
+		var desktop_rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
+		if intent.emulator_id.begins_with("rpcs3") and desktop_rpcs3_title_id != "":
 			# Check both disc and digital install locations
-			var disc_path: String = install_dir + "/games/" + intent.game.title_id
-			var digital_path: String = install_dir + "/dev_hdd0/game/" + intent.game.title_id
+			var disc_path: String = install_dir + "/games/" + desktop_rpcs3_title_id
+			var digital_path: String = install_dir + "/dev_hdd0/game/" + desktop_rpcs3_title_id
 			
 			var game_path: String
 			if FileSystemManager.dir_exists(disc_path):
@@ -773,13 +784,14 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# shadPS4 special handling for desktop - replace ROM path with TitleID
 		# shadPS4 searches configured installDirs for matching TitleID folder
-		if intent.emulator_id == "shadps4" and intent.game and intent.game.title_id != "":
-			print("[LaunchManager] shadPS4: Using TitleID: " + intent.game.title_id)
+		var shadps4_title_id = intent.game.get_active_title_id() if intent.game else ""
+		if intent.emulator_id == "shadps4" and shadps4_title_id != "":
+			print("[LaunchManager] shadPS4: Using TitleID: " + shadps4_title_id)
 			
 			# Replace the ROM path (ZIP) with just the TitleID
 			for i in range(intent.launch_args.size()):
 				if intent.launch_args[i] == global_rom_path:
-					intent.launch_args[i] = intent.game.title_id
+					intent.launch_args[i] = shadps4_title_id
 					break
 
 ## Executes a launch intent
@@ -2722,6 +2734,8 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	else:
 		destination_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), filename)
 	
+	print("[LaunchManager] Queueing download for " + emulator_id + ": " + filename + " -> " + destination_path)
+	
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
 	# Queue download WITHOUT auto-extract (extract is now a separate step)
@@ -3197,8 +3211,6 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## Handles Vita3K game extraction and launch preparation
 ## Returns true if ready to launch, false if error
 func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
-	if game.get_active_title_id() != "":
-		return true
 	print("[LaunchManager] _prepare_vita3k_game: ENTER for " + game.get_display_name())
 	
 	var rom_path = intent.rom_path
@@ -3246,6 +3258,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	# If stored title_id doesn't match the ZIP, update it
 	var active_title_id = game.get_active_title_id()
+	print("[LaunchManager] Vita3K: active_title_id from DB = '" + active_title_id + "', zip_title_id = '" + zip_title_id + "'")
 	if active_title_id != "" and active_title_id != zip_title_id:
 		print("[LaunchManager] Vita3K: WARNING - Stored TitleID " + active_title_id + " doesn't match ZIP TitleID " + zip_title_id)
 		print("[LaunchManager] Vita3K: Updating to correct TitleID from ZIP")
@@ -3253,6 +3266,8 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if active_title_id != zip_title_id:
 		_store_title_id(game, zip_title_id)
 		print("[LaunchManager] Vita3K: Updated database with TitleID: " + zip_title_id)
+	else:
+		print("[LaunchManager] Vita3K: TitleID already matches, skipping DB update")
 	
 	var title_id = game.get_active_title_id()
 	print("[LaunchManager] Vita3K: Using TitleID: " + title_id)
