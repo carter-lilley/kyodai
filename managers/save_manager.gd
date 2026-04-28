@@ -7,6 +7,9 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 const SLOT_DEFAULT := ""
 const MAX_FILE_SIZE := 100 * 1024 * 1024
 
+# In-memory cache for discovered emulator profiles
+var _emulator_profile_cache: Dictionary = {}
+
 func _ready() -> void:
 	# Clean up orphaned temp directories on startup
 	_cleanup_all_temp_dirs()
@@ -293,7 +296,52 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	
 	return results
 
-func discover_local_eden_save(directory: String, title_id: String) -> Array[Dictionary]:
+## Discovers the Eden profile ID from profiles.dat
+## Reads the UUID from offset 0x10, reverses byte order, returns hex string
+## Caches result in memory for subsequent calls
+func _discover_eden_profile(emulator_dir: String) -> String:
+	var cache_key = "eden_" + emulator_dir
+	if _emulator_profile_cache.has(cache_key):
+		return _emulator_profile_cache[cache_key]
+	
+	# On Android, Eden's data is in the app directory, not the download directory
+	var profiles_path = ""
+	if PlatformManager.is_android():
+		profiles_path = "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/system/save/8000000000000010/su/avators/profiles.dat"
+	else:
+		profiles_path = emulator_dir.rstrip("/") + "/user/nand/system/save/8000000000000010/su/avators/profiles.dat"
+	
+	print("[SaveManager] _discover_eden_profile: reading " + profiles_path)
+	
+	if not FileSystemManager.file_exists(profiles_path):
+		print("[SaveManager] _discover_eden_profile: profiles.dat not found, using zero profile")
+		_emulator_profile_cache[cache_key] = "0000000000000000"
+		return "0000000000000000"
+	
+	var data = FileSystemManager.read_file_bytes(profiles_path)
+	if data.size() < 0x20:
+		print("[SaveManager] _discover_eden_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
+		_emulator_profile_cache[cache_key] = "0000000000000000"
+		return "0000000000000000"
+	
+	# Extract 16 bytes from offset 0x10 and reverse byte order
+	var uuid_bytes = data.slice(0x10, 0x20)
+	var reversed = PackedByteArray()
+	reversed.resize(16)
+	for i in range(16):
+		reversed[i] = uuid_bytes[15 - i]
+	
+	# Convert to hex string
+	var profile_id = ""
+	for b in reversed:
+		profile_id += "%02x" % b
+	profile_id = profile_id.to_upper()
+	
+	print("[SaveManager] _discover_eden_profile: discovered profile " + profile_id)
+	_emulator_profile_cache[cache_key] = profile_id
+	return profile_id
+
+func discover_local_eden_save(directory: String, title_id: String, emulator_dir: String = "") -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "" or title_id.length() != 16:
 		print("[SaveManager] discover_local_eden_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
@@ -304,37 +352,41 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 	if not dir_exists:
 		return results
 	
-	var best_path = ""
-	var best_mtime = 0
+	# Discover the active profile
+	var profile_id = "0000000000000000"
+	if emulator_dir != "":
+		profile_id = _discover_eden_profile(emulator_dir)
 	
-	var profile_dirs = FileSystemManager.list_dir(directory)
-	print("[SaveManager] discover_local_eden_save: profile_dirs = " + str(profile_dirs))
-	for profile in profile_dirs:
-		if profile == "." or profile == "..":
-			continue
-		var profile_path = directory + profile + "/"
-		if not FileSystemManager.dir_exists(profile_path):
-			continue
-		
-		var save_path = profile_path + title_id
-		var save_exists = FileSystemManager.dir_exists(save_path)
-		print("[SaveManager] discover_local_eden_save: checking " + save_path + " -> " + str(save_exists))
-		if save_exists:
-			var mtime = _get_folder_mtime(save_path)
-			print("[SaveManager] discover_local_eden_save: found save with mtime=" + str(mtime))
-			if mtime > best_mtime:
-				best_mtime = mtime
-				best_path = save_path
-	
-	if best_path != "":
+	# Eden save structure: {base}/{user}/{profile}/{title_id}/
+	# Eden uses full TitleID (16 chars) for save folder names
+	var save_path = FileSystemManager.join_paths(directory, "0000000000000000", profile_id, title_id)
+	print("[SaveManager] discover_local_eden_save: checking " + save_path)
+	if FileSystemManager.dir_exists(save_path):
+		var mtime = _get_folder_mtime(save_path)
+		print("[SaveManager] discover_local_eden_save: found save with mtime=" + str(mtime))
 		results.append({
 			"file_name": title_id + ".zip",
-			"file_path": best_path,
-			"modified_time": best_mtime,
+			"file_path": save_path,
+			"modified_time": mtime,
 			"extension": ".zip"
 		})
+		return results
 	
-	print("[SaveManager] discover_local_eden_save: results = " + str(results))
+	# Fallback: check zero profile
+	var zero_path = FileSystemManager.join_paths(directory, "0000000000000000", "0000000000000000", title_id)
+	print("[SaveManager] discover_local_eden_save: checking fallback " + zero_path)
+	if FileSystemManager.dir_exists(zero_path):
+		var mtime = _get_folder_mtime(zero_path)
+		print("[SaveManager] discover_local_eden_save: found save in zero profile with mtime=" + str(mtime))
+		results.append({
+			"file_name": title_id + ".zip",
+			"file_path": zero_path,
+			"modified_time": mtime,
+			"extension": ".zip"
+		})
+		return results
+	
+	print("[SaveManager] discover_local_eden_save: no save found")
 	return results
 
 ## Generalized fuzzy folder save discovery
@@ -646,7 +698,8 @@ func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameR
 				return discover_local_dolphin_wii_save(save_dir, title_id)
 			return discover_local_dolphin_gc_save(save_dir, title_id)
 		"eden":
-			return discover_local_eden_save(save_dir, title_id)
+			var emu_dir = LaunchManager._get_emulator_directory("eden")
+			return discover_local_eden_save(save_dir, title_id, emu_dir)
 		"pcsx2":
 			return discover_local_pcsx2_save(save_dir, title_id)
 		"ppsspp":
@@ -690,10 +743,10 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 				return FileSystemManager.join_paths(save_dir, "Wii", "title", "00010000", _game_id_to_hex(title_id))
 			return FileSystemManager.join_paths(save_dir, "GC", "USA", "Card A")
 		"eden":
-			var profile = _find_first_subdir(save_dir)
-			if profile == "":
-				profile = "0000000000000000"
-			return FileSystemManager.join_paths(save_dir, profile, title_id)
+			var emu_dir = LaunchManager._get_emulator_directory("eden")
+			var profile = _discover_eden_profile(emu_dir)
+			# Eden uses full TitleID (16 chars) for save folder names
+			return FileSystemManager.join_paths(save_dir, "0000000000000000", profile, title_id)
 		"pcsx2":
 			return FileSystemManager.join_paths(save_dir, "main.ps2")
 		"ppsspp":
@@ -755,6 +808,9 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 			return save_dir
 		"vita3k":
 			return save_dir
+		"eden":
+			# Eden saves are loose files in the zip, extract directly into the TitleID folder
+			return record_path
 		"rpcs3":
 			return save_dir
 		"shadps4":
@@ -794,6 +850,9 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 		"xenia":
 			# For Xenia, use the TitleID as the save name
 			return title_id
+		"eden":
+			# For Eden, use the full TitleID as the save name
+			return title_id
 		_:
 			return title_id.substr(8, 8)
 
@@ -808,6 +867,10 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			if game.platform_slug == "wii":
 				return _zip_dolphin_wii_save(source_path, zip_path)
 			return _zip_dolphin_gc_saves(source_path, game.get_active_title_id(), zip_path)
+		"eden":
+			# Eden saves are loose files inside the zip (no root folder)
+			# Zip is named with the full TitleID
+			return FileSystemManager.zip_directory(source_path, zip_path)
 		"pcsx2":
 			return FileSystemManager.zip_directory(source_path, zip_path)
 		"ppsspp":

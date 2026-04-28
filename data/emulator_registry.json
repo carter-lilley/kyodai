@@ -578,9 +578,9 @@
 	"platforms": ["switch"],
 	"save_config": {
 	  "directories": {
-		"windows": "{emulator_dir}/user/nand/user/save/0000000000000000",
-		"linux": "{emulator_dir}/user/nand/user/save/0000000000000000",
-		"android": "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/user/save/0000000000000000"
+		"windows": "{emulator_dir}/user/nand/user/save",
+		"linux": "{emulator_dir}/user/nand/user/save",
+		"android": "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/user/save"
 	  },
 	  "extensions": ["*"],
 	  "uses_folder_saves": true
@@ -635,35 +635,6 @@
 			"validate": {
 			  "action_type": "package_installed",
 			  "package": "dev.eden.eden_emulator"
-			}
-		  }
-		}
-	  },
-	  {
-		"step": "create_user_folders",
-		"platforms": {
-		  "windows": {
-			"action_type": "create_folders",
-			"folders": ["user", "user/nand/system/Contents/registered", "user/keys"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "user"
-			}
-		  },
-		  "linux": {
-			"action_type": "create_folders",
-			"folders": ["user", "user/nand/system/Contents/registered", "user/keys"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "user"
-			}
-		  },
-		  "android": {
-			"action_type": "create_folders",
-			"folders": ["{emulator_dir}/user", "{emulator_dir}/user/nand/system/Contents/registered", "{emulator_dir}/user/keys"],
-			"validate": {
-			  "action_type": "folder_exists",
-			  "path": "{emulator_dir}/user"
 			}
 		  }
 		}
@@ -809,7 +780,7 @@
 	  "directories": {
 		"windows": "{emulator_dir}/ux0/user/00/savedata",
 		"linux": "{emulator_dir}/ux0/user/00/savedata",
-		"android": "{emulator_dir}/ux0/user/00/savedata"
+		"android": "/storage/emulated/0/Android/data/org.vita3k.emulator/files/vita/ux0/user/00/savedata"
 	  },
 	  "extensions": ["*"],
 	  "uses_folder_saves": true
@@ -864,144 +835,67 @@
 			}
 		  }
 		}
-  },
-  {
-	"step": "create_ux0_folder",
-	"platforms": {
-	  "windows": {
-		"action_type": "create_folders",
-		"folders": ["ux0"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "ux0"
-		}
 	  },
-	  "linux": {
-		"action_type": "create_folders",
-		"folders": ["ux0"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "ux0"
-		}
-	  },
-	  "android": {
-		"action_type": "create_folders",
-		"folders": ["{emulator_dir}/ux0"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "{emulator_dir}/ux0"
-		}
-	  }
-	}
-  },
-  {
-	"step": "create_ux0_app_folder",
-	"platforms": {
-	  "windows": {
-		"action_type": "create_folders",
-		"folders": ["ux0/app"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "ux0/app"
-		}
-	  },
-	  "linux": {
-		"action_type": "create_folders",
-		"folders": ["ux0/app"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "ux0/app"
-		}
-	  },
-	  "android": {
-		"action_type": "create_folders",
-		"folders": ["{emulator_dir}/ux0/app"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "{emulator_dir}/ux0/app"
-		}
-	  }
-	}
-  },
-  {
-	"step": "create_savedata_folder",
-	"platforms": {
-	  "windows": {
-		"action_type": "create_folders",
-		"folders": ["ux0/user/00/savedata"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "ux0/user/00/savedata"
-		}
-	  },
-	  "linux": {
-		"action_type": "create_folders",
-		"folders": ["ux0/user/00/savedata"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "ux0/user/00/savedata"
-		}
-	  },
-	  "android": {
-		"action_type": "create_folders",
-		"folders": ["{emulator_dir}/ux0/user/00/savedata"],
-		"validate": {
-		  "action_type": "folder_exists",
-		  "path": "{emulator_dir}/ux0/user/00/savedata"
-		}
-	  }
-	}
-  },
-  {
-	"step": "create_config",
-	"platforms": {
-	  "windows": {
-		"action_type": "create_files",
-		"files": [
-		  {
-			"name": "config.yml",
-			"content": "pref-path: .\\"
-		  }
-		],
-		"validate": {
-		  "action_type": "files_exist",
-		  "files": ["config.yml"]
-		}
-	  },
-	  "linux": {
-		"action_type": "create_files",
-		"files": [
-		  {
-			"name": "config.yml",
-			"content": "pref-path: ./"
-		  }
-		],
-		"validate": {
-		  "action_type": "files_exist",
-		  "files": ["config.yml"]
-		}
-	  },
-	  "android": {
-			"action_type": "none"
-		  }
-	}
-  },
-  {
-	"step": "create_vita3k_folder",
+	  {
+		"step": "create_ux0_app_folder",
 		"platforms": {
 		  "windows": {
-			"action_type": "none"
-		  },
-		  "linux": {
-			"action_type": "none"
-		  },
-		  "android": {
 			"action_type": "create_folders",
-			"folders": ["{emulator_dir}"],
+			"folders": ["ux0/app"],
 			"validate": {
 			  "action_type": "folder_exists",
-			  "path": "{emulator_dir}"
+			  "path": "ux0/app"
 			}
+		  },
+		  "linux": {
+			"action_type": "create_folders",
+			"folders": ["ux0/app"],
+			"validate": {
+			  "action_type": "folder_exists",
+			  "path": "ux0/app"
+			}
+		  },
+	  "android": {
+		"action_type": "create_folders",
+		"folders": ["/storage/emulated/0/Android/data/org.vita3k.emulator/files/vita/ux0/app"],
+		"validate": {
+		  "action_type": "folder_exists",
+		  "path": "/storage/emulated/0/Android/data/org.vita3k.emulator/files/vita/ux0/app"
+		}
+	  }
+		}
+	  },
+	  {
+		"step": "create_config",
+		"platforms": {
+		  "windows": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "config.yml",
+				"content": "pref-path: .\\"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["config.yml"]
+			}
+		  },
+		  "linux": {
+			"action_type": "create_files",
+			"files": [
+			  {
+				"name": "config.yml",
+				"content": "pref-path: ./"
+			  }
+			],
+			"validate": {
+			  "action_type": "files_exist",
+			  "files": ["config.yml"]
+			}
+		  },
+		  "android": {
+			"action_type": "none"
 		  }
 		}
 	  },

@@ -24,12 +24,6 @@ func _get_vita3k_android_data_path() -> String:
 ## Gets the full path to an emulator's directory
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
-	# Vita3K on Android uses its own external storage path, not the emulators folder
-	if emulator_id.begins_with("vita3k") and PlatformManager.is_android():
-		var vita_path = _get_vita3k_android_data_path()
-		if vita_path != "":
-			return vita_path + "/"
-	
 	var base_dir = get_emulators_directory()
 	return FileSystemManager.join_paths(base_dir, emulator_id)
 

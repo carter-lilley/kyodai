@@ -1723,7 +1723,8 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		return
 	
 	# Verify file exists and has content
-	if not FileAccess.file_exists(item.destination_path):
+	# Use FileSystemManager (not FileAccess) for Android external storage compatibility
+	if not FileSystemManager.file_exists(item.destination_path):
 		item.status = "failed"
 		item.error_message = "Download file not found"
 		NotificationManager.update_notification_text(item.notification_id, "Download failed: " + item.name)
