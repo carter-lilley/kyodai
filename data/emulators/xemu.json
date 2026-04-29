@@ -14,6 +14,15 @@
         "extensions": [],
         "uses_folder_saves": false
       }
+    },
+    "firmware": {
+      "_default": {
+        "directories": {
+          "windows": "{emulator_dir}",
+          "linux": "{emulator_dir}",
+          "android": "{emulator_dir}"
+        }
+      }
     }
   },
   "launch": {
@@ -131,71 +140,6 @@
         },
         "android": {
           "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "download_bios",
-      "platforms": {
-        "windows": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/xemu_bios.zip"
-        },
-        "linux": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/xemu_bios.zip"
-        },
-        "android": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/xemu_bios.zip"
-        }
-      }
-    },
-    {
-      "step": "install_bios",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "filename": "xemu_bios.zip",
-          "extract_to": ".",
-          "strip_top_directory": true,
-          "flatten_target": "xemu_bios",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "mcpx_1.0.bin",
-              "Complex_4627.bin"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "filename": "xemu_bios.zip",
-          "extract_to": ".",
-          "strip_top_directory": true,
-          "flatten_target": "xemu_bios",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "mcpx_1.0.bin",
-              "Complex_4627.bin"
-            ]
-          }
-        },
-        "android": {
-          "action_type": "extract",
-          "filename": "xemu_bios.zip",
-          "extract_to": "{emulator_dir}",
-          "strip_top_directory": true,
-          "flatten_target": "xemu_bios",
-          "validate": {
-            "action_type": "files_exist",
-            "path": "{emulator_dir}",
-            "files": [
-              "mcpx_1.0.bin",
-              "Complex_4627.bin"
-            ]
-          }
         }
       }
     }

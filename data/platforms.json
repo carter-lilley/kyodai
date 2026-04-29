@@ -1,227 +1,466 @@
 {
-  "_meta": {
-	"version": "1.0",
-	"description": "Platform definitions for Kyodai launcher"
-  },
-  "3do": {
-	"name": "3Do",
-	"default_emulator": "retroarch",
-	"retroarch_core": "opera"
-  },
-  "arcade": {
-	"name": "Arcade",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mame2003_plus"
-  },
-  "atari2600": {
-	"name": "Atari2600",
-	"default_emulator": "retroarch",
-	"retroarch_core": "stella"
-  },
-  "lynx": {
-	"name": "Lynx",
-	"default_emulator": "retroarch",
-	"retroarch_core": "handy"
-  },
-  "atomiswave": {
-	"name": "Atomiswave",
-	"default_emulator": "retroarch",
-	"retroarch_core": "flycast"
-  },
-  "c64": {
-	"name": "C64",
-	"default_emulator": "retroarch",
-	"retroarch_core": "vice_x64"
-  },
-  "dos": {
-	"name": "Dos",
-	"default_emulator": "retroarch",
-	"retroarch_core": "dosbox_pure"
-  },
-  "dc": {
-	"name": "Dc",
-	"default_emulator": "retroarch",
-	"retroarch_core": "flycast"
-  },
-  "fds": {
-	"name": "Fds",
-	"default_emulator": "retroarch",
-	"retroarch_core": "nestopia"
-  },
-  "g-and-w": {
-	"name": "G And W",
-	"default_emulator": "retroarch",
-	"retroarch_core": "gw"
-  },
-  "gb": {
-	"name": "Gb",
-	"default_emulator": "retroarch",
-	"retroarch_core": "gambatte"
-  },
-  "gba": {
-	"name": "Gba",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mgba"
-  },
-  "gbc": {
-	"name": "Gbc",
-	"default_emulator": "retroarch",
-	"retroarch_core": "gambatte"
-  },
-  "msx": {
-	"name": "Msx",
-	"default_emulator": "retroarch",
-	"retroarch_core": "bluemsx"
-  },
-  "naomi": {
-	"name": "Naomi",
-	"default_emulator": "retroarch",
-	"retroarch_core": "flycast"
-  },
-  "naomi2": {
-	"name": "Naomi2",
-	"default_emulator": "retroarch",
-	"retroarch_core": "flycast"
-  },
-  "neogeoaes": {
-	"name": "Neogeoaes",
-	"default_emulator": "retroarch",
-	"retroarch_core": "fbneo"
-  },
-  "neo-geo-pocket-color": {
-	"name": "Neo Geo Pocket Color",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mednafen_ngp"
-  },
-  "3ds": {
-	"name": "3Ds",
-	"default_emulator": "azahar"
-  },
-  "n64": {
-	"name": "N64",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mupen64plus_next_gles3"
-  },
-  "nds": {
-	"name": "Nds",
-	"default_emulator": "melonds"
-  },
-  "nes": {
-	"name": "Nes",
-	"default_emulator": "retroarch",
-	"retroarch_core": "nestopia"
-  },
-  "ngc": {
-	"name": "Ngc",
-	"default_emulator": "dolphin"
-  },
-  "win3x": {
-	"name": "Win3X",
-	"default_emulator": "retroarch",
-	"retroarch_core": "dosbox_pure"
-  },
-  "pico8": {
-	"name": "Pico8",
-	"default_emulator": "retroarch"
-  },
-  "psx": {
-	"name": "Psx",
-	"default_emulator": "retroarch",
-	"retroarch_core": "swanstation"
-  },
-  "ps2": {
-	"name": "Ps2",
-	"default_emulator": "pcsx2"
-  },
-  "ps3": {
-	"name": "Ps3",
-	"default_emulator": "rpcs3"
-  },
-  "ps4": {
-	"name": "Ps4",
-	"default_emulator": "shadps4"
-  },
-  "psp": {
-	"name": "Psp",
-	"default_emulator": "ppsspp"
-  },
-  "psvita": {
-	"name": "Psvita",
-	"default_emulator": "vita3k"
-  },
-  "sega32": {
-	"name": "Sega32",
-	"default_emulator": "retroarch",
-	"retroarch_core": "picodrive"
-  },
-  "segacd": {
-	"name": "Segacd",
-	"default_emulator": "retroarch",
-	"retroarch_core": "genesis_plus_gx"
-  },
-  "gamegear": {
-	"name": "Gamegear",
-	"default_emulator": "retroarch",
-	"retroarch_core": "genesis_plus_gx"
-  },
-  "sms": {
-	"name": "Sms",
-	"default_emulator": "retroarch",
-	"retroarch_core": "genesis_plus_gx"
-  },
-  "genesis": {
-	"name": "Genesis",
-	"default_emulator": "retroarch",
-	"retroarch_core": "genesis_plus_gx"
-  },
-  "saturn": {
-	"name": "Saturn",
-	"default_emulator": "retroarch",
-	"retroarch_core": "yabasanshiro"
-  },
-  "sg1000": {
-	"name": "Sg1000",
-	"default_emulator": "retroarch",
-	"retroarch_core": "genesis_plus_gx"
-  },
-  "snes": {
-	"name": "Snes",
-	"default_emulator": "retroarch",
-	"retroarch_core": "snes9x"
-  },
-  "tg16": {
-	"name": "Tg16",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mednafen_pce"
-  },
-  "turbografx-cd": {
-	"name": "Turbografx Cd",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mednafen_pce"
-  },
-  "virtualboy": {
-	"name": "Virtualboy",
-	"default_emulator": "retroarch",
-	"retroarch_core": "mednafen_vb"
-  },
-  "wii": {
-	"name": "Wii",
-	"default_emulator": "dolphin"
-  },
-  "wiiu": {
-	"name": "Wiiu",
-	"default_emulator": "cemu"
-  },
-  "switch": {
-	"name": "Switch",
-	"default_emulator": "eden"
-  },
-  "xbox": {
-	"name": "Xbox",
-	"default_emulator": "xemu"
-  },
-  "xbox360": {
-	"name": "Xbox360",
-	"default_emulator": "xenia"
-  }
+	"_meta": {
+		"version": "1.0",
+		"description": "Platform definitions for Kyodai launcher"
+	},
+	"3do": {
+		"name": "3Do",
+		"default_emulator": "retroarch",
+		"retroarch_core": "opera",
+		"firmware": {
+			"expected_files": [
+				"panafz1.bin",
+				"panafz10.bin",
+				"goldstar.bin",
+				"sanyotry.bin",
+				"3do_arcade_saot.bin"
+			]
+		}
+	},
+	"arcade": {
+		"name": "Arcade",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mame2003_plus",
+		"firmware": {
+
+		}
+	},
+	"atari2600": {
+		"name": "Atari2600",
+		"default_emulator": "retroarch",
+		"retroarch_core": "stella",
+		"firmware": {
+
+		}
+	},
+	"lynx": {
+		"name": "Lynx",
+		"default_emulator": "retroarch",
+		"retroarch_core": "handy",
+		"firmware": {
+			"expected_files": [
+				"lynxboot.img"
+			]
+		}
+	},
+	"atomiswave": {
+		"name": "Atomiswave",
+		"default_emulator": "retroarch",
+		"retroarch_core": "flycast",
+		"firmware": {
+			"expected_files": [
+				"dc/awbios.zip"
+			]
+		}
+	},
+	"c64": {
+		"name": "C64",
+		"default_emulator": "retroarch",
+		"retroarch_core": "vice_x64",
+		"firmware": {
+			"expected_files": [
+				"JiffyDOS_C64.bin",
+				"JiffyDOS_1541-II.bin",
+				"JiffyDOS_1571_repl310654.bin",
+				"JiffyDOS_1581.bin"
+			]
+		}
+	},
+	"dos": {
+		"name": "Dos",
+		"default_emulator": "retroarch",
+		"retroarch_core": "dosbox_pure",
+		"firmware": {
+			"expected_files": [
+				"MT32_CONTROL.ROM",
+				"MT32_PCM.ROM"
+			]
+		}
+	},
+	"dc": {
+		"name": "Dc",
+		"default_emulator": "retroarch",
+		"retroarch_core": "flycast",
+		"firmware": {
+			"expected_files": [
+				"dc/dc_boot.bin"
+			]
+		}
+	},
+	"fds": {
+		"name": "Fds",
+		"default_emulator": "retroarch",
+		"retroarch_core": "nestopia",
+		"firmware": {
+			"expected_files": [
+				"disksys.rom"
+			]
+		}
+	},
+	"g-and-w": {
+		"name": "G And W",
+		"default_emulator": "retroarch",
+		"retroarch_core": "gw",
+		"firmware": {
+
+		}
+	},
+	"gb": {
+		"name": "Gb",
+		"default_emulator": "retroarch",
+		"retroarch_core": "gambatte",
+		"firmware": {
+			"expected_files": [
+				"gb_bios.bin",
+				"dmg_boot.bin",
+				"cgb_boot.bin"
+			]
+		}
+	},
+	"gba": {
+		"name": "Gba",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mgba",
+		"firmware": {
+			"expected_files": [
+				"gba_bios.bin"
+			]
+		}
+	},
+	"gbc": {
+		"name": "Gbc",
+		"default_emulator": "retroarch",
+		"retroarch_core": "gambatte",
+		"firmware": {
+			"expected_files": [
+				"gbc_bios.bin",
+				"cgb_boot.bin"
+			]
+		}
+	},
+	"msx": {
+		"name": "Msx",
+		"default_emulator": "retroarch",
+		"retroarch_core": "bluemsx",
+		"firmware": {
+			"expected_files": [
+				"MSX.ROM",
+				"MSX2.ROM",
+				"MSX2EXT.ROM"
+			]
+		}
+	},
+	"naomi": {
+		"name": "Naomi",
+		"default_emulator": "retroarch",
+		"retroarch_core": "flycast",
+		"firmware": {
+			"expected_files": [
+				"dc/naomi.zip"
+			]
+		}
+	},
+	"naomi2": {
+		"name": "Naomi2",
+		"default_emulator": "retroarch",
+		"retroarch_core": "flycast",
+		"firmware": {
+			"expected_files": [
+				"dc/naomi.zip"
+			]
+		}
+	},
+	"neogeoaes": {
+		"name": "Neogeoaes",
+		"default_emulator": "retroarch",
+		"retroarch_core": "fbneo",
+		"firmware": {
+
+		}
+	},
+	"neo-geo-pocket-color": {
+		"name": "Neo Geo Pocket Color",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mednafen_ngp",
+		"firmware": {
+
+		}
+	},
+	"3ds": {
+		"name": "3Ds",
+		"default_emulator": "azahar",
+		"firmware": {
+
+		}
+	},
+	"n64": {
+		"name": "N64",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mupen64plus_next_gles3",
+		"firmware": {
+
+		}
+	},
+	"nds": {
+		"name": "Nds",
+		"default_emulator": "melonds",
+		"firmware": {
+			"expected_files": [
+				"bios7.bin",
+				"bios9.bin",
+				"firmware.bin"
+			]
+		}
+	},
+	"nes": {
+		"name": "Nes",
+		"default_emulator": "retroarch",
+		"retroarch_core": "nestopia",
+		"firmware": {
+
+		}
+	},
+	"ngc": {
+		"name": "Ngc",
+		"default_emulator": "dolphin",
+		"firmware": {
+
+		}
+	},
+	"win3x": {
+		"name": "Win3X",
+		"default_emulator": "retroarch",
+		"retroarch_core": "dosbox_pure",
+		"firmware": {
+			"expected_files": [
+				"MT32_CONTROL.ROM",
+				"MT32_PCM.ROM"
+			]
+		}
+	},
+	"pico8": {
+		"name": "Pico8",
+		"default_emulator": "retroarch",
+		"firmware": {
+
+		}
+	},
+	"psx": {
+		"name": "Psx",
+		"default_emulator": "retroarch",
+		"retroarch_core": "swanstation",
+		"firmware": {
+			"expected_files": [
+				"scph5500.bin",
+				"scph5501.bin",
+				"scph5502.bin",
+				"scph1001.bin",
+				"scph7001.bin",
+				"scph101.bin",
+				"PSXONPSP660.bin"
+			]
+		}
+	},
+	"ps2": {
+		"name": "Ps2",
+		"default_emulator": "pcsx2",
+		"firmware": {
+			"expected_files": [
+				"bios/ps2-0200a-20040614.bin",
+				"bios/ps2-0200e-20040614.bin",
+				"bios/ps2-0200j-20040614.bin"
+			]
+		}
+	},
+	"ps3": {
+		"name": "Ps3",
+		"default_emulator": "rpcs3",
+		"firmware": {
+			"expected_files": [
+				"PS3UPDAT.PUP"
+			]
+		}
+	},
+	"ps4": {
+		"name": "Ps4",
+		"default_emulator": "shadps4",
+		"firmware": {
+
+		}
+	},
+	"psp": {
+		"name": "Psp",
+		"default_emulator": "ppsspp",
+		"firmware": {
+
+		}
+	},
+	"psvita": {
+		"name": "Psvita",
+		"default_emulator": "vita3k",
+		"firmware": {
+			"expected_files": [
+				"PSVUPDAT.PUP"
+			]
+		}
+	},
+	"sega32": {
+		"name": "Sega32",
+		"default_emulator": "retroarch",
+		"retroarch_core": "picodrive",
+		"firmware": {
+
+		}
+	},
+	"segacd": {
+		"name": "Segacd",
+		"default_emulator": "retroarch",
+		"retroarch_core": "genesis_plus_gx",
+		"firmware": {
+			"expected_files": [
+				"bios_CD_U.bin",
+				"bios_CD_E.bin",
+				"bios_CD_J.bin"
+			]
+		}
+	},
+	"gamegear": {
+		"name": "Gamegear",
+		"default_emulator": "retroarch",
+		"retroarch_core": "genesis_plus_gx",
+		"firmware": {
+			"expected_files": [
+				"bios.gg"
+			]
+		}
+	},
+	"sms": {
+		"name": "Sms",
+		"default_emulator": "retroarch",
+		"retroarch_core": "genesis_plus_gx",
+		"firmware": {
+			"expected_files": [
+				"bios_U.sms",
+				"bios_E.sms",
+				"bios_J.sms"
+			]
+		}
+	},
+	"genesis": {
+		"name": "Genesis",
+		"default_emulator": "retroarch",
+		"retroarch_core": "genesis_plus_gx",
+		"firmware": {
+			"expected_files": [
+				"bios_MD.bin"
+			]
+		}
+	},
+	"saturn": {
+		"name": "Saturn",
+		"default_emulator": "retroarch",
+		"retroarch_core": "yabasanshiro",
+		"firmware": {
+			"expected_files": [
+				"saturn_bios.bin",
+				"sega_101.bin",
+				"mpr-17933.bin",
+				"mpr-18811-mx.ic1"
+			]
+		}
+	},
+	"sg1000": {
+		"name": "Sg1000",
+		"default_emulator": "retroarch",
+		"retroarch_core": "genesis_plus_gx",
+		"firmware": {
+
+		}
+	},
+	"snes": {
+		"name": "Snes",
+		"default_emulator": "retroarch",
+		"retroarch_core": "snes9x",
+		"firmware": {
+			"expected_files": [
+				"BS-X.bin",
+				"STBIOS.bin"
+			]
+		}
+	},
+	"tg16": {
+		"name": "Tg16",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mednafen_pce",
+		"firmware": {
+			"expected_files": [
+				"syscard3.pce",
+				"syscard2.pce",
+				"syscard1.pce",
+				"gexpress.pce"
+			]
+		}
+	},
+	"turbografx-cd": {
+		"name": "Turbografx Cd",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mednafen_pce",
+		"firmware": {
+			"expected_files": [
+				"syscard3.pce",
+				"syscard2.pce",
+				"syscard1.pce",
+				"gexpress.pce"
+			]
+		}
+	},
+	"virtualboy": {
+		"name": "Virtualboy",
+		"default_emulator": "retroarch",
+		"retroarch_core": "mednafen_vb",
+		"firmware": {
+
+		}
+	},
+	"wii": {
+		"name": "Wii",
+		"default_emulator": "dolphin",
+		"firmware": {
+
+		}
+	},
+	"wiiu": {
+		"name": "Wiiu",
+		"default_emulator": "cemu",
+		"firmware": {
+
+		}
+	},
+	"switch": {
+		"name": "Switch",
+		"default_emulator": "eden",
+		"firmware": {
+			"expected_files": [
+				"user/keys/prod.keys",
+				"user/keys/title.keys"
+			]
+		}
+	},
+	"xbox": {
+		"name": "Xbox",
+		"default_emulator": "xemu",
+		"firmware": {
+			"expected_files": [
+				"Complex_4627.bin",
+				"mcpx_1.0.bin"
+			]
+		}
+	},
+	"xbox360": {
+		"name": "Xbox360",
+		"default_emulator": "xenia",
+		"firmware": {
+
+		}
+	}
 }

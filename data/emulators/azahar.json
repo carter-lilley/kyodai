@@ -18,6 +18,14 @@
 		],
 		"uses_folder_saves": true
 	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/user/nand",
+		  "android": "{app_data}/nand"
+		}
+	  }
 	}
   },
   "launch": {

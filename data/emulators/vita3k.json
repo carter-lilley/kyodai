@@ -1,267 +1,186 @@
 {
   "meta": {
-    "id": "vita3k",
-    "name": "Vita3K",
-    "platforms": [
+	"id": "vita3k",
+	"name": "Vita3K",
+	"platforms": [
       "psvita"
-    ]
+	]
   },
   "paths": {
-    "saves": {
-      "_default": {
-        "directories": {
-          "windows": "{emulator_dir}/ux0/user/00/savedata",
-          "linux": "{emulator_dir}/ux0/user/00/savedata",
-          "android": "{app_data}/vita/ux0/user/00/savedata"
-        },
-        "extensions": [
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/ux0/user/00/savedata",
+		  "linux": "{emulator_dir}/ux0/user/00/savedata",
+		  "android": "{app_data}/vita/ux0/user/00/savedata"
+		},
+		"extensions": [
           "*"
-        ],
-        "uses_folder_saves": true
-      }
-    }
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}",
+		  "linux": "{emulator_dir}",
+		  "android": "{app_data}/vita"
+		}
+	  }
+	}
   },
   "launch": {
-    "platforms": {
-      "windows": {
-        "type": "command",
-        "executable": "Vita3K.exe",
-        "template": [
-          "{exe}",
-          "--fullscreen",
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "Vita3K.exe",
+		"template": [
+		  "{exe}",
+		  "--fullscreen",
           "{rom}"
-        ]
-      },
-      "linux": {
-        "type": "command",
-        "executable": "Vita3K",
-        "template": [
-          "{exe}",
-          "--fullscreen",
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "Vita3K",
+		"template": [
+		  "{exe}",
+		  "--fullscreen",
           "{rom}"
-        ]
-      },
-      "android": {
-        "action": "android.intent.action.MAIN",
-        "package": "org.vita3k.emulator",
-        "class": "org.vita3k.emulator.Emulator",
-        "rom_delivery": "none"
-      }
-    }
+		]
+	  },
+	  "android": {
+		"action": "android.intent.action.MAIN",
+		"package": "org.vita3k.emulator",
+		"class": "org.vita3k.emulator.Emulator",
+		"rom_delivery": "none"
+	  }
+	}
   },
   "install": [
-    {
-      "step": "download_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "download_repo",
-          "github_repo": "Vita3K/Vita3K",
-          "asset_pattern": "windows-latest\\.zip"
-        },
-        "linux": {
-          "action_type": "download_repo",
-          "github_repo": "Vita3K/Vita3K",
-          "asset_pattern": "ubuntu-latest\\.zip"
-        },
-        "android": {
-          "action_type": "download_repo",
-          "github_repo": "Vita3K/Vita3K",
-          "asset_pattern": "android-latest\\.apk"
-        }
-      }
-    },
-    {
-      "step": "install_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "file_exists",
-            "file": "Vita3K.exe"
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "file_exists",
-            "file": "Vita3K"
-          }
-        },
-        "android": {
-          "action_type": "apk_install",
-          "package_name": "org.vita3k.emulator",
-          "expected_file": "android-latest.apk",
-          "validate": {
-            "action_type": "package_installed",
-            "package": "org.vita3k.emulator"
-          }
-        }
-      }
-    },
-    {
-      "step": "create_ux0_app_folder",
-      "platforms": {
-        "windows": {
-          "action_type": "create_folders",
-          "folders": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_repo",
+		  "github_repo": "Vita3K/Vita3K",
+		  "asset_pattern": "windows-latest\\.zip"
+		},
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "Vita3K/Vita3K",
+		  "asset_pattern": "ubuntu-latest\\.zip"
+		},
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "Vita3K/Vita3K",
+		  "asset_pattern": "android-latest\\.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "Vita3K.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "Vita3K"
+		  }
+		},
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "org.vita3k.emulator",
+		  "expected_file": "android-latest.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "org.vita3k.emulator"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "create_ux0_app_folder",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_folders",
+		  "folders": [
             "ux0/app"
-          ],
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "ux0/app"
-          }
-        },
-        "linux": {
-          "action_type": "create_folders",
-          "folders": [
+		  ],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "ux0/app"
+		  }
+		},
+		"linux": {
+		  "action_type": "create_folders",
+		  "folders": [
             "ux0/app"
-          ],
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "ux0/app"
-          }
-        },
-        "android": {
-          "action_type": "create_folders",
-          "folders": [
+		  ],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "ux0/app"
+		  }
+		},
+		"android": {
+		  "action_type": "create_folders",
+		  "folders": [
             "{app_data}/vita/ux0/app"
-          ],
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "{app_data}/vita/ux0/app"
-          }
-        }
-      }
-    },
-    {
-      "step": "create_config",
-      "platforms": {
-        "windows": {
-          "action_type": "create_files",
-          "files": [
-            {
-              "name": "config.yml",
-              "content": "pref-path: .\\"
-            }
-          ],
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
+		  ],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "{app_data}/vita/ux0/app"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "create_config",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "config.yml",
+			  "content": "pref-path: .\\"
+			}
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": [
               "config.yml"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "create_files",
-          "files": [
-            {
-              "name": "config.yml",
-              "content": "pref-path: ./"
-            }
-          ],
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
+			]
+		  }
+		},
+		"linux": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "config.yml",
+			  "content": "pref-path: ./"
+			}
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": [
               "config.yml"
-            ]
-          }
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "download_firmware_pre",
-      "platforms": {
-        "windows": {
-          "action_type": "download_url",
-          "url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP",
-          "filename": "PSP2UPDAT_pre.pup",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "PSP2UPDAT_pre.pup"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "none"
-        },
-        "android": {
-          "action_type": "download_url",
-          "url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/pre_efd1ef6c1cc2fe92e72e9e783e421237/PSP2UPDAT.PUP",
-          "filename": "PSP2UPDAT_pre.pup",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "PSP2UPDAT_pre.pup"
-            ]
-          }
-        }
-      }
-    },
-    {
-      "step": "download_firmware_psv",
-      "platforms": {
-        "windows": {
-          "action_type": "download_url",
-          "url": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
-          "filename": "PSVUPDAT.pup",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "PSVUPDAT.pup"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "none"
-        },
-        "android": {
-          "action_type": "download_url",
-          "url": "http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP",
-          "filename": "PSVUPDAT.pup",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "PSVUPDAT.pup"
-            ]
-          }
-        }
-      }
-    },
-    {
-      "step": "download_firmware_sd",
-      "platforms": {
-        "windows": {
-          "action_type": "download_url",
-          "url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP",
-          "filename": "PSP2UPDAT_sd.pup",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "PSP2UPDAT_sd.pup"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "none"
-        },
-        "android": {
-          "action_type": "download_url",
-          "url": "http://dus01.psp2.update.playstation.net/update/psp2/image/2022_0209/sd_59dcf059d3328fb67be7e51f8aa33418/PSP2UPDAT.PUP",
-          "filename": "PSP2UPDAT_sd.pup",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "PSP2UPDAT_sd.pup"
-            ]
-          }
-        }
-      }
-    }
+			]
+		  }
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
   ]
 }

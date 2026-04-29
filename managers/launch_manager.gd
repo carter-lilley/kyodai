@@ -17,9 +17,7 @@ func get_emulators_directory() -> String:
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
 	var base_dir = get_emulators_directory()
-	var result = FileSystemManager.join_paths(base_dir, emulator_id)
-	print("[LaunchManager] Emulator directory for " + emulator_id + ": " + result)
-	return result
+	return FileSystemManager.join_paths(base_dir, emulator_id)
 
 # Registry data
 var _emulator_registry: Dictionary = {}
@@ -43,6 +41,14 @@ var _pending_game_downloads: Dictionary = {}
 ## Unified download tracking for emulator downloads
 # item_id -> {emulator_id, context, extract_to, strip_top_directory, callback}
 var _pending_emulator_downloads: Dictionary = {}
+
+## Track pending firmware downloads to avoid duplicates
+# platform_slug -> bool
+var _pending_firmware_downloads: Dictionary = {}
+
+## Track pending launches waiting for firmware download
+# platform_slug -> {game: GameResource, emulator_id: String}
+var _pending_firmware_launches: Dictionary = {}
 
 ## Validation cache to avoid redundant file system operations
 # emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
@@ -624,6 +630,167 @@ func get_app_data_path(emulator_id: String) -> String:
 func get_retroarch_core_name(platform_slug: String) -> String:
 	var platform = _platforms_data.get(platform_slug, {})
 	return platform.get("retroarch_core", "")
+
+## Gets the firmware directory for an emulator
+## Resolves paths with wildcards ({emulator_dir}, {app_data}, etc.)
+func get_firmware_directory(emulator_id: String) -> String:
+	var emulator = get_emulator(emulator_id)
+	if emulator.is_empty():
+		return ""
+	
+	var paths = emulator.get("paths", {})
+	var firmware = paths.get("firmware", {})
+	var default_config = firmware.get("_default", {})
+	var directories = default_config.get("directories", {})
+	
+	var platform_name = PlatformManager.get_platform_name().to_lower()
+	var dir = directories.get(platform_name, "")
+	if dir == "":
+		dir = directories.get("all", "")
+	
+	if dir == "":
+		return ""
+	
+	# Resolve wildcards
+	dir = FileSystemManager.resolve_emulator_path(dir, emulator_id)
+	return dir.rstrip("/") + "/"
+
+## Checks if firmware is ready for a platform/emulator
+## Returns true if firmware directory exists and has any of the expected files
+## Searches recursively through subdirectories
+func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> bool:
+	var firmware_dir = get_firmware_directory(emulator_id)
+	if firmware_dir == "":
+		# No firmware directory configured, assume not needed
+		return true
+	
+	if not FileSystemManager.dir_exists(firmware_dir):
+		return false
+	
+	# Get expected files from platform configuration
+	var platform_config = _platforms_data.get(platform_slug, {})
+	var firmware_config = platform_config.get("firmware", {})
+	var expected_files = firmware_config.get("expected_files", [])
+	
+	# No expected files means no BIOS needed for this platform
+	if expected_files.is_empty():
+		return true
+	
+	# Check if any expected file exists (searching recursively)
+	for expected_file in expected_files:
+		if _find_file_recursive(firmware_dir, expected_file):
+			return true
+	
+	return false
+
+## Recursively searches for a file in a directory and its subdirectories
+## Returns true if the file is found
+func _find_file_recursive(dir: String, filename: String) -> bool:
+	if not FileSystemManager.dir_exists(dir):
+		return false
+	
+	var entries = FileSystemManager.list_dir(dir)
+	for entry in entries:
+		if entry == "." or entry == "..":
+			continue
+		
+		var full_path = FileSystemManager.join_paths(dir, entry)
+		
+		# Check if this entry matches the filename (handles subdirs like "dc/dc_boot.bin")
+		if entry == filename or full_path.ends_with("/" + filename) or full_path.ends_with("\\" + filename):
+			if FileSystemManager.file_exists(full_path):
+				return true
+		
+		# Recurse into subdirectories
+		if FileSystemManager.dir_exists(full_path):
+			if _find_file_recursive(full_path, filename):
+				return true
+	
+	return false
+
+## Sets up firmware for a platform by downloading from RomM
+## This should be called during platform sync
+## callback(success: bool, message: String)
+func setup_platform_firmware(platform_slug: String, emulator_id: String, callback: Callable = Callable()) -> void:
+	print("[LaunchManager] Checking firmware for " + platform_slug + " / " + emulator_id)
+	
+	# Check if firmware is already ready
+	if is_platform_firmware_ready(platform_slug, emulator_id):
+		print("[LaunchManager] Firmware already ready for " + platform_slug)
+		if callback.is_valid():
+			callback.call(true, "Firmware already installed")
+		return
+	
+	# Get firmware directory
+	var firmware_dir = get_firmware_directory(emulator_id)
+	if firmware_dir == "":
+		print("[LaunchManager] No firmware directory configured for " + emulator_id)
+		if callback.is_valid():
+			callback.call(true, "No firmware needed")
+		return
+	
+	print("[LaunchManager] Firmware needed for " + platform_slug + ", querying RomM...")
+	
+	# Query RomM for platform firmware
+	NetworkManager.fetch_platform_firmware(platform_slug, func(platform_data: Dictionary, error: String):
+		if error != "":
+			push_error("[LaunchManager] Failed to fetch firmware info: " + error)
+			if callback.is_valid():
+				callback.call(false, error)
+			return
+		
+		var firmware_list = platform_data.get("firmware", [])
+		if firmware_list.is_empty():
+			print("[LaunchManager] No firmware available for " + platform_slug + " on RomM")
+			if callback.is_valid():
+				callback.call(true, "No firmware on server")
+			return
+		
+		print("[LaunchManager] Found " + str(firmware_list.size()) + " firmware file(s) for " + platform_slug)
+		
+		# For now, download the first firmware file (should be the zip)
+		var firmware = firmware_list[0]
+		var firmware_id = firmware.get("id", 0)
+		var file_name = firmware.get("file_name", "")
+		
+		if firmware_id == 0 or file_name == "":
+			push_error("[LaunchManager] Invalid firmware data for " + platform_slug)
+			if callback.is_valid():
+				callback.call(false, "Invalid firmware data")
+			return
+		
+		# Download to temp location first
+		var temp_path = "user://temp_firmware/" + file_name
+		FileSystemManager.make_dir_recursive("user://temp_firmware")
+		
+		print("[LaunchManager] Downloading firmware: " + file_name)
+		NetworkManager.download_firmware_zip(firmware_id, file_name, temp_path, func(success: bool, download_error: String):
+			if not success:
+				push_error("[LaunchManager] Failed to download firmware: " + download_error)
+				if callback.is_valid():
+					callback.call(false, download_error)
+				return
+			
+			print("[LaunchManager] Firmware downloaded, extracting to: " + firmware_dir)
+			
+			# Extract zip to firmware directory
+			var extract_success = FileSystemManager.extract_zip(temp_path, firmware_dir)
+			
+			# Clean up temp file
+			if FileSystemManager.file_exists(temp_path):
+				FileSystemManager.delete_file(temp_path)
+			
+			if not extract_success:
+				push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir)
+				if callback.is_valid():
+					callback.call(false, "Extraction failed")
+				return
+			
+			print("[LaunchManager] Firmware successfully installed for " + platform_slug)
+			if callback.is_valid():
+				callback.call(true, "Firmware installed")
+		)
+	)
 
 ## Resolves which emulator to use for a game
 ## Priority: 1. Game override, 2. User platform setting, 3. Registry default
@@ -1330,9 +1497,49 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 			NotificationManager.show_notification("Failed to queue " + emulator_name + " download", Notification.Type.ERROR)
 		return
 	
-	# Emulator is already installed, launch immediately
+	# Emulator is installed - check firmware
+	if not is_platform_firmware_ready(game.platform_slug, emulator_id):
+		# Already downloading? Store this launch to retry when ready
+		if _pending_firmware_downloads.has(game.platform_slug):
+			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
+			NotificationManager.show_notification("Firmware download in progress for " + game.platform_slug + "...", Notification.Type.INFO)
+			_pending_firmware_launches[game.platform_slug] = {
+				"game": game,
+				"emulator_id": emulator_id
+			}
+			return
+		
+		# Start firmware download
+		print("[LaunchManager] Firmware not ready for " + game.platform_slug + ", downloading...")
+		NotificationManager.show_notification("Downloading firmware for " + game.platform_slug + "...", Notification.Type.INFO)
+		
+		_pending_firmware_downloads[game.platform_slug] = true
+		_pending_firmware_launches[game.platform_slug] = {
+			"game": game,
+			"emulator_id": emulator_id
+		}
+		
+		setup_platform_firmware(game.platform_slug, emulator_id, func(success: bool, message: String):
+			_pending_firmware_downloads.erase(game.platform_slug)
+			
+			var pending = _pending_firmware_launches.get(game.platform_slug)
+			if pending:
+				_pending_firmware_launches.erase(game.platform_slug)
+				
+				if not success:
+					push_error("[LaunchManager] Firmware download failed for " + game.platform_slug + ": " + message)
+					NotificationManager.show_notification("Failed to download firmware for " + game.platform_slug, Notification.Type.ERROR)
+					return
+				
+				print("[LaunchManager] Firmware ready for " + game.platform_slug + ", launching game...")
+				_launch_game_internal(pending.game, pending.emulator_id)
+		)
+		
+		return
+	
+	# Emulator is already installed and firmware is ready, launch immediately
 	print("[LaunchManager] _launch_with_emulator_check: Emulator installed, launching game")
-	_launch_game_internal(game, emulator_id)
+	await _launch_game_internal(game, emulator_id)
 	print("[LaunchManager] _launch_with_emulator_check: EXIT")
 
 ## Handler for when emulator extraction completes - retries pending launches

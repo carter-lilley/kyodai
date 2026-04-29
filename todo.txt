@@ -50,5 +50,4 @@ check if save is modified
   	add: ps3 on android
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?
-	rework: core systems -> romm firmware
 	linux

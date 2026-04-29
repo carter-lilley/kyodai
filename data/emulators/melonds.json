@@ -19,6 +19,15 @@
         ],
         "uses_folder_saves": false
       }
+    },
+    "firmware": {
+      "_default": {
+        "directories": {
+          "windows": "{emulator_dir}",
+          "linux": "{emulator_dir}",
+          "android": "{emulator_dir}"
+        }
+      }
     }
   },
   "launch": {
@@ -110,70 +119,6 @@
       }
     },
     {
-      "step": "download_bios",
-      "platforms": {
-        "windows": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/melonds_bios.zip",
-          "filename": "melonds_bios.zip"
-        },
-        "linux": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/melonds_bios.zip",
-          "filename": "melonds_bios.zip"
-        },
-        "android": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/melonds_bios.zip",
-          "filename": "melonds_bios.zip"
-        }
-      }
-    },
-    {
-      "step": "extract_bios",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "expected_file": "melonds_bios.zip",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "firmware.bin",
-              "bios7.bin",
-              "bios9.bin"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "expected_file": "melonds_bios.zip",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "firmware.bin",
-              "bios7.bin",
-              "bios9.bin"
-            ]
-          }
-        },
-        "android": {
-          "action_type": "extract",
-          "expected_file": "melonds_bios.zip",
-          "extract_to": "{emulator_dir}",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "firmware.bin",
-              "bios7.bin",
-              "bios9.bin"
-            ]
-          }
-        }
-      }
-    },
-    {
       "step": "create_config",
       "platforms": {
         "windows": {
@@ -190,20 +135,6 @@
               "melonDS.toml"
             ]
           }
-        },
-        "linux": {
-          "action_type": "none"
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "configure_bios_paths",
-      "platforms": {
-        "windows": {
-          "action_type": "none"
         },
         "linux": {
           "action_type": "none"

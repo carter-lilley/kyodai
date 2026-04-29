@@ -18,6 +18,15 @@
         ],
         "uses_folder_saves": true
       }
+    },
+    "firmware": {
+      "_default": {
+        "directories": {
+          "windows": "{emulator_dir}/bios",
+          "linux": "{emulator_dir}/bios",
+          "android": "{emulator_dir}/bios"
+        }
+      }
     }
   },
   "launch": {
@@ -127,58 +136,6 @@
         },
         "android": {
           "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "download_bios",
-      "platforms": {
-        "windows": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
-          "filename": "LRPS2_bios.zip"
-        },
-        "linux": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
-          "filename": "LRPS2_bios.zip"
-        },
-        "android": {
-          "action_type": "download_url",
-          "url": "https://files.lilley.video/other_assets/LRPS2_bios.zip",
-          "filename": "LRPS2_bios.zip"
-        }
-      }
-    },
-    {
-      "step": "extract_bios",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "expected_file": "LRPS2_bios.zip",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "bios"
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "expected_file": "LRPS2_bios.zip",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "bios"
-          }
-        },
-        "android": {
-          "action_type": "extract",
-          "expected_file": "LRPS2_bios.zip",
-          "extract_to": ".",
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "bios"
-          }
         }
       }
     },

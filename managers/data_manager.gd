@@ -624,6 +624,12 @@ func _process_next_platform():
 	_sync_current_synced = 0
 	_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
 	
+	# Check and setup firmware for this platform before syncing games
+	var emulator_id = LaunchManager.get_default_emulator_for_platform(platform.slug)
+	if emulator_id != "":
+		print("[Sync] Checking firmware for platform '%s' with emulator '%s'" % [platform.name, emulator_id])
+		await LaunchManager.setup_platform_firmware(platform.slug, emulator_id)
+	
 	# Start fetching this platform
 	_sync_state = SyncState.PLATFORM_FETCHING
 	_fetch_platform_batch()

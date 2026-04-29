@@ -19,6 +19,11 @@
         ],
         "uses_folder_saves": true
       }
+    },
+    "firmware": {
+      "_default": {
+        "directories": {}
+      }
     }
   },
   "launch": {

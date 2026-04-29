@@ -1,227 +1,115 @@
 {
   "meta": {
-    "id": "eden",
-    "name": "Eden",
-    "platforms": [
+	"id": "eden",
+	"name": "Eden",
+	"platforms": [
       "switch"
-    ]
+	]
   },
   "paths": {
-    "saves": {
-      "_default": {
-        "directories": {
-          "windows": "{emulator_dir}/user/nand/user/save",
-          "linux": "{emulator_dir}/user/nand/user/save",
-          "android": "{app_data}/nand/user/save"
-        },
-        "extensions": [
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/user/nand/user/save",
+		  "linux": "{emulator_dir}/user/nand/user/save",
+		  "android": "{app_data}/nand/user/save"
+		},
+		"extensions": [
           "*"
-        ],
-        "uses_folder_saves": true
-      }
-    }
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}",
+		  "linux": "{emulator_dir}",
+		  "android": "{app_data}"
+		}
+	  }
+	}
   },
   "launch": {
-    "platforms": {
-      "windows": {
-        "type": "command",
-        "executable": "eden.exe",
-        "template": [
-          "{exe}",
-          "{rom}",
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "eden.exe",
+		"template": [
+		  "{exe}",
+		  "{rom}",
           "-f"
-        ]
-      },
-      "linux": {
-        "type": "command",
-        "executable": "Eden-Linux-.*-amd64-clang-pgo.AppImage",
-        "template": [
-          "{exe}",
-          "{rom}",
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "Eden-Linux-.*-amd64-clang-pgo.AppImage",
+		"template": [
+		  "{exe}",
+		  "{rom}",
           "-f"
-        ]
-      },
-      "android": {
-        "action": "android.intent.action.VIEW",
-        "package": "dev.eden.eden_emulator",
-        "rom_delivery": "intent_data"
-      }
-    }
+		]
+	  },
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "dev.eden.eden_emulator",
+		"rom_delivery": "intent_data"
+	  }
+	}
   },
   "install": [
-    {
-      "step": "download_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "download_repo",
-          "github_repo": "eden-emu/eden",
-          "api_base_url": "https://git.eden-emu.dev/api/v1",
-          "asset_pattern": "Eden-Windows-.*-amd64-msvc.*\\.zip"
-        },
-        "linux": {
-          "action_type": "download_repo",
-          "github_repo": "eden-emu/eden",
-          "api_base_url": "https://git.eden-emu.dev/api/v1",
-          "asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
-        },
-        "android": {
-          "action_type": "download_repo",
-          "github_repo": "eden-emu/eden",
-          "api_base_url": "https://git.eden-emu.dev/api/v1",
-          "asset_pattern": "Eden-Android-.*-standard\\.apk"
-        }
-      }
-    },
-    {
-      "step": "install_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": true,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "eden.exe"
-          }
-        },
-        "linux": {
-          "action_type": "none",
-          "validate": {
-            "action_type": "file_exists",
-            "file": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
-          }
-        },
-        "android": {
-          "action_type": "apk_install",
-          "package_name": "dev.eden.eden_emulator",
-          "expected_file": "Eden-Android-*-standard.apk",
-          "validate": {
-            "action_type": "package_installed",
-            "package": "dev.eden.eden_emulator"
-          }
-        }
-      }
-    },
-    {
-      "step": "download_firmware",
-      "platforms": {
-        "windows": {
-          "action_type": "download_repo",
-          "github_repo": "THZoria/NX_Firmware",
-          "asset_pattern": "Firmware.*\\.zip"
-        },
-        "linux": {
-          "action_type": "download_repo",
-          "github_repo": "THZoria/NX_Firmware",
-          "asset_pattern": "Firmware.*\\.zip"
-        },
-        "android": {
-          "action_type": "download_repo",
-          "github_repo": "THZoria/NX_Firmware",
-          "asset_pattern": "Firmware.*\\.zip"
-        }
-      }
-    },
-    {
-      "step": "extract_firmware",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "expected_file": "Firmware*.zip",
-          "extract_to": "user/nand/system/Contents/registered",
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "user/nand/system/Contents/registered"
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "expected_file": "Firmware*.zip",
-          "extract_to": "user/nand/system/Contents/registered",
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "user/nand/system/Contents/registered"
-          }
-        },
-        "android": {
-          "action_type": "extract",
-          "expected_file": "Firmware*.zip",
-          "extract_to": "{app_data}/nand/system/Contents/registered",
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "{app_data}/nand/system/Contents/registered"
-          }
-        }
-      }
-    },
-    {
-      "step": "download_keys",
-      "platforms": {
-        "windows": {
-          "action_type": "download_scrape",
-          "scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
-          "version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-          "url_template": "https://files.prodkeys.net/ProdKeys.NET-v{version}.zip"
-        },
-        "linux": {
-          "action_type": "download_scrape",
-          "scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
-          "version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-          "url_template": "https://files.prodkeys.net/ProdKeys.NET-v{version}.zip"
-        },
-        "android": {
-          "action_type": "download_scrape",
-          "scrape_url": "https://prodkeys.net/ryujinx-prod-keys-n28/",
-          "version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)",
-          "url_template": "https://files.prodkeys.net/ProdKeys.NET-v{version}.zip"
-        }
-      }
-    },
-    {
-      "step": "extract_keys",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "expected_file": "ProdKeys.NET-*.zip",
-          "extract_to": "user/keys",
-          "strip_top_directory": true,
-          "flatten_target": "Keys-*",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "user/keys/prod.keys",
-              "user/keys/title.keys"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "expected_file": "ProdKeys.NET-*.zip",
-          "extract_to": "user/keys",
-          "strip_top_directory": true,
-          "flatten_target": "Keys-*",
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "user/keys/prod.keys",
-              "user/keys/title.keys"
-            ]
-          }
-        },
-        "android": {
-          "action_type": "extract",
-          "expected_file": "ProdKeys.NET-*.zip",
-          "extract_to": "{app_data}/keys",
-          "strip_top_directory": true,
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
-              "{app_data}/keys/prod.keys",
-              "{app_data}/keys/title.keys"
-            ]
-          }
-        }
-      }
-    }
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_repo",
+		  "github_repo": "eden-emu/eden",
+		  "api_base_url": "https://git.eden-emu.dev/api/v1",
+		  "asset_pattern": "Eden-Windows-.*-amd64-msvc.*\\.zip"
+		},
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "eden-emu/eden",
+		  "api_base_url": "https://git.eden-emu.dev/api/v1",
+		  "asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
+		},
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "eden-emu/eden",
+		  "api_base_url": "https://git.eden-emu.dev/api/v1",
+		  "asset_pattern": "Eden-Android-.*-standard\\.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "eden.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "none",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
+		  }
+		},
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "dev.eden.eden_emulator",
+		  "expected_file": "Eden-Android-*-standard.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "dev.eden.eden_emulator"
+		  }
+		}
+	  }
+	}
   ]
 }

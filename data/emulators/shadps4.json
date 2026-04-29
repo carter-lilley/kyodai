@@ -1,211 +1,216 @@
 {
   "meta": {
-    "id": "shadps4",
-    "name": "shadPS4",
-    "platforms": [
+	"id": "shadps4",
+	"name": "shadPS4",
+	"platforms": [
       "ps4"
-    ],
-    "requires_working_dir": true
+	],
+	"requires_working_dir": true
   },
   "paths": {
-    "saves": {
-      "_default": {
-        "directories": {
-          "windows": "{emulator_dir}/user/savedata/1",
-          "linux": "{emulator_dir}/user/savedata/1"
-        },
-        "extensions": [
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/user/savedata/1",
+		  "linux": "{emulator_dir}/user/savedata/1"
+		},
+		"extensions": [
           "*"
-        ],
-        "uses_folder_saves": true
-      }
-    }
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {}
+	  }
+	}
   },
   "launch": {
-    "platforms": {
-      "windows": {
-        "type": "command",
-        "executable": "shadps4.exe",
-        "template": [
-          "{exe}",
-          "{rom}",
-          "--fullscreen",
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "shadps4.exe",
+		"template": [
+		  "{exe}",
+		  "{rom}",
+		  "--fullscreen",
           "true"
-        ]
-      },
-      "linux": {
-        "type": "command",
-        "executable": "shadps4",
-        "template": [
-          "{exe}",
-          "{rom}",
-          "--fullscreen",
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "shadps4",
+		"template": [
+		  "{exe}",
+		  "{rom}",
+		  "--fullscreen",
           "true"
-        ]
-      },
-      "android": {
-        "action_type": "none"
-      }
-    }
+		]
+	  },
+	  "android": {
+		"action_type": "none"
+	  }
+	}
   },
   "install": [
-    {
-      "step": "download_core",
-      "platforms": {
-        "windows": {
-          "action_type": "download_repo",
-          "github_repo": "shadps4-emu/shadPS4",
-          "asset_pattern": "shadps4-win64-sdl-.*\\.zip"
-        },
-        "linux": {
-          "action_type": "download_repo",
-          "github_repo": "shadps4-emu/shadPS4",
-          "asset_pattern": "shadps4-linux-sdl-.*\\.zip"
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "install_core",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": false,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "shadps4.exe"
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": false,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "shadps4"
-          }
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "download_qt_launcher",
-      "platforms": {
-        "windows": {
-          "action_type": "download_repo",
-          "github_repo": "shadps4-emu/shadps4-qtlauncher",
-          "asset_pattern": "shadPS4QtLauncher-win64-qt-.*\\.zip"
-        },
-        "linux": {
-          "action_type": "download_repo",
-          "github_repo": "shadps4-emu/shadps4-qtlauncher",
-          "asset_pattern": "shadPS4QtLauncher-linux-qt-.*\\.zip"
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "install_qt_launcher",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": false,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "shadPS4QtLauncher.exe"
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": false,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "shadPS4QtLauncher"
-          }
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "create_user_directory",
-      "platforms": {
-        "windows": {
-          "action_type": "create_folders",
-          "folders": [
-            "user",
-            "user/savedata",
+	{
+	  "step": "download_core",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_repo",
+		  "github_repo": "shadps4-emu/shadPS4",
+		  "asset_pattern": "shadps4-win64-sdl-.*\\.zip"
+		},
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "shadps4-emu/shadPS4",
+		  "asset_pattern": "shadps4-linux-sdl-.*\\.zip"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "install_core",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": false,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "shadps4.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": false,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "shadps4"
+		  }
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "download_qt_launcher",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_repo",
+		  "github_repo": "shadps4-emu/shadps4-qtlauncher",
+		  "asset_pattern": "shadPS4QtLauncher-win64-qt-.*\\.zip"
+		},
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "shadps4-emu/shadps4-qtlauncher",
+		  "asset_pattern": "shadPS4QtLauncher-linux-qt-.*\\.zip"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "install_qt_launcher",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": false,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "shadPS4QtLauncher.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": false,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "shadPS4QtLauncher"
+		  }
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "create_user_directory",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_folders",
+		  "folders": [
+			"user",
+			"user/savedata",
             "user/savedata/1"
-          ],
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "user/savedata/1"
-          }
-        },
-        "linux": {
-          "action_type": "create_folders",
-          "folders": [
-            "user",
-            "user/savedata",
+		  ],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "user/savedata/1"
+		  }
+		},
+		"linux": {
+		  "action_type": "create_folders",
+		  "folders": [
+			"user",
+			"user/savedata",
             "user/savedata/1"
-          ],
-          "validate": {
-            "action_type": "folder_exists",
-            "path": "user/savedata/1"
-          }
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "create_config",
-      "platforms": {
-        "windows": {
-          "action_type": "create_files",
-          "files": [
-            {
-              "name": "user/config.toml",
-              "content": "[GUI]\ninstallDirs = ['{games_dir}/ps4']\ninstallDirsEnabled = [true]"
-            }
-          ],
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
+		  ],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "user/savedata/1"
+		  }
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "create_config",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "user/config.toml",
+			  "content": "[GUI]\ninstallDirs = ['{games_dir}/ps4']\ninstallDirsEnabled = [true]"
+			}
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": [
               "user/config.toml"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "create_files",
-          "files": [
-            {
-              "name": "user/config.toml",
-              "content": "[GUI]\ninstallDirs = ['{games_dir}/ps4']\ninstallDirsEnabled = [true]"
-            }
-          ],
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
+			]
+		  }
+		},
+		"linux": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "user/config.toml",
+			  "content": "[GUI]\ninstallDirs = ['{games_dir}/ps4']\ninstallDirsEnabled = [true]"
+			}
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": [
               "user/config.toml"
-            ]
-          }
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    }
+			]
+		  }
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
   ]
 }

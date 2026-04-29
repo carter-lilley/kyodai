@@ -990,6 +990,129 @@ func register_device(name: String, platform: String, client: String, client_vers
 			callback.call(json.data, "")
 	)
 
+# ==================== FIRMWARE DOWNLOAD ====================
+## Fetches firmware information for a platform from RomM
+## callback(data: Dictionary, error: String)
+## Returns platform data including firmware list
+func fetch_platform_firmware(platform_slug: String, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+	
+	var url = _base_url.rstrip("/") + "/api/platforms"
+	var headers = [
+		"Authorization: " + _get_auth_header()
+	]
+	
+	var http = _create_http_request()
+	_active_request_count += 1
+	var error = http.request(url, headers, HTTPClient.METHOD_GET)
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start request: " + str(error))
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, response_body):
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Request failed: " + str(result))
+			return
+		
+		if response_code < 200 or response_code >= 300:
+			if callback.is_valid():
+				callback.call({}, "HTTP error: " + str(response_code))
+			return
+		
+		var body_text = response_body.get_string_from_utf8()
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		if parse_result != OK:
+			if callback.is_valid():
+				callback.call({}, "Failed to parse response")
+			return
+		
+		# Find the platform in the list
+		var platforms = json.data
+		var platform_data = {}
+		if platforms is Array:
+			for platform in platforms:
+				if platform.get("slug", "") == platform_slug:
+					platform_data = platform
+					break
+		
+		if callback.is_valid():
+			callback.call(platform_data, "")
+	)
+
+## Downloads a firmware zip file from RomM
+## callback(success: bool, error: String)
+func download_firmware_zip(firmware_id: int, file_name: String, destination_path: String, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call(false, "Not connected")
+		return
+	
+	var url = _base_url.rstrip("/") + "/api/firmware/" + str(firmware_id) + "/content/" + file_name
+	var headers = [
+		"Authorization: " + _get_auth_header()
+	]
+	
+	# Ensure destination directory exists
+	var dest_dir = destination_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dest_dir):
+		DirAccess.make_dir_recursive_absolute(dest_dir)
+	
+	var http = _create_http_request()
+	_active_request_count += 1
+	
+	# Set up file download
+	http.download_file = destination_path
+	
+	var error = http.request(url, headers, HTTPClient.METHOD_GET)
+	if error != OK:
+		if callback.is_valid():
+			callback.call(false, "Failed to start request: " + str(error))
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		return
+	
+	http.request_completed.connect(func(result, response_code, response_headers, response_body):
+		_active_request_count -= 1
+		_cleanup_http_request(http)
+		
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call(false, "Authentication failed")
+			return
+		
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call(false, "Download failed: " + str(result))
+			return
+		
+		if response_code < 200 or response_code >= 300:
+			if callback.is_valid():
+				callback.call(false, "HTTP error: " + str(response_code))
+			return
+		
+		print("[NetworkManager] Firmware downloaded: " + destination_path)
+		if callback.is_valid():
+			callback.call(true, "")
+	)
+
 ## Confirm a save was downloaded successfully
 ## callback(data: Dictionary, error: String)
 func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable = Callable()) -> void:

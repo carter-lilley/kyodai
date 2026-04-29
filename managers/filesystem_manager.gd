@@ -154,7 +154,7 @@ static func resolve_path(path: String, options: Dictionary = {}) -> String:
 			result = normalize_path(result)
 			var platform = options.get("platform", "")
 			if platform == "":
-				if Engine.has_singleton("PlatformManager"):
+				if is_instance_valid(PlatformManager):
 					platform = PlatformManager.get_platform_name()
 				else:
 					platform = OS.get_name().to_lower()
@@ -177,7 +177,7 @@ func resolve_emulator_path(path: String, emulator_id: String, platform_slug: Str
 	var placeholders = {}
 	
 	# Resolve {emulator_dir}
-	if Engine.has_singleton("LaunchManager"):
+	if is_instance_valid(LaunchManager):
 		var emulator_dir = LaunchManager._get_emulator_directory(emulator_id)
 		placeholders["{emulator_dir}"] = emulator_dir.rstrip("/")
 		
@@ -193,7 +193,7 @@ func resolve_emulator_path(path: String, emulator_id: String, platform_slug: Str
 				placeholders["{core_name}"] = core_name
 	
 	# Resolve {games_dir}
-	if Engine.has_singleton("SettingsManager"):
+	if is_instance_valid(SettingsManager):
 		var games_folder_setting = SettingsManager.get_setting("games_root_folder")
 		var games_dir = games_folder_setting.value if games_folder_setting else "user://roms"
 		placeholders["{games_dir}"] = games_dir.rstrip("/")
@@ -258,7 +258,7 @@ static func _get_plugin():
 
 ## Checks if running on Android platform
 static func is_android() -> bool:
-	return PlatformManager.is_android() if Engine.has_singleton("PlatformManager") else OS.get_name() == "Android"
+	return PlatformManager.is_android() if is_instance_valid(PlatformManager) else OS.get_name() == "Android"
 
 ## Checks if a path requires DocumentsContract on Android 11+
 static func _is_restricted_android_path(path: String) -> bool:
