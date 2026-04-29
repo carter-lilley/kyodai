@@ -243,7 +243,7 @@ func _update_sync_ui() -> void:
 		sync_status_label.visible = false
 		return
 	
-	var extensions = SaveManager.get_save_extensions(emulator_id)
+	var extensions = SaveManager.get_save_extensions(emulator_id, _current_game.platform_slug)
 	if extensions.is_empty():
 		sync_button.visible = false
 		sync_status_label.visible = false

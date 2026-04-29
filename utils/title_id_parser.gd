@@ -470,13 +470,14 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 				
 				print("[TitleIDParser] header_key size: " + str(header_key.size()))
 				if header_key.size() == 32:
+					var data_start = 0x10 + entries_size + string_table_size
 					for i in range(file_count):
 						var filename = filenames[i]
 						if filename.to_lower().ends_with(".nca"):
 							var nca_offset = header.decode_u64(0x10 + (i * 0x18))
 							var nca_size = header.decode_u64(0x10 + (i * 0x18) + 0x08)
 							
-							file.seek(nca_offset)
+							file.seek(data_start + nca_offset)
 							var nca_header = file.get_buffer(0x400)
 							
 							print("[TitleIDParser] Trying NCA: " + filename + ", offset=" + str(nca_offset) + ", header_size=" + str(nca_header.size()))

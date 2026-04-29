@@ -946,12 +946,18 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var install_path = get_emulator_install_path(intent.emulator_id)
 		
 		# Convert paths to absolute system paths for OS.execute
-		var format = FileSystemManager.PathFormat.ABSOLUTE
-		if PlatformManager.is_windows() and emulator.get("requires_native_paths", false):
-			format = FileSystemManager.PathFormat.PLATFORM
+		# Always resolve to ABSOLUTE first to convert user:// to real paths
+		var global_install_path = FileSystemManager.resolve_path(install_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+		var global_rom_path = FileSystemManager.resolve_path(intent.rom_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 		
-		var global_install_path = FileSystemManager.resolve_path(install_path, {"format": format})
-		var global_rom_path = FileSystemManager.resolve_path(intent.rom_path, {"format": format})
+		# Then convert to native paths if needed (PCSX2 on Windows needs backslashes)
+		if PlatformManager.is_windows():
+			if intent.platform_slug == "ps2" and intent.emulator_id == "pcsx2":
+				global_install_path = global_install_path.replace("/", "\\")
+				global_rom_path = global_rom_path.replace("/", "\\")
+			elif emulator.get("requires_native_paths", false):
+				global_install_path = global_install_path.replace("/", "\\")
+				global_rom_path = global_rom_path.replace("/", "\\")
 		
 		# Build absolute core path
 		var install_dir = global_install_path.get_base_dir()
@@ -1076,6 +1082,7 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 				exe_path,
 				" ".join(quoted_args)
 			]
+			print("[LaunchManager] Executing command: cmd /c ", inner_cmd)
 			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
 		else:
 			# Linux/macOS: use sh -c "cd WORKING_DIR && exe args"
@@ -1099,6 +1106,7 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 				exe_path,
 				" ".join(quoted_args)
 			]
+			print("[LaunchManager] Executing command: cmd /c ", inner_cmd)
 			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
 		else:
 			# Linux/macOS: use sh -c "exe args"

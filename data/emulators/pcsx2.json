@@ -22,9 +22,9 @@
 	"firmware": {
 	  "_default": {
 		"directories": {
-		  "windows": "{emulator_dir}/bios",
-		  "linux": "{emulator_dir}/bios",
-		  "android": "{emulator_dir}/bios"
+		  "windows": "{emulator_dir}",
+		  "linux": "{emulator_dir}",
+		  "android": "{emulator_dir}"
 		}
 	  }
 	}

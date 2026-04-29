@@ -56,8 +56,8 @@ func _get_global_save_override() -> String:
 	return ""
 
 ## Resolves the save directory for an emulator
-## Priority: 1. Global override, 2. Registry per-platform directory
-## Optional platform_slug for resolving platform-specific paths (e.g., RetroArch {core_name})
+## Priority: 1. Global override, 2. Registry per-platform directory, 3. _default directory
+## Optional platform_slug for resolving platform-specific paths (e.g., RetroArch {core_name}, Dolphin ngc/wii)
 func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> String:
 	var override = _get_global_save_override()
 	if override != "":
@@ -69,8 +69,15 @@ func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> 
 	
 	var paths = emulator.get("paths", {})
 	var saves = paths.get("saves", {})
-	var default_config = saves.get("_default", {})
-	var directories = default_config.get("directories", {})
+	
+	# Check platform-specific config first (e.g., dolphin ngc vs wii)
+	var config: Dictionary
+	if platform_slug != "" and saves.has(platform_slug):
+		config = saves[platform_slug]
+	else:
+		config = saves.get("_default", {})
+	
+	var directories = config.get("directories", {})
 	var platform_name = PlatformManager.get_platform_name().to_lower()
 	
 	var dir = directories.get(platform_name, "")
@@ -106,15 +113,22 @@ func _ensure_save_directory_exists(emulator_id: String) -> bool:
 	return true
 
 ## Gets the save file extensions for an emulator
-func get_save_extensions(emulator_id: String) -> Array[String]:
+func get_save_extensions(emulator_id: String, platform_slug: String = "") -> Array[String]:
 	var emulator = LaunchManager.get_emulator(emulator_id)
 	if emulator.is_empty():
 		return []
 	
 	var paths = emulator.get("paths", {})
 	var saves = paths.get("saves", {})
-	var default_config = saves.get("_default", {})
-	var extensions = default_config.get("extensions", [])
+	
+	# Check platform-specific config first
+	var config: Dictionary
+	if platform_slug != "" and saves.has(platform_slug):
+		config = saves[platform_slug]
+	else:
+		config = saves.get("_default", {})
+	
+	var extensions = config.get("extensions", [])
 	var result: Array[String] = []
 	for ext in extensions:
 		if ext is String:
@@ -158,14 +172,21 @@ func _search_directory_for_saves(dir_path: String, rom_name_no_ext: String, exte
 						"extension": dot_ext
 					})
 
-func uses_folder_saves(emulator_id: String) -> bool:
+func uses_folder_saves(emulator_id: String, platform_slug: String = "") -> bool:
 	var emulator = LaunchManager.get_emulator(emulator_id)
 	if emulator.is_empty():
 		return false
 	var paths = emulator.get("paths", {})
 	var saves = paths.get("saves", {})
-	var default_config = saves.get("_default", {})
-	return default_config.get("uses_folder_saves", false)
+	
+	# Check platform-specific config first
+	var config: Dictionary
+	if platform_slug != "" and saves.has(platform_slug):
+		config = saves[platform_slug]
+	else:
+		config = saves.get("_default", {})
+	
+	return config.get("uses_folder_saves", false)
 
 func discover_local_folder_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
@@ -230,30 +251,56 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 	if not FileSystemManager.dir_exists(directory):
 		return results
 	
-	var regions: Array[String] = ["USA", "EUR", "JAP", "KOR"]
+	# Find all matching GCI files
+	var gci_files: Array[String] = []
+	var items = FileSystemManager.list_dir(directory)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
+			gci_files.append(FileSystemManager.join_paths(directory, item))
 	
-	for region in regions:
-		var card_dirs: Array[String] = ["Card A", "Card B"]
-		for card in card_dirs:
-			var card_path = FileSystemManager.join_paths(directory, "GC", region, card)
-			if not FileSystemManager.dir_exists(card_path):
-				continue
-			
-			var items = FileSystemManager.list_dir(card_path)
-			for item in items:
-				if item == "." or item == "..":
-					continue
-				if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
-					var mtime = _get_folder_mtime(card_path)
-					results.append({
-						"file_name": game_id + ".zip",
-						"file_path": card_path,
-						"modified_time": mtime,
-						"extension": ".zip"
-					})
-					return results
+	if gci_files.is_empty():
+		return results
+	
+	# Create a temp zip bundle with all matching GCI files
+	var zip_path = "user://temp_saves/" + game_id + ".zip"
+	FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+	
+	var zip_success = _zip_gci_files(gci_files, zip_path)
+	if not zip_success:
+		push_error("[SaveManager] Failed to create GCI bundle for " + game_id)
+		return results
+	
+	var mtime = _get_folder_mtime(directory)
+	results.append({
+		"file_name": game_id + ".zip",
+		"file_path": zip_path,
+		"modified_time": mtime,
+		"extension": ".zip"
+	})
 	
 	return results
+
+## Creates a zip archive containing specific GCI files
+## Used for bundling multiple GameCube saves for the same game
+func _zip_gci_files(gci_files: Array[String], zip_path: String) -> bool:
+	var writer = ZIPPacker.new()
+	var err = writer.open(zip_path, ZIPPacker.ZipAppend.APPEND_CREATE)
+	if err != OK:
+		push_error("[SaveManager] Failed to create GCI zip: " + zip_path)
+		return false
+	
+	for gci_path in gci_files:
+		var file_name = gci_path.get_file()
+		var data = FileSystemManager.read_file_bytes(gci_path)
+		if data.size() > 0:
+			writer.start_file(file_name)
+			writer.write_file(data)
+			writer.close_file()
+	
+	writer.close()
+	return true
 
 func _game_id_to_hex(game_id: String) -> String:
 	var hex = ""
@@ -266,30 +313,21 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	if directory == "" or game_id == "":
 		return results
 	
-	var title_path = FileSystemManager.join_paths(directory, "Wii", "title")
-	if not FileSystemManager.dir_exists(title_path):
+	if not FileSystemManager.dir_exists(directory):
 		return results
 	
 	var hex_id = _game_id_to_hex(game_id)
+	var game_path = FileSystemManager.join_paths(directory, hex_id)
 	
-	var prefix_dirs = FileSystemManager.list_dir(title_path)
-	for prefix in prefix_dirs:
-		if prefix == "." or prefix == "..":
-			continue
-		var prefix_path = FileSystemManager.join_paths(title_path, prefix)
-		if not FileSystemManager.dir_exists(prefix_path):
-			continue
-		
-		var game_path = FileSystemManager.join_paths(prefix_path, hex_id)
-		if FileSystemManager.dir_exists(game_path):
-			var mtime = _get_folder_mtime(game_path)
-			results.append({
-				"file_name": hex_id + ".zip",
-				"file_path": game_path,
-				"modified_time": mtime,
-				"extension": ".zip"
-			})
-			return results
+	if FileSystemManager.dir_exists(game_path):
+		var mtime = _get_folder_mtime(game_path)
+		results.append({
+			"file_name": hex_id + ".zip",
+			"file_path": game_path,
+			"modified_time": mtime,
+			"extension": ".zip"
+		})
+		return results
 	
 	return results
 
@@ -737,15 +775,15 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			return FileSystemManager.join_paths(save_dir, title_id.substr(8, 8))
 		"dolphin":
 			if game.platform_slug == "wii":
-				return FileSystemManager.join_paths(save_dir, "Wii", "title", "00010000", _game_id_to_hex(title_id))
-			return FileSystemManager.join_paths(save_dir, "GC", "USA", "Card A")
+				return FileSystemManager.join_paths(save_dir, _game_id_to_hex(title_id))
+			return save_dir
 		"eden":
 			var emu_dir = LaunchManager._get_emulator_directory("eden")
 			var profile = _discover_eden_profile(emu_dir)
 			# Eden uses full TitleID (16 chars) for save folder names
 			return FileSystemManager.join_paths(save_dir, "0000000000000000", profile, title_id)
 		"pcsx2":
-			return FileSystemManager.join_paths(save_dir, "main.ps2")
+			return save_dir
 		"ppsspp":
 			return FileSystemManager.join_paths(save_dir, title_id)
 		"vita3k":
@@ -794,7 +832,7 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 
 ## Determines the extraction destination for downloaded saves based on emulator
 ## Returns the destination directory path
-func _get_extract_dest(emulator_id: String, save_dir: String, record_path: String, game: GameResource) -> String:
+func _get_extract_dest(emulator_id: String, save_dir: String, record_path: String, game: GameResource, zip_file_name: String = "") -> String:
 	match emulator_id:
 		"cemu":
 			# Cemu saves are in save_dir/{prefix}/{short_id}/
@@ -802,10 +840,19 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 			return record_path.get_base_dir()
 		"dolphin":
 			if game.platform_slug == "wii":
-				return save_dir
-			return record_path
+				var hex_id = _game_id_to_hex(game.get_active_title_id())
+				return FileSystemManager.join_paths(save_dir, hex_id)
+			return save_dir
 		"pcsx2":
-			return save_dir + "main.ps2/"
+			# PCSX2 saves are loose files in a zip named by serial
+			# Extract into save_dir/{serial}/ so the zip contents go into the serial folder
+			# Use the zip filename (without extension) if available, otherwise fall back to the game's title_id
+			var folder_name: String
+			if zip_file_name != "":
+				folder_name = zip_file_name.get_basename()
+			else:
+				folder_name = game.get_active_title_id()
+			return FileSystemManager.join_paths(save_dir, folder_name)
 		"ppsspp":
 			return save_dir
 		"vita3k":
@@ -870,9 +917,7 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 			var save_name = game.get_active_title_id().substr(8, 8)
 			return FileSystemManager.zip_directory(source_path, zip_path, -1, save_name)
 		"dolphin":
-			if game.platform_slug == "wii":
-				return _zip_dolphin_wii_save(source_path, zip_path)
-			return _zip_dolphin_gc_saves(source_path, game.get_active_title_id(), zip_path)
+			return FileSystemManager.zip_directory(source_path, zip_path)
 		"eden":
 			# Eden saves are loose files inside the zip (no root folder)
 			# Zip is named with the full TitleID
@@ -953,46 +998,6 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 	FileSystemManager.delete_dir_recursive(stage_dir)
 	return zip_success
 
-func _zip_dolphin_gc_saves(card_dir: String, game_id: String, dest_zip: String) -> bool:
-	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
-	var copy_success = false
-	
-	var items = FileSystemManager.list_dir(card_dir)
-	for item in items:
-		if item == "." or item == "..":
-			continue
-		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
-			var src = FileSystemManager.join_paths(card_dir, item)
-			var dst = FileSystemManager.join_paths(stage_dir, item)
-			FileSystemManager.make_dir_recursive(dst.get_base_dir())
-			if FileSystemManager.copy_file(src, dst):
-				copy_success = true
-	
-	if not copy_success:
-		FileSystemManager.delete_dir_recursive(stage_dir)
-		return false
-	
-	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
-	FileSystemManager.delete_dir_recursive(stage_dir)
-	return zip_success
-
-func _zip_dolphin_wii_save(source_dir: String, dest_zip: String) -> bool:
-	var parts = source_dir.rstrip("/").split("/")
-	if parts.size() < 2:
-		return false
-	var hex_id = parts[-1]
-	var prefix = parts[-2]
-	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
-	var stage_root = FileSystemManager.join_paths(stage_dir, "Wii", "title", prefix, hex_id)
-	FileSystemManager.make_dir_recursive(stage_root)
-	var copy_success = FileSystemManager.copy_dir(source_dir, stage_root)
-	if not copy_success:
-		FileSystemManager.delete_dir_recursive(stage_dir)
-		return false
-	var zip_success = FileSystemManager.zip_directory(stage_dir, dest_zip)
-	FileSystemManager.delete_dir_recursive(stage_dir)
-	return zip_success
-
 func _sanitize_filename(name: String) -> String:
 	return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
 
@@ -1061,7 +1066,7 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 		return
 	
 	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
-	var extensions = get_save_extensions(emulator_id)
+	var extensions = get_save_extensions(emulator_id, game.platform_slug)
 	
 	if save_dir == "" or extensions.is_empty():
 		if callback.is_valid():
@@ -1069,7 +1074,7 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 		return
 	
 	var local_saves: Array[Dictionary]
-	if uses_folder_saves(emulator_id):
+	if uses_folder_saves(emulator_id, game.platform_slug) or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 		if game.get_active_title_id() == "":
 			if callback.is_valid():
 				callback.call(false, "No Title ID available for this game. Launch it once to extract the Title ID.")
@@ -1187,7 +1192,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				if callback.is_valid():
 					callback.call(true, "Save sync completed")
 	
-	var is_folder_save = uses_folder_saves(emulator_id)
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug)
 	
 	for upload in pending_uploads:
 		var upload_file_name = upload.local.file_name
@@ -1234,6 +1239,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				device_id,
 				true,
 				func(data: Dictionary, error: String):
+					# Clean up temp GCI zip files after upload
+					if original_path.contains("user://temp_saves/") and FileSystemManager.file_exists(original_path):
+						FileSystemManager.delete_file(original_path)
 					if error != "":
 						state.failed += 1
 						push_error("[SaveManager] Upload failed for " + original_path + ": " + error)
@@ -1314,7 +1322,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 						# Ensure PCSX2 superblock is valid after extracting saves
 				if emulator_id == "pcsx2":
 					print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
-					var memcard_path = resolve_save_directory(emulator_id, game.platform_slug) + "main.ps2/"
+					var memcard_path = resolve_save_directory(emulator_id, game.platform_slug)
 					ensure_pcsx2_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
@@ -1370,14 +1378,14 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		return
 	
 	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
-	var extensions = get_save_extensions(emulator_id)
+	var extensions = get_save_extensions(emulator_id, game.platform_slug)
 	if save_dir == "" or extensions.is_empty():
 		print("[SaveManager] Auto-upload aborted: no save dir or extensions (dir=" + save_dir + ", ext count=" + str(extensions.size()) + ")")
 		return
 	
-	var is_folder_save = uses_folder_saves(emulator_id)
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug)
 	var local_saves: Array[Dictionary]
-	if is_folder_save:
+	if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 		if game.get_active_title_id() == "":
 			return
 		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
@@ -1555,15 +1563,15 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 		return
 	
 	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
-	var extensions = get_save_extensions(emulator_id)
-	print("[SaveManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions))
+	var extensions = get_save_extensions(emulator_id, game.platform_slug)
+	print("[SaveManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions.size()))
 	if save_dir == "" or extensions.is_empty():
 		print("[SaveManager] auto_download: ABORT - no save_dir or extensions")
 		if on_complete.is_valid():
 			on_complete.call()
 		return
 	
-	var is_folder_save = uses_folder_saves(emulator_id)
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug)
 	
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
@@ -1704,7 +1712,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 							
 							if is_folder_save:
-								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game)
+								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 								# Don't use subfolder - the zip already contains the correct folder structure
 								var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
 								if not extract_success:
@@ -1714,11 +1722,21 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 									FileSystemManager.delete_file(zip_path)
 								# Clean up empty parent directories
 								_cleanup_temp_dir(zip_path)
+							elif local_path.to_lower().ends_with(".zip"):
+								# Non-folder save but downloaded as zip (e.g., GameCube .gci in zip)
+								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
+								print("[SaveManager] Extracting non-folder zip save for " + emulator_id + " to: " + extract_dest)
+								var extract_success = FileSystemManager.extract_zip(local_path, extract_dest)
+								if not extract_success:
+									state.failed += 1
+									push_error("[SaveManager] Failed to extract downloaded zip: " + local_path)
+								if FileSystemManager.file_exists(local_path):
+									FileSystemManager.delete_file(local_path)
 							
 							# Ensure PCSX2 superblock is valid after extracting saves
 							if emulator_id == "pcsx2":
 								print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
-								var memcard_path = save_dir + "main.ps2/"
+								var memcard_path = save_dir
 								ensure_pcsx2_superblock(memcard_path)
 							# Small delay to let filesystem settle before emulator launch
 							OS.delay_msec(100)

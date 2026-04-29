@@ -9,13 +9,23 @@
   },
   "paths": {
 	"saves": {
-	  "_default": {
+	  "ngc": {
 		"directories": {
-		  "windows": "{emulator_dir}/User",
-		  "android": "{app_data}/"
+		  "windows": "{emulator_dir}/User/GC/USA/Card A",
+		  "android": "{app_data}/GC/USA/Card A"
 		},
 		"extensions": [
           "gci"
+		],
+		"uses_folder_saves": false
+	  },
+	  "wii": {
+		"directories": {
+		  "windows": "{emulator_dir}/User/Wii/title/00010000",
+		  "android": "{app_data}/Wii/title/00010000"
+		},
+		"extensions": [
+          "zip"
 		],
 		"uses_folder_saves": true
 	  }

@@ -756,8 +756,8 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
 	if err != OK:
-		push_error("[FileSystemManager] Failed to open ZIP: " + zip_path + " (error: " + str(err) + ")")
-		return false
+		print("[FileSystemManager] ZIPReader failed to open ZIP, attempting 7-Zip fallback...")
+		return _extract_zip_with_7z(zip_path, extract_dir)
 	
 	var files = reader.get_files()
 	var success = true
@@ -783,6 +783,45 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 	
 	reader.close()
 	return success
+
+## Extracts a ZIP archive using 7-Zip binary (fallback for ZIP64/large files)
+## Returns true on success
+static func _extract_zip_with_7z(zip_path: String, extract_dir: String) -> bool:
+	var binary_path = _get_7z_binary_path()
+	if binary_path == "":
+		push_error("[FileSystemManager] 7-Zip binary not available for fallback extraction")
+		return false
+	
+	print("[FileSystemManager] Using 7-Zip fallback for ZIP extraction: " + binary_path)
+	
+	var abs_zip = ProjectSettings.globalize_path(zip_path)
+	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
+	
+	# Use 7z x to extract with full paths
+	var output = []
+	var args = ["x", abs_zip, "-o" + abs_extract_dir, "-y"]
+	var exit_code = OS.execute(binary_path, args, output, true)
+	
+	if exit_code != 0:
+		push_error("[FileSystemManager] 7-Zip extraction failed with exit code: " + str(exit_code))
+		return false
+	
+	print("[FileSystemManager] 7-Zip extraction completed successfully")
+	return true
+
+## Gets the bundled 7z binary path for the current platform
+static func _get_7z_binary_path() -> String:
+	var platform_name = ""
+	match OS.get_name():
+		"Windows":
+			platform_name = "windows"
+		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+			platform_name = "linux"
+		_:
+			return ""
+	
+	var binary_name = "7za.exe" if OS.get_name() == "Windows" else "7z"
+	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
 
 ## Gets available storage space in bytes for a given path
 static func get_available_space(path: String) -> int:
