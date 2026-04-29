@@ -11,7 +11,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/user/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-		  "android": "{app_data}/sdmc/Nintendo 3DS"
+		  "android": "{app_data}/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
 		},
 		"extensions": [
           "*"

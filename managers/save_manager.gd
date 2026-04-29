@@ -761,6 +761,11 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			if profile == "":
 				profile = "0000000000000000"
 			return FileSystemManager.join_paths(save_dir, profile, title_id)
+		"azahar":
+			# Azahar saves: zip contains {short_title_id}/ as root
+			# Extract directly into save_dir so zip creates {short_title_id}/ folder
+			var short_title_id = title_id.substr(8, 8)
+			return FileSystemManager.join_paths(save_dir, short_title_id)
 		"retroarch":
 			return _resolve_retroarch_save_path(save_dir, game)
 		_:
@@ -814,6 +819,10 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 			return save_dir
 		"xenia":
 			return save_dir
+		"azahar":
+			# Azahar saves: zip contains loose files, extract into {short_title_id}/ folder
+			# record_path is already save_dir/{short_title_id}
+			return record_path
 		_:
 			return record_path.get_base_dir()
 
@@ -1258,6 +1267,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			
 			if not download.local:
 				record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
+				print("[SaveManager] Folder save record_path for " + emulator_id + ": " + record_path)
 				if record_path == "":
 					var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
 					if result.error != "":
@@ -1289,6 +1299,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				
 				if is_folder_save:
 					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id, game.platform_slug), record_path, game)
+					print("[SaveManager] Extracting folder save for " + emulator_id + " to: " + extract_dest)
+					print("[SaveManager] record_path was: " + record_path)
 					# Don't use subfolder - the zip already contains the correct folder structure
 					var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
 					if not extract_success:

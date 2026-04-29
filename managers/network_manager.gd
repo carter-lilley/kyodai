@@ -1058,7 +1058,7 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 
 ## Downloads a firmware zip file from RomM
 ## callback(success: bool, error: String)
-func download_firmware_zip(firmware_id: int, file_name: String, destination_path: String, callback: Callable = Callable()) -> void:
+func download_firmware_zip(firmware_id: int, file_name: String, destination_path: String, callback: Callable = Callable(), progress_callback: Callable = Callable()) -> void:
 	if not _is_online:
 		if callback.is_valid():
 			callback.call(false, "Not connected")
@@ -1080,8 +1080,31 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 	# Set up file download
 	http.download_file = destination_path
 	
+	# Track download progress with a timer
+	var progress_timer: Timer = null
+	var last_reported_mb: int = -1
+	
+	if progress_callback.is_valid():
+		progress_timer = Timer.new()
+		progress_timer.wait_time = 0.5
+		progress_timer.one_shot = false
+		add_child(progress_timer)
+		
+		progress_timer.timeout.connect(func():
+			if FileSystemManager.file_exists(destination_path):
+				var file_size = FileSystemManager.get_file_size(destination_path)
+				var size_mb = int(file_size / (1024 * 1024))
+				if size_mb != last_reported_mb:
+					last_reported_mb = size_mb
+					progress_callback.call(size_mb)
+		)
+		progress_timer.start()
+	
 	var error = http.request(url, headers, HTTPClient.METHOD_GET)
 	if error != OK:
+		if progress_timer:
+			progress_timer.stop()
+			progress_timer.queue_free()
 		if callback.is_valid():
 			callback.call(false, "Failed to start request: " + str(error))
 		_active_request_count -= 1
@@ -1089,6 +1112,10 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 		return
 	
 	http.request_completed.connect(func(result, response_code, response_headers, response_body):
+		if progress_timer:
+			progress_timer.stop()
+			progress_timer.queue_free()
+		
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		

@@ -764,31 +764,71 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		FileSystemManager.make_dir_recursive("user://temp_firmware")
 		
 		print("[LaunchManager] Downloading firmware: " + file_name)
-		NetworkManager.download_firmware_zip(firmware_id, file_name, temp_path, func(success: bool, download_error: String):
-			if not success:
-				push_error("[LaunchManager] Failed to download firmware: " + download_error)
+		
+		# Show progress notification
+		var _firmware_notification_id = NotificationManager.show_notification(
+			"Downloading firmware for " + platform_slug + "...",
+			Notification.Type.INFO,
+			null,
+			0.0,
+			Callable(),
+			Callable(),
+			true  # pulsing
+		)
+		
+		var _last_progress_mb: int = -1
+		
+		NetworkManager.download_firmware_zip(
+			firmware_id,
+			file_name,
+			temp_path,
+			func(success: bool, download_error: String):
+				NotificationManager.dismiss_notification(_firmware_notification_id)
+				
+				if not success:
+					push_error("[LaunchManager] Failed to download firmware: " + download_error)
+					if callback.is_valid():
+						callback.call(false, download_error)
+					return
+				
+				print("[LaunchManager] Firmware downloaded, extracting to: " + firmware_dir)
+				
+				# Show extracting notification
+				var _extract_notification_id = NotificationManager.show_notification(
+					"Extracting firmware for " + platform_slug + "...",
+					Notification.Type.INFO,
+					null,
+					0.0,
+					Callable(),
+					Callable(),
+					true
+				)
+				
+				# Extract zip to firmware directory
+				var extract_success = FileSystemManager.extract_zip(temp_path, firmware_dir)
+				
+				NotificationManager.dismiss_notification(_extract_notification_id)
+				
+				# Clean up temp file
+				if FileSystemManager.file_exists(temp_path):
+					FileSystemManager.delete_file(temp_path)
+				
+				if not extract_success:
+					push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir)
+					if callback.is_valid():
+						callback.call(false, "Extraction failed")
+					return
+				
+				print("[LaunchManager] Firmware successfully installed for " + platform_slug)
 				if callback.is_valid():
-					callback.call(false, download_error)
-				return
-			
-			print("[LaunchManager] Firmware downloaded, extracting to: " + firmware_dir)
-			
-			# Extract zip to firmware directory
-			var extract_success = FileSystemManager.extract_zip(temp_path, firmware_dir)
-			
-			# Clean up temp file
-			if FileSystemManager.file_exists(temp_path):
-				FileSystemManager.delete_file(temp_path)
-			
-			if not extract_success:
-				push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir)
-				if callback.is_valid():
-					callback.call(false, "Extraction failed")
-				return
-			
-			print("[LaunchManager] Firmware successfully installed for " + platform_slug)
-			if callback.is_valid():
-				callback.call(true, "Firmware installed")
+					callback.call(true, "Firmware installed"),
+			func(size_mb: int):
+				if size_mb != _last_progress_mb:
+					_last_progress_mb = size_mb
+					NotificationManager.update_notification_text(
+						_firmware_notification_id,
+						"Downloading firmware for " + platform_slug + "... " + str(size_mb) + " MB"
+					)
 		)
 	)
 

@@ -43,8 +43,8 @@
 	"saves": {
 	  "_default": {
 		"directories": {
-		  "windows": "{emulator_dir}/saves/{core_name}",
-		  "android": "/storage/emulated/0/RetroArch/saves/{core_name}"
+		  "windows": "{emulator_dir}/saves",
+		  "android": "/storage/emulated/0/RetroArch/saves"
 		},
 		"extensions": [
           ".srm"

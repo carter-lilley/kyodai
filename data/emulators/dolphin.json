@@ -1,141 +1,141 @@
 {
   "meta": {
-    "id": "dolphin",
-    "name": "Dolphin",
-    "platforms": [
-      "ngc",
+	"id": "dolphin",
+	"name": "Dolphin",
+	"platforms": [
+	  "ngc",
       "wii"
-    ]
+	]
   },
   "paths": {
-    "saves": {
-      "_default": {
-        "directories": {
-          "windows": "{emulator_dir}/User",
-          "android": "{app_data}/"
-        },
-        "extensions": [
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "windows": "{emulator_dir}/User",
+		  "android": "{app_data}/"
+		},
+		"extensions": [
           "gci"
-        ],
-        "uses_folder_saves": true
-      }
-    },
-    "firmware": {
-      "_default": {
-        "directories": {}
-      }
-    }
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {}
+	  }
+	}
   },
   "launch": {
-    "platforms": {
-      "windows": {
-        "type": "command",
-        "executable": "Dolphin.exe",
-        "template": [
-          "{exe}",
-          "-e",
-          "{rom}",
-          "--batch",
-          "--config",
-          "Dolphin.Display.Fullscreen=True",
-          "--config",
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "Dolphin.exe",
+		"template": [
+		  "{exe}",
+		  "-e",
+		  "{rom}",
+		  "--batch",
+		  "--config",
+		  "Dolphin.Display.Fullscreen=True",
+		  "--config",
           "Dolphin.Interface.ConfirmStop=False"
-        ]
-      },
-      "linux": {
-        "type": "command",
-        "executable": "",
-        "template": []
-      },
-      "android": {
-        "action": "android.intent.action.MAIN",
-        "package": "org.dolphinemu.dolphinemu",
-        "class": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
-        "rom_delivery": "extra",
-        "extras": [
-          {
-            "key": "AutoStartFile",
-            "value": "{rom}",
-            "type": "content_uri"
-          }
-        ]
-      }
-    }
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "",
+		"template": []
+	  },
+	  "android": {
+		"action": "android.intent.action.MAIN",
+		"package": "org.dolphinemu.dolphinemu",
+		"class": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
+		"rom_delivery": "extra",
+		"extras": [
+		  {
+			"key": "AutoStartFile",
+			"value": "{rom}",
+			"type": "content_uri"
+		  }
+		]
+	  }
+	}
   },
   "install": [
-    {
-      "step": "download_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "download_scrape",
-          "scrape_url": "https://dolphin-emu.org/download/",
-          "version_pattern": "/download/release/([0-9a-z]+)/",
-          "url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z"
-        },
-        "linux": {
-          "action_type": "download_url",
-          "url": ""
-        },
-        "android": {
-          "action_type": "download_scrape",
-          "scrape_url": "https://dolphin-emu.org/download/",
-          "version_pattern": "/download/release/([0-9a-z]+)/",
-          "url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}.apk"
-        }
-      }
-    },
-    {
-      "step": "install_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": true,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "Dolphin.exe"
-          }
-        },
-        "linux": {
-          "action_type": "none",
-          "validate": {
-            "action_type": "file_exists",
-            "file": ""
-          }
-        },
-        "android": {
-          "action_type": "apk_install",
-          "package_name": "org.dolphinemu.dolphinemu",
-          "expected_file": "dolphin-*.apk",
-          "validate": {
-            "action_type": "package_installed",
-            "package": "org.dolphinemu.dolphinemu"
-          }
-        }
-      }
-    },
-    {
-      "step": "setup_portable_mode",
-      "platforms": {
-        "windows": {
-          "action_type": "create_files",
-          "files": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_scrape",
+		  "scrape_url": "https://dolphin-emu.org/download/",
+		  "version_pattern": "/download/release/([0-9a-z]+)/",
+		  "url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z"
+		},
+		"linux": {
+		  "action_type": "download_url",
+		  "url": ""
+		},
+		"android": {
+		  "action_type": "download_scrape",
+		  "scrape_url": "https://dolphin-emu.org/download/",
+		  "version_pattern": "/download/release/([0-9a-z]+)/",
+		  "url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "Dolphin.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "none",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": ""
+		  }
+		},
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "org.dolphinemu.dolphinemu",
+		  "expected_file": "dolphin-*.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "org.dolphinemu.dolphinemu"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "setup_portable_mode",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
             "portable.txt"
-          ],
-          "validate": {
-            "action_type": "files_exist",
-            "files": [
+		  ],
+		  "validate": {
+			"action_type": "files_exist",
+			"files": [
               "portable.txt"
-            ]
-          }
-        },
-        "linux": {
-          "action_type": "none"
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    }
+			]
+		  }
+		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
   ]
 }

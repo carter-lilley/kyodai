@@ -96,34 +96,6 @@
 		  }
 		}
 	  }
-	},
-	{
-	  "step": "create_save_directories",
-	  "platforms": {
-		"windows": {
-		  "action_type": "create_folders",
-		  "folders": [
-            "dev_hdd0/home/00000001/savedata"
-		  ],
-		  "validate": {
-			"action_type": "folder_exists",
-			"path": "dev_hdd0/home/00000001/savedata"
-		  }
-		},
-		"linux": {
-		  "action_type": "none"
-		},
-		"android": {
-		  "action_type": "create_folders",
-		  "folders": [
-            "dev_hdd0/home/00000001/savedata"
-		  ],
-		  "validate": {
-			"action_type": "folder_exists",
-			"path": "dev_hdd0/home/00000001/savedata"
-		  }
-		}
-	  }
 	}
   ]
 }

@@ -13,8 +13,6 @@ chunk reassembly notif on android
 user save folder
 reading save path configs where possible (emulator {user_dir} wildcard?)
 error when no user save and no default save (azahar)
-save folder creation happens by default....
-	check extraction & folder creation steps (extraction should create folders by default) - might save some folder creation steps. 
 check if save is modified
 
 ## general UI
