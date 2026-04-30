@@ -140,6 +140,12 @@ func _format_timestamp(unix_time: int) -> String:
 		return "Unknown"
 	
 	var dict = Time.get_datetime_dict_from_unix_time(unix_time)
+	
+	# Adjust to local timezone
+	var tz_info = Time.get_time_zone_from_system()
+	var tz_offset_minutes = tz_info.get("bias", 0)
+	var adjusted_unix = unix_time + (tz_offset_minutes * 60)
+	dict = Time.get_datetime_dict_from_unix_time(adjusted_unix)
 	var month_names = ["January", "February", "March", "April", "May", "June",
 					"July", "August", "September", "October", "November", "December"]
 	

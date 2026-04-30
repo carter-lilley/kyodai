@@ -1,123 +1,123 @@
 {
   "meta": {
-    "id": "xenia",
-    "name": "Xenia",
-    "platforms": [
+	"id": "xenia",
+	"name": "Xenia",
+	"platforms": [
       "xbox360"
-    ]
+	]
   },
   "paths": {
-    "saves": {
-      "_default": {
-        "directories": {
-          "all": "{emulator_dir}/content"
-        },
-        "extensions": [
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "all": "{emulator_dir}/content"
+		},
+		"extensions": [
           ".zip"
-        ],
-        "uses_folder_saves": true
-      }
-    },
-    "firmware": {
-      "_default": {
-        "directories": {}
-      }
-    }
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {}
+	  }
+	}
   },
   "launch": {
-    "platforms": {
-      "windows": {
-        "type": "command",
-        "executable": "xenia_canary.exe",
-        "template": [
-          "{exe}",
-          "{rom}",
+	"platforms": {
+	  "windows": {
+		"type": "command",
+		"executable": "xenia_canary.exe",
+		"template": [
+		  "{exe}",
+		  "{rom}",
           "--fullscreen"
-        ]
-      },
-      "linux": {
-        "type": "command",
-        "executable": "xenia_canary",
-        "template": [
-          "{exe}",
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "xenia_canary",
+		"template": [
+		  "{exe}",
           "{rom}"
-        ]
-      },
-      "android": {
-        "action_type": "none"
-      }
-    }
+		]
+	  },
+	  "android": {
+		"action_type": "none"
+	  }
+	}
   },
   "install": [
-    {
-      "step": "download_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "download_repo",
-          "github_repo": "xenia-canary/xenia-canary-releases",
-          "release_tag": "canary_experimental",
-          "asset_pattern": "xenia_canary_windows\\.zip"
-        },
-        "linux": {
-          "action_type": "download_repo",
-          "github_repo": "xenia-canary/xenia-canary-releases",
-          "release_tag": "canary_experimental",
-          "asset_pattern": "xenia_canary_linux\\.tar\\.xz"
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "install_emulator",
-      "platforms": {
-        "windows": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": true,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "xenia_canary.exe"
-          }
-        },
-        "linux": {
-          "action_type": "extract",
-          "extract_to": ".",
-          "strip_top_directory": true,
-          "validate": {
-            "action_type": "file_exists",
-            "file": "xenia_canary"
-          }
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    },
-    {
-      "step": "create_portable_file",
-      "platforms": {
-        "windows": {
-          "action_type": "create_files",
-          "files": [
-            {
-              "name": "portable.txt",
-              "content": ""
-            }
-          ],
-          "validate": {
-            "action_type": "file_exists",
-            "file": "portable.txt"
-          }
-        },
-        "linux": {
-          "action_type": "none"
-        },
-        "android": {
-          "action_type": "none"
-        }
-      }
-    }
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "download_repo",
+		  "github_repo": "xenia-canary/xenia-canary-releases",
+		  "release_tag": "canary_experimental",
+		  "asset_pattern": "xenia_canary_windows\\.zip"
+		},
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "xenia-canary/xenia-canary-releases",
+		  "release_tag": "canary_experimental",
+		  "asset_pattern": "xenia_canary_linux\\.tar\\.xz"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "xenia_canary.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "xenia_canary"
+		  }
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "create_portable_file",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "portable.txt",
+			  "content": ""
+			}
+		  ],
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "portable.txt"
+		  }
+		},
+		"linux": {
+		  "action_type": "none"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	}
   ]
 }

@@ -344,11 +344,13 @@ static func _plugin_delete_file(path: String) -> bool:
 	return plugin.call("androidDeleteFile", path)
 
 ## Delegates get modified time to plugin for restricted paths
+## Note: Android plugin returns milliseconds, Godot expects seconds
 static func _plugin_get_modified_time(path: String) -> int:
 	var plugin = _get_plugin()
 	if plugin == null:
 		return 0
-	return plugin.call("androidGetModifiedTime", path)
+	var ms = plugin.call("androidGetModifiedTime", path)
+	return int(ms / 1000)
 
 ## Checks if a file exists
 static func file_exists(path: String) -> bool:

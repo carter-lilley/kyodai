@@ -12,7 +12,7 @@
 		"directories": {
 		  "windows": "{games_dir}/nds",
 		  "linux": "{games_dir}/nds",
-		  "android": "{games_dir}/nds"
+		  "android": "{app_data}/saves"
 		},
 		"extensions": [
           ".sav"

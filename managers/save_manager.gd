@@ -333,8 +333,9 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 
 ## Discovers the Eden profile ID from profiles.dat
 ## Reads the UUID from offset 0x10, reverses byte order, returns hex string
+## Returns Dictionary with "profile_id" (String) and "is_fallback" (bool)
 ## Caches result in memory for subsequent calls
-func _discover_eden_profile(emulator_dir: String) -> String:
+func _discover_eden_profile(emulator_dir: String) -> Dictionary:
 	var cache_key = "eden_" + emulator_dir
 	if _emulator_profile_cache.has(cache_key):
 		return _emulator_profile_cache[cache_key]
@@ -348,16 +349,18 @@ func _discover_eden_profile(emulator_dir: String) -> String:
 	
 	print("[SaveManager] _discover_eden_profile: reading " + profiles_path)
 	
+	var result = {"profile_id": "0000000000000000", "is_fallback": true}
+	
 	if not FileSystemManager.file_exists(profiles_path):
 		print("[SaveManager] _discover_eden_profile: profiles.dat not found, using zero profile")
-		_emulator_profile_cache[cache_key] = "0000000000000000"
-		return "0000000000000000"
+		_emulator_profile_cache[cache_key] = result
+		return result
 	
 	var data = FileSystemManager.read_file_bytes(profiles_path)
 	if data.size() < 0x20:
 		print("[SaveManager] _discover_eden_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
-		_emulator_profile_cache[cache_key] = "0000000000000000"
-		return "0000000000000000"
+		_emulator_profile_cache[cache_key] = result
+		return result
 	
 	# Extract 16 bytes from offset 0x10 and reverse byte order
 	var uuid_bytes = data.slice(0x10, 0x20)
@@ -373,8 +376,9 @@ func _discover_eden_profile(emulator_dir: String) -> String:
 	profile_id = profile_id.to_upper()
 	
 	print("[SaveManager] _discover_eden_profile: discovered profile " + profile_id)
-	_emulator_profile_cache[cache_key] = profile_id
-	return profile_id
+	result = {"profile_id": profile_id, "is_fallback": false}
+	_emulator_profile_cache[cache_key] = result
+	return result
 
 func discover_local_eden_save(directory: String, title_id: String, emulator_dir: String = "") -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
@@ -390,7 +394,8 @@ func discover_local_eden_save(directory: String, title_id: String, emulator_dir:
 	# Discover the active profile
 	var profile_id = "0000000000000000"
 	if emulator_dir != "":
-		profile_id = _discover_eden_profile(emulator_dir)
+		var profile_result = _discover_eden_profile(emulator_dir)
+		profile_id = profile_result.profile_id
 	
 	# Eden save structure: {base}/{user}/{profile}/{title_id}/
 	# Eden uses full TitleID (16 chars) for save folder names
@@ -779,9 +784,9 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 			return save_dir
 		"eden":
 			var emu_dir = LaunchManager._get_emulator_directory("eden")
-			var profile = _discover_eden_profile(emu_dir)
+			var profile_result = _discover_eden_profile(emu_dir)
 			# Eden uses full TitleID (16 chars) for save folder names
-			return FileSystemManager.join_paths(save_dir, "0000000000000000", profile, title_id)
+			return FileSystemManager.join_paths(save_dir, "0000000000000000", profile_result.profile_id, title_id)
 		"pcsx2":
 			return save_dir
 		"ppsspp":
@@ -1388,6 +1393,14 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 		if game.get_active_title_id() == "":
 			return
+		# Eden: abort sync if profile not resolved (first launch)
+		if emulator_id == "eden":
+			var emu_dir = LaunchManager._get_emulator_directory("eden")
+			var profile_result = _discover_eden_profile(emu_dir)
+			if profile_result.is_fallback:
+				print("[SaveManager] Auto-upload aborted: Eden profile not resolved (first launch?)")
+				NotificationManager.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", Notification.Type.WARNING)
+				return
 		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 	else:
 		var rom_name_no_ext = game.get_active_file_name().get_basename()
@@ -1607,6 +1620,16 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					if on_complete.is_valid():
 						on_complete.call()
 					return
+				# Eden: abort sync if profile not resolved (first launch)
+				if emulator_id == "eden":
+					var emu_dir = LaunchManager._get_emulator_directory("eden")
+					var profile_result = _discover_eden_profile(emu_dir)
+					if profile_result.is_fallback:
+						print("[SaveManager] Auto-download aborted: Eden profile not resolved (first launch?)")
+						NotificationManager.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", Notification.Type.WARNING)
+						if on_complete.is_valid():
+							on_complete.call()
+						return
 				local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 			else:
 				var rom_name_no_ext = game.get_active_file_name().get_basename()

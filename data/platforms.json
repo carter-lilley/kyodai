@@ -441,8 +441,8 @@
 		"default_emulator": "eden",
 		"firmware": {
 			"expected_files": [
-				"user/keys/prod.keys",
-				"user/keys/title.keys"
+				"keys/prod.keys",
+				"keys/title.keys"
 			]
 		}
 	},

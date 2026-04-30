@@ -56,7 +56,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/system",
-		  "android": "{emulator_dir}/system"
+		  "android": "/storage/emulated/0/RetroArch/system"
 		}
 	  }
 	}

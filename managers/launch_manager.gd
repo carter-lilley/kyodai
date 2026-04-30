@@ -1965,6 +1965,9 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	print("[LaunchManager] APK installer opened successfully")
 	print("[LaunchManager] User must complete installation in Android UI")
 	
+	# Show reminder on Android to open the app and grant permissions
+	_show_android_permissions_reminder(emulator_id)
+	
 	# DEBUG: Don't delete APK so we can check it
 	print("[LaunchManager] DEBUG: Keeping APK for inspection: " + apk_path)
 	# TODO: Re-enable deletion after debugging
@@ -4217,3 +4220,28 @@ func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
 	
 	print("[LaunchManager] shadPS4: _extract_shadps4_zip returning: " + str(completion_tracker.success))
 	return completion_tracker.success
+
+## Shows a reminder dialog on Android after APK installation
+## Prompts the user to open the newly installed emulator and grant permissions
+func _show_android_permissions_reminder(emulator_id: String) -> void:
+	# Only show on Android
+	if PlatformManager.get_platform_name().to_lower() != "android":
+		return
+	
+	var emulator = get_emulator(emulator_id)
+	var emulator_name = emulator.get("name", emulator_id)
+	
+	# Create reminder dialog
+	var dialog = AcceptDialog.new()
+	dialog.title = "Installation Reminder"
+	dialog.dialog_text = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
+	dialog.ok_button_text = "Got it"
+	dialog.min_size = Vector2(400, 150)
+	dialog.exclusive = true
+	dialog.unresizable = true
+	
+	# Add to scene tree and show
+	get_tree().root.add_child(dialog)
+	dialog.popup_centered()
+	
+	print("[LaunchManager] Shown Android permissions reminder for: " + emulator_name)
