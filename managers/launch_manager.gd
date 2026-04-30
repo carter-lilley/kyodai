@@ -946,18 +946,9 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var install_path = get_emulator_install_path(intent.emulator_id)
 		
 		# Convert paths to absolute system paths for OS.execute
-		# Always resolve to ABSOLUTE first to convert user:// to real paths
-		var global_install_path = FileSystemManager.resolve_path(install_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-		var global_rom_path = FileSystemManager.resolve_path(intent.rom_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-		
-		# Then convert to native paths if needed (PCSX2 on Windows needs backslashes)
-		if PlatformManager.is_windows():
-			if intent.platform_slug == "ps2" and intent.emulator_id == "pcsx2":
-				global_install_path = global_install_path.replace("/", "\\")
-				global_rom_path = global_rom_path.replace("/", "\\")
-			elif emulator.get("requires_native_paths", false):
-				global_install_path = global_install_path.replace("/", "\\")
-				global_rom_path = global_rom_path.replace("/", "\\")
+		# Use native path resolution for external tools (converts user:// and handles Windows backslashes)
+		var global_install_path = FileSystemManager.resolve_native_path(install_path)
+		var global_rom_path = FileSystemManager.resolve_native_path(intent.rom_path)
 		
 		# Build absolute core path
 		var install_dir = global_install_path.get_base_dir()
@@ -991,8 +982,8 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var desktop_rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
 		if intent.emulator_id.begins_with("rpcs3") and desktop_rpcs3_title_id != "":
 			# Check both disc and digital install locations
-			var disc_path: String = install_dir + "/games/" + desktop_rpcs3_title_id
-			var digital_path: String = install_dir + "/dev_hdd0/game/" + desktop_rpcs3_title_id
+			var disc_path: String = FileSystemManager.resolve_native_path(FileSystemManager.join_paths(install_dir, "games", desktop_rpcs3_title_id))
+			var digital_path: String = FileSystemManager.resolve_native_path(FileSystemManager.join_paths(install_dir, "dev_hdd0", "game", desktop_rpcs3_title_id))
 			
 			var game_path: String
 			if FileSystemManager.dir_exists(disc_path):
@@ -3882,7 +3873,8 @@ func _determine_ps3_game_format_with_7z(zip_path: String) -> String:
 		print("[LaunchManager] RPCS3: 7-Zip binary not available for format detection")
 		return "digital"
 	
-	var list_args = ["l", zip_path]
+	var native_zip_path = FileSystemManager.resolve_native_path(zip_path)
+	var list_args = ["l", native_zip_path]
 	var output = []
 	var exit_code = OS.execute(binary_path, list_args, output, true)
 	
@@ -3905,8 +3897,18 @@ func _determine_ps3_game_format_with_7z(zip_path: String) -> String:
 ## Follows the Vita3K pattern: extract TitleID first, check if installed, skip if present
 ## Extracts directly to games/ or dev_hdd0/game/ based on format detection - no temp directory
 func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
-	if game.get_active_title_id() != "":
-		return true
+	var existing_title_id = game.get_active_title_id()
+	if existing_title_id != "":
+		# TitleID exists, but verify game files are actually present
+		var emulator_dir = _get_emulator_directory("rpcs3")
+		var disc_path = FileSystemManager.join_paths(emulator_dir, "games", existing_title_id)
+		var digital_path = FileSystemManager.join_paths(emulator_dir, "dev_hdd0", "game", existing_title_id)
+		if _rpcs3_game_has_files(disc_path) or _rpcs3_game_has_files(digital_path):
+			print("[LaunchManager] RPCS3: Game already installed")
+			return true
+		else:
+			print("[LaunchManager] RPCS3: TitleID found but game files missing, will re-extract")
+	
 	print("[LaunchManager] RPCS3: _prepare_rpcs3_game called for: " + game.get_display_name())
 	
 	if not game or not intent:
@@ -3963,9 +3965,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Step 4: Determine final install location based on format
 	var install_path: String
 	if game_format == "disc":
-		install_path = emulator_dir + "/games/" + title_id
+		install_path = FileSystemManager.join_paths(emulator_dir, "games", title_id)
 	else:
-		install_path = emulator_dir + "/dev_hdd0/game/" + title_id
+		install_path = FileSystemManager.join_paths(emulator_dir, "dev_hdd0", "game", title_id)
 	
 	print("[LaunchManager] RPCS3: Install path: " + install_path)
 	
@@ -4012,6 +4014,16 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Step 8: Recursively flatten wrapper folders until we find game files
 	# Handles multiple nesting levels: "Tokyo Jungle/NPUA80523/..."
 	_flatten_rpcs3_wrappers(install_path)
+	
+	# Step 9: Verify game files actually exist after extraction
+	var has_param_sfo = FileSystemManager.file_exists(FileSystemManager.join_paths(install_path, "PARAM.SFO"))
+	var has_ps3_disc = FileSystemManager.file_exists(FileSystemManager.join_paths(install_path, "PS3_DISC.SFB"))
+	var has_ps3_game = FileSystemManager.dir_exists(FileSystemManager.join_paths(install_path, "PS3_GAME"))
+	
+	if not has_param_sfo and not has_ps3_disc and not has_ps3_game:
+		push_error("[LaunchManager] RPCS3: Game files missing after extraction at: " + install_path)
+		NotificationManager.show_notification("Failed to install PS3 game - files missing", Notification.Type.ERROR)
+		return false
 	
 	print("[LaunchManager] RPCS3: Game installed successfully at: " + install_path)
 	return true

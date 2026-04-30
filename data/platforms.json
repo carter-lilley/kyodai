@@ -277,7 +277,7 @@
 		"default_emulator": "rpcs3",
 		"firmware": {
 			"expected_files": [
-				"PS3UPDAT.PUP"
+				"dev_flash/vsh/etc/index.dat"
 			]
 		}
 	},
@@ -300,7 +300,7 @@
 		"default_emulator": "vita3k",
 		"firmware": {
 			"expected_files": [
-				"PSVUPDAT.PUP"
+				"vs0/vsh/shell/shell.self"
 			]
 		}
 	},

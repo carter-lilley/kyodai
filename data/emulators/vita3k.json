@@ -152,7 +152,7 @@
 		  "files": [
 			{
 			  "name": "config.yml",
-			  "content": "pref-path: .\\"
+			  "content": "---\ninitial-setup: true\npref-path: .\\"
 			}
 		  ],
 		  "validate": {
@@ -167,7 +167,7 @@
 		  "files": [
 			{
 			  "name": "config.yml",
-			  "content": "pref-path: ./"
+			  "content": "---\ninitial-setup: true\npref-path: ./"
 			}
 		  ],
 		  "validate": {

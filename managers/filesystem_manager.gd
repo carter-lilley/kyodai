@@ -167,6 +167,18 @@ static func resolve_path(path: String, options: Dictionary = {}) -> String:
 	
 	return result
 
+## Resolves a path to an absolute native path for external tools/processes
+## Combines ABSOLUTE resolution with platform-specific slash conversion
+## Windows: backslashes, Others: forward slashes
+static func resolve_native_path(path: String) -> String:
+	var resolved = resolve_path(path, {"format": PathFormat.ABSOLUTE})
+	if is_instance_valid(PlatformManager):
+		if PlatformManager.is_windows():
+			resolved = resolved.replace("/", "\\")
+	elif OS.get_name() == "Windows":
+		resolved = resolved.replace("/", "\\")
+	return resolved
+
 ## Resolves emulator paths with full wildcard support
 ## Handles {emulator_dir}, {app_data}, {games_dir}, and {core_name}
 ## This is the preferred method for resolving emulator-related paths
@@ -794,8 +806,10 @@ static func _extract_zip_with_7z(zip_path: String, extract_dir: String) -> bool:
 	
 	print("[FileSystemManager] Using 7-Zip fallback for ZIP extraction: " + binary_path)
 	
-	var abs_zip = ProjectSettings.globalize_path(zip_path)
-	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
+	var abs_zip = resolve_native_path(zip_path)
+	var abs_extract_dir = resolve_native_path(extract_dir)
+	
+	print("[FileSystemManager] 7-Zip extracting: " + abs_zip + " -> " + abs_extract_dir)
 	
 	# Use 7z x to extract with full paths
 	var output = []

@@ -4,9 +4,9 @@
 	"name": "shadPS4",
 	"platforms": [
       "ps4"
-	],
-	"requires_working_dir": true
+	]
   },
+  "requires_working_dir": true,
   "paths": {
 	"saves": {
 	  "_default": {

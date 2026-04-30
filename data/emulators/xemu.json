@@ -4,9 +4,9 @@
     "name": "Xemu",
     "platforms": [
       "xbox"
-    ],
-    "requires_working_dir": true
+    ]
   },
+  "requires_working_dir": true,
   "paths": {
     "saves": {
       "_default": {
