@@ -117,8 +117,8 @@ jobs:
     - name: Copy Binaries
       run: |
         mkdir -p bin/cso_reader/android
-        cp bin/src/cso_reader/build-android/cso_reader bin/cso_reader/android/cso_reader-arm64
-        cp bin/src/cso_reader/build-android-armv7/cso_reader bin/cso_reader/android/cso_reader-armv7
+        cp bin/src/cso_reader/build-android/cso_reader bin/cso_reader/android/cso_reader-arm64.bin
+        cp bin/src/cso_reader/build-android-armv7/cso_reader bin/cso_reader/android/cso_reader-armv7.bin
         chmod +x bin/cso_reader/android/*
     
     - name: Upload Artifact
@@ -148,8 +148,8 @@ jobs:
         cp artifacts/cso_reader-windows/cso_reader.exe bin/cso_reader/win/ || true
         cp artifacts/cso_reader-windows/cso_reader-arm64.exe bin/cso_reader/win/ || true
         cp artifacts/cso_reader-linux-x64/cso_reader bin/cso_reader/linux/ || true
-        cp artifacts/cso_reader-android/cso_reader-arm64 bin/cso_reader/android/ || true
-        cp artifacts/cso_reader-android/cso_reader-armv7 bin/cso_reader/android/ || true
+        cp artifacts/cso_reader-android/cso_reader-arm64.bin bin/cso_reader/android/ || true
+        cp artifacts/cso_reader-android/cso_reader-armv7.bin bin/cso_reader/android/ || true
         
         chmod +x bin/cso_reader/linux/cso_reader || true
         chmod +x bin/cso_reader/android/* || true

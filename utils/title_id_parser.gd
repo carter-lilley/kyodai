@@ -2,6 +2,9 @@
 ## Extracts game identifiers from ROM files for save sync purposes
 class_name TitleIDParser
 
+# Preload AndroidBinaryExtractor to ensure it's available when referenced
+const _AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd")
+
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -964,7 +967,8 @@ static func _get_chd_reader_path() -> String:
 	elif PlatformManager.is_macos():
 		return base_path + "macos/chd_reader"
 	elif PlatformManager.is_android():
-		return base_path + "android/chd_reader-arm64"
+		# Extract binary to internal storage on first use
+		return _AndroidBinaryExtractor.extract_binary(base_path + "android/chd_reader-arm64.bin", "chd_reader")
 	else:
 		push_error("[TitleIDParser] Unsupported platform for CHD reading")
 		return ""
@@ -1624,7 +1628,8 @@ static func _get_cso_reader_path() -> String:
 	elif PlatformManager.is_macos():
 		return base_path + "macos/cso_reader"
 	elif PlatformManager.is_android():
-		return base_path + "android/cso_reader-arm64"
+		# Extract binary to internal storage on first use
+		return _AndroidBinaryExtractor.extract_binary(base_path + "android/cso_reader-arm64.bin", "cso_reader")
 	else:
 		push_error("[TitleIDParser] Unsupported platform for CSO reading")
 		return ""

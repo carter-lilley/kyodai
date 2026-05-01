@@ -1023,6 +1023,36 @@ public class PackageCheckerPlugin extends GodotPlugin {
     }
     
     /**
+     * Makes a file executable (chmod +x).
+     * Required for running native binaries extracted from APK assets.
+     */
+    @UsedByGodot
+    public boolean chmodExecutable(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        
+        try {
+            File file = new File(path);
+            if (!file.exists()) {
+                Log.w(TAG, "chmodExecutable: file does not exist: " + path);
+                return false;
+            }
+            
+            boolean success = file.setExecutable(true, false);
+            if (success) {
+                Log.d(TAG, "chmodExecutable: made executable: " + path);
+            } else {
+                Log.w(TAG, "chmodExecutable: failed to make executable: " + path);
+            }
+            return success;
+        } catch (Exception e) {
+            Log.e(TAG, "chmodExecutable error: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
      * Launches an Android intent with the specified parameters.
      * Uses FileProvider for content:// URIs when needed.
      */

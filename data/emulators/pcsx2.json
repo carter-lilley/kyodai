@@ -213,11 +213,11 @@
 		"android": {
 		  "action_type": "create_folders",
 		  "folders": [
-            "memcards/main.ps2"
+            "{app_data}/memcards/main.ps2"
 		  ],
 		  "validate": {
 			"action_type": "folder_exists",
-			"path": "memcards/main.ps2"
+			"path": "{app_data}/memcards/main.ps2"
 		  }
 		}
 	  }
@@ -251,7 +251,7 @@
 		  "validate": {
 			"action_type": "files_exist",
 			"files": [
-              "memcards/main.ps2/_pcsx2_superblock"
+              "{app_data}/memcards/main.ps2/_pcsx2_superblock"
 			]
 		  }
 		}

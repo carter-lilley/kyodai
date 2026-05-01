@@ -110,6 +110,10 @@ func _ready():
 		second_viewport_container.focus_mode = Control.FOCUS_NONE
 		print("[Main] Set SecondViewportContainer focus_mode to FOCUS_NONE")
 	
+	# Extract native binaries on Android (non-blocking, happens in background)
+	if PlatformManager.is_android():
+		AndroidBinaryExtractor.extract_all_binaries()
+	
 	# Check if first-run wizard needs to be shown
 	_show_oobe_wizard_if_needed()
 

@@ -1520,20 +1520,21 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	if not is_actually_installed:
 		NotificationManager.show_notification("Setting up " + emulator_name + "...", Notification.Type.INFO)
 		
+		# Connect signal handler BEFORE starting download (signal may fire synchronously during install)
+		if not emulator_extraction_completed.is_connected(_on_emulator_installed_for_launch):
+			emulator_extraction_completed.connect(_on_emulator_installed_for_launch)
+		
+		# Store this launch as pending - it will be retried when installation completes
+		_pending_launches[emulator_id] = game
+		
 		# Queue download/install - this will handle extraction and post-install
 		var download_success = download_emulator(emulator_id)
 		
 		if download_success:
 			NotificationManager.show_notification(emulator_name + " downloading... Will auto-launch when ready.", Notification.Type.INFO)
-			
-			# Store this launch as pending - it will be retried when installation completes
-			_pending_launches[emulator_id] = game
-			
-			# Connect to extraction completion signal if not already connected
-			if not emulator_extraction_completed.is_connected(_on_emulator_installed_for_launch):
-				emulator_extraction_completed.connect(_on_emulator_installed_for_launch)
 		else:
 			NotificationManager.show_notification("Failed to queue " + emulator_name + " download", Notification.Type.ERROR)
+			_pending_launches.erase(emulator_id)
 		return
 	
 	# Emulator is installed - check firmware
@@ -2753,7 +2754,16 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 		push_error("[LaunchManager] No path specified for create_pcsx2_superblock step: " + step_name)
 		return false
 
-	var memcard_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), path)
+	# Use the configured save directory as the base path, which properly resolves
+	# to app_data on Android and emulator_dir on desktop
+	var save_dir = SaveManager.resolve_save_directory(emulator_id, "ps2")
+	if save_dir == "":
+		push_error("[LaunchManager] No save directory configured for " + emulator_id)
+		return false
+	
+	# The save directory already includes the memcards path from the emulator config,
+	# so we use it directly without appending the step path again
+	var memcard_path = save_dir.rstrip("/")
 	
 	var success = SaveManager.create_pcsx2_superblock(memcard_path)
 	if not success:

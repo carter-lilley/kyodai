@@ -114,8 +114,8 @@ jobs:
     - name: Copy Binaries
       run: |
         mkdir -p bin/libchdr/android
-        cp bin/src/libchdr/build-android/chd_reader bin/libchdr/android/chd_reader-arm64
-        cp bin/src/libchdr/build-android-armv7/chd_reader bin/libchdr/android/chd_reader-armv7
+        cp bin/src/libchdr/build-android/chd_reader bin/libchdr/android/chd_reader-arm64.bin
+        cp bin/src/libchdr/build-android-armv7/chd_reader bin/libchdr/android/chd_reader-armv7.bin
         chmod +x bin/libchdr/android/*
     
     - name: Upload Artifacts
@@ -139,8 +139,8 @@ jobs:
         mkdir release
         cp artifacts/chd_reader-windows-x64/chd_reader.exe release/chd_reader-windows-x64.exe
         cp artifacts/chd_reader-linux-x64/chd_reader release/chd_reader-linux-x64
-        cp artifacts/chd_reader-android/chd_reader-arm64 release/chd_reader-android-arm64
-        cp artifacts/chd_reader-android/chd_reader-armv7 release/chd_reader-android-armv7
+        cp artifacts/chd_reader-android/chd_reader-arm64.bin release/chd_reader-android-arm64.bin
+        cp artifacts/chd_reader-android/chd_reader-armv7.bin release/chd_reader-android-armv7.bin
         chmod +x release/*
     
     - name: Create Release
