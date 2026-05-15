@@ -26,6 +26,8 @@ func _ready():
 func initialize(container_state: EffectContainerState, settings: Dictionary) -> void:
 	_container_state = container_state
 	_settings = settings.duplicate()
+	if material == null:
+		material = ShaderMaterial.new()
 	_setup_shader()
 	_apply_settings()
 	_connect_container_state_signals()

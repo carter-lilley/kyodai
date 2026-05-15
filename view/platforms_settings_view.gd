@@ -6,6 +6,9 @@ var _platforms_container: VBoxContainer
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
 var _scroll_container: ScrollContainer
+var _cards_hbox: HBoxContainer
+var _cards_left: VBoxContainer
+var _cards_right: VBoxContainer
 
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
@@ -156,14 +159,37 @@ func _build_view():
 	var spacer4 = Control.new()
 	spacer4.custom_minimum_size = Vector2(0, 20)
 	_platforms_container.add_child(spacer4)
+	
+	# Two-column card layout
+	_cards_hbox = HBoxContainer.new()
+	_cards_hbox.name = "CardsHBox"
+	_cards_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cards_hbox.add_theme_constant_override("separation", 10)
+	_platforms_container.add_child(_cards_hbox)
+	
+	_cards_left = VBoxContainer.new()
+	_cards_left.name = "CardsLeft"
+	_cards_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cards_left.add_theme_constant_override("separation", 10)
+	_cards_hbox.add_child(_cards_left)
+	
+	_cards_right = VBoxContainer.new()
+	_cards_right.name = "CardsRight"
+	_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cards_right.add_theme_constant_override("separation", 10)
+	_cards_hbox.add_child(_cards_right)
 
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "CheckUpdatesButton", "FoldCoversContainer", "HideNoCoversContainer", "FoldRommSiblingsContainer"]:
+		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "CheckUpdatesButton", "FoldCoversContainer", "HideNoCoversContainer", "FoldRommSiblingsContainer", "CardsHBox"]:
 			continue
-		if child is PlatformCard or child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
+		if child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
+	for child in _cards_left.get_children():
+		child.queue_free()
+	for child in _cards_right.get_children():
+		child.queue_free()
 	_platform_cards.clear()
 	
 	# Show loading indicator
@@ -251,7 +277,11 @@ func _fetch_platforms():
 			
 			# Create platform card with precomputed validation results
 			var card = _create_platform_card(slug, name, romm_id, icon_url, enabled_platforms, precomputed_status)
-			_platforms_container.add_child(card)
+			# Distribute cards across two columns
+			if _platform_cards.size() % 2 == 0:
+				_cards_left.add_child(card)
+			else:
+				_cards_right.add_child(card)
 			_platform_cards[slug] = card
 		
 		# Remove platforms that no longer exist on RomM
@@ -331,11 +361,10 @@ func _load_platforms_from_database():
 	var enabled_platforms = _get_enabled_platforms()
 	
 	# Clear existing cards
-	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "CheckUpdatesButton"]:
-			continue
-		if child is PlatformCard:
-			child.queue_free()
+	for child in _cards_left.get_children():
+		child.queue_free()
+	for child in _cards_right.get_children():
+		child.queue_free()
 	_platform_cards.clear()
 	
 	for platform in platforms:
@@ -350,14 +379,17 @@ func _load_platforms_from_database():
 		var card = _create_platform_card(slug, name, 0, icon_url, enabled_platforms)
 		card.disabled = true
 		card.tooltip_text = "Connect to RomM to configure this platform"
-		_platforms_container.add_child(card)
+		if _platform_cards.size() % 2 == 0:
+			_cards_left.add_child(card)
+		else:
+			_cards_right.add_child(card)
 		_platform_cards[slug] = card
 	
 	if platforms.size() == 0:
 		var no_platforms_label = Label.new()
 		no_platforms_label.name = "NoPlatformsLabel"
 		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
-		_platforms_container.add_child(no_platforms_label)
+		_cards_left.add_child(no_platforms_label)
 
 func _remove_deleted_platforms(current_slugs: Array[String]):
 	var enabled_platforms = _get_enabled_platforms()

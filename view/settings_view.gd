@@ -385,9 +385,7 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.library_focus_scale != b.library_focus_scale:
 		return false
-	if a.library_card_alignment != b.library_card_alignment:
-		return false
-	if a.library_navigation_bar_position != b.library_navigation_bar_position:
+	if a.library_navigation_type != b.library_navigation_type:
 		return false
 	if a.library_grid_padding != b.library_grid_padding:
 		return false
@@ -396,10 +394,6 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	if a.library_grid_margin_y != b.library_grid_margin_y:
 		return false
 	if a.library_card_zoom != b.library_card_zoom:
-		return false
-	if a.library_bar_color != b.library_bar_color:
-		return false
-	if a.library_icon_color != b.library_icon_color:
 		return false
 	if a.library_show_title_mode != b.library_show_title_mode:
 		return false
@@ -437,9 +431,6 @@ func _refresh_all_settings_ui() -> void:
 		
 		if general_settings.size() > 0:
 			_library_general_menu.build_controls_from_settingsvars(general_settings)
-			var layout_mode_setting = SettingsManager.get_setting("library_layout_mode")
-			if layout_mode_setting:
-				_update_alignment_control_visibility(layout_mode_setting.value)
 	
 	if _library_effect_dropdown:
 		var current_effect_id = _library_appearance_config.get("effect_id", "xmb")
@@ -686,23 +677,6 @@ func _update_connection_status(indicator: Indicator):
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	SettingsManager.set_setting(value, setting)
-	if setting.property_name == "library_layout_mode":
-		_update_alignment_control_visibility(value)
-
-func _update_alignment_control_visibility(layout_mode: int) -> void:
-	if not _library_general_menu:
-		return
-	var control = _library_general_menu.controls.get("library_card_alignment")
-	if control:
-		var show = layout_mode == 2 or layout_mode == 3
-		control.visible = show
-		# Hide the label sibling that was added immediately before this control
-		var parent = control.get_parent()
-		var control_idx = control.get_index()
-		if control_idx > 0:
-			var label = parent.get_child(control_idx - 1)
-			if label is Label:
-				label.visible = show
 
 func _on_any_setting_changed(value: Variant, setting: SettingsVar):
 	# Check if settings now deviate from loaded preset

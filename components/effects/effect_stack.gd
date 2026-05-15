@@ -6,6 +6,7 @@ signal effects_changed
 var _container_state: EffectContainerState
 var _effects: Dictionary = {}  # effect_id -> EffectBase instance
 var _effect_configs: Array = []  # Array of {effect_id, settings} dictionaries
+var _context: String = "base_card"
 
 # Effect factory - maps effect_id to script path
 const EFFECT_REGISTRY: Dictionary = {
@@ -41,9 +42,10 @@ func _init(container_state: EffectContainerState = null):
 	else:
 		_container_state = EffectContainerState.new()
 
-func initialize(container_state: EffectContainerState, effect_configs: Array):
+func initialize(container_state: EffectContainerState, effect_configs: Array, context: String = "base_card"):
 	_container_state = container_state
 	_effect_configs = effect_configs.duplicate(true)
+	_context = context
 	_rebuild_effects()
 
 func update_state(container_state: EffectContainerState):
@@ -109,6 +111,10 @@ func _rebuild_effects():
 				# Create new effect
 				var effect = _create_effect(effect_id)
 				if effect:
+					# Skip effects that are not allowed in the current context
+					var allowed_contexts = effect.get_allowed_contexts()
+					if not allowed_contexts.has(_context):
+						continue
 					_effects[effect_id] = effect
 					add_child(effect)
 					effect.initialize(_container_state, settings)

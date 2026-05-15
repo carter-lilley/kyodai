@@ -15,31 +15,26 @@ signal batch_progress_changed(progress: float)
 		if debug_mode != value:
 			debug_mode = value
 			_update_debug_mode()
-@export var vertical: bool = true:
+enum ViewMode { GRID, LIST, CAROUSEL }
+
+@export var view_mode: ViewMode = ViewMode.GRID:
 	set(value):
-		if vertical != value:
-			vertical = value
-			if _flow_container:
-				_flow_container.vertical = not vertical
-			if _scroll_container:
-				_scroll_container.vertical = vertical
-			_recalculate_layout()
-			_refresh_buffer()
+		if view_mode != value:
+			view_mode = value
+			_update_view_mode()
 
-const BASE_CARD_WIDTH: float = 202.0
-const BASE_CARD_HEIGHT: float = 270.0
+# Backwards-compat read-only; derived from view_mode
+var vertical: bool = true:
+	get:
+		return view_mode != ViewMode.CAROUSEL
 
-# Grid separation (padding) - loaded from settings, defaults to 10
-var grid_separation: int = 10
+const BASE_CARD_WIDTH_DP: float = 202.0
+const BASE_CARD_HEIGHT_DP: float = 270.0
+const BASE_LIST_HEIGHT_DP: float = 120.0
+const BASE_CAROUSEL_WIDTH_DP: float = 280.0
 
-# If > 0, forces _get_items_per_line() to return this value.
-# Used for single-row (vertical=false) and single-column (vertical=true) layouts.
-var force_items_per_line: int = 0:
-	set(value):
-		if force_items_per_line != value:
-			force_items_per_line = value
-			_recalculate_layout()
-			_refresh_buffer()
+# Grid separation (padding) - loaded from settings, defaults to 10 DP
+var grid_separation: int = int(M3Units.dp(10))
 
 # Scale factor applied when a card is focused. Layout math divides available space by this
 # so that the focused card (normal size * focus_scale) always fits without clipping.
@@ -49,13 +44,6 @@ var focus_scale: float = 1.08:
 			focus_scale = maxf(value, 1.0)
 			_recalculate_layout()
 			_refresh_buffer()
-
-# Card alignment for single row/column modes: 0=Top/Left, 1=Center, 2=Bottom/Right
-var card_alignment: int = 0:
-	set(value):
-		if card_alignment != value:
-			card_alignment = clampi(value, 0, 2)
-			_recalculate_layout()
 
 # Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
@@ -78,7 +66,7 @@ var zoom: float = 1.0:
 		push_warning("VirtualScrollGridContainer: Cannot set zoom directly. Set target_card_width_ratio instead.")
 
 # Unified size vocabulary - single source of truth
-var base_card_size: Vector2 = Vector2(BASE_CARD_WIDTH, BASE_CARD_HEIGHT)
+var base_card_size: Vector2 = Vector2(BASE_CARD_WIDTH_DP, BASE_CARD_HEIGHT_DP)
 var card_size: Vector2 = Vector2(212.0, 280.0)
 var focused_card_size: Vector2 = Vector2(228.96, 302.4)
 
@@ -137,6 +125,41 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_PARENTED:
 		_find_parent_margin_container()
 
+func _update_view_mode() -> void:
+	if not _flow_container or not _scroll_container:
+		return
+	match view_mode:
+		ViewMode.GRID, ViewMode.LIST:
+			_scroll_container.vertical = true
+			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+			_flow_container.vertical = false
+		ViewMode.CAROUSEL:
+			_scroll_container.vertical = false
+			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+			_flow_container.vertical = true
+	_update_flow_container_flags()
+	_recalculate_layout()
+	# Reset scroll so cards rebuilt from index 0 are visible
+	_scroll_container.scroll_vertical = 0
+	_scroll_container.scroll_horizontal = 0
+	_refresh_buffer()
+
+func _update_flow_container_flags() -> void:
+	if not _flow_container:
+		return
+	match view_mode:
+		ViewMode.GRID:
+			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ViewMode.LIST:
+			_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ViewMode.CAROUSEL:
+			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
 func _find_parent_margin_container() -> void:
 	var parent = get_parent()
 	while parent != null:
@@ -156,9 +179,7 @@ func _get_available_size() -> Vector2:
 	return Vector2(max(available.x, 1.0), max(available.y, 1.0))
 
 func _get_normal_stride() -> float:
-	# In single row/column mode, every card reserves the focused slot size,
-	# so the normal stride must match the actual physical layout.
-	if force_items_per_line > 0:
+	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
 		return _get_focused_stride()
 	return (card_size.y + grid_separation) if vertical else (card_size.x + grid_separation)
 
@@ -169,7 +190,7 @@ func _get_slot_position_for_index(idx: int) -> float:
 	"""Returns the scroll-axis pixel position where slot `idx` begins."""
 	var items_per_line = _get_items_per_line()
 	var line = idx / items_per_line
-	if force_items_per_line == 0 or _focused_virtual_index < 0:
+	if view_mode != ViewMode.GRID or _focused_virtual_index < 0:
 		return line * _get_normal_stride()
 	var normal_s = _get_normal_stride()
 	var focused_s = _get_focused_stride()
@@ -193,7 +214,6 @@ func _ready():
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
-	call_deferred("_update_card_alignment_from_settings")
 	call_deferred("_recalculate_layout")
 	
 	# Connect to settings saved signal to refresh layout when card orientation changes
@@ -203,7 +223,6 @@ func _ready():
 func _on_settings_saved():
 	# Refresh dimensions when settings change (e.g., card orientation)
 	_update_focus_scale_from_settings()
-	_update_card_alignment_from_settings()
 	refresh_dimensions()
 
 func _on_resized():
@@ -218,9 +237,9 @@ func _update_grid_separation_from_settings() -> void:
 		return
 	var setting = SettingsManager.get_setting("library_grid_padding")
 	if setting and (setting.value is int or setting.value is float):
-		grid_separation = int(setting.value)
+		grid_separation = int(M3Units.dp(float(setting.value)))
 	else:
-		grid_separation = 10
+		grid_separation = int(M3Units.dp(10))
 	
 	# Apply to FlowContainer if it exists
 	if _flow_container:
@@ -236,41 +255,35 @@ func _update_focus_scale_from_settings() -> void:
 	else:
 		focus_scale = 1.08
 
-func _update_card_alignment_from_settings() -> void:
-	if not SettingsManager:
-		return
-	var setting = SettingsManager.get_setting("library_card_alignment")
-	if setting and (setting.value is int or setting.value is float):
-		card_alignment = int(setting.value)
-	else:
-		card_alignment = 0
+
 
 func _calculate_zoom() -> float:
-	var base_dims = _get_base_dimensions()
+	var base_dims = _get_base_dimensions_for_mode()
+	var available = _get_available_size()
+	var ratio = clampf(target_card_width_ratio, 0.05, _calculate_max_ratio())
 	
-	if force_items_per_line > 0:
-		var available = _get_available_size()
-		var ratio = clampf(target_card_width_ratio, 0.05, _calculate_max_ratio())
-		if vertical:
-			return (available.x * ratio) / (base_dims.x * focus_scale)
-		else:
+	match view_mode:
+		ViewMode.GRID:
+			var viewport_area = size.x * size.y
+			var base_area = base_dims.x * base_dims.y
+			var target_card_area = viewport_area * ratio * ratio
+			return sqrt(target_card_area / base_area)
+		ViewMode.LIST:
 			return (available.y * ratio) / (base_dims.y * focus_scale)
-	
-	var viewport_area = size.x * size.y
-	var base_area = base_dims.x * base_dims.y
-	var target_card_area = viewport_area * target_card_width_ratio * target_card_width_ratio
-	return sqrt(target_card_area / base_area)
+		ViewMode.CAROUSEL:
+			return (available.x * ratio) / (base_dims.x * focus_scale)
+	return 1.0
 
 func _calculate_max_ratio() -> float:
 	if size.x <= 0 or size.y <= 0:
 		return 0.5
 	
-	var base_dims = _get_base_dimensions()
-	var available = _get_available_size()
+	var base_dims = _get_base_dimensions_for_mode()
 	
-	if force_items_per_line > 0:
+	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
 		return 1.0
 	
+	var available = _get_available_size()
 	available.x /= focus_scale
 	available.y /= focus_scale
 	
@@ -287,10 +300,10 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	if size.x <= 0 or size.y <= 0:
 		return desired_ratio
 	
-	if force_items_per_line > 0:
+	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
 		return clampf(desired_ratio, 0.05, _calculate_max_ratio())
 	
-	var base_dims = _get_base_dimensions()
+	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
 	available.x /= focus_scale
 	available.y /= focus_scale
@@ -339,10 +352,19 @@ func _recalculate_layout():
 		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
 		return
 	
-	var base_dims = _get_base_dimensions()
+	var base_dims = _get_base_dimensions_for_mode()
 	base_card_size = base_dims
-	card_size = base_dims * current_zoom
-	focused_card_size = card_size * focus_scale
+	
+	match view_mode:
+		ViewMode.GRID:
+			card_size = base_dims * current_zoom
+			focused_card_size = card_size * focus_scale
+		ViewMode.LIST:
+			card_size = Vector2(0.0, base_dims.y * current_zoom)
+			focused_card_size = Vector2(0.0, card_size.y * focus_scale)
+		ViewMode.CAROUSEL:
+			card_size = Vector2(base_dims.x * current_zoom, 0.0)
+			focused_card_size = Vector2(card_size.x * focus_scale, 0.0)
 	
 	_flow_container.add_theme_constant_override("h_separation", grid_separation)
 	_flow_container.add_theme_constant_override("v_separation", grid_separation)
@@ -361,40 +383,32 @@ func _recalculate_layout():
 			if is_instance_valid(card) and card.has_method("set_card_zoom"):
 				card.set_card_zoom(current_zoom)
 	
-	var overlap = (force_items_per_line == 0)
 	for card in _active_cards:
-		if is_instance_valid(card) and "focus_overlap" in card:
-			if card.focus_overlap != overlap:
-				card.focus_overlap = overlap
-				if card.has_method("restore_focus_animation") and card.get("_is_focused") == true:
-					card.restore_focus_animation()
-	
-	var offset = _get_alignment_offset()
-	for card in _active_cards:
-		if is_instance_valid(card) and card.has_method("set_alignment_offset"):
-			card.set_alignment_offset(offset)
-
-func _get_alignment_offset() -> Vector2:
-	var offset = Vector2.ZERO
-	if force_items_per_line > 0 and card_alignment > 0:
-		var factor = float(card_alignment) / 2.0
-		if vertical:
-			offset.x = card_size.x * (focus_scale - 1.0) * factor
-		else:
-			offset.y = card_size.y * (focus_scale - 1.0) * factor
-	return offset
+		if is_instance_valid(card) and "focus_scale_enabled" in card:
+			card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+		_configure_card_size_flags(card)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
 		return 1
-	if force_items_per_line > 0:
-		return force_items_per_line
+	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
+		return 1
 	
 	var available = _get_available_size()
 	if vertical:
 		return max(1, int(available.x / item_width))
 	else:
 		return max(1, int(available.y / item_height))
+
+func _get_base_dimensions_for_mode() -> Vector2:
+	match view_mode:
+		ViewMode.GRID:
+			return _get_base_dimensions()
+		ViewMode.LIST:
+			return Vector2(0.0, BASE_LIST_HEIGHT_DP)
+		ViewMode.CAROUSEL:
+			return Vector2(BASE_CAROUSEL_WIDTH_DP, 0.0)
+	return _get_base_dimensions()
 
 func _get_visible_count() -> int:
 	var items_per_line = _get_items_per_line()
@@ -443,9 +457,7 @@ func _setup_ui():
 	
 	_flow_container = FlowContainer.new()
 	_flow_container.vertical = not vertical
-	# FlowContainer shrinks to fit its content (active cards only)
-	_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_update_flow_container_flags()
 	_flow_container.add_theme_constant_override("h_separation", grid_separation)
 	_flow_container.add_theme_constant_override("v_separation", grid_separation)
 	_center_container.add_child(_flow_container)
@@ -564,22 +576,22 @@ func set_total_count(count: int, preserve_cache: bool = false):
 func _update_layout():
 	var items_per_line = _get_items_per_line()
 	
-	if vertical:
-		if force_items_per_line > 0:
-			_flow_container.custom_minimum_size.x = focused_card_size.x
-		else:
-			var row_width = items_per_line * card_size.x
-			if items_per_line > 1:
-				row_width += (items_per_line - 1) * grid_separation
-			_flow_container.custom_minimum_size.x = max(row_width, 0.0)
-	else:
-		if force_items_per_line > 0:
-			_flow_container.custom_minimum_size.y = focused_card_size.y
-		else:
-			var col_height = items_per_line * card_size.y
-			if items_per_line > 1:
-				col_height += (items_per_line - 1) * grid_separation
-			_flow_container.custom_minimum_size.y = max(col_height, 0.0)
+	match view_mode:
+		ViewMode.GRID:
+			if vertical:
+				var row_width = items_per_line * card_size.x
+				if items_per_line > 1:
+					row_width += (items_per_line - 1) * grid_separation
+				_flow_container.custom_minimum_size.x = max(row_width, 0.0)
+			else:
+				var col_height = items_per_line * card_size.y
+				if items_per_line > 1:
+					col_height += (items_per_line - 1) * grid_separation
+				_flow_container.custom_minimum_size.y = max(col_height, 0.0)
+		ViewMode.LIST:
+			_flow_container.custom_minimum_size.x = 0
+		ViewMode.CAROUSEL:
+			_flow_container.custom_minimum_size.y = 0
 
 func _initial_load():
 	if size.x <= 0 or size.y <= 0:
@@ -607,8 +619,11 @@ func _initial_load():
 		var card = _acquire_card()
 		if card:
 			card.set_meta("virtual_index", i)
+			if "focus_scale_enabled" in card:
+				card.focus_scale_enabled = (view_mode == ViewMode.GRID)
 			_active_cards.append(card)
 			_flow_container.add_child(card)
+			_configure_card_size_flags(card)
 			if card.has_method("refresh_settings"):
 				card.refresh_settings()
 			item_created.emit(card, i)
@@ -791,24 +806,44 @@ func _recycle_card_at_index(index: int):
 		
 		_card_pool.append(card)
 
+func _configure_card_size_flags(card: Control) -> void:
+	if not card is M3Card:
+		return
+	
+	match view_mode:
+		ViewMode.GRID:
+			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
+			card.custom_minimum_size = card_size
+			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ViewMode.LIST:
+			card.card_layout_mode = M3Card.LayoutMode.HORIZONTAL
+			# FlowContainer doesn't expand children, so set width to viewport size
+			card.custom_minimum_size = Vector2(size.x, focused_card_size.y)
+			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ViewMode.CAROUSEL:
+			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
+			# FlowContainer doesn't expand children, so set height to viewport size
+			card.custom_minimum_size = Vector2(focused_card_size.x, size.y)
+			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
 func _add_card_at_end(virtual_index: int):
 	var card = _acquire_card()
 	if not card:
 		return
 	
 	card.set_meta("virtual_index", virtual_index)
-	if "focus_overlap" in card:
-		card.focus_overlap = (force_items_per_line == 0)
+	if "focus_scale_enabled" in card:
+		card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+	_configure_card_size_flags(card)
 	_active_cards.append(card)
 	_flow_container.add_child(card)
 	
 	# Fresh pool cards need zoom set after entering the tree (so @onready vars initialize)
 	if card.has_method("set_card_zoom"):
 		card.set_card_zoom(_calculate_zoom())
-	
-	# Apply alignment offset for single row/column modes
-	if card.has_method("set_alignment_offset"):
-		card.set_alignment_offset(_get_alignment_offset())
 	
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
@@ -833,19 +868,16 @@ func _add_card_at_start(virtual_index: int):
 		return
 	
 	card.set_meta("virtual_index", virtual_index)
-	if "focus_overlap" in card:
-		card.focus_overlap = (force_items_per_line == 0)
+	if "focus_scale_enabled" in card:
+		card.focus_scale_enabled = (view_mode == ViewMode.GRID)
 	_active_cards.insert(0, card)
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
+	_configure_card_size_flags(card)
 	
 	# Fresh pool cards need zoom set after entering the tree (so @onready vars initialize)
 	if card.has_method("set_card_zoom"):
 		card.set_card_zoom(_calculate_zoom())
-	
-	# Apply alignment offset for single row/column modes
-	if card.has_method("set_alignment_offset"):
-		card.set_alignment_offset(_get_alignment_offset())
 	
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
@@ -1397,6 +1429,9 @@ func _initial_load_from_increment():
 		var card = _acquire_card()
 		if card:
 			card.set_meta("virtual_index", i)
+			if "focus_scale_enabled" in card:
+				card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+			_configure_card_size_flags(card)
 			_active_cards.append(card)
 			_flow_container.add_child(card)
 			

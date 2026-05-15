@@ -1,0 +1,461 @@
+[gd_scene format=3 uid="uid://dhh8vxax0sdmb"]
+
+[ext_resource type="Script" uid="uid://cvgbxtf1hrqqc" path="res://addons/m3/components/M3Card.gd" id="1_abc12"]
+[ext_resource type="Script" uid="uid://bn6fms64k5kbn" path="res://addons/m3/examples/card_test.gd" id="2_def34"]
+[ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="2_u78jb"]
+[ext_resource type="Script" uid="uid://ca1nbgxeetvm3" path="res://addons/m3/components/M3IconButton.gd" id="3_u78jb"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_u78jb"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.9523137, 0.9306667, 0.9678431, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_p1jwn"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_78uh7"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.89903057, 0.8778604, 0.9152, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bf2hh"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.45160785, 0.36862746, 0.6716863, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ojfrw"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rox7l"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.9523137, 0.9306667, 0.9678431, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_xjrp1"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.9523137, 0.9306667, 0.9678431, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_2ge25"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_kd8es"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.89903057, 0.8778604, 0.9152, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v6g0a"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.45160785, 0.36862746, 0.6716863, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rrteg"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_t44dt"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.9523137, 0.9306667, 0.9678431, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1mnbw"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.9523137, 0.9306667, 0.9678431, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bosxq"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_qhwp0"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.89903057, 0.8778604, 0.9152, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bcf2e"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.45160785, 0.36862746, 0.6716863, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ni87a"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vpbir"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.9523137, 0.9306667, 0.9678431, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ffp3u"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.38431373, 0.35686275, 0.44313726, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yg5fu"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.4581961, 0.43403924, 0.5099608, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_inugg"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.43356863, 0.40831372, 0.48768628, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cr84h"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0nait"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_mmi41"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.38431373, 0.35686275, 0.44313726, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(1, 1, 1, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_8i2co"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_tx2pa"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_x7uak"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_rq8af"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_n3pw5"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_mjvek"]
+
+[node name="CardTest" type="Control" unique_id=1409644243]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_def34")
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=225997336]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=1458706851]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="HBoxContainer" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=1155915391]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=354363297]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 24
+text = "M3 Card Test"
+
+[node name="M3ButtonGroup" type="HBoxContainer" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=1401778888]
+layout_mode = 2
+theme_override_constants/separation = 0
+script = ExtResource("2_u78jb")
+mode = 1
+shape = 0
+metadata/_custom_type_script = "uid://dc5stkkoubv5o"
+
+[node name="Grid" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer/M3ButtonGroup" unique_id=376662358]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
+theme_override_font_sizes/font_size = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_u78jb")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_u78jb")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_p1jwn")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_p1jwn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_78uh7")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_78uh7")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_bf2hh")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_bf2hh")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_ojfrw")
+theme_override_styles/focus = SubResource("StyleBoxFlat_rox7l")
+toggle_mode = true
+button_pressed = true
+script = ExtResource("3_u78jb")
+icon_button_size = 1
+icon_button_variant = 1
+button_type = 1
+icon_name = "view-grid"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+
+[node name="List" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer/M3ButtonGroup" unique_id=82708387]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+theme_override_colors/font_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_focus_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_hover_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_hover_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
+theme_override_font_sizes/font_size = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_xjrp1")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_xjrp1")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_2ge25")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_2ge25")
+theme_override_styles/hover = SubResource("StyleBoxFlat_kd8es")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_kd8es")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_v6g0a")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_v6g0a")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_rrteg")
+theme_override_styles/focus = SubResource("StyleBoxFlat_t44dt")
+toggle_mode = true
+script = ExtResource("3_u78jb")
+icon_button_size = 1
+icon_button_variant = 1
+button_variant = 0
+button_type = 1
+icon_name = "view-list"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+
+[node name="Carosel" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer/M3ButtonGroup" unique_id=1597157644]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+theme_override_colors/font_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_focus_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_hover_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_hover_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
+theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
+theme_override_font_sizes/font_size = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_1mnbw")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_1mnbw")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_bosxq")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_bosxq")
+theme_override_styles/hover = SubResource("StyleBoxFlat_qhwp0")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_qhwp0")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_bcf2e")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_bcf2e")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_ni87a")
+theme_override_styles/focus = SubResource("StyleBoxFlat_vpbir")
+toggle_mode = true
+script = ExtResource("3_u78jb")
+icon_button_size = 1
+icon_button_variant = 1
+button_type = 1
+icon_name = "view-carousel"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+
+[node name="M3IconButton" type="Button" parent="MarginContainer/VBoxContainer/HBoxContainer" unique_id=1408717296]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
+theme_override_font_sizes/font_size = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_ffp3u")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_ffp3u")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_yg5fu")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_yg5fu")
+theme_override_styles/hover = SubResource("StyleBoxFlat_inugg")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_inugg")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_cr84h")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_cr84h")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_0nait")
+theme_override_styles/focus = SubResource("StyleBoxFlat_mmi41")
+script = ExtResource("3_u78jb")
+icon_button_size = 1
+icon_button_width = 1
+icon_button_variant = 2
+icon_name = "dots-vertical"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+
+[node name="GridContainer" type="GridContainer" parent="MarginContainer/VBoxContainer" unique_id=732697221]
+visible = false
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 16
+columns = 3
+
+[node name="Card1" type="Button" parent="MarginContainer/VBoxContainer/GridContainer" unique_id=1056700338]
+clip_children = 2
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/focus = SubResource("StyleBoxEmpty_8i2co")
+flat = true
+script = ExtResource("1_abc12")
+headline = "Game One"
+supporting_text = "An exciting adventure"
+
+[node name="Card2" type="Button" parent="MarginContainer/VBoxContainer/GridContainer" unique_id=1526181480]
+clip_children = 2
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/focus = SubResource("StyleBoxEmpty_tx2pa")
+flat = true
+script = ExtResource("1_abc12")
+card_variant = 1
+headline = "Game Two"
+supporting_text = "Strategy and tactics"
+
+[node name="Card3" type="Button" parent="MarginContainer/VBoxContainer/GridContainer" unique_id=894683043]
+clip_children = 2
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/focus = SubResource("StyleBoxEmpty_x7uak")
+flat = true
+script = ExtResource("1_abc12")
+card_variant = 2
+headline = "Game Three"
+supporting_text = "Fast-paced action"
+
+[node name="Card4" type="Button" parent="MarginContainer/VBoxContainer/GridContainer" unique_id=394356534]
+clip_children = 2
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/focus = SubResource("StyleBoxEmpty_rq8af")
+flat = true
+script = ExtResource("1_abc12")
+headline = "Game Four"
+supporting_text = "Puzzle solving"
+
+[node name="Card5" type="Button" parent="MarginContainer/VBoxContainer/GridContainer" unique_id=2115381585]
+clip_children = 2
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/focus = SubResource("StyleBoxEmpty_n3pw5")
+flat = true
+script = ExtResource("1_abc12")
+card_variant = 1
+headline = "Game Five"
+supporting_text = "RPG elements"
+
+[node name="Card6" type="Button" parent="MarginContainer/VBoxContainer/GridContainer" unique_id=1990487209]
+clip_children = 2
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/focus = SubResource("StyleBoxEmpty_mjvek")
+flat = true
+script = ExtResource("1_abc12")
+card_variant = 2
+headline = "Game Six"
+supporting_text = "Multiplayer mayhem"

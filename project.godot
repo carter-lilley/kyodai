@@ -17,6 +17,7 @@ config/features=PackedStringArray("4.6", "Mobile")
 run/low_processor_mode=true
 run/low_processor_mode_sleep_usec=8000
 config/icon="res://icon.svg"
+addons/icon_finder/preview_size=24
 
 [autoload]
 
@@ -33,10 +34,11 @@ SaveManager="*res://managers/save_manager.gd"
 AudioManager="*res://managers/audio_manager.gd"
 GameNativeManager="*res://managers/gamenative_manager.gd"
 FileSystemManager="*res://managers/filesystem_manager.gd"
+IconsFonts="*uid://b573s24lmntbd"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/PackageChecker/plugin.cfg")
+enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/PackageChecker/plugin.cfg", "res://addons/godot-sqlite/plugin.cfg", "res://addons/icons-fonts/plugin.cfg", "res://addons/m3/plugin.cfg", "res://addons/onscreenkeyboard/plugin.cfg", "res://addons/rakugo-nodes/plugin.cfg")
 
 [file_customization]
 

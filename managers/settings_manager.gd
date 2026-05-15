@@ -318,8 +318,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 		# Emit the SETTING VALUE (settings.X.value), not the preset value
 		if settings.get("hero_effect_config") != null:
 			emit_signal("setting_changed", settings.hero_effect_config.value, settings.hero_effect_config)
-		if settings.get("library_navigation_bar_position") != null:
-			emit_signal("setting_changed", settings.library_navigation_bar_position.value, settings.library_navigation_bar_position)
+		if settings.get("library_navigation_type") != null:
+			emit_signal("setting_changed", settings.library_navigation_type.value, settings.library_navigation_type)
 		if settings.get("library_grid_padding") != null:
 			emit_signal("setting_changed", settings.library_grid_padding.value, settings.library_grid_padding)
 		if settings.get("library_grid_margin_x") != null:
@@ -328,18 +328,12 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_grid_margin_y.value, settings.library_grid_margin_y)
 		if settings.get("library_card_zoom") != null:
 			emit_signal("setting_changed", settings.library_card_zoom.value, settings.library_card_zoom)
-		if settings.get("library_bar_color") != null:
-			emit_signal("setting_changed", settings.library_bar_color.value, settings.library_bar_color)
-		if settings.get("library_icon_color") != null:
-			emit_signal("setting_changed", settings.library_icon_color.value, settings.library_icon_color)
 		if settings.get("library_background_config") != null:
 			emit_signal("setting_changed", settings.library_background_config.value, settings.library_background_config)
 		if settings.get("library_show_title_mode") != null:
 			emit_signal("setting_changed", settings.library_show_title_mode.value, settings.library_show_title_mode)
 		if settings.get("library_focus_scale") != null:
 			emit_signal("setting_changed", settings.library_focus_scale.value, settings.library_focus_scale)
-		if settings.get("library_card_alignment") != null:
-			emit_signal("setting_changed", settings.library_card_alignment.value, settings.library_card_alignment)
 		if settings.get("library_layout_mode") != null:
 			emit_signal("setting_changed", settings.library_layout_mode.value, settings.library_layout_mode)
 		# Emit for card effect config - this triggers grid rebuild

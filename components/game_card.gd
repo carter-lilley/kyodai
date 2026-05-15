@@ -1,11 +1,12 @@
 class_name GameCard
-extends ColorRect
+extends M3Card
 
 signal download_requested(game: GameResource)
-signal enter_animation_completed()
 
 @export var game: GameResource:
 	set(value):
+		if game == value:
+			return
 		game = value
 		_update_display()
 
@@ -15,130 +16,77 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 
 @export var preview_mode: bool = false
 
-@onready var visual_container: Control = $VisualContainer
-@onready var card_input: Button = $VisualContainer/CardInput
-@onready var status_badge: Panel = $VisualContainer/CardInput/StatusBadge
-@onready var game_title_label: Label = $VisualContainer/GameTitleLabel
-
 var _loading_texture: Texture2D = preload("res://icon.svg")
 var _is_downloading: bool = false
-var _is_focused: bool = false
-
-# Base font size for the title label (at zoom = 1.0)
-const BASE_TITLE_FONT_SIZE: int = 18
-
-# Ratio-based constants (as fraction of card width)
-const BADGE_SIZE_RATIO: float = 0.16  # Platform badge size (16% of card width)
-const BADGE_MARGIN_RATIO: float = 0.025  # Platform badge margin
-const STATUS_BADGE_SIZE_RATIO: float = 0.04  # Status badge size (4% of card width)
-const STATUS_BADGE_MARGIN_RATIO: float = 0.05  # Status badge margin - sits deeper in card
-const STATUS_BADGE_INSET_MARGIN: float = 0.015  # Additional margin to inset status badge from edges
-const BADGE_CORNER_RATIO: float = 0.11  # ~23px at default width
-
-# Debug
-var _debug_safe_area: ColorRect = null
-
 var _current_texture: Texture2D = null
-var _card_state: EffectContainerState = EffectContainerState.for_card()
 
-# EffectStack system - normal and focus stacks share _card_state
-var _normal_stack: EffectStack = null
-var _focus_stack: EffectStack = null
+# Media effect stack rendered inside M3Card's media panel
+var _media_stack: EffectStack = null
+var _card_state: EffectContainerState = EffectContainerState.for_card()
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
 var _current_image_task_id: int = -1
 const MAX_IMAGE_RETRIES: int = 3
 
-# Track download retries separately from image load retries
 var _download_retry_count: int = 0
 const MAX_DOWNLOAD_RETRIES: int = 2
 
+# Status badge overlay (child of M3Card media panel)
+var _status_badge: Panel = null
+const STATUS_BADGE_SIZE_RATIO: float = 0.04
+const STATUS_BADGE_MARGIN_RATIO: float = 0.05
+
+# Focus
 const FOCUS_TWEEN_DURATION: float = 0.12
-const FOCUS_EFFECT_FADE_DURATION: float = 0.15  # Duration for focus effects fade in/out
 var _focus_tween: Tween = null
-var _focus_effect_tweens: Array[Tween] = []  # Track tweens created in _show_focus_effects
-var focus_overlap: bool = true
-var alignment_offset: Vector2 = Vector2.ZERO
+var _is_focused: bool = false
 
-func _get_alignment_pivot() -> Vector2:
-	var card_size = _card_state.card_size
-	var focus_scale = _get_focus_scale()
-	if focus_scale <= 1.0 or alignment_offset == Vector2.ZERO:
-		return card_size / 2.0
-	var pivot = Vector2.ZERO
-	if alignment_offset.x > 0.001:
-		pivot.x = alignment_offset.x / (focus_scale - 1.0)
-	else:
-		pivot.x = card_size.x / 2.0
-	if alignment_offset.y > 0.001:
-		pivot.y = alignment_offset.y / (focus_scale - 1.0)
-	else:
-		pivot.y = card_size.y / 2.0
-	return pivot
-
-func set_alignment_offset(offset: Vector2) -> void:
-	alignment_offset = offset
-	if visual_container and not focus_overlap:
-		var pivot = _get_alignment_pivot()
-		visual_container.pivot_offset = pivot
-		visual_container.position = alignment_offset
-
-func _get_focus_scale() -> float:
-	if SettingsManager:
-		var setting = SettingsManager.get_setting("library_focus_scale")
-		if setting:
-			return 1.0 + setting.value
-	return 1.08
-
-# Enter animation constants
-const ENTER_START_SCALE: float = 3.0
-const ENTER_TWEEN_DURATION: float = 1.2  # Animation duration - quicker (was 1.75)
-var _enter_tween: Tween = null
-var _enter_tween_alpha: Tween = null
-
-# Android touch-and-hold detection
-const LONG_PRESS_DURATION: float = 0.6  # 600ms
-const LONG_PRESS_TOLERANCE: float = 20.0  # 20px position tolerance
+# Android touch-and-hold
+const LONG_PRESS_DURATION: float = 0.6
+const LONG_PRESS_TOLERANCE_DP: float = 20.0
 var _touch_start_time: float = 0.0
 var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
 var _long_press_timer: Timer = null
 
 func _ready():
-	# Allow effects (like drop shadow) to render outside card bounds
-	clip_contents = false
-	# Cards render above UI backgrounds, shadows at -1 stay behind card but above backgrounds
-	z_index = 10
+	print("[GameCard] _ready() START ", name)
+	super._ready()
 	
-	# Set pivot to center for proper scaling on visual container
-	# Use custom_minimum_size as fallback since visual_container might not be laid out yet
-	var pivot_size = visual_container.size if visual_container.size.x > 0 else custom_minimum_size
-	visual_container.pivot_offset = pivot_size / 2
+	# Configure M3Card text labels to prevent variable-height grid breakage
+	var headline_label = get_node_or_null("RootContainer/TextMargin/TextContent/Headline")
+	if headline_label:
+		headline_label.max_lines_visible = 2
+		headline_label.clip_text = true
+		headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var supporting_label = get_node_or_null("RootContainer/TextMargin/TextContent/SupportingText")
+	if supporting_label:
+		supporting_label.max_lines_visible = 1
+		supporting_label.clip_text = true
+		supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	
 	if preview_mode:
 		_setup_preview_mode()
+		print("[GameCard] _ready() END (preview mode) ", name)
 		return
 	
-	# Connect to state signals for reactivity
-	_card_state.zoom_changed.connect(_on_zoom_changed)
-	_card_state.orientation_changed.connect(_on_orientation_changed)
-	
 	_update_card_state_from_settings()
-	_rebuild_effects()
+	_build_media_stack()
 	_update_display()
 	
-	# Connect input signals
-	if card_input:
-		card_input.pressed.connect(_on_card_pressed)
-		card_input.gui_input.connect(_on_card_gui_input)
-		card_input.focus_entered.connect(_on_focus_entered)
-		card_input.focus_exited.connect(_on_focus_exited)
-		card_input.mouse_entered.connect(_on_card_mouse_entered)
+	# Connect M3Card signals
+	pressed.connect(_on_card_pressed)
+	gui_input.connect(_on_card_gui_input)
+	focus_entered.connect(_on_focus_entered)
+	focus_exited.connect(_on_focus_exited)
+	mouse_entered.connect(_on_card_mouse_entered)
 	
 	if DownloadManager:
 		DownloadManager.download_progress.connect(_on_download_progress)
 		DownloadManager.download_completed.connect(_on_download_completed)
+	
+	_setup_status_badge()
 	
 	# Setup long-press timer for Android
 	if PlatformManager.is_android():
@@ -147,33 +95,58 @@ func _ready():
 		_long_press_timer.one_shot = true
 		_long_press_timer.timeout.connect(_on_long_press_timeout)
 		add_child(_long_press_timer)
-
-## Checks if animations are blocking focus - cards can't be focused during intro or launch animations
-func _can_accept_focus() -> bool:
-	# Check if we're in HomeView and intro animations are still running
-	var home_view = _find_home_view()
-	if home_view and home_view.has_method("are_intro_animations_complete"):
-		if not home_view.are_intro_animations_complete():
-			return false
 	
-	# Check if launch transition overlay is animating (static variable)
-	if LaunchTransitionOverlay.is_transition_active:
-		return false
-	
-	return true
+	print("[GameCard] _ready() END ", name)
 
-## Finds the parent HomeView if this card is in one
-func _find_home_view() -> Node:
-	var current = get_parent()
-	while current:
-		if current is HomeView:
-			return current
-		current = current.get_parent()
-	return null
+func _rebuild_layout():
+	# Remove status badge before M3Card rebuilds, or it would be freed
+	# if it's inside the media panel (which gets recreated).
+	if _status_badge and _status_badge.get_parent():
+		_status_badge.get_parent().remove_child(_status_badge)
+	
+	super._rebuild_layout()
+	# M3Card frees _media_stack when it rebuilds its internal layout.
+	# Null the reference and rebuild so the media stack is restored.
+	_media_stack = null
+	_build_media_stack()
+	
+	# Add status badge into the new media panel so it sits over the art
+	if _status_badge:
+		var media_panel = get_node_or_null("RootContainer/MediaPanel")
+		if media_panel:
+			media_panel.add_child(_status_badge)
+		else:
+			add_child(_status_badge)
+
+func _setup_status_badge():
+	_status_badge = Panel.new()
+	_status_badge.name = "StatusBadge"
+	_status_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_status_badge.visible = false
+	_status_badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	var media_panel = get_node_or_null("RootContainer/MediaPanel")
+	if media_panel:
+		media_panel.add_child(_status_badge)
+	else:
+		add_child(_status_badge)
+	_update_status_badge_style()
+
+func get_card_state() -> EffectContainerState:
+	return _card_state
+
+func get_focus_shape_params() -> Dictionary:
+	return {
+		"shape_size": _card_state.container_size,
+		"corner_radius_ratio": _card_state.corner_radius_ratio,
+		"corner_radius_pixels": _card_state.corner_radius_pixels
+	}
+
+func get_current_texture() -> Texture2D:
+	return _current_texture
 
 func _setup_preview_mode():
 	_update_card_state_from_settings()
-	_rebuild_effects()
+	_build_media_stack()
 	
 	if DataManager:
 		var random_game = DataManager.get_random_game()
@@ -184,355 +157,190 @@ func _setup_preview_mode():
 	else:
 		_set_texture(_loading_texture)
 	
-	if status_badge:
-		status_badge.visible = false
+	if _status_badge:
+		_status_badge.visible = false
 	
-	if game_title_label:
-		game_title_label.visible = false
-	
-	if card_input:
-		card_input.disabled = true
-		card_input.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	disabled = true
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-func set_card_state(state: EffectContainerState) -> void:
-	# Disconnect old signals safely
-	if _card_state and _card_state.zoom_changed.is_connected(_on_zoom_changed):
-		_card_state.zoom_changed.disconnect(_on_zoom_changed)
-	if _card_state and _card_state.orientation_changed.is_connected(_on_orientation_changed):
-		_card_state.orientation_changed.disconnect(_on_orientation_changed)
+func _build_media_stack():
+	if _media_stack and is_instance_valid(_media_stack):
+		_media_stack.queue_free()
 	
-	_card_state = state.duplicate()
-	_rebuild_effects()
+	_media_stack = EffectStack.new()
+	var effect_settings := []
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			effect_settings = config_setting.value.get("effects", [])
 	
-	# Reconnect signals
-	_card_state.zoom_changed.connect(_on_zoom_changed)
-	_card_state.orientation_changed.connect(_on_orientation_changed)
+	_media_stack.initialize(_card_state, effect_settings, "base_card")
+	if _current_texture:
+		_media_stack.set_game_texture(_current_texture)
 	
-	# Trigger updates
-	_on_zoom_changed(_card_state.zoom_level)
-	_on_orientation_changed(_card_state.orientation)
+	# Connect signal BEFORE adding to tree, so we catch the initial resize
+	# that may fire synchronously during add_child().
+	if not _media_stack.resized.is_connected(_on_media_stack_resized):
+		_media_stack.resized.connect(_on_media_stack_resized)
+	
+	set_media_content(_media_stack)
+	
+	# If add_child() triggered an immediate layout and the EffectStack already
+	# has its final size, the resized signal may have fired before we connected.
+	# Explicitly initialize shader params in that case.
+	if _media_stack.size.x > 0 and _media_stack.size.y > 0:
+		_on_media_stack_resized()
 
-func get_card_state() -> EffectContainerState:
-	return _card_state
-
-func get_focus_shape_params() -> Dictionary:
-	return {
-		"shape_size": _card_state.card_size,
-		"corner_radius_ratio": _card_state.corner_radius_ratio,
-		"corner_radius_pixels": _card_state.corner_radius_pixels
-	}
+func _on_media_stack_resized():
+	print("[GameCard] _on_media_stack_resized() size=", _media_stack.size if _media_stack else "null")
+	if not _media_stack or _media_stack.size.x <= 0 or _media_stack.size.y <= 0:
+		print("[GameCard] _on_media_stack_resized() aborting: invalid size")
+		return
+	
+	_card_state.container_size = _media_stack.size
+	
+	# The user's corner_radius_ratio is the source of truth.
+	# Convert it to an absolute pixel radius for the current media panel, then to DP for M3Card.
+	var min_dim = min(_media_stack.size.x, _media_stack.size.y)
+	var radius_pixels = clampf(_card_state.corner_radius_ratio * min_dim, 0.0, min_dim)
+	var new_corner_radius_dp = radius_pixels / M3Units.get_scale()
+	print("[GameCard] _on_media_stack_resized() min_dim=", min_dim, " radius_pixels=", radius_pixels, " new_corner_radius_dp=", new_corner_radius_dp, " current_dp=", corner_radius_dp)
+	if not is_equal_approx(new_corner_radius_dp, corner_radius_dp):
+		self.corner_radius_dp = new_corner_radius_dp
+	
+	_media_stack.update_state(_card_state)
+	_update_status_badge_layout()
+	_update_platform_badge()
 
 func _update_card_state_from_settings():
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
-		if config_setting:
-			if config_setting.value is Dictionary:
-				_card_state.orientation = config_setting.value.get("card_orientation", 0)
-				_card_state.effect_settings = config_setting.value.get("effects", [])
-				_card_state.focus_effect_settings = config_setting.value.get("focus_effects", [])
-				# Corner radius as ratio (0.0 to 1.0) - convert from old pixel format if needed
-				var corner_value = config_setting.value.get("corner_radius", 0.06)
-				# If value > 1.0, it's in old pixel format (default was 12px), convert to ratio
-				if corner_value > 1.0:
-					_card_state.corner_radius_ratio = corner_value / 202.0
-				else:
-					_card_state.corner_radius_ratio = corner_value
+		if config_setting and config_setting.value is Dictionary:
+			_card_state.effect_settings = config_setting.value.get("effects", [])
+			var corner_value = config_setting.value.get("corner_radius", 0.06)
+			if corner_value > 1.0:
+				# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
+				const LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP: float = 202.0
+				_card_state.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
+			else:
+				_card_state.corner_radius_ratio = corner_value
 
-func _get_effect_config(effect_id: String) -> Dictionary:
-	for effect_data in _card_state.effect_settings:
-		if effect_data.get("effect_id") == effect_id:
-			return effect_data
-	return {}
+func set_card_zoom(_zoom: float) -> void:
+	# container_size is managed by _on_media_stack_resized() based on actual media panel size.
+	# Setting zoom_level here would trigger _recalculate_dimensions() and overwrite container_size
+	# with an incorrect value before the layout pass corrects it.
+	pass
 
-func _get_focus_effect_config(effect_id: String) -> Dictionary:
-	for effect_data in _card_state.focus_effect_settings:
-		if effect_data.get("effect_id") == effect_id:
-			return effect_data
-	return {}
-
-func _rebuild_effects():
-	if not visual_container:
-		push_warning("GameCard: visual_container is null, cannot add effects")
-		return
-	
-	# Remove old stacks if they exist
-	if _normal_stack:
-		_normal_stack.queue_free()
-		_normal_stack = null
-	if _focus_stack:
-		_focus_stack.queue_free()
-		_focus_stack = null
-	
-	# Reset border inset before rebuilding
-	_card_state.border_inset_ratio = 0.0
-	_card_state.glass_inset_ratio = 0.0
-	
-	# Create normal EffectStack
-	_normal_stack = EffectStack.new()
-	_normal_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
-	visual_container.add_child(_normal_stack)
-	_normal_stack.initialize(_card_state, _card_state.effect_settings)
-	if _current_texture:
-		_normal_stack.set_game_texture(_current_texture)
-	
-	# Create focus EffectStack with its own state (duplicate to avoid clobbering normal stack's insets)
-	var focus_state = _card_state.duplicate()
-	focus_state.effect_settings = _card_state.focus_effect_settings.duplicate(true)
-	
-	# Create focus EffectStack (starts invisible, higher z-index than normal stack)
-	_focus_stack = EffectStack.new()
-	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_focus_stack.z_index = 100
-	_focus_stack.visible = false
-	visual_container.add_child(_focus_stack)
-	_focus_stack.initialize(focus_state, _card_state.focus_effect_settings)
-	if _current_texture:
-		_focus_stack.set_game_texture(_current_texture)
-	
-	# Remove base effect from focus stack - focus effects are overlays only,
-	# they should not draw the game texture (that's the normal stack's job)
-	var focus_base = _focus_stack.get_effect("base")
-	if focus_base:
-		focus_base.visible = false
-		focus_base.modulate.a = 0.0
-	
-	# Link overlapping focus effects to their base counterparts for tweening
-	_link_overlapping_effects()
-	
-	# Initialize focus effects with effect_alpha = 0.0 so they start hidden
-	# (shader default is 1.0, which would cause them to pop in before the tween)
-	# Exception: in preview mode, always show focus effects so designer can see them
-	var focus_alpha = 1.0 if preview_mode else 0.0
-	for child in _focus_stack.get_children():
-		if child is EffectBase and child.material is ShaderMaterial:
-			child.material.set_shader_parameter("effect_alpha", focus_alpha)
-	
-	# In preview mode, make focus stack visible
-	if preview_mode:
-		_focus_stack.visible = true
-	
-	# Ensure card_input is on top
-	if card_input:
-		visual_container.move_child(card_input, -1)
-	
+func refresh_settings() -> void:
+	_update_card_state_from_settings()
+	_build_media_stack()
 	_update_platform_badge()
-	_update_status_badge_layout()
+	_update_display()
 
-func _link_overlapping_effects() -> void:
-	"""Link focus effects that overlap with base effects so they can tween settings."""
-	if not _normal_stack or not _focus_stack:
-		return
-	
-	# Get base effect IDs
-	var base_effect_ids: Array[String] = []
-	for child in _normal_stack.get_children():
-		if child is EffectBase:
-			base_effect_ids.append(child.effect_id)
-	
-	# For each focus effect that exists in base, link them
-	for child in _focus_stack.get_children():
-		if child is EffectBase and child.effect_id in base_effect_ids:
-			var base_effect = _normal_stack.get_effect(child.effect_id)
-			if base_effect:
-				child.set_base_effect(base_effect)
-				
-				# Only reset to base settings if card is NOT focused
-				# Focused cards should keep their current tween state
-				if not _is_focused and base_effect._settings.size() > 0:
-					child.tween_settings(base_effect._settings, base_effect._settings, 1.0)
+func reset() -> void:
+	game = null
+	_current_texture = null
+	_is_downloading = false
+	_loading_game_id = ""
+	_image_retry_count = 0
+	_download_retry_count = 0
+	if _current_image_task_id > 0 and MemoryManager:
+		MemoryManager.cancel_image_task(_current_image_task_id)
+		_current_image_task_id = -1
+	if _status_badge:
+		_status_badge.visible = false
+	headline = ""
+	supporting_text = ""
+	if _media_stack:
+		_media_stack.set_game_texture(null)
 
-func _on_zoom_changed(_new_zoom: float) -> void:
-	if not visual_container:
-		return
-	
-	var card_size = _card_state.card_size
-	var focus_scale = _get_focus_scale()
-	
-	if focus_overlap:
-		custom_minimum_size = card_size
-		size = card_size
-		pivot_offset = card_size / 2
-		size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		
-		visual_container.anchors_preset = Control.PRESET_FULL_RECT
-		visual_container.anchor_right = 1.0
-		visual_container.anchor_bottom = 1.0
-		visual_container.position = Vector2.ZERO
-		# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
-		# and causes wrong sizes when the parent resizes between deferral and execution.
-		# Anchors handle sizing automatically.
-		# visual_container.set_deferred("size", card_size)
-		visual_container.pivot_offset = _get_grid_pivot_offset()
+func set_placeholder(_enabled: bool) -> void:
+	# No-op for M3Card-based GameCard
+	pass
+
+func restore_focus_animation() -> void:
+	if _is_focused:
+		_on_focus_entered()
 	else:
-		var focused_size = card_size * focus_scale
-		custom_minimum_size = focused_size
-		size = focused_size
-		pivot_offset = focused_size / 2
-		size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		
-		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
-		visual_container.anchor_right = 0.0
-		visual_container.anchor_bottom = 0.0
-		visual_container.size = card_size
-		
-		var pivot = _get_alignment_pivot()
-		visual_container.pivot_offset = pivot
-		
-		if _is_focused:
-			visual_container.scale = Vector2(focus_scale, focus_scale)
-			visual_container.position = alignment_offset
-		else:
-			visual_container.scale = Vector2.ONE
-			visual_container.position = alignment_offset
-	
-	# Update title label font size based on zoom
-	if game_title_label:
-		var zoom = _card_state.zoom_level
-		var scaled_font_size = max(10, int(BASE_TITLE_FONT_SIZE * zoom))
-		game_title_label.add_theme_font_size_override("font_size", scaled_font_size)
-	
-	_update_status_badge_layout()
-	_update_platform_badge()
-
-func _on_orientation_changed(_new_orientation: int) -> void:
-	_on_zoom_changed(_card_state.zoom_level)
-
-func _update_status_badge_layout():
-	if not status_badge:
-		return
-	
-	var card_size = _card_state.card_size
-	var card_width = card_size.x
-	var card_height = card_size.y
-	var badge_size = STATUS_BADGE_SIZE_RATIO * card_width
-	var border_inset_pixels = _card_state.border_inset_ratio * card_width
-	var glass_inset_pixels = _card_state.glass_inset_ratio * card_width
-	var total_inset = border_inset_pixels + glass_inset_pixels
-	
-	# Calculate effective corner radius at the inset position
-	var effective_corner_radius = max(0, _card_state.corner_radius_pixels - total_inset)
-	
-	# Corner margin calculation (same as platform badge)
-	var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
-	var corner_margin = effective_corner_radius * corner_midpoint_factor
-	
-	# Additional margin to inset the status badge from the edges
-	var inset_margin = STATUS_BADGE_INSET_MARGIN * card_width
-	
-	# Position in BOTTOM RIGHT corner (mirror of top-left logic)
-	# Start from bottom-right corner and move inward by total_inset + corner_margin + inset_margin
-	var safe_x = card_width - total_inset - corner_margin - badge_size - inset_margin
-	var safe_y = card_height - total_inset - corner_margin - badge_size - inset_margin
-	
-	# Position the status badge
-	status_badge.offset_left = safe_x
-	status_badge.offset_top = safe_y
-	status_badge.offset_right = safe_x + badge_size
-	status_badge.offset_bottom = safe_y + badge_size
-	
-	# Update badge style - always a circle (radius = half the size)
-	_update_status_badge_style()
-
-func _update_status_badge_style():
-	if not status_badge:
-		return
-	
-	var card_width = _card_state.card_size.x
-	var badge_size = STATUS_BADGE_SIZE_RATIO * card_width
-	# Always a perfect circle (radius = half the size)
-	var circle_radius = int(badge_size / 2.0)
-	
-	var new_style = StyleBoxFlat.new()
-	# Set color based on download status
-	if game and game.is_active_variant_downloaded():
-		# Downloaded/ready to launch - green
-		new_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)  # #7db600
-	else:
-		# Not downloaded - blue
-		new_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)  # #009feb
-	
-	# Always a perfect circle
-	new_style.corner_radius_top_left = circle_radius
-	new_style.corner_radius_top_right = circle_radius
-	new_style.corner_radius_bottom_left = circle_radius
-	new_style.corner_radius_bottom_right = circle_radius
-	status_badge.add_theme_stylebox_override("panel", new_style)
+		_on_focus_exited()
 
 func _update_display():
-	if not game:
-		return
-	if not is_node_ready():
+	print("[GameCard] _update_display() game=", game, " ready=", is_node_ready())
+	if not game or not is_node_ready():
+		print("[GameCard] _update_display() aborting")
 		return
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(false)
-	_update_game_title_label()
+	headline = game.title
+	supporting_text = game.platform if game.platform else ""
+	print("[GameCard] _update_display() headline=", headline, " supporting=", supporting_text)
 
 func _update_display_with_priority(high_priority: bool):
-	if not game:
-		return
-	if not is_node_ready():
+	if not game or not is_node_ready():
 		return
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(high_priority)
-	_update_game_title_label()
+	headline = game.title
+	supporting_text = game.platform if game.platform else ""
 
-func _update_game_title_label():
-	if not game_title_label:
+func _update_status_badge_layout():
+	if not _status_badge:
 		return
 	
-	if not game:
-		game_title_label.visible = false
-		return
+	var panel_width: float = size.x
+	var panel_height: float = size.y
+	var parent = _status_badge.get_parent()
+	if parent and parent != self:
+		panel_width = parent.size.x
+		panel_height = parent.size.y
 	
-	# Set the label text
-	game_title_label.text = game.title
+	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
+	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
 	
-	# Update visibility based on focus state and setting
-	_update_game_title_visibility()
+	# Position in bottom-right of the media panel so it sits over the art
+	_status_badge.offset_left = -margin - badge_size
+	_status_badge.offset_top = -margin - badge_size
+	_status_badge.offset_right = -margin
+	_status_badge.offset_bottom = -margin
 
-func _update_game_title_visibility():
-	if not game_title_label:
+func _update_status_badge_style():
+	if not _status_badge:
 		return
+	var panel_width = size.x if size.x > 0 else _card_state.container_size.x
+	var parent = _status_badge.get_parent()
+	if parent and parent != self and parent.size.x > 0:
+		panel_width = parent.size.x
+	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
+	var circle_radius = int(badge_size / 2.0)
 	
-	if not game:
-		game_title_label.visible = false
-		return
+	var new_style = StyleBoxFlat.new()
+	if game and game.is_active_variant_downloaded():
+		new_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)
+	else:
+		new_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)
 	
-	# Check the setting
-	var mode = 1  # default "Focused"
-	if SettingsManager:
-		var setting = SettingsManager.get_setting("library_show_title_mode")
-		if setting:
-			mode = setting.value
-	
-	# Show if: All (2) OR Focused (1) and card is focused
-	game_title_label.visible = (mode == 2) or (mode == 1 and _is_focused)
-
-func load_cover_with_priority(high_priority: bool = false):
-	_load_cover(high_priority)
+	new_style.corner_radius_top_left = circle_radius
+	new_style.corner_radius_top_right = circle_radius
+	new_style.corner_radius_bottom_left = circle_radius
+	new_style.corner_radius_bottom_right = circle_radius
+	_status_badge.add_theme_stylebox_override("panel", new_style)
 
 func _update_status_icon():
-	if not status_badge:
+	if not _status_badge:
 		return
 	if not game:
-		status_badge.visible = false
+		_status_badge.visible = false
 		return
-	
-	if _is_downloading:
-		status_badge.visible = false
-	else:
-		status_badge.visible = true
-		_update_status_badge_style()
+	_status_badge.visible = not _is_downloading
+	_update_status_badge_style()
 
 func _update_platform_badge():
-	if not _normal_stack:
+	if not _media_stack:
 		return
 	
-	var normal_badge = _normal_stack.get_effect("badge") as BadgeEffect
+	var normal_badge = _media_stack.get_effect("badge") as BadgeEffect
 	if not normal_badge:
 		return
 	
@@ -543,13 +351,18 @@ func _update_platform_badge():
 	var platform_slug = game.platform_slug
 	var icon_texture: Texture2D = null
 	
-	var badge_config = _get_effect_config("badge")
+	var badge_config := {}
+	for effect_data in _card_state.effect_settings:
+		if effect_data is Dictionary and effect_data.get("effect_id") == "badge":
+			badge_config = effect_data
+			break
+	
 	var settings = badge_config.get("settings", {})
 	var badge_type = settings.get("badge_type", 0)
 	var badge_size_setting = settings.get("badge_size", 1.0)
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
 	
-	var card_width = _card_state.card_size.x
+	var card_width = _card_state.container_size.x
 	var corner_radius_pixels = _card_state.corner_radius_pixels
 	var total_inset = _card_state.total_inset_pixels
 	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
@@ -573,27 +386,17 @@ func _update_platform_badge():
 		if badge_type != 1:
 			texture_aspect = 1.0
 	
-	var bar_height: float = 0.0
-	var top_bar_safe_x: float = 0.0
-	var top_bar_safe_y: float = 0.0
-	var top_bar_safe_width: float = 0.0
-	var top_bar_safe_height: float = 0.0
-	var badge_width: float = 0.0
-	var badge_height: float = 0.0
-	var safe_x: float = 0.0
-	var safe_y: float = 0.0
-	var safe_width: float = 0.0
-	var safe_height: float = 0.0
+	const BADGE_SIZE_RATIO: float = 0.16
+	const BADGE_CORNER_RATIO: float = 0.11
 	
 	if badge_type == 1:
 		var base_badge_size = BADGE_SIZE_RATIO * card_width
 		var top_bar_max_size = card_width * 0.25
-		bar_height = min(base_badge_size * badge_size_setting, top_bar_max_size)
-		
-		top_bar_safe_x = total_inset + effective_corner_radius
-		top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
-		top_bar_safe_y = total_inset
-		top_bar_safe_height = bar_height
+		var bar_height = min(base_badge_size * badge_size_setting, top_bar_max_size)
+		var top_bar_safe_x = total_inset + effective_corner_radius
+		var top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
+		var top_bar_safe_y = total_inset
+		var top_bar_safe_height = bar_height
 		
 		normal_badge.set_badge_dimensions(Vector2(card_width, bar_height))
 		normal_badge.set_border_inset_pixels(total_inset)
@@ -604,6 +407,8 @@ func _update_platform_badge():
 		var max_badge_size = card_width * 0.45
 		var target_badge_size = clamp(raw_badge_size, min_badge_size, max_badge_size)
 		
+		var badge_width: float
+		var badge_height: float
 		if texture_aspect >= 1.0:
 			badge_width = target_badge_size * texture_aspect
 			badge_height = target_badge_size
@@ -616,33 +421,19 @@ func _update_platform_badge():
 		var base_min_dim = min(badge_width, badge_height)
 		var base_inner_corner = (base_min_dim * 0.5) * clamp(inner_radius_setting, 0.0, 1.0)
 		var inner_corner_margin = base_inner_corner * corner_midpoint_factor
-		
 		var max_corner_margin = badge_width * 0.8
 		var clamped_corner_margin = min(corner_margin, max_corner_margin)
 		
-		safe_x = total_inset + clamped_corner_margin
-		safe_y = total_inset + clamped_corner_margin
-		safe_width = max(badge_width - clamped_corner_margin - inner_corner_margin, 0.0)
-		safe_height = max(badge_height - clamped_corner_margin - inner_corner_margin, 0.0)
+		var safe_x = total_inset + clamped_corner_margin
+		var safe_y = total_inset + clamped_corner_margin
+		var safe_width = max(badge_width - clamped_corner_margin - inner_corner_margin, 0.0)
+		var safe_height = max(badge_height - clamped_corner_margin - inner_corner_margin, 0.0)
 		
 		normal_badge.set_badge_dimensions(Vector2(badge_width, badge_height))
 		normal_badge.set_border_inset_pixels(total_inset)
 		normal_badge.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 	
 	normal_badge.set_icon_texture(icon_texture)
-	
-	# Also update focus badge if it exists
-	var focus_badge = _focus_stack.get_effect("badge") as BadgeEffect
-	if focus_badge:
-		focus_badge.set_icon_texture(icon_texture)
-		if badge_type == 1:
-			focus_badge.set_badge_dimensions(Vector2(card_width, bar_height))
-			focus_badge.set_border_inset_pixels(total_inset)
-			focus_badge.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
-		else:
-			focus_badge.set_badge_dimensions(Vector2(badge_width, badge_height))
-			focus_badge.set_border_inset_pixels(total_inset)
-			focus_badge.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
 
 func _load_cover(high_priority: bool = false):
 	if not game:
@@ -651,7 +442,7 @@ func _load_cover(high_priority: bool = false):
 	
 	_loading_game_id = game.id
 	_image_retry_count = 0
-	_download_retry_count = 0  # Reset download retry counter for new game
+	_download_retry_count = 0
 	
 	var cache_path = ""
 	var cover_url = ""
@@ -661,13 +452,10 @@ func _load_cover(high_priority: bool = false):
 		cover_url = game.cover_url
 		cache_path = _get_cached_cover_path(cover_url)
 		if not FileAccess.file_exists(cache_path):
-			# Cache file missing - check if sync is in progress
 			if DataManager.is_sync_in_progress():
-				# During sync: sync handles cover downloads, just show loading
 				_set_texture(_loading_texture)
 				return
 			else:
-				# After sync: trigger download as fallback
 				_download_cover_and_retry(cover_url, cache_path, high_priority)
 				return
 	
@@ -684,7 +472,6 @@ func _load_cover(high_priority: bool = false):
 
 func _get_cached_cover_path(url: String) -> String:
 	const CACHE_FOLDER = "user://cache/covers/"
-	# Extract extension from URL, default to jpg if not found
 	var extension = "jpg"
 	var query_start = url.find("?")
 	var url_without_query = url
@@ -741,33 +528,23 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority)
 
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false):
-	"""Trigger a cover download and retry loading when complete."""
 	var target_game_id = _loading_game_id
 	
-	# Check download retry limit
 	_download_retry_count += 1
 	if _download_retry_count > MAX_DOWNLOAD_RETRIES:
-		# Too many download attempts, just show loading texture
 		_set_texture(_loading_texture)
 		return
 	
-	# Show loading texture while downloading
 	_set_texture(_loading_texture)
 	
-	# Trigger download via DataManager
 	DataManager.load_image(cover_url, func(_texture: Texture2D):
-		# Called when download completes (or fails)
 		if not is_instance_valid(self):
 			return
 		if not game or game.id != target_game_id:
 			return
-		
-		# Check if file actually exists now
 		if FileAccess.file_exists(cache_path):
-			# File exists - safe to retry loading
 			_load_cover(high_priority)
 		else:
-			# Download failed or file still missing - show loading texture
 			_set_texture(_loading_texture)
 	)
 
@@ -778,19 +555,13 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	var err = FAILED
 	var image = Image.new()
 	
-	# Always use magic bytes to detect actual format, regardless of file extension
-	# This handles cases where the extension doesn't match the actual content
 	if buffer[0] == 0xFF and buffer[1] == 0xD8:
-		# JPEG magic bytes
 		err = image.load_jpg_from_buffer(buffer)
 	elif buffer[0] == 0x89 and buffer[1] == 0x50:
-		# PNG magic bytes (0x89 0x50 0x4E 0x47)
 		err = image.load_png_from_buffer(buffer)
 	elif buffer[0] == 0x52 and buffer[1] == 0x49:
-		# WebP magic bytes (RIFF header)
 		err = image.load_webp_from_buffer(buffer)
 	else:
-		# Try all formats as fallback
 		err = image.load_jpg_from_buffer(buffer)
 		if err != OK:
 			image = Image.new()
@@ -804,23 +575,18 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	return null
 
 func _set_texture(tex: Texture2D) -> void:
-	# Skip if texture hasn't changed
 	if tex == _current_texture:
 		return
 	_current_texture = tex
-	if _normal_stack:
-		_normal_stack.set_game_texture(tex)
-	if _focus_stack:
-		_focus_stack.set_game_texture(tex)
+	if _media_stack:
+		_media_stack.set_game_texture(tex)
 
 func _on_card_pressed():
 	if not game:
 		return
 	
-	# Get the virtual index immediately while we still have focus context
 	var focus_index = self.get_meta("virtual_index", -1)
 	
-	# Skip file check for GameNative games - they don't have physical files
 	if game.source == "gamenative":
 		if LaunchManager:
 			LaunchManager.launch_game(game, focus_index)
@@ -829,14 +595,9 @@ func _on_card_pressed():
 	if game.is_active_variant_downloaded():
 		var root_folder = SettingsManager.get_setting("games_root_folder") if SettingsManager else null
 		if root_folder and root_folder.value != "":
-			# Construct the full file path from known components (don't rely on file_path which may be relative)
 			var active_file_name = game.get_active_file_name()
 			var file_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
-			
-			# Check if file exists using standard file access
-			var file_exists = FileAccess.file_exists(file_path)
-			
-			if not file_exists:
+			if not FileAccess.file_exists(file_path):
 				if NotificationManager:
 					NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
 				download_requested.emit(game)
@@ -848,7 +609,6 @@ func _on_card_pressed():
 		download_requested.emit(game)
 
 func _get_show_delete() -> bool:
-	# Check if we're in the home view by traversing up the tree
 	var parent = get_parent()
 	while parent:
 		if parent is HomeView:
@@ -865,38 +625,28 @@ func _on_card_gui_input(event: InputEvent) -> void:
 				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position(), _get_show_delete())
 
 func _on_card_mouse_entered() -> void:
-	# Check if we can accept focus (animations complete)
 	if not _can_accept_focus():
 		return
-	
-	# Only grab focus if mouse is recently active and controller doesn't have priority
 	if UIManager and UIManager.should_card_grab_focus_on_hover():
-		if card_input and not card_input.has_focus():
-			# Mark this focus change as mouse-initiated so smooth scroll can skip it
-			card_input.set_meta("mouse_hover_focus", true)
-			card_input.grab_focus()
+		if not has_focus():
+			set_meta("mouse_hover_focus", true)
+			grab_focus()
 
 func _input(event: InputEvent) -> void:
-	# Check if we can accept focus (animations complete)
 	if not _can_accept_focus():
 		return
 	
-	# Handle ui_select (gamepad top button/Space) to open context menu
 	if event.is_action_pressed("ui_select"):
-		# Check if any child of this card has focus (the button gets focus, not the card)
 		var focused = get_viewport().gui_get_focus_owner()
-		if focused and is_ancestor_of(focused) and game and UIManager:
-			# Play click_03 modulated up by a quarter octave (~1.03)
+		if focused == self and game and UIManager:
 			if AudioManager:
 				AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 			var center_pos = global_position + (size / 2)
 			UIManager.show_game_context_menu(game.romm_id, center_pos, _get_show_delete())
 			get_viewport().set_input_as_handled()
 	
-	# Handle Android touch-and-hold
 	if PlatformManager.is_android() and event is InputEventScreenTouch:
 		if event.pressed:
-			# Check if touch is over this card
 			var touch_pos = event.position
 			if get_global_rect().has_point(touch_pos):
 				_touch_start_time = Time.get_ticks_msec() / 1000.0
@@ -905,7 +655,6 @@ func _input(event: InputEvent) -> void:
 				if _long_press_timer:
 					_long_press_timer.start()
 		else:
-			# Touch released
 			if _touch_is_holding:
 				_touch_is_holding = false
 				if _long_press_timer:
@@ -913,11 +662,9 @@ func _input(event: InputEvent) -> void:
 	
 	if PlatformManager.is_android() and event is InputEventScreenDrag:
 		if _touch_is_holding:
-			# Check if finger moved too far
 			var current_pos = event.position
 			var distance = _touch_start_pos.distance_to(current_pos)
-			if distance > LONG_PRESS_TOLERANCE:
-				# Cancel long press
+			if distance > M3Units.dp(LONG_PRESS_TOLERANCE_DP):
 				_touch_is_holding = false
 				if _long_press_timer:
 					_long_press_timer.stop()
@@ -925,513 +672,59 @@ func _input(event: InputEvent) -> void:
 func _on_long_press_timeout() -> void:
 	if _touch_is_holding and game and UIManager:
 		_touch_is_holding = false
-		# Play sound for long press
 		if AudioManager:
 			AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
-		# Show context menu at touch position
 		UIManager.show_game_context_menu(game.romm_id, _touch_start_pos, _get_show_delete())
 
-func _get_grid_pivot_offset() -> Vector2:
-	var container_size = _card_state.card_size
-	if container_size.x <= 0 or container_size.y <= 0:
-		return container_size / 2
-	
-	var virtual_index = get_meta("virtual_index", -1)
-	if virtual_index < 0:
-		return container_size / 2
-	
-	var grid_container = _find_virtual_scroll_grid_container()
-	if not grid_container:
-		return container_size / 2
-	
-	var items_per_line = grid_container._get_items_per_line() if grid_container.has_method("_get_items_per_line") else 1
-	var total_items = grid_container._total_items if "_total_items" in grid_container else virtual_index + 1
-	var vertical = grid_container.vertical if "vertical" in grid_container else true
-	
-	if vertical:
-		var column = virtual_index % items_per_line
-		var row = virtual_index / items_per_line
-		var total_rows = ceili(float(total_items) / items_per_line)
-		
-		# Single column: center horizontally instead of snapping to edges
-		if items_per_line == 1:
-			var pivot_y = container_size.y / 2
-			if row == 0:
-				pivot_y = 0
-			elif row == total_rows - 1 or virtual_index == total_items - 1:
-				pivot_y = container_size.y
-			return Vector2(container_size.x / 2, pivot_y)
-		
-		var is_leftmost = column == 0
-		var is_rightmost = (column == items_per_line - 1) or (virtual_index == total_items - 1)
-		var is_topmost = row == 0
-		var is_bottommost = (row == total_rows - 1) or (virtual_index >= total_items - items_per_line)
-		
-		var pivot_x = container_size.x / 2
-		if is_leftmost:
-			pivot_x = 0
-		elif is_rightmost:
-			pivot_x = container_size.x
-		
-		var pivot_y = container_size.y / 2
-		if is_topmost:
-			pivot_y = 0
-		elif is_bottommost:
-			pivot_y = container_size.y
-		
-		return Vector2(pivot_x, pivot_y)
-	else:
-		var row = virtual_index % items_per_line
-		var column = virtual_index / items_per_line
-		var total_columns = ceili(float(total_items) / items_per_line)
-		
-		# Single row: center vertically instead of snapping to edges
-		if items_per_line == 1:
-			var pivot_x = container_size.x / 2
-			if column == 0:
-				pivot_x = 0
-			elif column == total_columns - 1 or virtual_index == total_items - 1:
-				pivot_x = container_size.x
-			return Vector2(pivot_x, container_size.y / 2)
-		
-		var is_topmost = row == 0
-		var is_bottommost = (row == items_per_line - 1) or (virtual_index == total_items - 1)
-		var is_leftmost = column == 0
-		var is_rightmost = (column == total_columns - 1) or (virtual_index >= total_items - items_per_line)
-		
-		var pivot_y = container_size.y / 2
-		if is_topmost:
-			pivot_y = 0
-		elif is_bottommost:
-			pivot_y = container_size.y
-		
-		var pivot_x = container_size.x / 2
-		if is_leftmost:
-			pivot_x = 0
-		elif is_rightmost:
-			pivot_x = container_size.x
-		
-		return Vector2(pivot_x, pivot_y)
+func _can_accept_focus() -> bool:
+	var home_view = _find_home_view()
+	if home_view and home_view.has_method("are_intro_animations_complete"):
+		if not home_view.are_intro_animations_complete():
+			return false
+	if LaunchTransitionOverlay.is_transition_active:
+		return false
+	return true
 
-func _find_virtual_scroll_grid_container() -> Node:
+func _find_home_view() -> Node:
 	var current = get_parent()
 	while current:
-		if current.has_method("_get_items_per_line"):
+		if current is HomeView:
 			return current
 		current = current.get_parent()
 	return null
 
-func _on_focus_entered() -> void:
-	if not _can_accept_focus():
-		return
-	
+func _on_download_progress(_game_id: String, _progress: float):
+	pass
+
+func _on_download_completed(game_id: String, _success: bool):
+	if game and game.id == game_id:
+		_is_downloading = false
+		_update_status_icon()
+
+func _on_focus_entered():
 	_is_focused = true
-	_update_game_title_visibility()
-	
-	if AudioManager:
-		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
-	
-	if PlatformManager.is_android():
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin:
-			plugin.call("vibrateDevice", 50)
-	else:
-		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
-	
-	var focus_scale = _get_focus_scale()
-	var card_size = _card_state.card_size
-	var pivot = _get_grid_pivot_offset()
-	z_index = 11
-	
-	if focus_overlap:
-		visual_container.pivot_offset = pivot
-		
-		if _focus_tween:
-			_focus_tween.kill()
-		_focus_tween = create_tween()
-		_focus_tween.set_trans(Tween.TRANS_BACK)
-		_focus_tween.set_ease(Tween.EASE_OUT)
-		_focus_tween.tween_property(visual_container, "scale", Vector2(focus_scale, focus_scale), FOCUS_TWEEN_DURATION)
-	else:
-		if _focus_tween:
-			_focus_tween.kill()
-		_focus_tween = create_tween()
-		_focus_tween.set_trans(Tween.TRANS_BACK)
-		_focus_tween.set_ease(Tween.EASE_OUT)
-		_focus_tween.parallel().tween_property(visual_container, "scale", Vector2(focus_scale, focus_scale), FOCUS_TWEEN_DURATION)
-		_focus_tween.parallel().tween_property(visual_container, "position", alignment_offset, FOCUS_TWEEN_DURATION)
-	
-	var grid = _find_virtual_scroll_grid_container()
-	if grid and grid.has_method("set_focused_card"):
-		grid.set_focused_card(get_meta("virtual_index"))
-	
-	_show_focus_effects(true)
-
-func _on_focus_exited() -> void:
-	_is_focused = false
-	_update_game_title_visibility()
-	
-	z_index = 10
-	
-	var focus_scale = _get_focus_scale()
-	var card_size = _card_state.card_size
-	
-	if focus_overlap:
-		if _focus_tween:
-			_focus_tween.kill()
-		_focus_tween = create_tween()
-		_focus_tween.set_trans(Tween.TRANS_QUAD)
-		_focus_tween.set_ease(Tween.EASE_OUT)
-		_focus_tween.tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
-	else:
-		if _focus_tween:
-			_focus_tween.kill()
-		_focus_tween = create_tween()
-		_focus_tween.set_trans(Tween.TRANS_QUAD)
-		_focus_tween.set_ease(Tween.EASE_OUT)
-		_focus_tween.parallel().tween_property(visual_container, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
-		_focus_tween.parallel().tween_property(visual_container, "position", alignment_offset, FOCUS_TWEEN_DURATION)
-	
-	var grid = _find_virtual_scroll_grid_container()
-	if grid and grid.has_method("set_focused_card"):
-		grid.set_focused_card(-1)
-	
-	_show_focus_effects(false)
-
-func _restore_visual_container_anchors() -> void:
-	if not focus_overlap:
-		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
-		visual_container.anchor_right = 0.0
-		visual_container.anchor_bottom = 0.0
-		visual_container.position = alignment_offset
-		visual_container.pivot_offset = _get_alignment_pivot()
-	else:
-		var card_size = _card_state.card_size
-		visual_container.anchors_preset = Control.PRESET_FULL_RECT
-		visual_container.anchor_right = 1.0
-		visual_container.anchor_bottom = 1.0
-		visual_container.position = Vector2.ZERO
-		visual_container.pivot_offset = card_size / 2
-
-## Restores the focus animation after layout changes (e.g., after queue_sort resets transforms)
-## Called by VirtualScrollGridContainer to re-apply focus scale without triggering full focus_entered logic
-func restore_focus_animation() -> void:
+	_update_status_icon()
+	z_index = 1
 	if _focus_tween:
 		_focus_tween.kill()
-	
-	var focus_scale = _get_focus_scale()
-	var card_size = _card_state.card_size
-	z_index = 11
-	
-	if focus_overlap:
-		var pivot = _get_grid_pivot_offset()
-		visual_container.anchors_preset = Control.PRESET_FULL_RECT
-		visual_container.anchor_right = 1.0
-		visual_container.anchor_bottom = 1.0
-		visual_container.position = Vector2.ZERO
-		visual_container.pivot_offset = pivot
-		visual_container.scale = Vector2(focus_scale, focus_scale)
-	else:
-		var focused_size = card_size * focus_scale
-		custom_minimum_size = focused_size
-		size = focused_size
-		
-		var align_pivot = _get_alignment_pivot()
-		visual_container.anchors_preset = Control.PRESET_TOP_LEFT
-		visual_container.anchor_right = 0.0
-		visual_container.anchor_bottom = 0.0
-		visual_container.size = card_size
-		visual_container.pivot_offset = align_pivot
-		visual_container.position = alignment_offset
-		visual_container.scale = Vector2(focus_scale, focus_scale)
-	
-	_show_focus_effects(true)
+	_focus_tween = create_tween()
+	_focus_tween.set_trans(Tween.TRANS_QUAD)
+	_focus_tween.set_ease(Tween.EASE_OUT)
+	_focus_tween.tween_property(self, "scale", Vector2(1.08, 1.08), FOCUS_TWEEN_DURATION)
 
-## Shows or hides focus effects with a smooth transition.
-## For overlapping effects (present in both base and focus), tweens the base effect's shader settings directly.
-## For non-overlapping effects, fades in/out via alpha overlay.
-func _show_focus_effects(show: bool) -> void:
-	# Kill any existing focus effect tweens to prevent callbacks on freed objects
-	for tween in _focus_effect_tweens:
-		if tween and is_instance_valid(tween):
-			tween.kill()
-	_focus_effect_tweens.clear()
-	
-	# In preview mode, always show focus effects so designer can see them
-	if preview_mode:
-		show = true
-	
-	if not _focus_stack or not _normal_stack:
-		return
-	
-	# Separate effects into overlapping and non-overlapping
-	var overlapping_effects: Array[EffectBase] = []
-	var non_overlapping_effects: Array[EffectBase] = []
-	
-	for child in _focus_stack.get_children():
-		if not (child is EffectBase):
-			continue
-		
-		var focus_effect = child as EffectBase
-		if focus_effect._base_effect != null:
-			overlapping_effects.append(focus_effect)
-		else:
-			non_overlapping_effects.append(focus_effect)
-	
-	# Handle overlapping effects: tween the base effect directly, no overlay needed
-	for focus_effect in overlapping_effects:
-		var base_effect = focus_effect._base_effect
-		if not base_effect:
-			continue
-		
-		var base_settings = base_effect._settings
-		var focus_settings = focus_effect._settings
-		
-		# Capture copies to avoid closure issues
-		var base_copy = base_settings.duplicate(true)
-		var focus_copy = focus_settings.duplicate(true)
-		
-		if show:
-			# Focused: tween base effect from base settings to focus settings
-			var settings_tween = create_tween()
-			_focus_effect_tweens.append(settings_tween)
-			settings_tween.set_trans(Tween.TRANS_QUAD)
-			settings_tween.set_ease(Tween.EASE_OUT)
-			
-			var tween_callable = func(t: float):
-				if base_effect and is_instance_valid(base_effect):
-					base_effect.tween_settings(base_copy, focus_copy, t)
-			
-			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
-		else:
-			# Unfocused: tween base effect from focus settings back to base settings
-			var settings_tween = create_tween()
-			_focus_effect_tweens.append(settings_tween)
-			settings_tween.set_trans(Tween.TRANS_QUAD)
-			settings_tween.set_ease(Tween.EASE_OUT)
-			
-			var tween_callable = func(t: float):
-				if base_effect and is_instance_valid(base_effect):
-					base_effect.tween_settings(focus_copy, base_copy, t)
-			
-			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
-	
-	# Handle non-overlapping effects: use traditional alpha fade overlay
-	if non_overlapping_effects.size() > 0:
-		if show:
-			_focus_stack.visible = true
-			_focus_stack.modulate = Color(1, 1, 1, 1)
-		
-		for focus_effect in non_overlapping_effects:
-			if focus_effect.material is ShaderMaterial:
-				var start_alpha = 0.0 if show else 1.0
-				var target_alpha = 1.0 if show else 0.0
-				
-				if show:
-					focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
-				
-				var fade_tween = create_tween()
-				_focus_effect_tweens.append(fade_tween)
-				fade_tween.set_trans(Tween.TRANS_QUAD)
-				fade_tween.set_ease(Tween.EASE_OUT)
-				fade_tween.tween_method(
-					func(t: float, eff: EffectBase = focus_effect):
-						if eff and is_instance_valid(eff) and eff.material is ShaderMaterial:
-							eff.material.set_shader_parameter("effect_alpha", t),
-					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
-				)
-		
-		# Hide stack after fade-out completes
-		if not show:
-			var hide_tween = create_tween()
-			_focus_effect_tweens.append(hide_tween)
-			hide_tween.set_trans(Tween.TRANS_QUAD)
-			hide_tween.set_ease(Tween.EASE_OUT)
-			hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
-			hide_tween.finished.connect(func(): 
-				if _focus_stack and is_instance_valid(_focus_stack):
-					_focus_stack.visible = false
-			)
-
-## Plays the enter animation: scales from 125% to 100% while fading opacity from 0% to 100%
-func play_enter_animation() -> void:
-	# Kill any existing enter tweens
-	if _enter_tween:
-		_enter_tween.kill()
-	if _enter_tween_alpha:
-		_enter_tween_alpha.kill()
-	
-	# Set initial scale on visual container
-	# Use grid-based pivot for proper scaling at edges
-	visual_container.pivot_offset = _get_grid_pivot_offset()
-	visual_container.scale = Vector2(ENTER_START_SCALE, ENTER_START_SCALE)
-	
-	# Tween for scale (bouncy/elastic feel)
-	_enter_tween = create_tween()
-	_enter_tween.set_trans(Tween.TRANS_QUINT)
-	_enter_tween.set_ease(Tween.EASE_OUT)
-	_enter_tween.tween_property(visual_container, "scale", Vector2.ONE, ENTER_TWEEN_DURATION)
-	
-	# Separate tween for opacity (smooth fade)
-	_enter_tween_alpha = create_tween()
-	_enter_tween_alpha.set_trans(Tween.TRANS_CIRC)
-	
-	# Tween alpha on base effect using the stack
-	# Capture self (not the node) so the lambda survives card recycles
-	_enter_tween_alpha.parallel().tween_method(func(t):
-		if _normal_stack:
-			var be = _normal_stack.get_effect("base") as BaseCardEffect
-			if is_instance_valid(be):
-				be.set_alpha(t)
-	, 0.0, 1.0, ENTER_TWEEN_DURATION)
-	
-	# Tween opacity on card input (covers UI elements like status icons)
-	if card_input:
-		_enter_tween_alpha.parallel().tween_property(card_input, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
-	
-	# Tween opacity on all normal stack effects
-	if _normal_stack:
-		for child in _normal_stack.get_children():
-			if child is EffectBase:
-				_enter_tween_alpha.parallel().tween_property(child, "modulate", Color(1, 1, 1, 1), ENTER_TWEEN_DURATION)
-	
-	# Connect to completion signal
-	_enter_tween.finished.connect(func():
-		enter_animation_completed.emit()
-	)
-
-## Sets the card's alpha immediately (for initial state before animations)
-func set_card_alpha(alpha: float) -> void:
-	if _normal_stack:
-		var base_effect = _normal_stack.get_effect("base") as BaseCardEffect
-		if base_effect:
-			base_effect.set_alpha(alpha)
-	
-		# Set opacity on all normal stack effects
-		for child in _normal_stack.get_children():
-			if child is EffectBase:
-				child.modulate = Color(1, 1, 1, alpha)
-	
-	# Set opacity on card input (covers UI elements like status icons)
-	if card_input:
-		card_input.modulate = Color(1, 1, 1, alpha)
-
-func _on_download_progress(item_id: String, progress: float):
-	if not DownloadManager:
-		return
-	var item = DownloadManager.get_item(item_id)
-	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
-		_is_downloading = true
-		_update_status_icon()
-
-func _on_download_completed(item_id: String, success: bool, message: String):
-	if not DownloadManager:
-		return
-	var item = DownloadManager.get_item(item_id)
-	if item and item.game_resource and game and item.game_resource.romm_id == game.romm_id:
-		_is_downloading = false
-		if success:
-			if DataManager:
-				var updated = DataManager.get_game_by_id(game.romm_id)
-				if updated:
-					game = updated
-		_update_status_icon()
-
-func set_placeholder(is_placeholder: bool):
-	if is_placeholder:
-		_set_texture(_loading_texture)
-		if status_badge:
-			status_badge.visible = false
-		if game_title_label:
-			game_title_label.visible = false
-	else:
-		_update_display()
-
-func reset():
-	if _current_image_task_id > 0:
-		MemoryManager.cancel_image_task(_current_image_task_id)
-		_current_image_task_id = -1
-	for tween in _focus_effect_tweens:
-		if tween and is_instance_valid(tween):
-			tween.kill()
-	_focus_effect_tweens.clear()
-	if _focus_tween and is_instance_valid(_focus_tween):
-		_focus_tween.kill()
-	_focus_tween = null
-	# Kill enter animation tweens to prevent orphaned animations when card is recycled
-	if _enter_tween and is_instance_valid(_enter_tween):
-		_enter_tween.kill()
-		# Notify listeners that the animation was cancelled (so counters can be decremented)
-		enter_animation_completed.emit()
-	_enter_tween = null
-	if _enter_tween_alpha and is_instance_valid(_enter_tween_alpha):
-		_enter_tween_alpha.kill()
-	_enter_tween_alpha = null
-	alignment_offset = Vector2.ZERO
-	_loading_game_id = ""
-	_image_retry_count = 0
-	_download_retry_count = 0
-	game = null
+func _on_focus_exited():
 	_is_focused = false
-	if _card_state:
-		var sz = _card_state.card_size
-		custom_minimum_size = sz
-		size = sz
-	if visual_container:
-		visual_container.scale = Vector2.ONE
-		visual_container.position = Vector2.ZERO
-		visual_container.anchors_preset = Control.PRESET_FULL_RECT
-		visual_container.anchor_right = 1.0
-		visual_container.anchor_bottom = 1.0
-		visual_container.pivot_offset = (_card_state.card_size / 2) if _card_state else Vector2(100, 100)
-	if _current_texture != _loading_texture:
-		_set_texture(_loading_texture)
-	set_card_alpha(1.0)
-	if game_title_label:
-		game_title_label.visible = false
-	if _focus_stack:
-		_focus_stack.visible = false
-		_focus_stack.modulate.a = 0.0
-		for child in _focus_stack.get_children():
-			if child is EffectBase and child.material is ShaderMaterial:
-				child.material.set_shader_parameter("effect_alpha", 0.0)
+	_update_status_icon()
+	z_index = 0
+	if _focus_tween:
+		_focus_tween.kill()
+	_focus_tween = create_tween()
+	_focus_tween.set_trans(Tween.TRANS_QUAD)
+	_focus_tween.set_ease(Tween.EASE_OUT)
+	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
 
-func refresh_settings():
-	"""Refresh card settings from global config. Rebuilds effects if orientation or effect settings changed."""
-	var old_orientation = _card_state.orientation if _card_state else 0
-	var old_zoom = _card_state.zoom_level if _card_state else 1.0
-	var old_effects = _card_state.effect_settings.duplicate(true) if _card_state else []
-	var old_focus_effects = _card_state.focus_effect_settings.duplicate(true) if _card_state else []
-	_update_card_state_from_settings()
-	
-	# Update zoom if it changed
-	if _card_state.zoom_level != old_zoom:
-		_on_zoom_changed(_card_state.zoom_level)
-	
-	var effects_changed = _card_state.effect_settings != old_effects
-	var focus_effects_changed = _card_state.focus_effect_settings != old_focus_effects
-	
-	# Rebuild effects if orientation or effect settings changed
-	if _card_state.orientation != old_orientation or effects_changed or focus_effects_changed:
-		_rebuild_effects()
-		# If focused, restore focus state after rebuild
-		if _is_focused:
-			_show_focus_effects(true)
-	
-	# Always update title visibility in case the setting changed
-	_update_game_title_visibility()
-
-func set_image_priority(high_priority: bool):
-	if _current_image_task_id > 0:
-		MemoryManager.update_image_priority(_current_image_task_id, high_priority)
-	elif high_priority and game:
-		_load_cover(true)
-
-# Called by VirtualScrollGridContainer when zoom changes
-func set_card_zoom(new_zoom: float) -> void:
-	_card_state.zoom_level = new_zoom
-	# Always refresh visual state even if zoom_level setter deduplicates
-	_on_zoom_changed(new_zoom)
-
-func get_current_texture() -> Texture2D:
-	return _current_texture
+func _notification(what: int):
+	super._notification(what)
+	if what == NOTIFICATION_RESIZED:
+		pivot_offset = size / 2.0
+		_update_status_badge_layout()

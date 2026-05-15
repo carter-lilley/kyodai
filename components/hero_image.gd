@@ -50,7 +50,7 @@ func _load_effect_config():
 	var state = EffectContainerState.for_hero()
 	state.corner_radius_ratio = config.get("corner_radius", 0.06)
 	state.effect_settings = config.get("effects", [])
-	_effect_stack.initialize(state, state.effect_settings)
+	_effect_stack.initialize(state, state.effect_settings, "hero")
 
 func _notification(what: int) -> void:
 	# Update size when resized

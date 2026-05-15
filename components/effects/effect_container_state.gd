@@ -8,7 +8,7 @@ signal corner_radius_changed(new_ratio: float)
 signal border_inset_changed(new_ratio: float)
 signal shape_changed()
 
-# Base dimensions (unscaled reference sizes)
+# Base dimensions (unscaled reference sizes in DP)
 var base_size: Vector2 = Vector2(202.0, 270.0)
 
 # Container properties - reactive
@@ -89,13 +89,16 @@ func _set(property: StringName, value: Variant) -> bool:
 
 func _init(p_base_size: Vector2 = Vector2(202.0, 270.0)) -> void:
 	base_size = p_base_size
-	container_size = base_size
+	# Initialize container_size in pixels (base DP * scale)
+	container_size = Vector2(M3Units.dp(base_size.x), M3Units.dp(base_size.y))
 	_recalculate_dimensions()
 	_recalculate_shape()
 
 func _recalculate_dimensions() -> void:
 	var base = _get_base_dimensions()
-	container_size = base * zoom_level
+	# Convert DP base dimensions to pixels before applying zoom
+	var base_pixels = Vector2(M3Units.dp(base.x), M3Units.dp(base.y))
+	container_size = base_pixels * zoom_level
 
 func _get_base_dimensions() -> Vector2:
 	return get_base_dimensions_for_orientation(orientation)

@@ -10,26 +10,15 @@ var _current_view: View
 # Layout management - NEW ARCHITECTURE
 var _root_control: Control = null  # Plain control, never replaced
 var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orientation change
-var _navigation_bar: NavigationBar = null
-var _controls_bar: ControlsBar = null
-var _controls_bar_enabled: bool = true
-var _controls_bar_mode: int = 0  # 0 = floating, 1 = docked
-var _current_bar_position: String = "bottom"
+var _nav_node: M3Navigation = null
+var _nav_type: int = 0  # 0 = Bar, 1 = Rail
 
-# Position index mapping
-const BAR_POSITIONS = ["bottom", "top", "left", "right"]
-
-# Bar sizing constants
-const BAR_SIZE_RATIO_HORIZONTAL = 0.075  # 7.5% of viewport height for top/bottom
-const BAR_SIZE_RATIO_VERTICAL = 0.05     # 5% of viewport width for left/right
-
-# Controls Bar sizing
-const CONTROLS_BAR_HEIGHT_RATIO = 0.0525  # 70% of navigation bar height (7.5% * 0.7 = 5.25%)
-const CONTROLS_BAR_WIDTH_FLOATING = 0.6   # 60% of screen width in floating mode
-const CONTROLS_BAR_Z_INDEX = 50  # Above game cards, below modals
-
-# Docked controls bar wrapper for vertical layout
-var _controls_bar_wrapper: BoxContainer = null
+const NAV_DESTINATIONS = [
+	{"id": "home",      "label": "Home",      "icon": "home",     "view": "Home"},
+	{"id": "library",   "label": "Library",   "icon": "library",  "view": "Library"},
+	{"id": "downloads", "label": "Downloads", "icon": "download", "view": "Downloads"},
+	{"id": "settings",  "label": "Settings",  "icon": "cog",      "view": "Settings"},
+]
 
 # Default hero height ratio (will be overridden by settings)
 const HERO_SIZE_RATIO_DEFAULT = 0.33
@@ -73,24 +62,18 @@ signal layout_changed(position: String)
 
 func initialize(
 	tab_container: TabContainer,
-	navigation_bar: NavigationBar,
 	hero_image: HeroImage,
 	hero_spacer: Control,
 	library_background: LibraryBackground,
 	content_wrapper: Control,
 	main_content_vbox: VBoxContainer,
-	root_layout: Control,
-	controls_bar: ControlsBar = null
+	root_layout: Control
 ) -> void:
 	"""Initialize UIManager with all pre-built nodes from main.tscn."""
 	
-	# Debug: Log received nodes
-	# Store references to all pre-built nodes
 	_tab_container = tab_container
 	_tab_container.tab_changed.connect(_on_tab_changed)
 	
-	_navigation_bar = navigation_bar
-	_controls_bar = controls_bar
 	_hero_image = hero_image
 	_hero_spacer = hero_spacer
 	_library_background = library_background
@@ -98,54 +81,24 @@ func initialize(
 	_main_content_vbox = main_content_vbox
 	_root_control = root_layout
 	
-	# Get Controls Bar settings
+	# Get navigation type setting
 	if SettingsManager:
-		var enabled_setting = SettingsManager.get_setting("controls_bar_enabled")
-		if enabled_setting:
-			_controls_bar_enabled = enabled_setting.value
-		
-		var mode_setting = SettingsManager.get_setting("controls_bar_mode")
-		if mode_setting:
-			_controls_bar_mode = mode_setting.value
+		var type_setting = SettingsManager.get_setting("library_navigation_type")
+		if type_setting:
+			_nav_type = type_setting.value
 	
-	# Get current position setting
-	var position_setting = SettingsManager.get_setting("library_navigation_bar_position")
-	if position_setting:
-		_current_bar_position = _get_bar_position_string(position_setting.value)
-	
-	var is_horizontal = _current_bar_position in ["top", "bottom"]
-	
-	# Create InnerLayout (VBox or HBox based on orientation)
-	_inner_layout = _create_inner_layout(is_horizontal)
-	_root_control.add_child(_inner_layout)
-	
-	# Remove NavigationBar from Main and ContentWrapper from RootLayout (they're direct children now)
-	# We'll reparent them into InnerLayout
-	if _navigation_bar.get_parent():
-		_navigation_bar.get_parent().remove_child(_navigation_bar)
-	if _content_wrapper.get_parent():
-		_content_wrapper.get_parent().remove_child(_content_wrapper)
-	
-	# Add NavigationBar and ContentWrapper to InnerLayout in correct order
-	_update_inner_layout_children()
-	
-	# Setup Controls Bar if provided
-	if _controls_bar:
-		_setup_controls_bar()
+	# Create InnerLayout and nav node
+	_rebuild_nav_and_layout()
 	
 	# Ensure MainContentVBox fills ContentWrapper
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
-	# Connect viewport resize first
+	# Connect viewport resize
 	_connect_viewport_resize()
 	
-	# Update sizes immediately - nodes should be ready now
-	_update_bar_size()
+	# Update hero size
 	_update_hero_size()
-	
-	# Apply colors
-	_apply_navigation_bar_colors()
 	
 	# Setup existing tabs
 	_setup_home_tab()
@@ -160,7 +113,12 @@ func initialize(
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
 		_update_hero_visibility(current_tab_title)
-		_update_controls_bar_visibility(current_tab_title)
+		# Update nav selection
+		for i in range(NAV_DESTINATIONS.size()):
+			if NAV_DESTINATIONS[i].view == current_tab_title:
+				if _nav_node:
+					_nav_node.selected_index = i
+				break
 	
 	# Setup modal input handling
 	_setup_modal_input_handling()
@@ -175,12 +133,7 @@ func initialize(
 	# Connect to dual screen mode changes
 	if DisplayManager:
 		DisplayManager.dual_screen_mode_changed.connect(_on_dual_screen_mode_changed)
-		
-		# Debug: Check plugin availability
-		
-		# Check initial dual screen state (delay to allow plugins to initialize)
 		if DisplayManager.is_dual_screen_enabled():
-			# Try calling directly first to see if deferred is the issue
 			_initialize_dual_screen()
 	
 	# Set initial focus
@@ -229,191 +182,18 @@ func should_card_grab_focus_on_hover() -> bool:
 		return false
 	return true
 
-func _setup_controls_bar() -> void:
-	"""Setup the Controls Bar with initial state from settings."""
-	if not _controls_bar:
-		return
-	
-	# Remove from current parent if any
-	if _controls_bar.get_parent():
-		_controls_bar.get_parent().remove_child(_controls_bar)
-	
-	# Set initial display mode
-	_controls_bar.set_display_mode(_controls_bar_mode as ControlsBar.DisplayMode)
-	
-	# Add to appropriate parent based on mode
-	_update_controls_bar_layout()
-
-func _update_controls_bar_layout() -> void:
-	"""Update Controls Bar position and parent based on current mode."""
-	if not _controls_bar:
-		return
-	
-	# Remove from current parent
-	if _controls_bar.get_parent():
-		_controls_bar.get_parent().remove_child(_controls_bar)
-	
-	# Clean up wrapper if it exists
-	if _controls_bar_wrapper and _controls_bar_wrapper.get_parent():
-		_controls_bar_wrapper.get_parent().remove_child(_controls_bar_wrapper)
-		_controls_bar_wrapper.queue_free()
-		_controls_bar_wrapper = null
-	
-	match _controls_bar_mode:
-		0:  # Floating mode
-			_controls_bar.set_display_mode(ControlsBar.DisplayMode.FLOATING)
-			# Set z-index to be above game cards
-			_controls_bar.z_index = CONTROLS_BAR_Z_INDEX
-			# Add to ContentWrapper as floating overlay
-			_content_wrapper.add_child(_controls_bar)
-			# Don't use top_level - just use z_index for layering
-			_controls_bar.top_level = false
-			# Set full rect anchors first, then we'll position with offsets
-			_controls_bar.set_anchors_preset(Control.PRESET_FULL_RECT)
-			# Grow from bottom-right
-			_controls_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-			_controls_bar.grow_vertical = Control.GROW_DIRECTION_END
-			_update_controls_bar_size_floating()
-		
-		1:  # Docked mode
-			_controls_bar.set_display_mode(ControlsBar.DisplayMode.DOCKED)
-			_controls_bar.z_index = 0  # Normal z-index when docked
-			_controls_bar.top_level = false
-			
-			var is_horizontal = _current_bar_position in ["top", "bottom"]
-			
-			if is_horizontal:
-				# Horizontal layout: VBoxContainer
-				_controls_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				_controls_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-				
-				# Add in correct position
-				if _current_bar_position == "top":
-					# NavigationBar at top, then ControlsBar, then ContentWrapper
-					if _navigation_bar.get_parent() == _inner_layout:
-						var nav_idx = _inner_layout.get_children().find(_navigation_bar)
-						_inner_layout.add_child(_controls_bar)
-						_inner_layout.move_child(_controls_bar, nav_idx + 1)
-				else:  # bottom
-					# ContentWrapper, then ControlsBar, then NavigationBar at bottom
-					if _navigation_bar.get_parent() == _inner_layout:
-						var nav_idx = _inner_layout.get_children().find(_navigation_bar)
-						_inner_layout.add_child(_controls_bar)
-						_inner_layout.move_child(_controls_bar, nav_idx)
-			else:
-				# Vertical layout: HBoxContainer
-				# ControlsBar is always horizontal, so we need to wrap it in a VBoxContainer
-				# to maintain its horizontal orientation while filling vertical space properly
-				_controls_bar_wrapper = VBoxContainer.new()
-				_controls_bar_wrapper.name = "ControlsBarWrapper"
-				_controls_bar_wrapper.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-				_controls_bar_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
-				
-				# Add ControlsBar to wrapper
-				_controls_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				_controls_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-				_controls_bar_wrapper.add_child(_controls_bar)
-				
-				# Add wrapper to layout near navigation bar
-				if _current_bar_position == "left":
-					if _navigation_bar.get_parent() == _inner_layout:
-						var nav_idx = _inner_layout.get_children().find(_navigation_bar)
-						_inner_layout.add_child(_controls_bar_wrapper)
-						_inner_layout.move_child(_controls_bar_wrapper, nav_idx + 1)
-				else:  # right
-					if _navigation_bar.get_parent() == _inner_layout:
-						var nav_idx = _inner_layout.get_children().find(_navigation_bar)
-						_inner_layout.add_child(_controls_bar_wrapper)
-						_inner_layout.move_child(_controls_bar_wrapper, nav_idx)
-			
-			_update_controls_bar_size_docked()
-
-func _update_controls_bar_size_floating() -> void:
-	"""Update Controls Bar size and position for floating mode."""
-	if not _controls_bar or not is_inside_tree():
-		return
-	
-	var viewport_size = get_viewport().size
-	
-	# Height is 70% of navigation bar height
-	var nav_bar_height = viewport_size.y * BAR_SIZE_RATIO_HORIZONTAL
-	var controls_height = nav_bar_height * 0.7
-	
-	# Width is 60% of screen width
-	var controls_width = viewport_size.x * CONTROLS_BAR_WIDTH_FLOATING
-	
-	# Bottom offset is 10% of screen height from the bottom
-	var bottom_offset = viewport_size.y * 0.008
-	
-	_controls_bar.custom_minimum_size = Vector2(controls_width, controls_height)
-	
-	# Use PRESET_BOTTOM_RIGHT - anchor at bottom-right corner
-	_controls_bar.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_controls_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_controls_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	
-	# Position with offset from bottom-right
-	# offset_left/right control horizontal position (growing left)
-	# offset_top/bottom control vertical position (growing up)
-	_controls_bar.offset_left = -controls_width
-	_controls_bar.offset_top = -controls_height - bottom_offset
-	_controls_bar.offset_right = 0
-	_controls_bar.offset_bottom = -bottom_offset
-
-func _update_controls_bar_size_docked() -> void:
-	"""Update Controls Bar size for docked mode."""
-	if not _controls_bar or not is_inside_tree():
-		return
-	
-	var viewport_size = get_viewport().size
-	var is_horizontal = _current_bar_position in ["top", "bottom"]
-	
-	# Height is 70% of navigation bar height
-	var nav_bar_height = viewport_size.y * BAR_SIZE_RATIO_HORIZONTAL
-	var controls_height = nav_bar_height * 0.7
-	
-	if is_horizontal:
-		_controls_bar.custom_minimum_size = Vector2(0, controls_height)
-	else:
-		# In vertical mode, make it match navigation bar width
-		var nav_bar_width = viewport_size.x * BAR_SIZE_RATIO_VERTICAL
-		_controls_bar.custom_minimum_size = Vector2(nav_bar_width, 0)
-
-func _update_controls_bar_visibility(view_name: String) -> void:
-	"""Show/hide Controls Bar based on current view."""
-	if not _controls_bar:
-		return
-	
-	# Hide in Settings view, show everywhere else
-	var should_show = _controls_bar_enabled and view_name != "Settings"
-	_controls_bar.visible = should_show
-
 func _initialize_dual_screen() -> void:
 	"""Initialize dual screen mode (called deferred to allow plugin initialization)."""
 	_on_dual_screen_mode_changed(true, DisplayManager.get_second_screen_index())
 
-func _get_bar_position_string(index: int) -> String:
-	"""Convert position index to string."""
-	if index >= 0 and index < BAR_POSITIONS.size():
-		return BAR_POSITIONS[index]
-	return "bottom"
-
 func _connect_viewport_resize() -> void:
-	"""Connect to viewport resize signal to update bar size."""
+	"""Connect to viewport resize signal to update hero size."""
 	if get_viewport():
 		get_viewport().size_changed.connect(_on_viewport_resized)
 
 func _on_viewport_resized() -> void:
-	"""Handle viewport resize - update bar and hero sizes."""
-	_update_bar_size()
+	"""Handle viewport resize - update hero size."""
 	_update_hero_size()
-	
-	# Update Controls Bar size
-	if _controls_bar:
-		if _controls_bar_mode == 0:  # Floating
-			_update_controls_bar_size_floating()
-		else:  # Docked
-			_update_controls_bar_size_docked()
 
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	"""Create the inner layout container (VBox or HBox)."""
@@ -430,110 +210,120 @@ func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	return layout
 
 func _update_inner_layout_children() -> void:
-	"""Update the order of children in InnerLayout based on bar position."""
+	"""Update the order of children in InnerLayout based on nav type."""
 	
-	# Remove existing children (except Controls Bar wrapper if in docked mode with vertical layout)
+	# Remove existing children
 	for child in _inner_layout.get_children():
-		# Don't remove if it's the ControlsBar itself or its wrapper (we'll handle those specially)
-		if child == _controls_bar and _controls_bar_mode == 1:
-			continue
-		if child == _controls_bar_wrapper and _controls_bar_mode == 1:
-			continue
 		_inner_layout.remove_child(child)
 	
-	var is_horizontal = _current_bar_position in ["top", "bottom"]
+	var is_bar = _nav_type == 0
 	
-	# Configure size flags for NavigationBar (fixed size based on bar ratio)
-	if is_horizontal:
-		_navigation_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	else:
-		_navigation_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		_navigation_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Configure size flags for nav node
+	if _nav_node:
+		if is_bar:
+			_nav_node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_nav_node.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		else:
+			_nav_node.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			_nav_node.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
 	# Configure size flags for ContentWrapper (expand to fill remaining space)
 	_content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
 	# Remove from current parents before reparenting (fixes Android dual-screen mode issue)
-	if _navigation_bar.get_parent():
-		_navigation_bar.get_parent().remove_child(_navigation_bar)
+	if _nav_node and _nav_node.get_parent():
+		_nav_node.get_parent().remove_child(_nav_node)
 	if _content_wrapper.get_parent():
 		_content_wrapper.get_parent().remove_child(_content_wrapper)
 	
 	# Add in correct order
-	match _current_bar_position:
-		"top", "left":
-			_inner_layout.add_child(_navigation_bar)
-			_inner_layout.add_child(_content_wrapper)
-		"bottom", "right", _:
-			_inner_layout.add_child(_content_wrapper)
-			_inner_layout.add_child(_navigation_bar)
-	
-	# Configure navigation bar orientation
-	if is_horizontal:
-		_navigation_bar.set_orientation(NavigationBar.BarOrientation.HORIZONTAL)
+	if is_bar:
+		# Bar at bottom: ContentWrapper first, then nav
+		_inner_layout.add_child(_content_wrapper)
+		if _nav_node:
+			_inner_layout.add_child(_nav_node)
 	else:
-		_navigation_bar.set_orientation(NavigationBar.BarOrientation.VERTICAL)
-	
-	# Re-add Controls Bar if in docked mode
-	if _controls_bar and _controls_bar_mode == 1:
-		_update_controls_bar_layout()
+		# Rail at left: nav first, then ContentWrapper
+		if _nav_node:
+			_inner_layout.add_child(_nav_node)
+		_inner_layout.add_child(_content_wrapper)
 
 # ============================================================================
-# Layout Updates (No rebuilding, just property changes)
+# Layout Updates
 # ============================================================================
 
-func _update_layout_orientation() -> void:
-	"""Update layout when orientation changes. Only replaces InnerLayout if needed."""
+func _rebuild_nav_and_layout() -> void:
+	"""Rebuild nav node and layout when type changes."""
 	
-	var position_setting = SettingsManager.get_setting("library_navigation_bar_position")
-	if position_setting:
-		_current_bar_position = _get_bar_position_string(position_setting.value)
+	var is_bar = _nav_type == 0
+	var is_horizontal = is_bar
 	
-	var is_horizontal = _current_bar_position in ["top", "bottom"]
-	var current_is_horizontal = _inner_layout is VBoxContainer
-	
-	# Only replace InnerLayout if orientation type changed
-	if is_horizontal != current_is_horizontal:
-		# IMPORTANT: Remove children from old layout BEFORE freeing it
-		# Otherwise queue_free() will destroy NavigationBar and ContentWrapper too!
-		if _navigation_bar.get_parent() == _inner_layout:
-			_inner_layout.remove_child(_navigation_bar)
+	# Remove existing nav and content from current layout
+	if _inner_layout:
+		if _nav_node and _nav_node.get_parent() == _inner_layout:
+			_inner_layout.remove_child(_nav_node)
 		if _content_wrapper.get_parent() == _inner_layout:
 			_inner_layout.remove_child(_content_wrapper)
-		# Remove Controls Bar or its wrapper if in docked mode
-		if _controls_bar and _controls_bar_mode == 1:
-			if _controls_bar.get_parent() == _inner_layout:
-				_inner_layout.remove_child(_controls_bar)
-			if _controls_bar_wrapper and _controls_bar_wrapper.get_parent() == _inner_layout:
-				_inner_layout.remove_child(_controls_bar_wrapper)
-		
-		# Create new InnerLayout
-		var new_layout = _create_inner_layout(is_horizontal)
-		
-		# Replace old layout
-		_root_control.remove_child(_inner_layout)
-		_inner_layout.queue_free()
-		_inner_layout = new_layout
+	
+	# Free old nav node
+	if _nav_node:
+		_nav_node.queue_free()
+		_nav_node = null
+	
+	# Check if we need to replace InnerLayout (VBox ↔ HBox)
+	var current_is_horizontal = _inner_layout is VBoxContainer
+	if is_horizontal != current_is_horizontal:
+		if _inner_layout and _inner_layout.get_parent() == _root_control:
+			_root_control.remove_child(_inner_layout)
+			_inner_layout.queue_free()
+		_inner_layout = _create_inner_layout(is_horizontal)
 		_root_control.add_child(_inner_layout)
-		
-		# Re-add children in correct order (they're now orphaned but still valid)
-		_update_inner_layout_children()
-	else:
-		# Just update child order
-		_update_inner_layout_children()
+	elif not _inner_layout:
+		# First-time initialization
+		_inner_layout = _create_inner_layout(is_horizontal)
+		_root_control.add_child(_inner_layout)
 	
-	# Update Controls Bar layout if in docked mode
-	if _controls_bar and _controls_bar_mode == 1:
-		_update_controls_bar_layout()
+	# Create new nav node
+	_create_nav_node()
 	
-	# Update sizes
-	_update_bar_size()
+	# Re-add children in correct order
+	_update_inner_layout_children()
+	
+	# Update hero size
 	_update_hero_size()
 	
 	# Emit signal
-	layout_changed.emit(_current_bar_position)
+	layout_changed.emit("bar" if is_bar else "rail")
+
+func _create_nav_node() -> void:
+	"""Create the M3 navigation node (Bar or Rail) with destinations."""
+	if _nav_type == 0:
+		_nav_node = M3NavigationBar.new()
+	else:
+		_nav_node = M3NavigationRail.new()
+	
+	_nav_node.name = "M3Nav"
+	_nav_node.placement_mode = M3Navigation.PlacementMode.OVERLAY
+	_nav_node.label_visibility = M3Navigation.LabelVisibility.AUTO
+	
+	# Build destinations
+	var dest_data: Array[M3NavigationDestinationData] = []
+	for dest in NAV_DESTINATIONS:
+		var d = M3NavigationDestinationData.new()
+		d.id = dest.id
+		d.label = dest.label
+		d.icon_name = dest.icon
+		dest_data.append(d)
+	_nav_node.destinations = dest_data
+	
+	# Connect selection signal
+	_nav_node.destination_selected.connect(_on_nav_destination_selected)
+
+func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
+	"""Handle M3 nav destination selection."""
+	if index >= 0 and index < NAV_DESTINATIONS.size():
+		switch_to_tab(NAV_DESTINATIONS[index].view)
 
 # ============================================================================
 # Existing methods (preserved functionality)
@@ -600,28 +390,7 @@ func _verify_hero_size() -> void:
 	if _hero_image:
 		pass
 
-func _update_bar_size() -> void:
-	"""Update navigation bar size based on viewport and orientation."""
-	if not _navigation_bar or not is_inside_tree():
-		return
-	
-	var viewport_size = get_viewport().size
-	var is_horizontal = _current_bar_position in ["top", "bottom"]
-	
-	if is_horizontal:
-		var target_height = viewport_size.y * BAR_SIZE_RATIO_HORIZONTAL
-		_navigation_bar.custom_minimum_size = Vector2(0, target_height)
-		_navigation_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_navigation_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	else:
-		var target_width = viewport_size.x * BAR_SIZE_RATIO_VERTICAL
-		_navigation_bar.custom_minimum_size = Vector2(target_width, 0)
-		_navigation_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		_navigation_bar.size_flags_vertical = Control.SIZE_EXPAND_FILL
-
 func _update_zoom_range_for_current_view() -> void:
-	if not _navigation_bar:
-		return
 	var current_view_name = _current_view.view_name if _current_view else ""
 	if not current_view_name in ["Home", "Library"]:
 		return
@@ -630,22 +399,9 @@ func _update_zoom_range_for_current_view() -> void:
 	var view = _views[current_view_name]
 	var grid = view.games_grid if "games_grid" in view else null
 	if grid:
-		var max_zoom = 1.0 if grid.force_items_per_line > 0 else 0.5
-		_navigation_bar.set_zoom_range(0.15, max_zoom, 0.01)
-
-# Keep other existing methods...
-func _apply_navigation_bar_colors() -> void:
-	"""Apply bar background and icon colors from settings."""
-	if not _navigation_bar:
-		return
-	
-	var bar_color_setting = SettingsManager.get_setting("library_bar_color")
-	if bar_color_setting:
-		_navigation_bar.set_bar_background_color(bar_color_setting.value)
-	
-	var icon_color_setting = SettingsManager.get_setting("library_icon_color")
-	if icon_color_setting:
-		_navigation_bar.set_icon_color(icon_color_setting.value)
+		var max_zoom = 1.0 if grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
+		# Zoom overlay is managed by main.gd; UIManager just knows the range
+		pass
 
 func _rebuild_views(reason: String, use_true: bool = false) -> void:
 	"""Rebuild visible views immediately, mark hidden views for rebuild."""
@@ -668,16 +424,14 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_background_config":
 			if _library_background and _value is Dictionary:
 				_library_background.set_background_config(_value.duplicate())
-		"library_navigation_bar_position":
-			_current_bar_position = _get_bar_position_string(setting.value)
-			_update_layout_orientation()
+		"library_navigation_type":
+			_nav_type = setting.value
+			_rebuild_nav_and_layout()
 		"library_layout_mode":
 			_rebuild_views("Layout mode changed")
 			_update_zoom_range_for_current_view()
 		"library_focus_scale":
 			_rebuild_views("Focus scale changed")
-		"library_card_alignment":
-			_rebuild_views("Card alignment changed")
 		"card_effect_config":
 			_rebuild_views("Card effects changed", true)
 		"hero_effect_config":
@@ -690,21 +444,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 				_views["Library"].mark_for_rebuild("Hero height changed")
 		"library_grid_padding":
 			_rebuild_views("Grid padding changed")
-		"library_bar_color":
-			if _navigation_bar:
-				_navigation_bar.set_bar_background_color(setting.value)
-		"library_icon_color":
-			if _navigation_bar:
-				_navigation_bar.set_icon_color(setting.value)
-		"controls_bar_enabled":
-			_controls_bar_enabled = setting.value
-			if _current_view:
-				_update_controls_bar_visibility(_current_view.view_name)
-		"controls_bar_mode":
-			_controls_bar_mode = setting.value
-			_update_controls_bar_layout()
-			if _current_view:
-				_update_controls_bar_visibility(_current_view.view_name)
 
 func _setup_home_tab():
 	var home_idx = _get_tab_index("Home")
@@ -802,7 +541,7 @@ func _set_initial_focus() -> void:
 	await get_tree().process_frame
 	
 	# Try to find the home button in the navigation bar (search recursively since buttons are in dynamic containers)
-	var home_button = _find_home_button()
+	var home_button = find_home_button()
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
 		home_button.grab_focus()
 		return
@@ -813,13 +552,22 @@ func _set_initial_focus() -> void:
 		if first_focusable:
 			first_focusable.grab_focus()
 
-func _find_home_button() -> Control:
-	"""Find the Home button in the navigation bar."""
-	if not _navigation_bar:
+func find_home_button() -> Control:
+	"""Find the Home destination in the M3 nav."""
+	if not _nav_node:
 		return null
 	
-	# Search recursively for a button named HomeButton
-	return _find_node_by_name(_navigation_bar, "HomeButton")
+	# M3NavigationDestination items are children of the nav's content container
+	# Search recursively for the first destination node (index 0 = Home)
+	for child in _nav_node.get_children():
+		if child is M3NavigationDestination:
+			# The first M3NavigationDestination is Home
+			return child
+		# Also search deeper in case they're inside containers
+		for sub in child.get_children():
+			if sub is M3NavigationDestination:
+				return sub
+	return null
 
 func _find_node_by_name(node: Node, target_name: String) -> Node:
 	"""Recursively find a node by name."""
@@ -901,11 +649,6 @@ func _on_tab_changed(tab_idx: int):
 		# Update hero image visibility based on view
 		_update_hero_visibility(tab_title)
 		
-		# Update Controls Bar visibility based on view
-		_update_controls_bar_visibility(tab_title)
-		
-		# Emit tab changed signal for global UI updates
-		tab_changed.emit(tab_title)
 
 func _update_hero_visibility(view_name: String) -> void:
 	"""Show/hide hero image, spacer, and library background based on current view and settings."""
@@ -1028,9 +771,9 @@ func switch_to_tab(tab_name: String):
 	if idx != -1:
 		_tab_container.current_tab = idx
 
-func get_bar_position() -> String:
-	"""Get the current navigation bar position."""
-	return _current_bar_position
+func get_nav_type() -> int:
+	"""Get the current navigation type (0 = Bar, 1 = Rail)."""
+	return _nav_type
 
 # ==================== MODAL MANAGEMENT ====================
 
@@ -1267,7 +1010,7 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	"""Reparent RootLayout into MainViewport for dual screen.
 	
 	The RootLayout contains the full UI hierarchy including InnerLayout (which holds
-	NavigationBar and ContentWrapper), so we only need to reparent RootLayout.
+	M3 nav and ContentWrapper), so we only need to reparent RootLayout.
 	"""
 	if _is_nodes_reparented:
 		return
@@ -1281,7 +1024,7 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	if ui_layer:
 		_ui_layer_original_parent = ui_layer.get_parent()
 	
-	# Remove RootLayout from current parent (this includes NavigationBar via InnerLayout)
+	# Remove RootLayout from current parent (this includes M3 nav via InnerLayout)
 	if _root_control and _root_control.get_parent():
 		_root_control.get_parent().remove_child(_root_control)
 	
@@ -1333,7 +1076,7 @@ func _restore_ui_to_original_parents() -> void:
 	"""Restore RootLayout to its original parent.
 	
 	RootLayout contains the full UI hierarchy including InnerLayout (which holds
-	NavigationBar and ContentWrapper), so restoring RootLayout restores everything.
+	M3 nav and ContentWrapper), so restoring RootLayout restores everything.
 	"""
 	if not _is_nodes_reparented:
 		return

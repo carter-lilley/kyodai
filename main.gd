@@ -2,14 +2,13 @@ extends Control
 
 # UI Nodes - initialized in _ready()
 var tab_container: TabContainer
-var navigation_bar: NavigationBar
-var controls_bar: ControlsBar
 var hero_image: HeroImage
 var hero_spacer: Control
 var library_background: LibraryBackground
 var content_wrapper: Control
 var main_content_vbox: VBoxContainer
 var root_layout: Control
+var view_mode_group: M3ButtonGroup
 
 # Cached reference to the on-screen keyboard (survives reparenting in dual-screen mode)
 var _keyboard: PanelContainer = null
@@ -40,8 +39,6 @@ func _ready():
 	
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
-	navigation_bar = get_node("NavigationBar")
-	controls_bar = get_node("ControlsBar")
 	hero_image = get_node("RootLayout/ContentWrapper/HeroImage")
 	hero_spacer = get_node("RootLayout/ContentWrapper/MainContentVBox/HeroSpacer")
 	library_background = get_node("RootLayout/ContentWrapper/LibraryBackground")
@@ -56,23 +53,26 @@ func _ready():
 	# Initialize UIManager with all the pre-built nodes
 	UIManager.initialize(
 		tab_container,
-		navigation_bar,
 		hero_image,
 		hero_spacer,
 		library_background,
 		content_wrapper,
 		main_content_vbox,
-		root_layout,
-		controls_bar
+		root_layout
 	)
 	
-	# Connect navigation bar signals
-	if navigation_bar:
-		navigation_bar.nav_button_pressed.connect(_on_nav_button_pressed)
-		navigation_bar.zoom_changed.connect(_on_zoom_changed)
-		navigation_bar.zoom_changed_finished.connect(_on_zoom_changed_finished)
-	else:
-		push_error("[Main] NavigationBar not found!")
+	# Connect zoom overlay signals
+	var zoom_overlay = get_node_or_null("ZoomOverlay")
+	if zoom_overlay:
+		zoom_overlay.zoom_changed.connect(_on_zoom_changed)
+		zoom_overlay.zoom_changed_finished.connect(_on_zoom_changed_finished)
+	
+	# Connect view mode buttons
+	# Note: UIManager.initialize() reparents ContentWrapper, so we must use the
+	# cached main_content_vbox reference instead of a root-relative path.
+	view_mode_group = main_content_vbox.get_node("HBoxContainer/M3ButtonGroup")
+	view_mode_group.selection_changed.connect(_on_view_mode_changed)
+	_sync_view_mode_button_to_setting()
 	
 	# Connect to UIManager for tab changes
 	UIManager.tab_changed.connect(_on_tab_changed)
@@ -85,7 +85,7 @@ func _ready():
 		LaunchManager.background_state_exited.connect(_on_background_state_exited)
 	
 	# Set initial view
-	_update_navigation_bar_for_view("Home")
+	_update_ui_for_view("Home")
 	
 	# Load and apply saved zoom setting (wait for views to be ready)
 	await get_tree().process_frame
@@ -142,11 +142,8 @@ func _on_oobe_wizard_completed():
 	# Restore focus to the home button
 	call_deferred("reset_focus_to_home_button")
 
-func _on_nav_button_pressed(view_name: String):
-	UIManager.switch_to_tab(view_name)
-
 func _on_tab_changed(view_name: String):
-	_update_navigation_bar_for_view(view_name)
+	_update_ui_for_view(view_name)
 	
 	# Apply saved zoom to newly visible view (deferred to allow layout)
 	if view_name in ["Home", "Library"]:
@@ -174,17 +171,87 @@ func _apply_zoom_to_view_deferred(view_name: String) -> void:
 	
 	grid.target_card_width_ratio = zoom_setting.value
 
-func _update_navigation_bar_for_view(view_name: String):
-	navigation_bar.set_current_view(view_name)
+func _update_ui_for_view(view_name: String):
+	# Show/hide view mode buttons only on Home and Library
+	if view_mode_group:
+		view_mode_group.visible = view_name in ["Home", "Library"]
 	
 	# Update zoom slider to match current view's grid
-	var view = UIManager.get_view(view_name)
-	if view and view_name in ["Home", "Library"]:
-		var games_grid = _get_view_grid(view)
+	var zoom_overlay = get_node_or_null("ZoomOverlay")
+	if zoom_overlay:
+		zoom_overlay.visible = view_name in ["Home", "Library"]
+		var view = UIManager.get_view(view_name)
+		if view and view_name in ["Home", "Library"]:
+			var games_grid = _get_view_grid(view)
+			if games_grid:
+				zoom_overlay.set_zoom_value(games_grid.target_card_width_ratio)
+				var max_zoom = 1.0 if games_grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
+				zoom_overlay.set_zoom_range(0.15, max_zoom, 0.01)
+
+func _on_view_mode_changed(selected_indices: Array[int]) -> void:
+	if selected_indices.is_empty():
+		return
+	
+	var new_mode: VirtualScrollGridContainer.ViewMode
+	var setting_value: int
+	
+	match selected_indices[0]:
+		0:  # Grid
+			new_mode = VirtualScrollGridContainer.ViewMode.GRID
+			setting_value = 0
+		1:  # List
+			new_mode = VirtualScrollGridContainer.ViewMode.LIST
+			setting_value = 3
+		2:  # Carousel
+			new_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
+			setting_value = 2
+		_:
+			return
+	
+	# Apply to both Home and Library grids
+	for view_name in ["Home", "Library"]:
+		var view = UIManager.get_view(view_name)
+		if view:
+			var grid = _get_view_grid(view)
+			if grid:
+				grid.view_mode = new_mode
+			else:
+				push_error("[Main] No grid found for view: " + view_name)
+		else:
+			push_error("[Main] View not found: " + view_name)
+	
+	# Save to settings
+	if SettingsManager:
+		var mode_setting = SettingsManager.get_setting("library_layout_mode")
+		if mode_setting:
+			SettingsManager.set_setting(setting_value, mode_setting)
+			SettingsManager.save_settings()
+	
+	# Update zoom range since max zoom differs per mode
+	var current_view = UIManager.get_current_view()
+	if current_view:
+		var games_grid = _get_view_grid(current_view)
 		if games_grid:
-			navigation_bar.set_zoom_value(games_grid.target_card_width_ratio)
-			var max_zoom = 1.0 if games_grid.force_items_per_line > 0 else 0.5
-			navigation_bar.set_zoom_range(0.15, max_zoom, 0.01)
+			var max_zoom = 1.0 if new_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
+			var zoom_overlay = get_node_or_null("ZoomOverlay")
+			if zoom_overlay:
+				zoom_overlay.set_zoom_range(0.15, max_zoom, 0.01)
+
+func _sync_view_mode_button_to_setting() -> void:
+	if not view_mode_group or not SettingsManager:
+		return
+	
+	var mode_setting = SettingsManager.get_setting("library_layout_mode")
+	var layout_mode = mode_setting.value if mode_setting else 0
+	
+	var button_index: int
+	match layout_mode:
+		0, 1: button_index = 0  # Grid
+		2:    button_index = 2  # Carousel
+		3:    button_index = 1  # List
+		_:    button_index = 0
+	
+	view_mode_group.select_button(button_index)
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""
@@ -207,7 +274,9 @@ func _on_zoom_changed_finished(_value: float):
 			snapped_value = games_grid.target_card_width_ratio
 	
 	# Update slider to match snapped value
-	navigation_bar.set_zoom_value(snapped_value)
+	var zoom_overlay = get_node_or_null("ZoomOverlay")
+	if zoom_overlay:
+		zoom_overlay.set_zoom_value(snapped_value)
 	
 	# Save snapped zoom to settings
 	if SettingsManager:
@@ -248,35 +317,16 @@ func _load_and_apply_saved_zoom() -> void:
 			if grid:
 				grid.target_card_width_ratio = saved_zoom
 	
-	# Set navigation bar slider to saved value
-	if navigation_bar:
-		navigation_bar.set_zoom_value(saved_zoom)
-
-func set_status_text(text: String):
-	if is_instance_valid(navigation_bar):
-		navigation_bar.set_status_text(text)
+	# Set zoom overlay slider to saved value
+	var zoom_overlay = get_node_or_null("ZoomOverlay")
+	if zoom_overlay:
+		zoom_overlay.set_zoom_value(saved_zoom)
 
 func reset_focus_to_home_button() -> void:
-	"""Reset focus to the Home button in the navigation bar."""
-	if not is_instance_valid(navigation_bar):
-		return
-	
-	# Search recursively for HomeButton since it's in dynamic containers
-	var home_button = _find_node_by_name(navigation_bar, "HomeButton")
+	"""Reset focus to the Home destination in the M3 nav."""
+	var home_button = UIManager.find_home_button()
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
 		home_button.grab_focus()
-
-func _find_node_by_name(node: Node, target_name: String) -> Node:
-	"""Recursively find a node by name."""
-	if node.name == target_name:
-		return node
-	
-	for child in node.get_children():
-		var result = _find_node_by_name(child, target_name)
-		if result:
-			return result
-	
-	return null
 
 func _setup_repeat():
 	_delay_timer = Timer.new()
@@ -373,23 +423,24 @@ func _input(event: InputEvent):
 		return
 
 func _adjust_zoom(delta: float) -> void:
-	if not navigation_bar:
+	var zoom_overlay = get_node_or_null("ZoomOverlay")
+	if not zoom_overlay:
 		return
 	
-	var current_zoom = navigation_bar.get_zoom_value()
+	var current_zoom = zoom_overlay.get_zoom_value()
 	
 	var max_zoom = 0.5
 	var current_view = UIManager.get_current_view()
 	if current_view:
 		var games_grid = _get_view_grid(current_view)
-		if games_grid and games_grid.force_items_per_line > 0:
+		if games_grid and games_grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID:
 			max_zoom = 1.0
 	
 	var new_zoom = clampf(current_zoom + delta, 0.05, max_zoom)
 	
 	if not is_equal_approx(current_zoom, new_zoom):
 		var focused_index = _get_focused_card_index()
-		navigation_bar.set_zoom_value(new_zoom)
+		zoom_overlay.set_zoom_value(new_zoom)
 		_on_zoom_changed(new_zoom)
 		if focused_index >= 0:
 			call_deferred("_restore_focus_to_card", focused_index)

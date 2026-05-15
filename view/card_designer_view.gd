@@ -7,7 +7,6 @@ var _current_config: Dictionary = {}
 var _preview_card: GameCard
 var _effects_list: VBoxContainer
 var _add_effect_button: MenuButton
-var _orientation_btn: OptionButton
 var _corner_slider: HSlider
 var _left_scroll: ScrollContainer
 
@@ -112,18 +111,6 @@ func _setup_ui():
 	global_label.add_theme_font_size_override("font_size", 16)
 	left_vbox.add_child(global_label)
 	
-	var orient_label = Label.new()
-	orient_label.text = "Card Orientation"
-	left_vbox.add_child(orient_label)
-	
-	_orientation_btn = OptionButton.new()
-	_orientation_btn.add_item("2/3 (Tall)", 0)
-	_orientation_btn.add_item("3/4 (Vertical)", 1)
-	_orientation_btn.add_item("1/1 (Square)", 2)
-	_orientation_btn.add_item("16/11 (Horizontal)", 3)
-	_orientation_btn.item_selected.connect(_on_orientation_changed)
-	left_vbox.add_child(_orientation_btn)
-	
 	var corner_label = Label.new()
 	corner_label.text = "Corner Radius (0-1)"
 	left_vbox.add_child(corner_label)
@@ -219,7 +206,6 @@ func _load_current_config():
 	else:
 		_current_config = _get_default_config()
 	
-	_orientation_btn.select(_current_config.get("card_orientation", 0))
 	_corner_slider.value = _current_config.get("corner_radius", 0.06)
 	
 	_container_state.orientation = _current_config.get("card_orientation", 0)
@@ -240,16 +226,9 @@ func _setup_preview_card():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
-	var state = EffectContainerState.for_card()
-	state.orientation = _current_config.get("card_orientation", 0)
-	# Corner radius is now 0.0-1.0 ratio directly
-	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
-	state.effect_settings = _current_config.get("effects", []).duplicate(true)
-	state.focus_effect_settings = _current_config.get("focus_effects", []).duplicate(true)
-	state.zoom_level = 1.5
-	state.game_texture = _preview_card._current_texture
-	
-	_preview_card.set_card_state(state)
+	# Save current config to SettingsManager so refresh_settings() picks it up
+	_save_to_settings()
+	_preview_card.refresh_settings()
 
 func _rebuild_effects_ui():
 	# Save collapsed states before rebuilding - regular effects
@@ -698,13 +677,6 @@ func _on_focus_effect_setting_changed(effect_index: int, setting_name: String, v
 		_update_preview()
 		_save_to_settings()
 
-func _on_orientation_changed(index: int):
-	_current_config["card_orientation"] = index
-	_container_state.orientation = index
-	_container_state.zoom_level = 1.5
-	_update_preview()
-	_save_to_settings()
-
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
 	_container_state.corner_radius_ratio = value
@@ -716,16 +688,9 @@ func _update_preview():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
-	var state = EffectContainerState.for_card()
-	state.orientation = _current_config.get("card_orientation", 0)
-	# Corner radius is now 0.0-1.0 ratio directly
-	state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
-	state.effect_settings = _current_config.get("effects", []).duplicate(true)
-	state.focus_effect_settings = _current_config.get("focus_effects", []).duplicate(true)
-	state.zoom_level = 1.5
-	state.game_texture = _preview_card._current_texture
-	
-	_preview_card.set_card_state(state)
+	# Save current config to SettingsManager so refresh_settings() picks it up
+	_save_to_settings()
+	_preview_card.refresh_settings()
 
 func _save_to_settings() -> void:
 	"""Save the current config to SettingsManager immediately."""

@@ -67,19 +67,15 @@ const Type = SettingsVar.SettingType
 
 @export_subgroup("Library Appearance")
 # General layout settings (always visible)
-@export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Layout Mode", "How game cards are arranged in the library", 0.0, 3.0, 1.0, ["Vertical Grid", "Horizontal Grid", "Single Row", "Single Column"])
-@export var library_navigation_bar_position := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Navigation Bar Position", "Position of the navigation bar on screen", 0.0, 3.0, 1.0, ["bottom", "top", "left", "right"])
+@export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"])
+@export var library_navigation_type := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
 @export var library_grid_margin_x := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin X", "Left/right margin around the grid in pixels", 0.0, 600.0, 1.0)
 @export var library_grid_margin_y := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin Y", "Top/bottom margin around the grid in pixels", 0.0, 600.0, 1.0)
 @export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.15, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
-@export var library_bar_color := SettingsVar.new(Type.COLOR, Color(0.12, 0.12, 0.12, 0.95), State.ENABLED, "Bar Color", "Background color of the navigation bar")
-@export var library_icon_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Icon Color", "Color of navigation icons")
 @export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
 @export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.08, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
-@export var library_card_alignment := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Card Alignment", "Alignment of unfocused cards relative to the focused card", 0.0, 2.0, 1.0, ["Top / Left", "Center", "Bottom / Right"])
-@export var controls_bar_enabled := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Show Controls Bar", "Display the quick controls bar in game views")
-@export var controls_bar_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Controls Bar Mode", "How the controls bar is displayed", 0.0, 1.0, 1.0, ["Floating", "Docked"])
+
 
 # Internal first-run flag (tracks if OOBE wizard has been completed)
 @export var first_run_completed := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "First Run Completed")

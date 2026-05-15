@@ -48,6 +48,8 @@ func _build_ui() -> void:
 	# Status label
 	_status_label = Label.new()
 	_status_label.visible = show_text
+	var fonts = M3Theme.load_fonts()
+	_status_label.add_theme_font_override("font", fonts["regular"])
 	hbox.add_child(_status_label)
 
 func set_status(status: Status, message: String = "", tooltip: String = "") -> void:
@@ -56,16 +58,16 @@ func set_status(status: Status, message: String = "", tooltip: String = "") -> v
 	
 	match status:
 		Status.NEUTRAL:
-			_status_dot.color = Color.GRAY
+			_status_dot.color = M3Theme.get_on_surface_variant()
 			_status_label.text = text_prefix + (message if not message.is_empty() else "Not configured")
 		Status.SUCCESS:
-			_status_dot.color = Color.GREEN
+			_status_dot.color = Color(0.2, 0.7, 0.3)
 			_status_label.text = text_prefix + (message if not message.is_empty() else "Ready")
 		Status.ERROR:
-			_status_dot.color = Color.RED
+			_status_dot.color = M3Theme.get_error()
 			_status_label.text = text_prefix + (message if not message.is_empty() else "Error")
 		Status.WARNING:
-			_status_dot.color = Color.YELLOW
+			_status_dot.color = Color(0.9, 0.6, 0.1)
 			_status_label.text = text_prefix + (message if not message.is_empty() else "Warning")
 	
 	if not tooltip.is_empty():

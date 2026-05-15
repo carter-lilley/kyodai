@@ -136,13 +136,8 @@ func _load_gamenative_games() -> void:
 	_gamenative_loaded = true
 
 func _update_status(text: String):
-	# Emit signal to update global status bar
-	# Find the main node and update its status
-	if not is_inside_tree() or not get_tree():
-		return
-	var main = get_tree().get_root().get_node_or_null("Main")
-	if main and main.has_method("set_status_text"):
-		main.set_status_text(text)
+	# Status bar removed - no-op
+	pass
 
 func _on_focus_changed(control: Control):
 	# Traverse up the tree to find if focused control is inside a GameCard
@@ -598,25 +593,17 @@ func _update_grid_orientation() -> void:
 	var mode_setting = SettingsManager.get_setting("library_layout_mode")
 	var layout_mode = mode_setting.value if mode_setting else 0
 	
+	# Migrate old 4-mode values to new 3-mode values
 	match layout_mode:
-		0: # Vertical Grid
-			games_grid.vertical = true
-			games_grid.force_items_per_line = 0
-		1: # Horizontal Grid
-			games_grid.vertical = false
-			games_grid.force_items_per_line = 0
-		2: # Single Row
-			games_grid.vertical = false
-			games_grid.force_items_per_line = 1
-		3: # Single Column
-			games_grid.vertical = true
-			games_grid.force_items_per_line = 1
+		0, 1:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.GRID
+		2:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
+		3:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
 	
 	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
 	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
-	
-	var alignment_setting = SettingsManager.get_setting("library_card_alignment")
-	games_grid.card_alignment = alignment_setting.value if alignment_setting else 0
 
 func _update_grid_margins() -> void:
 	"""Update the grid margins from settings."""
