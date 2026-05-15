@@ -32,7 +32,7 @@ const MAX_IMAGE_RETRIES: int = 3
 var _download_retry_count: int = 0
 const MAX_DOWNLOAD_RETRIES: int = 2
 
-# Status badge overlay (child of M3Card media panel)
+# Status badge overlay (direct child of GameCard, positioned over media panel)
 var _status_badge: Panel = null
 const STATUS_BADGE_SIZE_RATIO: float = 0.04
 const STATUS_BADGE_MARGIN_RATIO: float = 0.05
@@ -51,28 +51,13 @@ var _touch_is_holding: bool = false
 var _long_press_timer: Timer = null
 
 func _ready():
-	print("[GameCard] _ready() START ", name)
 	super._ready()
-	
-	# Configure M3Card text labels to prevent variable-height grid breakage
-	var headline_label = get_node_or_null("RootContainer/TextMargin/TextContent/Headline")
-	if headline_label:
-		headline_label.max_lines_visible = 2
-		headline_label.clip_text = true
-		headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	var supporting_label = get_node_or_null("RootContainer/TextMargin/TextContent/SupportingText")
-	if supporting_label:
-		supporting_label.max_lines_visible = 1
-		supporting_label.clip_text = true
-		supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	
 	if preview_mode:
 		_setup_preview_mode()
-		print("[GameCard] _ready() END (preview mode) ", name)
 		return
 	
 	_update_card_state_from_settings()
-	_build_media_stack()
 	_update_display()
 	
 	# Connect M3Card signals
@@ -95,41 +80,16 @@ func _ready():
 		_long_press_timer.one_shot = true
 		_long_press_timer.timeout.connect(_on_long_press_timeout)
 		add_child(_long_press_timer)
-	
-	print("[GameCard] _ready() END ", name)
-
-func _rebuild_layout():
-	# Remove status badge before M3Card rebuilds, or it would be freed
-	# if it's inside the media panel (which gets recreated).
-	if _status_badge and _status_badge.get_parent():
-		_status_badge.get_parent().remove_child(_status_badge)
-	
-	super._rebuild_layout()
-	# M3Card frees _media_stack when it rebuilds its internal layout.
-	# Null the reference and rebuild so the media stack is restored.
-	_media_stack = null
-	_build_media_stack()
-	
-	# Add status badge into the new media panel so it sits over the art
-	if _status_badge:
-		var media_panel = get_node_or_null("RootContainer/MediaPanel")
-		if media_panel:
-			media_panel.add_child(_status_badge)
-		else:
-			add_child(_status_badge)
 
 func _setup_status_badge():
 	_status_badge = Panel.new()
 	_status_badge.name = "StatusBadge"
 	_status_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_status_badge.visible = false
-	_status_badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	var media_panel = get_node_or_null("RootContainer/MediaPanel")
-	if media_panel:
-		media_panel.add_child(_status_badge)
-	else:
-		add_child(_status_badge)
+	_status_badge.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	add_child(_status_badge)
 	_update_status_badge_style()
+	_update_status_badge_layout()
 
 func get_card_state() -> EffectContainerState:
 	return _card_state
@@ -178,39 +138,7 @@ func _build_media_stack():
 	if _current_texture:
 		_media_stack.set_game_texture(_current_texture)
 	
-	# Connect signal BEFORE adding to tree, so we catch the initial resize
-	# that may fire synchronously during add_child().
-	if not _media_stack.resized.is_connected(_on_media_stack_resized):
-		_media_stack.resized.connect(_on_media_stack_resized)
-	
 	set_media_content(_media_stack)
-	
-	# If add_child() triggered an immediate layout and the EffectStack already
-	# has its final size, the resized signal may have fired before we connected.
-	# Explicitly initialize shader params in that case.
-	if _media_stack.size.x > 0 and _media_stack.size.y > 0:
-		_on_media_stack_resized()
-
-func _on_media_stack_resized():
-	print("[GameCard] _on_media_stack_resized() size=", _media_stack.size if _media_stack else "null")
-	if not _media_stack or _media_stack.size.x <= 0 or _media_stack.size.y <= 0:
-		print("[GameCard] _on_media_stack_resized() aborting: invalid size")
-		return
-	
-	_card_state.container_size = _media_stack.size
-	
-	# The user's corner_radius_ratio is the source of truth.
-	# Convert it to an absolute pixel radius for the current media panel, then to DP for M3Card.
-	var min_dim = min(_media_stack.size.x, _media_stack.size.y)
-	var radius_pixels = clampf(_card_state.corner_radius_ratio * min_dim, 0.0, min_dim)
-	var new_corner_radius_dp = radius_pixels / M3Units.get_scale()
-	print("[GameCard] _on_media_stack_resized() min_dim=", min_dim, " radius_pixels=", radius_pixels, " new_corner_radius_dp=", new_corner_radius_dp, " current_dp=", corner_radius_dp)
-	if not is_equal_approx(new_corner_radius_dp, corner_radius_dp):
-		self.corner_radius_dp = new_corner_radius_dp
-	
-	_media_stack.update_state(_card_state)
-	_update_status_badge_layout()
-	_update_platform_badge()
 
 func _update_card_state_from_settings():
 	if SettingsManager:
@@ -226,7 +154,7 @@ func _update_card_state_from_settings():
 				_card_state.corner_radius_ratio = corner_value
 
 func set_card_zoom(_zoom: float) -> void:
-	# container_size is managed by _on_media_stack_resized() based on actual media panel size.
+	# EffectStack updates container_size automatically via NOTIFICATION_RESIZED.
 	# Setting zoom_level here would trigger _recalculate_dimensions() and overwrite container_size
 	# with an incorrect value before the layout pass corrects it.
 	pass
@@ -265,16 +193,13 @@ func restore_focus_animation() -> void:
 		_on_focus_exited()
 
 func _update_display():
-	print("[GameCard] _update_display() game=", game, " ready=", is_node_ready())
 	if not game or not is_node_ready():
-		print("[GameCard] _update_display() aborting")
 		return
 	_update_status_icon()
 	_update_platform_badge()
 	_load_cover(false)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
-	print("[GameCard] _update_display() headline=", headline, " supporting=", supporting_text)
 
 func _update_display_with_priority(high_priority: bool):
 	if not game or not is_node_ready():
@@ -289,29 +214,35 @@ func _update_status_badge_layout():
 	if not _status_badge:
 		return
 	
+	var media_panel = get_node_or_null("RootContainer/MediaPanel")
 	var panel_width: float = size.x
 	var panel_height: float = size.y
-	var parent = _status_badge.get_parent()
-	if parent and parent != self:
-		panel_width = parent.size.x
-		panel_height = parent.size.y
+	if media_panel and is_instance_valid(media_panel):
+		panel_width = media_panel.size.x
+		panel_height = media_panel.size.y
 	
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
 	
-	# Position in bottom-right of the media panel so it sits over the art
-	_status_badge.offset_left = -margin - badge_size
-	_status_badge.offset_top = -margin - badge_size
-	_status_badge.offset_right = -margin
-	_status_badge.offset_bottom = -margin
+	if media_panel and is_instance_valid(media_panel):
+		_status_badge.position = media_panel.position + Vector2(
+			panel_width - margin - badge_size,
+			panel_height - margin - badge_size
+		)
+	else:
+		_status_badge.position = Vector2(
+			panel_width - margin - badge_size,
+			panel_height - margin - badge_size
+		)
+	_status_badge.size = Vector2(badge_size, badge_size)
 
 func _update_status_badge_style():
 	if not _status_badge:
 		return
+	var media_panel = get_node_or_null("RootContainer/MediaPanel")
 	var panel_width = size.x if size.x > 0 else _card_state.container_size.x
-	var parent = _status_badge.get_parent()
-	if parent and parent != self and parent.size.x > 0:
-		panel_width = parent.size.x
+	if media_panel and is_instance_valid(media_panel) and media_panel.size.x > 0:
+		panel_width = media_panel.size.x
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var circle_radius = int(badge_size / 2.0)
 	
@@ -334,6 +265,7 @@ func _update_status_icon():
 		_status_badge.visible = false
 		return
 	_status_badge.visible = not _is_downloading
+	_update_status_badge_layout()
 	_update_status_badge_style()
 
 func _update_platform_badge():
@@ -727,4 +659,6 @@ func _notification(what: int):
 	super._notification(what)
 	if what == NOTIFICATION_RESIZED:
 		pivot_offset = size / 2.0
+		_update_status_badge_layout()
+		_update_platform_badge()
 		_update_status_badge_layout()

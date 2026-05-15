@@ -8,7 +8,7 @@ extends HBoxContainer
 ## single-select and multi-select interaction modes, and round/square shapes.
 
 enum Mode { STANDARD, CONNECTED }
-enum SelectMode { SINGLE, MULTI }
+enum SelectMode { SINGLE, MULTI, NONE }
 enum Shape { ROUND, SQUARE }
 
 # ============================================
@@ -129,9 +129,10 @@ func _is_valid_button(node: Node) -> bool:
 	return node is M3Button or node is M3IconButton or node is Button
 
 func _connect_button(btn: Button):
-	# Ensure toggle mode for group behavior
-	if btn is M3Button and btn.button_type != M3Button.Type.TOGGLE:
-		btn.button_type = M3Button.Type.TOGGLE
+	# Ensure toggle mode for group behavior (unless in NONE mode)
+	if select_mode != SelectMode.NONE:
+		if btn is M3Button and btn.button_type != M3Button.Type.TOGGLE:
+			btn.button_type = M3Button.Type.TOGGLE
 	
 	if not _button_callables.has(btn):
 		var callable = _on_button_pressed.bind(btn)
@@ -158,6 +159,9 @@ func _on_child_exiting(node: Node):
 		var removed_idx = _buttons.find(node)
 		_buttons.erase(node)
 		_disconnect_button(node)
+		
+		if select_mode == SelectMode.NONE:
+			return
 		
 		# Adjust selected indices after removal
 		var new_selection: Array[int] = []
@@ -204,6 +208,9 @@ func _on_button_pressed(btn: Button):
 				_selected_indices.append(index)
 			_update_button_states()
 			selection_changed.emit(_selected_indices.duplicate())
+		SelectMode.NONE:
+			# Normal push button behavior — just emit with empty selection
+			selection_changed.emit([])
 
 func _apply_initial_selection():
 	_selected_indices.clear()
@@ -223,6 +230,8 @@ func _apply_initial_selection():
 			for idx in initial_selection:
 				if idx >= 0 and idx < _buttons.size() and idx not in _selected_indices:
 					_selected_indices.append(idx)
+		SelectMode.NONE:
+			pass  # No selection tracking in NONE mode
 	
 	_update_button_states()
 
@@ -231,6 +240,9 @@ func _ensure_valid_selection():
 		_apply_initial_selection()
 
 func _update_button_states():
+	if select_mode == SelectMode.NONE:
+		return
+	
 	for i in range(_buttons.size()):
 		var btn = _buttons[i]
 		var should_be_pressed = i in _selected_indices

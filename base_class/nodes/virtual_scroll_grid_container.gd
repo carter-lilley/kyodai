@@ -70,9 +70,6 @@ var base_card_size: Vector2 = Vector2(BASE_CARD_WIDTH_DP, BASE_CARD_HEIGHT_DP)
 var card_size: Vector2 = Vector2(212.0, 280.0)
 var focused_card_size: Vector2 = Vector2(228.96, 302.4)
 
-# Cached margin container reference
-var _parent_margin_container: MarginContainer = null
-
 # Currently focused virtual index for dynamic stride math
 var _focused_virtual_index: int = -1
 
@@ -121,10 +118,6 @@ var _cached_game_ids: Dictionary = {}  # romm_id -> cache_key
 const MAX_CACHE_SIZE: int = 5000
 var _cache_access_order: Array[int] = []
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_PARENTED:
-		_find_parent_margin_container()
-
 func _update_view_mode() -> void:
 	if not _flow_container or not _scroll_container:
 		return
@@ -160,23 +153,8 @@ func _update_flow_container_flags() -> void:
 			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
-func _find_parent_margin_container() -> void:
-	var parent = get_parent()
-	while parent != null:
-		if parent is MarginContainer:
-			_parent_margin_container = parent
-			return
-		parent = parent.get_parent()
-	_parent_margin_container = null
-
 func _get_available_size() -> Vector2:
-	var available = size
-	if _parent_margin_container:
-		available.x -= (_parent_margin_container.get_theme_constant("margin_left")
-					+ _parent_margin_container.get_theme_constant("margin_right"))
-		available.y -= (_parent_margin_container.get_theme_constant("margin_top")
-					+ _parent_margin_container.get_theme_constant("margin_bottom"))
-	return Vector2(max(available.x, 1.0), max(available.y, 1.0))
+	return Vector2(max(size.x, 1.0), max(size.y, 1.0))
 
 func _get_normal_stride() -> float:
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:

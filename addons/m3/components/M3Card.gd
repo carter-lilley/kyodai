@@ -16,7 +16,7 @@ enum LayoutMode { VERTICAL, HORIZONTAL }
 const CORNER_RADIUS := 12.0
 const PADDING := 16.0
 
-@export var corner_radius_dp: float = CORNER_RADIUS:
+var corner_radius_dp: float = CORNER_RADIUS:
 	set(value):
 		if is_equal_approx(value, corner_radius_dp):
 			return
@@ -117,7 +117,6 @@ var _media_content: Control = null
 # ============================================
 
 func _ready():
-	print("[M3Card] _ready() called on ", name)
 	flat = true
 	text = ""
 	set_clip_children_mode(CanvasItem.ClipChildrenMode.CLIP_CHILDREN_AND_DRAW)
@@ -128,9 +127,6 @@ func _ready():
 	_update_media()
 	_update_text()
 	_update_appearance()
-	
-	# DEBUG: deferred redraw to ensure draw happens after full tree entry
-	call_deferred("queue_redraw")
 	
 	# Suppress native focus stylebox; we use a child panel instead
 	add_theme_stylebox_override("focus", StyleBoxEmpty.new())
@@ -308,15 +304,11 @@ func _rebuild_layout():
 # ============================================
 
 func _draw():
-	print("[M3Card] _draw() called on ", name, " size=", size, " stylebox=", _cached_stylebox, " corner_radius_dp=", corner_radius_dp)
-	self_modulate = Color(1.0, 0.3, 0.3)  # DEBUG: turn card red so we can visually confirm _draw() runs
 	if not _cached_stylebox:
-		print("[M3Card] _draw() aborting: _cached_stylebox is null")
 		return
 	
 	var rect = Rect2(Vector2.ZERO, size)
 	var radius = M3Units.dpi(corner_radius_dp)
-	print("[M3Card] _draw() radius=", radius, " rect=", rect)
 	
 	_configure_stylebox_for_state()
 	_cached_stylebox.set_corner_radius_all(radius)
@@ -376,9 +368,7 @@ func _update_media():
 		_media_panel.visible = media_texture != null
 
 func _update_text():
-	print("[M3Card] _update_text() headline=", headline, " supporting=", supporting_text, " labels_exist=", _headline_label != null and _supporting_label != null)
 	if not _headline_label or not _supporting_label:
-		print("[M3Card] _update_text() aborting: labels missing")
 		return
 	
 	var fonts = _cached_fonts
@@ -398,9 +388,7 @@ func _update_text():
 	_supporting_label.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
 
 func _update_appearance():
-	print("[M3Card] _update_appearance() text_margin=", _text_margin, " custom_min_size=", custom_minimum_size)
 	if not _text_margin:
-		print("[M3Card] _update_appearance() aborting: _text_margin missing")
 		return
 	
 	var pad = M3Units.dp(PADDING)
@@ -506,8 +494,6 @@ func _notification(what: int):
 				queue_redraw()
 		NOTIFICATION_RESIZED:
 			queue_redraw()
-		NOTIFICATION_DRAW:
-			print("[M3Card] NOTIFICATION_DRAW on ", name, " size=", size)
 
 func _gui_input(event: InputEvent):
 	if not clickable:

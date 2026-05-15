@@ -2,20 +2,68 @@
 class_name PlatformsSettingsView
 extends View
 
-var _platforms_container: VBoxContainer
+@onready var _scroll_container: ScrollContainer = $ScrollContainer
+@onready var _platforms_container: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer
+@onready var _cards_hbox: HBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox
+@onready var _cards_left: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsLeft
+@onready var _cards_right: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsRight
+
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
-var _scroll_container: ScrollContainer
-var _cards_hbox: HBoxContainer
-var _cards_left: VBoxContainer
-var _cards_right: VBoxContainer
 
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
 
 func _ready():
-	view_name = "Platforms"
-	_build_view()
+	view_name = "RomM"
+	
+	# Connect M3 checkbox signals and set initial values from settings
+	var m3_dup_covers: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_DuplicateCovers")
+	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
+	m3_dup_covers.button_pressed = fold_covers_setting.value if fold_covers_setting else false
+	m3_dup_covers.toggled.connect(_on_fold_covers_toggled)
+	
+	var m3_hide: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Hide")
+	var hide_no_covers_setting = SettingsManager.get_setting("hide_games_without_covers")
+	m3_hide.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
+	m3_hide.toggled.connect(_on_hide_no_covers_toggled)
+	
+	var m3_siblings: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Siblings")
+	var fold_romm_setting = SettingsManager.get_setting("fold_romm_siblings")
+	m3_siblings.button_pressed = fold_romm_setting.value if fold_romm_setting else true
+	m3_siblings.toggled.connect(_on_fold_romm_siblings_toggled)
+	
+	# Connect RomM text field signals and set initial values
+	var url_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_URL")
+	var url_setting = SettingsManager.get_setting("romm_url")
+	url_field.text = url_setting.value if url_setting else ""
+	url_field.text_changed.connect(_on_romm_url_changed)
+	
+	var user_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_User")
+	var user_setting = SettingsManager.get_setting("romm_username")
+	user_field.text = user_setting.value if user_setting else ""
+	user_field.text_changed.connect(_on_romm_username_changed)
+	
+	var pass_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_Pass")
+	var pass_setting = SettingsManager.get_setting("romm_password")
+	pass_field.text = pass_setting.value if pass_setting else ""
+	pass_field.text_changed.connect(_on_romm_password_changed)
+	
+	# Connect button signals
+	var check_updates_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
+	check_updates_button.pressed.connect(_on_check_updates_pressed)
+	
+	var select_all_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
+	select_all_button.pressed.connect(_on_select_all_pressed)
+	
+	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
+	sync_button.pressed.connect(_on_sync_pressed)
+	
+	var full_sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
+	full_sync_button.pressed.connect(_on_full_sync_pressed)
+	
+	# Add connection status UI below the button row
+	_add_connection_status_ui()
 	
 	# Connect to launch manager signals for extraction
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
@@ -26,163 +74,10 @@ func _ready():
 	
 	super._ready()
 
-func _build_view():
-	_scroll_container = ScrollContainer.new()
-	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_scroll_container.follow_focus = true
-	add_child(_scroll_container)
-	
-	var margin = MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_top", 20)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_bottom", 20)
-	_scroll_container.add_child(margin)
-	
-	_platforms_container = VBoxContainer.new()
-	_platforms_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_platforms_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_platforms_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_platforms_container.add_theme_constant_override("separation", 10)
-	margin.add_child(_platforms_container)
-	
-	# Add info label
-	var info_label = Label.new()
-	info_label.text = "Configure platform sync and emulators. Disabled platforms will have their games removed."
-	info_label.name = "InfoLabel"
-	info_label.add_theme_font_size_override("font_size", 14)
-	_platforms_container.add_child(info_label)
-	
-	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(0, 10)
-	_platforms_container.add_child(spacer)
-	
-	# Add fold duplicate covers toggle
-	var fold_covers_hbox = HBoxContainer.new()
-	fold_covers_hbox.name = "FoldCoversContainer"
-	
-	var fold_covers_checkbox = CheckBox.new()
-	fold_covers_checkbox.name = "FoldCoversCheckbox"
-	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
-	fold_covers_checkbox.button_pressed = fold_covers_setting.value if fold_covers_setting else false
-	fold_covers_checkbox.toggled.connect(_on_fold_covers_toggled)
-	
-	var fold_covers_label = Label.new()
-	fold_covers_label.text = "Fold duplicate covers into siblings"
-	fold_covers_label.tooltip_text = "During sync, games with identical cover art will be grouped together like RomM siblings"
-	
-	fold_covers_hbox.add_child(fold_covers_checkbox)
-	fold_covers_hbox.add_child(fold_covers_label)
-	_platforms_container.add_child(fold_covers_hbox)
-	
-	# Add hide games without covers toggle
-	var hide_no_covers_hbox = HBoxContainer.new()
-	hide_no_covers_hbox.name = "HideNoCoversContainer"
-	
-	var hide_no_covers_checkbox = CheckBox.new()
-	hide_no_covers_checkbox.name = "HideNoCoversCheckbox"
-	var hide_no_covers_setting = SettingsManager.get_setting("hide_games_without_covers")
-	hide_no_covers_checkbox.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
-	hide_no_covers_checkbox.toggled.connect(_on_hide_no_covers_toggled)
-	
-	var hide_no_covers_label = Label.new()
-	hide_no_covers_label.text = "Hide games without cover art"
-	hide_no_covers_label.tooltip_text = "Games without cover art will be hidden from the library view"
-	
-	hide_no_covers_hbox.add_child(hide_no_covers_checkbox)
-	hide_no_covers_hbox.add_child(hide_no_covers_label)
-	_platforms_container.add_child(hide_no_covers_hbox)
-	
-	# Add fold RomM siblings toggle
-	var fold_romm_hbox = HBoxContainer.new()
-	fold_romm_hbox.name = "FoldRommSiblingsContainer"
-	
-	var fold_romm_checkbox = CheckBox.new()
-	fold_romm_checkbox.name = "FoldRommSiblingsCheckbox"
-	var fold_romm_setting = SettingsManager.get_setting("fold_romm_siblings")
-	fold_romm_checkbox.button_pressed = fold_romm_setting.value if fold_romm_setting else true
-	fold_romm_checkbox.toggled.connect(_on_fold_romm_siblings_toggled)
-	
-	var fold_romm_label = Label.new()
-	fold_romm_label.text = "Fold RomM siblings"
-	fold_romm_label.tooltip_text = "RomM-designated regional variants (siblings) will be grouped under a single library entry"
-	
-	fold_romm_hbox.add_child(fold_romm_checkbox)
-	fold_romm_hbox.add_child(fold_romm_label)
-	_platforms_container.add_child(fold_romm_hbox)
-	
-	var spacer2 = Control.new()
-	spacer2.custom_minimum_size = Vector2(0, 10)
-	_platforms_container.add_child(spacer2)
-	
-	# Add check for updates button
-	var check_updates_button = Button.new()
-	check_updates_button.text = "Check for Updates"
-	check_updates_button.name = "CheckUpdatesButton"
-	check_updates_button.tooltip_text = "Check all installed emulators for updates and install them automatically"
-	check_updates_button.pressed.connect(_on_check_updates_pressed)
-	_platforms_container.add_child(check_updates_button)
-	
-	var spacer2b = Control.new()
-	spacer2b.custom_minimum_size = Vector2(0, 10)
-	_platforms_container.add_child(spacer2b)
-	
-	# Add select all/deselect all button
-	var select_all_button = Button.new()
-	select_all_button.text = "Select All"
-	select_all_button.name = "SelectAllButton"
-	select_all_button.pressed.connect(_on_select_all_pressed)
-	_platforms_container.add_child(select_all_button)
-	
-	var spacer3 = Control.new()
-	spacer3.custom_minimum_size = Vector2(0, 10)
-	_platforms_container.add_child(spacer3)
-	
-	# Add sync button
-	var sync_button = Button.new()
-	sync_button.text = "Sync Enabled Platforms"
-	sync_button.name = "SyncButton"
-	sync_button.pressed.connect(_on_sync_pressed)
-	_platforms_container.add_child(sync_button)
-	
-	# Add full sync button
-	var full_sync_button = Button.new()
-	full_sync_button.text = "Full Sync"
-	full_sync_button.name = "FullSyncButton"
-	full_sync_button.tooltip_text = "Force a complete resync of all platforms (ignores incremental sync)"
-	full_sync_button.pressed.connect(_on_full_sync_pressed)
-	_platforms_container.add_child(full_sync_button)
-	
-	var spacer4 = Control.new()
-	spacer4.custom_minimum_size = Vector2(0, 20)
-	_platforms_container.add_child(spacer4)
-	
-	# Two-column card layout
-	_cards_hbox = HBoxContainer.new()
-	_cards_hbox.name = "CardsHBox"
-	_cards_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_cards_hbox.add_theme_constant_override("separation", 10)
-	_platforms_container.add_child(_cards_hbox)
-	
-	_cards_left = VBoxContainer.new()
-	_cards_left.name = "CardsLeft"
-	_cards_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_cards_left.add_theme_constant_override("separation", 10)
-	_cards_hbox.add_child(_cards_left)
-	
-	_cards_right = VBoxContainer.new()
-	_cards_right.name = "CardsRight"
-	_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_cards_right.add_theme_constant_override("separation", 10)
-	_cards_hbox.add_child(_cards_right)
-
 func _fetch_platforms():
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "SyncButton", "FullSyncButton", "SelectAllButton", "CheckUpdatesButton", "FoldCoversContainer", "HideNoCoversContainer", "FoldRommSiblingsContainer", "CardsHBox"]:
+		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "CardsHBox"]:
 			continue
 		if child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -524,7 +419,7 @@ func _on_emulator_extraction_completed(emulator_id: String, success: bool):
 			card.refresh_ui()
 
 func _on_check_updates_pressed():
-	var check_button: Button = _platforms_container.get_node("CheckUpdatesButton")
+	var check_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
 	if check_button:
 		check_button.disabled = true
 		check_button.text = "Checking..."
@@ -552,7 +447,7 @@ func _on_sync_pressed():
 		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
 		return
 	
-	var sync_button: Button = _platforms_container.get_node("SyncButton")
+	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
 	
 	if sync_button:
 		sync_button.disabled = true
@@ -577,8 +472,8 @@ func _on_full_sync_pressed():
 		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
 		return
 	
-	var full_sync_button: Button = _platforms_container.get_node("FullSyncButton")
-	var sync_button: Button = _platforms_container.get_node("SyncButton")
+	var full_sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
+	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
 	
 	if full_sync_button:
 		full_sync_button.disabled = true
@@ -604,7 +499,7 @@ func _on_full_sync_pressed():
 	, true)  # true = force_full_sync
 
 func _update_select_all_button_text():
-	var select_all_button: Button = _platforms_container.get_node("SelectAllButton")
+	var select_all_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
 	if not select_all_button:
 		return
 	
@@ -624,7 +519,7 @@ func _update_select_all_button_text():
 	select_all_button.text = "Deselect All" if all_selected else "Select All"
 
 func _on_select_all_pressed():
-	var select_all_button: Button = _platforms_container.get_node("SelectAllButton")
+	var select_all_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
 	if not select_all_button:
 		return
 	
@@ -691,6 +586,75 @@ func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 	var setting = SettingsManager.get_setting("fold_romm_siblings")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
+
+func _on_romm_url_changed(text: String) -> void:
+	var setting = SettingsManager.get_setting("romm_url")
+	if setting:
+		SettingsManager.set_setting(text, setting)
+
+func _on_romm_username_changed(text: String) -> void:
+	var setting = SettingsManager.get_setting("romm_username")
+	if setting:
+		SettingsManager.set_setting(text, setting)
+
+func _on_romm_password_changed(text: String) -> void:
+	var setting = SettingsManager.get_setting("romm_password")
+	if setting:
+		SettingsManager.set_setting(text, setting)
+
+# ============================================
+# CONNECTION STATUS
+# ============================================
+
+func _add_connection_status_ui():
+	var container = HBoxContainer.new()
+	container.name = "ConnectionStatusUI"
+	container.custom_minimum_size = Vector2(0, 30)
+	
+	var indicator = Indicator.new()
+	indicator.name = "ConnectionIndicator"
+	indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.add_child(indicator)
+	
+	var test_button = M3Button.new()
+	test_button.name = "TestButton"
+	test_button.text = "Test"
+	test_button.button_size = M3Button.Size.SMALL
+	container.add_child(test_button)
+	
+	_platforms_container.add_child(container)
+	
+	# Set initial status
+	_update_connection_status(indicator)
+	
+	# Connect test button
+	test_button.pressed.connect(func():
+		_test_connection(indicator)
+	)
+
+func _test_connection(indicator: Indicator):
+	indicator.set_status(Indicator.Status.WARNING, "Testing connection...")
+	
+	NetworkManager.test_connection(func(online: bool):
+		if online:
+			indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
+			NotificationManager.show_notification("Connected to RomM successfully", Notification.Type.SUCCESS)
+		else:
+			if not NetworkManager.is_configured():
+				indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
+				NotificationManager.show_notification("RomM not configured - check URL, username, password", Notification.Type.ERROR)
+			else:
+				indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
+				NotificationManager.show_notification("Connection failed - check credentials", Notification.Type.ERROR)
+	)
+
+func _update_connection_status(indicator: Indicator):
+	if NetworkManager.is_online():
+		indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
+	elif not NetworkManager.is_configured():
+		indicator.set_status(Indicator.Status.NEUTRAL, "Not configured")
+	else:
+		indicator.set_status(Indicator.Status.ERROR, "Disconnected")
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.

@@ -354,6 +354,8 @@ func _update_theme():
 	add_theme_color_override("font_focus_color", text)
 	add_theme_color_override("font_disabled_color", disabled_text)
 	
+	var fonts = M3Theme.load_fonts()
+	add_theme_font_override("font", fonts["medium"])
 	add_theme_font_size_override("font_size", font_size)
 	alignment = HORIZONTAL_ALIGNMENT_CENTER
 	

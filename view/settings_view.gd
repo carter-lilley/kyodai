@@ -44,6 +44,10 @@ func _build_settings_view():
 	for subgroup_name in subgroups.keys():
 		var settings_vars = subgroups[subgroup_name]
 		
+		# Skip RomM Connection — folded into Platforms/RomM tab
+		if subgroup_name == "RomM Connection":
+			continue
+		
 		# Filter out platform-specific settings
 		if subgroup_name == "Storage":
 			if not PlatformManager.is_android():
@@ -55,10 +59,10 @@ func _build_settings_view():
 		_settings_container.add_child(tab)
 		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, subgroup_name)
 	
-	# Add Platforms tab
+	# Add RomM tab (was Platforms)
 	var platforms_tab = _create_platforms_tab()
 	_settings_container.add_child(platforms_tab)
-	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Platforms")
+	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "RomM")
 	
 	# Add Card Designer tab
 	var designer_tab = _create_card_designer_tab()
@@ -87,10 +91,7 @@ func _create_hero_designer_tab() -> Control:
 	return designer
 
 func _create_platforms_tab() -> Control:
-	var platforms_view = preload("res://view/platforms_settings_view.gd").new()
-	platforms_view.set_anchors_preset(Control.PRESET_FULL_RECT)
-	platforms_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	platforms_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var platforms_view = preload("res://view/platforms_settings_view.tscn").instantiate()
 	_platforms_settings_view = platforms_view
 	return platforms_view
 
@@ -130,10 +131,6 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 		menu.initialize_settings_menu(name, settings_vars)
 		menu.setting_changed.connect(_on_setting_changed)
 		vbox.add_child(menu)
-	
-	if name == "RomM Connection":
-		var status_ui = _create_connection_status_ui()
-		vbox.add_child(status_ui)
 	
 	margin.add_child(vbox)
 	scroll.add_child(margin)
@@ -621,59 +618,6 @@ func _on_library_effect_setting_changed(value: Variant, setting: SettingsVar) ->
 
 # Network connection status enum (local to this view)
 enum ConnectionStatus { NOT_CONFIGURED, CONNECTED, DISCONNECTED, TESTING }
-
-func _create_connection_status_ui() -> Control:
-	# Create a container to hold the indicator and test button
-	var container = HBoxContainer.new()
-	container.custom_minimum_size = Vector2(0, 30)
-	
-	# Create indicator
-	var indicator = Indicator.new()
-	indicator.name = "ConnectionIndicator"
-	indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	container.add_child(indicator)
-	
-	# Create test button
-	var test_button = Button.new()
-	test_button.name = "TestButton"
-	test_button.text = "Test"
-	container.add_child(test_button)
-	
-	# Connect to ready signal to set initial status after node is initialized
-	container.ready.connect(func():
-		_update_connection_status(indicator)
-	)
-	
-	# Connect test button signal
-	test_button.pressed.connect(func():
-		_test_connection(indicator)
-	)
-	
-	return container
-
-func _test_connection(indicator: Indicator):
-	indicator.set_status(Indicator.Status.WARNING, "Testing connection...")
-	
-	NetworkManager.test_connection(func(online: bool):
-		if online:
-			indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-			NotificationManager.show_notification("Connected to RomM successfully", Notification.Type.SUCCESS)
-		else:
-			if not NetworkManager.is_configured():
-				indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
-				NotificationManager.show_notification("RomM not configured - check URL, username, password", Notification.Type.ERROR)
-			else:
-				indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
-				NotificationManager.show_notification("Connection failed - check credentials", Notification.Type.ERROR)
-	)
-
-func _update_connection_status(indicator: Indicator):
-	if NetworkManager.is_online():
-		indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-	elif not NetworkManager.is_configured():
-		indicator.set_status(Indicator.Status.NEUTRAL, "Not configured")
-	else:
-		indicator.set_status(Indicator.Status.ERROR, "Disconnected")
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	SettingsManager.set_setting(value, setting)
