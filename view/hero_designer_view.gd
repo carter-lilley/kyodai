@@ -300,6 +300,10 @@ func _force_hero_resize():
 	if not _preview_hero:
 		return
 	
+	# Node may have been reparented (e.g., by SettingsDialog); skip if not in tree
+	if not is_inside_tree():
+		return
+	
 	# Wait a frame for the layout to actually update
 	await get_tree().process_frame
 	

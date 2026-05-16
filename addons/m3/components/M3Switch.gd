@@ -5,7 +5,7 @@ extends CheckButton
 ## Material 3 Switch
 ## Custom-drawn toggle switch with optional thumb icon.
 ## Extends CheckButton for native input/behavior.
-## Uses FontIcon node for thumb icons (icons-fonts addon).
+## NOTE: This component does NOT support text. Use an M3Label alongside the switch instead.
 
 # ============================================
 # SIZE SPECS (all values in dp)
@@ -56,8 +56,15 @@ func _enter_tree():
 	M3Theme.hide_native_checkbutton_styleboxes(self)
 	M3Theme.hide_native_check_icons(self)
 
+func _set(property: StringName, value: Variant) -> bool:
+	if property == &"text":
+		if value is String and not value.is_empty():
+			push_warning("M3Switch does not support text. Use an M3Label alongside the switch instead.")
+		# Reject text by returning true without setting the property
+		return true
+	return false
+
 func _ready():
-	# Set fixed size - never expand in containers
 	var track_width_px = M3Units.dp(TRACK_WIDTH)
 	var track_height_px = M3Units.dp(TRACK_HEIGHT)
 	custom_minimum_size = Vector2(track_width_px, track_height_px)
@@ -160,7 +167,10 @@ func _update_icon():
 func _draw():
 	var track_width_px = M3Units.dp(TRACK_WIDTH)
 	var track_height_px = M3Units.dp(TRACK_HEIGHT)
-	var track_rect = Rect2(Vector2((size.x - track_width_px) / 2.0, (size.y - track_height_px) / 2.0), Vector2(track_width_px, track_height_px))
+	var track_rect = Rect2(
+		Vector2((size.x - track_width_px) / 2.0, (size.y - track_height_px) / 2.0),
+		Vector2(track_width_px, track_height_px)
+	)
 	var is_on = button_pressed
 	var is_disabled = disabled
 	
@@ -230,10 +240,10 @@ func _draw_thumb(rect: Rect2, thumb_size_px: float, is_on: bool, is_disabled: bo
 	var thumb_radius = thumb_size_px / 2.0
 	var pad_px = M3Units.dp(THUMB_PADDING)
 	
-	# Calculate thumb position
-	var min_x = pad_px + thumb_radius
-	var max_x = rect.size.x - pad_px - thumb_radius
-	var center_y = rect.size.y / 2.0
+	# Calculate thumb position in control-local coordinates
+	var min_x = rect.position.x + pad_px + thumb_radius
+	var max_x = rect.position.x + rect.size.x - pad_px - thumb_radius
+	var center_y = rect.position.y + rect.size.y / 2.0
 	
 	var center_x: float
 	if is_on:

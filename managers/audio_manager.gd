@@ -270,17 +270,17 @@ func _apply_initial_volumes() -> void:
 		var sfx_setting = SettingsManager.get_setting("dblevel_sfx")
 		
 		if music_setting:
-			set_music_volume(music_setting.value)
+			set_music_volume(music_setting.value / 100.0)
 		if sfx_setting:
-			set_sfx_volume(sfx_setting.value)
+			set_sfx_volume(sfx_setting.value / 100.0)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	# Update volumes when settings change
 	match setting.property_name:
 		"dblevel_music":
-			set_music_volume(setting.value)
+			set_music_volume(setting.value / 100.0)
 		"dblevel_sfx":
-			set_sfx_volume(setting.value)
+			set_sfx_volume(setting.value / 100.0)
 
 func _play_startup_sound() -> void:
 	play_sfx("affirm_01")

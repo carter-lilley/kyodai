@@ -35,8 +35,8 @@ func _ready() -> void:
 	# Initialize display detection
 	_initialize_display_detection()
 	
-	# Apply initial UI scale
-	_apply_ui_scale()
+	# UI scale setting disabled — now using DP-based scaling via M3Units
+	#_apply_ui_scale()
 	
 	# Try to connect to AynThor screen swap signal (may not exist yet)
 	call_deferred("_connect_ayn_thor_signals")
@@ -87,22 +87,22 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 		"dual_screen_mode":
 			# Trigger a display check when dual screen setting changes
 			_check_for_dual_screen()
-		"ui_scale":
-			_apply_ui_scale()
+		#"ui_scale":
+		#	_apply_ui_scale()
 
-func _apply_ui_scale() -> void:
-	var ui_scale_setting = settings_man.get_setting("ui_scale")
-	if ui_scale_setting:
-		var scale_value = float(ui_scale_setting.value)
-		if scale_value > 0:
-			_saved_ui_scale = scale_value
-			if _subviewport_dual_screen_active:
-				# In SubViewport dual screen mode, disable Window scaling
-				# and apply scaling to SubViewports instead
-				get_tree().root.content_scale_factor = 1.0
-				_apply_subviewport_scale(scale_value)
-			else:
-				get_tree().root.content_scale_factor = scale_value
+#func _apply_ui_scale() -> void:
+#	var ui_scale_setting = settings_man.get_setting("ui_scale")
+#	if ui_scale_setting:
+#		var scale_value = float(ui_scale_setting.value)
+#		if scale_value > 0:
+#			_saved_ui_scale = scale_value
+#			if _subviewport_dual_screen_active:
+#				# In SubViewport dual screen mode, disable Window scaling
+#				# and apply scaling to SubViewports instead
+#				get_tree().root.content_scale_factor = 1.0
+#				_apply_subviewport_scale(scale_value)
+#			else:
+#				get_tree().root.content_scale_factor = scale_value
 
 func _check_subviewport_size_changes() -> void:
 	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
@@ -165,14 +165,14 @@ func enter_subviewport_dual_screen_mode() -> void:
 	if _subviewport_dual_screen_active:
 		return
 	_subviewport_dual_screen_active = true
-	_apply_ui_scale()
+	#_apply_ui_scale()
 
 func exit_subviewport_dual_screen_mode() -> void:
 	if not _subviewport_dual_screen_active:
 		return
 	_subviewport_dual_screen_active = false
 	_clear_subviewport_scale()
-	_apply_ui_scale()
+	#_apply_ui_scale()
 
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]

@@ -74,8 +74,14 @@ func _ready():
 	view_mode_group.selection_changed.connect(_on_view_mode_changed)
 	_sync_view_mode_button_to_setting()
 	
-	# Connect to UIManager for tab changes
+	# Connect settings gear button
+	var settings_button = main_content_vbox.get_node("HBoxContainer/SettingsButton")
+	if settings_button:
+		settings_button.pressed.connect(_on_settings_button_pressed)
+	
+	# Connect to UIManager for tab changes and settings dialog
 	UIManager.tab_changed.connect(_on_tab_changed)
+	UIManager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
 	
 	# Connect to LaunchManager to save focus before game launch
 	if LaunchManager:
@@ -141,6 +147,15 @@ func _on_oobe_wizard_completed():
 	UIManager.rebuild_game_grid()
 	# Restore focus to the home button
 	call_deferred("reset_focus_to_home_button")
+
+func _on_settings_button_pressed() -> void:
+	UIManager.show_settings_dialog()
+
+func _on_settings_dialog_dismissed() -> void:
+	# Restore focus to the settings gear button
+	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
+	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
+		settings_button.grab_focus()
 
 func _on_tab_changed(view_name: String):
 	_update_ui_for_view(view_name)
@@ -577,12 +592,10 @@ func _notification(what: int) -> void:
 		# This handles APK installs that completed while the app was in the background
 		if LaunchManager:
 			LaunchManager.clear_validation_cache()
-		var settings_view = UIManager.get_view("Settings")
-		if settings_view and settings_view.has_method("get_platforms_settings_view"):
-			var platforms_view = settings_view.get_platforms_settings_view()
-			if platforms_view and platforms_view.has_method("refresh_cards"):
-				platforms_view.refresh_cards()
-				print("[Main] Refreshed platform cards after resume")
+		var platforms_view = UIManager.get_settings_dialog_platforms_view()
+		if platforms_view and platforms_view.has_method("refresh_cards"):
+			platforms_view.refresh_cards()
+			print("[Main] Refreshed platform cards after resume")
 		
 		# Dismiss any stale notifications (e.g., extraction notifications that completed while backgrounded)
 		if NotificationManager:

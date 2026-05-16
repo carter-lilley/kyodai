@@ -17,8 +17,10 @@ const NAV_DESTINATIONS = [
 	{"id": "home",      "label": "Home",      "icon": "home",     "view": "Home"},
 	{"id": "library",   "label": "Library",   "icon": "library",  "view": "Library"},
 	{"id": "downloads", "label": "Downloads", "icon": "download", "view": "Downloads"},
-	{"id": "settings",  "label": "Settings",  "icon": "cog",      "view": "Settings"},
 ]
+
+# Settings dialog
+var _settings_dialog: SettingsDialog = null
 
 # Default hero height ratio (will be overridden by settings)
 const HERO_SIZE_RATIO_DEFAULT = 0.33
@@ -59,6 +61,7 @@ signal modal_dismissed(modal_id: String)
 signal modal_item_selected(item_id: String, context: Dictionary)
 signal tab_changed(view_name: String)
 signal layout_changed(position: String)
+signal settings_dialog_dismissed()
 
 func initialize(
 	tab_container: TabContainer,
@@ -90,7 +93,24 @@ func initialize(
 	# Create InnerLayout and nav node
 	_rebuild_nav_and_layout()
 	
-	# Ensure MainContentVBox fills ContentWrapper
+	# Wrap MainContentVBox in a MarginContainer to keep content away from screen edges
+	var content_margin = MarginContainer.new()
+	content_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	content_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var margin = int(M3Units.dp(16))
+	content_margin.add_theme_constant_override("margin_left", margin)
+	content_margin.add_theme_constant_override("margin_right", margin)
+	content_margin.add_theme_constant_override("margin_top", margin)
+	content_margin.add_theme_constant_override("margin_bottom", margin)
+	
+	var mcv_index = _main_content_vbox.get_index()
+	_content_wrapper.remove_child(_main_content_vbox)
+	content_margin.add_child(_main_content_vbox)
+	_content_wrapper.add_child(content_margin)
+	_content_wrapper.move_child(content_margin, mcv_index)
+	
+	# Ensure MainContentVBox fills the MarginContainer
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
@@ -104,7 +124,6 @@ func initialize(
 	_setup_home_tab()
 	_setup_library_tab()
 	_setup_downloads_tab()
-	_setup_settings_tab()
 	
 	# Set initial current view based on current tab
 	var current_tab_idx = _tab_container.current_tab
@@ -129,6 +148,11 @@ func initialize(
 	# Setup library appearance
 	_setup_library_appearance()
 	SettingsManager.setting_changed.connect(_on_setting_changed)
+	
+	# Apply dark mode setting on startup
+	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
+	if dark_mode_setting:
+		_apply_dark_mode(dark_mode_setting.value)
 	
 	# Connect to dual screen mode changes
 	if DisplayManager:
@@ -444,6 +468,18 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 				_views["Library"].mark_for_rebuild("Hero height changed")
 		"library_grid_padding":
 			_rebuild_views("Grid padding changed")
+		"dark_mode":
+			_apply_dark_mode(_value)
+
+func _apply_dark_mode(enabled: bool) -> void:
+	M3Theme.is_dark_mode = enabled
+	_refresh_theme_on_all_nodes(get_tree().root)
+
+func _refresh_theme_on_all_nodes(node: Node) -> void:
+	if node.has_method("refresh_theme"):
+		node.refresh_theme()
+	for child in node.get_children():
+		_refresh_theme_on_all_nodes(child)
 
 func _setup_home_tab():
 	var home_idx = _get_tab_index("Home")
@@ -510,24 +546,20 @@ func _setup_downloads_tab():
 	downloads_tab.add_child(downloads_view)
 	_views["Downloads"] = downloads_view
 
-func _setup_settings_tab():
-	var settings_idx = _get_tab_index("Settings")
-	if settings_idx == -1:
-		push_warning("[UIManager]: Settings tab not found")
-		return
+func show_settings_dialog() -> void:
+	"""Show the fullscreen settings dialog."""
+	if not _settings_dialog:
+		_settings_dialog = preload("res://view/settings_dialog.tscn").instantiate()
+		_settings_dialog.dismissed.connect(_on_settings_dialog_dismissed)
 	
-	var settings_tab = _tab_container.get_tab_control(settings_idx)
+	if not _settings_dialog.is_inside_tree():
+		_root_control.add_child(_settings_dialog)
 	
-	# Clear existing content
-	for child in settings_tab.get_children():
-		child.queue_free()
-	
-	# Add SettingsView (auto-generated from SettingsVar)
-	var settings_view = SettingsView.new()
-	settings_view.set_anchors_preset(Control.PRESET_FULL_RECT)
-	settings_view.view_name = "Settings"
-	settings_tab.add_child(settings_view)
-	_views["Settings"] = settings_view
+	_settings_dialog.show_overlay()
+
+func _on_settings_dialog_dismissed() -> void:
+	"""Handle settings dialog dismissal."""
+	settings_dialog_dismissed.emit()
 
 func _get_tab_index(tab_title: String) -> int:
 	for i in range(_tab_container.get_tab_count()):
@@ -674,8 +706,8 @@ func _update_hero_visibility(view_name: String) -> void:
 					height_ratio = HERO_HEIGHT_RATIOS[index]
 	var hero_enabled = height_ratio > 0.0
 	
-	# Show background for Home/Library/Downloads, hide for Settings
-	var show_background = view_name != "Settings"
+	# Show background for all main views (Settings is now a dialog overlay)
+	var show_background = true
 	
 	# Update hero image visibility (only visible when enabled AND showing background)
 	if _hero_image:
@@ -764,6 +796,11 @@ func rebuild_game_grid() -> void:
 func get_view(view_name: String) -> View:
 	if _views.has(view_name):
 		return _views[view_name]
+	return null
+
+func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
+	if _settings_dialog and is_instance_valid(_settings_dialog):
+		return _settings_dialog.get_platforms_settings_view()
 	return null
 
 func switch_to_tab(tab_name: String):
@@ -1067,7 +1104,7 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 		library_view.reconnect_viewport()
 	
 	# Reconnect all other views that support viewport reconnection
-	for view_name in ["Settings", "Downloads", "Platforms"]:
+	for view_name in ["Downloads", "Platforms"]:
 		var view = get_view(view_name)
 		if view and view.has_method("reconnect_viewport"):
 			view.reconnect_viewport()

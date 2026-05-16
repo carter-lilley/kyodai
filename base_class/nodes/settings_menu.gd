@@ -10,38 +10,35 @@ const Type = SettingsVar.SettingType
 signal setting_changed(value: Variant, setting: SettingsVar)
 
 func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar]):
-	var menu_name_label = Label.new()
+	var menu_name_label = M3Label.new()
 	menu_name_label.text = subgroup
+	menu_name_label.label_style = M3Label.Style.HEADLINE_SMALL
 	add_child(menu_name_label)
 	build_controls_from_settingsvars(settingsvars)
 
 func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: String = "") -> void:
 	if title:
-		var title_label = Label.new()
+		var title_label = M3Label.new()
 		title_label.text = title
-		title_label.add_theme_font_size_override("font_size", 16)
+		title_label.label_style = M3Label.Style.TITLE_MEDIUM
 		add_child(title_label)
 	
 	for settingsvar in settingsvars:
-		#print("[SettingsMenu] Processing setting: ", settingsvar.display_name, " state: ", settingsvar.state, " INTERNAL?: ", settingsvar.state == State.INTERNAL)
 		if settingsvar.state != State.INTERNAL:
-			#print("[SettingsMenu]   -> Adding to menu")
 			match_var_type(settingsvar)
-		#else:
-			#print("[SettingsMenu]   -> SKIPPING (INTERNAL)")
 
 func update_control_value(property_name: String, value: Variant) -> void:
 	var control = controls.get(property_name)
 	if not control:
 		return
 	
-	if control is CheckBox:
+	if control is M3Switch:
 		control.button_pressed = value
-	elif control is OptionButton:
-		control.select(value)
-	elif control is HSlider:
-		control.value = value
-	elif control is LineEdit:
+	elif control is M3OptionButton:
+		control.selected = value
+	elif control is M3Slider:
+		control.value = value * control.get_meta("display_scale", 1.0)
+	elif control is M3TextField:
 		control.text = str(value)
 	elif control is ColorPickerButton:
 		control.color = value
@@ -53,13 +50,13 @@ func get_control_value(property_name: String) -> Variant:
 	if not control:
 		return null
 	
-	if control is CheckBox:
+	if control is M3Switch:
 		return control.button_pressed
-	elif control is OptionButton:
+	elif control is M3OptionButton:
 		return control.selected
-	elif control is HSlider:
-		return control.value
-	elif control is LineEdit:
+	elif control is M3Slider:
+		return control.value / control.get_meta("display_scale", 1.0)
+	elif control is M3TextField:
 		return control.text
 	elif control is ColorPickerButton:
 		return control.color
@@ -73,105 +70,166 @@ func clear_controls() -> void:
 	controls.clear()
 
 var controls: Dictionary[String, Control] = {}
+
+func _apply_metadata(control: Control, metadata: Dictionary) -> void:
+	"""Apply M3 component-specific properties from SettingsVar metadata."""
+	if metadata.is_empty():
+		return
+	
+	if control is M3Slider:
+		if metadata.has("show_stops"):
+			control.show_stops = metadata["show_stops"]
+		if metadata.has("slider_size"):
+			match metadata["slider_size"]:
+				"EXTRA_SMALL": control.slider_size = M3Slider.Size.EXTRA_SMALL
+				"SMALL": control.slider_size = M3Slider.Size.SMALL
+				"MEDIUM": control.slider_size = M3Slider.Size.MEDIUM
+				"LARGE": control.slider_size = M3Slider.Size.LARGE
+				"EXTRA_LARGE": control.slider_size = M3Slider.Size.EXTRA_LARGE
+		if metadata.has("label_behavior"):
+			match metadata["label_behavior"]:
+				"ALWAYS": control.label_behavior = M3Slider.LabelBehavior.ALWAYS
+				"WHILE_DRAGGING": control.label_behavior = M3Slider.LabelBehavior.WHILE_DRAGGING
+				"NEVER": control.label_behavior = M3Slider.LabelBehavior.NEVER
+		if metadata.has("label_formatter"):
+			control.label_formatter = metadata["label_formatter"]
+		if metadata.has("start_icon_name"):
+			control.start_icon_name = metadata["start_icon_name"]
+		if metadata.has("end_icon_name"):
+			control.end_icon_name = metadata["end_icon_name"]
+	elif control is M3TextField or control is M3OptionButton:
+		if metadata.has("field_variant"):
+			match metadata["field_variant"]:
+				"FILLED": control.field_variant = M3TextField.Variant.FILLED
+				"OUTLINED": control.field_variant = M3TextField.Variant.OUTLINED
+		if metadata.has("leading_icon"):
+			control.leading_icon = metadata["leading_icon"]
+		if metadata.has("trailing_icon"):
+			control.trailing_icon = metadata["trailing_icon"]
+	elif control is M3Switch:
+		if metadata.has("icon_name"):
+			control.icon_name = metadata["icon_name"]
+
 func match_var_type(settingsvar : SettingsVar):
 	match settingsvar.type:
 		Type.BOOL:
-			var check_box = CheckBox.new()
-			check_box.text = settingsvar.display_name
-			check_box.button_pressed = settingsvar.value
-			add_child(check_box)
-			check_box.disabled = settingsvar.state
-			controls[settingsvar.property_name] = check_box
-			check_box.toggled.connect(func(pressed: bool):
+			var hbox = HBoxContainer.new()
+			hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			add_child(hbox)
+			
+			var label = M3Label.new()
+			label.text = settingsvar.display_name
+			label.label_style = M3Label.Style.BODY_MEDIUM
+			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			hbox.add_child(label)
+			
+			var switch = M3Switch.new()
+			switch.button_pressed = settingsvar.value
+			switch.disabled = settingsvar.state != 0
+			switch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			hbox.add_child(switch)
+			controls[settingsvar.property_name] = switch
+			_apply_metadata(switch, settingsvar.metadata)
+			
+			switch.toggled.connect(func(pressed: bool):
 				emit_signal("setting_changed", pressed, settingsvar)
 			)
 		Type.ENUM, Type.ARRAY:
-			var option_button = OptionButton.new()
-			var option_label = Label.new()
-			option_label.text = settingsvar.display_name
+			var option_button = M3OptionButton.new()
+			option_button.label_text = settingsvar.display_name
 			var id = 0
+			var matched_index = 0
 			for option in settingsvar.options:
 				option_button.add_item(str(option), id)
-				# For enums (ints) OR arrays with int values (index-based), match by index
 				if settingsvar.value is int and settingsvar.value == id:
-					option_button.select(id)
-				# For arrays with non-int values (Vector2, string, etc.), match by string comparison
+					matched_index = id
 				elif not settingsvar.value is int and str(option) == str(settingsvar.value):
-					option_button.select(id)
+					matched_index = id
 				id += 1
-			add_child(option_label)
+			option_button.selected = matched_index
+			option_button.editable = settingsvar.state == 0
 			add_child(option_button)
-			option_button.disabled = settingsvar.state
 			controls[settingsvar.property_name] = option_button
+			_apply_metadata(option_button, settingsvar.metadata)
 			option_button.item_selected.connect(func(value: int):
 				emit_signal("setting_changed", value, settingsvar)
 			)
 		Type.FLOAT, Type.INT:
-			var slider = HSlider.new()
-			slider.focus_mode = 2
-			slider.min_value = settingsvar.min_value
-			slider.max_value = settingsvar.max_value
-			slider.step = settingsvar.step
-			slider.value = settingsvar.value  # Default value if not provided
-			var slider_label = Label.new()
+			var slider_label = M3Label.new()
 			slider_label.text = settingsvar.display_name
+			slider_label.label_style = M3Label.Style.BODY_MEDIUM
 			add_child(slider_label)
+			
+			var display_scale = settingsvar.metadata.get("display_scale", 1.0)
+			var display_unit = settingsvar.metadata.get("display_unit", "")
+			
+			var slider = M3Slider.new()
+			# Set cached properties before add_child so _ready() picks them up
+			slider.min_value = settingsvar.min_value * display_scale
+			slider.max_value = settingsvar.max_value * display_scale
+			slider.step = settingsvar.step * display_scale
+			slider.show_stops = false
+			slider.set_meta("display_scale", display_scale)
+			
+			if not display_unit.is_empty():
+				slider.label_formatter = "%.0f" + display_unit.replace("%", "%%")
+			
 			add_child(slider)
-			slider.editable = settingsvar.state == 0
 			controls[settingsvar.property_name] = slider
-			slider.value_changed.connect(func(value: float):
-				emit_signal("setting_changed", value, settingsvar)
+			
+			# Properties that need the internal slider to exist must be set after add_child
+			slider.value = settingsvar.value * display_scale
+			slider.editable = settingsvar.state == 0
+			_apply_metadata(slider, settingsvar.metadata)
+			
+			slider.value_changed.connect(func(display_value: float):
+				emit_signal("setting_changed", display_value / display_scale, settingsvar)
 			)
 		Type.STRING:
-			var string_label = Label.new()
-			string_label.text = settingsvar.display_name
-			add_child(string_label)
-			
-			var line_edit = LineEdit.new()
-			line_edit.text = settingsvar.value if settingsvar.value else ""
-			line_edit.editable = settingsvar.state == 0
-			line_edit.secret = settingsvar.encrypted
-			add_child(line_edit)
-			controls[settingsvar.property_name] = line_edit
-			line_edit.text_changed.connect(func(text: String):
+			var text_field = M3TextField.new()
+			text_field.label_text = settingsvar.display_name
+			text_field.text = settingsvar.value if settingsvar.value else ""
+			text_field.editable = settingsvar.state == 0
+			text_field.secret = settingsvar.encrypted
+			add_child(text_field)
+			controls[settingsvar.property_name] = text_field
+			_apply_metadata(text_field, settingsvar.metadata)
+			text_field.text_changed.connect(func(text: String):
 				emit_signal("setting_changed", text, settingsvar)
 			)
 		
 		Type.PATH:
-			var path_label = Label.new()
-			path_label.text = settingsvar.display_name
-			add_child(path_label)
+			var path_field = M3TextField.new()
+			path_field.label_text = settingsvar.display_name
+			path_field.text = settingsvar.value if settingsvar.value else ""
+			path_field.editable = settingsvar.state == 0
+			path_field.focus_mode = Control.FOCUS_NONE
+			path_field.virtual_keyboard_enabled = false
+			add_child(path_field)
+			controls[settingsvar.property_name] = path_field
+			_apply_metadata(path_field, settingsvar.metadata)
 			
-			var path_container = HBoxContainer.new()
-			add_child(path_container)
-			
-			var line_edit = LineEdit.new()
-			line_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			line_edit.text = settingsvar.value if settingsvar.value else ""
-			line_edit.editable = settingsvar.state == 0
-			line_edit.virtual_keyboard_enabled = false
-			line_edit.focus_mode = Control.FOCUS_NONE
-			path_container.add_child(line_edit)
-			controls[settingsvar.property_name] = line_edit
-			
-			var browse_button = Button.new()
+			var browse_button = M3Button.new()
 			browse_button.text = "Browse..."
+			browse_button.icon_name = "folder-open"
+			browse_button.button_variant = M3Button.Variant.OUTLINED
 			browse_button.disabled = settingsvar.state != 0
-			path_container.add_child(browse_button)
+			add_child(browse_button)
 			
 			browse_button.pressed.connect(func():
 				var dialog = FileDialog.new()
 				dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 				dialog.access = FileDialog.ACCESS_FILESYSTEM
-				dialog.use_native_dialog = true  # Use OS native file picker!
-				dialog.current_dir = line_edit.text if line_edit.text else OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+				dialog.use_native_dialog = true
+				dialog.current_dir = path_field.text if path_field.text else OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
 				dialog.title = "Select " + settingsvar.display_name
 				
 				add_child(dialog)
 				
 				dialog.dir_selected.connect(func(dir: String):
 					var resolved_dir = FileSystemManager.resolve_content_uri(dir)
-					line_edit.text = resolved_dir
+					path_field.text = resolved_dir
 					emit_signal("setting_changed", resolved_dir, settingsvar)
 					dialog.queue_free()
 				)
@@ -183,20 +241,20 @@ func match_var_type(settingsvar : SettingsVar):
 				dialog.show()
 			)
 			
-			line_edit.text_changed.connect(func(text: String):
+			path_field.text_changed.connect(func(text: String):
 				emit_signal("setting_changed", text, settingsvar)
 			)
 		
-		Type.VECTOR2: # Replace with a real range slider eventually
-			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, 0.05)
-			#fix setting after creation
-			rangeslider.set("_step",0.05)
-			rangeslider.set("range_start",settingsvar.value.x)
-			#print("SETTING RANGE START ", settingsvar.value.x)
-			rangeslider.set("range_end",settingsvar.value.y)
-			var rangeslider_label = Label.new()
+		Type.VECTOR2:
+			var rangeslider_label = M3Label.new()
 			rangeslider_label.text = settingsvar.display_name
+			rangeslider_label.label_style = M3Label.Style.BODY_MEDIUM
 			add_child(rangeslider_label)
+			
+			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, 0.05)
+			rangeslider.set("_step", 0.05)
+			rangeslider.set("range_start", settingsvar.value.x)
+			rangeslider.set("range_end", settingsvar.value.y)
 			add_child(rangeslider.min)
 			add_child(rangeslider.max)
 			rangeslider.min.editable = settingsvar.state == 0
@@ -207,8 +265,9 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		
 		Type.COLOR:
-			var color_label = Label.new()
+			var color_label = M3Label.new()
 			color_label.text = settingsvar.display_name
+			color_label.label_style = M3Label.Style.BODY_MEDIUM
 			add_child(color_label)
 			
 			var color_picker = ColorPickerButton.new()
@@ -221,8 +280,9 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		
 		Type.GRADIENT:
-			var gradient_label = Label.new()
+			var gradient_label = M3Label.new()
 			gradient_label.text = settingsvar.display_name
+			gradient_label.label_style = M3Label.Style.BODY_MEDIUM
 			add_child(gradient_label)
 			
 			var gradient_edit = GradientEdit.new()
@@ -236,6 +296,7 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		
 		_:
-			var button = Button.new()
+			var button = M3Button.new()
 			button.text = settingsvar.display_name
+			button.button_variant = M3Button.Variant.TEXT
 			add_child(button)

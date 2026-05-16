@@ -7,12 +7,12 @@ const Type = SettingsVar.SettingType
 
 @export_group("Settings")
 @export_subgroup("Audio")
-@export var dblevel_music := SettingsVar.new(Type.FLOAT,1.0,State.ENABLED,"Music Level")
-@export var dblevel_sfx := SettingsVar.new(Type.FLOAT,1.0,State.ENABLED,"SFX Level")
+@export var dblevel_music := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "Music Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "MEDIUM", "display_unit": "%"})
+@export var dblevel_sfx := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "SFX Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "MEDIUM", "display_unit": "%"})
 
 @export_subgroup("Display")
 @export var windowed := SettingsVar.new(Type.BOOL,true,State.ENABLED,"Windowed")
-@export var ui_scale := SettingsVar.new(Type.FLOAT, 1.5, State.ENABLED, "UI Scale", "Scale all interface elements (restart may be needed on some platforms)", 0.5, 2.0, 0.05)
+#@export var ui_scale := SettingsVar.new(Type.FLOAT, 1.5, State.ENABLED, "UI Scale", "Scale all interface elements (restart may be needed on some platforms)", 0.5, 2.0, 0.05)
 @export var resolutions: Array = [
 	Vector2i(2560,1080),
 	Vector2i(1920,1080),
@@ -26,6 +26,7 @@ const Type = SettingsVar.SettingType
 ]
 @export var resolution := SettingsVar.new(Type.ARRAY,resolutions[0],State.ENABLED, "Windowed Resolution:", "", 0.0, 1.0, 0.1, resolutions)
 @export var dual_screen_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
+@export var dark_mode := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface")
 
 @export_subgroup("RomM Connection")
 @export var romm_url := SettingsVar.new(Type.STRING, "", State.ENABLED, "RomM URL")

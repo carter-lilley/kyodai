@@ -41,6 +41,7 @@ const STATUS_BADGE_MARGIN_RATIO: float = 0.05
 const FOCUS_TWEEN_DURATION: float = 0.12
 var _focus_tween: Tween = null
 var _is_focused: bool = false
+var focus_scale: float = 1.08
 
 # Android touch-and-hold
 const LONG_PRESS_DURATION: float = 0.6
@@ -52,6 +53,7 @@ var _long_press_timer: Timer = null
 
 func _ready():
 	super._ready()
+	scale = Vector2.ONE / focus_scale
 	
 	if preview_mode:
 		_setup_preview_mode()
@@ -159,6 +161,11 @@ func set_card_zoom(_zoom: float) -> void:
 	# with an incorrect value before the layout pass corrects it.
 	pass
 
+func set_focus_scale(value: float) -> void:
+	focus_scale = maxf(value, 1.0)
+	if not _is_focused:
+		scale = Vector2.ONE / focus_scale
+
 func refresh_settings() -> void:
 	_update_card_state_from_settings()
 	_build_media_stack()
@@ -172,6 +179,7 @@ func reset() -> void:
 	_loading_game_id = ""
 	_image_retry_count = 0
 	_download_retry_count = 0
+	scale = Vector2.ONE / focus_scale
 	if _current_image_task_id > 0 and MemoryManager:
 		MemoryManager.cancel_image_task(_current_image_task_id)
 		_current_image_task_id = -1
@@ -642,7 +650,7 @@ func _on_focus_entered():
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(self, "scale", Vector2(1.08, 1.08), FOCUS_TWEEN_DURATION)
+	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
 
 func _on_focus_exited():
 	_is_focused = false
@@ -653,7 +661,7 @@ func _on_focus_exited():
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	_focus_tween.tween_property(self, "scale", Vector2.ONE / focus_scale, FOCUS_TWEEN_DURATION)
 
 func _notification(what: int):
 	super._notification(what)

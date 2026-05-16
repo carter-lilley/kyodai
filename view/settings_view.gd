@@ -37,10 +37,25 @@ func _build_settings_view():
 	_settings_container.tab_changed.connect(_on_settings_tab_changed)
 	add_child(_settings_container)
 	
+	var categories = build_categories()
+	
+	# Add all categories in their natural order (subgroups first, then special tabs)
+	for tab_name in categories.keys():
+		if tab_name == "RomM Connection":
+			continue
+		var tab = categories[tab_name]
+		_settings_container.add_child(tab)
+		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, tab_name)
+
+## Build all category content controls and return them as a Dictionary.
+## This allows external callers (like SettingsDialog) to use the content
+## without wrapping it in a TabContainer.
+func build_categories() -> Dictionary:
+	var result: Dictionary = {}
+	
 	# Get settings by subgroup from SettingsManager
 	var subgroups = SettingsManager.get_settings_by_subgroup()
 	
-	# Create a tab for each subgroup
 	for subgroup_name in subgroups.keys():
 		var settings_vars = subgroups[subgroup_name]
 		
@@ -56,29 +71,26 @@ func _build_settings_view():
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Steam Installation Folder")
 		
 		var tab = _create_settings_tab(subgroup_name, settings_vars)
-		_settings_container.add_child(tab)
-		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, subgroup_name)
+		result[subgroup_name] = tab
 	
 	# Add RomM tab (was Platforms)
 	var platforms_tab = _create_platforms_tab()
-	_settings_container.add_child(platforms_tab)
-	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "RomM")
+	result["RomM"] = platforms_tab
 	
 	# Add Card Designer tab
 	var designer_tab = _create_card_designer_tab()
-	_settings_container.add_child(designer_tab)
-	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Card Designer")
+	result["Card Designer"] = designer_tab
 	
 	# Add Hero Designer tab
 	var hero_designer_tab = _create_hero_designer_tab()
-	_settings_container.add_child(hero_designer_tab)
-	_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "Hero Designer")
+	result["Hero Designer"] = hero_designer_tab
 	
 	# Add GameNative tab (Android only)
 	if PlatformManager.is_android():
 		var gamenative_tab = _create_gamenative_tab()
-		_settings_container.add_child(gamenative_tab)
-		_settings_container.set_tab_title(_settings_container.get_tab_count() - 1, "GameNative")
+		result["GameNative"] = gamenative_tab
+	
+	return result
 
 func _create_card_designer_tab() -> Control:
 	var designer = preload("res://view/card_designer_view.tscn").instantiate()
@@ -97,6 +109,9 @@ func _create_platforms_tab() -> Control:
 
 func get_platforms_settings_view() -> PlatformsSettingsView:
 	return _platforms_settings_view
+
+func get_settings_container() -> TabContainer:
+	return _settings_container
 
 func _create_gamenative_tab() -> Control:
 	var gamenative_view = preload("res://view/gamenative_settings_view.gd").new()
@@ -142,9 +157,9 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	_load_library_background_config()
 	
 	# Title
-	var title_label = Label.new()
+	var title_label = M3Label.new()
 	title_label.text = "Library Appearance"
-	title_label.add_theme_font_size_override("font_size", 18)
+	title_label.label_style = M3Label.Style.HEADLINE_SMALL
 	vbox.add_child(title_label)
 	
 	vbox.add_child(HSeparator.new())
@@ -157,9 +172,9 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 			general_settings.append(sv)
 	
 	if general_settings.size() > 0:
-		var general_label = Label.new()
+		var general_label = M3Label.new()
 		general_label.text = "Layout Settings"
-		general_label.add_theme_font_size_override("font_size", 14)
+		general_label.label_style = M3Label.Style.TITLE_MEDIUM
 		vbox.add_child(general_label)
 		
 		general_menu.build_controls_from_settingsvars(general_settings)
@@ -169,9 +184,9 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 		vbox.add_child(HSeparator.new())
 	
 	# Background Gradient section (global, applies to all effects)
-	var bg_gradient_label = Label.new()
+	var bg_gradient_label = M3Label.new()
 	bg_gradient_label.text = "Background Gradient"
-	bg_gradient_label.add_theme_font_size_override("font_size", 14)
+	bg_gradient_label.label_style = M3Label.Style.TITLE_MEDIUM
 	vbox.add_child(bg_gradient_label)
 	
 	_library_gradient_menu = SettingsMenu.new()
@@ -194,9 +209,9 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	vbox.add_child(HSeparator.new())
 	
 	# Background Effect section
-	var bg_label = Label.new()
+	var bg_label = M3Label.new()
 	bg_label.text = "Background Effect"
-	bg_label.add_theme_font_size_override("font_size", 14)
+	bg_label.label_style = M3Label.Style.TITLE_MEDIUM
 	vbox.add_child(bg_label)
 	
 	# Effect selection dropdown
@@ -241,9 +256,9 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	_create_preset_section(vbox)
 
 func _create_preset_section(vbox: VBoxContainer) -> void:
-	var preset_label = Label.new()
+	var preset_label = M3Label.new()
 	preset_label.text = "Theme Presets"
-	preset_label.add_theme_font_size_override("font_size", 14)
+	preset_label.label_style = M3Label.Style.TITLE_MEDIUM
 	vbox.add_child(preset_label)
 	
 	# Preset dropdown and buttons container

@@ -76,10 +76,10 @@ var _focused_virtual_index: int = -1
 # Backward compatibility - still compute these from card_size
 var item_height: float = 280.0:
 	get:
-		return card_size.y + grid_separation
+		return focused_card_size.y + grid_separation
 var item_width: float = 212.0:
 	get:
-		return card_size.x + grid_separation
+		return focused_card_size.x + grid_separation
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
@@ -157,9 +157,7 @@ func _get_available_size() -> Vector2:
 	return Vector2(max(size.x, 1.0), max(size.y, 1.0))
 
 func _get_normal_stride() -> float:
-	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
-		return _get_focused_stride()
-	return (card_size.y + grid_separation) if vertical else (card_size.x + grid_separation)
+	return _get_focused_stride()
 
 func _get_focused_stride() -> float:
 	return (focused_card_size.y + grid_separation) if vertical else (focused_card_size.x + grid_separation)
@@ -168,15 +166,7 @@ func _get_slot_position_for_index(idx: int) -> float:
 	"""Returns the scroll-axis pixel position where slot `idx` begins."""
 	var items_per_line = _get_items_per_line()
 	var line = idx / items_per_line
-	if view_mode != ViewMode.GRID or _focused_virtual_index < 0:
-		return line * _get_normal_stride()
-	var normal_s = _get_normal_stride()
-	var focused_s = _get_focused_stride()
-	var focused_line = _focused_virtual_index / items_per_line
-	if line <= focused_line:
-		return line * normal_s
-	var extra = focused_s - normal_s
-	return line * normal_s + extra
+	return line * _get_normal_stride()
 
 func set_focused_card(virtual_index: int) -> void:
 	if _focused_virtual_index == virtual_index:
@@ -245,7 +235,7 @@ func _calculate_zoom() -> float:
 			var viewport_area = size.x * size.y
 			var base_area = base_dims.x * base_dims.y
 			var target_card_area = viewport_area * ratio * ratio
-			return sqrt(target_card_area / base_area)
+			return sqrt(target_card_area / base_area) / focus_scale
 		ViewMode.LIST:
 			return (available.y * ratio) / (base_dims.y * focus_scale)
 		ViewMode.CAROUSEL:
@@ -364,6 +354,8 @@ func _recalculate_layout():
 	for card in _active_cards:
 		if is_instance_valid(card) and "focus_scale_enabled" in card:
 			card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+		if card.has_method("set_focus_scale"):
+			card.set_focus_scale(focus_scale)
 		_configure_card_size_flags(card)
 
 func _get_items_per_line() -> int:
@@ -557,12 +549,12 @@ func _update_layout():
 	match view_mode:
 		ViewMode.GRID:
 			if vertical:
-				var row_width = items_per_line * card_size.x
+				var row_width = items_per_line * focused_card_size.x
 				if items_per_line > 1:
 					row_width += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.x = max(row_width, 0.0)
 			else:
-				var col_height = items_per_line * card_size.y
+				var col_height = items_per_line * focused_card_size.y
 				if items_per_line > 1:
 					col_height += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.y = max(col_height, 0.0)
@@ -602,6 +594,8 @@ func _initial_load():
 			_active_cards.append(card)
 			_flow_container.add_child(card)
 			_configure_card_size_flags(card)
+			if card.has_method("set_focus_scale"):
+				card.set_focus_scale(focus_scale)
 			if card.has_method("refresh_settings"):
 				card.refresh_settings()
 			item_created.emit(card, i)
@@ -791,7 +785,7 @@ func _configure_card_size_flags(card: Control) -> void:
 	match view_mode:
 		ViewMode.GRID:
 			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
-			card.custom_minimum_size = card_size
+			card.custom_minimum_size = focused_card_size
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		ViewMode.LIST:
@@ -816,6 +810,8 @@ func _add_card_at_end(virtual_index: int):
 	if "focus_scale_enabled" in card:
 		card.focus_scale_enabled = (view_mode == ViewMode.GRID)
 	_configure_card_size_flags(card)
+	if card.has_method("set_focus_scale"):
+		card.set_focus_scale(focus_scale)
 	_active_cards.append(card)
 	_flow_container.add_child(card)
 	
@@ -852,6 +848,8 @@ func _add_card_at_start(virtual_index: int):
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
 	_configure_card_size_flags(card)
+	if card.has_method("set_focus_scale"):
+		card.set_focus_scale(focus_scale)
 	
 	# Fresh pool cards need zoom set after entering the tree (so @onready vars initialize)
 	if card.has_method("set_card_zoom"):

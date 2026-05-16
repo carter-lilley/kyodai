@@ -367,7 +367,8 @@ func _position_dialog():
 		_dialog_container.custom_minimum_size = Vector2(dialog_width, min_height)
 	else:
 		_dialog_container.position = Vector2.ZERO
-		_dialog_container.size = viewport_size
+		# Use set_deferred to avoid anchor/size conflict warning in fullscreen mode
+		_dialog_container.set_deferred("size", viewport_size)
 
 # ============================================
 # APPEARANCE

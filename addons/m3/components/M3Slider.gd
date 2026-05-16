@@ -101,10 +101,11 @@ enum SliderOrientation { HORIZONTAL, VERTICAL }
 		_request_redraw()
 
 @export var editable: bool = true:
-	get: return _slider.editable if _slider else true
+	get: return _slider.editable if _slider else _cached_editable
 	set(v):
-		if v == editable:
+		if v == _cached_editable:
 			return
+		_cached_editable = v
 		if _slider:
 			_slider.editable = v
 			_invalidate_color_cache()
@@ -145,8 +146,9 @@ enum SliderOrientation { HORIZONTAL, VERTICAL }
 			_invalidate_stop_cache()
 
 @export var value: float = 0.0:
-	get: return _slider.value if _slider else 0.0
+	get: return _slider.value if _slider else _cached_value
 	set(v):
+		_cached_value = v
 		if not _slider:
 			return
 		# Prevent crossing: value can never go below range_value in RANGE mode
@@ -180,6 +182,8 @@ var _prev_value: float = 0.0  # Value before current drag/click interaction
 var _effective_min: float = 0.0
 var _effective_max: float = 100.0
 var _effective_step: float = 1.0
+var _cached_value: float = 0.0
+var _cached_editable: bool = true
 
 # Cached StyleBoxFlat instances (allocated once, mutated each frame)
 var _cached_style_rect: StyleBoxFlat
@@ -296,9 +300,9 @@ func _ready():
 		_slider.min_value = _effective_min
 		_slider.max_value = _effective_max
 		_slider.step = _effective_step
-		_slider.value = value
-		_slider.editable = editable
-		_prev_value = value
+		_slider.value = _cached_value
+		_slider.editable = _cached_editable
+		_prev_value = _cached_value
 	
 	# Size children to fill initial parent size
 	if _slider:

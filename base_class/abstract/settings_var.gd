@@ -21,6 +21,7 @@ var property_name: String = ""
 # Optional for dropdowns or enum-style choices
 @export var options: Array = []
 @export var encrypted: bool = false
+@export var metadata: Dictionary = {}
 
 func _init(
 	_type: SettingType = SettingType.FLOAT,
@@ -32,7 +33,8 @@ func _init(
 	_max_value: float = 1.0,
 	_step: float = 0.1,
 	_options: Array = [],
-	_encrypted: bool = false
+	_encrypted: bool = false,
+	_metadata: Dictionary = {}
 ):
 	self.type = _type
 	self.value = _value
@@ -44,4 +46,5 @@ func _init(
 	self.step = _step
 	self.options = _options
 	self.encrypted = _encrypted
+	self.metadata = _metadata
 	

@@ -47,6 +47,9 @@ func _ready():
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
+	# If database is already ready, trigger the callback manually
+	if DataManager.is_database_ready():
+		_on_database_ready()
 	DataManager.game_added.connect(_on_game_added)
 	DataManager.game_updated.connect(_on_game_updated)
 	DataManager.games_removed.connect(_on_games_removed)
@@ -78,9 +81,6 @@ func _ready():
 		platform_indicator.cycle_prev_clicked.connect(_on_cycle_prev_clicked)
 		platform_indicator.cycle_next_clicked.connect(_on_cycle_next_clicked)
 		platform_indicator.search_clicked.connect(_on_search_button_clicked)
-	
-	# Initial load
-	_load_total_count()
 	
 	# Create search overlay
 	_setup_search_overlay()
