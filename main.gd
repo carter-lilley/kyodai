@@ -528,17 +528,13 @@ func _restore_focus_to_card(index: int) -> void:
 		return
 	print("[Main] _restore_focus_to_card: found card ", card.name, " at index ", target_index)
 	
-	# Grab focus on the card's input element (inside VisualContainer)
-	if card.has_node("VisualContainer/CardInput"):
-		var card_input = card.get_node("VisualContainer/CardInput")
-		if card_input and card_input is Control and card_input.focus_mode != Control.FOCUS_NONE:
-			print("[Main] _restore_focus_to_card: calling grab_focus() on CardInput")
-			card_input.grab_focus()
-			print("[Main] _restore_focus_to_card: grab_focus() completed")
-		else:
-			print("[Main] _restore_focus_to_card: CardInput invalid or not focusable")
+	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node)
+	if card is Control and card.focus_mode != Control.FOCUS_NONE:
+		print("[Main] _restore_focus_to_card: calling grab_focus() on card")
+		card.grab_focus()
+		print("[Main] _restore_focus_to_card: grab_focus() completed")
 	else:
-		print("[Main] _restore_focus_to_card: card has no VisualContainer/CardInput node")
+		print("[Main] _restore_focus_to_card: card invalid or not focusable")
 
 func _on_delay_timeout():
 	if _held_dir != "":

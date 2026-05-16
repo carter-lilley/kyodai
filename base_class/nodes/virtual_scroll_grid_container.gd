@@ -432,6 +432,10 @@ func _setup_ui():
 	_flow_container.add_theme_constant_override("v_separation", grid_separation)
 	_center_container.add_child(_flow_container)
 	
+	# Containers reset child scale to (1,1) during layout passes.
+	# Re-apply focus_scale after every sort so cards don't appear at the wrong size.
+	_flow_container.sort_children.connect(_on_flow_container_sorted)
+	
 	if debug_mode:
 		_setup_debug_camera()
 		_scroll_container.clip_contents = false
@@ -439,6 +443,11 @@ func _setup_ui():
 		_scroll_container.clip_contents = true
 	
 	_recalculate_dimensions()
+
+func _on_flow_container_sorted() -> void:
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("set_focus_scale"):
+			card.set_focus_scale(focus_scale)
 
 func _get_base_dimensions() -> Vector2:
 	var orientation_idx = 0  # Default tall (2/3)
@@ -1226,11 +1235,11 @@ func scroll_to_index(index: int, animate: bool = false, duration_multiplier: flo
 		
 		if vertical:
 			var viewport_height = size.y
-			var card_offset = target_pos + (card_size.y / 2.0) - (viewport_height / 2.0)
+			var card_offset = target_pos + (focused_card_size.y / 2.0) - (viewport_height / 2.0)
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 		else:
 			var viewport_width = size.x
-			var card_offset = target_pos + (card_size.x / 2.0) - (viewport_width / 2.0)
+			var card_offset = target_pos + (focused_card_size.x / 2.0) - (viewport_width / 2.0)
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):

@@ -102,7 +102,7 @@ func _fetch_platforms():
 		
 		if error != "":
 			push_error("[PlatformsSettingsView] Failed to fetch platforms: " + error)
-			NotificationManager.show_notification("Failed to fetch platforms: " + error, Notification.Type.ERROR)
+			NotificationManager.show_notification("Failed to fetch platforms: " + error, NotificationManager.Type.ERROR)
 			
 			var error_label = Label.new()
 			error_label.name = "ErrorLabel"
@@ -424,7 +424,7 @@ func _on_check_updates_pressed():
 		check_button.disabled = true
 		check_button.text = "Checking..."
 	
-	NotificationManager.show_notification("Checking for emulator updates...", Notification.Type.INFO)
+	NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
 	
 	LaunchManager.check_for_updates(func(updated: Array, up_to_date: Array, failed: Array):
 		if check_button:
@@ -432,11 +432,11 @@ func _on_check_updates_pressed():
 			check_button.text = "Check for Updates"
 		
 		if updated.size() > 0:
-			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % updated.size(), Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % updated.size(), NotificationManager.Type.SUCCESS)
 		elif failed.size() > 0:
-			NotificationManager.show_notification("Failed to check %d emulator(s)" % failed.size(), Notification.Type.WARNING)
+			NotificationManager.show_notification("Failed to check %d emulator(s)" % failed.size(), NotificationManager.Type.WARNING)
 		else:
-			NotificationManager.show_notification("All emulators are up to date", Notification.Type.INFO)
+			NotificationManager.show_notification("All emulators are up to date", NotificationManager.Type.INFO)
 	)
 
 func _on_sync_pressed():
@@ -444,7 +444,7 @@ func _on_sync_pressed():
 	_sync_triggered = true
 	
 	if not NetworkManager.is_online():
-		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
+		NotificationManager.show_notification("Not connected to RomM - check settings", NotificationManager.Type.ERROR)
 		return
 	
 	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
@@ -459,9 +459,9 @@ func _on_sync_pressed():
 			sync_button.text = "Sync Enabled Platforms"
 		
 		if success:
-			NotificationManager.show_notification("Sync complete! %s" % message, Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Sync complete! %s" % message, NotificationManager.Type.SUCCESS)
 		else:
-			NotificationManager.show_notification("Sync failed: %s" % message, Notification.Type.ERROR)
+			NotificationManager.show_notification("Sync failed: %s" % message, NotificationManager.Type.ERROR)
 	)
 
 func _on_full_sync_pressed():
@@ -469,7 +469,7 @@ func _on_full_sync_pressed():
 	_sync_triggered = true
 	
 	if not NetworkManager.is_online():
-		NotificationManager.show_notification("Not connected to RomM - check settings", Notification.Type.ERROR)
+		NotificationManager.show_notification("Not connected to RomM - check settings", NotificationManager.Type.ERROR)
 		return
 	
 	var full_sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
@@ -493,9 +493,9 @@ func _on_full_sync_pressed():
 			sync_button.text = "Sync Enabled Platforms"
 		
 		if success:
-			NotificationManager.show_notification("Full sync complete! %s" % message, Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Full sync complete! %s" % message, NotificationManager.Type.SUCCESS)
 		else:
-			NotificationManager.show_notification("Full sync failed: %s" % message, Notification.Type.ERROR)
+			NotificationManager.show_notification("Full sync failed: %s" % message, NotificationManager.Type.ERROR)
 	, true)  # true = force_full_sync
 
 func _update_select_all_button_text():
@@ -638,14 +638,14 @@ func _test_connection(indicator: Indicator):
 	NetworkManager.test_connection(func(online: bool):
 		if online:
 			indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-			NotificationManager.show_notification("Connected to RomM successfully", Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Connected to RomM successfully", NotificationManager.Type.SUCCESS)
 		else:
 			if not NetworkManager.is_configured():
 				indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
-				NotificationManager.show_notification("RomM not configured - check URL, username, password", Notification.Type.ERROR)
+				NotificationManager.show_notification("RomM not configured - check URL, username, password", NotificationManager.Type.ERROR)
 			else:
 				indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
-				NotificationManager.show_notification("Connection failed - check credentials", Notification.Type.ERROR)
+				NotificationManager.show_notification("Connection failed - check credentials", NotificationManager.Type.ERROR)
 	)
 
 func _update_connection_status(indicator: Indicator):

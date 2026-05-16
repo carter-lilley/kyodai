@@ -96,6 +96,7 @@ func _ready():
 	button_variant = Variant.TEXT
 	button_shape = Shape.ROUNDED
 	flat = true
+	auto_size_vertical = false  # Nav bar controls our vertical sizing
 	
 	super._ready()
 	

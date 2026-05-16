@@ -131,6 +131,10 @@ var _cached_colors_selected: Dictionary = {}
 var _cached_pad_h_px: int = 0
 var _cached_icon_size_px: int = 0
 
+## When false, M3Button will not auto-set size_flags_vertical or custom_minimum_size.y.
+## Useful for subclasses (e.g., M3NavigationDestination) whose parent container controls sizing.
+var auto_size_vertical: bool = true
+
 # ============================================
 # LIFECYCLE
 # ============================================
@@ -139,7 +143,8 @@ func _ready():
 	_initialize_caches()
 	_create_icon()
 	_update_icon()  # Set icon visibility first
-	size_flags_vertical = 0  # Don't expand vertically in containers
+	if auto_size_vertical:
+		size_flags_vertical = 0  # Don't expand vertically in containers
 	_update_size()
 	_initialize_theme_overrides()
 	_update_theme()  # Then configure styleboxes with correct visibility
@@ -224,7 +229,8 @@ func _update_size():
 	var height_px = M3Units.dp(spec["height"])
 	_cached_icon_size_px = max(1.0, M3Units.dp(spec["icon_size"]))
 	_cached_pad_h_px = M3Units.dp(spec["padding_h"])
-	custom_minimum_size = Vector2(custom_minimum_size.x, height_px)
+	if auto_size_vertical:
+		custom_minimum_size = Vector2(custom_minimum_size.x, height_px)
 	if _icon_node:
 		_icon_node.icon_settings.icon_size = _cached_icon_size_px
 		# Force icon node to exact icon_size so glyph is centered within fixed bounds

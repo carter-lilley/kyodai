@@ -579,7 +579,7 @@ func _on_download_requested(game: GameResource):
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
 		_update_status("Error: Games folder not set")
-		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
+		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
 		return
 	
 	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name

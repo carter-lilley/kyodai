@@ -499,6 +499,9 @@ func _update_theme():
 	# Override Godot's native uneditable color
 	add_theme_color_override("font_uneditable_color", M3Theme.get_on_surface())
 
+func is_virtual_keyboard_enabled() -> bool:
+	return false
+
 func refresh_theme():
 	super.refresh_theme()
 	_update_icons()

@@ -1399,7 +1399,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			var profile_result = _discover_eden_profile(emu_dir)
 			if profile_result.is_fallback:
 				print("[SaveManager] Auto-upload aborted: Eden profile not resolved (first launch?)")
-				NotificationManager.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", Notification.Type.WARNING)
+				NotificationManager.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", NotificationManager.Type.WARNING)
 				return
 		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
 	else:
@@ -1467,11 +1467,11 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 					"server":
 						# User chose to keep server, skip upload (will download on next launch)
 						print("[SaveManager] User chose to keep server save, skipping upload")
-						NotificationManager.show_notification("Save sync: keeping server version", Notification.Type.INFO)
+						NotificationManager.show_notification("Save sync: keeping server version", NotificationManager.Type.INFO)
 					"cancel", "":
 						# User cancelled
 						print("[SaveManager] User cancelled auto-upload")
-						NotificationManager.show_notification("Save sync cancelled", Notification.Type.INFO)
+						NotificationManager.show_notification("Save sync cancelled", NotificationManager.Type.INFO)
 			else:
 				# No conflict, proceed with upload
 				_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
@@ -1499,9 +1499,9 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 				state.pending -= 1
 				if state.pending <= 0:
 					if state.failed > 0:
-						NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+						NotificationManager.show_notification("Save sync failed for some files", NotificationManager.Type.ERROR)
 					else:
-						NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+						NotificationManager.show_notification("Saves synced to RomM", NotificationManager.Type.INFO)
 				continue
 			
 			NetworkManager.upload_save(
@@ -1526,9 +1526,9 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 					state.pending -= 1
 					if state.pending <= 0:
 						if state.failed > 0:
-							NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+							NotificationManager.show_notification("Save sync failed for some files", NotificationManager.Type.ERROR)
 						else:
-							NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+							NotificationManager.show_notification("Saves synced to RomM", NotificationManager.Type.INFO)
 			)
 		else:
 			NetworkManager.upload_save(
@@ -1549,9 +1549,9 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 				state.pending -= 1
 				if state.pending <= 0:
 					if state.failed > 0:
-						NotificationManager.show_notification("Save sync failed for some files", Notification.Type.ERROR)
+						NotificationManager.show_notification("Save sync failed for some files", NotificationManager.Type.ERROR)
 					else:
-						NotificationManager.show_notification("Saves synced to RomM", Notification.Type.INFO)
+						NotificationManager.show_notification("Saves synced to RomM", NotificationManager.Type.INFO)
 			)
 
 ## Auto-download saves before launch (pre-launch hook)
@@ -1626,7 +1626,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					var profile_result = _discover_eden_profile(emu_dir)
 					if profile_result.is_fallback:
 						print("[SaveManager] Auto-download aborted: Eden profile not resolved (first launch?)")
-						NotificationManager.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", Notification.Type.WARNING)
+						NotificationManager.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", NotificationManager.Type.WARNING)
 						if on_complete.is_valid():
 							on_complete.call()
 						return
@@ -1766,7 +1766,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 							state.pending -= 1
 							if state.pending <= 0 and state.failed == 0:
-								NotificationManager.show_notification("Saves downloaded from RomM", Notification.Type.INFO)
+								NotificationManager.show_notification("Saves downloaded from RomM", NotificationManager.Type.INFO)
 							check_complete.call()
 						)
 					)

@@ -336,7 +336,7 @@ func _apply_preset(preset: ThemePreset) -> void:
 	var success = SettingsManager.apply_preset(preset)
 	if success:
 		_loaded_preset = preset
-		NotificationManager.show_notification("Applied preset: %s" % preset.name, Notification.Type.SUCCESS)
+		NotificationManager.show_notification("Applied preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
 		
 		# Refresh all UI to reflect new settings
 		_refresh_all_settings_ui()
@@ -344,7 +344,7 @@ func _apply_preset(preset: ThemePreset) -> void:
 		# Update dropdown to show loaded preset
 		_update_preset_dropdown_for_loaded_preset()
 	else:
-		NotificationManager.show_notification("Failed to apply preset", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to apply preset", NotificationManager.Type.ERROR)
 		_preset_dropdown.select(0)
 	
 	_is_applying_preset = false
@@ -487,7 +487,7 @@ func _on_load_preset_pressed() -> void:
 	file_dialog.file_selected.connect(func(path: String):
 		var preset = SettingsManager.import_preset(path)
 		if preset:
-			NotificationManager.show_notification("Imported preset: %s" % preset.name, Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Imported preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
 			_refresh_preset_dropdown()
 			
 			# Auto-apply the imported preset with confirmation
@@ -501,7 +501,7 @@ func _on_load_preset_pressed() -> void:
 			add_child(dialog)
 			dialog.popup_centered()
 		else:
-			NotificationManager.show_notification("Failed to import preset", Notification.Type.ERROR)
+			NotificationManager.show_notification("Failed to import preset", NotificationManager.Type.ERROR)
 	)
 	
 	add_child(file_dialog)
@@ -527,7 +527,7 @@ func _on_export_preset_pressed() -> void:
 	
 	name_dialog.confirmed.connect(func():
 		if line_edit.text.is_empty():
-			NotificationManager.show_notification("Preset name cannot be empty", Notification.Type.WARNING)
+			NotificationManager.show_notification("Preset name cannot be empty", NotificationManager.Type.WARNING)
 			return
 		
 		preset.name = line_edit.text
@@ -536,10 +536,10 @@ func _on_export_preset_pressed() -> void:
 		# Save directly to internal presets folder
 		var success = SettingsManager.save_preset(preset)
 		if success:
-			NotificationManager.show_notification("Saved preset: %s" % preset.name, Notification.Type.SUCCESS)
+			NotificationManager.show_notification("Saved preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
 			_refresh_preset_dropdown()
 		else:
-			NotificationManager.show_notification("Failed to save preset", Notification.Type.ERROR)
+			NotificationManager.show_notification("Failed to save preset", NotificationManager.Type.ERROR)
 	)
 	
 	add_child(name_dialog)

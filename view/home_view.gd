@@ -190,7 +190,7 @@ func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
 	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
-		NotificationManager.show_notification("Found %d downloaded games" % found_count, Notification.Type.SUCCESS)
+		NotificationManager.show_notification("Found %d downloaded games" % found_count, NotificationManager.Type.SUCCESS)
 
 func _on_sync_completed(success: bool, message: String):
 	"""Called when library sync completes."""
@@ -330,7 +330,7 @@ func _on_download_requested(game: GameResource):
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
 		_update_status("Error: Games folder not set")
-		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
+		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
 		return
 	
 	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
@@ -485,7 +485,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				# Show deleting notification
-				NotificationManager.show_notification("Deleting " + game.title + "...", Notification.Type.INFO)
+				NotificationManager.show_notification("Deleting " + game.title + "...", NotificationManager.Type.INFO)
 				
 				# Lock the grid UI during deletion to prevent interaction with stale cards
 				if games_grid:
@@ -494,7 +494,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				# Delete the game
 				DataManager.delete_game_download(game, func(success: bool):
 					if success:
-						NotificationManager.show_notification(game.title + " deleted", Notification.Type.SUCCESS)
+						NotificationManager.show_notification(game.title + " deleted", NotificationManager.Type.SUCCESS)
 						
 						# Remove from GameNative cache if it's a GameNative game
 						if game.source == "gamenative":
@@ -529,7 +529,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 								AudioManager.play_sfx("error")
 						)
 					else:
-						NotificationManager.show_notification("Failed to delete " + game.title, Notification.Type.ERROR)
+						NotificationManager.show_notification("Failed to delete " + game.title, NotificationManager.Type.ERROR)
 						
 						# Re-enable grid interaction on failure too
 						if games_grid:
@@ -645,25 +645,25 @@ func _add_game_to_steam(game: GameResource) -> void:
 	# Validate Steam path
 	var steam_folder_setting = SettingsManager.get_setting("steam_folder")
 	if not steam_folder_setting or steam_folder_setting.value.is_empty():
-		NotificationManager.show_notification("Steam folder not configured", Notification.Type.ERROR)
+		NotificationManager.show_notification("Steam folder not configured", NotificationManager.Type.ERROR)
 		if AudioManager:
 			AudioManager.play_sfx("error")
 		return
 	
 	var steam_path = steam_folder_setting.value
 	if not SteamVDFWriter.is_valid_steam_path(steam_path):
-		NotificationManager.show_notification("Invalid Steam installation folder", Notification.Type.ERROR)
+		NotificationManager.show_notification("Invalid Steam installation folder", NotificationManager.Type.ERROR)
 		if AudioManager:
 			AudioManager.play_sfx("error")
 		return
 	
 	# Show processing notification
-	NotificationManager.show_notification("Adding " + game.title + " to Steam...", Notification.Type.INFO)
+	NotificationManager.show_notification("Adding " + game.title + " to Steam...", NotificationManager.Type.INFO)
 	
 	# Get launch intent for the game
 	var launch_intent = await LaunchManager.create_launch_intent(game)
 	if not launch_intent:
-		NotificationManager.show_notification("Failed to create launch intent for " + game.title, Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to create launch intent for " + game.title, NotificationManager.Type.ERROR)
 		if AudioManager:
 			AudioManager.play_sfx("error")
 		return
@@ -671,7 +671,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	# Get emulator executable path
 	var exe_path = LaunchManager.get_emulator_install_path(launch_intent.emulator_id)
 	if exe_path.is_empty():
-		NotificationManager.show_notification("Could not find emulator executable for " + game.title, Notification.Type.ERROR)
+		NotificationManager.show_notification("Could not find emulator executable for " + game.title, NotificationManager.Type.ERROR)
 		if AudioManager:
 			AudioManager.play_sfx("error")
 		return
@@ -735,7 +735,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	# Get shortcuts.vdf path
 	var shortcuts_path = SteamVDFWriter.get_shortcuts_vdf_path(steam_path)
 	if shortcuts_path.is_empty():
-		NotificationManager.show_notification("Could not find Steam shortcuts file", Notification.Type.ERROR)
+		NotificationManager.show_notification("Could not find Steam shortcuts file", NotificationManager.Type.ERROR)
 		if AudioManager:
 			AudioManager.play_sfx("error")
 		return
@@ -753,7 +753,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	for key in shortcuts_list.keys():
 		var entry = shortcuts_list[key]
 		if entry is Dictionary and entry.get("AppName", "") == game.title:
-			NotificationManager.show_notification(game.title + " is already in Steam", Notification.Type.WARNING)
+			NotificationManager.show_notification(game.title + " is already in Steam", NotificationManager.Type.WARNING)
 			if AudioManager:
 				AudioManager.play_sfx("error")
 			return
@@ -773,10 +773,10 @@ func _add_game_to_steam(game: GameResource) -> void:
 		if not cover_path.is_empty():
 			SteamVDFWriter.copy_artwork_to_steam(steam_path, app_id, cover_path)
 		
-		NotificationManager.show_notification(game.title + " added to Steam! Restart Steam to see it.", Notification.Type.SUCCESS)
+		NotificationManager.show_notification(game.title + " added to Steam! Restart Steam to see it.", NotificationManager.Type.SUCCESS)
 		if AudioManager:
 			AudioManager.play_sfx("success")
 	else:
-		NotificationManager.show_notification("Failed to add " + game.title + " to Steam", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to add " + game.title + " to Steam", NotificationManager.Type.ERROR)
 		if AudioManager:
 			AudioManager.play_sfx("error")

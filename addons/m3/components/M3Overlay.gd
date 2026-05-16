@@ -17,6 +17,7 @@ static var _max_layer: int = 0
 
 @export var overlay_type: String = ""
 @export var overlay_layer: int = 80
+@export var persistent: bool = false
 
 # ============================================
 # SIGNALS
@@ -62,7 +63,8 @@ func dismiss():
 				_max_layer = overlay.overlay_layer
 	dismissed.emit()
 	visible = false
-	queue_free()
+	if not persistent:
+		queue_free()
 
 ## Check if this overlay type is currently showing.
 static func is_showing(type: String) -> bool:

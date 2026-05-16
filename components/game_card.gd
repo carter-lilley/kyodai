@@ -22,6 +22,8 @@ var _current_texture: Texture2D = null
 
 # Media effect stack rendered inside M3Card's media panel
 var _media_stack: EffectStack = null
+var _focus_stack: EffectStack = null
+var _focus_effect_tweens: Array[Tween] = []
 var _card_state: EffectContainerState = EffectContainerState.for_card()
 
 var _loading_game_id: String = ""
@@ -39,6 +41,7 @@ const STATUS_BADGE_MARGIN_RATIO: float = 0.05
 
 # Focus
 const FOCUS_TWEEN_DURATION: float = 0.12
+const FOCUS_EFFECT_FADE_DURATION: float = 0.15
 var _focus_tween: Tween = null
 var _is_focused: bool = false
 var focus_scale: float = 1.08
@@ -53,7 +56,7 @@ var _long_press_timer: Timer = null
 
 func _ready():
 	super._ready()
-	scale = Vector2.ONE / focus_scale
+	_sync_focus_visuals()
 	
 	if preview_mode:
 		_setup_preview_mode()
@@ -141,12 +144,171 @@ func _build_media_stack():
 		_media_stack.set_game_texture(_current_texture)
 	
 	set_media_content(_media_stack)
+	_build_focus_stack()
+
+func _build_focus_stack() -> void:
+	if _focus_stack and is_instance_valid(_focus_stack):
+		_focus_stack.queue_free()
+	
+	var focus_effect_settings := []
+	if SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			focus_effect_settings = config_setting.value.get("focus_effects", [])
+	
+	# Skip if no focus effects configured
+	if focus_effect_settings.is_empty():
+		return
+	
+	_focus_stack = EffectStack.new()
+	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_focus_stack.z_index = 5
+	_focus_stack.visible = false
+	_focus_stack.size = size
+	add_child(_focus_stack)
+	
+	# Use a duplicated state so focus stack insets don't clobber base stack
+	var focus_state = _card_state.duplicate()
+	focus_state.effect_settings = focus_effect_settings.duplicate(true)
+	
+	_focus_stack.initialize(focus_state, focus_effect_settings, "focus_card")
+	if _current_texture:
+		_focus_stack.set_game_texture(_current_texture)
+	
+	# Hide base effect in focus stack — focus effects are overlays only
+	var focus_base = _focus_stack.get_effect("base")
+	if focus_base:
+		focus_base.visible = false
+		focus_base.modulate.a = 0.0
+	
+	# Initialize focus effects with effect_alpha = 0.0 so they start hidden
+	# (shader default is 1.0, which would cause them to pop in before tween)
+	var focus_alpha = 1.0 if preview_mode else 0.0
+	for child in _focus_stack.get_children():
+		if child is EffectBase and child.material is ShaderMaterial:
+			child.material.set_shader_parameter("effect_alpha", focus_alpha)
+	
+	if preview_mode:
+		_focus_stack.visible = true
+	
+	_link_overlapping_effects()
+
+func _link_overlapping_effects() -> void:
+	if not _media_stack or not _focus_stack:
+		return
+	
+	var base_effect_ids: Array[String] = []
+	for child in _media_stack.get_children():
+		if child is EffectBase:
+			base_effect_ids.append(child.effect_id)
+	
+	for child in _focus_stack.get_children():
+		if not (child is EffectBase):
+			continue
+		var focus_effect = child as EffectBase
+		if focus_effect.effect_id in base_effect_ids:
+			var base_effect = _media_stack.get_effect(focus_effect.effect_id)
+			if base_effect:
+				focus_effect.set_base_effect(base_effect)
+				if not _is_focused and base_effect._settings.size() > 0:
+					focus_effect.tween_settings(base_effect._settings, base_effect._settings, 1.0)
+
+func _show_focus_effects(show: bool) -> void:
+	# Kill any existing focus effect tweens to prevent callbacks on freed objects
+	for tween in _focus_effect_tweens:
+		if tween and is_instance_valid(tween):
+			tween.kill()
+	_focus_effect_tweens.clear()
+	
+	if preview_mode:
+		show = true
+	
+	if not _focus_stack or not _media_stack:
+		return
+	
+	var overlapping_effects: Array[EffectBase] = []
+	var non_overlapping_effects: Array[EffectBase] = []
+	
+	for child in _focus_stack.get_children():
+		if not (child is EffectBase):
+			continue
+		var focus_effect = child as EffectBase
+		if focus_effect._base_effect != null:
+			overlapping_effects.append(focus_effect)
+		else:
+			non_overlapping_effects.append(focus_effect)
+	
+	# Overlapping effects: tween the base effect's shader settings directly
+	for focus_effect in overlapping_effects:
+		var base_effect = focus_effect._base_effect
+		if not base_effect:
+			continue
+		
+		var base_settings = base_effect._settings
+		var focus_settings = focus_effect._settings
+		var base_copy = base_settings.duplicate(true)
+		var focus_copy = focus_settings.duplicate(true)
+		
+		if show:
+			var settings_tween = create_tween()
+			_focus_effect_tweens.append(settings_tween)
+			settings_tween.set_trans(Tween.TRANS_QUAD)
+			settings_tween.set_ease(Tween.EASE_OUT)
+			var tween_callable = func(t: float):
+				if base_effect and is_instance_valid(base_effect):
+					base_effect.tween_settings(base_copy, focus_copy, t)
+			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+		else:
+			var settings_tween = create_tween()
+			_focus_effect_tweens.append(settings_tween)
+			settings_tween.set_trans(Tween.TRANS_QUAD)
+			settings_tween.set_ease(Tween.EASE_OUT)
+			var tween_callable = func(t: float):
+				if base_effect and is_instance_valid(base_effect):
+					base_effect.tween_settings(focus_copy, base_copy, t)
+			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+	
+	# Non-overlapping effects: fade in/out via alpha overlay
+	if non_overlapping_effects.size() > 0:
+		if show:
+			_focus_stack.visible = true
+			_focus_stack.modulate = Color(1, 1, 1, 1)
+		
+		for focus_effect in non_overlapping_effects:
+			if focus_effect.material is ShaderMaterial:
+				var start_alpha = 0.0 if show else 1.0
+				var target_alpha = 1.0 if show else 0.0
+				if show:
+					focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
+				
+				var fade_tween = create_tween()
+				_focus_effect_tweens.append(fade_tween)
+				fade_tween.set_trans(Tween.TRANS_QUAD)
+				fade_tween.set_ease(Tween.EASE_OUT)
+				fade_tween.tween_method(
+					func(t: float, eff: EffectBase = focus_effect):
+						if eff and is_instance_valid(eff) and eff.material is ShaderMaterial:
+							eff.material.set_shader_parameter("effect_alpha", t),
+					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
+				)
+		
+		if not show:
+			var hide_tween = create_tween()
+			_focus_effect_tweens.append(hide_tween)
+			hide_tween.set_trans(Tween.TRANS_QUAD)
+			hide_tween.set_ease(Tween.EASE_OUT)
+			hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
+			hide_tween.finished.connect(func():
+				if _focus_stack and is_instance_valid(_focus_stack):
+					_focus_stack.visible = false
+			)
 
 func _update_card_state_from_settings():
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_card_state.effect_settings = config_setting.value.get("effects", [])
+			_card_state.focus_effect_settings = config_setting.value.get("focus_effects", [])
 			var corner_value = config_setting.value.get("corner_radius", 0.06)
 			if corner_value > 1.0:
 				# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
@@ -163,8 +325,7 @@ func set_card_zoom(_zoom: float) -> void:
 
 func set_focus_scale(value: float) -> void:
 	focus_scale = maxf(value, 1.0)
-	if not _is_focused:
-		scale = Vector2.ONE / focus_scale
+	_sync_focus_visuals()
 
 func refresh_settings() -> void:
 	_update_card_state_from_settings()
@@ -176,10 +337,19 @@ func reset() -> void:
 	game = null
 	_current_texture = null
 	_is_downloading = false
+	_is_focused = false
 	_loading_game_id = ""
 	_image_retry_count = 0
 	_download_retry_count = 0
-	scale = Vector2.ONE / focus_scale
+	if _focus_tween:
+		_focus_tween.kill()
+		_focus_tween = null
+	if _focus_effect_tweens:
+		for tween in _focus_effect_tweens:
+			if tween and is_instance_valid(tween):
+				tween.kill()
+		_focus_effect_tweens.clear()
+	_sync_focus_visuals()
 	if _current_image_task_id > 0 and MemoryManager:
 		MemoryManager.cancel_image_task(_current_image_task_id)
 		_current_image_task_id = -1
@@ -189,16 +359,24 @@ func reset() -> void:
 	supporting_text = ""
 	if _media_stack:
 		_media_stack.set_game_texture(null)
+	if _focus_stack:
+		_focus_stack.set_game_texture(null)
+		# Ensure focus stack is hidden after reset
+		if _focus_stack.visible:
+			_focus_stack.visible = false
+			_focus_stack.modulate = Color(1, 1, 1, 1)
+			for child in _focus_stack.get_children():
+				if child is EffectBase and child.material is ShaderMaterial:
+					child.material.set_shader_parameter("effect_alpha", 0.0)
 
 func set_placeholder(_enabled: bool) -> void:
 	# No-op for M3Card-based GameCard
 	pass
 
 func restore_focus_animation() -> void:
-	if _is_focused:
-		_on_focus_entered()
-	else:
-		_on_focus_exited()
+	# Re-sync visuals without full tween when layout changes underneath us
+	_sync_focus_visuals()
+	_show_focus_effects(_is_focused)
 
 func _update_display():
 	if not game or not is_node_ready():
@@ -520,6 +698,8 @@ func _set_texture(tex: Texture2D) -> void:
 	_current_texture = tex
 	if _media_stack:
 		_media_stack.set_game_texture(tex)
+	if _focus_stack:
+		_focus_stack.set_game_texture(tex)
 
 func _on_card_pressed():
 	if not game:
@@ -539,7 +719,7 @@ func _on_card_pressed():
 			var file_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
 			if not FileAccess.file_exists(file_path):
 				if NotificationManager:
-					NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
+					NotificationManager.show_notification("File not found - redownloading", NotificationManager.Type.WARNING)
 				download_requested.emit(game)
 				return
 		
@@ -641,6 +821,11 @@ func _on_download_completed(game_id: String, _success: bool):
 		_is_downloading = false
 		_update_status_icon()
 
+func _sync_focus_visuals() -> void:
+	var target_scale := Vector2.ONE if _is_focused else Vector2.ONE / focus_scale
+	if not is_equal_approx(scale.x, target_scale.x) or not is_equal_approx(scale.y, target_scale.y):
+		scale = target_scale
+
 func _on_focus_entered():
 	_is_focused = true
 	_update_status_icon()
@@ -651,6 +836,7 @@ func _on_focus_entered():
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	_show_focus_effects(true)
 
 func _on_focus_exited():
 	_is_focused = false
@@ -662,6 +848,7 @@ func _on_focus_exited():
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	_focus_tween.tween_property(self, "scale", Vector2.ONE / focus_scale, FOCUS_TWEEN_DURATION)
+	_show_focus_effects(false)
 
 func _notification(what: int):
 	super._notification(what)
@@ -670,3 +857,5 @@ func _notification(what: int):
 		_update_status_badge_layout()
 		_update_platform_badge()
 		_update_status_badge_layout()
+		if _focus_stack and is_instance_valid(_focus_stack):
+			_focus_stack.size = size

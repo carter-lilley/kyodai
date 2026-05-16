@@ -546,7 +546,7 @@ func _start_sync_iterative(enabled: Array, callback: Callable, force_full_sync: 
 		# Show notification with grand total
 		_sync_notification_id = NotificationManager.show_notification(
 			"Syncing...",
-			Notification.Type.INFO,
+			NotificationManager.Type.INFO,
 			null,
 			0.0,
 			func() -> float:
@@ -1318,7 +1318,7 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 	# Show pulsing notification
 	var notification_id = NotificationManager.show_notification(
 		"Folding duplicate covers...",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,
 		Callable(),
@@ -1427,7 +1427,7 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 			if folded_count > 0:
 				NotificationManager.show_notification(
 					"Folded %d duplicate covers" % folded_count,
-					Notification.Type.SUCCESS
+					NotificationManager.Type.SUCCESS
 				)
 			
 			print("[CoverFolding] Complete - folded %d games" % folded_count)

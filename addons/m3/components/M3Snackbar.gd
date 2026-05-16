@@ -16,6 +16,8 @@ const MOBILE_MARGIN := 8.0
 const CORNER_RADIUS := 4.0
 const LEFT_PADDING := 16.0
 const RIGHT_PADDING := 8.0
+const PROGRESS_EXTRA_HEIGHT := 12.0
+const ICON_SIZE := 24.0
 
 # ============================================
 # SIGNALS
@@ -36,9 +38,15 @@ var _timer: Timer
 var _hovered: bool = false
 var _cached_fonts: Dictionary = {}
 
+var _progress: M3Progress
+var _leading_icon: FontIcon
+var _font_icon_template: FontIconSettings = null
+
 var message: String = ""
 var action_text: String = ""
 var dismissible: bool = true
+var _auto_dismiss: bool = true
+var _progress_visible: bool = false
 
 # ============================================
 # LIFECYCLE
@@ -56,7 +64,8 @@ func _ready():
 	_position_snackbar()
 	_setup_timer()
 	_update_appearance()
-	start_timer(4000)
+	if _auto_dismiss:
+		start_timer(4000)
 	
 	_container.mouse_entered.connect(_on_mouse_entered)
 	_container.mouse_exited.connect(_on_mouse_exited)
@@ -72,6 +81,14 @@ func _create_visuals():
 	_hbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_container.add_child(_hbox)
+	
+	_leading_icon = FontIcon.new()
+	_leading_icon.icon_settings = _get_font_icon_settings()
+	_leading_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_leading_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_leading_icon.visible = false
+	_leading_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hbox.add_child(_leading_icon)
 	
 	_message_label = Label.new()
 	_message_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -101,6 +118,19 @@ func _create_visuals():
 	_dismiss_button.icon_name = "close"
 	_dismiss_button.pressed.connect(_on_dismiss_pressed)
 	dismiss_center.add_child(_dismiss_button)
+	
+	_progress = M3Progress.new()
+	_progress.mode = M3Progress.Mode.LINEAR
+	_progress.progress_size = M3Progress.Size.SMALL
+	_progress.visible = false
+	_container.add_child(_progress)
+
+func _get_font_icon_settings() -> FontIconSettings:
+	if _font_icon_template == null:
+		_font_icon_template = FontIconSettings.new()
+		_font_icon_template.icon_size = M3Units.dp(ICON_SIZE)
+		_font_icon_template.icon_font = "MaterialIcons"
+	return _font_icon_template.duplicate()
 
 func _setup_timer():
 	_timer = Timer.new()
@@ -113,6 +143,7 @@ func _position_snackbar():
 	var margin = M3Units.dp(MOBILE_MARGIN)
 	var max_width = M3Units.dp(MAX_WIDTH)
 	var height = M3Units.dp(SNACKBAR_HEIGHT)
+	var extra = M3Units.dp(PROGRESS_EXTRA_HEIGHT) if _progress_visible else 0.0
 	
 	var width: float
 	if viewport_size.x <= M3Units.dp(600):
@@ -120,10 +151,10 @@ func _position_snackbar():
 	else:
 		width = min(viewport_size.x - margin * 2, max_width)
 	
-	_container.size = Vector2(width, height)
+	_container.size = Vector2(width, height + extra)
 	_container.position = Vector2(
 		(viewport_size.x - width) / 2.0,
-		viewport_size.y - height - margin
+		viewport_size.y - height - extra - margin
 	)
 
 func _update_appearance():
@@ -145,13 +176,23 @@ func _update_appearance():
 	_dismiss_button.add_theme_color_override("font_color", Color(dismiss_color.r, dismiss_color.g, dismiss_color.b, 0.6))
 	_dismiss_button.add_theme_color_override("font_hover_color", dismiss_color)
 	
+	if is_instance_valid(_leading_icon) and _leading_icon.visible:
+		_leading_icon.icon_settings.icon_color = dismiss_color
+	
 	_update_layout()
 
 func _update_layout():
 	var h_padding = M3Units.dp(LEFT_PADDING)
 	var right_padding = M3Units.dp(RIGHT_PADDING)
+	var hbox_height = M3Units.dp(SNACKBAR_HEIGHT)
+	
 	_hbox.position = Vector2(h_padding, 0)
-	_hbox.size = Vector2(_container.size.x - h_padding - right_padding, _container.size.y)
+	_hbox.size = Vector2(_container.size.x - h_padding - right_padding, hbox_height)
+	
+	if _progress_visible and is_instance_valid(_progress):
+		var progress_y = hbox_height + M3Units.dp(4)
+		_progress.position = Vector2(h_padding, progress_y)
+		_progress.size = Vector2(_container.size.x - h_padding - right_padding, M3Units.dp(4))
 
 # ============================================
 # TIMER
@@ -237,5 +278,39 @@ func setup(msg: String, act_text: String = "", action_callback: Callable = Calla
 	_message_label.text = msg
 	_action_button.text = act_text
 
+func set_overlay_type(type: String):
+	overlay_type = type
+
+func set_auto_dismiss(enabled: bool):
+	_auto_dismiss = enabled
+
+func show_progress(enabled: bool):
+	_progress_visible = enabled
+	if is_instance_valid(_progress):
+		_progress.visible = enabled
+	if is_node_ready():
+		_position_snackbar()
+		_update_layout()
+
+func set_progress_fraction(fraction: float):
+	if is_instance_valid(_progress):
+		_progress.set_fraction(fraction)
+
+func set_leading_icon(icon_name: String):
+	if not is_instance_valid(_leading_icon):
+		return
+	if icon_name.is_empty():
+		_leading_icon.visible = false
+	else:
+		_leading_icon.icon_settings.icon_name = icon_name
+		_leading_icon.visible = true
+		_update_appearance()
+
+func set_pulsing(enabled: bool):
+	if is_instance_valid(_progress):
+		_progress.indeterminate = enabled
+
 func refresh_theme():
 	_update_appearance()
+	if is_instance_valid(_progress):
+		_progress.refresh_theme()

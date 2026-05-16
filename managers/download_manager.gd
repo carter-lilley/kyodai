@@ -402,7 +402,7 @@ func _start_download(item: QueueItem):
 	if not item.suppress_notification:
 		item.notification_id = NotificationManager.show_notification(
 			item.name + "...",
-			Notification.Type.INFO,
+			NotificationManager.Type.INFO,
 			null,
 			0.0,
 			func() -> float:
@@ -1361,7 +1361,7 @@ func _show_reassembly_notification(item_id: String, item_name: String) -> void:
 	var item = _chunked_downloads[item_id].item
 	item.notification_id = NotificationManager.show_notification(
 		"Assembling " + item_name + "...",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,
 		Callable(),  # No progress callable - using pulsing
@@ -1821,7 +1821,7 @@ func _start_extraction(item: QueueItem):
 		
 		item.notification_id = NotificationManager.show_notification(
 			"Extracting " + item.name + "...",
-			Notification.Type.INFO,
+			NotificationManager.Type.INFO,
 			null,
 			0.0,
 			Callable(),  # No progress callable - using pulsing
@@ -1863,7 +1863,7 @@ func _finish_download_completion(item: QueueItem):
 		# Extract TitleID in background if needed
 		if item.game_resource.get_active_title_id() == "" and _needs_title_id(item.game_resource):
 			var game = item.game_resource
-			var notify_id = NotificationManager.show_notification("Extracting TitleID for " + game.title + "...", Notification.Type.INFO, null, 3.0, Callable(), Callable(), true)
+			var notify_id = NotificationManager.show_notification("Extracting TitleID for " + game.title + "...", NotificationManager.Type.INFO, null, 3.0, Callable(), Callable(), true)
 			MemoryManager.queue_extraction_task(func():
 				var title_id = TitleIDParser.extract_for_game(game)
 				return title_id
@@ -1871,7 +1871,7 @@ func _finish_download_completion(item: QueueItem):
 				NotificationManager.dismiss_notification(notify_id)
 				if title_id != "":
 					DataManager.update_game_title_id(game.romm_id, title_id)
-					NotificationManager.show_notification("TitleID " + title_id + " found for " + game.title + "!", Notification.Type.SUCCESS, null, 3.0)
+					NotificationManager.show_notification("TitleID " + title_id + " found for " + game.title + "!", NotificationManager.Type.SUCCESS, null, 3.0)
 					print("[DownloadManager] TitleID extracted post-download: " + title_id + " for " + game.title)
 				else:
 					print("[DownloadManager] TitleID extraction failed for " + game.title)

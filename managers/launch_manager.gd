@@ -768,7 +768,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		# Show progress notification
 		var _firmware_notification_id = NotificationManager.show_notification(
 			"Downloading firmware for " + platform_slug + "...",
-			Notification.Type.INFO,
+			NotificationManager.Type.INFO,
 			null,
 			0.0,
 			Callable(),
@@ -796,7 +796,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 				# Show extracting notification
 				var _extract_notification_id = NotificationManager.show_notification(
 					"Extracting firmware for " + platform_slug + "...",
-					Notification.Type.INFO,
+					NotificationManager.Type.INFO,
 					null,
 					0.0,
 					Callable(),
@@ -1032,7 +1032,7 @@ func execute_launch(intent: LaunchIntent) -> bool:
 	
 	if not is_actually_installed:
 		push_error("[LaunchManager] Emulator not fully installed: " + intent.emulator_id)
-		NotificationManager.show_notification("Emulator not ready: " + intent.emulator_name, Notification.Type.ERROR)
+		NotificationManager.show_notification("Emulator not ready: " + intent.emulator_name, NotificationManager.Type.ERROR)
 		return false
 	
 	# Controller configuration temporarily disabled - need to solve SDL device index mapping
@@ -1398,7 +1398,7 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	var prep_success = await _prepare_game_for_launch(game, emulator_id)
 	if not prep_success:
 		push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
-		NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
 		return
 	print("[LaunchManager] launch_game: Game preparation complete")
 	
@@ -1416,7 +1416,7 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 func _launch_gamenative_game(game: GameResource) -> void:
 	if not PlatformManager.is_android():
 		push_error("[LaunchManager] Cannot launch GameNative game on non-Android platform")
-		NotificationManager.show_notification("GameNative games only available on Android", Notification.Type.ERROR)
+		NotificationManager.show_notification("GameNative games only available on Android", NotificationManager.Type.ERROR)
 		return
 	
 	var success = GameNativeManager.launch_game(game.steam_app_id)
@@ -1425,7 +1425,7 @@ func _launch_gamenative_game(game: GameResource) -> void:
 		game_launched.emit(game)
 	else:
 		push_error("[LaunchManager] Failed to launch GameNative game")
-		NotificationManager.show_notification("Failed to launch GameNative. Is the app installed?", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to launch GameNative. Is the app installed?", NotificationManager.Type.ERROR)
 	
 ## If game is not downloaded, queue the download first then proceed
 func _queue_game_download_then_launch(game: GameResource) -> void:
@@ -1435,12 +1435,12 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
-		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
+		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
 		return
 	
 	var destination_path = FileSystemManager.join_paths(root_folder.value, game.platform_slug, active_file_name)
 	
-	NotificationManager.show_notification("Downloading " + game.get_display_name() + "...", Notification.Type.INFO)
+	NotificationManager.show_notification("Downloading " + game.get_display_name() + "...", NotificationManager.Type.INFO)
 	
 	# Define callback for when download completes
 	var on_download_complete = func(success: bool, _path: String):
@@ -1455,7 +1455,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			var prep_success = await _prepare_game_for_launch(game_to_launch, emulator_id)
 			if not prep_success:
 				push_error("[LaunchManager] Failed to prepare game after download: " + game_to_launch.get_display_name())
-				NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
+				NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
 				return
 			print("[LaunchManager] _queue_game_download_then_launch: Game preparation complete")
 			
@@ -1468,7 +1468,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			else:
 				_launch_with_emulator_check(game_to_launch)
 		else:
-			NotificationManager.show_notification("Download failed for " + game.get_display_name(), Notification.Type.ERROR)
+			NotificationManager.show_notification("Download failed for " + game.get_display_name(), NotificationManager.Type.ERROR)
 	
 	# Queue download with callback to continue launch flow
 	var item_id = DownloadManager.queue_download(
@@ -1484,7 +1484,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 	)
 	
 	if item_id == "":
-		NotificationManager.show_notification("Failed to queue download", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to queue download", NotificationManager.Type.ERROR)
 
 ## Check emulator status and launch game (game must be downloaded)
 func _launch_with_emulator_check(game: GameResource) -> void:
@@ -1497,11 +1497,11 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	if _pending_launches.has(emulator_id):
 		var pending_game: GameResource = _pending_launches[emulator_id]
 		if pending_game.romm_id == game.romm_id:
-			NotificationManager.show_notification("Game already pending launch! Waiting for emulator installation...", Notification.Type.WARNING)
+			NotificationManager.show_notification("Game already pending launch! Waiting for emulator installation...", NotificationManager.Type.WARNING)
 			return
 	
 	if emulator_id == "":
-		NotificationManager.show_notification("No emulator configured for platform: " + game.platform_slug, Notification.Type.ERROR)
+		NotificationManager.show_notification("No emulator configured for platform: " + game.platform_slug, NotificationManager.Type.ERROR)
 		return
 	
 	var emulator = get_emulator(emulator_id)
@@ -1518,7 +1518,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 			break
 	
 	if not is_actually_installed:
-		NotificationManager.show_notification("Setting up " + emulator_name + "...", Notification.Type.INFO)
+		NotificationManager.show_notification("Setting up " + emulator_name + "...", NotificationManager.Type.INFO)
 		
 		# Connect signal handler BEFORE starting download (signal may fire synchronously during install)
 		if not emulator_extraction_completed.is_connected(_on_emulator_installed_for_launch):
@@ -1531,9 +1531,9 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 		var download_success = download_emulator(emulator_id)
 		
 		if download_success:
-			NotificationManager.show_notification(emulator_name + " downloading... Will auto-launch when ready.", Notification.Type.INFO)
+			NotificationManager.show_notification(emulator_name + " downloading... Will auto-launch when ready.", NotificationManager.Type.INFO)
 		else:
-			NotificationManager.show_notification("Failed to queue " + emulator_name + " download", Notification.Type.ERROR)
+			NotificationManager.show_notification("Failed to queue " + emulator_name + " download", NotificationManager.Type.ERROR)
 			_pending_launches.erase(emulator_id)
 		return
 	
@@ -1542,7 +1542,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 		# Already downloading? Store this launch to retry when ready
 		if _pending_firmware_downloads.has(game.platform_slug):
 			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
-			NotificationManager.show_notification("Firmware download in progress for " + game.platform_slug + "...", Notification.Type.INFO)
+			NotificationManager.show_notification("Firmware download in progress for " + game.platform_slug + "...", NotificationManager.Type.INFO)
 			_pending_firmware_launches[game.platform_slug] = {
 				"game": game,
 				"emulator_id": emulator_id
@@ -1551,7 +1551,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 		
 		# Start firmware download
 		print("[LaunchManager] Firmware not ready for " + game.platform_slug + ", downloading...")
-		NotificationManager.show_notification("Downloading firmware for " + game.platform_slug + "...", Notification.Type.INFO)
+		NotificationManager.show_notification("Downloading firmware for " + game.platform_slug + "...", NotificationManager.Type.INFO)
 		
 		_pending_firmware_downloads[game.platform_slug] = true
 		_pending_firmware_launches[game.platform_slug] = {
@@ -1568,7 +1568,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 				
 				if not success:
 					push_error("[LaunchManager] Firmware download failed for " + game.platform_slug + ": " + message)
-					NotificationManager.show_notification("Failed to download firmware for " + game.platform_slug, Notification.Type.ERROR)
+					NotificationManager.show_notification("Failed to download firmware for " + game.platform_slug, NotificationManager.Type.ERROR)
 					return
 				
 				print("[LaunchManager] Firmware ready for " + game.platform_slug + ", launching game...")
@@ -1604,7 +1604,7 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 	if _pending_launches.has(emulator_id):
 		var game: GameResource = _pending_launches[emulator_id]
 		_pending_launches.erase(emulator_id)
-		NotificationManager.show_notification("Launching " + game.get_display_name() + "...", Notification.Type.INFO)
+		NotificationManager.show_notification("Launching " + game.get_display_name() + "...", NotificationManager.Type.INFO)
 		
 		# Give a small delay for file system to settle
 		await get_tree().create_timer(0.5).timeout
@@ -1615,7 +1615,7 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 		var prep_success = await _prepare_game_for_launch(game, emulator_id)
 		if not prep_success:
 			push_error("[LaunchManager] Failed to prepare game after emulator install: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare game for launch", Notification.Type.ERROR)
+			NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
 			return
 		print("[LaunchManager] _on_emulator_installed_for_launch: Game preparation complete")
 		# Retry the launch
@@ -1629,7 +1629,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	
 	if not intent:
 		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")
-		NotificationManager.show_notification("Failed to create launch intent", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to create launch intent", NotificationManager.Type.ERROR)
 		print("[LaunchManager] _launch_game_internal: EXIT (null intent)")
 		return
 	
@@ -1638,7 +1638,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	
 	if not success:
 		push_error("[LaunchManager] _launch_game_internal: execute_launch returned false")
-		NotificationManager.show_notification("Failed to launch " + game.get_display_name(), Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to launch " + game.get_display_name(), NotificationManager.Type.ERROR)
 		print("[LaunchManager] _launch_game_internal: EXIT (launch failed)")
 		return
 	
@@ -1924,7 +1924,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		print("[LaunchManager] ERROR: APK file is too small or empty!")
 		NotificationManager.show_notification(
 			"APK download incomplete!\nFile size: " + str(file_size) + " bytes",
-			Notification.Type.ERROR,
+			NotificationManager.Type.ERROR,
 			null,
 			10.0
 		)
@@ -1950,7 +1950,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		print("[LaunchManager] APK install failed with error: " + str(result))
 		NotificationManager.show_notification(
 			"APK install failed!\nPlease install manually from:\n" + apk_path,
-			Notification.Type.ERROR,
+			NotificationManager.Type.ERROR,
 			null,
 			10.0
 		)
@@ -2029,7 +2029,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	# Create a single batch progress notification
 	var batch_notification_id = NotificationManager.show_notification(
 		step_display_name + " (0/" + str(total_cores) + ")",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,
 		func() -> float:
@@ -2281,7 +2281,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	# Create a single batch progress notification
 	var batch_notification_id = NotificationManager.show_notification(
 		step_display_name + " (0/" + str(total_archives) + ")",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,
 		func() -> float:
@@ -3219,7 +3219,7 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var title_id = TitleIDParser.extract_3ds_title_id(rom_path)
 	if title_id == "":
 		push_error("[LaunchManager] Azahar: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract 3DS game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract 3DS game TitleID", NotificationManager.Type.ERROR)
 		return false
 	
 	print("[LaunchManager] Azahar: TitleID from ROM: " + title_id)
@@ -3244,7 +3244,7 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var title_id = TitleIDParser.extract_wiiu_title_id(rom_path)
 	if title_id == "":
 		push_error("[LaunchManager] Cemu: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract Wii U game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract Wii U game TitleID", NotificationManager.Type.ERROR)
 		return false
 	
 	print("[LaunchManager] Cemu: TitleID from WUA: " + title_id)
@@ -3375,7 +3375,7 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if title_id == "":
 		push_error("[LaunchManager] Eden: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract Switch game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract Switch game TitleID", NotificationManager.Type.ERROR)
 		return false
 	
 	print("[LaunchManager] Eden: TitleID resolved: " + title_id)
@@ -3406,7 +3406,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if game_id == "":
 		push_error("[LaunchManager] Dolphin: Failed to extract Game ID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract GameCube/Wii game ID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract GameCube/Wii game ID", NotificationManager.Type.ERROR)
 		return false
 	
 	print("[LaunchManager] Dolphin: Game ID: " + game_id)
@@ -3431,7 +3431,7 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var title_id = TitleIDParser.extract_xbox360_title_id(rom_path)
 	if title_id == "":
 		push_error("[LaunchManager] Xenia: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract Xbox 360 game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract Xbox 360 game TitleID", NotificationManager.Type.ERROR)
 		return false
 	
 	print("[LaunchManager] Xenia: TitleID from ISO: " + title_id)
@@ -3463,7 +3463,7 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if serial == "":
 		push_error("[LaunchManager] PCSX2: Failed to extract serial from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract PS2 game serial", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract PS2 game serial", NotificationManager.Type.ERROR)
 		return false
 	
 	var active_title_id = game.get_active_title_id()
@@ -3495,7 +3495,7 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if game_id == "":
 		push_error("[LaunchManager] PPSSPP: Failed to extract game ID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract PSP game ID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract PSP game ID", NotificationManager.Type.ERROR)
 		return false
 	
 	var active_title_id = game.get_active_title_id()
@@ -3553,7 +3553,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var zip_title_id = TitleIDParser.extract_vita_title_id(rom_path)
 	if zip_title_id == "":
 		push_error("[LaunchManager] Vita3K: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract Vita game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract Vita game TitleID", NotificationManager.Type.ERROR)
 		return false
 	print("[LaunchManager] Vita3K: TitleID from ZIP: " + zip_title_id)
 	
@@ -3596,7 +3596,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Show persistent pulsing notification during extraction
 	var notify_id = NotificationManager.show_notification(
 		"Extracting " + game.get_display_name() + "...",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,  # Never auto-dismiss
 		Callable(),
@@ -3940,7 +3940,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var zip_title_id = TitleIDParser.extract_ps3_title_id(rom_path)
 	if zip_title_id == "":
 		push_error("[LaunchManager] RPCS3: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract PS3 game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract PS3 game TitleID", NotificationManager.Type.ERROR)
 		return false
 	print("[LaunchManager] RPCS3: TitleID from ZIP: " + zip_title_id)
 	
@@ -4002,7 +4002,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Show persistent pulsing notification during extraction
 	var rpcs3_notify_id = NotificationManager.show_notification(
 		"Extracting " + game.get_display_name() + "...",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,
 		Callable(),
@@ -4035,7 +4035,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if not has_param_sfo and not has_ps3_disc and not has_ps3_game:
 		push_error("[LaunchManager] RPCS3: Game files missing after extraction at: " + install_path)
-		NotificationManager.show_notification("Failed to install PS3 game - files missing", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to install PS3 game - files missing", NotificationManager.Type.ERROR)
 		return false
 	
 	print("[LaunchManager] RPCS3: Game installed successfully at: " + install_path)
@@ -4110,7 +4110,7 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var zip_title_id = TitleIDParser.extract_ps4_title_id(rom_path)
 	if zip_title_id == "":
 		push_error("[LaunchManager] shadPS4: Failed to extract TitleID from: " + rom_path)
-		NotificationManager.show_notification("Failed to extract PS4 game TitleID", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to extract PS4 game TitleID", NotificationManager.Type.ERROR)
 		return false
 	print("[LaunchManager] shadPS4: TitleID from ZIP: " + zip_title_id)
 	
@@ -4149,7 +4149,7 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Step 5: Extract ZIP to extraction path
 	var shadps4_notify_id = NotificationManager.show_notification(
 		"Extracting " + game.get_display_name() + "...",
-		Notification.Type.INFO,
+		NotificationManager.Type.INFO,
 		null,
 		0.0,
 		Callable(),

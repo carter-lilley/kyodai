@@ -273,9 +273,9 @@ func _on_sync_button_pressed() -> void:
 		_update_sync_ui()
 		
 		if success:
-			NotificationManager.show_notification("Save sync complete", Notification.Type.INFO)
+			NotificationManager.show_notification("Save sync complete", NotificationManager.Type.INFO)
 		else:
-			NotificationManager.show_notification("Save sync: " + message, Notification.Type.ERROR)
+			NotificationManager.show_notification("Save sync: " + message, NotificationManager.Type.ERROR)
 	)
 
 func _on_action_button_pressed() -> void:
@@ -297,7 +297,7 @@ func _on_action_button_pressed() -> void:
 			
 			if not FileAccess.file_exists(file_path):
 				# File is marked as downloaded but doesn't exist - redownload
-				NotificationManager.show_notification("File not found - redownloading", Notification.Type.WARNING)
+				NotificationManager.show_notification("File not found - redownloading", NotificationManager.Type.WARNING)
 				_queue_download()
 				return
 		
@@ -318,16 +318,16 @@ func _queue_download() -> void:
 	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
-		NotificationManager.show_notification("Error: Games folder not set", Notification.Type.ERROR)
+		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
 		return
 	
 	var destination_path = root_folder.value + "/" + _current_game.platform_slug + "/" + active_file_name
 	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", _current_game.get_display_name(), false, "", _current_game, {}, active_game_id)
 	
 	if item_id != "":
-		NotificationManager.show_notification("Queued: " + _current_game.get_display_name(), Notification.Type.INFO)
+		NotificationManager.show_notification("Queued: " + _current_game.get_display_name(), NotificationManager.Type.INFO)
 	else:
-		NotificationManager.show_notification("Failed to queue download", Notification.Type.ERROR)
+		NotificationManager.show_notification("Failed to queue download", NotificationManager.Type.ERROR)
 
 func _on_download_completed(item_id: String, success: bool, message: String) -> void:
 	# Check if this download is for our current game
@@ -337,9 +337,9 @@ func _on_download_completed(item_id: String, success: bool, message: String) -> 
 	var item = DownloadManager.get_item(item_id)
 	if item and item.game_resource and item.game_resource.romm_id == _current_game.romm_id:
 		if success:
-			NotificationManager.show_notification("Download completed", Notification.Type.INFO)
+			NotificationManager.show_notification("Download completed", NotificationManager.Type.INFO)
 		else:
-			NotificationManager.show_notification("Download failed: " + message, Notification.Type.ERROR)
+			NotificationManager.show_notification("Download failed: " + message, NotificationManager.Type.ERROR)
 		
 		# Reload game data from DataManager to get updated downloaded_sibling_ids
 		var updated_game = DataManager.get_game_by_id(_current_game.romm_id)

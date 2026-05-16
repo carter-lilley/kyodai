@@ -206,7 +206,7 @@ func match_var_type(settingsvar : SettingsVar):
 			path_field.editable = settingsvar.state == 0
 			path_field.focus_mode = Control.FOCUS_NONE
 			path_field.virtual_keyboard_enabled = false
-			add_child(path_field)
+			path_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			controls[settingsvar.property_name] = path_field
 			_apply_metadata(path_field, settingsvar.metadata)
 			
@@ -215,7 +215,13 @@ func match_var_type(settingsvar : SettingsVar):
 			browse_button.icon_name = "folder-open"
 			browse_button.button_variant = M3Button.Variant.OUTLINED
 			browse_button.disabled = settingsvar.state != 0
-			add_child(browse_button)
+			browse_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			
+			var path_row = HBoxContainer.new()
+			path_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			path_row.add_child(path_field)
+			path_row.add_child(browse_button)
+			add_child(path_row)
 			
 			browse_button.pressed.connect(func():
 				var dialog = FileDialog.new()

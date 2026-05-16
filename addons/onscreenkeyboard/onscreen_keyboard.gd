@@ -759,6 +759,8 @@ func is_keyboard_focus_object_complete_on_enter(focus_object):
 
 func is_keyboard_focus_object(focus_object):
 	if focus_object is LineEdit or focus_object is TextEdit:
+		if focus_object.has_method("is_virtual_keyboard_enabled"):
+			return focus_object.is_virtual_keyboard_enabled()
 		return true
 	return false
 
@@ -791,7 +793,8 @@ func _find_line_edit_recursive(node: Node, pos: Vector2) -> LineEdit:
 	if node is LineEdit:
 		var control = node as Control
 		if control.get_global_rect().has_point(pos) and control.visible:
-			return control
+			if not node.has_method("is_virtual_keyboard_enabled") or node.is_virtual_keyboard_enabled():
+				return control
 	
 	# Check children recursively
 	for child in node.get_children():

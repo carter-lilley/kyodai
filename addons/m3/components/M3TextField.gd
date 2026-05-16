@@ -702,6 +702,9 @@ func _get_minimum_size() -> Vector2:
 # PUBLIC
 # ============================================
 
+func is_virtual_keyboard_enabled() -> bool:
+	return true
+
 func refresh_theme():
 	_update_theme()
 	_update_layout()

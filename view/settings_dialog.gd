@@ -24,6 +24,7 @@ var _library_settings_view: SettingsView
 func _init():
 	dialog_variant = Variant.FULL_SCREEN
 	title_text = "Settings"
+	persistent = true
 	super._init()
 
 func _ready():
@@ -204,6 +205,9 @@ func _create_library_appearance_content() -> Control:
 		if tab_container.get_tab_title(i) == "Library Appearance":
 			var content = tab_container.get_tab_control(i)
 			tab_container.remove_child(content)
+			content.visible = true
+			content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			# Return the ScrollContainer wrapper directly to preserve scrolling behavior
 			if content is ScrollContainer:
 				return content

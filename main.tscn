@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://oa15cvl0ceqq"]
 
 [ext_resource type="Script" uid="uid://4p4i1nlgkicx" path="res://main.gd" id="1_main"]
-[ext_resource type="Script" path="res://components/zoom_overlay.gd" id="3_zoomoverlay"]
+[ext_resource type="Script" uid="uid://d2eue5yykkf5q" path="res://components/zoom_overlay.gd" id="3_zoomoverlay"]
 [ext_resource type="PackedScene" uid="uid://c8yvxg3ulq3a8" path="res://components/library_background.tscn" id="4_libbg"]
 [ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="4_ycdy4"]
 [ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/hero_image.tscn" id="5_heroimg"]
