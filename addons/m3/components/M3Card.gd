@@ -29,8 +29,19 @@ var corner_radius_dp: float = CORNER_RADIUS:
 					focus_sb.set_corner_radius_all(M3Units.dpi(corner_radius_dp))
 
 const MEDIA_WIDTH_LIST := 256.0
-const HEADLINE_FONT_SIZE := 22.0
-const SUPPORTING_FONT_SIZE := 14.0
+# M3 type-scale tiers keyed by minimum card-height (dp).
+# Headline uses medium weight; supporting uses regular weight.
+const _HEADLINE_SCALE := [
+	{ "threshold_dp": 280.0, "size": 22.0, "weight": "medium" },  # Title Large
+	{ "threshold_dp": 200.0, "size": 16.0, "weight": "medium" },  # Title Medium
+	{ "threshold_dp": 140.0, "size": 14.0, "weight": "medium" },  # Title Small
+	{ "threshold_dp":   0.0, "size": 12.0, "weight": "medium" },  # Label Medium
+]
+const _SUPPORTING_SCALE := [
+	{ "threshold_dp": 200.0, "size": 14.0, "weight": "regular" }, # Body Medium
+	{ "threshold_dp": 140.0, "size": 12.0, "weight": "regular" }, # Body Small
+	{ "threshold_dp":   0.0, "size": 11.0, "weight": "medium" },  # Label Small
+]
 const ACTIONS_GAP := 8.0
 const LABEL_GAP := 4.0
 const MIN_HEIGHT_VERTICAL_DP := 240.0
@@ -111,6 +122,8 @@ var _cached_fonts: Dictionary = {}
 var _action_labels: Array[String] = []
 var _ready_called: bool = false
 var _media_content: Control = null
+var _applied_headline_size_dp: float = -1.0
+var _applied_supporting_size_dp: float = -1.0
 
 # ============================================
 # LIFECYCLE
@@ -160,6 +173,10 @@ func _initialize_styleboxes():
 	_cached_stylebox.set_border_width_all(0)
 
 func _rebuild_layout():
+	# Reset font caches since labels will be recreated
+	_applied_headline_size_dp = -1.0
+	_applied_supporting_size_dp = -1.0
+	
 	# Remove old root container and focus ring from the tree immediately
 	# so the new nodes don't get auto-renamed by Godot.
 	if _root_container and is_instance_valid(_root_container):
@@ -269,6 +286,8 @@ func _rebuild_layout():
 	_headline_label = Label.new()
 	_headline_label.name = "Headline"
 	_headline_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_headline_label.max_lines_visible = 1
+	_headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_headline_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_headline_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_content.add_child(_headline_label)
@@ -276,6 +295,8 @@ func _rebuild_layout():
 	_supporting_label = Label.new()
 	_supporting_label.name = "SupportingText"
 	_supporting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_supporting_label.max_lines_visible = 1
+	_supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_supporting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_content.add_child(_supporting_label)
@@ -367,24 +388,41 @@ func _update_media():
 	if _media_panel:
 		_media_panel.visible = media_texture != null
 
+func _pick_headline_spec(height_dp: float) -> Dictionary:
+	for spec in _HEADLINE_SCALE:
+		if height_dp >= spec.threshold_dp:
+			return spec
+	return _HEADLINE_SCALE[-1]
+
+func _pick_supporting_spec(height_dp: float) -> Dictionary:
+	for spec in _SUPPORTING_SCALE:
+		if height_dp >= spec.threshold_dp:
+			return spec
+	return _SUPPORTING_SCALE[-1]
+
 func _update_text():
 	if not _headline_label or not _supporting_label:
 		return
 	
+	var height_dp = size.y / M3Units.get_scale()
 	var fonts = _cached_fonts
-	var headline_size = M3Units.dp(HEADLINE_FONT_SIZE)
-	var supporting_size = M3Units.dp(SUPPORTING_FONT_SIZE)
+	var headline_spec = _pick_headline_spec(height_dp)
+	var supporting_spec = _pick_supporting_spec(height_dp)
 	
 	_headline_label.text = headline
 	_headline_label.visible = not headline.is_empty()
-	_headline_label.add_theme_font_override("font", fonts["medium"])
-	_headline_label.add_theme_font_size_override("font_size", headline_size)
+	if headline_spec.size != _applied_headline_size_dp:
+		_applied_headline_size_dp = headline_spec.size
+		_headline_label.add_theme_font_override("font", fonts[headline_spec.weight])
+		_headline_label.add_theme_font_size_override("font_size", M3Units.dp(headline_spec.size))
 	_headline_label.add_theme_color_override("font_color", M3Theme.get_on_surface())
 	
 	_supporting_label.text = supporting_text
-	_supporting_label.visible = not supporting_text.is_empty()
-	_supporting_label.add_theme_font_override("font", fonts["regular"])
-	_supporting_label.add_theme_font_size_override("font_size", supporting_size)
+	_supporting_label.visible = not supporting_text.is_empty() and size.y >= M3Units.dp(100.0)
+	if supporting_spec.size != _applied_supporting_size_dp:
+		_applied_supporting_size_dp = supporting_spec.size
+		_supporting_label.add_theme_font_override("font", fonts[supporting_spec.weight])
+		_supporting_label.add_theme_font_size_override("font_size", M3Units.dp(supporting_spec.size))
 	_supporting_label.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
 
 func _update_appearance():
@@ -494,6 +532,9 @@ func _notification(what: int):
 				queue_redraw()
 		NOTIFICATION_RESIZED:
 			queue_redraw()
+			if card_layout_mode == LayoutMode.VERTICAL and _media_panel:
+				_media_panel.custom_minimum_size.y = maxf(M3Units.dp(40.0), size.y * 0.5)
+			_update_text()
 
 func _gui_input(event: InputEvent):
 	if not clickable:

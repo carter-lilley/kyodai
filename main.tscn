@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://oa15cvl0ceqq"]
 
 [ext_resource type="Script" uid="uid://4p4i1nlgkicx" path="res://main.gd" id="1_main"]
-[ext_resource type="Script" uid="uid://d2eue5yykkf5q" path="res://components/zoom_overlay.gd" id="3_zoomoverlay"]
 [ext_resource type="PackedScene" uid="uid://c8yvxg3ulq3a8" path="res://components/library_background.tscn" id="4_libbg"]
+[ext_resource type="Script" uid="uid://63mocgx1dxi4" path="res://addons/m3/components/M3Slider.gd" id="4_w48qg"]
 [ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="4_ycdy4"]
 [ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/hero_image.tscn" id="5_heroimg"]
 [ext_resource type="Script" uid="uid://ca1nbgxeetvm3" path="res://addons/m3/components/M3IconButton.gd" id="5_w48qg"]
@@ -325,9 +325,26 @@ layout_mode = 2
 
 [node name="Title" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1709345551]
 layout_mode = 2
-size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 24
-text = "M3 Card Test"
+text = "K"
+
+[node name="M3Slider_Zoom" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1438207355]
+custom_minimum_size = Vector2(250, 0)
+layout_mode = 2
+script = ExtResource("4_w48qg")
+slider_size = 0
+custom_stop_values = null
+start_icon_name = "magnify-minus"
+end_icon_name = "magnify-plus"
+min_value = 0.15
+max_value = 0.5
+step = 0.05
+value = 0.15
+metadata/_custom_type_script = "uid://63mocgx1dxi4"
+
+[node name="Control" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=283909580]
+layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="M3ButtonGroup" type="HBoxContainer" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=575083622]
 layout_mode = 2
@@ -426,7 +443,7 @@ button_type = 1
 icon_name = "view-carousel"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
-[node name="M3IconButton" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1391264046]
+[node name="M3IconButton_More" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1391264046]
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
@@ -505,19 +522,6 @@ metadata/_tab_index = 1
 visible = false
 layout_mode = 2
 metadata/_tab_index = 2
-
-[node name="ZoomOverlay" type="Control" parent="." unique_id=344391296]
-layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -200.0
-offset_top = -60.0
-grow_horizontal = 0
-grow_vertical = 0
-script = ExtResource("3_zoomoverlay")
 
 [node name="UILayer" type="CanvasLayer" parent="." unique_id=777777777]
 layer = 1000

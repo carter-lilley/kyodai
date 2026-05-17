@@ -45,6 +45,10 @@ const FOCUS_EFFECT_FADE_DURATION: float = 0.15
 var _focus_tween: Tween = null
 var _is_focused: bool = false
 var focus_scale: float = 1.08
+var focus_scale_enabled: bool = true
+# If true, card starts at 1.0/focus_scale and grows to 1.0 when focused (LIST/CAROUSEL).
+# If false, card starts at 1.0 and grows to focus_scale when focused (GRID).
+var focus_scale_inverted: bool = false
 
 # Android touch-and-hold
 const LONG_PRESS_DURATION: float = 0.6
@@ -822,7 +826,14 @@ func _on_download_completed(game_id: String, _success: bool):
 		_update_status_icon()
 
 func _sync_focus_visuals() -> void:
-	var target_scale := Vector2.ONE if _is_focused else Vector2.ONE / focus_scale
+	if not focus_scale_enabled:
+		scale = Vector2.ONE
+		return
+	var target_scale: Vector2
+	if focus_scale_inverted:
+		target_scale = Vector2.ONE if _is_focused else Vector2.ONE / focus_scale
+	else:
+		target_scale = Vector2.ONE * focus_scale if _is_focused else Vector2.ONE
 	if not is_equal_approx(scale.x, target_scale.x) or not is_equal_approx(scale.y, target_scale.y):
 		scale = target_scale
 
@@ -835,7 +846,9 @@ func _on_focus_entered():
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(self, "scale", Vector2.ONE, FOCUS_TWEEN_DURATION)
+	if focus_scale_enabled:
+		var target = Vector2.ONE if focus_scale_inverted else Vector2.ONE * focus_scale
+		_focus_tween.tween_property(self, "scale", target, FOCUS_TWEEN_DURATION)
 	_show_focus_effects(true)
 
 func _on_focus_exited():
@@ -847,7 +860,9 @@ func _on_focus_exited():
 	_focus_tween = create_tween()
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
-	_focus_tween.tween_property(self, "scale", Vector2.ONE / focus_scale, FOCUS_TWEEN_DURATION)
+	if focus_scale_enabled:
+		var target = Vector2.ONE / focus_scale if focus_scale_inverted else Vector2.ONE
+		_focus_tween.tween_property(self, "scale", target, FOCUS_TWEEN_DURATION)
 	_show_focus_effects(false)
 
 func _notification(what: int):

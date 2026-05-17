@@ -36,8 +36,8 @@ const BASE_CAROUSEL_WIDTH_DP: float = 280.0
 # Grid separation (padding) - loaded from settings, defaults to 10 DP
 var grid_separation: int = int(M3Units.dp(10))
 
-# Scale factor applied when a card is focused. Layout math divides available space by this
-# so that the focused card (normal size * focus_scale) always fits without clipping.
+# Scale factor applied when a card is focused. Cards scale UP from their normal size
+# by this amount. Edge overflow is prevented by focus-safe container margins.
 var focus_scale: float = 1.08:
 	set(value):
 		if not is_equal_approx(focus_scale, value):
@@ -76,10 +76,10 @@ var _focused_virtual_index: int = -1
 # Backward compatibility - still compute these from card_size
 var item_height: float = 280.0:
 	get:
-		return focused_card_size.y + grid_separation
+		return card_size.y + grid_separation
 var item_width: float = 212.0:
 	get:
-		return focused_card_size.x + grid_separation
+		return card_size.x + grid_separation
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
@@ -153,14 +153,50 @@ func _update_flow_container_flags() -> void:
 			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
+func _get_focus_overflow() -> Vector2:
+	# How many pixels a focused card extends beyond its normal bounds on each side.
+	match view_mode:
+		ViewMode.GRID:
+			return Vector2(
+				maxf(0.0, (focused_card_size.x - card_size.x) / 2.0),
+				maxf(0.0, (focused_card_size.y - card_size.y) / 2.0)
+			)
+		ViewMode.LIST:
+			return Vector2(0.0, maxf(0.0, (focused_card_size.y - card_size.y) / 2.0))
+		ViewMode.CAROUSEL:
+			return Vector2(maxf(0.0, (focused_card_size.x - card_size.x) / 2.0), 0.0)
+	return Vector2.ZERO
+
 func _get_available_size() -> Vector2:
-	return Vector2(max(size.x, 1.0), max(size.y, 1.0))
+	var scrollbar_x = 0.0
+	var scrollbar_y = 0.0
+	if _scroll_container:
+		var v_scroll = _scroll_container.get_v_scroll_bar()
+		if v_scroll:
+			scrollbar_x = v_scroll.get_combined_minimum_size().x
+		var h_scroll = _scroll_container.get_h_scroll_bar()
+		if h_scroll:
+			scrollbar_y = h_scroll.get_combined_minimum_size().y
+	
+	if vertical:
+		return Vector2(maxf(size.x - scrollbar_x, 1.0), maxf(size.y, 1.0))
+	else:
+		return Vector2(maxf(size.x, 1.0), maxf(size.y - scrollbar_y, 1.0))
 
 func _get_normal_stride() -> float:
 	return _get_focused_stride()
 
 func _get_focused_stride() -> float:
-	return (focused_card_size.y + grid_separation) if vertical else (focused_card_size.x + grid_separation)
+	# Stride is based on normal card size so cards can touch at grid_separation = 0.
+	# Focused cards scale up and overlap; inner padding prevents clipping at content edges.
+	match view_mode:
+		ViewMode.GRID:
+			return (card_size.y + grid_separation) if vertical else (card_size.x + grid_separation)
+		ViewMode.LIST:
+			return card_size.y + grid_separation
+		ViewMode.CAROUSEL:
+			return card_size.x + grid_separation
+	return (card_size.y + grid_separation) if vertical else (card_size.x + grid_separation)
 
 func _get_slot_position_for_index(idx: int) -> float:
 	"""Returns the scroll-axis pixel position where slot `idx` begins."""
@@ -235,11 +271,11 @@ func _calculate_zoom() -> float:
 			var viewport_area = size.x * size.y
 			var base_area = base_dims.x * base_dims.y
 			var target_card_area = viewport_area * ratio * ratio
-			return sqrt(target_card_area / base_area) / focus_scale
+			return sqrt(target_card_area / base_area)
 		ViewMode.LIST:
-			return (available.y * ratio) / (base_dims.y * focus_scale)
+			return (available.y * ratio) / base_dims.y
 		ViewMode.CAROUSEL:
-			return (available.x * ratio) / (base_dims.x * focus_scale)
+			return (available.x * ratio) / base_dims.x
 	return 1.0
 
 func _calculate_max_ratio() -> float:
@@ -252,8 +288,6 @@ func _calculate_max_ratio() -> float:
 		return 1.0
 	
 	var available = _get_available_size()
-	available.x /= focus_scale
-	available.y /= focus_scale
 	
 	var zoom_width = available.x / base_dims.x
 	var zoom_height = available.y / base_dims.y
@@ -264,6 +298,95 @@ func _calculate_max_ratio() -> float:
 	
 	return max(ratio, 0.5)
 
+## Returns all possible snap ratios for the current viewport configuration.
+## Each ratio corresponds to a whole number of cards per line.
+## Used to populate discrete slider stops that match grid snap behavior.
+func get_snap_ratios() -> Array[float]:
+	if size.x <= 0 or size.y <= 0:
+		return []
+	
+	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
+		# No discrete snapping in these modes
+		return []
+	
+	var base_dims = _get_base_dimensions_for_mode()
+	var available = _get_available_size()
+	var viewport_area = size.x * size.y
+	
+	# Determine max items per line based on minimum card size (10% of base)
+	var max_items_per_line: int
+	if vertical:
+		var min_item_width = base_dims.x * 0.1 + grid_separation
+		max_items_per_line = max(1, int(available.x / min_item_width))
+	else:
+		var min_item_height = base_dims.y * 0.1 + grid_separation
+		max_items_per_line = max(1, int(available.y / min_item_height))
+	
+	var ratios: Array[float] = []
+	
+	# Cap at 6 visible items per line — matches List/Carousel minimum zoom parity
+	const MAX_VISIBLE_ITEMS: int = 6
+	var capped_max = min(max_items_per_line, MAX_VISIBLE_ITEMS)
+	
+	for items_per_line in range(1, capped_max + 1):
+		var ratio = _compute_ratio_for_items_per_line(items_per_line, base_dims, available, viewport_area)
+		if ratio > 0 and not ratios.has(ratio):
+			ratios.append(ratio)
+	
+	# Sort descending so largest cards (fewest per line) come first
+	ratios.sort_custom(func(a, b): return a > b)
+	
+	return ratios
+
+## Compute the exact snap ratio for a given number of items per line.
+func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, available: Vector2, viewport_area: float) -> float:
+	var effective_width = available.x
+	var effective_height = available.y
+	
+	# Iterate a few times to converge focus overflow
+	for i in range(3):
+		var target_card_width: float
+		var target_card_height: float
+		
+		if vertical:
+			var target_item_width = effective_width / items_per_line
+			target_card_width = target_item_width - grid_separation
+			target_card_height = target_card_width * (base_dims.y / base_dims.x)
+		else:
+			var target_item_height = effective_height / items_per_line
+			target_card_height = target_item_height - grid_separation
+			target_card_width = target_card_height * (base_dims.x / base_dims.y)
+		
+		target_card_width = max(target_card_width, base_dims.x * 0.1)
+		target_card_height = max(target_card_height, base_dims.y * 0.1)
+		
+		var focus_overflow_x = maxf(0.0, target_card_width * (focus_scale - 1.0) / 2.0)
+		var focus_overflow_y = maxf(0.0, target_card_height * (focus_scale - 1.0) / 2.0)
+		
+		effective_width = maxf(1.0, available.x - focus_overflow_x * 2.0)
+		effective_height = maxf(1.0, available.y - focus_overflow_y * 2.0)
+	
+	# Final computation
+	var final_card_width: float
+	var final_card_height: float
+	
+	if vertical:
+		var target_item_width = effective_width / items_per_line
+		final_card_width = target_item_width - grid_separation
+		final_card_height = final_card_width * (base_dims.y / base_dims.x)
+	else:
+		var target_item_height = effective_height / items_per_line
+		final_card_height = target_item_height - grid_separation
+		final_card_width = final_card_height * (base_dims.x / base_dims.y)
+	
+	final_card_width = max(final_card_width, base_dims.x * 0.1)
+	final_card_height = max(final_card_height, base_dims.y * 0.1)
+	
+	var target_card_area = final_card_width * final_card_height
+	var ratio = sqrt(target_card_area / viewport_area)
+	
+	return clampf(ratio, 0.05, _calculate_max_ratio())
+
 func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	if size.x <= 0 or size.y <= 0:
 		return desired_ratio
@@ -273,40 +396,31 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	
 	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
-	available.x /= focus_scale
-	available.y /= focus_scale
 	
 	var viewport_area = size.x * size.y
 	var target_card_area = viewport_area * desired_ratio * desired_ratio
 	var desired_zoom = sqrt(target_card_area / (base_dims.x * base_dims.y))
-	var desired_item_width = (base_dims.x * desired_zoom) + grid_separation
-	var desired_item_height = (base_dims.y * desired_zoom) + grid_separation
+	var desired_card_width = base_dims.x * desired_zoom
+	var desired_card_height = base_dims.y * desired_zoom
+	
+	# Account for focus overflow so snapping matches _get_items_per_line()
+	var desired_focus_overflow_x = maxf(0.0, desired_card_width * (focus_scale - 1.0) / 2.0)
+	var desired_focus_overflow_y = maxf(0.0, desired_card_height * (focus_scale - 1.0) / 2.0)
+	
+	var effective_width = maxf(1.0, available.x - desired_focus_overflow_x * 2.0)
+	var effective_height = maxf(1.0, available.y - desired_focus_overflow_y * 2.0)
+	
+	var desired_item_width = desired_card_width + grid_separation
+	var desired_item_height = desired_card_height + grid_separation
 	
 	var desired_items_per_line: int
 	if vertical:
-		desired_items_per_line = max(1, int(available.x / desired_item_width))
+		desired_items_per_line = max(1, int(effective_width / desired_item_width))
 	else:
-		desired_items_per_line = max(1, int(available.y / desired_item_height))
+		desired_items_per_line = max(1, int(effective_height / desired_item_height))
 	
-	var target_card_width: float
-	var target_card_height: float
-	
-	if vertical:
-		var target_item_width = available.x / desired_items_per_line
-		target_card_width = target_item_width - grid_separation
-		target_card_height = target_card_width * (base_dims.y / base_dims.x)
-	else:
-		var target_item_height = available.y / desired_items_per_line
-		target_card_height = target_item_height - grid_separation
-		target_card_width = target_card_height * (base_dims.x / base_dims.y)
-	
-	target_card_width = max(target_card_width, base_dims.x * 0.1)
-	target_card_height = max(target_card_height, base_dims.y * 0.1)
-	
-	target_card_area = target_card_width * target_card_height
-	var snapped_ratio = sqrt(target_card_area / viewport_area)
-	
-	return clampf(snapped_ratio, 0.05, _calculate_max_ratio())
+	# Use the exact same helper for consistency
+	return _compute_ratio_for_items_per_line(desired_items_per_line, base_dims, available, viewport_area)
 
 func _recalculate_layout():
 	if not _flow_container or not _scroll_container:
@@ -353,7 +467,8 @@ func _recalculate_layout():
 	
 	for card in _active_cards:
 		if is_instance_valid(card) and "focus_scale_enabled" in card:
-			card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+			card.focus_scale_enabled = true
+			card.focus_scale_inverted = false
 		if card.has_method("set_focus_scale"):
 			card.set_focus_scale(focus_scale)
 		_configure_card_size_flags(card)
@@ -365,10 +480,15 @@ func _get_items_per_line() -> int:
 		return 1
 	
 	var available = _get_available_size()
+	var focus_overflow = _get_focus_overflow()
 	if vertical:
-		return max(1, int(available.x / item_width))
+		# Subtract 2× overflow so centered flow leaves room on both sides
+		# for focused cards to expand without clipping the viewport edge.
+		var effective_width = maxf(1.0, available.x - focus_overflow.x * 2.0)
+		return max(1, int(effective_width / item_width))
 	else:
-		return max(1, int(available.y / item_height))
+		var effective_height = maxf(1.0, available.y - focus_overflow.y * 2.0)
+		return max(1, int(effective_height / item_height))
 
 func _get_base_dimensions_for_mode() -> Vector2:
 	match view_mode:
@@ -438,9 +558,6 @@ func _setup_ui():
 	
 	if debug_mode:
 		_setup_debug_camera()
-		_scroll_container.clip_contents = false
-	else:
-		_scroll_container.clip_contents = true
 	
 	_recalculate_dimensions()
 
@@ -558,12 +675,12 @@ func _update_layout():
 	match view_mode:
 		ViewMode.GRID:
 			if vertical:
-				var row_width = items_per_line * focused_card_size.x
+				var row_width = items_per_line * card_size.x
 				if items_per_line > 1:
 					row_width += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.x = max(row_width, 0.0)
 			else:
-				var col_height = items_per_line * focused_card_size.y
+				var col_height = items_per_line * card_size.y
 				if items_per_line > 1:
 					col_height += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.y = max(col_height, 0.0)
@@ -599,7 +716,8 @@ func _initial_load():
 		if card:
 			card.set_meta("virtual_index", i)
 			if "focus_scale_enabled" in card:
-				card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+				card.focus_scale_enabled = true
+				card.focus_scale_inverted = false
 			_active_cards.append(card)
 			_flow_container.add_child(card)
 			_configure_card_size_flags(card)
@@ -794,19 +912,21 @@ func _configure_card_size_flags(card: Control) -> void:
 	match view_mode:
 		ViewMode.GRID:
 			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
-			card.custom_minimum_size = focused_card_size
+			card.custom_minimum_size = card_size
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		ViewMode.LIST:
 			card.card_layout_mode = M3Card.LayoutMode.HORIZONTAL
-			# FlowContainer doesn't expand children, so set width to viewport size
-			card.custom_minimum_size = Vector2(size.x, focused_card_size.y)
+			# Unfocused width is reduced so focused card exactly fills the viewport width.
+			var card_width = _get_available_size().x / focus_scale
+			card.custom_minimum_size = Vector2(card_width, card_size.y)
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		ViewMode.CAROUSEL:
 			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
-			# FlowContainer doesn't expand children, so set height to viewport size
-			card.custom_minimum_size = Vector2(focused_card_size.x, size.y)
+			# Unfocused height is reduced so focused card exactly fills the viewport height.
+			var card_height = _get_available_size().y / focus_scale
+			card.custom_minimum_size = Vector2(card_size.x, card_height)
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
@@ -817,7 +937,8 @@ func _add_card_at_end(virtual_index: int):
 	
 	card.set_meta("virtual_index", virtual_index)
 	if "focus_scale_enabled" in card:
-		card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+		card.focus_scale_enabled = true
+		card.focus_scale_inverted = false
 	_configure_card_size_flags(card)
 	if card.has_method("set_focus_scale"):
 		card.set_focus_scale(focus_scale)
@@ -852,7 +973,8 @@ func _add_card_at_start(virtual_index: int):
 	
 	card.set_meta("virtual_index", virtual_index)
 	if "focus_scale_enabled" in card:
-		card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+		card.focus_scale_enabled = true
+		card.focus_scale_inverted = false
 	_active_cards.insert(0, card)
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
@@ -934,36 +1056,35 @@ func _disconnect_card_signals(card: Control):
 
 func _update_margin():
 	if _active_cards.size() == 0:
-		if vertical:
-			if _last_margin_top != 0 or _last_margin_bottom != 0:
-				_margin_container.add_theme_constant_override("margin_top", 0)
-				_margin_container.add_theme_constant_override("margin_bottom", 0)
-				_last_margin_top = 0
-				_last_margin_bottom = 0
-			if _last_flow_height != 0:
-				_flow_container.custom_minimum_size.y = 0
-				_last_flow_height = 0
-		else:
-			if _last_margin_left != 0 or _last_margin_right != 0:
-				_margin_container.add_theme_constant_override("margin_left", 0)
-				_margin_container.add_theme_constant_override("margin_right", 0)
-				_last_margin_left = 0
-				_last_margin_right = 0
-			if _last_flow_width != 0:
-				_flow_container.custom_minimum_size.x = 0
-				_last_flow_width = 0
+		if _last_margin_top != 0 or _last_margin_bottom != 0 or _last_margin_left != 0 or _last_margin_right != 0:
+			_margin_container.add_theme_constant_override("margin_top", 0)
+			_margin_container.add_theme_constant_override("margin_bottom", 0)
+			_margin_container.add_theme_constant_override("margin_left", 0)
+			_margin_container.add_theme_constant_override("margin_right", 0)
+			_last_margin_top = 0
+			_last_margin_bottom = 0
+			_last_margin_left = 0
+			_last_margin_right = 0
+		if _last_flow_height != 0:
+			_flow_container.custom_minimum_size.y = 0
+			_last_flow_height = 0
+		if _last_flow_width != 0:
+			_flow_container.custom_minimum_size.x = 0
+			_last_flow_width = 0
 		return
 	
 	var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	var num_active = last_idx - first_idx + 1
 	var items_per_line = _get_items_per_line()
+	var focus_overflow = _get_focus_overflow()
 	
 	if vertical:
-		var margin_top = _get_slot_position_for_index(first_idx)
-		var flow_height = _get_slot_position_for_index(last_idx + 1) - margin_top
+		# Add focus overflow padding to top/bottom so edge rows have room to scale.
+		var margin_top = _get_slot_position_for_index(first_idx) + focus_overflow.y
+		var flow_height = _get_slot_position_for_index(last_idx + 1) - _get_slot_position_for_index(first_idx)
 		var total_end = _get_slot_position_for_index(_total_items)
-		var margin_bottom = total_end - _get_slot_position_for_index(last_idx + 1)
+		var margin_bottom = total_end - _get_slot_position_for_index(last_idx + 1) + focus_overflow.y
 		
 		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
 			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
@@ -975,10 +1096,10 @@ func _update_margin():
 			_flow_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
 	else:
-		var margin_left = _get_slot_position_for_index(first_idx)
-		var flow_width = _get_slot_position_for_index(last_idx + 1) - margin_left
+		var margin_left = _get_slot_position_for_index(first_idx) + focus_overflow.x
+		var flow_width = _get_slot_position_for_index(last_idx + 1) - _get_slot_position_for_index(first_idx)
 		var total_end = _get_slot_position_for_index(_total_items)
-		var margin_right = total_end - _get_slot_position_for_index(last_idx + 1)
+		var margin_right = total_end - _get_slot_position_for_index(last_idx + 1) + focus_overflow.x
 		
 		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
 			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
@@ -1235,11 +1356,11 @@ func scroll_to_index(index: int, animate: bool = false, duration_multiplier: flo
 		
 		if vertical:
 			var viewport_height = size.y
-			var card_offset = target_pos + (focused_card_size.y / 2.0) - (viewport_height / 2.0)
+			var card_offset = target_pos + (card_size.y / 2.0) - (viewport_height / 2.0)
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 		else:
 			var viewport_width = size.x
-			var card_offset = target_pos + (focused_card_size.x / 2.0) - (viewport_width / 2.0)
+			var card_offset = target_pos + (card_size.x / 2.0) - (viewport_width / 2.0)
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
@@ -1295,7 +1416,6 @@ func _update_debug_mode():
 		return
 	
 	if debug_mode:
-		_scroll_container.clip_contents = false
 		_setup_debug_camera()
 		_setup_debug_flow_panel()
 		if _active_cards.size() > 0:
@@ -1303,7 +1423,6 @@ func _update_debug_mode():
 			var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 			_update_debug_visuals(first_idx, last_idx)
 	else:
-		_scroll_container.clip_contents = true
 		if _debug_camera:
 			_debug_camera.queue_free()
 			_debug_camera = null
@@ -1415,7 +1534,8 @@ func _initial_load_from_increment():
 		if card:
 			card.set_meta("virtual_index", i)
 			if "focus_scale_enabled" in card:
-				card.focus_scale_enabled = (view_mode == ViewMode.GRID)
+				card.focus_scale_enabled = true
+				card.focus_scale_inverted = false
 			_configure_card_size_flags(card)
 			_active_cards.append(card)
 			_flow_container.add_child(card)

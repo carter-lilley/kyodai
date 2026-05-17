@@ -74,6 +74,16 @@ enum SliderOrientation { HORIZONTAL, VERTICAL }
 		_request_redraw()
 		_invalidate_stop_cache()
 
+## Custom stop values override the uniform step-based stops.
+## When set, the slider snaps to these exact values and draws stops at them.
+@export var custom_stop_values: Array[float] = []:
+	set(value):
+		if value == custom_stop_values:
+			return
+		custom_stop_values = value
+		_request_redraw()
+		_invalidate_stop_cache()
+
 @export var start_icon_name: String = "":
 	set(value):
 		if value == start_icon_name:
@@ -281,6 +291,18 @@ func get_range() -> Vector2:
 	if slider_variant == Variant.RANGE:
 		return Vector2(min(value, range_value), max(value, range_value))
 	return Vector2(value, value)
+
+## Set the slider value without emitting value_changed signal.
+func set_value_no_signal(new_value: float) -> void:
+	_cached_value = new_value
+	if not _slider:
+		return
+	if new_value == _slider.value:
+		return
+	_slider.set_block_signals(true)
+	_slider.value = new_value
+	_slider.set_block_signals(false)
+	_request_redraw()
 
 
 
@@ -610,6 +632,15 @@ func _on_focus_changed(has_focus: bool):
 # ============================================
 
 func _on_value_changed(new_value: float):
+	# Snap to custom stops or step if needed
+	var snapped_value = _snap_to_nearest_stop(new_value)
+	if not is_equal_approx(snapped_value, new_value) and _slider:
+		_slider.set_block_signals(true)
+		_slider.value = snapped_value
+		_slider.set_block_signals(false)
+		new_value = snapped_value
+		_request_redraw()
+	
 	if slider_variant == Variant.RANGE:
 		if _is_dragging_primary:
 			# Primary handle drag: just constrain range_value
@@ -841,7 +872,20 @@ func _get_stop_positions() -> Array[float]:
 	
 	_cached_stops.clear()
 	
-	if not show_stops or step <= 0:
+	if not show_stops:
+		_cached_stops_valid = true
+		return _cached_stops
+	
+	# Use custom stops if provided
+	if custom_stop_values.size() > 0:
+		for stop in custom_stop_values:
+			if stop > min_value and stop < max_value:
+				_cached_stops.append(stop)
+		_cached_stops_valid = true
+		return _cached_stops
+	
+	# Fall back to uniform step-based stops
+	if step <= 0:
 		_cached_stops_valid = true
 		return _cached_stops
 	
@@ -861,6 +905,21 @@ func _get_stop_positions() -> Array[float]:
 	
 	_cached_stops_valid = true
 	return _cached_stops
+
+func _snap_to_nearest_stop(raw_value: float) -> float:
+	"""Snap a raw value to the nearest custom stop, or to step if no custom stops."""
+	if custom_stop_values.size() > 0:
+		var nearest = custom_stop_values[0]
+		var nearest_dist = abs(raw_value - nearest)
+		for stop in custom_stop_values:
+			var dist = abs(raw_value - stop)
+			if dist < nearest_dist:
+				nearest_dist = dist
+				nearest = stop
+		return clampf(nearest, min_value, max_value)
+	elif step > 0:
+		return clampf(snappedf(raw_value, step), min_value, max_value)
+	return clampf(raw_value, min_value, max_value)
 
 # ============================================
 # CUSTOM DRAWING

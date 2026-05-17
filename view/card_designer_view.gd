@@ -226,6 +226,8 @@ func _setup_preview_card():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
+	_preview_card.custom_minimum_size = _container_state.container_size
+	
 	# Save current config to SettingsManager so refresh_settings() picks it up
 	_save_to_settings()
 	_preview_card.refresh_settings()

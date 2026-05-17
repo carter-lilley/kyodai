@@ -223,11 +223,12 @@ void fragment() {
 	// Calculate the outer edge (base card shape)
 	// Use shared corner_radius_pixels from EffectContainerState for consistent rounding
 	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 	
-	if (edge_alpha <= 0.0) {
+	// Hard edge for outer boundary — card's CLIP_CHILDREN_AND_DRAW provides anti-aliasing
+	if (dist > 0.0) {
 		discard;
 	}
+	float edge_alpha = 1.0;
 	
 	// Calculate the inner edge (glass inset area) - clip the base card to this shape
 	// Reuse glass_inset_pixels from earlier calculation

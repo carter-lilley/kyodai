@@ -28,6 +28,9 @@ var _last_press: int = 0
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
 
+# Current grid snap ratios ( populated when in GRID mode, empty for LIST/CAROUSEL )
+var _current_snap_ratios: Array[float] = []
+
 # Focus restoration on app resume (Android)
 var _last_focused_index: int = -1
 
@@ -61,11 +64,11 @@ func _ready():
 		root_layout
 	)
 	
-	# Connect zoom overlay signals
-	var zoom_overlay = get_node_or_null("ZoomOverlay")
-	if zoom_overlay:
-		zoom_overlay.zoom_changed.connect(_on_zoom_changed)
-		zoom_overlay.zoom_changed_finished.connect(_on_zoom_changed_finished)
+	# Connect zoom slider signals
+	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	if zoom_slider:
+		zoom_slider.value_changed.connect(_on_zoom_changed)
+		zoom_slider.drag_ended.connect(_on_zoom_changed_finished)
 	
 	# Connect view mode buttons
 	# Note: UIManager.initialize() reparents ContentWrapper, so we must use the
@@ -192,16 +195,55 @@ func _update_ui_for_view(view_name: String):
 		view_mode_group.visible = view_name in ["Home", "Library"]
 	
 	# Update zoom slider to match current view's grid
-	var zoom_overlay = get_node_or_null("ZoomOverlay")
-	if zoom_overlay:
-		zoom_overlay.visible = view_name in ["Home", "Library"]
+	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	if zoom_slider:
+		zoom_slider.visible = view_name in ["Home", "Library"]
 		var view = UIManager.get_view(view_name)
 		if view and view_name in ["Home", "Library"]:
 			var games_grid = _get_view_grid(view)
 			if games_grid:
-				zoom_overlay.set_zoom_value(games_grid.target_card_width_ratio)
-				var max_zoom = 1.0 if games_grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
-				zoom_overlay.set_zoom_range(0.15, max_zoom, 0.01)
+				_update_zoom_slider_stops(zoom_slider, games_grid)
+				if _current_snap_ratios.size() > 0:
+					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+				else:
+					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+
+func _update_zoom_slider_stops(zoom_slider: M3Slider, games_grid: VirtualScrollGridContainer) -> void:
+	"""Update slider stops to match the grid's calculated snap levels."""
+	var snap_ratios = games_grid.get_snap_ratios()
+	# Reverse so index 0 = smallest ratio (zoomed out, most items per line)
+	# and max index = largest ratio (zoomed in, fewest items per line)
+	snap_ratios.reverse()
+	_current_snap_ratios = snap_ratios
+	if snap_ratios.size() > 0:
+		# Grid mode: use integer indices so stops are evenly spaced visually.
+		# The actual snap ratios are looked up by index when applying zoom.
+		zoom_slider.step = 1.0
+		zoom_slider.custom_stop_values = []
+		zoom_slider.min_value = 0
+		zoom_slider.max_value = snap_ratios.size() - 1
+		zoom_slider.label_behavior = M3Slider.LabelBehavior.NEVER
+	else:
+		# List/Carousel mode: fall back to uniform float steps
+		zoom_slider.custom_stop_values = []
+		var max_zoom = 1.0 if games_grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
+		zoom_slider.min_value = 0.15
+		zoom_slider.max_value = max_zoom
+		zoom_slider.step = 0.05
+		zoom_slider.label_behavior = M3Slider.LabelBehavior.WHILE_DRAGGING
+
+func _find_nearest_snap_index(ratio: float) -> int:
+	"""Find the index of the snap ratio closest to the given ratio."""
+	if _current_snap_ratios.is_empty():
+		return 0
+	var nearest_idx = 0
+	var nearest_dist = abs(ratio - _current_snap_ratios[0])
+	for i in range(_current_snap_ratios.size()):
+		var dist = abs(ratio - _current_snap_ratios[i])
+		if dist < nearest_dist:
+			nearest_dist = dist
+			nearest_idx = i
+	return nearest_idx
 
 func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 	if selected_indices.is_empty():
@@ -242,15 +284,14 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			SettingsManager.set_setting(setting_value, mode_setting)
 			SettingsManager.save_settings()
 	
-	# Update zoom range since max zoom differs per mode
+	# Update zoom slider stops/range since max zoom and snap levels differ per mode
 	var current_view = UIManager.get_current_view()
 	if current_view:
 		var games_grid = _get_view_grid(current_view)
 		if games_grid:
-			var max_zoom = 1.0 if new_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
-			var zoom_overlay = get_node_or_null("ZoomOverlay")
-			if zoom_overlay:
-				zoom_overlay.set_zoom_range(0.15, max_zoom, 0.01)
+			var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+			if zoom_slider:
+				_update_zoom_slider_stops(zoom_slider, games_grid)
 
 func _sync_view_mode_button_to_setting() -> void:
 	if not view_mode_group or not SettingsManager:
@@ -270,34 +311,37 @@ func _sync_view_mode_button_to_setting() -> void:
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""
+	var actual_zoom = value
+	if _current_snap_ratios.size() > 0:
+		# Grid mode: value is an integer index — map to actual ratio
+		var index = clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
+		actual_zoom = _current_snap_ratios[index]
+	
 	# Apply zoom to BOTH Home and Library grids for consistent zoom across views
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
 		if view:
 			var games_grid = _get_view_grid(view)
 			if games_grid:
-				games_grid.target_card_width_ratio = value
+				games_grid.target_card_width_ratio = actual_zoom
 
-func _on_zoom_changed_finished(_value: float):
-	"""Called when drag ends - syncs slider to snapped value and saves setting."""
-	# Get the snapped zoom value from the Library view grid
-	var snapped_value = _value
-	var library_view = UIManager.get_view("Library")
-	if library_view:
-		var games_grid = _get_view_grid(library_view)
-		if games_grid:
-			snapped_value = games_grid.target_card_width_ratio
+func _on_zoom_changed_finished(_value_changed: bool):
+	"""Called when drag ends - saves the current slider value to settings."""
+	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var saved_value = 0.15
+	if zoom_slider:
+		if _current_snap_ratios.size() > 0:
+			# Grid mode: map integer index back to actual ratio
+			var index = clampi(int(round(zoom_slider.value)), 0, _current_snap_ratios.size() - 1)
+			saved_value = _current_snap_ratios[index]
+		else:
+			saved_value = zoom_slider.value
 	
-	# Update slider to match snapped value
-	var zoom_overlay = get_node_or_null("ZoomOverlay")
-	if zoom_overlay:
-		zoom_overlay.set_zoom_value(snapped_value)
-	
-	# Save snapped zoom to settings
+	# Save zoom to settings
 	if SettingsManager:
 		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 		if zoom_setting:
-			SettingsManager.set_setting(snapped_value, zoom_setting)
+			SettingsManager.set_setting(saved_value, zoom_setting)
 			SettingsManager.save_settings()
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
@@ -332,10 +376,18 @@ func _load_and_apply_saved_zoom() -> void:
 			if grid:
 				grid.target_card_width_ratio = saved_zoom
 	
-	# Set zoom overlay slider to saved value
-	var zoom_overlay = get_node_or_null("ZoomOverlay")
-	if zoom_overlay:
-		zoom_overlay.set_zoom_value(saved_zoom)
+	# Set zoom slider to saved value and refresh stops
+	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	if zoom_slider:
+		var current_view = UIManager.get_current_view()
+		if current_view:
+			var games_grid = _get_view_grid(current_view)
+			if games_grid:
+				_update_zoom_slider_stops(zoom_slider, games_grid)
+		if _current_snap_ratios.size() > 0:
+			zoom_slider.set_value_no_signal(_find_nearest_snap_index(saved_zoom))
+		else:
+			zoom_slider.set_value_no_signal(saved_zoom)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
@@ -438,31 +490,50 @@ func _input(event: InputEvent):
 		return
 
 func _adjust_zoom(delta: float) -> void:
-	var zoom_overlay = get_node_or_null("ZoomOverlay")
-	if not zoom_overlay:
+	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	if not zoom_slider:
 		return
 	
-	var current_zoom = zoom_overlay.get_zoom_value()
-	
-	var max_zoom = 0.5
 	var current_view = UIManager.get_current_view()
+	var is_grid = false
 	if current_view:
 		var games_grid = _get_view_grid(current_view)
-		if games_grid and games_grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID:
-			max_zoom = 1.0
+		if games_grid:
+			is_grid = games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
 	
+	if _current_snap_ratios.size() > 0 and is_grid:
+		# Grid mode: move by whole stop indices
+		var current_index = int(round(zoom_slider.value))
+		var new_index = clampi(current_index + sign(delta), 0, _current_snap_ratios.size() - 1)
+		if new_index != current_index:
+			var focused_index = _get_focused_card_index()
+			zoom_slider.set_value_no_signal(new_index)
+			_on_zoom_changed(new_index)
+			if focused_index >= 0:
+				call_deferred("_restore_focus_to_card", focused_index)
+			if SettingsManager:
+				var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+				if zoom_setting:
+					SettingsManager.set_setting(_current_snap_ratios[new_index], zoom_setting)
+					SettingsManager.save_settings()
+		return
+	
+	# List/Carousel mode: existing float logic
+	var current_zoom = zoom_slider.value
+	var max_zoom = 1.0 if not is_grid else 0.5
 	var new_zoom = clampf(current_zoom + delta, 0.05, max_zoom)
 	
 	if not is_equal_approx(current_zoom, new_zoom):
 		var focused_index = _get_focused_card_index()
-		zoom_overlay.set_zoom_value(new_zoom)
-		_on_zoom_changed(new_zoom)
+		zoom_slider.set_value_no_signal(new_zoom)
+		var actual_zoom = zoom_slider.value
+		_on_zoom_changed(actual_zoom)
 		if focused_index >= 0:
 			call_deferred("_restore_focus_to_card", focused_index)
 		if SettingsManager:
 			var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 			if zoom_setting:
-				SettingsManager.set_setting(new_zoom, zoom_setting)
+				SettingsManager.set_setting(actual_zoom, zoom_setting)
 				SettingsManager.save_settings()
 
 func _get_focused_card_index() -> int:

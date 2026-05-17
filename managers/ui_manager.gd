@@ -142,8 +142,8 @@ func initialize(
 	# Setup modal input handling
 	_setup_modal_input_handling()
 	
-	# Setup focus indicator
-	_setup_focus_indicator()
+	# Focus indicator disabled — M3 components provide their own focus visuals
+	# _setup_focus_indicator()
 	
 	# Setup library appearance
 	_setup_library_appearance()
@@ -428,16 +428,20 @@ func _update_zoom_range_for_current_view() -> void:
 		pass
 
 func _rebuild_views(reason: String, use_true: bool = false) -> void:
-	"""Rebuild visible views immediately, mark hidden views for rebuild."""
+	"""Rebuild visible views immediately, mark hidden views for rebuild.
+	Defer expensive card-effect rebuilds while the SettingsDialog is open."""
+	var settings_open = _settings_dialog and is_instance_valid(_settings_dialog) and _settings_dialog.visible
+	var defer = settings_open and use_true
+	
 	if _views.has("Home"):
 		var home_view = _views["Home"]
-		if is_current_view("Home"):
+		if is_current_view("Home") and not defer:
 			home_view.rebuild_grid(use_true)
 		else:
 			home_view.mark_for_rebuild(reason)
 	if _views.has("Library"):
 		var library_view = _views["Library"]
-		if is_current_view("Library"):
+		if is_current_view("Library") and not defer:
 			library_view.rebuild_grid(use_true)
 		else:
 			library_view.mark_for_rebuild(reason)
@@ -815,10 +819,12 @@ func get_nav_type() -> int:
 # ==================== MODAL MANAGEMENT ====================
 
 func _setup_focus_indicator() -> void:
-	"""Create and add the global focus indicator."""
-	_focus_indicator = FocusIndicator.new()
-	_focus_indicator.name = "FocusIndicator"
-	_root_control.add_child(_focus_indicator)
+	"""Create and add the global focus indicator.
+	Disabled for now — M3 components provide their own focus visuals."""
+	pass
+	# _focus_indicator = FocusIndicator.new()
+	# _focus_indicator.name = "FocusIndicator"
+	# _root_control.add_child(_focus_indicator)
 
 func show_context_menu(items: Array[Dictionary], position: Vector2, context: Dictionary = {}) -> String:
 	"""Show a context menu modal at the specified position. Returns modal ID."""

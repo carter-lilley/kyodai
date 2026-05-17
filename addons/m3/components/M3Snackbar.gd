@@ -57,6 +57,7 @@ func _init():
 	overlay_type = "snackbar"
 	overlay_layer = 100
 	_create_visuals()
+	_cached_fonts = M3Theme.load_fonts()
 
 func _ready():
 	super._ready()
