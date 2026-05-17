@@ -109,6 +109,9 @@ func _ready():
 	
 	# Connect our own text changed handler for filtering
 	text_changed.connect(_on_filter_text_changed)
+	
+	# Sync pre-set selection to the text field
+	_update_selected_text()
 
 func _gui_input(event: InputEvent):
 	if _is_menu_open:

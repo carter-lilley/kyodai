@@ -23,6 +23,8 @@ var _active_request_count: int = 0
 # Response cache for client-side hash-based caching
 # endpoint -> {hash, data}
 var _response_cache: Dictionary = {}
+const MAX_RESPONSE_CACHE_SIZE: int = 200
+var _response_cache_order: Array[String] = []
 
 # Cache statistics for sync reporting
 var _cache_hits: int = 0
@@ -138,16 +140,40 @@ func _get_cached_response(endpoint: String) -> Dictionary:
 	"""Get cached response data for an endpoint if it exists."""
 	var key = _get_cache_key(endpoint)
 	if _response_cache.has(key):
+		# Refresh LRU order on access
+		var idx = _response_cache_order.find(key)
+		if idx != -1:
+			_response_cache_order.remove_at(idx)
+			_response_cache_order.append(key)
 		return _response_cache[key]
 	return {}
 
 func _store_cached_response(endpoint: String, hash: String, data: Variant):
 	"""Store response data in cache with its hash."""
 	var key = _get_cache_key(endpoint)
+	
+	# If key already exists, just update and refresh LRU order
+	if _response_cache.has(key):
+		_response_cache[key] = {"hash": hash, "data": data}
+		var idx = _response_cache_order.find(key)
+		if idx != -1:
+			_response_cache_order.remove_at(idx)
+			_response_cache_order.append(key)
+		return
+	
+	# Evict oldest entries if at capacity
+	if _response_cache.size() >= MAX_RESPONSE_CACHE_SIZE:
+		var to_evict = _response_cache.size() - MAX_RESPONSE_CACHE_SIZE + 1
+		for i in range(to_evict):
+			if _response_cache_order.size() > 0:
+				var oldest_key = _response_cache_order.pop_front()
+				_response_cache.erase(oldest_key)
+	
 	_response_cache[key] = {
 		"hash": hash,
 		"data": data
 	}
+	_response_cache_order.append(key)
 
 func _extract_header(headers: PackedStringArray, header_name: String) -> String:
 	"""Extract a specific header value from response headers."""

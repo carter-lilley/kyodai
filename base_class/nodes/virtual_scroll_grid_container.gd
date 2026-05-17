@@ -4,7 +4,6 @@ extends Control
 signal items_requested(offset, limit)
 signal visible_range_changed(start, end, total)
 signal item_created(item, index)
-signal batch_progress_changed(progress: float)
 
 @export var card_scene: PackedScene
 @export var data_buffer_multiplier: int = 5
@@ -135,10 +134,9 @@ var _virtual_end: int = 0
 var _card_scene: PackedScene
 var _ready_called: bool = false
 
-var batch_progress: float = 0.0
-
 var _card_pool: Array[Control] = []
 var _active_cards: Array[Control] = []
+var _active_cards_by_index: Dictionary[int, Control] = {}
 var _max_pool_size: int = 120
 
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
@@ -251,11 +249,14 @@ func _get_normal_stride() -> float:
 			return card_size.x + grid_separation
 	return (card_size.y + grid_separation) if vertical else (card_size.x + grid_separation)
 
-func _get_slot_position_for_index(idx: int) -> float:
+func _get_slot_position_for_index(idx: int, items_per_line: int = -1, stride: float = -1.0) -> float:
 	"""Returns the scroll-axis pixel position where slot `idx` begins."""
-	var items_per_line = _get_items_per_line()
+	if items_per_line < 0:
+		items_per_line = _get_items_per_line()
+	if stride < 0.0:
+		stride = _get_normal_stride()
 	var line = idx / items_per_line
-	return line * _get_normal_stride()
+	return line * stride
 
 func set_focused_card(virtual_index: int) -> void:
 	if _focused_virtual_index == virtual_index:
@@ -763,6 +764,7 @@ func _initial_load():
 				card.focus_scale_enabled = true
 				card.focus_scale_inverted = false
 			_active_cards.append(card)
+			_active_cards_by_index[i] = card
 			_flow_container.add_child(card)
 			_configure_card_size_flags(card)
 			if card.has_method("set_focus_scale"):
@@ -774,52 +776,46 @@ func _initial_load():
 	_update_margin()
 	_request_data(0, card_count)
 
+func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> Dictionary:
+	"""Compute visible range and buffer target range for the current scroll position."""
+	var line = int(scroll_pos / stride) if stride > 0 else 0
+	var visible_lines = ceili(viewport_size / stride) if stride > 0 else 1
+	var visible_start_idx = line * items_per_line
+	var visible_end_idx = min(visible_start_idx + visible_lines * items_per_line, _total_items) - 1
+	
+	var visible_count = _get_visible_count()
+	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
+	var half_buffer = (total_card_count - visible_count) / 2
+	var target_start = max(0, visible_start_idx - half_buffer)
+	var target_end = min(_total_items, target_start + total_card_count)
+	
+	if target_end == _total_items:
+		target_start = max(0, _total_items - total_card_count)
+	
+	return {
+		"visible_start": visible_start_idx,
+		"visible_end": visible_end_idx,
+		"target_start": target_start,
+		"target_end": target_end,
+		"total_card_count": total_card_count,
+	}
+
 func _on_scroll_value_changed(value: float):
 	if _total_items == 0 or not _scroll_container:
 		return
 	
 	var scroll_pos = int(value)
 	var items_per_line = _get_items_per_line()
+	var stride = _get_normal_stride()
 	
-	var visible_start_idx: int
-	var visible_end_idx: int
-	var target_start: int
-	var target_end: int
-	var total_card_count: int
+	var viewport_size = size.y if vertical else size.x
+	var ranges = _compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
 	
-	var eff = _get_normal_stride()
-	if vertical:
-		var viewport_height = size.y
-		var top_row = int(scroll_pos / eff) if eff > 0 else 0
-		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		visible_start_idx = top_row * items_per_line
-		visible_end_idx = min(visible_start_idx + (visible_rows) * items_per_line, _total_items)-1
-		
-		var visible_count = _get_visible_count()
-		total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-		
-		var half_buffer = (total_card_count - visible_count) / 2
-		target_start = max(0, visible_start_idx - half_buffer)
-		target_end = min(_total_items, target_start + total_card_count)
-		
-		if target_end == _total_items:
-			target_start = max(0, _total_items - total_card_count)
-	else:
-		var viewport_width = size.x
-		var left_col = int(scroll_pos / eff) if eff > 0 else 0
-		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		visible_start_idx = left_col * items_per_line
-		visible_end_idx = min(visible_start_idx + (visible_cols) * items_per_line, _total_items)-1
-		
-		var visible_count = _get_visible_count()
-		total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-		
-		var half_buffer = (total_card_count - visible_count) / 2
-		target_start = max(0, visible_start_idx - half_buffer)
-		target_end = min(_total_items, target_start + total_card_count)
-		
-		if target_end == _total_items:
-			target_start = max(0, _total_items - total_card_count)
+	var visible_start_idx: int = ranges.visible_start
+	var visible_end_idx: int = ranges.visible_end
+	var target_start: int = ranges.target_start
+	var target_end: int = ranges.target_end
+	var total_card_count: int = ranges.total_card_count
 	
 	var changes_made = false
 	var recycled_top = 0
@@ -902,20 +898,7 @@ func _on_scroll_value_changed(value: float):
 	if vertical:
 		var batch_rows = 1
 		var batch_height_pixels = batch_rows * item_height
-		var new_batch_progress = fmod(scroll_pos, batch_height_pixels) / batch_height_pixels
-		
-		if abs(new_batch_progress - batch_progress) > 0.001:
-			batch_progress = clampf(new_batch_progress, 0.0, 1.0)
-			batch_progress_changed.emit(batch_progress)
-	else:
-		var batch_cols = 1
-		var batch_width_pixels = batch_cols * item_width
-		var new_batch_progress = fmod(scroll_pos, batch_width_pixels) / batch_width_pixels
-		
-		if abs(new_batch_progress - batch_progress) > 0.001:
-			batch_progress = clampf(new_batch_progress, 0.0, 1.0)
-			batch_progress_changed.emit(batch_progress)
-	
+
 	if debug_mode:
 		_update_debug_visuals(visible_start_idx, visible_end_idx)
 
@@ -928,6 +911,9 @@ func _recycle_card_at_index(index: int):
 	if "game" in card and card.game:
 		old_game_title = card.game.title
 	_active_cards.remove_at(index)
+	var vidx = card.get_meta("virtual_index", -1)
+	if vidx >= 0:
+		_active_cards_by_index.erase(vidx)
 	
 	if is_instance_valid(card):
 		_disconnect_card_signals(card)
@@ -992,6 +978,7 @@ func _add_card_at_end(virtual_index: int):
 	if card.has_method("set_focus_scale"):
 		card.set_focus_scale(focus_scale)
 	_active_cards.append(card)
+	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
 	
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
@@ -1018,6 +1005,7 @@ func _add_card_at_start(virtual_index: int):
 		card.focus_scale_enabled = true
 		card.focus_scale_inverted = false
 	_active_cards.insert(0, card)
+	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
 	_configure_card_size_flags(card)
@@ -1044,6 +1032,9 @@ func _batch_recycle_from_start(count: int) -> void:
 	var to_recycle = _active_cards.slice(0, count)
 	_active_cards = _active_cards.slice(count)
 	for card in to_recycle:
+		var vidx = card.get_meta("virtual_index", -1)
+		if vidx >= 0:
+			_active_cards_by_index.erase(vidx)
 		if is_instance_valid(card):
 			_disconnect_card_signals(card)
 			card.visible = false
@@ -1085,6 +1076,7 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 				card.game = _data_cache[virtual_index]
 			_update_cache_access_order(virtual_index)
 		item_created.emit(card, virtual_index)
+		_active_cards_by_index[virtual_index] = card
 		new_cards.append(card)
 	_active_cards = new_cards + _active_cards
 
@@ -1161,14 +1153,17 @@ func _update_margin():
 	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	var num_active = last_idx - first_idx + 1
 	var items_per_line = _get_items_per_line()
+	var stride = _get_normal_stride()
 	var focus_overflow = _get_focus_overflow()
 	
 	if vertical:
 		# Add focus overflow padding to top/bottom so edge rows have room to scale.
-		var margin_top = _get_slot_position_for_index(first_idx) + focus_overflow.y
-		var flow_height = _get_slot_position_for_index(last_idx + 1) - _get_slot_position_for_index(first_idx)
-		var total_end = _get_slot_position_for_index(_total_items)
-		var margin_bottom = total_end - _get_slot_position_for_index(last_idx + 1) + focus_overflow.y
+		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
+		var after_last_pos = _get_slot_position_for_index(last_idx + 1, items_per_line, stride)
+		var total_end = _get_slot_position_for_index(_total_items, items_per_line, stride)
+		var margin_top = first_pos + focus_overflow.y
+		var margin_bottom = total_end - after_last_pos + focus_overflow.y
+		var flow_height = after_last_pos - first_pos
 		
 		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
 			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
@@ -1180,10 +1175,12 @@ func _update_margin():
 			_flow_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
 	else:
-		var margin_left = _get_slot_position_for_index(first_idx) + focus_overflow.x
-		var flow_width = _get_slot_position_for_index(last_idx + 1) - _get_slot_position_for_index(first_idx)
-		var total_end = _get_slot_position_for_index(_total_items)
-		var margin_right = total_end - _get_slot_position_for_index(last_idx + 1) + focus_overflow.x
+		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
+		var after_last_pos = _get_slot_position_for_index(last_idx + 1, items_per_line, stride)
+		var total_end = _get_slot_position_for_index(_total_items, items_per_line, stride)
+		var margin_left = first_pos + focus_overflow.x
+		var margin_right = total_end - after_last_pos + focus_overflow.x
+		var flow_width = after_last_pos - first_pos
 		
 		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
 			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
@@ -1331,6 +1328,7 @@ func _refresh_buffer():
 	_cached_game_ids.clear()
 	_cache_lru_tick.clear()
 	_pending_loads.clear()
+	_active_cards_by_index.clear()
 	_margin_container.add_theme_constant_override("margin_top", 0)
 	_margin_container.add_theme_constant_override("margin_bottom", 0)
 	_margin_container.add_theme_constant_override("margin_left", 0)
@@ -1418,10 +1416,7 @@ func get_visible_range() -> Dictionary:
 		}
 
 func get_card_at_index(index: int) -> Control:
-	for card in _active_cards:
-		if card.get_meta("virtual_index", -1) == index:
-			return card
-	return null
+	return _active_cards_by_index.get(index, null)
 
 func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	if _scroll_container:
@@ -1465,8 +1460,9 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 		var is_visible = idx >= visible_start_idx and idx <= visible_end_idx
 		var has_data = _data_cache.has(idx)
 		
-		var debug_panel = card.get_node_or_null("_debug_panel")
-		if not debug_panel:
+		# Use cached metadata reference instead of tree traversal for performance
+		var debug_panel = card.get_meta("_debug_panel_ref", null)
+		if not debug_panel or not is_instance_valid(debug_panel):
 			debug_panel = Panel.new()
 			debug_panel.name = "_debug_panel"
 			debug_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1481,6 +1477,7 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 			
 			card.add_child(debug_panel)
 			card.move_child(debug_panel, 0)
+			card.set_meta("_debug_panel_ref", debug_panel)
 		
 		var style: StyleBoxFlat
 		if is_visible:
@@ -1516,9 +1513,10 @@ func _update_debug_mode():
 			_debug_flow_panel.queue_free()
 			_debug_flow_panel = null
 		for card in _active_cards:
-			var debug_panel = card.get_node_or_null("_debug_panel")
-			if debug_panel:
+			var debug_panel = card.get_meta("_debug_panel_ref", null)
+			if debug_panel and is_instance_valid(debug_panel):
 				debug_panel.queue_free()
+			card.set_meta("_debug_panel_ref", null)
 		_debug_style_visible_data = null
 		_debug_style_visible_loading = null
 		_debug_style_buffer_data = null
@@ -1628,6 +1626,7 @@ func _initial_load_from_increment():
 				card.focus_scale_inverted = false
 			_configure_card_size_flags(card)
 			_active_cards.append(card)
+			_active_cards_by_index[i] = card
 			_flow_container.add_child(card)
 			
 			if _data_cache.has(i):
@@ -1728,19 +1727,19 @@ func _evict_oldest_cache_entries(count: int):
 	if to_evict <= 0:
 		return
 	
+	# Single-pass: collect all entries, sort by tick (ascending), then remove oldest
+	# O(n log n) instead of O(n²) — for 5000 entries this is ~60k ops vs 25M
+	var entries: Array[Array] = []
+	for key in _cache_lru_tick.keys():
+		entries.append([_cache_lru_tick[key], key])
+	
+	entries.sort_custom(func(a, b): return a[0] < b[0])
+	
 	for i in range(to_evict):
-		var oldest_key = -1
-		var oldest_tick = _lru_counter + 1
-		for key in _cache_lru_tick.keys():
-			var tick = _cache_lru_tick[key]
-			if tick < oldest_tick:
-				oldest_tick = tick
-				oldest_key = key
-		
-		if oldest_key >= 0:
-			_cache_lru_tick.erase(oldest_key)
-			if _data_cache.has(oldest_key):
-				var game = _data_cache[oldest_key]
-				if game and game.romm_id != 0:
-					_cached_game_ids.erase(game.romm_id)
-				_data_cache.erase(oldest_key)
+		var key = entries[i][1]
+		_cache_lru_tick.erase(key)
+		if _data_cache.has(key):
+			var game = _data_cache[key]
+			if game and game.romm_id != 0:
+				_cached_game_ids.erase(game.romm_id)
+			_data_cache.erase(key)

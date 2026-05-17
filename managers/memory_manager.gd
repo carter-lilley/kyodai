@@ -31,11 +31,24 @@ var _texture_cache: Dictionary = {}
 var _texture_cache_order: Array[String] = []
 var _texture_cache_mutex: Mutex
 const MAX_TEXTURE_CACHE_SIZE: int = 400
+const MAX_TEXTURE_CACHE_MEMORY_MB: int = 300
+const MAX_TEXTURE_CACHE_MEMORY_MB_ANDROID: int = 100
+var _texture_cache_memory: int = 0  # Estimated bytes currently cached
 
 static func get_max_texture_cache_size() -> int:
 	if PlatformManager.is_android():
 		return 150
 	return MAX_TEXTURE_CACHE_SIZE
+
+static func get_max_texture_cache_memory_bytes() -> int:
+	if PlatformManager.is_android():
+		return MAX_TEXTURE_CACHE_MEMORY_MB_ANDROID * 1024 * 1024
+	return MAX_TEXTURE_CACHE_MEMORY_MB * 1024 * 1024
+
+static func _estimate_texture_memory(texture: Texture2D) -> int:
+	if texture == null:
+		return 0
+	return texture.get_width() * texture.get_height() * 4  # RGBA8 estimate
 
 var _lp_callbacks: Array = []
 var _lp_callback_mutex: Mutex
@@ -119,7 +132,6 @@ class BatchProcess:
 
 var _batch_processes: Array[BatchProcess] = []
 var _batch_mutex: Mutex = Mutex.new()
-var _batch_processing: bool = false
 
 # Parallel download batch tracking
 var _download_batches: Dictionary = {}  # id -> DownloadBatch
@@ -442,19 +454,31 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 	_instance._texture_cache_mutex.lock()
 	
 	if _instance._texture_cache.has(cache_key):
+		# Refresh LRU order even for existing textures
+		var idx = _instance._texture_cache_order.find(cache_key)
+		if idx != -1:
+			_instance._texture_cache_order.remove_at(idx)
+			_instance._texture_cache_order.append(cache_key)
 		_instance._texture_cache_mutex.unlock()
 		return
 	
 	var cache_limit = get_max_texture_cache_size()
-	if _instance._texture_cache.size() >= cache_limit:
-		var to_evict = _instance._texture_cache.size() - cache_limit + 1
-		for i in range(to_evict):
-			if _instance._texture_cache_order.size() > 0:
-				var oldest_key = _instance._texture_cache_order.pop_front()
-				_instance._texture_cache.erase(oldest_key)
+	var memory_limit = get_max_texture_cache_memory_bytes()
+	var tex_memory = _estimate_texture_memory(texture)
+	
+	# Evict by count and/or memory limits
+	while (_instance._texture_cache.size() >= cache_limit or 
+		   (_instance._texture_cache_memory + tex_memory) > memory_limit) and _instance._texture_cache_order.size() > 0:
+		var oldest_key = _instance._texture_cache_order.pop_front()
+		var oldest_tex = _instance._texture_cache.get(oldest_key, null)
+		if oldest_tex:
+			_instance._texture_cache_memory -= _estimate_texture_memory(oldest_tex)
+			_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory)
+		_instance._texture_cache.erase(oldest_key)
 	
 	_instance._texture_cache[cache_key] = texture
 	_instance._texture_cache_order.append(cache_key)
+	_instance._texture_cache_memory += tex_memory
 	_instance._texture_cache_mutex.unlock()
 
 static func queue_extraction_task(callable: Callable, callback: Callable = Callable()):

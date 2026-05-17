@@ -190,6 +190,31 @@ func _rebuild_layout():
 	_applied_headline_size_dp = -1.0
 	_applied_supporting_size_dp = -1.0
 	
+	# --- Preserve reusable children before destroying old tree ---
+	# Extract media content/rect so they survive root container destruction
+	var preserved_media_content: Control = null
+	var preserved_media_rect: TextureRect = null
+	if _media_panel and is_instance_valid(_media_panel):
+		for child in _media_panel.get_children():
+			if child == _media_content and is_instance_valid(child):
+				preserved_media_content = child
+				_media_panel.remove_child(child)
+			elif child == _media_rect and is_instance_valid(child):
+				preserved_media_rect = child
+				_media_panel.remove_child(child)
+	
+	# Extract labels so they can be reparented
+	var preserved_headline: Label = null
+	var preserved_supporting: Label = null
+	if _text_content and is_instance_valid(_text_content):
+		for child in _text_content.get_children():
+			if child == _headline_label and is_instance_valid(child):
+				preserved_headline = child
+				_text_content.remove_child(child)
+			elif child == _supporting_label and is_instance_valid(child):
+				preserved_supporting = child
+				_text_content.remove_child(child)
+	
 	# Remove old root container and focus ring from the tree immediately
 	# so the new nodes don't get auto-renamed by Godot.
 	if _root_container and is_instance_valid(_root_container):
@@ -240,8 +265,10 @@ func _rebuild_layout():
 	
 	_root_container.add_child(_media_panel)
 	
-	if _media_content and is_instance_valid(_media_content):
-		_media_panel.add_child(_media_content)
+	if preserved_media_content:
+		_media_panel.add_child(preserved_media_content)
+	elif preserved_media_rect:
+		_media_panel.add_child(preserved_media_rect)
 	else:
 		_media_rect = TextureRect.new()
 		_media_rect.name = "MediaRect"
@@ -305,22 +332,28 @@ func _rebuild_layout():
 		_actions_hbox.visible = false
 		_text_content.add_child(_actions_hbox)
 	
-	_headline_label = Label.new()
-	_headline_label.name = "Headline"
-	_headline_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_headline_label.max_lines_visible = 1
-	_headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_headline_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_headline_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if preserved_headline:
+		_headline_label = preserved_headline
+	else:
+		_headline_label = Label.new()
+		_headline_label.name = "Headline"
+		_headline_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_headline_label.max_lines_visible = 1
+		_headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		_headline_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_headline_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_content.add_child(_headline_label)
 	
-	_supporting_label = Label.new()
-	_supporting_label.name = "SupportingText"
-	_supporting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_supporting_label.max_lines_visible = 1
-	_supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_supporting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if preserved_supporting:
+		_supporting_label = preserved_supporting
+	else:
+		_supporting_label = Label.new()
+		_supporting_label.name = "SupportingText"
+		_supporting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_supporting_label.max_lines_visible = 1
+		_supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		_supporting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_content.add_child(_supporting_label)
 	
 	# Focus ring panel (draws on top of everything)

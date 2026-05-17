@@ -151,16 +151,16 @@ func initialize(
 	SettingsManager.apply_preset_begin.connect(_on_apply_preset_begin)
 	SettingsManager.apply_preset_end.connect(_on_apply_preset_end)
 	
+	# Apply dark mode setting on startup
+	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
+	if dark_mode_setting:
+		_apply_dark_mode(dark_mode_setting.value)
+	
 	# Pre-create settings dialog so first open is instant.
 	# On first launch we skip this; it will be created after OOBE completes.
 	var first_run_setting = SettingsManager.get_setting("first_run_completed")
 	if first_run_setting and first_run_setting.value:
 		pre_create_settings_dialog()
-	
-	# Apply dark mode setting on startup
-	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
-	if dark_mode_setting:
-		_apply_dark_mode(dark_mode_setting.value)
 	
 	# Connect to dual screen mode changes
 	if DisplayManager:

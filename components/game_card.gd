@@ -33,6 +33,7 @@ const MAX_IMAGE_RETRIES: int = 3
 
 var _download_retry_count: int = 0
 const MAX_DOWNLOAD_RETRIES: int = 2
+const MAX_COVER_TEXTURE_SIZE: int = 512
 
 # Status badge overlay (direct child of GameCard, positioned over media panel)
 var _status_badge: Panel = null
@@ -133,35 +134,61 @@ func _setup_preview_mode():
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _build_media_stack():
-	if _media_stack and is_instance_valid(_media_stack):
-		_media_stack.queue_free()
-	
-	_media_stack = EffectStack.new()
 	var effect_settings := []
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			effect_settings = config_setting.value.get("effects", [])
 	
-	_media_stack.initialize(_card_state, effect_settings, "base_card")
-	if _current_texture:
-		_media_stack.set_game_texture(_current_texture)
+	if _media_stack and is_instance_valid(_media_stack):
+		# Hot-reload: update configs in-place instead of rebuilding the node tree
+		_media_stack.update_effect_configs(effect_settings)
+		if _current_texture:
+			_media_stack.set_game_texture(_current_texture)
+	else:
+		_media_stack = EffectStack.new()
+		_media_stack.initialize(_card_state, effect_settings, "base_card")
+		if _current_texture:
+			_media_stack.set_game_texture(_current_texture)
+		set_media_content(_media_stack)
 	
-	set_media_content(_media_stack)
 	_build_focus_stack()
 
 func _build_focus_stack() -> void:
-	if _focus_stack and is_instance_valid(_focus_stack):
-		_focus_stack.queue_free()
-	
 	var focus_effect_settings := []
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			focus_effect_settings = config_setting.value.get("focus_effects", [])
 	
-	# Skip if no focus effects configured
+	# If no focus effects configured, hide existing stack and return
 	if focus_effect_settings.is_empty():
+		if _focus_stack and is_instance_valid(_focus_stack):
+			_focus_stack.visible = false
+		return
+	
+	if _focus_stack and is_instance_valid(_focus_stack):
+		# Hot-reload: update configs in-place
+		_focus_stack.visible = false
+		_focus_stack.update_effect_configs(focus_effect_settings)
+		
+		# Re-apply focus state setup after config update
+		var focus_base = _focus_stack.get_effect("base")
+		if focus_base:
+			focus_base.visible = false
+			focus_base.modulate.a = 0.0
+		
+		var focus_alpha = 1.0 if preview_mode else 0.0
+		for child in _focus_stack.get_children():
+			if child is EffectBase and child.material is ShaderMaterial:
+				child.material.set_shader_parameter("effect_alpha", focus_alpha)
+		
+		if preview_mode:
+			_focus_stack.visible = true
+		
+		if _current_texture:
+			_focus_stack.set_game_texture(_current_texture)
+		_link_overlapping_effects()
 		return
 	
 	_focus_stack = EffectStack.new()
@@ -345,6 +372,7 @@ func reset() -> void:
 	_loading_game_id = ""
 	_image_retry_count = 0
 	_download_retry_count = 0
+	set_meta("_cached_show_delete", null)
 	if _focus_tween:
 		_focus_tween.kill()
 		_focus_tween = null
@@ -707,6 +735,13 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 			err = image.load_webp_from_buffer(buffer)
 	
 	if err == OK:
+		# Downscale large images to save GPU memory and improve sampling performance
+		var max_dim = max(image.get_width(), image.get_height())
+		if max_dim > MAX_COVER_TEXTURE_SIZE:
+			var scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
+			var new_width = max(1, int(image.get_width() * scale))
+			var new_height = max(1, int(image.get_height() * scale))
+			image.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
 		return image
 	return null
 
@@ -747,13 +782,21 @@ func _on_card_pressed():
 		download_requested.emit(game)
 
 func _get_show_delete() -> bool:
+	# Cache the result to avoid parent traversal on every context menu open
+	var cached = get_meta("_cached_show_delete", null)
+	if cached != null:
+		return cached
+	
 	var parent = get_parent()
 	while parent:
 		if parent is HomeView:
+			set_meta("_cached_show_delete", true)
 			return true
 		elif parent is LibraryView:
+			set_meta("_cached_show_delete", false)
 			return false
 		parent = parent.get_parent()
+	set_meta("_cached_show_delete", false)
 	return false
 
 func _on_card_gui_input(event: InputEvent) -> void:
@@ -861,8 +904,15 @@ func _on_focus_entered():
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	if focus_scale_enabled:
-		var target = Vector2.ONE if focus_scale_inverted else Vector2.ONE * focus_scale
-		_focus_tween.tween_property(self, "scale", target, FOCUS_TWEEN_DURATION)
+		var start_scale = scale
+		var target_scale = Vector2.ONE if focus_scale_inverted else Vector2.ONE * focus_scale
+		_focus_tween.tween_method(
+			func(t: float):
+				if not is_instance_valid(self):
+					return
+				scale = start_scale.lerp(target_scale, t),
+			0.0, 1.0, FOCUS_TWEEN_DURATION
+		)
 	_show_focus_effects(true)
 
 func _on_focus_exited():
@@ -875,8 +925,15 @@ func _on_focus_exited():
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	if focus_scale_enabled:
-		var target = Vector2.ONE / focus_scale if focus_scale_inverted else Vector2.ONE
-		_focus_tween.tween_property(self, "scale", target, FOCUS_TWEEN_DURATION)
+		var start_scale = scale
+		var target_scale = Vector2.ONE / focus_scale if focus_scale_inverted else Vector2.ONE
+		_focus_tween.tween_method(
+			func(t: float):
+				if not is_instance_valid(self):
+					return
+				scale = start_scale.lerp(target_scale, t),
+			0.0, 1.0, FOCUS_TWEEN_DURATION
+		)
 	_show_focus_effects(false)
 
 func _notification(what: int):
@@ -885,6 +942,5 @@ func _notification(what: int):
 		pivot_offset = size / 2.0
 		_update_status_badge_layout()
 		_update_platform_badge()
-		_update_status_badge_layout()
 		if _focus_stack and is_instance_valid(_focus_stack):
 			_focus_stack.size = size

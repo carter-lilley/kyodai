@@ -273,6 +273,12 @@ func get_platforms_settings_view() -> PlatformsSettingsView:
 		return _category_contents["romm"] as PlatformsSettingsView
 	return null
 
+func refresh_theme() -> void:
+	super.refresh_theme()
+	for content in _category_contents.values():
+		if is_instance_valid(content) and content.has_method("refresh_theme"):
+			content.refresh_theme()
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
 		if _library_settings_view and is_instance_valid(_library_settings_view):

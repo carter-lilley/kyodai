@@ -196,13 +196,13 @@ func _on_scan_completed(found_count: int):
 	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, NotificationManager.Type.SUCCESS)
-	_merged_cache_dirty = true
+		_merged_cache_dirty = true
 
 func _on_sync_completed(success: bool, message: String):
 	"""Called when library sync completes."""
 	if success:
 		_scan_for_downloaded_games()
-	_merged_cache_dirty = true
+		_merged_cache_dirty = true
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer.

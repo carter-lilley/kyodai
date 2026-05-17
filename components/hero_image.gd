@@ -8,6 +8,9 @@ var _gray_texture: ImageTexture = null
 var _effect_stack: EffectStack = null
 var _dual_screen_mode: bool = false
 
+var _current_image_task_id: int = -1
+var _loading_game_id: String = ""
+
 func set_dual_screen_mode(enabled: bool) -> void:
 	_dual_screen_mode = enabled
 	if enabled:
@@ -90,16 +93,29 @@ func set_game(game: GameResource):
 		clear()
 		return
 	
-	# Load image - try all formats
-	var file = FileAccess.open(cache_path, FileAccess.READ)
-	if file:
+	# Check texture cache first
+	var cached_tex = MemoryManager.get_cached_texture(cache_path)
+	if cached_tex:
+		_set_texture(cached_tex)
+		return
+	
+	# Cancel any pending image load
+	if _current_image_task_id > 0:
+		MemoryManager.cancel_image_task(_current_image_task_id)
+	
+	_loading_game_id = game.id if game else ""
+	
+	const MAX_HERO_TEXTURE_SIZE: int = 1024
+	
+	var load_callable = func() -> Image:
+		var file = FileAccess.open(cache_path, FileAccess.READ)
+		if not file:
+			return null
 		var buffer = file.get_buffer(file.get_length())
 		file.close()
 		
 		var img = Image.new()
 		var err = FAILED
-		
-		# Detect format from magic bytes
 		if buffer.size() >= 2:
 			if buffer[0] == 0xFF and buffer[1] == 0xD8:
 				err = img.load_jpg_from_buffer(buffer)
@@ -109,13 +125,33 @@ func set_game(game: GameResource):
 				err = img.load_webp_from_buffer(buffer)
 		
 		if err == OK:
-			var tex = ImageTexture.create_from_image(img)
-			if tex:
-				if _effect_stack:
-					_effect_stack.set_game_texture(tex)
-				return
+			# Downscale large images to save GPU memory
+			var max_dim = max(img.get_width(), img.get_height())
+			if max_dim > MAX_HERO_TEXTURE_SIZE:
+				var scale = float(MAX_HERO_TEXTURE_SIZE) / max_dim
+				var new_width = max(1, int(img.get_width() * scale))
+				var new_height = max(1, int(img.get_height() * scale))
+				img.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
+			return img
+		return null
 	
-	clear()
+	var callback_callable = func(image: Image):
+		_current_image_task_id = -1
+		if not is_instance_valid(self):
+			return
+		if not _current_game or _current_game.id != _loading_game_id:
+			return
+		
+		if image:
+			var tex = ImageTexture.create_from_image(image)
+			if tex:
+				MemoryManager.cache_texture(cache_path, tex)
+				_set_texture(tex)
+				return
+		
+		clear()
+	
+	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, true)
 
 func _set_texture(tex: Texture2D):
 	if _effect_stack:
@@ -123,6 +159,9 @@ func _set_texture(tex: Texture2D):
 
 func clear():
 	_current_game = null
+	if _current_image_task_id > 0 and MemoryManager:
+		MemoryManager.cancel_image_task(_current_image_task_id)
+		_current_image_task_id = -1
 	if _gray_texture:
 		_set_texture(_gray_texture)
 	# EffectStack handles visibility - no legacy ColorRect to manage

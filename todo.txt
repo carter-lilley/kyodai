@@ -1,19 +1,27 @@
 #TODO.TXT
 
-no touch to launch on bottom screen
-android download manager and file streaming
+refocus when install process finished (button disappears)
+note to user: prepping on first launch
 alignment modes in single row
 clicking settings should focus tab
 effect stacks to fill their parent base 
 	and pass the texture along the stack instead of re-cropping/rendering
 card designer use effect designer ui
-chunk reassembly notif on android
+
+## android
+	chunk reassembly notif on android
+	android download manager and file streaming
+	no touch to launch on bottom screen
+	note to user: open apk before launcnhing
+	kb on bottom screen in ds mode
+	ft: android background sync/notifs
 
 ## saves
-user save folder
-reading save path configs where possible (emulator {user_dir} wildcard?)
-error when no user save and no default save (azahar)
-check if save is modified
+	implement argosy sigil
+	user save folder
+	reading save path configs where possible (emulator {user_dir} wildcard?)
+	error when no user save and no default save (azahar)
+	check if save is modified
 
 ## general UI
 	draggable ui elements? (split containers?)
@@ -24,6 +32,7 @@ check if save is modified
 	add letters to library navigation?
 	badge effect placement opts
 	placeholders
+	
 ## game titles:
 	game title under/beside card option
 	game title "speech bubble option"
@@ -38,7 +47,6 @@ check if save is modified
 	image priority management.
 	performance.add_custom_monitor for everything
 ## sync:
-	ft: android background sync/notifs
 	how to split important siblings
 	cache image colors, cropping data on sync
 	check: are sync db actions and load db actions the same?
