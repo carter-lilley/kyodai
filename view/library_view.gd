@@ -644,7 +644,8 @@ func _on_game_updated(game: GameResource):
 	for i in range(range_info.buffer_start, range_info.buffer_start + range_info.buffer_size):
 		var card = games_grid.get_card_at_index(i)
 		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
-			card.game = game
+			var is_visible = i >= range_info.start and i < range_info.end
+			card.set_game_with_priority(game, is_visible)
 			break
 
 func _on_games_removed(platform_slug: String):

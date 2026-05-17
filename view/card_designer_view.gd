@@ -208,7 +208,6 @@ func _load_current_config():
 	
 	_corner_slider.value = _current_config.get("corner_radius", 0.06)
 	
-	_container_state.orientation = _current_config.get("card_orientation", 0)
 	# Corner radius is now 0.0-1.0 ratio directly
 	_container_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	_container_state.effect_settings = _current_config.get("effects", [])
@@ -218,7 +217,6 @@ func _get_default_config() -> Dictionary:
 	return {
 		"effects": [],
 		"focus_effects": [],
-		"card_orientation": 0,
 		"corner_radius": 0.06
 	}
 

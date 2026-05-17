@@ -30,10 +30,6 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	_update_shadow_offsets()
 	_update_shader_params()
 
-func _on_orientation_changed(_new_orientation: int) -> void:
-	_update_shadow_offsets()
-	_update_shader_params()
-
 # Override to update geometry when container size changes
 func _on_size_changed(_new_size: Vector2) -> void:
 	_update_shadow_offsets()

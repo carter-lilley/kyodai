@@ -151,6 +151,8 @@ func _show_oobe_wizard_if_needed():
 
 func _on_oobe_wizard_completed():
 	print("[Main] OOBE wizard completed")
+	# Rebuild settings dialog with updated path/RomM values so it's fresh
+	UIManager.pre_create_settings_dialog()
 	# Refresh any views that might need updated settings
 	UIManager.rebuild_game_grid()
 	# Restore focus to the home button

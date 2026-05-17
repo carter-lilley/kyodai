@@ -148,6 +148,14 @@ func initialize(
 	# Setup library appearance
 	_setup_library_appearance()
 	SettingsManager.setting_changed.connect(_on_setting_changed)
+	SettingsManager.apply_preset_begin.connect(_on_apply_preset_begin)
+	SettingsManager.apply_preset_end.connect(_on_apply_preset_end)
+	
+	# Pre-create settings dialog so first open is instant.
+	# On first launch we skip this; it will be created after OOBE completes.
+	var first_run_setting = SettingsManager.get_setting("first_run_completed")
+	if first_run_setting and first_run_setting.value:
+		pre_create_settings_dialog()
 	
 	# Apply dark mode setting on startup
 	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
@@ -429,25 +437,37 @@ func _update_zoom_range_for_current_view() -> void:
 
 func _rebuild_views(reason: String, use_true: bool = false) -> void:
 	"""Rebuild visible views immediately, mark hidden views for rebuild.
-	Defer expensive card-effect rebuilds while the SettingsDialog is open."""
+	Defer ALL rebuilds while the SettingsDialog is open to avoid stutter."""
 	var settings_open = _settings_dialog and is_instance_valid(_settings_dialog) and _settings_dialog.visible
-	var defer = settings_open and use_true
 	
 	if _views.has("Home"):
 		var home_view = _views["Home"]
-		if is_current_view("Home") and not defer:
+		if is_current_view("Home") and not settings_open:
 			home_view.rebuild_grid(use_true)
 		else:
 			home_view.mark_for_rebuild(reason)
 	if _views.has("Library"):
 		var library_view = _views["Library"]
-		if is_current_view("Library") and not defer:
+		if is_current_view("Library") and not settings_open:
 			library_view.rebuild_grid(use_true)
 		else:
 			library_view.mark_for_rebuild(reason)
 
+var _preset_in_progress: bool = false
+
+func _on_apply_preset_begin() -> void:
+	_preset_in_progress = true
+
+func _on_apply_preset_end() -> void:
+	_preset_in_progress = false
+	# One rebuild after preset is fully applied
+	_rebuild_views("Preset applied")
+
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
+	if _preset_in_progress:
+		# Skip individual rebuilds during preset application; one rebuild at the end
+		return
 	match setting.property_name:
 		"library_background_config":
 			if _library_background and _value is Dictionary:
@@ -462,6 +482,8 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			_rebuild_views("Grid orientation changed")
 		"library_focus_scale":
 			_rebuild_views("Focus scale changed")
+		"card_media_aspect_ratio":
+			_rebuild_views("Card media ratio changed")
 		"card_effect_config":
 			_rebuild_views("Card effects changed", true)
 		"hero_effect_config":
@@ -552,11 +574,22 @@ func _setup_downloads_tab():
 	downloads_tab.add_child(downloads_view)
 	_views["Downloads"] = downloads_view
 
+func pre_create_settings_dialog() -> void:
+	"""Eagerly build the settings dialog in the background."""
+	if _settings_dialog and is_instance_valid(_settings_dialog):
+		_settings_dialog.queue_free()
+		_settings_dialog = null
+	
+	_settings_dialog = preload("res://view/settings_dialog.tscn").instantiate()
+	_settings_dialog.dismissed.connect(_on_settings_dialog_dismissed)
+	
+	if not _settings_dialog.is_inside_tree():
+		_root_control.add_child(_settings_dialog)
+
 func show_settings_dialog() -> void:
 	"""Show the fullscreen settings dialog."""
-	if not _settings_dialog:
-		_settings_dialog = preload("res://view/settings_dialog.tscn").instantiate()
-		_settings_dialog.dismissed.connect(_on_settings_dialog_dismissed)
+	if not _settings_dialog or not is_instance_valid(_settings_dialog):
+		pre_create_settings_dialog()
 	
 	if not _settings_dialog.is_inside_tree():
 		_root_control.add_child(_settings_dialog)

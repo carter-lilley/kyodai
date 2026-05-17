@@ -333,7 +333,6 @@ custom_minimum_size = Vector2(250, 0)
 layout_mode = 2
 script = ExtResource("4_w48qg")
 slider_size = 0
-custom_stop_values = null
 start_icon_name = "magnify-minus"
 end_icon_name = "magnify-plus"
 min_value = 0.15
@@ -527,7 +526,6 @@ metadata/_tab_index = 2
 layer = 1000
 
 [node name="FPSLabel" type="Label" parent="UILayer" unique_id=777777778]
-visible = false
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 100.0

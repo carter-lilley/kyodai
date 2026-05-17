@@ -4,6 +4,8 @@ extends Manager
 
 signal setting_changed(value: Variant, setting: SettingsVar)
 signal settings_saved
+signal apply_preset_begin
+signal apply_preset_end
 
 const SAVE_PATH := "user://user_prefs.tres"
 const PRESETS_FOLDER := "user://themes/"
@@ -314,6 +316,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 	var success = preset.apply_to_settings(settings)
 	
 	if success:
+		emit_signal("apply_preset_begin")
+		
 		# Emit setting_changed for all library settings so views get notified
 		# Emit the SETTING VALUE (settings.X.value), not the preset value
 		if settings.get("hero_effect_config") != null:
@@ -339,6 +343,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 		# Emit for card effect config - this triggers grid rebuild
 		if settings.get("card_effect_config") != null:
 			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)
+		
+		emit_signal("apply_preset_end")
 		
 		save_settings()
 		emit_signal("settings_saved")

@@ -377,6 +377,17 @@ func set_placeholder(_enabled: bool) -> void:
 	# No-op for M3Card-based GameCard
 	pass
 
+func set_image_priority(high_priority: bool) -> void:
+	if _current_texture and _current_texture != _loading_texture:
+		return  # Already loaded
+	
+	if _current_image_task_id > 0:
+		if MemoryManager:
+			MemoryManager.update_image_priority(_current_image_task_id, high_priority)
+	elif high_priority:
+		# No task in flight and no texture - retry load with high priority
+		_load_cover(true)
+
 func restore_focus_animation() -> void:
 	# Re-sync visuals without full tween when layout changes underneath us
 	_sync_focus_visuals()
@@ -659,12 +670,15 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 	
 	_set_texture(_loading_texture)
 	
-	DataManager.load_image(cover_url, func(_texture: Texture2D):
+	DataManager.load_image(cover_url, func(loaded_texture: Texture2D):
 		if not is_instance_valid(self):
 			return
 		if not game or game.id != target_game_id:
 			return
-		if FileAccess.file_exists(cache_path):
+		if loaded_texture:
+			MemoryManager.cache_texture(cache_path, loaded_texture)
+			_set_texture(loaded_texture)
+		elif FileAccess.file_exists(cache_path):
 			_load_cover(high_priority)
 		else:
 			_set_texture(_loading_texture)

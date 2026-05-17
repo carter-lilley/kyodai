@@ -20,6 +20,10 @@ var _gamenative_loaded: bool = false
 # This maps virtual index -> true if it's a GameNative game
 var _gamenative_indices: Dictionary = {}
 
+# Cached merged list of DB + GameNative games (rebuilt when dirty)
+var _merged_games_cache: Array[GameResource] = []
+var _merged_cache_dirty: bool = true
+
 
 
 func _ready():
@@ -134,6 +138,7 @@ func _load_gamenative_games() -> void:
 	else:
 		_gamenative_games.clear()
 	_gamenative_loaded = true
+	_merged_cache_dirty = true
 
 func _update_status(text: String):
 	# Status bar removed - no-op
@@ -191,43 +196,37 @@ func _on_scan_completed(found_count: int):
 	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, NotificationManager.Type.SUCCESS)
+	_merged_cache_dirty = true
 
 func _on_sync_completed(success: bool, message: String):
 	"""Called when library sync completes."""
 	if success:
 		_scan_for_downloaded_games()
+	_merged_cache_dirty = true
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer.
 	
 	Merges DB games with GameNative games, sorted by last_played.
-	Properly tracks which indices are GameNative vs DB games.
+	Uses a cached merged list to avoid O(n²) DB over-fetching.
 	"""
 	MemoryManager.queue_db_task(
 		func():
-			# To properly merge and paginate, we need to fetch enough DB games
-			# to ensure we can fill the requested window after merging with GameNative games.
-			# 
-			# Strategy: Fetch DB games from 0 up to (offset + limit + gamenative_count)
-			# This guarantees we have all DB games that could appear in the merged window.
-			# Then merge everything, and slice to get the exact window requested.
+			# Rebuild cache if dirty or empty
+			if _merged_cache_dirty or _merged_games_cache.is_empty():
+				var db_games = DataManager.get_downloaded_games_paginated(0, _total_games + _gamenative_games.size() + 10)
+				_merged_games_cache = _merge_all_games_by_last_played(db_games, _gamenative_games)
+				_merged_cache_dirty = false
 			
-			var db_limit = offset + limit + _gamenative_games.size()
-			var db_games = DataManager.get_downloaded_games_paginated(0, db_limit)
-			
-			# Merge ALL fetched DB games with GameNative games
-			var merged = _merge_all_games_by_last_played(db_games, _gamenative_games)
-			
-			# Slice to get exactly the requested window
+			# Slice the cached merged list
 			var result: Array[GameResource] = []
 			var result_gamenative_indices: Dictionary = {}
 			
 			for i in range(limit):
 				var idx = offset + i
-				if idx < merged.size():
-					var game = merged[idx]
+				if idx < _merged_games_cache.size():
+					var game = _merged_games_cache[idx]
 					result.append(game)
-					# Check if this is a GameNative game
 					if game.source == "gamenative":
 						result_gamenative_indices[i] = true
 			
@@ -241,7 +240,6 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			var response_offset = result["offset"] as int
 			var gamenative_indices = result["gamenative_indices"] as Dictionary
 			
-			# Merge the GameNative index tracking
 			for idx in gamenative_indices.keys():
 				_gamenative_indices[response_offset + idx] = true
 			
@@ -357,7 +355,8 @@ func _on_game_updated(game: GameResource):
 	for i in range(range_info.buffer_start, range_info.buffer_start + range_info.buffer_size):
 		var card = games_grid.get_card_at_index(i)
 		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
-			card.game = game
+			var is_visible = i >= range_info.start and i < range_info.end
+			card.set_game_with_priority(game, is_visible)
 			break
 
 func _on_game_launched(game: GameResource):

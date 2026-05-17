@@ -155,7 +155,6 @@ func _connect_container_state_signals() -> void:
 		return
 	_container_state.zoom_changed.connect(_on_zoom_changed)
 	_container_state.size_changed.connect(_on_size_changed)
-	_container_state.orientation_changed.connect(_on_orientation_changed)
 	_container_state.corner_radius_changed.connect(_on_corner_radius_changed)
 	_container_state.border_inset_changed.connect(_on_border_inset_changed)
 	_container_state.shape_changed.connect(_on_shape_changed)
@@ -167,8 +166,6 @@ func _disconnect_container_state_signals() -> void:
 		_container_state.zoom_changed.disconnect(_on_zoom_changed)
 	if _container_state.size_changed.is_connected(_on_size_changed):
 		_container_state.size_changed.disconnect(_on_size_changed)
-	if _container_state.orientation_changed.is_connected(_on_orientation_changed):
-		_container_state.orientation_changed.disconnect(_on_orientation_changed)
 	if _container_state.corner_radius_changed.is_connected(_on_corner_radius_changed):
 		_container_state.corner_radius_changed.disconnect(_on_corner_radius_changed)
 	if _container_state.border_inset_changed.is_connected(_on_border_inset_changed):
@@ -182,11 +179,6 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	_update_shader_params()
 
 func _on_size_changed(_new_size: Vector2) -> void:
-	if _is_tweening:
-		return
-	_update_shader_params()
-
-func _on_orientation_changed(_new_orientation: int) -> void:
 	if _is_tweening:
 		return
 	_update_shader_params()

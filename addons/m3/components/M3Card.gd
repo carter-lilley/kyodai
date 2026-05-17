@@ -71,6 +71,19 @@ const MIN_HEIGHT_HORIZONTAL_DP := 80.0
 			_update_appearance()
 			_rebuild_actions()
 
+var media_aspect_ratio: float = -1.0:
+	set(value):
+		if is_equal_approx(media_aspect_ratio, value):
+			return
+		media_aspect_ratio = value
+		if _ready_called:
+			_rebuild_layout()
+			_update_appearance()
+			queue_redraw()
+
+func set_media_aspect_ratio(ratio: float) -> void:
+	media_aspect_ratio = ratio
+
 @export var media_texture: Texture2D:
 	set(value):
 		if value == media_texture:
@@ -212,11 +225,17 @@ func _rebuild_layout():
 	_media_panel.add_theme_stylebox_override("panel", media_sb)
 	
 	if card_layout_mode == LayoutMode.HORIZONTAL:
-		_media_panel.custom_minimum_size.x = M3Units.dp(MEDIA_WIDTH_LIST)
+		if media_aspect_ratio > 0.0:
+			_media_panel.custom_minimum_size.x = 0
+		else:
+			_media_panel.custom_minimum_size.x = M3Units.dp(MEDIA_WIDTH_LIST)
 		_media_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_media_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	else:
-		_media_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		if media_aspect_ratio > 0.0:
+			_media_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		else:
+			_media_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_media_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	
 	_root_container.add_child(_media_panel)
@@ -241,7 +260,10 @@ func _rebuild_layout():
 	if card_layout_mode == LayoutMode.HORIZONTAL:
 		_text_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	else:
-		_text_margin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		if media_aspect_ratio > 0.0:
+			_text_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		else:
+			_text_margin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_root_container.add_child(_text_margin)
 	
 	if card_layout_mode == LayoutMode.HORIZONTAL:
@@ -533,7 +555,19 @@ func _notification(what: int):
 		NOTIFICATION_RESIZED:
 			queue_redraw()
 			if card_layout_mode == LayoutMode.VERTICAL and _media_panel:
-				_media_panel.custom_minimum_size.y = maxf(M3Units.dp(40.0), size.y * 0.5)
+				if media_aspect_ratio > 0.0:
+					var desired_h = size.x / media_aspect_ratio
+					var max_h = size.y - M3Units.dp(40.0)
+					_media_panel.custom_minimum_size.y = clampf(desired_h, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_h))
+				else:
+					_media_panel.custom_minimum_size.y = maxf(M3Units.dp(40.0), size.y * 0.5)
+			elif card_layout_mode == LayoutMode.HORIZONTAL and _media_panel:
+				if media_aspect_ratio > 0.0:
+					var desired_w = size.y * media_aspect_ratio
+					var max_w = size.x - M3Units.dp(40.0)
+					_media_panel.custom_minimum_size.x = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
+				else:
+					_media_panel.custom_minimum_size.x = M3Units.dp(MEDIA_WIDTH_LIST)
 			_update_text()
 
 func _gui_input(event: InputEvent):

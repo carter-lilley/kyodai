@@ -3,7 +3,6 @@ extends RefCounted
 
 signal zoom_changed(new_zoom: float)
 signal size_changed(new_size: Vector2)
-signal orientation_changed(new_orientation: int)
 signal corner_radius_changed(new_ratio: float)
 signal border_inset_changed(new_ratio: float)
 signal shape_changed()
@@ -26,12 +25,6 @@ var container_size: Vector2 = base_size:
 			size_changed.emit(value)
 			_recalculate_shape()
 
-var orientation: int = 0:  # 0=tall (2/3), 1=vertical (3/4), 2=square (1/1), 3=horizontal (16/11)
-	set(value):
-		if orientation != value:
-			orientation = value
-			_recalculate_dimensions()
-			orientation_changed.emit(value)
 
 # Corner radius as ratio where 0.0 = square, 1.0 = corners touch (pill/circle)
 var corner_radius_ratio: float = 0.06:
@@ -101,15 +94,7 @@ func _recalculate_dimensions() -> void:
 	container_size = base_pixels * zoom_level
 
 func _get_base_dimensions() -> Vector2:
-	return get_base_dimensions_for_orientation(orientation)
-
-static func get_base_dimensions_for_orientation(orientation_idx: int) -> Vector2:
-	match orientation_idx:
-		0: return Vector2(190.0, 285.0)   # Tall (2/3)
-		1: return Vector2(202.0, 270.0)   # Vertical (3/4)
-		2: return Vector2(234.0, 234.0)   # Square (1/1)
-		3: return Vector2(282.0, 194.0)   # Horizontal (16/11)
-		_: return Vector2(202.0, 270.0)   # Vertical (3/4) default
+	return base_size
 
 # Recalculates shape parameters that all shaders use
 func _recalculate_shape() -> void:
@@ -154,7 +139,6 @@ func set_focus_effect_config(effect_id: String, config: Dictionary) -> void:
 func duplicate() -> EffectContainerState:
 	var new_state = EffectContainerState.new(base_size)
 	new_state.zoom_level = zoom_level
-	new_state.orientation = orientation
 	new_state.corner_radius_ratio = corner_radius_ratio
 	new_state.border_inset_ratio = border_inset_ratio
 	new_state.glass_inset_ratio = glass_inset_ratio
