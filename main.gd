@@ -82,6 +82,11 @@ func _ready():
 	if settings_button:
 		settings_button.pressed.connect(_on_settings_button_pressed)
 	
+	# Connect more-options button
+	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
+	if more_button:
+		more_button.pressed.connect(_on_more_button_pressed)
+	
 	# Connect to UIManager for tab changes and settings dialog
 	UIManager.tab_changed.connect(_on_tab_changed)
 	UIManager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
@@ -159,6 +164,49 @@ func _on_settings_dialog_dismissed() -> void:
 	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
 	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
 		settings_button.grab_focus()
+
+func _on_more_button_pressed() -> void:
+	var menu = M3Menu.new()
+	var current_view = UIManager.get_current_view()
+	var is_grid = false
+	var is_horizontal = false
+	
+	if current_view:
+		var grid = _get_view_grid(current_view)
+		if grid:
+			is_grid = grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
+			is_horizontal = not grid.grid_vertical
+	
+	menu.add_check_item("Horizontal Grid", is_horizontal, _toggle_horizontal_grid)
+	if not is_grid:
+		menu.get_item(menu.get_item_count() - 1).disabled = true
+	
+	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
+	if more_button:
+		menu.popup(more_button)
+
+func _toggle_horizontal_grid() -> void:
+	var target_vertical = true
+	var current_view = UIManager.get_current_view()
+	if current_view:
+		var grid = _get_view_grid(current_view)
+		if grid:
+			target_vertical = not grid.grid_vertical
+	
+	# Apply to both Home and Library grids
+	for view_name in ["Home", "Library"]:
+		var view = UIManager.get_view(view_name)
+		if view:
+			var grid = _get_view_grid(view)
+			if grid:
+				grid.grid_vertical = target_vertical
+	
+	# Persist
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("library_grid_vertical")
+		if setting:
+			SettingsManager.set_setting(target_vertical, setting)
+			SettingsManager.save_settings()
 
 func _on_tab_changed(view_name: String):
 	_update_ui_for_view(view_name)

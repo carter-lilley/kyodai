@@ -458,6 +458,8 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_layout_mode":
 			_rebuild_views("Layout mode changed")
 			_update_zoom_range_for_current_view()
+		"library_grid_vertical":
+			_rebuild_views("Grid orientation changed")
 		"library_focus_scale":
 			_rebuild_views("Focus scale changed")
 		"card_effect_config":

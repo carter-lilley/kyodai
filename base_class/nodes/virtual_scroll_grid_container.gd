@@ -20,13 +20,37 @@ enum ViewMode { GRID, LIST, CAROUSEL }
 @export var view_mode: ViewMode = ViewMode.GRID:
 	set(value):
 		if view_mode != value:
+			var old_focused = _focused_virtual_index
 			view_mode = value
 			_update_view_mode()
+			if old_focused >= 0:
+				call_deferred("scroll_to_index", old_focused, false)
 
-# Backwards-compat read-only; derived from view_mode
-var vertical: bool = true:
+# Grid orientation toggle. Only affects GRID mode; LIST is always vertical, CAROUSEL always horizontal.
+var grid_vertical: bool = true:
+	set(value):
+		if value == grid_vertical:
+			return
+		var old_focused = _focused_virtual_index
+		grid_vertical = value
+		if _ready_called and view_mode == ViewMode.GRID:
+			_update_view_mode()
+			refresh_dimensions()
+			queue_redraw()
+			if old_focused >= 0:
+				call_deferred("scroll_to_index", old_focused, false)
+
+# Computed scroll axis: GRID respects grid_vertical; LIST is vertical; CAROUSEL is horizontal.
+var vertical: bool:
 	get:
-		return view_mode != ViewMode.CAROUSEL
+		match view_mode:
+			ViewMode.GRID:
+				return grid_vertical
+			ViewMode.LIST:
+				return true
+			ViewMode.CAROUSEL:
+				return false
+		return true
 
 const BASE_CARD_WIDTH_DP: float = 202.0
 const BASE_CARD_HEIGHT_DP: float = 270.0
@@ -92,6 +116,7 @@ var _total_items: int = 0
 var _virtual_start: int = 0
 var _virtual_end: int = 0
 var _card_scene: PackedScene
+var _ready_called: bool = false
 
 var batch_progress: float = 0.0
 
@@ -122,7 +147,12 @@ func _update_view_mode() -> void:
 	if not _flow_container or not _scroll_container:
 		return
 	match view_mode:
-		ViewMode.GRID, ViewMode.LIST:
+		ViewMode.GRID:
+			_scroll_container.vertical = grid_vertical
+			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if grid_vertical else ScrollContainer.SCROLL_MODE_DISABLED
+			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if grid_vertical else ScrollContainer.SCROLL_MODE_AUTO
+			_flow_container.vertical = not grid_vertical
+		ViewMode.LIST:
 			_scroll_container.vertical = true
 			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -132,11 +162,9 @@ func _update_view_mode() -> void:
 			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 			_flow_container.vertical = true
+	_update_center_container_flags()
 	_update_flow_container_flags()
 	_recalculate_layout()
-	# Reset scroll so cards rebuilt from index 0 are visible
-	_scroll_container.scroll_vertical = 0
-	_scroll_container.scroll_horizontal = 0
 	_refresh_buffer()
 
 func _update_flow_container_flags() -> void:
@@ -152,6 +180,16 @@ func _update_flow_container_flags() -> void:
 		ViewMode.CAROUSEL:
 			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+func _update_center_container_flags() -> void:
+	if not _center_container:
+		return
+	if vertical:
+		_center_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_center_container.size_flags_vertical = Control.SIZE_FILL
+	else:
+		_center_container.size_flags_horizontal = Control.SIZE_FILL
+		_center_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 func _get_focus_overflow() -> Vector2:
 	# How many pixels a focused card extends beyond its normal bounds on each side.
@@ -219,6 +257,7 @@ func _ready():
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
 	call_deferred("_recalculate_layout")
+	_ready_called = true
 	
 	# Connect to settings saved signal to refresh layout when card orientation changes
 	if SettingsManager:
@@ -484,10 +523,10 @@ func _get_items_per_line() -> int:
 	if vertical:
 		# Subtract 2× overflow so centered flow leaves room on both sides
 		# for focused cards to expand without clipping the viewport edge.
-		var effective_width = maxf(1.0, available.x - focus_overflow.x * 2.0)
+		var effective_width = maxf(1.0, available.x + grid_separation - focus_overflow.x * 2.0)
 		return max(1, int(effective_width / item_width))
 	else:
-		var effective_height = maxf(1.0, available.y - focus_overflow.y * 2.0)
+		var effective_height = maxf(1.0, available.y + grid_separation - focus_overflow.y * 2.0)
 		return max(1, int(effective_height / item_height))
 
 func _get_base_dimensions_for_mode() -> Vector2:

@@ -602,6 +602,9 @@ func _update_grid_orientation() -> void:
 		3:
 			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
 	
+	var grid_vertical_setting = SettingsManager.get_setting("library_grid_vertical")
+	games_grid.grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true
+	
 	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
 	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
 
