@@ -140,6 +140,8 @@ var _active_cards_by_index: Dictionary[int, Control] = {}
 var _max_pool_size: int = 120
 
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
+var _last_refreshed_card_size: Vector2 = Vector2.ZERO
+var _last_refreshed_view_mode: ViewMode = ViewMode.GRID
 
 # Margin caching - only update when margins actually change
 var _last_margin_top: int = -1
@@ -279,12 +281,23 @@ func _ready():
 	if SettingsManager:
 		SettingsManager.settings_saved.connect(_on_settings_saved)
 
+func _exit_tree():
+	if SettingsManager:
+		SettingsManager.settings_saved.disconnect(_on_settings_saved)
+
 func _on_settings_saved():
 	# Update focus scale from settings. Dimensions are refreshed by the rebuild
 	# triggered by UIManager._rebuild_views() after settings dialog closes.
 	_update_focus_scale_from_settings()
 
+var _last_resized_size: Vector2 = Vector2.ZERO
+
 func _on_resized():
+	# Ignore resize events that don't actually change size (sub-pixel or duplicate)
+	var new_size = Vector2(size.x, size.y)
+	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
+		return
+	_last_resized_size = new_size
 	# Recalculate layout with current snapped zoom
 	_recalculate_layout()
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
@@ -302,8 +315,10 @@ func _update_grid_separation_from_settings() -> void:
 	
 	# Apply to FlowContainer if it exists
 	if _flow_container:
-		_flow_container.add_theme_constant_override("h_separation", grid_separation)
-		_flow_container.add_theme_constant_override("v_separation", grid_separation)
+		if _flow_container.get_theme_constant("h_separation") != grid_separation:
+			_flow_container.add_theme_constant_override("h_separation", grid_separation)
+		if _flow_container.get_theme_constant("v_separation") != grid_separation:
+			_flow_container.add_theme_constant_override("v_separation", grid_separation)
 
 func _update_focus_scale_from_settings() -> void:
 	if not SettingsManager:
@@ -323,7 +338,7 @@ func _calculate_zoom() -> float:
 	
 	match view_mode:
 		ViewMode.GRID:
-			var viewport_area = size.x * size.y
+			var viewport_area = available.x * available.y
 			var base_area = base_dims.x * base_dims.y
 			var target_card_area = viewport_area * ratio * ratio
 			return sqrt(target_card_area / base_area)
@@ -340,7 +355,7 @@ func _calculate_max_ratio() -> float:
 	var base_dims = _get_base_dimensions_for_mode()
 	
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
-		return 1.0
+		return 0.5
 	
 	var available = _get_available_size()
 	
@@ -351,7 +366,7 @@ func _calculate_max_ratio() -> float:
 	var card_area = (base_dims.x * zoom) * (base_dims.y * zoom)
 	var ratio = sqrt(card_area / viewport_area)
 	
-	return max(ratio, 0.5)
+	return max(ratio / 2.0, 0.25)
 
 ## Returns all possible snap ratios for the current viewport configuration.
 ## Each ratio corresponds to a whole number of cards per line.
@@ -385,8 +400,14 @@ func get_snap_ratios() -> Array[float]:
 	
 	for items_per_line in range(1, capped_max + 1):
 		var ratio = _compute_ratio_for_items_per_line(items_per_line, base_dims, available, viewport_area)
-		if ratio > 0 and not ratios.has(ratio):
-			ratios.append(ratio)
+		if ratio > 0:
+			var is_duplicate = false
+			for existing in ratios:
+				if is_equal_approx(ratio, existing):
+					is_duplicate = true
+					break
+			if not is_duplicate:
+				ratios.append(ratio)
 	
 	# Sort descending so largest cards (fewest per line) come first
 	ratios.sort_custom(func(a, b): return a > b)
@@ -470,9 +491,9 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	
 	var desired_items_per_line: int
 	if vertical:
-		desired_items_per_line = max(1, int(effective_width / desired_item_width))
+		desired_items_per_line = max(1, int(effective_width / desired_item_width + 0.0001))
 	else:
-		desired_items_per_line = max(1, int(effective_height / desired_item_height))
+		desired_items_per_line = max(1, int(effective_height / desired_item_height + 0.0001))
 	
 	# Use the exact same helper for consistency
 	return _compute_ratio_for_items_per_line(desired_items_per_line, base_dims, available, viewport_area)
@@ -539,10 +560,10 @@ func _get_items_per_line() -> int:
 		# Subtract 2× overflow so centered flow leaves room on both sides
 		# for focused cards to expand without clipping the viewport edge.
 		var effective_width = maxf(1.0, available.x + grid_separation - focus_overflow.x * 2.0)
-		return max(1, int(effective_width / item_width))
+		return max(1, int(effective_width / item_width + 0.0001))
 	else:
 		var effective_height = maxf(1.0, available.y + grid_separation - focus_overflow.y * 2.0)
-		return max(1, int(effective_height / item_height))
+		return max(1, int(effective_height / item_height + 0.0001))
 
 func _get_media_aspect_ratio() -> float:
 	if not SettingsManager:
@@ -552,6 +573,17 @@ func _get_media_aspect_ratio() -> float:
 		var idx = clampi(setting.value, 0, _RATIO_LOOKUP.size() - 1)
 		return _RATIO_LOOKUP[idx]
 	return -1.0
+
+func _get_base_card_height_for_ratio(media_h: float) -> float:
+	"""Compute card height that guarantees M3Card's text area fits.
+	
+	Delegates to M3Card.get_min_text_height_dp() so the threshold logic
+	lives in one place and never drifts out of sync."""
+	var card_h = media_h + 500.0  # start well above any threshold
+	for i in range(3):
+		var text_h = M3Card.get_min_text_height_dp(card_h)
+		card_h = media_h + text_h
+	return card_h
 
 func _get_base_dimensions_for_mode() -> Vector2:
 	var ratio = _get_media_aspect_ratio()
@@ -570,7 +602,7 @@ func _get_base_dimensions_for_mode() -> Vector2:
 	match view_mode:
 		ViewMode.GRID:
 			var media_h = _MEDIA_BASE_WIDTH_DP / ratio
-			var card_h  = media_h / (1.0 - _TEXT_AREA_RATIO)
+			var card_h = _get_base_card_height_for_ratio(media_h)
 			return Vector2(_MEDIA_BASE_WIDTH_DP, card_h)
 		ViewMode.LIST:
 			# Horizontal layout: base height = media height
@@ -668,11 +700,14 @@ func refresh_dimensions() -> void:
 	if zoom_changed:
 		_last_applied_zoom = current_zoom
 	
-	for card in _active_cards:
-		if is_instance_valid(card) and card.has_method("refresh_settings"):
-			card.refresh_settings()
-	
-	_update_margin()
+	var should_refresh_cards = not is_equal_approx(card_size.x, _last_refreshed_card_size.x) or not is_equal_approx(card_size.y, _last_refreshed_card_size.y) or view_mode != _last_refreshed_view_mode
+	if should_refresh_cards:
+		_last_refreshed_card_size = card_size
+		_last_refreshed_view_mode = view_mode
+		for card in _active_cards:
+			if is_instance_valid(card) and card.has_method("refresh_settings"):
+				card.refresh_settings()
+	# _update_margin() is already called by _recalculate_layout() via the target_card_width_ratio setter above
 
 func setup(card_scene_resource: PackedScene, total_items: int):
 	_card_scene = card_scene_resource

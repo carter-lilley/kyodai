@@ -494,8 +494,16 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"dark_mode":
 			_apply_dark_mode(_value)
 
+var _theme_refresh_pending: bool = false
+
 func _apply_dark_mode(enabled: bool) -> void:
 	M3Theme.is_dark_mode = enabled
+	if not _theme_refresh_pending:
+		_theme_refresh_pending = true
+		call_deferred("_do_refresh_theme")
+
+func _do_refresh_theme() -> void:
+	_theme_refresh_pending = false
 	_refresh_theme_on_all_nodes(get_tree().root)
 
 func _refresh_theme_on_all_nodes(node: Node) -> void:
@@ -600,6 +608,11 @@ func show_settings_dialog_with_category(category_id: String) -> void:
 func _on_settings_dialog_dismissed() -> void:
 	"""Handle settings dialog dismissal."""
 	settings_dialog_dismissed.emit()
+	
+	# Trigger any deferred rebuilds on the currently visible view now that
+	# the dialog is closed. Hidden views will rebuild when they become visible.
+	if _current_view and _current_view.needs_rebuild:
+		_current_view.check_and_rebuild_if_needed()
 
 func _get_tab_index(tab_title: String) -> int:
 	for i in range(_tab_container.get_tab_count()):

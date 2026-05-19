@@ -209,13 +209,16 @@ func _toggle_horizontal_grid() -> void:
 		if setting:
 			SettingsManager.set_setting(target_vertical, setting)
 			SettingsManager.save_settings()
+	
+	# Refresh zoom slider so it uses snap ratios for the new orientation
+	if current_view:
+		_update_ui_for_view(current_view.view_name)
 
 func _on_tab_changed(view_name: String):
-	_update_ui_for_view(view_name)
-	
-	# Apply saved zoom to newly visible view (deferred to allow layout)
+	# Apply saved zoom first, then sync slider so UI reflects the applied value
 	if view_name in ["Home", "Library"]:
-		_apply_zoom_to_view_deferred(view_name)
+		await _apply_zoom_to_view_deferred(view_name)
+	_update_ui_for_view(view_name)
 
 func _apply_zoom_to_view_deferred(view_name: String) -> void:
 	"""Apply saved zoom to the specified view when it becomes visible."""
@@ -252,6 +255,20 @@ func _update_ui_for_view(view_name: String):
 		if view and view_name in ["Home", "Library"]:
 			var games_grid = _get_view_grid(view)
 			if games_grid:
+				# Defer if grid hasn't been laid out yet — get_snap_ratios() needs valid size
+				# Guard with retry counter to prevent infinite recursion
+				if games_grid.size.x <= 0 or games_grid.size.y <= 0:
+					if not games_grid.has_meta("_ui_view_retry_count"):
+						games_grid.set_meta("_ui_view_retry_count", 0)
+					var retry_count = games_grid.get_meta("_ui_view_retry_count")
+					if retry_count < 5:
+						games_grid.set_meta("_ui_view_retry_count", retry_count + 1)
+						await get_tree().process_frame
+						_update_ui_for_view(view_name)
+					else:
+						games_grid.set_meta("_ui_view_retry_count", 0)
+					return
+				games_grid.set_meta("_ui_view_retry_count", 0)
 				_update_zoom_slider_stops(zoom_slider, games_grid)
 				if _current_snap_ratios.size() > 0:
 					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
@@ -276,7 +293,14 @@ func _update_zoom_slider_stops(zoom_slider: M3Slider, games_grid: VirtualScrollG
 	else:
 		# List/Carousel mode: fall back to uniform float steps
 		zoom_slider.custom_stop_values = []
-		var max_zoom = 1.0 if games_grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
+		var max_zoom: float
+		match games_grid.view_mode:
+			VirtualScrollGridContainer.ViewMode.GRID:
+				max_zoom = 0.5
+			VirtualScrollGridContainer.ViewMode.CAROUSEL:
+				max_zoom = 0.5
+			VirtualScrollGridContainer.ViewMode.LIST:
+				max_zoom = 0.5
 		zoom_slider.min_value = 0.15
 		zoom_slider.max_value = max_zoom
 		zoom_slider.step = 0.05
@@ -342,6 +366,11 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 			if zoom_slider:
 				_update_zoom_slider_stops(zoom_slider, games_grid)
+				# Sync slider value to the grid's actual current ratio
+				if _current_snap_ratios.size() > 0:
+					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+				else:
+					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
 
 func _sync_view_mode_button_to_setting() -> void:
 	if not view_mode_group or not SettingsManager:
@@ -373,10 +402,14 @@ func _on_zoom_changed(value: float):
 		if view:
 			var games_grid = _get_view_grid(view)
 			if games_grid:
-				games_grid.target_card_width_ratio = actual_zoom
+				# Only update if the zoom actually changed
+				if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
+					games_grid.target_card_width_ratio = actual_zoom
 
-func _on_zoom_changed_finished(_value_changed: bool):
+func _on_zoom_changed_finished(value_changed: bool):
 	"""Called when drag ends - saves the current slider value to settings."""
+	if not value_changed:
+		return
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	var saved_value = 0.15
 	if zoom_slider:
@@ -430,14 +463,15 @@ func _load_and_apply_saved_zoom() -> void:
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	if zoom_slider:
 		var current_view = UIManager.get_current_view()
-		if current_view:
-			var games_grid = _get_view_grid(current_view)
-			if games_grid:
-				_update_zoom_slider_stops(zoom_slider, games_grid)
+		var games_grid = _get_view_grid(current_view) if current_view else null
+		if games_grid:
+			_update_zoom_slider_stops(zoom_slider, games_grid)
+		# Use the grid's actual snapped ratio (not the raw saved value) so slider matches reality
+		var actual_zoom = games_grid.target_card_width_ratio if games_grid else saved_zoom
 		if _current_snap_ratios.size() > 0:
-			zoom_slider.set_value_no_signal(_find_nearest_snap_index(saved_zoom))
+			zoom_slider.set_value_no_signal(_find_nearest_snap_index(actual_zoom))
 		else:
-			zoom_slider.set_value_no_signal(saved_zoom)
+			zoom_slider.set_value_no_signal(actual_zoom)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
@@ -570,7 +604,7 @@ func _adjust_zoom(delta: float) -> void:
 	
 	# List/Carousel mode: existing float logic
 	var current_zoom = zoom_slider.value
-	var max_zoom = 1.0 if not is_grid else 0.5
+	var max_zoom = 0.5
 	var new_zoom = clampf(current_zoom + delta, 0.05, max_zoom)
 	
 	if not is_equal_approx(current_zoom, new_zoom):

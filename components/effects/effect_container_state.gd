@@ -98,7 +98,7 @@ func _get_base_dimensions() -> Vector2:
 
 # Recalculates shape parameters that all shaders use
 func _recalculate_shape() -> void:
-	# Corner radius in pixels (using min dimension like border shader)
+	# Corner radius in pixels from ratio (0 = square, 1 = capsule)
 	corner_radius_pixels = corner_radius_ratio * min(container_size.x, container_size.y) / 2.0
 	
 	# Total inset combines border and glass

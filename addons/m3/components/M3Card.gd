@@ -13,20 +13,18 @@ enum LayoutMode { VERTICAL, HORIZONTAL }
 # SIZE SPECS (all values in dp)
 # ============================================
 
-const CORNER_RADIUS := 12.0
 const PADDING := 16.0
 
-var corner_radius_dp: float = CORNER_RADIUS:
+# Card corner rounding ratio: 0.0 = square, 1.0 = capsule (min(w,h)/2)
+var card_rounding_ratio: float = 0.12:
 	set(value):
-		if is_equal_approx(value, corner_radius_dp):
+		var clamped = clampf(value, 0.0, 1.0)
+		if is_equal_approx(clamped, card_rounding_ratio):
 			return
-		corner_radius_dp = value
+		card_rounding_ratio = clamped
 		if _ready_called:
 			queue_redraw()
-			if _focus_ring:
-				var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
-				if focus_sb:
-					focus_sb.set_corner_radius_all(M3Units.dpi(corner_radius_dp))
+			_update_focus_ring_radius()
 
 const MEDIA_WIDTH_LIST := 256.0
 # M3 type-scale tiers keyed by minimum card-height (dp).
@@ -75,6 +73,10 @@ var media_aspect_ratio: float = -1.0:
 	set(value):
 		if is_equal_approx(media_aspect_ratio, value):
 			return
+		# Sentinel -1.0 = fill mode; any other value must be positive
+		if value != -1.0 and value <= 0.0:
+			push_warning("M3Card: media_aspect_ratio must be > 0 or -1.0 (fill). Got %f, ignoring." % value)
+			return
 		media_aspect_ratio = value
 		if _ready_called:
 			_rebuild_layout()
@@ -121,7 +123,7 @@ func set_media_aspect_ratio(ratio: float) -> void:
 # ============================================
 
 var _root_container: BoxContainer
-var _media_panel: Panel
+var _media_panel: Control
 var _media_rect: TextureRect
 var _text_margin: MarginContainer
 var _text_content: VBoxContainer
@@ -138,6 +140,18 @@ var _media_content: Control = null
 var _applied_headline_size_dp: float = -1.0
 var _applied_supporting_size_dp: float = -1.0
 
+# Cache last-applied theme values to avoid redundant overrides
+var _applied_font_color: Color = Color(-1, -1, -1)
+var _applied_supporting_color: Color = Color(-1, -1, -1)
+var _applied_margin_left: int = -1
+var _applied_margin_right: int = -1
+var _applied_margin_top: int = -1
+var _applied_margin_bottom: int = -1
+
+# Cache last-set media panel min sizes to prevent layout thrashing
+var _last_media_min_y: float = -1.0
+var _last_media_min_x: float = -1.0
+
 # ============================================
 # CONTENT SCALE (visual pop without affecting parent layout)
 # ============================================
@@ -149,6 +163,16 @@ var content_scale: Vector2 = Vector2.ONE:
 		content_scale = value
 		_apply_content_scale()
 		queue_redraw()
+
+func _update_focus_ring_radius() -> void:
+	if not _focus_ring:
+		return
+	var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
+	if not focus_sb:
+		return
+	var max_radius = min(size.x, size.y) / 2.0
+	var radius = card_rounding_ratio * max_radius
+	focus_sb.set_corner_radius_all(int(round(radius)))
 
 func _apply_content_scale() -> void:
 	if _root_container:
@@ -258,16 +282,10 @@ func _rebuild_layout():
 	_root_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_root_container)
 	
-	# Media panel with rounded-corner clipping
-	_media_panel = Panel.new()
+	# Media panel — ancestor clipping handled by parent M3Card
+	_media_panel = Control.new()
 	_media_panel.name = "MediaPanel"
 	_media_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_media_panel.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
-	var media_sb = StyleBoxFlat.new()
-	media_sb.bg_color = Color.TRANSPARENT
-	media_sb.anti_aliasing = false
-	media_sb.set_border_width_all(0)
-	_media_panel.add_theme_stylebox_override("panel", media_sb)
 	
 	if card_layout_mode == LayoutMode.HORIZONTAL:
 		if media_aspect_ratio > 0.0:
@@ -387,10 +405,10 @@ func _rebuild_layout():
 	focus_sb.bg_color = Color.TRANSPARENT
 	focus_sb.border_color = M3Theme.get_primary()
 	focus_sb.set_border_width_all(M3Units.dp(2))
-	focus_sb.set_corner_radius_all(M3Units.dpi(corner_radius_dp))
 	focus_sb.anti_aliasing = true
 	focus_sb.anti_aliasing_size = 1.0
 	_focus_ring.add_theme_stylebox_override("panel", focus_sb)
+	_update_focus_ring_radius()
 	add_child(_focus_ring)
 	
 	_rebuild_actions()
@@ -405,7 +423,8 @@ func _draw():
 		return
 	
 	var rect = Rect2(Vector2.ZERO, size)
-	var radius = M3Units.dpi(corner_radius_dp)
+	var max_radius = min(size.x, size.y) / 2.0
+	var radius = int(round(card_rounding_ratio * max_radius))
 	
 	_configure_stylebox_for_state()
 	_cached_stylebox.set_corner_radius_all(radius)
@@ -470,17 +489,37 @@ func _update_media():
 	if _media_panel:
 		_media_panel.visible = media_texture != null
 
-func _pick_headline_spec(height_dp: float) -> Dictionary:
+static func _pick_headline_spec(height_dp: float) -> Dictionary:
 	for spec in _HEADLINE_SCALE:
 		if height_dp >= spec.threshold_dp:
 			return spec
 	return _HEADLINE_SCALE[-1]
 
-func _pick_supporting_spec(height_dp: float) -> Dictionary:
+static func _pick_supporting_spec(height_dp: float) -> Dictionary:
 	for spec in _SUPPORTING_SCALE:
 		if height_dp >= spec.threshold_dp:
 			return spec
 	return _SUPPORTING_SCALE[-1]
+
+static func get_min_text_height_dp(card_height_dp: float) -> float:
+	"""Return the minimum height the text area needs for this card height in dp.
+	
+	Matches the padding, margins, and font thresholds used in _rebuild_layout
+	and _update_text."""
+	const PAD := 16.0
+	const HALF_PAD := 8.0
+	const LABEL_GAP := 4.0
+	
+	var headline_spec = _pick_headline_spec(card_height_dp)
+	var headline_h = headline_spec.size
+	
+	# Supporting text is hidden when card is shorter than 100 dp
+	if card_height_dp < 100.0:
+		return HALF_PAD + headline_h + PAD
+	
+	var supporting_spec = _pick_supporting_spec(card_height_dp)
+	var supporting_h = supporting_spec.size
+	return HALF_PAD + headline_h + LABEL_GAP + supporting_h + PAD
 
 func _update_text():
 	if not _headline_label or not _supporting_label:
@@ -497,7 +536,10 @@ func _update_text():
 		_applied_headline_size_dp = headline_spec.size
 		_headline_label.add_theme_font_override("font", fonts[headline_spec.weight])
 		_headline_label.add_theme_font_size_override("font_size", M3Units.dp(headline_spec.size))
-	_headline_label.add_theme_color_override("font_color", M3Theme.get_on_surface())
+	var font_color = M3Theme.get_on_surface()
+	if font_color != _applied_font_color:
+		_applied_font_color = font_color
+		_headline_label.add_theme_color_override("font_color", font_color)
 	
 	_supporting_label.text = supporting_text
 	_supporting_label.visible = not supporting_text.is_empty() and size.y >= M3Units.dp(100.0)
@@ -505,7 +547,10 @@ func _update_text():
 		_applied_supporting_size_dp = supporting_spec.size
 		_supporting_label.add_theme_font_override("font", fonts[supporting_spec.weight])
 		_supporting_label.add_theme_font_size_override("font_size", M3Units.dp(supporting_spec.size))
-	_supporting_label.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
+	var supporting_color = M3Theme.get_on_surface_variant()
+	if supporting_color != _applied_supporting_color:
+		_applied_supporting_color = supporting_color
+		_supporting_label.add_theme_color_override("font_color", supporting_color)
 
 func _update_appearance():
 	if not _text_margin:
@@ -515,10 +560,22 @@ func _update_appearance():
 	var half_pad = M3Units.dp(PADDING / 2.0)
 	
 	# Padding inside the text area
-	_text_margin.add_theme_constant_override("margin_left", pad)
-	_text_margin.add_theme_constant_override("margin_right", pad)
-	_text_margin.add_theme_constant_override("margin_top", half_pad)
-	_text_margin.add_theme_constant_override("margin_bottom", pad)
+	var margin_left = int(pad)
+	var margin_right = int(pad)
+	var margin_top = int(half_pad)
+	var margin_bottom = int(pad)
+	if margin_left != _applied_margin_left:
+		_applied_margin_left = margin_left
+		_text_margin.add_theme_constant_override("margin_left", margin_left)
+	if margin_right != _applied_margin_right:
+		_applied_margin_right = margin_right
+		_text_margin.add_theme_constant_override("margin_right", margin_right)
+	if margin_top != _applied_margin_top:
+		_applied_margin_top = margin_top
+		_text_margin.add_theme_constant_override("margin_top", margin_top)
+	if margin_bottom != _applied_margin_bottom:
+		_applied_margin_bottom = margin_bottom
+		_text_margin.add_theme_constant_override("margin_bottom", margin_bottom)
 	
 	# Set minimum card height based on layout mode (only if caller hasn't set one)
 	var default_min_height = MIN_HEIGHT_VERTICAL_DP if card_layout_mode == LayoutMode.VERTICAL else MIN_HEIGHT_HORIZONTAL_DP
@@ -612,25 +669,42 @@ func _notification(what: int):
 				_hovered = false
 				_is_pressing = false
 				queue_redraw()
-		NOTIFICATION_RESIZED:
+			if not is_node_ready() or size.x <= 0 or size.y <= 0:
+				return
+			_update_focus_ring_radius()
 			queue_redraw()
 			if card_layout_mode == LayoutMode.VERTICAL and _media_panel:
 				if media_aspect_ratio > 0.0:
 					var desired_h = size.x / media_aspect_ratio
-					var max_h = size.y - M3Units.dp(40.0)
-					_media_panel.custom_minimum_size.y = clampf(desired_h, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_h))
+					var min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
+					var max_h = size.y - min_text_h
+					# Ensure the ceiling is at least as large as the floor so clamp()
+					# never returns a negative size when the card is initializing.
+					var clamp_max = maxf(M3Units.dp(40.0), max_h)
+					var new_min_y = clampf(desired_h, M3Units.dp(40.0), clamp_max)
+					if not is_equal_approx(new_min_y, _last_media_min_y):
+						_last_media_min_y = new_min_y
+						_media_panel.custom_minimum_size.y = new_min_y
 				else:
-					_media_panel.custom_minimum_size.y = maxf(M3Units.dp(40.0), size.y * 0.5)
+					var new_min_y2 = maxf(M3Units.dp(40.0), size.y * 0.5)
+					if not is_equal_approx(new_min_y2, _last_media_min_y):
+						_last_media_min_y = new_min_y2
+						_media_panel.custom_minimum_size.y = new_min_y2
 			elif card_layout_mode == LayoutMode.HORIZONTAL and _media_panel:
 				if media_aspect_ratio > 0.0:
 					var desired_w = size.y * media_aspect_ratio
 					var max_w = size.x - M3Units.dp(40.0)
-					_media_panel.custom_minimum_size.x = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
+					var new_min_x = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
+					if not is_equal_approx(new_min_x, _last_media_min_x):
+						_last_media_min_x = new_min_x
+						_media_panel.custom_minimum_size.x = new_min_x
 				else:
-					_media_panel.custom_minimum_size.x = M3Units.dp(MEDIA_WIDTH_LIST)
+					var new_min_x2 = M3Units.dp(MEDIA_WIDTH_LIST)
+					if not is_equal_approx(new_min_x2, _last_media_min_x):
+						_last_media_min_x = new_min_x2
+						_media_panel.custom_minimum_size.x = new_min_x2
 			_update_text()
 			_apply_content_scale()
-
 func _gui_input(event: InputEvent):
 	if not clickable:
 		return

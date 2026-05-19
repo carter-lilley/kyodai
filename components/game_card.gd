@@ -37,6 +37,7 @@ const MAX_COVER_TEXTURE_SIZE: int = 512
 
 # Status badge overlay (direct child of GameCard, positioned over media panel)
 var _status_badge: Panel = null
+var _badge_update_pending: bool = false
 const STATUS_BADGE_SIZE_RATIO: float = 0.04
 const STATUS_BADGE_MARGIN_RATIO: float = 0.05
 
@@ -438,6 +439,11 @@ func _update_display_with_priority(high_priority: bool):
 	_load_cover(high_priority)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
+
+func _deferred_update_badges():
+	_badge_update_pending = false
+	_update_status_badge_layout()
+	_update_platform_badge()
 
 func _update_status_badge_layout():
 	if not _status_badge:
@@ -945,7 +951,8 @@ func _notification(what: int):
 	super._notification(what)
 	if what == NOTIFICATION_RESIZED:
 		pivot_offset = size / 2.0
-		_update_status_badge_layout()
-		_update_platform_badge()
+		if not _badge_update_pending:
+			_badge_update_pending = true
+			call_deferred("_deferred_update_badges")
 		if _focus_stack and is_instance_valid(_focus_stack):
 			_focus_stack.size = size

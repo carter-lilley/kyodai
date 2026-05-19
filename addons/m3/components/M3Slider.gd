@@ -297,7 +297,7 @@ func set_value_no_signal(new_value: float) -> void:
 	_cached_value = new_value
 	if not _slider:
 		return
-	if new_value == _slider.value:
+	if is_equal_approx(new_value, _slider.value):
 		return
 	_slider.set_block_signals(true)
 	_slider.value = new_value
@@ -879,8 +879,15 @@ func _get_stop_positions() -> Array[float]:
 	# Use custom stops if provided
 	if custom_stop_values.size() > 0:
 		for stop in custom_stop_values:
-			if stop > min_value and stop < max_value:
-				_cached_stops.append(stop)
+			if stop >= min_value and stop <= max_value:
+				# Deduplicate visually identical stops
+				var is_duplicate = false
+				for existing in _cached_stops:
+					if is_equal_approx(stop, existing):
+						is_duplicate = true
+						break
+				if not is_duplicate:
+					_cached_stops.append(stop)
 		_cached_stops_valid = true
 		return _cached_stops
 	
@@ -894,7 +901,10 @@ func _get_stop_positions() -> Array[float]:
 		_cached_stops_valid = true
 		return _cached_stops
 	
-	var count = int(range_val / step)
+	var count = roundi(range_val / step)
+	if count <= 1:
+		_cached_stops_valid = true
+		return _cached_stops
 	if count > 50:
 		_cached_stops_valid = true
 		return _cached_stops  # Too many stops
@@ -1098,7 +1108,7 @@ func _draw_stops():
 		return
 	
 	var stops = _get_stop_positions()
-	if stops.size() <= 2:
+	if stops.size() == 0:
 		return
 	
 	var stop_size = _get_stop_size()
@@ -1130,9 +1140,11 @@ func _draw_stops():
 			), color)
 
 func _draw_end_indicator():
-	"""Draw end-of-track indicator dot at max value position. Not shown on discrete sliders."""
-	if _get_stop_positions().size() > 0:
-		return
+	"""Draw end-of-track indicator dot at max value position."""
+	# Only skip if a stop is already drawn at the exact end
+	for stop in _get_stop_positions():
+		if is_equal_approx(stop, max_value):
+			return
 	
 	var track_rect = _cached_track_rect
 	var stop_size = _get_stop_size()

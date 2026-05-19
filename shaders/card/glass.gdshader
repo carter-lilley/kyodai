@@ -92,6 +92,10 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
 	
+	if (edge_alpha <= 0.0) {
+		discard;
+	}
+	
 	// Calculate the inner "image area" with additional inset (for alpha only)
 	float additional_inset_pixels = additional_inset_ratio * card_size.x;
 	vec2 image_area_size = inner_size - vec2(additional_inset_pixels * 2.0);

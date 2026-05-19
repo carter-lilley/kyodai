@@ -5,7 +5,8 @@ var _container_state: EffectContainerState = EffectContainerState.for_card()
 var _current_config: Dictionary = {}
 
 var _preview_card: GameCard
-var _corner_slider: HSlider
+var _card_rounding_slider: HSlider
+var _art_rounding_slider: HSlider
 
 # Shared effect designer UI instances
 var _base_effect_designer: EffectDesignerUI
@@ -74,17 +75,29 @@ func _setup_ui():
 	global_label.add_theme_font_size_override("font_size", 16)
 	left_vbox.add_child(global_label)
 	
-	var corner_label = Label.new()
-	corner_label.text = "Corner Radius (0-1)"
-	left_vbox.add_child(corner_label)
+	var card_rounding_label = Label.new()
+	card_rounding_label.text = "Card Rounding (0-1)"
+	left_vbox.add_child(card_rounding_label)
 	
-	_corner_slider = HSlider.new()
-	_corner_slider.min_value = 0.0
-	_corner_slider.max_value = 1.0
-	_corner_slider.step = 0.01
-	_corner_slider.value = 0.06
-	_corner_slider.value_changed.connect(_on_corner_radius_changed)
-	left_vbox.add_child(_corner_slider)
+	_card_rounding_slider = HSlider.new()
+	_card_rounding_slider.min_value = 0.0
+	_card_rounding_slider.max_value = 1.0
+	_card_rounding_slider.step = 0.01
+	_card_rounding_slider.value = 0.12
+	_card_rounding_slider.value_changed.connect(_on_card_rounding_changed)
+	left_vbox.add_child(_card_rounding_slider)
+	
+	var art_rounding_label = Label.new()
+	art_rounding_label.text = "Art Rounding (0-1)"
+	left_vbox.add_child(art_rounding_label)
+	
+	_art_rounding_slider = HSlider.new()
+	_art_rounding_slider.min_value = 0.0
+	_art_rounding_slider.max_value = 1.0
+	_art_rounding_slider.step = 0.01
+	_art_rounding_slider.value = 0.12
+	_art_rounding_slider.value_changed.connect(_on_art_rounding_changed)
+	left_vbox.add_child(_art_rounding_slider)
 	
 	left_vbox.add_child(HSeparator.new())
 	
@@ -147,10 +160,15 @@ func _load_current_config():
 	else:
 		_current_config = _get_default_config()
 	
-	_corner_slider.value = _current_config.get("corner_radius", 0.06)
+	# Backward compat: old single "corner_radius" → copy to both new keys
+	if _current_config.has("corner_radius") and not _current_config.has("card_rounding"):
+		_current_config["card_rounding"] = _current_config["corner_radius"]
+		_current_config["art_rounding"] = _current_config["corner_radius"]
 	
-	# Corner radius is now 0.0-1.0 ratio directly
-	_container_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
+	_card_rounding_slider.value = _current_config.get("card_rounding", 0.12)
+	_art_rounding_slider.value = _current_config.get("art_rounding", 0.12)
+	
+	_container_state.corner_radius_ratio = _current_config.get("art_rounding", 0.12)
 	_container_state.effect_settings = _current_config.get("effects", [])
 	_container_state.focus_effect_settings = _current_config.get("focus_effects", [])
 	
@@ -165,7 +183,8 @@ func _get_default_config() -> Dictionary:
 	return {
 		"effects": [],
 		"focus_effects": [],
-		"corner_radius": 0.06
+		"card_rounding": 0.12,
+		"art_rounding": 0.12,
 	}
 
 func _setup_preview_card():
@@ -191,8 +210,15 @@ func _on_focus_config_changed(config: Dictionary):
 	_update_preview()
 	_save_to_settings()
 
-func _on_corner_radius_changed(value: float):
-	_current_config["corner_radius"] = value
+func _on_card_rounding_changed(value: float):
+	_current_config["card_rounding"] = value
+	if _preview_card:
+		_preview_card.card_rounding_ratio = value
+	_update_preview()
+	_save_to_settings()
+
+func _on_art_rounding_changed(value: float):
+	_current_config["art_rounding"] = value
 	_container_state.corner_radius_ratio = value
 	_container_state.zoom_level = 1.5
 	_update_preview()

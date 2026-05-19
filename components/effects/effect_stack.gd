@@ -138,16 +138,21 @@ func _rebuild_effects():
 	
 	effects_changed.emit()
 
+static var _script_cache: Dictionary[String, Script] = {}
+
 func _create_effect(effect_id: String) -> EffectBase:
 	var script_path = EFFECT_REGISTRY.get(effect_id, "")
 	if script_path == "":
 		push_error("EffectStack: Unknown effect_id: " + effect_id)
 		return null
 	
-	var script = load(script_path)
+	var script: Script = _script_cache.get(script_path, null)
 	if not script:
-		push_error("EffectStack: Failed to load script: " + script_path)
-		return null
+		script = load(script_path)
+		if not script:
+			push_error("EffectStack: Failed to load script: " + script_path)
+			return null
+		_script_cache[script_path] = script
 	
 	var effect = script.new()
 	if not effect is EffectBase:
