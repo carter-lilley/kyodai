@@ -1,11 +1,7 @@
 shader_type canvas_item;
 
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_ratio = 0.06;
+#include "res://shaders/card/includes/card_common.gdshaderinc"
 
-// Shared shape parameters from EffectContainerState (calculated once, used by all effects)
-uniform float corner_radius_pixels = 0.0;
-uniform float total_inset_pixels = 0.0;
 uniform float inner_corner_radius_pixels = 0.0;  // Radius after glass inset
 uniform float glass_inset_ratio = 0.0;  // For calculating inner size
 
@@ -29,14 +25,6 @@ uniform bool show_safe_zone = false;
 uniform vec4 safe_zone = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (corner badge mode)
 uniform vec4 safe_zone_top_bar = vec4(0.0, 0.0, 0.0, 0.0); // x, y, width, height in pixels (top bar mode)
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
-
-// SDF that accepts radius in pixels (consistent with base_card.gdshader)
-float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
-	vec2 half_size = size * 0.5;
-	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 void fragment() {
 	if (hide_background && !has_icon_texture) {

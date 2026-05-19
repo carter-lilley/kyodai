@@ -1,7 +1,7 @@
 shader_type canvas_item;
 
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_ratio = 0.06;
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform float border_inset_ratio = 0.0;
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 
@@ -9,13 +9,6 @@ uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float distortion : hint_range(0.0, 1.0) = 0.5;
 uniform float opacity : hint_range(0.0, 1.0) = 1.0;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
-
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
-	vec2 half_size = size * 0.5;
-	float radius = radius_ratio * min(size.x, size.y) / 2.0;
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 vec2 distort(vec2 p, float dist_param, float aspect) {
 	float d = length(p);
@@ -44,21 +37,6 @@ vec2 spherical_distort(vec2 uv, float raw_distortion, vec2 size) {
 	return distort(centered, dist_param, aspect);
 }
 
-// Aspect ratio preserving UV calculation (same as base_card)
-vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
-	float card_aspect = card.x / card.y;
-	float tex_aspect = tex.x / tex.y;
-	
-	vec2 scale;
-	if (card_aspect > tex_aspect) {
-		scale = vec2(1.0, tex_aspect / card_aspect);
-	} else {
-		scale = vec2(card_aspect / tex_aspect, 1.0);
-	}
-	
-	return (uv - 0.5) * scale + 0.5;
-}
-
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
@@ -80,7 +58,7 @@ void fragment() {
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;
 	
 	// Check if we're inside the area
-	float sdf_dist = rounded_rect_sdf(inner_pixel_pos, inner_size, inner_radius_ratio);
+	float sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, inner_radius_ratio);
 	
 	// Calculate edge anti-aliasing
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
@@ -94,9 +72,9 @@ void fragment() {
 	vec2 warped_uv = spherical_distort(UV, distortion, card_size);
 	warped_uv = clamp(warped_uv, 0.0, 1.0);
 	
-	// Apply aspect ratio correction
-	vec2 tex_size = vec2(textureSize(game_texture, 0));
-	warped_uv = aspect_covered_uv(warped_uv, card_size, tex_size);
+	// Apply precomputed UV transforms from base_card instead of re-deriving aspect math
+	warped_uv = (warped_uv - 0.5) * uv_transform_scale + 0.5 + uv_transform_offset;
+	warped_uv.y -= vertical_offset;
 	
 	// Sample the distorted texture
 	vec4 tex_color = texture(game_texture, warped_uv);

@@ -1,7 +1,7 @@
 shader_type canvas_item;
 
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_ratio = 0.06;  // 0.0 to 1.0, relative to card width
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float glass_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width (additional inset from glass effect)
@@ -17,43 +17,8 @@ uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
 uniform float smart_crop_overshoot = 0.15;
 
-// Shared shape parameters from EffectContainerState (calculated once, used by all effects)
-uniform float corner_radius_pixels = 0.0;
-uniform float total_inset_pixels = 0.0;
-
 const int ROW_SAMPLES = 8;
 const int COL_SAMPLES = 8;
-
-// SDF that accepts radius in pixels (consistent with border.gdshader and badge.gdshader)
-float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
-	vec2 half_size = size * 0.5;
-	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
-
-// Kept for backward compatibility with glass inset calculation
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
-	vec2 half_size = size * 0.5;
-	// 1.0 ratio = corners touch (half of smallest dimension)
-	float radius = radius_ratio * min(size.x, size.y) / 2.0;
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
-
-vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
-	float card_aspect = card.x / card.y;
-	float tex_aspect = tex.x / tex.y;
-	
-	vec2 scale;
-	if (card_aspect > tex_aspect) {
-		scale = vec2(1.0, tex_aspect / card_aspect);
-	} else {
-		scale = vec2(card_aspect / tex_aspect, 1.0);
-	}
-	
-	return (uv - 0.5) * scale + 0.5;
-}
 
 float get_luminance(vec4 col) {
 	vec3 luminance_weights = vec3(0.2126, 0.725152, 0.0722);
@@ -244,7 +209,7 @@ void fragment() {
 	
 	// Check if inside glass inset area
 	vec2 glass_pixel_pos = pixel_pos - glass_inner_offset;
-	float glass_sdf_dist = rounded_rect_sdf(glass_pixel_pos, glass_inner_size, glass_inner_radius_ratio);
+	float glass_sdf_dist = rounded_rect_sdf_ratio(glass_pixel_pos, glass_inner_size, glass_inner_radius_ratio);
 	float glass_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, glass_sdf_dist);
 	
 	// If there's a glass inset, clip the base card to the inner shape
@@ -261,7 +226,7 @@ void fragment() {
 	
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
 	
-	float vertical_offset = 0.0;
+	float local_vertical_offset = 0.0;
 	float logo_y = 0.5;
 	
 	float card_aspect = inner_size.x / inner_size.y;
@@ -297,18 +262,18 @@ void fragment() {
 		float snap_offset = nearest_target - logo_y;
 		
 		if (nearest_target == third2) {
-			vertical_offset = snap_offset;
+			local_vertical_offset = snap_offset;
 		} else {
 			float max_slide = visible_top;
 			float overshoot_offset = (nearest_target < 0.5) ? max_slide : -max_slide;
-			vertical_offset = mix(snap_offset, overshoot_offset, smart_crop_overshoot);
+			local_vertical_offset = mix(snap_offset, overshoot_offset, smart_crop_overshoot);
 		}
 		
-		vertical_offset = clamp(vertical_offset, -visible_top, visible_top);
+		local_vertical_offset = clamp(local_vertical_offset, -visible_top, visible_top);
 	}
 	
 	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
-	tex_uv.y -= vertical_offset;
+	tex_uv.y -= local_vertical_offset;
 	vec4 tex_color = texture(game_texture, tex_uv);
 	
 	if (debug_sobel) {
@@ -345,7 +310,7 @@ void fragment() {
 		float display_y = blend_y;
 		
 		if (smart_crop_enabled && tex_aspect < card_aspect) {
-			display_y = blend_y + vertical_offset;
+			display_y = blend_y + local_vertical_offset;
 		}
 		
 		float line_thickness = 3.0 / tex_size.y;

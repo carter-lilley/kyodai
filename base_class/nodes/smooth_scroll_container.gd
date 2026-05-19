@@ -26,6 +26,15 @@ var _scrollbar_drag_start_value: float = 0.0
 var _focus_timer: Timer = null
 var _focus_callback: Callable = Callable()
 
+## When true, all scroll input (wheel, scrollbar drag, focus-driven) is blocked.
+var scroll_paused: bool = false:
+	set(value):
+		scroll_paused = value
+		if scroll_paused:
+			if _scroll_tween and _scroll_tween.is_valid():
+				_scroll_tween.kill()
+			_is_smooth_scrolling = false
+
 func _ready():
 	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
 	follow_focus = false
@@ -62,6 +71,8 @@ func _connect_focus_signal() -> void:
 
 func _on_focus_changed(control: Control) -> void:
 	"""Handle focus changes to smoothly scroll focused items into view."""
+	if scroll_paused:
+		return
 	if not control:
 		return
 	
@@ -168,7 +179,7 @@ func _get_centered_scroll_for_control(p_control: Control) -> float:
 		return target
 
 func _on_gui_input(event: InputEvent):
-	if not smooth_scrolling:
+	if not smooth_scrolling or scroll_paused:
 		return
 	
 	if event is InputEventMouseButton:
@@ -191,7 +202,7 @@ func _on_gui_input(event: InputEvent):
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):
-	if not smooth_scrolling:
+	if not smooth_scrolling or scroll_paused:
 		return
 	
 	var scrollbar = _get_scrollbar()

@@ -37,11 +37,9 @@ var _content_wrapper: Control = null  # Layers background + content
 # Main content area - ALWAYS PRESENT
 var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 
-# Modal management
-var _active_modal: Modal = null
+# Modal management (now uses M3Menu)
+var _active_menu: M3Menu = null
 var _modal_context: Dictionary = {}
-var _modal_backdrop: ColorRect = null
-var _is_dismissing: bool = false
 var _focus_indicator: FocusIndicator = null
 
 # Game details tab
@@ -138,9 +136,6 @@ func initialize(
 				if _nav_node:
 					_nav_node.selected_index = i
 				break
-	
-	# Setup modal input handling
-	_setup_modal_input_handling()
 	
 	# Focus indicator disabled — M3 components provide their own focus visuals
 	# _setup_focus_indicator()
@@ -596,6 +591,12 @@ func show_settings_dialog() -> void:
 	
 	_settings_dialog.show_overlay()
 
+func show_settings_dialog_with_category(category_id: String) -> void:
+	"""Open the settings dialog and jump to a specific category."""
+	show_settings_dialog()
+	if _settings_dialog and is_instance_valid(_settings_dialog):
+		_settings_dialog.select_category(category_id)
+
 func _on_settings_dialog_dismissed() -> void:
 	"""Handle settings dialog dismissal."""
 	settings_dialog_dismissed.emit()
@@ -861,113 +862,93 @@ func _setup_focus_indicator() -> void:
 	# _focus_indicator.name = "FocusIndicator"
 	# _root_control.add_child(_focus_indicator)
 
-func show_context_menu(items: Array[Dictionary], position: Vector2, context: Dictionary = {}) -> String:
-	"""Show a context menu modal at the specified position. Returns modal ID."""
-	# Dismiss any existing modal first
+func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dictionary = {}) -> String:
+	"""Show a context menu modal anchored to the given control. Returns modal ID."""
 	dismiss_modal()
 	
-	# Create backdrop
-	_create_backdrop()
-	
-	# Create and configure modal
-	_active_modal = Modal.new(items)
+	var menu = M3Menu.new()
 	
 	# Store context
 	_modal_context = context.duplicate()
 	var modal_id = str(Time.get_unix_time_from_system())
 	_modal_context["modal_id"] = modal_id
 	
-	# Connect signals
-	_active_modal.item_selected.connect(_on_modal_item_selected)
-	_active_modal.dismissed.connect(_on_modal_dismissed)
+	# Build menu items with callbacks
+	for item in items:
+		var item_id = item.get("id", "")
+		var item_text = item.get("text", "")
+		var item_icon = item.get("icon", "")
+		var item_disabled = item.get("disabled", false)
+		
+		var callback = func():
+			modal_item_selected.emit(item_id, _modal_context.duplicate())
+			dismiss_modal()
+		
+		menu.add_item(item_text, callback, item_icon)
+		if item_disabled:
+			menu.get_item(menu.get_item_count() - 1).disabled = true
 	
-	# Add to scene and show
-	_root_control.add_child(_active_modal)
-	_active_modal.popup_at_position(position)
+	# Add scrim backdrop to block interaction with content below
+	var scrim = ColorRect.new()
+	scrim.color = Color(0, 0, 0, 0.5)
+	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+	menu.add_child(scrim)
+	
+	# Find and pause the scroll container so the anchor doesn't move
+	var scroll_container = anchor
+	while scroll_container:
+		if scroll_container is SmoothScrollContainer:
+			scroll_container.scroll_paused = true
+			break
+		scroll_container = scroll_container.get_parent()
+	
+	# Connect dismissed signal — cleanup happens here so dismiss_modal() doesn't double-fire
+	menu.dismissed.connect(func():
+		if scroll_container and is_instance_valid(scroll_container):
+			scroll_container.scroll_paused = false
+		_active_menu = null
+		_modal_context.clear()
+		modal_dismissed.emit(modal_id)
+	, CONNECT_ONE_SHOT)
+	
+	_active_menu = menu
+	menu.popup(anchor)
 	
 	modal_shown.emit(modal_id)
 	return modal_id
 
-func show_game_context_menu(romm_id: int, position: Vector2, show_delete: bool = true) -> String:
+func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
 	"""Show the standard game context menu."""
 	var items: Array[Dictionary] = [
-		{"id": "launch", "text": "Launch"},
-		{"id": "details", "text": "Details"}
+		{"id": "launch", "text": "Launch", "icon": "play"},
+		{"id": "details", "text": "Details", "icon": "information"}
 	]
 	
 	# Add delete option only if game is downloaded and show_delete is true
 	var game = DataManager.get_game_by_id(romm_id)
 	if show_delete and game and game.is_active_variant_downloaded():
-		items.append({"id": "delete", "text": "Delete"})
+		items.append({"id": "delete", "text": "Delete", "icon": "trash-can"})
 		
 		# Add "Add to Steam" option if game is downloaded and Steam folder is configured
 		var steam_folder = SettingsManager.get_setting("steam_folder")
 		if steam_folder and not steam_folder.value.is_empty() and SteamVDFWriter.is_valid_steam_path(steam_folder.value):
 			items.append({"id": "add_to_steam", "text": "Add to Steam"})
 	
-	items.append({"id": "hide", "text": "Hide"})
-	return show_context_menu(items, position, {"romm_id": romm_id})
+	items.append({"id": "card_designer", "text": "Card Designer", "icon": "cards-outline"})
+	items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
+	return show_context_menu(items, anchor, {"romm_id": romm_id})
 
 func dismiss_modal() -> void:
-	"""Dismiss the active modal if one exists."""
-	if _is_dismissing or not _active_modal:
-		return
-	
-	_is_dismissing = true
-	var modal_id = _modal_context.get("modal_id", "")
-	
-	_active_modal.hide()
-	_active_modal.queue_free()
-	_active_modal = null
-	_modal_context.clear()
-	
-	if _modal_backdrop:
-		_modal_backdrop.queue_free()
-		_modal_backdrop = null
-	
-	_is_dismissing = false
-	modal_dismissed.emit(modal_id)
+	"""Dismiss the active menu if one exists.
+	Cleanup and modal_dismissed emission are handled by the menu's dismissed signal."""
+	if _active_menu != null and is_instance_valid(_active_menu) and _active_menu.is_open():
+		_active_menu.dismiss()
+	# If menu is already closed, the dismissed callback already cleaned up.
 
 func is_modal_open() -> bool:
 	"""Returns whether a modal is currently displayed."""
-	return _active_modal != null and is_instance_valid(_active_modal)
-
-func _create_backdrop() -> void:
-	"""Create a semi-transparent backdrop behind the modal."""
-	_modal_backdrop = ColorRect.new()
-	_modal_backdrop.color = Color(0, 0, 0, 0.5)
-	_modal_backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_modal_backdrop.z_index = 90
-	_modal_backdrop.top_level = true
-	_modal_backdrop.gui_input.connect(_on_backdrop_input)
-	_root_control.add_child(_modal_backdrop)
-
-func _on_backdrop_input(event: InputEvent) -> void:
-	"""Handle input on backdrop - clicking dismisses modal."""
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		dismiss_modal()
-
-func _on_modal_item_selected(item_id: String) -> void:
-	"""Handle item selection from modal."""
-	modal_item_selected.emit(item_id, _modal_context.duplicate())
-	dismiss_modal()
-
-func _on_modal_dismissed() -> void:
-	"""Handle modal dismissal."""
-	# This is called when modal closes itself
-	if _active_modal:
-		dismiss_modal()
-
-func _setup_modal_input_handling() -> void:
-	"""Setup global input handling for modal dismiss."""
-	# Modal input handling is managed through _unhandled_input
-	pass
-
-func _unhandled_input(event: InputEvent) -> void:
-	"""Handle global input - Escape dismisses modal."""
-	if is_modal_open() and event.is_action_pressed("ui_cancel"):
-		dismiss_modal()
-		get_viewport().set_input_as_handled()
+	return _active_menu != null and is_instance_valid(_active_menu) and _active_menu.is_open()
 
 # ==================== DUAL SCREEN MODE ====================
 

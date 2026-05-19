@@ -1,8 +1,8 @@
 shader_type canvas_item;
 render_mode blend_add;
 
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_ratio = 0.06;
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform float border_inset_ratio = 0.0;  // Inherited from border effect
 
 // Glass parameters  
@@ -26,19 +26,12 @@ uniform float rim_sharpness : hint_range(2.0, 10.0) = 5.0;
 uniform float additional_inset_ratio : hint_range(0.0, 0.5) = 0.0;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
-	vec2 half_size = size * 0.5;
-	float radius = radius_ratio * min(size.x, size.y) / 2.0;
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
-
 // Simple and correct: spherical dome using SDF distance
 vec3 calculate_dome_normal(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
 	
 	// Get signed distance from edge (negative inside)
-	float sdf_dist = rounded_rect_sdf(pos, size, radius_ratio);
+	float sdf_dist = rounded_rect_sdf_ratio(pos, size, radius_ratio);
 	
 	// Distance from edge (0 at edge, positive inside)
 	float dist_from_edge = -sdf_dist;
@@ -93,7 +86,7 @@ void fragment() {
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;
 	
 	// Check if we're inside the inset area using the adjusted corner radius
-	float sdf_dist = rounded_rect_sdf(inner_pixel_pos, inner_size, inner_radius_ratio);
+	float sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, inner_radius_ratio);
 	
 	// Calculate edge anti-aliasing for the outer glass edge
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
@@ -113,7 +106,7 @@ void fragment() {
 	
 	// Check if inside image area (for alpha calculation only)
 	vec2 image_pixel_pos = pixel_pos - image_area_offset;
-	float image_sdf_dist = rounded_rect_sdf(image_pixel_pos, image_area_size, image_area_radius_ratio);
+	float image_sdf_dist = rounded_rect_sdf_ratio(image_pixel_pos, image_area_size, image_area_radius_ratio);
 	float image_aa = 1.0 - smoothstep(-aa_width, 0.0, image_sdf_dist);
 	
 	// Calculate 3D dome normal from inset area with adjusted corner radius

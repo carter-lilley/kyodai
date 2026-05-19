@@ -38,6 +38,10 @@ var multi_select: bool = false
 ## Set to false for reusable menus (e.g., checkable menus that need to persist state).
 var auto_free: bool = true
 
+## When true, the menu dismisses if the anchor control moves (e.g., scroll).
+## Disable for menus anchored to scrolling items.
+var track_summoner: bool = true
+
 # ============================================
 # LIFECYCLE
 # ============================================
@@ -48,6 +52,8 @@ func _init():
 	overlay_layer = 95
 
 func _process(_delta):
+	if not track_summoner:
+		return
 	# Dismiss if summoner has moved (e.g., page scrolled)
 	if not visible or _summoner == null or not is_instance_valid(_summoner):
 		return

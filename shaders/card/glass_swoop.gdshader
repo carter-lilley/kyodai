@@ -1,7 +1,7 @@
 shader_type canvas_item;
 
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_ratio = 0.06;
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform float border_inset_ratio = 0.0;
 
 // Swoop parameters
@@ -10,13 +10,6 @@ uniform float swoop_intensity : hint_range(0.0, 1.0) = 0.3;
 uniform float swoop_height : hint_range(0.0, 0.8) = 0.5;  // Y position of the line (0 = bottom, 1 = top)
 uniform float swoop_curve : hint_range(0.0, 1.0) = 0.3;  // Curve amount: 0 = flat, 1 = maximum dip
 uniform float swoop_tilt : hint_range(-1.0, 1.0) = 0.0;   // Tilt: raises one side, lowers the other
-
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_ratio) {
-	vec2 half_size = size * 0.5;
-	float radius = radius_ratio * min(size.x, size.y) / 2.0;
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
@@ -33,7 +26,7 @@ void fragment() {
 	
 	// Calculate SDF for the glass shape
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;
-	float sdf_dist = rounded_rect_sdf(inner_pixel_pos, inner_size, corner_radius_ratio);
+	float sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, corner_radius_ratio);
 	
 	// Edge anti-aliasing
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);

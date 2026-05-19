@@ -1,6 +1,8 @@
 shader_type canvas_item;
 render_mode blend_mix;
 
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform sampler2D game_texture : source_color;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
@@ -8,25 +10,6 @@ uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 uniform float hue_shift : hint_range(-1.0, 1.0) = 0.0;
 uniform float saturation_scale : hint_range(0.0, 2.0) = 1.0;
 uniform float lightness_scale : hint_range(0.0, 2.0) = 1.0;
-
-// UV transform parameters
-uniform vec2 uv_transform_scale = vec2(1.0, 1.0);
-uniform vec2 uv_transform_offset = vec2(0.0, 0.0);
-uniform float vertical_offset = 0.0;
-
-// Card shape parameters
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_pixels = 0.0;
-uniform float total_inset_pixels = 0.0;
-
-
-// --- SDF ---
-float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
-	vec2 half_size = size * 0.5;
-	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 
 void fragment() {

@@ -13,12 +13,13 @@ var title: String = "Effects":
 var context: String = "hero"  # "hero", "base_card", or "focus_card"
 var inherit_from_base: bool = false  # For focus effects - copy defaults from base effects
 var config_key: String = "effects"  # Key in config dict ("effects" or "focus_effects")
+var hide_disabled_effects: bool = false  # If true, dropdown omits already-active effects entirely
 
 # State
 var _current_config: Dictionary = {}
 var _base_effects: Array = []  # For focus effect inheritance
 var _effects_list: VBoxContainer
-var _add_effect_button: MenuButton
+var _add_effect_button: M3OptionButton
 var _scroll_container: ScrollContainer
 var _title_label: Label
 
@@ -85,12 +86,12 @@ func setup(p_title: String, p_context: String, p_config_key: String = "effects",
 	config_key = p_config_key
 	inherit_from_base = p_inherit_from_base
 	_discover_effects()
-	_rebuild_add_effect_dropdown()
+	_sync_option_button()
 
 func set_base_effects(base_effects: Array):
 	_base_effects = base_effects.duplicate(true)
 	if inherit_from_base:
-		_rebuild_add_effect_dropdown()  # Update to show overlap labels
+		_populate_option_button()  # Update to show overlap labels
 
 func _discover_effects():
 	"""Auto-discover effects that support this context."""
@@ -99,6 +100,10 @@ func _discover_effects():
 	
 	var dropdown_id = 0
 	for effect_id in EffectStack.EFFECT_REGISTRY.keys():
+		# Skip auto-managed base effect — it has no user settings and is always injected by EffectStack
+		if effect_id == "base":
+			continue
+		
 		var script_path = EffectStack.EFFECT_REGISTRY[effect_id]
 		var script = load(script_path)
 		if not script:
@@ -118,6 +123,8 @@ func _discover_effects():
 			_available_effects[effect_id] = display_name
 			_effect_id_map[dropdown_id] = effect_id
 			dropdown_id += 1
+	
+	_populate_option_button()
 
 func _ready():
 	_setup_ui()
@@ -130,6 +137,8 @@ func _setup_ui():
 	_scroll_container = ScrollContainer.new()
 	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll_container.follow_focus = true
+	_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll_container.clip_contents = true
 	_scroll_container.name = "ScrollContainer"
 	add_child(_scroll_container)
 	
@@ -143,18 +152,28 @@ func _setup_ui():
 	
 	_title_label = Label.new()
 	_title_label.text = title
+	_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_title_label.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(_title_label)
 	
-	_effects_list = VBoxContainer.new()
-	vbox.add_child(_effects_list)
-	
-	_add_effect_button = MenuButton.new()
+	_add_effect_button = M3OptionButton.new()
+	_add_effect_button.multi_select = true
 	_add_effect_button.text = "Add Effect"
+	_add_effect_button.placeholder_text = "Add Effect"
+	_add_effect_button.fit_to_longest_item = false
+	_add_effect_button.field_variant = M3TextField.Variant.FILLED
 	vbox.add_child(_add_effect_button)
 	
-	var popup = _add_effect_button.get_popup()
-	popup.id_pressed.connect(_on_add_effect)
+	_add_effect_button.item_selected.connect(_on_effect_toggled)
+	
+	# Small spacer between button and effects list to prevent visual crowding
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(0, M3Units.dp(8))
+	vbox.add_child(spacer)
+	
+	_effects_list = VBoxContainer.new()
+	vbox.add_child(_effects_list)
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.
@@ -195,6 +214,8 @@ func _rebuild_effects_ui():
 	if effects.size() == 0:
 		var no_effects_label = Label.new()
 		no_effects_label.text = "No effects added. Click 'Add Effect' to get started."
+		no_effects_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		no_effects_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		no_effects_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 		_effects_list.add_child(no_effects_label)
 	
@@ -207,56 +228,44 @@ func _rebuild_effects_ui():
 		if child is CollapsableVBoxContainer and collapsed_states.has(child.title):
 			child.collapsed = collapsed_states[child.title]
 	
-	# Update the Add Effect dropdown
-	_rebuild_add_effect_dropdown()
+	# Sync the toggle option button to match current config
+	_sync_option_button()
 
-func _rebuild_add_effect_dropdown() -> void:
+func _populate_option_button() -> void:
 	if not _add_effect_button:
 		return
-	
-	var popup = _add_effect_button.get_popup()
-	popup.clear()
-	
-	# Get list of currently active effect IDs
-	var active_effects: Array[String] = []
+	_add_effect_button.clear()
+	for dropdown_id in _effect_id_map.keys():
+		var effect_id = _effect_id_map[dropdown_id]
+		var display_name = _available_effects.get(effect_id, effect_id.replace("_", " ").capitalize())
+		if inherit_from_base:
+			var in_base = false
+			for effect in _base_effects:
+				if effect.get("effect_id") == effect_id:
+					in_base = true
+					break
+			if in_base:
+				display_name += " (overrides base)"
+		_add_effect_button.add_item(display_name, dropdown_id)
+	_sync_option_button()
+
+func _sync_option_button() -> void:
+	if not _add_effect_button:
+		return
+	_add_effect_button.clear_selection()
 	var effects = _current_config.get(config_key, [])
+	var active_ids: Array[String] = []
 	for effect in effects:
 		var effect_id = effect.get("effect_id", "")
 		if effect_id:
-			active_effects.append(effect_id)
-	
-	# Get list of base effect IDs for overlap detection (focus effects only)
-	var base_effects: Array[String] = []
-	if inherit_from_base:
-		for effect in _base_effects:
-			var effect_id = effect.get("effect_id", "")
-			if effect_id:
-				base_effects.append(effect_id)
-	
-	# Add only inactive effects to the dropdown
-	var has_available_effects = false
+			active_ids.append(effect_id)
 	for dropdown_id in _effect_id_map.keys():
 		var effect_id = _effect_id_map[dropdown_id]
-		
-		# Build display name with overlap indicator if applicable
-		var display_name = _available_effects.get(effect_id, effect_id.replace("_", " ").capitalize())
-		if inherit_from_base and effect_id in base_effects:
-			display_name += " (overrides base)"
-		
-		popup.add_item(display_name, dropdown_id)
-		
-		# Disable if already in effects list
-		if effect_id in active_effects:
-			popup.set_item_disabled(popup.get_item_index(dropdown_id), true)
-		else:
-			has_available_effects = true
-	
-	# Disable button if all effects are active
-	_add_effect_button.disabled = not has_available_effects
-	if not has_available_effects:
-		_add_effect_button.text = "All Effects Added"
-	else:
-		_add_effect_button.text = "Add " + title
+		if effect_id in active_ids:
+			_add_effect_button.select_option(dropdown_id)
+	# Override auto-text so the button never appears blank when empty
+	var selected_count = _add_effect_button.get_selected_indices().size()
+	_add_effect_button.text = "Add Effect" if selected_count == 0 else ("%d selected" % selected_count)
 
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()
@@ -332,20 +341,36 @@ func _get_default_settings(effect_id: String) -> Dictionary:
 	
 	return defaults
 
-func _on_add_effect(id: int):
-	var effect_id = _effect_id_map.get(id, "")
-	if effect_id == "":
-		return
-	
-	var new_effect = {
-		"effect_id": effect_id,
-		"settings": _get_default_settings(effect_id)
-	}
+func _on_effect_toggled(index: int):
+	var selected_indices = _add_effect_button.get_selected_indices()
+	var selected_ids: Dictionary = {}
+	for idx in selected_indices:
+		var effect_id = _effect_id_map.get(idx, "")
+		if effect_id:
+			selected_ids[effect_id] = true
 	
 	var effects = _current_config.get(config_key, [])
-	effects.append(new_effect)
-	_current_config[config_key] = effects
+	var new_effects: Array = []
+	var added_ids: Dictionary = {}
 	
+	# Preserve order for existing effects that remain selected
+	for effect in effects:
+		var effect_id = effect.get("effect_id", "")
+		if selected_ids.has(effect_id):
+			new_effects.append(effect)
+			added_ids[effect_id] = true
+	
+	# Append newly selected effects at the end
+	for idx in selected_indices:
+		var effect_id = _effect_id_map.get(idx, "")
+		if effect_id and not added_ids.has(effect_id):
+			new_effects.append({
+				"effect_id": effect_id,
+				"settings": _get_default_settings(effect_id)
+			})
+			added_ids[effect_id] = true
+	
+	_current_config[config_key] = new_effects
 	_rebuild_effects_ui()
 	config_changed.emit(_current_config.duplicate(true))
 

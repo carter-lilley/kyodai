@@ -139,6 +139,26 @@ var _applied_headline_size_dp: float = -1.0
 var _applied_supporting_size_dp: float = -1.0
 
 # ============================================
+# CONTENT SCALE (visual pop without affecting parent layout)
+# ============================================
+
+var content_scale: Vector2 = Vector2.ONE:
+	set(value):
+		if content_scale.is_equal_approx(value):
+			return
+		content_scale = value
+		_apply_content_scale()
+		queue_redraw()
+
+func _apply_content_scale() -> void:
+	if _root_container:
+		_root_container.scale = content_scale
+		_root_container.pivot_offset = _root_container.size / 2.0
+	if _focus_ring:
+		_focus_ring.scale = content_scale
+		_focus_ring.pivot_offset = _focus_ring.size / 2.0
+
+# ============================================
 # LIFECYCLE
 # ============================================
 
@@ -374,6 +394,7 @@ func _rebuild_layout():
 	add_child(_focus_ring)
 	
 	_rebuild_actions()
+	_apply_content_scale()
 
 # ============================================
 # DRAW
@@ -389,8 +410,14 @@ func _draw():
 	_configure_stylebox_for_state()
 	_cached_stylebox.set_corner_radius_all(radius)
 	
-	# Draw card background
-	draw_style_box(_cached_stylebox, rect)
+	# Draw card background — scale from center to match content_scale
+	if content_scale.is_equal_approx(Vector2.ONE):
+		draw_style_box(_cached_stylebox, rect)
+	else:
+		var center = size / 2.0
+		draw_set_transform(center, 0.0, content_scale)
+		draw_style_box(_cached_stylebox, Rect2(-size / 2.0, size))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _configure_stylebox_for_state():
 	var bg: Color
@@ -602,6 +629,7 @@ func _notification(what: int):
 				else:
 					_media_panel.custom_minimum_size.x = M3Units.dp(MEDIA_WIDTH_LIST)
 			_update_text()
+			_apply_content_scale()
 
 func _gui_input(event: InputEvent):
 	if not clickable:

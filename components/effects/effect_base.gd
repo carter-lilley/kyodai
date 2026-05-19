@@ -38,6 +38,10 @@ func set_base_effect(base: EffectBase) -> void:
 	_base_effect = base
 
 func update_state(container_state: EffectContainerState) -> void:
+	if _container_state == container_state:
+		# Same state object — skip expensive disconnect/reconnect churn
+		_update_shader_params()
+		return
 	_disconnect_container_state_signals()
 	_container_state = container_state
 	_connect_container_state_signals()

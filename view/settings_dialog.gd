@@ -29,6 +29,13 @@ func _init():
 
 func _ready():
 	super._ready()
+	# Disable outer scroll — each category page scrolls independently
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Make content slot expand to fill vertical space
+	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Hide empty bottom actions bar to reclaim vertical space
+	_bottom_actions.visible = false
 	_build_two_pane_layout()
 	await _build_categories()
 	
@@ -51,7 +58,7 @@ func _build_two_pane_layout() -> void:
 	
 	# Left sidebar
 	_left_pane = VBoxContainer.new()
-	_left_pane.custom_minimum_size = Vector2(M3Units.dp(200), 0)
+	_left_pane.custom_minimum_size = Vector2(M3Units.dp(160), 0)
 	_left_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_left_pane.add_theme_constant_override("separation", M3Units.dp(4))
 	
@@ -143,7 +150,7 @@ func _build_categories() -> void:
 	# Select first category that has content
 	for btn_id in _category_buttons.keys():
 		if _category_contents.has(btn_id):
-			_select_category(btn_id)
+			select_category(btn_id)
 			break
 
 func _add_category_button(id: String, label: String, icon: String) -> void:
@@ -151,7 +158,7 @@ func _add_category_button(id: String, label: String, icon: String) -> void:
 	btn.text = label
 	btn.icon_name = icon
 	btn.button_variant = M3Button.Variant.TEXT
-	btn.button_size = M3Button.Size.MEDIUM
+	btn.button_size = M3Button.Size.SMALL
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.pressed.connect(_on_category_selected.bind(id))
@@ -217,9 +224,9 @@ func _create_library_appearance_content() -> Control:
 	return Control.new()
 
 func _on_category_selected(id: String) -> void:
-	_select_category(id)
+	select_category(id)
 
-func _select_category(id: String) -> void:
+func select_category(id: String) -> void:
 	if _current_category == id:
 		return
 	

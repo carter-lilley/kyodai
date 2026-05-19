@@ -3,10 +3,6 @@
 refocus when install process finished (button disappears)
 note to user: prepping on first launch
 alignment modes in single row
-clicking settings should focus tab
-effect stacks to fill their parent base 
-	and pass the texture along the stack instead of re-cropping/rendering
-card designer use effect designer ui
 
 ## android
 	chunk reassembly notif on android
@@ -32,9 +28,7 @@ card designer use effect designer ui
 	add letters to library navigation?
 	badge effect placement opts
 	placeholders
-	
 ## game titles:
-	game title under/beside card option
 	game title "speech bubble option"
 ## hero
 	postcard-style [[img] name ]

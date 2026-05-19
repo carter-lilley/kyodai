@@ -1,8 +1,8 @@
 shader_type canvas_item;
 render_mode blend_mix;
 
-uniform vec2 card_size = vec2(368.0, 202.0);
-uniform float corner_radius_ratio = 0.06;
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform float shadow_margin = 100.0;
 
 uniform vec4 shadow_color : source_color = vec4(0.0, 0.0, 0.0, 0.5);
@@ -14,12 +14,6 @@ uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // Anti-aliasing width in pixels (1.0 is usually enough)
 const float aa_width = 1.5;
-
-// Rounded rectangle SDF
-float rounded_rect_sdf(vec2 pixel_pos, vec2 size, float radius) {
-	vec2 d = abs(pixel_pos) - (size * 0.5 - vec2(radius));
-	return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 void fragment() {
 	// The texture is larger than the card (includes margin for shadow)

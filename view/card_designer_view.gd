@@ -5,46 +5,16 @@ var _container_state: EffectContainerState = EffectContainerState.for_card()
 var _current_config: Dictionary = {}
 
 var _preview_card: GameCard
-var _effects_list: VBoxContainer
-var _add_effect_button: MenuButton
 var _corner_slider: HSlider
-var _left_scroll: ScrollContainer
 
-# Focus effects UI elements
-var _focus_effects_list: VBoxContainer
-var _add_focus_effect_button: MenuButton
-
-# Maps dropdown IDs to effect IDs for filtering active effects
-const EFFECT_ID_MAP: Dictionary = {
-	0: "border",
-	1: "badge",
-	2: "drop_shadow",
-	3: "glow",
-	4: "glass",
-	5: "distort",
-	6: "gradient_overlay",
-	7: "hsl",
-	8: "blur"
-}
-
-# Focus effects - excludes base (card needs texture always)
-const FOCUS_EFFECT_ID_MAP: Dictionary = {
-	0: "border",
-	1: "badge",
-	2: "drop_shadow",
-	3: "glow",
-	4: "glass",
-	5: "distort",
-	6: "gradient_overlay",
-	7: "hsl",
-	8: "blur"
-}
+# Shared effect designer UI instances
+var _base_effect_designer: EffectDesignerUI
+var _focus_effect_designer: EffectDesignerUI
 
 func _ready():
 	_setup_ui()
 	_load_current_config()
 	call_deferred("_setup_preview_card")
-	call_deferred("_rebuild_effects_ui")
 	
 	# Connect to settings changes so we refresh when a preset is applied
 	if SettingsManager:
@@ -55,7 +25,6 @@ func _ready():
 
 func _on_settings_saved():
 	_load_current_config()
-	_rebuild_effects_ui()
 	_setup_preview_card()
 
 func _exit_tree():
@@ -71,7 +40,6 @@ func on_view_hide():
 func on_view_show():
 	# Reload config from SettingsManager to ensure we have latest (including preset changes)
 	_load_current_config()
-	_rebuild_effects_ui()
 	_setup_preview_card()
 
 func _setup_ui():
@@ -82,17 +50,12 @@ func _setup_ui():
 	
 	var left_panel = Panel.new()
 	left_panel.custom_minimum_size = Vector2(300, 0)
+	left_panel.clip_contents = true
 	hsplit.add_child(left_panel)
 	
-	_left_scroll = ScrollContainer.new()
-	_left_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_left_scroll.follow_focus = true
-	left_panel.add_child(_left_scroll)
-	
 	var left_vbox = VBoxContainer.new()
-	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_left_scroll.add_child(left_vbox)
+	left_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	left_panel.add_child(left_vbox)
 	
 	var title_label = Label.new()
 	title_label.text = "Card Designer"
@@ -125,48 +88,26 @@ func _setup_ui():
 	
 	left_vbox.add_child(HSeparator.new())
 	
-	var effects_label = Label.new()
-	effects_label.text = "Effects"
-	effects_label.add_theme_font_size_override("font_size", 16)
-	left_vbox.add_child(effects_label)
-	
-	_effects_list = VBoxContainer.new()
-	left_vbox.add_child(_effects_list)
-	
-	_add_effect_button = MenuButton.new()
-	_add_effect_button.text = "Add Effect"
-	left_vbox.add_child(_add_effect_button)
-	
-	var popup = _add_effect_button.get_popup()
-	popup.id_pressed.connect(_on_add_effect)
-	# Dropdown will be populated in _rebuild_add_effect_dropdown based on active effects
+	# Base effects designer
+	_base_effect_designer = EffectDesignerUI.new()
+	_base_effect_designer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_base_effect_designer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_base_effect_designer.custom_minimum_size = Vector2(0, 250)
+	_base_effect_designer.hide_disabled_effects = true
+	_base_effect_designer.setup("Effects", "base_card", "effects", false)
+	_base_effect_designer.config_changed.connect(_on_base_config_changed)
+	left_vbox.add_child(_base_effect_designer)
 	
 	left_vbox.add_child(HSeparator.new())
 	
-	var focus_effects_label = Label.new()
-	focus_effects_label.text = "Focus Effects"
-	focus_effects_label.add_theme_font_size_override("font_size", 16)
-	focus_effects_label.add_theme_color_override("font_color", Color(1, 0.8, 0.4))
-	left_vbox.add_child(focus_effects_label)
-	
-	var focus_effects_subtitle = Label.new()
-	focus_effects_subtitle.text = "Shown when card is focused"
-	focus_effects_subtitle.add_theme_font_size_override("font_size", 10)
-	focus_effects_subtitle.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	left_vbox.add_child(focus_effects_subtitle)
-	
-	_focus_effects_list = VBoxContainer.new()
-	left_vbox.add_child(_focus_effects_list)
-	
-	_add_focus_effect_button = MenuButton.new()
-	_add_focus_effect_button.text = "Add Focus Effect"
-	left_vbox.add_child(_add_focus_effect_button)
-	
-	var focus_popup = _add_focus_effect_button.get_popup()
-	focus_popup.id_pressed.connect(_on_add_focus_effect)
-	# Dropdown will be populated in _rebuild_add_focus_effect_dropdown based on active focus effects
-	
-	left_vbox.add_child(HSeparator.new())
+	# Focus effects designer
+	_focus_effect_designer = EffectDesignerUI.new()
+	_focus_effect_designer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_focus_effect_designer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_focus_effect_designer.custom_minimum_size = Vector2(0, 250)
+	_focus_effect_designer.setup("Focus Effects", "focus_card", "focus_effects", true)
+	_focus_effect_designer.config_changed.connect(_on_focus_config_changed)
+	left_vbox.add_child(_focus_effect_designer)
 	
 	var right_panel = Panel.new()
 	hsplit.add_child(right_panel)
@@ -212,6 +153,13 @@ func _load_current_config():
 	_container_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
 	_container_state.effect_settings = _current_config.get("effects", [])
 	_container_state.focus_effect_settings = _current_config.get("focus_effects", [])
+	
+	# Sync shared effect designers
+	if _base_effect_designer:
+		_base_effect_designer.set_config(_current_config)
+	if _focus_effect_designer:
+		_focus_effect_designer.set_config(_current_config)
+		_focus_effect_designer.set_base_effects(_current_config.get("effects", []))
 
 func _get_default_config() -> Dictionary:
 	return {
@@ -230,452 +178,18 @@ func _setup_preview_card():
 	_save_to_settings()
 	_preview_card.refresh_settings()
 
-func _rebuild_effects_ui():
-	# Save collapsed states before rebuilding - regular effects
-	var collapsed_states: Dictionary = {}
-	for child in _effects_list.get_children():
-		if child is CollapsableVBoxContainer:
-			collapsed_states[child.title] = child.collapsed
-	
-	for child in _effects_list.get_children():
-		child.queue_free()
-	
-	var effects = _current_config.get("effects", [])
-	for i in range(effects.size()):
-		var effect_data = effects[i]
-		_create_effect_ui(effect_data, i, false)
-	
-	# Restore collapsed states after rebuilding - regular effects
-	for child in _effects_list.get_children():
-		if child is CollapsableVBoxContainer and collapsed_states.has(child.title):
-			child.collapsed = collapsed_states[child.title]
-	
-	# Update the Add Effect dropdown to only show inactive effects
-	_rebuild_add_effect_dropdown()
-	
-	# Save collapsed states before rebuilding - focus effects
-	var focus_collapsed_states: Dictionary = {}
-	for child in _focus_effects_list.get_children():
-		if child is CollapsableVBoxContainer:
-			focus_collapsed_states[child.title] = child.collapsed
-	
-	for child in _focus_effects_list.get_children():
-		child.queue_free()
-	
-	var focus_effects = _current_config.get("focus_effects", [])
-	for i in range(focus_effects.size()):
-		var effect_data = focus_effects[i]
-		_create_effect_ui(effect_data, i, true)
-	
-	# Restore collapsed states after rebuilding - focus effects
-	for child in _focus_effects_list.get_children():
-		if child is CollapsableVBoxContainer and focus_collapsed_states.has(child.title):
-			child.collapsed = focus_collapsed_states[child.title]
-	
-	# Update the Add Focus Effect dropdown
-	_rebuild_add_focus_effect_dropdown()
+func _on_base_config_changed(config: Dictionary):
+	_current_config["effects"] = config.get("effects", []).duplicate(true)
+	# Refresh focus designer's base reference so overlap labels stay current
+	if _focus_effect_designer:
+		_focus_effect_designer.set_base_effects(_current_config.get("effects", []))
+	_update_preview()
+	_save_to_settings()
 
-func _rebuild_add_effect_dropdown() -> void:
-	"""Rebuild the Add Effect dropdown to only show effects that aren't already active."""
-	if not _add_effect_button:
-		return
-	
-	var popup = _add_effect_button.get_popup()
-	popup.clear()
-	
-	# Get list of currently active effect IDs
-	var active_effects: Array[String] = []
-	var effects = _current_config.get("effects", [])
-	for effect in effects:
-		var effect_id = effect.get("effect_id", "")
-		if effect_id:
-			active_effects.append(effect_id)
-	
-	# Add only inactive effects to the dropdown
-	var has_available_effects = false
-	for id in EFFECT_ID_MAP.keys():
-		var effect_id = EFFECT_ID_MAP[id]
-		if not effect_id in active_effects:
-			var display_name = effect_id.replace("_", " ").capitalize()
-			popup.add_item(display_name, id)
-			has_available_effects = true
-	
-	# Disable button if all effects are active
-	_add_effect_button.disabled = not has_available_effects
-	if not has_available_effects:
-		_add_effect_button.text = "All Effects Added"
-	else:
-		_add_effect_button.text = "Add Effect"
-
-func _build_effect_settings(effect: EffectBase, effect_data: Dictionary, content: Control, index: int, is_focus_effect: bool) -> void:
-	var schema = effect.get_settings_schema()
-	effect.queue_free()
-	
-	var settings_menu = SettingsMenu.new()
-	content.add_child(settings_menu)
-	
-	var current_settings = effect_data.get("settings", {})
-	for setting in schema:
-		if current_settings.has(setting.property_name):
-			setting.value = current_settings[setting.property_name]
-	
-	settings_menu.build_controls_from_settingsvars(schema, "Settings")
-	if is_focus_effect:
-		settings_menu.setting_changed.connect(func(value, setting): _on_focus_effect_setting_changed(index, setting.property_name, value))
-	else:
-		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
-
-func _create_effect_ui(effect_data: Dictionary, index: int, is_focus_effect: bool = false) -> void:
-	var container = CollapsableVBoxContainer.new()
-	container.title = effect_data.get("effect_id", "Unknown").capitalize()
-	container.collapsed = false  # Start expanded
-	
-	if is_focus_effect:
-		_focus_effects_list.add_child(container)
-	else:
-		_effects_list.add_child(container)
-	
-	var remove_btn = Button.new()
-	remove_btn.text = "X"
-	if is_focus_effect:
-		remove_btn.pressed.connect(func(): _on_remove_focus_effect(index))
-	else:
-		remove_btn.pressed.connect(func(): _on_remove_effect(index))
-	container.add_header_button(remove_btn)
-	
-	var content = container.get_content_container()
-	
-	match effect_data.get("effect_id"):
-		"border":
-			_build_effect_settings(BorderEffect.new(), effect_data, content, index, is_focus_effect)
-		"badge":
-			_build_effect_settings(BadgeEffect.new(), effect_data, content, index, is_focus_effect)
-		"drop_shadow":
-			_build_effect_settings(DropShadowEffect.new(), effect_data, content, index, is_focus_effect)
-		"glow":
-			_build_effect_settings(GlowEffect.new(), effect_data, content, index, is_focus_effect)
-		"distort":
-			_build_effect_settings(DistortEffect.new(), effect_data, content, index, is_focus_effect)
-		"glass":
-			_build_effect_settings(GlassEffect.new(), effect_data, content, index, is_focus_effect)
-		"gradient_overlay":
-			_build_effect_settings(GradientOverlayEffect.new(), effect_data, content, index, is_focus_effect)
-		"hsl":
-			_build_effect_settings(HSLEffect.new(), effect_data, content, index, is_focus_effect)
-		"blur":
-			_build_effect_settings(BlurEffect.new(), effect_data, content, index, is_focus_effect)
-
-func _on_add_effect(id: int):
-	var new_effect: Dictionary
-	
-	match id:
-		0:
-			new_effect = {
-				"effect_id": "border",
-				"settings": {
-					"border_size": 0.05,
-					"border_fade_in": 0.0,
-					"border_color": Color.WHITE
-				}
-			}
-		1:
-			new_effect = {
-				"effect_id": "badge",
-				"settings": {
-					"hide_background": false,
-					"badge_size": 1.0,
-					"badge_inner_radius": 0.0,
-					"badge_color": Color.WHITE,
-					"icon_padding": 0.5,
-					"icon_color": Color.WHITE
-				}
-			}
-		2:
-			new_effect = {
-				"effect_id": "drop_shadow",
-				"settings": {
-					"shadow_color": Color(0, 0, 0, 0.5),
-					"shadow_offset_x": 0.0,
-					"shadow_offset_y": 0.05,
-					"shadow_softness": 0.04,
-					"shadow_spread": 0.0,
-					"shadow_expand": 0.02
-				}
-			}
-		3:
-			new_effect = {
-				"effect_id": "glow",
-				"settings": {
-					"glow_radius": 0.1,
-					"glow_intensity": 1.5,
-					"blur_amount": 12.0,
-					"threshold": 0.1,
-					"glow_spread": 0.05
-				}
-			}
-		4:
-			new_effect = {
-				"effect_id": "glass",
-				"settings": {
-					"distortion": 0.5,
-					"glass_color": Color(0.2, 0.4, 1.0, 0.3)
-				}
-			}
-		5:
-			new_effect = {
-				"effect_id": "distort",
-				"settings": {
-					"distortion": 0.5,
-					"opacity": 1.0
-				}
-			}
-		6:
-			var default_gradient = Gradient.new()
-			default_gradient.offsets = [0.0, 1.0]
-			default_gradient.colors = [Color.WHITE, Color.BLACK]
-			new_effect = {
-				"effect_id": "gradient_overlay",
-				"settings": {
-					"gradient": default_gradient,
-					"gradient_direction": 0
-				}
-			}
-		7:
-			new_effect = {
-				"effect_id": "hsl",
-				"settings": {
-					"hue_shift": 0.0,
-					"saturation_scale": 1.0,
-					"lightness_scale": 1.0
-				}
-			}
-		8:
-			new_effect = {
-				"effect_id": "blur",
-				"settings": {
-					"blur_strength": 4.0,
-					"blur_samples": 8
-				}
-			}
-	
-	if new_effect:
-		var effects = _current_config.get("effects", [])
-		effects.append(new_effect)
-		_current_config["effects"] = effects
-		_container_state.effect_settings = effects
-		_rebuild_effects_ui()
-		_update_preview()
-		_save_to_settings()
-
-func _on_remove_effect(index: int):
-	var effects = _current_config.get("effects", [])
-	if index >= 0 and index < effects.size():
-		effects.remove_at(index)
-		_current_config["effects"] = effects
-		_container_state.effect_settings = effects
-		_rebuild_effects_ui()
-		_update_preview()
-		_save_to_settings()
-
-func _on_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):
-	var effects = _current_config.get("effects", [])
-	if effect_index >= 0 and effect_index < effects.size():
-		if not effects[effect_index].has("settings"):
-			effects[effect_index]["settings"] = {}
-		effects[effect_index]["settings"][setting_name] = value
-		_update_preview()
-		_save_to_settings()
-
-func _rebuild_add_focus_effect_dropdown() -> void:
-	"""Rebuild the Add Focus Effect dropdown to show all effects, with overlapping ones marked."""
-	if not _add_focus_effect_button:
-		return
-	
-	var popup = _add_focus_effect_button.get_popup()
-	popup.clear()
-	
-	# Get list of currently active focus effect IDs
-	var active_effects: Array[String] = []
-	var focus_effects = _current_config.get("focus_effects", [])
-	for effect in focus_effects:
-		var effect_id = effect.get("effect_id", "")
-		if effect_id:
-			active_effects.append(effect_id)
-	
-	# Get list of base effect IDs (for marking overlaps)
-	var base_effects: Array[String] = []
-	var normal_effects = _current_config.get("effects", [])
-	for effect in normal_effects:
-		var effect_id = effect.get("effect_id", "")
-		if effect_id:
-			base_effects.append(effect_id)
-	
-	# Add all effects to the dropdown (not just inactive ones)
-	# Disabled items are those already in focus effects
-	for id in FOCUS_EFFECT_ID_MAP.keys():
-		var effect_id = FOCUS_EFFECT_ID_MAP[id]
-		var display_name = effect_id.replace("_", " ").capitalize()
-		
-		# Mark if this effect overlaps with base
-		if effect_id in base_effects:
-			display_name += " (overrides base)"
-		
-		popup.add_item(display_name, id)
-		
-		# Disable if already in focus effects
-		if effect_id in active_effects:
-			popup.set_item_disabled(popup.get_item_index(id), true)
-	
-	# Disable button if all effects are active
-	var has_available_effects = active_effects.size() < FOCUS_EFFECT_ID_MAP.size()
-	_add_focus_effect_button.disabled = not has_available_effects
-	if not has_available_effects:
-		_add_focus_effect_button.text = "All Effects Added"
-	else:
-		_add_focus_effect_button.text = "Add Focus Effect"
-
-func _on_add_focus_effect(id: int):
-	var new_effect: Dictionary
-	
-	# Determine effect_id from the id
-	var effect_id = ""
-	match id:
-		0: effect_id = "border"
-		1: effect_id = "badge"
-		2: effect_id = "drop_shadow"
-		3: effect_id = "glow"
-		4: effect_id = "glass"
-		5: effect_id = "distort"
-		6: effect_id = "gradient_overlay"
-		7: effect_id = "hsl"
-		8: effect_id = "blur"
-	
-	# Check if this effect already exists in base effects
-	var base_effect_settings = {}
-	var base_effects = _current_config.get("effects", [])
-	for effect in base_effects:
-		if effect.get("effect_id") == effect_id:
-			base_effect_settings = effect.get("settings", {}).duplicate(true)
-			break
-	
-	# Create new effect with appropriate defaults
-	match id:
-		0:
-			new_effect = {
-				"effect_id": "border",
-				"settings": {
-					"border_size": base_effect_settings.get("border_size", 0.05),
-					"border_fade_in": base_effect_settings.get("border_fade_in", 0.0),
-					"border_color": base_effect_settings.get("border_color", Color.WHITE)
-				}
-			}
-		1:
-			new_effect = {
-				"effect_id": "badge",
-				"settings": {
-					"hide_background": base_effect_settings.get("hide_background", false),
-					"badge_size": base_effect_settings.get("badge_size", 1.0),
-					"badge_inner_radius": base_effect_settings.get("badge_inner_radius", 0.0),
-					"badge_color": base_effect_settings.get("badge_color", Color.WHITE),
-					"icon_padding": base_effect_settings.get("icon_padding", 0.5),
-					"icon_color": base_effect_settings.get("icon_color", Color.WHITE)
-				}
-			}
-		2:
-			new_effect = {
-				"effect_id": "drop_shadow",
-				"settings": {
-					"shadow_color": base_effect_settings.get("shadow_color", Color(0, 0, 0, 0.5)),
-					"shadow_offset_x": base_effect_settings.get("shadow_offset_x", 0.0),
-					"shadow_offset_y": base_effect_settings.get("shadow_offset_y", 0.05),
-					"shadow_softness": base_effect_settings.get("shadow_softness", 0.04),
-					"shadow_spread": base_effect_settings.get("shadow_spread", 0.0),
-					"shadow_expand": base_effect_settings.get("shadow_expand", 0.02)
-				}
-			}
-		3:
-			new_effect = {
-				"effect_id": "glow",
-				"settings": {
-					"glow_radius": base_effect_settings.get("glow_radius", 0.1),
-					"glow_intensity": base_effect_settings.get("glow_intensity", 1.5),
-					"blur_amount": base_effect_settings.get("blur_amount", 12.0),
-					"threshold": base_effect_settings.get("threshold", 0.1),
-					"glow_spread": base_effect_settings.get("glow_spread", 0.05)
-				}
-			}
-		4:
-			new_effect = {
-				"effect_id": "glass",
-				"settings": {
-					"distortion": base_effect_settings.get("distortion", 0.5),
-					"glass_color": base_effect_settings.get("glass_color", Color(0.2, 0.4, 1.0, 0.3))
-				}
-			}
-		5:
-			new_effect = {
-				"effect_id": "distort",
-				"settings": {
-					"distortion": base_effect_settings.get("distortion", 0.5),
-					"opacity": base_effect_settings.get("opacity", 1.0)
-				}
-			}
-		6:
-			var default_gradient = Gradient.new()
-			default_gradient.offsets = [0.0, 1.0]
-			default_gradient.colors = [Color.WHITE, Color.BLACK]
-			new_effect = {
-				"effect_id": "gradient_overlay",
-				"settings": {
-					"gradient": base_effect_settings.get("gradient", default_gradient),
-					"gradient_direction": base_effect_settings.get("gradient_direction", 0)
-				}
-			}
-		7:
-			new_effect = {
-				"effect_id": "hsl",
-				"settings": {
-					"hue_shift": base_effect_settings.get("hue_shift", 0.0),
-					"saturation_scale": base_effect_settings.get("saturation_scale", 1.0),
-					"lightness_scale": base_effect_settings.get("lightness_scale", 1.0)
-				}
-			}
-		8:
-			new_effect = {
-				"effect_id": "blur",
-				"settings": {
-					"blur_strength": base_effect_settings.get("blur_strength", 4.0),
-					"blur_samples": base_effect_settings.get("blur_samples", 8)
-				}
-			}
-	
-	if new_effect:
-		var focus_effects = _current_config.get("focus_effects", [])
-		focus_effects.append(new_effect)
-		_current_config["focus_effects"] = focus_effects
-		_container_state.focus_effect_settings = focus_effects
-		_rebuild_effects_ui()
-		_update_preview()
-		_save_to_settings()
-
-func _on_remove_focus_effect(index: int):
-	var focus_effects = _current_config.get("focus_effects", [])
-	if index >= 0 and index < focus_effects.size():
-		focus_effects.remove_at(index)
-		_current_config["focus_effects"] = focus_effects
-		_container_state.focus_effect_settings = focus_effects
-		_rebuild_effects_ui()
-		_update_preview()
-		_save_to_settings()
-
-func _on_focus_effect_setting_changed(effect_index: int, setting_name: String, value: Variant):
-	var focus_effects = _current_config.get("focus_effects", [])
-	if effect_index >= 0 and effect_index < focus_effects.size():
-		if not focus_effects[effect_index].has("settings"):
-			focus_effects[effect_index]["settings"] = {}
-		focus_effects[effect_index]["settings"][setting_name] = value
-		_update_preview()
-		_save_to_settings()
+func _on_focus_config_changed(config: Dictionary):
+	_current_config["focus_effects"] = config.get("focus_effects", []).duplicate(true)
+	_update_preview()
+	_save_to_settings()
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
@@ -712,13 +226,25 @@ func reconnect_viewport() -> void:
 		viewport.gui_focus_changed.disconnect(_on_focus_changed)
 	
 	viewport.gui_focus_changed.connect(_on_focus_changed)
+	
+	# Reconnect nested EffectDesignerUI viewports
+	if _base_effect_designer and _base_effect_designer.has_method("reconnect_viewport"):
+		_base_effect_designer.reconnect_viewport()
+	if _focus_effect_designer and _focus_effect_designer.has_method("reconnect_viewport"):
+		_focus_effect_designer.reconnect_viewport()
 
 func _on_focus_changed(control: Control) -> void:
-	"""Ensure focused controls are visible in the scroll container."""
+	"""Ensure focused controls are visible in nested scroll containers."""
 	if not control:
 		return
-	if not is_instance_valid(_left_scroll):
+	
+	# Forward to the appropriate designer's scroll container
+	if _base_effect_designer and _base_effect_designer.is_ancestor_of(control):
+		if _base_effect_designer._scroll_container:
+			_base_effect_designer._scroll_container.ensure_control_visible(control)
 		return
-	if not _left_scroll.is_ancestor_of(control):
+	
+	if _focus_effect_designer and _focus_effect_designer.is_ancestor_of(control):
+		if _focus_effect_designer._scroll_container:
+			_focus_effect_designer._scroll_container.ensure_control_visible(control)
 		return
-	_left_scroll.ensure_control_visible(control)

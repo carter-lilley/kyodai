@@ -803,7 +803,7 @@ func _on_card_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if game and UIManager:
-				UIManager.show_game_context_menu(game.romm_id, get_viewport().get_mouse_position(), _get_show_delete())
+				UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 
 func _on_card_mouse_entered() -> void:
 	if not _can_accept_focus():
@@ -822,8 +822,7 @@ func _input(event: InputEvent) -> void:
 		if focused == self and game and UIManager:
 			if AudioManager:
 				AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
-			var center_pos = global_position + (size / 2)
-			UIManager.show_game_context_menu(game.romm_id, center_pos, _get_show_delete())
+			UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 			get_viewport().set_input_as_handled()
 	
 	if PlatformManager.is_android() and event is InputEventScreenTouch:
@@ -855,7 +854,7 @@ func _on_long_press_timeout() -> void:
 		_touch_is_holding = false
 		if AudioManager:
 			AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
-		UIManager.show_game_context_menu(game.romm_id, _touch_start_pos, _get_show_delete())
+		UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 
 func _can_accept_focus() -> bool:
 	var home_view = _find_home_view()
@@ -882,17 +881,23 @@ func _on_download_completed(game_id: String, _success: bool):
 		_is_downloading = false
 		_update_status_icon()
 
+func _apply_content_scale() -> void:
+	super._apply_content_scale()
+	if _focus_stack and is_instance_valid(_focus_stack):
+		_focus_stack.scale = content_scale
+		_focus_stack.pivot_offset = _focus_stack.size / 2.0
+
 func _sync_focus_visuals() -> void:
 	if not focus_scale_enabled:
-		scale = Vector2.ONE
+		content_scale = Vector2.ONE
 		return
 	var target_scale: Vector2
 	if focus_scale_inverted:
 		target_scale = Vector2.ONE if _is_focused else Vector2.ONE / focus_scale
 	else:
 		target_scale = Vector2.ONE * focus_scale if _is_focused else Vector2.ONE
-	if not is_equal_approx(scale.x, target_scale.x) or not is_equal_approx(scale.y, target_scale.y):
-		scale = target_scale
+	if not is_equal_approx(content_scale.x, target_scale.x) or not is_equal_approx(content_scale.y, target_scale.y):
+		content_scale = target_scale
 
 func _on_focus_entered():
 	_is_focused = true
@@ -904,13 +909,13 @@ func _on_focus_entered():
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	if focus_scale_enabled:
-		var start_scale = scale
+		var start_scale = content_scale
 		var target_scale = Vector2.ONE if focus_scale_inverted else Vector2.ONE * focus_scale
 		_focus_tween.tween_method(
 			func(t: float):
 				if not is_instance_valid(self):
 					return
-				scale = start_scale.lerp(target_scale, t),
+				content_scale = start_scale.lerp(target_scale, t),
 			0.0, 1.0, FOCUS_TWEEN_DURATION
 		)
 	_show_focus_effects(true)
@@ -925,13 +930,13 @@ func _on_focus_exited():
 	_focus_tween.set_trans(Tween.TRANS_QUAD)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	if focus_scale_enabled:
-		var start_scale = scale
+		var start_scale = content_scale
 		var target_scale = Vector2.ONE / focus_scale if focus_scale_inverted else Vector2.ONE
 		_focus_tween.tween_method(
 			func(t: float):
 				if not is_instance_valid(self):
 					return
-				scale = start_scale.lerp(target_scale, t),
+				content_scale = start_scale.lerp(target_scale, t),
 			0.0, 1.0, FOCUS_TWEEN_DURATION
 		)
 	_show_focus_effects(false)

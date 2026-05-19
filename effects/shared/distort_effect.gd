@@ -28,6 +28,9 @@ func _update_shader_params() -> void:
 	_set_shader_param("border_inset_ratio", _container_state.border_inset_ratio)
 	_set_shader_param("distortion", distortion)
 	_set_shader_param("opacity", opacity)
+	_set_shader_param("uv_transform_scale", _container_state.uv_transform_scale)
+	_set_shader_param("uv_transform_offset", _container_state.uv_transform_offset)
+	_set_shader_param("vertical_offset", _container_state.vertical_offset)
 	_set_shader_param("game_texture", _container_state.game_texture)
 
 func set_game_texture(texture: Texture2D) -> void:

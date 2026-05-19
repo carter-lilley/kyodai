@@ -12,11 +12,6 @@ func _ready():
 	effect_name = "Drop Shadow"
 	effect_id = "drop_shadow"
 	z_index = -1
-	
-	# Connect to parent resized signal to update geometry when card size changes
-	# This ensures shadow size is calculated AFTER the card has its final size
-	if get_parent():
-		get_parent().resized.connect(_on_parent_resized)
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
@@ -30,40 +25,21 @@ func _on_zoom_changed(_new_zoom: float) -> void:
 	_update_shadow_offsets()
 	_update_shader_params()
 
-# Override to update geometry when container size changes
-func _on_size_changed(_new_size: Vector2) -> void:
-	_update_shadow_offsets()
-	_update_shader_params()
-
-# Called when parent card resizes - ensures geometry is calculated after layout settles
-func _on_parent_resized() -> void:
-	_update_shadow_offsets()
-	_update_shader_params()
-
 func _update_shadow_offsets():
-	# Use parent's ACTUAL size (not container_state) to ensure we're synced with layout
-	var parent = get_parent()
-	if not parent:
-		return
-	
-	var card_size = parent.size
-	var card_width = card_size.x
-	var card_height = card_size.y
+	# Use anchors so Godot handles sizing automatically
 	var shadow_offset_y_ratio = _settings.get("shadow_offset_y", 0.05)
 	var shadow_softness_ratio = _settings.get("shadow_softness", 0.04)
-	
 	var margin_ratio = SHADOW_MARGIN_RATIO + abs(shadow_offset_y_ratio) + shadow_softness_ratio
-	var margin_pixels = margin_ratio * card_width
 	
-	var shadow_width = card_width + margin_pixels * 2
-	var shadow_height = card_height + margin_pixels * 2
+	anchor_left = -margin_ratio
+	anchor_top = -margin_ratio
+	anchor_right = 1.0 + margin_ratio
+	anchor_bottom = 1.0 + margin_ratio
 	
-	custom_minimum_size = Vector2(shadow_width, shadow_height)
-	size = custom_minimum_size
-	
-	# With centered anchors, offset is relative to parent center
-	# Offset by half the size difference to center the shadow on the card
-	position = Vector2(-margin_pixels, -margin_pixels)
+	offset_left = 0.0
+	offset_top = 0.0
+	offset_right = 0.0
+	offset_bottom = 0.0
 
 func _update_shader_params() -> void:
 	if not _container_state:

@@ -714,6 +714,8 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				LaunchManager.launch_game(game)
+		"card_designer":
+			UIManager.show_settings_dialog_with_category("card_designer")
 		"hide":
 			pass
 

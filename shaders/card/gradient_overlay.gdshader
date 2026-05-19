@@ -1,20 +1,10 @@
 shader_type canvas_item;
 
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform sampler2D gradient_texture : filter_linear, repeat_disable;
 uniform int gradient_direction = 0;  // 0 = Horizontal, 1 = Vertical, 2 = Diagonal
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
-
-// Card shape parameters for SDF clipping
-uniform vec2 card_size = vec2(202.0, 270.0);
-uniform float corner_radius_pixels = 0.0;
-
-// SDF that accepts radius in pixels (consistent with base_card.gdshader and border.gdshader)
-float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
-	vec2 half_size = size * 0.5;
-	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
