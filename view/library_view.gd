@@ -269,8 +269,7 @@ func _focus_card_at_index(index: int) -> void:
 		return
 	var card = games_grid.get_card_at_index(index)
 	if card and card is GameCard:
-		if card.card_input:
-			card.card_input.grab_focus()
+		card.grab_focus()
 
 func _focus_first_card() -> void:
 	"""Focus the first game card in the grid."""
@@ -280,8 +279,7 @@ func _focus_first_card() -> void:
 		return
 	var first_card = games_grid.get_card_at_index(0)
 	if first_card and first_card is GameCard:
-		if first_card.card_input:
-			first_card.card_input.grab_focus()
+		first_card.grab_focus()
 
 func _cycle_platform(direction: int) -> void:
 	"""Cycle to next/previous platform filter."""

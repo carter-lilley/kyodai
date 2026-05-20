@@ -126,6 +126,7 @@ var show_background: bool = true:
 		show_background = value
 		if _ready_called:
 			queue_redraw()
+			_update_focus_ring_bounds()
 
 var show_text_margin: bool = true:
 	set(value):
@@ -160,6 +161,10 @@ var _media_content: Control = null
 var _applied_headline_size_dp: float = -1.0
 var _applied_supporting_size_dp: float = -1.0
 
+# Computed media dimensions for focus-ring sizing in Transparent mode
+var _focus_target_w: float = 0.0
+var _focus_target_h: float = 0.0
+
 # Cache last-applied theme values to avoid redundant overrides
 var _applied_font_color: Color = Color(-1, -1, -1)
 var _applied_supporting_color: Color = Color(-1, -1, -1)
@@ -190,9 +195,37 @@ func _update_focus_ring_radius() -> void:
 	var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
 	if not focus_sb:
 		return
-	var max_radius = min(size.x, size.y) / 2.0
+	var max_radius = min(_focus_ring.size.x, _focus_ring.size.y) / 2.0
 	var radius = card_rounding_ratio * max_radius
 	focus_sb.set_corner_radius_all(int(round(radius)))
+
+func _update_focus_ring_bounds() -> void:
+	if not _focus_ring or not _media_panel:
+		return
+	# Use the actual media panel size when available (it's authoritative after
+	# the container has sorted). Fallback to our computed targets during init.
+	var target_w := _focus_target_w
+	var target_h := _focus_target_h
+	if _media_panel.size.x > 0.0 and _media_panel.size.y > 0.0:
+		target_w = _media_panel.size.x
+		target_h = _media_panel.size.y
+	if target_w <= 0.0:
+		target_w = size.x
+	if target_h <= 0.0:
+		target_h = size.y
+	if not show_background and show_text_margin:
+		# Transparent mode: focus ring only around the media area
+		_focus_ring.offset_top = 0.0
+		_focus_ring.offset_left = 0.0
+		_focus_ring.offset_bottom = -(size.y - target_h)
+		_focus_ring.offset_right = -(size.x - target_w)
+	else:
+		# Standard / Media Only: focus ring fills the card
+		_focus_ring.offset_top = 0.0
+		_focus_ring.offset_left = 0.0
+		_focus_ring.offset_bottom = 0.0
+		_focus_ring.offset_right = 0.0
+	_update_focus_ring_radius()
 
 func _apply_content_scale() -> void:
 	if _root_container:
@@ -200,7 +233,7 @@ func _apply_content_scale() -> void:
 		_root_container.pivot_offset = _root_container.size / 2.0
 	if _focus_ring:
 		_focus_ring.scale = content_scale
-		_focus_ring.pivot_offset = _focus_ring.size / 2.0
+		_focus_ring.pivot_offset = size / 2.0
 
 # ============================================
 # LIFECYCLE
@@ -436,8 +469,7 @@ func _rebuild_layout():
 	focus_sb.bg_color = Color.TRANSPARENT
 	focus_sb.border_color = M3Theme.get_primary()
 	focus_sb.set_border_width_all(M3Units.dp(2))
-	focus_sb.anti_aliasing = true
-	focus_sb.anti_aliasing_size = 1.0
+	focus_sb.anti_aliasing = false
 	_focus_ring.add_theme_stylebox_override("panel", focus_sb)
 	_update_focus_ring_radius()
 	add_child(_focus_ring)
@@ -733,6 +765,8 @@ func _gui_input(event: InputEvent):
 func _update_media_panel_size() -> void:
 	if not _media_panel:
 		return
+	_focus_target_w = size.x
+	_focus_target_h = size.y
 	if card_layout_mode == LayoutMode.VERTICAL:
 		if media_aspect_ratio > 0.0:
 			var desired_h = size.x / media_aspect_ratio
@@ -744,14 +778,23 @@ func _update_media_panel_size() -> void:
 				max_h = size.y
 			var clamp_max = maxf(M3Units.dp(40.0), max_h)
 			var new_min_y = clampf(desired_h, M3Units.dp(40.0), clamp_max)
+			# When media fills the entire card (Media Only), force exact height
+			# match to prevent sub-pixel gaps or overflow from floating-point drift.
+			if not show_text_margin and is_equal_approx(new_min_y, size.y):
+				new_min_y = size.y
 			if not is_equal_approx(new_min_y, _last_media_min_y):
 				_last_media_min_y = new_min_y
 				_media_panel.custom_minimum_size.y = new_min_y
+			_focus_target_h = new_min_y
 		else:
-			var new_min_y2 = maxf(M3Units.dp(40.0), size.y * 0.5)
+			var min_text_h := 0.0
+			if show_text_margin:
+				min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
+			var new_min_y2 = maxf(M3Units.dp(40.0), size.y - min_text_h)
 			if not is_equal_approx(new_min_y2, _last_media_min_y):
 				_last_media_min_y = new_min_y2
 				_media_panel.custom_minimum_size.y = new_min_y2
+			_focus_target_h = new_min_y2
 	elif card_layout_mode == LayoutMode.HORIZONTAL:
 		if media_aspect_ratio > 0.0:
 			var desired_w = size.y * media_aspect_ratio
@@ -760,11 +803,17 @@ func _update_media_panel_size() -> void:
 			if not is_equal_approx(new_min_x, _last_media_min_x):
 				_last_media_min_x = new_min_x
 				_media_panel.custom_minimum_size.x = new_min_x
+			_focus_target_w = new_min_x
 		else:
 			var new_min_x2 = M3Units.dp(MEDIA_WIDTH_LIST)
 			if not is_equal_approx(new_min_x2, _last_media_min_x):
 				_last_media_min_x = new_min_x2
 				_media_panel.custom_minimum_size.x = new_min_x2
+			_focus_target_w = new_min_x2
+	_update_focus_ring_bounds()
+	# Media panel size may not be stable until the container finishes its sort,
+	# so queue a second update to snap to the authoritative layout.
+	call_deferred("_update_focus_ring_bounds")
 
 func _on_focus_changed():
 	if _focus_ring:

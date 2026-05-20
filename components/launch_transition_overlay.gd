@@ -137,12 +137,12 @@ func _get_focused_card_and_texture() -> Dictionary:
 			
 			# Get the visual container's global rect
 			var card_rect = Rect2()
-			if card.visual_container:
-				var global_pos = card.visual_container.global_position
-				var size = card.visual_container.size
+			if card is Control:
+				var global_pos = card.global_position
+				var size = card.size
 				card_rect = Rect2(global_pos, size)
 			else:
-				push_error("[LaunchTransitionOverlay] Card has no visual_container")
+				push_error("[LaunchTransitionOverlay] Card is not a Control")
 			
 			# Get the texture directly from the card
 			var texture = card.get_current_texture()

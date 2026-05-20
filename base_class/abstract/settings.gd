@@ -56,7 +56,7 @@ const Type = SettingsVar.SettingType
 @export var card_effect_config := SettingsVar.new(Type.DICTIONARY, {
 	"effects": [],
 	"card_orientation": 0,
-	"corner_radius": 0.06
+	"card_rounding": 0.12
 }, State.INTERNAL, "Card Effect Configuration")
 
 # Internal hero effect configuration (managed by Hero Designer)

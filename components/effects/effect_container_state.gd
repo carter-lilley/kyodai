@@ -27,7 +27,7 @@ var container_size: Vector2 = base_size:
 
 
 # Corner radius as ratio where 0.0 = square, 1.0 = corners touch (pill/circle)
-var corner_radius_ratio: float = 0.06:
+var corner_radius_ratio: float = 0.12:
 	set(value):
 		var clamped = clampf(value, 0.0, 1.0)
 		if not is_equal_approx(corner_radius_ratio, clamped):

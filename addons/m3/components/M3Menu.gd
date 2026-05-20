@@ -30,6 +30,8 @@ var _summoner: Control = null
 var _submenu: M3Menu = null
 var _submenu_item_index: int = -1
 var _summoner_start_pos: Vector2 = Vector2.ZERO
+var _parent_menu: M3Menu = null
+var _item_selected: bool = false
 
 ## When true, checkable items toggle without dismissing the menu.
 var multi_select: bool = false
@@ -123,6 +125,10 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	_summoner_start_pos = anchor.global_position
 	_set_summoner_active(true)
 	
+	# Reset item selection tracking for fresh popup
+	_item_selected = false
+	_parent_menu = null
+	
 	if as_submenu:
 		# Just add to tree and show; don't register in _active so parent isn't dismissed
 		var tree = Engine.get_main_loop()
@@ -165,18 +171,24 @@ func _ensure_renderer():
 		add_child(_renderer)
 
 func _on_item_pressed(index: int):
-	pass
+	_item_selected = true
 
 func refresh_theme():
 	if _renderer:
 		_renderer.refresh_theme()
 
 func dismiss():
-	# Return focus to the summoner before releasing it
-	if _summoner != null and is_instance_valid(_summoner):
+	# Return focus to the summoner before releasing it, but only if the user
+	# didn't select an item (i.e., they cancelled or navigated away). When an
+	# item is selected from a submenu, we skip focus restoration to prevent
+	# re-triggering the submenu open via _on_item_focus_entered.
+	if not _item_selected and _summoner != null and is_instance_valid(_summoner):
 		_summoner.grab_focus()
 	_release_summoner()
 	_close_submenu()
+	# Don't reset _item_selected here — it's needed by _on_submenu_dismissed
+	# to know whether the parent menu should also close. It's reset in popup().
+	_parent_menu = null
 	# Don't call super.dismiss() — M3Overlay.dismiss() queue_frees the node,
 	# but M3Menu instances are often reused (e.g., checkable menus that need
 	# to persist state across openings). Do the registry cleanup manually.
@@ -211,6 +223,7 @@ func _on_submenu_requested(index: int):
 	
 	_submenu = item.submenu
 	_submenu_item_index = index
+	_submenu._parent_menu = self
 	
 	# Keep parent item visually focused while submenu is open
 	if _renderer:
@@ -233,7 +246,12 @@ func _on_submenu_requested(index: int):
 		_submenu.dismissed.connect(_on_submenu_dismissed, CONNECT_ONE_SHOT)
 
 func _on_submenu_dismissed():
-	# Restore chevron, clear forced focus, and return focus to parent item
+	# If the submenu had an item selected, close the parent menu too
+	if _submenu and _submenu._item_selected:
+		dismiss()
+		return
+	
+	# Otherwise, restore chevron, clear forced focus, and return focus to parent item
 	if _renderer and _submenu_item_index >= 0:
 		_renderer._suppress_submenu = true
 		_renderer.grab_item_focus(_submenu_item_index)

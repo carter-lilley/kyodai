@@ -24,7 +24,7 @@ class_name ThemePreset
 @export var card_effect_config: Dictionary = {
 	"effects": [],
 	"card_orientation": 0,
-	"corner_radius": 0.06,
+	"card_rounding": 0.12,
 	"hero_height": 0
 }
 
@@ -52,7 +52,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.card_effect_config = settings.card_effect_config.value.duplicate() if settings.card_effect_config else {
 		"effects": [],
 		"card_orientation": 0,
-		"corner_radius": 0.06,
+		"card_rounding": 0.12,
 		"hero_height": 0
 	}
 	

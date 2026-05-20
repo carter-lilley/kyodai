@@ -213,7 +213,6 @@ func _build_focus_stack() -> void:
 	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_focus_stack.z_index = 5
 	_focus_stack.visible = false
-	_focus_stack.size = size
 	add_child(_focus_stack)
 	
 	# Use a duplicated state so focus stack insets don't clobber base stack
@@ -360,13 +359,24 @@ func _update_card_state_from_settings():
 		if config_setting and config_setting.value is Dictionary:
 			_card_state.effect_settings = config_setting.value.get("effects", [])
 			_card_state.focus_effect_settings = config_setting.value.get("focus_effects", [])
-			var corner_value = config_setting.value.get("corner_radius", 0.06)
+			# Migrate old keys to unified card_rounding
+			var config_dict = config_setting.value.duplicate(true)
+			if not config_dict.has("card_rounding"):
+				if config_dict.has("art_rounding"):
+					config_dict["card_rounding"] = config_dict["art_rounding"]
+				elif config_dict.has("corner_radius"):
+					config_dict["card_rounding"] = config_dict["corner_radius"]
+			
+			var corner_value = config_dict.get("card_rounding", 0.12)
 			if corner_value > 1.0:
 				# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
 				const LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP: float = 202.0
 				_card_state.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
 			else:
 				_card_state.corner_radius_ratio = corner_value
+			
+			# Apply the same rounding to the M3Card background clip
+			card_rounding_ratio = _card_state.corner_radius_ratio
 		
 		var display_setting = SettingsManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
@@ -921,7 +931,7 @@ func _apply_content_scale() -> void:
 	super._apply_content_scale()
 	if _focus_stack and is_instance_valid(_focus_stack):
 		_focus_stack.scale = content_scale
-		_focus_stack.pivot_offset = _focus_stack.size / 2.0
+		_focus_stack.pivot_offset = size / 2.0
 
 func _sync_focus_visuals() -> void:
 	if not focus_scale_enabled:
@@ -977,6 +987,34 @@ func _on_focus_exited():
 		)
 	_show_focus_effects(false)
 
+func _update_focus_stack_bounds() -> void:
+	if not _focus_stack or not is_instance_valid(_focus_stack) or not _media_panel:
+		return
+	# Use the actual media panel size when available (authoritative after sort).
+	var target_w := _focus_target_w
+	var target_h := _focus_target_h
+	if _media_panel.size.x > 0.0 and _media_panel.size.y > 0.0:
+		target_w = _media_panel.size.x
+		target_h = _media_panel.size.y
+	if target_w <= 0.0:
+		target_w = size.x
+	if target_h <= 0.0:
+		target_h = size.y
+	if not show_background and show_text_margin:
+		_focus_stack.offset_top = 0.0
+		_focus_stack.offset_left = 0.0
+		_focus_stack.offset_bottom = -(size.y - target_h)
+		_focus_stack.offset_right = -(size.x - target_w)
+	else:
+		_focus_stack.offset_top = 0.0
+		_focus_stack.offset_left = 0.0
+		_focus_stack.offset_bottom = 0.0
+		_focus_stack.offset_right = 0.0
+
+func _update_focus_ring_bounds() -> void:
+	super._update_focus_ring_bounds()
+	_update_focus_stack_bounds()
+
 func _notification(what: int):
 	super._notification(what)
 	if what == NOTIFICATION_RESIZED:
@@ -984,8 +1022,6 @@ func _notification(what: int):
 		if not _badge_update_pending:
 			_badge_update_pending = true
 			call_deferred("_deferred_update_badges")
-		if _focus_stack and is_instance_valid(_focus_stack):
-			_focus_stack.size = size
 	if what == NOTIFICATION_PARENTED:
 		# Invalidate cached parent-chain lookup so _get_show_delete() recomputes
 		set_meta("_cached_show_delete", null)
