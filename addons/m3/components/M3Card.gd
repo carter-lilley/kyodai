@@ -119,6 +119,25 @@ func set_media_aspect_ratio(ratio: float) -> void:
 		if _ready_called:
 			_apply_clickable_state()
 
+var show_background: bool = true:
+	set(value):
+		if show_background == value:
+			return
+		show_background = value
+		if _ready_called:
+			queue_redraw()
+
+var show_text_margin: bool = true:
+	set(value):
+		if show_text_margin == value:
+			return
+		show_text_margin = value
+		if _ready_called:
+			if _text_margin:
+				_text_margin.visible = value
+			_update_media_panel_size()
+			queue_redraw()
+
 # ============================================
 # INTERNAL
 # ============================================
@@ -333,6 +352,7 @@ func _rebuild_layout():
 	_text_margin.name = "TextMargin"
 	_text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text_margin.visible = show_text_margin
 	if card_layout_mode == LayoutMode.HORIZONTAL:
 		_text_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	else:
@@ -442,13 +462,14 @@ func _draw():
 	_cached_stylebox.set_corner_radius_all(radius)
 	
 	# Draw card background — scale from center to match content_scale
-	if content_scale.is_equal_approx(Vector2.ONE):
-		draw_style_box(_cached_stylebox, rect)
-	else:
-		var center = size / 2.0
-		draw_set_transform(center, 0.0, content_scale)
-		draw_style_box(_cached_stylebox, Rect2(-size / 2.0, size))
-		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if show_background:
+		if content_scale.is_equal_approx(Vector2.ONE):
+			draw_style_box(_cached_stylebox, rect)
+		else:
+			var center = size / 2.0
+			draw_set_transform(center, 0.0, content_scale)
+			draw_style_box(_cached_stylebox, Rect2(-size / 2.0, size))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _configure_stylebox_for_state():
 	var bg: Color
@@ -715,8 +736,12 @@ func _update_media_panel_size() -> void:
 	if card_layout_mode == LayoutMode.VERTICAL:
 		if media_aspect_ratio > 0.0:
 			var desired_h = size.x / media_aspect_ratio
-			var min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
-			var max_h = size.y - min_text_h
+			var max_h: float
+			if show_text_margin:
+				var min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
+				max_h = size.y - min_text_h
+			else:
+				max_h = size.y
 			var clamp_max = maxf(M3Units.dp(40.0), max_h)
 			var new_min_y = clampf(desired_h, M3Units.dp(40.0), clamp_max)
 			if not is_equal_approx(new_min_y, _last_media_min_y):

@@ -34,6 +34,9 @@ var _summoner_start_pos: Vector2 = Vector2.ZERO
 ## When true, checkable items toggle without dismissing the menu.
 var multi_select: bool = false
 
+## When true, checkable items behave like radio buttons: only one can be checked at a time.
+var radio_group: bool = false
+
 ## When true, the menu is automatically freed after dismissal.
 ## Set to false for reusable menus (e.g., checkable menus that need to persist state).
 var auto_free: bool = true
@@ -130,7 +133,7 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 		show_overlay()
 	
 	_ensure_renderer()
-	_renderer.popup(_items, anchor, menu_variant, alignment, auto_focus_first, min_width, multi_select, as_submenu)
+	_renderer.popup(_items, anchor, menu_variant, alignment, auto_focus_first, min_width, multi_select, radio_group, as_submenu)
 	_renderer.item_pressed.connect(_on_item_pressed, CONNECT_ONE_SHOT)
 	_renderer.dismissed.connect(_on_renderer_dismissed, CONNECT_ONE_SHOT)
 	_renderer.submenu_requested.connect(_on_submenu_requested)
@@ -224,7 +227,9 @@ func _on_submenu_requested(index: int):
 	else:
 		_submenu.popup(_renderer, 0, true, 0, true)
 	
-	if _submenu != null and is_instance_valid(_submenu):
+	# Tell parent renderer about the submenu's rect so it doesn't dismiss on clicks inside it
+	if _renderer and _submenu != null and is_instance_valid(_submenu):
+		_renderer.set_submenu_rect(_submenu.get_menu_rect())
 		_submenu.dismissed.connect(_on_submenu_dismissed, CONNECT_ONE_SHOT)
 
 func _on_submenu_dismissed():
@@ -235,6 +240,8 @@ func _on_submenu_dismissed():
 		_renderer._suppress_submenu = false
 		_renderer.set_submenu_open(_submenu_item_index, false)
 		_renderer.set_forced_focus_index(-1)
+	if _renderer:
+		_renderer.set_submenu_rect(Rect2())
 	_submenu = null
 	_submenu_item_index = -1
 
@@ -248,6 +255,8 @@ func _close_submenu():
 		_renderer._suppress_submenu = false
 		_renderer.set_submenu_open(_submenu_item_index, false)
 		_renderer.set_forced_focus_index(-1)
+	if _renderer:
+		_renderer.set_submenu_rect(Rect2())
 	_submenu = null
 	_submenu_item_index = -1
 

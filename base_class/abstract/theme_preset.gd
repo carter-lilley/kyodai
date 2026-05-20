@@ -15,7 +15,8 @@ class_name ThemePreset
 @export var library_grid_margin_x: int = 20
 @export var library_grid_margin_y: int = 20
 @export var library_card_zoom: float = 1.0
-@export var library_show_title_mode: int = 1
+@export var library_show_title_mode: int = 2
+@export var library_card_display_mode: int = 0
 @export var library_focus_scale: float = 0.08
 @export var library_background_config: Dictionary = {}
 
@@ -42,7 +43,8 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_grid_margin_x = settings.library_grid_margin_x.value if settings.library_grid_margin_x else 20
 	preset.library_grid_margin_y = settings.library_grid_margin_y.value if settings.library_grid_margin_y else 20
 	preset.library_card_zoom = settings.library_card_zoom.value if settings.library_card_zoom else 1.0
-	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 1
+	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 2
+	preset.library_card_display_mode = settings.library_card_display_mode.value if settings.library_card_display_mode else 0
 	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.08
 	preset.library_background_config = settings.library_background_config.value.duplicate() if settings.library_background_config else {}
 	
@@ -82,6 +84,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_card_zoom.value = library_card_zoom
 	if settings.get("library_show_title_mode") != null:
 		settings.library_show_title_mode.value = library_show_title_mode
+	if settings.get("library_card_display_mode") != null:
+		settings.library_card_display_mode.value = library_card_display_mode
 	if settings.get("library_focus_scale") != null:
 		settings.library_focus_scale.value = library_focus_scale
 	if settings.get("library_background_config") != null:

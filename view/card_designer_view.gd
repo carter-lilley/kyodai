@@ -26,7 +26,11 @@ func _ready():
 
 func _on_settings_saved():
 	_load_current_config()
-	_setup_preview_card()
+	# Don't call _setup_preview_card() here — it calls _save_to_settings() which
+	# emits setting_changed(card_effect_config) and triggers UIManager._rebuild_views().
+	# Just refresh the preview card directly since settings are already saved.
+	if _preview_card and is_instance_valid(_preview_card):
+		_preview_card.refresh_settings()
 
 func _exit_tree():
 	# Disconnect signal to prevent callbacks on freed object

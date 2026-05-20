@@ -479,6 +479,8 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			_rebuild_views("Focus scale changed")
 		"card_media_aspect_ratio":
 			_rebuild_views("Card media ratio changed")
+		"library_card_display_mode":
+			_rebuild_views("Card display mode changed")
 		"card_effect_config":
 			_rebuild_views("Card effects changed", true)
 		"hero_effect_config":

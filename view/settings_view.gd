@@ -409,6 +409,8 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.library_show_title_mode != b.library_show_title_mode:
 		return false
+	if a.library_card_display_mode != b.library_card_display_mode:
+		return false
 	if a.library_layout_mode != b.library_layout_mode:
 		return false
 	

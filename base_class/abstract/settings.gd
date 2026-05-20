@@ -75,9 +75,10 @@ const Type = SettingsVar.SettingType
 @export var library_grid_margin_x := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin X", "Left/right margin around the grid in pixels", 0.0, 600.0, 1.0)
 @export var library_grid_margin_y := SettingsVar.new(Type.INT, 0, State.ENABLED, "Grid Margin Y", "Top/bottom margin around the grid in pixels", 0.0, 600.0, 1.0)
 @export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.15, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
-@export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
+@export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 2, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
 @export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.08, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
 @export var card_media_aspect_ratio := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Card Media Ratio", "Aspect ratio of the card's media panel", 0.0, 4.0, 1.0, ["Fill", "2:3", "3:4", "1:1", "16:11"])
+@export var library_card_display_mode := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Card Display Mode", "How game cards appear in the library", 0.0, 2.0, 1.0, ["Standard", "Transparent", "Media Only"])
 
 
 # Internal first-run flag (tracks if OOBE wizard has been completed)

@@ -296,8 +296,6 @@ func _exit_tree():
 		SettingsManager.settings_saved.disconnect(_on_settings_saved)
 
 func _on_settings_saved():
-	# Update focus scale from settings. Dimensions are refreshed by the rebuild
-	# triggered by UIManager._rebuild_views() after settings dialog closes.
 	_update_focus_scale_from_settings()
 
 var _last_resized_size: Vector2 = Vector2.ZERO
@@ -617,6 +615,14 @@ func _get_media_aspect_ratio() -> float:
 		return _RATIO_LOOKUP[idx]
 	return -1.0
 
+func _get_card_display_mode() -> int:
+	if not SettingsManager:
+		return 0
+	var setting = SettingsManager.get_setting("library_card_display_mode")
+	if setting and setting.value is int:
+		return clampi(setting.value, 0, 2)
+	return 0
+
 func _get_base_card_height_for_ratio(media_h: float) -> float:
 	"""Compute card height that guarantees M3Card's text area fits.
 	
@@ -630,6 +636,7 @@ func _get_base_card_height_for_ratio(media_h: float) -> float:
 
 func _get_base_dimensions_for_mode() -> Vector2:
 	var ratio = _get_media_aspect_ratio()
+	var display_mode = _get_card_display_mode()
 	if ratio < 0.0:
 		# Fill mode — legacy behavior
 		match view_mode:
@@ -645,6 +652,9 @@ func _get_base_dimensions_for_mode() -> Vector2:
 	match view_mode:
 		ViewMode.GRID:
 			var media_h = _MEDIA_BASE_WIDTH_DP / ratio
+			if display_mode == 2:
+				# Media Only: no text area
+				return Vector2(_MEDIA_BASE_WIDTH_DP, media_h)
 			var card_h = _get_base_card_height_for_ratio(media_h)
 			return Vector2(_MEDIA_BASE_WIDTH_DP, card_h)
 		ViewMode.LIST:

@@ -193,9 +193,32 @@ func _on_more_button_pressed() -> void:
 	if not is_grid:
 		menu.get_item(menu.get_item_count() - 1).disabled = true
 	
+	menu.add_separator()
+	
+	# Card Display Mode submenu
+	var display_mode = 0
+	if SettingsManager:
+		var display_setting = SettingsManager.get_setting("library_card_display_mode")
+		if display_setting and display_setting.value is int:
+			display_mode = display_setting.value
+	
+	var display_submenu = M3Menu.new()
+	display_submenu.radio_group = true
+	display_submenu.add_check_item("Standard", display_mode == 0, func(): _set_card_display_mode(0))
+	display_submenu.add_check_item("Transparent", display_mode == 1, func(): _set_card_display_mode(1))
+	display_submenu.add_check_item("Media Only", display_mode == 2, func(): _set_card_display_mode(2))
+	menu.add_submenu_item("Card Display Mode", display_submenu, "cards-outline")
+	
 	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
 	if more_button:
 		menu.popup(more_button)
+
+func _set_card_display_mode(mode: int) -> void:
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("library_card_display_mode")
+		if setting:
+			SettingsManager.set_setting(mode, setting)
+			SettingsManager.save_settings()
 
 func _toggle_horizontal_grid() -> void:
 	var target_vertical = true

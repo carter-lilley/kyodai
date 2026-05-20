@@ -62,7 +62,9 @@ var _anchor_control: Control = null
 var _horizontal_alignment: MenuAlignment = MenuAlignment.START
 var _min_width: float = 0.0
 var _multi_select: bool = false
+var _radio_group: bool = false
 var _submenu_mode: bool = false
+var _submenu_rect: Rect2 = Rect2()
 var _suppress_submenu: bool = false
 var _forced_focus_index: int = -1
 var _focused_item_index: int = -1
@@ -133,7 +135,7 @@ func _update_appearance():
 # PUBLIC API
 # ============================================
 
-func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = ColorVariant.STANDARD, alignment: MenuAlignment = MenuAlignment.START, auto_focus_first: bool = true, min_width: float = 0.0, multi_select: bool = false, submenu_mode: bool = false):
+func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = ColorVariant.STANDARD, alignment: MenuAlignment = MenuAlignment.START, auto_focus_first: bool = true, min_width: float = 0.0, multi_select: bool = false, radio_group: bool = false, submenu_mode: bool = false):
 	_ensure_visuals()
 	_cached_fonts = M3Theme.load_fonts()
 	
@@ -143,6 +145,7 @@ func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = Co
 	_horizontal_alignment = alignment
 	_min_width = min_width
 	_multi_select = multi_select
+	_radio_group = radio_group
 	_submenu_mode = submenu_mode
 	_cache_variant_colors()
 	
@@ -700,7 +703,9 @@ func _input(event: InputEvent):
 	# Outside-click dismissal only; ui_cancel is handled by M3Overlay base class
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not get_global_rect().has_point(event.global_position):
-			dismiss()
+			# Don't dismiss if the click is inside an open submenu
+			if not _submenu_rect.has_point(event.global_position):
+				dismiss()
 		return
 	
 	# Right arrow opens submenu for the focused item
@@ -795,7 +800,15 @@ func _activate_item(index: int):
 	
 	# Toggle checkable items
 	if item.checkable:
-		item.checked = not item.checked
+		if _radio_group:
+			# Radio behavior: uncheck all others, check this one
+			for i in range(_menu_items.size()):
+				if i != index and _menu_items[i].checkable and _menu_items[i].checked:
+					_menu_items[i].checked = false
+					_update_item_checkmark(i)
+			item.checked = true
+		else:
+			item.checked = not item.checked
 		_update_item_checkmark(index)
 	
 	if item.callback.is_valid():
@@ -909,6 +922,9 @@ func _update_item_checkmark(index: int):
 			else:
 				icon_node.icon_settings.icon_name = ""
 				icon_node.icon_settings.icon_color = Color.TRANSPARENT
+
+func set_submenu_rect(rect: Rect2):
+	_submenu_rect = rect
 
 func set_submenu_open(index: int, open: bool):
 	if index < 0 or index >= _item_nodes.size():

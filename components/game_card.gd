@@ -352,6 +352,8 @@ func _show_focus_effects(show: bool) -> void:
 					_focus_stack.visible = false
 			)
 
+var _display_mode: int = 0
+
 func _update_card_state_from_settings():
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
@@ -365,6 +367,25 @@ func _update_card_state_from_settings():
 				_card_state.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
 			else:
 				_card_state.corner_radius_ratio = corner_value
+		
+		var display_setting = SettingsManager.get_setting("library_card_display_mode")
+		if display_setting and display_setting.value is int:
+			_display_mode = display_setting.value
+		
+		_apply_display_mode()
+
+func _apply_display_mode() -> void:
+	# Map display mode to background/text visibility
+	match _display_mode:
+		0: # Standard
+			show_background = true
+			show_text_margin = true
+		1: # Transparent
+			show_background = false
+			show_text_margin = true
+		2: # Media Only
+			show_background = false
+			show_text_margin = false
 
 func set_card_zoom(_zoom: float) -> void:
 	# EffectStack updates container_size automatically via NOTIFICATION_RESIZED.
