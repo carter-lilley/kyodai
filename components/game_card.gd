@@ -97,9 +97,24 @@ func _setup_status_badge():
 	_status_badge.name = "StatusBadge"
 	_status_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_status_badge.visible = false
-	_status_badge.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_status_badge.z_index = 20
+	_status_badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_status_badge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_status_badge.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(_status_badge)
 	_update_status_badge_style()
+	_reparent_status_badge_to_media_stack()
+
+func _reparent_status_badge_to_media_stack():
+	if not _status_badge:
+		return
+	if not _media_stack or not is_instance_valid(_media_stack):
+		return
+	if _status_badge.get_parent() == _media_stack:
+		return
+	if _status_badge.get_parent() and is_instance_valid(_status_badge.get_parent()):
+		_status_badge.get_parent().remove_child(_status_badge)
+	_media_stack.add_child(_status_badge)
 	_update_status_badge_layout()
 
 func get_card_state() -> EffectContainerState:
@@ -118,6 +133,7 @@ func get_current_texture() -> Texture2D:
 func _setup_preview_mode():
 	_update_card_state_from_settings()
 	_build_media_stack()
+	_reparent_status_badge_to_media_stack()
 	
 	if DataManager:
 		var random_game = DataManager.get_random_game()
@@ -153,6 +169,7 @@ func _build_media_stack():
 			_media_stack.set_game_texture(_current_texture)
 		set_media_content(_media_stack)
 	
+	_reparent_status_badge_to_media_stack()
 	_build_focus_stack()
 
 func _build_focus_stack() -> void:
@@ -448,36 +465,28 @@ func _deferred_update_badges():
 func _update_status_badge_layout():
 	if not _status_badge:
 		return
+	if not _media_stack or not is_instance_valid(_media_stack):
+		return
 	
-	var media_panel = get_node_or_null("RootContainer/MediaPanel")
 	var panel_width: float = size.x
-	var panel_height: float = size.y
-	if media_panel and is_instance_valid(media_panel):
-		panel_width = media_panel.size.x
-		panel_height = media_panel.size.y
+	if _media_stack.size.x > 0:
+		panel_width = _media_stack.size.x
 	
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
 	
-	if media_panel and is_instance_valid(media_panel):
-		_status_badge.position = media_panel.position + Vector2(
-			panel_width - margin - badge_size,
-			panel_height - margin - badge_size
-		)
-	else:
-		_status_badge.position = Vector2(
-			panel_width - margin - badge_size,
-			panel_height - margin - badge_size
-		)
 	_status_badge.size = Vector2(badge_size, badge_size)
+	_status_badge.offset_left = -badge_size - margin
+	_status_badge.offset_top = -badge_size - margin
+	_status_badge.offset_right = -margin
+	_status_badge.offset_bottom = -margin
 
 func _update_status_badge_style():
 	if not _status_badge:
 		return
-	var media_panel = get_node_or_null("RootContainer/MediaPanel")
 	var panel_width = size.x if size.x > 0 else _card_state.container_size.x
-	if media_panel and is_instance_valid(media_panel) and media_panel.size.x > 0:
-		panel_width = media_panel.size.x
+	if _media_stack and is_instance_valid(_media_stack) and _media_stack.size.x > 0:
+		panel_width = _media_stack.size.x
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var circle_radius = int(badge_size / 2.0)
 	
@@ -692,7 +701,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false):
 				if is_instance_valid(self) and game and game.id == target_game_id:
 					_load_cached_cover(cache_path, high_priority)
 	
-	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority)
+	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority, cache_path)
 
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false):
 	var target_game_id = _loading_game_id
@@ -956,3 +965,6 @@ func _notification(what: int):
 			call_deferred("_deferred_update_badges")
 		if _focus_stack and is_instance_valid(_focus_stack):
 			_focus_stack.size = size
+	if what == NOTIFICATION_PARENTED:
+		# Invalidate cached parent-chain lookup so _get_show_delete() recomputes
+		set_meta("_cached_show_delete", null)

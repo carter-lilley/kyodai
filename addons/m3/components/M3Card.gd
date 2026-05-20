@@ -80,6 +80,7 @@ var media_aspect_ratio: float = -1.0:
 		media_aspect_ratio = value
 		if _ready_called:
 			_rebuild_layout()
+			_update_text()
 			_update_appearance()
 			queue_redraw()
 
@@ -230,9 +231,19 @@ func _initialize_styleboxes():
 	_cached_stylebox.set_border_width_all(0)
 
 func _rebuild_layout():
-	# Reset font caches since labels will be recreated
+	# Reset all applied-state trackers since the entire node tree is being recreated.
+	# Without this, guards in _update_text(), _update_appearance(), and
+	# _update_media_panel_size() will incorrectly skip applying values to new nodes.
 	_applied_headline_size_dp = -1.0
 	_applied_supporting_size_dp = -1.0
+	_applied_font_color = Color(-1, -1, -1)
+	_applied_supporting_color = Color(-1, -1, -1)
+	_applied_margin_left = -1
+	_applied_margin_right = -1
+	_applied_margin_top = -1
+	_applied_margin_bottom = -1
+	_last_media_min_y = -1.0
+	_last_media_min_x = -1.0
 	
 	# --- Preserve reusable children before destroying old tree ---
 	# Extract media content/rect so they survive root container destruction
@@ -413,6 +424,7 @@ func _rebuild_layout():
 	
 	_rebuild_actions()
 	_apply_content_scale()
+	_update_media_panel_size()
 
 # ============================================
 # DRAW
@@ -660,6 +672,19 @@ var _is_pressing: bool = false
 
 func _notification(what: int):
 	match what:
+		NOTIFICATION_RESIZED:
+			# The FlowContainer (or any parent) has set our final size.
+			# Recompute media panel and text now that size is authoritative.
+			# This is essential because _rebuild_layout() runs before the
+			# parent has laid us out, so _update_media_panel_size() sees
+			# stale dimensions at that moment.
+			if not is_node_ready() or size.x <= 0 or size.y <= 0:
+				return
+			_update_focus_ring_radius()
+			queue_redraw()
+			_update_media_panel_size()
+			_update_text()
+			_apply_content_scale()
 		NOTIFICATION_MOUSE_ENTER:
 			if clickable:
 				_hovered = true
@@ -673,36 +698,7 @@ func _notification(what: int):
 				return
 			_update_focus_ring_radius()
 			queue_redraw()
-			if card_layout_mode == LayoutMode.VERTICAL and _media_panel:
-				if media_aspect_ratio > 0.0:
-					var desired_h = size.x / media_aspect_ratio
-					var min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
-					var max_h = size.y - min_text_h
-					# Ensure the ceiling is at least as large as the floor so clamp()
-					# never returns a negative size when the card is initializing.
-					var clamp_max = maxf(M3Units.dp(40.0), max_h)
-					var new_min_y = clampf(desired_h, M3Units.dp(40.0), clamp_max)
-					if not is_equal_approx(new_min_y, _last_media_min_y):
-						_last_media_min_y = new_min_y
-						_media_panel.custom_minimum_size.y = new_min_y
-				else:
-					var new_min_y2 = maxf(M3Units.dp(40.0), size.y * 0.5)
-					if not is_equal_approx(new_min_y2, _last_media_min_y):
-						_last_media_min_y = new_min_y2
-						_media_panel.custom_minimum_size.y = new_min_y2
-			elif card_layout_mode == LayoutMode.HORIZONTAL and _media_panel:
-				if media_aspect_ratio > 0.0:
-					var desired_w = size.y * media_aspect_ratio
-					var max_w = size.x - M3Units.dp(40.0)
-					var new_min_x = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
-					if not is_equal_approx(new_min_x, _last_media_min_x):
-						_last_media_min_x = new_min_x
-						_media_panel.custom_minimum_size.x = new_min_x
-				else:
-					var new_min_x2 = M3Units.dp(MEDIA_WIDTH_LIST)
-					if not is_equal_approx(new_min_x2, _last_media_min_x):
-						_last_media_min_x = new_min_x2
-						_media_panel.custom_minimum_size.x = new_min_x2
+			_update_media_panel_size()
 			_update_text()
 			_apply_content_scale()
 func _gui_input(event: InputEvent):
@@ -712,6 +708,38 @@ func _gui_input(event: InputEvent):
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			_is_pressing = event.pressed
 			queue_redraw()
+
+func _update_media_panel_size() -> void:
+	if not _media_panel:
+		return
+	if card_layout_mode == LayoutMode.VERTICAL:
+		if media_aspect_ratio > 0.0:
+			var desired_h = size.x / media_aspect_ratio
+			var min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
+			var max_h = size.y - min_text_h
+			var clamp_max = maxf(M3Units.dp(40.0), max_h)
+			var new_min_y = clampf(desired_h, M3Units.dp(40.0), clamp_max)
+			if not is_equal_approx(new_min_y, _last_media_min_y):
+				_last_media_min_y = new_min_y
+				_media_panel.custom_minimum_size.y = new_min_y
+		else:
+			var new_min_y2 = maxf(M3Units.dp(40.0), size.y * 0.5)
+			if not is_equal_approx(new_min_y2, _last_media_min_y):
+				_last_media_min_y = new_min_y2
+				_media_panel.custom_minimum_size.y = new_min_y2
+	elif card_layout_mode == LayoutMode.HORIZONTAL:
+		if media_aspect_ratio > 0.0:
+			var desired_w = size.y * media_aspect_ratio
+			var max_w = size.x - M3Units.dp(40.0)
+			var new_min_x = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
+			if not is_equal_approx(new_min_x, _last_media_min_x):
+				_last_media_min_x = new_min_x
+				_media_panel.custom_minimum_size.x = new_min_x
+		else:
+			var new_min_x2 = M3Units.dp(MEDIA_WIDTH_LIST)
+			if not is_equal_approx(new_min_x2, _last_media_min_x):
+				_last_media_min_x = new_min_x2
+				_media_panel.custom_minimum_size.x = new_min_x2
 
 func _on_focus_changed():
 	if _focus_ring:

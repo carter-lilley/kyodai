@@ -26,6 +26,7 @@ var _download_semaphore: Semaphore
 var _exit_flag: bool = false
 var _image_task_counter: int = 0
 var _image_tasks: Dictionary = {}
+var _inflight_image_callbacks: Dictionary[String, Array] = {}
 
 var _texture_cache: Dictionary = {}
 var _texture_cache_order: Array[String] = []
@@ -256,6 +257,11 @@ static func _image_worker():
 			
 			_instance._image_mutex.lock()
 			_instance._image_tasks.erase(task.id)
+			# Collect any coalesced callbacks waiting on this dedup_key
+			var coalesced = []
+			if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
+				coalesced = _instance._inflight_image_callbacks[task.dedup_key].duplicate()
+				_instance._inflight_image_callbacks.erase(task.dedup_key)
 			_instance._image_mutex.unlock()
 			
 			if task.callback.is_valid() and not task.cancelled:
@@ -267,6 +273,17 @@ static func _image_worker():
 					_instance._lp_callback_mutex.lock()
 					_instance._lp_callbacks.append({"callback": task.callback, "result": result})
 					_instance._lp_callback_mutex.unlock()
+			
+			# Fire coalesced callbacks with the same result
+			for waiting in coalesced:
+				var cb = waiting.callback
+				if cb.is_valid():
+					if waiting.high_priority:
+						_instance.call_deferred("_execute_callback", cb, result)
+					else:
+						_instance._lp_callback_mutex.lock()
+						_instance._lp_callbacks.append({"callback": cb, "result": result})
+						_instance._lp_callback_mutex.unlock()
 
 static func _extraction_worker():
 	while not _instance._exit_flag:
@@ -328,12 +345,19 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	_instance._db_mutex.unlock()
 	_instance._db_semaphore.post()
 
-static func queue_image_task(callable: Callable, callback: Callable = Callable(), high_priority: bool = false) -> int:
+static func queue_image_task(callable: Callable, callback: Callable = Callable(), high_priority: bool = false, dedup_key: String = "") -> int:
 	if _instance == null:
 		push_error("[MemoryManager] Not initialized - cannot queue image task")
 		return -1
 	
 	_instance._image_mutex.lock()
+	
+	# If dedup_key provided and an identical task is already in flight, queue callback for coalescing
+	if dedup_key != "" and _instance._inflight_image_callbacks.has(dedup_key):
+		_instance._inflight_image_callbacks[dedup_key].append({"callback": callback, "high_priority": high_priority})
+		_instance._image_mutex.unlock()
+		return -1
+	
 	var total_size = _instance._image_high_priority_queue.size() + _instance._image_low_priority_queue.size()
 	
 	if total_size >= MAX_IMAGE_QUEUE_SIZE:
@@ -359,10 +383,14 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 		"callable": callable,
 		"callback": callback,
 		"cancelled": false,
-		"high_priority": high_priority
+		"high_priority": high_priority,
+		"dedup_key": dedup_key
 	}
 	
 	_instance._image_tasks[task_id] = task
+	
+	if dedup_key != "":
+		_instance._inflight_image_callbacks[dedup_key] = []
 	
 	if high_priority:
 		_instance._image_high_priority_queue.append(task)
@@ -384,6 +412,9 @@ static func cancel_image_task(task_id: int) -> bool:
 		var task = _instance._image_tasks[task_id]
 		task.cancelled = true
 		_instance._image_tasks.erase(task_id)
+		# Clean up coalesced callbacks for this dedup_key
+		if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
+			_instance._inflight_image_callbacks.erase(task.dedup_key)
 		
 		var queue = _instance._image_high_priority_queue if task.high_priority else _instance._image_low_priority_queue
 		for i in range(queue.size()):

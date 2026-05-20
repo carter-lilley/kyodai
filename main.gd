@@ -34,6 +34,16 @@ var _current_snap_ratios: Array[float] = []
 # Focus restoration on app resume (Android)
 var _last_focused_index: int = -1
 
+# Debounced zoom save to avoid LIST/CAROUSEL flash during interaction
+var _zoom_save_after_ms: int = -1
+const ZOOM_SAVE_DELAY_MS: int = 1500
+
+func _process(_delta: float) -> void:
+	if _zoom_save_after_ms >= 0 and Time.get_ticks_msec() >= _zoom_save_after_ms:
+		_zoom_save_after_ms = -1
+		if SettingsManager:
+			SettingsManager.save_settings()
+
 func _ready():
 	_setup_repeat()
 	
@@ -420,12 +430,12 @@ func _on_zoom_changed_finished(value_changed: bool):
 		else:
 			saved_value = zoom_slider.value
 	
-	# Save zoom to settings
+	# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
 	if SettingsManager:
 		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 		if zoom_setting:
 			SettingsManager.set_setting(saved_value, zoom_setting)
-			SettingsManager.save_settings()
+			_zoom_save_after_ms = Time.get_ticks_msec() + ZOOM_SAVE_DELAY_MS
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Safely get the games grid from a view
@@ -595,11 +605,12 @@ func _adjust_zoom(delta: float) -> void:
 			_on_zoom_changed(new_index)
 			if focused_index >= 0:
 				call_deferred("_restore_focus_to_card", focused_index)
+			# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
 			if SettingsManager:
 				var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 				if zoom_setting:
 					SettingsManager.set_setting(_current_snap_ratios[new_index], zoom_setting)
-					SettingsManager.save_settings()
+					_zoom_save_after_ms = Time.get_ticks_msec() + ZOOM_SAVE_DELAY_MS
 		return
 	
 	# List/Carousel mode: existing float logic
@@ -614,11 +625,12 @@ func _adjust_zoom(delta: float) -> void:
 		_on_zoom_changed(actual_zoom)
 		if focused_index >= 0:
 			call_deferred("_restore_focus_to_card", focused_index)
+		# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
 		if SettingsManager:
 			var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 			if zoom_setting:
 				SettingsManager.set_setting(actual_zoom, zoom_setting)
-				SettingsManager.save_settings()
+				_zoom_save_after_ms = Time.get_ticks_msec() + ZOOM_SAVE_DELAY_MS
 
 func _get_focused_card_index() -> int:
 	"""Get the virtual index of the currently focused card, or -1 if none."""
