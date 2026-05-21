@@ -764,6 +764,11 @@ func _on_item_mouse_entered(index: int):
 		var node = _item_nodes[index]
 		if not node.has_focus():
 			node.grab_focus()
+		elif not _suppress_submenu and index >= 0 and index < _menu_items.size():
+			# Already focused but mouse re-entered — re-request submenu if applicable
+			var item = _menu_items[index]
+			if item.submenu != null:
+				submenu_requested.emit(index)
 
 func _on_item_focus_exited(index: int):
 	if _focused_item_index == index:

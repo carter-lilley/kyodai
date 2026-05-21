@@ -385,7 +385,7 @@ func _calculate_max_ratio() -> float:
 	var zoom_width = available.x / base_dims.x
 	var zoom_height = available.y / base_dims.y
 	var zoom = min(zoom_width, zoom_height)
-	var viewport_area = size.x * size.y
+	var viewport_area = available.x * available.y
 	var card_area = (base_dims.x * zoom) * (base_dims.y * zoom)
 	var ratio = sqrt(card_area / viewport_area)
 	
@@ -404,7 +404,7 @@ func get_snap_ratios() -> Array[float]:
 	
 	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
-	var viewport_area = size.x * size.y
+	var viewport_area = available.x * available.y
 	
 	# Determine max items per line based on minimum card size (10% of base)
 	var max_items_per_line: int
@@ -435,6 +435,10 @@ func get_snap_ratios() -> Array[float]:
 	# Sort descending so largest cards (fewest per line) come first
 	ratios.sort_custom(func(a, b): return a > b)
 	
+	# Defensive: log when we have fewer than 2 ratios for debugging
+	if ratios.size() < 2:
+		push_warning("[VirtualScrollGridContainer] Only %d snap ratio(s) for view_mode=%s, size=%s, base_dims=%s, available=%s" % [ratios.size(), view_mode, size, base_dims, available])
+	
 	return ratios
 
 ## Compute the exact snap ratio for a given number of items per line.
@@ -444,6 +448,8 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 	
 	# Iterate a few times to converge focus overflow
 	for i in range(3):
+		var prev_effective_width = effective_width
+		var prev_effective_height = effective_height
 		var target_card_width: float
 		var target_card_height: float
 		
@@ -464,6 +470,10 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 		
 		effective_width = maxf(1.0, available.x - focus_overflow_x * 2.0)
 		effective_height = maxf(1.0, available.y - focus_overflow_y * 2.0)
+		
+		# Convergence check: if effective dimensions stabilized, stop iterating
+		if is_equal_approx(effective_width, prev_effective_width) and is_equal_approx(effective_height, prev_effective_height):
+			break
 	
 	# Final computation
 	var final_card_width: float
@@ -496,7 +506,7 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
 	
-	var viewport_area = size.x * size.y
+	var viewport_area = available.x * available.y
 	var target_card_area = viewport_area * desired_ratio * desired_ratio
 	var desired_zoom = sqrt(target_card_area / (base_dims.x * base_dims.y))
 	var desired_card_width = base_dims.x * desired_zoom
@@ -506,8 +516,9 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	var desired_focus_overflow_x = maxf(0.0, desired_card_width * (focus_scale - 1.0) / 2.0)
 	var desired_focus_overflow_y = maxf(0.0, desired_card_height * (focus_scale - 1.0) / 2.0)
 	
-	var effective_width = maxf(1.0, available.x - desired_focus_overflow_x * 2.0)
-	var effective_height = maxf(1.0, available.y - desired_focus_overflow_y * 2.0)
+	# Use same formula as _get_items_per_line() for consistency
+	var effective_width = maxf(1.0, available.x + grid_separation - desired_focus_overflow_x * 2.0)
+	var effective_height = maxf(1.0, available.y + grid_separation - desired_focus_overflow_y * 2.0)
 	
 	var desired_item_width = desired_card_width + grid_separation
 	var desired_item_height = desired_card_height + grid_separation
@@ -633,6 +644,15 @@ func _get_base_card_height_for_ratio(media_h: float) -> float:
 		var text_h = M3Card.get_min_text_height_dp(card_h)
 		card_h = media_h + text_h
 	return card_h
+
+func _get_content_alignment() -> M3Card.ContentAlignment:
+	if not SettingsManager:
+		return M3Card.ContentAlignment.START
+	var setting = SettingsManager.get_setting("library_card_content_alignment")
+	if setting and setting.value is int:
+		var idx = clampi(setting.value, 0, 2)
+		return idx as M3Card.ContentAlignment
+	return M3Card.ContentAlignment.START
 
 func _get_base_dimensions_for_mode() -> Vector2:
 	var ratio = _get_media_aspect_ratio()
@@ -1059,6 +1079,11 @@ func _configure_card_size_flags(card: Control) -> void:
 			card.custom_minimum_size = card_size
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	
+	# Apply content alignment for list and carousel modes
+	if view_mode != ViewMode.GRID and card.has_method("set_content_alignment"):
+		var alignment = _get_content_alignment()
+		card.set_content_alignment(alignment)
 
 	if card.has_method("set_media_aspect_ratio"):
 		card.set_media_aspect_ratio(_get_media_aspect_ratio())

@@ -186,6 +186,10 @@ func dismiss():
 		_summoner.grab_focus()
 	_release_summoner()
 	_close_submenu()
+	# Free any non-auto_free submenus so they don't leak
+	for item in _items:
+		if item.submenu != null and is_instance_valid(item.submenu):
+			item.submenu.queue_free()
 	# Don't reset _item_selected here — it's needed by _on_submenu_dismissed
 	# to know whether the parent menu should also close. It's reset in popup().
 	_parent_menu = null
@@ -279,9 +283,11 @@ func _close_submenu():
 	_submenu_item_index = -1
 
 func _on_focus_changed(index: int):
-	# If a submenu is open and focus moved to a different item, close it
+	# Only close the submenu if focus moved to a different submenu item.
+	# Hovering normal items in the parent menu keeps the submenu open.
 	if _submenu and _submenu.is_open() and index != _submenu_item_index:
-		_close_submenu()
+		if index >= 0 and index < _items.size() and _items[index].submenu != null:
+			_close_submenu()
 
 func _on_navigated_off_edge(direction: String):
 	# Always close the menu when navigating off an edge

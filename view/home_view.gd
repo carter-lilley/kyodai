@@ -43,10 +43,7 @@ func _ready():
 	# Setup vertical layout from settings
 	_update_grid_orientation()
 	
-	# Setup grid margins from settings
-	_update_grid_margins()
-	
-	# Connect to settings changes for grid margins
+	# Connect to settings changes
 	if SettingsManager:
 		SettingsManager.setting_changed.connect(_on_setting_changed)
 	
@@ -609,38 +606,12 @@ func _update_grid_orientation() -> void:
 	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
 	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
 
-func _update_grid_margins() -> void:
-	"""Update the grid margins from settings."""
-	if not margin_container:
-		return
-	
-	var margin_x = 0
-	var margin_y = 0
-	
-	if SettingsManager:
-		var margin_x_setting = SettingsManager.get_setting("library_grid_margin_x")
-		if margin_x_setting:
-			margin_x = int(margin_x_setting.value)
-		
-		var margin_y_setting = SettingsManager.get_setting("library_grid_margin_y")
-		if margin_y_setting:
-			margin_y = int(margin_y_setting.value)
-	
-	margin_container.add_theme_constant_override("margin_left", margin_x)
-	margin_container.add_theme_constant_override("margin_right", margin_x)
-	margin_container.add_theme_constant_override("margin_top", margin_y)
-	margin_container.add_theme_constant_override("margin_bottom", margin_y)
-	
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
 	match setting.property_name:
-		"library_grid_margin_x", "library_grid_margin_y":
-			_update_grid_margins()
-			# Also refresh the grid layout to recalculate with new margins
-			games_grid.refresh_dimensions()
 		"card_effect_config":
 			mark_for_rebuild("Card effects changed")
-		"library_show_title_mode", "library_card_display_mode":
+		"library_show_title_mode", "library_card_display_mode", "library_card_content_alignment":
 			if games_grid:
 				games_grid.refresh_all_card_effects()
 				games_grid.refresh_dimensions()

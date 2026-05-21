@@ -326,10 +326,6 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_navigation_type.value, settings.library_navigation_type)
 		if settings.get("library_grid_padding") != null:
 			emit_signal("setting_changed", settings.library_grid_padding.value, settings.library_grid_padding)
-		if settings.get("library_grid_margin_x") != null:
-			emit_signal("setting_changed", settings.library_grid_margin_x.value, settings.library_grid_margin_x)
-		if settings.get("library_grid_margin_y") != null:
-			emit_signal("setting_changed", settings.library_grid_margin_y.value, settings.library_grid_margin_y)
 		if settings.get("library_card_zoom") != null:
 			emit_signal("setting_changed", settings.library_card_zoom.value, settings.library_card_zoom)
 		if settings.get("library_background_config") != null:
@@ -338,6 +334,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_show_title_mode.value, settings.library_show_title_mode)
 		if settings.get("library_card_display_mode") != null:
 			emit_signal("setting_changed", settings.library_card_display_mode.value, settings.library_card_display_mode)
+		if settings.get("library_card_content_alignment") != null:
+			emit_signal("setting_changed", settings.library_card_content_alignment.value, settings.library_card_content_alignment)
 		if settings.get("library_focus_scale") != null:
 			emit_signal("setting_changed", settings.library_focus_scale.value, settings.library_focus_scale)
 		if settings.get("library_layout_mode") != null:

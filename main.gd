@@ -203,11 +203,44 @@ func _on_more_button_pressed() -> void:
 			display_mode = display_setting.value
 	
 	var display_submenu = M3Menu.new()
+	display_submenu.auto_free = false
 	display_submenu.radio_group = true
 	display_submenu.add_check_item("Standard", display_mode == 0, func(): _set_card_display_mode(0))
 	display_submenu.add_check_item("Transparent", display_mode == 1, func(): _set_card_display_mode(1))
 	display_submenu.add_check_item("Media Only", display_mode == 2, func(): _set_card_display_mode(2))
 	menu.add_submenu_item("Card Display Mode", display_submenu, "cards-outline")
+	
+	# Card Media Ratio submenu
+	var media_ratio = 0
+	if SettingsManager:
+		var ratio_setting = SettingsManager.get_setting("card_media_aspect_ratio")
+		if ratio_setting and ratio_setting.value is int:
+			media_ratio = ratio_setting.value
+	
+	var ratio_submenu = M3Menu.new()
+	ratio_submenu.auto_free = false
+	ratio_submenu.radio_group = true
+	ratio_submenu.add_check_item("Fill", media_ratio == 0, func(): _set_card_media_ratio(0))
+	ratio_submenu.add_check_item("2:3", media_ratio == 1, func(): _set_card_media_ratio(1))
+	ratio_submenu.add_check_item("3:4", media_ratio == 2, func(): _set_card_media_ratio(2))
+	ratio_submenu.add_check_item("1:1", media_ratio == 3, func(): _set_card_media_ratio(3))
+	ratio_submenu.add_check_item("16:11", media_ratio == 4, func(): _set_card_media_ratio(4))
+	menu.add_submenu_item("Card Media Ratio", ratio_submenu, "aspect-ratio")
+	
+	# Content Alignment submenu
+	var content_alignment = 0
+	if SettingsManager:
+		var align_setting = SettingsManager.get_setting("library_card_content_alignment")
+		if align_setting and align_setting.value is int:
+			content_alignment = align_setting.value
+	
+	var align_submenu = M3Menu.new()
+	align_submenu.auto_free = false
+	align_submenu.radio_group = true
+	align_submenu.add_check_item("Left / Top", content_alignment == 0, func(): _set_content_alignment(0))
+	align_submenu.add_check_item("Center / Middle", content_alignment == 1, func(): _set_content_alignment(1))
+	align_submenu.add_check_item("Right / Bottom", content_alignment == 2, func(): _set_content_alignment(2))
+	menu.add_submenu_item("Content Alignment", align_submenu, "format-align-center")
 	
 	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
 	if more_button:
@@ -218,6 +251,20 @@ func _set_card_display_mode(mode: int) -> void:
 		var setting = SettingsManager.get_setting("library_card_display_mode")
 		if setting:
 			SettingsManager.set_setting(mode, setting)
+			SettingsManager.save_settings()
+
+func _set_card_media_ratio(ratio: int) -> void:
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("card_media_aspect_ratio")
+		if setting:
+			SettingsManager.set_setting(ratio, setting)
+			SettingsManager.save_settings()
+
+func _set_content_alignment(alignment: int) -> void:
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("library_card_content_alignment")
+		if setting:
+			SettingsManager.set_setting(alignment, setting)
 			SettingsManager.save_settings()
 
 func _toggle_horizontal_grid() -> void:
@@ -314,12 +361,25 @@ func _update_zoom_slider_stops(zoom_slider: M3Slider, games_grid: VirtualScrollG
 	# Reverse so index 0 = smallest ratio (zoomed out, most items per line)
 	# and max index = largest ratio (zoomed in, fewest items per line)
 	snap_ratios.reverse()
+	
+	# Guard: ensure at least 2 snap ratios to prevent division-by-zero in slider
+	# and to provide meaningful zoom range. If only 1 ratio, add a second.
+	if snap_ratios.size() == 1:
+		# Add a smaller ratio (zoomed out more) — cap at minimum 0.05
+		var second_ratio = maxf(0.05, snap_ratios[0] * 0.7)
+		if not is_equal_approx(second_ratio, snap_ratios[0]):
+			snap_ratios.insert(0, second_ratio)
+	
 	_current_snap_ratios = snap_ratios
-	if snap_ratios.size() > 0:
+	if snap_ratios.size() >= 2:
 		# Grid mode: use integer indices so stops are evenly spaced visually.
 		# The actual snap ratios are looked up by index when applying zoom.
 		zoom_slider.step = 1.0
-		zoom_slider.custom_stop_values = []
+		# Populate custom stops so M3Slider draws tick marks at each snap level
+		var stops: Array[float] = []
+		for i in range(snap_ratios.size()):
+			stops.append(float(i))
+		zoom_slider.custom_stop_values = stops
 		zoom_slider.min_value = 0
 		zoom_slider.max_value = snap_ratios.size() - 1
 		zoom_slider.label_behavior = M3Slider.LabelBehavior.NEVER

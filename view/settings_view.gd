@@ -401,15 +401,13 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.library_grid_padding != b.library_grid_padding:
 		return false
-	if a.library_grid_margin_x != b.library_grid_margin_x:
-		return false
-	if a.library_grid_margin_y != b.library_grid_margin_y:
-		return false
 	if a.library_card_zoom != b.library_card_zoom:
 		return false
 	if a.library_show_title_mode != b.library_show_title_mode:
 		return false
 	if a.library_card_display_mode != b.library_card_display_mode:
+		return false
+	if a.library_card_content_alignment != b.library_card_content_alignment:
 		return false
 	if a.library_layout_mode != b.library_layout_mode:
 		return false

@@ -775,7 +775,11 @@ func _get_perp_center() -> float:
 func _get_axis_position(for_value: float) -> float:
 	var handle_size = _get_handle_w()
 	var area_size = _get_slider_axis_size() - handle_size
-	var ratio = (for_value - min_value) / (max_value - min_value)
+	var ratio: float
+	if is_equal_approx(max_value, min_value):
+		ratio = 0.5  # Center the handle when range is zero
+	else:
+		ratio = (for_value - min_value) / (max_value - min_value)
 	
 	if _is_vertical():
 		# VSlider: 0 at top, max at bottom (inverted)
@@ -903,6 +907,8 @@ func _get_stop_positions() -> Array[float]:
 	
 	var count = roundi(range_val / step)
 	if count <= 1:
+		# Even with only 2 values, show start and end as stops
+		_cached_stops = [min_value, max_value]
 		_cached_stops_valid = true
 		return _cached_stops
 	if count > 50:
