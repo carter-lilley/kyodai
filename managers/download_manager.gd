@@ -1820,7 +1820,7 @@ func _start_extraction(item: QueueItem):
 			NotificationManager.dismiss_notification(item.notification_id)
 		
 		item.notification_id = NotificationManager.show_notification(
-			"Extracting " + item.name + "...",
+			item.name + "...",
 			NotificationManager.Type.INFO,
 			null,
 			0.0,

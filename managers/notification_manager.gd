@@ -7,10 +7,10 @@ extends Manager
 enum Type { INFO, SUCCESS, WARNING, ERROR }
 
 const TYPE_ICONS: Dictionary = {
-	Type.INFO: "info",
+	Type.INFO: "information-outline",
 	Type.SUCCESS: "check-circle",
-	Type.WARNING: "alert",
-	Type.ERROR: "alert-circle",
+	Type.WARNING: "alert-outline",
+	Type.ERROR: "close-circle-outline",
 }
 
 signal notification_shown(id: int)

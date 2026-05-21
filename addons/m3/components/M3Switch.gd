@@ -157,7 +157,8 @@ func _initialize_icon():
 func _update_icon():
 	if not _icon_node:
 		return
-	_icon_node.icon_settings.icon_name = icon_name
+	if not icon_name.is_empty():
+		_icon_node.icon_settings.icon_name = icon_name
 	_icon_node.visible = not icon_name.is_empty()
 
 # ============================================

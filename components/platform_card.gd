@@ -46,7 +46,7 @@ func _ready():
 	card_layout_mode = LayoutMode.HORIZONTAL
 	card_variant = Variant.ELEVATED
 	clickable = false
-	custom_minimum_size = Vector2(0, M3Units.dp(120))
+	custom_minimum_size = Vector2(0, M3Units.dp(150))
 
 	super._ready()
 
@@ -82,38 +82,44 @@ func _build_ui():
 	top_row.add_child(_name_label)
 
 	_sync_toggle = M3Checkbox.new()
-	_sync_toggle.text = "Sync"
 	_sync_toggle.toggled.connect(_on_sync_toggled)
 	top_row.add_child(_sync_toggle)
 
-	# Bottom row: Emulator label + dropdown + status + download + version
-	var bottom_row = HBoxContainer.new()
-	bottom_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_text_content.add_child(bottom_row)
+	# Emulator row: Label + Dropdown + Download button
+	var emulator_row = HBoxContainer.new()
+	emulator_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text_content.add_child(emulator_row)
 
 	_emulator_label = Label.new()
 	_emulator_label.text = "Emulator:"
-	bottom_row.add_child(_emulator_label)
+	emulator_row.add_child(_emulator_label)
 
 	_emulator_dropdown = M3OptionButton.new()
 	_emulator_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_emulator_dropdown.item_selected.connect(_on_emulator_selected)
-	bottom_row.add_child(_emulator_dropdown)
-
-	_status_indicator = Indicator.new()
-	_status_indicator.dot_size = Vector2(12, 12)
-	bottom_row.add_child(_status_indicator)
+	emulator_row.add_child(_emulator_dropdown)
 
 	_download_button = M3Button.new()
 	_download_button.text = "Download"
 	_download_button.visible = false
-	_download_button.button_size = M3Button.Size.SMALL
+	_download_button.button_size = M3Button.Size.EXTRA_SMALL
 	_download_button.pressed.connect(_on_download_pressed)
-	bottom_row.add_child(_download_button)
+	emulator_row.add_child(_download_button)
+
+	# Status row: Indicator + version text displayed on its own line (prevents overflow)
+	var status_row = HBoxContainer.new()
+	status_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text_content.add_child(status_row)
+
+	_status_indicator = Indicator.new()
+	_status_indicator.dot_size = Vector2(10, 10)
+	_status_indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_row.add_child(_status_indicator)
 
 	_version_label = Label.new()
 	_version_label.visible = false
-	bottom_row.add_child(_version_label)
+	_version_label.size_flags_horizontal = Control.SIZE_SHRINK_END
+	status_row.add_child(_version_label)
 
 	# Apply M3 fonts and colors
 	_apply_m3_text_styles()
@@ -266,7 +272,7 @@ func _update_status_indicator():
 			_download_button.text = "Installing..."
 	elif progress["status"] == "partial":
 		var next_step = progress["next_step_display"]
-		_status_indicator.set_status(Indicator.Status.WARNING, "Resume: %s" % next_step, "Installation incomplete - click to continue")
+		_status_indicator.set_status(Indicator.Status.WARNING, next_step, "Installation incomplete - click to continue")
 		if _download_button:
 			_download_button.visible = true
 			_download_button.disabled = false
