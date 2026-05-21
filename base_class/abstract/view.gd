@@ -4,14 +4,25 @@ extends Control
 signal view_ready()
 signal view_shown()
 signal view_hidden()
+signal hero_game_changed(game: GameResource)
 
 var view_name: String = ""
+
+# Shared grid reference — subclasses set this via @onready
+var games_grid: VirtualScrollGridContainer = null
 
 # Lazy rebuild pattern - views marked for rebuild when hidden, rebuilt when shown
 var needs_rebuild: bool = false
 var needs_rebuild_reason: String = ""
 var _rebuild_attempts: int = 0
 const MAX_REBUILD_ATTEMPTS: int = 5
+
+# Deferred rebuild guard
+var _deferred_rebuild_attempts: int = 0
+const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
+
+# Track last connected viewport to prevent signal leaks on reparent
+var _last_connected_viewport: Viewport = null
 
 func _ready():
 	view_ready.emit()
@@ -30,23 +41,150 @@ func mark_for_rebuild(reason: String = "") -> void:
 	needs_rebuild_reason = reason
 
 func check_and_rebuild_if_needed() -> void:
-	"""Override in subclasses to rebuild if needs_rebuild is true."""
+	"""Override: Capture reason before it's cleared, then defer rebuild."""
 	if needs_rebuild:
-		_rebuild_attempts += 1
-		if _rebuild_attempts > MAX_REBUILD_ATTEMPTS:
-			push_warning("[%s] Max rebuild attempts reached, skipping rebuild" % view_name)
-			needs_rebuild = false
-			needs_rebuild_reason = ""
-			_rebuild_attempts = 0
-			return
-		
-		perform_rebuild()
+		var reason = needs_rebuild_reason
+		# Clear flags now since we're handling the rebuild
 		needs_rebuild = false
 		needs_rebuild_reason = ""
-		_rebuild_attempts = 0
+		# Pass the captured reason to the deferred rebuild
+		call_deferred("_do_rebuild", reason)
 	else:
 		_rebuild_attempts = 0
 
 func perform_rebuild() -> void:
 	"""Override in subclasses to perform the actual rebuild."""
 	pass
+
+func _do_rebuild(reason: String = "") -> void:
+	# Ensure we have valid dimensions before rebuilding
+	if size.x <= 0 or size.y <= 0:
+		_deferred_rebuild_attempts += 1
+		if _deferred_rebuild_attempts > MAX_DEFERRED_REBUILD_ATTEMPTS:
+			push_warning("[%s] Max deferred rebuild attempts reached with invalid size, aborting" % view_name)
+			_deferred_rebuild_attempts = 0
+			return
+		call_deferred("_do_rebuild", reason)
+		return
+	
+	# Reset counter on successful rebuild
+	_deferred_rebuild_attempts = 0
+	
+	if games_grid:
+		# Force a layout recalculation with the new valid size
+		games_grid.queue_redraw()
+	
+	# Check if rebuild is due to card effects change
+	var refresh_effects = reason == "Card effects changed"
+	rebuild_grid(refresh_effects)
+
+# Subclasses override this; base version is a no-op for safety.
+func rebuild_grid(refresh_effects: bool = false) -> void:
+	pass
+
+# ============================================
+# SHARED GRID / CARD LOGIC
+# ============================================
+
+func _update_grid_orientation() -> void:
+	if not SettingsManager:
+		return
+	
+	var mode_setting = SettingsManager.get_setting("library_layout_mode")
+	var layout_mode = mode_setting.value if mode_setting else 0
+	
+	# Migrate old 4-mode values to new 3-mode values
+	match layout_mode:
+		0, 1:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.GRID
+		2:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
+		3:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
+	
+	var grid_vertical_setting = SettingsManager.get_setting("library_grid_vertical")
+	games_grid.grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true
+	
+	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
+	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
+
+func _on_focus_changed(control: Control):
+	# Traverse up the tree to find if focused control is inside a GameCard
+	var card = control
+	while card != null:
+		if card is GameCard:
+			hero_game_changed.emit(card.game)
+			return
+		card = card.get_parent()
+	
+	# Don't clear hero - keep the last focused game image
+
+func reconnect_viewport() -> void:
+	"""Reconnect to the current viewport's gui_focus_changed signal.
+	Call this after reparenting to ensure focus events are received."""
+	# Disconnect from the PREVIOUSLY connected viewport (not get_viewport() which
+	# returns the NEW viewport after reparenting). This prevents signal leaks.
+	if _last_connected_viewport and is_instance_valid(_last_connected_viewport):
+		if _last_connected_viewport.gui_focus_changed.is_connected(_on_focus_changed):
+			_last_connected_viewport.gui_focus_changed.disconnect(_on_focus_changed)
+		_last_connected_viewport = null
+	
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	
+	# Connect to new/current viewport
+	viewport.gui_focus_changed.connect(_on_focus_changed)
+	_last_connected_viewport = viewport
+	
+	# Reconnect grid's scroll container follow_focus
+	if games_grid and games_grid._scroll_container:
+		games_grid._scroll_container.reconnect_viewport()
+
+func _on_game_updated(game: GameResource):
+	# Find and update any visible cards for this game
+	var range_info = games_grid.get_visible_range()
+	for i in range(range_info.buffer_start, range_info.buffer_start + range_info.buffer_size):
+		var card = games_grid.get_card_at_index(i)
+		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
+			var is_visible = i >= range_info.start and i < range_info.end
+			card.set_game_with_priority(game, is_visible)
+			break
+
+func _on_card_created(card: Control, index: int):
+	"""Connect signals to newly created cards."""
+	if card is GameCard:
+		card.download_requested.connect(_on_download_requested)
+
+func _on_download_requested(game: GameResource):
+	# Use the selected sibling's ID and file name if one is selected
+	var active_game_id = game.get_active_game_id()
+	var active_file_name = game.get_active_file_name()
+	
+	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
+	var root_folder = SettingsManager.get_setting("games_root_folder")
+	if not root_folder or root_folder.value == "":
+		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
+		return
+	
+	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
+	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
+	
+	if item_id != "":
+		pass  # Status updates removed; notifications handled by DownloadManager
+	else:
+		NotificationManager.show_notification("Failed to queue download", NotificationManager.Type.ERROR)
+
+# Status bar removed — kept as no-op so subclasses don't need to override
+func _update_status(_text: String = "") -> void:
+	pass
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	"""Handle settings changes."""
+	match setting.property_name:
+		"card_effect_config":
+			mark_for_rebuild("Card effects changed")
+		"library_show_title_mode", "library_card_display_mode", "library_card_content_alignment":
+			if games_grid:
+				games_grid.refresh_all_card_effects()
+				games_grid.refresh_dimensions()

@@ -2,7 +2,6 @@
 
 refocus when install process finished (button disappears)
 note to user: prepping on first launch
-alignment modes in single row
 
 ## android
 	chunk reassembly notif on android

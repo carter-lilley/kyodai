@@ -35,14 +35,8 @@ var _current_snap_ratios: Array[float] = []
 var _last_focused_index: int = -1
 
 # Debounced zoom save to avoid LIST/CAROUSEL flash during interaction
-var _zoom_save_after_ms: int = -1
+var _zoom_save_timer: Timer = null
 const ZOOM_SAVE_DELAY_MS: int = 1500
-
-func _process(_delta: float) -> void:
-	if _zoom_save_after_ms >= 0 and Time.get_ticks_msec() >= _zoom_save_after_ms:
-		_zoom_save_after_ms = -1
-		if SettingsManager:
-			SettingsManager.save_settings()
 
 func _ready():
 	_setup_repeat()
@@ -73,6 +67,13 @@ func _ready():
 		main_content_vbox,
 		root_layout
 	)
+	
+	# Create debounced zoom save timer (replaces _process polling)
+	_zoom_save_timer = Timer.new()
+	_zoom_save_timer.one_shot = true
+	_zoom_save_timer.wait_time = ZOOM_SAVE_DELAY_MS / 1000.0
+	_zoom_save_timer.timeout.connect(_on_zoom_save_timer_timeout)
+	add_child(_zoom_save_timer)
 	
 	# Connect zoom slider signals
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
@@ -518,19 +519,24 @@ func _on_zoom_changed_finished(value_changed: bool):
 		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 		if zoom_setting:
 			SettingsManager.set_setting(saved_value, zoom_setting)
-			_zoom_save_after_ms = Time.get_ticks_msec() + ZOOM_SAVE_DELAY_MS
+			if _zoom_save_timer:
+				_zoom_save_timer.start()
+
+func _on_zoom_save_timer_timeout() -> void:
+	if SettingsManager:
+		SettingsManager.save_settings()
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Safely get the games grid from a view
 	# New structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer (for platform indicator)
 	if view.has_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer"):
-		return view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer")
+		return view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
 	# Old structure: MarginContainer/VirtualScrollGridContainer
 	elif view.has_node("MarginContainer/VirtualScrollGridContainer"):
-		return view.get_node("MarginContainer/VirtualScrollGridContainer")
+		return view.get_node("MarginContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
 	# Very old structure: VirtualScrollGridContainer
 	elif view.has_node("VirtualScrollGridContainer"):
-		return view.get_node("VirtualScrollGridContainer")
+		return view.get_node("VirtualScrollGridContainer") as VirtualScrollGridContainer
 	return null
 
 func _load_and_apply_saved_zoom() -> void:
@@ -693,7 +699,8 @@ func _adjust_zoom(delta: float) -> void:
 				var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 				if zoom_setting:
 					SettingsManager.set_setting(_current_snap_ratios[new_index], zoom_setting)
-					_zoom_save_after_ms = Time.get_ticks_msec() + ZOOM_SAVE_DELAY_MS
+					if _zoom_save_timer:
+						_zoom_save_timer.start()
 		return
 	
 	# List/Carousel mode: existing float logic
@@ -713,78 +720,51 @@ func _adjust_zoom(delta: float) -> void:
 			var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 			if zoom_setting:
 				SettingsManager.set_setting(actual_zoom, zoom_setting)
-				_zoom_save_after_ms = Time.get_ticks_msec() + ZOOM_SAVE_DELAY_MS
+				if _zoom_save_timer:
+					_zoom_save_timer.start()
 
 func _get_focused_card_index() -> int:
 	"""Get the virtual index of the currently focused card, or -1 if none."""
 	var viewport = get_viewport()
-	print("[Main] _get_focused_card_index: viewport = ", viewport)
 	if not viewport:
-		print("[Main] _get_focused_card_index: no viewport")
 		return -1
 	
 	var focused = viewport.gui_get_focus_owner()
-	print("[Main] _get_focused_card_index: gui_get_focus_owner() = ", focused)
 	if not focused:
-		print("[Main] _get_focused_card_index: no focused control")
 		return -1
-	
-	print("[Main] _get_focused_card_index: focused control = ", focused.name, " (", focused.get_class(), ")")
-	print("[Main] _get_focused_card_index: focused path = ", focused.get_path())
 	
 	# Find the GameCard that contains the focused control
 	var parent = focused
-	var depth = 0
 	while parent:
-		print("[Main] _get_focused_card_index: checking parent at depth ", depth, ": ", parent.name, " has_meta virtual_index = ", parent.has_meta("virtual_index"))
 		if parent.has_meta("virtual_index"):
-			var idx = parent.get_meta("virtual_index", -1)
-			print("[Main] _get_focused_card_index: found virtual_index ", idx, " at depth ", depth, " (", parent.name, ")")
-			return idx
+			return parent.get_meta("virtual_index", -1)
 		parent = parent.get_parent()
-		depth += 1
 	
-	print("[Main] _get_focused_card_index: no virtual_index found in parent chain")
 	return -1
 
 func _restore_focus_to_card(index: int) -> void:
 	"""Restore focus to the card at the given virtual index."""
-	#print("[Main] _restore_focus_to_card() called for index: ", index)
-	
-	# Get the current view
 	var current_view = UIManager.get_current_view()
 	if not current_view:
-		print("[Main] _restore_focus_to_card: no current view")
 		return
-	print("[Main] _restore_focus_to_card: current view = ", current_view.name)
 	
 	# For HomeView, always restore to index 0 since it reorders by last played
 	# For LibraryView, restore to the saved index
 	var target_index = index
 	if current_view is HomeView:
 		target_index = 0
-		print("[Main] _restore_focus_to_card: HomeView detected, forcing index to 0")
 	
 	var games_grid = _get_view_grid(current_view)
 	if not games_grid:
-		print("[Main] _restore_focus_to_card: no games_grid")
 		return
-	print("[Main] _restore_focus_to_card: found games_grid")
 	
-	# Get the card at the target index
 	var card = games_grid.get_card_at_index(target_index)
 	if not card:
-		print("[Main] _restore_focus_to_card: no card at index ", target_index)
 		return
-	print("[Main] _restore_focus_to_card: found card ", card.name, " at index ", target_index)
 	
 	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node)
 	if card is Control and card.focus_mode != Control.FOCUS_NONE:
-		print("[Main] _restore_focus_to_card: calling grab_focus() on card")
 		card.grab_focus()
-		print("[Main] _restore_focus_to_card: grab_focus() completed")
-	else:
-		print("[Main] _restore_focus_to_card: card invalid or not focusable")
 
 func _on_delay_timeout():
 	if _held_dir != "":

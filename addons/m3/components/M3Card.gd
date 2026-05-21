@@ -172,6 +172,9 @@ var _focus_ring: Panel
 var _cached_stylebox: StyleBoxFlat
 var _cached_fonts: Dictionary = {}
 var _action_labels: Array[String] = []
+
+# Deferred-call guard to prevent accumulation during rapid resize/zoom drags
+var _focus_ring_bounds_queued: bool = false
 var _ready_called: bool = false
 var _media_content: Control = null
 var _applied_headline_size_dp: float = -1.0
@@ -216,6 +219,7 @@ func _update_focus_ring_radius() -> void:
 	focus_sb.set_corner_radius_all(int(round(radius)))
 
 func _update_focus_ring_bounds() -> void:
+	_focus_ring_bounds_queued = false
 	if not _focus_ring or not _media_panel:
 		return
 	# Use the actual media panel size when available (it's authoritative after
@@ -299,8 +303,10 @@ func _ready():
 	add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	
 	# Mouse / focus state tracking
-	mouse_entered.connect(queue_redraw)
-	mouse_exited.connect(queue_redraw)
+	# NOTE: mouse enter/exit redraws are handled by NOTIFICATION_MOUSE_ENTER/EXIT
+	# below, which is more comprehensive (also updates focus ring, media panel,
+	# text sizing, etc.). Do NOT connect mouse_entered/exited signals here or
+	# queue_redraw() will fire twice per event.
 	focus_entered.connect(_on_focus_changed)
 	focus_exited.connect(_on_focus_changed)
 	button_down.connect(queue_redraw)
@@ -906,7 +912,10 @@ func _update_media_panel_size() -> void:
 	_update_focus_ring_bounds()
 	# Media panel size may not be stable until the container finishes its sort,
 	# so queue a second update to snap to the authoritative layout.
-	call_deferred("_update_focus_ring_bounds")
+	# Guard prevents accumulation during rapid resize/zoom drags.
+	if not _focus_ring_bounds_queued:
+		_focus_ring_bounds_queued = true
+		call_deferred("_update_focus_ring_bounds")
 
 func _update_text_content_sizes() -> void:
 	if not _text_content or not _ready_called:

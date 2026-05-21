@@ -100,6 +100,6 @@ func _on_clear_completed():
 	
 	_update_status()
 
-func _update_status():
+func _update_status(_text: String = "") -> void:
 	# Status bar removed - no-op
 	pass

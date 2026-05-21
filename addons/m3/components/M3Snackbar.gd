@@ -55,7 +55,7 @@ var _progress_visible: bool = false
 func _init():
 	super._init()
 	overlay_type = "snackbar"
-	overlay_layer = 100
+	overlay_layer = 1100
 	_create_visuals()
 	_cached_fonts = M3Theme.load_fonts()
 

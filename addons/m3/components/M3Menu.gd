@@ -33,6 +33,9 @@ var _summoner_start_pos: Vector2 = Vector2.ZERO
 var _parent_menu: M3Menu = null
 var _item_selected: bool = false
 
+# Guard against reentrant submenu closure (focus events during dismiss can trigger reopen)
+var _is_closing_submenu: bool = false
+
 ## When true, checkable items toggle without dismissing the menu.
 var multi_select: bool = false
 
@@ -140,7 +143,12 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	
 	_ensure_renderer()
 	_renderer.popup(_items, anchor, menu_variant, alignment, auto_focus_first, min_width, multi_select, radio_group, as_submenu)
+	# Disconnect old one-shot connections before reconnecting (prevents duplicates on reopen)
+	if _renderer.item_pressed.is_connected(_on_item_pressed):
+		_renderer.item_pressed.disconnect(_on_item_pressed)
 	_renderer.item_pressed.connect(_on_item_pressed, CONNECT_ONE_SHOT)
+	if _renderer.dismissed.is_connected(_on_renderer_dismissed):
+		_renderer.dismissed.disconnect(_on_renderer_dismissed)
 	_renderer.dismissed.connect(_on_renderer_dismissed, CONNECT_ONE_SHOT)
 	_renderer.submenu_requested.connect(_on_submenu_requested)
 	_renderer.focus_changed.connect(_on_focus_changed)
@@ -268,11 +276,20 @@ func _on_submenu_dismissed():
 	_submenu_item_index = -1
 
 func _close_submenu():
-	if _submenu and is_instance_valid(_submenu) and _submenu.is_open():
-		_submenu.dismissed.disconnect(_on_submenu_dismissed)
-		_submenu.dismiss()
+	if _is_closing_submenu:
+		return
+	_is_closing_submenu = true
+	
+	# Suppress BEFORE dismissing to prevent focus-grab from re-triggering submenu open
 	if _renderer and _submenu_item_index >= 0:
 		_renderer._suppress_submenu = true
+	
+	if _submenu and is_instance_valid(_submenu) and _submenu.is_open():
+		if _submenu.dismissed.is_connected(_on_submenu_dismissed):
+			_submenu.dismissed.disconnect(_on_submenu_dismissed)
+		_submenu.dismiss()
+	
+	if _renderer and _submenu_item_index >= 0:
 		_renderer.grab_item_focus(_submenu_item_index)
 		_renderer._suppress_submenu = false
 		_renderer.set_submenu_open(_submenu_item_index, false)
@@ -281,6 +298,7 @@ func _close_submenu():
 		_renderer.set_submenu_rect(Rect2())
 	_submenu = null
 	_submenu_item_index = -1
+	_is_closing_submenu = false
 
 func _on_focus_changed(index: int):
 	# Only close the submenu if focus moved to a different submenu item.

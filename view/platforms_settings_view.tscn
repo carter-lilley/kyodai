@@ -9,9 +9,9 @@
 [ext_resource type="Script" uid="uid://dxu4u734ecmxi" path="res://addons/m3/components/M3TextField.gd" id="4_lo3qa"]
 [ext_resource type="FontFile" uid="uid://bj7f788kpislk" path="res://addons/m3/fonts/Roboto/Roboto-Medium.ttf" id="4_n5l8y"]
 
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_n5l8y"]
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_lo3qa"]
 
-[sub_resource type="Image" id="Image_f1e5o"]
+[sub_resource type="Image" id="Image_n5l8y"]
 data = {
 "data": PackedByteArray(255, 255, 255, 0),
 "format": "RGBA8",
@@ -20,18 +20,12 @@ data = {
 "width": 1
 }
 
-[sub_resource type="ImageTexture" id="ImageTexture_4rsul"]
-image = SubResource("Image_f1e5o")
+[sub_resource type="ImageTexture" id="ImageTexture_klweo"]
+image = SubResource("Image_n5l8y")
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_n5l8y"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_klweo"]
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_f1e5o"]
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_4rsul"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_crkbm"]
 content_margin_left = 0.0
@@ -81,7 +75,13 @@ content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_crkbm"]
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_w1hk4"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_51w8a"]
 content_margin_left = 1.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -91,7 +91,7 @@ shadow_color = Color(0, 0, 0, 0.15)
 shadow_size = 2
 shadow_offset = Vector2(0, 1)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_aavty"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7r1iw"]
 content_margin_left = 1.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -100,7 +100,7 @@ bg_color = Color(0.90224314, 0.87433726, 0.93819606, 1)
 shadow_color = Color(0, 0, 0, 0.15)
 shadow_offset = Vector2(0, 1)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3e8q1"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_32gxc"]
 content_margin_left = 1.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -110,9 +110,9 @@ shadow_color = Color(0, 0, 0, 0.15)
 shadow_size = 2
 shadow_offset = Vector2(0, 1)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_wx6lo"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_w04ni"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4wukb"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v0qxi"]
 content_margin_left = 1.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -120,7 +120,7 @@ content_margin_bottom = 0.0
 bg_color = Color(1, 0.9843137, 0.99607843, 0.38)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vgv63"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3j0xk"]
 content_margin_left = 1.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -133,130 +133,38 @@ border_width_bottom = 3
 border_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_8g2nn"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3td0o"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_w1hk4"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_51w8a"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7r1iw"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_32gxc"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.12941177, 0, 0.3647059, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_w04ni"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v0qxi"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3j0xk"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_44cik"]
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.91764706, 0.8666667, 1, 1)
+shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_iytk3"]
-content_margin_left = 1.0
+content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
+bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
 shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ep3f8"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.12941177, 0, 0.3647059, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_boxsh"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
+bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
 shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_boxsh"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_u4tgy"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
+bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
 shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_31d4u"]
@@ -264,16 +172,108 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
+bg_color = Color(0.91764706, 0.8666667, 1, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.12941177, 0, 0.3647059, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_trt52"]
+content_margin_left = 1.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.91764706, 0.8666667, 1, 1)
+corner_radius_top_left = 11
+corner_radius_bottom_left = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_f2ju3"]
+content_margin_left = 1.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
+corner_radius_top_left = 11
+corner_radius_bottom_left = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_h1hkk"]
+content_margin_left = 1.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
+corner_radius_top_left = 11
+corner_radius_bottom_left = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_82p76"]
+corner_radius_top_left = 11
+corner_radius_bottom_left = 11
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_aybkc"]
+content_margin_left = 1.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
+corner_radius_top_left = 11
+corner_radius_bottom_left = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_c6lrq"]
+content_margin_left = 1.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.91764706, 0.8666667, 1, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.12941177, 0, 0.3647059, 1)
+corner_radius_top_left = 11
+corner_radius_bottom_left = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4lo4p"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.91764706, 0.8666667, 1, 1)
+corner_radius_top_right = 11
+corner_radius_bottom_right = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_gr7se"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
+corner_radius_top_right = 11
+corner_radius_bottom_right = 11
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dhuxk"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
 bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
 corner_radius_top_right = 11
 corner_radius_bottom_right = 11
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_trt52"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_j7e14"]
 corner_radius_top_right = 11
 corner_radius_bottom_right = 11
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_f2ju3"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jf211"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -283,7 +283,7 @@ corner_radius_top_right = 11
 corner_radius_bottom_right = 11
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_h1hkk"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_t1x7y"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -331,11 +331,6 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 10
 
-[node name="InfoLabel" type="Label" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=612037732]
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "Configure platform sync and emulators. Disabled platforms will have their games removed."
-
 [node name="Spacer" type="Control" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=1036150649]
 custom_minimum_size = Vector2(0, 10)
 layout_mode = 2
@@ -348,7 +343,35 @@ layout_mode = 2
 
 [node name="M3Checkbox_DuplicateCovers" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1839931523]
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_horizontal = 0
+size_flags_vertical = 4
+theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
+theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
+theme_override_colors/font_pressed_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
+theme_override_colors/font_hover_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
+theme_override_colors/font_hover_pressed_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
+theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
+theme_override_colors/icon_normal_color = Color(1, 1, 1, 0)
+theme_override_colors/icon_pressed_color = Color(1, 1, 1, 0)
+theme_override_colors/icon_hover_color = Color(1, 1, 1, 0)
+theme_override_colors/icon_hover_pressed_color = Color(1, 1, 1, 0)
+theme_override_colors/icon_disabled_color = Color(1, 1, 1, 0)
+theme_override_constants/h_separation = 0
+theme_override_fonts/font = ExtResource("2_pdj8p")
+theme_override_font_sizes/font_size = 0
+theme_override_styles/focus = SubResource("StyleBoxEmpty_lo3qa")
+theme_override_icons/checked = SubResource("ImageTexture_klweo")
+theme_override_icons/unchecked = SubResource("ImageTexture_klweo")
+theme_override_icons/checked_disabled = SubResource("ImageTexture_klweo")
+theme_override_icons/unchecked_disabled = SubResource("ImageTexture_klweo")
+text = "Fold duplicate covers"
+flat = true
+script = ExtResource("3_lo3qa")
+metadata/_custom_type_script = "uid://fmt3itosrqu4"
+
+[node name="M3Checkbox_Hide" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1162553171]
+layout_mode = 2
+size_flags_horizontal = 0
 size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
 theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
@@ -365,18 +388,18 @@ theme_override_constants/h_separation = 0
 theme_override_fonts/font = ExtResource("2_pdj8p")
 theme_override_font_sizes/font_size = 0
 theme_override_styles/focus = SubResource("StyleBoxEmpty_n5l8y")
-theme_override_icons/checked = SubResource("ImageTexture_4rsul")
-theme_override_icons/unchecked = SubResource("ImageTexture_4rsul")
-theme_override_icons/checked_disabled = SubResource("ImageTexture_4rsul")
-theme_override_icons/unchecked_disabled = SubResource("ImageTexture_4rsul")
-text = "Fold duplicate covers"
+theme_override_icons/checked = SubResource("ImageTexture_klweo")
+theme_override_icons/unchecked = SubResource("ImageTexture_klweo")
+theme_override_icons/checked_disabled = SubResource("ImageTexture_klweo")
+theme_override_icons/unchecked_disabled = SubResource("ImageTexture_klweo")
+text = "Hide games with cover"
 flat = true
 script = ExtResource("3_lo3qa")
 metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
-[node name="M3Checkbox_Hide" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1162553171]
+[node name="M3Checkbox_Siblings" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=333737005]
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_horizontal = 0
 size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
 theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
@@ -393,38 +416,10 @@ theme_override_constants/h_separation = 0
 theme_override_fonts/font = ExtResource("2_pdj8p")
 theme_override_font_sizes/font_size = 0
 theme_override_styles/focus = SubResource("StyleBoxEmpty_klweo")
-theme_override_icons/checked = SubResource("ImageTexture_4rsul")
-theme_override_icons/unchecked = SubResource("ImageTexture_4rsul")
-theme_override_icons/checked_disabled = SubResource("ImageTexture_4rsul")
-theme_override_icons/unchecked_disabled = SubResource("ImageTexture_4rsul")
-text = "Hide games with cover"
-flat = true
-script = ExtResource("3_lo3qa")
-metadata/_custom_type_script = "uid://fmt3itosrqu4"
-
-[node name="M3Checkbox_Siblings" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=333737005]
-layout_mode = 2
-size_flags_horizontal = 4
-size_flags_vertical = 4
-theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
-theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
-theme_override_colors/font_pressed_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
-theme_override_colors/font_hover_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
-theme_override_colors/font_hover_pressed_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_colors/icon_normal_color = Color(1, 1, 1, 0)
-theme_override_colors/icon_pressed_color = Color(1, 1, 1, 0)
-theme_override_colors/icon_hover_color = Color(1, 1, 1, 0)
-theme_override_colors/icon_hover_pressed_color = Color(1, 1, 1, 0)
-theme_override_colors/icon_disabled_color = Color(1, 1, 1, 0)
-theme_override_constants/h_separation = 0
-theme_override_fonts/font = ExtResource("2_pdj8p")
-theme_override_font_sizes/font_size = 0
-theme_override_styles/focus = SubResource("StyleBoxEmpty_f1e5o")
-theme_override_icons/checked = SubResource("ImageTexture_4rsul")
-theme_override_icons/unchecked = SubResource("ImageTexture_4rsul")
-theme_override_icons/checked_disabled = SubResource("ImageTexture_4rsul")
-theme_override_icons/unchecked_disabled = SubResource("ImageTexture_4rsul")
+theme_override_icons/checked = SubResource("ImageTexture_klweo")
+theme_override_icons/unchecked = SubResource("ImageTexture_klweo")
+theme_override_icons/checked_disabled = SubResource("ImageTexture_klweo")
+theme_override_icons/unchecked_disabled = SubResource("ImageTexture_klweo")
 text = "Fold Romm siblings"
 flat = true
 script = ExtResource("3_lo3qa")
@@ -438,6 +433,7 @@ size_flags_horizontal = 3
 layout_mode = 2
 
 [node name="M3TextField_URL" type="LineEdit" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings" unique_id=1012644857]
+custom_minimum_size = Vector2(500, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 4
@@ -447,15 +443,16 @@ theme_override_colors/caret_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
 theme_override_colors/selection_color = Color(0.91764706, 0.8666667, 1, 1)
 theme_override_fonts/font = ExtResource("2_pdj8p")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxEmpty_4rsul")
-theme_override_styles/read_only = SubResource("StyleBoxEmpty_crkbm")
-theme_override_styles/focus = SubResource("StyleBoxEmpty_aavty")
+theme_override_styles/normal = SubResource("StyleBoxEmpty_crkbm")
+theme_override_styles/read_only = SubResource("StyleBoxEmpty_aavty")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_3e8q1")
 script = ExtResource("4_lo3qa")
 field_variant = 0
 label_text = "Romm URL"
 metadata/_custom_type_script = "uid://dxu4u734ecmxi"
 
 [node name="M3TextField_User" type="LineEdit" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings" unique_id=261766622]
+custom_minimum_size = Vector2(500, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 4
@@ -465,15 +462,16 @@ theme_override_colors/caret_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
 theme_override_colors/selection_color = Color(0.91764706, 0.8666667, 1, 1)
 theme_override_fonts/font = ExtResource("2_pdj8p")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxEmpty_3e8q1")
-theme_override_styles/read_only = SubResource("StyleBoxEmpty_wx6lo")
-theme_override_styles/focus = SubResource("StyleBoxEmpty_4wukb")
+theme_override_styles/normal = SubResource("StyleBoxEmpty_wx6lo")
+theme_override_styles/read_only = SubResource("StyleBoxEmpty_4wukb")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_vgv63")
 script = ExtResource("4_lo3qa")
 field_variant = 0
 label_text = "Username"
 metadata/_custom_type_script = "uid://dxu4u734ecmxi"
 
 [node name="M3TextField_Pass" type="LineEdit" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings" unique_id=521830116]
+custom_minimum_size = Vector2(500, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 4
@@ -483,9 +481,9 @@ theme_override_colors/caret_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
 theme_override_colors/selection_color = Color(0.91764706, 0.8666667, 1, 1)
 theme_override_fonts/font = ExtResource("2_pdj8p")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxEmpty_vgv63")
-theme_override_styles/read_only = SubResource("StyleBoxEmpty_8g2nn")
-theme_override_styles/focus = SubResource("StyleBoxEmpty_3td0o")
+theme_override_styles/normal = SubResource("StyleBoxEmpty_8g2nn")
+theme_override_styles/read_only = SubResource("StyleBoxEmpty_3td0o")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_w1hk4")
 script = ExtResource("4_lo3qa")
 field_variant = 0
 label_text = "Password"
@@ -505,16 +503,16 @@ theme_override_colors/font_hover_pressed_color = Color(0.40392157, 0.3137255, 0.
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_fonts/font = ExtResource("4_n5l8y")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxFlat_crkbm")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_crkbm")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_aavty")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_aavty")
-theme_override_styles/hover = SubResource("StyleBoxFlat_3e8q1")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_3e8q1")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_wx6lo")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_wx6lo")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_4wukb")
-theme_override_styles/focus = SubResource("StyleBoxFlat_vgv63")
+theme_override_styles/normal = SubResource("StyleBoxFlat_51w8a")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_51w8a")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_7r1iw")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_7r1iw")
+theme_override_styles/hover = SubResource("StyleBoxFlat_32gxc")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_32gxc")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_w04ni")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_w04ni")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_v0qxi")
+theme_override_styles/focus = SubResource("StyleBoxFlat_3j0xk")
 text = "Update"
 alignment = 0
 script = ExtResource("4_cuggk")
@@ -536,16 +534,16 @@ theme_override_colors/font_hover_pressed_color = Color(0.12941177, 0, 0.3647059,
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_fonts/font = ExtResource("4_n5l8y")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxFlat_8g2nn")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_8g2nn")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_3td0o")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_3td0o")
-theme_override_styles/hover = SubResource("StyleBoxFlat_w1hk4")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_w1hk4")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_51w8a")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_51w8a")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_7r1iw")
-theme_override_styles/focus = SubResource("StyleBoxFlat_32gxc")
+theme_override_styles/normal = SubResource("StyleBoxFlat_44cik")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_44cik")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_iytk3")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_iytk3")
+theme_override_styles/hover = SubResource("StyleBoxFlat_ep3f8")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_ep3f8")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_boxsh")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_boxsh")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_u4tgy")
+theme_override_styles/focus = SubResource("StyleBoxFlat_31d4u")
 text = "Select All"
 script = ExtResource("4_cuggk")
 button_size = 1
@@ -583,16 +581,16 @@ theme_override_colors/font_hover_pressed_color = Color(0.12941177, 0, 0.3647059,
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_fonts/font = ExtResource("4_n5l8y")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxFlat_w04ni")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_w04ni")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_v0qxi")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_v0qxi")
-theme_override_styles/hover = SubResource("StyleBoxFlat_3j0xk")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_3j0xk")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_44cik")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_44cik")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_iytk3")
-theme_override_styles/focus = SubResource("StyleBoxFlat_ep3f8")
+theme_override_styles/normal = SubResource("StyleBoxFlat_trt52")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_trt52")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_f2ju3")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_f2ju3")
+theme_override_styles/hover = SubResource("StyleBoxFlat_h1hkk")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_h1hkk")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_82p76")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_82p76")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_aybkc")
+theme_override_styles/focus = SubResource("StyleBoxFlat_c6lrq")
 text = "Quick"
 alignment = 0
 script = ExtResource("4_cuggk")
@@ -612,16 +610,16 @@ theme_override_colors/font_hover_pressed_color = Color(0.12941177, 0, 0.3647059,
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_fonts/font = ExtResource("4_n5l8y")
 theme_override_font_sizes/font_size = 0
-theme_override_styles/normal = SubResource("StyleBoxFlat_boxsh")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_boxsh")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_u4tgy")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_u4tgy")
-theme_override_styles/hover = SubResource("StyleBoxFlat_31d4u")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_31d4u")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_trt52")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_trt52")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_f2ju3")
-theme_override_styles/focus = SubResource("StyleBoxFlat_h1hkk")
+theme_override_styles/normal = SubResource("StyleBoxFlat_4lo4p")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_4lo4p")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_gr7se")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_gr7se")
+theme_override_styles/hover = SubResource("StyleBoxFlat_dhuxk")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_dhuxk")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_j7e14")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_j7e14")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_jf211")
+theme_override_styles/focus = SubResource("StyleBoxFlat_t1x7y")
 text = "Full"
 script = ExtResource("4_cuggk")
 button_size = 1

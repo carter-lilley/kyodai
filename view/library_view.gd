@@ -1,9 +1,7 @@
 class_name LibraryView
 extends View
 
-signal hero_game_changed(game: GameResource)
-
-@onready var games_grid: VirtualScrollGridContainer = $MarginContainer/VBoxContainer/VirtualScrollGridContainer
+# games_grid is declared in base View class; initialize here
 @onready var margin_container: MarginContainer = $MarginContainer
 @onready var platform_indicator: PlatformIndicator = $MarginContainer/VBoxContainer/PlatformIndicator
 
@@ -23,6 +21,9 @@ var _pre_search_platform_index: int = -1  # Remember platform before search
 
 func _ready():
 	view_name = "Library"
+	
+	# Initialize grid reference (declared in base View class)
+	games_grid = $MarginContainer/VBoxContainer/VirtualScrollGridContainer as VirtualScrollGridContainer
 	
 	# Setup VirtualScrollGridContainer
 	if not games_grid:
@@ -58,10 +59,6 @@ func _ready():
 	
 	# Connect to sync_started to clear cache before new sync begins
 	DataManager.sync_started.connect(_on_sync_started)
-	
-	# Connect to download manager for downloads
-	DownloadManager.download_progress.connect(_on_download_progress)
-	DownloadManager.download_completed.connect(_on_download_completed)
 	
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
@@ -457,39 +454,6 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 				on_complete.call()
 	)
 
-func _update_status(text: String):
-	# Status bar removed - no-op
-	pass
-
-func _on_focus_changed(control: Control):
-	# Traverse up the tree to find if focused control is inside a GameCard
-	var card = control
-	while card != null:
-		if card is GameCard:
-			hero_game_changed.emit(card.game)
-			return
-		card = card.get_parent()
-	
-	# Don't clear hero - keep the last focused game image
-
-func reconnect_viewport() -> void:
-	"""Reconnect to the current viewport's gui_focus_changed signal.
-	Call this after reparenting to ensure focus events are received."""
-	var viewport = get_viewport()
-	if not is_instance_valid(viewport):
-		return
-	
-	# Try to disconnect from old viewport (might fail if not connected, that's ok)
-	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		viewport.gui_focus_changed.disconnect(_on_focus_changed)
-	
-	# Connect to new/current viewport
-	viewport.gui_focus_changed.connect(_on_focus_changed)
-	
-	# Reconnect grid's scroll container follow_focus
-	if games_grid and games_grid._scroll_container:
-		games_grid._scroll_container.reconnect_viewport()
-
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
 	if _is_search_active:
@@ -560,40 +524,6 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 		else:
 			_load_total_count(true)
 
-func _on_card_created(card: Control, index: int):
-	"""Connect signals to newly created cards."""
-	if card is GameCard:
-		card.download_requested.connect(_on_download_requested)
-
-func _on_download_requested(game: GameResource):
-	# Use the selected sibling's ID and file name if one is selected
-	var active_game_id = game.get_active_game_id()
-	var active_file_name = game.get_active_file_name()
-	
-	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
-	var root_folder = SettingsManager.get_setting("games_root_folder")
-	if not root_folder or root_folder.value == "":
-		_update_status("Error: Games folder not set")
-		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
-		return
-	
-	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
-	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
-	
-	if item_id != "":
-		_update_status("Queued: " + game.get_display_name())
-	else:
-		_update_status("Failed to queue download")
-
-func _on_download_progress(item_id: String, progress: float):
-	pass
-
-func _on_download_completed(item_id: String, success: bool, message: String):
-	if success:
-		_update_status("Download completed")
-	else:
-		_update_status("Download failed: " + message)
-
 func _on_database_ready():
 	_load_total_count()
 
@@ -632,16 +562,6 @@ func _on_games_batch_added(platform_slug: String, start_index: int, games: Array
 		var start_num = range_info.start + 1
 		var end_num = mini(range_info.end, range_info.total)
 		_update_status("Showing %d-%d of %d games" % [start_num, end_num, range_info.total])
-
-func _on_game_updated(game: GameResource):
-	# Find and update any visible cards for this game
-	var range_info = games_grid.get_visible_range()
-	for i in range(range_info.buffer_start, range_info.buffer_start + range_info.buffer_size):
-		var card = games_grid.get_card_at_index(i)
-		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
-			var is_visible = i >= range_info.start and i < range_info.end
-			card.set_game_with_priority(game, is_visible)
-			break
 
 func _on_games_removed(platform_slug: String):
 	_reload_after_change()
@@ -713,75 +633,3 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			UIManager.show_settings_dialog_with_category("card_designer")
 		"hide":
 			pass
-
-func check_and_rebuild_if_needed() -> void:
-	"""Override: Capture reason before it's cleared, then defer rebuild."""
-	if needs_rebuild:
-		var reason = needs_rebuild_reason
-		# Clear flags now since we're handling the rebuild
-		needs_rebuild = false
-		needs_rebuild_reason = ""
-		# Pass the captured reason to the deferred rebuild
-		call_deferred("_do_rebuild", reason)
-
-func perform_rebuild() -> void:
-	"""Override: Perform the actual grid rebuild when view becomes visible."""
-	# This is called by the base class, but we handle the deferred rebuild in check_and_rebuild_if_needed
-	pass
-
-var _deferred_rebuild_attempts: int = 0
-const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
-
-func _do_rebuild(reason: String = "") -> void:
-	# Ensure we have valid dimensions before rebuilding
-	if size.x <= 0 or size.y <= 0:
-		_deferred_rebuild_attempts += 1
-		if _deferred_rebuild_attempts > MAX_DEFERRED_REBUILD_ATTEMPTS:
-			push_warning("[LibraryView] Max deferred rebuild attempts reached with invalid size, aborting")
-			_deferred_rebuild_attempts = 0
-			return
-		call_deferred("_do_rebuild", reason)
-		return
-	
-	# Reset counter on successful rebuild
-	_deferred_rebuild_attempts = 0
-	
-	if games_grid:
-		# Force a layout recalculation with the new valid size
-		games_grid.queue_redraw()
-	
-	# Check if rebuild is due to card effects change
-	var refresh_effects = reason == "Card effects changed"
-	rebuild_grid(refresh_effects)
-
-func _update_grid_orientation() -> void:
-	if not SettingsManager:
-		return
-	
-	var mode_setting = SettingsManager.get_setting("library_layout_mode")
-	var layout_mode = mode_setting.value if mode_setting else 0
-	
-	# Migrate old 4-mode values to new 3-mode values
-	match layout_mode:
-		0, 1:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.GRID
-		2:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
-		3:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
-	
-	var grid_vertical_setting = SettingsManager.get_setting("library_grid_vertical")
-	games_grid.grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true
-	
-	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
-	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
-
-func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	"""Handle settings changes."""
-	match setting.property_name:
-		"card_effect_config":
-			mark_for_rebuild("Card effects changed")
-		"library_show_title_mode", "library_card_display_mode", "library_card_content_alignment":
-			if games_grid:
-				games_grid.refresh_all_card_effects()
-				games_grid.refresh_dimensions()

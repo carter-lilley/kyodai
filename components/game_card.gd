@@ -58,7 +58,6 @@ const LONG_PRESS_TOLERANCE_DP: float = 20.0
 var _touch_start_time: float = 0.0
 var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
-var _long_press_timer: Timer = null
 
 func _ready():
 	super._ready()
@@ -78,19 +77,7 @@ func _ready():
 	focus_exited.connect(_on_focus_exited)
 	mouse_entered.connect(_on_card_mouse_entered)
 	
-	if DownloadManager:
-		DownloadManager.download_progress.connect(_on_download_progress)
-		DownloadManager.download_completed.connect(_on_download_completed)
-	
 	_setup_status_badge()
-	
-	# Setup long-press timer for Android
-	if PlatformManager.is_android():
-		_long_press_timer = Timer.new()
-		_long_press_timer.wait_time = LONG_PRESS_DURATION
-		_long_press_timer.one_shot = true
-		_long_press_timer.timeout.connect(_on_long_press_timeout)
-		add_child(_long_press_timer)
 
 func _setup_status_badge():
 	_status_badge = Panel.new()
@@ -396,12 +383,6 @@ func _apply_display_mode() -> void:
 		2: # Media Only
 			show_background = false
 			show_text_margin = false
-
-func set_card_zoom(_zoom: float) -> void:
-	# EffectStack updates container_size automatically via NOTIFICATION_RESIZED.
-	# Setting zoom_level here would trigger _recalculate_dimensions() and overwrite container_size
-	# with an incorrect value before the layout pass corrects it.
-	pass
 
 func set_focus_scale(value: float) -> void:
 	focus_scale = maxf(value, 1.0)
@@ -860,6 +841,12 @@ func _on_card_mouse_entered() -> void:
 			grab_focus()
 
 func _input(event: InputEvent) -> void:
+	# Early-out for non-Android touch events — avoids _can_accept_focus() cost
+	# for the vast majority of input events on desktop/console.
+	var is_touch_event = (event is InputEventScreenTouch or event is InputEventScreenDrag)
+	if is_touch_event and not PlatformManager.is_android():
+		return
+	
 	if not _can_accept_focus():
 		return
 	
@@ -878,13 +865,12 @@ func _input(event: InputEvent) -> void:
 				_touch_start_time = Time.get_ticks_msec() / 1000.0
 				_touch_start_pos = touch_pos
 				_touch_is_holding = true
-				if _long_press_timer:
-					_long_press_timer.start()
 		else:
 			if _touch_is_holding:
+				# Check if this release qualifies as a long press
+				if _is_long_press_elapsed():
+					_trigger_long_press()
 				_touch_is_holding = false
-				if _long_press_timer:
-					_long_press_timer.stop()
 	
 	if PlatformManager.is_android() and event is InputEventScreenDrag:
 		if _touch_is_holding:
@@ -892,15 +878,24 @@ func _input(event: InputEvent) -> void:
 			var distance = _touch_start_pos.distance_to(current_pos)
 			if distance > M3Units.dp(LONG_PRESS_TOLERANCE_DP):
 				_touch_is_holding = false
-				if _long_press_timer:
-					_long_press_timer.stop()
+			else:
+				# Check if we've held long enough during drag
+				if _is_long_press_elapsed():
+					_trigger_long_press()
 
-func _on_long_press_timeout() -> void:
-	if _touch_is_holding and game and UIManager:
-		_touch_is_holding = false
-		if AudioManager:
-			AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
-		UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
+func _is_long_press_elapsed() -> bool:
+	if not _touch_is_holding:
+		return false
+	var elapsed = (Time.get_ticks_msec() / 1000.0) - _touch_start_time
+	return elapsed >= LONG_PRESS_DURATION
+
+func _trigger_long_press() -> void:
+	if not _touch_is_holding or not game or not UIManager:
+		return
+	_touch_is_holding = false
+	if AudioManager:
+		AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
+	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 
 func _can_accept_focus() -> bool:
 	var home_view = _find_home_view()
@@ -918,14 +913,6 @@ func _find_home_view() -> Node:
 			return current
 		current = current.get_parent()
 	return null
-
-func _on_download_progress(_game_id: String, _progress: float):
-	pass
-
-func _on_download_completed(game_id: String, _success: bool):
-	if game and game.id == game_id:
-		_is_downloading = false
-		_update_status_icon()
 
 func _apply_content_scale() -> void:
 	super._apply_content_scale()
@@ -1024,4 +1011,4 @@ func _notification(what: int):
 			call_deferred("_deferred_update_badges")
 	if what == NOTIFICATION_PARENTED:
 		# Invalidate cached parent-chain lookup so _get_show_delete() recomputes
-		set_meta("_cached_show_delete", null)
+		remove_meta("_cached_show_delete")

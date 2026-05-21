@@ -15,11 +15,6 @@ signal download_requested(emulator_id: String)
 		platform_name = value
 		_update_display()
 
-@export var platform_icon: Texture2D = null:
-	set(value):
-		platform_icon = value
-		_update_display()
-
 @export var is_sync_enabled: bool = false:
 	set(value):
 		is_sync_enabled = value
@@ -39,7 +34,6 @@ var registry_default_emulator: String = "":
 var _available_emulators: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}
 
-var _icon_texture: TextureRect
 var _name_label: Label
 var _emulator_label: Label
 var _sync_toggle: M3Checkbox
@@ -67,15 +61,9 @@ func _ready():
 			_update_status_indicator()
 
 func _build_ui():
-	# Use M3Card's media panel for the platform icon
-	_icon_texture = TextureRect.new()
-	_icon_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-	_icon_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	set_media_content(_icon_texture)
-
-	# Shrink media panel from default 256dp to a compact icon slot
+	# Platform cards have no media
 	if _media_panel:
-		_media_panel.custom_minimum_size = Vector2(M3Units.dp(56), 0)
+		_media_panel.visible = false
 
 	# Hide M3Card's default text labels (we build our own layout inside _text_content)
 	if _headline_label:
@@ -158,7 +146,6 @@ func _update_display():
 	if not is_node_ready():
 		return
 
-	_icon_texture.texture = platform_icon
 	_name_label.text = platform_name if platform_name else platform_slug
 	_sync_toggle.button_pressed = is_sync_enabled
 
