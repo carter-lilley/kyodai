@@ -190,6 +190,8 @@ func _clear_items():
 		child.queue_free()
 
 func _build_items():
+	if _cached_fonts.is_empty():
+		_cached_fonts = M3Theme.load_fonts()
 	var fonts = _cached_fonts
 	
 	for i in range(_menu_items.size()):
@@ -801,6 +803,11 @@ func _activate_item(index: int):
 	
 	var item = _menu_items[index]
 	if item.disabled:
+		return
+	
+	# If this item has a submenu, open it instead of activating
+	if item.submenu != null:
+		submenu_requested.emit(index)
 		return
 	
 	# Toggle checkable items

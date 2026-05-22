@@ -192,9 +192,9 @@ func refresh_theme():
 		_update_text()
 
 func show_overlay():
-	var tree = Engine.get_main_loop()
-	if tree and tree.root and get_parent() == null:
-		tree.root.add_child(self)
+	var parent = M3Overlay.get_overlay_parent()
+	if parent and get_parent() == null:
+		parent.add_child(self)
 	super.show_overlay()
 	_animate_in()
 

@@ -70,7 +70,7 @@ const Type = SettingsVar.SettingType
 # General layout settings (always visible)
 @export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"])
 @export var library_grid_vertical := SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)")
-@export var library_navigation_type := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
+@export var library_navigation_type := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
 @export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.15, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
 @export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 2, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])

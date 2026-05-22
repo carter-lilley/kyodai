@@ -678,6 +678,8 @@ func _update_text():
 		return
 	
 	var height_dp = size.y / M3Units.get_scale()
+	if _cached_fonts.is_empty():
+		_cached_fonts = M3Theme.load_fonts()
 	var fonts = _cached_fonts
 	var headline_spec = _pick_headline_spec(height_dp)
 	var supporting_spec = _pick_supporting_spec(height_dp)

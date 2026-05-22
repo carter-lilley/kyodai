@@ -3,7 +3,7 @@ render_mode blend_mix;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform sampler2D game_texture : source_color;
+uniform sampler2D game_texture : source_color, repeat_disable;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // HSL-style parameters (internally not HSL anymore)

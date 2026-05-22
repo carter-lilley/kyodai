@@ -2468,9 +2468,15 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 	var version_pattern = platform_config.get("version_pattern", "")
 	var url_template = platform_config.get("url_template", "")
 	var match_strategy = platform_config.get("match_strategy", "first")
+	var json_path = platform_config.get("json_path", "")
 	
-	if scrape_url == "" or version_pattern == "" or url_template == "":
+	if scrape_url == "" or url_template == "":
 		push_error("[LaunchManager] Invalid download_scrape config for step: " + step_name)
+		return false
+	
+	# version_pattern is required for HTML scraping, optional for JSON API mode
+	if json_path == "" and version_pattern == "":
+		push_error("[LaunchManager] download_scrape requires either version_pattern or json_path for step: " + step_name)
 		return false
 	
 	_emulator_install_progress[emulator_id] = "Scraping for latest version..."
@@ -2489,7 +2495,8 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 			if version != "":
 				_save_emulator_version(emulator_id, version)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
-		match_strategy
+		match_strategy,
+		json_path
 	)
 	return true
 

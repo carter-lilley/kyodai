@@ -20,7 +20,7 @@ const NAV_DESTINATIONS = [
 ]
 
 # Settings dialog
-var _settings_dialog: SettingsDialog = null
+var _settings_dialog = null
 
 # Default hero height ratio (will be overridden by settings)
 const HERO_SIZE_RATIO_DEFAULT = 0.33
@@ -586,11 +586,22 @@ func pre_create_settings_dialog() -> void:
 		_settings_dialog.queue_free()
 		_settings_dialog = null
 	
-	_settings_dialog = preload("res://view/settings_dialog.tscn").instantiate()
+	# Use script .new() instead of scene instantiation to avoid CanvasLayer script attachment issues in SubViewports
+	var settings_script = load("res://view/settings_dialog.gd")
+	if not settings_script:
+		push_error("[UIManager] Failed to load SettingsDialog script")
+		return
+	_settings_dialog = settings_script.new()
+	if not _settings_dialog or not is_instance_valid(_settings_dialog):
+		push_error("[UIManager] Failed to instantiate SettingsDialog")
+		return
+	if not _settings_dialog.has_signal("dismissed"):
+		push_error("[UIManager] SettingsDialog instance missing 'dismissed' signal — script failed to attach. Class: " + _settings_dialog.get_class())
+		return
 	_settings_dialog.dismissed.connect(_on_settings_dialog_dismissed)
 	
 	if not _settings_dialog.is_inside_tree():
-		_root_control.add_child(_settings_dialog)
+		_add_settings_dialog_to_correct_parent()
 
 func show_settings_dialog() -> void:
 	"""Show the fullscreen settings dialog."""
@@ -598,9 +609,18 @@ func show_settings_dialog() -> void:
 		pre_create_settings_dialog()
 	
 	if not _settings_dialog.is_inside_tree():
-		_root_control.add_child(_settings_dialog)
+		_add_settings_dialog_to_correct_parent()
 	
 	_settings_dialog.show_overlay()
+
+func _add_settings_dialog_to_correct_parent() -> void:
+	"""Add SettingsDialog to a parent where its CanvasLayer script will attach correctly.
+	SubViewports break CanvasLayer script attachment; keep it in the root viewport."""
+	var tree = Engine.get_main_loop()
+	if tree and tree.root:
+		tree.root.add_child(_settings_dialog)
+	else:
+		_root_control.add_child(_settings_dialog)
 
 func show_settings_dialog_with_category(category_id: String) -> void:
 	"""Open the settings dialog and jump to a specific category."""
@@ -975,6 +995,7 @@ var _hero_copy_in_second_viewport: Node = null
 # Node reparenting state for Android dual screen
 var _main_ui_original_parent: Node = null
 var _ui_layer_original_parent: Node = null
+var _settings_dialog_original_parent: Node = null
 var _is_nodes_reparented: bool = false
 var _viewport_layout: Node = null
 
@@ -1016,9 +1037,18 @@ func _enable_dual_screen_viewport_mode() -> void:
 		push_warning("[UIManager] Dual screen setup nodes not found")
 		return
 	
+	# Dismiss any active M3 overlays before reparenting so they don't get stranded
+	M3Overlay.dismiss_type("menu")
+	M3Overlay.dismiss_type("snackbar")
+	M3Overlay.dismiss_type("dialog")
+	M3Overlay.dismiss_type("tooltip")
+	M3Overlay.dismiss_type("sheet")
+
 	# REPARENTING: Move main UI nodes into MainViewport
 	var main_viewport = get_node("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
 	if main_viewport:
+		# Mark viewport as overlay parent so M3 components render inside it
+		main_viewport.add_to_group("m3_overlay_parent")
 		_reparent_ui_to_main_viewport(main_viewport)
 	
 	# Hide hero in main UI since it will be on second screen
@@ -1051,6 +1081,11 @@ func _disable_dual_screen_mode() -> void:
 	"""Disable dual screen mode - restore HeroImage to main layout."""
 	if not _dual_screen_active:
 		return
+	
+	# Remove main viewport from overlay parent group so M3 components attach to root viewport
+	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
+	if main_viewport:
+		main_viewport.remove_from_group("m3_overlay_parent")
 	
 	# Restore UI nodes to original parents first
 	_restore_ui_to_original_parents()
@@ -1099,6 +1134,12 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	if ui_layer:
 		_ui_layer_original_parent = ui_layer.get_parent()
 	
+	# Store SettingsDialog original parent and remove it from _root_control
+	# CanvasLayers must not be nested inside VBoxContainer inside SubViewport
+	if _settings_dialog and _settings_dialog.get_parent():
+		_settings_dialog_original_parent = _settings_dialog.get_parent()
+		_settings_dialog.get_parent().remove_child(_settings_dialog)
+	
 	# Remove RootLayout from current parent (this includes M3 nav via InnerLayout)
 	if _root_control and _root_control.get_parent():
 		_root_control.get_parent().remove_child(_root_control)
@@ -1120,6 +1161,10 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	# Add UILayer directly to MainViewport (CanvasLayer can't go in VBoxContainer)
 	if ui_layer:
 		main_viewport.add_child(ui_layer)
+	
+	# Add SettingsDialog directly to MainViewport (same reason as UILayer)
+	if _settings_dialog:
+		main_viewport.add_child(_settings_dialog)
 	
 	_is_nodes_reparented = true
 	
@@ -1177,9 +1222,20 @@ func _restore_ui_to_original_parents() -> void:
 			ui_layer.get_parent().remove_child(ui_layer)
 		_ui_layer_original_parent.add_child(ui_layer)
 	
+	# Restore SettingsDialog to its original parent (or _root_control as fallback)
+	if _settings_dialog:
+		if _settings_dialog.get_parent():
+			_settings_dialog.get_parent().remove_child(_settings_dialog)
+		if _settings_dialog_original_parent:
+			_settings_dialog_original_parent.add_child(_settings_dialog)
+		else:
+			# Created after reparenting — move back to _root_control
+			_root_control.add_child(_settings_dialog)
+	
 	_is_nodes_reparented = false
 	_main_ui_original_parent = null
 	_ui_layer_original_parent = null
+	_settings_dialog_original_parent = null
 	
 	# Reconnect FocusIndicator to original viewport after restoring
 	if _focus_indicator and is_instance_valid(_focus_indicator):

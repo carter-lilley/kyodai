@@ -11,6 +11,17 @@ extends CanvasLayer
 static var _active: Dictionary = {}
 static var _max_layer: int = 0
 
+## Get the effective parent node for overlays.
+## In dual-screen mode the "m3_overlay_parent" node group is used so overlays
+## render in the correct SubViewport instead of the root viewport.
+static func get_overlay_parent() -> Node:
+	var tree = Engine.get_main_loop()
+	if tree is SceneTree:
+		var group = tree.get_first_node_in_group("m3_overlay_parent")
+		if group and is_instance_valid(group) and group is Node:
+			return group
+	return tree.root if tree else null
+
 # ============================================
 # EXPORTS
 # ============================================

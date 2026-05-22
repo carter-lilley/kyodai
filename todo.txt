@@ -2,8 +2,17 @@
 
 refocus when install process finished (button disappears)
 note to user: prepping on first launch
+zoom hotkeys backwards
+ui cancel to close settings and to return home
+nav sounds and haptics gone?
+OOBE as M3Popup
+make DP size for romm textinputs
+check for update button changes
+why shadps4 triggering check for update
+separate firmware page or indicator?
 
 ## android
+	hero not working
 	chunk reassembly notif on android
 	android download manager and file streaming
 	no touch to launch on bottom screen

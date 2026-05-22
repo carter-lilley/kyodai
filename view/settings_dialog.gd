@@ -1,4 +1,3 @@
-@tool
 class_name SettingsDialog
 extends M3Dialog
 
@@ -284,8 +283,14 @@ func get_platforms_settings_view() -> PlatformsSettingsView:
 func refresh_theme() -> void:
 	super.refresh_theme()
 	for content in _category_contents.values():
-		if is_instance_valid(content) and content.has_method("refresh_theme"):
-			content.refresh_theme()
+		if is_instance_valid(content):
+			_refresh_theme_recursive(content)
+
+func _refresh_theme_recursive(node: Node) -> void:
+	if node.has_method("refresh_theme"):
+		node.refresh_theme()
+	for child in node.get_children():
+		_refresh_theme_recursive(child)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:

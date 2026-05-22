@@ -70,6 +70,15 @@ func clear_controls() -> void:
 		child.queue_free()
 	controls.clear()
 
+func refresh_theme() -> void:
+	_refresh_theme_recursive(self)
+
+func _refresh_theme_recursive(node: Node) -> void:
+	if node.has_method("refresh_theme") and node != self:
+		node.refresh_theme()
+	for child in node.get_children():
+		_refresh_theme_recursive(child)
+
 var controls: Dictionary[String, Control] = {}
 
 func _apply_metadata(control: Control, metadata: Dictionary) -> void:

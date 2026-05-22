@@ -343,7 +343,7 @@ layout_mode = 2
 
 [node name="M3Checkbox_DuplicateCovers" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1839931523]
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_horizontal = 0
 size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
 theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
@@ -371,7 +371,7 @@ metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
 [node name="M3Checkbox_Hide" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1162553171]
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_horizontal = 0
 size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
 theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
@@ -399,7 +399,7 @@ metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
 [node name="M3Checkbox_Siblings" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=333737005]
 layout_mode = 2
-size_flags_horizontal = 4
+size_flags_horizontal = 0
 size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
 theme_override_colors/font_focus_color = Color(0.10980392, 0.105882354, 0.12156863, 1)
@@ -522,6 +522,8 @@ button_shape = 1
 icon_name = "cloud-refresh"
 m3_tooltip_text = "Check for emulator updates."
 metadata/_custom_type_script = "uid://dv82iypo8etp8"
+metadata/m3_tooltip_text = "Check for emulator updates."
+metadata/m3_tooltip_variant = 0
 
 [node name="M3Button_SelectAll" type="Button" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=1487232430]
 layout_mode = 2
@@ -549,6 +551,8 @@ script = ExtResource("4_cuggk")
 button_size = 1
 m3_tooltip_text = "Bulk select platforms."
 metadata/_custom_type_script = "uid://dv82iypo8etp8"
+metadata/m3_tooltip_text = "Bulk select platforms."
+metadata/m3_tooltip_variant = 0
 
 [node name="Control" type="Control" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=347424575]
 layout_mode = 2
@@ -598,6 +602,8 @@ button_size = 1
 icon_name = "sync"
 m3_tooltip_text = "Fetch new games and updates since last sync"
 metadata/_custom_type_script = "uid://dv82iypo8etp8"
+metadata/m3_tooltip_text = "Fetch new games and updates since last sync"
+metadata/m3_tooltip_variant = 0
 
 [node name="M3Button_FullSync" type="Button" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow/M3ButtonGroup" unique_id=843799757]
 layout_mode = 2
@@ -625,6 +631,8 @@ script = ExtResource("4_cuggk")
 button_size = 1
 m3_tooltip_text = "Clear library for full metadata refresh."
 metadata/_custom_type_script = "uid://dv82iypo8etp8"
+metadata/m3_tooltip_text = "Clear library for full metadata refresh."
+metadata/m3_tooltip_variant = 0
 
 [node name="Spacer2" type="Control" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=602410741]
 custom_minimum_size = Vector2(0, 10)

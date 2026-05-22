@@ -741,7 +741,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			callback.call("", "", "No asset matched pattern: " + asset_pattern)
 			)
 
-func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first"):
+func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):
 	var http = _create_http_request()
 	_active_request_count += 1
 	
@@ -766,55 +766,154 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 			return
 		
 		var body_text = body.get_string_from_utf8()
-		
-		var regex = RegEx.new()
-		regex.compile(version_pattern)
-		
 		var version: String = ""
 		
-		if match_strategy == "latest_semver":
-			var all_matches = regex.search_all(body_text)
-			if all_matches.is_empty():
-				callback.call("", "", "Could not find version pattern in page")
+		if json_path != "":
+			# JSON API mode: parse JSON and extract version via path
+			var json = JSON.new()
+			var parse_result = json.parse(body_text)
+			if parse_result != OK:
+				callback.call("", "", "Failed to parse JSON: " + json.get_error_message())
 				return
 			
-			var versions: Array[String] = []
-			for m in all_matches:
-				var v = m.get_string(1)
-				if v not in versions:
-					versions.append(v)
-			
-			if versions.is_empty():
-				callback.call("", "", "Could not find version pattern in page")
-				return
-			
-			# Parse and sort by semver (descending)
-			versions.sort_custom(func(a: String, b: String) -> int:
-				var a_parts = a.split(".")
-				var b_parts = b.split(".")
-				var max_len = max(a_parts.size(), b_parts.size())
-				for i in range(max_len):
-					var av = int(a_parts[i]) if i < a_parts.size() else 0
-					var bv = int(b_parts[i]) if i < b_parts.size() else 0
-					if av > bv:
-						return true
-					elif av < bv:
-						return false
-				return false
-			)
-			version = versions[0]
+			# Check if path contains a wildcard array iterator [*]
+			var wildcard_idx = json_path.find("[*]")
+			if wildcard_idx != -1:
+				# Array iteration mode: prefix[*].suffix
+				var prefix_path = json_path.substr(0, wildcard_idx)
+				var suffix_path = json_path.substr(wildcard_idx + 3)  # skip "[*]"
+				if suffix_path.begins_with("."):
+					suffix_path = suffix_path.substr(1)
+				
+				var array_data = _extract_json_value(json.data, prefix_path)
+				if array_data == null or not (array_data is Array):
+					callback.call("", "", "JSON path did not resolve to an array: " + prefix_path)
+					return
+				
+				print("[NetworkManager] Fetched " + str(array_data.size()) + " tags from GitHub API")
+				
+				var regex = RegEx.new()
+				if version_pattern != "":
+					regex.compile(version_pattern)
+				
+				for item in array_data:
+					var item_value = item
+					if suffix_path != "":
+						item_value = _extract_json_value(item, suffix_path)
+					
+					if item_value == null:
+						continue
+					
+					var item_str = str(item_value)
+					print("[NetworkManager] Checking tag: " + item_str)
+					
+					if version_pattern != "":
+						var match_result = regex.search(item_str)
+						if match_result != null:
+							version = match_result.get_string(1) if match_result.get_group_count() >= 1 else item_str
+							print("[NetworkManager] Matched tag: " + item_str + " -> version=" + version)
+							break
+					else:
+						version = item_str
+						break
+				
+				if version == "":
+					callback.call("", "", "No array item matched version pattern: " + version_pattern)
+					return
+			else:
+				# Single value extraction mode
+				var extracted = _extract_json_value(json.data, json_path)
+				if extracted == null or extracted == "":
+					callback.call("", "", "Could not extract version from JSON path: " + json_path)
+					return
+				version = str(extracted)
 		else:
-			# Default: first match
-			var match_result = regex.search(body_text)
-			if match_result == null:
-				callback.call("", "", "Could not find version pattern in page")
-				return
-			version = match_result.get_string(1)
+			# HTML scraping mode: use regex on response body
+			var regex = RegEx.new()
+			regex.compile(version_pattern)
+			
+			if match_strategy == "latest_semver":
+				var all_matches = regex.search_all(body_text)
+				if all_matches.is_empty():
+					callback.call("", "", "Could not find version pattern in page")
+					return
+				
+				var versions: Array[String] = []
+				for m in all_matches:
+					var v = m.get_string(1)
+					if v not in versions:
+						versions.append(v)
+				
+				if versions.is_empty():
+					callback.call("", "", "Could not find version pattern in page")
+					return
+				
+				# Parse and sort by semver (descending)
+				versions.sort_custom(func(a: String, b: String) -> int:
+					var a_parts = a.split(".")
+					var b_parts = b.split(".")
+					var max_len = max(a_parts.size(), b_parts.size())
+					for i in range(max_len):
+						var av = int(a_parts[i]) if i < a_parts.size() else 0
+						var bv = int(b_parts[i]) if i < b_parts.size() else 0
+						if av > bv:
+							return true
+						elif av < bv:
+							return false
+					return false
+				)
+				version = versions[0]
+			else:
+				# Default: first match
+				var match_result = regex.search(body_text)
+				if match_result == null:
+					callback.call("", "", "Could not find version pattern in page")
+					return
+				version = match_result.get_string(1)
 		
 		var download_url = url_template.replace("{version}", version)
 		
 		callback.call(download_url, version, "")
 	)
+
+## Extracts a value from parsed JSON data using a dot-and-bracket path.
+## Examples: "[0].name", "data.version", "items[2].url"
+func _extract_json_value(data, path: String):
+	var current = data
+	var i = 0
+	while i < path.length():
+		if path[i] == "[":
+			# Array index: find closing bracket
+			var close_idx = path.find("]", i)
+			if close_idx == -1:
+				return null
+			var index = int(path.substr(i + 1, close_idx - i - 1))
+			if current is Array and index >= 0 and index < current.size():
+				current = current[index]
+			else:
+				return null
+			i = close_idx + 1
+			# Skip dot after bracket if present
+			if i < path.length() and path[i] == ".":
+				i += 1
+		else:
+			# Object key: find next dot or bracket
+			var next_dot = path.find(".", i)
+			var next_bracket = path.find("[", i)
+			var end_idx = path.length()
+			if next_dot != -1 and (next_bracket == -1 or next_dot < next_bracket):
+				end_idx = next_dot
+			elif next_bracket != -1 and (next_dot == -1 or next_bracket < next_dot):
+				end_idx = next_bracket
+			var key = path.substr(i, end_idx - i)
+			if current is Dictionary and current.has(key):
+				current = current[key]
+			else:
+				return null
+			i = end_idx
+			if i < path.length() and path[i] == ".":
+				i += 1
+	return current
 
 # ==================== ROMM SAVE API OPERATIONS ====================
 

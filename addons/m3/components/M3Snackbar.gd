@@ -159,6 +159,8 @@ func _position_snackbar():
 	)
 
 func _update_appearance():
+	if _cached_fonts.is_empty():
+		_cached_fonts = M3Theme.load_fonts()
 	var fonts = _cached_fonts
 	
 	var bg = M3Theme.get_inverse_surface()
@@ -253,9 +255,9 @@ static func show_message(message: String, action_text: String = "", action_callb
 	var snackbar = M3Snackbar.new()
 	snackbar.setup(message, action_text, action_callback, dismissible)
 	
-	var tree = Engine.get_main_loop()
-	if tree and tree.root:
-		tree.root.add_child(snackbar)
+	var parent = M3Overlay.get_overlay_parent()
+	if parent:
+		parent.add_child(snackbar)
 		snackbar.show_overlay()
 
 static func dismiss_current():

@@ -166,10 +166,7 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	# Position and size the EffectStack exactly at the card's location
 	# Add 2px overshoot to compensate for shader AA edge
 	_effect_stack.position = card_rect.position - Vector2(2, 2)
-	# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
-	# and causes wrong sizes when the parent resizes between deferral and execution.
-	# Anchors handle sizing automatically.
-	# _effect_stack.set_deferred("size", card_rect.size + Vector2(4, 4))
+	_effect_stack.size = card_rect.size + Vector2(4, 4)
 	
 	# Create a container state for the effect stack
 	var container_state = EffectContainerState.for_card()
@@ -227,7 +224,7 @@ func _animate_transition():
 		
 		tween.tween_method(
 			func(t: float):
-				var current_size = _original_card_rect.size.lerp(target_size, t)
+				var current_size = _effect_stack.size
 				container_state.container_size = current_size
 				
 				# Calculate vertical offset to keep image centered during aspect ratio change
@@ -298,17 +295,13 @@ func _animate_transition():
 	tween.chain().tween_callback(_on_animation_complete)
 
 func _on_animation_complete():
-	# On Android, hide immediately since we can't track process exit (uses intents)
-	# On desktop, wait for background_state_exited signal when process polling detects exit
-	if PlatformManager.is_android():
-		visible = false
-	else:
-		# Connect to background_state_exited to know when to hide
-		if LaunchManager:
-			if not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-				LaunchManager.background_state_exited.connect(_on_background_state_exited)
+	# On desktop, connect to background_state_exited signal when process polling detects exit
+	# On Android, keep the overlay visible until NOTIFICATION_APPLICATION_RESUMED fires
+	if LaunchManager:
+		if not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+			LaunchManager.background_state_exited.connect(_on_background_state_exited)
 	
-	# Hide the title label but keep the black overlay (desktop only)
+	# Hide the title label but keep the black overlay
 	if _game_title_label:
 		_game_title_label.visible = false
 	
@@ -323,6 +316,17 @@ func _on_background_state_exited(_exited_game: GameResource, _exit_code: int) ->
 	if LaunchManager:
 		if LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
 			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED:
+		if visible and PlatformManager.is_android():
+			visible = false
+			if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+				LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+
+func _exit_tree() -> void:
+	if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+		LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
 
 func is_animating() -> bool:
 	return _is_animating

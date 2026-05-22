@@ -125,9 +125,9 @@ func clear_actions():
 
 ## Show the dialog overlay.
 func show_overlay():
-	var tree = Engine.get_main_loop()
-	if tree and tree.root and get_parent() == null:
-		tree.root.add_child(self)
+	var parent = M3Overlay.get_overlay_parent()
+	if parent and get_parent() == null:
+		parent.add_child(self)
 	_position_dialog()
 	super.show_overlay()
 
@@ -461,6 +461,8 @@ func _update_hero_icon():
 		_hero_icon.visible = true
 
 func refresh_theme():
+	if not _ready_called:
+		return
 	_update_appearance()
 
 # ============================================
@@ -468,9 +470,9 @@ func refresh_theme():
 # ============================================
 
 static func show_dialog(dialog: M3Dialog):
-	var tree = Engine.get_main_loop()
-	if tree and tree.root:
-		tree.root.add_child(dialog)
+	var parent = M3Overlay.get_overlay_parent()
+	if parent:
+		parent.add_child(dialog)
 		dialog.show_overlay()
 
 static func show_confirm(title: String, body: String, on_accept: Callable = Callable(), on_cancel: Callable = Callable()) -> M3Dialog:

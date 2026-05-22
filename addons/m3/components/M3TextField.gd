@@ -446,6 +446,8 @@ func _get_font_icon_settings() -> FontIconSettings:
 
 func _update_theme():
 	var has_error = not error_text.is_empty()
+	if _cached_fonts.is_empty():
+		_cached_fonts = M3Theme.load_fonts()
 	var fonts = _cached_fonts
 	
 	# Input text styling (native LineEdit)
@@ -473,17 +475,20 @@ func _update_theme():
 	else:
 		label_color = M3Theme.get_on_surface_variant()
 	
-	_floating_label.add_theme_color_override("font_color", label_color)
-	_floating_label.add_theme_font_override("font", fonts["regular"])
+	if _floating_label:
+		_floating_label.add_theme_color_override("font_color", label_color)
+		_floating_label.add_theme_font_override("font", fonts["regular"])
 	
 	# Prefix/suffix colors
-	_prefix_label.add_theme_color_override("font_color", input_color)
-	_prefix_label.add_theme_font_override("font", fonts["regular"])
-	_prefix_label.add_theme_font_size_override("font_size", M3Units.dp(INPUT_FONT_SIZE))
+	if _prefix_label:
+		_prefix_label.add_theme_color_override("font_color", input_color)
+		_prefix_label.add_theme_font_override("font", fonts["regular"])
+		_prefix_label.add_theme_font_size_override("font_size", M3Units.dp(INPUT_FONT_SIZE))
 	
-	_suffix_label.add_theme_color_override("font_color", input_color)
-	_suffix_label.add_theme_font_override("font", fonts["regular"])
-	_suffix_label.add_theme_font_size_override("font_size", M3Units.dp(INPUT_FONT_SIZE))
+	if _suffix_label:
+		_suffix_label.add_theme_color_override("font_color", input_color)
+		_suffix_label.add_theme_font_override("font", fonts["regular"])
+		_suffix_label.add_theme_font_size_override("font_size", M3Units.dp(INPUT_FONT_SIZE))
 	
 	# Icon colors
 	var icon_color = M3Theme.disabled_color(M3Theme.get_on_surface_variant()) if not editable else M3Theme.get_on_surface_variant()
@@ -501,9 +506,10 @@ func _update_theme():
 	else:
 		supporting_color = M3Theme.get_on_surface_variant()
 	
-	_supporting_label.add_theme_color_override("font_color", supporting_color)
-	_supporting_label.add_theme_font_override("font", fonts["regular"])
-	_supporting_label.add_theme_font_size_override("font_size", M3Units.dp(SUPPORTING_FONT_SIZE))
+	if _supporting_label:
+		_supporting_label.add_theme_color_override("font_color", supporting_color)
+		_supporting_label.add_theme_font_override("font", fonts["regular"])
+		_supporting_label.add_theme_font_size_override("font_size", M3Units.dp(SUPPORTING_FONT_SIZE))
 
 func _update_layout():
 	if _updating_layout:
@@ -706,6 +712,8 @@ func is_virtual_keyboard_enabled() -> bool:
 	return true
 
 func refresh_theme():
+	if not _ready_called:
+		return
 	_update_theme()
 	_update_layout()
 	queue_redraw()

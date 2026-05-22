@@ -51,9 +51,9 @@ func _update_uv_transforms() -> void:
 		tex_scale.x = card_aspect / tex_aspect
 	
 	# Calculate offset to center the scaled texture
-	var offset = (Vector2(1.0, 1.0) - scale) * 0.5
+	var offset = (Vector2(1.0, 1.0) - tex_scale) * 0.5
 	
-	_container_state.uv_transform_scale = scale
+	_container_state.uv_transform_scale = tex_scale
 	_container_state.uv_transform_offset = offset
 	# Note: vertical_offset from smart crop stays 0 for now
 	# (smart crop calculation requires Sobel edge detection, done in shader)

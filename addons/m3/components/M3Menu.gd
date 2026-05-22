@@ -134,9 +134,9 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	
 	if as_submenu:
 		# Just add to tree and show; don't register in _active so parent isn't dismissed
-		var tree = Engine.get_main_loop()
-		if tree and tree.root and get_parent() == null:
-			tree.root.add_child(self)
+		var parent = M3Overlay.get_overlay_parent()
+		if parent and get_parent() == null:
+			parent.add_child(self)
 		visible = true
 	else:
 		show_overlay()
@@ -163,9 +163,9 @@ func is_open() -> bool:
 # ============================================
 
 func show_overlay():
-	var tree = Engine.get_main_loop()
-	if tree and tree.root and get_parent() == null:
-		tree.root.add_child(self)
+	var parent = M3Overlay.get_overlay_parent()
+	if parent and get_parent() == null:
+		parent.add_child(self)
 	super.show_overlay()
 
 # ============================================

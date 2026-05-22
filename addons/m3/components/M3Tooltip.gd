@@ -154,9 +154,9 @@ static func _show_for(control: Control, text: String, variant: Variant):
 	if control.has_method("get_tooltip_anchor_rect"):
 		tooltip._anchor_rect_override = control.get_tooltip_anchor_rect()
 	
-	var tree = Engine.get_main_loop()
-	if tree and tree.root:
-		tree.root.add_child(tooltip)
+	var parent = M3Overlay.get_overlay_parent()
+	if parent:
+		parent.add_child(tooltip)
 		tooltip.show_overlay()
 
 # ============================================
