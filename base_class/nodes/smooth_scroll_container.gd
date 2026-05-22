@@ -24,7 +24,6 @@ var _is_dragging_scrollbar: bool = false
 var _scrollbar_drag_start_mouse_pos: float = 0.0
 var _scrollbar_drag_start_value: float = 0.0
 var _focus_timer: Timer = null
-var _focus_callback: Callable = Callable()
 
 ## When true, all scroll input (wheel, scrollbar drag, focus-driven) is blocked.
 var scroll_paused: bool = false:
@@ -146,7 +145,9 @@ func _set_current_scroll(value: float):
 		scroll_horizontal = int(value)
 
 func _get_scrollbar():
-	return get_v_scroll_bar() if vertical else get_h_scroll_bar()
+	if vertical:
+		return get_v_scroll_bar()
+	return get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
 	scroll_value_changed.emit(value)
@@ -240,7 +241,7 @@ func _on_scrollbar_input(event: InputEvent):
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
-func _start_smooth_scroll(duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
+func _start_smooth_scroll(duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
@@ -305,7 +306,7 @@ func get_target_scroll() -> float:
 		return _target_scroll
 	return _get_current_scroll()
 
-func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
+func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()

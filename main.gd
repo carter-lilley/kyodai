@@ -471,10 +471,10 @@ func _sync_view_mode_button_to_setting() -> void:
 		return
 	
 	var mode_setting = SettingsManager.get_setting("library_layout_mode")
-	var layout_mode = mode_setting.value if mode_setting else 0
+	var layout_mode_val = mode_setting.value if mode_setting else 0
 	
 	var button_index: int
-	match layout_mode:
+	match layout_mode_val:
 		0, 1: button_index = 0  # Grid
 		2:    button_index = 2  # Carousel
 		3:    button_index = 1  # List
@@ -789,12 +789,12 @@ func _resend():
 		release.pressed = false
 		Input.parse_input_event(release)
 
-func _on_screens_swapped(is_swapped: bool) -> void:
+func _on_screens_swapped(_is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
 	# Update any UI state that depends on which screen is primary
 	# Note: No reparenting needed - AynThorManager handles rendering swap
 
-func _on_global_focus_changed(control: Control) -> void:
+func _on_global_focus_changed(_control: Control) -> void:
 	pass
 
 func _notification(what: int) -> void:

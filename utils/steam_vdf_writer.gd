@@ -191,7 +191,7 @@ static func add_shortcut(shortcuts: Dictionary, game_data: Dictionary) -> Dictio
 	var app_name: String = game_data.get("name", "Unknown")
 	
 	var result := generate_app_id(exe_path, app_name)
-	var app_id_64: int = result.app_id_64  # 64-bit for shortcuts.vdf
+	var _app_id_64: int = result.app_id_64  # 64-bit for shortcuts.vdf
 	var app_id_32: int = result.app_id_32  # 32-bit for grid files
 	
 	# Create shortcut entry with 32-bit appid (Steam expects INT32, not UINT64)
@@ -263,9 +263,9 @@ static func debug_calculate_app_ids(full_command: String, app_name: String) -> v
 		exe_path = full_command
 	
 	# Calculate AppIDs
-	var result := generate_app_id(exe_path, app_name)
+	var _result := generate_app_id(exe_path, app_name)
 
-static func _test_appid_variation(desc: String, exe_str: String, name_str: String, use_null: bool = true) -> void:
+static func _test_appid_variation(_desc: String, exe_str: String, name_str: String, use_null: bool = true) -> void:
 	var input_str: String
 	if use_null:
 		# Steam may include null byte between exe and name
@@ -275,7 +275,7 @@ static func _test_appid_variation(desc: String, exe_str: String, name_str: Strin
 		input_str = exe_str + name_str
 	
 	var crc := _crc32(input_str)
-	var app_id: int = (crc & 0xFFFFFFFF) | 0x80000000
+	var _app_id: int = (crc & 0xFFFFFFFF) | 0x80000000
 
 ## CRC32 implementation using reversed polynomial (standard CRC32)
 ## Standard CRC32: crc = (CRC32(exe + name) \u0026 0xFFFFFFFF) | 0x80000000
@@ -285,13 +285,13 @@ static func _crc32(s: String) -> int:
 	
 	# Build CRC table
 	for i in range(256):
-		var crc: int = i
+		var crc_value: int = i
 		for _j in range(8):
-			if crc & 1:
-				crc = ((crc >> 1) ^ polynomial) & 0xFFFFFFFF
+			if crc_value & 1:
+				crc_value = ((crc_value >> 1) ^ polynomial) & 0xFFFFFFFF
 			else:
-				crc = (crc >> 1) & 0xFFFFFFFF
-		table.append(crc)
+				crc_value = (crc_value >> 1) & 0xFFFFFFFF
+		table.append(crc_value)
 	
 	# Calculate CRC32 on UTF-8 bytes
 	var crc: int = 0xFFFFFFFF

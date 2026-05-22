@@ -1,3 +1,4 @@
+@tool
 class_name GameCard
 extends M3Card
 
@@ -178,15 +179,15 @@ func _build_focus_stack() -> void:
 		_focus_stack.update_effect_configs(focus_effect_settings)
 		
 		# Re-apply focus state setup after config update
-		var focus_base = _focus_stack.get_effect("base")
-		if focus_base:
-			focus_base.visible = false
-			focus_base.modulate.a = 0.0
+		var focus_base_node = _focus_stack.get_effect("base")
+		if focus_base_node:
+			focus_base_node.visible = false
+			focus_base_node.modulate.a = 0.0
 		
-		var focus_alpha = 1.0 if preview_mode else 0.0
+		var target_focus_alpha = 1.0 if preview_mode else 0.0
 		for child in _focus_stack.get_children():
 			if child is EffectBase and child.material is ShaderMaterial:
-				child.material.set_shader_parameter("effect_alpha", focus_alpha)
+				child.material.set_shader_parameter("effect_alpha", target_focus_alpha)
 		
 		if preview_mode:
 			_focus_stack.visible = true
@@ -248,7 +249,7 @@ func _link_overlapping_effects() -> void:
 				if not _is_focused and base_effect._settings.size() > 0:
 					focus_effect.tween_settings(base_effect._settings, base_effect._settings, 1.0)
 
-func _show_focus_effects(show: bool) -> void:
+func _show_focus_effects(p_show: bool) -> void:
 	# Kill any existing focus effect tweens to prevent callbacks on freed objects
 	for tween in _focus_effect_tweens:
 		if tween and is_instance_valid(tween):
@@ -256,7 +257,7 @@ func _show_focus_effects(show: bool) -> void:
 	_focus_effect_tweens.clear()
 	
 	if preview_mode:
-		show = true
+		p_show = true
 	
 	if not _focus_stack or not _media_stack:
 		return
@@ -284,7 +285,7 @@ func _show_focus_effects(show: bool) -> void:
 		var base_copy = base_settings.duplicate(true)
 		var focus_copy = focus_settings.duplicate(true)
 		
-		if show:
+		if p_show:
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
 			settings_tween.set_trans(Tween.TRANS_QUAD)
@@ -305,16 +306,15 @@ func _show_focus_effects(show: bool) -> void:
 	
 	# Non-overlapping effects: fade in/out via alpha overlay
 	if non_overlapping_effects.size() > 0:
-		if show:
+		if p_show:
 			_focus_stack.visible = true
 			_focus_stack.modulate = Color(1, 1, 1, 1)
 		
 		for focus_effect in non_overlapping_effects:
 			if focus_effect.material is ShaderMaterial:
-				var start_alpha = 0.0 if show else 1.0
-				var target_alpha = 1.0 if show else 0.0
-				if show:
-					focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
+				var start_alpha = 0.0 if p_show else 1.0
+				var target_alpha = 1.0 if p_show else 0.0
+				focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
 				
 				var fade_tween = create_tween()
 				_focus_effect_tweens.append(fade_tween)
@@ -327,7 +327,7 @@ func _show_focus_effects(show: bool) -> void:
 					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
 				)
 		
-		if not show:
+		if not p_show:
 			var hide_tween = create_tween()
 			_focus_effect_tweens.append(hide_tween)
 			hide_tween.set_trans(Tween.TRANS_QUAD)
@@ -575,7 +575,7 @@ func _update_platform_badge():
 			texture_aspect = 1.0
 	
 	const BADGE_SIZE_RATIO: float = 0.16
-	const BADGE_CORNER_RATIO: float = 0.11
+	const _BADGE_CORNER_RATIO: float = 0.11
 	
 	if badge_type == 1:
 		var base_badge_size = BADGE_SIZE_RATIO * card_width
@@ -765,9 +765,9 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 		# Downscale large images to save GPU memory and improve sampling performance
 		var max_dim = max(image.get_width(), image.get_height())
 		if max_dim > MAX_COVER_TEXTURE_SIZE:
-			var scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
-			var new_width = max(1, int(image.get_width() * scale))
-			var new_height = max(1, int(image.get_height() * scale))
+			var resize_scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
+			var new_width = max(1, int(image.get_width() * resize_scale))
+			var new_height = max(1, int(image.get_height() * resize_scale))
 			image.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
 		return image
 	return null

@@ -208,7 +208,7 @@ func _format_file_size(bytes: int) -> String:
 	if bytes < 1024:
 		return str(bytes) + " B"
 	elif bytes < 1024 * 1024:
-		return str(bytes / 1024) + " KB"
+		return str(int(bytes / 1024.0)) + " KB"
 	elif bytes < 1024 * 1024 * 1024:
 		return "%.1f MB" % (bytes / (1024.0 * 1024.0))
 	else:

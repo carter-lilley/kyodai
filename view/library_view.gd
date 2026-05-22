@@ -527,11 +527,11 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 func _on_database_ready():
 	_load_total_count()
 
-func _on_game_added(game: GameResource):
+func _on_game_added(_game: GameResource):
 	# Refresh total count and grid (for individual additions outside sync)
 	_load_total_count()
 
-func _on_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
+func _on_games_batch_added(_platform_slug: String, _start_index: int, games: Array[GameResource]):
 	"""Handle batch game additions during sync without full grid rebuild."""
 	# Filter out games without cover art based on setting
 	var hide_no_covers = true
@@ -563,7 +563,7 @@ func _on_games_batch_added(platform_slug: String, start_index: int, games: Array
 		var end_num = mini(range_info.end, range_info.total)
 		_update_status("Showing %d-%d of %d games" % [start_num, end_num, range_info.total])
 
-func _on_games_removed(platform_slug: String):
+func _on_games_removed(_platform_slug: String):
 	_reload_after_change()
 
 func _reload_after_change():

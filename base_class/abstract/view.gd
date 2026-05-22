@@ -79,7 +79,7 @@ func _do_rebuild(reason: String = "") -> void:
 	rebuild_grid(refresh_effects)
 
 # Subclasses override this; base version is a no-op for safety.
-func rebuild_grid(refresh_effects: bool = false) -> void:
+func rebuild_grid(_refresh_effects: bool = false) -> void:
 	pass
 
 # ============================================
@@ -91,10 +91,10 @@ func _update_grid_orientation() -> void:
 		return
 	
 	var mode_setting = SettingsManager.get_setting("library_layout_mode")
-	var layout_mode = mode_setting.value if mode_setting else 0
+	var layout_mode_val = mode_setting.value if mode_setting else 0
 	
 	# Migrate old 4-mode values to new 3-mode values
-	match layout_mode:
+	match layout_mode_val:
 		0, 1:
 			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.GRID
 		2:
@@ -147,11 +147,11 @@ func _on_game_updated(game: GameResource):
 	for i in range(range_info.buffer_start, range_info.buffer_start + range_info.buffer_size):
 		var card = games_grid.get_card_at_index(i)
 		if card and card is GameCard and card.game and card.game.romm_id == game.romm_id:
-			var is_visible = i >= range_info.start and i < range_info.end
-			card.set_game_with_priority(game, is_visible)
+			var card_visible = i >= range_info.start and i < range_info.end
+			card.set_game_with_priority(game, card_visible)
 			break
 
-func _on_card_created(card: Control, index: int):
+func _on_card_created(card: Control, _index: int):
 	"""Connect signals to newly created cards."""
 	if card is GameCard:
 		card.download_requested.connect(_on_download_requested)

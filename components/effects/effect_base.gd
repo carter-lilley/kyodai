@@ -10,7 +10,10 @@ var _container_state: EffectContainerState
 # Reference to base effect (for focus effects that overlap with base)
 var _base_effect: EffectBase = null
 
+# These signals are part of the public API for subclasses and external systems.
+@warning_ignore("unused_signal")
 signal effect_enabled_changed(enabled: bool)
+@warning_ignore("unused_signal")
 signal settings_changed(setting_name: String, value: Variant)
 
 func _ready():

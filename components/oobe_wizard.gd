@@ -1,6 +1,8 @@
 extends Control
 class_name OobeWizard
 
+const FSM = preload("res://managers/filesystem_manager.gd")
+
 signal wizard_completed
 
 # Page indices
@@ -349,9 +351,9 @@ func _build_done_page():
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(desc)
 
-func _create_page(name: String) -> Control:
+func _create_page(setting_name: String) -> Control:
 	var page = Control.new()
-	page.name = name
+	page.name = setting_name
 	page.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_page_container.add_child(page)
 	_pages.append(page)
@@ -559,7 +561,7 @@ func _on_browse_pressed(edit: LineEdit):
 	add_child(dialog)
 	
 	dialog.dir_selected.connect(func(dir: String):
-		edit.text = FileSystemManager.resolve_content_uri(dir)
+		edit.text = FSM.resolve_content_uri(dir)
 		dialog.queue_free()
 	)
 	
@@ -685,31 +687,31 @@ func _save_storage_settings():
 	var emulators_path = _emulators_path_edit.text.strip_edges()
 	
 	# Resolve content:// URIs to real paths before saving
-	games_path = FileSystemManager.resolve_content_uri(games_path)
-	emulators_path = FileSystemManager.resolve_content_uri(emulators_path)
+	games_path = FSM.resolve_content_uri(games_path)
+	emulators_path = FSM.resolve_content_uri(emulators_path)
 	
 	if not games_path.is_empty():
 		var games_setting = SettingsManager.get_setting("games_root_folder")
 		if games_setting:
 			SettingsManager.set_setting(games_path, games_setting)
 		# Ensure directory exists
-		FileSystemManager.make_dir_recursive(games_path)
+		FSM.make_dir_recursive(games_path)
 	
 	if not emulators_path.is_empty():
 		var emu_setting = SettingsManager.get_setting("emulators_folder")
 		if emu_setting:
 			SettingsManager.set_setting(emulators_path, emu_setting)
 		# Ensure directory exists
-		FileSystemManager.make_dir_recursive(emulators_path)
+		FSM.make_dir_recursive(emulators_path)
 	
 	if _steam_path_edit and not _steam_path_edit.text.strip_edges().is_empty():
-		var steam_path = FileSystemManager.resolve_content_uri(_steam_path_edit.text.strip_edges())
+		var steam_path = FSM.resolve_content_uri(_steam_path_edit.text.strip_edges())
 		var steam_setting = SettingsManager.get_setting("steam_folder")
 		if steam_setting:
 			SettingsManager.set_setting(steam_path, steam_setting)
 	
 	if _vita3k_path_edit and not _vita3k_path_edit.text.strip_edges().is_empty():
-		var vita_path = FileSystemManager.resolve_content_uri(_vita3k_path_edit.text.strip_edges())
+		var vita_path = FSM.resolve_content_uri(_vita3k_path_edit.text.strip_edges())
 		var vita_setting = SettingsManager.get_setting("vita3k_data_folder_android")
 		if vita_setting:
 			SettingsManager.set_setting(vita_path, vita_setting)

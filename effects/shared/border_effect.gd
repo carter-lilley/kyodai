@@ -71,8 +71,8 @@ func _update_shader_params() -> void:
 		_set_shader_param("border_color", border_color)
 		_set_shader_param("use_gradient", false)
 
-func set_border_size(size: float) -> void:
-	_settings["border_size"] = size
+func set_border_size(border_size: float) -> void:
+	_settings["border_size"] = border_size
 	_update_shader_params()
 
 func tween_border_size(target_size: float, duration: float = 0.15) -> Tween:
@@ -97,8 +97,8 @@ func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
 	
 	for i in range(256):
 		var t = i / 255.0  # Sample at pixel edges: 0.0 to 1.0 inclusive
-		var color = gradient.sample(t)
-		image.set_pixel(i, 0, color)
+		var border_color = gradient.sample(t)
+		image.set_pixel(i, 0, border_color)
 	
 	return ImageTexture.create_from_image(image)
 

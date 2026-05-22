@@ -74,7 +74,7 @@ var _is_validating: bool = false
 var _validation_callback: Callable
 var _validation_app_id: int
 
-func _on_http_request_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray):
+func _on_http_request_completed(_result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray):
 	if not _is_validating:
 		return
 	
@@ -95,22 +95,22 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 	
 	var http = HTTPRequest.new()
 	add_child(http)
-	http.request_completed.connect(func(result, response_code, headers, body):
+	http.request_completed.connect(func(_result, response_code, _headers, body):
 		var game_name = "Steam Game %d" % app_id
 		
 		if response_code == 200:
 			var json = JSON.new()
-			var error = json.parse(body.get_string_from_utf8())
-			if error == OK:
+			var parse_error = json.parse(body.get_string_from_utf8())
+			if parse_error == OK:
 				var data = json.get_data()
 				if data is Dictionary:
 					var app_data = data.get(str(app_id), {})
 					if app_data is Dictionary and app_data.get("success", false):
 						var game_data = app_data.get("data", {})
 						if game_data is Dictionary:
-							var name = game_data.get("name", "")
-							if name != "":
-								game_name = name
+							var steam_name = game_data.get("name", "")
+							if steam_name != "":
+								game_name = steam_name
 		
 		# Download cover image before saving
 		var cover_url = STEAM_CDN_URL.format({"appid": app_id})
@@ -118,8 +118,9 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 		
 		# Download the cover image
 		DownloadManager.download_image(cover_url, cover_path, func(success: bool):
+			var cover_path_ref = [cover_path]
 			if not success:
-				cover_path = ""  # Will fall back to placeholder
+				cover_path_ref[0] = ""  # Will fall back to placeholder
 			
 			# Add game to list with cover path
 			_games_data.append({
@@ -127,7 +128,7 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 				"name": game_name,
 				"source": "STEAM",
 				"added_at": Time.get_datetime_string_from_system(),
-				"cover_path": cover_path
+				"cover_path": cover_path_ref[0]
 			})
 			_save_games()
 			
@@ -165,13 +166,13 @@ func create_game_resources() -> Array[GameResource]:
 	
 	for game_data in _games_data:
 		var app_id = game_data.get("app_id", 0)
-		var name = game_data.get("name", "Steam Game %d" % app_id)
+		var game_title = game_data.get("name", "Steam Game %d" % app_id)
 		var cover_path = game_data.get("cover_path", "")
 		
 		var game = GameResource.new()
 		game.id = "gamenative_%d" % app_id
 		game.romm_id = -app_id  # Negative to avoid conflicts with RomM IDs
-		game.title = name
+		game.title = game_title
 		game.platform = "Steam (GameNative)"
 		game.platform_slug = "gamenative"
 		game.cover_url = STEAM_CDN_URL.format({"appid": app_id})

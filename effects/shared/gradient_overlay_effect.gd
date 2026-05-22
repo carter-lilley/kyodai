@@ -44,8 +44,8 @@ func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
 	
 	for i in range(256):
 		var t = i / 255.0
-		var color = gradient.sample(t)
-		image.set_pixel(i, 0, color)
+		var sampled_color = gradient.sample(t)
+		image.set_pixel(i, 0, sampled_color)
 	
 	return ImageTexture.create_from_image(image)
 

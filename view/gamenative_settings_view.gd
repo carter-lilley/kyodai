@@ -143,7 +143,7 @@ func _on_add_pressed():
 		_add_button.disabled = false
 	)
 
-func _on_add_submitted(text: String):
+func _on_add_submitted(_text: String):
 	_on_add_pressed()
 
 func _on_games_updated():
@@ -165,7 +165,7 @@ func _refresh_games_list():
 	
 	for game_data in games:
 		var app_id = game_data.get("app_id", 0)
-		var name = game_data.get("name", "Unknown")
+		var game_name = game_data.get("name", "Unknown")
 		
 		var row = HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
@@ -188,7 +188,7 @@ func _refresh_games_list():
 		row.add_child(info)
 		
 		var name_label = Label.new()
-		name_label.text = name
+		name_label.text = game_name
 		name_label.add_theme_font_size_override("font_size", 14)
 		info.add_child(name_label)
 		
@@ -210,7 +210,7 @@ func _load_cover_async(url: String, texture_rect: TextureRect) -> void:
 	"""Load cover image asynchronously."""
 	var http = HTTPRequest.new()
 	add_child(http)
-	http.request_completed.connect(func(result, response_code, headers, body):
+	http.request_completed.connect(func(_result, response_code, _headers, body):
 		if response_code == 200 and body.size() > 0:
 			var image = Image.new()
 			var err = image.load_jpg_from_buffer(body)

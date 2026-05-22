@@ -572,7 +572,7 @@ static func queue_parallel_downloads(
 			"callable": func():
 				return process_item.call(item, index),
 			"callback": func(result):
-				_instance._on_download_chunk_complete(batch.id, index, result)
+				MemoryManager._on_download_chunk_complete(batch.id, index, result)
 		})
 		_instance._download_mutex.unlock()
 		_instance._download_semaphore.post()

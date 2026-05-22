@@ -32,7 +32,7 @@ func _on_node_added_android(node: Node):
 		# TextEdit doesn't have virtual_keyboard_enabled, use focus callback
 		node.focus_entered.connect(_hide_android_keyboard.bind(node))
 
-func _hide_android_keyboard(node: Control):
+func _hide_android_keyboard(_node: Control):
 	# Hide the native Android virtual keyboard when TextEdit gets focus
 	DisplayServer.virtual_keyboard_hide()
 

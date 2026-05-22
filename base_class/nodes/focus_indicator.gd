@@ -336,8 +336,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if AudioManager:
 				AudioManager.play_sfx("click_03")
 
-func set_border_color(color: Color) -> void:
-	border_color = color
+func set_border_color(target_color: Color) -> void:
+	border_color = target_color
 	_update_shader_params()
 
 func hide_indicator() -> void:

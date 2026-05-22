@@ -52,9 +52,14 @@ extends Resource
 @export var steam_app_id: int = 0
 
 # Transient fields for sync tracking (not persisted)
+# Used by RomM sync flow via reflection/metascript.
+@warning_ignore("unused_private_class_variable")
 var _sync_db_done: bool = false
+@warning_ignore("unused_private_class_variable")
 var _sync_cover_done: bool = false
+@warning_ignore("unused_private_class_variable")
 var _sync_db_success: bool = false
+@warning_ignore("unused_private_class_variable")
 var _sync_processed: bool = false  # Guard to prevent double-processing
 
 ## Returns the ID of the game/sibling that should be used (for downloads, etc.)

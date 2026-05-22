@@ -7,7 +7,7 @@ signal text_submitted(text: String)
 @onready var line_edit: LineEdit
 @onready var search_icon: TextureRect
 
-var _is_active: bool = false
+
 
 func _ready():
 	# Set up pill-shaped styling

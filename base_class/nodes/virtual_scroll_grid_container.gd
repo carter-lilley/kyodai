@@ -87,9 +87,9 @@ var target_card_width_ratio: float = 0.15:
 		var max_ratio = _calculate_max_ratio()
 		var clamped = clampf(value, 0.05, max_ratio)
 		# Calculate snapped ratio to ensure whole cards fit per row/column
-		var snapped = _calculate_snapped_ratio(clamped)
+		var snapped_ratio = _calculate_snapped_ratio(clamped)
 		# Always update ratio and recalculate - _recalculate_layout handles optimization
-		target_card_width_ratio = snapped
+		target_card_width_ratio = snapped_ratio
 		_recalculate_layout()
 
 # Computed zoom based on viewport size
@@ -140,8 +140,6 @@ var _active_cards_by_index: Dictionary[int, Control] = {}
 var _max_pool_size: int = 120
 
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
-var _last_refreshed_card_size: Vector2 = Vector2.ZERO
-var _last_refreshed_view_mode: ViewMode = ViewMode.GRID
 
 # Resize debounce timer — prevents rapid-fire recalculations during window resize
 var _resize_debounce_timer: Timer = null
@@ -275,7 +273,7 @@ func _get_slot_position_for_index(idx: int, items_per_line: int = -1, stride: fl
 		items_per_line = _get_items_per_line()
 	if stride < 0.0:
 		stride = _get_normal_stride()
-	var line = idx / items_per_line
+	var line = int(float(idx) / items_per_line)
 	return line * stride
 
 func set_focused_card(virtual_index: int) -> void:
@@ -406,9 +404,9 @@ func _calculate_max_ratio() -> float:
 	
 	var zoom_width = available.x / base_dims.x
 	var zoom_height = available.y / base_dims.y
-	var zoom = min(zoom_width, zoom_height)
+	var card_zoom = min(zoom_width, zoom_height)
 	var viewport_area = available.x * available.y
-	var card_area = (base_dims.x * zoom) * (base_dims.y * zoom)
+	var card_area = (base_dims.x * card_zoom) * (base_dims.y * card_zoom)
 	var ratio = sqrt(card_area / viewport_area)
 	
 	return max(ratio / 2.0, 0.25)
@@ -889,6 +887,10 @@ func _initial_load():
 		visible_count = visible_cols * items_per_line
 	
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
+	# For small libraries, just load everything to avoid edge-case recycling bugs
+	# that can clip the last partial row in grid mode.
+	if _total_items <= 200:
+		total_card_count = _total_items
 	var card_count = min(total_card_count, _total_items, _max_pool_size)
 	
 	_virtual_start = 0
@@ -923,7 +925,11 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	
 	var visible_count = _get_visible_count()
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-	var half_buffer = (total_card_count - visible_count) / 2
+	# For small libraries, just load everything to avoid edge-case recycling bugs
+	# that can clip the last partial row in grid mode.
+	if _total_items <= 200:
+		total_card_count = _total_items
+	var half_buffer = int((total_card_count - visible_count) / 2.0)
 	var target_start = max(0, visible_start_idx - half_buffer)
 	var target_end = min(_total_items, target_start + total_card_count)
 	
@@ -937,6 +943,12 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	
 	# Recompute target_end after alignment so the buffer size stays consistent
 	target_end = min(_total_items, target_start + total_card_count)
+	
+	# When we're near the end of the list, alignment can leave a partial row
+	# outside the buffer (e.g. 98 items, buffer covers 56-97, missing index 97).
+	# Extend target_end to always include the last partial row.
+	if target_end < _total_items and (_total_items - target_end) < items_per_line:
+		target_end = _total_items
 	
 	return {
 		"visible_start": visible_start_idx,
@@ -972,7 +984,9 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	var visible_end_idx: int = ranges.visible_end
 	var target_start: int = ranges.target_start
 	var target_end: int = ranges.target_end
-	var total_card_count: int = ranges.total_card_count
+	
+
+
 	
 	# Batch recycle from top — skip during layout recalculations (zoom changes)
 	# so cards are not reset and their images stay loaded.
@@ -1118,9 +1132,9 @@ func _add_card_at_end(virtual_index: int):
 		card.refresh_settings()
 	
 	if _data_cache.has(virtual_index):
-		var is_visible = _is_index_visible(virtual_index)
+		var card_visible = _is_index_visible(virtual_index)
 		if card.has_method("set_game_with_priority"):
-			card.set_game_with_priority(_data_cache[virtual_index], is_visible)
+			card.set_game_with_priority(_data_cache[virtual_index], card_visible)
 		else:
 			card.game = _data_cache[virtual_index]
 		_update_cache_access_order(virtual_index)
@@ -1149,9 +1163,9 @@ func _add_card_at_start(virtual_index: int):
 		card.refresh_settings()
 	
 	if _data_cache.has(virtual_index):
-		var is_visible = _is_index_visible(virtual_index)
+		var card_visible = _is_index_visible(virtual_index)
 		if card.has_method("set_game_with_priority"):
-			card.set_game_with_priority(_data_cache[virtual_index], is_visible)
+			card.set_game_with_priority(_data_cache[virtual_index], card_visible)
 		else:
 			card.game = _data_cache[virtual_index]
 		_update_cache_access_order(virtual_index)
@@ -1201,9 +1215,9 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		if card.has_method("refresh_settings"):
 			card.refresh_settings()
 		if _data_cache.has(virtual_index):
-			var is_visible = _is_index_visible(virtual_index)
+			var card_visible = _is_index_visible(virtual_index)
 			if card.has_method("set_game_with_priority"):
-				card.set_game_with_priority(_data_cache[virtual_index], is_visible)
+				card.set_game_with_priority(_data_cache[virtual_index], card_visible)
 			else:
 				card.game = _data_cache[virtual_index]
 			_update_cache_access_order(virtual_index)
@@ -1287,7 +1301,7 @@ func _update_margin():
 	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	_last_margin_virtual_start = first_idx
 	_last_margin_virtual_end = last_idx
-	var num_active = last_idx - first_idx + 1
+	var _num_active = last_idx - first_idx + 1
 	var items_per_line = _get_items_per_line()
 	var stride = _get_normal_stride()
 	var focus_overflow = _get_focus_overflow()
@@ -1296,7 +1310,11 @@ func _update_margin():
 		# Add focus overflow padding to top/bottom so edge rows have room to scale.
 		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
 		var after_last_pos = _get_slot_position_for_index(last_idx + 1, items_per_line, stride)
-		var total_end = _get_slot_position_for_index(_total_items, items_per_line, stride)
+		# _get_slot_position_for_index uses floor division, returning the START of a row.
+		# For the total content end, we need the END of the last (possibly partial) row,
+		# otherwise the last row gets clipped in grid mode where items_per_line > 1.
+		var total_lines = ceili(float(_total_items) / items_per_line)
+		var total_end = total_lines * stride
 		var margin_top = first_pos + focus_overflow.y
 		var margin_bottom = total_end - after_last_pos + focus_overflow.y
 		var flow_height = after_last_pos - first_pos
@@ -1412,10 +1430,10 @@ func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 		if idx < 0:
 			continue
 		
-		var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+		var card_visible = idx >= visible_start_idx and idx < visible_end_idx
 		
 		if card.has_method("set_image_priority"):
-			card.set_image_priority(is_visible)
+			card.set_image_priority(card_visible)
 
 func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
@@ -1432,49 +1450,53 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	if items.is_empty():
 		return
 	
+	# Clear deduplication tracking for each batch to avoid false positives
+	# when scrolling causes overlapping ranges from the parent view
+	_cached_game_ids.clear()
+	
 	var duplicates_found: int = 0
 	
 	for i in range(items.size()):
 		var cache_key = offset + i
 		var game = items[i]
 		
-		# Deduplication check: skip if this game ID is already cached at a different index
+		# Deduplication check: warn if this game ID is already cached at a different index
+		# but still cache it at the new index so cards get their data
 		if game and game.romm_id != 0:
 			if _cached_game_ids.has(game.romm_id):
 				var existing_key = _cached_game_ids[game.romm_id]
 				if existing_key != cache_key:
-					# Duplicate detected - skip this entry
 					duplicates_found += 1
-					push_warning("[VirtualScrollGridContainer] Duplicate game detected: '%s' (romm_id: %d) at indices %d and %d - skipping duplicate" % [game.title, game.romm_id, existing_key, cache_key])
-					continue
-			
+					push_warning("[VirtualScrollGridContainer] Duplicate game detected: '%s' (romm_id: %d) at indices %d and %d" % [game.title, game.romm_id, existing_key, cache_key])
+			else:
+				_cached_game_ids[game.romm_id] = cache_key
+		
 		if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
 			_evict_oldest_cache_entries(items.size())
 		
 		_data_cache[cache_key] = game
-		_cached_game_ids[game.romm_id] = cache_key
 		_update_cache_access_order(cache_key)
 	
 	if duplicates_found > 0:
-		push_warning("[VirtualScrollGridContainer] Found and skipped %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
+		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
 	
 	var range_info = _get_visible_range()
 	var visible_start_idx: int = range_info.start
 	var visible_end_idx: int = range_info.end
 	
-	var updated_count = 0
+	var assigned_count = 0
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx >= offset and idx < offset + items.size():
 			var data_idx = idx - offset
 			if data_idx < items.size():
-				var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+				var card_visible = idx >= visible_start_idx and idx < visible_end_idx
 				if card.has_method("set_game_with_priority"):
-					card.set_game_with_priority(items[data_idx], is_visible)
+					card.set_game_with_priority(items[data_idx], card_visible)
 				else:
 					card.game = items[data_idx]
 				_update_cache_access_order(idx)
-				updated_count += 1
+				assigned_count += 1
 	
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 
@@ -1494,6 +1516,14 @@ func _refresh_buffer():
 	_flow_container.custom_minimum_size = Vector2(0, 0)
 	_virtual_start = 0
 	_virtual_end = 0
+	
+	# Reset scroll position to prevent stale scroll values from causing
+	# immediate recycling of freshly-created cards after view mode switches.
+	if _scroll_container:
+		_scroll_container.scroll_vertical = 0
+		_scroll_container.scroll_horizontal = 0
+		_scroll_container._target_scroll = 0.0
+	
 	_recalculate_layout()
 	if _active_cards.size() == 0:
 		_initial_load()
@@ -1541,7 +1571,7 @@ func get_card_at_index(index: int) -> Control:
 
 func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	if _scroll_container:
-		var items_per_line = _get_items_per_line()
+		var _items_per_line = _get_items_per_line()
 		var target_pos = _get_slot_position_for_index(index)
 		
 		if vertical:
@@ -1582,7 +1612,7 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 		if idx < 0:
 			continue
 		
-		var is_visible = idx >= visible_start_idx and idx <= visible_end_idx
+		var card_visible = idx >= visible_start_idx and idx <= visible_end_idx
 		var has_data = _data_cache.has(idx)
 		
 		# Use cached metadata reference instead of tree traversal for performance
@@ -1605,17 +1635,17 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 			card.set_meta("_debug_panel_ref", debug_panel)
 		
 		var style: StyleBoxFlat
-		if is_visible:
+		if card_visible:
 			style = _debug_style_visible_data if has_data else _debug_style_visible_loading
 		else:
 			style = _debug_style_buffer_data if has_data else _debug_style_buffer_loading
 		debug_panel.add_theme_stylebox_override("panel", style)
 		
-		var label = debug_panel.get_node("_debug_label")
-		if label:
+		var debug_label = debug_panel.get_node("_debug_label")
+		if debug_label:
 			var status = "DATA" if has_data else "LOADING"
-			var location = "VISIBLE" if is_visible else "BUFFER"
-			label.text = "#%d\n%s\n%s" % [idx, status, location]
+			var location = "VISIBLE" if card_visible else "BUFFER"
+			debug_label.text = "#%d\n%s\n%s" % [idx, status, location]
 	
 	_update_debug_flow_panel_position()
 
@@ -1733,11 +1763,11 @@ func _initial_load_from_increment():
 	var eff = _get_normal_stride()
 	
 	if vertical:
-		var viewport_height = size.y if size.y > 0 else 600
+		var viewport_height = float(size.y) if size.y > 0 else 600.0
 		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
 		visible_count = visible_rows * items_per_line
 	else:
-		var viewport_width = size.x if size.x > 0 else 800
+		var viewport_width = float(size.x) if size.x > 0 else 800.0
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		visible_count = visible_cols * items_per_line
 	
@@ -1761,9 +1791,9 @@ func _initial_load_from_increment():
 			_flow_container.add_child(card)
 			
 			if _data_cache.has(i):
-				var is_visible = i < visible_count
+				var card_visible = i < visible_count
 				if card.has_method("set_game_with_priority"):
-					card.set_game_with_priority(_data_cache[i], is_visible)
+					card.set_game_with_priority(_data_cache[i], card_visible)
 				else:
 					card.game = _data_cache[i]
 				if card.has_method("update_display"):
@@ -1774,8 +1804,6 @@ func _initial_load_from_increment():
 	_update_margin()
 
 func cache_items_at_offset(items: Array[GameResource], offset: int):
-	var duplicates_found: int = 0
-	
 	for i in range(items.size()):
 		if offset + i < _total_items:
 			var cache_key = offset + i
@@ -1786,7 +1814,6 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 				if _cached_game_ids.has(game.romm_id):
 					var existing_key = _cached_game_ids[game.romm_id]
 					if existing_key != cache_key:
-						duplicates_found += 1
 						continue
 			
 			if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
@@ -1805,9 +1832,9 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= offset and idx < offset + items.size():
 				if _data_cache.has(idx):
-					var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+					var card_visible = idx >= visible_start_idx and idx < visible_end_idx
 					if card.has_method("set_game_with_priority"):
-						card.set_game_with_priority(_data_cache[idx], is_visible)
+						card.set_game_with_priority(_data_cache[idx], card_visible)
 					else:
 						card.game = _data_cache[idx]
 					_update_cache_access_order(idx)
@@ -1829,19 +1856,17 @@ func refresh_if_visible(start_index: int, end_index: int):
 		var visible_start_idx: int = range_info.start
 		var visible_end_idx: int = range_info.end
 		
-		var updated_count = 0
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
-				var is_visible = idx >= visible_start_idx and idx < visible_end_idx
+				var card_visible = idx >= visible_start_idx and idx < visible_end_idx
 				if card.has_method("set_game_with_priority"):
-					card.set_game_with_priority(_data_cache[idx], is_visible)
+					card.set_game_with_priority(_data_cache[idx], card_visible)
 				else:
 					card.game = _data_cache[idx]
 				_update_cache_access_order(idx)
 				if card.has_method("update_display"):
 					card.update_display()
-				updated_count += 1
 
 func refresh_all_card_effects() -> void:
 	"""Refresh effects on all active cards (call when card settings change)."""

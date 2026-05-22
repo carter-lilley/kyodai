@@ -4,10 +4,13 @@ extends Manager
 # Handles all file downloads: games, emulators, cores, images, etc.
 # Also handles archive extraction with progress notifications
 
+const FSM = preload("res://managers/filesystem_manager.gd")
+
 signal download_started(item_id: String)
 signal download_progress(item_id: String, progress: float)
 signal download_completed(item_id: String, success: bool, message: String)
 signal extraction_started(item_id: String)
+@warning_ignore("unused_signal")
 signal extraction_progress(item_id: String, progress: float)
 signal extraction_completed(item_id: String, success: bool, message: String)
 signal queue_changed()
@@ -198,7 +201,7 @@ func _stop_foreground_service():
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
+func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
@@ -220,7 +223,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.url = url
 	item.destination_path = destination
 	item.type = type
-	item.name = name if name != "" else item_id
+	item.name = item_name if item_name != "" else item_id
 	item.auto_extract = auto_extract
 	item.game_resource = game
 	item.callbacks = callbacks
@@ -236,7 +239,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 	item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
 	var dest_dir = destination.get_base_dir()
 	
-	if not FileSystemManager.make_dir_recursive(dest_dir):
+	if not FSM.make_dir_recursive(dest_dir):
 		push_error("[DownloadManager] Failed to create directory: " + dest_dir)
 		return ""
 	
@@ -250,7 +253,7 @@ func queue_download(url: String, destination: String, type: String = "file", nam
 ## Queues an extraction task (for already-downloaded archives)
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true)
 ## suppress_notification: If true, skips showing extraction notifications (for batch operations)
-func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", name: String = "", delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
+func queue_extraction(archive_path: String, extract_dir: String, type: String = "archive", item_name: String = "", delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
 	var item_id = "extract_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
 	# Check if already extracting this archive
@@ -263,7 +266,7 @@ func queue_extraction(archive_path: String, extract_dir: String, type: String = 
 	item.url = ""  # No URL, already have file
 	item.destination_path = archive_path
 	item.type = type
-	item.name = name if name != "" else "Archive"
+	item.name = item_name if item_name != "" else "Archive"
 	item.status = "extract_pending"
 	item.auto_extract = false  # Already an extraction task
 	item.extract_dir = extract_dir
@@ -409,8 +412,8 @@ func _start_download(item: QueueItem):
 				return item.progress,
 			func(progress: float) -> String:
 				if item.expected_file_size > 0:
-					var mb_downloaded = int(item.expected_file_size * progress / (1024 * 1024))
-					var mb_total = int(item.expected_file_size / (1024 * 1024))
+					var mb_downloaded = int(item.expected_file_size * progress / (1024.0 * 1024.0))
+					var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
 					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
 				return item.name + ": %d%%" % int(progress * 100)
 		)
@@ -447,7 +450,7 @@ func _start_download(item: QueueItem):
 		item.url,
 		item.destination_path,
 		headers,
-		func(success: bool, status_code: int, error_msg: String):
+		func(success: bool, _status_code: int, error_msg: String):
 			_on_file_download_complete(item, success, error_msg),
 		item.expected_file_size
 	)
@@ -532,7 +535,7 @@ func _needs_title_id(game: GameResource) -> bool:
 
 func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 	"""Check if server supports Range requests, then start chunked or regular download"""
-	NetworkManager.check_range_support(item.url, headers, func(supports_range: bool, error_msg: String, content_length: int = 0):
+	NetworkManager.check_range_support(item.url, headers, func(supports_range: bool, _error_msg: String, content_length: int = 0):
 		if supports_range:
 			print("[DownloadManager] Server supports Range, starting chunked download for: " + item.name)
 			
@@ -556,8 +559,8 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 				item.url,
 				item.destination_path,
 				headers,
-				func(success: bool, status_code: int, err: String):
-					_on_file_download_complete(item, success, err),
+			func(success: bool, _status_code: int, err: String):
+				_on_file_download_complete(item, success, err),
 				item.expected_file_size
 			)
 			
@@ -597,7 +600,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	
 	# Create temp directory for chunks
 	var temp_dir = "user://downloads/chunks/" + item.id
-	if not FileSystemManager.make_dir_recursive(temp_dir):
+	if not FSM.make_dir_recursive(temp_dir):
 		push_error("[DownloadManager] Failed to create chunk temp directory: " + temp_dir)
 		item.status = "failed"
 		item.error_message = "Failed to create temp directory"
@@ -659,18 +662,18 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	# Use MemoryManager's download thread pool
 	await MemoryManager.queue_parallel_downloads(
 		chunk_items,
-		func(chunk_data, index):
+		func(chunk_data, _index):
 			var success = _download_chunk_on_thread(chunk_data)
 			return {
 				"success": success,
 				"chunk_index": chunk_data.chunk_index
 			},
-		func(completed, total, batch_index, result):
+		func(_completed, _total, batch_index, result):
 			var success = result.get("success", false) if result is Dictionary else result
 			var chunk_index = result.get("chunk_index", batch_index) if result is Dictionary else batch_index
 			_update_chunk_download_progress(item.id, chunk_index, success),
-		func(results):
-			_on_all_chunks_complete(item.id, headers, results)
+		func(_results):
+			_on_all_chunks_complete(item.id, headers, _results)
 	)
 	
 	# Progress updates now come from worker threads only (no polling timer to avoid race conditions)
@@ -715,7 +718,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	
 	# Get or create connection from pool (thread-safe access)
 	var http: HTTPClient
-	var connection_created = false
 	var was_reused = false
 	
 	_connection_pool_mutex.lock()
@@ -727,8 +729,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection status before check: " + str(status_before) + " (CONNECTED=" + str(HTTPClient.STATUS_CONNECTED) + ")")
 			
 			# Check for previous chunk finish time to calculate idle time
-			var thread_key = item_id + "_" + str(thread_index)
-			var prev_finish_time = _thread_chunk_finish_times.get(thread_key, 0)
+			var idle_thread_key = item_id + "_" + str(thread_index)
+			var prev_finish_time = _thread_chunk_finish_times.get(idle_thread_key, 0)
 			if prev_finish_time > 0:
 				var idle_time = chunk_start_time - prev_finish_time
 				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " idle time between chunks: " + str(idle_time) + "ms")
@@ -739,7 +741,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 				http = _create_connection(url_parts)
 				if http != null:
 					connection_pool[thread_index] = http
-					connection_created = true
 					print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " created new connection (status=" + str(http.get_status()) + ")")
 			else:
 				was_reused = true
@@ -866,7 +867,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 				if range_match:
 					var range_start = int(range_match.get_string(1))
 					var range_end = int(range_match.get_string(2))
-					var range_total = int(range_match.get_string(3))
+					var _range_total = int(range_match.get_string(3))
 					
 					if range_start == start_byte and range_end == end_byte:
 						content_range_valid = true
@@ -894,7 +895,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	var last_progress_emit = 0
 	var body_poll_count = 0
 	var last_poll_time = Time.get_ticks_msec()
-	var last_data_received_time = last_poll_time
 	
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		var current_time = Time.get_ticks_msec()
@@ -909,13 +909,12 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		if chunk.size() > 0:
 			file.store_buffer(chunk)
 			bytes_downloaded += chunk.size()
-			last_data_received_time = current_time
 			
 			# Emit progress every 10MB
 			if bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
 				call_deferred("_update_chunk_progress", chunk_data.item_id, chunk_index, bytes_downloaded)
 				last_progress_emit = bytes_downloaded
-				print("[DownloadManager] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / 1024 / 1024) + "MB")
+				print("[DownloadManager] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
 		else:
 			# No data available, wait a bit before checking again
 			OS.delay_usec(1000)  # 1ms micro-sleep to prevent busy-waiting
@@ -1035,7 +1034,7 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, success:
 			download_progress.emit(item_id, progress)
 
 ## Called when all chunks have been processed by the thread pool
-func _on_all_chunks_complete(item_id: String, headers: Array, results: Dictionary = {}):
+func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictionary = {}):
 	if not _chunked_downloads.has(item_id):
 		return
 	
@@ -1109,8 +1108,8 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			chunk.temp_bytes_downloaded = 0  # Reset progress tracking
 			
 			# Delete partial file
-			if FileSystemManager.file_exists(chunk.temp_path):
-				FileSystemManager.delete_file(chunk.temp_path)
+			if FSM.file_exists(chunk.temp_path):
+				FSM.delete_file(chunk.temp_path)
 			
 			retry_items.append({
 				"item_id": item_id,
@@ -1129,13 +1128,13 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		# Queue retry via thread pool
 		await MemoryManager.queue_parallel_downloads(
 			retry_items,
-			func(chunk_data, index):
+			func(chunk_data, _index):
 				var success = _download_chunk_on_thread(chunk_data)
 				return {
 					"success": success,
 					"chunk_index": chunk_data.chunk_index
 				},
-			func(completed, total, batch_index, result):
+			func(_completed, _total, batch_index, result):
 				var success = result.get("success", false) if result is Dictionary else result
 				var chunk_index = result.get("chunk_index", batch_index) if result is Dictionary else batch_index
 				_update_chunk_download_progress(item_id, chunk_index, success),
@@ -1196,7 +1195,6 @@ func _update_chunk_progress(item_id: String, chunk_index: int, bytes_downloaded:
 		chunked_info.chunks[chunk_index].temp_bytes_downloaded = bytes_downloaded
 		
 		# Calculate and emit progress immediately for responsive UI
-		var item = chunked_info.item
 		var total_downloaded_bytes = 0
 		
 		for chunk in chunked_info.chunks:
@@ -1205,7 +1203,7 @@ func _update_chunk_progress(item_id: String, chunk_index: int, bytes_downloaded:
 			else:
 				total_downloaded_bytes += chunk.temp_bytes_downloaded
 		
-		var total_size = float(item.expected_file_size)
+		var total_size = float(chunked_info.item.expected_file_size)
 		if total_size > 0:
 			var progress = float(total_downloaded_bytes) / total_size
 			progress = min(progress, 0.99)
@@ -1213,7 +1211,7 @@ func _update_chunk_progress(item_id: String, chunk_index: int, bytes_downloaded:
 			# Emit if progress changed significantly
 			if abs(progress - chunked_info.last_progress_update) >= 0.005:  # 0.5% threshold
 				chunked_info.last_progress_update = progress
-				item.progress = progress
+				chunked_info.item.progress = progress
 				download_progress.emit(item_id, progress)
 
 func _stop_chunked_progress_timer(item_id: String):
@@ -1233,7 +1231,7 @@ func _start_next_chunk_downloads(item_id: String, headers: Array):
 		return
 	
 	var chunked_info = _chunked_downloads[item_id]
-	var item = chunked_info.item
+	var _item = chunked_info.item
 	
 	# Count how many chunks are currently downloading
 	var active_count = 0
@@ -1279,7 +1277,7 @@ func _start_single_chunk_download(item_id: String, chunk: ChunkInfo, headers: Ar
 		chunk.start_byte,
 		chunk.end_byte,
 		request_headers,
-		func(success: bool, status_code: int, error_msg: String):
+		func(success: bool, _status_code: int, error_msg: String):
 			_on_chunk_download_complete(item_id, chunk.index, success, error_msg, headers)
 	)
 
@@ -1320,8 +1318,8 @@ func _on_chunk_download_complete(item_id: String, chunk_index: int, success: boo
 		
 		if chunk.retry_count <= MAX_CHUNK_RETRIES:
 			# Delete partial/failed chunk file
-			if FileSystemManager.file_exists(chunk.temp_path):
-				FileSystemManager.delete_file(chunk.temp_path)
+			if FSM.file_exists(chunk.temp_path):
+				FSM.delete_file(chunk.temp_path)
 				print("[DownloadManager] Deleted failed chunk file: " + chunk.temp_path)
 			
 			# Update progress to show retry status
@@ -1464,8 +1462,8 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	if not success:
 		push_error("[DownloadManager] Native reassembly failed for: " + item.name)
 		# Clean up failed final file
-		if FileSystemManager.file_exists(reassembly_temp_path):
-			FileSystemManager.delete_file(reassembly_temp_path)
+		if FSM.file_exists(reassembly_temp_path):
+			FSM.delete_file(reassembly_temp_path)
 		
 		_stop_chunked_progress_timer(item_id)
 		item.status = "failed"
@@ -1537,7 +1535,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		final_file.close()
 		
 		var final_size = 0
-		if FileSystemManager.file_exists(final_path):
+		if FSM.file_exists(final_path):
 			var size_file = FileAccess.open(final_path, FileAccess.READ)
 			if size_file:
 				final_size = size_file.get_length()
@@ -1558,8 +1556,8 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 			push_error("[DownloadManager] [Reassembly] Desktop reassembly failed for: " + item.name)
 			
 			# Clean up failed final file
-			if FileSystemManager.file_exists(final_path):
-				FileSystemManager.delete_file(final_path)
+			if FSM.file_exists(final_path):
+				FSM.delete_file(final_path)
 			
 			item.status = "failed"
 			item.error_message = "Failed to reassemble chunks"
@@ -1600,8 +1598,8 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_tem
 		_active_items.erase(item_id)
 		
 		# Clean up the corrupted file
-		if FileSystemManager.file_exists(reassembly_temp_path):
-			FileSystemManager.delete_file(reassembly_temp_path)
+		if FSM.file_exists(reassembly_temp_path):
+			FSM.delete_file(reassembly_temp_path)
 		
 		if item.notification_id != -1:
 			NotificationManager.dismiss_notification(item.notification_id)
@@ -1632,11 +1630,11 @@ func _cleanup_chunked_download(item_id: String):
 	
 	# Clean up temp chunk files
 	for chunk in chunked_info.chunks:
-		if FileSystemManager.file_exists(chunk.temp_path):
-			FileSystemManager.delete_file(chunk.temp_path)
+		if FSM.file_exists(chunk.temp_path):
+			FSM.delete_file(chunk.temp_path)
 	
 	# Clean up temp directory
-	if FileSystemManager.dir_exists(chunked_info.temp_dir):
+	if FSM.dir_exists(chunked_info.temp_dir):
 		_cleanup_temp_dir(chunked_info.temp_dir)
 	
 	# Close and clean up connection pool
@@ -1662,7 +1660,7 @@ func _update_download_progress(item: QueueItem):
 		
 		# Check file size on disk (64-bit, no overflow)
 		# Use FileSystemManager for Android external storage compatibility
-		if FileSystemManager.file_exists(file_path):
+		if FSM.file_exists(file_path):
 			var file = FileAccess.open(file_path, FileAccess.READ)
 			var current_size = 0
 			if file:
@@ -1670,7 +1668,7 @@ func _update_download_progress(item: QueueItem):
 				file.close()
 			else:
 				# Fallback to plugin file size for Android external storage
-				current_size = FileSystemManager.get_file_size(file_path)
+				current_size = FSM.get_file_size(file_path)
 				
 				# Use expected_file_size from game data for accurate progress
 				if item.expected_file_size > 0:
@@ -1731,7 +1729,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 	
 	# Verify file exists and has content
 	# Use FileSystemManager (not FileAccess) for Android external storage compatibility
-	if not FileSystemManager.file_exists(item.destination_path):
+	if not FSM.file_exists(item.destination_path):
 		item.status = "failed"
 		item.error_message = "Download file not found"
 		print("[DownloadManager] Download file not found after completion: " + item.destination_path)
@@ -1767,7 +1765,7 @@ func _check_download_timeout(item_id: String):
 	var start_time = _download_start_times.get(item_id, current_time)
 	var last_progress = _last_progress_times.get(item_id, current_time)
 	
-	var item = _active_items[item_id]
+	var _item = _active_items[item_id]
 	var elapsed_since_start = current_time - start_time
 	
 	# Check for overall timeout
@@ -1907,7 +1905,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		print("[DownloadManager] Extraction worker started: " + archive_path + " -> " + extract_dir)
 		
 		# Delegate to FileSystemManager for all ZIP extraction
-		var success = FileSystemManager.extract_zip(archive_path, extract_dir)
+		var success = FSM.extract_zip(archive_path, extract_dir)
 		
 		if not success:
 			push_error("[DownloadManager] Extraction failed for: " + archive_path)
@@ -1915,7 +1913,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		# Clean up archive only if delete_after_extract is true
 		if item.delete_after_extract:
-			FileSystemManager.delete_file(archive_path)
+			FSM.delete_file(archive_path)
 		
 		return true
 	
@@ -1972,7 +1970,7 @@ func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
 		
 		# Clean up archive only if delete_after_extract is true
 		if item.delete_after_extract:
-			FileSystemManager.delete_file(archive_path)
+			FSM.delete_file(archive_path)
 		
 		return true
 	
@@ -2047,10 +2045,10 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 	}
 	
 	# Make HTTP request
-	NetworkManager.http_get(url, [], func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
+	NetworkManager.http_get(url, [], func(success: bool, body: PackedByteArray, _status_code: int, _error_msg: String):
+		var state = _active_image_downloads[url]
 		if not success or body.is_empty():
 			# Download failed
-			var state = _active_image_downloads[url]
 			state.completed = true
 			state.success = false
 			for cb in state.callbacks:
@@ -2067,7 +2065,6 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 			file.close()
 		
 		# Notify callbacks
-		var state = _active_image_downloads[url]
 		state.completed = true
 		state.success = true
 		for cb in state.callbacks:
@@ -2078,7 +2075,6 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 		_active_image_downloads.erase(url)
 	)
 	
-	return true
 	return true
 
 ## Helper function to recursively clean up a temp directory
@@ -2096,8 +2092,8 @@ func _cleanup_temp_dir(dir_path: String) -> void:
 			if dir.current_is_dir():
 				_cleanup_temp_dir(full_path)
 			else:
-				FileSystemManager.delete_file(full_path)
+				FSM.delete_file(full_path)
 		file_name = dir.get_next()
 	
 	dir.list_dir_end()
-	FileSystemManager.delete_dir_recursive(dir_path)
+	FSM.delete_dir_recursive(dir_path)

@@ -117,7 +117,7 @@ func _create_gamenative_tab() -> Control:
 	var gamenative_view = preload("res://view/gamenative_settings_view.gd").new()
 	return gamenative_view
 
-func _create_settings_tab(name: String, settings_vars: Array) -> Control:
+func _create_settings_tab(setting_name: String, settings_vars: Array) -> Control:
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.follow_focus = true
@@ -137,13 +137,13 @@ func _create_settings_tab(name: String, settings_vars: Array) -> Control:
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
-	if name == "Library Appearance":
+	if setting_name == "Library Appearance":
 		# Handle Library Appearance specially with dynamic background controls
 		_create_library_appearance_tab(vbox, settings_vars)
 	else:
 		# Regular settings tab
 		var menu = SettingsMenu.new()
-		menu.initialize_settings_menu(name, settings_vars)
+		menu.initialize_settings_menu(setting_name, settings_vars)
 		menu.setting_changed.connect(_on_setting_changed)
 		vbox.add_child(menu)
 	
@@ -637,7 +637,7 @@ enum ConnectionStatus { NOT_CONFIGURED, CONNECTED, DISCONNECTED, TESTING }
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	SettingsManager.set_setting(value, setting)
 
-func _on_any_setting_changed(value: Variant, setting: SettingsVar):
+func _on_any_setting_changed(_value: Variant, _setting: SettingsVar):
 	# Check if settings now deviate from loaded preset
 	if not _is_applying_preset:
 		_check_preset_match()

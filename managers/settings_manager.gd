@@ -81,7 +81,7 @@ func set_setting(value: Variant, setting: SettingsVar):
 	emit_signal("setting_changed", value, setting)
 
 func get_setting(_name:String) -> SettingsVar:
-	var settingsvar: SettingsVar
+	var settingsvar: SettingsVar = null
 	if not settings:
 		push_error("No settings loaded, but queried anyway.")
 		return settingsvar

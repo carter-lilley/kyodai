@@ -139,7 +139,7 @@ func _create_effect(effect_id: String) -> BackgroundEffect:
 func _on_effect_changed(_new_effect_id: String) -> void:
 	_apply_background_state()
 
-func _on_setting_changed(setting_name: String, value: Variant) -> void:
+func _on_setting_changed(_setting_name: String, _value: Variant) -> void:
 	if _current_effect:
 		_current_effect.update_settings(_background_state.effect_settings)
 

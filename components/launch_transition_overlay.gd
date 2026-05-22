@@ -31,7 +31,7 @@ func _ready():
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
 
-func _on_game_launch_initiated(game: GameResource, _focus_index: int):
+func _on_game_launch_initiated(_launched_game: GameResource, _focus_index: int):
 	# We get the texture from the focused card, not from the game resource
 	# This avoids filesystem access and works on Android
 	_start_transition()
@@ -139,8 +139,8 @@ func _get_focused_card_and_texture() -> Dictionary:
 			var card_rect = Rect2()
 			if card is Control:
 				var global_pos = card.global_position
-				var size = card.size
-				card_rect = Rect2(global_pos, size)
+				var card_size = card.size
+				card_rect = Rect2(global_pos, card_size)
 			else:
 				push_error("[LaunchTransitionOverlay] Card is not a Control")
 			
@@ -316,7 +316,7 @@ func _on_animation_complete():
 	is_transition_active = false
 	animation_completed.emit()
 
-func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
+func _on_background_state_exited(_exited_game: GameResource, _exit_code: int) -> void:
 	# Emulator has exited, hide the overlay
 	visible = false
 	# Disconnect to avoid memory leaks

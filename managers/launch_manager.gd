@@ -4,6 +4,7 @@ extends Manager
 
 const REGISTRY_DIR := "res://data/emulators/"
 const PLATFORMS_PATH := "res://data/platforms.json"
+const FSM = preload("res://managers/filesystem_manager.gd")
 
 ## Returns the configured emulators directory from settings, or default if not set
 func get_emulators_directory() -> String:
@@ -17,7 +18,7 @@ func get_emulators_directory() -> String:
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
 	var base_dir = get_emulators_directory()
-	return FileSystemManager.join_paths(base_dir, emulator_id)
+	return FSM.join_paths(base_dir, emulator_id)
 
 # Registry data
 var _emulator_registry: Dictionary = {}
@@ -62,6 +63,7 @@ func clear_validation_cache() -> void:
 # Signals
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
+@warning_ignore("unused_signal")
 signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
 signal game_launched(game: GameResource)  # Emitted when a game is successfully launched
@@ -368,17 +370,17 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 	if current_depth >= max_depth:
 		return ""
 	
-	var entries = FileSystemManager.list_dir(dir_path)
-	if entries.is_empty() and not FileSystemManager.dir_exists(dir_path):
+	var entries = FSM.list_dir(dir_path)
+	if entries.is_empty() and not FSM.dir_exists(dir_path):
 		return ""
 	
 	for file_name in entries:
 		if file_name == "." or file_name == "..":
 			continue
 		
-		var full_path = FileSystemManager.join_paths(dir_path, file_name)
+		var full_path = FSM.join_paths(dir_path, file_name)
 		
-		if FileSystemManager.is_dir(full_path):
+		if FSM.is_dir(full_path):
 			var result = _find_executable_recursive(full_path, executable_name, max_depth, current_depth + 1)
 			if result != "":
 				return result
@@ -428,7 +430,7 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 
 ## Called when DownloadManager completes a download
 ## Cleans up pending game downloads tracking
-func _on_download_manager_download_completed(item_id: String, success: bool, message: String):
+func _on_download_manager_download_completed(item_id: String, _success: bool, _message: String):
 	# Handle game downloads
 	if _pending_game_downloads.has(item_id):
 		_pending_game_downloads.erase(item_id)
@@ -457,10 +459,10 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			# extract_to is already an absolute path (Unix, Windows, or Godot virtual filesystem style)
 			extract_path = extract_to
 		else:
-			extract_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), extract_to)
+			extract_path = FSM.join_paths(_get_emulator_directory(emulator_id), extract_to)
 	
 	# Normalize the path to remove "." and ".." components
-	extract_path = FileSystemManager.normalize_path(extract_path)
+	extract_path = FSM.normalize_path(extract_path)
 	print("[LaunchManager] Flattening: normalized extract_path=" + extract_path)
 	
 	# If a specific target folder is specified, flatten only that one
@@ -468,16 +470,16 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		var target_path = ""
 		
 		# First try exact match
-		var exact_path = FileSystemManager.join_paths(extract_path, target_folder)
-		if FileSystemManager.dir_exists(exact_path):
+		var exact_path = FSM.join_paths(extract_path, target_folder)
+		if FSM.dir_exists(exact_path):
 			target_path = exact_path
 		else:
 			# Try wildcard match against entries in extract_path
-			var candidates = FileSystemManager.list_dir(extract_path)
+			var candidates = FSM.list_dir(extract_path)
 			for entry in candidates:
 				if entry != "." and entry != ".." and entry.match(target_folder):
-					var entry_path = FileSystemManager.join_paths(extract_path, entry)
-					if FileSystemManager.dir_exists(entry_path):
+					var entry_path = FSM.join_paths(extract_path, entry)
+					if FSM.dir_exists(entry_path):
 						target_path = entry_path
 						break
 		
@@ -485,22 +487,22 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			return
 		
 		# Get list of items in the target folder
-		var items = FileSystemManager.list_dir(target_path)
+		var items = FSM.list_dir(target_path)
 		
 		# Move all contents from the subdirectory to the parent
 		for item_name in items:
 			if item_name == "." or item_name == "..":
 				continue
 			
-			var source_path = FileSystemManager.join_paths(target_path, item_name)
-			var dest_path = FileSystemManager.join_paths(extract_path, item_name)
+			var source_path = FSM.join_paths(target_path, item_name)
+			var dest_path = FSM.join_paths(extract_path, item_name)
 			
 			# Check if destination already exists
-			if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
+			if FSM.file_exists(dest_path) or FSM.dir_exists(dest_path):
 				continue
 			
 			# Move to parent directory
-			if not FileSystemManager.move(source_path, dest_path):
+			if not FSM.move(source_path, dest_path):
 				push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 		
 		# Remove the now-empty subdirectory
@@ -508,7 +510,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		return
 	
 	# No target folder specified, use original logic (single directory only)
-	var entries = FileSystemManager.list_dir(extract_path)
+	var entries = FSM.list_dir(extract_path)
 	print("[LaunchManager] Flattening: entries in extract_path=" + str(entries))
 	
 	# Filter out . and ..
@@ -522,15 +524,15 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	# If there's exactly one entry and it's a directory, flatten it
 	if filtered_entries.size() == 1:
 		var single_entry = filtered_entries[0]
-		var single_entry_path = FileSystemManager.join_paths(extract_path, single_entry)
+		var single_entry_path = FSM.join_paths(extract_path, single_entry)
 		print("[LaunchManager] Flattening: single_entry=" + single_entry + ", path=" + single_entry_path)
 		
 		# Check if the single entry is a directory
-		var is_dir = FileSystemManager.dir_exists(single_entry_path)
+		var is_dir = FSM.dir_exists(single_entry_path)
 		print("[LaunchManager] Flattening: is_dir=" + str(is_dir))
 		if is_dir:
 			# Get all items in the subdirectory
-			var sub_items = FileSystemManager.list_dir(single_entry_path)
+			var sub_items = FSM.list_dir(single_entry_path)
 			print("[LaunchManager] Flattening: sub_items=" + str(sub_items))
 			
 			# Move all contents from the subdirectory to the parent
@@ -538,17 +540,17 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 				if item_name == "." or item_name == "..":
 					continue
 				
-				var source_path = FileSystemManager.join_paths(single_entry_path, item_name)
-				var dest_path = FileSystemManager.join_paths(extract_path, item_name)
+				var source_path = FSM.join_paths(single_entry_path, item_name)
+				var dest_path = FSM.join_paths(extract_path, item_name)
 				print("[LaunchManager] Flattening: moving " + source_path + " -> " + dest_path)
 				
 				# Check if destination already exists
-				if FileSystemManager.file_exists(dest_path) or FileSystemManager.dir_exists(dest_path):
+				if FSM.file_exists(dest_path) or FSM.dir_exists(dest_path):
 					print("[LaunchManager] Flattening: destination already exists, skipping")
 					continue
 				
 				# Move to parent directory
-				var move_success = FileSystemManager.move(source_path, dest_path)
+				var move_success = FSM.move(source_path, dest_path)
 				print("[LaunchManager] Flattening: move result=" + str(move_success))
 				if not move_success:
 					push_warning("[LaunchManager] Failed to flatten item: " + source_path + " -> " + dest_path)
@@ -578,8 +580,8 @@ func get_emulator_install_path(emulator_id: String) -> String:
 		return ""
 	
 	# First check direct path
-	var direct_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), executable_name)
-	if FileSystemManager.file_exists(direct_path):
+	var direct_path = FSM.join_paths(_get_emulator_directory(emulator_id), executable_name)
+	if FSM.file_exists(direct_path):
 		return direct_path
 	
 	# Search recursively up to 3 levels deep
@@ -652,7 +654,7 @@ func get_firmware_directory(emulator_id: String) -> String:
 		return ""
 	
 	# Resolve wildcards
-	dir = FileSystemManager.resolve_emulator_path(dir, emulator_id)
+	dir = FSM.resolve_emulator_path(dir, emulator_id)
 	return dir.rstrip("/") + "/"
 
 ## Checks if firmware is ready for a platform/emulator
@@ -664,7 +666,7 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> b
 		# No firmware directory configured, assume not needed
 		return true
 	
-	if not FileSystemManager.dir_exists(firmware_dir):
+	if not FSM.dir_exists(firmware_dir):
 		return false
 	
 	# Get expected files from platform configuration
@@ -686,23 +688,23 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> b
 ## Recursively searches for a file in a directory and its subdirectories
 ## Returns true if the file is found
 func _find_file_recursive(dir: String, filename: String) -> bool:
-	if not FileSystemManager.dir_exists(dir):
+	if not FSM.dir_exists(dir):
 		return false
 	
-	var entries = FileSystemManager.list_dir(dir)
+	var entries = FSM.list_dir(dir)
 	for entry in entries:
 		if entry == "." or entry == "..":
 			continue
 		
-		var full_path = FileSystemManager.join_paths(dir, entry)
+		var full_path = FSM.join_paths(dir, entry)
 		
 		# Check if this entry matches the filename (handles subdirs like "dc/dc_boot.bin")
 		if entry == filename or full_path.ends_with("/" + filename) or full_path.ends_with("\\" + filename):
-			if FileSystemManager.file_exists(full_path):
+			if FSM.file_exists(full_path):
 				return true
 		
 		# Recurse into subdirectories
-		if FileSystemManager.dir_exists(full_path):
+		if FSM.dir_exists(full_path):
 			if _find_file_recursive(full_path, filename):
 				return true
 	
@@ -761,7 +763,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		
 		# Download to temp location first
 		var temp_path = "user://temp_firmware/" + file_name
-		FileSystemManager.make_dir_recursive("user://temp_firmware")
+		FSM.make_dir_recursive("user://temp_firmware")
 		
 		print("[LaunchManager] Downloading firmware: " + file_name)
 		
@@ -776,7 +778,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			true  # pulsing
 		)
 		
-		var _last_progress_mb: int = -1
+		var _last_progress_mb = [-1]
 		
 		NetworkManager.download_firmware_zip(
 			firmware_id,
@@ -805,13 +807,13 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 				)
 				
 				# Extract zip to firmware directory
-				var extract_success = FileSystemManager.extract_zip(temp_path, firmware_dir)
+				var extract_success = FSM.extract_zip(temp_path, firmware_dir)
 				
 				NotificationManager.dismiss_notification(_extract_notification_id)
 				
 				# Clean up temp file
-				if FileSystemManager.file_exists(temp_path):
-					FileSystemManager.delete_file(temp_path)
+				if FSM.file_exists(temp_path):
+					FSM.delete_file(temp_path)
 				
 				if not extract_success:
 					push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir)
@@ -823,8 +825,8 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 				if callback.is_valid():
 					callback.call(true, "Firmware installed"),
 			func(size_mb: int):
-				if size_mb != _last_progress_mb:
-					_last_progress_mb = size_mb
+				if size_mb != _last_progress_mb[0]:
+					_last_progress_mb[0] = size_mb
 					NotificationManager.update_notification_text(
 						_firmware_notification_id,
 						"Downloading firmware for " + platform_slug + "... " + str(size_mb) + " MB"
@@ -870,7 +872,7 @@ func create_launch_intent(game: GameResource) -> LaunchIntent:
 		# Fallback: construct path from components (for legacy or if file_path not set)
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		var root_path = root_folder.value if root_folder else "user://roms/"
-		intent.rom_path = FileSystemManager.join_paths(root_path, game.platform_slug, active_file_name)
+		intent.rom_path = FSM.join_paths(root_path, game.platform_slug, active_file_name)
 	
 	intent.platform_slug = game.platform_slug
 	
@@ -947,8 +949,8 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# Convert paths to absolute system paths for OS.execute
 		# Use native path resolution for external tools (converts user:// and handles Windows backslashes)
-		var global_install_path = FileSystemManager.resolve_native_path(install_path)
-		var global_rom_path = FileSystemManager.resolve_native_path(intent.rom_path)
+		var global_install_path = FSM.resolve_native_path(install_path)
+		var global_rom_path = FSM.resolve_native_path(intent.rom_path)
 		
 		# Build absolute core path
 		var install_dir = global_install_path.get_base_dir()
@@ -982,13 +984,13 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var desktop_rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
 		if intent.emulator_id.begins_with("rpcs3") and desktop_rpcs3_title_id != "":
 			# Check both disc and digital install locations
-			var disc_path: String = FileSystemManager.resolve_native_path(FileSystemManager.join_paths(install_dir, "games", desktop_rpcs3_title_id))
-			var digital_path: String = FileSystemManager.resolve_native_path(FileSystemManager.join_paths(install_dir, "dev_hdd0", "game", desktop_rpcs3_title_id))
+			var disc_path: String = FSM.resolve_native_path(FSM.join_paths(install_dir, "games", desktop_rpcs3_title_id))
+			var digital_path: String = FSM.resolve_native_path(FSM.join_paths(install_dir, "dev_hdd0", "game", desktop_rpcs3_title_id))
 			
 			var game_path: String
-			if FileSystemManager.dir_exists(disc_path):
+			if FSM.dir_exists(disc_path):
 				game_path = disc_path
-			elif FileSystemManager.dir_exists(digital_path):
+			elif FSM.dir_exists(digital_path):
 				game_path = digital_path
 			else:
 				# Fallback to disc path if neither exists (will fail gracefully later)
@@ -1188,12 +1190,12 @@ func _execute_controller_task(task: Dictionary, install_path: String) -> bool:
 func _execute_controller_create_folders(task: Dictionary, install_path: String) -> void:
 	var folders = task.get("folders", [])
 	for folder in folders:
-		var path = FileSystemManager.join_paths(install_path, folder)
-		FileSystemManager.make_dir_recursive(path)
+		var path = FSM.join_paths(install_path, folder)
+		FSM.make_dir_recursive(path)
 
 func _execute_controller_edit_file(task: Dictionary, install_path: String) -> bool:
 	var file_path = task.get("file", "")
-	var full_path = FileSystemManager.join_paths(install_path, file_path)
+	var full_path = FSM.join_paths(install_path, file_path)
 	
 	# Validate existing config
 	var validate = task.get("validate", {})
@@ -1266,10 +1268,10 @@ func _validate_controller_config(file_path: String, validate: Dictionary) -> boo
 			return false
 
 func _validate_section_contains(file_path: String, validate: Dictionary) -> bool:
-	if not FileSystemManager.file_exists(file_path):
+	if not FSM.file_exists(file_path):
 		return false
 	
-	var content = FileSystemManager.read_file(file_path)
+	var content = FSM.read_file(file_path)
 	if content == "":
 		return false
 	
@@ -1295,8 +1297,8 @@ func _validate_section_contains(file_path: String, validate: Dictionary) -> bool
 func _execute_controller_file_edit(file_path: String, content: String) -> void:
 	var existing_content = ""
 	
-	if FileSystemManager.file_exists(file_path):
-		existing_content = FileSystemManager.read_file(file_path)
+	if FSM.file_exists(file_path):
+		existing_content = FSM.read_file(file_path)
 	
 	# Parse the new content to find sections we need to replace
 	var new_sections = _parse_ini_sections(content)
@@ -1307,7 +1309,7 @@ func _execute_controller_file_edit(file_path: String, content: String) -> void:
 		var section_content = new_sections[section_name]
 		final_content = _replace_or_append_section(final_content, section_name, section_content)
 	
-	if not FileSystemManager.write_file(file_path, final_content):
+	if not FSM.write_file(file_path, final_content):
 		push_error("[LaunchManager] Failed to write: " + file_path)
 		return
 
@@ -1438,7 +1440,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
 		return
 	
-	var destination_path = FileSystemManager.join_paths(root_folder.value, game.platform_slug, active_file_name)
+	var destination_path = FSM.join_paths(root_folder.value, game.platform_slug, active_file_name)
 	
 	NotificationManager.show_notification("Downloading " + game.get_display_name() + "...", NotificationManager.Type.INFO)
 	
@@ -1579,7 +1581,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	
 	# Emulator is already installed and firmware is ready, launch immediately
 	print("[LaunchManager] _launch_with_emulator_check: Emulator installed, launching game")
-	await _launch_game_internal(game, emulator_id)
+	_launch_game_internal(game, emulator_id)
 	print("[LaunchManager] _launch_with_emulator_check: EXIT")
 
 ## Handler for when emulator extraction completes - retries pending launches
@@ -1619,13 +1621,13 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 			return
 		print("[LaunchManager] _on_emulator_installed_for_launch: Game preparation complete")
 		# Retry the launch
-		await _launch_game_internal(game, emulator_id)
+		_launch_game_internal(game, emulator_id)
 
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	print("[LaunchManager] _launch_game_internal: ENTER for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
 	
-	var intent = await create_launch_intent(game)
+	var intent = create_launch_intent(game)
 	
 	if not intent:
 		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")
@@ -1634,7 +1636,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 		return
 	
 	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
-	var success = await execute_launch(intent)
+	var success = execute_launch(intent)
 	
 	if not success:
 		push_error("[LaunchManager] _launch_game_internal: execute_launch returned false")
@@ -1693,9 +1695,9 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		if intent.core_name != "":
 			var core_filename = intent.core_name + "_libretro_android.so"
 			# Cores are downloaded to {emulator_dir}/cores
-			var emulator_dir = _get_emulator_directory(intent.emulator_id)
+			var _emulator_dir = _get_emulator_directory(intent.emulator_id)
 			# Use real filesystem path - with MANAGE_EXTERNAL_STORAGE, RetroArch can read directly
-			core_path = FileSystemManager.resolve_emulator_path("cores/" + core_filename, intent.emulator_id, "", FileSystemManager.PathFormat.ABSOLUTE)
+			core_path = FSM.resolve_emulator_path("cores/" + core_filename, intent.emulator_id, "", FSM.PathFormat.ABSOLUTE)
 			print("[LaunchManager] Core path for sideload: " + core_path)
 	else:
 		# Regular RetroArch launch - use internal core path
@@ -1797,9 +1799,9 @@ func download_emulator(emulator_id: String) -> bool:
 	
 	# Ensure emulator directory exists before starting install
 	var emulator_dir = _get_emulator_directory(emulator_id)
-	if not FileSystemManager.dir_exists(emulator_dir):
+	if not FSM.dir_exists(emulator_dir):
 		print("[LaunchManager] Creating emulator directory: " + emulator_dir)
-		if not FileSystemManager.make_dir_recursive(emulator_dir):
+		if not FSM.make_dir_recursive(emulator_dir):
 			push_error("[LaunchManager] Failed to create emulator directory: " + emulator_dir)
 			return false
 		print("[LaunchManager] Successfully created emulator directory")
@@ -1902,10 +1904,10 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	var apk_path = ""
 	
 	# Find the APK file in emulator directory
-	var entries = FileSystemManager.list_dir(emulator_dir)
+	var entries = FSM.list_dir(emulator_dir)
 	for file_name in entries:
 		if file_name.match(expected_file):
-			apk_path = FileSystemManager.join_paths(emulator_dir, file_name)
+			apk_path = FSM.join_paths(emulator_dir, file_name)
 			print("[LaunchManager] Found APK: " + apk_path)
 			break
 	
@@ -1915,7 +1917,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		return _retry_previous_step(emulator_id, step_index)
 	
 	# Validate APK file exists and has content
-	var file_size = FileSystemManager.get_file_size(apk_path)
+	var file_size = FSM.get_file_size(apk_path)
 	print("[LaunchManager] APK file size: " + str(file_size) + " bytes")
 	if file_size < 0:
 		print("[LaunchManager] ERROR: Cannot access APK file!")
@@ -1956,7 +1958,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		)
 		
 		# Try to open the folder
-		var folder_result = OS.shell_open(FileSystemManager.resolve_path(emulator_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE}))
+		var folder_result = OS.shell_open(FSM.resolve_path(emulator_dir, {"format": FSM.PathFormat.ABSOLUTE}))
 		if folder_result == Error.OK:
 			print("[LaunchManager] Opened folder containing APK")
 		
@@ -1998,7 +2000,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var extract_to = batch_config.get("extract_to", ".")
 	
 	# Resolve {emulator_dir} templates
-	extract_to = FileSystemManager.resolve_emulator_path(extract_to, emulator_id)
+	extract_to = FSM.resolve_emulator_path(extract_to, emulator_id)
 	
 	if base_url == "":
 		push_error("[LaunchManager] No base_url specified for batch_url_download")
@@ -2034,7 +2036,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		0.0,
 		func() -> float:
 			return float(progress.completed) / float(total_cores),
-		func(p: float) -> String:
+		func(_p: float) -> String:
 			return step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
 	)
 	
@@ -2045,13 +2047,13 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		var full_url = base_url + filename
 		
 		# Resolve extract directory using universal path resolver
-		var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, emulator_id)
+		var extract_dir = FSM.resolve_emulator_path(extract_to, emulator_id)
 		
 		# Normalize the path to remove "." and ".." components
-		extract_dir = FileSystemManager.normalize_path(extract_dir)
+		extract_dir = FSM.normalize_path(extract_dir)
 		
 		# Download to emulator directory (for extraction, then delete)
-		var destination_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), filename)
+		var destination_path = FSM.join_paths(_get_emulator_directory(emulator_id), filename)
 		
 		# Queue download without auto-extract (extraction happens in separate step)
 		# suppress_notification=true to avoid dozens of individual notifications
@@ -2075,7 +2077,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 			download_ids.append(item_id)
 			
 			# Create a callback that captures by reference (Dictionary is a reference type)
-			var callback = func(success: bool, message: String):
+			var callback = func(success: bool, _message: String):
 				progress.completed += 1
 				if not success:
 					progress.failed += 1
@@ -2117,10 +2119,10 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var install_steps = emulator.get("install", [])
 	
 	# Resolve path using universal resolver
-	var extract_dir = FileSystemManager.resolve_emulator_path(extract_to, emulator_id)
+	var extract_dir = FSM.resolve_emulator_path(extract_to, emulator_id)
 	
 	# Normalize the path to remove "." and ".." components
-	extract_dir = FileSystemManager.normalize_path(extract_dir)
+	extract_dir = FSM.normalize_path(extract_dir)
 	
 	# NEW LOGIC: Check validation first (output files exist?)
 	if _validate_install_step(emulator_id, step_index, install_steps):
@@ -2141,14 +2143,14 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var expected_file = extract_config.get("expected_file", "")
 	print("[LaunchManager] _execute_extract_step: expected_file pattern='" + expected_file + "'")
 	if expected_file != "":
-		var files = FileSystemManager.list_dir(emulator_dir)
+		var files = FSM.list_dir(emulator_dir)
 		print("[LaunchManager] _execute_extract_step: files in emulator_dir=" + str(files))
 		for file_name in files:
 			print("[LaunchManager] _execute_extract_step: checking if '" + file_name + "' matches pattern '" + expected_file + "'")
 			if file_name.match(expected_file):
-				var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
+				var full_path = FSM.join_paths(emulator_dir, file_name)
 				print("[LaunchManager] _execute_extract_step: MATCH! full_path=" + full_path)
-				if FileSystemManager.file_exists(full_path):
+				if FSM.file_exists(full_path):
 					archive_path = full_path
 					print("[LaunchManager] _execute_extract_step: archive_path set to " + archive_path)
 					break
@@ -2159,20 +2161,20 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# If no expected_file match, scan for common archive extensions (first match only)
 	if archive_path == "":
 		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
-		var files = FileSystemManager.list_dir(emulator_dir)
+		var files = FSM.list_dir(emulator_dir)
 		for file_name in files:
 			var lower_name = file_name.to_lower()
 			for ext in archive_extensions:
 				if lower_name.ends_with(ext):
-					var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
-					if FileSystemManager.file_exists(full_path):
+					var full_path = FSM.join_paths(emulator_dir, file_name)
+					if FSM.file_exists(full_path):
 						archive_path = full_path
 						break
 			if archive_path != "":
 				break
 	
 	# Check if archive was found
-	if archive_path == "" or not FileSystemManager.file_exists(archive_path):
+	if archive_path == "" or not FSM.file_exists(archive_path):
 		# Go back to download step to re-download
 		return _retry_previous_step(emulator_id, step_index)
 	
@@ -2192,7 +2194,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		return false
 	
 	# Create callback for single archive extraction
-	var extraction_callback = func(success: bool, message: String):
+	var extraction_callback = func(success: bool, _message: String):
 		if not success:
 			_emulator_install_progress[emulator_id] = "Extraction failed"
 			emulator_extraction_completed.emit(emulator_id, false)
@@ -2236,23 +2238,23 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	# First, check for explicit expected_file pattern in extract_config
 	var expected_file = extract_config.get("expected_file", "")
 	if expected_file != "":
-		var files = FileSystemManager.list_dir(emulator_dir)
+		var files = FSM.list_dir(emulator_dir)
 		for file_name in files:
 			if file_name.match(expected_file):
-				var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
-				if FileSystemManager.file_exists(full_path):
+				var full_path = FSM.join_paths(emulator_dir, file_name)
+				if FSM.file_exists(full_path):
 					archive_paths.append(full_path)
 	
 	# If no expected_file match, scan for common archive extensions
 	if archive_paths.is_empty():
 		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
-		var files = FileSystemManager.list_dir(emulator_dir)
+		var files = FSM.list_dir(emulator_dir)
 		for file_name in files:
 			var lower_name = file_name.to_lower()
 			for ext in archive_extensions:
 				if lower_name.ends_with(ext):
-					var full_path = FileSystemManager.join_paths(emulator_dir, file_name)
-					if FileSystemManager.file_exists(full_path):
+					var full_path = FSM.join_paths(emulator_dir, file_name)
+					if FSM.file_exists(full_path):
 						archive_paths.append(full_path)
 						break
 	
@@ -2286,7 +2288,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 		0.0,
 		func() -> float:
 			return float(progress.completed) / float(total_archives),
-		func(p: float) -> String:
+		func(_p: float) -> String:
 			return step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")"
 	)
 	
@@ -2305,12 +2307,12 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 		return false
 	
 	# Create callback for batch extraction (shared by all archives)
-	var batch_callback = func(success: bool, message: String):
+	var batch_callback = func(success: bool, _message: String):
 		progress.completed += 1
 		
 		if not success:
 			progress.failed += 1
-		
+			
 		# Update progress
 		_emulator_install_progress[emulator_id] = step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")"
 		
@@ -2362,15 +2364,15 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			var file_path = validate_config.get("file", "")
 			if file_path == "":
 				return true
-			var full_path = FileSystemManager.resolve_emulator_path(file_path, emulator_id)
-			return FileSystemManager.file_exists(full_path)
+			var full_path = FSM.resolve_emulator_path(file_path, emulator_id)
+			return FSM.file_exists(full_path)
 		
 		"folder_exists":
 			var folder_path = validate_config.get("path", "")
 			if folder_path == "":
 				return true
-			var full_path = FileSystemManager.resolve_emulator_path(folder_path, emulator_id)
-			return FileSystemManager.dir_exists(full_path)
+			var full_path = FSM.resolve_emulator_path(folder_path, emulator_id)
+			return FSM.dir_exists(full_path)
 		
 		"files_exist":
 			var folder_path = validate_config.get("path", "")
@@ -2381,17 +2383,17 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			if files_array.size() > 0:
 				# Check if all files in the array exist
 				for file_name in files_array:
-					var full_file_path = FileSystemManager.resolve_emulator_path(file_name, emulator_id)
-					if not FileSystemManager.file_exists(full_file_path):
+					var full_file_path = FSM.resolve_emulator_path(file_name, emulator_id)
+					if not FSM.file_exists(full_file_path):
 						return false
 				return true
 			
 			if folder_path == "":
 				return true
 			
-			var full_path = FileSystemManager.resolve_emulator_path(folder_path, emulator_id)
+			var full_path = FSM.resolve_emulator_path(folder_path, emulator_id)
 			
-			var entries = FileSystemManager.list_dir(full_path)
+			var entries = FSM.list_dir(full_path)
 			for file_name in entries:
 				if file_name != "." and file_name != "..":
 					if pattern == "" or file_name.match(pattern):
@@ -2629,7 +2631,7 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 		scrape_url,
 		version_pattern,
 		url_template,
-		func(url: String, version: String, error: String):
+		func(_url: String, version: String, error: String):
 			if error != "" or version == "":
 				results.failed.append(emulator_id)
 				_check_updates_complete(results, callback)
@@ -2662,7 +2664,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(url: String, tag: String, error: String):
+		func(_url: String, tag: String, error: String):
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
 				_check_updates_complete(results, callback)
@@ -2682,7 +2684,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	)
 
 ## Triggers re-installation of an emulator for update
-func _trigger_emulator_update(emulator_id: String, emulator_name: String, platform_config: Dictionary):
+func _trigger_emulator_update(emulator_id: String, _emulator_name: String, _platform_config: Dictionary):
 	print("[LaunchManager] Triggering update for: " + emulator_id)
 	
 	# Clear install progress to force fresh install
@@ -2692,30 +2694,30 @@ func _trigger_emulator_update(emulator_id: String, emulator_name: String, platfo
 	_execute_install_step(emulator_id, 0)
 
 ## Helper function for create_folders action
-func _handle_create_folders_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+func _handle_create_folders_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var folders = platform_config.get("folders", [])
 	if folders.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	for folder_path in folders:
 		# Resolve path using universal resolver
-		var full_path = FileSystemManager.resolve_emulator_path(folder_path, emulator_id)
+		var full_path = FSM.resolve_emulator_path(folder_path, emulator_id)
 		
-		if not FileSystemManager.make_dir_recursive(full_path):
+		if not FSM.make_dir_recursive(full_path):
 			push_error("[LaunchManager] Failed to create folder: " + full_path)
 			return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Helper function for create_files action
-func _handle_create_files_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+func _handle_create_files_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var files = platform_config.get("files", [])
 	if files.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
 	# Get the emulator directory path for placeholder resolution
 	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
-	var global_emulator_dir = FileSystemManager.resolve_path(emulator_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	var global_emulator_dir = FSM.resolve_path(emulator_dir, {"format": FSM.PathFormat.ABSOLUTE})
 	
 	for file_entry in files:
 		var file_name = ""
@@ -2730,7 +2732,7 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		if file_name == "":
 			continue
 		
-		var full_path = FileSystemManager.resolve_emulator_path(file_name, emulator_id)
+		var full_path = FSM.resolve_emulator_path(file_name, emulator_id)
 		
 		# Resolve placeholders in content
 		file_content = file_content.replace("{emulator_dir}", global_emulator_dir)
@@ -2740,8 +2742,8 @@ func _handle_create_files_step(emulator_id: String, step_name: String, step_inde
 		var games_dir = games_folder_setting.value.rstrip("/") if games_folder_setting else "user://roms"
 		file_content = file_content.replace("{games_dir}", games_dir)
 		
-		if not FileSystemManager.file_exists(full_path):
-			if not FileSystemManager.write_file(full_path, file_content):
+		if not FSM.file_exists(full_path):
+			if not FSM.write_file(full_path, file_content):
 				push_error("[LaunchManager] Failed to create file: " + full_path)
 				return false
 	
@@ -2773,20 +2775,20 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Helper function for edit_file action
-func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var file_path = platform_config.get("file", "")
 	var edits = platform_config.get("edits", [])
 	
 	if file_path == "" or edits.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
-	var full_path = FileSystemManager.resolve_emulator_path(file_path, emulator_id)
+	var full_path = FSM.resolve_emulator_path(file_path, emulator_id)
 	
-	if not FileSystemManager.file_exists(full_path):
+	if not FSM.file_exists(full_path):
 		push_error("[LaunchManager] File not found for editing: " + full_path)
 		return false
 	
-	var content = FileSystemManager.read_file(full_path)
+	var content = FSM.read_file(full_path)
 	if content == "":
 		push_error("[LaunchManager] Failed to read file for editing: " + full_path)
 		return false
@@ -2800,14 +2802,14 @@ func _handle_edit_file_step(emulator_id: String, step_name: String, step_index: 
 		
 		content = content.replace(old_text, new_text)
 	
-	if not FileSystemManager.write_file(full_path, content):
+	if not FSM.write_file(full_path, content):
 		push_error("[LaunchManager] Failed to write edited file: " + full_path)
 		return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Helper function for none action (skip)
-func _handle_none_step(emulator_id: String, step_name: String, step_index: int) -> bool:
+func _handle_none_step(emulator_id: String, _step_name: String, step_index: int) -> bool:
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Creates the save directory for an emulator if it doesn't exist
@@ -2827,12 +2829,12 @@ func _create_emulator_save_directory(emulator_id: String) -> void:
 			print("[LaunchManager] No save directory configured for: " + emulator_id)
 			return
 		
-		if FileSystemManager.dir_exists(save_dir):
+		if FSM.dir_exists(save_dir):
 			print("[LaunchManager] Save directory already exists for " + emulator_id + ": " + save_dir)
 			return
 		
 		print("[LaunchManager] Creating save directory for " + emulator_id + ": " + save_dir)
-		var success = FileSystemManager.make_dir_recursive(save_dir)
+		var success = FSM.make_dir_recursive(save_dir)
 		if not success:
 			push_error("[LaunchManager] Failed to create save directory for " + emulator_id + ": " + save_dir)
 		else:
@@ -2845,18 +2847,18 @@ func _create_emulator_save_directory(emulator_id: String) -> void:
 			if save_dir == "":
 				continue
 			
-			if FileSystemManager.dir_exists(save_dir):
+			if FSM.dir_exists(save_dir):
 				continue
 			
 			print("[LaunchManager] Creating save directory for " + emulator_id + " / " + platform + ": " + save_dir)
-			var success = FileSystemManager.make_dir_recursive(save_dir)
+			var success = FSM.make_dir_recursive(save_dir)
 			if not success:
 				push_error("[LaunchManager] Failed to create save directory for " + emulator_id + " / " + platform + ": " + save_dir)
 			else:
 				print("[LaunchManager] Successfully created save directory for " + emulator_id + " / " + platform)
 
 ## Executes install steps from new step-based format (entry point)
-func _execute_install_steps(emulator_id: String, emulator: Dictionary, install_steps: Array) -> bool:
+func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install_steps: Array) -> bool:
 	# Find the first incomplete step to start from
 	var progress = get_install_progress(emulator_id)
 	var start_step = 0
@@ -3020,7 +3022,7 @@ func scan_emulator_install_state(emulator_id: String):
 		_emulator_install_progress[emulator_id] = ""
 
 ## Legacy unified download - kept for reference but not used
-func _queue_emulator_download(emulator_id: String, emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
+func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
 	# Use explicit filename from config if provided, otherwise extract from URL
 	var filename = step_config.get("filename", "")
 	if filename == "":
@@ -3030,10 +3032,10 @@ func _queue_emulator_download(emulator_id: String, emulator_name: String, step_d
 	var custom_destination = step_config.get("destination", "")
 	var destination_path: String
 	if custom_destination != "":
-		FileSystemManager.make_dir_recursive(custom_destination)
-		destination_path = FileSystemManager.join_paths(custom_destination, filename)
+		FSM.make_dir_recursive(custom_destination)
+		destination_path = FSM.join_paths(custom_destination, filename)
 	else:
-		destination_path = FileSystemManager.join_paths(_get_emulator_directory(emulator_id), filename)
+		destination_path = FSM.join_paths(_get_emulator_directory(emulator_id), filename)
 	
 	print("[LaunchManager] Queueing download for " + emulator_id + ": " + filename + " -> " + destination_path)
 	
@@ -3156,7 +3158,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
 	else:
 		var root_folder = SettingsManager.get_setting("games_root_folder")
 		var root_path = root_folder.value if root_folder else "user://roms/"
-		temp_intent.rom_path = FileSystemManager.join_paths(root_path, game.platform_slug, game.get_active_file_name())
+		temp_intent.rom_path = FSM.join_paths(root_path, game.platform_slug, game.get_active_file_name())
 		print("[LaunchManager] _prepare_game_for_launch: Constructed path = " + temp_intent.rom_path)
 	
 	temp_intent.emulator_id = emulator_id
@@ -3621,7 +3623,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## Checks whether the given Vita3K app path contains actual game files
 func _vita_app_has_game_files(vita_app_path: String) -> bool:
 	# Use FileSystemManager to list files
-	var files = FileSystemManager.list_dir(vita_app_path)
+	var files = FSM.list_dir(vita_app_path)
 	# Filter out . and .. entries - they don't count as game files
 	var actual_files = 0
 	for f in files:
@@ -3636,7 +3638,7 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 	
 	var parent_dir = extract_to.get_base_dir()
 	print("[LaunchManager] Vita3K: Creating parent directory: " + parent_dir)
-	if not FileSystemManager.make_dir_recursive(parent_dir):
+	if not FSM.make_dir_recursive(parent_dir):
 		push_error("[LaunchManager] Failed to create Vita3K app directory: " + parent_dir)
 		print("[LaunchManager] _extract_vita_zip: EXIT false (mkdir failed)")
 		return false
@@ -3693,15 +3695,15 @@ func _find_param_sfo_recursive(search_dir: String) -> String:
 	
 	while file_name != "":
 		if file_name != "." and file_name != "..":
-			var full_path := FileSystemManager.join_paths(search_dir, file_name)
+			var full_path := FSM.join_paths(search_dir, file_name)
 			
 			# Check if this is the PARAM.SFO file we're looking for
-			if file_name == "PARAM.SFO" and FileSystemManager.file_exists(full_path):
+			if file_name == "PARAM.SFO" and FSM.file_exists(full_path):
 				dir.list_dir_end()
 				return full_path
 			
 			# If it's a directory, search recursively
-			if FileSystemManager.dir_exists(full_path):
+			if FSM.dir_exists(full_path):
 				var result := _find_param_sfo_recursive(full_path)
 				if result != "":
 					dir.list_dir_end()
@@ -3719,7 +3721,7 @@ func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
 	print("[LaunchManager] RPCS3: Copying directory recursively from " + source_dir + " to " + dest_dir)
 	
 	# Create destination directory
-	if not FileSystemManager.make_dir_recursive(dest_dir):
+	if not FSM.make_dir_recursive(dest_dir):
 		push_error("[LaunchManager] RPCS3: Failed to create destination directory: " + dest_dir)
 		return false
 	
@@ -3734,17 +3736,17 @@ func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
 	
 	while file_name != "":
 		if file_name != "." and file_name != "..":
-			var source_path := FileSystemManager.join_paths(source_dir, file_name)
-			var dest_path := FileSystemManager.join_paths(dest_dir, file_name)
+			var source_path := FSM.join_paths(source_dir, file_name)
+			var dest_path := FSM.join_paths(dest_dir, file_name)
 			
-			if FileSystemManager.dir_exists(source_path):
+			if FSM.dir_exists(source_path):
 				# Recursively copy subdirectory
 				if not _copy_dir_recursive(source_path, dest_path):
 					success = false
 					break
 			else:
 				# Copy file
-				if not FileSystemManager.copy_file(source_path, dest_path):
+				if not FSM.copy_file(source_path, dest_path):
 					push_error("[LaunchManager] RPCS3: Failed to copy file: " + source_path + " to " + dest_path)
 					success = false
 					break
@@ -3757,9 +3759,9 @@ func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
 
 ## Checks whether the given RPCS3 game path contains actual game files
 func _rpcs3_game_has_files(game_path: String) -> bool:
-	if not FileSystemManager.dir_exists(game_path):
+	if not FSM.dir_exists(game_path):
 		return false
-	var files = FileSystemManager.list_dir(game_path)
+	var files = FSM.list_dir(game_path)
 	var actual_files = 0
 	for f in files:
 		if f != "." and f != "..":
@@ -3795,17 +3797,17 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 			print("[LaunchManager] RPCS3: Stopping flatten - not a single wrapper (" + str(entries.size()) + " entries)")
 			break
 		
-		var potential_wrapper: String = FileSystemManager.join_paths(install_path, entries[0])
+		var potential_wrapper: String = FSM.join_paths(install_path, entries[0])
 		
 		# Only flatten if it's a directory
-		if not FileSystemManager.dir_exists(potential_wrapper):
+		if not FSM.dir_exists(potential_wrapper):
 			print("[LaunchManager] RPCS3: Stopping flatten - single entry is not a directory")
 			break
 		
 		# Check if this directory contains game indicators
-		var has_param_sfo = FileSystemManager.file_exists(FileSystemManager.join_paths(potential_wrapper, "PARAM.SFO"))
-		var has_disc_sfb = FileSystemManager.file_exists(FileSystemManager.join_paths(potential_wrapper, "PS3_DISC.SFB"))
-		var has_ps3_game = FileSystemManager.dir_exists(FileSystemManager.join_paths(potential_wrapper, "PS3_GAME"))
+		var has_param_sfo = FSM.file_exists(FSM.join_paths(potential_wrapper, "PARAM.SFO"))
+		var has_disc_sfb = FSM.file_exists(FSM.join_paths(potential_wrapper, "PS3_DISC.SFB"))
+		var has_ps3_game = FSM.dir_exists(FSM.join_paths(potential_wrapper, "PS3_GAME"))
 		
 		if has_param_sfo or has_disc_sfb or has_ps3_game:
 			print("[LaunchManager] RPCS3: Found game indicators in: " + entries[0])
@@ -3818,13 +3820,13 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 				var wrapper_file := wrapper_dir.get_next()
 				while wrapper_file != "":
 					if wrapper_file != "." and wrapper_file != "..":
-						var source := FileSystemManager.join_paths(potential_wrapper, wrapper_file)
-						var dest := FileSystemManager.join_paths(install_path, wrapper_file)
+						var source := FSM.join_paths(potential_wrapper, wrapper_file)
+						var dest := FSM.join_paths(install_path, wrapper_file)
 						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from game folder")
-						FileSystemManager.move(source, dest)
+						FSM.move(source, dest)
 					wrapper_file = wrapper_dir.get_next()
 				wrapper_dir.list_dir_end()
-				FileSystemManager.delete_dir_recursive(potential_wrapper)
+				FSM.delete_dir_recursive(potential_wrapper)
 				print("[LaunchManager] RPCS3: Flattened game folder")
 			
 			# Stop after flattening the game folder
@@ -3838,20 +3840,20 @@ func _flatten_rpcs3_wrappers(install_path: String) -> void:
 				var wrapper_file := wrapper_dir.get_next()
 				while wrapper_file != "":
 					if wrapper_file != "." and wrapper_file != "..":
-						var source := FileSystemManager.join_paths(potential_wrapper, wrapper_file)
-						var dest := FileSystemManager.join_paths(install_path, wrapper_file)
+						var source := FSM.join_paths(potential_wrapper, wrapper_file)
+						var dest := FSM.join_paths(install_path, wrapper_file)
 						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from wrapper")
-						FileSystemManager.move(source, dest)
+						FSM.move(source, dest)
 					wrapper_file = wrapper_dir.get_next()
 				wrapper_dir.list_dir_end()
-				FileSystemManager.delete_dir_recursive(potential_wrapper)
+				FSM.delete_dir_recursive(potential_wrapper)
 				print("[LaunchManager] RPCS3: Flattened wrapper folder")
 
 
 ## Determines if a PS3 game ZIP is disc or digital format by checking file paths
 ## Returns "disc" if ZIP contains PS3_GAME/ folder, "digital" otherwise
 func _determine_ps3_game_format(zip_path: String) -> String:
-	if not FileSystemManager.file_exists(zip_path):
+	if not FSM.file_exists(zip_path):
 		push_error("[LaunchManager] RPCS3: Cannot determine format - file not found: " + zip_path)
 		return "digital"  # Default to digital on error
 	
@@ -3886,7 +3888,7 @@ func _determine_ps3_game_format_with_7z(zip_path: String) -> String:
 		print("[LaunchManager] RPCS3: 7-Zip binary not available for format detection")
 		return "digital"
 	
-	var native_zip_path = FileSystemManager.resolve_native_path(zip_path)
+	var native_zip_path = FSM.resolve_native_path(zip_path)
 	var list_args = ["l", native_zip_path]
 	var output = []
 	var exit_code = OS.execute(binary_path, list_args, output, true)
@@ -3913,9 +3915,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var existing_title_id = game.get_active_title_id()
 	if existing_title_id != "":
 		# TitleID exists, but verify game files are actually present
-		var emulator_dir = _get_emulator_directory("rpcs3")
-		var disc_path = FileSystemManager.join_paths(emulator_dir, "games", existing_title_id)
-		var digital_path = FileSystemManager.join_paths(emulator_dir, "dev_hdd0", "game", existing_title_id)
+		var verify_emulator_dir = _get_emulator_directory("rpcs3")
+		var disc_path = FSM.join_paths(verify_emulator_dir, "games", existing_title_id)
+		var digital_path = FSM.join_paths(verify_emulator_dir, "dev_hdd0", "game", existing_title_id)
 		if _rpcs3_game_has_files(disc_path) or _rpcs3_game_has_files(digital_path):
 			print("[LaunchManager] RPCS3: Game already installed")
 			return true
@@ -3966,9 +3968,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[LaunchManager] RPCS3: Android mode - emulator_dir: " + emulator_dir)
 	else:
 		# Desktop: Use emulator install directory
-		var install_path = get_emulator_install_path(intent.emulator_id)
-		print("[LaunchManager] RPCS3: Desktop mode - install_path: " + install_path)
-		emulator_dir = install_path.get_base_dir()
+		var desktop_install_path = get_emulator_install_path(intent.emulator_id)
+		print("[LaunchManager] RPCS3: Desktop mode - install_path: " + desktop_install_path)
+		emulator_dir = desktop_install_path.get_base_dir()
 		print("[LaunchManager] RPCS3: Desktop mode - emulator_dir: " + emulator_dir)
 	
 	# Step 3: Detect game format from ZIP before extraction
@@ -3978,9 +3980,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Step 4: Determine final install location based on format
 	var install_path: String
 	if game_format == "disc":
-		install_path = FileSystemManager.join_paths(emulator_dir, "games", title_id)
+		install_path = FSM.join_paths(emulator_dir, "games", title_id)
 	else:
-		install_path = FileSystemManager.join_paths(emulator_dir, "dev_hdd0", "game", title_id)
+		install_path = FSM.join_paths(emulator_dir, "dev_hdd0", "game", title_id)
 	
 	print("[LaunchManager] RPCS3: Install path: " + install_path)
 	
@@ -3992,9 +3994,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[LaunchManager] RPCS3: Game not installed, will extract to: " + install_path)
 	
 	# Step 6: Create install directory
-	if not FileSystemManager.dir_exists(install_path):
+	if not FSM.dir_exists(install_path):
 		print("[LaunchManager] RPCS3: Creating install directory: " + install_path)
-		if not FileSystemManager.make_dir_recursive(install_path):
+		if not FSM.make_dir_recursive(install_path):
 			push_error("[LaunchManager] RPCS3: Failed to create install directory: " + install_path)
 			return false
 	
@@ -4029,9 +4031,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	_flatten_rpcs3_wrappers(install_path)
 	
 	# Step 9: Verify game files actually exist after extraction
-	var has_param_sfo = FileSystemManager.file_exists(FileSystemManager.join_paths(install_path, "PARAM.SFO"))
-	var has_ps3_disc = FileSystemManager.file_exists(FileSystemManager.join_paths(install_path, "PS3_DISC.SFB"))
-	var has_ps3_game = FileSystemManager.dir_exists(FileSystemManager.join_paths(install_path, "PS3_GAME"))
+	var has_param_sfo = FSM.file_exists(FSM.join_paths(install_path, "PARAM.SFO"))
+	var has_ps3_disc = FSM.file_exists(FSM.join_paths(install_path, "PS3_DISC.SFB"))
+	var has_ps3_game = FSM.dir_exists(FSM.join_paths(install_path, "PS3_GAME"))
 	
 	if not has_param_sfo and not has_ps3_disc and not has_ps3_game:
 		push_error("[LaunchManager] RPCS3: Game files missing after extraction at: " + install_path)
@@ -4047,7 +4049,7 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 	print("[LaunchManager] RPCS3: Extracting ZIP: " + zip_path + " to: " + extract_to)
 	
 	# Use DownloadManager's extraction functionality
-	var item_id := DownloadManager.queue_extraction(zip_path, extract_to, "ps3_game", "Extracting PS3 Game", false)
+	var item_id: String = DownloadManager.queue_extraction(zip_path, extract_to, "ps3_game", "Extracting PS3 Game", false)
 	
 	if item_id == "":
 		push_error("[LaunchManager] RPCS3: Failed to queue extraction")
@@ -4058,7 +4060,7 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 	# Use a completion tracker object (works around GDScript closure limitations)
 	var completion_tracker := {"complete": false, "success": false}
 	
-	var on_complete = func(completed_item_id: String, success: bool, message: String):
+	var on_complete = func(completed_item_id: String, success: bool, _message: String):
 		if completed_item_id == item_id:
 			completion_tracker.complete = true
 			completion_tracker.success = success
@@ -4129,7 +4131,7 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	# Step 2: Determine extraction path (next to the ZIP in the ps4 roms folder)
 	var rom_parent_dir = rom_path.get_base_dir()
-	var extract_path = FileSystemManager.join_paths(rom_parent_dir, title_id)
+	var extract_path = FSM.join_paths(rom_parent_dir, title_id)
 	print("[LaunchManager] shadPS4: Extraction path: " + extract_path)
 	
 	# Step 3: Check if already extracted
@@ -4140,9 +4142,9 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[LaunchManager] shadPS4: Game not extracted, will extract to: " + extract_path)
 	
 	# Step 4: Create extraction directory
-	if not FileSystemManager.dir_exists(extract_path):
+	if not FSM.dir_exists(extract_path):
 		print("[LaunchManager] shadPS4: Creating extraction directory: " + extract_path)
-		if not FileSystemManager.make_dir_recursive(extract_path):
+		if not FSM.make_dir_recursive(extract_path):
 			push_error("[LaunchManager] shadPS4: Failed to create extraction directory: " + extract_path)
 			return false
 	
@@ -4176,10 +4178,10 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 
 ## Checks if a shadPS4 game directory has actual game files
 func _shadps4_game_has_files(game_path: String) -> bool:
-	if not FileSystemManager.dir_exists(game_path):
+	if not FSM.dir_exists(game_path):
 		return false
 	
-	var entries = FileSystemManager.list_dir(game_path)
+	var entries = FSM.list_dir(game_path)
 	var actual_files = 0
 	for entry in entries:
 		if entry == "." or entry == "..":
@@ -4195,7 +4197,7 @@ func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
 	print("[LaunchManager] shadPS4: Extracting ZIP: " + zip_path + " to: " + extract_to)
 	
 	# Use DownloadManager's extraction functionality
-	var item_id := DownloadManager.queue_extraction(zip_path, extract_to, "ps4_game", "Extracting PS4 Game", false)
+	var item_id: String = DownloadManager.queue_extraction(zip_path, extract_to, "ps4_game", "Extracting PS4 Game", false)
 	
 	if item_id == "":
 		push_error("[LaunchManager] shadPS4: Failed to queue extraction")
@@ -4206,7 +4208,7 @@ func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
 	# Use a completion tracker object
 	var completion_tracker := {"complete": false, "success": false}
 	
-	var on_complete = func(completed_item_id: String, success: bool, message: String):
+	var on_complete = func(completed_item_id: String, success: bool, _message: String):
 		if completed_item_id == item_id:
 			completion_tracker.complete = true
 			completion_tracker.success = success

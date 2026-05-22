@@ -67,8 +67,8 @@ func _on_download_progress(item_id: String, progress: float):
 		progress_bar.value = progress * 100
 		_update_display()
 
-func _on_download_completed(item_id: String, success: bool, message: String):
-	if download_item and download_item.id == item_id:
+func _on_download_completed(_item_id: String, _success: bool, _message: String):
+	if download_item and download_item.id == _item_id:
 		_update_display()
 
 func _on_extraction_progress(item_id: String, progress: float):
@@ -76,8 +76,8 @@ func _on_extraction_progress(item_id: String, progress: float):
 		progress_bar.value = progress * 100
 		_update_display()
 
-func _on_extraction_completed(item_id: String, success: bool, message: String):
-	if download_item and download_item.id == item_id:
+func _on_extraction_completed(_item_id: String, _success: bool, _message: String):
+	if download_item and download_item.id == _item_id:
 		_update_display()
 
 func _on_cancel_pressed():

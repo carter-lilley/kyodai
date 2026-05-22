@@ -2,6 +2,8 @@
 ## Extracts game identifiers from ROM files for save sync purposes
 class_name TitleIDParser
 
+const FSM = preload("res://managers/filesystem_manager.gd")
+
 # Preload AndroidBinaryExtractor to ensure it's available when referenced
 const _AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd")
 
@@ -12,11 +14,11 @@ const _AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd
 ## Opens a file for reading and calls the callback. Handles error checking and cleanup.
 ## Returns the callback's result, or empty string on failure.
 static func _with_open_file(path: String, callback: Callable) -> String:
-	if not FileSystemManager.file_exists(path):
+	if not FSM.file_exists(path):
 		push_error("[TitleIDParser] File not found: " + path)
 		return ""
 	
-	var file = FileSystemManager.open_file_read(path)
+	var file = FSM.open_file_read(path)
 	if not file:
 		push_error("[TitleIDParser] Failed to open file: " + path)
 		return ""
@@ -96,16 +98,16 @@ static func _resolve_zip_path(zip_path: String) -> String:
 	# On Windows, prefer backslash paths for ZIPReader compatibility
 	if OS.get_name() == "Windows":
 		var backslash_path = zip_path.replace("/", "\\")
-		if FileSystemManager.file_exists(backslash_path):
+		if FSM.file_exists(backslash_path):
 			return backslash_path
 	
 	# Try original path
-	if FileSystemManager.file_exists(zip_path):
+	if FSM.file_exists(zip_path):
 		return zip_path
 	
 	# Try absolute path (resolves user://, res://, etc.)
-	var abs_path = FileSystemManager.resolve_path(zip_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-	if abs_path != zip_path and FileSystemManager.file_exists(abs_path):
+	var abs_path = FSM.resolve_path(zip_path, {"format": FSM.PathFormat.ABSOLUTE})
+	if abs_path != zip_path and FSM.file_exists(abs_path):
 		return abs_path
 	
 	return ""
@@ -139,7 +141,7 @@ static func extract_3ds_title_id(rom_path: String) -> String:
 # ==================== Wii U (Cemu) ====================
 
 static func extract_wiiu_title_id(rom_path: String) -> String:
-	var file_size = FileSystemManager.get_file_size(rom_path)
+	var file_size = FSM.get_file_size(rom_path)
 	if file_size <= 0:
 		return ""
 	
@@ -180,10 +182,10 @@ static func _read_prod_keys_header_key(emulator_dir: String) -> String:
 	else:
 		keys_path = emulator_dir.rstrip("/") + "/user/keys/prod.keys"
 	
-	if not FileSystemManager.file_exists(keys_path):
+	if not FSM.file_exists(keys_path):
 		return ""
 	
-	var content = FileSystemManager.read_file(keys_path)
+	var content = FSM.read_file(keys_path)
 	if content == "":
 		return ""
 	
@@ -213,7 +215,7 @@ static func _aes_xts_decrypt(data: PackedByteArray, key: PackedByteArray, sector
 	var result = PackedByteArray()
 	result.resize(data.size())
 	
-	var sectors = data.size() / sector_size
+	var sectors = data.size() / float(sector_size)
 	for sector in range(sectors):
 		var sector_data = data.slice(sector * sector_size, (sector + 1) * sector_size)
 		
@@ -229,7 +231,7 @@ static func _aes_xts_decrypt(data: PackedByteArray, key: PackedByteArray, sector
 		tweak_block[15] = (sector_start + sector) & 0xFF
 		
 		var t = aes_tweak.update(tweak_block)
-		var blocks = sector_size / 16
+		var blocks = sector_size / 16.0
 		
 		for block in range(blocks):
 			var block_data = PackedByteArray()
@@ -305,7 +307,7 @@ static func _parse_hfs0(file: FileAccess, offset: int) -> Dictionary:
 	return result
 
 static func extract_xci_title_id(rom_path: String, emulator_dir: String) -> String:
-	if not FileSystemManager.file_exists(rom_path):
+	if not FSM.file_exists(rom_path):
 		return ""
 	
 	var header_key_hex = _read_prod_keys_header_key(emulator_dir)
@@ -321,7 +323,7 @@ static func extract_xci_title_id(rom_path: String, emulator_dir: String) -> Stri
 	return _with_open_file(rom_path, func(file: FileAccess) -> String:
 		file.seek(0x130)
 		var hfs0_offset = file.get_64()
-		var hfs0_size = file.get_64()
+		var _hfs0_size = file.get_64()
 		
 		var root = _parse_hfs0(file, hfs0_offset)
 		if not root.valid:
@@ -388,7 +390,7 @@ static func extract_xci_title_id(rom_path: String, emulator_dir: String) -> Stri
 	)
 
 static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> String:
-	if not FileSystemManager.file_exists(rom_path):
+	if not FSM.file_exists(rom_path):
 		print("[TitleIDParser] extract_switch_title_id: file not found: " + rom_path)
 		return ""
 	
@@ -478,7 +480,7 @@ static func extract_switch_title_id(rom_path: String, emulator_dir: String) -> S
 						var filename = filenames[i]
 						if filename.to_lower().ends_with(".nca"):
 							var nca_offset = header.decode_u64(0x10 + (i * 0x18))
-							var nca_size = header.decode_u64(0x10 + (i * 0x18) + 0x08)
+							var _nca_size = header.decode_u64(0x10 + (i * 0x18) + 0x08)
 							
 							file.seek(data_start + nca_offset)
 							var nca_header = file.get_buffer(0x400)
@@ -523,7 +525,7 @@ static func _is_valid_maker_code(maker: String) -> bool:
 	return true
 
 static func extract_gamecube_game_id(rom_path: String) -> String:
-	var file_size = FileSystemManager.get_file_size(rom_path)
+	var file_size = FSM.get_file_size(rom_path)
 	if file_size <= 0:
 		return ""
 	
@@ -555,9 +557,9 @@ static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -
 		var card_dirs: Array[String] = ["Card A", "Card B"]
 		for card in card_dirs:
 			var card_path = emulator_dir.rstrip("/") + "/User/GC/" + region + "/" + card + "/"
-			if not FileSystemManager.dir_exists(card_path):
+			if not FSM.dir_exists(card_path):
 				continue
-			var items = FileSystemManager.list_dir(card_path)
+			var items = FSM.list_dir(card_path)
 			for item in items:
 				if item == "." or item == "..":
 					continue
@@ -658,10 +660,10 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 			print("[TitleIDParser] default.xex not found, trying GameInfo.bin...")
 			var gameinfo_entry = _find_file_in_gdfx(file, game_offset, root_offset, "GameInfo.bin")
 			if not gameinfo_entry.is_empty():
-				var title_id = _parse_gameinfo_title_id(file, gameinfo_entry)
-				if title_id != "":
-					print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + title_id.to_upper())
-					return title_id.to_upper()
+				var parsed_title_id = _parse_gameinfo_title_id(file, gameinfo_entry)
+				if parsed_title_id != "":
+					print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + parsed_title_id.to_upper())
+					return parsed_title_id.to_upper()
 			
 			push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ISO")
 			return ""
@@ -978,8 +980,8 @@ static func _chd_read_sector_binary(chd_path: String, lba: int) -> PackedByteArr
 	if reader_path == "":
 		return PackedByteArray()
 	
-	var abs_reader = FileSystemManager.resolve_path(reader_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-	var abs_chd = FileSystemManager.resolve_path(chd_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	var abs_reader = FSM.resolve_path(reader_path, {"format": FSM.PathFormat.ABSOLUTE})
+	var abs_chd = FSM.resolve_path(chd_path, {"format": FSM.PathFormat.ABSOLUTE})
 	
 	# Create temp file for sector output
 	var temp_path = OS.get_user_data_dir() + "/chd_sector_" + str(lba) + ".tmp"
@@ -1032,7 +1034,7 @@ static func _chd_extract_ps2_serial(rom_path: String) -> String:
 	var root_length = pvd_sector.decode_u32(166)
 	
 	# Read root directory sectors
-	var dir_sectors = (root_length + 2047) / 2048
+	var dir_sectors = int(ceil((root_length + 2047) / 2048.0))
 	var dir_data = PackedByteArray()
 	
 	for i in range(dir_sectors):
@@ -1050,7 +1052,7 @@ static func _chd_extract_ps2_serial(rom_path: String) -> String:
 	while offset < root_length:
 		var entry_length = dir_data[offset]
 		if entry_length == 0:
-			offset = (offset / 2048 + 1) * 2048
+			offset = (int(offset / 2048.0) + 1) * 2048
 			continue
 		
 		var name_length = dir_data[offset + 32]
@@ -1308,7 +1310,7 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 	if not DirAccess.dir_exists_absolute(temp_dir):
 		DirAccess.make_dir_recursive_absolute(temp_dir)
 	
-	var extract_args = ["e", zip_path, sfo_path, 		"-o" + FileSystemManager.resolve_path(temp_dir, {"format": FileSystemManager.PathFormat.ABSOLUTE}), "-y"]
+	var extract_args = ["e", zip_path, sfo_path, 		"-o" + FSM.resolve_path(temp_dir, {"format": FSM.PathFormat.ABSOLUTE}), "-y"]
 	exit_code = OS.execute(binary_path, extract_args, output, true)
 	
 	if exit_code != 0:
@@ -1369,11 +1371,11 @@ static func _get_7z_binary_path() -> String:
 ## Reads a PARAM.SFO file from disk and returns a dictionary with all fields
 ## Returns empty dictionary if file cannot be parsed
 static func read_sfo(path: String) -> Dictionary:
-	if not FileSystemManager.file_exists(path):
+	if not FSM.file_exists(path):
 		push_error("[TitleIDParser] SFO file not found: " + path)
 		return {}
 	
-	var file := FileSystemManager.open_file_read(path)
+	var file := FSM.open_file_read(path)
 	if not file:
 		push_error("[TitleIDParser] Failed to open SFO file: " + path)
 		return {}
@@ -1559,7 +1561,7 @@ static func _parse_paramsfo_disc_id(sfo_data: PackedByteArray) -> String:
 		var key_offset = sfo_data.decode_u16(index_offset + 0x00)
 		var data_fmt = sfo_data.decode_u16(index_offset + 0x02)
 		var data_len = sfo_data.decode_u32(index_offset + 0x04)
-		var data_max_len = sfo_data.decode_u32(index_offset + 0x08)
+		var _data_max_len = sfo_data.decode_u32(index_offset + 0x08)
 		var data_offset = sfo_data.decode_u32(index_offset + 0x0C)
 		
 		# Read key name (null-terminated)
@@ -1641,8 +1643,8 @@ static func _cso_extract_psp_game_id(rom_path: String) -> String:
 	if reader_path == "":
 		return ""
 	
-	var abs_reader = FileSystemManager.resolve_path(reader_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
-	var abs_cso = FileSystemManager.resolve_path(rom_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	var abs_reader = FSM.resolve_path(reader_path, {"format": FSM.PathFormat.ABSOLUTE})
+	var abs_cso = FSM.resolve_path(rom_path, {"format": FSM.PathFormat.ABSOLUTE})
 	
 	var output = []
 	var args = [abs_cso]

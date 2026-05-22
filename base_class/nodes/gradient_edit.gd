@@ -33,12 +33,12 @@ func _ready():
 		set_gradient(gradient)
 
 func _generate_checker_texture():
-	var size = 8
-	var image = Image.create(size * 2, size * 2, false, Image.FORMAT_RGBA8)
+	var checker_size = 8
+	var image = Image.create(checker_size * 2, checker_size * 2, false, Image.FORMAT_RGBA8)
 	
-	for y in range(size * 2):
-		for x in range(size * 2):
-			var is_light = ((x / size) + (y / size)) % 2 == 0
+	for y in range(checker_size * 2):
+		for x in range(checker_size * 2):
+			var is_light = int((x / float(checker_size)) + (y / float(checker_size))) % 2 == 0
 			var color = Color(0.5, 0.5, 0.5, 1.0) if is_light else Color(0.35, 0.35, 0.35, 1.0)
 			image.set_pixel(x, y, color)
 	

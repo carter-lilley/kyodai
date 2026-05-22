@@ -1,6 +1,7 @@
 class_name HeroImage
 extends Control
 
+@warning_ignore("unused_signal")
 signal game_changed(game: GameResource)
 
 var _current_game: GameResource = null
@@ -128,9 +129,9 @@ func set_game(game: GameResource):
 			# Downscale large images to save GPU memory
 			var max_dim = max(img.get_width(), img.get_height())
 			if max_dim > MAX_HERO_TEXTURE_SIZE:
-				var scale = float(MAX_HERO_TEXTURE_SIZE) / max_dim
-				var new_width = max(1, int(img.get_width() * scale))
-				var new_height = max(1, int(img.get_height() * scale))
+				var tex_scale = float(MAX_HERO_TEXTURE_SIZE) / max_dim
+				var new_width = max(1, int(img.get_width() * tex_scale))
+				var new_height = max(1, int(img.get_height() * tex_scale))
 				img.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
 			return img
 		return null

@@ -1,3 +1,4 @@
+@tool
 class_name SettingsDialog
 extends M3Dialog
 
@@ -60,13 +61,13 @@ func _build_two_pane_layout() -> void:
 	_left_pane = VBoxContainer.new()
 	_left_pane.custom_minimum_size = Vector2(M3Units.dp(160), 0)
 	_left_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_left_pane.add_theme_constant_override("separation", M3Units.dp(4))
+	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
 	
 	var left_margin = MarginContainer.new()
-	left_margin.add_theme_constant_override("margin_left", M3Units.dp(12))
-	left_margin.add_theme_constant_override("margin_right", M3Units.dp(12))
-	left_margin.add_theme_constant_override("margin_top", M3Units.dp(16))
-	left_margin.add_theme_constant_override("margin_bottom", M3Units.dp(16))
+	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(12)))
+	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(12)))
+	left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(16)))
+	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(16)))
 	left_margin.add_child(_left_pane)
 	hbox.add_child(left_margin)
 	
@@ -82,10 +83,10 @@ func _build_two_pane_layout() -> void:
 	_right_pane = MarginContainer.new()
 	_right_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_right_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_right_pane.add_theme_constant_override("margin_left", M3Units.dp(16))
-	_right_pane.add_theme_constant_override("margin_right", M3Units.dp(16))
-	_right_pane.add_theme_constant_override("margin_top", M3Units.dp(16))
-	_right_pane.add_theme_constant_override("margin_bottom", M3Units.dp(16))
+	_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(16)))
+	_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(16)))
+	_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(16)))
+	_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(16)))
 	hbox.add_child(_right_pane)
 
 func _build_categories() -> void:
@@ -165,7 +166,7 @@ func _add_category_button(id: String, label: String, icon: String) -> void:
 	_left_pane.add_child(btn)
 	_category_buttons[id] = btn
 
-func _create_settings_menu_content(name: String, settings_vars: Array) -> Control:
+func _create_settings_menu_content(setting_name: String, settings_vars: Array) -> Control:
 	"""Create a SettingsMenu wrapped in ScrollContainer + MarginContainer + VBoxContainer for the right pane."""
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -186,7 +187,7 @@ func _create_settings_menu_content(name: String, settings_vars: Array) -> Contro
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
 	var menu = SettingsMenu.new()
-	menu.initialize_settings_menu(name, settings_vars)
+	menu.initialize_settings_menu(setting_name, settings_vars)
 	menu.setting_changed.connect(func(value, setting): SettingsManager.set_setting(value, setting))
 	vbox.add_child(menu)
 	

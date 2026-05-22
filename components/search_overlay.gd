@@ -48,16 +48,16 @@ func _ready():
 	main_container.add_child(search_bar)
 	
 	# Last search button
-	var last_search_button = Button.new()
-	last_search_button.name = "LastSearchButton"
-	last_search_button.text = ""
-	last_search_button.visible = false
-	last_search_button.focus_mode = Control.FOCUS_ALL
-	last_search_button.add_theme_font_size_override("font_size", 14)
-	last_search_button.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 1.0))
-	last_search_button.pressed.connect(_on_last_search_clicked)
-	main_container.add_child(last_search_button)
-	self.last_search_button = last_search_button
+	var search_history_button = Button.new()
+	search_history_button.name = "LastSearchButton"
+	search_history_button.text = ""
+	search_history_button.visible = false
+	search_history_button.focus_mode = Control.FOCUS_ALL
+	search_history_button.add_theme_font_size_override("font_size", 14)
+	search_history_button.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 1.0))
+	search_history_button.pressed.connect(_on_last_search_clicked)
+	main_container.add_child(search_history_button)
+	self.last_search_button = search_history_button
 	
 	# Set up focus neighbors so controller navigation cycles inside the overlay
 	var line_edit = search_bar.get_line_edit()
@@ -66,14 +66,14 @@ func _ready():
 		last_search_button.focus_neighbor_top = line_edit.get_path()
 	
 	# Results label (shows "X results found" or live results)
-	var results_label = Label.new()
-	results_label.name = "ResultsLabel"
-	results_label.text = ""
-	results_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	results_label.add_theme_font_size_override("font_size", 14)
-	results_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
-	main_container.add_child(results_label)
-	self.results_label = results_label
+	var results_count_label = Label.new()
+	results_count_label.name = "ResultsLabel"
+	results_count_label.text = ""
+	results_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	results_count_label.add_theme_font_size_override("font_size", 14)
+	results_count_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+	main_container.add_child(results_count_label)
+	self.results_label = results_count_label
 
 func set_last_search(text: String) -> void:
 	_last_search_text = text.strip_edges()
@@ -134,7 +134,7 @@ func _on_last_search_clicked() -> void:
 		search_bar.set_text(_last_search_text)
 		search_submitted.emit(_last_search_text)
 
-func _on_search_text_changed(text: String):
+func _on_search_text_changed(_text: String):
 	# Update live results count via signal to parent
 	# Parent should call update_results_count() with actual count
 	pass

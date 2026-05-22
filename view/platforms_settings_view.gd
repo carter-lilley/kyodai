@@ -4,7 +4,6 @@ extends View
 
 @onready var _scroll_container: ScrollContainer = $ScrollContainer
 @onready var _platforms_container: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer
-@onready var _cards_hbox: HBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox
 @onready var _cards_left: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsLeft
 @onready var _cards_right: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsRight
 
@@ -161,7 +160,7 @@ func _fetch_platforms():
 				continue
 			
 			var slug = platform_data.get("slug", "")
-			var name = platform_data.get("name", slug)
+			var platform_name = platform_data.get("name", slug)
 			var romm_id = platform_data.get("id", 0)
 			var icon_url = platform_data.get("icon_url", "")
 			
@@ -171,7 +170,7 @@ func _fetch_platforms():
 			fetched_slugs.append(slug)
 			
 			# Create platform card with precomputed validation results
-			var card = _create_platform_card(slug, name, romm_id, icon_url, enabled_platforms, precomputed_status)
+			var card = _create_platform_card(slug, platform_name, romm_id, icon_url, enabled_platforms, precomputed_status)
 			# Distribute cards across two columns
 			if _platform_cards.size() % 2 == 0:
 				_cards_left.add_child(card)
@@ -186,10 +185,10 @@ func _fetch_platforms():
 		_update_select_all_button_text()
 	)
 
-func _create_platform_card(slug: String, name: String, romm_id: int, icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}) -> PlatformCard:
+func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCard.new()
 	card.platform_slug = slug
-	card.platform_name = name
+	card.platform_name = platform_name
 	
 	# Set sync enabled status
 	var platform_config = enabled_platforms.get(slug, {})
@@ -264,14 +263,14 @@ func _load_platforms_from_database():
 	
 	for platform in platforms:
 		var slug = platform.slug
-		var name = platform.name
+		var platform_name = platform.name
 		var icon_url = platform.icon_url
 		
 		if slug == "":
 			continue
 		
 		# Create offline card (no romm_id available)
-		var card = _create_platform_card(slug, name, 0, icon_url, enabled_platforms)
+		var card = _create_platform_card(slug, platform_name, 0, icon_url, enabled_platforms)
 		card.disabled = true
 		card.tooltip_text = "Connect to RomM to configure this platform"
 		if _platform_cards.size() % 2 == 0:
@@ -390,7 +389,7 @@ func _save_settings():
 
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	# Start the download
-	var success = await LaunchManager.download_emulator(emulator_id)
+	var success = LaunchManager.download_emulator(emulator_id)
 	if success:
 		# Update install status for the emulator
 		var install_status = {emulator_id: LaunchManager.scan_emulator_install_state(emulator_id)}
@@ -405,7 +404,7 @@ func _on_emulator_extraction_started(emulator_id: String):
 		if effective_emu == emulator_id:
 			card.refresh_ui()
 
-func _on_emulator_extraction_completed(emulator_id: String, success: bool):
+func _on_emulator_extraction_completed(emulator_id: String, _success: bool):
 	# Refresh all cards that use this emulator (either explicitly or via auto)
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
@@ -426,15 +425,15 @@ func _on_check_updates_pressed():
 	
 	NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
 	
-	LaunchManager.check_for_updates(func(updated: Array, up_to_date: Array, failed: Array):
+	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array):
 		if check_button:
 			check_button.disabled = false
 			check_button.text = "Check for Updates"
 		
-		if updated.size() > 0:
-			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % updated.size(), NotificationManager.Type.SUCCESS)
-		elif failed.size() > 0:
-			NotificationManager.show_notification("Failed to check %d emulator(s)" % failed.size(), NotificationManager.Type.WARNING)
+		if _updated.size() > 0:
+			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), NotificationManager.Type.SUCCESS)
+		elif _failed.size() > 0:
+			NotificationManager.show_notification("Failed to check %d emulator(s)" % _failed.size(), NotificationManager.Type.WARNING)
 		else:
 			NotificationManager.show_notification("All emulators are up to date", NotificationManager.Type.INFO)
 	)
@@ -453,15 +452,15 @@ func _on_sync_pressed():
 		sync_button.disabled = true
 		sync_button.text = "Syncing..."
 	
-	DataManager.sync_enabled_platforms(func(success: bool, message: String, synced: int, total: int):
+	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
 		if sync_button:
 			sync_button.disabled = false
 			sync_button.text = "Sync Enabled Platforms"
 		
-		if success:
-			NotificationManager.show_notification("Sync complete! %s" % message, NotificationManager.Type.SUCCESS)
+		if _success:
+			NotificationManager.show_notification("Sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
 		else:
-			NotificationManager.show_notification("Sync failed: %s" % message, NotificationManager.Type.ERROR)
+			NotificationManager.show_notification("Sync failed: %s" % _message, NotificationManager.Type.ERROR)
 	)
 
 func _on_full_sync_pressed():
@@ -483,7 +482,7 @@ func _on_full_sync_pressed():
 		sync_button.disabled = true
 	
 	# Call sync with force_full_sync = true
-	DataManager.sync_enabled_platforms(func(success: bool, message: String, synced: int, total: int):
+	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
 		if full_sync_button:
 			full_sync_button.disabled = false
 			full_sync_button.text = "Full Sync"
@@ -492,10 +491,10 @@ func _on_full_sync_pressed():
 			sync_button.disabled = false
 			sync_button.text = "Sync Enabled Platforms"
 		
-		if success:
-			NotificationManager.show_notification("Full sync complete! %s" % message, NotificationManager.Type.SUCCESS)
+		if _success:
+			NotificationManager.show_notification("Full sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
 		else:
-			NotificationManager.show_notification("Full sync failed: %s" % message, NotificationManager.Type.ERROR)
+			NotificationManager.show_notification("Full sync failed: %s" % _message, NotificationManager.Type.ERROR)
 	, true)  # true = force_full_sync
 
 func _update_select_all_button_text():

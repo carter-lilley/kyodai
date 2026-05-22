@@ -341,7 +341,7 @@ func _get_default_settings(effect_id: String) -> Dictionary:
 	
 	return defaults
 
-func _on_effect_toggled(index: int):
+func _on_effect_toggled(_index: int):
 	var selected_indices = _add_effect_button.get_selected_indices()
 	var selected_ids: Dictionary = {}
 	for idx in selected_indices:

@@ -18,6 +18,7 @@ signal sync_started()  # Emitted when a sync begins - allows UI to clear cache
 
 const DB_PATH = "user://database/kyodai.db"
 const CACHE_FOLDER = "user://cache/covers/"
+const FSM = preload("res://managers/filesystem_manager.gd")
 
 var _db: SQLite = null
 var _is_db_ready: bool = false
@@ -42,7 +43,6 @@ func _db_query_bool(query: String) -> bool:
 	var success = _db.query(query)
 	_db_unlock()
 	return success
-var _loading_images: Dictionary = {}
 var _sync_notification_id: int = -1
 
 # Logging control
@@ -92,11 +92,6 @@ var _sync_batch_pending_mutex: Mutex = Mutex.new()  # Thread-safe access
 var _sync_batch_timer: Timer = null
 var _sync_batch_last_emit_time: int = 0
 const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 800ms during sync
-
-# Batch processing state
-var _batch_remaining: int = 0
-var _batch_callback: Callable = Callable()
-var _batch_success_count: int = 0
 
 # Pre-calculation state (avoid closures)
 var _precalc_pending: int = 0
@@ -628,7 +623,7 @@ func _process_next_platform():
 	var emulator_id = LaunchManager.get_default_emulator_for_platform(platform.slug)
 	if emulator_id != "":
 		print("[Sync] Checking firmware for platform '%s' with emulator '%s'" % [platform.name, emulator_id])
-		await LaunchManager.setup_platform_firmware(platform.slug, emulator_id)
+		LaunchManager.setup_platform_firmware(platform.slug, emulator_id)
 	
 	# Start fetching this platform
 	_sync_state = SyncState.PLATFORM_FETCHING
@@ -765,19 +760,19 @@ func _get_enabled_platforms() -> Array:
 		var data = setting.value[slug]
 		var enabled = false
 		var id = 0
-		var name = slug.capitalize()
+		var game_name = slug.capitalize()
 		
 		if data is bool:
 			enabled = data
 		elif data is Dictionary:
 			enabled = data.get("enabled", false)
 			id = data.get("id", 0)
-			name = data.get("name", slug.capitalize())
+			game_name = data.get("name", slug.capitalize())
 		
 		if enabled:
 			# Include all enabled platforms regardless of ID
 			# ID will be looked up during sync if needed
-			result.append({"slug": slug, "id": id, "name": name})
+			result.append({"slug": slug, "id": id, "name": game_name})
 	
 	return result
 
@@ -842,7 +837,7 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 	
 	# Use DB thread for GameResource creation (CPU-bound work)
 	var phase1_start = Time.get_ticks_msec()
-	var phase1_batch_id = MemoryManager.start_batch(
+	var _phase1_batch_id = MemoryManager.start_batch(
 		game_creation_data,
 		func(item: Dictionary, _idx: int) -> Dictionary:
 			# This runs on BACKGROUND thread
@@ -876,7 +871,7 @@ func _process_batch(items: Array, platform_slug: String, on_complete: Callable):
 			_process_phase2_sibling_checks(phase1_results, platform_slug, on_complete)
 	)
 
-func _process_phase2_sibling_checks(phase1_results: Array, platform_slug: String, on_complete: Callable):
+func _process_phase2_sibling_checks(phase1_results: Array, _platform_slug: String, on_complete: Callable):
 	"""Phase 2: Batch sibling checks (async, spread across frames).
 	
 	Called after Phase 1 (GameResource creation) completes on background thread.
@@ -908,13 +903,13 @@ func _process_phase2_sibling_checks(phase1_results: Array, platform_slug: String
 	
 	# Phase 2: Batch sibling checks (async, spread across frames)
 	var phase2_start = Time.get_ticks_msec()
-	var sibling_batch_id = MemoryManager.start_batch(
+	var _sibling_batch_id = MemoryManager.start_batch(
 		sibling_check_data,
 		func(item: Dictionary, _idx: int) -> bool:
 			return _check_siblings_in_db(item["romm_id"], item["siblings"]),
 		MemoryManager.BatchMode.DB_THREAD,
 		15,  # 15 sibling checks per frame
-		func(processed: int, total_count: int):
+		func(_processed: int, _total_count: int):
 			pass,  # Progress tracked in Phase 3
 		func(sibling_results: Array):
 			# Phase 2 complete - track timing
@@ -1024,17 +1019,17 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 	
 	# Track progress across all transaction batches
 	var total_games: int = games.size()
-	var processed_games: int = 0
+	var _processed_games: int = 0
 	var games_with_covers: Array[GameResource] = []
-	var games_with_covers_mutex = Mutex.new()
+	var _games_with_covers_mutex = Mutex.new()
 	var had_error: bool = false
-	var error_message: String = ""
+	var _error_message: String = ""
 	
 	print("[DataManager] Batch %d: Inserting %d games in %d transaction batches of max %d" % [_perf_total_batches, total_games, transaction_batches.size(), transaction_batch_size])
 	
 	# Process each transaction batch
 	var db_batches_per_frame: int = 2
-	var batch_id = MemoryManager.start_batch(
+	var _batch_id = MemoryManager.start_batch(
 		transaction_batches,
 		func(batch: Array[GameResource], _idx: int) -> bool:
 			if had_error:
@@ -1043,7 +1038,7 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 			return _insert_games_transaction(batch),
 		MemoryManager.BatchMode.DB_THREAD,
 		db_batches_per_frame,  # Process transaction batches per frame
-		func(completed_batches: int, total_batches: int):
+		func(completed_batches: int, _total_batches: int):
 			# Progress callback - update sync progress
 			var completed_games = mini(completed_batches * transaction_batch_size, total_games)
 			var percent = float(completed_games) / float(total_games) * 100.0
@@ -1119,9 +1114,9 @@ func _cover_download_batch(games: Array[GameResource], on_complete: Callable):
 		on_complete.call(games.size())
 		return
 	
-	var completed_count: int = 0
+	var _completed_count: int = 0
 	
-	var cover_batch_id = MemoryManager.start_batch(
+	var _cover_batch_id = MemoryManager.start_batch(
 		cover_data,
 		func(item: Dictionary, _idx: int) -> bool:
 			# Queue download via DownloadManager
@@ -1259,7 +1254,7 @@ func _group_games_by_cover_url(games: Array[GameResource]):
 		# For each game in the group, add other games as siblings (if not already)
 		for i in range(indices.size()):
 			var current_game = games[indices[i]]
-			var current_id = current_game.romm_id
+			var _current_id = current_game.romm_id
 			
 			# Build set of existing sibling IDs (romm siblings + any already added)
 			var existing_sibling_ids: Dictionary = {}
@@ -1898,13 +1893,13 @@ func _cleanup_extracted_game_files(game: GameResource) -> void:
 				var disc_path = emulator_dir + "/games/" + title_id
 				var digital_path = emulator_dir + "/dev_hdd0/game/" + title_id
 				
-				if FileSystemManager.dir_exists(disc_path):
+				if FSM.dir_exists(disc_path):
 					print("[DataManager] Cleaning up extracted PS3 disc game: " + disc_path)
-					FileSystemManager.delete_dir_recursive(disc_path)
+					FSM.delete_dir_recursive(disc_path)
 				
-				if FileSystemManager.dir_exists(digital_path):
+				if FSM.dir_exists(digital_path):
 					print("[DataManager] Cleaning up extracted PS3 digital game: " + digital_path)
-					FileSystemManager.delete_dir_recursive(digital_path)
+					FSM.delete_dir_recursive(digital_path)
 		
 		"psvita":
 			# Vita games are extracted to ux0/app/TITLEID
@@ -1912,9 +1907,9 @@ func _cleanup_extracted_game_files(game: GameResource) -> void:
 			if emulator_dir != "":
 				var vita_path = emulator_dir + "/ux0/app/" + title_id
 				
-				if FileSystemManager.dir_exists(vita_path):
+				if FSM.dir_exists(vita_path):
 					print("[DataManager] Cleaning up extracted Vita game: " + vita_path)
-					FileSystemManager.delete_dir_recursive(vita_path)
+					FSM.delete_dir_recursive(vita_path)
 
 
 ## Gets the emulator directory (helper to avoid circular dependency with LaunchManager)
@@ -2033,17 +2028,17 @@ func get_platforms_with_games() -> Array[Dictionary]:
 	var query_result = _db_query_array(query)
 	for row in query_result:
 		var slug = row.get("platform_slug", "")
-		var name = row.get("name", "")
-		var count = int(row.get("game_count", 0))
+		var game_name = row.get("name", "")
+		var _count = int(row.get("game_count", 0))
 		
 		# Fallback to capitalized slug if no name in platforms table
-		if name == null or name == "":
-			name = slug.capitalize()
+		if game_name == null or game_name == "":
+			game_name = slug.capitalize()
 		
 		platforms.append({
 			"slug": slug,
-			"name": name,
-			"count": count
+			"name": game_name,
+			"count": _count
 		})
 
 	return platforms
@@ -2325,7 +2320,7 @@ func _download_cover(url: String, callback: Callable):
 	
 	# Check if already downloading (deduplication) - thread-safe
 	_active_downloads_mutex.lock()
-	var should_return = false
+	var _should_return = false
 	var download_state = null
 	
 	if _active_downloads.has(url):
@@ -2424,7 +2419,7 @@ func get_cached_image_path(url: String) -> String:
 	
 	return CACHE_FOLDER + url.md5_text() + "." + extension
 
-func _load_image_from_memory(buffer: PackedByteArray, cache_path: String = "") -> Image:
+func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") -> Image:
 	if buffer.size() < 16:
 		return null
 	
@@ -2632,7 +2627,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 			print("[Sync] remove_platform_games callback executing")
 			var success = result.get("success", false)
 			var cover_urls = result.get("cover_urls", [])
-			var count = result.get("count", 0)
+			var _count = result.get("count", 0)
 			
 			if success:
 				# Delete cover cache files on main thread (file system access)
@@ -2784,7 +2779,7 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 	
 	# Match files to games
 	var matched_games: Dictionary = {}  # romm_id -> {game, matched_siblings: [], file_path: ""}
-	var matched_count: int = 0
+	var _matched_count: int = 0
 	
 	for file_path in found_files:
 		var parts = file_path.split("/", false, 1)
@@ -2821,7 +2816,7 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 							matched_games[game.romm_id].matched_siblings.append(sibling_id)
 							break
 			
-			matched_count += 1
+			_matched_count += 1
 	
 	# Update database for matched games
 	if matched_games.size() > 0:

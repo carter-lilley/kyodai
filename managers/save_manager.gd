@@ -4,6 +4,7 @@ extends Manager
 
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
+const FSM = preload("res://managers/filesystem_manager.gd")
 const SLOT_DEFAULT := ""
 const MAX_FILE_SIZE := 100 * 1024 * 1024
 
@@ -17,23 +18,23 @@ func _ready() -> void:
 ## Cleans up all temp directories under user://temp_saves/
 func _cleanup_all_temp_dirs() -> void:
 	var temp_base = "user://temp_saves"
-	if not FileSystemManager.dir_exists(temp_base):
+	if not FSM.dir_exists(temp_base):
 		return
-	var items = FileSystemManager.list_dir(temp_base + "/")
+	var items = FSM.list_dir(temp_base + "/")
 	for item in items:
 		if item == "." or item == "..":
 			continue
 		var full_path = temp_base + "/" + item
-		if FileSystemManager.dir_exists(full_path):
+		if FSM.dir_exists(full_path):
 			print("[SaveManager] Cleaning up temp directory: " + full_path)
-			FileSystemManager.delete_dir_recursive(full_path)
+			FSM.delete_dir_recursive(full_path)
 
 ## Cleans up empty parent directories after removing a temp file
 func _cleanup_temp_dir(file_path: String) -> void:
 	var parent = file_path.get_base_dir()
 	while parent != "" and parent != "user://" and parent != "res://":
-		if FileSystemManager.dir_exists(parent):
-			var items = FileSystemManager.list_dir(parent + "/")
+		if FSM.dir_exists(parent):
+			var items = FSM.list_dir(parent + "/")
 			var has_files = false
 			for item in items:
 				if item != "." and item != "..":
@@ -41,7 +42,7 @@ func _cleanup_temp_dir(file_path: String) -> void:
 					break
 			if not has_files:
 				print("[SaveManager] Removing empty temp directory: " + parent)
-				FileSystemManager.delete_dir_recursive(parent)
+				FSM.delete_dir_recursive(parent)
 				parent = parent.get_base_dir()
 			else:
 				break
@@ -88,7 +89,7 @@ func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> 
 		return ""
 	
 	# Use the full emulator path resolver with all wildcards
-	dir = FileSystemManager.resolve_emulator_path(dir, emulator_id, platform_slug)
+	dir = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
 	
 	return dir.rstrip("/") + "/"
 
@@ -100,11 +101,11 @@ func _ensure_save_directory_exists(emulator_id: String) -> bool:
 		print("[SaveManager] No save directory configured for: " + emulator_id)
 		return false
 	
-	if FileSystemManager.dir_exists(save_dir):
+	if FSM.dir_exists(save_dir):
 		return true
 	
 	print("[SaveManager] Creating save directory for " + emulator_id + ": " + save_dir)
-	var success = FileSystemManager.make_dir_recursive(save_dir)
+	var success = FSM.make_dir_recursive(save_dir)
 	if not success:
 		push_error("[SaveManager] Failed to create save directory for " + emulator_id + ": " + save_dir)
 		return false
@@ -143,28 +144,28 @@ func discover_local_saves(directory: String, rom_name_no_ext: String, extensions
 	if directory == "" or extensions.is_empty():
 		return results
 	
-	if not FileSystemManager.dir_exists(directory):
+	if not FSM.dir_exists(directory):
 		return results
 	
 	_search_directory_for_saves(directory, rom_name_no_ext, extensions, results)
 	return results
 
 func _search_directory_for_saves(dir_path: String, rom_name_no_ext: String, extensions: Array[String], results: Array[Dictionary]) -> void:
-	var items = FileSystemManager.list_dir(dir_path)
+	var items = FSM.list_dir(dir_path)
 	for item in items:
 		if item == "." or item == "..":
 			continue
 		
 		var full_path = dir_path + item
-		if FileSystemManager.dir_exists(full_path):
+		if FSM.dir_exists(full_path):
 			_search_directory_for_saves(full_path + "/", rom_name_no_ext, extensions, results)
-		elif FileSystemManager.file_exists(full_path):
+		elif FSM.file_exists(full_path):
 			var item_no_ext = item.get_basename()
 			var item_ext = item.get_extension()
 			if item_no_ext == rom_name_no_ext:
 				var dot_ext = "." + item_ext
 				if dot_ext in extensions:
-					var modified_time = FileSystemManager.get_modified_time(full_path)
+					var modified_time = FSM.get_modified_time(full_path)
 					results.append({
 						"file_name": item,
 						"file_path": full_path,
@@ -193,23 +194,23 @@ func discover_local_folder_save(directory: String, title_id: String) -> Array[Di
 	if directory == "" or title_id == "" or title_id.length() != 16:
 		return results
 	
-	if not FileSystemManager.dir_exists(directory):
+	if not FSM.dir_exists(directory):
 		return results
 	
 	var category = title_id.substr(0, 8)
 	var short_title_id = title_id.substr(8, 8)
 	
-	var id0_dirs = FileSystemManager.list_dir(directory)
+	var id0_dirs = FSM.list_dir(directory)
 	for id0 in id0_dirs:
-		if id0 == "." or id0 == ".." or not FileSystemManager.dir_exists(FileSystemManager.join_paths(directory, id0)):
+		if id0 == "." or id0 == ".." or not FSM.dir_exists(FSM.join_paths(directory, id0)):
 			continue
-		var id0_path = FileSystemManager.join_paths(directory, id0)
-		var id1_dirs = FileSystemManager.list_dir(id0_path)
+		var id0_path = FSM.join_paths(directory, id0)
+		var id1_dirs = FSM.list_dir(id0_path)
 		for id1 in id1_dirs:
-			if id1 == "." or id1 == ".." or not FileSystemManager.dir_exists(FileSystemManager.join_paths(id0_path, id1)):
+			if id1 == "." or id1 == ".." or not FSM.dir_exists(FSM.join_paths(id0_path, id1)):
 				continue
-			var title_path = FileSystemManager.join_paths(id0_path, id1, "title", category, short_title_id)
-			if FileSystemManager.dir_exists(title_path):
+			var title_path = FSM.join_paths(id0_path, id1, "title", category, short_title_id)
+			if FSM.dir_exists(title_path):
 				var mtime = _get_folder_mtime(title_path)
 				results.append({
 					"file_name": short_title_id + ".zip",
@@ -226,12 +227,12 @@ func discover_local_cemu_save(directory: String, title_id: String) -> Array[Dict
 	if directory == "" or title_id == "" or title_id.length() != 16:
 		return results
 	
-	if not FileSystemManager.dir_exists(directory):
+	if not FSM.dir_exists(directory):
 		return results
 	
 	var short_title_id = title_id.substr(8, 8)
-	var save_path = FileSystemManager.join_paths(directory, short_title_id)
-	if FileSystemManager.dir_exists(save_path):
+	var save_path = FSM.join_paths(directory, short_title_id)
+	if FSM.dir_exists(save_path):
 		var mtime = _get_folder_mtime(save_path)
 		results.append({
 			"file_name": short_title_id + ".zip",
@@ -248,24 +249,24 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 	if directory == "" or game_id == "":
 		return results
 	
-	if not FileSystemManager.dir_exists(directory):
+	if not FSM.dir_exists(directory):
 		return results
 	
 	# Find all matching GCI files
 	var gci_files: Array[String] = []
-	var items = FileSystemManager.list_dir(directory)
+	var items = FSM.list_dir(directory)
 	for item in items:
 		if item == "." or item == "..":
 			continue
 		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
-			gci_files.append(FileSystemManager.join_paths(directory, item))
+			gci_files.append(FSM.join_paths(directory, item))
 	
 	if gci_files.is_empty():
 		return results
 	
 	# Create a temp zip bundle with all matching GCI files
 	var zip_path = "user://temp_saves/" + game_id + ".zip"
-	FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+	FSM.make_dir_recursive(zip_path.get_base_dir())
 	
 	var zip_success = _zip_gci_files(gci_files, zip_path)
 	if not zip_success:
@@ -293,7 +294,7 @@ func _zip_gci_files(gci_files: Array[String], zip_path: String) -> bool:
 	
 	for gci_path in gci_files:
 		var file_name = gci_path.get_file()
-		var data = FileSystemManager.read_file_bytes(gci_path)
+		var data = FSM.read_file_bytes(gci_path)
 		if data.size() > 0:
 			writer.start_file(file_name)
 			writer.write_file(data)
@@ -313,13 +314,13 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	if directory == "" or game_id == "":
 		return results
 	
-	if not FileSystemManager.dir_exists(directory):
+	if not FSM.dir_exists(directory):
 		return results
 	
 	var hex_id = _game_id_to_hex(game_id)
-	var game_path = FileSystemManager.join_paths(directory, hex_id)
+	var game_path = FSM.join_paths(directory, hex_id)
 	
-	if FileSystemManager.dir_exists(game_path):
+	if FSM.dir_exists(game_path):
 		var mtime = _get_folder_mtime(game_path)
 		results.append({
 			"file_name": hex_id + ".zip",
@@ -351,12 +352,12 @@ func _discover_eden_profile(emulator_dir: String) -> Dictionary:
 	
 	var result = {"profile_id": "0000000000000000", "is_fallback": true}
 	
-	if not FileSystemManager.file_exists(profiles_path):
+	if not FSM.file_exists(profiles_path):
 		print("[SaveManager] _discover_eden_profile: profiles.dat not found, using zero profile")
 		_emulator_profile_cache[cache_key] = result
 		return result
 	
-	var data = FileSystemManager.read_file_bytes(profiles_path)
+	var data = FSM.read_file_bytes(profiles_path)
 	if data.size() < 0x20:
 		print("[SaveManager] _discover_eden_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
 		_emulator_profile_cache[cache_key] = result
@@ -386,7 +387,7 @@ func discover_local_eden_save(directory: String, title_id: String, emulator_dir:
 		print("[SaveManager] discover_local_eden_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
 	
-	var dir_exists = FileSystemManager.dir_exists(directory)
+	var dir_exists = FSM.dir_exists(directory)
 	print("[SaveManager] discover_local_eden_save: dir_exists(" + directory + ") = " + str(dir_exists))
 	if not dir_exists:
 		return results
@@ -399,9 +400,9 @@ func discover_local_eden_save(directory: String, title_id: String, emulator_dir:
 	
 	# Eden save structure: {base}/{user}/{profile}/{title_id}/
 	# Eden uses full TitleID (16 chars) for save folder names
-	var save_path = FileSystemManager.join_paths(directory, "0000000000000000", profile_id, title_id)
+	var save_path = FSM.join_paths(directory, "0000000000000000", profile_id, title_id)
 	print("[SaveManager] discover_local_eden_save: checking " + save_path)
-	if FileSystemManager.dir_exists(save_path):
+	if FSM.dir_exists(save_path):
 		var mtime = _get_folder_mtime(save_path)
 		print("[SaveManager] discover_local_eden_save: found save with mtime=" + str(mtime))
 		results.append({
@@ -413,9 +414,9 @@ func discover_local_eden_save(directory: String, title_id: String, emulator_dir:
 		return results
 	
 	# Fallback: check zero profile
-	var zero_path = FileSystemManager.join_paths(directory, "0000000000000000", "0000000000000000", title_id)
+	var zero_path = FSM.join_paths(directory, "0000000000000000", "0000000000000000", title_id)
 	print("[SaveManager] discover_local_eden_save: checking fallback " + zero_path)
-	if FileSystemManager.dir_exists(zero_path):
+	if FSM.dir_exists(zero_path):
 		var mtime = _get_folder_mtime(zero_path)
 		print("[SaveManager] discover_local_eden_save: found save in zero profile with mtime=" + str(mtime))
 		results.append({
@@ -448,17 +449,17 @@ func discover_local_fuzzy_folder_save(directory: String, search_id: String, recu
 	var dirs_to_check: Array[String] = [directory]
 	while not dirs_to_check.is_empty():
 		var current = dirs_to_check.pop_back()
-		if not FileSystemManager.dir_exists(current):
+		if not FSM.dir_exists(current):
 			continue
 		
-		var items = FileSystemManager.list_dir(current)
+		var items = FSM.list_dir(current)
 		for item in items:
 			if item == "." or item == "..":
 				continue
 			
-			var full_path = FileSystemManager.join_paths(current, item)
+			var full_path = FSM.join_paths(current, item)
 			
-			if FileSystemManager.dir_exists(full_path):
+			if FSM.dir_exists(full_path):
 				var folder_name = item.to_upper()
 				var folder_name_no_hyphen = folder_name.replace("-", "")
 				
@@ -522,7 +523,7 @@ func discover_local_psp_save(directory: String, title_id: String) -> Array[Dicti
 	var savedata_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_psp_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
-	if not FileSystemManager.dir_exists(savedata_dir):
+	if not FSM.dir_exists(savedata_dir):
 		print("[SaveManager] discover_local_psp_save: SAVEDATA dir doesn't exist yet")
 		return []
 	
@@ -542,13 +543,13 @@ func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Di
 	var savedata_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_vita3k_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
-	if not FileSystemManager.dir_exists(savedata_dir):
+	if not FSM.dir_exists(savedata_dir):
 		print("[SaveManager] discover_local_vita3k_save: savedata dir doesn't exist yet")
 		return results
 	
 	# Look for exact match folder
 	var save_path = savedata_dir + title_id
-	if FileSystemManager.dir_exists(save_path):
+	if FSM.dir_exists(save_path):
 		var mtime = _get_folder_mtime(save_path)
 		results.append({
 			"file_name": title_id + ".zip",
@@ -573,13 +574,13 @@ func discover_local_rpcs3_save(directory: String, title_id: String) -> Array[Dic
 	var savedata_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_rpcs3_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
-	if not FileSystemManager.dir_exists(savedata_dir):
+	if not FSM.dir_exists(savedata_dir):
 		print("[SaveManager] discover_local_rpcs3_save: savedata dir doesn't exist yet")
 		return results
 	
 	# Look for exact match folder
 	var save_path = savedata_dir + title_id
-	if FileSystemManager.dir_exists(save_path):
+	if FSM.dir_exists(save_path):
 		var mtime = _get_folder_mtime(save_path)
 		results.append({
 			"file_name": title_id + ".zip",
@@ -604,13 +605,13 @@ func discover_local_shadps4_save(directory: String, title_id: String) -> Array[D
 	var savedata_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_shadps4_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
-	if not FileSystemManager.dir_exists(savedata_dir):
+	if not FSM.dir_exists(savedata_dir):
 		print("[SaveManager] discover_local_shadps4_save: savedata dir doesn't exist yet")
 		return results
 	
 	# Look for exact match folder
 	var save_path = savedata_dir + title_id
-	if FileSystemManager.dir_exists(save_path):
+	if FSM.dir_exists(save_path):
 		var mtime = _get_folder_mtime(save_path)
 		results.append({
 			"file_name": title_id + ".zip",
@@ -636,7 +637,7 @@ func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dic
 	var content_dir = directory.rstrip("/") + "/"
 	print("[SaveManager] discover_local_xenia_save: searching in " + content_dir + " for title_id " + title_id)
 	
-	if not FileSystemManager.dir_exists(content_dir):
+	if not FSM.dir_exists(content_dir):
 		print("[SaveManager] discover_local_xenia_save: content dir doesn't exist yet")
 		return results
 	
@@ -644,13 +645,13 @@ func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dic
 	var dirs_to_check: Array[String] = [content_dir]
 	while not dirs_to_check.is_empty():
 		var current = dirs_to_check.pop_back()
-		var items = FileSystemManager.list_dir(current)
+		var items = FSM.list_dir(current)
 		for item in items:
 			if item == "." or item == "..":
 				continue
 			
 			var full_path = current.rstrip("/") + "/" + item
-			if FileSystemManager.dir_exists(full_path):
+			if FSM.dir_exists(full_path):
 				# Check if this directory matches our Title ID
 				if item.to_upper() == title_id.to_upper():
 					var mtime = _get_folder_mtime(full_path)
@@ -674,15 +675,15 @@ func _get_folder_mtime(dir_path: String) -> int:
 	var dirs_to_check: Array[String] = [dir_path]
 	while not dirs_to_check.is_empty():
 		var current = dirs_to_check.pop_back()
-		var items = FileSystemManager.list_dir(current)
+		var items = FSM.list_dir(current)
 		for item in items:
 			if item == "." or item == "..":
 				continue
-			var full = FileSystemManager.join_paths(current, item)
-			if FileSystemManager.dir_exists(full):
+			var full = FSM.join_paths(current, item)
+			if FSM.dir_exists(full):
 				dirs_to_check.append(full)
-			elif FileSystemManager.file_exists(full):
-				var mtime = FileSystemManager.get_modified_time(full)
+			elif FSM.file_exists(full):
+				var mtime = FSM.get_modified_time(full)
 				if mtime > latest:
 					latest = mtime
 	return latest
@@ -762,12 +763,12 @@ func _resolve_default_save_path(save_dir: String, title_id: String) -> Dictionar
 	var id0 = _find_first_subdir(save_dir)
 	if id0 == "":
 		return {"path": "", "error": "no_id0"}
-	var id1 = _find_first_subdir(FileSystemManager.join_paths(save_dir, id0))
+	var id1 = _find_first_subdir(FSM.join_paths(save_dir, id0))
 	if id1 == "":
 		return {"path": "", "error": "no_id1"}
 	var category = title_id.substr(0, 8)
 	return {
-		"path": FileSystemManager.join_paths(save_dir, id0, id1, "title", category, short_title_id),
+		"path": FSM.join_paths(save_dir, id0, id1, "title", category, short_title_id),
 		"error": ""
 	}
 
@@ -777,38 +778,38 @@ func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: Ga
 	var title_id = game.get_active_title_id()
 	match emulator_id:
 		"cemu":
-			return FileSystemManager.join_paths(save_dir, title_id.substr(8, 8))
+			return FSM.join_paths(save_dir, title_id.substr(8, 8))
 		"dolphin":
 			if game.platform_slug == "wii":
-				return FileSystemManager.join_paths(save_dir, _game_id_to_hex(title_id))
+				return FSM.join_paths(save_dir, _game_id_to_hex(title_id))
 			return save_dir
 		"eden":
 			var emu_dir = LaunchManager._get_emulator_directory("eden")
 			var profile_result = _discover_eden_profile(emu_dir)
 			# Eden uses full TitleID (16 chars) for save folder names
-			return FileSystemManager.join_paths(save_dir, "0000000000000000", profile_result.profile_id, title_id)
+			return FSM.join_paths(save_dir, "0000000000000000", profile_result.profile_id, title_id)
 		"pcsx2":
 			return save_dir
 		"ppsspp":
-			return FileSystemManager.join_paths(save_dir, title_id)
+			return FSM.join_paths(save_dir, title_id)
 		"vita3k":
-			return FileSystemManager.join_paths(save_dir, title_id)
+			return FSM.join_paths(save_dir, title_id)
 		"rpcs3":
-			return FileSystemManager.join_paths(save_dir, title_id)
+			return FSM.join_paths(save_dir, title_id)
 		"shadps4":
-			return FileSystemManager.join_paths(save_dir, title_id)
+			return FSM.join_paths(save_dir, title_id)
 		"xenia":
 			# Xenia saves are in content/PROFILE_ID/TITLE_ID/
 			# We need to find the profile directory first
 			var profile = _find_first_subdir(save_dir)
 			if profile == "":
 				profile = "0000000000000000"
-			return FileSystemManager.join_paths(save_dir, profile, title_id)
+			return FSM.join_paths(save_dir, profile, title_id)
 		"azahar":
 			# Azahar saves: zip contains {short_title_id}/ as root
 			# Extract directly into save_dir so zip creates {short_title_id}/ folder
 			var short_title_id = title_id.substr(8, 8)
-			return FileSystemManager.join_paths(save_dir, short_title_id)
+			return FSM.join_paths(save_dir, short_title_id)
 		"retroarch":
 			return _resolve_retroarch_save_path(save_dir, game)
 		_:
@@ -833,7 +834,7 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 		return ""
 	
 	var rom_name_no_ext = game.get_active_file_name().get_basename()
-	return FileSystemManager.join_paths(save_dir, core_save_name, rom_name_no_ext + ".srm")
+	return FSM.join_paths(save_dir, core_save_name, rom_name_no_ext + ".srm")
 
 ## Determines the extraction destination for downloaded saves based on emulator
 ## Returns the destination directory path
@@ -846,7 +847,7 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 		"dolphin":
 			if game.platform_slug == "wii":
 				var hex_id = _game_id_to_hex(game.get_active_title_id())
-				return FileSystemManager.join_paths(save_dir, hex_id)
+				return FSM.join_paths(save_dir, hex_id)
 			return save_dir
 		"pcsx2":
 			# PCSX2 saves are loose files in a zip named by serial
@@ -857,7 +858,7 @@ func _get_extract_dest(emulator_id: String, save_dir: String, record_path: Strin
 				folder_name = zip_file_name.get_basename()
 			else:
 				folder_name = game.get_active_title_id()
-			return FileSystemManager.join_paths(save_dir, folder_name)
+			return FSM.join_paths(save_dir, folder_name)
 		"ppsspp":
 			return save_dir
 		"vita3k":
@@ -920,39 +921,39 @@ func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: Stri
 	match emulator_id:
 		"cemu":
 			var save_name = game.get_active_title_id().substr(8, 8)
-			return FileSystemManager.zip_directory(source_path, zip_path, -1, save_name)
+			return FSM.zip_directory(source_path, zip_path, -1, save_name)
 		"dolphin":
-			return FileSystemManager.zip_directory(source_path, zip_path)
+			return FSM.zip_directory(source_path, zip_path)
 		"eden":
 			# Eden saves are loose files inside the zip (no root folder)
 			# Zip is named with the full TitleID
-			return FileSystemManager.zip_directory(source_path, zip_path)
+			return FSM.zip_directory(source_path, zip_path)
 		"pcsx2":
-			return FileSystemManager.zip_directory(source_path, zip_path)
+			return FSM.zip_directory(source_path, zip_path)
 		"ppsspp":
 			# For individual uploads, zip the specific folder with its name as root
 			# This ensures extraction creates the correct subfolder (e.g., NPJH50333DAT/)
 			# Skip files over 100MB (DLC/install data) to avoid Cloudflare 413 errors
 			var folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory(source_path, zip_path, MAX_FILE_SIZE, folder_name)
+			return FSM.zip_directory(source_path, zip_path, MAX_FILE_SIZE, folder_name)
 		"vita3k":
 			# For Vita3K, zip the save folder with TitleID as root
 			var vita_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory(source_path, zip_path, -1, vita_folder_name)
+			return FSM.zip_directory(source_path, zip_path, -1, vita_folder_name)
 		"rpcs3":
 			# For RPCS3, zip the save folder with TitleID as root
 			var rpcs3_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory(source_path, zip_path, -1, rpcs3_folder_name)
+			return FSM.zip_directory(source_path, zip_path, -1, rpcs3_folder_name)
 		"shadps4":
 			# For shadPS4, zip the save folder with TitleID as root
 			var shadps4_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory(source_path, zip_path, -1, shadps4_folder_name)
+			return FSM.zip_directory(source_path, zip_path, -1, shadps4_folder_name)
 		"xenia":
 			# For Xenia, zip the save folder with TitleID as root
 			var xenia_folder_name = source_path.get_file()
-			return FileSystemManager.zip_directory(source_path, zip_path, -1, xenia_folder_name)
+			return FSM.zip_directory(source_path, zip_path, -1, xenia_folder_name)
 		_:
-			return FileSystemManager.zip_directory(source_path, zip_path)
+			return FSM.zip_directory(source_path, zip_path)
 
 ## Zips all PSP save folders matching the title_id into a single archive
 ## max_file_size: maximum file size in bytes to include (-1 for no limit)
@@ -986,30 +987,30 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 	# Copy all matching save folders to staging directory
 	for save in saves:
 		var save_folder_name = save.file_path.get_file()
-		var dest = FileSystemManager.join_paths(stage_dir, save_folder_name)
+		var dest = FSM.join_paths(stage_dir, save_folder_name)
 		print("[SaveManager] _zip_psp_save: copying " + save.file_path + " to " + dest)
-		var success = FileSystemManager.copy_dir(save.file_path, dest)
+		var success = FSM.copy_dir(save.file_path, dest)
 		if not success:
 			push_error("[SaveManager] _zip_psp_save: failed to copy " + save.file_path)
-			FileSystemManager.delete_dir_recursive(stage_dir)
+			FSM.delete_dir_recursive(stage_dir)
 			return false
 	
 	# Zip the staging directory
 	print("[SaveManager] _zip_psp_save: creating zip at " + zip_path)
-	var zip_success = FileSystemManager.zip_directory(stage_dir, zip_path, max_file_size)
+	var zip_success = FSM.zip_directory(stage_dir, zip_path, max_file_size)
 	if not zip_success:
 		push_error("[SaveManager] _zip_psp_save: failed to create zip " + zip_path)
 	
-	FileSystemManager.delete_dir_recursive(stage_dir)
+	FSM.delete_dir_recursive(stage_dir)
 	return zip_success
 
-func _sanitize_filename(name: String) -> String:
-	return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
+func _sanitize_filename(file_name: String) -> String:
+	return file_name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
 
 func _find_first_subdir(dir_path: String) -> String:
-	var items = FileSystemManager.list_dir(dir_path)
+	var items = FSM.list_dir(dir_path)
 	for item in items:
-		if item != "." and item != ".." and FileSystemManager.dir_exists(FileSystemManager.join_paths(dir_path, item)):
+		if item != "." and item != ".." and FSM.dir_exists(FSM.join_paths(dir_path, item)):
 			return item
 	return ""
 
@@ -1101,10 +1102,10 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			return
 		
 		var device_id = DataManager.get_romm_device_id()
-		NetworkManager.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, error: String):
-			if error != "":
+		NetworkManager.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+			if fetch_error != "":
 				if callback.is_valid():
-					callback.call(false, "Failed to fetch remote saves: " + error)
+					callback.call(false, "Failed to fetch remote saves: " + fetch_error)
 				return
 			
 			_run_sync(game, emulator_id, local_saves, remote_saves, device_id, callback)
@@ -1207,7 +1208,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 			print("[SaveManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
-			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+			FSM.make_dir_recursive(zip_path.get_base_dir())
 			var zip_success = _zip_emulator_save(emulator_id, original_path, zip_path, game)
 			if not zip_success:
 				state.failed += 1
@@ -1223,8 +1224,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				device_id,
 				true,
 				func(data: Dictionary, error: String):
-					if FileSystemManager.file_exists(zip_path):
-						FileSystemManager.delete_file(zip_path)
+					if FSM.file_exists(zip_path):
+						FSM.delete_file(zip_path)
 					# Clean up empty parent directories
 					_cleanup_temp_dir(zip_path)
 					if error != "":
@@ -1245,8 +1246,8 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				true,
 				func(data: Dictionary, error: String):
 					# Clean up temp GCI zip files after upload
-					if original_path.contains("user://temp_saves/") and FileSystemManager.file_exists(original_path):
-						FileSystemManager.delete_file(original_path)
+					if original_path.contains("user://temp_saves/") and FSM.file_exists(original_path):
+						FSM.delete_file(original_path)
 					if error != "":
 						state.failed += 1
 						push_error("[SaveManager] Upload failed for " + original_path + ": " + error)
@@ -1270,11 +1271,11 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			if emulator_id == "retroarch":
 				record_path = _resolve_emulator_save_path(emulator_id, resolve_save_directory(emulator_id, game.platform_slug), game)
 			else:
-				record_path = FileSystemManager.join_paths(resolve_save_directory(emulator_id, game.platform_slug), file_name)
+				record_path = FSM.join_paths(resolve_save_directory(emulator_id, game.platform_slug), file_name)
 		
 		if is_folder_save:
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
-			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+			FSM.make_dir_recursive(zip_path.get_base_dir())
 			local_path = zip_path
 			var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
 			
@@ -1294,12 +1295,12 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			# Ensure parent directory exists for RetroArch core-specific saves
 			if emulator_id == "retroarch":
 				var parent_dir = record_path.get_base_dir()
-				FileSystemManager.make_dir_recursive(parent_dir)
+				FSM.make_dir_recursive(parent_dir)
 		
 		# Ensure save directory exists before downloading
 		_ensure_save_directory_exists(emulator_id)
 		
-		NetworkManager.download_save(save_id, device_id, local_path, func(_success: bool, status_code: int, error_msg: String):
+		NetworkManager.download_save(save_id, device_id, local_path, func(_success: bool, _status_code: int, error_msg: String):
 			if not _success:
 				state.failed += 1
 				push_error("[SaveManager] Download failed for save " + str(save_id) + ": " + error_msg)
@@ -1315,12 +1316,12 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					print("[SaveManager] Extracting folder save for " + emulator_id + " to: " + extract_dest)
 					print("[SaveManager] record_path was: " + record_path)
 					# Don't use subfolder - the zip already contains the correct folder structure
-					var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
+					var extract_success = FSM.extract_zip(zip_path, extract_dest)
 					if not extract_success:
 						state.failed += 1
 						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
-					if FileSystemManager.file_exists(zip_path):
-						FileSystemManager.delete_file(zip_path)
+					if FSM.file_exists(zip_path):
+						FSM.delete_file(zip_path)
 					# Clean up empty parent directories
 					_cleanup_temp_dir(zip_path)
 					
@@ -1491,7 +1492,7 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 		if is_folder_save:
 			var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
-			FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+			FSM.make_dir_recursive(zip_path.get_base_dir())
 			var zip_success = _zip_emulator_save(emulator_id, local_file_path, zip_path, game)
 			if not zip_success:
 				state.failed += 1
@@ -1512,8 +1513,8 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 				device_id,
 				true,
 				func(data: Dictionary, error: String):
-					if FileSystemManager.file_exists(zip_path):
-						FileSystemManager.delete_file(zip_path)
+					if FSM.file_exists(zip_path):
+						FSM.delete_file(zip_path)
 					# Clean up empty parent directories
 					_cleanup_temp_dir(zip_path)
 					if error != "":
@@ -1595,9 +1596,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 		
 		var device_id = DataManager.get_romm_device_id()
 		
-		NetworkManager.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, error: String):
-			if error != "":
-				push_warning("[SaveManager] Pre-launch fetch failed: " + error)
+		NetworkManager.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+			if fetch_error != "":
+				push_warning("[SaveManager] Pre-launch fetch failed: " + fetch_error)
 				if on_complete.is_valid():
 					on_complete.call()
 				return
@@ -1696,7 +1697,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					
 					if is_folder_save:
 						zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
-						FileSystemManager.make_dir_recursive(zip_path.get_base_dir())
+						FSM.make_dir_recursive(zip_path.get_base_dir())
 						local_path = zip_path
 						
 						if not _local:
@@ -1715,14 +1716,14 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 						# Ensure parent directory exists for RetroArch core-specific saves
 						if emulator_id == "retroarch":
 							var parent_dir = record_path.get_base_dir()
-							FileSystemManager.make_dir_recursive(parent_dir)
+							FSM.make_dir_recursive(parent_dir)
 					
 					# Ensure save directory exists before downloading
 					_ensure_save_directory_exists(emulator_id)
 					
 					print("[SaveManager] auto_download: downloading save '" + file_name + "' to: " + local_path)
 					
-					NetworkManager.download_save(save_id, device_id, local_path, func(success: bool, status_code: int, error_msg: String):
+					NetworkManager.download_save(save_id, device_id, local_path, func(success: bool, _status_code: int, error_msg: String):
 						if not success:
 							state.failed += 1
 							push_error("[SaveManager] Pre-launch download failed: " + error_msg)
@@ -1737,24 +1738,24 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							if is_folder_save:
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 								# Don't use subfolder - the zip already contains the correct folder structure
-								var extract_success = FileSystemManager.extract_zip(zip_path, extract_dest)
+								var extract_success = FSM.extract_zip(zip_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
-								if FileSystemManager.file_exists(zip_path):
-									FileSystemManager.delete_file(zip_path)
+								if FSM.file_exists(zip_path):
+									FSM.delete_file(zip_path)
 								# Clean up empty parent directories
 								_cleanup_temp_dir(zip_path)
 							elif local_path.to_lower().ends_with(".zip"):
 								# Non-folder save but downloaded as zip (e.g., GameCube .gci in zip)
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 								print("[SaveManager] Extracting non-folder zip save for " + emulator_id + " to: " + extract_dest)
-								var extract_success = FileSystemManager.extract_zip(local_path, extract_dest)
+								var extract_success = FSM.extract_zip(local_path, extract_dest)
 								if not extract_success:
 									state.failed += 1
 									push_error("[SaveManager] Failed to extract downloaded zip: " + local_path)
-								if FileSystemManager.file_exists(local_path):
-									FileSystemManager.delete_file(local_path)
+								if FSM.file_exists(local_path):
+									FSM.delete_file(local_path)
 							
 							# Ensure PCSX2 superblock is valid after extracting saves
 							if emulator_id == "pcsx2":
@@ -1780,9 +1781,9 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 ## Returns true if valid, false if missing or invalid.
 func validate_pcsx2_superblock(memcard_path: String) -> bool:
 	var superblock_path = memcard_path.rstrip("/") + "/_pcsx2_superblock"
-	if not FileSystemManager.file_exists(superblock_path):
+	if not FSM.file_exists(superblock_path):
 		return false
-	var existing = FileSystemManager.open_file_read(superblock_path)
+	var existing = FSM.open_file_read(superblock_path)
 	if not existing:
 		return false
 	var header = existing.get_buffer(28)
@@ -1850,7 +1851,7 @@ func create_pcsx2_superblock(memcard_path: String) -> bool:
 	for i in range(512, 8192):
 		sb[i] = 0xFF
 	
-	if not FileSystemManager.write_file_bytes(superblock_path, sb):
+	if not FSM.write_file_bytes(superblock_path, sb):
 		push_error("[SaveManager] Failed to write PCSX2 superblock: " + superblock_path)
 		return false
 	
@@ -1885,11 +1886,11 @@ func get_save_sync_status_text(game: GameResource, emulator_id: String) -> Strin
 		if diff < 60:
 			return "Synced just now"
 		elif diff < 3600:
-			return "Synced %d min ago" % (diff / 60)
+			return "Synced %d min ago" % (diff / 60.0)
 		elif diff < 86400:
-			return "Synced %d hours ago" % (diff / 3600)
+			return "Synced %d hours ago" % (diff / 3600.0)
 		else:
-			return "Synced %d days ago" % (diff / 86400)
+			return "Synced %d days ago" % (diff / 86400.0)
 	
 	return "Synced"
 

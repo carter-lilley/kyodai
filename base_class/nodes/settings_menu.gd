@@ -7,6 +7,7 @@ var variables: Array
 
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
+const FSM = preload("res://managers/filesystem_manager.gd")
 signal setting_changed(value: Variant, setting: SettingsVar)
 
 func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar]):
@@ -235,7 +236,7 @@ func match_var_type(settingsvar : SettingsVar):
 				add_child(dialog)
 				
 				dialog.dir_selected.connect(func(dir: String):
-					var resolved_dir = FileSystemManager.resolve_content_uri(dir)
+					var resolved_dir = FSM.resolve_content_uri(dir)
 					path_field.text = resolved_dir
 					emit_signal("setting_changed", resolved_dir, settingsvar)
 					dialog.queue_free()

@@ -1,6 +1,8 @@
 class_name HomeView
 extends View
 
+const FSM = preload("res://managers/filesystem_manager.gd")
+
 @onready var margin_container: MarginContainer = $MarginContainer
 
 var _total_games: int = 0
@@ -20,6 +22,8 @@ var _gamenative_indices: Dictionary = {}
 # Cached merged list of DB + GameNative games (rebuilt when dirty)
 var _merged_games_cache: Array[GameResource] = []
 var _merged_cache_dirty: bool = true
+var _merged_cache_start: int = 0
+var _merged_cache_end: int = 0
 
 
 
@@ -106,6 +110,10 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			# Clear the index tracking when total changes significantly
 			if not preserve_cache:
 				_gamenative_indices.clear()
+				_merged_games_cache.clear()
+				_merged_cache_start = 0
+				_merged_cache_end = 0
+				_merged_cache_dirty = true
 			
 			games_grid.set_total_count(_total_games, preserve_cache)
 			
@@ -160,12 +168,18 @@ func _on_scan_completed(found_count: int):
 	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
 		NotificationManager.show_notification("Found %d downloaded games" % found_count, NotificationManager.Type.SUCCESS)
+		_merged_games_cache.clear()
+		_merged_cache_start = 0
+		_merged_cache_end = 0
 		_merged_cache_dirty = true
 
-func _on_sync_completed(success: bool, message: String):
+func _on_sync_completed(success: bool, _message: String):
 	"""Called when library sync completes."""
 	if success:
 		_scan_for_downloaded_games()
+		_merged_games_cache.clear()
+		_merged_cache_start = 0
+		_merged_cache_end = 0
 		_merged_cache_dirty = true
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
@@ -178,24 +192,41 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""
 	MemoryManager.queue_db_task(
 		func():
-			# Rebuild cache if dirty or empty — fetch only the requested window
-			# plus a 2× buffer on each side to reduce future cache misses.
-			if _merged_cache_dirty or _merged_games_cache.is_empty():
+			var request_end = offset + limit
+			# The cache must FULLY contain the requested range, not just overlap.
+			# A partial overlap (e.g. cache=[55,98) vs request=[0,98)) still
+			# produces misses for the uncovered portion.
+			var cache_fully_covers = not _merged_games_cache.is_empty() and \
+				offset >= _merged_cache_start and \
+				request_end <= _merged_cache_end
+			
+			var cache_hit = not (_merged_cache_dirty or _merged_games_cache.is_empty() or not cache_fully_covers)
+			
+			# Rebuild cache if dirty, empty, or the requested range is not fully
+			# covered by the current cached window.
+			if not cache_hit:
 				var buffer = limit * 2
 				var fetch_offset = max(0, offset - buffer)
-				var fetch_limit = limit + buffer * 2
+				# Enforce a minimum fetch window so small _request_missing_data()
+				# batches don't create an undersized cache that immediately misses.
+				var fetch_limit = max(limit + buffer * 2, 50)
 				var db_games = DataManager.get_downloaded_games_paginated(fetch_offset, fetch_limit)
 				_merged_games_cache = _merge_all_games_by_last_played(db_games, _gamenative_games)
+				_merged_cache_start = fetch_offset
+				_merged_cache_end = fetch_offset + _merged_games_cache.size()
 				_merged_cache_dirty = false
+			else:
+				pass
 			
-			# Slice the cached merged list
+			# Slice the cached merged list using virtual-index offsets.
 			var result: Array[GameResource] = []
 			var result_gamenative_indices: Dictionary = {}
 			
 			for i in range(limit):
-				var idx = offset + i
-				if idx < _merged_games_cache.size():
-					var game = _merged_games_cache[idx]
+				var virtual_idx = offset + i
+				var cache_idx = virtual_idx - _merged_cache_start
+				if cache_idx >= 0 and cache_idx < _merged_games_cache.size():
+					var game = _merged_games_cache[cache_idx]
 					result.append(game)
 					if game.source == "gamenative":
 						result_gamenative_indices[i] = true
@@ -284,7 +315,7 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 func are_intro_animations_complete() -> bool:
 	return true
 
-func _on_download_completed(item_id: String, success: bool, message: String):
+func _on_download_completed(_item_id: String, success: bool, _message: String):
 	# Refresh when a download completes (game may now show in home view)
 	if success:
 		# Rebuild grid to ensure layout transforms are recalculated
@@ -351,6 +382,10 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 			
 			if not preserve_cache:
 				_gamenative_indices.clear()
+				_merged_games_cache.clear()
+				_merged_cache_start = 0
+				_merged_cache_end = 0
+				_merged_cache_dirty = true
 			
 			games_grid.set_total_count(_total_games, preserve_cache)
 			
@@ -503,7 +538,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	NotificationManager.show_notification("Adding " + game.title + " to Steam...", NotificationManager.Type.INFO)
 	
 	# Get launch intent for the game
-	var launch_intent = await LaunchManager.create_launch_intent(game)
+	var launch_intent = LaunchManager.create_launch_intent(game)
 	if not launch_intent:
 		NotificationManager.show_notification("Failed to create launch intent for " + game.title, NotificationManager.Type.ERROR)
 		if AudioManager:
@@ -519,10 +554,10 @@ func _add_game_to_steam(game: GameResource) -> void:
 		return
 	
 	# Globalize the path for Steam (needs absolute system path)
-	exe_path = FileSystemManager.resolve_path(exe_path, {"format": FileSystemManager.PathFormat.PLATFORM})
+	exe_path = FSM.resolve_path(exe_path, {"format": FSM.PathFormat.PLATFORM})
 	
 	# Get the ROM path and ensure it's quoted
-	var rom_path: String = FileSystemManager.resolve_path(launch_intent.rom_path, {"format": FileSystemManager.PathFormat.PLATFORM})
+	var rom_path: String = FSM.resolve_path(launch_intent.rom_path, {"format": FSM.PathFormat.PLATFORM})
 	
 	# Build the full command line: "exe" args "rom"
 	# Start with quoted exe path
@@ -544,7 +579,7 @@ func _add_game_to_steam(game: GameResource) -> void:
 	var working_dir: String = launch_intent.working_directory
 	if working_dir.is_empty():
 		working_dir = exe_path.get_base_dir()
-	working_dir = FileSystemManager.resolve_path(working_dir, {"format": FileSystemManager.PathFormat.PLATFORM})
+	working_dir = FSM.resolve_path(working_dir, {"format": FSM.PathFormat.PLATFORM})
 	
 	# Get the cached cover art path (same as GameCard uses)
 	var cover_art_path: String = ""
@@ -552,15 +587,15 @@ func _add_game_to_steam(game: GameResource) -> void:
 	
 	# Try to get the cached cover path from cover_url
 	if not game.cover_url.is_empty() and game.cover_url.begins_with("http"):
-		cover_art_path = FileSystemManager.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
-		cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+		cover_art_path = FSM.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
+		cover_art_path = FSM.resolve_path(cover_art_path, {"format": FSM.PathFormat.ABSOLUTE})
 	elif not game.cover_path.is_empty():
 		# Fallback to cover_path if it's a valid local path
 		cover_art_path = game.cover_path
 		if cover_art_path.find("?") != -1:
 			cover_art_path = cover_art_path.substr(0, cover_art_path.find("?"))
 		if FileAccess.file_exists(cover_art_path):
-			cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+			cover_art_path = FSM.resolve_path(cover_art_path, {"format": FSM.PathFormat.ABSOLUTE})
 	
 	# Build game data for Steam
 	# exe = full command with args (used as Steam target in VDF)

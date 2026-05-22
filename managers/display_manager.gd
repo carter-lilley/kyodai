@@ -177,7 +177,7 @@ func exit_subviewport_dual_screen_mode() -> void:
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]
 	DisplayServer.window_set_size(choice)
-	DisplayServer.window_set_position((DisplayServer.screen_get_position()+DisplayServer.screen_get_size()/2)-choice/2)
+	DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(choice) / 2.0))
 
 func windowed_toggle(value : bool):
 	if value:

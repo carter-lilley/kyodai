@@ -1,3 +1,4 @@
+@tool
 class_name PlatformCard
 extends M3Card
 
@@ -55,9 +56,9 @@ func _ready():
 
 	# If install status wasn't pre-set by parent, scan on ready
 	if _emulator_install_status.is_empty():
-		var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
-		if effective_emulator != "" and LaunchManager:
-			LaunchManager.scan_emulator_install_state(effective_emulator)
+		var _effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+		if _effective_emulator != "" and LaunchManager:
+			LaunchManager.scan_emulator_install_state(_effective_emulator)
 			_update_status_indicator()
 
 func _build_ui():
@@ -164,7 +165,7 @@ func _update_emulator_dropdown():
 	_emulator_dropdown.clear()
 
 	# Determine effective emulator (what's actually being used)
-	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	var _effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
 	var selected_index = 0
 
 	# Add "Auto" option if we have a registry default
@@ -321,7 +322,7 @@ func _on_download_pressed():
 
 	if progress["status"] == "partial":
 		# Resume installation from first incomplete step
-		await LaunchManager.download_emulator(effective_emulator)
+		LaunchManager.download_emulator(effective_emulator)
 		refresh_ui()
 	else:
 		# For not_started, complete, or any other state, request download/install

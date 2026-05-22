@@ -49,18 +49,18 @@ func _add_download_item(item):
 	downloads_list.add_child(ui_item)
 	_download_items[item.id] = ui_item
 
-func _on_download_started(item_id: String):
+func _on_download_started(_item_id: String):
 	_refresh_list()
 
-func _on_download_progress(item_id: String, progress: float):
-	if _download_items.has(item_id):
-		var item = _download_items[item_id]
+func _on_download_progress(_item_id: String, _progress: float):
+	if _download_items.has(_item_id):
+		var item = _download_items[_item_id]
 		if is_instance_valid(item):
 			item._update_display()
 
-func _on_download_completed(item_id: String, success: bool, message: String):
-	if _download_items.has(item_id):
-		var item = _download_items[item_id]
+func _on_download_completed(_item_id: String, _success: bool, _message: String):
+	if _download_items.has(_item_id):
+		var item = _download_items[_item_id]
 		if is_instance_valid(item):
 			item._update_display()
 	_update_status()
@@ -71,15 +71,15 @@ func _on_extraction_started(item_id: String):
 		if is_instance_valid(item):
 			item._update_display()
 
-func _on_extraction_progress(item_id: String, progress: float):
-	if _download_items.has(item_id):
-		var item = _download_items[item_id]
+func _on_extraction_progress(_item_id: String, _progress: float):
+	if _download_items.has(_item_id):
+		var item = _download_items[_item_id]
 		if is_instance_valid(item):
 			item._update_display()
 
-func _on_extraction_completed(item_id: String, success: bool, message: String):
-	if _download_items.has(item_id):
-		var item = _download_items[item_id]
+func _on_extraction_completed(_item_id: String, _success: bool, _message: String):
+	if _download_items.has(_item_id):
+		var item = _download_items[_item_id]
 		if is_instance_valid(item):
 			item._update_display()
 	_update_status()

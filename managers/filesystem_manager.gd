@@ -22,6 +22,12 @@ static func normalize_path(path: String) -> String:
 	# Convert content:// URIs to real paths
 	path = resolve_content_uri(path)
 	
+	# Shared variables for path normalization
+	var has_leading_slash: bool
+	var segments: PackedStringArray
+	var resolved: Array[String] = []
+	var result: String
+	
 	# Preserve Godot virtual paths - don't normalize slashes in user:// or res://
 	if path.begins_with("user://") or path.begins_with("res://"):
 		# Only resolve . and .. after the protocol prefix
@@ -35,9 +41,9 @@ static func normalize_path(path: String) -> String:
 			rest = path.substr(6)
 		
 		# Normalize the rest of the path
-		var has_leading_slash = rest.begins_with("/")
-		var segments = rest.split("/", false)
-		var resolved: Array[String] = []
+		has_leading_slash = rest.begins_with("/")
+		segments = rest.split("/", false)
+		resolved.clear()
 		for segment in segments:
 			if segment == ".":
 				continue
@@ -47,7 +53,7 @@ static func normalize_path(path: String) -> String:
 			else:
 				resolved.append(segment)
 		
-		var result = "/".join(resolved)
+		result = "/".join(resolved)
 		if has_leading_slash:
 			result = "/" + result
 		if result.length() > 1 and result.ends_with("/"):
@@ -56,11 +62,11 @@ static func normalize_path(path: String) -> String:
 		return prefix + result
 	
 	# Detect leading slash (absolute path)
-	var has_leading_slash = path.begins_with("/")
+	has_leading_slash = path.begins_with("/")
 	
 	# Split into segments and resolve . and ..
-	var segments = path.split("/", false)
-	var resolved: Array[String] = []
+	segments = path.split("/", false)
+	resolved.clear()
 	for segment in segments:
 		if segment == ".":
 			continue
@@ -71,7 +77,7 @@ static func normalize_path(path: String) -> String:
 			resolved.append(segment)
 	
 	# Rejoin segments
-	var result = "/".join(resolved)
+	result = "/".join(resolved)
 	
 	# Restore leading slash for absolute paths
 	if has_leading_slash:
@@ -182,7 +188,7 @@ static func resolve_native_path(path: String) -> String:
 ## Resolves emulator paths with full wildcard support
 ## Handles {emulator_dir}, {app_data}, {games_dir}, and {core_name}
 ## This is the preferred method for resolving emulator-related paths
-func resolve_emulator_path(path: String, emulator_id: String, platform_slug: String = "", format: PathFormat = PathFormat.DEFAULT) -> String:
+static func resolve_emulator_path(path: String, emulator_id: String, platform_slug: String = "", format: PathFormat = PathFormat.DEFAULT) -> String:
 	if path.is_empty():
 		return ""
 	

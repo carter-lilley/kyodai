@@ -44,11 +44,11 @@ func _update_uv_transforms() -> void:
 	var card_aspect = card_size.x / card_size.y
 	var tex_aspect = tex_size.x / tex_size.y
 	
-	var scale = Vector2(1.0, 1.0)
+	var tex_scale = Vector2(1.0, 1.0)
 	if card_aspect > tex_aspect:
-		scale.y = tex_aspect / card_aspect
+		tex_scale.y = tex_aspect / card_aspect
 	else:
-		scale.x = card_aspect / tex_aspect
+		tex_scale.x = card_aspect / tex_aspect
 	
 	# Calculate offset to center the scaled texture
 	var offset = (Vector2(1.0, 1.0) - scale) * 0.5

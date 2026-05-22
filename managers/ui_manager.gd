@@ -57,6 +57,7 @@ var _last_mouse_position: Vector2 = Vector2.ZERO
 signal modal_shown(modal_id: String)
 signal modal_dismissed(modal_id: String)
 signal modal_item_selected(item_id: String, context: Dictionary)
+@warning_ignore("unused_signal")
 signal tab_changed(view_name: String)
 signal layout_changed(position: String)
 signal settings_dialog_dismissed()
@@ -374,7 +375,7 @@ func _update_hero_size() -> void:
 	
 	var viewport_size = get_viewport().size
 	var height_ratio = HERO_SIZE_RATIO_DEFAULT
-	var raw_setting_value = null
+	var _raw_setting_value = null
 	
 	if SettingsManager:
 		var hero_config_setting = SettingsManager.get_setting("hero_effect_config")
@@ -386,7 +387,7 @@ func _update_hero_size() -> void:
 				var index = int(height_index)
 				if index >= 0 and index < HERO_HEIGHT_RATIOS.size():
 					height_ratio = HERO_HEIGHT_RATIOS[index]
-					raw_setting_value = index
+					_raw_setting_value = index
 	
 	var target_height = viewport_size.y * height_ratio
 	if target_height < 1.0:
@@ -426,7 +427,7 @@ func _update_zoom_range_for_current_view() -> void:
 	var view = _views[current_view_name]
 	var grid = view.games_grid if "games_grid" in view else null
 	if grid:
-		var max_zoom = 1.0 if grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
+		var _max_zoom = 1.0 if grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
 		# Zoom overlay is managed by main.gd; UIManager just knows the range
 		pass
 
@@ -737,7 +738,7 @@ func _on_tab_changed(tab_idx: int):
 		_update_hero_visibility(tab_title)
 		
 
-func _update_hero_visibility(view_name: String) -> void:
+func _update_hero_visibility(_view_name: String) -> void:
 	"""Show/hide hero image, spacer, and library background based on current view and settings."""
 	# In dual screen mode, main hero should always be hidden (shown on second screen instead)
 	if _dual_screen_active:
@@ -1208,7 +1209,7 @@ func _enable_dual_screen_mode_desktop(second_screen_index: int) -> void:
 	# Use call_deferred to avoid race conditions during _ready()
 	_setup_desktop_dual_screen.call_deferred(second_screen_index)
 
-func _setup_desktop_dual_screen(second_screen_index: int) -> void:
+func _setup_desktop_dual_screen(_second_screen_index: int) -> void:
 	"""Setup desktop dual screen (called deferred to avoid race conditions)."""
 	# Store reference to original parent
 	_hero_original_parent = _hero_image.get_parent()
