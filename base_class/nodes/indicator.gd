@@ -50,6 +50,7 @@ func _build_ui() -> void:
 	_status_label.visible = show_text
 	var fonts = M3Theme.load_fonts()
 	_status_label.add_theme_font_override("font", fonts["regular"])
+	_status_label.add_theme_color_override("font_color", M3Theme.get_on_surface())
 	hbox.add_child(_status_label)
 
 func set_status(status: Status, message: String = "", tooltip: String = "") -> void:
@@ -92,5 +93,9 @@ func set_tooltip(tooltip: String) -> void:
 		_status_dot.tooltip_text = tooltip
 	if _status_label:
 		_status_label.tooltip_text = tooltip
+
+func refresh_theme() -> void:
+	if _status_label:
+		_status_label.add_theme_color_override("font_color", M3Theme.get_on_surface())
 
 var _tooltip_text: String = ""

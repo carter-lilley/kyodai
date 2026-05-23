@@ -36,7 +36,6 @@ var _available_emulators: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}
 
 var _name_label: Label
-var _emulator_label: Label
 var _sync_toggle: M3Checkbox
 var _emulator_dropdown: M3OptionButton
 var _status_indicator: Indicator
@@ -47,9 +46,10 @@ func _ready():
 	card_layout_mode = LayoutMode.HORIZONTAL
 	card_variant = Variant.ELEVATED
 	clickable = false
-	custom_minimum_size = Vector2(0, M3Units.dp(150))
 
 	super._ready()
+	# Allow card to grow to fit content; set a sane minimum for horizontal mode
+	custom_minimum_size.y = M3Units.dp(140)
 
 	_build_ui()
 	_update_display()
@@ -86,28 +86,24 @@ func _build_ui():
 	_sync_toggle.toggled.connect(_on_sync_toggled)
 	top_row.add_child(_sync_toggle)
 
-	# Emulator row: Label + Dropdown + Download button
+	# Emulator row: Icon + Dropdown
 	var emulator_row = HBoxContainer.new()
 	emulator_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_text_content.add_child(emulator_row)
 
-	_emulator_label = Label.new()
-	_emulator_label.text = "Emulator:"
-	emulator_row.add_child(_emulator_label)
+	var emulator_icon = FontIcon.new()
+	emulator_icon.icon_settings = FontIconSettings.new()
+	emulator_icon.icon_settings.icon_name = "gamepad-variant"
+	emulator_icon.icon_settings.icon_size = M3Units.dp(20)
+	emulator_icon.icon_settings.icon_color = M3Theme.get_on_surface_variant()
+	emulator_row.add_child(emulator_icon)
 
 	_emulator_dropdown = M3OptionButton.new()
 	_emulator_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_emulator_dropdown.item_selected.connect(_on_emulator_selected)
 	emulator_row.add_child(_emulator_dropdown)
 
-	_download_button = M3Button.new()
-	_download_button.text = "Download"
-	_download_button.visible = false
-	_download_button.button_size = M3Button.Size.EXTRA_SMALL
-	_download_button.pressed.connect(_on_download_pressed)
-	emulator_row.add_child(_download_button)
-
-	# Status row: Indicator + version text displayed on its own line (prevents overflow)
+	# Status row: Indicator + Download button + version label
 	var status_row = HBoxContainer.new()
 	status_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_text_content.add_child(status_row)
@@ -116,6 +112,13 @@ func _build_ui():
 	_status_indicator.dot_size = Vector2(10, 10)
 	_status_indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(_status_indicator)
+
+	_download_button = M3Button.new()
+	_download_button.text = "Download"
+	_download_button.visible = false
+	_download_button.button_size = M3Button.Size.EXTRA_SMALL
+	_download_button.pressed.connect(_on_download_pressed)
+	status_row.add_child(_download_button)
 
 	_version_label = Label.new()
 	_version_label.visible = false
@@ -130,7 +133,7 @@ func _apply_m3_text_styles():
 	var on_surface = M3Theme.get_on_surface()
 	var on_surface_variant = M3Theme.get_on_surface_variant()
 
-	var headline_size = M3Units.dp(22)
+	var headline_size = M3Units.dp(16)
 	var body_size = M3Units.dp(14)
 	var small_size = M3Units.dp(12)
 
@@ -138,11 +141,6 @@ func _apply_m3_text_styles():
 		_name_label.add_theme_font_override("font", fonts["medium"])
 		_name_label.add_theme_font_size_override("font_size", headline_size)
 		_name_label.add_theme_color_override("font_color", on_surface)
-
-	if _emulator_label:
-		_emulator_label.add_theme_font_override("font", fonts["regular"])
-		_emulator_label.add_theme_font_size_override("font_size", body_size)
-		_emulator_label.add_theme_color_override("font_color", on_surface_variant)
 
 	if _version_label:
 		_version_label.add_theme_font_override("font", fonts["regular"])
@@ -327,6 +325,10 @@ func _on_download_pressed():
 	else:
 		# For not_started, complete, or any other state, request download/install
 		download_requested.emit(effective_emulator)
+
+func focus_sync_toggle() -> void:
+	if _sync_toggle and _sync_toggle.focus_mode != Control.FOCUS_NONE:
+		_sync_toggle.grab_focus()
 
 func refresh_ui():
 	# Called by parent to refresh button states (e.g., when download starts/completes)

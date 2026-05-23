@@ -12,6 +12,16 @@ var _platform_cards: Dictionary = {}  # slug -> PlatformCard
 
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
+var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
+
+const NARROW_BREAKPOINT_DP := 850.0
+
+func _is_narrow_screen() -> bool:
+	var viewport = get_viewport()
+	if viewport == null:
+		return true
+	var viewport_width = viewport.get_visible_rect().size.x
+	return viewport_width < M3Units.dp(NARROW_BREAKPOINT_DP)
 
 func _ready():
 	view_name = "RomM"
@@ -70,6 +80,12 @@ func _ready():
 	
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
+	
+	# Connect to viewport resize to update card layout
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	
+	# Set initial column visibility
+	_update_column_visibility()
 	
 	super._ready()
 
@@ -171,11 +187,14 @@ func _fetch_platforms():
 			
 			# Create platform card with precomputed validation results
 			var card = _create_platform_card(slug, platform_name, romm_id, icon_url, enabled_platforms, precomputed_status)
-			# Distribute cards across two columns
-			if _platform_cards.size() % 2 == 0:
+			# Distribute cards: single column on narrow screens, two columns on wide
+			if _is_narrow_screen():
 				_cards_left.add_child(card)
 			else:
-				_cards_right.add_child(card)
+				if _platform_cards.size() % 2 == 0:
+					_cards_left.add_child(card)
+				else:
+					_cards_right.add_child(card)
 			_platform_cards[slug] = card
 		
 		# Remove platforms that no longer exist on RomM
@@ -273,10 +292,13 @@ func _load_platforms_from_database():
 		var card = _create_platform_card(slug, platform_name, 0, icon_url, enabled_platforms)
 		card.disabled = true
 		card.tooltip_text = "Connect to RomM to configure this platform"
-		if _platform_cards.size() % 2 == 0:
+		if _is_narrow_screen():
 			_cards_left.add_child(card)
 		else:
-			_cards_right.add_child(card)
+			if _platform_cards.size() % 2 == 0:
+				_cards_left.add_child(card)
+			else:
+				_cards_right.add_child(card)
 		_platform_cards[slug] = card
 	
 	if platforms.size() == 0:
@@ -388,6 +410,9 @@ func _save_settings():
 	SettingsManager.save_settings()
 
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
+	# Track which platform initiated the download for focus restoration later
+	_last_active_platform_slug = card.platform_slug
+	
 	# Start the download
 	var success = LaunchManager.download_emulator(emulator_id)
 	if success:
@@ -552,12 +577,57 @@ func _on_select_all_pressed():
 	# Update button text
 	select_all_button.text = "Deselect All" if new_state else "Select All"
 
+func _update_column_visibility() -> void:
+	var is_narrow = _is_narrow_screen()
+	_cards_right.visible = not is_narrow
+	if is_narrow:
+		_cards_right.custom_minimum_size = Vector2.ZERO
+		_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	else:
+		_cards_right.custom_minimum_size = Vector2(M3Units.dp(300), 0)
+		_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+func _on_viewport_size_changed() -> void:
+	"""Re-layout cards when viewport size crosses the narrow breakpoint."""
+	_update_column_visibility()
+	
+	if not _platform_cards.is_empty():
+		# Check if layout mode needs to change
+		var is_narrow = _is_narrow_screen()
+		var has_right_cards = _cards_right.get_child_count() > 0
+		
+		if is_narrow and has_right_cards:
+			# Move all cards from right to left
+			for child in _cards_right.get_children():
+				_cards_right.remove_child(child)
+				_cards_left.add_child(child)
+		elif not is_narrow and not has_right_cards and _cards_left.get_child_count() > 1:
+			# Re-distribute cards evenly across both columns
+			var all_cards = []
+			for child in _cards_left.get_children():
+				all_cards.append(child)
+				_cards_left.remove_child(child)
+			
+			for i in range(all_cards.size()):
+				if i % 2 == 0:
+					_cards_left.add_child(all_cards[i])
+				else:
+					_cards_right.add_child(all_cards[i])
+
 func refresh_cards() -> void:
 	"""Refresh UI for all existing platform cards without re-fetching from network."""
 	for slug in _platform_cards.keys():
 		var card = _platform_cards[slug]
 		if is_instance_valid(card):
 			card.refresh_ui()
+
+func restore_focus_to_last_active() -> void:
+	"""Restore focus to the sync toggle of the last active platform card (e.g. after APK install)."""
+	if _last_active_platform_slug.is_empty():
+		return
+	var card = _platform_cards.get(_last_active_platform_slug)
+	if card and is_instance_valid(card):
+		card.focus_sync_toggle()
 
 func on_view_show():
 	# Take snapshot of current enabled state before user makes changes

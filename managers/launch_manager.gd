@@ -4250,17 +4250,14 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	var emulator = get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
 	
-	# Create reminder dialog
-	var dialog = AcceptDialog.new()
-	dialog.title = "Installation Reminder"
-	dialog.dialog_text = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
-	dialog.ok_button_text = "Got it"
-	dialog.min_size = Vector2(400, 150)
-	dialog.exclusive = true
-	dialog.unresizable = true
+	# Create M3Dialog reminder
+	var dialog = M3Dialog.new()
+	dialog.title_text = "Installation Reminder"
+	dialog.body_text = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
+	dialog.dismissible = false
+	dialog.add_action("Got it", Callable(), true)
 	
-	# Add to scene tree and show
-	get_tree().root.add_child(dialog)
-	dialog.popup_centered()
+	# Show via M3Dialog static helper
+	M3Dialog.show_dialog(dialog)
 	
 	print("[LaunchManager] Shown Android permissions reminder for: " + emulator_name)

@@ -5,11 +5,11 @@ note to user: prepping on first launch
 zoom hotkeys backwards
 ui cancel to close settings and to return home
 nav sounds and haptics gone?
-OOBE as M3Popup
 make DP size for romm textinputs
 check for update button changes
 why shadps4 triggering check for update
 separate firmware page or indicator?
+scrolling in romm view
 
 ## android
 	hero not working
@@ -22,8 +22,8 @@ separate firmware page or indicator?
 
 ## saves
 	implement argosy sigil
-	user save folder
-	reading save path configs where possible (emulator {user_dir} wildcard?)
+	user save folder (set by user)
+	emulator save folder (set in emu config)
 	error when no user save and no default save (azahar)
 	check if save is modified
 

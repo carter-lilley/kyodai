@@ -150,15 +150,9 @@ func _show_oobe_wizard_if_needed():
 	
 	if is_first_run:
 		print("[Main] First run detected, showing OOBE wizard")
-		var wizard_scene = preload("res://components/oobe_wizard.tscn")
-		var wizard = wizard_scene.instantiate()
-		
-		if _ui_layer:
-			_ui_layer.add_child(wizard)
-			wizard.start_wizard()
-			wizard.wizard_completed.connect(_on_oobe_wizard_completed)
-		else:
-			push_error("[Main] UILayer not found, cannot show OOBE wizard")
+		var wizard = OobeWizard.new()
+		wizard.wizard_completed.connect(_on_oobe_wizard_completed)
+		wizard.start_wizard()
 
 func _on_oobe_wizard_completed():
 	print("[Main] OOBE wizard completed")
@@ -822,6 +816,9 @@ func _notification(what: int) -> void:
 		if platforms_view and platforms_view.has_method("refresh_cards"):
 			platforms_view.refresh_cards()
 			print("[Main] Refreshed platform cards after resume")
+			# Restore focus to the platform card the user was last interacting with
+			if platforms_view.has_method("restore_focus_to_last_active"):
+				call_deferred("_restore_platform_focus")
 		
 		# Dismiss any stale notifications (e.g., extraction notifications that completed while backgrounded)
 		if NotificationManager:
@@ -843,6 +840,11 @@ func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
 	print("[Main] Background state entered - input blocked")
 	# Optional: Show overlay or dim the UI
 	# UIManager.set_dimmed(true)
+
+func _restore_platform_focus() -> void:
+	var platforms_view = UIManager.get_settings_dialog_platforms_view()
+	if platforms_view and platforms_view.has_method("restore_focus_to_last_active"):
+		platforms_view.restore_focus_to_last_active()
 
 func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	"""Handle exiting background state - restore focus."""

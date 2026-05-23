@@ -319,9 +319,11 @@ func _apply_clickable_state():
 	if clickable:
 		focus_mode = Control.FOCUS_ALL
 		button_mask = MouseButtonMask.MOUSE_BUTTON_MASK_LEFT
+		mouse_filter = Control.MOUSE_FILTER_STOP
 	else:
 		focus_mode = Control.FOCUS_NONE
 		button_mask = MouseButton.MOUSE_BUTTON_NONE
+		mouse_filter = Control.MOUSE_FILTER_PASS
 		_hovered = false
 		_is_pressing = false
 	queue_redraw()

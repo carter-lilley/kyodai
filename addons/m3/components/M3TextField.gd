@@ -143,6 +143,7 @@ var _cached_empty_readonly: StyleBoxEmpty
 var _updating_layout: bool = false
 var _cached_fonts: Dictionary = {}
 var _font_icon_template: FontIconSettings = null
+var _stored_placeholder: String = ""
 
 # ============================================
 # LIFECYCLE
@@ -619,10 +620,26 @@ func _update_floating_label():
 	
 	if label_text.is_empty():
 		_floating_label.visible = false
+		# Restore native placeholder when no floating label
+		if not _stored_placeholder.is_empty():
+			placeholder_text = _stored_placeholder
+			_stored_placeholder = ""
 		return
 	
 	_floating_label.visible = true
 	_floating_label.text = label_text
+	
+	# When floating label acts as placeholder (not floated), suppress native placeholder to avoid overlap
+	var should_float = _should_float_label()
+	if not should_float:
+		# Store current placeholder before clearing
+		if not placeholder_text.is_empty():
+			_stored_placeholder = placeholder_text
+			placeholder_text = ""
+	elif not _stored_placeholder.is_empty():
+		# Restore native placeholder when label floats above
+		placeholder_text = _stored_placeholder
+		_stored_placeholder = ""
 	
 	if _ready_called:
 		_update_layout()

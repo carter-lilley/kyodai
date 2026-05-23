@@ -455,6 +455,94 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    // ============================================================================
+    // Content URI Resolution (No SAF - requires MANAGE_EXTERNAL_STORAGE)
+    // ============================================================================
+    
+    /**
+     * Resolves a content:// URI to a real filesystem path.
+     * Parses external storage document URIs without using SAF or ContentResolver.
+     * Requires MANAGE_EXTERNAL_STORAGE permission for the returned path to be usable.
+     * 
+     * Supports:
+     * - Document URIs: content://.../document/primary:path/to/file
+     * - Tree URIs: content://.../tree/primary:path/to/file
+     * 
+     * @param contentUri The content:// URI to resolve
+     * @return The real filesystem path, or the original URI if it cannot be resolved
+     */
+    @UsedByGodot
+    public String resolveContentUriToRealPath(String contentUri) {
+        if (contentUri == null || contentUri.isEmpty()) {
+            return "";
+        }
+        
+        if (!contentUri.startsWith("content://")) {
+            return contentUri;
+        }
+        
+        try {
+            // Handle external storage document URIs
+            // Format: content://com.android.externalstorage.documents/document/primary:path/to/file
+            if (contentUri.contains("com.android.externalstorage.documents")) {
+                String docId = null;
+                
+                // Try /document/ format first
+                int docPos = contentUri.lastIndexOf("/document/");
+                if (docPos != -1) {
+                    docId = contentUri.substring(docPos + 10); // Skip "/document/"
+                } else {
+                    // Try /tree/ format
+                    int treePos = contentUri.lastIndexOf("/tree/");
+                    if (treePos != -1) {
+                        docId = contentUri.substring(treePos + 6); // Skip "/tree/"
+                    }
+                }
+                
+                if (docId != null && !docId.isEmpty()) {
+                    // URL decode the docId
+                    docId = java.net.URLDecoder.decode(docId, "UTF-8");
+                    
+                    // Parse format: "primary:path/to/file" or "XXXX-XXXX:path/to/file"
+                    int colonPos = docId.indexOf(':');
+                    if (colonPos != -1) {
+                        String storage = docId.substring(0, colonPos);
+                        String path = docId.substring(colonPos + 1);
+                        
+                        if ("primary".equalsIgnoreCase(storage)) {
+                            return "/storage/emulated/0/" + path;
+                        } else {
+                            // For other storage volumes (SD cards, etc.)
+                            return "/storage/" + storage + "/" + path;
+                        }
+                    }
+                }
+            }
+            
+            // Handle media documents
+            if (contentUri.contains("com.android.providers.media.documents")) {
+                // Try to query the MediaStore for the file path
+                Uri uri = Uri.parse(contentUri);
+                String[] projection = {android.provider.MediaStore.MediaColumns.DATA};
+                try (android.database.Cursor cursor = activity.getContentResolver().query(uri, projection, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int columnIndex = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATA);
+                        String dataPath = cursor.getString(columnIndex);
+                        if (dataPath != null && !dataPath.isEmpty()) {
+                            return dataPath;
+                        }
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error resolving content URI: " + contentUri + " - " + e.getMessage());
+        }
+        
+        // Return original if we couldn't resolve it
+        return contentUri;
+    }
+    
     // ==================== FOREGROUND SERVICE FOR DOWNLOADS ====================
     
     /**

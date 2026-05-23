@@ -80,7 +80,7 @@ func _ready():
 	# Fixed size: touch target on both axes (bounds match touch target, never expand)
 	var touch_px = M3Units.dp(TOUCH_TARGET)
 	custom_minimum_size = Vector2(touch_px, touch_px)
-	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	# Don't override size_flags — let parent container control alignment
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
 	# Connect signals
