@@ -219,53 +219,6 @@ border_width_bottom = 3
 border_color = Color(1, 1, 1, 1)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ok6jj"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.38431373, 0.35686275, 0.44313726, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_facbu"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.4581961, 0.43403924, 0.5099608, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_b1qrp"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.43356863, 0.40831372, 0.48768628, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_come4"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_h8e4i"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4lmeg"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.38431373, 0.35686275, 0.44313726, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(1, 1, 1, 1)
-shadow_color = Color(1, 1, 1, 0)
-
 [sub_resource type="Resource" id="Screen_1"]
 script = ExtResource("9_screenres")
 container_path = NodePath("../DualScreenSetup/MainViewportContainer")
@@ -470,34 +423,6 @@ icon_button_variant = 2
 icon_name = "dots-vertical"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
-[node name="SettingsButton" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1391264047]
-layout_mode = 2
-size_flags_horizontal = 0
-size_flags_vertical = 0
-theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_colors/font_focus_color = Color(1, 1, 1, 1)
-theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
-theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
-theme_override_colors/font_hover_pressed_color = Color(1, 1, 1, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_ok6jj")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_ok6jj")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_facbu")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_facbu")
-theme_override_styles/hover = SubResource("StyleBoxFlat_b1qrp")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_b1qrp")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_come4")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_come4")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_h8e4i")
-theme_override_styles/focus = SubResource("StyleBoxFlat_4lmeg")
-script = ExtResource("5_w48qg")
-icon_button_size = 1
-icon_button_width = 1
-icon_button_variant = 2
-icon_name = "cog"
-metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
-
 [node name="HeroSpacer" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox" unique_id=888888006]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -524,6 +449,7 @@ metadata/_tab_index = 2
 
 [node name="UILayer" type="CanvasLayer" parent="." unique_id=777777777]
 layer = 1000
+visible = false
 
 [node name="FPSLabel" type="Label" parent="UILayer" unique_id=777777778]
 offset_left = 10.0

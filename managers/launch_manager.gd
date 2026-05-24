@@ -2500,7 +2500,9 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 	)
 	return true
 
-## Saves the installed emulator version to settings for update checking
+## Saves the installed emulator version to settings for update checking.
+## Only stores the FIRST download step's version to prevent secondary assets
+## (e.g. shadPS4 Qt launcher) from clobbering the core version.
 func _save_emulator_version(emulator_id: String, version: String):
 	if SettingsManager:
 		var setting = SettingsManager.get_setting("installed_emulator_versions")
@@ -2508,13 +2510,31 @@ func _save_emulator_version(emulator_id: String, version: String):
 			var versions = setting.value as Dictionary
 			if versions == null:
 				versions = {}
-			versions[emulator_id] = version
-			SettingsManager.set_setting(versions, setting)
-			SettingsManager.save_settings()
+			# Only save if not already present (first download step wins)
+			if not versions.has(emulator_id):
+				versions[emulator_id] = version
+				SettingsManager.set_setting(versions, setting)
+				SettingsManager.save_settings()
+
+## Clears stored version so a fresh install/update can save a new version.
+func _clear_emulator_version(emulator_id: String):
+	if SettingsManager:
+		var setting = SettingsManager.get_setting("installed_emulator_versions")
+		if setting:
+			var versions = setting.value as Dictionary
+			if versions != null and versions.has(emulator_id):
+				versions.erase(emulator_id)
+				SettingsManager.set_setting(versions, setting)
+				SettingsManager.save_settings()
 
 ## Normalizes a version string for comparison/display
 func _normalize_version(version: String) -> String:
-	return version.trim_prefix("v").trim_prefix("V").replace("_", ".")
+	var regex = RegEx.new()
+	regex.compile("^[vV]\\.?(.*)$")
+	var match_result = regex.search(version)
+	if match_result:
+		return match_result.get_string(1).replace("_", ".")
+	return version.replace("_", ".")
 
 ## Checks if a version string looks like semver
 func _is_semver(version: String) -> bool:
@@ -2628,8 +2648,15 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 	var version_pattern = platform_config.get("version_pattern", "")
 	var url_template = platform_config.get("url_template", "")
 	var match_strategy = platform_config.get("match_strategy", "first")
+	var json_path = platform_config.get("json_path", "")
 	
-	if scrape_url == "" or version_pattern == "" or url_template == "":
+	if scrape_url == "" or url_template == "":
+		results.failed.append(emulator_id)
+		_check_updates_complete(results, callback)
+		return
+	
+	# version_pattern is required for HTML scraping, optional for JSON API mode
+	if json_path == "" and version_pattern == "":
 		results.failed.append(emulator_id)
 		_check_updates_complete(results, callback)
 		return
@@ -2653,7 +2680,8 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 				results.up_to_date.append(emulator_id)
 			
 			_check_updates_complete(results, callback),
-		match_strategy
+		match_strategy,
+		json_path
 	)
 
 ## Checks for a repo-based update
@@ -2696,6 +2724,9 @@ func _trigger_emulator_update(emulator_id: String, _emulator_name: String, _plat
 	
 	# Clear install progress to force fresh install
 	_emulator_install_progress.erase(emulator_id)
+	
+	# Clear stored version so the first download step can save the new version
+	_clear_emulator_version(emulator_id)
 	
 	# Start installation from step 0
 	_execute_install_step(emulator_id, 0)
@@ -4250,14 +4281,19 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	var emulator = get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
 	
-	# Create M3Dialog reminder
+	# Create M3Dialog reminder as a distinct overlay type so it stacks above the settings dialog
 	var dialog = M3Dialog.new()
+	dialog.overlay_type = "alert"
+	dialog.overlay_layer = 95
 	dialog.title_text = "Installation Reminder"
 	dialog.body_text = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
 	dialog.dismissible = false
-	dialog.add_action("Got it", Callable(), true)
+	dialog.add_action("Got it", func(): dialog.dismiss(), true)
 	
-	# Show via M3Dialog static helper
-	M3Dialog.show_dialog(dialog)
+	# Show directly (not via M3Dialog.show_dialog which would force overlay_type back to "dialog")
+	var parent = M3Overlay.get_overlay_parent()
+	if parent and dialog.get_parent() == null:
+		parent.add_child(dialog)
+	dialog.show_overlay()
 	
 	print("[LaunchManager] Shown Android permissions reminder for: " + emulator_name)

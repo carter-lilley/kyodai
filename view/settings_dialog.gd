@@ -104,8 +104,6 @@ func _build_categories() -> void:
 		
 		# Filter out platform-specific settings
 		if subgroup_name == "Storage":
-			if not PlatformManager.is_android():
-				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Vita3K Data Folder")
 			if not (PlatformManager.is_windows() or PlatformManager.is_linux()):
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Steam Installation Folder")
 		

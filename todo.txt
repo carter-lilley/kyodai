@@ -1,22 +1,26 @@
 #TODO.TXT
 
-refocus when install process finished (button disappears)
 note to user: prepping on first launch
-zoom hotkeys backwards
-ui cancel to close settings and to return home
-nav sounds and haptics gone?
-make DP size for romm textinputs
-check for update button changes
-why shadps4 triggering check for update
+--
+bar focus seperate grom grid focus
+bar focus on ui cancel
+--
+multiple snackbars (ongoing during sync, bios, etc)
+check for update button changes ui, same with sync
 separate firmware page or indicator?
-scrolling in romm view
+sync not working after removing games
+merge background gradient inot background settings
+--
+W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [VirtualScrollGridContainer] Only 1 snap ratio(s) for view_mode=0, size=(1848.0, 702.0), base_dims=(202.0, 270.0), available=(1840.0, 702.0)
+  <C++ Source>  core/variant/variant_utility.cpp:1034 @ push_warning()
+  <Stack Trace> virtual_scroll_grid_container.gd:466 @ get_snap_ratios()
+				main.gd:361 @ _update_zoom_slider_stops()
+				main.gd:353 @ _update_ui_for_view()
+				main.gd:348 @ _update_ui_for_view()
 
 ## android
-	hero not working
 	chunk reassembly notif on android
 	android download manager and file streaming
-	no touch to launch on bottom screen
-	note to user: open apk before launcnhing
 	kb on bottom screen in ds mode
 	ft: android background sync/notifs
 
@@ -28,6 +32,7 @@ scrolling in romm view
 	check if save is modified
 
 ## general UI
+	fix rando game selection
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)
 	'controls/info bar'
@@ -36,23 +41,28 @@ scrolling in romm view
 	add letters to library navigation?
 	badge effect placement opts
 	placeholders
+	
 ## game titles:
 	game title "speech bubble option"
+	
 ## hero
 	postcard-style [[img] name ]
 	card/image/poster style
 	hero placement opt -> '4 way container?'
 	hero IGDB opt
 	hero fx (screenshots/cropping/shadows/etc)
+	
 ## performance:
 	try scaling cropping algo(?)
 	image priority management.
 	performance.add_custom_monitor for everything
+	
 ## sync:
 	how to split important siblings
 	cache image colors, cropping data on sync
 	check: are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
+	
 ## launch:
 	add: psp, melonds, ps2, dolphin retroarch sync
   	add: ps3 on android

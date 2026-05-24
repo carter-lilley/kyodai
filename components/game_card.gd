@@ -934,6 +934,17 @@ func _sync_focus_visuals() -> void:
 
 func _on_focus_entered():
 	_is_focused = true
+	
+	if AudioManager:
+		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
+	
+	if PlatformManager.is_android():
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			plugin.call("vibrateDevice", 50)
+	else:
+		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
+	
 	_update_status_icon()
 	z_index = 1
 	if _focus_tween:

@@ -30,6 +30,7 @@ var _content_container: HBoxContainer
 var _items_container: HBoxContainer
 var _menu_wrapper: MarginContainer
 var _menu_button: M3IconButton
+var _footer_wrapper: MarginContainer
 
 # ============================================
 # LIFECYCLE
@@ -75,6 +76,14 @@ func _create_layout():
 	_items_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content_container.add_child(_items_container)
 	
+	# Footer wrapper (for footer_content slot)
+	_footer_wrapper = MarginContainer.new()
+	_footer_wrapper.name = "FooterWrapper"
+	_footer_wrapper.custom_minimum_size = Vector2(M3Units.dp(MENU_BUTTON_WIDTH), 0)
+	_footer_wrapper.size_flags_vertical = Control.SIZE_FILL
+	_footer_wrapper.visible = false
+	_content_container.add_child(_footer_wrapper)
+	
 	_update_dimensions()
 
 # ============================================
@@ -96,6 +105,56 @@ func _update_dimensions():
 		var vertical_margin = (height_px - btn_size) / 2.0
 		_menu_wrapper.add_theme_constant_override("margin_top", vertical_margin)
 		_menu_wrapper.add_theme_constant_override("margin_bottom", vertical_margin)
+	
+	# Center footer content vertically within wrapper
+	if _footer_wrapper:
+		var btn_size = M3Units.dp(48)
+		var vertical_margin = (height_px - btn_size) / 2.0
+		_footer_wrapper.add_theme_constant_override("margin_top", vertical_margin)
+		_footer_wrapper.add_theme_constant_override("margin_bottom", vertical_margin)
+
+func _update_menu_button_state():
+	"""Update menu button visibility and position in the bar."""
+	if not _menu_wrapper or not _content_container:
+		return
+	
+	# Visibility
+	_menu_wrapper.visible = show_menu_button
+	
+	# Position: START (left) or END (right)
+	var menu_index := 0 if menu_button_position == MenuPosition.START else 1
+	if _content_container.get_child_count() > menu_index:
+		if _content_container.get_child(menu_index) != _menu_wrapper:
+			_content_container.move_child(_menu_wrapper, menu_index)
+	
+	# Margins: left padding for START, right padding for END
+	if menu_button_position == MenuPosition.START:
+		_menu_wrapper.add_theme_constant_override("margin_left", M3Units.dp(12))
+		_menu_wrapper.add_theme_constant_override("margin_right", 0)
+	else:
+		_menu_wrapper.add_theme_constant_override("margin_left", 0)
+		_menu_wrapper.add_theme_constant_override("margin_right", M3Units.dp(12))
+	
+	_update_item_sizes()
+
+func _add_footer_content():
+	"""Add footer content to the bar's footer wrapper."""
+	if not _footer_wrapper or not footer_content:
+		return
+	
+	# Clear existing children
+	for child in _footer_wrapper.get_children():
+		_footer_wrapper.remove_child(child)
+	
+	_footer_wrapper.add_child(footer_content)
+	_footer_wrapper.visible = true
+	
+	# Position footer at END (right)
+	if _content_container and _content_container.get_child_count() > 2:
+		if _content_container.get_child(2) != _footer_wrapper:
+			_content_container.move_child(_footer_wrapper, 2)
+	
+	_update_item_sizes()
 
 func _apply_content_margins():
 	if not content_node:
@@ -213,7 +272,9 @@ func _update_item_sizes():
 	if _destination_items.is_empty() or not _items_container:
 		return
 	
-	var available_width = size.x - M3Units.dp(MENU_BUTTON_WIDTH)
+	var menu_width = M3Units.dp(MENU_BUTTON_WIDTH) if show_menu_button else 0
+	var footer_width = M3Units.dp(MENU_BUTTON_WIDTH) if footer_content else 0
+	var available_width = size.x - menu_width - footer_width
 	var ideal_width = available_width / _destination_items.size()
 	var item_width = clamp(ideal_width, M3Units.dp(MIN_ITEM_WIDTH), M3Units.dp(MAX_ITEM_WIDTH))
 	

@@ -18,6 +18,8 @@ const LEFT_PADDING := 16.0
 const RIGHT_PADDING := 8.0
 const PROGRESS_EXTRA_HEIGHT := 12.0
 const ICON_SIZE := 24.0
+const FONT_SIZE_NORMAL := 14.0
+const FONT_SIZE_SMALL := 12.0
 
 # ============================================
 # SIGNALS
@@ -169,7 +171,6 @@ func _update_appearance():
 	
 	_message_label.add_theme_color_override("font_color", M3Theme.get_inverse_on_surface())
 	_message_label.add_theme_font_override("font", fonts["medium"])
-	_message_label.add_theme_font_size_override("font_size", M3Units.dp(14))
 	
 	_action_button.add_theme_color_override("font_color", M3Theme.get_primary())
 	_action_button.add_theme_color_override("font_pressed_color", M3Theme.get_primary())
@@ -183,6 +184,7 @@ func _update_appearance():
 		_leading_icon.icon_settings.icon_color = dismiss_color
 	
 	_update_layout()
+	_fit_text()
 
 func _update_layout():
 	var h_padding = M3Units.dp(LEFT_PADDING)
@@ -196,6 +198,61 @@ func _update_layout():
 		var progress_y = hbox_height + M3Units.dp(4)
 		_progress.position = Vector2(h_padding, progress_y)
 		_progress.size = Vector2(_container.size.x - h_padding - right_padding, M3Units.dp(4))
+
+func _fit_text():
+	if not is_instance_valid(_message_label) or not _message_label.is_inside_tree():
+		return
+	
+	var container_width: float = _container.size.x
+	if container_width <= 0:
+		return
+	
+	# Calculate width taken by other visible children in the HBox
+	var other_width := 0.0
+	var visible_children := 0
+	for child in _hbox.get_children():
+		if child is Control and child.visible:
+			visible_children += 1
+			if child != _message_label:
+				other_width += child.get_combined_minimum_size().x
+	
+	# Account for HBox separation gaps
+	var separation := _hbox.get_theme_constant("separation")
+	other_width += maxi(0, visible_children - 1) * separation
+	
+	# Account for container padding
+	other_width += M3Units.dp(LEFT_PADDING) + M3Units.dp(RIGHT_PADDING)
+	
+	var available_width := container_width - other_width
+	if available_width <= 0:
+		return
+	
+	var font := _message_label.get_theme_font("font")
+	if font == null:
+		return
+	
+	# Try normal font size first
+	var normal_size := M3Units.dp(FONT_SIZE_NORMAL)
+	var text_width := font.get_string_size(message, HORIZONTAL_ALIGNMENT_LEFT, -1, normal_size).x
+	
+	if text_width <= available_width:
+		_message_label.add_theme_font_size_override("font_size", normal_size)
+		_message_label.clip_text = false
+		return
+	
+	# Try smaller font size
+	var small_size := M3Units.dp(FONT_SIZE_SMALL)
+	text_width = font.get_string_size(message, HORIZONTAL_ALIGNMENT_LEFT, -1, small_size).x
+	
+	if text_width <= available_width:
+		_message_label.add_theme_font_size_override("font_size", small_size)
+		_message_label.clip_text = false
+		return
+	
+	# Still too long — use small font with ellipsis
+	_message_label.add_theme_font_size_override("font_size", small_size)
+	_message_label.clip_text = true
+	_message_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 
 # ============================================
 # TIMER
@@ -246,6 +303,7 @@ func _on_mouse_exited():
 func _on_viewport_resized():
 	_position_snackbar()
 	_update_layout()
+	_fit_text()
 
 # ============================================
 # PUBLIC

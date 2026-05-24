@@ -650,18 +650,23 @@ func _start_chunk_download_on_main_thread(url: String, normalized_path: String, 
 # ==================== UTILITY ====================
 
 func test_connection(callback: Callable = Callable()):
-	_check_connection()
-	
-	var timer = Timer.new()
-	timer.wait_time = 1.0
-	timer.one_shot = true
-	timer.timeout.connect(func():
+	if not _is_configured:
+		_is_online = false
 		if callback.is_valid():
-			callback.call(_is_online)
-		timer.queue_free()
-	)
-	add_child(timer)
-	timer.start()
+			callback.call(false)
+		return
+	
+	# Perform a direct request instead of relying on the cached _is_online state.
+	# _check_connection() is asynchronous; a fixed timer races the HTTP round-trip.
+	make_request("/platforms", func(_data, error):
+		var success = error == ""
+		var was_online = _is_online
+		_is_online = success
+		if was_online != _is_online:
+			network_status_changed.emit(_is_online)
+		if callback.is_valid():
+			callback.call(success)
+	, true, false)  # authenticated=true, use_cache=false
 
 func format_bytes(bytes: int) -> String:
 	if bytes < 1024:

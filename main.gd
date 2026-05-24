@@ -16,6 +16,9 @@ var _keyboard: PanelContainer = null
 # Cached reference to UILayer (survives reparenting in dual-screen mode)
 var _ui_layer: CanvasLayer = null
 
+# Stored reference to DualScreenSetup when removed from tree (prevents input interference on desktop)
+var _dual_screen_setup: Node = null
+
 # Auto-repeat navigation
 var _held_dir: String = ""
 var _delay_timer: Timer
@@ -88,8 +91,8 @@ func _ready():
 	view_mode_group.selection_changed.connect(_on_view_mode_changed)
 	_sync_view_mode_button_to_setting()
 	
-	# Connect settings gear button
-	var settings_button = main_content_vbox.get_node("HBoxContainer/SettingsButton")
+	# Connect settings gear button (if present in scene; nav footer button is primary)
+	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
 	if settings_button:
 		settings_button.pressed.connect(_on_settings_button_pressed)
 	
@@ -124,16 +127,24 @@ func _ready():
 	# DEBUG: Connect to global focus changed to see what's grabbing focus
 	get_viewport().gui_focus_changed.connect(_on_global_focus_changed)
 	
-	# Fix: Prevent SubViewportContainers from grabbing focus on touch
-	var main_viewport_container = get_node_or_null("DualScreenSetup/MainViewportContainer")
-	if main_viewport_container:
-		main_viewport_container.focus_mode = Control.FOCUS_NONE
-		print("[Main] Set MainViewportContainer focus_mode to FOCUS_NONE")
-	
-	var second_viewport_container = get_node_or_null("DualScreenSetup/SecondViewportContainer")
-	if second_viewport_container:
-		second_viewport_container.focus_mode = Control.FOCUS_NONE
-		print("[Main] Set SecondViewportContainer focus_mode to FOCUS_NONE")
+	# Fix: Remove DualScreenSetup from tree when not in dual-screen mode.
+	# SubViewport nodes can interfere with keyboard input propagation on desktop
+	# even when hidden, causing _input() to miss press events while _process()
+	# still detects them via Input singleton.
+	var dual_screen_setup = get_node_or_null("DualScreenSetup")
+	if dual_screen_setup:
+		if DisplayManager and not DisplayManager.is_dual_screen_enabled():
+			_dual_screen_setup = dual_screen_setup
+			remove_child(dual_screen_setup)
+			print("[Main] Removed DualScreenSetup from tree (dual-screen not enabled)")
+		else:
+			# Dual-screen IS enabled at startup — just disable focus on containers
+			var main_viewport_container = get_node_or_null("DualScreenSetup/MainViewportContainer")
+			if main_viewport_container:
+				main_viewport_container.focus_mode = Control.FOCUS_NONE
+			var second_viewport_container = get_node_or_null("DualScreenSetup/SecondViewportContainer")
+			if second_viewport_container:
+				second_viewport_container.focus_mode = Control.FOCUS_NONE
 	
 	# Extract native binaries on Android (non-blocking, happens in background)
 	if PlatformManager.is_android():
@@ -167,7 +178,13 @@ func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
 
 func _on_settings_dialog_dismissed() -> void:
-	# Restore focus to the settings gear button
+	# Try nav footer settings button first
+	var nav_settings_btn = UIManager.find_nav_settings_button()
+	if nav_settings_btn and nav_settings_btn.focus_mode != Control.FOCUS_NONE:
+		nav_settings_btn.grab_focus()
+		return
+	
+	# Fallback to scene settings button
 	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
 	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
 		settings_button.grab_focus()
@@ -569,8 +586,37 @@ func _load_and_apply_saved_zoom() -> void:
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
 	var home_button = UIManager.find_home_button()
+	print("[Main] find_home_button returned: ", home_button)
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+		print("[Main] Grabbing focus on: ", home_button.name)
 		home_button.grab_focus()
+	else:
+		print("[Main] Could not grab focus — home_button invalid or focus disabled")
+
+## DualScreenSetup lifecycle management
+## SubViewport nodes interfere with keyboard input on desktop even when hidden,
+## so we remove DualScreenSetup from the tree entirely when not in dual-screen mode.
+
+func ensure_dual_screen_setup() -> Node:
+	"""Ensure DualScreenSetup is in the scene tree. Returns the node or null."""
+	var ds = get_node_or_null("DualScreenSetup")
+	if ds:
+		return ds
+	if _dual_screen_setup:
+		add_child(_dual_screen_setup)
+		ds = _dual_screen_setup
+		_dual_screen_setup = null
+		print("[Main] Re-added DualScreenSetup to tree")
+		return ds
+	return null
+
+func remove_dual_screen_setup() -> void:
+	"""Remove DualScreenSetup from the scene tree and cache it for later."""
+	var ds = get_node_or_null("DualScreenSetup")
+	if ds:
+		_dual_screen_setup = ds
+		remove_child(ds)
+		print("[Main] Removed DualScreenSetup from tree")
 
 func _setup_repeat():
 	_delay_timer = Timer.new()
@@ -583,6 +629,48 @@ func _setup_repeat():
 	_repeat_timer.wait_time = REPEAT_DELAY
 	_repeat_timer.timeout.connect(_on_repeat)
 	add_child(_repeat_timer)
+
+func _process(_delta):
+	# Desktop workaround: _input() doesn't receive the ui_cancel press event
+	# (likely consumed by SubViewport or focused control), so we check the
+	# Input singleton here where it reliably reports the action state.
+	if Input.is_action_just_pressed("ui_cancel"):
+		_handle_ui_cancel()
+
+func _handle_ui_cancel() -> void:
+	"""Handle ui_cancel: return to Home unless blocked by overlay."""
+	# Block during background state (emulator running)
+	if LaunchManager and LaunchManager.is_in_background_state():
+		return
+	
+	# Block if OOBE wizard is visible
+	if _ui_layer:
+		for child in _ui_layer.get_children():
+			if child.has_method("start_wizard") and child.visible:
+				return
+	
+	# Check if keyboard is visible - let keyboard handle it
+	if _keyboard and _keyboard.visible:
+		return
+	
+	# Check if settings dialog is open - let it handle dismissal
+	if UIManager and UIManager.is_settings_dialog_open():
+		return
+	
+	# If in Library view with an active search, clear the search first
+	var current_view = UIManager.get_current_view()
+	if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_search"):
+		if current_view.try_clear_search():
+			return
+	
+	# Play return sound
+	if AudioManager:
+		AudioManager.play_sfx("return")
+	# Switch to Home view
+	push_warning("[Main] ui_cancel: switching to Home")
+	UIManager.switch_to_tab("Home")
+	# Set focus to Home button (deferred so tab layout settles)
+	call_deferred("reset_focus_to_home_button")
 
 func _input(event: InputEvent):
 	# Block all input during background state (emulator running)
@@ -620,51 +708,33 @@ func _input(event: InputEvent):
 			return
 	
 	# Handle zoom in/out with triggers - only on press, not hold
-	if event.is_action_pressed("zoom_in") and not _zoom_in_pressed:
-	# Play sound effect when zooming (R2/L2)
-		if AudioManager:
-			AudioManager.play_sfx("click_04")
-		_zoom_in_pressed = true
-		_adjust_zoom(0.02)
+	if event.is_action_pressed("zoom_in"):
+		if not _zoom_in_pressed:
+			if AudioManager:
+				AudioManager.play_sfx("click_04")
+			_zoom_in_pressed = true
+			_adjust_zoom(1.0)
 		return
 	elif event.is_action_released("zoom_in"):
 		_zoom_in_pressed = false
 		return
 	
-	if event.is_action_pressed("zoom_out") and not _zoom_out_pressed:
-	# Play sound effect when zooming (R2/L2)
-		if AudioManager:
-			AudioManager.play_sfx("click_04")
-		_zoom_out_pressed = true
-		_adjust_zoom(-0.02)
+	if event.is_action_pressed("zoom_out"):
+		if not _zoom_out_pressed:
+			if AudioManager:
+				AudioManager.play_sfx("click_04")
+			_zoom_out_pressed = true
+			_adjust_zoom(-1.0)
 		return
 	elif event.is_action_released("zoom_out"):
 		_zoom_out_pressed = false
 		return
 	
-	# Handle ui_cancel to go back to Home (unless keyboard is open)
+	# Android path: _input() works correctly there, so also handle ui_cancel here.
+	# On desktop this branch is never reached because the press event doesn't
+	# propagate to Main._input(), but _process() handles it instead.
 	if event.is_action_pressed("ui_cancel"):
-		# Check if keyboard is visible - if so, let keyboard handle it
-		if _keyboard and _keyboard.visible:
-			# Keyboard will handle ui_cancel to close itself
-			return
-		
-		# If in Library view with an active search, clear the search first
-		var current_view = UIManager.get_current_view()
-		if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_search"):
-			if current_view.try_clear_search():
-				get_viewport().set_input_as_handled()
-				return
-		
-		# Play return sound
-		if AudioManager:
-			AudioManager.play_sfx("return")
-		# Switch to Home view
-		UIManager.switch_to_tab("Home")
-		# Set focus to Home button (use UIManager's helper to find it)
-		await get_tree().process_frame
-		reset_focus_to_home_button()
-		return
+		_handle_ui_cancel()
 
 func _adjust_zoom(delta: float) -> void:
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
@@ -697,10 +767,11 @@ func _adjust_zoom(delta: float) -> void:
 						_zoom_save_timer.start()
 		return
 	
-	# List/Carousel mode: existing float logic
+	# List/Carousel mode: step by slider step to avoid snapping back
 	var current_zoom = zoom_slider.value
 	var max_zoom = 0.5
-	var new_zoom = clampf(current_zoom + delta, 0.05, max_zoom)
+	var effective_delta = sign(delta) * zoom_slider.step
+	var new_zoom = clampf(current_zoom + effective_delta, 0.05, max_zoom)
 	
 	if not is_equal_approx(current_zoom, new_zoom):
 		var focused_index = _get_focused_card_index()

@@ -150,9 +150,12 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	if _renderer.dismissed.is_connected(_on_renderer_dismissed):
 		_renderer.dismissed.disconnect(_on_renderer_dismissed)
 	_renderer.dismissed.connect(_on_renderer_dismissed, CONNECT_ONE_SHOT)
-	_renderer.submenu_requested.connect(_on_submenu_requested)
-	_renderer.focus_changed.connect(_on_focus_changed)
-	_renderer.navigated_off_edge.connect(_on_navigated_off_edge)
+	if not _renderer.submenu_requested.is_connected(_on_submenu_requested):
+		_renderer.submenu_requested.connect(_on_submenu_requested)
+	if not _renderer.focus_changed.is_connected(_on_focus_changed):
+		_renderer.focus_changed.connect(_on_focus_changed)
+	if not _renderer.navigated_off_edge.is_connected(_on_navigated_off_edge):
+		_renderer.navigated_off_edge.connect(_on_navigated_off_edge)
 
 ## Check if the menu is currently open.
 func is_open() -> bool:
@@ -206,6 +209,12 @@ func dismiss():
 	# to persist state across openings). Do the registry cleanup manually.
 	if _active.get(overlay_type) == self:
 		_active.erase(overlay_type)
+	# Recalculate max layer so lower-layer overlays can dismiss properly
+	if overlay_layer >= _max_layer:
+		_max_layer = 0
+		for overlay in _active.values():
+			if is_instance_valid(overlay) and overlay.overlay_layer > _max_layer:
+				_max_layer = overlay.overlay_layer
 	if _renderer and _renderer.focus_changed.is_connected(_on_focus_changed):
 		_renderer.focus_changed.disconnect(_on_focus_changed)
 	if _renderer and _renderer.submenu_requested.is_connected(_on_submenu_requested):
@@ -255,7 +264,8 @@ func _on_submenu_requested(index: int):
 	# Tell parent renderer about the submenu's rect so it doesn't dismiss on clicks inside it
 	if _renderer and _submenu != null and is_instance_valid(_submenu):
 		_renderer.set_submenu_rect(_submenu.get_menu_rect())
-		_submenu.dismissed.connect(_on_submenu_dismissed, CONNECT_ONE_SHOT)
+		if not _submenu.dismissed.is_connected(_on_submenu_dismissed):
+			_submenu.dismissed.connect(_on_submenu_dismissed, CONNECT_ONE_SHOT)
 
 func _on_submenu_dismissed():
 	# If the submenu had an item selected, close the parent menu too

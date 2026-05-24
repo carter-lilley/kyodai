@@ -51,8 +51,10 @@ var _items_area: VBoxContainer
 var _menu_button: M3IconButton
 var _menu_wrapper: MarginContainer
 var _top_spacer: Control
+var _bottom_spacer: Control
 var _top_flex_spacer: Control
 var _bottom_flex_spacer: Control
+var _footer_wrapper: MarginContainer
 var _header_nodes: Array[Node] = []
 var _header_labels: Array[Label] = []
 var _sectioned_items: Array[M3NavigationDestination] = []
@@ -101,6 +103,20 @@ func _create_layout():
 	_items_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_content_container.add_child(_items_area)
 	
+	# Footer wrapper (for footer_content slot)
+	_footer_wrapper = MarginContainer.new()
+	_footer_wrapper.name = "FooterWrapper"
+	_footer_wrapper.add_theme_constant_override("margin_top", M3Units.dp(12))
+	_footer_wrapper.add_theme_constant_override("margin_bottom", M3Units.dp(12))
+	_footer_wrapper.visible = false
+	_content_container.add_child(_footer_wrapper)
+	
+	# Bottom spacer for padding when menu is at END
+	_bottom_spacer = Control.new()
+	_bottom_spacer.name = "BottomSpacer"
+	_bottom_spacer.custom_minimum_size = Vector2(0, M3Units.dp(12))
+	_content_container.add_child(_bottom_spacer)
+	
 	_update_dimensions()
 
 func _update_dimensions():
@@ -127,6 +143,54 @@ func _update_dimensions():
 	
 	# Update content position in integrated mode
 	_update_content_position()
+
+func _update_menu_button_state():
+	"""Update menu button visibility and position in the rail."""
+	if not _menu_wrapper or not _content_container:
+		return
+	
+	# Visibility
+	_menu_wrapper.visible = show_menu_button
+	if _bottom_spacer:
+		_bottom_spacer.visible = show_menu_button and menu_button_position == MenuPosition.END
+	
+	# Position: START (after TopSpacer) or END (before BottomSpacer)
+	if menu_button_position == MenuPosition.START:
+		if _content_container.get_child_count() > 1:
+			if _content_container.get_child(1) != _menu_wrapper:
+				_content_container.move_child(_menu_wrapper, 1)
+	else:
+		if _content_container.get_child_count() > 2:
+			if _content_container.get_child(_content_container.get_child_count() - 2) != _menu_wrapper:
+				_content_container.move_child(_menu_wrapper, _content_container.get_child_count() - 2)
+	
+	_update_menu_gravity()
+
+func _add_footer_content():
+	"""Add footer content to the rail's footer wrapper."""
+	if not _footer_wrapper or not footer_content:
+		return
+	
+	# Clear existing children
+	for child in _footer_wrapper.get_children():
+		_footer_wrapper.remove_child(child)
+	
+	_footer_wrapper.add_child(footer_content)
+	_footer_wrapper.visible = true
+	
+	# Center horizontally in collapsed mode
+	var width_px = M3Units.dp(WIDTH_EXPANDED) if expanded else M3Units.dp(WIDTH_COLLAPSED)
+	var btn_size = M3Units.dp(48)
+	if expanded:
+		var margin_left = M3Units.dp(24)
+		_footer_wrapper.add_theme_constant_override("margin_left", margin_left)
+		_footer_wrapper.add_theme_constant_override("margin_right", width_px - margin_left - btn_size)
+	else:
+		var side_margin = (width_px - btn_size) / 2.0
+		_footer_wrapper.add_theme_constant_override("margin_left", side_margin)
+		_footer_wrapper.add_theme_constant_override("margin_right", side_margin)
+	
+	_update_menu_gravity()
 
 func _apply_content_margins():
 	if not content_node:
@@ -157,27 +221,42 @@ func _update_menu_gravity():
 	_bottom_flex_spacer.size_flags_vertical = 0
 	_bottom_flex_spacer.custom_minimum_size = Vector2.ZERO
 	
+	# Calculate footer area height if present
+	var footer_height = 0.0
+	if _footer_wrapper and _footer_wrapper.visible:
+		# Footer = margin_top (12dp) + button (48dp) + margin_bottom (12dp)
+		footer_height = M3Units.dp(72)
+	
 	match menu_gravity:
 		MenuGravity.TOP:
-			_bottom_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			if menu_button_position == MenuPosition.START:
+				_bottom_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			# END: both spacers stay 0, items sit at top of ItemsArea
 		
 		MenuGravity.CENTER:
-			var rail_height = size.y
-			# Menu area = top spacer (12dp) + menu button height (48dp for MEDIUM)
-			var menu_btn_height = _menu_button.custom_minimum_size.y if _menu_button else M3Units.dp(48)
-			var menu_area_height = _top_spacer.custom_minimum_size.y + menu_btn_height
-			# Use cached height if valid
-			var items_height = _cached_items_height
-			if items_height <= 0:
-				items_height = _calculate_items_height()
-			# Center items within the ENTIRE rail, not just the space below the menu
-			# items_center = menu_area + top_padding + items_height/2 = rail_height/2
-			# top_padding = (rail_height - items_height)/2 - menu_area_height
-			var top_padding = (rail_height - items_height) / 2.0 - menu_area_height
-			
-			if top_padding > 0:
-				_top_flex_spacer.custom_minimum_size = Vector2(0, top_padding)
-			_bottom_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			if menu_button_position == MenuPosition.START:
+				var rail_height = size.y
+				# Menu area = top spacer (12dp) + menu button height (48dp for MEDIUM)
+				var menu_btn_height = _menu_button.custom_minimum_size.y if _menu_button else M3Units.dp(48)
+				var menu_area_height = _top_spacer.custom_minimum_size.y + menu_btn_height
+				# Footer area takes space at bottom
+				var available_height = rail_height - footer_height
+				# Use cached height if valid
+				var items_height = _cached_items_height
+				if items_height <= 0:
+					items_height = _calculate_items_height()
+				# Center items within available space below menu and above footer
+				# items_center = menu_area + top_padding + items_height/2 = available_height/2
+				# top_padding = (available_height - items_height)/2 - menu_area_height
+				var top_padding = (available_height - items_height) / 2.0 - menu_area_height
+				
+				if top_padding > 0:
+					_top_flex_spacer.custom_minimum_size = Vector2(0, top_padding)
+				_bottom_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			else:
+				# END: center within ItemsArea (menu is outside, so just equal expansion)
+				_top_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+				_bottom_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		
 		MenuGravity.BOTTOM:
 			_top_flex_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -298,7 +377,12 @@ func _rebuild_destinations():
 	_items_area.add_child(_bottom_flex_spacer)
 	
 	if header_content and header_content.get_parent() == _content_container:
-		_content_container.move_child(header_content, -1)
+		# Place header_content at end, but before BottomSpacer if menu is at END
+		if menu_button_position == MenuPosition.END and _bottom_spacer and _bottom_spacer.get_parent() == _content_container:
+			var bottom_idx = _content_container.get_children().find(_bottom_spacer)
+			_content_container.move_child(header_content, bottom_idx)
+		else:
+			_content_container.move_child(header_content, -1)
 	
 	_cached_destinations = destinations.duplicate()
 	_cached_items_height = 0.0

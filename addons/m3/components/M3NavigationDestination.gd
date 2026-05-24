@@ -129,6 +129,7 @@ func _update_theme():
 	# Clear native focus stylebox after parent sets it
 	# so focus ring is drawn only around the pill in _draw()
 	add_theme_stylebox_override("focus", _shared_empty_stylebox)
+	_update_label_color()
 
 func _get_variant_colors(selected: bool) -> Dictionary:
 	var cache_key = str(selected) + "_" + str(disabled)
@@ -329,6 +330,13 @@ func _update_button_width():
 	if get_parent() is Container:
 		get_parent().queue_sort()
 
+func _update_label_color():
+	if not _label_node:
+		return
+	var colors = _get_variant_colors(active)
+	var text_color = colors.disabled_text if disabled else colors.text
+	_label_node.add_theme_color_override("font_color", text_color)
+
 func _update_label():
 	if not _label_node:
 		return
@@ -351,6 +359,7 @@ func _update_label():
 		_label_node.visible = false
 	_update_icon_position()
 	_update_label_position()
+	_update_label_color()
 	queue_redraw()
 
 func _update_label_position():

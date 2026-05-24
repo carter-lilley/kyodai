@@ -7,6 +7,8 @@ extends Button
 ## Material 3 Button Component
 ## Extends native Button with M3 sizing, shapes, and variants
 
+
+
 enum Size { EXTRA_SMALL, SMALL, MEDIUM, LARGE, EXTRA_LARGE }
 enum Shape { ROUNDED, PILL }
 enum Type { NORMAL, TOGGLE }
@@ -578,6 +580,28 @@ func _update_icon_position():
 		icon_x,
 		size.y / 2.0 - _cached_icon_size_px / 2.0
 	)
+
+func _gui_input(event: InputEvent):
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		# Inside a SubViewport, Button ignores clicks because is_hovered() is false
+		# (push_input() doesn't update the viewport's internal cursor position).
+		# Manually trigger press/release signals.
+		var vp = get_viewport()
+		if vp is SubViewport:
+			accept_event()
+			if event.pressed:
+				_is_pressing = true
+				grab_focus()
+				button_down.emit()
+				_update_colors()
+				queue_redraw()
+			else:
+				_is_pressing = false
+				button_up.emit()
+				_update_colors()
+				queue_redraw()
+				if not disabled:
+					pressed.emit()
 
 var _custom_corner_radii: Array[int] = []
 

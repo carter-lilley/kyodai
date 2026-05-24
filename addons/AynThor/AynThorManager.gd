@@ -162,6 +162,7 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 	var target_vp = _main_viewport if is_swapped else _second_viewport
 	
 	if not target_vp:
+		print("[AynThor] No target viewport!")
 		return
 	
 	# Get the actual screen size from renderer (physical second screen resolution)
@@ -178,9 +179,11 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 	var scale_y = float(viewport_size.y) / float(screen_size.y)
 	var scaled_pos = Vector2(current_pos.x * scale_x, current_pos.y * scale_y)
 	
-	# Convert touch events to mouse events for UI control compatibility
+	# Ensure local input handling is enabled (may get reset by engine under certain conditions)
+	if not target_vp.handle_input_locally:
+		target_vp.handle_input_locally = true
+	
 	if action == 0 or action == 5:
-		# Touch pressed -> Mouse button down
 		last_touch_positions[pid] = current_pos
 		var mouse_event = InputEventMouseButton.new()
 		mouse_event.button_index = MOUSE_BUTTON_LEFT
@@ -190,7 +193,6 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		target_vp.push_input(mouse_event)
 		
 	elif action == 1 or action == 6:
-		# Touch released -> Mouse button up
 		last_touch_positions.erase(pid)
 		var mouse_event = InputEventMouseButton.new()
 		mouse_event.pressed = false
@@ -200,7 +202,6 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		target_vp.push_input(mouse_event)
 		
 	elif action == 2:
-		# Touch drag -> Mouse motion
 		var prev_pos = last_touch_positions.get(pid, current_pos)
 		var scaled_prev = Vector2(prev_pos.x * scale_x, prev_pos.y * scale_y)
 		var mouse_event = InputEventMouseMotion.new()

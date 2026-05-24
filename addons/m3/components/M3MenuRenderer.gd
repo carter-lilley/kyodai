@@ -442,7 +442,7 @@ func _create_two_line_node(item: M3MenuItem, index: int, fonts: Dictionary) -> C
 	return node
 
 func _create_interactable_node(item: M3MenuItem, index: int, height: float) -> Button:
-	var node = Button.new()
+	var node = M3MenuButton.new()
 	node.custom_minimum_size = Vector2(0, height)
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.mouse_filter = Control.MOUSE_FILTER_PASS if not item.disabled else Control.MOUSE_FILTER_IGNORE

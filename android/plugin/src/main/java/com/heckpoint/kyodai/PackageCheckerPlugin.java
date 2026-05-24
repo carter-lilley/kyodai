@@ -455,6 +455,38 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    /**
+     * Opens the app's details page in Android Settings so the user can enable
+     * "Install unknown apps" permission. Uses ACTION_APPLICATION_DETAILS_SETTINGS
+     * with the proper package: URI instead of the unreliable ACTION_VIEW.
+     *
+     * @return true if the settings intent was launched successfully
+     */
+    @UsedByGodot
+    public boolean requestInstallUnknownAppsPermission() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "requestInstallUnknownAppsPermission() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.parse("package:" + activity.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity.startActivity(intent);
+            Log.d(TAG, "Launched application details settings for install unknown apps");
+            Log.d(TAG, "==========================================");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR opening install unknown apps settings: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
+        }
+    }
+    
     // ============================================================================
     // Content URI Resolution (No SAF - requires MANAGE_EXTERNAL_STORAGE)
     // ============================================================================

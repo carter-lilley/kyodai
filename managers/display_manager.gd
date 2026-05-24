@@ -105,8 +105,9 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 #				get_tree().root.content_scale_factor = scale_value
 
 func _check_subviewport_size_changes() -> void:
-	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
-	var second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	var ds = get_node_or_null("/root/Main/DualScreenSetup")
+	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
+	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
 	
 	var main_changed = false
 	var second_changed = false
@@ -126,8 +127,9 @@ func _apply_subviewport_scale(scale: float) -> void:
 	if scale <= 0:
 		scale = 1.0
 	
-	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
-	var second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	var ds = get_node_or_null("/root/Main/DualScreenSetup")
+	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
+	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
 	
 	if main_viewport:
 		var original_size = main_viewport.size
@@ -142,8 +144,9 @@ func _apply_subviewport_scale(scale: float) -> void:
 		_last_second_viewport_size = original_size
 
 func _clear_subviewport_scale() -> void:
-	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
-	var second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
+	var ds = get_node_or_null("/root/Main/DualScreenSetup")
+	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
+	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
 	
 	if main_viewport:
 		main_viewport.size_2d_override = Vector2i.ZERO

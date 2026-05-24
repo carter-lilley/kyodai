@@ -42,6 +42,10 @@ var _active_menu: M3Menu = null
 var _modal_context: Dictionary = {}
 var _focus_indicator: FocusIndicator = null
 
+# Feedback tracking for navigation sounds
+var _feedback_connected_viewport: Viewport = null
+var _is_first_focus: bool = true
+
 # Game details tab
 var _details_tab_idx: int = -1
 var _game_details_view: View = null
@@ -166,6 +170,9 @@ func initialize(
 	
 	# Set initial focus
 	_set_initial_focus()
+	
+	# Setup focus feedback handlers (navigation sounds)
+	_setup_feedback_handlers()
 
 ## Input tracking for mouse hover focus
 func _input(event: InputEvent) -> void:
@@ -347,6 +354,33 @@ func _create_nav_node() -> void:
 	
 	# Connect selection signal
 	_nav_node.destination_selected.connect(_on_nav_destination_selected)
+	
+	# Deferred config: the M3 nav node creates its internal UI in _ready(),
+	# which only fires after it enters the tree. Setting show_menu_button and
+	# footer_content before that point silently fails because the wrappers
+	# don't exist yet. We stash the values and apply them on ready.
+	var settings_btn = M3IconButton.new()
+	settings_btn.name = "SettingsButton"
+	settings_btn.icon_name = "cog"
+	settings_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
+	settings_btn.icon_button_size = M3IconButton.IconSize.MEDIUM
+	settings_btn.pressed.connect(show_settings_dialog)
+	
+	_nav_node.set_meta("_deferred_show_menu_button", false)
+	_nav_node.set_meta("_deferred_footer_content", settings_btn)
+	if not _nav_node.ready.is_connected(_on_nav_node_ready):
+		_nav_node.ready.connect(_on_nav_node_ready)
+
+func _on_nav_node_ready() -> void:
+	"""Apply deferred nav node config now that _ready() has created internal UI."""
+	if not _nav_node:
+		return
+	if _nav_node.has_meta("_deferred_show_menu_button"):
+		_nav_node.show_menu_button = _nav_node.get_meta("_deferred_show_menu_button")
+		_nav_node.remove_meta("_deferred_show_menu_button")
+	if _nav_node.has_meta("_deferred_footer_content"):
+		_nav_node.footer_content = _nav_node.get_meta("_deferred_footer_content")
+		_nav_node.remove_meta("_deferred_footer_content")
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	"""Handle M3 nav destination selection."""
@@ -616,17 +650,30 @@ func show_settings_dialog() -> void:
 func _add_settings_dialog_to_correct_parent() -> void:
 	"""Add SettingsDialog to a parent where its CanvasLayer script will attach correctly.
 	SubViewports break CanvasLayer script attachment; keep it in the root viewport."""
+	if _settings_dialog.is_inside_tree():
+		return
 	var tree = Engine.get_main_loop()
 	if tree and tree.root:
-		tree.root.add_child(_settings_dialog)
+		# Deferred to avoid "busy parent" during _ready, but check again at execution
+		# time in case show_overlay() auto-added it to a SubViewport in the meantime.
+		var add_fn = func():
+			if is_instance_valid(_settings_dialog) and not _settings_dialog.is_inside_tree():
+				tree.root.add_child(_settings_dialog)
+		add_fn.call_deferred()
 	else:
-		_root_control.add_child(_settings_dialog)
+		var add_fn = func():
+			if is_instance_valid(_settings_dialog) and not _settings_dialog.is_inside_tree():
+				_root_control.add_child(_settings_dialog)
+		add_fn.call_deferred()
 
 func show_settings_dialog_with_category(category_id: String) -> void:
 	"""Open the settings dialog and jump to a specific category."""
 	show_settings_dialog()
 	if _settings_dialog and is_instance_valid(_settings_dialog):
 		_settings_dialog.select_category(category_id)
+
+func is_settings_dialog_open() -> bool:
+	return _settings_dialog and is_instance_valid(_settings_dialog) and _settings_dialog.visible
 
 func _on_settings_dialog_dismissed() -> void:
 	"""Handle settings dialog dismissal."""
@@ -663,6 +710,7 @@ func _set_initial_focus() -> void:
 func find_home_button() -> Control:
 	"""Find the Home destination in the M3 nav."""
 	if not _nav_node:
+		print("[UIManager] find_home_button: _nav_node is null")
 		return null
 	
 	# M3NavigationDestination items are children of the nav's content container
@@ -675,6 +723,19 @@ func find_home_button() -> Control:
 		for sub in child.get_children():
 			if sub is M3NavigationDestination:
 				return sub
+			for subsub in sub.get_children():
+				if subsub is M3NavigationDestination:
+					return subsub
+	return null
+
+func find_nav_settings_button() -> Control:
+	"""Find the settings button in the nav's footer slot."""
+	if not _nav_node:
+		return null
+	
+	# footer_content is set directly on the nav node
+	if _nav_node.footer_content and is_instance_valid(_nav_node.footer_content):
+		return _nav_node.footer_content
 	return null
 
 func _find_node_by_name(node: Node, target_name: String) -> Node:
@@ -888,6 +949,64 @@ func get_nav_type() -> int:
 	"""Get the current navigation type (0 = Bar, 1 = Rail)."""
 	return _nav_type
 
+# ==================== FOCUS FEEDBACK (Navigation Sounds) ====================
+
+func _setup_feedback_handlers() -> void:
+	"""Connect to viewport focus changes for navigation sounds."""
+	_reconnect_feedback_viewport()
+
+func _reconnect_feedback_viewport() -> void:
+	"""Reconnect feedback handlers to the current viewport."""
+	if _feedback_connected_viewport and is_instance_valid(_feedback_connected_viewport):
+		if _feedback_connected_viewport.gui_focus_changed.is_connected(_on_feedback_focus_changed):
+			_feedback_connected_viewport.gui_focus_changed.disconnect(_on_feedback_focus_changed)
+	
+	var viewport = get_viewport()
+	if is_instance_valid(viewport):
+		if viewport.gui_focus_changed.is_connected(_on_feedback_focus_changed):
+			viewport.gui_focus_changed.disconnect(_on_feedback_focus_changed)
+		viewport.gui_focus_changed.connect(_on_feedback_focus_changed)
+		_feedback_connected_viewport = viewport
+
+func _on_feedback_focus_changed(control: Control) -> void:
+	"""Play navigation sounds on focus changes."""
+	if not is_instance_valid(control):
+		return
+	
+	# Skip text edits
+	if control is LineEdit or control is TextEdit:
+		return
+	
+	# Skip game cards (they handle their own focus sound)
+	if _control_is_game_card(control):
+		return
+	
+	# Skip first focus (app startup)
+	if _is_first_focus:
+		_is_first_focus = false
+		return
+	
+	# Non-game card focus - play generic click sound
+	if AudioManager:
+		AudioManager.play_sfx("click_00")
+
+func _control_is_game_card(control: Control) -> bool:
+	"""Traverse up the tree to check if control is inside a GameCard."""
+	var ancestor = control
+	while ancestor:
+		if ancestor is GameCard:
+			return true
+		ancestor = ancestor.get_parent()
+	return false
+
+func _unhandled_input(event: InputEvent) -> void:
+	"""Play activation sound on ui_accept for non-game card elements."""
+	if event.is_action_pressed("ui_accept"):
+		var focused = get_viewport().gui_get_focus_owner()
+		if focused and is_instance_valid(focused) and not _control_is_game_card(focused):
+			if AudioManager:
+				AudioManager.play_sfx("click_03")
+
 # ==================== MODAL MANAGEMENT ====================
 
 func _setup_focus_indicator() -> void:
@@ -1028,10 +1147,20 @@ func _enable_dual_screen_mode(second_screen_index: int) -> void:
 func _enable_dual_screen_viewport_mode() -> void:
 	"""Enable dual screen using viewport plugin (generic dual screen support)."""
 	
-	# Get the dual screen setup nodes
-	var dual_screen_setup = get_node("/root/Main/DualScreenSetup")
-	var second_viewport = get_node("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport")
-	_hero_copy_in_second_viewport = get_node_or_null("/root/Main/DualScreenSetup/SecondViewportContainer/SecondViewport/HeroImageSecondScreen")
+	# Ensure DualScreenSetup is in the tree (it may have been removed on desktop)
+	var main_node = get_node_or_null("/root/Main")
+	var dual_screen_setup = null
+	var second_viewport = null
+	_hero_copy_in_second_viewport = null
+	
+	if main_node and main_node.has_method("ensure_dual_screen_setup"):
+		dual_screen_setup = main_node.ensure_dual_screen_setup()
+	else:
+		dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
+	
+	if dual_screen_setup:
+		second_viewport = dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport")
+		_hero_copy_in_second_viewport = dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport/HeroImageSecondScreen")
 	
 	if not dual_screen_setup or not second_viewport or not _hero_copy_in_second_viewport:
 		push_warning("[UIManager] Dual screen setup nodes not found")
@@ -1045,11 +1174,17 @@ func _enable_dual_screen_viewport_mode() -> void:
 	M3Overlay.dismiss_type("sheet")
 
 	# REPARENTING: Move main UI nodes into MainViewport
-	var main_viewport = get_node("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
+	var main_viewport = dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
 	if main_viewport:
 		# Mark viewport as overlay parent so M3 components render inside it
 		main_viewport.add_to_group("m3_overlay_parent")
+		# Enable local input handling so touch/mouse events are processed inside the viewport
+		main_viewport.handle_input_locally = true
 		_reparent_ui_to_main_viewport(main_viewport)
+	
+	# Enable local input handling on second viewport as well
+	if second_viewport:
+		second_viewport.handle_input_locally = true
 	
 	# Hide hero in main UI since it will be on second screen
 	if _hero_spacer:
@@ -1083,19 +1218,42 @@ func _disable_dual_screen_mode() -> void:
 		return
 	
 	# Remove main viewport from overlay parent group so M3 components attach to root viewport
-	var main_viewport = get_node_or_null("/root/Main/DualScreenSetup/MainViewportContainer/MainViewport")
-	if main_viewport:
-		main_viewport.remove_from_group("m3_overlay_parent")
+	var dual_screen_setup = null
+	var main_node = get_node_or_null("/root/Main")
+	if main_node and main_node.has_method("ensure_dual_screen_setup"):
+		dual_screen_setup = main_node.ensure_dual_screen_setup()
+	else:
+		dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
+	
+	if dual_screen_setup:
+		var main_viewport = dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
+		if main_viewport:
+			main_viewport.remove_from_group("m3_overlay_parent")
 	
 	# Restore UI nodes to original parents first
 	_restore_ui_to_original_parents()
 	
 	if _dual_screen_viewport_mode:
-		# Hide dual screen setup and move it back off-screen
-		var dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
+		# Restore input handling to default (forward to parent viewport)
+		var main_vp = null
+		var second_vp = null
 		if dual_screen_setup:
-			dual_screen_setup.visible = false
-			dual_screen_setup.position = Vector2(-10000, -10000)
+			main_vp = dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
+			second_vp = dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport")
+		if main_vp:
+			main_vp.handle_input_locally = false
+		if second_vp:
+			second_vp.handle_input_locally = false
+		
+		# Remove dual screen setup from tree (prevents input interference on desktop)
+		main_node = get_node_or_null("/root/Main")
+		if main_node and main_node.has_method("remove_dual_screen_setup"):
+			main_node.remove_dual_screen_setup()
+		else:
+			dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
+			if dual_screen_setup:
+				dual_screen_setup.visible = false
+				dual_screen_setup.position = Vector2(-10000, -10000)
 		
 		_dual_screen_viewport_mode = false
 	else:
@@ -1191,6 +1349,9 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 		var view = get_view(view_name)
 		if view and view.has_method("reconnect_viewport"):
 			view.reconnect_viewport()
+	
+	# Reconnect feedback handlers to new viewport
+	_reconnect_feedback_viewport()
 
 func _restore_ui_to_original_parents() -> void:
 	"""Restore RootLayout to its original parent.
@@ -1254,6 +1415,9 @@ func _restore_ui_to_original_parents() -> void:
 	var library_view = get_view("Library")
 	if library_view and library_view.has_method("reconnect_viewport"):
 		library_view.reconnect_viewport()
+	
+	# Reconnect feedback handlers to original viewport
+	_reconnect_feedback_viewport()
 
 # ==================== DUAL SCREEN DESKTOP FALLBACK ====================
 

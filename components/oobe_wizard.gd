@@ -22,7 +22,6 @@ var _is_romm_skipped: bool = false
 var _games_path_field: M3TextField
 var _emulators_path_field: M3TextField
 var _steam_path_field: M3TextField
-var _vita3k_path_field: M3TextField
 
 var _romm_url_field: M3TextField
 var _romm_username_field: M3TextField
@@ -132,8 +131,7 @@ func _build_storage_paths_page() -> VBoxContainer:
 	if PlatformManager.is_windows() or PlatformManager.is_linux():
 		_steam_path_field = _add_path_row(vbox, "Steam Installation Folder (optional)", "")
 	
-	if PlatformManager.is_android():
-		_vita3k_path_field = _add_path_row(vbox, "Vita3K Data Folder (optional)", "")
+	#if PlatformManager.is_android():
 	
 	return vbox
 
@@ -617,10 +615,6 @@ func _save_storage_settings():
 		if steam_setting:
 			SettingsManager.set_setting(_steam_path_field.text, steam_setting)
 	
-	if _vita3k_path_field and not _vita3k_path_field.text.is_empty():
-		var vita_setting = SettingsManager.get_setting("vita3k_data_folder")
-		if vita_setting:
-			SettingsManager.set_setting(_vita3k_path_field.text, vita_setting)
 
 # Public API
 

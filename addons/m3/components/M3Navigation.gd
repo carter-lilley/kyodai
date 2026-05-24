@@ -12,6 +12,7 @@ signal on_collapsed
 
 enum LabelVisibility { AUTO, SELECTED, LABELED, UNLABELED }
 enum PlacementMode { OVERLAY, INTEGRATED }
+enum MenuPosition { START, END }
 
 # ============================================
 # EXPORTS
@@ -55,6 +56,31 @@ enum PlacementMode { OVERLAY, INTEGRATED }
 		var old_index = selected_index
 		selected_index = value
 		_update_selection(old_index)
+
+@export var show_menu_button: bool = true:
+	set(value):
+		if value == show_menu_button:
+			return
+		show_menu_button = value
+		_update_menu_button_state()
+
+@export var menu_button_position: MenuPosition = MenuPosition.START:
+	set(value):
+		if value == menu_button_position:
+			return
+		menu_button_position = value
+		_update_menu_button_state()
+
+@export var footer_content: Control = null:
+	set(value):
+		if value == footer_content:
+			return
+		if footer_content and footer_content.get_parent():
+			footer_content.get_parent().remove_child(footer_content)
+		footer_content = value
+		if footer_content:
+			_add_footer_content()
+		_update_dimensions()
 
 # ============================================
 # INTERNAL
@@ -161,6 +187,14 @@ func _on_destination_pressed(index: int):
 
 func _on_menu_button_pressed():
 	expanded = not expanded
+
+func _update_menu_button_state():
+	"""Override in subclass to update menu button visibility and position."""
+	pass
+
+func _add_footer_content():
+	"""Override in subclass to place footer content in the correct position."""
+	pass
 
 # ============================================
 # THEME
