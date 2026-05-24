@@ -124,9 +124,6 @@ func _ready():
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
 	
-	# DEBUG: Connect to global focus changed to see what's grabbing focus
-	get_viewport().gui_focus_changed.connect(_on_global_focus_changed)
-	
 	# Fix: Remove DualScreenSetup from tree when not in dual-screen mode.
 	# SubViewport nodes can interfere with keyboard input propagation on desktop
 	# even when hidden, causing _input() to miss press events while _process()
@@ -437,7 +434,7 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			setting_value = 0
 		1:  # List
 			new_mode = VirtualScrollGridContainer.ViewMode.LIST
-			setting_value = 3
+			setting_value = 1
 		2:  # Carousel
 			new_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
 			setting_value = 2
@@ -486,10 +483,10 @@ func _sync_view_mode_button_to_setting() -> void:
 	
 	var button_index: int
 	match layout_mode_val:
-		0, 1: button_index = 0  # Grid
-		2:    button_index = 2  # Carousel
-		3:    button_index = 1  # List
-		_:    button_index = 0
+		0: button_index = 0  # Grid
+		1: button_index = 1  # List
+		2: button_index = 2  # Carousel
+		_: button_index = 0
 	
 	view_mode_group.select_button(button_index)
 
@@ -630,13 +627,6 @@ func _setup_repeat():
 	_repeat_timer.timeout.connect(_on_repeat)
 	add_child(_repeat_timer)
 
-func _process(_delta):
-	# Desktop workaround: _input() doesn't receive the ui_cancel press event
-	# (likely consumed by SubViewport or focused control), so we check the
-	# Input singleton here where it reliably reports the action state.
-	if Input.is_action_just_pressed("ui_cancel"):
-		_handle_ui_cancel()
-
 func _handle_ui_cancel() -> void:
 	"""Handle ui_cancel: return to Home unless blocked by overlay."""
 	# Block during background state (emulator running)
@@ -730,9 +720,7 @@ func _input(event: InputEvent):
 		_zoom_out_pressed = false
 		return
 	
-	# Android path: _input() works correctly there, so also handle ui_cancel here.
-	# On desktop this branch is never reached because the press event doesn't
-	# propagate to Main._input(), but _process() handles it instead.
+	# Handle ui_cancel: return to Home unless blocked by overlay.
 	if event.is_action_pressed("ui_cancel"):
 		_handle_ui_cancel()
 
@@ -858,9 +846,6 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
 	# Update any UI state that depends on which screen is primary
 	# Note: No reparenting needed - AynThorManager handles rendering swap
-
-func _on_global_focus_changed(_control: Control) -> void:
-	pass
 
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""

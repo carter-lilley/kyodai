@@ -353,7 +353,8 @@ func _update_auto_display_on_input(event):
 			return
 	
 	# Hide keyboard on ui_cancel action (controller B button)
-	if event.is_action_pressed("ui_cancel"):
+	# Only consume if the keyboard is actually visible; otherwise let the event propagate
+	if visible and event.is_action_pressed("ui_cancel"):
 		# Mark as dismissed so auto-show won't reopen when focus returns
 		if _active_line_edit != null:
 			_dismissed_line_edit = _active_line_edit

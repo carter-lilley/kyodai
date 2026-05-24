@@ -90,16 +90,9 @@ const Type = SettingsVar.SettingType
 
 # Internal background effect configuration (managed by Library Appearance settings)
 @export var library_background_config := SettingsVar.new(Type.DICTIONARY, {
-	"effect_id": "xmb",
+	"effect_id": "gradient",
 	"settings": {
-		"time_scale": 1.0,
-		"show_dust": true,
-		"wave_intensity": 1.0,
-		"star_threshold": 0.99,
-		"color_top_left": Color(0.7, 0.2, 0.2, 1.0),
-		"color_top_right": Color(0.4, 0.1, 0.1, 1.0),
-		"color_bottom_left": Color(0.45, 0.1, 0.1, 1.0),
-		"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
-		"wave_blend_color": Color.WHITE
+		"background_gradient": Gradient.new(),
+		"gradient_direction": 0
 	}
 }, State.INTERNAL, "Background Effect Configuration")

@@ -1,15 +1,12 @@
 #TODO.TXT
 
 note to user: prepping on first launch
---
-bar focus seperate grom grid focus
-bar focus on ui cancel
---
 multiple snackbars (ongoing during sync, bios, etc)
-check for update button changes ui, same with sync
 separate firmware page or indicator?
 sync not working after removing games
-merge background gradient inot background settings
+M3 Color control
+m3 master color option
+sync with game?
 --
 W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [VirtualScrollGridContainer] Only 1 snap ratio(s) for view_mode=0, size=(1848.0, 702.0), base_dims=(202.0, 270.0), available=(1840.0, 702.0)
   <C++ Source>  core/variant/variant_utility.cpp:1034 @ push_warning()

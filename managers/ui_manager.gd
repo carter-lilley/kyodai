@@ -777,19 +777,10 @@ func _apply_library_background_config() -> void:
 		default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
 		
 		_library_background.set_background_config({
-			"effect_id": "xmb",
-			"background_gradient": default_gradient,
-			"gradient_direction": 0,
+			"effect_id": "gradient",
 			"settings": {
-				"time_scale": 1.0,
-				"show_dust": true,
-				"wave_intensity": 1.0,
-				"star_threshold": 0.99,
-				"color_top_left": Color(0.7, 0.2, 0.2, 1.0),
-				"color_top_right": Color(0.4, 0.1, 0.1, 1.0),
-				"color_bottom_left": Color(0.45, 0.1, 0.1, 1.0),
-				"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
-				"wave_blend_color": Color.WHITE
+				"background_gradient": default_gradient,
+				"gradient_direction": 0
 			}
 		})
 

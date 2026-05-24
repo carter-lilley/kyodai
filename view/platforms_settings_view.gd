@@ -446,14 +446,12 @@ func _on_check_updates_pressed():
 	var check_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
 	if check_button:
 		check_button.disabled = true
-		check_button.text = "Checking..."
 	
 	NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
 	
 	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array):
 		if check_button:
 			check_button.disabled = false
-			check_button.text = "Check for Updates"
 		
 		if _updated.size() > 0:
 			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), NotificationManager.Type.SUCCESS)
@@ -475,12 +473,10 @@ func _on_sync_pressed():
 	
 	if sync_button:
 		sync_button.disabled = true
-		sync_button.text = "Syncing..."
 	
 	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
 		if sync_button:
 			sync_button.disabled = false
-			sync_button.text = "Sync Enabled Platforms"
 		
 		if _success:
 			NotificationManager.show_notification("Sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
@@ -501,7 +497,6 @@ func _on_full_sync_pressed():
 	
 	if full_sync_button:
 		full_sync_button.disabled = true
-		full_sync_button.text = "Full Syncing..."
 	
 	if sync_button:
 		sync_button.disabled = true
@@ -510,11 +505,9 @@ func _on_full_sync_pressed():
 	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
 		if full_sync_button:
 			full_sync_button.disabled = false
-			full_sync_button.text = "Full Sync"
 		
 		if sync_button:
 			sync_button.disabled = false
-			sync_button.text = "Sync Enabled Platforms"
 		
 		if _success:
 			NotificationManager.show_notification("Full sync complete! %s" % _message, NotificationManager.Type.SUCCESS)

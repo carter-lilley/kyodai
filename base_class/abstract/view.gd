@@ -93,14 +93,13 @@ func _update_grid_orientation() -> void:
 	var mode_setting = SettingsManager.get_setting("library_layout_mode")
 	var layout_mode_val = mode_setting.value if mode_setting else 0
 	
-	# Migrate old 4-mode values to new 3-mode values
 	match layout_mode_val:
-		0, 1:
+		0:
 			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.GRID
+		1:
+			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
 		2:
 			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
-		3:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
 	
 	var grid_vertical_setting = SettingsManager.get_setting("library_grid_vertical")
 	games_grid.grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true

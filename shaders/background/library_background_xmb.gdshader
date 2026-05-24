@@ -1,5 +1,4 @@
 shader_type canvas_item;
-render_mode blend_add;
 
 // PS3 XMB Background Shader Port - Additive Overlay Version
 // Based on: https://www.shadertoy.com/view/tXy3DK by int_45h
@@ -197,6 +196,6 @@ void fragment() {
 	// Calculate alpha based on brightness
 	float alpha = min(length(final_color), 1.0);
 	
-	// Output with alpha for blending
-	COLOR = vec4(final_color, alpha);
+	// Output opaque
+	COLOR = vec4(final_color, 1.0);
 }

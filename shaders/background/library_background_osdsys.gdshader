@@ -1,5 +1,4 @@
 shader_type canvas_item;
-render_mode blend_premul_alpha;
 
 // OSDSYS Background Effect - Overlay Version
 // Based on PS2 OSDSYS visual style with 8 orbiting particles
@@ -87,6 +86,6 @@ void fragment() {
     // Calculate alpha based on particle intensity
     float alpha = max(drawing.r, max(drawing.g, drawing.b));
     
-    // Output premultiplied: (RGB * A, A)
-    COLOR = vec4(drawing * alpha, alpha);
+    // Output opaque
+    COLOR = vec4(drawing * alpha, 1.0);
 }

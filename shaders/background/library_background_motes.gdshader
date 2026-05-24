@@ -1,5 +1,4 @@
 shader_type canvas_item;
-render_mode blend_premul_alpha;
 
 // Motes Effect - Overlay Version
 
@@ -93,6 +92,6 @@ void fragment() {
     // Clamp alpha
     alpha = clamp(alpha, 0.0, 1.0);
     
-    // Output premultiplied: (RGB * A, A)
-    COLOR = vec4(color * alpha, alpha);
+    // Output opaque
+    COLOR = vec4(color * alpha, 1.0);
 }

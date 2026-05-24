@@ -224,8 +224,8 @@ func _open_menu():
 
 func _on_trailing_icon_input(event: InputEvent):
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_trailing_pressing = true
-		get_viewport().set_input_as_handled()
+			_trailing_pressing = true
+			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if _trailing_pressing:
 			_trailing_pressing = false
@@ -234,8 +234,8 @@ func _on_trailing_icon_input(event: InputEvent):
 
 func _on_close_icon_input(event: InputEvent):
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_close_pressing = true
-		get_viewport().set_input_as_handled()
+			_close_pressing = true
+			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if _close_pressing:
 			_close_pressing = false

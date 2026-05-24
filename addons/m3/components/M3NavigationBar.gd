@@ -4,14 +4,14 @@ extends M3Navigation
 
 ## Material 3 Bottom Navigation Bar
 ## Horizontal navigation component for top-level destinations.
-## Supports compact (icon+label vertical, 80dp) and expanded (icon+label horizontal, 64dp) modes.
+## Supports compact (icon+label vertical, 64dp) and expanded (icon+label horizontal, 80dp) modes.
 
 # ============================================
 # SIZE SPECS (all values in dp)
 # ============================================
 
-const HEIGHT_COMPACT := 80
-const HEIGHT_EXPANDED := 64
+const HEIGHT_COMPACT := 64
+const HEIGHT_EXPANDED := 80
 const MIN_ITEM_WIDTH := 80
 const MAX_ITEM_WIDTH := 168
 const MENU_BUTTON_WIDTH := 80  # 16 + 48 + 16

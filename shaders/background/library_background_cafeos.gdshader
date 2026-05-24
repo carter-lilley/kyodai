@@ -1,5 +1,4 @@
 shader_type canvas_item;
-render_mode blend_premul_alpha;
 
 // CafeOS - TRUE 3D Alpha Extrusion with Flat Shading
 
@@ -317,5 +316,6 @@ void fragment() {
     // Output is already premultiplied: (RGB * A, A)
     final_color = blurred_color;
     
-    COLOR = final_color;
+    // Output opaque
+    COLOR = vec4(final_color.rgb, 1.0);
 }

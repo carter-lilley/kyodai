@@ -1,0 +1,47 @@
+class_name GradientBackgroundEffect
+extends BackgroundEffect
+
+var _gradient_texture: ImageTexture = null
+
+func _ready():
+	super._ready()
+	effect_name = "Gradient"
+	effect_id = "gradient"
+
+func _setup_shader() -> void:
+	var mat = material as ShaderMaterial
+	mat.shader = preload("res://shaders/background/library_background_gradient.gdshader")
+
+func _apply_settings() -> void:
+	var gradient = _settings.get("background_gradient", null)
+	if gradient is Gradient:
+		_update_gradient_texture(gradient)
+		var mat = material as ShaderMaterial
+		mat.set_shader_parameter("gradient_texture", _gradient_texture)
+		mat.set_shader_parameter("gradient_direction", _settings.get("gradient_direction", 0))
+
+func _update_gradient_texture(gradient: Gradient) -> void:
+	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
+	for i in range(256):
+		var t = i / 255.0
+		var color = gradient.sample(t)
+		image.set_pixel(i, 0, color)
+	_gradient_texture = ImageTexture.create_from_image(image)
+
+func get_settings_schema() -> Array[SettingsVar]:
+	var schema: Array[SettingsVar] = []
+	var Type = SettingsVar.SettingType
+	var State = SettingsVar.SettingState
+	
+	var gradient = Gradient.new()
+	gradient.offsets = [0.0, 1.0]
+	gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
+	var gradient_var = SettingsVar.new(Type.GRADIENT, gradient, State.ENABLED, "Background Gradient")
+	gradient_var.property_name = "background_gradient"
+	schema.append(gradient_var)
+	
+	var direction_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Gradient Direction", "", 0.0, 2.0, 1.0, ["Horizontal", "Vertical", "Diagonal"])
+	direction_var.property_name = "gradient_direction"
+	schema.append(direction_var)
+	
+	return schema
