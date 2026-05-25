@@ -41,6 +41,9 @@ var _last_focused_index: int = -1
 var _zoom_save_timer: Timer = null
 const ZOOM_SAVE_DELAY_MS: int = 1500
 
+# M3 Theme resource (applied to root for fallback native control styling)
+var _m3_theme: Theme = null
+
 func _ready():
 	_setup_repeat()
 	
@@ -149,6 +152,17 @@ func _ready():
 	
 	# Check if first-run wizard needs to be shown
 	_show_oobe_wizard_if_needed()
+	
+	# Apply M3 theme to root for fallback native control styling (scrollbars, etc.)
+	_apply_m3_theme()
+
+func _apply_m3_theme() -> void:
+	_m3_theme = M3Theme.generate_theme()
+	self.theme = _m3_theme
+
+func refresh_theme() -> void:
+	# Called by UIManager when theme colors change (dark mode, primary color, etc.)
+	_apply_m3_theme()
 
 func _show_oobe_wizard_if_needed():
 	var first_run_setting = SettingsManager.get_setting("first_run_completed")

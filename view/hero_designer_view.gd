@@ -84,14 +84,21 @@ func _setup_ui():
 	hsplit.split_offset = 350
 	add_child(hsplit)
 	
-	# Left panel - controls (EffectDesignerUI has its own ScrollContainer)
+	# Left panel - controls
 	var left_panel = Panel.new()
 	left_panel.custom_minimum_size = Vector2(350, 0)
+	left_panel.clip_contents = true
 	hsplit.add_child(left_panel)
 	
+	var scroll = ScrollContainer.new()
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	left_panel.add_child(scroll)
+	
 	var left_vbox = VBoxContainer.new()
-	left_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	left_panel.add_child(left_vbox)
+	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(left_vbox)
 	
 	var title_label = Label.new()
 	title_label.text = "Hero Designer"
@@ -140,9 +147,7 @@ func _setup_ui():
 	
 	# Add the shared effect designer UI
 	_effect_designer_ui = EffectDesignerUI.new()
-	_effect_designer_ui.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_effect_designer_ui.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_effect_designer_ui.custom_minimum_size = Vector2(0, 500)
+	_effect_designer_ui.use_internal_scroll = false
 	_effect_designer_ui.config_changed.connect(_on_config_changed)
 	left_vbox.add_child(_effect_designer_ui)
 	

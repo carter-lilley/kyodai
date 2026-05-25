@@ -4,9 +4,7 @@ note to user: prepping on first launch
 multiple snackbars (ongoing during sync, bios, etc)
 separate firmware page or indicator?
 sync not working after removing games
-M3 Color control
-m3 master color option
-sync with game?
+focus lock
 --
 W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [VirtualScrollGridContainer] Only 1 snap ratio(s) for view_mode=0, size=(1848.0, 702.0), base_dims=(202.0, 270.0), available=(1840.0, 702.0)
   <C++ Source>  core/variant/variant_utility.cpp:1034 @ push_warning()
@@ -29,6 +27,7 @@ W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [Virtu
 	check if save is modified
 
 ## general UI
+	m3 master color sync with game
 	fix rando game selection
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)
@@ -61,7 +60,7 @@ W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [Virtu
 	move max_cache_size to memory manager?
 	
 ## launch:
-	add: psp, melonds, ps2, dolphin retroarch sync
+	add: psp, melonds, ps2, dolphin retroarch cores
   	add: ps3 on android
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?

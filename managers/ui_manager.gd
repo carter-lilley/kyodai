@@ -156,6 +156,11 @@ func initialize(
 	if dark_mode_setting:
 		_apply_dark_mode(dark_mode_setting.value)
 	
+	# Apply primary color setting on startup
+	var primary_color_setting = SettingsManager.get_setting("library_primary_color")
+	if primary_color_setting and primary_color_setting.value is Color:
+		M3Theme.set_primary_seed(primary_color_setting.value)
+	
 	# Pre-create settings dialog so first open is instant.
 	# On first launch we skip this; it will be created after OOBE completes.
 	var first_run_setting = SettingsManager.get_setting("first_run_completed")
@@ -492,6 +497,10 @@ func _on_apply_preset_end() -> void:
 	_preset_in_progress = false
 	# One rebuild after preset is fully applied
 	_rebuild_views("Preset applied")
+	# Ensure theme is refreshed in case accent color or dark mode changed
+	if not _theme_refresh_pending:
+		_theme_refresh_pending = true
+		call_deferred("_do_refresh_theme")
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
@@ -530,6 +539,11 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			_rebuild_views("Grid padding changed")
 		"dark_mode":
 			_apply_dark_mode(_value)
+		"library_primary_color":
+			M3Theme.set_primary_seed(_value)
+			if not _theme_refresh_pending:
+				_theme_refresh_pending = true
+				call_deferred("_do_refresh_theme")
 
 var _theme_refresh_pending: bool = false
 

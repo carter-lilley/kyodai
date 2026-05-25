@@ -41,7 +41,7 @@ func update_control_value(property_name: String, value: Variant) -> void:
 		control.value = value * control.get_meta("display_scale", 1.0)
 	elif control is M3TextField:
 		control.text = str(value)
-	elif control is ColorPickerButton:
+	elif control is M3ColorPicker:
 		control.color = value
 	elif control is RangeSlider:
 		control.set_range(value.x, value.y)
@@ -59,7 +59,7 @@ func get_control_value(property_name: String) -> Variant:
 		return control.value / control.get_meta("display_scale", 1.0)
 	elif control is M3TextField:
 		return control.text
-	elif control is ColorPickerButton:
+	elif control is M3ColorPicker:
 		return control.color
 	elif control is RangeSlider:
 		return Vector2(control.range_start, control.range_end)
@@ -287,7 +287,7 @@ func match_var_type(settingsvar : SettingsVar):
 			color_label.label_style = M3Label.Style.BODY_MEDIUM
 			add_child(color_label)
 			
-			var color_picker = ColorPickerButton.new()
+			var color_picker = M3ColorPicker.new()
 			color_picker.color = settingsvar.value if settingsvar.value is Color else Color.WHITE
 			color_picker.disabled = settingsvar.state != 0
 			add_child(color_picker)

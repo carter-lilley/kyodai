@@ -57,6 +57,9 @@ var game_texture: Texture2D = null
 var effect_settings: Array = []
 var focus_effect_settings: Array = []
 
+# Display mode for conditional rendering behavior (0 = Standard, 1 = Transparent, 2 = Media Only)
+var display_mode: int = 0
+
 # Shared shape parameters for SDF calculations (calculated once, used by all effects)
 var corner_radius_pixels: float = 0.0
 var total_inset_pixels: float = 0.0
@@ -99,7 +102,9 @@ func _get_base_dimensions() -> Vector2:
 # Recalculates shape parameters that all shaders use
 func _recalculate_shape() -> void:
 	# Corner radius in pixels from ratio (0 = square, 1 = capsule)
-	corner_radius_pixels = corner_radius_ratio * min(container_size.x, container_size.y) / 2.0
+	# Round to integer to match StyleBoxFlat corner_radius which uses int(round()),
+	# ensuring focus ring and shader corners align pixel-perfectly.
+	corner_radius_pixels = round(corner_radius_ratio * min(container_size.x, container_size.y) / 2.0)
 	
 	# Total inset combines border and glass
 	total_inset_pixels = (border_inset_ratio + glass_inset_ratio) * container_size.x
@@ -145,6 +150,7 @@ func duplicate() -> EffectContainerState:
 	new_state.game_texture = game_texture
 	new_state.effect_settings = effect_settings.duplicate(true)
 	new_state.focus_effect_settings = focus_effect_settings.duplicate(true)
+	new_state.display_mode = display_mode
 	# _recalculate_dimensions will be called in _init, but container_size will be recalculated
 	new_state.container_size = container_size
 	return new_state

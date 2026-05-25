@@ -18,6 +18,7 @@ class_name ThemePreset
 @export var library_focus_scale: float = 0.08
 @export var library_card_content_alignment: int = 0
 @export var library_background_config: Dictionary = {}
+@export var library_primary_color: Color = Color("#6750A4")
 
 # Card Designer Settings
 @export var card_effect_config: Dictionary = {
@@ -45,6 +46,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.08
 	preset.library_card_content_alignment = settings.library_card_content_alignment.value if settings.library_card_content_alignment else 0
 	preset.library_background_config = settings.library_background_config.value.duplicate() if settings.library_background_config else {}
+	preset.library_primary_color = settings.library_primary_color.value if settings.library_primary_color else Color("#6750A4")
 	
 	# Card settings
 	preset.card_effect_config = settings.card_effect_config.value.duplicate() if settings.card_effect_config else {
@@ -86,6 +88,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_card_content_alignment.value = library_card_content_alignment
 	if settings.get("library_background_config") != null:
 		settings.library_background_config.value = library_background_config.duplicate()
+	if settings.get("library_primary_color") != null:
+		settings.library_primary_color.value = library_primary_color
 	
 	# Apply card settings
 	if settings.get("card_effect_config") != null:

@@ -214,21 +214,29 @@ func _update_focus_ring_radius() -> void:
 	var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
 	if not focus_sb:
 		return
-	var max_radius = min(_focus_ring.size.x, _focus_ring.size.y) / 2.0
+	# Use _focus_target_w/h which are set authoritatively by _update_media_panel_size.
+	# Don't use _media_panel.size here — it may be stale during the immediate call
+	# before Godot's layout system has finished resizing the panel.
+	var target_w = _focus_target_w if _focus_target_w > 0.0 else _focus_ring.size.x
+	var target_h = _focus_target_h if _focus_target_h > 0.0 else _focus_ring.size.y
+	var max_radius = min(target_w, target_h) / 2.0
 	var radius = card_rounding_ratio * max_radius
+	# The focus ring is scaled by content_scale in _apply_content_scale().
+	# StyleBoxFlat corner radius scales with the control, but the shader renders
+	# in unscaled local space. Compensate so screen-space radii match.
+	if not is_equal_approx(content_scale.x, 1.0):
+		radius = radius / content_scale.x
 	focus_sb.set_corner_radius_all(int(round(radius)))
 
 func _update_focus_ring_bounds() -> void:
 	_focus_ring_bounds_queued = false
 	if not _focus_ring or not _media_panel:
 		return
-	# Use the actual media panel size when available (it's authoritative after
-	# the container has sorted). Fallback to our computed targets during init.
+	# Use our computed targets (_focus_target_w/h are set authoritatively
+	# by _update_media_panel_size). Don't overwrite them with _media_panel.size
+	# which may be stale during immediate calls before layout settles.
 	var target_w := _focus_target_w
 	var target_h := _focus_target_h
-	if _media_panel.size.x > 0.0 and _media_panel.size.y > 0.0:
-		target_w = _media_panel.size.x
-		target_h = _media_panel.size.y
 	if target_w <= 0.0:
 		target_w = size.x
 	if target_h <= 0.0:
@@ -260,6 +268,22 @@ func _update_focus_ring_bounds() -> void:
 		_focus_ring.offset_bottom = 0.0
 		_focus_ring.offset_right = 0.0
 	_update_focus_ring_radius()
+
+func _sync_media_stack_size() -> void:
+	"""Sync effect stack container size and focus ring targets to the actual
+	media panel size after layout settles. Ensures shader and focus ring use
+	identical dimensions for pixel-perfect corner alignment."""
+	if _media_panel and _media_panel.size.x > 0.0 and _media_panel.size.y > 0.0:
+		# Update effect stack with authoritative panel size
+		if _media_content and _media_content is EffectStack:
+			var stack = _media_content as EffectStack
+			var state = stack.get_container_state()
+			if state:
+				state.container_size = _media_panel.size
+		# Sync focus targets so focus ring radius matches shader exactly
+		_focus_target_w = _media_panel.size.x
+		_focus_target_h = _media_panel.size.y
+		_update_focus_ring_radius()
 
 func _apply_content_scale() -> void:
 	if _root_container:
@@ -548,7 +572,8 @@ func _rebuild_layout():
 	focus_sb.bg_color = Color.TRANSPARENT
 	focus_sb.border_color = M3Theme.get_primary()
 	focus_sb.set_border_width_all(M3Units.dp(2))
-	focus_sb.anti_aliasing = false
+	focus_sb.anti_aliasing = true
+	focus_sb.anti_aliasing_size = 1.0
 	_focus_ring.add_theme_stylebox_override("panel", focus_sb)
 	_update_focus_ring_radius()
 	add_child(_focus_ring)
@@ -890,7 +915,7 @@ func _update_media_panel_size() -> void:
 			var new_min_y = clampf(desired_h, M3Units.dp(40.0), clamp_max)
 			# When media fills the entire card (Media Only), force exact height
 			# match to prevent sub-pixel gaps or overflow from floating-point drift.
-			if not show_text_margin and is_equal_approx(new_min_y, size.y):
+			if not show_text_margin:
 				new_min_y = size.y
 			if not is_equal_approx(new_min_y, _last_media_min_y):
 				_last_media_min_y = new_min_y
@@ -908,8 +933,14 @@ func _update_media_panel_size() -> void:
 	elif card_layout_mode == LayoutMode.HORIZONTAL:
 		if media_aspect_ratio > 0.0:
 			var desired_w = size.y * media_aspect_ratio
-			var max_w = size.x - M3Units.dp(40.0)
+			var max_w: float
+			if show_text_margin:
+				max_w = size.x - M3Units.dp(40.0)
+			else:
+				max_w = size.x
 			var new_min_x = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
+			if not show_text_margin:
+				new_min_x = size.x
 			if not is_equal_approx(new_min_x, _last_media_min_x):
 				_last_media_min_x = new_min_x
 				_media_panel.custom_minimum_size.x = new_min_x
@@ -931,6 +962,7 @@ func _update_media_panel_size() -> void:
 	if not _focus_ring_bounds_queued:
 		_focus_ring_bounds_queued = true
 		call_deferred("_update_focus_ring_bounds")
+		call_deferred("_sync_media_stack_size")
 
 func _update_text_content_sizes() -> void:
 	if not _text_content or not _ready_called:

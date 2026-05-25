@@ -1,5 +1,5 @@
 class_name EffectDesignerUI
-extends Control
+extends VBoxContainer
 
 signal config_changed(config: Dictionary)
 signal save_requested(config: Dictionary)
@@ -14,6 +14,7 @@ var context: String = "hero"  # "hero", "base_card", or "focus_card"
 var inherit_from_base: bool = false  # For focus effects - copy defaults from base effects
 var config_key: String = "effects"  # Key in config dict ("effects" or "focus_effects")
 var hide_disabled_effects: bool = false  # If true, dropdown omits already-active effects entirely
+@export var use_internal_scroll: bool = true  # If false, no internal ScrollContainer is created (useful when parent provides scrolling)
 
 # State
 var _current_config: Dictionary = {}
@@ -131,31 +132,33 @@ func _ready():
 	_discover_effects()
 
 func _setup_ui():
-	# Set up this control to fill parent
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	var target: Control = self
 	
-	_scroll_container = ScrollContainer.new()
-	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_scroll_container.follow_focus = true
-	_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_scroll_container.clip_contents = true
-	_scroll_container.name = "ScrollContainer"
-	add_child(_scroll_container)
+	if use_internal_scroll:
+		_scroll_container = ScrollContainer.new()
+		_scroll_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_scroll_container.follow_focus = true
+		_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		_scroll_container.clip_contents = true
+		_scroll_container.name = "ScrollContainer"
+		add_child(_scroll_container)
+		
+		var inner_vbox = VBoxContainer.new()
+		inner_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		inner_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_scroll_container.add_child(inner_vbox)
+		target = inner_vbox
 	
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
-	
-	var vbox = VBoxContainer.new()
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_scroll_container.add_child(vbox)
 	
 	_title_label = Label.new()
 	_title_label.text = title
 	_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_title_label.add_theme_font_size_override("font_size", 16)
-	vbox.add_child(_title_label)
+	target.add_child(_title_label)
 	
 	_add_effect_button = M3OptionButton.new()
 	_add_effect_button.multi_select = true
@@ -163,17 +166,19 @@ func _setup_ui():
 	_add_effect_button.placeholder_text = "Add Effect"
 	_add_effect_button.fit_to_longest_item = false
 	_add_effect_button.field_variant = M3TextField.Variant.FILLED
-	vbox.add_child(_add_effect_button)
+	_add_effect_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	target.add_child(_add_effect_button)
 	
 	_add_effect_button.item_selected.connect(_on_effect_toggled)
 	
 	# Small spacer between button and effects list to prevent visual crowding
 	var spacer = Control.new()
 	spacer.custom_minimum_size = Vector2(0, M3Units.dp(8))
-	vbox.add_child(spacer)
+	target.add_child(spacer)
 	
 	_effects_list = VBoxContainer.new()
-	vbox.add_child(_effects_list)
+	_effects_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	target.add_child(_effects_list)
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.
@@ -271,6 +276,7 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()
 	container.title = effect_data.get("effect_id", "Unknown").capitalize()
 	container.collapsed = false
+	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_effects_list.add_child(container)
 	
 	var remove_btn = Button.new()

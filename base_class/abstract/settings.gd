@@ -77,6 +77,7 @@ const Type = SettingsVar.SettingType
 @export var library_card_content_alignment := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Content Alignment", "How card content is positioned within the card cell", 0.0, 2.0, 1.0, ["Left/Top", "Center/Middle", "Right/Bottom"])
 @export var card_media_aspect_ratio := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Media Ratio", "Aspect ratio of the card's media panel", 0.0, 4.0, 1.0, ["Fill", "2:3", "3:4", "1:1", "16:11"])
 @export var library_card_display_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Display Mode", "How game cards appear in the library", 0.0, 2.0, 1.0, ["Standard", "Transparent", "Media Only"])
+@export var library_primary_color := SettingsVar.new(Type.COLOR, Color("#6750A4"), State.ENABLED, "Accent Color", "Primary color for the Material 3 interface theme")
 
 
 # Internal first-run flag (tracks if OOBE wizard has been completed)

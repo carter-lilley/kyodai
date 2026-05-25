@@ -30,6 +30,8 @@ func _update_shader_params() -> void:
 	# Pass shared shape parameters for consistent SDF calculations
 	_set_shader_param("corner_radius_pixels", _container_state.corner_radius_pixels)
 	_set_shader_param("total_inset_pixels", _container_state.total_inset_pixels)
+	# Pass display mode for conditional edge anti-aliasing
+	_set_shader_param("display_mode", _container_state.display_mode)
 	
 	# Calculate and store UV transforms for other effects
 	_update_uv_transforms()

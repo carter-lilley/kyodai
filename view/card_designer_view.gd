@@ -50,17 +50,25 @@ func on_view_show():
 func _setup_ui():
 	var hsplit = HSplitContainer.new()
 	hsplit.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hsplit.split_offset = 300
+	hsplit.split_offset = 0
+	hsplit.resized.connect(func():
+		hsplit.split_offset = int(hsplit.size.x * 0.65)
+	)
 	add_child(hsplit)
 	
 	var left_panel = Panel.new()
-	left_panel.custom_minimum_size = Vector2(300, 0)
 	left_panel.clip_contents = true
 	hsplit.add_child(left_panel)
 	
+	var scroll = ScrollContainer.new()
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	left_panel.add_child(scroll)
+	
 	var left_vbox = VBoxContainer.new()
-	left_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	left_panel.add_child(left_vbox)
+	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(left_vbox)
 	
 	var title_label = Label.new()
 	title_label.text = "Card Designer"
@@ -95,21 +103,15 @@ func _setup_ui():
 	
 	# Base effects designer
 	_base_effect_designer = EffectDesignerUI.new()
-	_base_effect_designer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_base_effect_designer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_base_effect_designer.custom_minimum_size = Vector2(0, 250)
+	_base_effect_designer.use_internal_scroll = false
 	_base_effect_designer.hide_disabled_effects = true
 	_base_effect_designer.setup("Effects", "base_card", "effects", false)
 	_base_effect_designer.config_changed.connect(_on_base_config_changed)
 	left_vbox.add_child(_base_effect_designer)
 	
-	left_vbox.add_child(HSeparator.new())
-	
 	# Focus effects designer
 	_focus_effect_designer = EffectDesignerUI.new()
-	_focus_effect_designer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_focus_effect_designer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_focus_effect_designer.custom_minimum_size = Vector2(0, 250)
+	_focus_effect_designer.use_internal_scroll = false
 	_focus_effect_designer.setup("Focus Effects", "focus_card", "focus_effects", true)
 	_focus_effect_designer.config_changed.connect(_on_focus_config_changed)
 	left_vbox.add_child(_focus_effect_designer)
@@ -129,7 +131,20 @@ func _setup_ui():
 	_preview_card = preload("res://components/game_card.tscn").instantiate()
 	_preview_card.preview_mode = true
 	_preview_card.focus_mode = Control.FOCUS_NONE
+	_preview_card.preview_show_focus = false
+	_preview_card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	preview_container.add_child(_preview_card)
+	
+	# GameCard sets mouse_filter = IGNORE in _ready(), so we must override after
+	_preview_card.call_deferred("set", "mouse_filter", Control.MOUSE_FILTER_STOP)
+	_preview_card.mouse_entered.connect(func():
+		if _preview_card:
+			_preview_card.set_preview_focus(true)
+	)
+	_preview_card.mouse_exited.connect(func():
+		if _preview_card:
+			_preview_card.set_preview_focus(false)
+	)
 
 func _load_current_config():
 	if SettingsManager:

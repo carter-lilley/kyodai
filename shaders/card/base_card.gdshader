@@ -16,6 +16,7 @@ uniform float blend_outlier_threshold = 0.15;
 uniform float detection_window_ratio = 0.15;
 uniform float edge_threshold = 0.4;
 uniform float smart_crop_overshoot = 0.15;
+uniform int display_mode = 0;  // 0 = Standard, 1 = Transparent, 2 = Media Only
 
 const int ROW_SAMPLES = 8;
 const int COL_SAMPLES = 8;
@@ -189,11 +190,20 @@ void fragment() {
 	// Use shared corner_radius_pixels from EffectContainerState for consistent rounding
 	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
 	
-	// Hard edge for outer boundary — card's CLIP_CHILDREN_AND_DRAW provides anti-aliasing
-	if (dist > 0.0) {
-		discard;
+	float edge_alpha;
+	if (display_mode == 0) {
+		// Standard mode: hard edge — parent panel provides anti-aliasing
+		if (dist > 0.0) {
+			discard;
+		}
+		edge_alpha = 1.0;
+	} else {
+		// Transparent / Media Only: smoothstep anti-aliasing on the edge
+		edge_alpha = 1.0 - smoothstep(0.0, aa_width, dist);
+		if (edge_alpha <= 0.0) {
+			discard;
+		}
 	}
-	float edge_alpha = 1.0;
 	
 	// Calculate the inner edge (glass inset area) - clip the base card to this shape
 	// Reuse glass_inset_pixels from earlier calculation

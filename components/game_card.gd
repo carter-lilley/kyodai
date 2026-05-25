@@ -137,6 +137,9 @@ func _setup_preview_mode():
 	
 	disabled = true
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	# Ensure focus effects match preview_show_focus after all setup
+	_show_focus_effects(preview_show_focus)
 
 func _build_media_stack():
 	var effect_settings := []
@@ -184,13 +187,14 @@ func _build_focus_stack() -> void:
 			focus_base_node.visible = false
 			focus_base_node.modulate.a = 0.0
 		
-		var target_focus_alpha = 1.0 if preview_mode else 0.0
+		# In preview mode, respect preview_show_focus for initial alpha
+		var target_focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
 		for child in _focus_stack.get_children():
 			if child is EffectBase and child.material is ShaderMaterial:
 				child.material.set_shader_parameter("effect_alpha", target_focus_alpha)
 		
 		if preview_mode:
-			_focus_stack.visible = true
+			_focus_stack.visible = preview_show_focus
 		
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
@@ -201,6 +205,7 @@ func _build_focus_stack() -> void:
 	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_focus_stack.z_index = 5
 	_focus_stack.visible = false
+	_focus_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_focus_stack)
 	
 	# Use a duplicated state so focus stack insets don't clobber base stack
@@ -217,15 +222,15 @@ func _build_focus_stack() -> void:
 		focus_base.visible = false
 		focus_base.modulate.a = 0.0
 	
-	# Initialize focus effects with effect_alpha = 0.0 so they start hidden
-	# (shader default is 1.0, which would cause them to pop in before tween)
-	var focus_alpha = 1.0 if preview_mode else 0.0
+	# Initialize focus effects with effect_alpha based on preview_show_focus
+	# so they start in the correct state before any tweens
+	var focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
 	for child in _focus_stack.get_children():
 		if child is EffectBase and child.material is ShaderMaterial:
 			child.material.set_shader_parameter("effect_alpha", focus_alpha)
 	
 	if preview_mode:
-		_focus_stack.visible = true
+		_focus_stack.visible = preview_show_focus
 	
 	_link_overlapping_effects()
 
@@ -246,8 +251,16 @@ func _link_overlapping_effects() -> void:
 			var base_effect = _media_stack.get_effect(focus_effect.effect_id)
 			if base_effect:
 				focus_effect.set_base_effect(base_effect)
-				if not _is_focused and base_effect._settings.size() > 0:
+				# In preview mode, respect preview_show_focus instead of _is_focused
+				var show_focus = preview_show_focus if preview_mode else _is_focused
+				if not show_focus and base_effect._settings.size() > 0:
 					focus_effect.tween_settings(base_effect._settings, base_effect._settings, 1.0)
+
+var preview_show_focus: bool = false
+
+func set_preview_focus(show: bool) -> void:
+	preview_show_focus = show
+	_show_focus_effects(show)
 
 func _show_focus_effects(p_show: bool) -> void:
 	# Kill any existing focus effect tweens to prevent callbacks on freed objects
@@ -257,7 +270,7 @@ func _show_focus_effects(p_show: bool) -> void:
 	_focus_effect_tweens.clear()
 	
 	if preview_mode:
-		p_show = true
+		p_show = preview_show_focus
 	
 	if not _focus_stack or not _media_stack:
 		return
@@ -354,6 +367,10 @@ func _update_card_state_from_settings():
 				elif config_dict.has("corner_radius"):
 					config_dict["card_rounding"] = config_dict["corner_radius"]
 			
+			# Ensure container_size is current before corner_radius triggers _recalculate_shape
+			if size.x > 0.0 and size.y > 0.0:
+				_card_state.container_size = size
+			
 			var corner_value = config_dict.get("card_rounding", 0.12)
 			if corner_value > 1.0:
 				# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
@@ -372,6 +389,7 @@ func _update_card_state_from_settings():
 		_apply_display_mode()
 
 func _apply_display_mode() -> void:
+	_card_state.display_mode = _display_mode
 	# Map display mode to background/text visibility
 	match _display_mode:
 		0: # Standard
@@ -393,6 +411,9 @@ func refresh_settings() -> void:
 	_build_media_stack()
 	_update_platform_badge()
 	_update_display()
+	# Ensure focus effects match current preview state after rebuild
+	if preview_mode:
+		_show_focus_effects(preview_show_focus)
 
 func reset() -> void:
 	game = null
@@ -998,7 +1019,8 @@ func _update_focus_stack_bounds() -> void:
 		target_w = size.x
 	if target_h <= 0.0:
 		target_h = size.y
-	if not show_background and show_text_margin:
+	if not show_background:
+		# Transparent / Media Only: shrink focus stack to match media panel
 		_focus_stack.offset_top = 0.0
 		_focus_stack.offset_left = 0.0
 		_focus_stack.offset_bottom = -(size.y - target_h)

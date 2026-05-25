@@ -192,8 +192,8 @@ func _notification(what: int) -> void:
 		# Update container state with actual size
 		if _container_state and size.x > 0 and size.y > 0:
 			_container_state.container_size = size
-			# Update all effects with new size
+			# Update all effects with new size (even hidden ones, so they have correct params when shown)
 			for effect_id in _effects:
 				var effect = _effects[effect_id]
-				if effect and effect.visible:
+				if effect:
 					effect.update_state(_container_state)

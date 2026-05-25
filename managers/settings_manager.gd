@@ -340,6 +340,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_focus_scale.value, settings.library_focus_scale)
 		if settings.get("library_layout_mode") != null:
 			emit_signal("setting_changed", settings.library_layout_mode.value, settings.library_layout_mode)
+		if settings.get("library_primary_color") != null:
+			emit_signal("setting_changed", settings.library_primary_color.value, settings.library_primary_color)
 		# Emit for card effect config - this triggers grid rebuild
 		if settings.get("card_effect_config") != null:
 			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)

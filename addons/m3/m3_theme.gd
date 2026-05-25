@@ -10,45 +10,45 @@ static var is_dark_mode: bool = false
 # COLOR TOKENS
 # ============================================
 
-const PRIMARY_LIGHT := Color("#6750A4")
-const ON_PRIMARY_LIGHT := Color("#FFFFFF")
-const PRIMARY_CONTAINER_LIGHT := Color("#EADDFF")
-const ON_PRIMARY_CONTAINER_LIGHT := Color("#21005D")
+static var PRIMARY_LIGHT: Color = Color("#6750A4")
+static var ON_PRIMARY_LIGHT: Color = Color("#FFFFFF")
+static var PRIMARY_CONTAINER_LIGHT: Color = Color("#EADDFF")
+static var ON_PRIMARY_CONTAINER_LIGHT: Color = Color("#21005D")
 
-const PRIMARY_DARK := Color("#D0BCFF")
-const ON_PRIMARY_DARK := Color("#381E72")
-const PRIMARY_CONTAINER_DARK := Color("#4F378B")
-const ON_PRIMARY_CONTAINER_DARK := Color("#EADDFF")
+static var PRIMARY_DARK: Color = Color("#D0BCFF")
+static var ON_PRIMARY_DARK: Color = Color("#381E72")
+static var PRIMARY_CONTAINER_DARK: Color = Color("#4F378B")
+static var ON_PRIMARY_CONTAINER_DARK: Color = Color("#EADDFF")
 
-const SECONDARY_LIGHT := Color("#625B71")
-const ON_SECONDARY_LIGHT := Color("#FFFFFF")
-const SECONDARY_CONTAINER_LIGHT := Color("#E8DEF8")
-const ON_SECONDARY_CONTAINER_LIGHT := Color("#1D192B")
+static var SECONDARY_LIGHT: Color = Color("#625B71")
+static var ON_SECONDARY_LIGHT: Color = Color("#FFFFFF")
+static var SECONDARY_CONTAINER_LIGHT: Color = Color("#E8DEF8")
+static var ON_SECONDARY_CONTAINER_LIGHT: Color = Color("#1D192B")
 
-const SECONDARY_DARK := Color("#CCC2DC")
-const ON_SECONDARY_DARK := Color("#332D41")
-const SECONDARY_CONTAINER_DARK := Color("#4A4458")
-const ON_SECONDARY_CONTAINER_DARK := Color("#E8DEF8")
+static var SECONDARY_DARK: Color = Color("#CCC2DC")
+static var ON_SECONDARY_DARK: Color = Color("#332D41")
+static var SECONDARY_CONTAINER_DARK: Color = Color("#4A4458")
+static var ON_SECONDARY_CONTAINER_DARK: Color = Color("#E8DEF8")
 
-const TERTIARY_LIGHT := Color("#7D5260")
-const ON_TERTIARY_LIGHT := Color("#FFFFFF")
-const TERTIARY_CONTAINER_LIGHT := Color("#FFD8E4")
-const ON_TERTIARY_CONTAINER_LIGHT := Color("#31111D")
+static var TERTIARY_LIGHT: Color = Color("#7D5260")
+static var ON_TERTIARY_LIGHT: Color = Color("#FFFFFF")
+static var TERTIARY_CONTAINER_LIGHT: Color = Color("#FFD8E4")
+static var ON_TERTIARY_CONTAINER_LIGHT: Color = Color("#31111D")
 
-const TERTIARY_DARK := Color("#EFB8C8")
-const ON_TERTIARY_DARK := Color("#31111D")
-const TERTIARY_CONTAINER_DARK := Color("#633B48")
-const ON_TERTIARY_CONTAINER_DARK := Color("#FFD8E4")
+static var TERTIARY_DARK: Color = Color("#EFB8C8")
+static var ON_TERTIARY_DARK: Color = Color("#31111D")
+static var TERTIARY_CONTAINER_DARK: Color = Color("#633B48")
+static var ON_TERTIARY_CONTAINER_DARK: Color = Color("#FFD8E4")
 
-const ERROR_LIGHT := Color("#B3261E")
-const ON_ERROR_LIGHT := Color("#FFFFFF")
-const ERROR_CONTAINER_LIGHT := Color("#F9DEDC")
-const ON_ERROR_CONTAINER_LIGHT := Color("#410E0B")
+static var ERROR_LIGHT: Color = Color("#B3261E")
+static var ON_ERROR_LIGHT: Color = Color("#FFFFFF")
+static var ERROR_CONTAINER_LIGHT: Color = Color("#F9DEDC")
+static var ON_ERROR_CONTAINER_LIGHT: Color = Color("#410E0B")
 
-const ERROR_DARK := Color("#F2B8B5")
-const ON_ERROR_DARK := Color("#601410")
-const ERROR_CONTAINER_DARK := Color("#8C1D18")
-const ON_ERROR_CONTAINER_DARK := Color("#F9DEDC")
+static var ERROR_DARK: Color = Color("#F2B8B5")
+static var ON_ERROR_DARK: Color = Color("#601410")
+static var ERROR_CONTAINER_DARK: Color = Color("#8C1D18")
+static var ON_ERROR_CONTAINER_DARK: Color = Color("#F9DEDC")
 
 const SURFACE_LIGHT := Color("#FFFBFE")
 const ON_SURFACE_LIGHT := Color("#1C1B1F")
@@ -115,6 +115,9 @@ const TAB_HEIGHT := 48
 const SLIDER_TRACK_HEIGHT := 4
 const PROGRESS_HEIGHT := 4
 const SCROLLBAR_THICKNESS := 8
+const SCROLLBAR_OPACITY := 0.70
+const SCROLLBAR_OPACITY_HOVER := 0.85
+const SCROLLBAR_OPACITY_PRESSED := 0.95
 
 # ============================================
 # ELEVATION SHADOWS
@@ -210,12 +213,81 @@ static func get_inverse_on_surface() -> Color:
 	return INVERSE_ON_SURFACE_DARK if is_dark_mode else INVERSE_ON_SURFACE_LIGHT
 
 # ============================================
+# DYNAMIC PALETTE GENERATION
+# ============================================
+
+static func _compute_on_color(bg: Color, hue: float, is_container: bool = false) -> Color:
+	var luminance = bg.get_luminance()
+	if luminance > 0.5:
+		var sat = 0.7 if is_container else 0.5
+		var val = 0.15 if is_container else 0.25
+		return Color.from_hsv(hue, sat, val)
+	else:
+		var sat = 0.2 if is_container else 0.1
+		return Color.from_hsv(hue, sat, 1.0)
+
+static func set_primary_seed(seed: Color) -> void:
+	var ref_s = 0.52
+	var ref_v = 0.64
+
+	var h = seed.h
+	var s = clamp(seed.s, 0.2, 1.0)
+	var v = clamp(seed.v, 0.3, 0.9)
+
+	# Primary family
+	PRIMARY_LIGHT = Color.from_hsv(h, s, v)
+	ON_PRIMARY_LIGHT = _compute_on_color(PRIMARY_LIGHT, h)
+	PRIMARY_CONTAINER_LIGHT = Color.from_hsv(h, s * 0.15, 1.0)
+	ON_PRIMARY_CONTAINER_LIGHT = _compute_on_color(PRIMARY_CONTAINER_LIGHT, h, true)
+
+	PRIMARY_DARK = Color.from_hsv(h, s * 0.5, 1.0)
+	ON_PRIMARY_DARK = _compute_on_color(PRIMARY_DARK, h)
+	PRIMARY_CONTAINER_DARK = Color.from_hsv(h, s * 1.15, v * 0.86)
+	ON_PRIMARY_CONTAINER_DARK = _compute_on_color(PRIMARY_CONTAINER_DARK, h, true)
+
+	# Secondary (same hue family, lower chroma)
+	var sec_s = s * 0.31
+	SECONDARY_LIGHT = Color.from_hsv(h, sec_s, v * 0.69)
+	ON_SECONDARY_LIGHT = _compute_on_color(SECONDARY_LIGHT, h)
+	SECONDARY_CONTAINER_LIGHT = Color.from_hsv(h, sec_s * 0.3, 0.92)
+	ON_SECONDARY_CONTAINER_LIGHT = _compute_on_color(SECONDARY_CONTAINER_LIGHT, h, true)
+
+	SECONDARY_DARK = Color.from_hsv(h, sec_s * 0.69, 0.85)
+	ON_SECONDARY_DARK = _compute_on_color(SECONDARY_DARK, h)
+	SECONDARY_CONTAINER_DARK = Color.from_hsv(h, sec_s * 1.5, 0.35)
+	ON_SECONDARY_CONTAINER_DARK = _compute_on_color(SECONDARY_CONTAINER_DARK, h, true)
+
+	# Tertiary (rotated hue, medium chroma)
+	var tert_h = fmod(h + 0.227, 1.0)
+	var tert_s = s * 0.65
+	TERTIARY_LIGHT = Color.from_hsv(tert_h, tert_s, v * 0.77)
+	ON_TERTIARY_LIGHT = _compute_on_color(TERTIARY_LIGHT, tert_h)
+	TERTIARY_CONTAINER_LIGHT = Color.from_hsv(tert_h, tert_s * 0.15, 1.0)
+	ON_TERTIARY_CONTAINER_LIGHT = _compute_on_color(TERTIARY_CONTAINER_LIGHT, tert_h, true)
+
+	TERTIARY_DARK = Color.from_hsv(tert_h, tert_s * 0.48, 0.95)
+	ON_TERTIARY_DARK = _compute_on_color(TERTIARY_DARK, tert_h)
+	TERTIARY_CONTAINER_DARK = Color.from_hsv(tert_h, tert_s * 1.08, 0.4)
+	ON_TERTIARY_CONTAINER_DARK = _compute_on_color(TERTIARY_CONTAINER_DARK, tert_h, true)
+
+	# Error (fixed red family)
+	ERROR_LIGHT = Color.from_hsv(0.01, 0.83, 0.70)
+	ON_ERROR_LIGHT = _compute_on_color(ERROR_LIGHT, 0.01)
+	ERROR_CONTAINER_LIGHT = Color.from_hsv(0.01, 0.20, 1.0)
+	ON_ERROR_CONTAINER_LIGHT = _compute_on_color(ERROR_CONTAINER_LIGHT, 0.01, true)
+
+	ERROR_DARK = Color.from_hsv(0.01, 0.26, 0.95)
+	ON_ERROR_DARK = _compute_on_color(ERROR_DARK, 0.01)
+	ERROR_CONTAINER_DARK = Color.from_hsv(0.01, 0.60, 0.35)
+	ON_ERROR_CONTAINER_DARK = _compute_on_color(ERROR_CONTAINER_DARK, 0.01, true)
+
+# ============================================
 # ELEVATION
 # ============================================
 
 static func get_elevation_surface(level: int) -> Color:
 	var surface = get_surface()
-	var tint = PRIMARY_DARK if is_dark_mode else PRIMARY_LIGHT
+	var tint = get_primary()
 	var opacity = 0.0
 	match level:
 		0: opacity = 0.0
@@ -576,7 +648,7 @@ static func generate_theme() -> Theme:
 	t.set_font_size("font_size", "TabContainer", TYPE_TITLE_SMALL)
 	
 	# ========================================
-	# SCROLLBARS
+	# SCROLLBARS (M3 compliant)
 	# ========================================
 	var sb_track = StyleBoxFlat.new()
 	sb_track.bg_color = Color.TRANSPARENT
@@ -590,14 +662,18 @@ static func generate_theme() -> Theme:
 	sb_track.content_margin_bottom = 2
 	
 	var sb_grabber = StyleBoxFlat.new()
-	sb_grabber.bg_color = on_surf_var
-	sb_grabber.set_corner_radius_all(4)
+	sb_grabber.bg_color = Color(outl.r, outl.g, outl.b, SCROLLBAR_OPACITY)
+	sb_grabber.set_corner_radius_all(SCROLLBAR_THICKNESS / 2)
 	
 	var sb_grabber_hi = StyleBoxFlat.new()
-	sb_grabber_hi.bg_color = on_surf
-	sb_grabber_hi.set_corner_radius_all(4)
+	sb_grabber_hi.bg_color = Color(outl.r, outl.g, outl.b, SCROLLBAR_OPACITY_HOVER)
+	sb_grabber_hi.set_corner_radius_all(SCROLLBAR_THICKNESS / 2)
 	
-	for sb in [sb_grabber, sb_grabber_hi]:
+	var sb_grabber_pressed = StyleBoxFlat.new()
+	sb_grabber_pressed.bg_color = Color(on_surf.r, on_surf.g, on_surf.b, SCROLLBAR_OPACITY_PRESSED)
+	sb_grabber_pressed.set_corner_radius_all(SCROLLBAR_THICKNESS / 2)
+	
+	for sb in [sb_grabber, sb_grabber_hi, sb_grabber_pressed]:
 		sb.anti_aliasing = true
 		sb.anti_aliasing_size = 1.0
 	
@@ -606,12 +682,14 @@ static func generate_theme() -> Theme:
 	t.set_stylebox("scroll_focus", "VScrollBar", sb_track)
 	t.set_stylebox("grabber", "VScrollBar", sb_grabber)
 	t.set_stylebox("grabber_highlight", "VScrollBar", sb_grabber_hi)
+	t.set_stylebox("grabber_pressed", "VScrollBar", sb_grabber_pressed)
 	
 	# HScrollBar
 	t.set_stylebox("scroll", "HScrollBar", sb_track)
 	t.set_stylebox("scroll_focus", "HScrollBar", sb_track)
 	t.set_stylebox("grabber", "HScrollBar", sb_grabber)
 	t.set_stylebox("grabber_highlight", "HScrollBar", sb_grabber_hi)
+	t.set_stylebox("grabber_pressed", "HScrollBar", sb_grabber_pressed)
 	
 	# ========================================
 	# POPUP MENU (elevated)
