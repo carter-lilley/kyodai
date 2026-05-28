@@ -1,7 +1,7 @@
 class_name HeroDesignerView
 extends Control
 
-var _container_state: EffectContainerState
+var _media_container: MediaContainer = MediaContainer.new()
 var _current_config: Dictionary = {}
 
 var _preview_hero: HeroImage
@@ -13,7 +13,6 @@ var _height_preset_btn: OptionButton
 const HEIGHT_RATIOS = [1.0, 0.66, 0.5, 0.33, 0.0]
 
 func _ready():
-	_container_state = EffectContainerState.for_hero()
 	_setup_ui()
 	_load_current_config()
 	
@@ -194,8 +193,8 @@ func _load_current_config():
 		_effect_designer_ui.set_config(_current_config)
 	
 	# Update container state
-	_container_state.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
-	_container_state.effect_settings = _current_config.get("effects", [])
+	_media_container.corner_radius_ratio = _current_config.get("corner_radius", 0.06)
+	_media_container.effect_settings = _current_config.get("effects", [])
 
 func _get_default_config() -> Dictionary:
 	return {
@@ -244,7 +243,7 @@ func _save_to_settings() -> void:
 
 func _on_corner_radius_changed(value: float):
 	_current_config["corner_radius"] = value
-	_container_state.corner_radius_ratio = value
+	_media_container.corner_radius_ratio = value
 	_update_preview()
 	_save_to_settings()
 
@@ -313,16 +312,7 @@ func _force_hero_resize():
 	await get_tree().process_frame
 	
 	# Update the EffectStack with the actual container size
-	if _preview_hero._effect_stack:
+	if _preview_hero._effect_stack and _preview_hero._effect_stack.media_container:
 		var actual_size = _preview_hero.size
-		
-		var state = _preview_hero._effect_stack.get_container_state()
-		if state:
-			state.container_size = actual_size
-			state._recalculate_shape()
-			
-			# Update all effects with the new size
-			for effect_id in _preview_hero._effect_stack._effects:
-				var effect = _preview_hero._effect_stack._effects[effect_id]
-				if effect and effect.visible:
-					effect.update_state(state)
+		_preview_hero._effect_stack.media_container.bounds = Rect2(Vector2.ZERO, actual_size)
+		_preview_hero._effect_stack.force_refresh()

@@ -1,7 +1,10 @@
 class_name CardDesignerView
 extends Control
 
-var _container_state: EffectContainerState = EffectContainerState.for_card()
+var _media_container: MediaContainer = MediaContainer.new()
+
+func _init():
+	_media_container.bounds = Rect2(Vector2.ZERO, Vector2(202.0, 270.0))
 var _current_config: Dictionary = {}
 
 var _preview_card: GameCard
@@ -180,11 +183,11 @@ func _load_current_config():
 	
 	var rounding_value = _current_config.get("card_rounding", 0.12)
 	_card_rounding_slider.value = rounding_value
-	_container_state.corner_radius_ratio = rounding_value
+	_media_container.corner_radius_ratio = rounding_value
 	if _preview_card and is_instance_valid(_preview_card):
 		_preview_card.card_rounding_ratio = rounding_value
-	_container_state.effect_settings = _current_config.get("effects", [])
-	_container_state.focus_effect_settings = _current_config.get("focus_effects", [])
+	_media_container.effect_settings = _current_config.get("effects", [])
+	_media_container.focus_effect_settings = _current_config.get("focus_effects", [])
 	
 	# Sync shared effect designers
 	if _base_effect_designer:
@@ -204,7 +207,7 @@ func _setup_preview_card():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
-	_preview_card.custom_minimum_size = _container_state.container_size
+	_preview_card.custom_minimum_size = _media_container.size
 	
 	# Save current config to SettingsManager so refresh_settings() picks it up
 	_save_to_settings()
@@ -227,7 +230,7 @@ func _on_card_rounding_changed(value: float):
 	_current_config["card_rounding"] = value
 	if _preview_card:
 		_preview_card.card_rounding_ratio = value
-	_container_state.corner_radius_ratio = value
+	_media_container.corner_radius_ratio = value
 	_update_preview()
 	_save_to_settings()
 

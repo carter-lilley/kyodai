@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 uniform vec2 shape_size = vec2(100.0, 100.0);
 uniform float corner_radius_ratio = 0.0;
-uniform float corner_radius_pixels = 0.0;  // Pre-calculated from EffectContainerState for consistency
+uniform float corner_radius_pixels = 0.0;  // Pre-calculated from MediaContainer for consistency
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 0.8);
 uniform float border_width : hint_range(1.0, 20.0) = 6.0;
 uniform bool debug_mode = false;
@@ -10,7 +10,7 @@ uniform float chase_speed : hint_range(0.0, 5.0) = 0.65;
 uniform float gap_size : hint_range(0.0, 0.3) = 0.04;
 uniform float fade_length : hint_range(0.0, 0.5) = 0.35;
 
-// SDF using pre-calculated pixel radius (matches EffectContainerState calculation exactly)
+// SDF using pre-calculated pixel radius (matches MediaContainer calculation exactly)
 float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 	vec2 half_size = size * 0.5;
 	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));

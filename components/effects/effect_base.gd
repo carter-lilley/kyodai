@@ -5,10 +5,12 @@ extends ColorRect
 @export var effect_id: String = ""
 
 var _settings: Dictionary = {}
-var _container_state: EffectContainerState
+var media_container: MediaContainer = null
 
 # Reference to base effect (for focus effects that overlap with base)
 var _base_effect: EffectBase = null
+
+var enabled: bool = true
 
 # These signals are part of the public API for subclasses and external systems.
 @warning_ignore("unused_signal")
@@ -23,35 +25,23 @@ func _ready():
 	# Make the ColorRect transparent so shader can control visibility
 	color = Color.TRANSPARENT
 	# If initialize() ran before _ready() (deferred), push shader params now that material exists
-	if _container_state:
+	if media_container:
 		_update_shader_params()
 
-func initialize(container_state: EffectContainerState, settings: Dictionary) -> void:
-	_container_state = container_state
+func initialize(container: MediaContainer, settings: Dictionary) -> void:
+	media_container = container
 	_settings = settings.duplicate()
 	if material == null:
 		material = ShaderMaterial.new()
 	_setup_shader()
 	_apply_settings()
-	_connect_container_state_signals()
+	if media_container:
+		media_container.changed.connect(_on_media_changed)
 	_update_shader_params()
 
 func set_base_effect(base: EffectBase) -> void:
 	"""Set the base effect that this focus effect should tween from."""
 	_base_effect = base
-
-func update_state(container_state: EffectContainerState) -> void:
-	if _container_state == container_state:
-		# Same state object — skip expensive disconnect/reconnect churn
-		_update_shader_params()
-		return
-	_disconnect_container_state_signals()
-	_container_state = container_state
-	_connect_container_state_signals()
-	# Manually trigger size update since the signal may have fired before we reconnected
-	if _container_state:
-		_on_size_changed(_container_state.container_size)
-	_update_shader_params()
 
 func update_settings(settings: Dictionary) -> void:
 	_settings = settings.duplicate()
@@ -124,6 +114,11 @@ func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> 
 		# For non-interpolatable types, use threshold
 		return to_val if progress >= 0.5 else from_val
 
+func compute_pipeline(cache: Dictionary) -> void:
+	"""Override to compute shared values and write to pipeline cache.
+	Called in layer order before _update_shader_params()."""
+	pass
+
 func _setup_shader() -> void:
 	pass
 
@@ -148,59 +143,9 @@ func _update_shader_params() -> void:
 func _set_shader_param(param: String, value: Variant) -> void:
 	var mat = material as ShaderMaterial
 	if mat:
-		# DEBUG: Track saturation_scale changes for HSL
-		if effect_id == "hsl" and param == "saturation_scale":
-			var card = get_parent()
-			var is_focus = card and card.get_parent() and card.get_parent().name == "FocusEffects"
-			if is_focus:
-				print("[HSL SHADER] Setting saturation_scale: %.3f on %s" % [value, name])
 		mat.set_shader_parameter(param, value)
 
-# Reactive signal connections
-func _connect_container_state_signals() -> void:
-	if not _container_state:
-		return
-	_container_state.zoom_changed.connect(_on_zoom_changed)
-	_container_state.size_changed.connect(_on_size_changed)
-	_container_state.corner_radius_changed.connect(_on_corner_radius_changed)
-	_container_state.border_inset_changed.connect(_on_border_inset_changed)
-	_container_state.shape_changed.connect(_on_shape_changed)
-
-func _disconnect_container_state_signals() -> void:
-	if not _container_state:
-		return
-	if _container_state.zoom_changed.is_connected(_on_zoom_changed):
-		_container_state.zoom_changed.disconnect(_on_zoom_changed)
-	if _container_state.size_changed.is_connected(_on_size_changed):
-		_container_state.size_changed.disconnect(_on_size_changed)
-	if _container_state.corner_radius_changed.is_connected(_on_corner_radius_changed):
-		_container_state.corner_radius_changed.disconnect(_on_corner_radius_changed)
-	if _container_state.border_inset_changed.is_connected(_on_border_inset_changed):
-		_container_state.border_inset_changed.disconnect(_on_border_inset_changed)
-	if _container_state.shape_changed.is_connected(_on_shape_changed):
-		_container_state.shape_changed.disconnect(_on_shape_changed)
-
-func _on_zoom_changed(_new_zoom: float) -> void:
-	if _is_tweening:
-		return
-	_update_shader_params()
-
-func _on_size_changed(_new_size: Vector2) -> void:
-	if _is_tweening:
-		return
-	_update_shader_params()
-
-func _on_corner_radius_changed(_new_ratio: float) -> void:
-	if _is_tweening:
-		return
-	_update_shader_params()
-
-func _on_border_inset_changed(_new_ratio: float) -> void:
-	if _is_tweening:
-		return
-	_update_shader_params()
-
-func _on_shape_changed() -> void:
+func _on_media_changed() -> void:
 	if _is_tweening:
 		return
 	_update_shader_params()

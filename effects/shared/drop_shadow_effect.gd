@@ -2,9 +2,8 @@ class_name DropShadowEffect
 extends EffectBase
 
 static func get_allowed_contexts() -> Array[String]:
-	return ["hero"]
+	return ["hero", "base_card", "focus_card"]
 
-# Base margin ratio for shadow (0.05 = 5% of card width)
 const SHADOW_MARGIN_RATIO = 0.05
 
 func _ready():
@@ -21,12 +20,10 @@ func _apply_settings() -> void:
 	_update_shadow_offsets()
 	_update_shader_params()
 
-func _on_zoom_changed(_new_zoom: float) -> void:
+func compute_pipeline(cache: Dictionary) -> void:
 	_update_shadow_offsets()
-	_update_shader_params()
 
 func _update_shadow_offsets():
-	# Use anchors so Godot handles sizing automatically
 	var shadow_offset_y_ratio = _settings.get("shadow_offset_y", 0.05)
 	var shadow_softness_ratio = _settings.get("shadow_softness", 0.04)
 	var margin_ratio = SHADOW_MARGIN_RATIO + abs(shadow_offset_y_ratio) + shadow_softness_ratio
@@ -42,7 +39,7 @@ func _update_shadow_offsets():
 	offset_bottom = 0.0
 
 func _update_shader_params() -> void:
-	if not _container_state:
+	if not media_container:
 		return
 	
 	var shadow_color = _settings.get("shadow_color", Color(0, 0, 0, 0.5))
@@ -52,16 +49,15 @@ func _update_shader_params() -> void:
 	var shadow_spread = _settings.get("shadow_spread", 0.0)
 	var shadow_expand = _settings.get("shadow_expand", 0.02)
 	
-	var card_size = _container_state.container_size
+	var card_size = media_container.size
 	var card_width = card_size.x
 	
-	# Convert ratios to pixels for shader
 	var shadow_offset = Vector2(shadow_offset_x * card_width, shadow_offset_y * card_width)
 	var softness_pixels = shadow_softness * card_width
 	var margin_pixels = (SHADOW_MARGIN_RATIO + abs(shadow_offset_y) + shadow_softness) * card_width
 	
 	_set_shader_param("card_size", card_size)
-	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
+	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
 	_set_shader_param("shadow_color", shadow_color)
 	_set_shader_param("shadow_offset", shadow_offset)
 	_set_shader_param("shadow_softness", softness_pixels)

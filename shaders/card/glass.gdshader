@@ -70,9 +70,7 @@ void fragment() {
 	// Calculate border inset (same as base_card)
 	float border_inset_pixels = border_inset_ratio * card_size.x;
 	
-	// Subtract padding to extend under the border edge (same as base_card)
-	float padding_pixels = 5.0;
-	float effective_border_inset = max(0.0, border_inset_pixels - padding_pixels);
+	float effective_border_inset = border_inset_pixels;
 	
 	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
 	vec2 inner_offset = vec2(effective_border_inset);

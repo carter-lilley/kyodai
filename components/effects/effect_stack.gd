@@ -3,7 +3,7 @@ extends Control
 
 signal effects_changed
 
-var _container_state: EffectContainerState
+var media_container: MediaContainer
 var _effects: Dictionary = {}  # effect_id -> EffectBase instance
 var _effect_configs: Array = []  # Array of {effect_id, settings} dictionaries
 var _context: String = "base_card"
@@ -24,51 +24,36 @@ const EFFECT_REGISTRY: Dictionary = {
 
 # Layer order (z-index / child order) - lower = behind, higher = in front
 const EFFECT_LAYER_ORDER: Array = [
-	"glow",       # -2: Behind everything
-	"drop_shadow",# -1: Behind card
-	"base",       # 0: Base texture
-	"hsl",        # 1: HSL color adjustment
-	"blur",       # 2: Blur overlay
-	"distort",         # 3: Distortion overlay
-	"gradient_overlay", # 3: Gradient overlay
-	"glass",            # 4: Glass overlay
-	"border",           # 5: Border overlay
-	"badge",            # 6: Badge overlay
+	"glow",       # Behind everything
+	"drop_shadow",# Behind card
+	"base",       # Base texture
+	"hsl",        # HSL color adjustment
+	"blur",       # Blur overlay
+	"distort",         # Distortion overlay
+	"gradient_overlay", # Gradient overlay
+	"glass",            # Glass overlay
+	"border",           # Border overlay
+	"badge",            # Badge overlay
 ]
 
-func _init(container_state: EffectContainerState = null):
-	if container_state:
-		_container_state = container_state
-	else:
-		_container_state = EffectContainerState.new()
-
-func initialize(container_state: EffectContainerState, effect_configs: Array, context: String = "base_card"):
-	_container_state = container_state
+func initialize(container: MediaContainer, effect_configs: Array, context: String = "base_card"):
+	media_container = container
 	_effect_configs = effect_configs.duplicate(true)
 	_context = context
 	_rebuild_effects()
-
-func update_state(container_state: EffectContainerState):
-	_container_state = container_state
-	for effect_id in _effects:
-		var effect = _effects[effect_id]
-		if effect:
-			effect.update_state(_container_state)
 
 func update_effect_configs(effect_configs: Array):
 	_effect_configs = effect_configs.duplicate(true)
 	_rebuild_effects()
 
 func set_game_texture(texture: Texture2D):
-	_container_state.game_texture = texture
+	if media_container:
+		media_container.texture = texture
 	# Notify all effects that need the game texture
 	for effect_id in _effects:
 		var effect = _effects[effect_id]
 		if effect and effect.has_method("set_game_texture"):
 			effect.set_game_texture(texture)
-
-func get_container_state() -> EffectContainerState:
-	return _container_state
 
 func get_effect_configs() -> Array:
 	return _effect_configs.duplicate(true)
@@ -91,9 +76,10 @@ func _rebuild_effects():
 		if not effect_id in active_effect_ids:
 			_effects[effect_id].visible = false
 	
-	# Reset insets
-	_container_state.border_inset_ratio = 0.0
-	_container_state.glass_inset_ratio = 0.0
+	# Reset insets on media container
+	if media_container:
+		media_container.border_inset_ratio = 0.0
+		media_container.glass_inset_ratio = 0.0
 	
 	# Create/update effects in layer order
 	for effect_id in EFFECT_LAYER_ORDER:
@@ -105,7 +91,7 @@ func _rebuild_effects():
 				# Update existing effect
 				var effect = _effects[effect_id]
 				effect.visible = true
-				effect.update_state(_container_state)
+				effect.media_container = media_container
 				effect.update_settings(settings)
 			else:
 				# Create new effect
@@ -117,14 +103,16 @@ func _rebuild_effects():
 						continue
 					_effects[effect_id] = effect
 					add_child(effect)
-					effect.initialize(_container_state, settings)
+					effect.initialize(media_container, settings)
 			
 			# Update insets based on effect settings
 			match effect_id:
 				"border":
-					_container_state.border_inset_ratio = settings.get("border_size", 0.05)
+					if media_container:
+						media_container.border_inset_ratio = settings.get("border_size", 0.05)
 				"glass":
-					_container_state.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
+					if media_container:
+						media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
 			
 			# Set layer order
 			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)
@@ -136,7 +124,24 @@ func _rebuild_effects():
 		if effect_id in _effects and _effects[effect_id].visible:
 			move_child(_effects[effect_id], -1)
 	
+	# Run pipeline to compute shared values
+	_run_pipeline()
+	
 	effects_changed.emit()
+
+func _run_pipeline() -> void:
+	if not media_container:
+		return
+	var layers: Array = []
+	for effect_id in EFFECT_LAYER_ORDER:
+		if effect_id in _effects and _effects[effect_id].visible:
+			layers.append(_effects[effect_id])
+	media_container.run_pipeline(layers)
+	# Update all effects after pipeline runs
+	for effect_id in _effects:
+		var effect = _effects[effect_id]
+		if effect:
+			effect._update_shader_params()
 
 static var _script_cache: Dictionary[String, Script] = {}
 
@@ -187,13 +192,12 @@ static func get_available_effects() -> Dictionary:
 static func get_effect_display_name(effect_id: String) -> String:
 	return effect_id.replace("_", " ").capitalize()
 
+func force_refresh() -> void:
+	"""Public method to force a full pipeline refresh."""
+	_run_pipeline()
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
-		# Update container state with actual size
-		if _container_state and size.x > 0 and size.y > 0:
-			_container_state.container_size = size
-			# Update all effects with new size (even hidden ones, so they have correct params when shown)
-			for effect_id in _effects:
-				var effect = _effects[effect_id]
-				if effect:
-					effect.update_state(_container_state)
+		# Update media container bounds with actual size
+		if media_container and size.x > 0 and size.y > 0:
+			media_container.bounds = Rect2(Vector2.ZERO, size)

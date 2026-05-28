@@ -26,11 +26,11 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// Convert border ratios to pixels (corner_radius_pixels comes from EffectContainerState)
+	// Convert border ratios to pixels (corner_radius_pixels comes from MediaContainer)
 	float border_width_pixels = border_width_ratio * card_size.x;
 	float border_fade_in_pixels = border_fade_in_ratio * card_size.x;
 	
-	// Use shared corner_radius_pixels from EffectContainerState for consistent rounding
+	// Use shared corner_radius_pixels from MediaContainer for consistent rounding
 	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
 	
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);

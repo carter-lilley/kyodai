@@ -8,6 +8,7 @@ var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
 var _effect_stack: EffectStack = null
 var _dual_screen_mode: bool = false
+var _media_container: MediaContainer = null
 
 var _current_image_task_id: int = -1
 var _loading_game_id: String = ""
@@ -30,7 +31,9 @@ func _ready():
 	clear()
 
 func _setup_effect_stack():
-	# Create EffectStack
+	# Create MediaContainer and EffectStack
+	_media_container = MediaContainer.new()
+	
 	_effect_stack = EffectStack.new()
 	_effect_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_effect_stack.name = "EffectStack"
@@ -51,19 +54,15 @@ func _load_effect_config():
 		if config_setting and config_setting.value is Dictionary:
 			config = config_setting.value
 	
-	var state = EffectContainerState.for_hero()
-	state.corner_radius_ratio = config.get("corner_radius", 0.06)
-	state.effect_settings = config.get("effects", [])
-	_effect_stack.initialize(state, state.effect_settings, "hero")
+	_media_container.corner_radius_ratio = config.get("corner_radius", 0.06)
+	_media_container.effect_settings = config.get("effects", [])
+	_effect_stack.initialize(_media_container, _media_container.effect_settings, "hero")
 
 func _notification(what: int) -> void:
 	# Update size when resized
 	if what == NOTIFICATION_RESIZED:
-		if _effect_stack and size.x > 0 and size.y > 0:
-			# Update the container state with actual size
-			var state = _effect_stack.get_container_state()
-			if state:
-				state.container_size = size
+		if _media_container and size.x > 0 and size.y > 0:
+			_media_container.bounds = Rect2(Vector2.ZERO, size)
 
 func _create_gray_texture():
 	var img = Image.create(4, 4, false, Image.FORMAT_RGB8)
@@ -182,21 +181,13 @@ func refresh_from_settings():
 		# Store current texture and size before reloading
 		var current_texture = null
 		var current_size = Vector2.ZERO
-		if _effect_stack.get_container_state():
-			current_texture = _effect_stack.get_container_state().game_texture
-			current_size = _effect_stack.get_container_state().container_size
+		if _media_container:
+			current_texture = _media_container.texture
+			current_size = _media_container.size
 		_load_effect_config()
 		# Restore the texture and size after reloading
 		if current_texture:
 			_effect_stack.set_game_texture(current_texture)
 		# Restore the size to maintain aspect ratio
 		if current_size != Vector2.ZERO:
-			var state = _effect_stack.get_container_state()
-			if state:
-				state.container_size = current_size
-				state._recalculate_shape()
-				# Update all effects with the restored size
-				for effect_id in _effect_stack._effects:
-					var effect = _effect_stack._effects[effect_id]
-					if effect and effect.visible:
-						effect.update_state(state)
+			_media_container.bounds = Rect2(Vector2.ZERO, current_size)

@@ -2,16 +2,15 @@ class_name GlowEffect
 extends EffectBase
 
 static func get_allowed_contexts() -> Array[String]:
-	return ["hero"]
+	return ["hero", "base_card", "focus_card"]
 
-# Base margin ratio for glow (0.08 = 8% of card width)
 const GLOW_MARGIN_RATIO = 0.08
 
 func _ready():
 	super._ready()
 	effect_name = "Glow"
 	effect_id = "glow"
-	z_index = -2  # Render behind everything (even drop shadow)
+	z_index = -2
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
@@ -21,17 +20,10 @@ func _apply_settings() -> void:
 	_update_glow_offsets()
 	_update_shader_params()
 
-func _on_zoom_changed(_new_zoom: float) -> void:
+func compute_pipeline(cache: Dictionary) -> void:
 	_update_glow_offsets()
-	_update_shader_params()
-
-# Override to update geometry when container size changes
-func _on_size_changed(_new_size: Vector2) -> void:
-	_update_glow_offsets()
-	_update_shader_params()
 
 func _update_glow_offsets():
-	# Use anchors so Godot handles sizing automatically — no manual size/position needed
 	var glow_radius_ratio = _settings.get("glow_radius", 0.06)
 	var margin_ratio = GLOW_MARGIN_RATIO + glow_radius_ratio
 	
@@ -40,19 +32,18 @@ func _update_glow_offsets():
 	anchor_right = 1.0 + margin_ratio
 	anchor_bottom = 1.0 + margin_ratio
 	
-	# Clear offsets so size is purely anchor-driven
 	offset_left = 0.0
 	offset_top = 0.0
 	offset_right = 0.0
 	offset_bottom = 0.0
 
 func set_game_texture(texture: Texture2D) -> void:
-	if _container_state:
-		_container_state.game_texture = texture
+	if media_container:
+		media_container.texture = texture
 		_update_shader_params()
 
 func _update_shader_params() -> void:
-	if not _container_state:
+	if not media_container:
 		return
 	
 	var glow_radius = _settings.get("glow_radius", 0.1)
@@ -61,22 +52,21 @@ func _update_shader_params() -> void:
 	var threshold = _settings.get("threshold", 0.1)
 	var glow_spread = _settings.get("glow_spread", 0.05)
 	
-	var card_size = _container_state.container_size
+	var card_size = media_container.size
 	var card_width = card_size.x
 	
-	# Convert ratios to pixels
 	var radius_pixels = glow_radius * card_width
 	var margin_pixels = (GLOW_MARGIN_RATIO + glow_radius) * card_width
 	
 	_set_shader_param("card_size", card_size)
-	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
+	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
 	_set_shader_param("glow_radius", radius_pixels)
 	_set_shader_param("glow_intensity", glow_intensity)
 	_set_shader_param("blur_amount", blur_amount)
 	_set_shader_param("threshold", threshold)
 	_set_shader_param("glow_spread", glow_spread)
 	_set_shader_param("glow_margin", margin_pixels)
-	_set_shader_param("game_texture", _container_state.game_texture)
+	_set_shader_param("game_texture", media_container.texture)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

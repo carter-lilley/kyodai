@@ -13,7 +13,6 @@ func _ready():
 
 func update_settings(settings: Dictionary) -> void:
 	visible = true
-	queue_redraw()
 	super.update_settings(settings)
 
 func _setup_shader() -> void:
@@ -24,15 +23,14 @@ func _apply_settings() -> void:
 	_update_shader_params()
 
 func _update_shader_params() -> void:
-	if not _container_state:
+	if not media_container:
 		return
 	
 	var gradient = _settings.get("gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
 	
-	# Pass card dimensions and shape parameters for SDF clipping
-	_set_shader_param("card_size", _container_state.container_size)
-	_set_shader_param("corner_radius_pixels", _container_state.corner_radius_pixels)
+	_set_shader_param("card_size", media_container.size)
+	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("gradient_direction", gradient_direction)
 	
 	if gradient is Gradient:

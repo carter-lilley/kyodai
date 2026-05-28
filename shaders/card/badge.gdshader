@@ -132,7 +132,7 @@ void fragment() {
 		}
 	}
 	
-	// Clip to card shape using shared shape parameters from EffectContainerState
+	// Clip to card shape using shared shape parameters from MediaContainer
 	// Calculate inner size (after glass inset) and check SDF against that
 	float glass_inset_pixels = glass_inset_ratio * card_size.x;
 	vec2 inner_size = card_size - vec2(glass_inset_pixels * 2.0);

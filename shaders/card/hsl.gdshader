@@ -18,8 +18,7 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	float padding_pixels = 5.0;
-	float effective_inset = max(0.0, total_inset_pixels - padding_pixels);
+	float effective_inset = total_inset_pixels;
 	
 	vec2 inner_size = card_size - vec2(effective_inset * 2.0);
 	vec2 inner_offset = vec2(effective_inset);

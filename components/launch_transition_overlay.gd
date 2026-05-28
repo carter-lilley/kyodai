@@ -168,11 +168,11 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	_effect_stack.position = card_rect.position - Vector2(2, 2)
 	_effect_stack.size = card_rect.size + Vector2(4, 4)
 	
-	# Create a container state for the effect stack
-	var container_state = EffectContainerState.for_card()
-	container_state.game_texture = texture
-	container_state.container_size = card_rect.size
-	container_state.corner_radius_ratio = start_corner_radius  # Start with card's corner radius
+	# Create a media container for the effect stack
+	var media_container = MediaContainer.new()
+	media_container.texture = texture
+	media_container.bounds = Rect2(Vector2.ZERO, card_rect.size)
+	media_container.corner_radius_ratio = start_corner_radius
 	
 	# Setup minimal effect stack with base + HSL + gradient overlay
 	# Disable smart crop for launch transition (scale from center, not bottom)
@@ -187,7 +187,7 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 		{"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_direction": 1}}
 	]
 	
-	_effect_stack.initialize(container_state, effect_configs)
+	_effect_stack.initialize(media_container, effect_configs)
 	
 	# Set the game texture on the base effect
 	var base_effect = _effect_stack.get_effect("base") as BaseCardEffect
@@ -206,7 +206,7 @@ func _animate_transition():
 	var target_size = viewport_size + Vector2(overshoot * 2, overshoot * 2)
 	var target_pos = Vector2(-overshoot, -overshoot)  # Center the overshoot
 	
-	var container_state = _effect_stack.get_container_state()
+	var media_container = _effect_stack.media_container
 	
 	# PHASE 1: Scale and position with QUART + EASE_OUT
 	tween.set_trans(Tween.TRANS_QUART)
@@ -218,35 +218,32 @@ func _animate_transition():
 	tween.tween_property(_effect_stack, "size", target_size, PHASE1_DURATION)
 	
 	# Animate UV transforms, vertical offset, and corner radius during scale
-	if container_state and container_state.game_texture:
-		var tex_size = container_state.game_texture.get_size()
+	if media_container and media_container.texture:
+		var tex_size = media_container.texture.get_size()
 		var tex_aspect = tex_size.x / tex_size.y
 		
 		tween.tween_method(
 			func(t: float):
 				var current_size = _effect_stack.size
-				container_state.container_size = current_size
+				media_container.bounds = Rect2(Vector2.ZERO, current_size)
 				
 				# Calculate vertical offset to keep image centered during aspect ratio change
 				var card_aspect = current_size.x / current_size.y
 				if card_aspect > tex_aspect:
 					# Scaling from portrait to landscape - image will be cropped vertically
 					var scale_y = tex_aspect / card_aspect
-					container_state.vertical_offset = (1.0 - scale_y) / 2.0
+					media_container.vertical_offset = (1.0 - scale_y) / 2.0
 				else:
-					container_state.vertical_offset = 0.0
+					media_container.vertical_offset = 0.0
 				
-				for effect_id in ["base", "hsl"]:
-					var effect = _effect_stack.get_effect(effect_id)
-					if effect:
-						effect.update_state(container_state),
+				_effect_stack.force_refresh(),
 			0.0, 1.0, PHASE1_DURATION
 		)
 		
-		var start_corner_radius = container_state.corner_radius_ratio
+		var start_corner_radius = media_container.corner_radius_ratio
 		tween.tween_method(
 			func(t: float):
-				container_state.corner_radius_ratio = lerpf(start_corner_radius, 0.0, t),
+				media_container.corner_radius_ratio = lerpf(start_corner_radius, 0.0, t),
 			0.0, 1.0, PHASE1_DURATION
 		)
 	

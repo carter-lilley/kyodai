@@ -25,7 +25,6 @@ var _current_texture: Texture2D = null
 var _media_stack: EffectStack = null
 var _focus_stack: EffectStack = null
 var _focus_effect_tweens: Array[Tween] = []
-var _card_state: EffectContainerState = EffectContainerState.for_card()
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -105,14 +104,14 @@ func _reparent_status_badge_to_media_stack():
 	_media_stack.add_child(_status_badge)
 	_update_status_badge_layout()
 
-func get_card_state() -> EffectContainerState:
-	return _card_state
+func get_card_state() -> MediaContainer:
+	return _media_container
 
 func get_focus_shape_params() -> Dictionary:
 	return {
-		"shape_size": _card_state.container_size,
-		"corner_radius_ratio": _card_state.corner_radius_ratio,
-		"corner_radius_pixels": _card_state.corner_radius_pixels
+		"shape_size": _media_container.size,
+		"corner_radius_ratio": _media_container.corner_radius_ratio,
+		"corner_radius_pixels": _media_container.get_corner_radius_pixels()
 	}
 
 func get_current_texture() -> Texture2D:
@@ -155,7 +154,7 @@ func _build_media_stack():
 			_media_stack.set_game_texture(_current_texture)
 	else:
 		_media_stack = EffectStack.new()
-		_media_stack.initialize(_card_state, effect_settings, "base_card")
+		_media_stack.initialize(_media_container, effect_settings, "base_card")
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		set_media_content(_media_stack)
@@ -208,11 +207,7 @@ func _build_focus_stack() -> void:
 	_focus_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_focus_stack)
 	
-	# Use a duplicated state so focus stack insets don't clobber base stack
-	var focus_state = _card_state.duplicate()
-	focus_state.effect_settings = focus_effect_settings.duplicate(true)
-	
-	_focus_stack.initialize(focus_state, focus_effect_settings, "focus_card")
+	_focus_stack.initialize(_media_container, focus_effect_settings, "focus_card")
 	if _current_texture:
 		_focus_stack.set_game_texture(_current_texture)
 	
@@ -357,8 +352,8 @@ func _update_card_state_from_settings():
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
-			_card_state.effect_settings = config_setting.value.get("effects", [])
-			_card_state.focus_effect_settings = config_setting.value.get("focus_effects", [])
+			_media_container.effect_settings = config_setting.value.get("effects", [])
+			_media_container.focus_effect_settings = config_setting.value.get("focus_effects", [])
 			# Migrate old keys to unified card_rounding
 			var config_dict = config_setting.value.duplicate(true)
 			if not config_dict.has("card_rounding"):
@@ -367,20 +362,16 @@ func _update_card_state_from_settings():
 				elif config_dict.has("corner_radius"):
 					config_dict["card_rounding"] = config_dict["corner_radius"]
 			
-			# Ensure container_size is current before corner_radius triggers _recalculate_shape
-			if size.x > 0.0 and size.y > 0.0:
-				_card_state.container_size = size
-			
 			var corner_value = config_dict.get("card_rounding", 0.12)
 			if corner_value > 1.0:
 				# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
 				const LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP: float = 202.0
-				_card_state.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
+				_media_container.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
 			else:
-				_card_state.corner_radius_ratio = corner_value
+				_media_container.corner_radius_ratio = corner_value
 			
 			# Apply the same rounding to the M3Card background clip
-			card_rounding_ratio = _card_state.corner_radius_ratio
+			card_rounding_ratio = _media_container.corner_radius_ratio
 		
 		var display_setting = SettingsManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
@@ -389,7 +380,6 @@ func _update_card_state_from_settings():
 		_apply_display_mode()
 
 func _apply_display_mode() -> void:
-	_card_state.display_mode = _display_mode
 	# Map display mode to background/text visibility
 	match _display_mode:
 		0: # Standard
@@ -517,7 +507,7 @@ func _update_status_badge_layout():
 func _update_status_badge_style():
 	if not _status_badge:
 		return
-	var panel_width = size.x if size.x > 0 else _card_state.container_size.x
+	var panel_width = size.x if size.x > 0 else _media_container.size.x
 	if _media_stack and is_instance_valid(_media_stack) and _media_stack.size.x > 0:
 		panel_width = _media_stack.size.x
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
@@ -561,7 +551,7 @@ func _update_platform_badge():
 	var icon_texture: Texture2D = null
 	
 	var badge_config := {}
-	for effect_data in _card_state.effect_settings:
+	for effect_data in _media_container.effect_settings:
 		if effect_data is Dictionary and effect_data.get("effect_id") == "badge":
 			badge_config = effect_data
 			break
@@ -571,9 +561,9 @@ func _update_platform_badge():
 	var badge_size_setting = settings.get("badge_size", 1.0)
 	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
 	
-	var card_width = _card_state.container_size.x
-	var corner_radius_pixels = _card_state.corner_radius_pixels
-	var total_inset = _card_state.total_inset_pixels
+	var card_width = _media_container.size.x
+	var corner_radius_pixels = _media_container.get_corner_radius_pixels()
+	var total_inset = _media_container.get_total_inset_pixels()
 	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
 	
 	if platform_slug:

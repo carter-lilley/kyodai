@@ -204,8 +204,13 @@ func _update_flow_container_flags() -> void:
 		return
 	match view_mode:
 		ViewMode.GRID:
-			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-			_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			# GRID: FlowContainer fills the scroll direction to prevent side gaps
+			if vertical:
+				_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			else:
+				_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+				_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		ViewMode.LIST:
 			_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -236,6 +241,11 @@ func _get_focus_overflow() -> Vector2:
 		ViewMode.CAROUSEL:
 			return Vector2(maxf(0.0, (focused_card_size.x - card_size.x) / 2.0), 0.0)
 	return Vector2.ZERO
+
+func _get_focus_scale_inverted() -> bool:
+	# LIST/CAROUSEL: card starts at 1.0/focus_scale and grows to 1.0 when focused.
+	# GRID: card starts at 1.0 and grows to focus_scale when focused.
+	return view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL
 
 func _get_available_size() -> Vector2:
 	var scrollbar_x = 0.0
@@ -409,7 +419,7 @@ func _calculate_max_ratio() -> float:
 	var card_area = (base_dims.x * card_zoom) * (base_dims.y * card_zoom)
 	var ratio = sqrt(card_area / viewport_area)
 	
-	return max(ratio / 2.0, 0.25)
+	return max(ratio, 0.05)
 
 ## Returns all possible snap ratios for the current viewport configuration.
 ## Each ratio corresponds to a whole number of cards per line.
@@ -480,12 +490,12 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 		var target_card_height: float
 		
 		if vertical:
-			var target_item_width = effective_width / items_per_line
-			target_card_width = target_item_width - grid_separation
+			var target_item_width = (effective_width - (items_per_line - 1) * grid_separation) / items_per_line
+			target_card_width = target_item_width
 			target_card_height = target_card_width * (base_dims.y / base_dims.x)
 		else:
-			var target_item_height = effective_height / items_per_line
-			target_card_height = target_item_height - grid_separation
+			var target_item_height = (effective_height - (items_per_line - 1) * grid_separation) / items_per_line
+			target_card_height = target_item_height
 			target_card_width = target_card_height * (base_dims.x / base_dims.y)
 		
 		target_card_width = max(target_card_width, base_dims.x * 0.1)
@@ -506,12 +516,12 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 	var final_card_height: float
 	
 	if vertical:
-		var target_item_width = effective_width / items_per_line
-		final_card_width = target_item_width - grid_separation
+		var target_item_width = (effective_width - (items_per_line - 1) * grid_separation) / items_per_line
+		final_card_width = target_item_width
 		final_card_height = final_card_width * (base_dims.y / base_dims.x)
 	else:
-		var target_item_height = effective_height / items_per_line
-		final_card_height = target_item_height - grid_separation
+		var target_item_height = (effective_height - (items_per_line - 1) * grid_separation) / items_per_line
+		final_card_height = target_item_height
 		final_card_width = final_card_height * (base_dims.x / base_dims.y)
 	
 	final_card_width = max(final_card_width, base_dims.x * 0.1)
@@ -584,10 +594,14 @@ func _recalculate_layout():
 			card_size = base_dims * current_zoom
 			focused_card_size = card_size * focus_scale
 		ViewMode.LIST:
+			# LIST: normal card is smaller so focused card fills viewport exactly.
+			# Focus overflow = (focused - normal) / 2, and focused width = available.x.
 			var card_width = _get_available_size().x / focus_scale
 			card_size = Vector2(card_width, base_dims.y * current_zoom)
 			focused_card_size = card_size * focus_scale
 		ViewMode.CAROUSEL:
+			# CAROUSEL: normal card is smaller so focused card fills viewport exactly.
+			# Focus overflow = (focused - normal) / 2, and focused height = available.y.
 			var card_height = _get_available_size().y / focus_scale
 			card_size = Vector2(base_dims.x * current_zoom, card_height)
 			focused_card_size = card_size * focus_scale
@@ -622,7 +636,7 @@ func _recalculate_layout():
 			continue
 		if "focus_scale_enabled" in card:
 			card.focus_scale_enabled = true
-			card.focus_scale_inverted = false
+			card.focus_scale_inverted = _get_focus_scale_inverted()
 		if card.has_method("set_focus_scale"):
 			card.set_focus_scale(focus_scale)
 		_configure_card_size_flags(card)
@@ -902,7 +916,7 @@ func _initial_load():
 			card.set_meta("virtual_index", i)
 			if "focus_scale_enabled" in card:
 				card.focus_scale_enabled = true
-				card.focus_scale_inverted = false
+				card.focus_scale_inverted = _get_focus_scale_inverted()
 			_active_cards.append(card)
 			_active_cards_by_index[i] = card
 			_flow_container.add_child(card)
@@ -1119,7 +1133,7 @@ func _add_card_at_end(virtual_index: int):
 	card.set_meta("virtual_index", virtual_index)
 	if "focus_scale_enabled" in card:
 		card.focus_scale_enabled = true
-		card.focus_scale_inverted = false
+		card.focus_scale_inverted = _get_focus_scale_inverted()
 	_configure_card_size_flags(card)
 	if card.has_method("set_focus_scale"):
 		card.set_focus_scale(focus_scale)
@@ -1149,7 +1163,7 @@ func _add_card_at_start(virtual_index: int):
 	card.set_meta("virtual_index", virtual_index)
 	if "focus_scale_enabled" in card:
 		card.focus_scale_enabled = true
-		card.focus_scale_inverted = false
+		card.focus_scale_inverted = _get_focus_scale_inverted()
 	_active_cards.insert(0, card)
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
@@ -1206,7 +1220,7 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		card.set_meta("virtual_index", virtual_index)
 		if "focus_scale_enabled" in card:
 			card.focus_scale_enabled = true
-			card.focus_scale_inverted = false
+			card.focus_scale_inverted = _get_focus_scale_inverted()
 		_flow_container.add_child(card)
 		_flow_container.move_child(card, i)
 		_configure_card_size_flags(card)
@@ -1329,13 +1343,16 @@ func _update_margin():
 			_flow_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
 		
-		# Clear orthogonal margins/flow-sizes so switching between vertical
-		# and horizontal modes doesn't leave stale values.
-		if _last_margin_left != 0 or _last_margin_right != 0:
-			_margin_container.add_theme_constant_override("margin_left", 0)
-			_margin_container.add_theme_constant_override("margin_right", 0)
-			_last_margin_left = 0
-			_last_margin_right = 0
+		# Add horizontal margins for cross-axis focus overflow in GRID mode.
+		# Focused cards in edge columns extend horizontally; without this padding
+		# they clip against the viewport edge.
+		var margin_left = focus_overflow.x
+		var margin_right = focus_overflow.x
+		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
+			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
+			_margin_container.add_theme_constant_override("margin_right", int(margin_right))
+			_last_margin_left = int(margin_left)
+			_last_margin_right = int(margin_right)
 		if _last_flow_width != 0:
 			_flow_container.custom_minimum_size.x = 0
 			_last_flow_width = 0
@@ -1357,13 +1374,16 @@ func _update_margin():
 			_flow_container.custom_minimum_size.x = flow_width
 			_last_flow_width = flow_width
 		
-		# Clear orthogonal margins/flow-sizes so switching between vertical
-		# and horizontal modes doesn't leave stale values.
-		if _last_margin_top != 0 or _last_margin_bottom != 0:
-			_margin_container.add_theme_constant_override("margin_top", 0)
-			_margin_container.add_theme_constant_override("margin_bottom", 0)
-			_last_margin_top = 0
-			_last_margin_bottom = 0
+		# Add vertical margins for cross-axis focus overflow in GRID mode.
+		# Focused cards in edge rows extend vertically; without this padding
+		# they clip against the viewport edge.
+		var margin_top = focus_overflow.y
+		var margin_bottom = focus_overflow.y
+		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
+			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
+			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
+			_last_margin_top = int(margin_top)
+			_last_margin_bottom = int(margin_bottom)
 		if _last_flow_height != 0:
 			_flow_container.custom_minimum_size.y = 0
 			_last_flow_height = 0
@@ -1784,7 +1804,7 @@ func _initial_load_from_increment():
 			card.set_meta("virtual_index", i)
 			if "focus_scale_enabled" in card:
 				card.focus_scale_enabled = true
-				card.focus_scale_inverted = false
+				card.focus_scale_inverted = _get_focus_scale_inverted()
 			_configure_card_size_flags(card)
 			_active_cards.append(card)
 			_active_cards_by_index[i] = card

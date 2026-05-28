@@ -27,11 +27,10 @@ func _apply_settings() -> void:
 
 func update_settings(settings: Dictionary) -> void:
 	visible = true
-	queue_redraw()
 	super.update_settings(settings)
 
 func _update_shader_params() -> void:
-	if not _container_state:
+	if not media_container:
 		return
 	
 	var hide_background = _settings.get("hide_background", false)
@@ -42,35 +41,30 @@ func _update_shader_params() -> void:
 	var icon_padding = _settings.get("icon_padding", 0.5)
 	var icon_color = _settings.get("icon_color", Color.WHITE)
 	
-	_set_shader_param("card_size", _container_state.container_size)
-	_set_shader_param("corner_radius_ratio", _container_state.corner_radius_ratio)
-	# Pass shared shape parameters for consistent SDF calculations
-	_set_shader_param("corner_radius_pixels", _container_state.corner_radius_pixels)
-	_set_shader_param("total_inset_pixels", _container_state.total_inset_pixels)
-	# Inner corner radius accounts for glass inset
-	_set_shader_param("inner_corner_radius_pixels", _container_state.inner_corner_radius_pixels)
-	_set_shader_param("glass_inset_ratio", _container_state.glass_inset_ratio)
+	var card_width = media_container.size.x
+	
+	_set_shader_param("card_size", media_container.size)
+	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
+	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
+	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
+	_set_shader_param("inner_corner_radius_pixels", media_container.get_inner_corner_radius_pixels())
+	_set_shader_param("glass_inset_ratio", media_container.glass_inset_ratio)
 	_set_shader_param("hide_background", hide_background)
 	_set_shader_param("badge_type", badge_type)
-	# Calculate proper shader params
-	var card_width = _container_state.container_size.x
+	
 	if _badge_width > 0 and _badge_height > 0:
 		if badge_type == 1:
-			# Top bar mode: width is card width, height is the bar height
-			# Pass height directly as ratio
 			_set_shader_param("badge_size_ratio", _badge_height / card_width)
 			_set_shader_param("badge_aspect_ratio", Vector2(_badge_width / _badge_height, 1.0))
 		else:
-			# Corner badge: based on MAX dimension to match GameCard logic
 			var max_dim = max(_badge_width, _badge_height)
 			_set_shader_param("badge_size_ratio", max_dim / card_width)
-			# aspect_ratio should be actual dimensions normalized by max
 			_set_shader_param("badge_aspect_ratio", Vector2(_badge_width / max_dim, _badge_height / max_dim))
 	else:
-		# Fallback: square badge
 		var badge_size = _settings.get("badge_size", 1.0)
 		_set_shader_param("badge_size_ratio", badge_size * 0.16)
 		_set_shader_param("badge_aspect_ratio", Vector2(1.0, 1.0))
+	
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
 	_set_shader_param("border_width_ratio", _border_width)
@@ -86,24 +80,19 @@ func _update_shader_params() -> void:
 func set_border_width(width: float) -> void:
 	_border_width = width
 	_update_shader_params()
-	queue_redraw()
 
 func set_border_inset_pixels(pixels: float) -> void:
 	_border_inset_pixels = pixels
 	_update_shader_params()
-	queue_redraw()
 
 func set_badge_dimensions(dimensions: Vector2) -> void:
-	# Store actual dimensions passed from GameCard
 	_badge_width = dimensions.x
 	_badge_height = dimensions.y
 	
-	# Convert dimensions to aspect ratio
 	var max_dim = max(dimensions.x, dimensions.y)
 	if max_dim > 0:
 		_settings["badge_aspect"] = Vector2(dimensions.x / max_dim, dimensions.y / max_dim)
 	_update_shader_params()
-	queue_redraw()
 
 func set_safe_zone(safe_x: float, safe_y: float, safe_width: float, safe_height: float, show_debug: bool = false) -> void:
 	_safe_zone = Vector4(safe_x, safe_y, safe_width, safe_height)
@@ -118,7 +107,6 @@ func set_safe_zone_top_bar(safe_x: float, safe_y: float, safe_width: float, safe
 func set_icon_texture(texture: Texture2D) -> void:
 	_icon_texture = texture
 	_update_shader_params()
-	queue_redraw()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
