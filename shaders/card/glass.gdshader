@@ -67,40 +67,37 @@ vec3 calculate_dome_normal(vec2 pos, vec2 size, float radius_ratio) {
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
-	// Calculate border inset (same as base_card)
-	float border_inset_pixels = border_inset_ratio * card_size.x;
+	// Glass covers the full card edge (no border inset for glass shape)
+	// The border effect overlays on top at the outer edge
+	vec2 glass_size = card_size;
+	vec2 glass_offset = vec2(0.0);
+	vec2 glass_pixel_pos = pixel_pos;
 	
-	float effective_border_inset = border_inset_pixels;
+	// Use full card corner radius for glass edge
+	float glass_radius_ratio = corner_radius_ratio;
 	
-	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
-	vec2 inner_offset = vec2(effective_border_inset);
-	
-	// Calculate effective inner corner radius
-	// Inner radius = outer radius - effective_inset (but not less than 0)
-	float inner_radius_pixels = max(0.0, corner_radius_ratio * min(card_size.x, card_size.y) / 2.0 - effective_border_inset);
-	float inner_radius_ratio = inner_radius_pixels / (min(inner_size.x, inner_size.y) / 2.0);
-	
-	// Offset pixel position for inset calculations
-	vec2 inner_pixel_pos = pixel_pos - inner_offset;
-	
-	// Check if we're inside the inset area using the adjusted corner radius
-	float sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, inner_radius_ratio);
+	// Check if we're inside the glass area
+	float sdf_dist = rounded_rect_sdf_ratio(glass_pixel_pos, glass_size, glass_radius_ratio);
 	
 	// Calculate edge anti-aliasing for the outer glass edge
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
-	
-	if (edge_alpha <= 0.0) {
-		discard;
+	float edge_alpha;
+	if (display_mode == 0) {
+		if (sdf_dist > 0.0) { discard; }
+		edge_alpha = 1.0;
+	} else {
+		edge_alpha = 1.0 - smoothstep(0.0, aa_width, sdf_dist);
+		if (edge_alpha <= 0.0) { discard; }
 	}
 	
-	// Calculate the inner "image area" with additional inset (for alpha only)
-	float additional_inset_pixels = additional_inset_ratio * card_size.x;
-	vec2 image_area_size = inner_size - vec2(additional_inset_pixels * 2.0);
-	vec2 image_area_offset = inner_offset + vec2(additional_inset_pixels);
+	// Calculate the inner "image area" with border + additional inset
+	// This pushes the underlying image inward from the glass edge
+	float total_image_inset = (border_inset_ratio + additional_inset_ratio) * card_size.x;
+	vec2 image_area_size = card_size - vec2(total_image_inset * 2.0);
+	vec2 image_area_offset = vec2(total_image_inset);
 	
 	// Calculate image area corner radius
-	float image_area_radius_pixels = max(0.0, inner_radius_pixels - additional_inset_pixels);
+	float image_area_radius_pixels = max(0.0, corner_radius_ratio * min(card_size.x, card_size.y) / 2.0 - total_image_inset);
 	float image_area_radius_ratio = 0.0;
 	if (min(image_area_size.x, image_area_size.y) > 0.0) {
 		image_area_radius_ratio = image_area_radius_pixels / (min(image_area_size.x, image_area_size.y) / 2.0);
@@ -111,8 +108,8 @@ void fragment() {
 	float image_sdf_dist = rounded_rect_sdf_ratio(image_pixel_pos, image_area_size, image_area_radius_ratio);
 	float image_aa = 1.0 - smoothstep(-aa_width, 0.0, image_sdf_dist);
 	
-	// Calculate 3D dome normal from inset area with adjusted corner radius
-	vec3 normal = calculate_dome_normal(inner_pixel_pos, inner_size, inner_radius_ratio);
+	// Calculate 3D dome normal from full card area
+	vec3 normal = calculate_dome_normal(glass_pixel_pos, glass_size, glass_radius_ratio);
 	
 	// Specular
 	float angle_rad = radians(light_angle);

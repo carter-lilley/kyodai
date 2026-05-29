@@ -99,18 +99,6 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	# Apply the interpolated settings WITHOUT storing them in _settings
 	_apply_tweened_settings(temp_settings)
 	
-	# Sync media-container insets for effects that drive shared layout state.
-	# Without this, the border/glass inset stays frozen at the focus-stack's
-	# initial value while the shader tweens, causing a visible gap/slide mismatch.
-	if media_container:
-		match effect_id:
-			"border":
-				var border_size = temp_settings.get("border_size", media_container.border_inset_ratio)
-				media_container.border_inset_ratio = border_size
-			"glass":
-				var additional_inset = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
-				media_container.glass_inset_ratio = additional_inset
-	
 	# Mark tween as complete when progress reaches 1.0
 	if progress >= 1.0:
 		_is_tweening = false
@@ -155,6 +143,17 @@ func _apply_tweened_settings(temp_settings: Dictionary) -> void:
 	_settings = temp_settings
 	# Apply to shader
 	_apply_settings()
+	
+	# Sync shared media-container insets while _settings still holds
+	# interpolated values, so that the changed signal (which triggers
+	# _update_shader_params on all effects) doesn't overwrite them.
+	if media_container:
+		match effect_id:
+			"border":
+				media_container.border_inset_ratio = temp_settings.get("border_size", media_container.border_inset_ratio)
+			"glass":
+				media_container.glass_inset_ratio = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
+	
 	# Restore original settings
 	_settings = original_settings
 

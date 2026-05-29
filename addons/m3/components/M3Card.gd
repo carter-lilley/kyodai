@@ -984,6 +984,9 @@ func _update_media_panel_size(force: bool = false) -> void:
 	if _media_container:
 		_media_container.bounds = Rect2(media_x, media_y, media_w, media_h)
 		_media_container.corner_radius_ratio = card_rounding_ratio
+		# Force an explicit refresh on all effects — the changed signal can be
+		# missed when _is_tweening is stuck or when Godot defers layout.
+		_refresh_media_effects()
 	
 	# Update text minimum sizes for consistent CENTER mode
 	_update_text_content_sizes()
@@ -993,6 +996,22 @@ func _update_media_panel_size(force: bool = false) -> void:
 	if not _focus_ring_bounds_queued:
 		_focus_ring_bounds_queued = true
 		call_deferred("_update_focus_ring_bounds")
+
+func _refresh_media_effects() -> void:
+	if not _media_content:
+		return
+	# Walk the effect tree and force shader param refresh on every EffectBase.
+	# This bypasses the changed-signal path which can be blocked by _is_tweening.
+	var stack := []
+	stack.append(_media_content)
+	while stack.size() > 0:
+		var node = stack.pop_back() as Node
+		if node is EffectBase:
+			var effect = node as EffectBase
+			if effect.enabled:
+				effect._update_shader_params()
+		for child in node.get_children():
+			stack.append(child)
 
 func _update_text_content_sizes() -> void:
 	if not _text_content or not _ready_called:

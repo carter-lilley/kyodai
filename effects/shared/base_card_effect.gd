@@ -49,7 +49,7 @@ func _update_shader_params() -> void:
 	if not media_container:
 		return
 	
-	var cache = media_container.pipeline_cache
+	var uv = media_container.get_uv_transforms()
 	
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
@@ -59,9 +59,13 @@ func _update_shader_params() -> void:
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
 	
-	# Read UV transforms from pipeline cache
-	_set_shader_param("uv_transform_scale", cache.get("uv_transform_scale", Vector2.ONE))
-	_set_shader_param("uv_transform_offset", cache.get("uv_transform_offset", Vector2.ZERO))
+	# Compute UV transforms live — reading from pipeline cache would give stale
+	# values when bounds change (e.g. aspect ratio switch) without a full rebuild.
+	_set_shader_param("uv_transform_scale", uv["uv_transform_scale"])
+	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])
+	
+	# Edge AA: 0 = hard discard (Standard, parent clips), 1 = smoothstep AA (Transparent/Media Only)
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_current_texture = texture

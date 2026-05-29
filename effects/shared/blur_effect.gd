@@ -23,16 +23,17 @@ func _update_shader_params() -> void:
 	var blur_strength = _settings.get("blur_strength", 4.0)
 	var blur_samples = _settings.get("blur_samples", 8)
 	
-	var cache = media_container.pipeline_cache
+	var uv = media_container.get_uv_transforms()
 	
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
-	_set_shader_param("uv_transform_scale", cache.get("uv_transform_scale", Vector2.ONE))
-	_set_shader_param("uv_transform_offset", cache.get("uv_transform_offset", Vector2.ZERO))
+	_set_shader_param("uv_transform_scale", uv["uv_transform_scale"])
+	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])
 	_set_shader_param("blur_strength", blur_strength)
 	_set_shader_param("blur_samples", float(blur_samples))
 	_set_shader_param("game_texture", media_container.texture)
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func set_game_texture(texture: Texture2D) -> void:
 	if media_container:

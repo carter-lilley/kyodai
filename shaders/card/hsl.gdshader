@@ -15,19 +15,22 @@ uniform float lightness_scale : hint_range(0.0, 2.0) = 1.0;
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
-	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
-	aa_width = max(aa_width, 0.5);
-	
 	float effective_inset = total_inset_pixels;
 	
 	vec2 inner_size = card_size - vec2(effective_inset * 2.0);
 	vec2 inner_offset = vec2(effective_inset);
 	
-	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
+	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
+	aa_width = max(aa_width, 0.5);
 	
-	if (edge_alpha <= 0.0) {
-		discard;
+	float dist = rounded_rect_sdf_pixels(pixel_pos, card_size, corner_radius_pixels);
+	float edge_alpha;
+	if (display_mode == 0) {
+		if (dist > 0.0) { discard; }
+		edge_alpha = 1.0;
+	} else {
+		edge_alpha = 1.0 - smoothstep(0.0, aa_width, dist);
+		if (edge_alpha <= 0.0) { discard; }
 	}
 	
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;

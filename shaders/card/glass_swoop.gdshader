@@ -14,24 +14,24 @@ uniform float swoop_tilt : hint_range(-1.0, 1.0) = 0.0;   // Tilt: raises one si
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
-	// Calculate border inset
-	float border_inset_pixels = border_inset_ratio * card_size.x;
+	// Swoop covers the full card edge (no border inset)
+	// The border effect overlays on top at the outer edge
+	vec2 swoop_size = card_size;
+	vec2 swoop_offset = vec2(0.0);
 	
-	float effective_border_inset = border_inset_pixels;
-	
-	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
-	vec2 inner_offset = vec2(effective_border_inset);
-	
-	// Calculate SDF for the glass shape
-	vec2 inner_pixel_pos = pixel_pos - inner_offset;
-	float sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, corner_radius_ratio);
+	// Calculate SDF for the full card shape
+	vec2 swoop_pixel_pos = pixel_pos - swoop_offset;
+	float sdf_dist = rounded_rect_sdf_ratio(swoop_pixel_pos, swoop_size, corner_radius_ratio);
 	
 	// Edge anti-aliasing
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
-	
-	if (edge_alpha <= 0.0) {
-		discard;
+	float edge_alpha;
+	if (display_mode == 0) {
+		if (sdf_dist > 0.0) { discard; }
+		edge_alpha = 1.0;
+	} else {
+		edge_alpha = 1.0 - smoothstep(0.0, aa_width, sdf_dist);
+		if (edge_alpha <= 0.0) { discard; }
 	}
 	
 	// Base Y position of the swoop line (from bottom)

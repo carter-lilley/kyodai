@@ -97,6 +97,12 @@ func _exit_tree():
 		if tween and is_instance_valid(tween):
 			tween.kill()
 	_focus_effect_tweens.clear()
+	
+	# Reset _is_tweening so the card doesn't leave the effect in a blocked state
+	if _media_stack:
+		for child in _media_stack.get_children():
+			if child is EffectBase:
+				child._is_tweening = false
 
 func _setup_status_badge():
 	_status_badge = Panel.new()
@@ -190,9 +196,10 @@ func _build_focus_stack() -> void:
 		if config_setting and config_setting.value is Dictionary:
 			focus_effect_settings = config_setting.value.get("focus_effects", [])
 	
-	# If no focus effects configured, hide existing stack and return
+	# If no focus effects configured, clear and hide existing stack
 	if focus_effect_settings.is_empty():
 		if _focus_stack and is_instance_valid(_focus_stack):
+			_focus_stack.update_effect_configs([])
 			_focus_stack.visible = false
 		return
 	
@@ -284,6 +291,13 @@ func _show_focus_effects(p_show: bool) -> void:
 		if tween and is_instance_valid(tween):
 			tween.kill()
 	_focus_effect_tweens.clear()
+	
+	# Reset _is_tweening on all base effects so _on_media_changed() isn't blocked
+	# after a tween is interrupted (e.g. rapid hover in/out)
+	if _media_stack:
+		for child in _media_stack.get_children():
+			if child is EffectBase:
+				child._is_tweening = false
 	
 	if preview_mode:
 		p_show = preview_show_focus
@@ -405,17 +419,25 @@ func _update_card_state_from_settings():
 		_apply_display_mode()
 
 func _apply_display_mode() -> void:
-	# Map display mode to background/text visibility
+	# Map display mode to background/text visibility and edge AA
 	match _display_mode:
 		0: # Standard
 			show_background = true
 			show_text_margin = true
+			_media_container.edge_aa_enabled = false
 		1: # Transparent
 			show_background = false
 			show_text_margin = true
+			_media_container.edge_aa_enabled = true
 		2: # Media Only
 			show_background = false
 			show_text_margin = false
+			_media_container.edge_aa_enabled = true
+	
+	# Push the new AA flag to the shader immediately so the edge doesn't stay
+	# jagged when switching into transparent/media-only mode.
+	if _media_stack and is_instance_valid(_media_stack):
+		_media_stack.force_refresh()
 
 func set_focus_scale(value: float) -> void:
 	focus_scale = maxf(value, 1.0)

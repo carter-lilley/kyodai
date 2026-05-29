@@ -51,6 +51,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
 	_set_shader_param("border_inset_ratio", media_container.border_inset_ratio)
 	_set_shader_param("glass_color", glass_color)
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	_set_shader_param("specular_power", specular_power)
 	_set_shader_param("specular_intensity", specular_intensity)
 	_set_shader_param("light_angle", light_angle)
@@ -71,6 +72,7 @@ func _update_shader_params() -> void:
 		swoop_mat.set_shader_parameter("swoop_height", swoop_height)
 		swoop_mat.set_shader_parameter("swoop_curve", swoop_curve)
 		swoop_mat.set_shader_parameter("swoop_tilt", swoop_tilt)
+		swoop_mat.set_shader_parameter("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

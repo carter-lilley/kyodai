@@ -32,6 +32,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("gradient_direction", gradient_direction)
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	
 	if gradient is Gradient:
 		_gradient_texture = _gradient_to_texture(gradient)

@@ -60,10 +60,13 @@ void fragment() {
 	
 	// Calculate edge anti-aliasing
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
-	float edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
-	
-	if (edge_alpha <= 0.0) {
-		discard;
+	float edge_alpha;
+	if (display_mode == 0) {
+		if (sdf_dist > 0.0) { discard; }
+		edge_alpha = 1.0;
+	} else {
+		edge_alpha = 1.0 - smoothstep(0.0, aa_width, sdf_dist);
+		if (edge_alpha <= 0.0) { discard; }
 	}
 	
 	// Get distorted/warped UVs

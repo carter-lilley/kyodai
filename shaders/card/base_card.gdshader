@@ -6,7 +6,6 @@ uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float glass_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width (additional inset from glass effect)
 uniform float alpha = 1.0;  // Global alpha multiplier for fade animations
-uniform int display_mode = 0;  // 0 = Standard, 1 = Transparent, 2 = Media Only
 
 void fragment() {
 	vec2 pixel_pos = UV * card_size;

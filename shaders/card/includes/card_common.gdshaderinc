@@ -11,6 +11,9 @@ uniform vec2 uv_transform_scale = vec2(1.0, 1.0);
 uniform vec2 uv_transform_offset = vec2(0.0, 0.0);
 uniform float vertical_offset = 0.0;
 
+// Edge AA mode: 0 = hard discard (Standard), 1 = smoothstep AA (Transparent/Media Only)
+uniform int display_mode = 0;
+
 // Pixel-accurate rounded rect SDF (used by base, blur, border, badge, gradient)
 float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 	vec2 half_size = size * 0.5;

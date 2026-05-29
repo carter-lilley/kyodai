@@ -678,6 +678,10 @@ func _recalculate_layout():
 		if card.has_method("set_focus_scale"):
 			card.set_focus_scale(focus_scale)
 		_configure_card_size_flags(card)
+		# Force immediate media-panel refresh so the effect stack picks up the
+		# new bounds without waiting for Godot's deferred layout pass.
+		if card.has_method("_update_media_panel_size"):
+			card._update_media_panel_size(true)
 	
 	_is_recalculating_layout = false
 
