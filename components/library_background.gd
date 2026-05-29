@@ -2,7 +2,8 @@ class_name LibraryBackground
 extends Control
 
 var _current_effect: BackgroundEffect = null
-var _background_state: BackgroundState = null
+var _effect_id: String = "gradient"
+var _effect_settings: Dictionary = {}
 
 func _ready():
 	_initialize_background()
@@ -15,9 +16,8 @@ func _on_resized() -> void:
 func _initialize_background() -> void:
 	# Get initial config from settings if available
 	var config = _get_initial_config()
-	_background_state = BackgroundState.new(config)
-	_background_state.effect_changed.connect(_on_effect_changed)
-	_background_state.setting_changed.connect(_on_setting_changed)
+	_effect_id = config.get("effect_id", "gradient")
+	_effect_settings = config.get("settings", {}).duplicate()
 	_apply_background_state()
 
 func _get_initial_config() -> Dictionary:
@@ -40,22 +40,19 @@ func _get_initial_config() -> Dictionary:
 	}
 
 func _apply_background_state() -> void:
-	if not _background_state:
-		return
-	
 	# Remove current effect if any
 	if _current_effect:
 		_current_effect.queue_free()
 		_current_effect = null
 	
 	# Create and add new effect
-	_current_effect = _create_effect(_background_state.effect_id)
+	_current_effect = _create_effect(_effect_id)
 	if _current_effect:
 		add_child(_current_effect)
 		_current_effect.position = Vector2.ZERO
 		_current_effect.size = size
 		_current_effect.visible = true
-		_current_effect.initialize(_background_state.effect_settings)
+		_current_effect.initialize(_effect_settings)
 
 func _create_effect(effect_id: String) -> BackgroundEffect:
 	match effect_id:
@@ -79,44 +76,34 @@ func _create_effect(effect_id: String) -> BackgroundEffect:
 func _on_effect_changed(_new_effect_id: String) -> void:
 	_apply_background_state()
 
-func _on_setting_changed(_setting_name: String, _value: Variant) -> void:
-	if _current_effect:
-		_current_effect.update_settings(_background_state.effect_settings)
-
 # Public API for updating background configuration
 func set_background_config(config: Dictionary) -> void:
-	if not _background_state:
-		_background_state = BackgroundState.new(config)
-		_background_state.effect_changed.connect(_on_effect_changed)
-		_background_state.setting_changed.connect(_on_setting_changed)
+	var old_effect_id = _effect_id
+	_effect_id = config.get("effect_id", "gradient")
+	_effect_settings = config.get("settings", {}).duplicate()
+	
+	if _effect_id != old_effect_id:
 		_apply_background_state()
 	else:
-		var old_effect_id = _background_state.effect_id
-		_background_state.effect_id = config.get("effect_id", "gradient")
-		_background_state.effect_settings = config.get("settings", {}).duplicate()
-		
-		if _background_state.effect_id != old_effect_id:
-			_apply_background_state()
-		else:
-			# Same effect, just update settings
-			if _current_effect:
-				_current_effect.update_settings(_background_state.effect_settings)
+		# Same effect, just update settings
+		if _current_effect:
+			_current_effect.update_settings(_effect_settings)
 
 func get_background_config() -> Dictionary:
-	if _background_state:
-		return _background_state.get_config()
-	return _get_initial_config()
+	return {
+		"effect_id": _effect_id,
+		"settings": _effect_settings.duplicate()
+	}
 
 # Legacy method for backward compatibility
 func set_background_color(color: Color) -> void:
-	if _background_state:
-		# Convert solid color to single-color gradient
-		var gradient = Gradient.new()
-		gradient.offsets = [0.0, 1.0]
-		gradient.colors = [color, color]
-		_background_state.effect_settings["background_gradient"] = gradient
-		if _current_effect:
-			_current_effect.update_settings(_background_state.effect_settings)
+	# Convert solid color to single-color gradient
+	var gradient = Gradient.new()
+	gradient.offsets = [0.0, 1.0]
+	gradient.colors = [color, color]
+	_effect_settings["background_gradient"] = gradient
+	if _current_effect:
+		_current_effect.update_settings(_effect_settings)
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:

@@ -71,10 +71,13 @@ func _rebuild_effects():
 	if not "base" in active_effect_ids:
 		active_effect_ids.append("base")
 	
-	# Hide effects that are no longer active
+	# Free effects that are no longer active
 	for effect_id in _effects.keys():
 		if not effect_id in active_effect_ids:
-			_effects[effect_id].visible = false
+			var effect = _effects[effect_id]
+			if is_instance_valid(effect):
+				effect.queue_free()
+			_effects.erase(effect_id)
 	
 	# Reset insets on media container
 	if media_container:
@@ -105,14 +108,16 @@ func _rebuild_effects():
 					add_child(effect)
 					effect.initialize(media_container, settings)
 			
-			# Update insets based on effect settings
-			match effect_id:
-				"border":
-					if media_container:
-						media_container.border_inset_ratio = settings.get("border_size", 0.05)
-				"glass":
-					if media_container:
-						media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
+			# Update insets based on effect settings (only for base card context;
+			# focus effects should not permanently overwrite base insets)
+			if _context != "focus_card":
+				match effect_id:
+					"border":
+						if media_container:
+							media_container.border_inset_ratio = settings.get("border_size", 0.05)
+					"glass":
+						if media_container:
+							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
 			
 			# Set layer order
 			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)

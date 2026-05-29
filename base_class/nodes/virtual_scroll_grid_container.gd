@@ -157,6 +157,17 @@ var _last_margin_right: int = -1
 var _last_flow_width: float = 0.0
 var _last_flow_height: float = 0.0
 
+# Cached settings — refreshed only when settings change (settings_saved signal)
+var _cached_media_aspect_ratio: float = -1.0
+var _cached_card_display_mode: int = 0
+var _cached_content_alignment: M3Card.ContentAlignment = M3Card.ContentAlignment.START
+
+# Cached visible/buffer range — updated in-place to avoid Dictionary allocations
+var _visible_start_idx: int = 0
+var _visible_end_idx: int = 0
+var _buffer_target_start: int = 0
+var _buffer_target_end: int = 0
+
 # Flow-container separation caching - only override when value changes
 var _last_h_separation: int = -1
 var _last_v_separation: int = -1
@@ -308,6 +319,7 @@ func _ready():
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
+	call_deferred("_refresh_cached_settings")
 	call_deferred("_recalculate_layout")
 	_ready_called = true
 	
@@ -321,6 +333,32 @@ func _exit_tree():
 
 func _on_settings_saved():
 	_update_focus_scale_from_settings()
+	_refresh_cached_settings()
+	_recalculate_layout()
+
+func _refresh_cached_settings() -> void:
+	if not SettingsManager:
+		return
+	
+	var ratio_setting = SettingsManager.get_setting("card_media_aspect_ratio")
+	if ratio_setting and ratio_setting.value is int:
+		var idx = clampi(ratio_setting.value, 0, _RATIO_LOOKUP.size() - 1)
+		_cached_media_aspect_ratio = _RATIO_LOOKUP[idx]
+	else:
+		_cached_media_aspect_ratio = -1.0
+	
+	var mode_setting = SettingsManager.get_setting("library_card_display_mode")
+	if mode_setting and mode_setting.value is int:
+		_cached_card_display_mode = clampi(mode_setting.value, 0, 2)
+	else:
+		_cached_card_display_mode = 0
+	
+	var align_setting = SettingsManager.get_setting("library_card_content_alignment")
+	if align_setting and align_setting.value is int:
+		var align_idx = clampi(align_setting.value, 0, 2)
+		_cached_content_alignment = align_idx as M3Card.ContentAlignment
+	else:
+		_cached_content_alignment = M3Card.ContentAlignment.START
 
 var _last_resized_size: Vector2 = Vector2.ZERO
 var _is_recalculating_layout: bool = false
@@ -663,21 +701,10 @@ func _get_items_per_line() -> int:
 		return max(1, int(effective_height / item_height + 0.0001))
 
 func _get_media_aspect_ratio() -> float:
-	if not SettingsManager:
-		return -1.0
-	var setting = SettingsManager.get_setting("card_media_aspect_ratio")
-	if setting and setting.value is int:
-		var idx = clampi(setting.value, 0, _RATIO_LOOKUP.size() - 1)
-		return _RATIO_LOOKUP[idx]
-	return -1.0
+	return _cached_media_aspect_ratio
 
 func _get_card_display_mode() -> int:
-	if not SettingsManager:
-		return 0
-	var setting = SettingsManager.get_setting("library_card_display_mode")
-	if setting and setting.value is int:
-		return clampi(setting.value, 0, 2)
-	return 0
+	return _cached_card_display_mode
 
 func _get_base_card_height_for_ratio(media_h: float) -> float:
 	"""Compute card height that guarantees M3Card's text area fits.
@@ -691,13 +718,7 @@ func _get_base_card_height_for_ratio(media_h: float) -> float:
 	return card_h
 
 func _get_content_alignment() -> M3Card.ContentAlignment:
-	if not SettingsManager:
-		return M3Card.ContentAlignment.START
-	var setting = SettingsManager.get_setting("library_card_content_alignment")
-	if setting and setting.value is int:
-		var idx = clampi(setting.value, 0, 2)
-		return idx as M3Card.ContentAlignment
-	return M3Card.ContentAlignment.START
+	return _cached_content_alignment
 
 func _get_base_dimensions_for_mode() -> Vector2:
 	var ratio = _get_media_aspect_ratio()
@@ -930,12 +951,13 @@ func _initial_load():
 	_update_margin()
 	_request_data(0, card_count)
 
-func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> Dictionary:
-	"""Compute visible range and buffer target range for the current scroll position."""
+func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
+	"""Compute visible range and buffer target range for the current scroll position.
+	Writes directly to member variables to avoid Dictionary allocation."""
 	var line = int(scroll_pos / stride) if stride > 0 else 0
 	var visible_lines = ceili(viewport_size / stride) if stride > 0 else 1
-	var visible_start_idx = line * items_per_line
-	var visible_end_idx = min(visible_start_idx + visible_lines * items_per_line, _total_items) - 1
+	_visible_start_idx = line * items_per_line
+	_visible_end_idx = min(_visible_start_idx + visible_lines * items_per_line, _total_items) - 1
 	
 	var visible_count = _get_visible_count()
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
@@ -944,33 +966,25 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	if _total_items <= 200:
 		total_card_count = _total_items
 	var half_buffer = int((total_card_count - visible_count) / 2.0)
-	var target_start = max(0, visible_start_idx - half_buffer)
-	var target_end = min(_total_items, target_start + total_card_count)
+	_buffer_target_start = max(0, _visible_start_idx - half_buffer)
+	_buffer_target_end = min(_total_items, _buffer_target_start + total_card_count)
 	
-	if target_end == _total_items:
-		target_start = max(0, _total_items - total_card_count)
+	if _buffer_target_end == _total_items:
+		_buffer_target_start = max(0, _total_items - total_card_count)
 	
 	# Align target_start to items_per_line so the first buffered card always starts
 	# at the beginning of a row/column. Without this, FlowContainer misaligns cards
 	# when the buffer starts mid-row after incremental recycling or zoom changes.
-	target_start = (target_start / items_per_line) * items_per_line
+	_buffer_target_start = (_buffer_target_start / items_per_line) * items_per_line
 	
 	# Recompute target_end after alignment so the buffer size stays consistent
-	target_end = min(_total_items, target_start + total_card_count)
+	_buffer_target_end = min(_total_items, _buffer_target_start + total_card_count)
 	
 	# When we're near the end of the list, alignment can leave a partial row
 	# outside the buffer (e.g. 98 items, buffer covers 56-97, missing index 97).
 	# Extend target_end to always include the last partial row.
-	if target_end < _total_items and (_total_items - target_end) < items_per_line:
-		target_end = _total_items
-	
-	return {
-		"visible_start": visible_start_idx,
-		"visible_end": visible_end_idx,
-		"target_start": target_start,
-		"target_end": target_end,
-		"total_card_count": total_card_count,
-	}
+	if _buffer_target_end < _total_items and (_total_items - _buffer_target_end) < items_per_line:
+		_buffer_target_end = _total_items
 
 func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	if _is_processing_scroll:
@@ -992,15 +1006,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	var stride = _get_normal_stride()
 	
 	var viewport_size = size.y if vertical else size.x
-	var ranges = _compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
-	
-	var visible_start_idx: int = ranges.visible_start
-	var visible_end_idx: int = ranges.visible_end
-	var target_start: int = ranges.target_start
-	var target_end: int = ranges.target_end
-	
-
-
+	_compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
 	
 	# Batch recycle from top — skip during layout recalculations (zoom changes)
 	# so cards are not reset and their images stay loaded.
@@ -1008,7 +1014,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 		var recycle_top_count = 0
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
-			if idx < target_start:
+			if idx < _buffer_target_start:
 				recycle_top_count += 1
 			else:
 				break
@@ -1019,7 +1025,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 			var last_card = _active_cards[_active_cards.size() - 1]
 			var last_idx = last_card.get_meta("virtual_index", -1)
 			
-			if last_idx >= target_end:
+			if last_idx >= _buffer_target_end:
 				_recycle_card_at_index(_active_cards.size() - 1)
 			else:
 				break
@@ -1027,19 +1033,19 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	# If buffer was fully recycled (e.g. scrolled to a completely different range),
 	# populate the target range from scratch
 	if _active_cards.size() == 0:
-		for i in range(target_start, target_end):
+		for i in range(_buffer_target_start, _buffer_target_end):
 			_add_card_at_end(i)
 	elif _active_cards.size() > 0:
 		var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-		while current_last < target_end - 1 and current_last < _total_items - 1:
+		while current_last < _buffer_target_end - 1 and current_last < _total_items - 1:
 			_add_card_at_end(current_last + 1)
 			current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	
 		if _active_cards.size() > 0:
 			var current_first = _active_cards[0].get_meta("virtual_index", 0)
-			if current_first > target_start and current_first > 0:
-				var add_start_count = mini(current_first - target_start, current_first)
-				_batch_add_at_start(target_start, add_start_count)
+			if current_first > _buffer_target_start and current_first > 0:
+				var add_start_count = mini(current_first - _buffer_target_start, current_first)
+				_batch_add_at_start(_buffer_target_start, add_start_count)
 	
 	if _active_cards.size() > 0:
 		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
@@ -1055,12 +1061,12 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	if should_update_margin:
 		_update_margin()
 	_check_preload_needed()
-	_update_card_priorities(visible_start_idx, visible_end_idx)
+	_update_card_priorities(_visible_start_idx, _visible_end_idx)
 	
-	visible_range_changed.emit(visible_start_idx, min(visible_end_idx, _total_items), _total_items)
+	visible_range_changed.emit(_visible_start_idx, min(_visible_end_idx, _total_items), _total_items)
 	
 	if debug_mode:
-		_update_debug_visuals(visible_start_idx, visible_end_idx)
+		_update_debug_visuals(_visible_start_idx, _visible_end_idx)
 	
 	_is_processing_scroll = false
 
@@ -1240,30 +1246,25 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		new_cards.append(card)
 	_active_cards = new_cards + _active_cards
 
-func _get_visible_range() -> Dictionary:
+func _get_visible_range() -> void:
 	var items_per_line = _get_items_per_line()
-	var visible_start_idx: int
-	var visible_end_idx: int
 	var eff = _get_normal_stride()
 	
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
 		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
-		visible_end_idx = min(visible_start_idx + visible_rows * items_per_line, _total_items)
+		_visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
+		_visible_end_idx = min(_visible_start_idx + visible_rows * items_per_line, _total_items)
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 		var viewport_width = size.x
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
-		visible_end_idx = min(visible_start_idx + visible_cols * items_per_line, _total_items)
-	
-	return {"start": visible_start_idx, "end": visible_end_idx}
+		_visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
+		_visible_end_idx = min(_visible_start_idx + visible_cols * items_per_line, _total_items)
 
 func _is_index_visible(idx: int) -> bool:
-	var range_info = _get_visible_range()
-	return idx >= range_info.start and idx < range_info.end
+	return idx >= _visible_start_idx and idx < _visible_end_idx
 
 func _acquire_card() -> Control:
 	while _card_pool.size() > 0:
@@ -1485,7 +1486,10 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 		if game and game.romm_id != 0:
 			if _cached_game_ids.has(game.romm_id):
 				var existing_key = _cached_game_ids[game.romm_id]
-				if existing_key != cache_key:
+				# Stale mapping check: evicted or replaced game at existing_key
+				if not _data_cache.has(existing_key) or _data_cache[existing_key] != game:
+					_cached_game_ids.erase(game.romm_id)
+				elif existing_key != cache_key:
 					duplicates_found += 1
 					push_warning("[VirtualScrollGridContainer] Duplicate game detected: '%s' (romm_id: %d) at indices %d and %d" % [game.title, game.romm_id, existing_key, cache_key])
 			else:
@@ -1500,9 +1504,9 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	if duplicates_found > 0:
 		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
 	
-	var range_info = _get_visible_range()
-	var visible_start_idx: int = range_info.start
-	var visible_end_idx: int = range_info.end
+	_get_visible_range()
+	var visible_start_idx: int = _visible_start_idx
+	var visible_end_idx: int = _visible_end_idx
 	
 	var assigned_count = 0
 	for card in _active_cards:
@@ -1833,20 +1837,20 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 			if game and game.romm_id != 0:
 				if _cached_game_ids.has(game.romm_id):
 					var existing_key = _cached_game_ids[game.romm_id]
-					if existing_key != cache_key:
+					# Stale mapping check: evicted or replaced game at existing_key
+					if not _data_cache.has(existing_key) or _data_cache[existing_key] != game:
+						_cached_game_ids.erase(game.romm_id)
+					elif existing_key != cache_key:
 						continue
+				
+				_cached_game_ids[game.romm_id] = cache_key
 			
-			if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
-				_evict_oldest_cache_entries(items.size())
-			
-			_data_cache[cache_key] = game
-			_cached_game_ids[game.romm_id] = cache_key
 			_update_cache_access_order(cache_key)
 	
 	if items.size() > 0:
-		var range_info = _get_visible_range()
-		var visible_start_idx: int = range_info.start
-		var visible_end_idx: int = range_info.end
+		_get_visible_range()
+		var visible_start_idx: int = _visible_start_idx
+		var visible_end_idx: int = _visible_end_idx
 		
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
@@ -1872,9 +1876,9 @@ func refresh_if_visible(start_index: int, end_index: int):
 	var overlap_end = min(end_index, current_last)
 	
 	if overlap_start <= overlap_end:
-		var range_info = _get_visible_range()
-		var visible_start_idx: int = range_info.start
-		var visible_end_idx: int = range_info.end
+		_get_visible_range()
+		var visible_start_idx: int = _visible_start_idx
+		var visible_end_idx: int = _visible_end_idx
 		
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
@@ -1903,19 +1907,24 @@ func _evict_oldest_cache_entries(count: int):
 	if to_evict <= 0:
 		return
 	
-	# Single-pass: collect all entries, sort by tick (ascending), then remove oldest
-	# O(n log n) instead of O(n²) — for 5000 entries this is ~60k ops vs 25M
-	var entries: Array[Array] = []
-	for key in _cache_lru_tick.keys():
-		entries.append([_cache_lru_tick[key], key])
-	
-	entries.sort_custom(func(a, b): return a[0] < b[0])
-	
+	# Linear scan for oldest entry, repeated to_evict times.
+	# Avoids allocating an Array[Array] of all entries (~5000 sub-arrays).
 	for i in range(to_evict):
-		var key = entries[i][1]
-		_cache_lru_tick.erase(key)
-		if _data_cache.has(key):
-			var game = _data_cache[key]
+		var oldest_key = -1
+		var oldest_tick = INF
+		
+		for key in _cache_lru_tick.keys():
+			var tick = _cache_lru_tick[key]
+			if tick < oldest_tick:
+				oldest_tick = tick
+				oldest_key = key
+		
+		if oldest_key < 0:
+			break
+		
+		_cache_lru_tick.erase(oldest_key)
+		if _data_cache.has(oldest_key):
+			var game = _data_cache[oldest_key]
 			if game and game.romm_id != 0:
 				_cached_game_ids.erase(game.romm_id)
-			_data_cache.erase(key)
+			_data_cache.erase(oldest_key)

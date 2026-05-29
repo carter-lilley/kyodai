@@ -15,6 +15,7 @@ func _ready():
 	_swoop_layer.name = "GlassSwoop"
 	_swoop_layer.anchor_right = 1.0
 	_swoop_layer.anchor_bottom = 1.0
+	_swoop_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var swoop_mat = ShaderMaterial.new()
 	swoop_mat.shader = preload("res://shaders/card/glass_swoop.gdshader")
 	_swoop_layer.material = swoop_mat

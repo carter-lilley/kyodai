@@ -29,6 +29,10 @@ func _ready():
 		_update_shader_params()
 
 func initialize(container: MediaContainer, settings: Dictionary) -> void:
+	# Disconnect from previous container to prevent stale signal connections
+	if media_container and media_container.changed.is_connected(_on_media_changed):
+		media_container.changed.disconnect(_on_media_changed)
+	
 	media_container = container
 	_settings = settings.duplicate()
 	if material == null:
@@ -38,6 +42,10 @@ func initialize(container: MediaContainer, settings: Dictionary) -> void:
 	if media_container:
 		media_container.changed.connect(_on_media_changed)
 	_update_shader_params()
+
+func _exit_tree() -> void:
+	if media_container and media_container.changed.is_connected(_on_media_changed):
+		media_container.changed.disconnect(_on_media_changed)
 
 func set_base_effect(base: EffectBase) -> void:
 	"""Set the base effect that this focus effect should tween from."""
@@ -73,6 +81,7 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	to preserve the original focus effect configuration."""
 	var tweenables = get_tweenable_settings()
 	
+	# Reset tweening flag in case a previous tween was killed before completion
 	_is_tweening = true
 	
 	# Create a temporary settings dict for interpolation
@@ -89,6 +98,18 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	
 	# Apply the interpolated settings WITHOUT storing them in _settings
 	_apply_tweened_settings(temp_settings)
+	
+	# Sync media-container insets for effects that drive shared layout state.
+	# Without this, the border/glass inset stays frozen at the focus-stack's
+	# initial value while the shader tweens, causing a visible gap/slide mismatch.
+	if media_container:
+		match effect_id:
+			"border":
+				var border_size = temp_settings.get("border_size", media_container.border_inset_ratio)
+				media_container.border_inset_ratio = border_size
+			"glass":
+				var additional_inset = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
+				media_container.glass_inset_ratio = additional_inset
 	
 	# Mark tween as complete when progress reaches 1.0
 	if progress >= 1.0:

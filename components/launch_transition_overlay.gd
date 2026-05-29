@@ -182,7 +182,7 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	initial_gradient.colors = [Color(0, 0, 0, 0), Color(0, 0, 0, 0)]  # Both transparent
 	
 	var effect_configs = [
-		{"effect_id": "base", "settings": {"smart_crop_enabled": false}},
+		{"effect_id": "base", "settings": {}},
 		{"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}},
 		{"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_direction": 1}}
 	]

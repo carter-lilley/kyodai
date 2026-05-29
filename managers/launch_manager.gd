@@ -442,7 +442,6 @@ func _on_download_manager_download_completed(item_id: String, _success: bool, _m
 ## Flattens an extracted directory by moving contents of a single top-level subdirectory up one level
 ## This handles zips that extract to a nested directory like "Archive-1.0/file.txt" -> "file.txt"
 func _flatten_extracted_directory(emulator_id: String, extract_to: String, target_folder: String = ""):
-	print("[LaunchManager] _flatten_extracted_directory called with extract_to=" + extract_to + ", target_folder=" + target_folder)
 	# Android uses absolute paths, Desktop uses relative paths
 	var extract_path: String
 	if PlatformManager.is_android():
@@ -463,7 +462,6 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	
 	# Normalize the path to remove "." and ".." components
 	extract_path = FSM.normalize_path(extract_path)
-	print("[LaunchManager] Flattening: normalized extract_path=" + extract_path)
 	
 	# If a specific target folder is specified, flatten only that one
 	if target_folder != "":
@@ -511,7 +509,6 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 	
 	# No target folder specified, use original logic (single directory only)
 	var entries = FSM.list_dir(extract_path)
-	print("[LaunchManager] Flattening: entries in extract_path=" + str(entries))
 	
 	# Filter out . and ..
 	var filtered_entries = []
@@ -519,21 +516,16 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 		if entry != "." and entry != "..":
 			filtered_entries.append(entry)
 	
-	print("[LaunchManager] Flattening: filtered_entries=" + str(filtered_entries) + ", size=" + str(filtered_entries.size()))
-	
 	# If there's exactly one entry and it's a directory, flatten it
 	if filtered_entries.size() == 1:
 		var single_entry = filtered_entries[0]
 		var single_entry_path = FSM.join_paths(extract_path, single_entry)
-		print("[LaunchManager] Flattening: single_entry=" + single_entry + ", path=" + single_entry_path)
 		
 		# Check if the single entry is a directory
 		var is_dir = FSM.dir_exists(single_entry_path)
-		print("[LaunchManager] Flattening: is_dir=" + str(is_dir))
 		if is_dir:
 			# Get all items in the subdirectory
 			var sub_items = FSM.list_dir(single_entry_path)
-			print("[LaunchManager] Flattening: sub_items=" + str(sub_items))
 			
 			# Move all contents from the subdirectory to the parent
 			for item_name in sub_items:
@@ -542,11 +534,9 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 				
 				var source_path = FSM.join_paths(single_entry_path, item_name)
 				var dest_path = FSM.join_paths(extract_path, item_name)
-				print("[LaunchManager] Flattening: moving " + source_path + " -> " + dest_path)
 				
 				# Check if destination already exists
 				if FSM.file_exists(dest_path) or FSM.dir_exists(dest_path):
-					print("[LaunchManager] Flattening: destination already exists, skipping")
 					continue
 				
 				# Move to parent directory
@@ -557,8 +547,6 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			
 			# Remove the now-empty subdirectory
 			DirAccess.remove_absolute(single_entry_path)
-	else:
-		print("[LaunchManager] Flattening: filtered_entries.size() != 1, skipping flatten")
 
 ## Gets the install path for an emulator (searches recursively)
 func get_emulator_install_path(emulator_id: String) -> String:
@@ -1037,13 +1025,6 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		NotificationManager.show_notification("Emulator not ready: " + intent.emulator_name, NotificationManager.Type.ERROR)
 		return false
 	
-	# Controller configuration temporarily disabled - need to solve SDL device index mapping
-	# TODO: Re-enable when SDL device index detection is implemented
-	# Configure controllers for this emulator before launching
-	# var should_continue = await _configure_emulator_controllers(intent)
-	# if not should_continue:
-	# 	return false
-	
 	if PlatformManager.is_android():
 		return _execute_android(intent)
 	else:
@@ -1371,9 +1352,6 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	# Emit signal immediately so focus can be saved before any suspension happens
 	print("[LaunchManager] Emitting game_launch_initiated signal")
 	game_launch_initiated.emit(game, focus_index)
-	
-	# DEBUG: Uncomment the next line to disable actual game launching
-	# return
 	
 	# Play launch sound
 	if AudioManager:
@@ -1972,14 +1950,6 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	_show_android_permissions_reminder(emulator_id)
 	
 	# DEBUG: Don't delete APK so we can check it
-	print("[LaunchManager] DEBUG: Keeping APK for inspection: " + apk_path)
-	# TODO: Re-enable deletion after debugging
-	# var delete_result = DirAccess.remove_absolute(apk_path)
-	# if delete_result == OK:
-	# 	print("[LaunchManager] Deleted APK after install attempt")
-	# else:
-	# 	print("[LaunchManager] Could not delete APK: " + str(delete_result))
-	
 	# Validate installation
 	var validate_config = apk_config.get("validate", {})
 	if not _validate_step(emulator_id, validate_config):

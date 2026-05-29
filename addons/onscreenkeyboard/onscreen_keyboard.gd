@@ -151,11 +151,6 @@ func reconnect_viewport() -> void:
 	if new_viewport != null and not new_viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
 		new_viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
 
-#func _exit_tree():
-#    pass
-
-#func _process(delta):
-#    pass
 
 func _input(event):
 	# If keyboard is hidden and user taps/clicks anywhere, clear the dismissal

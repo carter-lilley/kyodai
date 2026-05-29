@@ -28,7 +28,7 @@ void fragment() {
 	// This gives us negative values inside the shape, positive outside
 	// 1.0 ratio = corners touch (half of smallest dimension)
 	float corner_radius = corner_radius_ratio * min(card_size.x, card_size.y) / 2.0;
-	float dist = rounded_rect_sdf(local_pos - shadow_offset, card_size, corner_radius);
+	float dist = rounded_rect_sdf_pixels(local_pos - shadow_offset, card_size, corner_radius);
 	
 	// Expand the shadow shape outward by the expand amount (as ratio of card width)
 	// Convert ratio to pixels: shadow_expand * card_width
@@ -46,7 +46,7 @@ void fragment() {
 	}
 	
 	// Mask out the card area itself (only show shadow outside)
-	float card_edge_dist = rounded_rect_sdf(local_pos, card_size, corner_radius);
+	float card_edge_dist = rounded_rect_sdf_pixels(local_pos, card_size, corner_radius);
 	float card_alpha = 1.0 - smoothstep(-aa_width, 0.0, card_edge_dist);
 	
 	// Shadow only appears outside the card

@@ -131,8 +131,6 @@ func _build_storage_paths_page() -> VBoxContainer:
 	if PlatformManager.is_windows() or PlatformManager.is_linux():
 		_steam_path_field = _add_path_row(vbox, "Steam Installation Folder (optional)", "")
 	
-	#if PlatformManager.is_android():
-	
 	return vbox
 
 func _build_android_permissions_page() -> VBoxContainer:

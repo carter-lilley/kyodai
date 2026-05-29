@@ -69,7 +69,7 @@ void fragment() {
 	vec2 local_pos = pixel_pos - card_center;
 	// 1.0 ratio = corners touch (half of smallest dimension)
 	float corner_radius = corner_radius_ratio * min(card_size.x, card_size.y) / 2.0;
-	float dist = rounded_rect_sdf(local_pos, card_size, corner_radius);
+	float dist = rounded_rect_sdf_pixels(local_pos, card_size, corner_radius);
 	
 	// Apply glow_spread - insets the fade from the outer edge
 	// 0.0 = fade over full glow_radius (slow fade)

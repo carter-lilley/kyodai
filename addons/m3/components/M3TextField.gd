@@ -356,11 +356,6 @@ func _draw():
 	else:
 		_draw_outlined(rect, border_color, border_width)
 	
-	# TODO: Focus ring behavior temporarily disabled — revisit with cleaner
-	# implementation that doesn't overlap with floating label patch
-	# if _is_focused and not _menu_active:
-	#     _draw_focus_ring(rect)
-
 func _draw_filled(rect: Rect2, border_color: Color, border_width: float):
 	var line_y = rect.position.y + rect.size.y - border_width / 2.0
 	draw_line(

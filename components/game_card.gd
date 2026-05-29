@@ -18,13 +18,15 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 @export var preview_mode: bool = false
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
-var _is_downloading: bool = false
 var _current_texture: Texture2D = null
 
 # Media effect stack rendered inside M3Card's media panel
 var _media_stack: EffectStack = null
 var _focus_stack: EffectStack = null
 var _focus_effect_tweens: Array[Tween] = []
+
+func _remove_focus_tween(tween: Tween) -> void:
+	_focus_effect_tweens.erase(tween)
 
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
@@ -33,10 +35,12 @@ const MAX_IMAGE_RETRIES: int = 3
 
 var _download_retry_count: int = 0
 const MAX_DOWNLOAD_RETRIES: int = 2
+var _current_download_id: int = -1
 const MAX_COVER_TEXTURE_SIZE: int = 512
 
 # Status badge overlay (direct child of GameCard, positioned over media panel)
 var _status_badge: Panel = null
+var _status_badge_style: StyleBoxFlat = null
 var _badge_update_pending: bool = false
 const STATUS_BADGE_SIZE_RATIO: float = 0.04
 const STATUS_BADGE_MARGIN_RATIO: float = 0.05
@@ -79,6 +83,21 @@ func _ready():
 	
 	_setup_status_badge()
 
+func _exit_tree():
+	# Cancel any in-flight image operations to prevent callbacks from keeping this card alive
+	if _current_image_task_id > 0 and MemoryManager:
+		MemoryManager.cancel_image_task(_current_image_task_id)
+		_current_image_task_id = -1
+	
+	# Increment download ID to invalidate any pending download callbacks
+	_current_download_id += 1
+	
+	# Kill any focus effect tweens
+	for tween in _focus_effect_tweens:
+		if tween and is_instance_valid(tween):
+			tween.kill()
+	_focus_effect_tweens.clear()
+
 func _setup_status_badge():
 	_status_badge = Panel.new()
 	_status_badge.name = "StatusBadge"
@@ -88,6 +107,8 @@ func _setup_status_badge():
 	_status_badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	_status_badge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_status_badge.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_status_badge_style = StyleBoxFlat.new()
+	_status_badge.add_theme_stylebox_override("panel", _status_badge_style)
 	add_child(_status_badge)
 	_update_status_badge_style()
 	_reparent_status_badge_to_media_stack()
@@ -296,6 +317,7 @@ func _show_focus_effects(p_show: bool) -> void:
 		if p_show:
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
+			settings_tween.finished.connect(_remove_focus_tween.bind(settings_tween))
 			settings_tween.set_trans(Tween.TRANS_QUAD)
 			settings_tween.set_ease(Tween.EASE_OUT)
 			var tween_callable = func(t: float):
@@ -305,6 +327,7 @@ func _show_focus_effects(p_show: bool) -> void:
 		else:
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
+			settings_tween.finished.connect(_remove_focus_tween.bind(settings_tween))
 			settings_tween.set_trans(Tween.TRANS_QUAD)
 			settings_tween.set_ease(Tween.EASE_OUT)
 			var tween_callable = func(t: float):
@@ -326,6 +349,7 @@ func _show_focus_effects(p_show: bool) -> void:
 				
 				var fade_tween = create_tween()
 				_focus_effect_tweens.append(fade_tween)
+				fade_tween.finished.connect(_remove_focus_tween.bind(fade_tween))
 				fade_tween.set_trans(Tween.TRANS_QUAD)
 				fade_tween.set_ease(Tween.EASE_OUT)
 				fade_tween.tween_method(
@@ -338,6 +362,7 @@ func _show_focus_effects(p_show: bool) -> void:
 		if not p_show:
 			var hide_tween = create_tween()
 			_focus_effect_tweens.append(hide_tween)
+			hide_tween.finished.connect(_remove_focus_tween.bind(hide_tween))
 			hide_tween.set_trans(Tween.TRANS_QUAD)
 			hide_tween.set_ease(Tween.EASE_OUT)
 			hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
@@ -408,7 +433,6 @@ func refresh_settings() -> void:
 func reset() -> void:
 	game = null
 	_current_texture = null
-	_is_downloading = false
 	_is_focused = false
 	_loading_game_id = ""
 	_image_retry_count = 0
@@ -513,17 +537,15 @@ func _update_status_badge_style():
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var circle_radius = int(badge_size / 2.0)
 	
-	var new_style = StyleBoxFlat.new()
 	if game and game.is_active_variant_downloaded():
-		new_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)
+		_status_badge_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)
 	else:
-		new_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)
+		_status_badge_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)
 	
-	new_style.corner_radius_top_left = circle_radius
-	new_style.corner_radius_top_right = circle_radius
-	new_style.corner_radius_bottom_left = circle_radius
-	new_style.corner_radius_bottom_right = circle_radius
-	_status_badge.add_theme_stylebox_override("panel", new_style)
+	_status_badge_style.corner_radius_top_left = circle_radius
+	_status_badge_style.corner_radius_top_right = circle_radius
+	_status_badge_style.corner_radius_bottom_left = circle_radius
+	_status_badge_style.corner_radius_bottom_right = circle_radius
 
 func _update_status_icon():
 	if not _status_badge:
@@ -531,7 +553,7 @@ func _update_status_icon():
 	if not game:
 		_status_badge.visible = false
 		return
-	_status_badge.visible = not _is_downloading
+	_status_badge.visible = true
 	_update_status_badge_layout()
 	_update_status_badge_style()
 
@@ -586,7 +608,6 @@ func _update_platform_badge():
 			texture_aspect = 1.0
 	
 	const BADGE_SIZE_RATIO: float = 0.16
-	const _BADGE_CORNER_RATIO: float = 0.11
 	
 	if badge_type == 1:
 		var base_badge_size = BADGE_SIZE_RATIO * card_width
@@ -736,8 +757,13 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 	
 	_set_texture(_loading_texture)
 	
+	var download_id = _current_download_id + 1
+	_current_download_id = download_id
+	
 	DataManager.load_image(cover_url, func(loaded_texture: Texture2D):
 		if not is_instance_valid(self):
+			return
+		if download_id != _current_download_id:
 			return
 		if not game or game.id != target_game_id:
 			return

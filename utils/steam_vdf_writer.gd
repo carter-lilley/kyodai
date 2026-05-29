@@ -265,18 +265,6 @@ static func debug_calculate_app_ids(full_command: String, app_name: String) -> v
 	# Calculate AppIDs
 	var _result := generate_app_id(exe_path, app_name)
 
-static func _test_appid_variation(_desc: String, exe_str: String, name_str: String, use_null: bool = true) -> void:
-	var input_str: String
-	if use_null:
-		# Steam may include null byte between exe and name
-		input_str = exe_str + char(0) + name_str
-	else:
-		# Direct concatenation
-		input_str = exe_str + name_str
-	
-	var crc := _crc32(input_str)
-	var _app_id: int = (crc & 0xFFFFFFFF) | 0x80000000
-
 ## CRC32 implementation using reversed polynomial (standard CRC32)
 ## Standard CRC32: crc = (CRC32(exe + name) \u0026 0xFFFFFFFF) | 0x80000000
 static func _crc32(s: String) -> int:

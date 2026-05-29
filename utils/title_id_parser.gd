@@ -46,21 +46,11 @@ static func _read_file_range(path: String, offset: int, length: int) -> PackedBy
 	return bytes
 
 ## Converts a PackedByteArray to a hex string
-static func _bytes_to_hex(bytes: PackedByteArray) -> String:
-	var hex = ""
-	for b in bytes:
-		hex += "%02x" % b
-	return hex
-
 ## Verifies magic bytes at a specific offset in a buffer
 static func _verify_magic(buffer: PackedByteArray, offset: int, expected: String) -> bool:
 	if buffer.size() < offset + expected.length():
 		return false
 	return buffer.slice(offset, offset + expected.length()).get_string_from_ascii() == expected
-
-## Reads little-endian uint16 from byte array
-static func _read_le16(bytes: PackedByteArray, offset: int) -> int:
-	return bytes.decode_u16(offset)
 
 ## Reads little-endian uint32 from byte array
 static func _read_le32(bytes: PackedByteArray, offset: int) -> int:
@@ -70,26 +60,9 @@ static func _read_le32(bytes: PackedByteArray, offset: int) -> int:
 static func _read_le64(bytes: PackedByteArray, offset: int) -> int:
 	return bytes.decode_u64(offset)
 
-## Reads big-endian uint16 from byte array
-static func _read_be16(bytes: PackedByteArray, offset: int) -> int:
-	return (bytes[offset] << 8) | bytes[offset + 1]
-
 ## Reads big-endian uint32 from byte array
 static func _read_be32(bytes: PackedByteArray, offset: int) -> int:
 	return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]
-
-## Reads a null-terminated string from a byte array starting at offset
-static func _read_cstring(bytes: PackedByteArray, offset: int) -> String:
-	var end = offset
-	while end < bytes.size() and bytes[end] != 0:
-		end += 1
-	if end > offset:
-		return bytes.slice(offset, end).get_string_from_ascii()
-	return ""
-
-## Returns the minimum of two integers
-static func mini(a: int, b: int) -> int:
-	return a if a < b else b
 
 ## Resolves a ZIP file path for opening with ZIPReader
 ## Handles Godot virtual paths, globalizes them, and tries Windows backslashes

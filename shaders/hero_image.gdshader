@@ -1,26 +1,13 @@
 shader_type canvas_item;
 
+#include "res://shaders/card/includes/card_common.gdshaderinc"
+
 uniform sampler2D game_texture : filter_linear, repeat_disable;
 uniform vec2 hero_size = vec2(1920.0, 640.0);
 
 uniform vec4 shadow_color : source_color = vec4(0.0, 0.0, 0.0, 0.7);
 uniform float shadow_intensity : hint_range(0.0, 1.0) = 0.5;
 uniform float corner_radius : hint_range(0.0, 0.5) = 0.06;
-
-// EXACT COPY from base_card.gdshader
-vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
-	float card_aspect = card.x / card.y;
-	float tex_aspect = tex.x / tex.y;
-	
-	vec2 scale;
-	if (card_aspect > tex_aspect) {
-		scale = vec2(1.0, tex_aspect / card_aspect);
-	} else {
-		scale = vec2(card_aspect / tex_aspect, 1.0);
-	}
-	
-	return (uv - 0.5) * scale + 0.5;
-}
 
 void fragment() {
 	vec2 tex_size = vec2(textureSize(game_texture, 0));

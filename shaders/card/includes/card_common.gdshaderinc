@@ -19,14 +19,6 @@ float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
 
-// Original pixel-based rounded rect SDF (used by glow, drop_shadow, distort)
-float rounded_rect_sdf(vec2 pos, vec2 size, float radius_pixels) {
-	vec2 half_size = size * 0.5;
-	float radius = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
-	vec2 d = abs(pos - half_size) - (half_size - vec2(radius));
-	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
-
 // Ratio-based rounded rect SDF (used when caller already has a ratio)
 float rounded_rect_sdf_ratio(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
