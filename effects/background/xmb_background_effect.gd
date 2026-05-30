@@ -24,11 +24,8 @@ func _apply_settings() -> void:
 	_set_shader_param("wave_intensity", _settings.get("wave_intensity", 0.812))
 	_set_shader_param("star_threshold", _settings.get("star_threshold", 1.0))
 	
-	# Wave color (additive glow)
-	_set_shader_param("wave_color", _settings.get("wave_color", Color(0.5, 0.5, 0.8, 1.0)))
-	
-	# Dust color
-	_set_shader_param("dust_color", _settings.get("dust_color", Color(0.4, 0.4, 0.6, 1.0)))
+	# Wave color (drives background gradient and dust)
+	_set_shader_param("wave_color", _settings.get("wave_color", Color(0.04, 0.69, 0.87, 1.0)))
 	
 	# Wave settings
 	_set_shader_param("wave_thickness", _settings.get("wave_thickness", 0.5))
@@ -64,14 +61,9 @@ func get_settings_schema() -> Array[SettingsVar]:
 	offset_var.property_name = "wave_vertical_offset"
 	schema.append(offset_var)
 	
-	# Wave color (additive glow)
-	var wave_color_var = SettingsVar.new(Type.COLOR, Color(0.5, 0.5, 0.8, 1.0), State.ENABLED, "Wave Color", "Color of the wave glow")
+	# Wave color (drives background gradient and dust)
+	var wave_color_var = SettingsVar.new(Type.COLOR, Color(0.04, 0.69, 0.87, 1.0), State.ENABLED, "Wave Color", "Base color for background gradient")
 	wave_color_var.property_name = "wave_color"
 	schema.append(wave_color_var)
-	
-	# Dust color
-	var dust_color_var = SettingsVar.new(Type.COLOR, Color(0.4, 0.4, 0.6, 1.0), State.ENABLED, "Dust Color", "Color of dust particles")
-	dust_color_var.property_name = "dust_color"
-	schema.append(dust_color_var)
 	
 	return schema

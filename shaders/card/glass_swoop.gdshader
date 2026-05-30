@@ -19,18 +19,22 @@ void fragment() {
 	vec2 swoop_size = card_size;
 	vec2 swoop_offset = vec2(0.0);
 	
-	// Calculate SDF for the full card shape
+	// Calculate SDF for the full card shape using precomputed radius
 	vec2 swoop_pixel_pos = pixel_pos - swoop_offset;
-	float sdf_dist = rounded_rect_sdf_ratio(swoop_pixel_pos, swoop_size, corner_radius_ratio);
+	float sdf_dist = rounded_rect_sdf_pixels(swoop_pixel_pos, swoop_size, corner_radius_pixels);
 	
-	// Edge anti-aliasing
+	// Unified edge anti-aliasing — same formula as all other effects
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
+	aa_width = max(aa_width, 0.5);
+	
 	float edge_alpha;
 	if (display_mode == 0) {
+		// Standard mode: hard edge — parent panel provides anti-aliasing
 		if (sdf_dist > 0.0) { discard; }
 		edge_alpha = 1.0;
 	} else {
-		edge_alpha = 1.0 - smoothstep(0.0, aa_width, sdf_dist);
+		// Transparent / Media Only: smoothstep anti-aliasing (fade inward so parent clip doesn't cut it)
+		edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	

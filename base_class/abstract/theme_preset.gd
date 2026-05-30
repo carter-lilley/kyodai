@@ -19,6 +19,7 @@ class_name ThemePreset
 @export var library_card_content_alignment: int = 0
 @export var library_background_config: Dictionary = {}
 @export var library_primary_color: Color = Color("#6750A4")
+@export var dark_mode: bool = false
 
 # Card Designer Settings
 @export var card_effect_config: Dictionary = {
@@ -47,6 +48,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_card_content_alignment = settings.library_card_content_alignment.value if settings.library_card_content_alignment else 0
 	preset.library_background_config = settings.library_background_config.value.duplicate() if settings.library_background_config else {}
 	preset.library_primary_color = settings.library_primary_color.value if settings.library_primary_color else Color("#6750A4")
+	preset.dark_mode = settings.dark_mode.value if settings.dark_mode else false
 	
 	# Card settings
 	preset.card_effect_config = settings.card_effect_config.value.duplicate() if settings.card_effect_config else {
@@ -90,6 +92,8 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_background_config.value = library_background_config.duplicate()
 	if settings.get("library_primary_color") != null:
 		settings.library_primary_color.value = library_primary_color
+	if settings.get("dark_mode") != null:
+		settings.dark_mode.value = dark_mode
 	
 	# Apply card settings
 	if settings.get("card_effect_config") != null:

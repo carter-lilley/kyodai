@@ -31,7 +31,7 @@ var _effect_id_map: Dictionary = {}  # Maps dropdown_id -> effect_id
 # Effect default settings
 var _effect_defaults: Dictionary = {
 	"border": {
-		"border_size": 0.05,
+		"border_size": 0.0,
 		"border_fade_in": 0.0,
 		"border_color": Color.WHITE
 	},

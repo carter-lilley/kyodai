@@ -73,20 +73,21 @@ void fragment() {
 	vec2 glass_offset = vec2(0.0);
 	vec2 glass_pixel_pos = pixel_pos;
 	
-	// Use full card corner radius for glass edge
-	float glass_radius_ratio = corner_radius_ratio;
+	// Use precomputed corner radius for consistent edge alignment with base/border
+	float sdf_dist = rounded_rect_sdf_pixels(glass_pixel_pos, glass_size, corner_radius_pixels);
 	
-	// Check if we're inside the glass area
-	float sdf_dist = rounded_rect_sdf_ratio(glass_pixel_pos, glass_size, glass_radius_ratio);
-	
-	// Calculate edge anti-aliasing for the outer glass edge
+	// Unified edge anti-aliasing — same formula as all other effects
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
+	aa_width = max(aa_width, 0.5);
+	
 	float edge_alpha;
 	if (display_mode == 0) {
+		// Standard mode: hard edge — parent panel provides anti-aliasing
 		if (sdf_dist > 0.0) { discard; }
 		edge_alpha = 1.0;
 	} else {
-		edge_alpha = 1.0 - smoothstep(0.0, aa_width, sdf_dist);
+		// Transparent / Media Only: smoothstep anti-aliasing (fade inward so parent clip doesn't cut it)
+		edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	
@@ -97,7 +98,7 @@ void fragment() {
 	vec2 image_area_offset = vec2(total_image_inset);
 	
 	// Calculate image area corner radius
-	float image_area_radius_pixels = max(0.0, corner_radius_ratio * min(card_size.x, card_size.y) / 2.0 - total_image_inset);
+	float image_area_radius_pixels = max(0.0, corner_radius_pixels - total_image_inset);
 	float image_area_radius_ratio = 0.0;
 	if (min(image_area_size.x, image_area_size.y) > 0.0) {
 		image_area_radius_ratio = image_area_radius_pixels / (min(image_area_size.x, image_area_size.y) / 2.0);
@@ -109,6 +110,8 @@ void fragment() {
 	float image_aa = 1.0 - smoothstep(-aa_width, 0.0, image_sdf_dist);
 	
 	// Calculate 3D dome normal from full card area
+	// Compute ratio from precomputed pixels for consistency
+	float glass_radius_ratio = corner_radius_pixels / (min(card_size.x, card_size.y) / 2.0);
 	vec3 normal = calculate_dome_normal(glass_pixel_pos, glass_size, glass_radius_ratio);
 	
 	// Specular

@@ -67,6 +67,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("glow_spread", glow_spread)
 	_set_shader_param("glow_margin", margin_pixels)
 	_set_shader_param("game_texture", media_container.texture)
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

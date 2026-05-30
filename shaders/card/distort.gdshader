@@ -49,7 +49,7 @@ void fragment() {
 	vec2 inner_offset = vec2(effective_border_inset);
 	
 	// Calculate effective inner corner radius
-	float inner_radius_pixels = max(0.0, corner_radius_ratio * min(card_size.x, card_size.y) / 2.0 - effective_border_inset);
+	float inner_radius_pixels = max(0.0, corner_radius_pixels - effective_border_inset);
 	float inner_radius_ratio = inner_radius_pixels / (min(inner_size.x, inner_size.y) / 2.0);
 	
 	// Offset pixel position for inset calculations
@@ -65,12 +65,16 @@ void fragment() {
 		if (sdf_dist > 0.0) { discard; }
 		edge_alpha = 1.0;
 	} else {
-		edge_alpha = 1.0 - smoothstep(0.0, aa_width, sdf_dist);
+		// Fade inward so anti-aliasing stays within card bounds (parent clips children)
+		edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, sdf_dist);
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	
 	// Get distorted/warped UVs
 	vec2 warped_uv = spherical_distort(UV, distortion, card_size);
+	// Zoom out to compensate for spherical magnification (30% at max distortion)
+	float zoom_out = 1.0 + distortion * 0.30;
+	warped_uv = (warped_uv - 0.5) * zoom_out + 0.5;
 	warped_uv = clamp(warped_uv, 0.0, 1.0);
 	
 	// Apply precomputed UV transforms from base_card instead of re-deriving aspect math

@@ -6,12 +6,6 @@ separate firmware page or indicator?
 sync not working after removing games
 focus lock
 --
-W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [VirtualScrollGridContainer] Only 1 snap ratio(s) for view_mode=0, size=(1848.0, 702.0), base_dims=(202.0, 270.0), available=(1840.0, 702.0)
-  <C++ Source>  core/variant/variant_utility.cpp:1034 @ push_warning()
-  <Stack Trace> virtual_scroll_grid_container.gd:466 @ get_snap_ratios()
-				main.gd:361 @ _update_zoom_slider_stops()
-				main.gd:353 @ _update_ui_for_view()
-				main.gd:348 @ _update_ui_for_view()
 
 ## android
 	chunk reassembly notif on android
@@ -33,7 +27,6 @@ W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [Virtu
 	color presets (platform/game/custom)
 	'controls/info bar'
 	focus glow
-	layer system inner-shadow/blur
 	add letters to library navigation?
 	badge effect placement opts
 	placeholders
@@ -49,7 +42,6 @@ W 0:00:03:898   virtual_scroll_grid_container.gd:466 @ get_snap_ratios(): [Virtu
 	hero fx (screenshots/cropping/shadows/etc)
 	
 ## performance:
-	try scaling cropping algo(?)
 	image priority management.
 	performance.add_custom_monitor for everything
 	

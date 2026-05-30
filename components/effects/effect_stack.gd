@@ -31,8 +31,8 @@ const EFFECT_LAYER_ORDER: Array = [
 	"blur",       # Blur overlay
 	"distort",         # Distortion overlay
 	"gradient_overlay", # Gradient overlay
+	"border",           # Border overlay (rendered before glass so glass can shine over it)
 	"glass",            # Glass overlay
-	"border",           # Border overlay
 	"badge",            # Badge overlay
 ]
 
@@ -114,7 +114,7 @@ func _rebuild_effects():
 				match effect_id:
 					"border":
 						if media_container:
-							media_container.border_inset_ratio = settings.get("border_size", 0.05)
+							media_container.border_inset_ratio = settings.get("border_size", 0.0)
 					"glass":
 						if media_container:
 							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)

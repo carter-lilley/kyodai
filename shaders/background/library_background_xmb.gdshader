@@ -1,6 +1,6 @@
 shader_type canvas_item;
 
-// PS3 XMB Background Shader Port - Additive Overlay Version
+// PS3 XMB Background Shader Port - Self-Contained Version
 // Based on: https://www.shadertoy.com/view/tXy3DK by int_45h
 // Ported to Godot 4.x
 
@@ -13,11 +13,11 @@ uniform float wave_amplitude : hint_range(0.0, 3.0) = 0.324;
 uniform float wave_vertical_offset : hint_range(-1.0, 1.0) = -0.2;
 uniform sampler2D noise_texture : filter_linear, repeat_enable;
 
-// Wave color - bright color that adds to the background
-uniform vec4 wave_color : source_color = vec4(0.5, 0.5, 0.8, 1.0);
+// Single user color - background gradient and dust are derived from this
+uniform vec4 wave_color : source_color = vec4(0.04, 0.69, 0.87, 1.0);
 
-// Dust color
-uniform vec4 dust_color : source_color = vec4(0.4, 0.4, 0.6, 1.0);
+// Color ratio for deriving gradient from single color (matching XMB Classic)
+const vec3 COLOR_RATIO = vec3(1.0, 0.275, 0.621);
 
 const float THRESHOLD = 0.99;
 const float MIN_DIST = 0.13;
@@ -175,27 +175,30 @@ void fragment() {
 	float wave_density = mg.x;
 	float wave_glow = mg.y;
 	
-	// Start with black (additive blending adds to the background)
-	vec3 final_color = vec3(0.0);
+	// Derive gradient colors from single user color
+	vec3 bottom_color = wave_color.rgb;
+	vec3 top_color = wave_color.rgb * COLOR_RATIO;
 	
-	// Vita-style: broad, soft waves with bright center
+	// Self-contained background gradient
+	vec3 final_color = mix(top_color, bottom_color, uv.y);
+	
+	// Vita-style: broad, soft waves with bright white center
 	if (wave_density > 0.0) {
 		// Power curve for brighter center, softer edges
 		float brightness = pow(wave_density, 0.7) * wave_intensity;
 		// Add glow falloff
 		brightness *= (1.0 + wave_glow * 0.5);
-		final_color += wave_color.rgb * brightness;
+		final_color += vec3(1.0) * brightness;  // White waves
 	}
 	
-	// Add dust particles (keep them subtle)
+	// Add dust particles (subtle, derived from user color)
 	if (show_dust) {
 		float dust = get_dust(uv, vec2(2000.0), mg.y, time, resolution);
-		final_color += dust_color.rgb * dust * 0.3;
+		vec3 derived_dust_color = wave_color.rgb * 0.6;
+		final_color += derived_dust_color * dust * 0.3;
 	}
 	
-	// Calculate alpha based on brightness
-	float alpha = min(length(final_color), 1.0);
-	
-	// Output opaque
+	// Clamp and output opaque
+	final_color = clamp(final_color, vec3(0.0), vec3(1.0));
 	COLOR = vec4(final_color, 1.0);
 }

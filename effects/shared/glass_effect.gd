@@ -49,6 +49,7 @@ func _update_shader_params() -> void:
 	
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
+	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("border_inset_ratio", media_container.border_inset_ratio)
 	_set_shader_param("glass_color", glass_color)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
@@ -66,6 +67,7 @@ func _update_shader_params() -> void:
 		var swoop_mat = _swoop_layer.material as ShaderMaterial
 		swoop_mat.set_shader_parameter("card_size", media_container.size)
 		swoop_mat.set_shader_parameter("corner_radius_ratio", media_container.corner_radius_ratio)
+		swoop_mat.set_shader_parameter("corner_radius_pixels", media_container.get_corner_radius_pixels())
 		swoop_mat.set_shader_parameter("border_inset_ratio", media_container.border_inset_ratio)
 		swoop_mat.set_shader_parameter("glass_color", glass_color)
 		swoop_mat.set_shader_parameter("swoop_intensity", swoop_intensity)

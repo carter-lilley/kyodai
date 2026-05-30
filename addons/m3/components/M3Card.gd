@@ -191,6 +191,7 @@ var _focus_target_h: float = 0.0
 # Cache last-applied theme values to avoid redundant overrides
 var _applied_font_color: Color = Color(-1, -1, -1)
 var _applied_supporting_color: Color = Color(-1, -1, -1)
+var _applied_text_shadow_enabled: bool = false
 var _applied_margin_left: int = -1
 var _applied_margin_right: int = -1
 var _applied_margin_top: int = -1
@@ -683,6 +684,27 @@ func _update_text():
 	
 	if _supporting_label.horizontal_alignment != h_align:
 		_supporting_label.horizontal_alignment = h_align
+	
+	# Text shadow in transparent mode for readability
+	var needs_shadow = not show_background
+	if needs_shadow and not _applied_text_shadow_enabled:
+		_applied_text_shadow_enabled = true
+		var shadow_color = Color(0.0, 0.0, 0.0, 0.15)
+		var shadow_offset_x = M3Units.dp(1.5)
+		var shadow_offset_y = M3Units.dp(2.5)
+		var shadow_outline = M3Units.dp(5.0)
+		for label in [_headline_label, _supporting_label]:
+			label.add_theme_color_override("font_shadow_color", shadow_color)
+			label.add_theme_constant_override("shadow_offset_x", shadow_offset_x)
+			label.add_theme_constant_override("shadow_offset_y", shadow_offset_y)
+			label.add_theme_constant_override("shadow_outline_size", shadow_outline)
+	elif not needs_shadow and _applied_text_shadow_enabled:
+		_applied_text_shadow_enabled = false
+		for label in [_headline_label, _supporting_label]:
+			label.remove_theme_color_override("font_shadow_color")
+			label.remove_theme_constant_override("shadow_offset_x")
+			label.remove_theme_constant_override("shadow_offset_y")
+			label.remove_theme_constant_override("shadow_outline_size")
 
 func _update_appearance():
 	if not _text_margin:

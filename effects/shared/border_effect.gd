@@ -29,7 +29,7 @@ func _update_shader_params() -> void:
 	if not media_container:
 		return
 	
-	var border_size = _settings.get("border_size", 0.05)
+	var border_size = _settings.get("border_size", 0.0)
 	var border_fade_in = _settings.get("border_fade_in", 0.0)
 	var border_gradient = _settings.get("border_gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
@@ -70,6 +70,8 @@ func _update_shader_params() -> void:
 		var border_color = _settings.get("border_color", Color.WHITE)
 		_set_shader_param("border_color", border_color)
 		_set_shader_param("use_gradient", false)
+	
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func set_border_size(border_size: float) -> void:
 	_settings["border_size"] = border_size
@@ -80,7 +82,7 @@ func tween_border_size(target_size: float, duration: float = 0.15) -> Tween:
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_OUT)
 	
-	var start_size = _settings.get("border_size", 0.05)
+	var start_size = _settings.get("border_size", 0.0)
 	tween.tween_method(func(t): 
 		var current_size = lerp(start_size, target_size, t)
 		set_border_size(current_size)
@@ -107,7 +109,7 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var Type = SettingsVar.SettingType
 	var State = SettingsVar.SettingState
 	
-	var size_var = SettingsVar.new(Type.FLOAT, 0.05, State.ENABLED, "Border Size", "", 0.01, 0.5, 0.01)
+	var size_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Border Size", "", 0.0, 0.5, 0.01)
 	size_var.property_name = "border_size"
 	schema.append(size_var)
 	

@@ -27,7 +27,7 @@ void fragment() {
 	// Calculate distance from the shadow-casting shape (offset card)
 	// This gives us negative values inside the shape, positive outside
 	// 1.0 ratio = corners touch (half of smallest dimension)
-	float corner_radius = corner_radius_ratio * min(card_size.x, card_size.y) / 2.0;
+	float corner_radius = corner_radius_pixels;
 	float dist = rounded_rect_sdf_pixels(local_pos - shadow_offset, card_size, corner_radius);
 	
 	// Expand the shadow shape outward by the expand amount (as ratio of card width)

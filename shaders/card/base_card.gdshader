@@ -35,8 +35,8 @@ void fragment() {
 		}
 		edge_alpha = 1.0;
 	} else {
-		// Transparent / Media Only: smoothstep anti-aliasing on the edge
-		edge_alpha = 1.0 - smoothstep(0.0, aa_width, dist);
+		// Fade inward so anti-aliasing stays within card bounds (parent clips children)
+		edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 		if (edge_alpha <= 0.0) {
 			discard;
 		}
@@ -48,7 +48,8 @@ void fragment() {
 	vec2 glass_inner_offset = vec2(glass_inset_pixels);
 	
 	// Calculate inner corner radius for glass inset
-	float glass_inner_radius_pixels = max(0.0, corner_radius_ratio * min(card_size.x, card_size.y) / 2.0 - glass_inset_pixels);
+	// Use precomputed corner_radius_pixels (rounded) for consistent alignment with outer edge
+	float glass_inner_radius_pixels = max(0.0, corner_radius_pixels - glass_inset_pixels);
 	float glass_inner_radius_ratio = 0.0;
 	if (min(glass_inner_size.x, glass_inner_size.y) > 0.0) {
 		glass_inner_radius_ratio = glass_inner_radius_pixels / (min(glass_inner_size.x, glass_inner_size.y) / 2.0);

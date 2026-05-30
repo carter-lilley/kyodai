@@ -381,7 +381,9 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.library_card_content_alignment != b.library_card_content_alignment:
 		return false
-	if a.library_layout_mode != b.library_layout_mode:
+	if a.library_primary_color != b.library_primary_color:
+		return false
+	if a.dark_mode != b.dark_mode:
 		return false
 	
 	# Compare dictionaries using JSON stringify for reliable comparison

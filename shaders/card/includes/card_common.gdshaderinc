@@ -26,6 +26,8 @@ float rounded_rect_sdf_pixels(vec2 pos, vec2 size, float radius_pixels) {
 float rounded_rect_sdf_ratio(vec2 pos, vec2 size, float radius_ratio) {
 	vec2 half_size = size * 0.5;
 	float radius_pixels = radius_ratio * min(size.x, size.y) / 2.0;
+	// Clamp for safety — ratio > 1.0 would otherwise exceed the shape bounds
+	radius_pixels = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
 	vec2 d = abs(pos - half_size) - (half_size - vec2(radius_pixels));
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius_pixels;
 }

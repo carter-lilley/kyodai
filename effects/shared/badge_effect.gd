@@ -76,6 +76,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("has_icon_texture", _icon_texture != null)
 	_set_shader_param("icon_padding", icon_padding)
 	_set_shader_param("icon_color", icon_color)
+	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func set_border_width(width: float) -> void:
 	_border_width = width

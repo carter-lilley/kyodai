@@ -20,7 +20,8 @@ void fragment() {
 		if (dist > 0.0) { discard; }
 		edge_alpha = 1.0;
 	} else {
-		edge_alpha = 1.0 - smoothstep(0.0, aa_width, dist);
+		// Fade inward so anti-aliasing stays within card bounds (parent clips children)
+		edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, dist);
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	
