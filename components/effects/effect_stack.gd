@@ -52,8 +52,13 @@ func set_game_texture(texture: Texture2D):
 	# Notify all effects that need the game texture
 	for effect_id in _effects:
 		var effect = _effects[effect_id]
-		if effect and effect.has_method("set_game_texture"):
+		if not effect:
+			continue
+		if effect.has_method("set_game_texture"):
 			effect.set_game_texture(texture)
+		# Force update on ALL effects so they get fresh UV transforms
+		# even when _is_tweening blocks the media_container.changed signal.
+		effect._update_shader_params()
 
 func get_effect_configs() -> Array:
 	return _effect_configs.duplicate(true)

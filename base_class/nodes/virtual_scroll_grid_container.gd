@@ -326,15 +326,26 @@ func _ready():
 	# Connect to settings saved signal to refresh layout when card orientation changes
 	if SettingsManager:
 		SettingsManager.settings_saved.connect(_on_settings_saved)
+		SettingsManager.setting_changed.connect(_on_setting_changed)
 
 func _exit_tree():
 	if SettingsManager:
 		SettingsManager.settings_saved.disconnect(_on_settings_saved)
+		SettingsManager.setting_changed.disconnect(_on_setting_changed)
 
 func _on_settings_saved():
 	_update_focus_scale_from_settings()
 	_refresh_cached_settings()
 	_recalculate_layout()
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	# Update caches immediately for settings that affect card layout
+	# so that immediate refreshes (from View._on_setting_changed) use correct values.
+	# Note: _recalculate_layout() is triggered by View/UIManager via refresh_dimensions(),
+	# so we only need to refresh the caches here.
+	match setting.property_name:
+		"card_media_aspect_ratio", "library_card_display_mode", "library_card_content_alignment", "library_layout_mode", "library_grid_vertical":
+			_refresh_cached_settings()
 
 func _refresh_cached_settings() -> void:
 	if not SettingsManager:
@@ -1127,8 +1138,8 @@ func _configure_card_size_flags(card: Control) -> void:
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
-	# Apply content alignment for list and carousel modes
-	if view_mode != ViewMode.GRID and card.has_method("set_content_alignment"):
+	# Apply content alignment for all modes (GRID also supports START/CENTER/END)
+	if card.has_method("set_content_alignment"):
 		var alignment = _get_content_alignment()
 		card.set_content_alignment(alignment)
 

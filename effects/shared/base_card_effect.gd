@@ -69,9 +69,6 @@ func _update_shader_params() -> void:
 
 func set_game_texture(texture: Texture2D) -> void:
 	_current_texture = texture
-	if media_container:
-		media_container.texture = texture
-		_update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	return []

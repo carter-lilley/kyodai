@@ -3,7 +3,7 @@ render_mode blend_mix;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float shadow_margin = 100.0;
+uniform vec2 shadow_margin = vec2(100.0, 100.0);
 
 uniform vec4 shadow_color : source_color = vec4(0.0, 0.0, 0.0, 0.5);
 uniform vec2 shadow_offset = vec2(0.0, 10.0); // pixels
@@ -17,7 +17,7 @@ const float aa_width = 1.5;
 
 void fragment() {
 	// The texture is larger than the card (includes margin for shadow)
-	vec2 total_size = card_size + vec2(shadow_margin * 2.0);
+	vec2 total_size = card_size + shadow_margin * 2.0;
 	vec2 pixel_pos = UV * total_size;
 	
 	// Center the card in the larger area
@@ -28,7 +28,8 @@ void fragment() {
 	// This gives us negative values inside the shape, positive outside
 	// 1.0 ratio = corners touch (half of smallest dimension)
 	float corner_radius = corner_radius_pixels;
-	float dist = rounded_rect_sdf_pixels(local_pos - shadow_offset, card_size, corner_radius);
+	vec2 card_half = card_size * 0.5;
+	float dist = rounded_rect_sdf_pixels(local_pos - shadow_offset + card_half, card_size, corner_radius);
 	
 	// Expand the shadow shape outward by the expand amount (as ratio of card width)
 	// Convert ratio to pixels: shadow_expand * card_width
@@ -46,7 +47,7 @@ void fragment() {
 	}
 	
 	// Mask out the card area itself (only show shadow outside)
-	float card_edge_dist = rounded_rect_sdf_pixels(local_pos, card_size, corner_radius);
+	float card_edge_dist = rounded_rect_sdf_pixels(local_pos + card_half, card_size, corner_radius);
 	float card_alpha = 1.0 - smoothstep(-aa_width, 0.0, card_edge_dist);
 	
 	// Shadow only appears outside the card

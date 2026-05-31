@@ -50,20 +50,29 @@ func _update_shader_params() -> void:
 	var shadow_expand = _settings.get("shadow_expand", 0.02)
 	
 	var card_size = media_container.size
-	var card_width = card_size.x
 	
-	var shadow_offset = Vector2(shadow_offset_x * card_width, shadow_offset_y * card_width)
-	var softness_pixels = shadow_softness * card_width
-	var margin_pixels = (SHADOW_MARGIN_RATIO + abs(shadow_offset_y) + shadow_softness) * card_width
+	# Offset each axis independently so the visual distance scales with that dimension
+	var shadow_offset = Vector2(shadow_offset_x * card_size.x, shadow_offset_y * card_size.y)
+	# Softness scales with the smaller dimension so it doesn't blow up on wide/tall cards
+	var card_min = min(card_size.x, card_size.y)
+	var softness_pixels = shadow_softness * card_min
+	
+	# Margin must match anchor expansion per-axis: anchor expands by margin_ratio * dimension
+	# So margin in pixels = dimension * margin_ratio for each axis independently
+	var margin_ratio = SHADOW_MARGIN_RATIO + max(abs(shadow_offset_x), abs(shadow_offset_y)) + shadow_softness
+	var margin_x = card_size.x * margin_ratio
+	var margin_y = card_size.y * margin_ratio
+	var shadow_margin = Vector2(margin_x, margin_y)
 	
 	_set_shader_param("card_size", card_size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
+	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("shadow_color", shadow_color)
 	_set_shader_param("shadow_offset", shadow_offset)
 	_set_shader_param("shadow_softness", softness_pixels)
 	_set_shader_param("shadow_spread", shadow_spread)
 	_set_shader_param("shadow_expand", shadow_expand)
-	_set_shader_param("shadow_margin", margin_pixels)
+	_set_shader_param("shadow_margin", shadow_margin)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func get_settings_schema() -> Array[SettingsVar]:
@@ -79,11 +88,11 @@ func get_settings_schema() -> Array[SettingsVar]:
 	offset_x_var.property_name = "shadow_offset_x"
 	schema.append(offset_x_var)
 	
-	var offset_y_var = SettingsVar.new(Type.FLOAT, 0.05, State.ENABLED, "Shadow Offset Y", "Ratio of card width", -0.1, 0.1, 0.001)
+	var offset_y_var = SettingsVar.new(Type.FLOAT, 0.05, State.ENABLED, "Shadow Offset Y", "Ratio of card height", -0.1, 0.1, 0.001)
 	offset_y_var.property_name = "shadow_offset_y"
 	schema.append(offset_y_var)
 	
-	var softness_var = SettingsVar.new(Type.FLOAT, 0.04, State.ENABLED, "Shadow Softness", "Ratio of card width", 0.0, 0.15, 0.001)
+	var softness_var = SettingsVar.new(Type.FLOAT, 0.04, State.ENABLED, "Shadow Softness", "Ratio of min(card width, height)", 0.0, 0.15, 0.001)
 	softness_var.property_name = "shadow_softness"
 	schema.append(softness_var)
 	

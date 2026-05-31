@@ -94,8 +94,14 @@ func set_base_effects(base_effects: Array):
 	if inherit_from_base:
 		_populate_option_button()  # Update to show overlap labels
 
+var _effects_discovered: bool = false
+
 func _discover_effects():
 	"""Auto-discover effects that support this context."""
+	if _effects_discovered:
+		return
+	_effects_discovered = true
+	
 	_available_effects.clear()
 	_effect_id_map.clear()
 	
@@ -129,7 +135,8 @@ func _discover_effects():
 
 func _ready():
 	_setup_ui()
-	_discover_effects()
+	# _discover_effects() is called by setup(), which is the intended init path.
+	# Calling it here would duplicate work when the designer is created via setup().
 
 func _setup_ui():
 	var target: Control = self

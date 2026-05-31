@@ -38,9 +38,7 @@ func _update_glow_offsets():
 	offset_bottom = 0.0
 
 func set_game_texture(texture: Texture2D) -> void:
-	if media_container:
-		media_container.texture = texture
-		_update_shader_params()
+	pass  # EffectStack now handles _update_shader_params() for all effects
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -60,6 +58,7 @@ func _update_shader_params() -> void:
 	
 	_set_shader_param("card_size", card_size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
+	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("glow_radius", radius_pixels)
 	_set_shader_param("glow_intensity", glow_intensity)
 	_set_shader_param("blur_amount", blur_amount)

@@ -29,9 +29,9 @@ vec2 spherical_distort(vec2 uv, float raw_distortion, vec2 size) {
 	
 	float dist_param;
 	if (raw_distortion < 0.5) {
-		dist_param = mix(0.3, 1.0, raw_distortion * 2.0);
+		dist_param = mix(0.2, 1.0, raw_distortion * 2.0);
 	} else {
-		dist_param = mix(1.0, 1.8, (raw_distortion - 0.5) * 2.0);
+		dist_param = mix(1.0, 1.5, (raw_distortion - 0.5) * 2.0);
 	}
 	
 	return distort(centered, dist_param, aspect);
@@ -70,12 +70,13 @@ void fragment() {
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	
+	// Zoom out input UVs so distortion pulls from a wider area of the texture
+	// Apply zoom at BOTH extremes (distortion 0 and 1), not just distortion=1
+	float zoom_out = 1.0 + abs(distortion - 0.5) * 0.4;
+	vec2 zoomed_uv = (UV - 0.5) * zoom_out + 0.5;
+	
 	// Get distorted/warped UVs
-	vec2 warped_uv = spherical_distort(UV, distortion, card_size);
-	// Zoom out to compensate for spherical magnification (30% at max distortion)
-	float zoom_out = 1.0 + distortion * 0.30;
-	warped_uv = (warped_uv - 0.5) * zoom_out + 0.5;
-	warped_uv = clamp(warped_uv, 0.0, 1.0);
+	vec2 warped_uv = spherical_distort(zoomed_uv, distortion, card_size);
 	
 	// Apply precomputed UV transforms from base_card instead of re-deriving aspect math
 	warped_uv = (warped_uv - 0.5) * uv_transform_scale + 0.5 + uv_transform_offset;
