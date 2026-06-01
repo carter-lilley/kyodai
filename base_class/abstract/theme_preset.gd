@@ -6,7 +6,7 @@ class_name ThemePreset
 @export var name: String = ""
 @export var description: String = ""
 @export var created_at: String = ""
-@export var version: int = 1  # For backwards compatibility
+@export var version: int = 2  # For backwards compatibility
 
 # Library Appearance Settings
 @export var library_layout_mode: int = 0
@@ -17,6 +17,8 @@ class_name ThemePreset
 @export var library_card_display_mode: int = 0
 @export var library_focus_scale: float = 0.08
 @export var library_card_content_alignment: int = 0
+@export var library_grid_vertical: bool = false
+@export var card_media_aspect_ratio: int = 0
 @export var library_background_config: Dictionary = {}
 @export var library_primary_color: Color = Color("#6750A4")
 @export var dark_mode: bool = false
@@ -25,8 +27,7 @@ class_name ThemePreset
 @export var card_effect_config: Dictionary = {
 	"effects": [],
 	"card_orientation": 0,
-	"card_rounding": 0.12,
-	"hero_height": 0
+	"card_rounding": 0.12
 }
 
 ## Creates a ThemePreset from current settings
@@ -35,7 +36,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.name = "New Preset"
 	preset.description = ""
 	preset.created_at = Time.get_datetime_string_from_system()
-	preset.version = 1
+	preset.version = 2
 	
 	# Library settings
 	preset.library_layout_mode = settings.library_layout_mode.value if settings.library_layout_mode else 0
@@ -46,21 +47,18 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_card_display_mode = settings.library_card_display_mode.value if settings.library_card_display_mode else 0
 	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.08
 	preset.library_card_content_alignment = settings.library_card_content_alignment.value if settings.library_card_content_alignment else 0
-	preset.library_background_config = settings.library_background_config.value.duplicate() if settings.library_background_config else {}
+	preset.library_grid_vertical = settings.library_grid_vertical.value if settings.library_grid_vertical else false
+	preset.card_media_aspect_ratio = settings.card_media_aspect_ratio.value if settings.card_media_aspect_ratio else 0
+	preset.library_background_config = settings.library_background_config.value.duplicate(true) if settings.library_background_config else {}
 	preset.library_primary_color = settings.library_primary_color.value if settings.library_primary_color else Color("#6750A4")
 	preset.dark_mode = settings.dark_mode.value if settings.dark_mode else false
 	
 	# Card settings
-	preset.card_effect_config = settings.card_effect_config.value.duplicate() if settings.card_effect_config else {
+	preset.card_effect_config = settings.card_effect_config.value.duplicate(true) if settings.card_effect_config else {
 		"effects": [],
 		"card_orientation": 0,
-		"card_rounding": 0.12,
-		"hero_height": 0
+		"card_rounding": 0.12
 	}
-	
-	# Also copy hero_height from hero_effect_config if it exists
-	if settings.get("hero_effect_config") != null and settings.hero_effect_config.value is Dictionary:
-		preset.card_effect_config["hero_height"] = settings.hero_effect_config.value.get("hero_height", 0)
 	
 	return preset
 
@@ -88,8 +86,14 @@ func apply_to_settings(settings: Settings) -> bool:
 		settings.library_focus_scale.value = library_focus_scale
 	if settings.get("library_card_content_alignment") != null:
 		settings.library_card_content_alignment.value = library_card_content_alignment
+	# Version 2 fields: only apply if preset was saved with these fields
+	if version >= 2:
+		if settings.get("library_grid_vertical") != null:
+			settings.library_grid_vertical.value = library_grid_vertical
+		if settings.get("card_media_aspect_ratio") != null:
+			settings.card_media_aspect_ratio.value = card_media_aspect_ratio
 	if settings.get("library_background_config") != null:
-		settings.library_background_config.value = library_background_config.duplicate()
+		settings.library_background_config.value = library_background_config.duplicate(true)
 	if settings.get("library_primary_color") != null:
 		settings.library_primary_color.value = library_primary_color
 	if settings.get("dark_mode") != null:
@@ -97,13 +101,7 @@ func apply_to_settings(settings: Settings) -> bool:
 	
 	# Apply card settings
 	if settings.get("card_effect_config") != null:
-		settings.card_effect_config.value = card_effect_config.duplicate()
-	
-	# Apply hero settings - copy hero_height to hero_effect_config
-	if settings.get("hero_effect_config") != null:
-		var hero_config = settings.hero_effect_config.value.duplicate() if settings.hero_effect_config.value is Dictionary else {}
-		hero_config["hero_height"] = card_effect_config.get("hero_height", 0)
-		settings.hero_effect_config.value = hero_config
+		settings.card_effect_config.value = card_effect_config.duplicate(true)
 	
 	return true
 
@@ -112,12 +110,20 @@ func merge_with_defaults(default_preset: ThemePreset) -> void:
 	# Only copy values that we don't have (for backwards compatibility)
 	# Library settings
 	if library_background_config.is_empty() and not default_preset.library_background_config.is_empty():
-		library_background_config = default_preset.library_background_config.duplicate()
+		library_background_config = default_preset.library_background_config.duplicate(true)
+	
+	# Version 2 fields: merge from defaults if this is an old preset
+	if version < 2:
+		library_grid_vertical = default_preset.library_grid_vertical
+		card_media_aspect_ratio = default_preset.card_media_aspect_ratio
+		version = 2
 	
 	# Card settings
-	if card_effect_config.is_empty() or card_effect_config.get("effects", []).is_empty():
+	# Only merge if the entire config dict is empty, not if effects array is empty
+	# (themes can intentionally have zero effects)
+	if card_effect_config.is_empty():
 		if not default_preset.card_effect_config.is_empty():
-			card_effect_config = default_preset.card_effect_config.duplicate()
+			card_effect_config = default_preset.card_effect_config.duplicate(true)
 
 ## Returns a display name for the preset
 func get_display_name() -> String:

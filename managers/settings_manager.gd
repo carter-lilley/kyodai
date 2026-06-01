@@ -320,8 +320,6 @@ func apply_preset(preset: ThemePreset) -> bool:
 		
 		# Emit setting_changed for all library settings so views get notified
 		# Emit the SETTING VALUE (settings.X.value), not the preset value
-		if settings.get("hero_effect_config") != null:
-			emit_signal("setting_changed", settings.hero_effect_config.value, settings.hero_effect_config)
 		if settings.get("library_navigation_type") != null:
 			emit_signal("setting_changed", settings.library_navigation_type.value, settings.library_navigation_type)
 		if settings.get("library_grid_padding") != null:
@@ -342,6 +340,12 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.library_layout_mode.value, settings.library_layout_mode)
 		if settings.get("library_primary_color") != null:
 			emit_signal("setting_changed", settings.library_primary_color.value, settings.library_primary_color)
+		if settings.get("library_grid_vertical") != null:
+			emit_signal("setting_changed", settings.library_grid_vertical.value, settings.library_grid_vertical)
+		if settings.get("card_media_aspect_ratio") != null:
+			emit_signal("setting_changed", settings.card_media_aspect_ratio.value, settings.card_media_aspect_ratio)
+		if settings.get("dark_mode") != null:
+			emit_signal("setting_changed", settings.dark_mode.value, settings.dark_mode)
 		# Emit for card effect config - this triggers grid rebuild
 		if settings.get("card_effect_config") != null:
 			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)

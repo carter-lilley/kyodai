@@ -147,6 +147,7 @@ func _setup_ui():
 	# Add the shared effect designer UI
 	_effect_designer_ui = EffectDesignerUI.new()
 	_effect_designer_ui.use_internal_scroll = false
+	_effect_designer_ui.setup("Effects", "hero", "effects", false)
 	_effect_designer_ui.config_changed.connect(_on_config_changed)
 	left_vbox.add_child(_effect_designer_ui)
 	

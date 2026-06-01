@@ -685,19 +685,23 @@ func _update_text():
 	if _supporting_label.horizontal_alignment != h_align:
 		_supporting_label.horizontal_alignment = h_align
 	
-	# Text shadow in transparent mode for readability
+	# Text shadow in transparent mode for readability (headline only)
 	var needs_shadow = not show_background
 	if needs_shadow and not _applied_text_shadow_enabled:
 		_applied_text_shadow_enabled = true
-		var shadow_color = Color(0.0, 0.0, 0.0, 0.15)
+		var shadow_color = Color(0.0, 0.0, 0.0, 0.10)
 		var shadow_offset_x = M3Units.dp(1.5)
 		var shadow_offset_y = M3Units.dp(2.5)
 		var shadow_outline = M3Units.dp(5.0)
-		for label in [_headline_label, _supporting_label]:
-			label.add_theme_color_override("font_shadow_color", shadow_color)
-			label.add_theme_constant_override("shadow_offset_x", shadow_offset_x)
-			label.add_theme_constant_override("shadow_offset_y", shadow_offset_y)
-			label.add_theme_constant_override("shadow_outline_size", shadow_outline)
+		# Apply shadow to headline only, remove from supporting text
+		_headline_label.add_theme_color_override("font_shadow_color", shadow_color)
+		_headline_label.add_theme_constant_override("shadow_offset_x", shadow_offset_x)
+		_headline_label.add_theme_constant_override("shadow_offset_y", shadow_offset_y)
+		_headline_label.add_theme_constant_override("shadow_outline_size", shadow_outline)
+		_supporting_label.remove_theme_color_override("font_shadow_color")
+		_supporting_label.remove_theme_constant_override("shadow_offset_x")
+		_supporting_label.remove_theme_constant_override("shadow_offset_y")
+		_supporting_label.remove_theme_constant_override("shadow_outline_size")
 	elif not needs_shadow and _applied_text_shadow_enabled:
 		_applied_text_shadow_enabled = false
 		for label in [_headline_label, _supporting_label]:
@@ -918,11 +922,18 @@ func _update_media_panel_size(force: bool = false) -> void:
 			text_y = 0
 			media_y = text_h
 		elif content_alignment == ContentAlignment.CENTER:
-			# Center the media + text block vertically
-			var total_h = media_h + text_h
-			var start_y = (card_h - total_h) / 2.0
-			media_y = start_y
-			text_y = start_y + media_h
+			if show_text_margin:
+				# Fixed text height = minimum needed (including margins)
+				text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
+				var total_h = media_h + text_h
+				var start_y = (card_h - total_h) / 2.0
+				media_y = start_y
+				text_y = start_y + media_h
+			else:
+				# Media Only: center media alone
+				text_h = 0
+				media_y = (card_h - media_h) / 2.0
+				text_y = 0
 		else:
 			# Media at top, text at bottom (START)
 			media_y = 0

@@ -495,8 +495,27 @@ func _on_apply_preset_begin() -> void:
 
 func _on_apply_preset_end() -> void:
 	_preset_in_progress = false
+	# Update nav type from settings before rebuilding
+	var old_nav_type = _nav_type
+	var type_setting = SettingsManager.get_setting("library_navigation_type")
+	if type_setting:
+		_nav_type = type_setting.value
 	# One rebuild after preset is fully applied
-	_rebuild_views("Preset applied")
+	# use_true=true to ensure card effects are fully refreshed
+	_rebuild_views("Preset applied", true)
+	# Apply background config in case it changed
+	_apply_library_background_config()
+	# Rebuild navigation only if navigation type actually changed
+	if _nav_type != old_nav_type:
+		_rebuild_nav_and_layout()
+	# Apply dark mode in case it changed during preset
+	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
+	if dark_mode_setting:
+		_apply_dark_mode(dark_mode_setting.value)
+	# Apply primary color in case it changed during preset
+	var primary_color_setting = SettingsManager.get_setting("library_primary_color")
+	if primary_color_setting and primary_color_setting.value is Color:
+		M3Theme.set_primary_seed(primary_color_setting.value)
 	# Ensure theme is refreshed in case accent color or dark mode changed
 	if not _theme_refresh_pending:
 		_theme_refresh_pending = true

@@ -381,6 +381,10 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.library_card_content_alignment != b.library_card_content_alignment:
 		return false
+	if a.library_grid_vertical != b.library_grid_vertical:
+		return false
+	if a.card_media_aspect_ratio != b.card_media_aspect_ratio:
+		return false
 	if a.library_primary_color != b.library_primary_color:
 		return false
 	if a.dark_mode != b.dark_mode:
@@ -568,7 +572,8 @@ func _on_library_effect_selected(index: int) -> void:
 				"orbit_radius": 2.358,
 				"icon_scale": 0.7,
 				"orbit_speed": 0.15,
-				"num_icons": 21
+				"num_icons": 21,
+				"background_color": Color(0.05, 0.08, 0.18, 1.0)
 			}
 	
 	# Save the config change

@@ -23,6 +23,9 @@ uniform float edge_softness : hint_range(0.0, 1.0) = 1.0;
 uniform float blur_amount : hint_range(0.0, 0.02) = 0.004;
 uniform int blur_kernel_size : hint_range(1, 7) = 6;
 
+// Background gradient derived from a single user color
+uniform vec4 background_color : source_color = vec4(0.05, 0.08, 0.18, 1.0);
+
 // Lighting Settings
 uniform float light_ambient : hint_range(0.0, 5.0) = 0.85;
 uniform float light_diffuse : hint_range(0.0, 5.0) = 0.275;
@@ -244,6 +247,14 @@ void fragment() {
     // Calculate pixel size for supersampling
     vec2 pixel_size = SCREEN_PIXEL_SIZE * 2.0; // UV range is -1 to 1
     
+    // Derive subtle tonal variations from single user color
+    vec3 base_color = background_color.rgb;
+    vec3 left_color  = mix(base_color, vec3(1.0), 0.08);  // 8% lighter
+    vec3 right_color = mix(base_color, vec3(0.0), 0.08);  // 8% darker
+    
+    // Horizontal gradient with a soft ease
+    vec3 bg_gradient = mix(left_color, right_color, smoothstep(0.0, 1.0, UV.x));
+    
     vec4 final_color = vec4(0.0);
     
     // Supersampling anti-aliasing
@@ -316,6 +327,11 @@ void fragment() {
     // Output is already premultiplied: (RGB * A, A)
     final_color = blurred_color;
     
+    // Composite icons over the gradient background
+    // final_color is premultiplied (RGB * A), so:
+    // result = background * (1 - A) + RGB
+    vec3 composited = bg_gradient * (1.0 - final_color.a) + final_color.rgb;
+    
     // Output opaque
-    COLOR = vec4(final_color.rgb, 1.0);
+    COLOR = vec4(composited, 1.0);
 }

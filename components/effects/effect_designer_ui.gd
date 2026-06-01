@@ -135,8 +135,13 @@ func _discover_effects():
 
 func _ready():
 	_setup_ui()
-	# _discover_effects() is called by setup(), which is the intended init path.
-	# Calling it here would duplicate work when the designer is created via setup().
+	# If setup() was called before we entered the tree (e.g. CardDesignerView),
+	# _add_effect_button didn't exist yet, so _populate_option_button() bailed.
+	# Ensure the dropdown is actually populated now that UI exists.
+	if not _effects_discovered:
+		_discover_effects()
+	else:
+		_populate_option_button()
 
 func _setup_ui():
 	var target: Control = self

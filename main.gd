@@ -108,6 +108,10 @@ func _ready():
 	UIManager.tab_changed.connect(_on_tab_changed)
 	UIManager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
 	
+	# Connect to SettingsManager to sync UI when presets are applied
+	if SettingsManager:
+		SettingsManager.apply_preset_end.connect(_on_preset_applied)
+	
 	# Connect to LaunchManager to save focus before game launch
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
@@ -487,6 +491,13 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
 				else:
 					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+
+func _on_preset_applied() -> void:
+	"""Sync UI controls after a theme preset is applied."""
+	# Sync view mode buttons to match the newly loaded setting
+	_sync_view_mode_button_to_setting()
+	# Re-apply zoom to both views (deferred so grids have valid dimensions)
+	call_deferred("_load_and_apply_saved_zoom")
 
 func _sync_view_mode_button_to_setting() -> void:
 	if not view_mode_group or not SettingsManager:

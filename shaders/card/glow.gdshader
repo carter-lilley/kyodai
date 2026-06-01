@@ -3,13 +3,13 @@ render_mode blend_mix;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float glow_margin = 20.0;
+uniform vec2 glow_margin = vec2(20.0, 20.0);
 uniform float glow_radius = 20.0;
 uniform float glow_intensity = 1.5;
 uniform float blur_amount = 12.0;
 uniform float threshold = 0.1;
 uniform float glow_spread : hint_range(0.0, 0.5) = 0.05; // Expands glow outward like drop shadow
-uniform sampler2D game_texture : source_color;
+uniform sampler2D game_texture : source_color, repeat_disable;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // Full box blur with 24x24 samples (radius 12)
@@ -25,7 +25,7 @@ vec3 sample_box_blur(vec2 uv, vec2 tex_size) {
 	for (int x = -blur_radius; x <= blur_radius; x++) {
 		for (int y = -blur_radius; y <= blur_radius; y++) {
 			vec2 offset = vec2(float(x) * step_x, float(y) * step_y);
-			vec4 sample_color = texture(game_texture, uv + offset);
+			vec4 sample_color = texture(game_texture, clamp(uv + offset, 0.0, 1.0));
 			
 			// Threshold: bright pixels keep color, dark pixels become black
 			float brightness = dot(sample_color.rgb, vec3(0.2126, 0.7152, 0.0722));
@@ -41,49 +41,34 @@ vec3 sample_box_blur(vec2 uv, vec2 tex_size) {
 }
 
 void fragment() {
-	vec2 total_size = card_size + vec2(glow_margin * 2.0);
+	// Total area including proportional glow margin per axis
+	vec2 total_size = card_size + glow_margin * 2.0;
 	vec2 pixel_pos = UV * total_size;
 	
-	// Calculate UV
-	vec2 uv = pixel_pos / total_size;
+	// Map to card-local coordinates (0 to card_size within the card area)
+	vec2 card_local_pos = pixel_pos - glow_margin;
 	
-	// Center and scale UV
-	float card_aspect = card_size.x / card_size.y;
-	float total_aspect = total_size.x / total_size.y;
+	// Convert to normalized UV (0-1 within card bounds)
+	vec2 card_uv = card_local_pos / card_size;
 	
-	vec2 scale = vec2(1.0);
-	if (card_aspect > total_aspect) {
-		scale = vec2(1.0, card_aspect / total_aspect);
-	} else {
-		scale = vec2(total_aspect / card_aspect, 1.0);
-	}
-	
-	uv = (uv - 0.5) * scale + 0.5;
+	// Apply aspect-ratio preserving transform to sample texture correctly
+	vec2 tex_size = vec2(textureSize(game_texture, 0));
+	vec2 tex_uv = aspect_covered_uv(card_uv, card_size, tex_size);
 	
 	// Get blurred, thresholded texture
-	vec2 tex_size = vec2(textureSize(game_texture, 0));
-	vec3 blurred = sample_box_blur(uv, tex_size);
+	vec3 blurred = sample_box_blur(tex_uv, tex_size);
 	
-	// Calculate distance from card edge
-	vec2 card_center = total_size * 0.5;
-	vec2 local_pos = pixel_pos - card_center;
-	// 1.0 ratio = corners touch (half of smallest dimension)
-	float corner_radius = corner_radius_pixels;
+	// Calculate distance from card edge using card-local position
 	vec2 card_half = card_size * 0.5;
-	float dist = rounded_rect_sdf_pixels(local_pos + card_half, card_size, corner_radius);
+	float dist = rounded_rect_sdf_pixels(card_local_pos, card_size, corner_radius_pixels);
 	
 	// Apply glow_spread - insets the fade from the outer edge
-	// 0.0 = fade over full glow_radius (slow fade)
-	// 0.5 = fade over half glow_radius (faster fade, reaches 0 at 50%)
-	// Higher spread = faster fade, glow is more concentrated near card edge
-	// Convert spread to effective fade distance
 	float effective_radius = glow_radius * (1.0 - glow_spread);
 	
 	// Only show glow outside the card
 	float glow_alpha = 0.0;
 	if (dist > 0.0 && effective_radius > 0.0) {
 		// Fade from card edge (dist=0) to effective_radius
-		// After effective_radius, alpha is 0
 		glow_alpha = 1.0 - smoothstep(0.0, effective_radius, dist);
 		glow_alpha = clamp(glow_alpha, 0.0, 1.0);
 	}

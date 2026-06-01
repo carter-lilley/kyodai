@@ -62,9 +62,13 @@ func _init():
 func _process(_delta):
 	if not track_summoner:
 		return
-	# Dismiss if summoner has moved (e.g., page scrolled)
-	if not visible or _summoner == null or not is_instance_valid(_summoner):
+	if not visible:
 		return
+	# Dismiss if summoner was freed or removed from tree
+	if _summoner == null or not is_instance_valid(_summoner):
+		dismiss()
+		return
+	# Dismiss if summoner has moved (e.g., page scrolled)
 	if _summoner.global_position.distance_to(_summoner_start_pos) > 1.0:
 		dismiss()
 

@@ -93,19 +93,23 @@ func _update_grid_orientation() -> void:
 	var mode_setting = SettingsManager.get_setting("library_layout_mode")
 	var layout_mode_val = mode_setting.value if mode_setting else 0
 	
+	var new_mode: VirtualScrollGridContainer.ViewMode
 	match layout_mode_val:
 		0:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.GRID
+			new_mode = VirtualScrollGridContainer.ViewMode.GRID
 		1:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.LIST
+			new_mode = VirtualScrollGridContainer.ViewMode.LIST
 		2:
-			games_grid.view_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
+			new_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
 	
 	var grid_vertical_setting = SettingsManager.get_setting("library_grid_vertical")
-	games_grid.grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true
+	var new_grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true
 	
 	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
-	games_grid.focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
+	var new_focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
+	
+	# Batch-apply to avoid redundant rebuilds from individual setters
+	games_grid.set_grid_orientation(new_mode, new_grid_vertical, new_focus_scale)
 
 func _on_focus_changed(control: Control):
 	# Traverse up the tree to find if focused control is inside a GameCard

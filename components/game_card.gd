@@ -328,6 +328,7 @@ func _show_focus_effects(p_show: bool) -> void:
 		var base_copy = base_settings.duplicate(true)
 		var focus_copy = focus_settings.duplicate(true)
 		
+		var base_effect_ref = weakref(base_effect)
 		if p_show:
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
@@ -335,8 +336,9 @@ func _show_focus_effects(p_show: bool) -> void:
 			settings_tween.set_trans(Tween.TRANS_QUAD)
 			settings_tween.set_ease(Tween.EASE_OUT)
 			var tween_callable = func(t: float):
-				if base_effect and is_instance_valid(base_effect):
-					base_effect.tween_settings(base_copy, focus_copy, t)
+				var eff = base_effect_ref.get_ref()
+				if eff and is_instance_valid(eff):
+					eff.tween_settings(base_copy, focus_copy, t)
 			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 		else:
 			var settings_tween = create_tween()
@@ -345,8 +347,9 @@ func _show_focus_effects(p_show: bool) -> void:
 			settings_tween.set_trans(Tween.TRANS_QUAD)
 			settings_tween.set_ease(Tween.EASE_OUT)
 			var tween_callable = func(t: float):
-				if base_effect and is_instance_valid(base_effect):
-					base_effect.tween_settings(focus_copy, base_copy, t)
+				var eff = base_effect_ref.get_ref()
+				if eff and is_instance_valid(eff):
+					eff.tween_settings(focus_copy, base_copy, t)
 			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 	
 	# Non-overlapping effects: fade in/out via alpha overlay
@@ -438,6 +441,9 @@ func _apply_display_mode() -> void:
 	# jagged when switching into transparent/media-only mode.
 	if _media_stack and is_instance_valid(_media_stack):
 		_media_stack.force_refresh()
+	
+	# Update text immediately so shadow state reflects the new display mode
+	_update_text()
 
 func set_focus_scale(value: float) -> void:
 	focus_scale = maxf(value, 1.0)

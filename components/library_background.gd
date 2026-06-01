@@ -2,6 +2,7 @@ class_name LibraryBackground
 extends Control
 
 var _current_effect: BackgroundEffect = null
+var _solid_bg: ColorRect = null
 var _effect_id: String = "gradient"
 var _effect_settings: Dictionary = {}
 
@@ -12,6 +13,13 @@ func _ready():
 func _on_resized() -> void:
 	if _current_effect:
 		_current_effect.size = size
+	if _solid_bg:
+		_solid_bg.size = size
+
+func refresh_theme() -> void:
+	# When dark/light mode changes, update the solid background color
+	if _solid_bg and _effect_id == "none":
+		_solid_bg.color = M3Theme.get_surface()
 
 func _initialize_background() -> void:
 	# Get initial config from settings if available
@@ -44,6 +52,21 @@ func _apply_background_state() -> void:
 	if _current_effect:
 		_current_effect.queue_free()
 		_current_effect = null
+	
+	# Remove solid background if present
+	if _solid_bg:
+		_solid_bg.queue_free()
+		_solid_bg = null
+	
+	if _effect_id == "none":
+		# Show solid M3 surface color instead of transparent
+		_solid_bg = ColorRect.new()
+		_solid_bg.color = M3Theme.get_surface()
+		_solid_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_solid_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_solid_bg)
+		move_child(_solid_bg, 0)
+		return
 	
 	# Create and add new effect
 	_current_effect = _create_effect(_effect_id)

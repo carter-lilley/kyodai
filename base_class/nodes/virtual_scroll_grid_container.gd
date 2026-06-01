@@ -39,6 +39,33 @@ var grid_vertical: bool = true:
 			if old_focused >= 0:
 				call_deferred("scroll_to_index", old_focused, false)
 
+## Batch-apply grid orientation settings to avoid redundant rebuilds.
+## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
+func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_scale: float) -> void:
+	var needs_refresh: bool = false
+	var old_focused = _focused_virtual_index
+	
+	if view_mode != p_view_mode:
+		view_mode = p_view_mode
+		_update_view_mode()
+		needs_refresh = true
+	
+	if grid_vertical != p_grid_vertical:
+		grid_vertical = p_grid_vertical
+		if view_mode == ViewMode.GRID:
+			_update_view_mode()
+			needs_refresh = true
+	
+	if not is_equal_approx(focus_scale, p_focus_scale):
+		focus_scale = maxf(p_focus_scale, 1.0)
+		needs_refresh = true
+	
+	if needs_refresh:
+		refresh_dimensions()
+		queue_redraw()
+		if old_focused >= 0:
+			call_deferred("scroll_to_index", old_focused, false)
+
 # Computed scroll axis: GRID respects grid_vertical; LIST is vertical; CAROUSEL is horizontal.
 var vertical: bool:
 	get:
@@ -207,7 +234,6 @@ func _update_view_mode() -> void:
 			_flow_container.vertical = true
 	_update_center_container_flags()
 	_update_flow_container_flags()
-	_recalculate_layout()
 	_refresh_buffer()
 
 func _update_flow_container_flags() -> void:
@@ -322,30 +348,53 @@ func _ready():
 	call_deferred("_refresh_cached_settings")
 	call_deferred("_recalculate_layout")
 	_ready_called = true
-	
-	# Connect to settings saved signal to refresh layout when card orientation changes
+
+func _enter_tree():
+	# Connect to settings signals (idempotent via is_connected guards)
 	if SettingsManager:
-		SettingsManager.settings_saved.connect(_on_settings_saved)
-		SettingsManager.setting_changed.connect(_on_setting_changed)
+		if not SettingsManager.settings_saved.is_connected(_on_settings_saved):
+			SettingsManager.settings_saved.connect(_on_settings_saved)
+		if not SettingsManager.setting_changed.is_connected(_on_setting_changed):
+			SettingsManager.setting_changed.connect(_on_setting_changed)
 
 func _exit_tree():
 	if SettingsManager:
-		SettingsManager.settings_saved.disconnect(_on_settings_saved)
-		SettingsManager.setting_changed.disconnect(_on_setting_changed)
+		if SettingsManager.settings_saved.is_connected(_on_settings_saved):
+			SettingsManager.settings_saved.disconnect(_on_settings_saved)
+		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
+			SettingsManager.setting_changed.disconnect(_on_setting_changed)
 
 func _on_settings_saved():
 	_update_focus_scale_from_settings()
 	_refresh_cached_settings()
+	refresh_all_card_configs()
 	_recalculate_layout()
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	# Update caches immediately for settings that affect card layout
-	# so that immediate refreshes (from View._on_setting_changed) use correct values.
-	# Note: _recalculate_layout() is triggered by View/UIManager via refresh_dimensions(),
-	# so we only need to refresh the caches here.
+	# so that immediate refreshes (from View/UIManager via refresh_dimensions())
+	# use correct values. Also defer a recalculation in case signal order
+	# causes stale caches during a rebuild.
 	match setting.property_name:
-		"card_media_aspect_ratio", "library_card_display_mode", "library_card_content_alignment", "library_layout_mode", "library_grid_vertical":
+		"card_media_aspect_ratio", "library_card_display_mode", "library_card_content_alignment", "library_layout_mode":
 			_refresh_cached_settings()
+			refresh_all_card_configs()
+			call_deferred("_recalculate_layout")
+		"library_grid_vertical":
+			if _value is bool:
+				grid_vertical = _value
+			_refresh_cached_settings()
+			refresh_all_card_configs()
+			call_deferred("_recalculate_layout")
+		"library_card_zoom":
+			if _value is float:
+				target_card_width_ratio = _value
+		"library_grid_padding":
+			_update_grid_separation_from_settings()
+			call_deferred("_recalculate_layout")
+		"library_focus_scale":
+			_update_focus_scale_from_settings()
+			call_deferred("_recalculate_layout")
 
 func _refresh_cached_settings() -> void:
 	if not SettingsManager:
@@ -625,6 +674,9 @@ func _recalculate_layout():
 	if size.x <= 0 or size.y <= 0:
 		return
 	
+	# Ensure cached settings are fresh before any layout math
+	_refresh_cached_settings()
+	
 	_is_recalculating_layout = true
 	_suppress_recycle_until_frame = Engine.get_process_frames() + 1
 	
@@ -835,6 +887,9 @@ func _recalculate_dimensions():
 
 func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change or margin change)."""
+	# Ensure cached settings are fresh before any layout math
+	_refresh_cached_settings()
+	
 	# Update grid separation from settings
 	_update_grid_separation_from_settings()
 	
@@ -1912,6 +1967,16 @@ func refresh_all_card_effects() -> void:
 	for card in _active_cards:
 		if is_instance_valid(card) and card.has_method("refresh_settings"):
 			card.refresh_settings()
+
+func refresh_all_card_configs() -> void:
+	"""Re-apply size flags, alignment, and aspect ratio to all active cards.
+	Call when cached settings (alignment, ratio, display mode) change so that
+	cards already in the viewport pick up the new values immediately."""
+	for card in _active_cards:
+		if is_instance_valid(card):
+			_configure_card_size_flags(card)
+			if card.has_method("_update_media_panel_size"):
+				card._update_media_panel_size(true)
 
 func _update_cache_access_order(cache_key: int):
 	_lru_counter += 1

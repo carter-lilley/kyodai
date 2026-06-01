@@ -27,6 +27,8 @@ func _update_glow_offsets():
 	var glow_radius_ratio = _settings.get("glow_radius", 0.06)
 	var margin_ratio = GLOW_MARGIN_RATIO + glow_radius_ratio
 	
+	# Expand proportionally on each axis so the shader margin matches
+	# the actual node size exactly.
 	anchor_left = -margin_ratio
 	anchor_top = -margin_ratio
 	anchor_right = 1.0 + margin_ratio
@@ -54,7 +56,11 @@ func _update_shader_params() -> void:
 	var card_width = card_size.x
 	
 	var radius_pixels = glow_radius * card_width
-	var margin_pixels = (GLOW_MARGIN_RATIO + glow_radius) * card_width
+	# Per-axis margins so the shader total_size matches the actual node bounds
+	var margin_pixels = Vector2(
+		(GLOW_MARGIN_RATIO + glow_radius) * card_size.x,
+		(GLOW_MARGIN_RATIO + glow_radius) * card_size.y
+	)
 	
 	_set_shader_param("card_size", card_size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
