@@ -78,9 +78,9 @@ func build_categories() -> Dictionary:
 	var designer_tab = _create_card_designer_tab()
 	result["Card Designer"] = designer_tab
 	
-	# Add Hero Designer tab
-	var hero_designer_tab = _create_hero_designer_tab()
-	result["Hero Designer"] = hero_designer_tab
+	# Hero Designer tab - hidden for now
+	# var hero_designer_tab = _create_hero_designer_tab()
+	# result["Hero Designer"] = hero_designer_tab
 	
 	# Add GameNative tab (Android only)
 	if PlatformManager.is_android():
@@ -132,7 +132,9 @@ func _create_settings_tab(setting_name: String, settings_vars: Array) -> Control
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# KEY: Use SHRINK_BEGIN so the VBox reports its true content height
+	# to the ScrollContainer instead of trying to fill the viewport.
+	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	
 	if setting_name == "Library Appearance":
 		# Handle Library Appearance specially with dynamic background controls
@@ -143,6 +145,14 @@ func _create_settings_tab(setting_name: String, settings_vars: Array) -> Control
 		menu.initialize_settings_menu(setting_name, settings_vars)
 		menu.setting_changed.connect(_on_setting_changed)
 		vbox.add_child(menu)
+	
+	# Bottom buffer so content isn't clipped by Android keyboard / nav bar
+	var bottom_buffer = Control.new()
+	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
+	vbox.add_child(bottom_buffer)
+	
+	# Force recalculation now that all children are added
+	vbox.queue_sort()
 	
 	margin.add_child(vbox)
 	scroll.add_child(margin)
@@ -226,6 +236,14 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	
 	# Theme Presets section
 	_create_preset_section(vbox)
+	
+	# Bottom buffer so content isn't clipped by Android keyboard / nav bar
+	var bottom_buffer = Control.new()
+	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
+	vbox.add_child(bottom_buffer)
+	
+	# Force recalculation now that all dynamic children are added
+	vbox.queue_sort()
 
 func _create_preset_section(vbox: VBoxContainer) -> void:
 	var preset_label = M3Label.new()

@@ -128,7 +128,11 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 		
 		# Clamp value to new valid range/options if needed
 		if default_var.type == SettingsVar.SettingType.ARRAY:
-			if old_value is int and old_value >= 0 and old_value < default_var.options.size():
+			if old_value is Array:
+				# ARRAY type can store actual arrays (e.g., gamenative_games)
+				# not just int indices for dropdown options
+				saved_var.value = old_value
+			elif old_value is int and old_value >= 0 and old_value < default_var.options.size():
 				saved_var.value = old_value
 			else:
 				saved_var.value = default_var.value
@@ -213,10 +217,15 @@ func _ensure_presets_folder() -> void:
 
 # List of built-in preset filenames (needed for Android where DirAccess doesn't work on res://)
 const BUILTIN_PRESET_FILES: Array[String] = [
-	# Add your built-in preset filenames here, e.g.:
-	# "Default.tres",
-	# "Neon.tres",
-	# "Retro.tres",
+	"CafeOS.tres",
+	"Default.tres",
+	"Horizon3D.tres",
+	"Horizon_(Dark).tres",
+	"Horizon_(Light).tres",
+	"LiveArea.tres",
+	"NSO_(Light).tres",
+	"SteamOS.tres",
+	"XMB.tres",
 ]
 
 func list_presets() -> Array[ThemePreset]:

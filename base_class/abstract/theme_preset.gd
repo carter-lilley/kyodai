@@ -10,24 +10,48 @@ class_name ThemePreset
 
 # Library Appearance Settings
 @export var library_layout_mode: int = 0
-@export var library_navigation_type: int = 0
-@export var library_grid_padding: int = 10
-@export var library_card_zoom: float = 1.0
-@export var library_show_title_mode: int = 2
+@export var library_navigation_type: int = 1
+@export var library_grid_padding: int = 22
+@export var library_card_zoom: float = 0.25
+@export var library_show_title_mode: int = 0
 @export var library_card_display_mode: int = 0
-@export var library_focus_scale: float = 0.08
+@export var library_focus_scale: float = 0.09
 @export var library_card_content_alignment: int = 0
-@export var library_grid_vertical: bool = false
+@export var library_grid_vertical: bool = true
 @export var card_media_aspect_ratio: int = 0
-@export var library_background_config: Dictionary = {}
-@export var library_primary_color: Color = Color("#6750A4")
-@export var dark_mode: bool = false
+@export var library_background_config: Dictionary = {
+	"effect_id": "none",
+	"settings": {}
+}
+@export var library_primary_color: Color = Color.WHITE
+@export var dark_mode: bool = true
 
 # Card Designer Settings
 @export var card_effect_config: Dictionary = {
-	"effects": [],
-	"card_orientation": 0,
-	"card_rounding": 0.12
+	"card_orientation": 2,
+	"card_rounding": 0.24,
+	"effects": [{
+		"effect_id": "drop_shadow",
+		"settings": {
+			"shadow_color": Color(0, 0, 0, 0.5),
+			"shadow_expand": 0.066,
+			"shadow_offset_x": 0.0,
+			"shadow_offset_y": 0.043,
+			"shadow_softness": 0.15,
+			"shadow_spread": 0.0
+		}
+	}],
+	"focus_effects": [{
+		"effect_id": "glow",
+		"settings": {
+			"blur_amount": 6.5,
+			"glow_intensity": 0.3,
+			"glow_radius": 0.14,
+			"glow_spread": 0.06,
+			"threshold": 0.41
+		}
+	}],
+	"hero_height": 4
 }
 
 ## Creates a ThemePreset from current settings
@@ -40,24 +64,48 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	
 	# Library settings
 	preset.library_layout_mode = settings.library_layout_mode.value if settings.library_layout_mode else 0
-	preset.library_navigation_type = settings.library_navigation_type.value if settings.library_navigation_type else 0
-	preset.library_grid_padding = settings.library_grid_padding.value if settings.library_grid_padding else 10
-	preset.library_card_zoom = settings.library_card_zoom.value if settings.library_card_zoom else 1.0
-	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 2
+	preset.library_navigation_type = settings.library_navigation_type.value if settings.library_navigation_type else 1
+	preset.library_grid_padding = settings.library_grid_padding.value if settings.library_grid_padding else 22
+	preset.library_card_zoom = settings.library_card_zoom.value if settings.library_card_zoom else 0.25
+	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 0
 	preset.library_card_display_mode = settings.library_card_display_mode.value if settings.library_card_display_mode else 0
-	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.08
+	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.09
 	preset.library_card_content_alignment = settings.library_card_content_alignment.value if settings.library_card_content_alignment else 0
-	preset.library_grid_vertical = settings.library_grid_vertical.value if settings.library_grid_vertical else false
+	preset.library_grid_vertical = settings.library_grid_vertical.value if settings.library_grid_vertical else true
 	preset.card_media_aspect_ratio = settings.card_media_aspect_ratio.value if settings.card_media_aspect_ratio else 0
-	preset.library_background_config = settings.library_background_config.value.duplicate(true) if settings.library_background_config else {}
-	preset.library_primary_color = settings.library_primary_color.value if settings.library_primary_color else Color("#6750A4")
-	preset.dark_mode = settings.dark_mode.value if settings.dark_mode else false
+	preset.library_background_config = settings.library_background_config.value.duplicate(true) if settings.library_background_config else {
+		"effect_id": "none",
+		"settings": {}
+	}
+	preset.library_primary_color = settings.library_primary_color.value if settings.library_primary_color else Color.WHITE
+	preset.dark_mode = settings.dark_mode.value if settings.dark_mode else true
 	
 	# Card settings
 	preset.card_effect_config = settings.card_effect_config.value.duplicate(true) if settings.card_effect_config else {
-		"effects": [],
-		"card_orientation": 0,
-		"card_rounding": 0.12
+		"card_orientation": 2,
+		"card_rounding": 0.24,
+		"effects": [{
+			"effect_id": "drop_shadow",
+			"settings": {
+				"shadow_color": Color(0, 0, 0, 0.5),
+				"shadow_expand": 0.066,
+				"shadow_offset_x": 0.0,
+				"shadow_offset_y": 0.043,
+				"shadow_softness": 0.15,
+				"shadow_spread": 0.0
+			}
+		}],
+		"focus_effects": [{
+			"effect_id": "glow",
+			"settings": {
+				"blur_amount": 6.5,
+				"glow_intensity": 0.3,
+				"glow_radius": 0.14,
+				"glow_spread": 0.06,
+				"threshold": 0.41
+			}
+		}],
+		"hero_height": 4
 	}
 	
 	return preset

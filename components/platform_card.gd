@@ -128,6 +128,14 @@ func _build_ui():
 	# Apply M3 fonts and colors
 	_apply_m3_text_styles()
 
+func _update_media_panel_size(force: bool = false) -> void:
+	super._update_media_panel_size(force)
+	# When media panel is hidden, reset text margin to fill entire card width
+	# instead of leaving a gap where the media panel would be.
+	if _media_panel and not _media_panel.visible and _text_margin:
+		_text_margin.position.x = 0
+		_text_margin.size.x = size.x
+
 func _apply_m3_text_styles():
 	var fonts = M3Theme.load_fonts()
 	var on_surface = M3Theme.get_on_surface()

@@ -128,11 +128,11 @@ func _build_categories() -> void:
 	card_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["card_designer"] = card_designer
 	
-	# Hero Designer
-	_add_category_button("hero_designer", "Hero Designer", "image")
-	var hero_designer = preload("res://view/hero_designer_view.tscn").instantiate()
-	hero_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_category_contents["hero_designer"] = hero_designer
+	# Hero Designer - hidden for now
+	# _add_category_button("hero_designer", "Hero Designer", "image")
+	# var hero_designer = preload("res://view/hero_designer_view.tscn").instantiate()
+	# hero_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# _category_contents["hero_designer"] = hero_designer
 	
 	# GameNative (Android only)
 	if PlatformManager.is_android():

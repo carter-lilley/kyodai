@@ -26,7 +26,7 @@ const Type = SettingsVar.SettingType
 ]
 @export var resolution := SettingsVar.new(Type.ARRAY,resolutions[0],State.ENABLED, "Windowed Resolution:", "", 0.0, 1.0, 0.1, resolutions)
 @export var dual_screen_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
-@export var dark_mode := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface")
+@export var dark_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface")
 
 @export_subgroup("RomM Connection")
 @export var romm_url := SettingsVar.new(Type.STRING, "", State.ENABLED, "RomM URL")
@@ -53,9 +53,30 @@ const Type = SettingsVar.SettingType
 
 # Internal card effect configuration (managed by Card Designer)
 @export var card_effect_config := SettingsVar.new(Type.DICTIONARY, {
-	"effects": [],
-	"card_orientation": 0,
-	"card_rounding": 0.12
+	"card_orientation": 2,
+	"card_rounding": 0.24,
+	"effects": [{
+		"effect_id": "drop_shadow",
+		"settings": {
+			"shadow_color": Color(0, 0, 0, 0.5),
+			"shadow_expand": 0.066,
+			"shadow_offset_x": 0.0,
+			"shadow_offset_y": 0.043,
+			"shadow_softness": 0.15,
+			"shadow_spread": 0.0
+		}
+	}],
+	"focus_effects": [{
+		"effect_id": "glow",
+		"settings": {
+			"blur_amount": 6.5,
+			"glow_intensity": 0.3,
+			"glow_radius": 0.14,
+			"glow_spread": 0.06,
+			"threshold": 0.41
+		}
+	}],
+	"hero_height": 4
 }, State.INTERNAL, "Card Effect Configuration")
 
 # Internal hero effect configuration (managed by Hero Designer)
@@ -69,15 +90,15 @@ const Type = SettingsVar.SettingType
 # General layout settings (always visible)
 @export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"])
 @export var library_grid_vertical := SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)")
-@export var library_navigation_type := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
-@export var library_grid_padding := SettingsVar.new(Type.INT, 10, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
-@export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.15, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
-@export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 2, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
-@export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.08, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
+@export var library_navigation_type := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
+@export var library_grid_padding := SettingsVar.new(Type.INT, 22, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
+@export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.25, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
+@export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
+@export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.09, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
 @export var library_card_content_alignment := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Content Alignment", "How card content is positioned within the card cell", 0.0, 2.0, 1.0, ["Left/Top", "Center/Middle", "Right/Bottom"])
 @export var card_media_aspect_ratio := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Media Ratio", "Aspect ratio of the card's media panel", 0.0, 4.0, 1.0, ["Fill", "2:3", "3:4", "1:1", "16:11"])
 @export var library_card_display_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Display Mode", "How game cards appear in the library", 0.0, 2.0, 1.0, ["Standard", "Transparent", "Media Only"])
-@export var library_primary_color := SettingsVar.new(Type.COLOR, Color("#6750A4"), State.ENABLED, "Accent Color", "Primary color for the Material 3 interface theme")
+@export var library_primary_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Accent Color", "Primary color for the Material 3 interface theme")
 
 
 # Internal first-run flag (tracks if OOBE wizard has been completed)
@@ -91,9 +112,6 @@ const Type = SettingsVar.SettingType
 
 # Internal background effect configuration (managed by Library Appearance settings)
 @export var library_background_config := SettingsVar.new(Type.DICTIONARY, {
-	"effect_id": "gradient",
-	"settings": {
-		"background_gradient": Gradient.new(),
-		"gradient_direction": 0
-	}
+	"effect_id": "none",
+	"settings": {}
 }, State.INTERNAL, "Background Effect Configuration")

@@ -2,9 +2,9 @@ class_name GamenativeSettingsView
 extends View
 
 var _games_container: VBoxContainer
-var _app_id_input: LineEdit
-var _add_button: Button
-var _status_label: Label
+var _app_id_input: M3TextField
+var _add_button: M3Button
+var _status_label: M3Label
 var _scroll_container: ScrollContainer
 
 func _ready():
@@ -39,60 +39,64 @@ func _build_view():
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vbox.add_theme_constant_override("separation", 15)
+	# KEY: Use SHRINK_BEGIN so the VBox reports its true content height
+	# to the ScrollContainer instead of trying to fill the viewport.
+	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	vbox.add_theme_constant_override("separation", M3Units.dp(12))
 	margin.add_child(vbox)
 	
 	# Title
-	var title = Label.new()
+	var title = M3Label.new()
 	title.text = "GameNative Steam Games"
-	title.add_theme_font_size_override("font_size", 20)
+	title.label_style = M3Label.Style.HEADLINE_SMALL
 	vbox.add_child(title)
 	
 	# Description
-	var desc = Label.new()
+	var desc = M3Label.new()
 	desc.text = "Add Steam games installed via GameNative to show in your library."
-	desc.add_theme_font_size_override("font_size", 14)
+	desc.label_style = M3Label.Style.BODY_MEDIUM
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(desc)
 	
 	# Spacer
 	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(0, 10)
+	spacer.custom_minimum_size = Vector2(0, M3Units.dp(8))
 	vbox.add_child(spacer)
 	
 	# Check GameNative status
 	if not GameNativeManager.is_game_native_installed():
-		var warning = Label.new()
-		warning.text = "⚠ GameNative app is not installed. Games cannot be launched."
-		warning.modulate = Color.ORANGE
+		var warning = M3Label.new()
+		warning.text = "GameNative app is not installed. Games cannot be launched."
+		warning.label_style = M3Label.Style.BODY_MEDIUM
+		warning.use_on_surface_variant = true
 		warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		vbox.add_child(warning)
 	
 	# Add game section
 	var add_section = HBoxContainer.new()
-	add_section.add_theme_constant_override("separation", 10)
+	add_section.add_theme_constant_override("separation", M3Units.dp(10))
 	vbox.add_child(add_section)
 	
-	var input_label = Label.new()
-	input_label.text = "Steam App ID:"
-	add_section.add_child(input_label)
-	
-	_app_id_input = LineEdit.new()
-	_app_id_input.custom_minimum_size = Vector2(150, 0)
+	_app_id_input = M3TextField.new()
+	_app_id_input.label_text = "Steam App ID"
 	_app_id_input.placeholder_text = "e.g., 480"
+	_app_id_input.custom_minimum_size = Vector2(M3Units.dp(200), 0)
+	_app_id_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_app_id_input.text_submitted.connect(_on_add_submitted)
 	add_section.add_child(_app_id_input)
 	
-	_add_button = Button.new()
+	_add_button = M3Button.new()
 	_add_button.text = "Add Game"
+	_add_button.button_variant = M3Button.Variant.FILLED
+	_add_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_add_button.pressed.connect(_on_add_pressed)
 	add_section.add_child(_add_button)
 	
 	# Status label
-	_status_label = Label.new()
+	_status_label = M3Label.new()
 	_status_label.text = ""
-	_status_label.modulate = Color.GRAY
+	_status_label.label_style = M3Label.Style.BODY_SMALL
+	_status_label.use_on_surface_variant = true
 	vbox.add_child(_status_label)
 	
 	# Separator
@@ -100,45 +104,59 @@ func _build_view():
 	vbox.add_child(separator)
 	
 	# Games list
-	var list_label = Label.new()
+	var list_label = M3Label.new()
 	list_label.text = "Configured Games"
-	list_label.add_theme_font_size_override("font_size", 16)
+	list_label.label_style = M3Label.Style.TITLE_MEDIUM
 	vbox.add_child(list_label)
 	
 	_games_container = VBoxContainer.new()
-	_games_container.add_theme_constant_override("separation", 10)
+	_games_container.add_theme_constant_override("separation", M3Units.dp(10))
 	vbox.add_child(_games_container)
+	
+	# Bottom buffer so content isn't clipped by Android keyboard / nav bar
+	var bottom_buffer = Control.new()
+	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
+	vbox.add_child(bottom_buffer)
+	
+	# Force recalculation now that all children are added
+	vbox.queue_sort()
 
 func _on_add_pressed():
 	var text = _app_id_input.text.strip_edges()
 	if text.is_empty():
 		_status_label.text = "Please enter a Steam App ID"
-		_status_label.modulate = Color.RED
+		_status_label.use_on_surface_variant = false
+		_status_label.modulate = M3Theme.get_error()
 		return
 	
 	if not text.is_valid_int():
 		_status_label.text = "App ID must be a number"
-		_status_label.modulate = Color.RED
+		_status_label.use_on_surface_variant = false
+		_status_label.modulate = M3Theme.get_error()
 		return
 	
 	var app_id = text.to_int()
 	if app_id <= 0:
 		_status_label.text = "App ID must be positive"
-		_status_label.modulate = Color.RED
+		_status_label.use_on_surface_variant = false
+		_status_label.modulate = M3Theme.get_error()
 		return
 	
 	_add_button.disabled = true
 	_status_label.text = "Validating App ID..."
-	_status_label.modulate = Color.YELLOW
+	_status_label.use_on_surface_variant = false
+	_status_label.modulate = M3Theme.get_primary()
 	
 	GameNativeManager.add_game(app_id, func(success: bool, message: String):
 		if success:
 			_status_label.text = "Added: %s" % message
-			_status_label.modulate = Color.GREEN
+			_status_label.use_on_surface_variant = false
+			_status_label.modulate = M3Theme.get_tertiary()
 			_app_id_input.text = ""
 		else:
 			_status_label.text = "Error: %s" % message
-			_status_label.modulate = Color.RED
+			_status_label.use_on_surface_variant = false
+			_status_label.modulate = M3Theme.get_error()
 		
 		_add_button.disabled = false
 	)
@@ -157,9 +175,10 @@ func _refresh_games_list():
 	var games = GameNativeManager.get_games()
 	
 	if games.is_empty():
-		var empty_label = Label.new()
+		var empty_label = M3Label.new()
 		empty_label.text = "No games added yet."
-		empty_label.modulate = Color.GRAY
+		empty_label.label_style = M3Label.Style.BODY_MEDIUM
+		empty_label.use_on_surface_variant = true
 		_games_container.add_child(empty_label)
 		return
 	
@@ -168,12 +187,12 @@ func _refresh_games_list():
 		var game_name = game_data.get("name", "Unknown")
 		
 		var row = HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
+		row.add_theme_constant_override("separation", M3Units.dp(10))
 		_games_container.add_child(row)
 		
 		# Cover image (placeholder, loaded async)
 		var cover = TextureRect.new()
-		cover.custom_minimum_size = Vector2(120, 45)  # Steam header aspect ratio
+		cover.custom_minimum_size = Vector2(M3Units.dp(120), M3Units.dp(45))  # Steam header aspect ratio
 		cover.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		row.add_child(cover)
@@ -187,20 +206,22 @@ func _refresh_games_list():
 		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(info)
 		
-		var name_label = Label.new()
+		var name_label = M3Label.new()
 		name_label.text = game_name
-		name_label.add_theme_font_size_override("font_size", 14)
+		name_label.label_style = M3Label.Style.BODY_MEDIUM
 		info.add_child(name_label)
 		
-		var id_label = Label.new()
+		var id_label = M3Label.new()
 		id_label.text = "App ID: %d" % app_id
-		id_label.add_theme_font_size_override("font_size", 12)
-		id_label.modulate = Color.GRAY
+		id_label.label_style = M3Label.Style.BODY_SMALL
+		id_label.use_on_surface_variant = true
 		info.add_child(id_label)
 		
 		# Delete button
-		var delete_btn = Button.new()
-		delete_btn.text = "Remove"
+		var delete_btn = M3IconButton.new()
+		delete_btn.icon_name = "delete"
+		delete_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
+		delete_btn.tooltip_text = "Remove game"
 		delete_btn.pressed.connect(func():
 			GameNativeManager.remove_game(app_id)
 		)
