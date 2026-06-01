@@ -1,0 +1,40 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_lx143"]
+
+[sub_resource type="Gradient" id="Gradient_3yjc8"]
+offsets = PackedFloat32Array(0.12044818, 0.8053221)
+colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
+
+[sub_resource type="Gradient" id="Gradient_rgwmd"]
+colors = PackedColorArray(0.93333334, 0.93333334, 0.93333334, 1, 0.93333334, 0.93333334, 0.93333334, 1)
+
+[resource]
+script = ExtResource("1_lx143")
+name = "NSO (Light)"
+created_at = "2026-05-31T18:56:44"
+library_navigation_type = 1
+library_grid_padding = 0
+library_card_zoom = 0.3032013101600298
+library_show_title_mode = 0
+library_card_display_mode = 2
+library_focus_scale = 0.0
+library_grid_vertical = true
+card_media_aspect_ratio = 1
+library_background_config = {
+"background_gradient": SubResource("Gradient_3yjc8"),
+"effect_id": "gradient",
+"gradient_direction": 0,
+"settings": {
+"background_gradient": SubResource("Gradient_rgwmd"),
+"gradient_direction": 0
+}
+}
+library_primary_color = Color(0, 0, 0, 1)
+card_effect_config = {
+"card_orientation": 2,
+"card_rounding": 0.0,
+"effects": [],
+"focus_effects": [],
+"hero_height": 4
+}

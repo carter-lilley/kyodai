@@ -811,6 +811,11 @@ func set_media_content(content: Control):
 func refresh_theme():
 	_cached_fonts = M3Theme.load_fonts()
 	_update_text()
+	# Update focus ring color to match new primary accent
+	if _focus_ring:
+		var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
+		if focus_sb:
+			focus_sb.border_color = M3Theme.get_primary()
 	queue_redraw()
 
 # ============================================

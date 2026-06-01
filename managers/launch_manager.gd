@@ -1613,6 +1613,21 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 		print("[LaunchManager] _launch_game_internal: EXIT (null intent)")
 		return
 	
+	# Wait for launch transition overlay phase 1 to complete before opening game window
+	# This ensures the user sees the card scale up before the game covers it
+	if LaunchTransitionOverlay.is_transition_active:
+		print("[LaunchManager] Waiting for launch transition overlay phase 1...")
+		# Find the overlay instance to await its signal
+		var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
+		if overlay_nodes.size() > 0:
+			var overlay = overlay_nodes[0] as LaunchTransitionOverlay
+			if overlay:
+				await overlay.phase1_completed
+				print("[LaunchManager] Overlay phase 1 complete, proceeding with launch")
+		else:
+			# Fallback: wait for the expected duration
+			await get_tree().create_timer(0.5).timeout
+	
 	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
 	var success = execute_launch(intent)
 	

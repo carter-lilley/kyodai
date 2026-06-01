@@ -40,6 +40,7 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
+	// --- BORDER FILL (original logic, unchanged) ---
 	// Border ring: from inner edge (-total_border) to outer edge
 	if (dist < -total_border) {
 		discard;
@@ -88,14 +89,28 @@ void fragment() {
 	
 	vec4 final_color = vec4(color.rgb, color.a * border_alpha);
 	
-	// Inner stroke
+	// --- STROKES ---
+	// Strokes are drawn ON TOP of the border fill.  They must stay within the
+	// border bounds and inherit the border alpha so they share the same smooth
+	// anti-aliased edges.
+	float aa_norm = aa_width / total_border;
+	
+	// Inner stroke — centred at the fade-in boundary (original position)
 	float inner_stroke_width_pixels = inner_stroke_width_ratio * card_size.x;
-	if (inner_stroke_width_pixels > 0.0) {
+	if (inner_stroke_width_pixels > 0.001) {
 		float inner_stroke_pos = border_fade_in_pixels / total_border;
 		float inner_stroke_half = (inner_stroke_width_pixels / total_border) * 0.5;
-		if (abs(rel_d - inner_stroke_pos) < inner_stroke_half) {
-			float stroke_alpha = smoothstep(inner_stroke_half, inner_stroke_half - aa_width / total_border, abs(rel_d - inner_stroke_pos));
-			
+		float d = rel_d - inner_stroke_pos;
+		
+		// Soft band: smoothstep on both edges instead of a hard if-check
+		float stroke_alpha =
+			smoothstep(-inner_stroke_half - aa_norm, -inner_stroke_half, d) *
+			(1.0 - smoothstep(inner_stroke_half, inner_stroke_half + aa_norm, d));
+		
+		// Inherit border alpha so the stroke fades where the border fades
+		stroke_alpha *= border_alpha;
+		
+		if (stroke_alpha > 0.0) {
 			vec4 stroke_color;
 			if (use_inner_stroke_gradient) {
 				float gradient_t;
@@ -111,19 +126,27 @@ void fragment() {
 			} else {
 				stroke_color = inner_stroke_color;
 			}
-			
 			final_color = mix(final_color, stroke_color, stroke_alpha * stroke_color.a);
 		}
 	}
 	
-	// Outer stroke
+	// Outer stroke — centred near the outer edge but fully inside the border
 	float outer_stroke_width_pixels = outer_stroke_width_ratio * card_size.x;
-	if (outer_stroke_width_pixels > 0.0) {
-		float outer_stroke_pos = 1.0;
+	if (outer_stroke_width_pixels > 0.001) {
+		// Position so the stroke is fully contained within the border ring
 		float outer_stroke_half = (outer_stroke_width_pixels / total_border) * 0.5;
-		if (abs(rel_d - outer_stroke_pos) < outer_stroke_half) {
-			float stroke_alpha = smoothstep(outer_stroke_half, outer_stroke_half - aa_width / total_border, abs(rel_d - outer_stroke_pos));
-			
+		float outer_stroke_pos = 1.0 - outer_stroke_half;
+		float d = rel_d - outer_stroke_pos;
+		
+		// Soft band: smoothstep on both edges
+		float stroke_alpha =
+			smoothstep(-outer_stroke_half - aa_norm, -outer_stroke_half, d) *
+			(1.0 - smoothstep(outer_stroke_half, outer_stroke_half + aa_norm, d));
+		
+		// Inherit border alpha
+		stroke_alpha *= border_alpha;
+		
+		if (stroke_alpha > 0.0) {
 			vec4 stroke_color;
 			if (use_outer_stroke_gradient) {
 				float gradient_t;
@@ -139,7 +162,6 @@ void fragment() {
 			} else {
 				stroke_color = outer_stroke_color;
 			}
-			
 			final_color = mix(final_color, stroke_color, stroke_alpha * stroke_color.a);
 		}
 	}

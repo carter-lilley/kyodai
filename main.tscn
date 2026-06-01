@@ -449,7 +449,6 @@ metadata/_tab_index = 2
 
 [node name="UILayer" type="CanvasLayer" parent="." unique_id=777777777]
 layer = 1000
-visible = false
 
 [node name="FPSLabel" type="Label" parent="UILayer" unique_id=777777778]
 offset_left = 10.0

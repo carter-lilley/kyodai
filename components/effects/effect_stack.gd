@@ -100,6 +100,7 @@ func _rebuild_effects():
 				var effect = _effects[effect_id]
 				effect.visible = true
 				effect.media_container = media_container
+				effect.effect_stack = self
 				effect.update_settings(settings)
 			else:
 				# Create new effect
@@ -111,6 +112,7 @@ func _rebuild_effects():
 						continue
 					_effects[effect_id] = effect
 					add_child(effect)
+					effect.effect_stack = self
 					effect.initialize(media_container, settings)
 			
 			# Update insets based on effect settings (only for base card context;

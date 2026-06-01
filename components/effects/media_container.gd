@@ -31,6 +31,11 @@ var glass_inset_ratio: float = 0.0:
 		if not is_equal_approx(glass_inset_ratio, value):
 			glass_inset_ratio = value
 			changed.emit()
+var vertical_offset: float = 0.0:
+	set(value):
+		if not is_equal_approx(vertical_offset, value):
+			vertical_offset = value
+			changed.emit()
 var zoom_level: float = 1.0
 var edge_aa_enabled: bool = false
 

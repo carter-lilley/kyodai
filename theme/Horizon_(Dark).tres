@@ -1,0 +1,42 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_6wf17"]
+
+[sub_resource type="Gradient" id="Gradient_3yjc8"]
+offsets = PackedFloat32Array(0.12044818, 0.8053221)
+colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
+
+[sub_resource type="Gradient" id="Gradient_rgwmd"]
+colors = PackedColorArray(0.2, 0.2, 0.2, 1, 0.2, 0.2, 0.2, 1)
+
+[resource]
+script = ExtResource("1_6wf17")
+name = "Horizon (Dark)"
+created_at = "2026-05-31T19:23:10"
+library_layout_mode = 2
+library_grid_padding = 20
+library_card_zoom = 0.25
+library_show_title_mode = 0
+library_card_display_mode = 1
+library_focus_scale = 0.0
+library_card_content_alignment = 1
+library_grid_vertical = true
+card_media_aspect_ratio = 3
+library_background_config = {
+"background_gradient": SubResource("Gradient_3yjc8"),
+"effect_id": "gradient",
+"gradient_direction": 0,
+"settings": {
+"background_gradient": SubResource("Gradient_rgwmd"),
+"gradient_direction": 0
+}
+}
+library_primary_color = Color(0.17849998, 0.64854985, 0.85, 1)
+dark_mode = true
+card_effect_config = {
+"card_orientation": 2,
+"card_rounding": 0.11,
+"effects": [],
+"focus_effects": [],
+"hero_height": 4
+}

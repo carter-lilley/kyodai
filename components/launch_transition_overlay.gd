@@ -19,13 +19,18 @@ const HOLD_DURATION: float = 0.1
 const PHASE2_DURATION: float = 0.5
 
 var _is_animating: bool = false
+var _phase1_completed: bool = false
 var _original_card_rect: Rect2
 var _game: GameResource
+
+func is_phase1_complete() -> bool:
+	return _phase1_completed
 
 func _ready():
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_to_group("launch_transition_overlay")
 	
 	# Connect to LaunchManager signal
 	if LaunchManager:
@@ -36,12 +41,15 @@ func _on_game_launch_initiated(_launched_game: GameResource, _focus_index: int):
 	# This avoids filesystem access and works on Android
 	_start_transition()
 
+signal phase1_completed
+
 func _start_transition():
 	if _is_animating:
 		return
 	
 	_is_animating = true
 	is_transition_active = true  # Set global static flag
+	_phase1_completed = false
 	
 	# Get the focused card and its texture
 	var card_info = _get_focused_card_and_texture()
@@ -159,6 +167,7 @@ func _get_focused_card_and_texture() -> Dictionary:
 	return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 
 func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float):
+	
 	if not _effect_stack:
 		push_error("[LaunchTransitionOverlay] _effect_stack is null")
 		return
@@ -246,6 +255,12 @@ func _animate_transition():
 				media_container.corner_radius_ratio = lerpf(start_corner_radius, 0.0, t),
 			0.0, 1.0, PHASE1_DURATION
 		)
+	
+	# After phase 1 completes, emit signal so LaunchManager can proceed with game launch
+	tween.chain().tween_callback(func():
+		_phase1_completed = true
+		phase1_completed.emit()
+	)
 	
 	# Hold after phase 1
 	tween.chain().tween_interval(HOLD_DURATION)

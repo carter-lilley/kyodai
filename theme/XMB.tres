@@ -1,0 +1,65 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_j3sqm"]
+
+[sub_resource type="Gradient" id="Gradient_3yjc8"]
+offsets = PackedFloat32Array(0.12044818, 0.8053221)
+colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
+
+[resource]
+script = ExtResource("1_j3sqm")
+name = "XMB"
+created_at = "2026-05-31T00:15:17"
+version = 2
+library_layout_mode = 1
+library_navigation_type = 1
+library_grid_padding = 1
+library_card_zoom = 0.5
+library_show_title_mode = 0
+library_card_display_mode = 1
+library_focus_scale = 0.24
+library_card_content_alignment = 1
+library_grid_vertical = true
+card_media_aspect_ratio = 4
+library_background_config = {
+"background_gradient": SubResource("Gradient_3yjc8"),
+"effect_id": "xmb_classic",
+"gradient_direction": 0,
+"settings": {
+"frequency": 4.3,
+"inner_amplitude": 0.2,
+"inner_speed": 0.065,
+"outer_amplitude": 0.5,
+"outer_speed": 0.045,
+"time_scale": 1.0,
+"wave_color": Color(0.04, 0.69, 0.87, 1)
+}
+}
+library_primary_color = Color(0.14117648, 0.38431373, 0.9490196, 1)
+card_effect_config = {
+"card_orientation": 2,
+"card_rounding": 0.0,
+"effects": [{
+"effect_id": "drop_shadow",
+"settings": {
+"shadow_color": Color(0, 0, 0, 0.25490198),
+"shadow_expand": 0.0,
+"shadow_offset_x": 0.04899999999999999,
+"shadow_offset_y": 0.04799999999999999,
+"shadow_softness": 0.035,
+"shadow_spread": 0.0
+}
+}],
+"focus_effects": [{
+"effect_id": "drop_shadow",
+"settings": {
+"shadow_color": Color(0, 0, 0, 0.11764706),
+"shadow_expand": 0.014,
+"shadow_offset_x": 0.064,
+"shadow_offset_y": 0.064,
+"shadow_softness": 0.08,
+"shadow_spread": 0.0
+}
+}],
+"hero_height": 4
+}

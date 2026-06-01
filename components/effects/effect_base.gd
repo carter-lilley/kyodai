@@ -10,6 +10,9 @@ var media_container: MediaContainer = null
 # Reference to base effect (for focus effects that overlap with base)
 var _base_effect: EffectBase = null
 
+# Reference to the EffectStack that owns this effect
+var effect_stack: EffectStack = null
+
 var enabled: bool = true
 
 # These signals are part of the public API for subclasses and external systems.
@@ -46,6 +49,7 @@ func initialize(container: MediaContainer, settings: Dictionary) -> void:
 func _exit_tree() -> void:
 	if media_container and media_container.changed.is_connected(_on_media_changed):
 		media_container.changed.disconnect(_on_media_changed)
+	effect_stack = null
 
 func set_base_effect(base: EffectBase) -> void:
 	"""Set the base effect that this focus effect should tween from."""
@@ -153,6 +157,12 @@ func _apply_tweened_settings(temp_settings: Dictionary) -> void:
 				media_container.border_inset_ratio = temp_settings.get("border_size", media_container.border_inset_ratio)
 			"glass":
 				media_container.glass_inset_ratio = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
+		
+		# Force all effects in the stack to update immediately so the base card
+		# and other layers stay in sync with the inset change (prevents holes
+		# when the border shrinks during focus transitions).
+		if effect_stack:
+			effect_stack.force_refresh()
 	
 	# Restore original settings
 	_settings = original_settings

@@ -64,6 +64,8 @@ func _update_shader_params() -> void:
 	_set_shader_param("uv_transform_scale", uv["uv_transform_scale"])
 	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])
 	
+	_set_shader_param("vertical_offset", media_container.vertical_offset)
+	
 	# Edge AA: 0 = hard discard (Standard, parent clips), 1 = smoothstep AA (Transparent/Media Only)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 

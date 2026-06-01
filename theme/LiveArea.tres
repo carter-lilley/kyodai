@@ -1,0 +1,85 @@
+[gd_resource type="Resource" script_class="ThemePreset" format=3]
+
+[ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_icu0t"]
+
+[sub_resource type="Gradient" id="Gradient_rgwmd"]
+colors = PackedColorArray(0, 0, 0, 0.14901961, 0, 0, 0, 0.14901961)
+
+[sub_resource type="Gradient" id="Gradient_3yjc8"]
+offsets = PackedFloat32Array(0.12044818, 0.8053221)
+colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
+
+[resource]
+script = ExtResource("1_icu0t")
+name = "LiveArea"
+created_at = "2026-05-31T18:41:43"
+library_grid_padding = 40
+library_card_zoom = 0.28931554957493205
+library_show_title_mode = 0
+library_card_display_mode = 1
+library_focus_scale = 0.03
+library_card_content_alignment = 1
+library_grid_vertical = true
+card_media_aspect_ratio = 3
+library_background_config = {
+"background_gradient": SubResource("Gradient_3yjc8"),
+"effect_id": "xmb",
+"gradient_direction": 0,
+"settings": {
+"color_bottom_left": Color(0.45, 0.1, 0.1, 1),
+"color_bottom_right": Color(0.8, 0.3, 0.5, 1),
+"color_top_left": Color(0.7, 0.2, 0.2, 1),
+"color_top_right": Color(0.4, 0.1, 0.1, 1),
+"show_dust": false,
+"star_threshold": 0.99,
+"time_scale": 0.9,
+"wave_amplitude": 0.3,
+"wave_blend_color": Color(1, 1, 1, 1),
+"wave_color": Color(0.042000007, 0.28139997, 0.84, 1),
+"wave_intensity": 0.6,
+"wave_thickness": 0.6,
+"wave_vertical_offset": -0.75
+}
+}
+library_primary_color = Color(0.14117648, 0.38431373, 0.9490196, 1)
+dark_mode = true
+card_effect_config = {
+"card_orientation": 2,
+"card_rounding": 1.0,
+"effects": [{
+"effect_id": "glass",
+"settings": {
+"additional_inset_ratio": 0.0,
+"bounce_intensity": 0.38,
+"bounce_softness": 2.5,
+"distortion": 0.5,
+"glass_color": Color(0.5411765, 0.4745098, 0.44705883, 0.07450981),
+"light_angle": 299.0,
+"light_height": 0.46,
+"rim_intensity": 1.16,
+"rim_sharpness": 4.6,
+"specular_intensity": 0.63,
+"specular_power": 50.0,
+"swoop_curve": 0.27,
+"swoop_height": 0.42,
+"swoop_intensity": 0.0,
+"swoop_tilt": -0.01
+}
+}, {
+"effect_id": "border",
+"settings": {
+"border_color": Color(1, 1, 1, 1),
+"border_fade_in": 0.33,
+"border_gradient": SubResource("Gradient_rgwmd"),
+"border_size": 0.0
+}
+}, {
+"effect_id": "distort",
+"settings": {
+"distortion": 0.05,
+"opacity": 1.0
+}
+}],
+"focus_effects": [],
+"hero_height": 4
+}

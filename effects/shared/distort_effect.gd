@@ -35,6 +35,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])
 	_set_shader_param("game_texture", media_container.texture)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
+	_set_shader_param("vertical_offset", media_container.vertical_offset)
 
 func set_game_texture(texture: Texture2D) -> void:
 	_set_shader_param("game_texture", texture)
