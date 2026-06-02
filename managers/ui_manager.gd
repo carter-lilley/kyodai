@@ -1144,6 +1144,12 @@ var _settings_dialog_original_parent: Node = null
 var _is_nodes_reparented: bool = false
 var _viewport_layout: Node = null
 
+# Keyboard state for dual screen mode
+var _keyboard: Node = null
+var _keyboard_original_parent: Node = null
+var _keyboard_original_anchors: Dictionary = {}
+var _keyboard_is_in_second_viewport: bool = false
+
 func _on_dual_screen_mode_changed(enabled: bool, second_screen_index: int) -> void:
 	"""Handle dual screen mode changes from DisplayManager."""
 	if enabled:
@@ -1219,6 +1225,9 @@ func _enable_dual_screen_viewport_mode() -> void:
 	if _hero_image:
 		_hero_image.set_dual_screen_mode(true)
 	
+	# Reparent keyboard to SecondViewport for fullscreen display on secondary screen
+	_reparent_keyboard_to_second_viewport(second_viewport)
+	
 	# Sync current game to second screen hero
 	var current_game = null
 	if _hero_image:
@@ -1242,6 +1251,9 @@ func _disable_dual_screen_mode() -> void:
 	"""Disable dual screen mode - restore HeroImage to main layout."""
 	if not _dual_screen_active:
 		return
+	
+	# Restore keyboard to original parent before restoring other UI
+	_restore_keyboard_to_original_parent()
 	
 	# Remove main viewport from overlay parent group so M3 components attach to root viewport
 	var dual_screen_setup = null
@@ -1299,6 +1311,106 @@ func _disable_dual_screen_mode() -> void:
 		_update_hero_size()  # This will set the correct spacer size
 	
 	_dual_screen_active = false
+
+func _reparent_keyboard_to_second_viewport(second_viewport: SubViewport) -> void:
+	"""Move the on-screen keyboard into SecondViewport for fullscreen display on the secondary screen."""
+	var keyboard = get_tree().root.find_child("OnscreenKeyboard", true, false)
+	if not keyboard:
+		return
+	
+	_keyboard = keyboard
+	_keyboard_original_parent = keyboard.get_parent()
+	
+	# Store original anchor values (get_anchors_preset does not exist in Godot)
+	_keyboard_original_anchors = {
+		"anchor_left": keyboard.anchor_left,
+		"anchor_top": keyboard.anchor_top,
+		"anchor_right": keyboard.anchor_right,
+		"anchor_bottom": keyboard.anchor_bottom,
+		"offset_left": keyboard.offset_left,
+		"offset_top": keyboard.offset_top,
+		"offset_right": keyboard.offset_right,
+		"offset_bottom": keyboard.offset_bottom,
+		"grow_horizontal": keyboard.grow_horizontal,
+		"grow_vertical": keyboard.grow_vertical
+	}
+	
+	# Hide keyboard before reparenting to avoid visual glitches
+	if keyboard.visible:
+		if keyboard.has_method("hide"):
+			keyboard.hide()
+	
+	# Remove from current parent
+	if keyboard.get_parent():
+		keyboard.get_parent().remove_child(keyboard)
+	
+	# Add to second viewport and make fullscreen
+	second_viewport.add_child(keyboard)
+	keyboard.set_anchors_preset(Control.PRESET_FULL_RECT)
+	keyboard.offset_left = 0
+	keyboard.offset_top = 0
+	keyboard.offset_right = 0
+	keyboard.offset_bottom = 0
+	keyboard.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	keyboard.grow_vertical = Control.GROW_DIRECTION_BOTH
+	
+	# Reconnect keyboard to second viewport's focus system
+	if keyboard.has_method("reconnect_viewport"):
+		keyboard.reconnect_viewport()
+	
+	_keyboard_is_in_second_viewport = true
+	
+	print("[UIManager] Keyboard reparented to SecondViewport")
+
+func _restore_keyboard_to_original_parent() -> void:
+	"""Restore the on-screen keyboard to its original parent and anchors."""
+	if not _keyboard_is_in_second_viewport or not _keyboard or not is_instance_valid(_keyboard):
+		_reset_keyboard_state()
+		return
+	
+	# Hide keyboard before reparenting
+	if _keyboard.visible:
+		if _keyboard.has_method("hide"):
+			_keyboard.hide()
+	
+	# Remove from second viewport
+	if _keyboard.get_parent():
+		_keyboard.get_parent().remove_child(_keyboard)
+	
+	# Restore to original parent
+	if _keyboard_original_parent and is_instance_valid(_keyboard_original_parent):
+		_keyboard_original_parent.add_child(_keyboard)
+	else:
+		# Fallback: add to Main node if original parent is invalid
+		var main_node = get_node_or_null("/root/Main")
+		if main_node:
+			main_node.add_child(_keyboard)
+	
+	# Restore original layout (set_anchors_preset overwrites individual anchors, so restore manually)
+	_keyboard.anchor_left = _keyboard_original_anchors.get("anchor_left", 0)
+	_keyboard.anchor_top = _keyboard_original_anchors.get("anchor_top", 1)
+	_keyboard.anchor_right = _keyboard_original_anchors.get("anchor_right", 1)
+	_keyboard.anchor_bottom = _keyboard_original_anchors.get("anchor_bottom", 1)
+	_keyboard.offset_left = _keyboard_original_anchors.get("offset_left", 0)
+	_keyboard.offset_top = _keyboard_original_anchors.get("offset_top", -300)
+	_keyboard.offset_right = _keyboard_original_anchors.get("offset_right", 0)
+	_keyboard.offset_bottom = _keyboard_original_anchors.get("offset_bottom", 0)
+	_keyboard.grow_horizontal = _keyboard_original_anchors.get("grow_horizontal", Control.GROW_DIRECTION_BOTH)
+	_keyboard.grow_vertical = _keyboard_original_anchors.get("grow_vertical", Control.GROW_DIRECTION_BEGIN)
+	
+	# Reconnect keyboard to original viewport's focus system
+	if _keyboard.has_method("reconnect_viewport"):
+		_keyboard.reconnect_viewport()
+	
+	print("[UIManager] Keyboard restored to original parent")
+	
+	_reset_keyboard_state()
+
+func _reset_keyboard_state() -> void:
+	_keyboard = null
+	_keyboard_original_parent = null
+	_keyboard_original_anchors = {}
+	_keyboard_is_in_second_viewport = false
 
 func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	"""Reparent RootLayout into MainViewport for dual screen.

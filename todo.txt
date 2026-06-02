@@ -1,16 +1,14 @@
 #TODO.TXT
 
+small screen testing in settings menu (never hscroll)
 note to user: prepping on first launch
-multiple snackbars (ongoing during sync, bios, etc)
 separate firmware page or indicator?
 sync not working after removing games
 focus lock
---
 
 ## android
 	chunk reassembly notif on android
 	android download manager and file streaming
-	kb on bottom screen in ds mode
 	ft: android background sync/notifs
 
 ## saves

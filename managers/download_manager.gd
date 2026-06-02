@@ -201,7 +201,7 @@ func _stop_foreground_service():
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false) -> String:
+func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
@@ -232,6 +232,7 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	item.suppress_notification = suppress_notification
 	
 	# Store expected file size for progress tracking
+	item.expected_file_size = expected_file_size
 	if game:
 		item.expected_file_size = game.get_active_file_size()
 	
@@ -403,20 +404,30 @@ func _start_download(item: QueueItem):
 	
 	# Show notification with progress (unless suppressed for batch downloads)
 	if not item.suppress_notification:
-		item.notification_id = NotificationManager.show_notification(
-			item.name + "...",
-			NotificationManager.Type.INFO,
-			null,
-			0.0,
-			func() -> float:
-				return item.progress,
-			func(progress: float) -> String:
-				if item.expected_file_size > 0:
+		if item.expected_file_size > 0:
+			item.notification_id = NotificationManager.show_notification(
+				item.name + "...",
+				NotificationManager.Type.INFO,
+				null,
+				0.0,
+				func() -> float:
+					return item.progress,
+				func(progress: float) -> String:
 					var mb_downloaded = int(item.expected_file_size * progress / (1024.0 * 1024.0))
 					var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
 					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
-				return item.name + ": %d%%" % int(progress * 100)
-		)
+			)
+		else:
+			# No expected file size - use pulsing notification
+			item.notification_id = NotificationManager.show_notification(
+				item.name + "...",
+				NotificationManager.Type.INFO,
+				null,
+				0.0,
+				Callable(),
+				Callable(),
+				true  # pulsing
+			)
 	
 	download_started.emit(item.id)
 	
@@ -434,7 +445,9 @@ func _start_download(item: QueueItem):
 		headers.append("Authorization: " + NetworkManager.get_auth_header())
 	
 	# Check if this is a large file that should use chunked downloading
-	var is_large_file = item.type == "game" or item.type == "emulator" or item.type == "emulator_core"
+	# NOTE: Emulator downloads excluded from chunking because GitHub redirects (302)
+	# break the HTTPClient-based chunk downloader. http_download_file handles redirects.
+	var is_large_file = item.type == "game" or item.type == "emulator_core"
 	var should_use_chunking = is_large_file and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD
 	
 	if should_use_chunking:
@@ -477,9 +490,9 @@ func _start_download(item: QueueItem):
 		_process_queue()
 		return
 	
-	# Setup progress timer - use longer intervals to reduce CPU/disk overhead
-	# Desktop: 3s (reduced from 1s to save CPU), Android: 8s (for heat management)
-	var poll_interval = 8.0 if PlatformManager.is_android() else 3.0
+	# Setup progress timer - poll frequently for smooth UI updates
+	# 0.5s provides responsive progress without excessive CPU/disk overhead
+	var poll_interval = 0.5
 	_progress_timers[item.id] = Timer.new()
 	_progress_timers[item.id].wait_time = poll_interval
 	_progress_timers[item.id].autostart = true
@@ -1669,24 +1682,24 @@ func _update_download_progress(item: QueueItem):
 			else:
 				# Fallback to plugin file size for Android external storage
 				current_size = FSM.get_file_size(file_path)
-				
-				# Use expected_file_size from game data for accurate progress
-				if item.expected_file_size > 0:
-					item.progress = float(current_size) / float(item.expected_file_size)
-					if item.progress > 0.99:
-						item.progress = 0.99
-				else:
-					# No expected size, cap at 99%
-					item.progress = 0.5  # Unknown progress
-				
-				# Track progress periodically (every 50MB change)
-				var last_bytes = _last_downloaded_bytes.get(item.id, 0)
-				if abs(current_size - last_bytes) > 50 * 1024 * 1024:
-					_last_downloaded_bytes[item.id] = current_size
-				
-				# Update stall time if making progress
-				if current_size > 0 and current_size != last_bytes:
-					_last_progress_times[item.id] = Time.get_ticks_msec()
+			
+			# Use expected_file_size from game data for accurate progress
+			if item.expected_file_size > 0:
+				item.progress = float(current_size) / float(item.expected_file_size)
+				if item.progress > 0.99:
+					item.progress = 0.99
+			else:
+				# No expected size, use indeterminate progress
+				item.progress = -1.0
+			
+			# Track progress periodically (every 50MB change)
+			var last_bytes = _last_downloaded_bytes.get(item.id, 0)
+			if abs(current_size - last_bytes) > 50 * 1024 * 1024:
+				_last_downloaded_bytes[item.id] = current_size
+			
+			# Update stall time if making progress
+			if current_size > 0 and current_size != last_bytes:
+				_last_progress_times[item.id] = Time.get_ticks_msec()
 		
 		# Check if download completed via request_completed callback
 		if item.download_info.get("completed", false):

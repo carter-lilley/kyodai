@@ -50,6 +50,11 @@ var dismissible: bool = true
 var _auto_dismiss: bool = true
 var _progress_visible: bool = false
 
+var _stack_offset_index: int = 0
+var _hover_pauses_timer: bool = true
+
+const STACK_GAP := 8.0
+
 # ============================================
 # LIFECYCLE
 # ============================================
@@ -147,6 +152,7 @@ func _position_snackbar():
 	var max_width = M3Units.dp(MAX_WIDTH)
 	var height = M3Units.dp(SNACKBAR_HEIGHT)
 	var extra = M3Units.dp(PROGRESS_EXTRA_HEIGHT) if _progress_visible else 0.0
+	var gap = M3Units.dp(STACK_GAP)
 	
 	var width: float
 	if viewport_size.x <= M3Units.dp(600):
@@ -157,7 +163,7 @@ func _position_snackbar():
 	_container.size = Vector2(width, height + extra)
 	_container.position = Vector2(
 		(viewport_size.x - width) / 2.0,
-		viewport_size.y - height - extra - margin
+		viewport_size.y - height - extra - margin - (_stack_offset_index * (height + extra + gap))
 	)
 
 func _update_appearance():
@@ -294,11 +300,13 @@ func dismiss():
 
 func _on_mouse_entered():
 	_hovered = true
-	pause_timer()
+	if _hover_pauses_timer:
+		pause_timer()
 
 func _on_mouse_exited():
 	_hovered = false
-	resume_timer()
+	if _hover_pauses_timer:
+		resume_timer()
 
 func _on_viewport_resized():
 	_position_snackbar()
@@ -344,6 +352,14 @@ func set_overlay_type(type: String):
 
 func set_auto_dismiss(enabled: bool):
 	_auto_dismiss = enabled
+
+func set_hover_pauses_timer(enabled: bool):
+	_hover_pauses_timer = enabled
+
+func set_stack_offset(offset: int):
+	_stack_offset_index = offset
+	if is_node_ready():
+		_position_snackbar()
 
 func show_progress(enabled: bool):
 	_progress_visible = enabled

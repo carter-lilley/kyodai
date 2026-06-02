@@ -620,10 +620,15 @@ func _process_next_platform():
 	_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
 	
 	# Check and setup firmware for this platform before syncing games
+	# Skip if emulator is not installed yet (firmware will be set up at launch time)
 	var emulator_id = LaunchManager.get_default_emulator_for_platform(platform.slug)
 	if emulator_id != "":
-		print("[Sync] Checking firmware for platform '%s' with emulator '%s'" % [platform.name, emulator_id])
-		LaunchManager.setup_platform_firmware(platform.slug, emulator_id)
+		var progress = LaunchManager.get_install_progress(emulator_id)
+		if progress.get("is_installed", false):
+			print("[Sync] Checking firmware for platform '%s' with emulator '%s'" % [platform.name, emulator_id])
+			LaunchManager.setup_platform_firmware(platform.slug, emulator_id)
+		else:
+			print("[Sync] Skipping firmware for platform '%s' - emulator '%s' not installed yet" % [platform.name, emulator_id])
 	
 	# Start fetching this platform
 	_sync_state = SyncState.PLATFORM_FETCHING

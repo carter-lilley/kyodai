@@ -190,6 +190,7 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		mouse_event.pressed = true
 		mouse_event.position = scaled_pos
 		mouse_event.global_position = scaled_pos
+		print("[AynThor] pushing touch DOWN to ", target_vp.name, " at ", scaled_pos, " (screen: ", current_pos, ")")
 		target_vp.push_input(mouse_event)
 		
 	elif action == 1 or action == 6:

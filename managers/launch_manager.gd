@@ -60,6 +60,27 @@ var _cache_ttl_ms: int = 5000  # 5 second cache TTL
 func clear_validation_cache() -> void:
 	_validation_cache.clear()
 
+## Clears pending launches whose emulators are now installed.
+## Call on app resume after potential APK installations.
+func clear_stale_pending_launches() -> void:
+	var to_remove = []
+	for emulator_id in _pending_launches:
+		var emulator = get_emulator(emulator_id)
+		if emulator.is_empty():
+			to_remove.append(emulator_id)
+			continue
+		var install_steps = emulator.get("install", [])
+		var all_valid = true
+		for i in range(install_steps.size()):
+			if not _validate_install_step(emulator_id, i, install_steps):
+				all_valid = false
+				break
+		if all_valid:
+			print("[LaunchManager] Clearing stale pending launch for emulator: " + emulator_id)
+			to_remove.append(emulator_id)
+	for emulator_id in to_remove:
+		_pending_launches.erase(emulator_id)
+
 # Signals
 signal emulator_registry_loaded(success: bool)
 signal launch_completed(success: bool, message: String)
@@ -907,16 +928,17 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		# Vita3K special handling - pass TitleID as command-line args via AppStartParameters
 		# Vita3K expects StringArray extra with key "AppStartParameters" containing ["-r", "TitleID"]
 		var vita_title_id = intent.game.get_active_title_id() if intent.game else ""
-		print("[LaunchManager] Vita3K launch: game.title_id='" + (intent.game.title_id if intent.game else "") + "', get_active_title_id='" + vita_title_id + "'")
-		if intent.emulator_id.begins_with("vita3k") and vita_title_id != "":
-			intent.android_extras.append({
-				"key": "AppStartParameters",
-				"value": JSON.stringify(["-r", vita_title_id]),
-				"type": "string_array"
-			})
-			print("[LaunchManager] Vita3K launch: Added AppStartParameters extra with TitleID: " + vita_title_id)
-		elif intent.emulator_id.begins_with("vita3k"):
-			print("[LaunchManager] Vita3K launch: WARNING - No TitleID available for launch intent!")
+		if intent.emulator_id.begins_with("vita3k"):
+			print("[LaunchManager] Vita3K launch: game.title_id='" + (intent.game.title_id if intent.game else "") + "', get_active_title_id='" + vita_title_id + "'")
+			if vita_title_id != "":
+				intent.android_extras.append({
+					"key": "AppStartParameters",
+					"value": JSON.stringify(["-r", vita_title_id]),
+					"type": "string_array"
+				})
+				print("[LaunchManager] Vita3K launch: Added AppStartParameters extra with TitleID: " + vita_title_id)
+			else:
+				print("[LaunchManager] Vita3K launch: WARNING - No TitleID available for launch intent!")
 		
 		# RPCS3/RPCSX special handling - pass boot path to the game folder
 		var rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
@@ -1473,13 +1495,6 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	# Determine which emulator to use
 	var emulator_id = resolve_emulator_for_game(game)
 	
-	# Check if this game is already pending launch (waiting for emulator install)
-	if _pending_launches.has(emulator_id):
-		var pending_game: GameResource = _pending_launches[emulator_id]
-		if pending_game.romm_id == game.romm_id:
-			NotificationManager.show_notification("Game already pending launch! Waiting for emulator installation...", NotificationManager.Type.WARNING)
-			return
-	
 	if emulator_id == "":
 		NotificationManager.show_notification("No emulator configured for platform: " + game.platform_slug, NotificationManager.Type.ERROR)
 		return
@@ -1489,13 +1504,24 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	
 	# Check if emulator is fully installed using step validation
 	# All emulators use registry-based install steps
-	var is_actually_installed = false
+	var is_actually_installed = true
 	var install_steps = emulator.get("install", [])
-	is_actually_installed = true
 	for i in range(install_steps.size()):
 		if not _validate_install_step(emulator_id, i, install_steps):
 			is_actually_installed = false
 			break
+	
+	# If emulator is now installed but there's a stale pending launch, clear it
+	if is_actually_installed and _pending_launches.has(emulator_id):
+		print("[LaunchManager] Emulator " + emulator_id + " is installed, clearing stale pending launch")
+		_pending_launches.erase(emulator_id)
+	
+	# Check if this game is already pending launch (waiting for emulator install)
+	if _pending_launches.has(emulator_id):
+		var pending_game: GameResource = _pending_launches[emulator_id]
+		if pending_game.romm_id == game.romm_id:
+			NotificationManager.show_notification("Game already pending launch! Waiting for emulator installation...", NotificationManager.Type.WARNING)
+			return
 	
 	if not is_actually_installed:
 		NotificationManager.show_notification("Setting up " + emulator_name + "...", NotificationManager.Type.INFO)
@@ -1598,8 +1624,8 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 			NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
 			return
 		print("[LaunchManager] _on_emulator_installed_for_launch: Game preparation complete")
-		# Retry the launch
-		_launch_game_internal(game, emulator_id)
+		# Retry the launch via _launch_with_emulator_check to ensure firmware is validated
+		_launch_with_emulator_check(game)
 
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
@@ -1622,8 +1648,11 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 		if overlay_nodes.size() > 0:
 			var overlay = overlay_nodes[0] as LaunchTransitionOverlay
 			if overlay:
-				await overlay.phase1_completed
-				print("[LaunchManager] Overlay phase 1 complete, proceeding with launch")
+				if overlay.is_phase1_complete():
+					print("[LaunchManager] Overlay phase 1 already complete, proceeding")
+				else:
+					await overlay.phase1_completed
+					print("[LaunchManager] Overlay phase 1 complete, proceeding with launch")
 		else:
 			# Fallback: wait for the expected duration
 			await get_tree().create_timer(0.5).timeout
@@ -2172,6 +2201,9 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
+	# Notify UI that extraction has started
+	emulator_extraction_started.emit(emulator_id)
+	
 	# Queue extraction via DownloadManager
 	var item_id = DownloadManager.queue_extraction(archive_path, extract_dir, "emulator", step_display_name)
 	if item_id == "":
@@ -2200,6 +2232,9 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			_emulator_install_progress[emulator_id] = "Validation failed"
 			emulator_extraction_completed.emit(emulator_id, false)
 			return
+		
+		# Notify UI that extraction completed successfully
+		emulator_extraction_completed.emit(emulator_id, true)
 		
 		# Progress to next step
 		_execute_install_step(emulator_id, step_index + 1)
@@ -2259,6 +2294,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	
 	# Show batch progress
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(archive_paths.size()) + ")"
+	
+	# Notify UI that extraction has started
+	emulator_extraction_started.emit(emulator_id)
 	
 	# Track progress for multiple extractions using Dictionary (reference type for closures)
 	var total_archives = archive_paths.size()
@@ -2322,6 +2360,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 				_emulator_install_progress[emulator_id] = "Validation failed"
 				emulator_extraction_completed.emit(emulator_id, false)
 				return
+			
+			# Notify UI that extraction completed successfully
+			emulator_extraction_completed.emit(emulator_id, true)
 			
 			# Progress to next step
 			_execute_install_step(emulator_id, step_index + 1)
@@ -2433,7 +2474,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(url: String, tag: String, error: String):
+		func(url: String, tag: String, error: String, file_size: int):
 			if error != "":
 				push_error("[LaunchManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = "Failed to fetch release"
@@ -2441,7 +2482,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 			var version_to_save = tag if tag != "" else release_tag
 			if version_to_save != "":
 				_save_emulator_version(emulator_id, version_to_save)
-			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
+			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size),
 		release_tag,
 		api_base_url
 	)
@@ -2488,15 +2529,16 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 ## Saves the installed emulator version to settings for update checking.
 ## Only stores the FIRST download step's version to prevent secondary assets
 ## (e.g. shadPS4 Qt launcher) from clobbering the core version.
-func _save_emulator_version(emulator_id: String, version: String):
+## Set force=true to overwrite an existing version (used by async version fetch).
+func _save_emulator_version(emulator_id: String, version: String, force: bool = false):
 	if SettingsManager:
 		var setting = SettingsManager.get_setting("installed_emulator_versions")
 		if setting:
 			var versions = setting.value as Dictionary
 			if versions == null:
 				versions = {}
-			# Only save if not already present (first download step wins)
-			if not versions.has(emulator_id):
+			# Only save if not already present (first download step wins), unless force is true
+			if not versions.has(emulator_id) or force:
 				versions[emulator_id] = version
 				SettingsManager.set_setting(versions, setting)
 				SettingsManager.save_settings()
@@ -2567,14 +2609,11 @@ func check_for_updates(callback: Callable):
 		return
 	
 	var version_setting = SettingsManager.get_setting("installed_emulator_versions")
-	if not version_setting:
-		callback.call([], [], [])
-		return
-	
-	var installed_versions = version_setting.value as Dictionary
-	if installed_versions == null or installed_versions.is_empty():
-		callback.call([], [], [])
-		return
+	var installed_versions = {}
+	if version_setting:
+		installed_versions = version_setting.value as Dictionary
+		if installed_versions == null:
+			installed_versions = {}
 	
 	var results = {
 		"updated": [],
@@ -2583,10 +2622,15 @@ func check_for_updates(callback: Callable):
 		"pending": 0
 	}
 	
-	for emulator_id in installed_versions.keys():
-		var installed_version = installed_versions[emulator_id]
-		var emulator = get_emulator(emulator_id)
-		if emulator.is_empty():
+	var all_emulators = get_all_emulators()
+	
+	for emulator in all_emulators:
+		var emulator_id = emulator.get("id", "")
+		if emulator_id == "":
+			continue
+		
+		var progress = get_install_progress(emulator_id)
+		if progress["status"] != "complete":
 			continue
 		
 		# Find the first download step to determine how to check
@@ -2606,6 +2650,15 @@ func check_for_updates(callback: Callable):
 		
 		var action_type = platform_config.get("action_type", "")
 		
+		# If installed but no version stored, force reinstall to get the actual version
+		if not installed_versions.has(emulator_id):
+			print("[LaunchManager] Emulator %s installed but no version stored - triggering reinstall" % emulator_id)
+			results.updated.append(emulator_id)
+			_trigger_emulator_update(emulator_id, emulator.get("name", emulator_id), platform_config)
+			continue
+		
+		var installed_version = installed_versions[emulator_id]
+		
 		match action_type:
 			"download_scrape":
 				results.pending += 1
@@ -2617,8 +2670,8 @@ func check_for_updates(callback: Callable):
 				# Hardcoded URL - can't check for updates automatically
 				results.up_to_date.append(emulator_id)
 	
-	# If nothing was pending, call callback immediately
-	if results.pending == 0:
+	# If nothing was pending and nothing was auto-updated, call callback immediately
+	if results.pending == 0 and results.updated.is_empty():
 		callback.call(results.updated, results.up_to_date, results.failed)
 
 ## Internal helper to check if all pending checks are done
@@ -2684,7 +2737,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(_url: String, tag: String, error: String):
+		func(_url: String, tag: String, error: String, _file_size: int):
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
 				_check_updates_complete(results, callback)
@@ -3045,7 +3098,7 @@ func scan_emulator_install_state(emulator_id: String):
 		_emulator_install_progress[emulator_id] = ""
 
 ## Legacy unified download - kept for reference but not used
-func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}):
+func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}, file_size: int = 0):
 	# Use explicit filename from config if provided, otherwise extract from URL
 	var filename = step_config.get("filename", "")
 	if filename == "":
@@ -3071,7 +3124,13 @@ func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_
 		"emulator",
 		step_display_name,  # Use step-specific display name for notifications
 		false,  # auto_extract = false
-		""  # extract_to = empty, we'll handle extraction separately
+		"",  # extract_to = empty, we'll handle extraction separately
+		null,  # game
+		{},  # callbacks
+		0,  # romm_id
+		true,  # delete_after_extract
+		false,  # suppress_notification
+		file_size  # expected_file_size from GitHub API
 	)
 	
 	if item_id == "":
@@ -3106,6 +3165,17 @@ func is_emulator_queued(emulator_id: String) -> bool:
 		if item.name == emulator_id or item.name.begins_with(emulator_id):
 			return true
 	return false
+
+## Gets the active download item for an emulator (if any)
+## Returns the DownloadManager.QueueItem or null
+func get_emulator_active_download(emulator_id: String):
+	for item_id in _pending_emulator_downloads:
+		var task = _pending_emulator_downloads[item_id]
+		if task.emulator_id == emulator_id:
+			for item in DownloadManager.get_active():
+				if item.id == item_id:
+					return item
+	return null
 
 ## Handles download completion
 func _on_unified_download_completed(item_id: String, success: bool, message: String):

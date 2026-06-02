@@ -665,8 +665,21 @@ func _handle_ui_cancel() -> void:
 				return
 	
 	# Check if keyboard is visible - let keyboard handle it
+	print("[Main] _handle_ui_cancel: _keyboard=", _keyboard, " visible=", _keyboard.visible if _keyboard else "N/A", " in_second_viewport=", UIManager._keyboard_is_in_second_viewport if UIManager else "N/A")
 	if _keyboard and _keyboard.visible:
-		return
+		# If keyboard is in SecondViewport, it won't receive ui_cancel (controller input goes to MainViewport)
+		# So we need to manually dismiss it here
+		if UIManager and UIManager._keyboard_is_in_second_viewport:
+			print("[Main] Manually dismissing keyboard in SecondViewport")
+			if _keyboard.has_method("_hide_keyboard"):
+				_keyboard._hide_keyboard()
+				# Return focus to the active LineEdit in MainViewport
+				if _keyboard._active_line_edit != null:
+					_keyboard._active_line_edit.grab_focus()
+			get_viewport().set_input_as_handled()
+			return
+		else:
+			return
 	
 	# Check if settings dialog is open - let it handle dismissal
 	if UIManager and UIManager.is_settings_dialog_open():
@@ -889,10 +902,11 @@ func _notification(what: int) -> void:
 		else:
 			print("[Main] No saved focus index, skipping restoration")
 		
-		# Clear emulator validation cache and refresh platform cards
+		# Clear emulator validation cache and stale pending launches
 		# This handles APK installs that completed while the app was in the background
 		if LaunchManager:
 			LaunchManager.clear_validation_cache()
+			LaunchManager.clear_stale_pending_launches()
 		var platforms_view = UIManager.get_settings_dialog_platforms_view()
 		if platforms_view and platforms_view.has_method("refresh_cards"):
 			platforms_view.refresh_cards()

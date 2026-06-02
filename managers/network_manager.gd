@@ -702,7 +702,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	var error = http.request(url, headers)
 	
 	if error != OK:
-		callback.call("", "", "Failed to start request: " + str(error))
+		callback.call("", "", "Failed to start request: " + str(error), 0)
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
@@ -712,11 +712,11 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			_cleanup_http_request(http)
 			
 			if result != HTTPRequest.RESULT_SUCCESS:
-				callback.call("", "", "Request failed: " + str(result))
+				callback.call("", "", "Request failed: " + str(result), 0)
 				return
 			
 			if response_code != 200:
-				callback.call("", "", "HTTP error: " + str(response_code))
+				callback.call("", "", "HTTP error: " + str(response_code), 0)
 				return
 			
 			var body_text = body.get_string_from_utf8()
@@ -724,12 +724,12 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			var parse_result = json.parse(body_text)
 			
 			if parse_result != OK:
-				callback.call("", "", "Failed to parse JSON: " + json.get_error_message())
+				callback.call("", "", "Failed to parse JSON: " + json.get_error_message(), 0)
 				return
 			
 			var data = json.data
 			if not data.has("assets"):
-				callback.call("", "", "No assets in release")
+				callback.call("", "", "No assets in release", 0)
 				return
 			
 			var regex = RegEx.new()
@@ -741,9 +741,10 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				var asset_name = asset.get("name", "")
 				if regex.search(asset_name) != null:
 					var download_url = asset.get("browser_download_url", "")
-					callback.call(download_url, tag_name, "")
+					var asset_size = asset.get("size", 0)
+					callback.call(download_url, tag_name, "", asset_size)
 					return
-			callback.call("", "", "No asset matched pattern: " + asset_pattern)
+			callback.call("", "", "No asset matched pattern: " + asset_pattern, 0)
 			)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):
@@ -1107,12 +1108,19 @@ func register_device(_device_name: String, platform: String, client: String, cli
 			
 		if response_code < 200 or response_code >= 300:
 			if callback.is_valid():
-				callback.call(false, "HTTP error: " + str(response_code))
+				callback.call({}, "HTTP error: " + str(response_code))
 			return
 		
-		# Success - file already saved by HTTPRequest
+		# Success - parse response body for device data
+		var body_text = _response_body.get_string_from_utf8()
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		var response_data = {}
+		if parse_result == OK:
+			response_data = json.data
+		
 		if callback.is_valid():
-			callback.call(true, "")
+			callback.call(response_data, "")
 		http.queue_free()
 	)
 

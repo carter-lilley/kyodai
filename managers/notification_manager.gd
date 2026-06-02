@@ -1,8 +1,8 @@
 extends Manager
 
 ## Manages notifications using M3Snackbar for messages and M3Progress for progress.
-## Simple messages queue into a single M3Snackbar. Progress notifications use a
-## separate M3Snackbar with embedded M3Progress (overlay_type = "snackbar_progress").
+## Message notifications stack up to MAX_STACK_SIZE visible snackbars. Older notifications
+## are replaced when the stack is full. Progress notifications use a separate M3Snackbar.
 
 enum Type { INFO, SUCCESS, WARNING, ERROR }
 
@@ -12,6 +12,8 @@ const TYPE_ICONS: Dictionary = {
 	Type.WARNING: "alert-outline",
 	Type.ERROR: "close-circle-outline",
 }
+
+const MAX_STACK_SIZE = 3
 
 signal notification_shown(id: int)
 signal notification_dismissed(id: int)
@@ -24,15 +26,15 @@ class NotificationEntry:
 	var is_progress_linked: bool = false
 	var is_pulsing: bool = false
 
-var _message_queue: Array[Dictionary] = []
-var _current_message_snackbar: M3Snackbar = null
-var _current_message_id: int = -1
+var _active_snackbars: Array[M3Snackbar] = []
+var _active_ids: Array[int] = []
 
 var _current_progress_snackbar: M3Snackbar = null
 var _current_progress_id: int = -1
 var _progress_entry: NotificationEntry = null
 
 var _notification_id_counter: int = 0
+var _overlay_type_counter: int = 0
 var _check_interval: float = 0.5
 
 func _ready() -> void:
@@ -62,33 +64,50 @@ func show_notification(
 	notification_shown.emit(id)
 	return id
 
-func _show_message(id: int, text: String, type: Type, min_duration: float) -> void:
-	if _current_message_snackbar and is_instance_valid(_current_message_snackbar):
-		_message_queue.append({"id": id, "text": text, "type": type, "duration": min_duration})
-		return
+func _show_message(id: int, text: String, type: Type, duration: float) -> void:
+	# If stack is full, dismiss the oldest (last in array) to make room
+	if _active_snackbars.size() >= MAX_STACK_SIZE:
+		var oldest_snackbar = _active_snackbars.pop_back()
+		var oldest_id = _active_ids.pop_back()
+		if oldest_snackbar and is_instance_valid(oldest_snackbar):
+			oldest_snackbar.dismiss()
+		notification_dismissed.emit(oldest_id)
 
-	_current_message_id = id
-	_spawn_message_snackbar(text, type, min_duration)
+	var snackbar = _spawn_message_snackbar(text, type, duration)
+	_active_snackbars.insert(0, snackbar)
+	_active_ids.insert(0, id)
+	_reposition_stack()
 
-func _spawn_message_snackbar(text: String, type: Type, duration: float) -> void:
+func _spawn_message_snackbar(text: String, type: Type, duration: float) -> M3Snackbar:
 	var snackbar = M3Snackbar.new()
+	snackbar.set_overlay_type("snackbar_stack_" + str(_overlay_type_counter))
+	_overlay_type_counter += 1
 	snackbar.setup(text, "", Callable(), true)
 	snackbar.set_leading_icon(TYPE_ICONS.get(type, "info"))
-	snackbar.dismissed.connect(_on_message_snackbar_dismissed)
+	snackbar.set_hover_pauses_timer(false)
+	snackbar.dismissed.connect(_on_message_snackbar_dismissed.bind(snackbar))
 	get_tree().root.add_child(snackbar)
 	snackbar.show_overlay()
 	snackbar.start_timer(int(duration * 1000))
-	_current_message_snackbar = snackbar
+	return snackbar
 
-func _on_message_snackbar_dismissed() -> void:
-	var dismissed_id = _current_message_id
-	_current_message_snackbar = null
-	_current_message_id = -1
+func _on_message_snackbar_dismissed(snackbar: M3Snackbar) -> void:
+	var index = _active_snackbars.find(snackbar)
+	if index == -1:
+		return
+
+	var dismissed_id = _active_ids[index]
+	_active_snackbars.remove_at(index)
+	_active_ids.remove_at(index)
 	notification_dismissed.emit(dismissed_id)
-	if _message_queue.size() > 0:
-		var next = _message_queue.pop_front()
-		_current_message_id = next.id
-		_spawn_message_snackbar(next.text, next.type, next.duration)
+
+	_reposition_stack()
+
+func _reposition_stack() -> void:
+	for i in range(_active_snackbars.size()):
+		var snackbar = _active_snackbars[i]
+		if is_instance_valid(snackbar):
+			snackbar.set_stack_offset(i)
 
 func _show_progress_snackbar(id: int, text: String, type: Type, progress_callable: Callable, text_formatter: Callable, pulsing: bool) -> void:
 	if _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
@@ -124,24 +143,31 @@ func _on_progress_snackbar_dismissed() -> void:
 	notification_dismissed.emit(dismissed_id)
 
 func dismiss_notification(id: int) -> void:
-	if id == _current_message_id and _current_message_snackbar and is_instance_valid(_current_message_snackbar):
-		_current_message_snackbar.dismiss()
-	_message_queue = _message_queue.filter(func(item): return item.id != id)
+	var index = _active_ids.find(id)
+	if index != -1:
+		var snackbar = _active_snackbars[index]
+		if is_instance_valid(snackbar):
+			snackbar.dismiss()
+		# _on_message_snackbar_dismissed handles array cleanup and repositioning
 
 	if id == _current_progress_id and _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
 		_current_progress_snackbar.dismiss()
 
 func dismiss_all_notifications() -> void:
-	if _current_message_snackbar and is_instance_valid(_current_message_snackbar):
-		_current_message_snackbar.dismiss()
-	_message_queue.clear()
+	for snackbar in _active_snackbars:
+		if is_instance_valid(snackbar):
+			snackbar.dismiss()
+	# _on_message_snackbar_dismissed handles individual cleanup
 
 	if _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
 		_current_progress_snackbar.dismiss()
 
 func update_notification_text(id: int, text: String) -> void:
-	if id == _current_message_id and _current_message_snackbar and is_instance_valid(_current_message_snackbar):
-		_current_message_snackbar.setup(text)
+	var index = _active_ids.find(id)
+	if index != -1:
+		var snackbar = _active_snackbars[index]
+		if is_instance_valid(snackbar):
+			snackbar.setup(text)
 
 	if id == _current_progress_id and _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
 		_current_progress_snackbar.setup(text)
@@ -172,11 +198,11 @@ func _check_notifications() -> void:
 
 func get_active_notification_count() -> int:
 	var count = 0
-	if _current_message_snackbar and is_instance_valid(_current_message_snackbar):
-		count += 1
+	for snackbar in _active_snackbars:
+		if is_instance_valid(snackbar):
+			count += 1
 	if _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
 		count += 1
-	count += _message_queue.size()
 	return count
 
 func clear_all_notifications() -> void:

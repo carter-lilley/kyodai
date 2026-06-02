@@ -60,6 +60,13 @@ func _ready():
 		if _effective_emulator != "" and LaunchManager:
 			LaunchManager.scan_emulator_install_state(_effective_emulator)
 			_update_status_indicator()
+	
+	# Poll for download progress updates every second
+	var timer = Timer.new()
+	timer.wait_time = 1.0
+	timer.timeout.connect(_update_status_indicator)
+	add_child(timer)
+	timer.start()
 
 func _build_ui():
 	# Platform cards have no media
@@ -230,11 +237,15 @@ func _update_status_indicator():
 	# Check for active download/extraction via DownloadManager
 	var is_downloading = false
 	var is_extracting = false
-	if DownloadManager:
-		for item in DownloadManager.get_active():
-			if item.name == effective_emulator:
+	var download_progress = -1.0
+	if LaunchManager:
+		var active_download = LaunchManager.get_emulator_active_download(effective_emulator)
+		if active_download != null:
+			if active_download.status == "downloading":
 				is_downloading = true
-				break
+				download_progress = active_download.progress
+			elif active_download.status == "extracting" or active_download.status == "extract_pending":
+				is_extracting = true
 
 	if LaunchManager and LaunchManager._emulator_install_progress.has(effective_emulator):
 		var progress_str = LaunchManager._emulator_install_progress[effective_emulator]
@@ -253,7 +264,8 @@ func _update_status_indicator():
 					_version_label.text = "v%s" % display_version
 					_version_label.visible = true
 				else:
-					_version_label.visible = false
+					_version_label.text = "Unknown version"
+					_version_label.visible = true
 			else:
 				_version_label.visible = false
 		else:
@@ -265,6 +277,8 @@ func _update_status_indicator():
 			_download_button.visible = false
 	elif is_downloading:
 		var display_text = progress_text if progress_text != "" else "Downloading..."
+		if download_progress >= 0:
+			display_text += " (%d%%)" % int(download_progress * 100)
 		_status_indicator.set_status(Indicator.Status.WARNING, display_text, "Emulator is being downloaded")
 		if _download_button:
 			_download_button.visible = true
