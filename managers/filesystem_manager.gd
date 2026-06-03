@@ -893,3 +893,77 @@ static func get_dirs(path: String) -> Array[String]:
 			result.append(item)
 	
 	return result
+
+## Recursively searches for a file by name starting from dir_path
+## Returns the full path to the file, or empty string if not found
+static func find_file_recursive(dir_path: String, filename: String) -> String:
+	if dir_path.is_empty() or filename.is_empty():
+		return ""
+	
+	if not dir_exists(dir_path):
+		return ""
+	
+	var items = list_dir(dir_path)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var item_path = join_paths(dir_path, item)
+		
+		if item == filename:
+			return item_path
+		
+		if is_dir(item_path):
+			var found = find_file_recursive(item_path, filename)
+			if not found.is_empty():
+				return found
+	
+	return ""
+
+## Moves all contents from source_dir to dest_dir
+## Tries rename first (fast), falls back to copy+delete for cross-boundary moves
+## Returns true on success
+static func move_dir_contents(source_dir: String, dest_dir: String) -> bool:
+	if source_dir.is_empty() or dest_dir.is_empty():
+		return false
+	
+	if not dir_exists(source_dir):
+		push_error("[FileSystemManager] Source directory does not exist: " + source_dir)
+		return false
+	
+	if not dir_exists(dest_dir):
+		if not make_dir_recursive(dest_dir):
+			push_error("[FileSystemManager] Failed to create destination directory: " + dest_dir)
+			return false
+	
+	var items = list_dir(source_dir)
+	var moved_count = 0
+	
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var source = join_paths(source_dir, item)
+		var dest = join_paths(dest_dir, item)
+		
+		# Try rename first (fast, same filesystem)
+		if move(source, dest):
+			moved_count += 1
+			continue
+		
+		# Rename failed - try copy+delete
+		if file_exists(source):
+			if not copy_file(source, dest):
+				push_error("[FileSystemManager] Failed to copy file: " + source + " -> " + dest)
+				return false
+			delete_file(source)
+			moved_count += 1
+		elif is_dir(source):
+			if not copy_dir(source, dest):
+				push_error("[FileSystemManager] Failed to copy directory: " + source + " -> " + dest)
+				return false
+			delete_dir_recursive(source)
+			moved_count += 1
+	
+	print("[FileSystemManager] Moved " + str(moved_count) + " items from " + source_dir + " to " + dest_dir)
+	return true

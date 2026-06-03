@@ -300,7 +300,11 @@ static func _extraction_worker():
 			var result = task.callable.call()
 			
 			if task.callback.is_valid():
-				_instance.call_deferred("_execute_callback", task.callback, result)
+				# Use thread-safe callback queue instead of call_deferred
+				# (call_deferred from threads is unreliable on Android)
+				_instance._lp_callback_mutex.lock()
+				_instance._lp_callbacks.append({"callback": task.callback, "result": result})
+				_instance._lp_callback_mutex.unlock()
 
 static func _download_worker():
 	while not _instance._exit_flag:
@@ -317,7 +321,11 @@ static func _download_worker():
 			var result = task.callable.call()
 			
 			if task.callback.is_valid():
-				_instance.call_deferred("_execute_callback", task.callback, result)
+				# Use thread-safe callback queue instead of call_deferred
+				# (call_deferred from threads is unreliable on Android)
+				_instance._lp_callback_mutex.lock()
+				_instance._lp_callbacks.append({"callback": task.callback, "result": result})
+				_instance._lp_callback_mutex.unlock()
 
 func _execute_callback(callback: Callable, result):
 	callback.call(result)

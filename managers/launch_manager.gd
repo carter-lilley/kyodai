@@ -943,7 +943,7 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		# RPCS3/RPCSX special handling - pass boot path to the game folder
 		var rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
 		if intent.emulator_id.begins_with("rpcs3") and rpcs3_title_id != "":
-			var boot_path = "/storage/emulated/0/Android/data/net.rpcsx.ui/files/games/" + rpcs3_title_id
+			var boot_path = "/storage/emulated/0/Android/data/net.rpcsx/files/config/games/" + rpcs3_title_id
 			intent.android_extras.append({
 				"key": "bootPath",
 				"value": boot_path,
@@ -1389,30 +1389,8 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 		_queue_game_download_then_launch(game)
 		return
 	
-	# Game is downloaded, prepare emulator-specific data first
-	var emulator_id = resolve_emulator_for_game(game)
-	print("[LaunchManager] Resolved emulator for game: '" + emulator_id + "'")
-	
-	# Prepare emulator-specific data (extract TitleIDs, game files, etc.)
-	# This must happen before save sync so the title_id is available
-	# NOTE: TitleID extraction now uses fast range-read (512 bytes) instead of copying entire files
-	print("[LaunchManager] launch_game: Preparing game for emulator: " + emulator_id)
-	var prep_success = await _prepare_game_for_launch(game, emulator_id)
-	if not prep_success:
-		push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
-		NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
-		return
-	print("[LaunchManager] launch_game: Game preparation complete")
-	
-	# Sync saves first then proceed with launch
-	if emulator_id != "":
-		print("[LaunchManager] Starting pre-launch save sync...")
-		SaveManager.auto_download_saves_for_game(game, emulator_id, func():
-			print("[LaunchManager] Pre-launch save sync complete, proceeding with launch")
-			_launch_with_emulator_check(game)
-		)
-	else:
-		_launch_with_emulator_check(game)
+	# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
+	_launch_with_emulator_check(game)
 
 ## Launch a GameNative game via intent
 func _launch_gamenative_game(game: GameResource) -> void:
@@ -1451,24 +1429,8 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			var game_to_launch = updated_game if updated_game else game
 			var emulator_id = resolve_emulator_for_game(game_to_launch)
 			
-			# Prepare emulator-specific data after download (extract TitleIDs, game files, etc.)
-			# NOTE: TitleID extraction now uses fast range-read (512 bytes) instead of copying entire files
-			print("[LaunchManager] _queue_game_download_then_launch: Preparing game for emulator: " + emulator_id)
-			var prep_success = await _prepare_game_for_launch(game_to_launch, emulator_id)
-			if not prep_success:
-				push_error("[LaunchManager] Failed to prepare game after download: " + game_to_launch.get_display_name())
-				NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
-				return
-			print("[LaunchManager] _queue_game_download_then_launch: Game preparation complete")
-			
-			if emulator_id != "":
-				print("[LaunchManager] Starting pre-launch save sync after game download...")
-				SaveManager.auto_download_saves_for_game(game_to_launch, emulator_id, func():
-					print("[LaunchManager] Pre-launch save sync complete, proceeding with launch")
-					_launch_with_emulator_check(game_to_launch)
-				)
-			else:
-				_launch_with_emulator_check(game_to_launch)
+			# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
+			_launch_with_emulator_check(game_to_launch)
 		else:
 			NotificationManager.show_notification("Download failed for " + game.get_display_name(), NotificationManager.Type.ERROR)
 	
@@ -1577,15 +1539,30 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 					NotificationManager.show_notification("Failed to download firmware for " + game.platform_slug, NotificationManager.Type.ERROR)
 					return
 				
-				print("[LaunchManager] Firmware ready for " + game.platform_slug + ", launching game...")
-				_launch_game_internal(pending.game, pending.emulator_id)
+				print("[LaunchManager] Firmware ready for " + game.platform_slug + ", re-entering launch flow...")
+				_launch_with_emulator_check(pending.game)
 		)
 		
 		return
 	
-	# Emulator is already installed and firmware is ready, launch immediately
-	print("[LaunchManager] _launch_with_emulator_check: Emulator installed, launching game")
-	_launch_game_internal(game, emulator_id)
+	# Emulator and firmware are ready — prepare game (titleid extraction)
+	print("[LaunchManager] _launch_with_emulator_check: Preparing game for emulator: " + emulator_id)
+	var prep_success = await _prepare_game_for_launch(game, emulator_id)
+	if not prep_success:
+		push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
+		NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
+		return
+	print("[LaunchManager] _launch_with_emulator_check: Game preparation complete")
+	
+	# Sync saves then launch
+	if emulator_id != "":
+		print("[LaunchManager] Starting pre-launch save sync...")
+		SaveManager.auto_download_saves_for_game(game, emulator_id, func():
+			print("[LaunchManager] Pre-launch save sync complete, launching game...")
+			_launch_game_internal(game, emulator_id)
+		)
+	else:
+		_launch_game_internal(game, emulator_id)
 	print("[LaunchManager] _launch_with_emulator_check: EXIT")
 
 ## Handler for when emulator extraction completes - retries pending launches
@@ -1615,16 +1592,8 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 		# Give a small delay for file system to settle
 		await get_tree().create_timer(0.5).timeout
 		
-		# Prepare game data before launching (extract TitleIDs, etc.)
-		# NOTE: TitleID extraction now uses fast range-read (512 bytes) instead of copying entire files
-		print("[LaunchManager] _on_emulator_installed_for_launch: Preparing game for emulator: " + emulator_id)
-		var prep_success = await _prepare_game_for_launch(game, emulator_id)
-		if not prep_success:
-			push_error("[LaunchManager] Failed to prepare game after emulator install: " + game.get_display_name())
-			NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
-			return
-		print("[LaunchManager] _on_emulator_installed_for_launch: Game preparation complete")
-		# Retry the launch via _launch_with_emulator_check to ensure firmware is validated
+		# Re-enter full launch flow: emulator -> firmware -> prep -> saves -> launch
+		print("[LaunchManager] _on_emulator_installed_for_launch: Re-entering launch flow for emulator: " + emulator_id)
 		_launch_with_emulator_check(game)
 
 ## Internal function to actually launch the game (emulator must be installed)
@@ -3863,147 +3832,9 @@ func _rpcs3_game_has_files(game_path: String) -> bool:
 	return actual_files > 0
 
 
-## Recursively flattens wrapper folders in a PS3 game installation
-## Handles multiple nesting levels (e.g., "Game Name/TitleID/..." -> "TitleID/...")
-## Stops when it finds a game indicator (PARAM.SFO, PS3_DISC.SFB, or PS3_GAME/ folder)
-func _flatten_rpcs3_wrappers(install_path: String) -> void:
-	var max_iterations = 5  # Safety limit to prevent infinite loops
-	
-	for i in range(max_iterations):
-		var dir := DirAccess.open(install_path)
-		if not dir:
-			break
-		
-		dir.list_dir_begin()
-		var entries := []
-		var file_name := dir.get_next()
-		while file_name != "":
-			if file_name != "." and file_name != "..":
-				entries.append(file_name)
-			file_name = dir.get_next()
-		dir.list_dir_end()
-		
-		print("[LaunchManager] RPCS3: Flatten iteration " + str(i + 1) + " - found " + str(entries.size()) + " entries")
-		
-		# Stop if there are multiple entries or no entries
-		if entries.size() != 1:
-			print("[LaunchManager] RPCS3: Stopping flatten - not a single wrapper (" + str(entries.size()) + " entries)")
-			break
-		
-		var potential_wrapper: String = FSM.join_paths(install_path, entries[0])
-		
-		# Only flatten if it's a directory
-		if not FSM.dir_exists(potential_wrapper):
-			print("[LaunchManager] RPCS3: Stopping flatten - single entry is not a directory")
-			break
-		
-		# Check if this directory contains game indicators
-		var has_param_sfo = FSM.file_exists(FSM.join_paths(potential_wrapper, "PARAM.SFO"))
-		var has_disc_sfb = FSM.file_exists(FSM.join_paths(potential_wrapper, "PS3_DISC.SFB"))
-		var has_ps3_game = FSM.dir_exists(FSM.join_paths(potential_wrapper, "PS3_GAME"))
-		
-		if has_param_sfo or has_disc_sfb or has_ps3_game:
-			print("[LaunchManager] RPCS3: Found game indicators in: " + entries[0])
-			
-			# Flatten this level (move game folder contents up)
-			print("[LaunchManager] RPCS3: Flattening game folder: " + entries[0])
-			var wrapper_dir := DirAccess.open(potential_wrapper)
-			if wrapper_dir:
-				wrapper_dir.list_dir_begin()
-				var wrapper_file := wrapper_dir.get_next()
-				while wrapper_file != "":
-					if wrapper_file != "." and wrapper_file != "..":
-						var source := FSM.join_paths(potential_wrapper, wrapper_file)
-						var dest := FSM.join_paths(install_path, wrapper_file)
-						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from game folder")
-						FSM.move(source, dest)
-					wrapper_file = wrapper_dir.get_next()
-				wrapper_dir.list_dir_end()
-				FSM.delete_dir_recursive(potential_wrapper)
-				print("[LaunchManager] RPCS3: Flattened game folder")
-			
-			# Stop after flattening the game folder
-			break
-		else:
-			# This is just a wrapper, flatten it
-			print("[LaunchManager] RPCS3: Found wrapper folder: " + entries[0])
-			var wrapper_dir := DirAccess.open(potential_wrapper)
-			if wrapper_dir:
-				wrapper_dir.list_dir_begin()
-				var wrapper_file := wrapper_dir.get_next()
-				while wrapper_file != "":
-					if wrapper_file != "." and wrapper_file != "..":
-						var source := FSM.join_paths(potential_wrapper, wrapper_file)
-						var dest := FSM.join_paths(install_path, wrapper_file)
-						print("[LaunchManager] RPCS3: Moving " + wrapper_file + " up from wrapper")
-						FSM.move(source, dest)
-					wrapper_file = wrapper_dir.get_next()
-				wrapper_dir.list_dir_end()
-				FSM.delete_dir_recursive(potential_wrapper)
-				print("[LaunchManager] RPCS3: Flattened wrapper folder")
-
-
-## Determines if a PS3 game ZIP is disc or digital format by checking file paths
-## Returns "disc" if ZIP contains PS3_GAME/ folder, "digital" otherwise
-func _determine_ps3_game_format(zip_path: String) -> String:
-	if not FSM.file_exists(zip_path):
-		push_error("[LaunchManager] RPCS3: Cannot determine format - file not found: " + zip_path)
-		return "digital"  # Default to digital on error
-	
-	var reader = ZIPReader.new()
-	var err = reader.open(zip_path)
-	
-	if err != OK:
-		# ZIPReader failed (likely ZIP64/large file), try 7-Zip fallback
-		print("[LaunchManager] RPCS3: ZIPReader failed for format detection, trying 7-Zip fallback")
-		return _determine_ps3_game_format_with_7z(zip_path)
-	
-	var files = reader.get_files()
-	reader.close()
-	
-	if files.is_empty():
-		return "digital"
-	
-	# Check if any file path contains PS3_GAME/
-	for file_path in files:
-		if file_path.find("PS3_GAME/") != -1:
-			print("[LaunchManager] RPCS3: Detected disc format (found PS3_GAME/ in ZIP)")
-			return "disc"
-	
-	print("[LaunchManager] RPCS3: Detected digital format (no PS3_GAME/ in ZIP)")
-	return "digital"
-
-
-## 7-Zip fallback for format detection on large/ZIP64 archives
-func _determine_ps3_game_format_with_7z(zip_path: String) -> String:
-	var binary_path = _get_7z_binary_path()
-	if binary_path == "":
-		print("[LaunchManager] RPCS3: 7-Zip binary not available for format detection")
-		return "digital"
-	
-	var native_zip_path = FSM.resolve_native_path(zip_path)
-	var list_args = ["l", native_zip_path]
-	var output = []
-	var exit_code = OS.execute(binary_path, list_args, output, true)
-	
-	if exit_code != 0:
-		push_error("[LaunchManager] RPCS3: 7-Zip list failed for format detection")
-		return "digital"
-	
-	var output_str = output[0] if output.size() > 0 else ""
-	
-	# Check if any line contains PS3_GAME/
-	if output_str.find("PS3_GAME/") != -1 or output_str.find("PS3_GAME\\") != -1:
-		print("[LaunchManager] RPCS3: Detected disc format via 7-Zip (found PS3_GAME/)")
-		return "disc"
-	
-	print("[LaunchManager] RPCS3: Detected digital format via 7-Zip (no PS3_GAME/)")
-	return "digital"
-
-
-## Prepares a PS3 game for RPCS3 by extracting ZIP directly to final location
-## Follows the Vita3K pattern: extract TitleID first, check if installed, skip if present
-## Extracts directly to games/ or dev_hdd0/game/ based on format detection - no temp directory
+## Prepares a PS3 game for RPCS3 by extracting ZIP and discovering game structure via PARAM.SFO
+## Uses PARAM.SFO location to determine disc vs digital format and correct install path
+## Works on both desktop and Android (extracts to temp first, then moves to final location)
 func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var existing_title_id = game.get_active_title_id()
 	if existing_title_id != "":
@@ -4030,7 +3861,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] RPCS3: No ROM path for game: " + game.get_display_name())
 		return false
 	
-	# Step 1: Extract TitleID from ZIP upfront (like Vita3K)
+	# Step 1: Extract TitleID from ZIP upfront
 	print("[LaunchManager] RPCS3: Extracting TitleID from ZIP...")
 	var zip_title_id = TitleIDParser.extract_ps3_title_id(rom_path)
 	if zip_title_id == "":
@@ -4057,7 +3888,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if PlatformManager.is_android():
 		# Android: RPCSX uses app-private storage
-		emulator_dir = "/storage/emulated/0/Android/data/net.rpcsx.ui/files"
+		emulator_dir = "/storage/emulated/0/Android/data/net.rpcsx/files/config"
 		print("[LaunchManager] RPCS3: Android mode - emulator_dir: " + emulator_dir)
 	else:
 		# Desktop: Use emulator install directory
@@ -4066,34 +3897,13 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		emulator_dir = desktop_install_path.get_base_dir()
 		print("[LaunchManager] RPCS3: Desktop mode - emulator_dir: " + emulator_dir)
 	
-	# Step 3: Detect game format from ZIP before extraction
-	var game_format = _determine_ps3_game_format(rom_path)
-	print("[LaunchManager] RPCS3: Game format: " + game_format)
+	# Step 3: Extract ZIP to temp directory (both desktop and Android)
+	var temp_path = FSM.join_paths(OS.get_user_data_dir(), "temp_ps3_extract", title_id)
+	if FSM.dir_exists(temp_path):
+		FSM.delete_dir_recursive(temp_path)
+	FSM.make_dir_recursive(temp_path)
+	print("[LaunchManager] RPCS3: Extracting to temp: " + temp_path)
 	
-	# Step 4: Determine final install location based on format
-	var install_path: String
-	if game_format == "disc":
-		install_path = FSM.join_paths(emulator_dir, "games", title_id)
-	else:
-		install_path = FSM.join_paths(emulator_dir, "dev_hdd0", "game", title_id)
-	
-	print("[LaunchManager] RPCS3: Install path: " + install_path)
-	
-	# Step 5: Check if already installed
-	if _rpcs3_game_has_files(install_path):
-		print("[LaunchManager] RPCS3: Game already installed at: " + install_path)
-		return true
-	
-	print("[LaunchManager] RPCS3: Game not installed, will extract to: " + install_path)
-	
-	# Step 6: Create install directory
-	if not FSM.dir_exists(install_path):
-		print("[LaunchManager] RPCS3: Creating install directory: " + install_path)
-		if not FSM.make_dir_recursive(install_path):
-			push_error("[LaunchManager] RPCS3: Failed to create install directory: " + install_path)
-			return false
-	
-	# Step 7: Extract ZIP directly to install location (no temp directory!)
 	# Show persistent pulsing notification during extraction
 	var rpcs3_notify_id = NotificationManager.show_notification(
 		"Extracting " + game.get_display_name() + "...",
@@ -4104,9 +3914,8 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		Callable(),
 		true
 	)
-	print("[LaunchManager] RPCS3: Extracting directly to: " + install_path)
 	
-	var extract_success := await _extract_ps3_zip(rom_path, install_path)
+	var extract_success := await _extract_ps3_zip(rom_path, temp_path)
 	
 	# Dismiss the extraction notification
 	NotificationManager.dismiss_notification(rpcs3_notify_id)
@@ -4115,15 +3924,90 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if not extract_success:
 		push_error("[LaunchManager] RPCS3: Failed to extract PS3 game ZIP: " + rom_path)
+		if FSM.dir_exists(temp_path):
+			FSM.delete_dir_recursive(temp_path)
 		return false
 	
-	print("[LaunchManager] RPCS3: Extraction complete, flattening wrapper folders...")
+	# Step 4: Discover game structure via PARAM.SFO
+	print("[LaunchManager] RPCS3: Discovering game structure via PARAM.SFO...")
+	var param_sfo_path = FSM.find_file_recursive(temp_path, "PARAM.SFO")
 	
-	# Step 8: Recursively flatten wrapper folders until we find game files
-	# Handles multiple nesting levels: "Tokyo Jungle/NPUA80523/..."
-	_flatten_rpcs3_wrappers(install_path)
+	if param_sfo_path.is_empty():
+		push_error("[LaunchManager] RPCS3: PARAM.SFO not found in extracted files")
+		if FSM.dir_exists(temp_path):
+			FSM.delete_dir_recursive(temp_path)
+		NotificationManager.show_notification("Failed to install PS3 game - PARAM.SFO not found", NotificationManager.Type.ERROR)
+		return false
 	
-	# Step 9: Verify game files actually exist after extraction
+	print("[LaunchManager] RPCS3: Found PARAM.SFO at: " + param_sfo_path)
+	
+	# Determine game format and game root from PARAM.SFO location
+	var game_format: String
+	var game_root: String
+	
+	# Normalize path separators for comparison
+	var normalized_path = param_sfo_path.replace("\\", "/")
+	var ps3_game_index = normalized_path.find("/PS3_GAME/")
+	
+	if ps3_game_index != -1:
+		# Disc format: PARAM.SFO is inside PS3_GAME/ folder
+		# Game root is the parent of PS3_GAME (contains PS3_GAME/, PS3_DISC.SFB, etc.)
+		game_root = normalized_path.substr(0, ps3_game_index)
+		game_format = "disc"
+		print("[LaunchManager] RPCS3: Detected disc format (PARAM.SFO inside PS3_GAME/)")
+	else:
+		# Digital format: PARAM.SFO is directly inside TitleID folder
+		# Game root is the parent of PARAM.SFO (the TitleID folder itself)
+		game_root = param_sfo_path.get_base_dir()
+		game_format = "digital"
+		print("[LaunchManager] RPCS3: Detected digital format (PARAM.SFO in TitleID folder)")
+	
+	print("[LaunchManager] RPCS3: Game root: " + game_root)
+	print("[LaunchManager] RPCS3: Game format: " + game_format)
+	
+	# Step 5: Determine final install location based on discovered format
+	var install_path: String
+	if game_format == "disc":
+		install_path = FSM.join_paths(emulator_dir, "games", title_id)
+	else:
+		install_path = FSM.join_paths(emulator_dir, "dev_hdd0", "game", title_id)
+	
+	print("[LaunchManager] RPCS3: Install path: " + install_path)
+	
+	# Step 6: Check if already installed
+	if _rpcs3_game_has_files(install_path):
+		print("[LaunchManager] RPCS3: Game already installed at: " + install_path)
+		# Clean up temp
+		if FSM.dir_exists(temp_path):
+			FSM.delete_dir_recursive(temp_path)
+		return true
+	
+	# Step 7: Create install directory and move game files
+	if not FSM.dir_exists(install_path):
+		print("[LaunchManager] RPCS3: Creating install directory: " + install_path)
+		if not FSM.make_dir_recursive(install_path):
+			push_error("[LaunchManager] RPCS3: Failed to create install directory: " + install_path)
+			if FSM.dir_exists(temp_path):
+				FSM.delete_dir_recursive(temp_path)
+			return false
+	
+	print("[LaunchManager] RPCS3: Moving game files from " + game_root + " to " + install_path + "...")
+	var move_success = FSM.move_dir_contents(game_root, install_path)
+	
+	if not move_success:
+		push_error("[LaunchManager] RPCS3: Failed to move game files to: " + install_path)
+		if FSM.dir_exists(temp_path):
+			FSM.delete_dir_recursive(temp_path)
+		return false
+	
+	print("[LaunchManager] RPCS3: Move complete")
+	
+	# Step 8: Clean up temp directory
+	if FSM.dir_exists(temp_path):
+		FSM.delete_dir_recursive(temp_path)
+		print("[LaunchManager] RPCS3: Cleaned up temp directory")
+	
+	# Step 9: Verify game files actually exist after installation
 	var has_param_sfo = FSM.file_exists(FSM.join_paths(install_path, "PARAM.SFO"))
 	var has_ps3_disc = FSM.file_exists(FSM.join_paths(install_path, "PS3_DISC.SFB"))
 	var has_ps3_game = FSM.dir_exists(FSM.join_paths(install_path, "PS3_GAME"))

@@ -1371,7 +1371,7 @@ func _show_reassembly_notification(item_id: String, item_name: String) -> void:
 		return
 	var item = _chunked_downloads[item_id].item
 	item.notification_id = NotificationManager.show_notification(
-		"Assembling " + item_name + "...",
+		"Reassembling chunks, please wait...",
 		NotificationManager.Type.INFO,
 		null,
 		0.0,
@@ -1391,13 +1391,14 @@ func _reassemble_chunks(item_id: String):
 	
 	print("[DownloadManager] Starting chunk reassembly for: " + item.name)
 	
-	# Dismiss the download progress notification and show a pulsing reassembly notification
-	if item.notification_id != -1:
-		NotificationManager.dismiss_notification(item.notification_id)
-	
+	# Show reassembly notification immediately
 	if not item.suppress_notification:
-		# Use call_deferred to show notification on main thread (avoids threading issues on Android)
-		call_deferred("_show_reassembly_notification", item_id, item.name)
+		if item.notification_id != -1:
+			NotificationManager.dismiss_notification(item.notification_id)
+		_show_reassembly_notification(item_id, item.name)
+		# Wait a short moment for the UI to render the new notification
+		# before starting the blocking reassembly work
+		await get_tree().create_timer(0.1).timeout
 	
 	# Reassemble chunks to the final destination path
 	var reassembly_temp_path = chunked_info.final_path
@@ -1452,7 +1453,9 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	
 	print("[DownloadManager] [Reassembly] Calling native reassembly for: " + item.name + " (" + str(chunk_paths.size()) + " chunks) -> " + output_absolute_path)
 	
-	# Call native Java reassembly
+	# Call native Java reassembly on the main thread.
+	# NOTE: This blocks the UI for the duration of reassembly, but a clear
+	# notification is shown beforehand so the user knows what is happening.
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin == null:
 		push_error("[DownloadManager] PackageChecker plugin not available for reassembly")
@@ -1467,8 +1470,7 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 		_process_queue()
 		return
 	
-	# Perform reassembly in native code (runs in foreground service process)
-	var success = plugin.reassembleChunks(chunk_paths_json, output_absolute_path)
+	var success = plugin.call("reassembleChunks", chunk_paths_json, output_absolute_path)
 	
 	print("[DownloadManager] [Reassembly] Native reassembly returned: " + str(success) + " for: " + item.name)
 	
@@ -1824,6 +1826,9 @@ func _start_extraction(item: QueueItem):
 	if not _active_items.has(item.id):
 		_active_items[item.id] = item
 	
+	# Start foreground service on Android to prevent app kill during extraction
+	_start_foreground_service(item.name)
+	
 	# Show extraction notification with pulsing progress (indeterminate)
 	# Dismiss old notification first, then create new one (unless suppressed for batch)
 	if not item.suppress_notification:
@@ -1858,6 +1863,7 @@ func _start_extraction(item: QueueItem):
 		NotificationManager.update_notification_text(item.notification_id, "Unknown format: " + item.name)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
+		_stop_foreground_service()  # Stop foreground service on failure
 		extraction_completed.emit(item.id, false, "Unknown archive format")
 		queue_changed.emit()
 		_process_queue()
@@ -1938,6 +1944,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 			NotificationManager.dismiss_notification(item.notification_id)
 			_cleanup_item(item)
 			_active_items.erase(item.id)
+			_stop_foreground_service()  # Stop foreground service on success
 			
 			extraction_completed.emit(item.id, true, extract_dir)
 			queue_changed.emit()
@@ -1948,6 +1955,7 @@ func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
 			NotificationManager.dismiss_notification(item.notification_id)
 			_cleanup_item(item)
 			_active_items.erase(item.id)
+			_stop_foreground_service()  # Stop foreground service on failure
 			extraction_completed.emit(item.id, false, item.error_message)
 			queue_changed.emit()
 			_process_queue()

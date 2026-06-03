@@ -5,9 +5,10 @@ note to user: prepping on first launch
 separate firmware page or indicator?
 sync not working after removing games
 focus lock
+extraction callback polling
 
 ## android
-	chunk reassembly notif on android
+	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
 	android download manager and file streaming
 	ft: android background sync/notifs
 
