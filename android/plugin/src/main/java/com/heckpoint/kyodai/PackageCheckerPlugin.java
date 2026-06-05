@@ -33,19 +33,28 @@ import org.godotengine.godot.plugin.SignalInfo;
 import org.godotengine.godot.plugin.UsedByGodot;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class PackageCheckerPlugin extends GodotPlugin {
     
     private static final String TAG = "PackageChecker";
+    private static final String ACTION_EXTRACTION_COMPLETE = "com.heckpoint.kyodai.EXTRACTION_COMPLETE";
     private Activity activity;
+    private BroadcastReceiver extractionReceiver;
     
     public PackageCheckerPlugin(Godot godot) {
         super(godot);
         Log.d(TAG, "PackageCheckerPlugin constructor called");
         this.activity = godot.getActivity();
         Log.d(TAG, "Activity obtained: " + (activity != null ? "YES" : "NO"));
+        registerExtractionReceiver();
     }
     
     @Override
@@ -56,7 +65,34 @@ public class PackageCheckerPlugin extends GodotPlugin {
     @Override
     public Set<SignalInfo> getPluginSignals() {
         Set<SignalInfo> signals = new HashSet<>();
+        signals.add(new SignalInfo("extraction_complete", Boolean.class, String.class, String.class));
         return signals;
+    }
+    
+    private void registerExtractionReceiver() {
+        if (activity == null) return;
+        
+        extractionReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (ACTION_EXTRACTION_COMPLETE.equals(intent.getAction())) {
+                    boolean success = intent.getBooleanExtra("success", false);
+                    String zipPath = intent.getStringExtra("zip_path");
+                    String extractDir = intent.getStringExtra("extract_dir");
+                    Log.d(TAG, "Extraction complete broadcast received: success=" + success + 
+                        ", zip=" + zipPath + ", dir=" + extractDir);
+                    emitSignal("extraction_complete", success, zipPath, extractDir);
+                }
+            }
+        };
+        
+        IntentFilter filter = new IntentFilter(ACTION_EXTRACTION_COMPLETE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            activity.registerReceiver(extractionReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            activity.registerReceiver(extractionReceiver, filter);
+        }
+        Log.d(TAG, "Registered extraction completion receiver");
     }
     
     @UsedByGodot
@@ -1403,6 +1439,167 @@ public class PackageCheckerPlugin extends GodotPlugin {
             
         } catch (Exception e) {
             Log.e(TAG, "installApk: Failed to install APK: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+    
+    /**
+     * Extracts a ZIP file using streaming to minimize memory usage.
+     * Uses Java's ZipInputStream with an 8KB buffer instead of loading entire files into memory.
+     * This prevents OOM kills during extraction of large game files on Android.
+     * 
+     * @param zipPath Absolute path to the ZIP file
+     * @param extractDir Absolute path to the extraction directory
+     * @return true if extraction succeeded, false otherwise
+     */
+    @UsedByGodot
+    public boolean extractZipStreaming(String zipPath, String extractDir) {
+        Log.d(TAG, "extractZipStreaming: Starting extraction of " + zipPath + " to " + extractDir);
+        
+        ZipInputStream zis = null;
+        InputStream fis = null;
+        byte[] buffer = new byte[8192]; // 8KB buffer
+        int extractedCount = 0;
+        long totalBytes = 0;
+        
+        try {
+            // Create extraction directory if it doesn't exist
+            File destDir = new File(extractDir);
+            if (!destDir.exists()) {
+                destDir.mkdirs();
+            }
+            
+            fis = new FileInputStream(zipPath);
+            zis = new ZipInputStream(fis);
+            
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String entryName = entry.getName();
+                File outputFile = new File(destDir, entryName);
+                
+                // Security check: ensure the output file is within the destination directory
+                String canonicalDest = destDir.getCanonicalPath();
+                String canonicalOutput = outputFile.getCanonicalPath();
+                if (!canonicalOutput.startsWith(canonicalDest)) {
+                    Log.e(TAG, "extractZipStreaming: ZIP entry tried to escape destination: " + entryName);
+                    continue;
+                }
+                
+                if (entry.isDirectory()) {
+                    outputFile.mkdirs();
+                    continue;
+                }
+                
+                // Create parent directories
+                File parentDir = outputFile.getParentFile();
+                if (parentDir != null && !parentDir.exists()) {
+                    parentDir.mkdirs();
+                }
+                
+                // Extract file using streaming with 8KB buffer
+                FileOutputStream fos = null;
+                try {
+                    fos = new FileOutputStream(outputFile);
+                    int count;
+                    while ((count = zis.read(buffer)) != -1) {
+                        fos.write(buffer, 0, count);
+                    }
+                    fos.flush();
+                    
+                    // Relieve memory pressure:
+                    // Force sync to disk every 50 files to prevent kernel buffer bloat
+                    if (extractedCount % 50 == 0) {
+                        try {
+                            fos.getFD().sync();
+                        } catch (Exception ignored) {}
+                    }
+                    
+                    extractedCount++;
+                    totalBytes += entry.getSize();
+                } finally {
+                    if (fos != null) {
+                        try {
+                            fos.close();
+                        } catch (Exception ignored) {}
+                    }
+                }
+                
+                zis.closeEntry();
+                
+                // Relieve memory pressure between files
+                try {
+                    Thread.sleep(1); // 1ms sleep to let system reclaim memory
+                    if (extractedCount % 100 == 0) {
+                        System.gc(); // Request garbage collection
+                    }
+                } catch (Exception ignored) {}
+                
+                // Log progress every 100 files or 100MB
+                if (extractedCount % 100 == 0 || totalBytes > 104857600) {
+                    Log.d(TAG, "extractZipStreaming: Progress - " + extractedCount + " files, " + 
+                        (totalBytes / 1048576) + " MB extracted");
+                }
+            }
+            
+            Log.d(TAG, "extractZipStreaming: Extraction complete. " + extractedCount + " files, " + 
+                (totalBytes / 1048576) + " MB total.");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "extractZipStreaming: Extraction failed: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        } finally {
+            // Clean up streams
+            if (zis != null) {
+                try {
+                    zis.close();
+                } catch (Exception ignored) {}
+            }
+            if (fis != null) {
+                try {
+                    fis.close();
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+    
+    /**
+     * Starts the ExtractorService in a separate process for memory-intensive extractions.
+     * The service runs in its own process (":extractor") and sends a broadcast when done.
+     * 
+     * @param zipPath Absolute path to ZIP file
+     * @param extractDir Absolute path to extraction directory
+     * @param gameName Display name for the notification
+     * @return true if service was started successfully
+     */
+    @UsedByGodot
+    public boolean startExtractorService(String zipPath, String extractDir, String gameName) {
+        Log.d(TAG, "startExtractorService: zip=" + zipPath + ", dir=" + extractDir);
+        
+        if (activity == null) {
+            Log.e(TAG, "Activity is null, cannot start extractor service");
+            return false;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, ExtractorService.class);
+            intent.setAction("EXTRACT");
+            intent.putExtra("zip_path", zipPath);
+            intent.putExtra("extract_dir", extractDir);
+            intent.putExtra("game_name", gameName);
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activity.startForegroundService(intent);
+            } else {
+                activity.startService(intent);
+            }
+            
+            Log.d(TAG, "ExtractorService started successfully");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start ExtractorService: " + e.getMessage());
             e.printStackTrace();
             return false;
         }

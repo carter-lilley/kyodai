@@ -773,6 +773,10 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 			push_error("[FileSystemManager] Failed to create extraction directory: " + extract_dir)
 			return false
 	
+	# On Android, use native streaming extraction to prevent OOM kills
+	if PlatformManager.is_android():
+		return _extract_zip_native_streaming(zip_path, extract_dir)
+	
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
 	if err != OK:
@@ -802,6 +806,88 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 			success = false
 	
 	reader.close()
+	return success
+
+## Uses the ExtractorService (separate process) for all Android ZIP extractions.
+## This prevents OOM kills by running extraction outside Godot's memory budget.
+## Works for any ZIP extraction: games, firmware, emulator assets, saves, etc.
+static func _extract_zip_native_streaming(zip_path: String, extract_dir: String, game_name: String = "") -> bool:
+	print("[FileSystemManager] Using ExtractorService for: " + zip_path)
+	
+	var plugin = _get_plugin()
+	if plugin == null:
+		push_error("[FileSystemManager] Android plugin not available")
+		return false
+	
+	var abs_zip = resolve_native_path(zip_path)
+	var abs_extract_dir = resolve_native_path(extract_dir)
+	
+	# Derive a display name from the ZIP filename if not provided
+	var display_name = game_name
+	if display_name == "":
+		display_name = zip_path.get_file().get_basename()
+	
+	# Use a completion marker file for 100% reliable completion detection
+	# The service writes this file when done, so we don't depend on signals/broadcasts
+	var completion_marker = abs_extract_dir + "/.extraction_complete"
+	var success_marker = abs_extract_dir + "/.extraction_success"
+	
+	# Clean up any old markers
+	if FileAccess.file_exists(completion_marker):
+		DirAccess.remove_absolute(completion_marker)
+	if FileAccess.file_exists(success_marker):
+		DirAccess.remove_absolute(success_marker)
+	
+	# Start the extraction service
+	var started = plugin.startExtractorService(abs_zip, abs_extract_dir, display_name)
+	if not started:
+		push_error("[FileSystemManager] Failed to start ExtractorService")
+		return false
+	
+	print("[FileSystemManager] ExtractorService started, waiting for completion...")
+	
+	# Wait for completion marker with timeout (30 minutes max for very large games)
+	var timeout = 1800.0
+	var elapsed = 0.0
+	var completed = false
+	var success = false
+	
+	while elapsed < timeout:
+		# Check for completion marker (most reliable method)
+		if FileAccess.file_exists(completion_marker):
+			completed = true
+			# Read success marker content ("true" or "false")
+			var success_file = FileAccess.open(success_marker, FileAccess.READ)
+			if success_file:
+				var success_text = success_file.get_as_text().strip_edges()
+				success = success_text == "true"
+				success_file.close()
+			else:
+				success = false
+			print("[FileSystemManager] Extraction complete marker found, success=" + str(success))
+			break
+		
+		# Fallback: check if service process is still running
+		# If the service died without writing a marker, something went wrong
+		
+		OS.delay_msec(100)
+		elapsed += 0.1
+		
+		# Log progress every 30 seconds
+		if int(elapsed) % 30 == 0 and elapsed > 0:
+			print("[FileSystemManager] ExtractorService still running... elapsed=" + str(int(elapsed)) + "s")
+	
+	# Clean up markers
+	if FileAccess.file_exists(completion_marker):
+		DirAccess.remove_absolute(completion_marker)
+	if FileAccess.file_exists(success_marker):
+		DirAccess.remove_absolute(success_marker)
+	
+	if not completed:
+		push_error("[FileSystemManager] Extraction service timed out")
+		return false
+	
+	print("[FileSystemManager] ExtractorService result: " + str(success))
 	return success
 
 ## Extracts a ZIP archive using 7-Zip binary (fallback for ZIP64/large files)

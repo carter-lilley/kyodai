@@ -9,7 +9,6 @@ extraction callback polling
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
-	android download manager and file streaming
 	ft: android background sync/notifs
 
 ## saves
@@ -52,7 +51,6 @@ extraction callback polling
 	
 ## launch:
 	add: psp, melonds, ps2, dolphin retroarch cores
-  	add: ps3 on android
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?
 	linux

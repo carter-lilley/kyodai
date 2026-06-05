@@ -12,7 +12,7 @@
 		"directories": {
 		  "windows": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
 		  "linux": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
-		  "android": "{emulator_dir}/dev_hdd0/home/00000001/savedata"
+		  "android": "{app_data}/config/dev_hdd0/home/00000001/savedata"
 		},
 		"extensions": [
           "*"
@@ -46,9 +46,13 @@
 		"action_type": "none"
 	  },
 	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "net.rpcsx",
-		"rom_delivery": "none"
+		"action": "aenu.intent.action.APS3E",
+		"package": "aenu.aps3e",
+		"class": "aenu.aps3e.EmulatorActivity",
+		"rom_delivery": "none",
+		"extras": [
+		  {"key": "game_dir", "value": "{rom}", "type": "file_path"}
+		]
 	  }
 	}
   },
@@ -66,8 +70,8 @@
 		},
 		"android": {
 		  "action_type": "download_repo",
-		  "github_repo": "RPCSX/rpcsx-ui-android",
-		  "asset_pattern": "rpcsx-.*\\.apk"
+		  "github_repo": "aenu1/aps3e",
+		  "asset_pattern": ".*\\.apk"
 		}
 	  }
 	},
@@ -88,11 +92,11 @@
 		},
 		"android": {
 		  "action_type": "apk_install",
-		  "package_name": "net.rpcsx",
-		  "expected_file": "rpcsx-release.apk",
+		  "package_name": "aenu.aps3e",
+		  "expected_file": "*.apk",
 		  "validate": {
 			"action_type": "package_installed",
-			"package": "net.rpcsx"
+			"package": "aenu.aps3e"
 		  }
 		}
 	  }

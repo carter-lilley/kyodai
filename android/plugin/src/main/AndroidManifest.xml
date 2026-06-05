@@ -49,6 +49,14 @@
 			android:enabled="true"
 			android:exported="false"
 			android:foregroundServiceType="dataSync" />
+		
+		<!-- Extraction service running in separate process to avoid sharing Godot's memory budget -->
+		<service
+			android:name=".ExtractorService"
+			android:enabled="true"
+			android:exported="false"
+			android:process=":extractor"
+			android:foregroundServiceType="dataSync" />
 	</application>
 
 </manifest>

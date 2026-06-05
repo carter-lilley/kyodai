@@ -62,8 +62,8 @@ func is_valid() -> bool:
 	if rom_path == "":
 		return false
 	
-	# Check if ROM file exists
-	if not FileAccess.file_exists(rom_path):
+	# Check if ROM path exists (file or directory)
+	if not FileAccess.file_exists(rom_path) and not DirAccess.dir_exists_absolute(rom_path):
 		return false
 	
 	if emulator_id == "":
