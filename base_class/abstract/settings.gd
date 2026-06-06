@@ -38,7 +38,6 @@ const Type = SettingsVar.SettingType
 @export_subgroup("Save Sync")
 @export var save_sync_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Enable Save Sync", "Sync emulator save files with RomM server")
 @export var save_sync_auto := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Auto-sync saves", "Automatically upload saves after playing and download before launch")
-@export var global_save_folder_override := SettingsVar.new(Type.PATH, "", State.ENABLED, "Global Save Folder Override", "Override save directory for all emulators (leave empty to use per-emulator defaults)")
 
 @export_subgroup("Storage")
 @export var games_root_folder := SettingsVar.new(Type.PATH, "user://roms/", State.ENABLED, "Games Folder", "Directory where game ROMs are stored")
@@ -98,6 +97,7 @@ const Type = SettingsVar.SettingType
 @export var library_card_content_alignment := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Content Alignment", "How card content is positioned within the card cell", 0.0, 2.0, 1.0, ["Left/Top", "Center/Middle", "Right/Bottom"])
 @export var card_media_aspect_ratio := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Media Ratio", "Aspect ratio of the card's media panel", 0.0, 4.0, 1.0, ["Fill", "2:3", "3:4", "1:1", "16:11"])
 @export var library_card_display_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Display Mode", "How game cards appear in the library", 0.0, 2.0, 1.0, ["Standard", "Transparent", "Media Only"])
+@export var focus_lock_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Focus Lock", "Prevent controller focus from escaping the game grid at edges")
 @export var library_primary_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Accent Color", "Primary color for the Material 3 interface theme")
 
 

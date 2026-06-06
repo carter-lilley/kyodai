@@ -49,21 +49,10 @@ func _cleanup_temp_dir(file_path: String) -> void:
 		else:
 			break
 
-## Returns the configured global save folder override, or empty string if not set
-func _get_global_save_override() -> String:
-	var setting = SettingsManager.get_setting("global_save_folder_override")
-	if setting and setting.value is String and setting.value != "":
-		return setting.value.rstrip("/")
-	return ""
-
-## Resolves the save directory for an emulator
-## Priority: 1. Global override, 2. Registry per-platform directory, 3. _default directory
+## Resolves the default save directory for an emulator from the registry config.
+## This is the "fallback" path based purely on the emulator JSON configuration.
 ## Optional platform_slug for resolving platform-specific paths (e.g., RetroArch {core_name}, Dolphin ngc/wii)
-func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> String:
-	var override = _get_global_save_override()
-	if override != "":
-		return override + "/"
-	
+func resolve_default_save_directory(emulator_id: String, platform_slug: String = "") -> String:
 	var emulator = LaunchManager.get_emulator(emulator_id)
 	if emulator.is_empty():
 		return ""
@@ -93,10 +82,86 @@ func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> 
 	
 	return dir.rstrip("/") + "/"
 
+## Resolves all candidate save directories for an emulator.
+## On desktop this returns a single path. On Android it returns both the
+## {app_data} path and the {emulator_dir} path so we can check which one
+## is actively being used.
+func resolve_save_directories(emulator_id: String, platform_slug: String = "") -> Array[String]:
+	var candidates: Array[String] = []
+	
+	var emulator = LaunchManager.get_emulator(emulator_id)
+	if emulator.is_empty():
+		return candidates
+	
+	var paths = emulator.get("paths", {})
+	var saves = paths.get("saves", {})
+	
+	# Check platform-specific config first
+	var config: Dictionary
+	if platform_slug != "" and saves.has(platform_slug):
+		config = saves[platform_slug]
+	else:
+		config = saves.get("_default", {})
+	
+	var directories = config.get("directories", {})
+	var platform_name = PlatformManager.get_platform_name().to_lower()
+	
+	var dir = directories.get(platform_name, "")
+	if dir == "":
+		dir = directories.get("all", "")
+	
+	if dir == "":
+		return candidates
+	
+	# Default candidate using the platform's normal resolver
+	var default_path = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
+	candidates.append(default_path.rstrip("/") + "/")
+	
+	# On Android, also add the emulator_dir variant as a secondary candidate
+	if PlatformManager.is_android():
+		# Replace {app_data} with {emulator_dir} in the path string
+		var emulator_dir_variant = dir.replace("{app_data}", "{emulator_dir}")
+		if emulator_dir_variant != dir:
+			var variant_path = FSM.resolve_emulator_path(emulator_dir_variant, emulator_id, platform_slug)
+			candidates.append(variant_path.rstrip("/") + "/")
+	
+	return candidates
+
+## Resolves the actively-used save directory for an emulator.
+## Checks all candidate directories and picks the one with the most recent
+## modification time. Falls back to the default (app_data on Android) if
+## none exist or have recent activity.
+func resolve_active_save_directory(emulator_id: String, platform_slug: String = "") -> String:
+	var candidates = resolve_save_directories(emulator_id, platform_slug)
+	if candidates.is_empty():
+		return ""
+	
+	var best_dir = ""
+	var best_mtime = 0
+	
+	for candidate in candidates:
+		if FSM.dir_exists(candidate):
+			var mtime = FSM.get_modified_time(candidate)
+			if mtime > best_mtime:
+				best_dir = candidate
+				best_mtime = mtime
+	
+	# If no candidate exists yet, fall back to the default (first candidate)
+	if best_dir == "":
+		best_dir = candidates[0]
+	
+	return best_dir
+
+## Backward-compatible alias that returns the default save directory.
+## Install-time and directory-creation code should use this.
+func resolve_save_directory(emulator_id: String, platform_slug: String = "") -> String:
+	return resolve_default_save_directory(emulator_id, platform_slug)
+
 ## Ensures the save directory for an emulator exists, creating it if necessary
 ## Returns true if directory exists or was created successfully
-func _ensure_save_directory_exists(emulator_id: String) -> bool:
-	var save_dir = resolve_save_directory(emulator_id)
+func _ensure_save_directory_exists(emulator_id: String, save_dir: String = "") -> bool:
+	if save_dir == "":
+		save_dir = resolve_active_save_directory(emulator_id)
 	if save_dir == "":
 		print("[SaveManager] No save directory configured for: " + emulator_id)
 		return false
@@ -1071,7 +1136,7 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			callback.call(false, "Not connected to RomM")
 		return
 	
-	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
+	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug)
 	var extensions = get_save_extensions(emulator_id, game.platform_slug)
 	
 	if save_dir == "" or extensions.is_empty():
@@ -1269,15 +1334,15 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			record_path = download.local.file_path
 		else:
 			if emulator_id == "retroarch":
-				record_path = _resolve_emulator_save_path(emulator_id, resolve_save_directory(emulator_id, game.platform_slug), game)
+				record_path = _resolve_emulator_save_path(emulator_id, resolve_active_save_directory(emulator_id, game.platform_slug), game)
 			else:
-				record_path = FSM.join_paths(resolve_save_directory(emulator_id, game.platform_slug), file_name)
+				record_path = FSM.join_paths(resolve_active_save_directory(emulator_id, game.platform_slug), file_name)
 		
 		if is_folder_save:
 			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
 			FSM.make_dir_recursive(zip_path.get_base_dir())
 			local_path = zip_path
-			var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
+			var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug)
 			
 			if not download.local:
 				record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
@@ -1312,7 +1377,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 				
 				if is_folder_save:
-					var extract_dest = _get_extract_dest(emulator_id, resolve_save_directory(emulator_id, game.platform_slug), record_path, game)
+					var extract_dest = _get_extract_dest(emulator_id, resolve_active_save_directory(emulator_id, game.platform_slug), record_path, game)
 					print("[SaveManager] Extracting folder save for " + emulator_id + " to: " + extract_dest)
 					print("[SaveManager] record_path was: " + record_path)
 					# Don't use subfolder - the zip already contains the correct folder structure
@@ -1328,7 +1393,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 						# Ensure PCSX2 superblock is valid after extracting saves
 				if emulator_id == "pcsx2":
 					print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
-					var memcard_path = resolve_save_directory(emulator_id, game.platform_slug)
+					var memcard_path = resolve_active_save_directory(emulator_id, game.platform_slug)
 					ensure_pcsx2_superblock(memcard_path)
 				
 				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
@@ -1383,7 +1448,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		print("[SaveManager] Auto-upload aborted: not connected to RomM")
 		return
 	
-	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
+	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug)
 	var extensions = get_save_extensions(emulator_id, game.platform_slug)
 	if save_dir == "" or extensions.is_empty():
 		print("[SaveManager] Auto-upload aborted: no save dir or extensions (dir=" + save_dir + ", ext count=" + str(extensions.size()) + ")")
@@ -1576,7 +1641,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			on_complete.call()
 		return
 	
-	var save_dir = resolve_save_directory(emulator_id, game.platform_slug)
+	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug)
 	var extensions = get_save_extensions(emulator_id, game.platform_slug)
 	print("[SaveManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions.size()))
 	if save_dir == "" or extensions.is_empty():
@@ -1719,7 +1784,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							FSM.make_dir_recursive(parent_dir)
 					
 					# Ensure save directory exists before downloading
-					_ensure_save_directory_exists(emulator_id)
+					_ensure_save_directory_exists(emulator_id, save_dir)
 					
 					print("[SaveManager] auto_download: downloading save '" + file_name + "' to: " + local_path)
 					

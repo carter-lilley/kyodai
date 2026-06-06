@@ -333,6 +333,14 @@ func _apply_preset(preset: ThemePreset) -> void:
 		
 		# Update dropdown to show loaded preset
 		_update_preset_dropdown_for_loaded_preset()
+		
+		# Refresh parent SettingsDialog so all category controls reflect new values
+		var parent = get_parent()
+		while parent:
+			if parent is SettingsDialog:
+				parent.refresh_all_category_values()
+				break
+			parent = parent.get_parent()
 	else:
 		NotificationManager.show_notification("Failed to apply preset", NotificationManager.Type.ERROR)
 		_preset_dropdown.select(0)

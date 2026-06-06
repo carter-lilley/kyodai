@@ -386,11 +386,53 @@ func _on_nav_node_ready() -> void:
 	if _nav_node.has_meta("_deferred_footer_content"):
 		_nav_node.footer_content = _nav_node.get_meta("_deferred_footer_content")
 		_nav_node.remove_meta("_deferred_footer_content")
+	# If a theme refresh was queued while nav was rebuilding, apply it now
+	if _theme_refresh_pending:
+		call_deferred("_do_refresh_theme")
+	_setup_nav_focus_neighbors()
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	"""Handle M3 nav destination selection."""
 	if index >= 0 and index < NAV_DESTINATIONS.size():
 		switch_to_tab(NAV_DESTINATIONS[index].view)
+
+func _setup_nav_focus_neighbors() -> void:
+	"""Block the one direction that leaks from nav into the game grid.
+	Nav-to-nav and nav-to-settings navigation is left to Godot's spatial
+	search so we don't store stale NodePaths across nav rebuilds."""
+	if not _nav_node:
+		return
+	
+	# Find all M3NavigationDestination children
+	var destinations: Array[M3NavigationDestination] = []
+	for child in _nav_node.get_children():
+		if child is M3NavigationDestination:
+			destinations.append(child)
+		else:
+			for sub in child.get_children():
+				if sub is M3NavigationDestination:
+					destinations.append(sub)
+				else:
+					for subsub in sub.get_children():
+						if subsub is M3NavigationDestination:
+							destinations.append(subsub)
+	
+	# Only block the grid-leak direction. Don't wire nav-to-nav neighbors
+	# because nodes get rebuilt (dual-screen, orientation changes) and
+	# NodePaths become stale, causing "Neighbor focus node path is invalid".
+	for dest in destinations:
+		if _nav_type == 0:  # Bar — grid is above
+			dest.focus_neighbor_top = NodePath("")
+		else:  # Rail — grid is to the right
+			dest.focus_neighbor_right = NodePath("")
+	
+	# Block settings button from leaking to the grid
+	var settings_btn = find_nav_settings_button()
+	if settings_btn:
+		if _nav_type == 0:
+			settings_btn.focus_neighbor_top = NodePath("")
+		else:
+			settings_btn.focus_neighbor_right = NodePath("")
 
 # ============================================================================
 # Existing methods (preserved functionality)
@@ -500,14 +542,14 @@ func _on_apply_preset_end() -> void:
 	var type_setting = SettingsManager.get_setting("library_navigation_type")
 	if type_setting:
 		_nav_type = type_setting.value
+	# Apply background config in case it changed
+	_apply_library_background_config()
+	# Rebuild navigation FIRST if navigation type changed so grids calculate correctly
+	if _nav_type != old_nav_type:
+		_rebuild_nav_and_layout()
 	# One rebuild after preset is fully applied
 	# use_true=true to ensure card effects are fully refreshed
 	_rebuild_views("Preset applied", true)
-	# Apply background config in case it changed
-	_apply_library_background_config()
-	# Rebuild navigation only if navigation type actually changed
-	if _nav_type != old_nav_type:
-		_rebuild_nav_and_layout()
 	# Apply dark mode in case it changed during preset
 	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
 	if dark_mode_setting:
@@ -519,7 +561,9 @@ func _on_apply_preset_end() -> void:
 	# Ensure theme is refreshed in case accent color or dark mode changed
 	if not _theme_refresh_pending:
 		_theme_refresh_pending = true
-		call_deferred("_do_refresh_theme")
+		# Defer refresh until nav is ready if nav type changed; otherwise defer normally
+		if _nav_type == old_nav_type:
+			call_deferred("_do_refresh_theme")
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes."""
@@ -773,6 +817,55 @@ func find_nav_settings_button() -> Control:
 		return _nav_node.footer_content
 	return null
 
+func get_last_nav_destination() -> Control:
+	"""Find the last nav destination (e.g. Downloads)."""
+	if not _nav_node:
+		return null
+	
+	var destinations: Array[M3NavigationDestination] = []
+	for child in _nav_node.get_children():
+		if child is M3NavigationDestination:
+			destinations.append(child)
+		else:
+			for sub in child.get_children():
+				if sub is M3NavigationDestination:
+					destinations.append(sub)
+				else:
+					for subsub in sub.get_children():
+						if subsub is M3NavigationDestination:
+							destinations.append(subsub)
+	
+	if destinations.size() > 0:
+		return destinations[destinations.size() - 1]
+	return null
+
+func get_active_nav_destination() -> Control:
+	"""Find the currently selected nav destination (active tab)."""
+	if not _nav_node:
+		return null
+	
+	var selected_idx = _nav_node.selected_index
+	if selected_idx < 0:
+		return null
+	
+	# Find all M3NavigationDestination children
+	var destinations: Array[M3NavigationDestination] = []
+	for child in _nav_node.get_children():
+		if child is M3NavigationDestination:
+			destinations.append(child)
+		else:
+			for sub in child.get_children():
+				if sub is M3NavigationDestination:
+					destinations.append(sub)
+				else:
+					for subsub in sub.get_children():
+						if subsub is M3NavigationDestination:
+							destinations.append(subsub)
+	
+	if selected_idx < destinations.size():
+		return destinations[selected_idx]
+	return null
+
 func _find_node_by_name(node: Node, target_name: String) -> Node:
 	"""Recursively find a node by name."""
 	if node.name == target_name:
@@ -831,6 +924,13 @@ func _setup_library_appearance() -> void:
 
 func _on_tab_changed(tab_idx: int):
 	var tab_title = _tab_container.get_tab_title(tab_idx)
+	
+	# Sync nav selection to the new tab
+	if _nav_node:
+		for i in range(NAV_DESTINATIONS.size()):
+			if NAV_DESTINATIONS[i].view == tab_title:
+				_nav_node.selected_index = i
+				break
 	
 	# Hide current view
 	if _current_view:

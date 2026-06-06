@@ -42,6 +42,7 @@ library_background_config = {
 }
 }
 library_primary_color = Color(0.14117648, 0.38431373, 0.9490196, 1)
+library_navigation_type = 0
 dark_mode = true
 card_effect_config = {
 "card_orientation": 2,

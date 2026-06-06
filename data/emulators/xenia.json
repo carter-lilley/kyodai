@@ -10,7 +10,9 @@
 	"saves": {
 	  "_default": {
 		"directories": {
-		  "all": "{emulator_dir}/content"
+		  "windows": "{emulator_dir}/content",
+		  "linux": "{emulator_dir}/content",
+		  "android": "{app_data}/content"
 		},
 		"extensions": [
           ".zip"
@@ -43,9 +45,13 @@
           "{rom}"
 		]
 	  },
-	  "android": {
-		"action_type": "none"
-	  }
+      "android": {
+        "action": "android.intent.action.VIEW",
+        "package": "emu.x360.mobile",
+        "class": "emu.x360.mobile.X360MobileGameLaunchActivity",
+        "rom_delivery": "intent_data",
+        "mime_type": "application/octet-stream"
+      }
 	}
   },
   "install": [
@@ -58,14 +64,16 @@
 		  "release_tag": "canary_experimental",
 		  "asset_pattern": "xenia_canary_windows\\.zip"
 		},
-		"linux": {
+  		"linux": {
 		  "action_type": "download_repo",
 		  "github_repo": "xenia-canary/xenia-canary-releases",
 		  "release_tag": "canary_experimental",
 		  "asset_pattern": "xenia_canary_linux\\.tar\\.xz"
 		},
 		"android": {
-		  "action_type": "none"
+		  "action_type": "download_repo",
+		  "github_repo": "Ashnar2602/X360-Mobile---OFFICIAL",
+		  "asset_pattern": "X360_.*_public\\.apk"
 		}
 	  }
 	},
@@ -91,7 +99,13 @@
 		  }
 		},
 		"android": {
-		  "action_type": "none"
+		  "action_type": "apk_install",
+		  "package_name": "emu.x360.mobile",
+		  "expected_file": "*.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "emu.x360.mobile"
+		  }
 		}
 	  }
 	},

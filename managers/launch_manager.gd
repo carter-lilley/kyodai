@@ -2795,7 +2795,7 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 
 	# Use the configured save directory as the base path, which properly resolves
 	# to app_data on Android and emulator_dir on desktop
-	var save_dir = SaveManager.resolve_save_directory(emulator_id, "ps2")
+	var save_dir = SaveManager.resolve_default_save_directory(emulator_id, "ps2")
 	if save_dir == "":
 		push_error("[LaunchManager] No save directory configured for " + emulator_id)
 		return false
@@ -2861,7 +2861,7 @@ func _create_emulator_save_directory(emulator_id: String) -> void:
 	
 	# For single-platform emulators, just create the base directory
 	if platforms.size() == 1:
-		var save_dir = SaveManager.resolve_save_directory(emulator_id)
+		var save_dir = SaveManager.resolve_default_save_directory(emulator_id)
 		if save_dir == "":
 			print("[LaunchManager] No save directory configured for: " + emulator_id)
 			return
@@ -2880,7 +2880,7 @@ func _create_emulator_save_directory(emulator_id: String) -> void:
 		# Multi-platform emulator: create save directories for each platform
 		print("[LaunchManager] Creating save directories for multi-platform emulator: " + emulator_id)
 		for platform in platforms:
-			var save_dir = SaveManager.resolve_save_directory(emulator_id, platform)
+			var save_dir = SaveManager.resolve_default_save_directory(emulator_id, platform)
 			if save_dir == "":
 				continue
 			

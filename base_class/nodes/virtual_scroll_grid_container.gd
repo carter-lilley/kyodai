@@ -97,6 +97,24 @@ const _RATIO_LOOKUP: Array[float] = [
 # Grid separation (padding) - loaded from settings, defaults to 10 DP
 var grid_separation: int = int(M3Units.dp(10))
 
+# When true, controller focus is prevented from escaping the grid at edges
+var focus_lock_enabled: bool = false
+
+# Track the last focused card's virtual index so we can redirect focus back if it escapes
+var _last_focused_virtual_index: int = -1
+var _viewport_focus_connection: Viewport = null
+
+# Guard to prevent recursive focus redirection
+var _is_redirecting_focus: bool = false
+
+# Tracks whether the previous focus change originated from inside this grid.
+# Only redirect when focus moves FROM inside the grid TO outside.
+var _grid_had_focus_last: bool = false
+
+func is_focus_locked_and_active() -> bool:
+	"""Returns true if focus lock is enabled and focus was recently inside this grid."""
+	return focus_lock_enabled and _grid_had_focus_last
+
 # Scale factor applied when a card is focused. Cards scale UP from their normal size
 # by this amount. Edge overflow is prevented by focus-safe container margins.
 var focus_scale: float = 1.08:
@@ -345,8 +363,10 @@ func _ready():
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
+	call_deferred("_update_focus_lock_from_settings")
 	call_deferred("_refresh_cached_settings")
 	call_deferred("_recalculate_layout")
+	call_deferred("_connect_focus_lock_viewport")
 	_ready_called = true
 
 func _enter_tree():
@@ -363,9 +383,11 @@ func _exit_tree():
 			SettingsManager.settings_saved.disconnect(_on_settings_saved)
 		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
 			SettingsManager.setting_changed.disconnect(_on_setting_changed)
+	_disconnect_focus_lock_viewport()
 
 func _on_settings_saved():
 	_update_focus_scale_from_settings()
+	_update_focus_lock_from_settings()
 	_refresh_cached_settings()
 	refresh_all_card_configs()
 	_recalculate_layout()
@@ -395,6 +417,17 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_focus_scale":
 			_update_focus_scale_from_settings()
 			call_deferred("_recalculate_layout")
+		"focus_lock_enabled":
+			_update_focus_lock_from_settings()
+
+func _update_focus_lock_from_settings() -> void:
+	if not SettingsManager:
+		return
+	var setting = SettingsManager.get_setting("focus_lock_enabled")
+	if setting and setting.value is bool:
+		focus_lock_enabled = setting.value
+	else:
+		focus_lock_enabled = false
 
 func _refresh_cached_settings() -> void:
 	if not SettingsManager:
@@ -1526,6 +1559,77 @@ func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 		if card.has_method("set_image_priority"):
 			card.set_image_priority(card_visible)
 
+func _connect_focus_lock_viewport() -> void:
+	var viewport = get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	if viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_viewport_focus_changed)
+	viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
+	_viewport_focus_connection = viewport
+
+func _disconnect_focus_lock_viewport() -> void:
+	if _viewport_focus_connection and is_instance_valid(_viewport_focus_connection):
+		if _viewport_focus_connection.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+			_viewport_focus_connection.gui_focus_changed.disconnect(_on_viewport_focus_changed)
+		_viewport_focus_connection = null
+
+func _on_viewport_focus_changed(control: Control) -> void:
+	if not control:
+		return
+	
+	# Check if focus moved to a card inside this grid
+	if is_ancestor_of(control):
+		var node = control
+		while node != self:
+			if node.has_meta("virtual_index"):
+				_last_focused_virtual_index = node.get_meta("virtual_index", -1)
+				break
+			node = node.get_parent()
+		_grid_had_focus_last = true
+		return
+	
+	# Focus is outside this grid
+	if not focus_lock_enabled:
+		_grid_had_focus_last = false
+		return
+	if not visible or not is_inside_tree():
+		_grid_had_focus_last = false
+		return
+	if _last_focused_virtual_index < 0:
+		_grid_had_focus_last = false
+		return
+	if _is_redirecting_focus:
+		return
+	
+	# Don't redirect if focus moved to an overlay/dialog (CanvasLayer)
+	var parent_node = control.get_parent()
+	while parent_node:
+		if parent_node is CanvasLayer:
+			_grid_had_focus_last = false
+			return
+		parent_node = parent_node.get_parent()
+	
+	# Only redirect when controller has priority (not mouse)
+	if not UIManager or not UIManager.controller_has_priority():
+		_grid_had_focus_last = false
+		return
+	
+	# Only redirect if focus was previously inside this grid.
+	# If the user is already navigating the nav bar, don't snap back.
+	if not _grid_had_focus_last:
+		return
+	
+	# Redirect back to the last focused card
+	var card = get_card_at_index(_last_focused_virtual_index)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		print("[VirtualScrollGridContainer] Focus escaped to ", control.name, " — redirecting back to card ", _last_focused_virtual_index)
+		_is_redirecting_focus = true
+		card.grab_focus()
+		_is_redirecting_focus = false
+	else:
+		print("[VirtualScrollGridContainer] Focus escaped but last card ", _last_focused_virtual_index, " is no longer valid")
+
 func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
 		return
@@ -1680,6 +1784,14 @@ func scroll_to_index(index: int, animate: bool = false, duration_multiplier: flo
 			# Account for left margin so the card ends up truly centered
 			card_offset -= _last_margin_left
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
+
+func focus_last_or_first_card() -> void:
+	"""Focus the last focused card, or the first card if none was focused."""
+	var card = get_card_at_index(_last_focused_virtual_index)
+	if not card or not is_instance_valid(card) or not card.is_inside_tree():
+		card = get_card_at_index(0)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		card.grab_focus()
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 	# Lazy-init cached style boxes

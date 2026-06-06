@@ -28,13 +28,17 @@ func is_phase1_complete() -> bool:
 
 func _ready():
 	visible = false
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_to_group("launch_transition_overlay")
 	
 	# Connect to LaunchManager signal
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
+
+func _input(event: InputEvent) -> void:
+	if _is_animating and visible:
+		get_viewport().set_input_as_handled()
 
 func _on_game_launch_initiated(_launched_game: GameResource, _focus_index: int):
 	# We get the texture from the focused card, not from the game resource

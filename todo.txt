@@ -1,11 +1,10 @@
 #TODO.TXT
 
 small screen testing in settings menu (never hscroll)
-note to user: prepping on first launch
 separate firmware page or indicator?
 sync not working after removing games
-focus lock
 extraction callback polling
+xemu save sync
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
@@ -39,11 +38,9 @@ extraction callback polling
 	hero IGDB opt
 	hero fx (screenshots/cropping/shadows/etc)
 	
-## performance:
+## performance & sync:
 	image priority management.
 	performance.add_custom_monitor for everything
-	
-## sync:
 	how to split important siblings
 	cache image colors, cropping data on sync
 	check: are sync db actions and load db actions the same?

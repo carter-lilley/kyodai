@@ -36,7 +36,18 @@ func update_control_value(property_name: String, value: Variant) -> void:
 	if control is M3Switch:
 		control.button_pressed = value
 	elif control is M3OptionButton:
-		control.selected = value
+		if value is int:
+			control.selected = value
+		else:
+			# ARRAY type may store non-int values (e.g., Vector2i for resolution).
+			# Look up the matching index from the stored options.
+			var options = control.get_meta("options", [])
+			var matched_index = 0
+			for i in range(options.size()):
+				if str(options[i]) == str(value):
+					matched_index = i
+					break
+			control.selected = matched_index
 	elif control is M3Slider:
 		control.value = value * control.get_meta("display_scale", 1.0)
 	elif control is M3TextField:
@@ -69,6 +80,12 @@ func clear_controls() -> void:
 	for child in get_children():
 		child.queue_free()
 	controls.clear()
+
+func refresh_all_control_values() -> void:
+	for property_name in controls.keys():
+		var setting = SettingsManager.get_setting(property_name)
+		if setting:
+			update_control_value(property_name, setting.value)
 
 func refresh_theme() -> void:
 	_refresh_theme_recursive(self)
@@ -159,6 +176,8 @@ func match_var_type(settingsvar : SettingsVar):
 				id += 1
 			option_button.selected = matched_index
 			option_button.editable = settingsvar.state == 0
+			# Store options for reverse lookup when refreshing values
+			option_button.set_meta("options", settingsvar.options.duplicate())
 			add_child(option_button)
 			controls[settingsvar.property_name] = option_button
 			_apply_metadata(option_button, settingsvar.metadata)

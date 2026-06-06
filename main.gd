@@ -27,6 +27,10 @@ const INITIAL_DELAY: float = 0.5
 const REPEAT_DELAY: float = 0.1
 var _last_press: int = 0
 
+# Nav transition cooldown (prevents joystick from skipping past nav items)
+var _last_nav_transition_time: int = 0
+const NAV_TRANSITION_COOLDOWN_MS: int = 150
+
 # Zoom state tracking for analog triggers
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
@@ -691,6 +695,27 @@ func _handle_ui_cancel() -> void:
 		if current_view.try_clear_search():
 			return
 	
+	# If focus is locked in a grid, escape to the nav bar instead of switching to Home
+	if current_view and current_view.games_grid:
+		var grid = current_view.games_grid
+		if grid.is_focus_locked_and_active():
+			# Mark that we're intentionally leaving the grid so it doesn't redirect back
+			grid._grid_had_focus_last = false
+			var nav_dest = UIManager.get_active_nav_destination()
+			if nav_dest and nav_dest is Control and nav_dest.focus_mode != Control.FOCUS_NONE:
+				if AudioManager:
+					AudioManager.play_sfx("return")
+				nav_dest.grab_focus()
+				print("[Main] _handle_ui_cancel: escaped locked grid to nav destination: ", nav_dest.name)
+			else:
+				var home_button = UIManager.find_home_button()
+				if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
+					if AudioManager:
+						AudioManager.play_sfx("return")
+					home_button.grab_focus()
+					print("[Main] _handle_ui_cancel: escaped locked grid to home button")
+			return
+	
 	# Play return sound
 	if AudioManager:
 		AudioManager.play_sfx("return")
@@ -721,6 +746,16 @@ func _input(event: InputEvent):
 				if now - _last_press < 80:
 					return
 				_last_press = now
+			
+			# Only handle nav transitions on the initial press, not auto-repeats.
+			# Joystick analog input generates a stream of events; without this,
+			# focus would skip past nav items before the user can release.
+			if _held_dir == "":
+				if _try_nav_to_grid(event):
+					_held_dir = dir
+					_delay_timer.start()
+					get_viewport().set_input_as_handled()
+					return
 			
 			_held_dir = dir
 			_delay_timer.start()
@@ -761,6 +796,61 @@ func _input(event: InputEvent):
 	# Handle ui_cancel: return to Home unless blocked by overlay.
 	if event.is_action_pressed("ui_cancel"):
 		_handle_ui_cancel()
+
+func _get_focus_owner() -> Control:
+	"""Get the focused control, accounting for dual-screen SubViewport."""
+	if root_layout and root_layout.is_inside_tree():
+		return root_layout.get_viewport().gui_get_focus_owner()
+	return get_viewport().gui_get_focus_owner()
+
+func _try_nav_to_grid(event: InputEvent) -> bool:
+	"""Handle manual focus navigation between nav, settings, and grid.
+	Avoids NodePaths which break when nodes are reparented (dual screen mode)."""
+	var focused = _get_focus_owner()
+	if not focused:
+		return false
+	
+	var nav_type = UIManager.get_nav_type()
+	var settings_btn = UIManager.find_nav_settings_button()
+	var last_dest = UIManager.get_last_nav_destination()
+	
+	# From nav destination -> Grid (UP for bar, RIGHT for rail)
+	if focused is M3NavigationDestination:
+		if nav_type == 0:  # Bar
+			if event.is_action_pressed("ui_up"):
+				return _enter_grid()
+		else:  # Rail
+			if event.is_action_pressed("ui_right"):
+				return _enter_grid()
+			# Last destination -> Settings (DOWN)
+			if event.is_action_pressed("ui_down") and focused == last_dest:
+				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
+					settings_btn.grab_focus()
+					return true
+		return false
+	
+	# From Settings -> Last nav destination (LEFT for bar, UP for rail)
+	if focused == settings_btn:
+		if nav_type == 0:  # Bar
+			if event.is_action_pressed("ui_left"):
+				if last_dest and last_dest.focus_mode != Control.FOCUS_NONE:
+					last_dest.grab_focus()
+					return true
+		else:  # Rail
+			if event.is_action_pressed("ui_up"):
+				if last_dest and last_dest.focus_mode != Control.FOCUS_NONE:
+					last_dest.grab_focus()
+					return true
+		return false
+	
+	return false
+
+func _enter_grid() -> bool:
+	var current_view = UIManager.get_current_view()
+	if not current_view or not current_view.games_grid:
+		return false
+	current_view.games_grid.focus_last_or_first_card()
+	return true
 
 func _adjust_zoom(delta: float) -> void:
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")

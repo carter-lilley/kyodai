@@ -290,6 +290,19 @@ func _refresh_theme_recursive(node: Node) -> void:
 	for child in node.get_children():
 		_refresh_theme_recursive(child)
 
+func refresh_all_category_values() -> void:
+	"""Refresh all SettingsMenu control values to match current settings."""
+	for content in _category_contents.values():
+		if is_instance_valid(content):
+			_refresh_settings_menu_values_recursive(content)
+
+func _refresh_settings_menu_values_recursive(node: Node) -> void:
+	if node is SettingsMenu:
+		node.refresh_all_control_values()
+		return
+	for child in node.get_children():
+		_refresh_settings_menu_values_recursive(child)
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
 		if _library_settings_view and is_instance_valid(_library_settings_view):
