@@ -599,7 +599,9 @@ func _start_sync_iterative(enabled: Array, callback: Callable, force_full_sync: 
 				var pct = int(progress * 100)
 				if _sync_platform != "":
 					return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
-				return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct]
+				return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct],
+			false,
+			true
 		)
 		
 		# Start iterating through platforms

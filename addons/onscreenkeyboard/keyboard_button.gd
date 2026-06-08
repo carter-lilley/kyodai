@@ -15,8 +15,6 @@ func _ready():
 
 func _init(_key_data):
 	key_data = _key_data
-	button_down.connect(_on_button_down)
-	button_up.connect(_on_button_up)
 	item_rect_changed.connect(_on_item_rect_changed)
 
 	size_flags_horizontal = SIZE_EXPAND_FILL
@@ -64,19 +62,17 @@ func _gui_input(event):
 	if event is InputEventMouseButton:
 		if event.pressed and not _is_pressed:
 			_is_pressed = true
-			print("[KeyboardButton] _gui_input press: ", key_data.get("display", "?"))
 			_on_button_down()
+			accept_event()
 		elif not event.pressed and _is_pressed:
 			_is_pressed = false
-			print("[KeyboardButton] _gui_input release: ", key_data.get("display", "?"))
 			_on_button_up()
+			accept_event()
 
 func _on_button_up():
-	print("[KeyboardButton] button_up: ", key_data.get("display", "?"), " -> emitting released")
 	released.emit(key_data)
 	# Don't release focus - keep it for controller navigation
 
 
 func _on_button_down():
-	print("[KeyboardButton] button_down: ", key_data.get("display", "?"))
 	down.emit(key_data)

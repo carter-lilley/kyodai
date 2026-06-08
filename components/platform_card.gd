@@ -260,7 +260,7 @@ func _update_status_indicator():
 				var versions = version_setting.value as Dictionary
 				if versions and versions.has(effective_emulator):
 					var raw_version = versions[effective_emulator]
-					var display_version = raw_version.trim_prefix("v").trim_prefix("V")
+					var display_version = _format_version_for_display(raw_version)
 					_version_label.text = "v%s" % display_version
 					_version_label.visible = true
 				else:
@@ -359,3 +359,22 @@ func refresh_ui():
 		LaunchManager.scan_emulator_install_state(effective_emulator)
 
 	_update_status_indicator()
+
+## Formats a version string for display. If it's an ISO date, shows a friendly date.
+## Otherwise returns the version string with v/V prefix stripped.
+func _format_version_for_display(version: String) -> String:
+	if version == "":
+		return ""
+	
+	# Check if it looks like an ISO date
+	var regex = RegEx.new()
+	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})T")
+	var match_result = regex.search(version)
+	if match_result:
+		var year = match_result.get_string(1)
+		var month = match_result.get_string(2)
+		var day = match_result.get_string(3)
+		return year + "-" + month + "-" + day
+	
+	# Not a date - strip v/V prefix
+	return version.trim_prefix("v").trim_prefix("V")

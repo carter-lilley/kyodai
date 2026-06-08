@@ -4,11 +4,10 @@ small screen testing in settings menu (never hscroll)
 separate firmware page or indicator?
 sync not working after removing games
 xemu save sync
-no kb in oobe? dual screen off by default or maybe jsut always off
+vita3k config override issue
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
-	x ft: android background sync/notifs
 
 ## saves
 	implement argosy sigil

@@ -18,8 +18,7 @@ func set_dual_screen_mode(enabled: bool) -> void:
 	if enabled:
 		# Hide when dual screen is active
 		visible = false
-	else:
-		visible = true
+	# Don't auto-show when dual screen is disabled - visibility controlled by UIManager
 
 func _ready():
 	# Create gray fallback texture

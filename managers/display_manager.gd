@@ -185,14 +185,23 @@ func _check_for_dual_screen() -> void:
 	"""Check if a second display is available. Works on both desktop and Android."""
 	
 	var detected_second_screen: int = -1
+	var detection_method = "none"
 	
 	# Try Android plugin first if available
 	if _android_plugin != null:
 		detected_second_screen = _get_second_screen_android()
+		detection_method = "android_plugin"
+		print("[DisplayManager] Android plugin detection (hasMultipleDisplays): screen=" + str(detected_second_screen))
 	
-	# Fall back to Godot DisplayServer if no Android plugin or plugin returned -1
-	if detected_second_screen == -1:
+	# Fall back to Godot DisplayServer only on desktop platforms
+	# On Android, DisplayServer may count virtual displays (casting, debug overlays)
+	# which incorrectly reports >= 2 screens on single-screen devices
+	if detected_second_screen == -1 and OS.get_name() != "Android":
 		detected_second_screen = _get_second_screen_desktop()
+		detection_method = "desktop"
+		print("[DisplayManager] Desktop fallback detection: screen=" + str(detected_second_screen))
+	
+	print("[DisplayManager] Dual screen check: method=" + detection_method + ", available=" + str(detected_second_screen >= 0))
 	
 	# Update availability state
 	var now_available = detected_second_screen >= 0
@@ -248,15 +257,24 @@ func _get_second_screen_desktop() -> int:
 	return -1
 
 func _get_second_screen_android() -> int:
-	"""Get second screen index using Android plugin."""
+	"""Get second screen index using Android plugin.
+	Uses hasMultipleDisplays() which filters out virtual displays (debug, casting, etc.)
+	to avoid false positives on single-screen devices."""
 	if _android_plugin == null:
 		return -1
 	
-	# Just call the method directly - has_method() doesn't work reliably with Android plugins
-	# even when the methods exist in the compiled code
-	var display_count = _android_plugin.getDisplayCount()
+	# Get debug info first so we can see what's happening in Godot console
+	var debug_info = _android_plugin.getDisplayDebugInfo()
+	if debug_info.has("info"):
+		print("[DisplayManager] Android display debug:\n" + str(debug_info["info"]))
 	
-	if display_count >= 2:
+	# Use hasMultipleDisplays() instead of getDisplayCount() because
+	# getDisplayCount() counts virtual displays (USB debug overlay, screen casting,
+	# accessibility services) which incorrectly reports >= 2 on single-screen devices.
+	# hasMultipleDisplays() filters by resolution, state, and name.
+	var has_multiple = _android_plugin.hasMultipleDisplays()
+	
+	if has_multiple:
 		# Return display index 1 (second display)
 		# On Android, display 0 is usually internal, display 1 is external
 		return 1

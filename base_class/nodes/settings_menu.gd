@@ -157,11 +157,18 @@ func match_var_type(settingsvar : SettingsVar):
 			if settingsvar.property_name == "dual_screen_mode" and DisplayManager and not DisplayManager.is_dual_screen_available():
 				is_disabled = true
 			switch.disabled = is_disabled
+			if is_disabled:
+				switch.focus_mode = Control.FOCUS_NONE
 			switch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			hbox.add_child(switch)
 			controls[settingsvar.property_name] = switch
 			_apply_metadata(switch, settingsvar.metadata)
+			
+			# Connect to dual screen availability changes for dynamic enable/disable
+			if settingsvar.property_name == "dual_screen_mode" and DisplayManager:
+				if not DisplayManager.dual_screen_availability_changed.is_connected(_on_dual_screen_availability_changed):
+					DisplayManager.dual_screen_availability_changed.connect(_on_dual_screen_availability_changed)
 			
 			switch.toggled.connect(func(pressed: bool):
 				emit_signal("setting_changed", pressed, settingsvar)
@@ -340,3 +347,20 @@ func match_var_type(settingsvar : SettingsVar):
 			button.text = settingsvar.display_name
 			button.button_variant = M3Button.Variant.TEXT
 			add_child(button)
+
+func _on_dual_screen_availability_changed(available: bool) -> void:
+	"""Update the dual_screen_mode switch when display availability changes."""
+	var switch = controls.get("dual_screen_mode")
+	if not switch or not switch is M3Switch:
+		return
+	
+	var settingsvar = SettingsManager.get_setting("dual_screen_mode")
+	var is_disabled = settingsvar.state != 0 if settingsvar else false
+	if not available:
+		is_disabled = true
+	
+	switch.disabled = is_disabled
+	if is_disabled:
+		switch.focus_mode = Control.FOCUS_NONE
+	else:
+		switch.focus_mode = Control.FOCUS_ALL

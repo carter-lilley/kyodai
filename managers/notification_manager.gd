@@ -25,9 +25,11 @@ class NotificationEntry:
 	var text_formatter: Callable
 	var is_progress_linked: bool = false
 	var is_pulsing: bool = false
+	var is_pinned: bool = false
 
 var _active_snackbars: Array[M3Snackbar] = []
 var _active_ids: Array[int] = []
+var _pinned_ids: Array[int] = []
 
 var _current_progress_snackbar: M3Snackbar = null
 var _current_progress_id: int = -1
@@ -52,21 +54,22 @@ func show_notification_safe(
 	min_duration: float = 3.0,
 	progress_callable: Callable = Callable(),
 	text_formatter: Callable = Callable(),
-	pulsing: bool = false
+	pulsing: bool = false,
+	pinned: bool = false
 ) -> int:
 	var id = _notification_id_counter
 	_notification_id_counter += 1
 	
 	# Queue to main thread
-	_show_notification_deferred.bind(id, text, type, _icon, min_duration, progress_callable, text_formatter, pulsing).call_deferred()
+	_show_notification_deferred.bind(id, text, type, _icon, min_duration, progress_callable, text_formatter, pulsing, pinned).call_deferred()
 	return id
 
-func _show_notification_deferred(id: int, text: String, type: Type, icon: Texture2D, min_duration: float, progress_callable: Callable, text_formatter: Callable, pulsing: bool) -> void:
+func _show_notification_deferred(id: int, text: String, type: Type, icon: Texture2D, min_duration: float, progress_callable: Callable, text_formatter: Callable, pulsing: bool, pinned: bool) -> void:
 	print("[NotificationManager] _show_notification_deferred id=" + str(id))
 	if not progress_callable.is_null() or pulsing:
-		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing)
+		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing, pinned)
 	else:
-		_show_message(id, text, type, min_duration)
+		_show_message(id, text, type, min_duration, pinned)
 	notification_shown.emit(id)
 
 ## Thread-safe wrapper for dismiss_notification()
@@ -97,27 +100,39 @@ func show_notification(
 	min_duration: float = 3.0,
 	progress_callable: Callable = Callable(),
 	text_formatter: Callable = Callable(),
-	pulsing: bool = false
+	pulsing: bool = false,
+	pinned: bool = false
 ) -> int:
 	var id = _notification_id_counter
 	_notification_id_counter += 1
 
 	if not progress_callable.is_null() or pulsing:
-		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing)
+		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing, pinned)
 	else:
-		_show_message(id, text, type, min_duration)
+		_show_message(id, text, type, min_duration, pinned)
 
 	notification_shown.emit(id)
 	return id
 
-func _show_message(id: int, text: String, type: Type, duration: float) -> void:
-	# If stack is full, dismiss the oldest (last in array) to make room
-	if _active_snackbars.size() >= MAX_STACK_SIZE:
-		var oldest_snackbar = _active_snackbars.pop_back()
-		var oldest_id = _active_ids.pop_back()
-		if oldest_snackbar and is_instance_valid(oldest_snackbar):
-			oldest_snackbar.dismiss()
-		notification_dismissed.emit(oldest_id)
+func _show_message(id: int, text: String, type: Type, duration: float, pinned: bool = false) -> void:
+	if pinned:
+		_pinned_ids.append(id)
+	else:
+		# Only count unpinned toward stack size; dismiss oldest unpinned if full
+		var unpinned_count = _active_ids.size() - _pinned_ids.size()
+		if unpinned_count >= MAX_STACK_SIZE:
+			for i in range(_active_snackbars.size() - 1, -1, -1):
+				var check_id = _active_ids[i]
+				if not _pinned_ids.has(check_id):
+					var oldest_snackbar = _active_snackbars[i]
+					var oldest_id = _active_ids[i]
+					if oldest_snackbar and is_instance_valid(oldest_snackbar):
+						oldest_snackbar.dismiss()
+					else:
+						_active_snackbars.remove_at(i)
+						_active_ids.remove_at(i)
+						notification_dismissed.emit(oldest_id)
+					break
 
 	var snackbar = _spawn_message_snackbar(text, type, duration)
 	_active_snackbars.insert(0, snackbar)
@@ -145,6 +160,7 @@ func _on_message_snackbar_dismissed(snackbar: M3Snackbar) -> void:
 	var dismissed_id = _active_ids[index]
 	_active_snackbars.remove_at(index)
 	_active_ids.remove_at(index)
+	_pinned_ids.erase(dismissed_id)
 	notification_dismissed.emit(dismissed_id)
 
 	_reposition_stack()
@@ -155,7 +171,7 @@ func _reposition_stack() -> void:
 		if is_instance_valid(snackbar):
 			snackbar.set_stack_offset(i)
 
-func _show_progress_snackbar(id: int, text: String, type: Type, progress_callable: Callable, text_formatter: Callable, pulsing: bool) -> void:
+func _show_progress_snackbar(id: int, text: String, type: Type, progress_callable: Callable, text_formatter: Callable, pulsing: bool, pinned: bool = false) -> void:
 	if _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
 		_current_progress_snackbar.dismiss()
 
@@ -180,6 +196,7 @@ func _show_progress_snackbar(id: int, text: String, type: Type, progress_callabl
 	_progress_entry.text_formatter = text_formatter
 	_progress_entry.is_pulsing = pulsing
 	_progress_entry.is_progress_linked = true
+	_progress_entry.is_pinned = pinned
 
 func _on_progress_snackbar_dismissed() -> void:
 	var dismissed_id = _current_progress_id
@@ -199,14 +216,25 @@ func dismiss_notification(id: int) -> void:
 	if id == _current_progress_id and _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
 		_current_progress_snackbar.dismiss()
 
+	_pinned_ids.erase(id)
+
 func dismiss_all_notifications() -> void:
-	for snackbar in _active_snackbars:
+	# Iterate backwards so removal doesn't shift indices
+	for i in range(_active_snackbars.size() - 1, -1, -1):
+		var id = _active_ids[i]
+		if _pinned_ids.has(id):
+			continue
+		var snackbar = _active_snackbars[i]
 		if is_instance_valid(snackbar):
 			snackbar.dismiss()
-	# _on_message_snackbar_dismissed handles individual cleanup
+		else:
+			_active_snackbars.remove_at(i)
+			_active_ids.remove_at(i)
+			notification_dismissed.emit(id)
 
 	if _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
-		_current_progress_snackbar.dismiss()
+		if not _progress_entry or not _progress_entry.is_pinned:
+			_current_progress_snackbar.dismiss()
 
 func update_notification_text(id: int, text: String) -> void:
 	var index = _active_ids.find(id)

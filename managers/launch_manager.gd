@@ -1685,6 +1685,11 @@ func _execute_android(intent: LaunchIntent) -> bool:
 				# Fallback if package name is somehow empty
 				core_path = "/data/data/com.retroarch/cores/" + core_filename
 	
+	# Resolve ROM path to absolute filesystem path for the Java plugin.
+	# The plugin creates File objects directly, so user:// virtual paths won't work.
+	var absolute_rom_path = FSM.resolve_path(intent.rom_path, {"format": FSM.PathFormat.ABSOLUTE})
+	print("[LaunchManager] Resolved ROM path for Android intent: " + absolute_rom_path)
+	
 	# Get configuration from android_config
 	var rom_delivery = intent.android_config.get("rom_delivery", "intent_data")
 	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
@@ -1725,7 +1730,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		intent.android_action,
 		intent.android_package,
 		intent.android_class,
-		intent.rom_path,
+		absolute_rom_path,
 		core_path,
 		rom_delivery,
 		extras_json,
@@ -1916,7 +1921,11 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	
 	var result = Error.FAILED
 	if plugin != null:
-		var success = plugin.call("installApk", apk_path)
+		# Convert Godot virtual path (user://) to an absolute filesystem path
+		# so the Java plugin can create a File object from it.
+		var absolute_apk_path = FSM.resolve_path(apk_path, {"format": FSM.PathFormat.ABSOLUTE})
+		print("[LaunchManager] Resolved APK path for plugin: " + absolute_apk_path)
+		var success = plugin.call("installApk", absolute_apk_path)
 		if success:
 			result = Error.OK
 	else:
@@ -2426,14 +2435,18 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(url: String, tag: String, error: String, file_size: int):
+		func(url: String, tag: String, error: String, file_size: int, published_at: String):
 			if error != "":
 				push_error("[LaunchManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = "Failed to fetch release"
 				return
-			var version_to_save = tag if tag != "" else release_tag
+			# Use published_at date as version for date-based comparison
+			# Fall back to tag name if no date available
+			var version_to_save = published_at if published_at != "" else tag
 			if version_to_save != "":
-				_save_emulator_version(emulator_id, version_to_save)
+				# force=true to overwrite any existing version during install
+				_save_emulator_version(emulator_id, version_to_save, true)
+				print("[LaunchManager] Saved emulator version for " + emulator_id + ": " + version_to_save)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size),
 		release_tag,
 		api_base_url
@@ -2471,7 +2484,9 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 				_emulator_install_progress[emulator_id] = "Failed to scrape release"
 				return
 			if version != "":
-				_save_emulator_version(emulator_id, version)
+				# force=true to overwrite any existing version during install
+				_save_emulator_version(emulator_id, version, true)
+				print("[LaunchManager] Saved emulator version for " + emulator_id + ": " + version)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
 		match_strategy,
 		json_path
@@ -2494,6 +2509,9 @@ func _save_emulator_version(emulator_id: String, version: String, force: bool = 
 				versions[emulator_id] = version
 				SettingsManager.set_setting(versions, setting)
 				SettingsManager.save_settings()
+				print("[LaunchManager] Saved version for " + emulator_id + ": " + version)
+			else:
+				print("[LaunchManager] Skipped saving version for " + emulator_id + " (already exists: " + versions.get(emulator_id, "") + ")")
 
 ## Clears stored version so a fresh install/update can save a new version.
 func _clear_emulator_version(emulator_id: String):
@@ -2552,6 +2570,31 @@ func _compare_versions(a: String, b: String) -> int:
 	
 	# Opaque strings - incomparable
 	return 2
+
+## Parses an ISO 8601 date string to unix timestamp for comparison
+## Returns -1 if parsing fails
+func _parse_iso_date(date_str: String) -> int:
+	if date_str == "" or not date_str.contains("-"):
+		return -1
+	
+	# Use regex to validate format first (avoids Godot parser error spam)
+	# Matches: 2024-01-15T10:30:00Z or 2024-01-15T10:30:00+00:00
+	var regex = RegEx.new()
+	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2})")
+	var match_result = regex.search(date_str)
+	if not match_result:
+		return -1
+	
+	var year = int(match_result.get_string(1))
+	var month = int(match_result.get_string(2))
+	var day = int(match_result.get_string(3))
+	var hour = int(match_result.get_string(4))
+	var minute = int(match_result.get_string(5))
+	var second = int(match_result.get_string(6))
+	
+	var dict = {"year": year, "month": month, "day": day,
+				"hour": hour, "minute": minute, "second": second}
+	return int(Time.get_unix_time_from_datetime_dict(dict))
 
 ## Checks for updates across all installed emulators
 ## callback(updated: Array, up_to_date: Array, failed: Array)
@@ -2689,15 +2732,47 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(_url: String, tag: String, error: String, _file_size: int):
+		func(_url: String, tag: String, error: String, _file_size: int, published_at: String):
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
 				_check_updates_complete(results, callback)
 				return
 			
-			var comparison = _compare_versions(installed_version, tag)
-			if comparison == -1 or comparison == 2:
-				# Update available or incomparable (treat as update)
+			var update_available = false
+			
+			# Primary: use published_at date if available (more reliable for repos)
+			if published_at != "":
+				var remote_date = _parse_iso_date(published_at)
+				var installed_date = _parse_iso_date(installed_version)
+				
+				if remote_date > 0 and installed_date > 0:
+					# Both are dates - compare directly
+					if remote_date > installed_date:
+						update_available = true
+						print("[LaunchManager] Update available for " + emulator_id + ": " + published_at + " > " + installed_version)
+					else:
+						print("[LaunchManager] " + emulator_id + " is up to date: " + installed_version)
+				else:
+					# Installed version is not a date (legacy format), assume update needed
+					print("[LaunchManager] " + emulator_id + " has legacy version format, triggering update")
+					update_available = true
+			else:
+				# Fallback: version string comparison when no date available
+				var comparison = _compare_versions(installed_version, tag)
+				
+				if comparison == -1:
+					# Remote version is newer
+					update_available = true
+					print("[LaunchManager] Update available for " + emulator_id + ": " + tag + " > " + installed_version)
+				elif comparison == 0 or comparison == 1:
+					# Same version or installed is newer
+					print("[LaunchManager] " + emulator_id + " is up to date: " + installed_version)
+				elif comparison == 2:
+					# Versions are incomparable - assume update needed to be safe
+					print("[LaunchManager] " + emulator_id + " versions incomparable ('" + installed_version + "' vs '" + tag + "'), assuming update needed")
+					update_available = true
+			
+			if update_available:
 				results.updated.append(emulator_id)
 				_trigger_emulator_update(emulator_id, emulator_name, platform_config)
 			else:

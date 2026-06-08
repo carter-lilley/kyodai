@@ -955,6 +955,13 @@ func _update_hero_visibility(_view_name: String) -> void:
 			_hero_spacer.visible = false
 		return
 	
+	# Hide hero background completely in non-dual-screen mode (single-screen Android/desktop)
+	if _hero_image:
+		_hero_image.visible = false
+	if _hero_spacer:
+		_hero_spacer.visible = false
+	return
+	
 	# Check if hero height is set to 0% (hidden)
 	var height_ratio = HERO_SIZE_RATIO_DEFAULT
 	if SettingsManager:

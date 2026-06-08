@@ -298,9 +298,13 @@ public class PackageCheckerPlugin extends GodotPlugin {
     
     /**
      * Check if the device has multiple physical displays.
-     * This filters out virtual displays and only counts physical screens.
+     * Filters out virtual displays by checking:
+     * 1. Display must be valid and not the default display
+     * 2. Display must have a different resolution than the built-in screen
+     * 3. Display name must not contain virtual/overlay keywords
+     * 4. Display state must be ON (not OFF or DOZE)
      * 
-     * @return true if 2 or more physical displays are connected
+     * @return true if a real secondary physical display is connected
      */
     @UsedByGodot
     public boolean hasMultipleDisplays() {
@@ -321,30 +325,159 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 return false;
             }
             
-            // Get only physical displays (excludes virtual displays)
-            android.view.Display[] displays = displayManager.getDisplays(android.hardware.display.DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
-            int physicalDisplayCount = displays.length;
-            
-            // If no presentation displays, check all displays and filter
-            if (physicalDisplayCount == 0) {
-                displays = displayManager.getDisplays();
-                physicalDisplayCount = 0;
-                for (android.view.Display display : displays) {
-                    // Skip the default display (usually display 0)
-                    if (display.getDisplayId() != android.view.Display.DEFAULT_DISPLAY && display.isValid()) {
-                        physicalDisplayCount++;
-                    }
-                }
+            // Get default display resolution for comparison
+            android.view.Display defaultDisplay = displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+            if (defaultDisplay == null) {
+                Log.e(TAG, "ERROR: Default display is null");
+                return false;
             }
             
-            Log.d(TAG, "Physical display count: " + physicalDisplayCount);
-            Log.d(TAG, "==========================================");
+            android.util.DisplayMetrics defaultMetrics = new android.util.DisplayMetrics();
+            defaultDisplay.getRealMetrics(defaultMetrics);
+            Log.d(TAG, "Default display: " + defaultMetrics.widthPixels + "x" + defaultMetrics.heightPixels);
             
-            return physicalDisplayCount >= 1; // 1 presentation display + default = 2 total
+            // Get all displays and filter
+            android.view.Display[] allDisplays = displayManager.getDisplays();
+            Log.d(TAG, "Total displays found: " + allDisplays.length);
+            
+            for (int i = 0; i < allDisplays.length; i++) {
+                android.view.Display display = allDisplays[i];
+                int displayId = display.getDisplayId();
+                String displayName = display.getName();
+                int displayState = display.getState();
+                
+                // Skip default display
+                if (displayId == android.view.Display.DEFAULT_DISPLAY) {
+                    Log.d(TAG, "  Display " + i + " [ID=" + displayId + "]: SKIPPED (default display)");
+                    continue;
+                }
+                
+                // Skip invalid displays
+                if (!display.isValid()) {
+                    Log.d(TAG, "  Display " + i + " [ID=" + displayId + "]: SKIPPED (not valid)");
+                    continue;
+                }
+                
+                // Skip displays that are off
+                if (displayState != android.view.Display.STATE_ON) {
+                    Log.d(TAG, "  Display " + i + " [ID=" + displayId + "]: SKIPPED (state=" + displayState + ", not ON)");
+                    continue;
+                }
+                
+                // Get metrics
+                android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+                display.getRealMetrics(metrics);
+                
+                // Skip virtual displays with same resolution as default
+                // (mirrored/virtual displays typically match the primary screen resolution)
+                boolean sameResolution = (metrics.widthPixels == defaultMetrics.widthPixels && 
+                                          metrics.heightPixels == defaultMetrics.heightPixels) ||
+                                         (metrics.widthPixels == defaultMetrics.heightPixels && 
+                                          metrics.heightPixels == defaultMetrics.widthPixels);
+                
+                if (sameResolution) {
+                    Log.d(TAG, "  Display " + i + " [ID=" + displayId + ", Name=" + displayName + "]: SKIPPED (same resolution " + 
+                          metrics.widthPixels + "x" + metrics.heightPixels + ")");
+                    continue;
+                }
+                
+                // Skip displays with virtual/overlay keywords in name
+                String nameLower = displayName.toLowerCase();
+                if (nameLower.contains("virtual") || nameLower.contains("overlay") || 
+                    nameLower.contains("scrcpy") || nameLower.contains("screenrecorder")) {
+                    Log.d(TAG, "  Display " + i + " [ID=" + displayId + ", Name=" + displayName + "]: SKIPPED (virtual keyword)");
+                    continue;
+                }
+                
+                // This looks like a real secondary display
+                Log.d(TAG, "  Display " + i + " [ID=" + displayId + ", Name=" + displayName + "]: VALID secondary display (" + 
+                      metrics.widthPixels + "x" + metrics.heightPixels + ")");
+                Log.d(TAG, "hasMultipleDisplays result: true");
+                Log.d(TAG, "==========================================");
+                return true;
+            }
+            
+            Log.d(TAG, "No valid secondary displays found");
+            Log.d(TAG, "hasMultipleDisplays result: false");
+            Log.d(TAG, "==========================================");
+            return false;
             
         } catch (Exception e) {
             Log.e(TAG, "ERROR checking for multiple displays: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
             return false;
+        }
+    }
+    
+    /**
+     * Get debug information about all displays as a formatted string.
+     * Returns a Dictionary with a "info" key containing the display details.
+     * This avoids issues with ArrayList/Dictionary conversion between Java and Godot.
+     * 
+     * @return Dictionary with "info" string and "count" int
+     */
+    @UsedByGodot
+    public Dictionary getDisplayDebugInfo() {
+        Dictionary result = new Dictionary();
+        StringBuilder info = new StringBuilder();
+        
+        if (activity == null) {
+            result.put("info", "Activity is null");
+            result.put("count", 0);
+            return result;
+        }
+        
+        try {
+            android.hardware.display.DisplayManager displayManager = 
+                (android.hardware.display.DisplayManager) activity.getSystemService(Context.DISPLAY_SERVICE);
+            
+            if (displayManager == null) {
+                result.put("info", "DisplayManager is null");
+                result.put("count", 0);
+                return result;
+            }
+            
+            android.view.Display[] allDisplays = displayManager.getDisplays();
+            result.put("count", allDisplays.length);
+            
+            // Get default display metrics
+            android.view.Display defaultDisplay = displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+            android.util.DisplayMetrics defaultMetrics = new android.util.DisplayMetrics();
+            if (defaultDisplay != null) {
+                defaultDisplay.getRealMetrics(defaultMetrics);
+            }
+            
+            info.append("Total displays: ").append(allDisplays.length).append("\n");
+            info.append("Default: ").append(defaultMetrics.widthPixels).append("x").append(defaultMetrics.heightPixels).append("\n");
+            
+            for (int i = 0; i < allDisplays.length; i++) {
+                android.view.Display display = allDisplays[i];
+                android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+                display.getRealMetrics(metrics);
+                
+                boolean isDefault = display.getDisplayId() == android.view.Display.DEFAULT_DISPLAY;
+                boolean sameResolution = (metrics.widthPixels == defaultMetrics.widthPixels && 
+                                          metrics.heightPixels == defaultMetrics.heightPixels) ||
+                                         (metrics.widthPixels == defaultMetrics.heightPixels && 
+                                          metrics.heightPixels == defaultMetrics.widthPixels);
+                
+                info.append("Display ").append(i)
+                    .append(": ID=").append(display.getDisplayId())
+                    .append(", Name=").append(display.getName())
+                    .append(", State=").append(display.getState())
+                    .append(", ").append(metrics.widthPixels).append("x").append(metrics.heightPixels)
+                    .append(", Default=").append(isDefault)
+                    .append(", SameRes=").append(sameResolution)
+                    .append("\n");
+            }
+            
+            result.put("info", info.toString());
+            return result;
+            
+        } catch (Exception e) {
+            result.put("info", "Error: " + e.getMessage());
+            result.put("count", 0);
+            return result;
         }
     }
     
