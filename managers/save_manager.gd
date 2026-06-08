@@ -1380,24 +1380,37 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					var extract_dest = _get_extract_dest(emulator_id, resolve_active_save_directory(emulator_id, game.platform_slug), record_path, game)
 					print("[SaveManager] Extracting folder save for " + emulator_id + " to: " + extract_dest)
 					print("[SaveManager] record_path was: " + record_path)
-					# Don't use subfolder - the zip already contains the correct folder structure
-					var extract_success = FSM.extract_zip(zip_path, extract_dest)
-					if not extract_success:
-						state.failed += 1
-						push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
-					if FSM.file_exists(zip_path):
-						FSM.delete_file(zip_path)
-					# Clean up empty parent directories
-					_cleanup_temp_dir(zip_path)
 					
-						# Ensure PCSX2 superblock is valid after extracting saves
-				if emulator_id == "pcsx2":
-					print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
-					var memcard_path = resolve_active_save_directory(emulator_id, game.platform_slug)
-					ensure_pcsx2_superblock(memcard_path)
-				
-				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
-				check_complete.call()
+					# Async extraction with completion callback
+					FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
+						func(_extracted, _total): pass,
+						func(extract_success: bool, _error):
+							if not extract_success:
+								state.failed += 1
+								push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
+							
+							# Clean up empty parent directories
+							_cleanup_temp_dir(zip_path)
+							
+							# Ensure PCSX2 superblock is valid after extracting saves
+							if emulator_id == "pcsx2":
+								print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
+								var memcard_path = resolve_active_save_directory(emulator_id, game.platform_slug)
+								ensure_pcsx2_superblock(memcard_path)
+							
+							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
+							check_complete.call()
+					)
+					return  # Exit callback, completion handled by async
+				else:
+					# Non-folder save, no extraction needed
+					if emulator_id == "pcsx2":
+						print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
+						var memcard_path = resolve_active_save_directory(emulator_id, game.platform_slug)
+						ensure_pcsx2_superblock(memcard_path)
+					
+					DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
+					check_complete.call()
 			)
 		)
 
@@ -1800,40 +1813,46 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							if confirm_error != "":
 								push_warning("[SaveManager] Failed to confirm download: " + confirm_error)
 							
+							var _post_extraction = func():
+								# Ensure PCSX2 superblock is valid after extracting saves
+								if emulator_id == "pcsx2":
+									print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
+									var memcard_path = save_dir
+									ensure_pcsx2_superblock(memcard_path)
+								# Small delay to let filesystem settle before emulator launch
+								OS.delay_msec(100)
+								DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
+								state.pending -= 1
+								if state.pending <= 0 and state.failed == 0:
+									NotificationManager.show_notification("Saves downloaded from RomM", NotificationManager.Type.INFO)
+								check_complete.call()
+							
 							if is_folder_save:
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
-								# Don't use subfolder - the zip already contains the correct folder structure
-								var extract_success = FSM.extract_zip(zip_path, extract_dest)
-								if not extract_success:
-									state.failed += 1
-									push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
-								if FSM.file_exists(zip_path):
-									FSM.delete_file(zip_path)
-								# Clean up empty parent directories
-								_cleanup_temp_dir(zip_path)
+								FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
+									func(_extracted, _total): pass,
+									func(extract_success: bool, _error):
+										if not extract_success:
+											state.failed += 1
+											push_error("[SaveManager] Failed to extract downloaded zip: " + zip_path)
+										_cleanup_temp_dir(zip_path)
+										_post_extraction.call()
+								)
 							elif local_path.to_lower().ends_with(".zip"):
 								# Non-folder save but downloaded as zip (e.g., GameCube .gci in zip)
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 								print("[SaveManager] Extracting non-folder zip save for " + emulator_id + " to: " + extract_dest)
-								var extract_success = FSM.extract_zip(local_path, extract_dest)
-								if not extract_success:
-									state.failed += 1
-									push_error("[SaveManager] Failed to extract downloaded zip: " + local_path)
-								if FSM.file_exists(local_path):
-									FSM.delete_file(local_path)
-							
-							# Ensure PCSX2 superblock is valid after extracting saves
-							if emulator_id == "pcsx2":
-								print("[SaveManager] Ensuring PCSX2 superblock is valid after save sync...")
-								var memcard_path = save_dir
-								ensure_pcsx2_superblock(memcard_path)
-							# Small delay to let filesystem settle before emulator launch
-							OS.delay_msec(100)
-							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
-							state.pending -= 1
-							if state.pending <= 0 and state.failed == 0:
-								NotificationManager.show_notification("Saves downloaded from RomM", NotificationManager.Type.INFO)
-							check_complete.call()
+								FSM.extract_archive_async(local_path, extract_dest, "Save data", true,
+									func(_extracted, _total): pass,
+									func(extract_success: bool, _error):
+										if not extract_success:
+											state.failed += 1
+											push_error("[SaveManager] Failed to extract downloaded zip: " + local_path)
+										_post_extraction.call()
+								)
+							else:
+								# No extraction needed
+								_post_extraction.call()
 						)
 					)
 			# If no downloads were queued, call completion immediately

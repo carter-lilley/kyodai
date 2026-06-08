@@ -6,6 +6,7 @@ signal viewport_size_changed(new_size: Vector2)
 signal dual_screen_detected(second_screen_index: int)
 signal dual_screen_lost()
 signal dual_screen_mode_changed(enabled: bool, second_screen_index: int)
+signal dual_screen_availability_changed(available: bool)
 
 @onready var settings_man = $"../SettingsManager"
 
@@ -13,6 +14,7 @@ var _viewport_size: Vector2 = Vector2.ZERO
 
 # Dual screen detection state
 var _dual_screen_enabled: bool = false
+var _dual_screen_available: bool = false
 var _second_screen_index: int = -1
 var _android_plugin = null
 
@@ -182,6 +184,22 @@ func windowed_toggle(value : bool):
 func _check_for_dual_screen() -> void:
 	"""Check if a second display is available. Works on both desktop and Android."""
 	
+	var detected_second_screen: int = -1
+	
+	# Try Android plugin first if available
+	if _android_plugin != null:
+		detected_second_screen = _get_second_screen_android()
+	
+	# Fall back to Godot DisplayServer if no Android plugin or plugin returned -1
+	if detected_second_screen == -1:
+		detected_second_screen = _get_second_screen_desktop()
+	
+	# Update availability state
+	var now_available = detected_second_screen >= 0
+	if now_available != _dual_screen_available:
+		_dual_screen_available = now_available
+		dual_screen_availability_changed.emit(_dual_screen_available)
+	
 	# Check if dual screen mode is enabled in settings
 	var dual_screen_setting = settings_man.get_setting("dual_screen_mode")
 	if dual_screen_setting and not dual_screen_setting.value:
@@ -192,16 +210,6 @@ func _check_for_dual_screen() -> void:
 			dual_screen_lost.emit()
 			dual_screen_mode_changed.emit(false, -1)
 		return
-	
-	var detected_second_screen: int = -1
-	
-	# Try Android plugin first if available
-	if _android_plugin != null:
-		detected_second_screen = _get_second_screen_android()
-	
-	# Fall back to Godot DisplayServer if no Android plugin or plugin returned -1
-	if detected_second_screen == -1:
-		detected_second_screen = _get_second_screen_desktop()
 	
 	# Update state based on detection
 	if detected_second_screen >= 0:
@@ -258,6 +266,10 @@ func _get_second_screen_android() -> int:
 func is_dual_screen_enabled() -> bool:
 	"""Returns true if dual screen mode is active."""
 	return _dual_screen_enabled
+
+func is_dual_screen_available() -> bool:
+	"""Returns true if a second display is available (hardware detected)."""
+	return _dual_screen_available
 
 func get_second_screen_index() -> int:
 	"""Returns the index of the second screen, or -1 if not available."""

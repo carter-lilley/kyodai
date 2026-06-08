@@ -152,7 +152,11 @@ func match_var_type(settingsvar : SettingsVar):
 			
 			var switch = M3Switch.new()
 			switch.button_pressed = settingsvar.value
-			switch.disabled = settingsvar.state != 0
+			# For dual_screen_mode, disable the switch if no second display is available
+			var is_disabled = settingsvar.state != 0
+			if settingsvar.property_name == "dual_screen_mode" and DisplayManager and not DisplayManager.is_dual_screen_available():
+				is_disabled = true
+			switch.disabled = is_disabled
 			switch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			hbox.add_child(switch)

@@ -719,6 +719,36 @@ func _find_file_recursive(dir: String, filename: String) -> bool:
 	
 	return false
 
+func _on_firmware_download_complete(success: bool, download_error: String, _notification_id: int, temp_path: String, firmware_dir: String, platform_slug: String, callback: Callable, _last_progress_mb: Array):
+	NotificationManager.dismiss_notification(_notification_id)
+	
+	if not success:
+		push_error("[LaunchManager] Failed to download firmware: " + download_error)
+		if callback.is_valid():
+			callback.call(false, download_error)
+		return
+	
+	print("[LaunchManager] Firmware downloaded, extracting to: " + firmware_dir)
+	
+	# FSM handles its own extraction notification
+	FSM.extract_archive_async(
+		temp_path,
+		firmware_dir,
+		"Firmware for " + platform_slug,
+		true,
+		func(_e, _t): pass,
+		func(extract_success: bool, error_msg: String):
+			if not extract_success:
+				push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir + ": " + error_msg)
+				if callback.is_valid():
+					callback.call(false, error_msg)
+				return
+			
+			print("[LaunchManager] Firmware successfully installed for " + platform_slug)
+			if callback.is_valid():
+				callback.call(true, "Firmware installed")
+	)
+
 ## Sets up firmware for a platform by downloading from RomM
 ## This should be called during platform sync
 ## callback(success: bool, message: String)
@@ -793,46 +823,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			firmware_id,
 			file_name,
 			temp_path,
-			func(success: bool, download_error: String):
-				NotificationManager.dismiss_notification(_firmware_notification_id)
-				
-				if not success:
-					push_error("[LaunchManager] Failed to download firmware: " + download_error)
-					if callback.is_valid():
-						callback.call(false, download_error)
-					return
-				
-				print("[LaunchManager] Firmware downloaded, extracting to: " + firmware_dir)
-				
-				# Show extracting notification
-				var _extract_notification_id = NotificationManager.show_notification(
-					"Extracting firmware for " + platform_slug + "...",
-					NotificationManager.Type.INFO,
-					null,
-					0.0,
-					Callable(),
-					Callable(),
-					true
-				)
-				
-				# Extract zip to firmware directory
-				var extract_success = FSM.extract_zip(temp_path, firmware_dir)
-				
-				NotificationManager.dismiss_notification(_extract_notification_id)
-				
-				# Clean up temp file
-				if FSM.file_exists(temp_path):
-					FSM.delete_file(temp_path)
-				
-				if not extract_success:
-					push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir)
-					if callback.is_valid():
-						callback.call(false, "Extraction failed")
-					return
-				
-				print("[LaunchManager] Firmware successfully installed for " + platform_slug)
-				if callback.is_valid():
-					callback.call(true, "Firmware installed"),
+			_on_firmware_download_complete.bind(_firmware_notification_id, temp_path, firmware_dir, platform_slug, callback, _last_progress_mb),
 			func(size_mb: int):
 				if size_mb != _last_progress_mb[0]:
 					_last_progress_mb[0] = size_mb
@@ -3885,16 +3876,31 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 						
 						return true
 			
-			# Fallback: find the original ZIP in parent directory
+			# Fallback: find the original ZIP
 			# This handles cases where we can't read PARAM.SFO
 			print("[LaunchManager] RPCS3: Could not get TitleID from PARAM.SFO, searching for ZIP...")
-			var parent_dir = rom_path.get_base_dir()
-			var zip_files = _find_zip_files_in_dir(parent_dir)
+			
+			# On desktop, the extracted folder might be in the emulator directory
+			# but the ZIP is in the games library. Check both.
+			var search_dirs = [rom_path.get_base_dir()]
+			if not PlatformManager.is_android():
+				var root_folder = SettingsManager.get_setting("games_root_folder")
+				var root_path = root_folder.value if root_folder else "user://roms/"
+				var library_dir = FSM.join_paths(root_path, game.platform_slug)
+				if library_dir != search_dirs[0]:
+					search_dirs.append(library_dir)
+			
+			var all_zip_files: Array[String] = []
+			for search_dir in search_dirs:
+				var zip_files = _find_zip_files_in_dir(search_dir)
+				for zf in zip_files:
+					if not zf in all_zip_files:
+						all_zip_files.append(zf)
 			
 			# Try to find the ZIP that matches this game by name
 			var game_name = game.get_display_name().to_lower()
 			var matching_zip = ""
-			for zf in zip_files:
+			for zf in all_zip_files:
 				if zf.to_lower().contains(game_name) or game_name.contains(zf.get_file().get_basename().to_lower()):
 					matching_zip = zf
 					break
@@ -3902,12 +3908,12 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 			if matching_zip != "":
 				zip_path = matching_zip
 				print("[LaunchManager] RPCS3: Found matching ZIP by game name: " + zip_path)
-			elif zip_files.size() > 0:
+			elif all_zip_files.size() > 0:
 				# Fallback to first ZIP (old behavior, but warn about it)
-				zip_path = zip_files[0]
+				zip_path = all_zip_files[0]
 				push_warning("[LaunchManager] RPCS3: Multiple ZIPs found, using first one: " + zip_path + " for game: " + game.get_display_name())
 			else:
-				push_error("[LaunchManager] RPCS3: No ZIP found to verify TitleID in: " + parent_dir)
+				push_error("[LaunchManager] RPCS3: No ZIP found to verify TitleID")
 				NotificationManager.show_notification("Game files missing - please re-download", NotificationManager.Type.ERROR)
 				return false
 		else:
@@ -3917,23 +3923,51 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 			var zip_files = _find_zip_files_in_dir(parent_dir)
 			if zip_files.size() > 0:
 				zip_path = zip_files[0]
-				print("[LaunchManager] RPCS3: Found original ZIP to re-extract: " + zip_path)
+				print("[LaunchManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
 			else:
-				push_error("[LaunchManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
-				NotificationManager.show_notification("Game files missing - please re-download", NotificationManager.Type.ERROR)
-				return false
+				# On desktop, the extracted folder might be in the emulator directory
+				# but the ZIP is in the games library. Check the library folder.
+				if not PlatformManager.is_android():
+					var root_folder = SettingsManager.get_setting("games_root_folder")
+					var root_path = root_folder.value if root_folder else "user://roms/"
+					var library_dir = FSM.join_paths(root_path, game.platform_slug)
+					print("[LaunchManager] RPCS3: Checking games library: " + library_dir)
+					zip_files = _find_zip_files_in_dir(library_dir)
+					if zip_files.size() > 0:
+						zip_path = zip_files[0]
+						print("[LaunchManager] RPCS3: Found original ZIP in library: " + zip_path)
+				
+				if zip_path == "":
+					push_error("[LaunchManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
+					NotificationManager.show_notification("Game files missing - please re-download", NotificationManager.Type.ERROR)
+					return false
 	elif not FSM.file_exists(rom_path):
 		# Path doesn't exist at all (deleted extracted folder). Look for ZIP in parent.
 		print("[LaunchManager] RPCS3: ROM path does not exist, looking for original ZIP...")
+		
+		# First try the parent directory of the deleted folder
 		var parent_dir = rom_path.get_base_dir()
 		var zip_files = _find_zip_files_in_dir(parent_dir)
 		if zip_files.size() > 0:
 			zip_path = zip_files[0]
-			print("[LaunchManager] RPCS3: Found original ZIP to re-extract: " + zip_path)
+			print("[LaunchManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
 		else:
-			push_error("[LaunchManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
-			NotificationManager.show_notification("Game files missing - please re-download", NotificationManager.Type.ERROR)
-			return false
+			# On desktop, the extracted folder might be in the emulator directory
+			# but the ZIP is in the games library. Check the library folder.
+			if not PlatformManager.is_android():
+				var root_folder = SettingsManager.get_setting("games_root_folder")
+				var root_path = root_folder.value if root_folder else "user://roms/"
+				var library_dir = FSM.join_paths(root_path, game.platform_slug)
+				print("[LaunchManager] RPCS3: Checking games library: " + library_dir)
+				zip_files = _find_zip_files_in_dir(library_dir)
+				if zip_files.size() > 0:
+					zip_path = zip_files[0]
+					print("[LaunchManager] RPCS3: Found original ZIP in library: " + zip_path)
+			
+			if zip_path == "":
+				push_error("[LaunchManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
+				NotificationManager.show_notification("Game files missing - please re-download", NotificationManager.Type.ERROR)
+				return false
 	
 	# Step 1: Extract TitleID from ZIP
 	print("[LaunchManager] RPCS3: Extracting TitleID from ZIP: " + zip_path)
@@ -3957,12 +3991,38 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var title_id = game.get_active_title_id()
 	print("[LaunchManager] RPCS3: Using TitleID: " + title_id)
 	
+	# On desktop, determine the correct RPCS3 directory
+	var rpcs3_install_dir := ""
+	var desktop_disc_path := ""
+	var desktop_digital_path := ""
+	if not PlatformManager.is_android():
+		var emulator_install_path = get_emulator_install_path(intent.emulator_id)
+		if emulator_install_path != "":
+			rpcs3_install_dir = emulator_install_path.get_base_dir()
+			desktop_disc_path = FSM.join_paths(rpcs3_install_dir, "games", title_id)
+			desktop_digital_path = FSM.join_paths(rpcs3_install_dir, "dev_hdd0", "game", title_id)
+			print("[LaunchManager] RPCS3: Desktop disc path: " + desktop_disc_path)
+			print("[LaunchManager] RPCS3: Desktop digital path: " + desktop_digital_path)
+	
 	# Step 2: Determine final extraction path (next to the ZIP)
 	var rom_parent_dir = zip_path.get_base_dir()
 	var extract_path = FSM.join_paths(rom_parent_dir, title_id)
 	print("[LaunchManager] RPCS3: Extraction path: " + extract_path)
 	
 	# Step 3: Check if already extracted
+	# On desktop, check RPCS3 directories first
+	if not PlatformManager.is_android():
+		if _ps3_game_has_files(desktop_disc_path):
+			print("[LaunchManager] RPCS3: Game already extracted at disc path: " + desktop_disc_path)
+			intent.rom_path = desktop_disc_path
+			_store_file_path(game, desktop_disc_path)
+			return true
+		elif _ps3_game_has_files(desktop_digital_path):
+			print("[LaunchManager] RPCS3: Game already extracted at digital path: " + desktop_digital_path)
+			intent.rom_path = desktop_digital_path
+			_store_file_path(game, desktop_digital_path)
+			return true
+	
 	if _ps3_game_has_files(extract_path):
 		print("[LaunchManager] RPCS3: Game already extracted at: " + extract_path)
 		# Update intent and game to point to extracted folder
@@ -3974,7 +4034,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	print("[LaunchManager] RPCS3: Game not extracted, will extract to: " + extract_path)
 	
-	# Step 4: Extract ZIP to a temp folder first, then normalize structure
+	# Step 4: Extract ZIP
 	var rpcs3_notify_id = NotificationManager.show_notification(
 		"Extracting " + game.get_display_name() + "...",
 		NotificationManager.Type.INFO,
@@ -3985,11 +4045,20 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		true
 	)
 	
-	# Extract to temp folder first so we can find the game root regardless of ZIP structure
-	var temp_extract_path = extract_path + "_tmp"
-	print("[LaunchManager] RPCS3: Extracting ZIP to temp: " + temp_extract_path)
+	# Determine extraction target
+	var extract_target: String
+	var is_desktop = not PlatformManager.is_android() and rpcs3_install_dir != ""
+	if is_desktop:
+		# On desktop, extract directly to RPCS3 directory.
+		# We default to disc path; if the game is digital format we'll handle it after extraction.
+		extract_target = desktop_disc_path
+		print("[LaunchManager] RPCS3: Desktop - extracting directly to: " + extract_target)
+	else:
+		# On Android, extract to temp first (same drive, no permission issues)
+		extract_target = extract_path + "_tmp"
+		print("[LaunchManager] RPCS3: Android - extracting to temp: " + extract_target)
 	
-	var extract_success := await _extract_ps3_zip(zip_path, temp_extract_path)
+	var extract_success := await _extract_ps3_zip(zip_path, extract_target)
 	
 	# Dismiss the extraction notification
 	NotificationManager.dismiss_notification(rpcs3_notify_id)
@@ -4000,55 +4069,72 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		push_error("[LaunchManager] RPCS3: Failed to extract PS3 game ZIP: " + zip_path)
 		return false
 	
-	# Step 5: Find PARAM.SFO in temp folder and determine game root
-	var sfo_path = FSM.find_file_recursive(temp_extract_path, "PARAM.SFO")
+	# Step 5: Find PARAM.SFO and determine format
+	var sfo_path = FSM.find_file_recursive(extract_target, "PARAM.SFO")
 	if sfo_path == "":
-		sfo_path = FSM.find_file_recursive(temp_extract_path, "PARAM.sfo")
+		sfo_path = FSM.find_file_recursive(extract_target, "PARAM.sfo")
 	
 	if sfo_path == "":
-		push_error("[LaunchManager] RPCS3: PARAM.SFO not found after extraction at: " + temp_extract_path)
-		FSM.delete_dir_recursive(temp_extract_path)
+		push_error("[LaunchManager] RPCS3: PARAM.SFO not found after extraction at: " + extract_target)
+		FSM.delete_dir_recursive(extract_target)
 		return false
 	
 	print("[LaunchManager] RPCS3: Found PARAM.SFO at: " + sfo_path)
 	var sfo_dir = sfo_path.get_base_dir()
-	var game_root: String
 	
-	# Determine game root:
-	# If PARAM.SFO is inside PS3_GAME/, game root is the folder containing PS3_GAME (disc format)
-	# Otherwise game root is the folder containing PARAM.SFO (HDD format)
-	if sfo_dir.get_file().to_upper() == "PS3_GAME":
-		game_root = sfo_dir.get_base_dir()
-		print("[LaunchManager] RPCS3: Disc format detected, game root: " + game_root)
-	else:
-		game_root = sfo_dir
-		print("[LaunchManager] RPCS3: HDD format detected, game root: " + game_root)
+	# Determine if disc or digital format
+	var is_disc_format = sfo_dir.get_file().to_upper() == "PS3_GAME"
+	print("[LaunchManager] RPCS3: Format detected: " + ("disc" if is_disc_format else "digital"))
 	
-	# Step 6: Move game root contents to final extraction path
-	print("[LaunchManager] RPCS3: Moving game files from " + game_root + " to " + extract_path)
-	if not FSM.move_dir_contents(game_root, extract_path):
-		push_error("[LaunchManager] RPCS3: Failed to move game files to " + extract_path)
-		FSM.delete_dir_recursive(temp_extract_path)
-		return false
+	# Determine final path
+	var final_extract_path = extract_path
+	if is_desktop:
+		final_extract_path = desktop_disc_path if is_disc_format else desktop_digital_path
+		print("[LaunchManager] RPCS3: Desktop final path: " + final_extract_path)
 	
-	# Clean up temp folder
-	print("[LaunchManager] RPCS3: Cleaning up temp folder: " + temp_extract_path)
-	FSM.delete_dir_recursive(temp_extract_path)
+	# Step 6: Handle wrapper folder (e.g., "Soulcalibur IV/PS3_GAME/" -> "PS3_GAME/")
+	var game_root = sfo_dir.get_base_dir() if is_disc_format else sfo_dir
+	if is_desktop and game_root != final_extract_path:
+		print("[LaunchManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
+		print("[LaunchManager] RPCS3: Unwrapping to: " + final_extract_path)
+		
+		# Move contents of wrapper folder up to final_extract_path
+		var items = FSM.list_dir(game_root)
+		for item in items:
+			if item == "." or item == "..":
+				continue
+			var source = FSM.join_paths(game_root, item)
+			var dest = FSM.join_paths(final_extract_path, item)
+			if not FSM.move(source, dest):
+				push_error("[LaunchManager] RPCS3: Failed to unwrap: " + source + " -> " + dest)
+				return false
+		
+		# Try to delete empty wrapper folder (may fail on Windows due to permissions, that's OK)
+		FSM.delete_dir_recursive(game_root)
+		print("[LaunchManager] RPCS3: Unwrapped successfully")
+	elif not is_desktop:
+		# Android: move from temp to final
+		print("[LaunchManager] RPCS3: Moving game files from " + game_root + " to " + final_extract_path)
+		if not FSM.move_dir_contents(game_root, final_extract_path):
+			push_error("[LaunchManager] RPCS3: Failed to move game files to " + final_extract_path)
+			FSM.delete_dir_recursive(extract_target)
+			return false
+		FSM.delete_dir_recursive(extract_target)
 	
-	# Step 6: Verify extracted files
-	if not _ps3_game_has_files(extract_path):
-		push_error("[LaunchManager] RPCS3: Game files missing after extraction at: " + extract_path)
+	# Step 7: Verify extracted files
+	if not _ps3_game_has_files(final_extract_path):
+		push_error("[LaunchManager] RPCS3: Game files missing after extraction at: " + final_extract_path)
 		NotificationManager.show_notification("Failed to install PS3 game - files missing", NotificationManager.Type.ERROR)
 		return false
 	
-	# Step 7: Update intent to point to extracted folder
-	intent.rom_path = extract_path
+	# Step 8: Update intent to point to extracted folder
+	intent.rom_path = final_extract_path
 	
 	# Also update game.file_path so create_launch_intent() picks up the extracted folder
-	_store_file_path(game, extract_path)
-	print("[LaunchManager] RPCS3: Updated game.file_path to: " + extract_path)
+	_store_file_path(game, final_extract_path)
+	print("[LaunchManager] RPCS3: Updated game.file_path to: " + final_extract_path)
 	
-	print("[LaunchManager] RPCS3: Game extracted successfully at: " + extract_path)
+	print("[LaunchManager] RPCS3: Game extracted successfully at: " + final_extract_path)
 	return true
 
 

@@ -44,6 +44,52 @@ func _ready() -> void:
 	add_child(timer)
 	timer.start()
 
+## Thread-safe wrapper for show_notification()
+func show_notification_safe(
+	text: String,
+	type: Type = Type.INFO,
+	_icon: Texture2D = null,
+	min_duration: float = 3.0,
+	progress_callable: Callable = Callable(),
+	text_formatter: Callable = Callable(),
+	pulsing: bool = false
+) -> int:
+	var id = _notification_id_counter
+	_notification_id_counter += 1
+	
+	# Queue to main thread
+	_show_notification_deferred.bind(id, text, type, _icon, min_duration, progress_callable, text_formatter, pulsing).call_deferred()
+	return id
+
+func _show_notification_deferred(id: int, text: String, type: Type, icon: Texture2D, min_duration: float, progress_callable: Callable, text_formatter: Callable, pulsing: bool) -> void:
+	print("[NotificationManager] _show_notification_deferred id=" + str(id))
+	if not progress_callable.is_null() or pulsing:
+		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing)
+	else:
+		_show_message(id, text, type, min_duration)
+	notification_shown.emit(id)
+
+## Thread-safe wrapper for dismiss_notification()
+func dismiss_notification_safe(id: int) -> void:
+	dismiss_notification.bind(id).call_deferred()
+
+## Thread-safe wrapper for update_notification_text()
+func update_notification_text_safe(id: int, text: String) -> void:
+	_update_notification_text_deferred.bind(id, text).call_deferred()
+
+func _update_notification_text_deferred(id: int, text: String) -> void:
+	print("[NotificationManager] _update_notification_text_deferred id=" + str(id) + " text=" + text)
+	var index = _active_ids.find(id)
+	if index != -1:
+		var snackbar = _active_snackbars[index]
+		if is_instance_valid(snackbar):
+			snackbar.setup(text)
+
+	if id == _current_progress_id and _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
+		_current_progress_snackbar.setup(text)
+		if _progress_entry:
+			_progress_entry.base_text = text
+
 func show_notification(
 	text: String,
 	type: Type = Type.INFO,

@@ -45,6 +45,9 @@ func _db_query_bool(query: String) -> bool:
 	return success
 var _sync_notification_id: int = -1
 
+# Android sync foreground service tracking
+var _sync_fg_service_active: bool = false
+
 # Logging control
 var _verbose_sql: bool = false  # Set to true to see SQL queries
 
@@ -122,6 +125,47 @@ func _ensure_memory_manager():
 	if MemoryManager._instance == null:
 		var mm = MemoryManager.new()
 		add_child(mm)
+
+# ==================== ANDROID SYNC FOREGROUND SERVICE ====================
+
+func _start_sync_fg_service(platform_name: String = "Game Library", current: int = 0, total: int = 0) -> void:
+	if not PlatformManager.is_android():
+		return
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_warning("[DataManager] PackageChecker plugin not available for sync foreground service")
+		return
+	
+	print("[DataManager] Starting sync foreground service: %s (%d/%d)" % [platform_name, current, total])
+	plugin.startSyncForegroundService(platform_name, current, total)
+	_sync_fg_service_active = true
+
+func _update_sync_fg_service(platform_name: String = "", current: int = 0, total: int = 0) -> void:
+	if not PlatformManager.is_android() or not _sync_fg_service_active:
+		return
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		return
+	
+	# Use current platform name if not provided
+	var name = platform_name if platform_name != "" else _sync_platform
+	plugin.updateSyncForegroundService(name, current, total)
+
+func _stop_sync_fg_service() -> void:
+	if not PlatformManager.is_android() or not _sync_fg_service_active:
+		return
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		return
+	
+	print("[DataManager] Stopping sync foreground service")
+	plugin.stopSyncForegroundService()
+	_sync_fg_service_active = false
+
+# ==================== SETTINGS CHANGE HANDLER ====================
 
 func _on_setting_changed(value, setting):
 	if setting.property_name == "fold_duplicate_covers":
@@ -538,6 +582,9 @@ func _start_sync_iterative(enabled: Array, callback: Callable, force_full_sync: 
 	_precalculate_totals(enabled, func(grand_total: int):
 		_sync_total = grand_total
 		
+		# Start Android foreground service to prevent app kill during sync
+		_start_sync_fg_service("Game Library", 0, grand_total)
+		
 		# Show notification with grand total
 		_sync_notification_id = NotificationManager.show_notification(
 			"Syncing...",
@@ -594,6 +641,9 @@ func _process_next_platform():
 		"slug": platform.slug,
 		"name": platform.name
 	}
+	
+	# Update Android foreground service with current platform
+	_update_sync_fg_service(platform.name, _sync_current, _sync_total)
 	
 	# Determine sync mode for this platform
 	_sync_current_updated_after = ""
@@ -659,6 +709,8 @@ func _fetch_platform_batch():
 				# Increment current by this platform's pre-calculated total
 				_sync_current += _sync_precalc_platform_total
 				print("[Sync] Platform '%s' - No changes, advanced progress by %d" % [_sync_current_platform_data.name, _sync_precalc_platform_total])
+				# Update Android foreground service
+				_update_sync_fg_service(_sync_platform, _sync_current, _sync_total)
 			
 			# Save sync timestamp and move to next platform
 			var current_time = Time.get_datetime_string_from_system(true)
@@ -705,6 +757,9 @@ func _complete_sync():
 	
 	# Clean up download tracking to free memory
 	_active_downloads.clear()
+	
+	# Stop Android foreground service
+	_stop_sync_fg_service()
 	
 	# Get cache statistics
 	var cache_stats = NetworkManager.get_and_reset_cache_stats()
@@ -1061,6 +1116,7 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 			
 			if not all_success:
 				# Transaction failed - this is a critical error
+				_stop_sync_fg_service()
 				sync_completed.emit(false, "Database transaction failed during sync")
 				on_complete.call(0)
 				return
@@ -1088,6 +1144,9 @@ func _db_insert_batch(games: Array[GameResource], on_complete: Callable):
 					
 					# Update sync current count
 					_sync_current += games.size()
+					
+					# Update Android foreground service with current progress
+					_update_sync_fg_service(_sync_platform, _sync_current, _sync_total)
 					
 					# Print performance summary
 					var total_batch_time = Time.get_ticks_msec() - _perf_batch_start_time

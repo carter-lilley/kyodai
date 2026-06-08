@@ -3,12 +3,12 @@
 small screen testing in settings menu (never hscroll)
 separate firmware page or indicator?
 sync not working after removing games
-extraction callback polling
 xemu save sync
+no kb in oobe? dual screen off by default or maybe jsut always off
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
-	ft: android background sync/notifs
+	x ft: android background sync/notifs
 
 ## saves
 	implement argosy sigil
@@ -47,6 +47,7 @@ xemu save sync
 	move max_cache_size to memory manager?
 	
 ## launch:
+	azahar save sync
 	add: psp, melonds, ps2, dolphin retroarch cores
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?

@@ -18,7 +18,9 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
+import java.util.Enumeration;
 
 /**
  * Extraction service that runs in a separate process to avoid sharing memory with Godot.
@@ -201,13 +203,31 @@ public class ExtractorService extends Service {
         InputStream fis = null;
         byte[] buffer = new byte[131072]; // 128KB buffer for better throughput
         int extractedCount = 0;
+        int totalFiles = 0;
         long totalBytes = 0;
         long lastLogTime = System.currentTimeMillis();
+        long lastProgressWrite = System.currentTimeMillis();
         
         try {
             File destDir = new File(extractDir);
             if (!destDir.exists()) {
                 destDir.mkdirs();
+            }
+            
+            // Count total files first using ZipFile (random access, doesn't stream)
+            try {
+                ZipFile zipFile = new ZipFile(zipPath);
+                Enumeration<? extends ZipEntry> entries = zipFile.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    if (!entry.isDirectory()) {
+                        totalFiles++;
+                    }
+                }
+                zipFile.close();
+                Log.d(TAG, "Total files to extract: " + totalFiles);
+            } catch (Exception e) {
+                Log.w(TAG, "Could not count total files: " + e.getMessage());
             }
             
             fis = new FileInputStream(zipPath);
@@ -264,11 +284,17 @@ public class ExtractorService extends Service {
                 
                 zis.closeEntry();
                 
-                // Log progress every 30 seconds
+                // Write progress file every 2 seconds
                 long now = System.currentTimeMillis();
-                if (now - lastLogTime > 30000) {
-                    Log.d(TAG, "Extraction progress: " + extractedCount + " files, " + (totalBytes / 1048576) + " MB");
+                if (now - lastProgressWrite > 2000) {
+                    writeProgressMarker(extractDir, extractedCount, totalFiles);
                     updateNotification(gameName, extractedCount, totalBytes);
+                    lastProgressWrite = now;
+                }
+                
+                // Log progress every 30 seconds
+                if (now - lastLogTime > 30000) {
+                    Log.d(TAG, "Extraction progress: " + extractedCount + "/" + totalFiles + " files, " + (totalBytes / 1048576) + " MB");
                     lastLogTime = now;
                 }
                 
@@ -278,7 +304,9 @@ public class ExtractorService extends Service {
                 }
             }
             
-            Log.d(TAG, "Extraction complete: " + extractedCount + " files, " + (totalBytes / 1048576) + " MB");
+            // Write final progress
+            writeProgressMarker(extractDir, extractedCount, totalFiles);
+            Log.d(TAG, "Extraction complete: " + extractedCount + "/" + totalFiles + " files, " + (totalBytes / 1048576) + " MB");
             return true;
             
         } catch (Exception e) {
@@ -296,6 +324,21 @@ public class ExtractorService extends Service {
                     fis.close();
                 } catch (Exception ignored) {}
             }
+        }
+    }
+    
+    private void writeProgressMarker(String extractDir, int extractedCount, int totalFiles) {
+        try {
+            java.io.File dir = new java.io.File(extractDir);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            java.io.File progressMarker = new java.io.File(dir, ".extraction_progress");
+            java.io.FileWriter writer = new java.io.FileWriter(progressMarker);
+            writer.write("{\"extracted\":" + extractedCount + ",\"total\":" + totalFiles + "}");
+            writer.close();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to write progress marker", e);
         }
     }
     

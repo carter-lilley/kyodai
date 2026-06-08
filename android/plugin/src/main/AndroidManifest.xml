@@ -50,6 +50,13 @@
 			android:exported="false"
 			android:foregroundServiceType="dataSync" />
 		
+		<!-- Foreground service for metadata sync to prevent app kill during RomM sync -->
+		<service
+			android:name=".SyncForegroundService"
+			android:enabled="true"
+			android:exported="false"
+			android:foregroundServiceType="dataSync" />
+		
 		<!-- Extraction service running in separate process to avoid sharing Godot's memory budget -->
 		<service
 			android:name=".ExtractorService"

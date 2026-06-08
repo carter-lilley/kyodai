@@ -1393,6 +1393,99 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    // ==================== FOREGROUND SERVICE FOR METADATA SYNC ====================
+    
+    /**
+     * Starts the foreground service to prevent Android from killing the app during metadata sync.
+     * Shows a persistent notification with sync progress.
+     * 
+     * @param platformName Name of the platform currently being synced
+     * @param current Current game count
+     * @param total Total game count across all platforms
+     */
+    @UsedByGodot
+    public void startSyncForegroundService(String platformName, int current, int total) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "startSyncForegroundService() called");
+        Log.d(TAG, "Platform: " + platformName + ", Progress: " + current + "/" + total);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, SyncForegroundService.class);
+            intent.setAction("START_SYNC");
+            intent.putExtra("platform_name", platformName);
+            intent.putExtra("current", current);
+            intent.putExtra("total", total);
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activity.startForegroundService(intent);
+            } else {
+                activity.startService(intent);
+            }
+            
+            Log.d(TAG, "Sync foreground service started successfully");
+            Log.d(TAG, "==========================================");
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR starting sync foreground service: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+        }
+    }
+    
+    /**
+     * Updates the sync foreground service notification with current progress.
+     * 
+     * @param platformName Name of the platform currently being synced
+     * @param current Current game count
+     * @param total Total game count across all platforms
+     */
+    @UsedByGodot
+    public void updateSyncForegroundService(String platformName, int current, int total) {
+        if (activity == null) {
+            return;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, SyncForegroundService.class);
+            intent.setAction("UPDATE_PROGRESS");
+            intent.putExtra("platform_name", platformName);
+            intent.putExtra("current", current);
+            intent.putExtra("total", total);
+            
+            activity.startService(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR updating sync foreground service: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Stops the sync foreground service when sync is complete or cancelled.
+     */
+    @UsedByGodot
+    public void stopSyncForegroundService() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "stopSyncForegroundService() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return;
+        }
+        
+        try {
+            Intent intent = new Intent(activity, SyncForegroundService.class);
+            intent.setAction("STOP_SYNC");
+            activity.startService(intent);
+            
+            Log.d(TAG, "Sync foreground service stop requested");
+            Log.d(TAG, "==========================================");
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR stopping sync foreground service: " + e.getMessage());
+        }
+    }
+    
     /**
      * Installs an APK file using PackageInstaller with FileProvider content URI.
      * Required for Android N+ where file:// URIs are forbidden.

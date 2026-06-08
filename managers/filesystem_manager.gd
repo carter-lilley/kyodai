@@ -428,23 +428,53 @@ static func delete_dir_recursive(path: String) -> bool:
 	return _delete_dir_recursive_internal(path)
 
 static func _delete_dir_recursive_internal(path: String) -> bool:
+	print("[FileSystemManager] Deleting directory: " + path)
 	var dir = DirAccess.open(path)
 	if dir == null:
+		print("[FileSystemManager] FAILED to open directory: " + path)
 		return false
 	
 	dir.list_dir_begin()
 	var file_name = dir.get_next()
+	var deleted_count = 0
+	var failed_count = 0
 	while file_name != "":
 		if file_name != "." and file_name != "..":
 			var item_path = join_paths(path, file_name)
 			if dir.current_is_dir():
-				_delete_dir_recursive_internal(item_path)
+				print("[FileSystemManager] Recursing into subdirectory: " + item_path)
+				if not _delete_dir_recursive_internal(item_path):
+					failed_count += 1
 			else:
-				DirAccess.remove_absolute(item_path)
+				var result = DirAccess.remove_absolute(item_path)
+				if result == OK:
+					deleted_count += 1
+				else:
+					if OS.get_name() == "Windows":
+						OS.execute("cmd", ["/c", "attrib", "-r", item_path], [], true)
+						result = DirAccess.remove_absolute(item_path)
+						if result == OK:
+							deleted_count += 1
+						else:
+							print("[FileSystemManager] FAILED to delete file after clearing read-only: " + item_path + " (error: " + str(result) + ")")
+							failed_count += 1
+					else:
+						print("[FileSystemManager] FAILED to delete file: " + item_path + " (error: " + str(result) + ")")
+						failed_count += 1
 		file_name = dir.get_next()
 	dir.list_dir_end()
 	
-	return DirAccess.remove_absolute(path) == OK
+	var result = DirAccess.remove_absolute(path)
+	if result != OK and OS.get_name() == "Windows":
+		OS.execute("cmd", ["/c", "attrib", "-r", path], [], true)
+		result = DirAccess.remove_absolute(path)
+	
+	if result == OK:
+		print("[FileSystemManager] Successfully deleted directory: " + path + " (files deleted: " + str(deleted_count) + ", failed: " + str(failed_count) + ")")
+	else:
+		print("[FileSystemManager] FAILED to delete directory: " + path + " (error: " + str(result) + ", files deleted: " + str(deleted_count) + ", failed: " + str(failed_count) + ")")
+	
+	return result == OK
 
 ## Lists files in a directory
 static func list_dir(path: String) -> Array[String]:
@@ -528,7 +558,9 @@ static func copy_file(source_path: String, dest_path: String) -> bool:
 ## Recursively copies a directory to another location
 ## Returns true on success
 static func copy_dir(source: String, dest: String) -> bool:
+	print("[FileSystemManager] copy_dir: START " + source + " -> " + dest)
 	if not DirAccess.dir_exists_absolute(dest):
+		print("[FileSystemManager] copy_dir: Creating destination directory: " + dest)
 		DirAccess.make_dir_recursive_absolute(dest)
 	
 	var dir = DirAccess.open(source)
@@ -539,6 +571,8 @@ static func copy_dir(source: String, dest: String) -> bool:
 	dir.list_dir_begin()
 	var item = dir.get_next()
 	var success = true
+	var copied_count = 0
+	var failed_count = 0
 	
 	while item != "":
 		if item != "." and item != "..":
@@ -547,12 +581,17 @@ static func copy_dir(source: String, dest: String) -> bool:
 			if dir.current_is_dir():
 				if not copy_dir(src_path, dst_path):
 					success = false
+					failed_count += 1
 			else:
 				if not copy_file(src_path, dst_path):
 					success = false
+					failed_count += 1
+				else:
+					copied_count += 1
 		item = dir.get_next()
 	
 	dir.list_dir_end()
+	print("[FileSystemManager] copy_dir: END " + source + " -> " + dest + " (success=" + str(success) + ", copied=" + str(copied_count) + ", failed=" + str(failed_count) + ")")
 	return success
 
 ## Creates a ZIP archive from a directory
@@ -659,7 +698,13 @@ static func delete_file(path: String) -> bool:
 	if _is_restricted_android_path(path):
 		return _plugin_delete_file(path)
 	
-	return DirAccess.remove_absolute(path) == OK
+	var result = DirAccess.remove_absolute(path)
+	if result != OK and OS.get_name() == "Windows":
+		# Clear read-only attribute and retry on Windows
+		OS.execute("cmd", ["/c", "attrib", "-r", path], [], true)
+		result = DirAccess.remove_absolute(path)
+	
+	return result == OK
 
 ## Gets file modification time
 static func get_modified_time(path: String) -> int:
@@ -762,10 +807,14 @@ static func read_file_bytes(path: String) -> PackedByteArray:
 	file.close()
 	return data
 
-## Extracts a ZIP archive to a destination directory
-static func extract_zip(zip_path: String, extract_dir: String) -> bool:
-	if not file_exists(zip_path):
-		push_error("[FileSystemManager] ZIP file not found: " + zip_path)
+## Extracts an archive to a destination directory.
+## Auto-detects format (.zip, .7z) and platform (Android/desktop).
+## On desktop: always uses 7-Zip binary for consistent behavior.
+## On Android: uses native ExtractorService for ZIP files.
+## progress_callback(extracted_count: int, total_count: int) is called periodically.
+static func extract_archive(archive_path: String, extract_dir: String, progress_callback: Callable = Callable()) -> bool:
+	if not file_exists(archive_path):
+		push_error("[FileSystemManager] Archive file not found: " + archive_path)
 		return false
 	
 	if not dir_exists(extract_dir):
@@ -773,45 +822,90 @@ static func extract_zip(zip_path: String, extract_dir: String) -> bool:
 			push_error("[FileSystemManager] Failed to create extraction directory: " + extract_dir)
 			return false
 	
-	# On Android, use native streaming extraction to prevent OOM kills
+	var ext = archive_path.to_lower().get_extension()
+	
+	# On Android, only ZIP is supported via native ExtractorService
 	if PlatformManager.is_android():
-		return _extract_zip_native_streaming(zip_path, extract_dir)
+		if ext == "zip":
+			return _extract_zip_native_streaming(archive_path, extract_dir, "", progress_callback)
+		else:
+			push_error("[FileSystemManager] Only ZIP files supported on Android")
+			return false
 	
-	var reader = ZIPReader.new()
-	var err = reader.open(zip_path)
-	if err != OK:
-		print("[FileSystemManager] ZIPReader failed to open ZIP, attempting 7-Zip fallback...")
-		return _extract_zip_with_7z(zip_path, extract_dir)
+	# On desktop, use 7-Zip for all archive types
+	return _extract_with_7z(archive_path, extract_dir, progress_callback)
+
+## Async extraction with notification management.
+## Queues to MemoryManager and handles progress notifications automatically.
+## on_progress(extracted: int, total: int)
+## on_complete(success: bool, error_msg: String)
+static func extract_archive_async(
+	archive_path: String,
+	extract_dir: String,
+	name: String = "",
+	delete_after: bool = false,
+	on_progress: Callable = Callable(),
+	on_complete: Callable = Callable()
+) -> void:
+	var display_name = name if name != "" else archive_path.get_file().get_basename()
 	
-	var files = reader.get_files()
-	var success = true
-	for file_path in files:
-		# Skip directory entries (paths ending with /)
-		if file_path.ends_with("/"):
-			continue
-		
-		var dest_path = join_paths(extract_dir, file_path)
-		var dest_dir = dest_path.get_base_dir()
-		
-		if not dir_exists(dest_dir):
-			make_dir_recursive(dest_dir)
-		
-		var data = reader.read_file(file_path)
-		if data.is_empty():
-			push_warning("[FileSystemManager] Empty file in ZIP: " + file_path)
-			continue
-		
-		if not write_file_bytes(dest_path, data):
-			push_error("[FileSystemManager] Failed to write extracted file: " + dest_path)
-			success = false
+	# Use Dictionary so closures capture by reference (not by value)
+	var counts = {"extracted": 0, "total": 0}
 	
-	reader.close()
-	return success
+	var progress_callable = func() -> float:
+		if counts.total > 0:
+			return float(counts.extracted) / float(counts.total)
+		return 0.0
+	
+	var text_formatter = func(_progress: float) -> String:
+		if counts.total > 0:
+			return display_name + "... (" + str(counts.extracted) + "/" + str(counts.total) + " files)"
+		elif counts.extracted > 0:
+			return display_name + "... (" + str(counts.extracted) + " files)"
+		return display_name + "..."
+	
+	var notification_id = NotificationManager.show_notification_safe(
+		display_name + "...",
+		NotificationManager.Type.INFO,
+		null,
+		0.0,
+		progress_callable,
+		text_formatter,
+		false
+	)
+	
+	var progress_callback = func(extracted: int, total: int):
+		counts.extracted = extracted
+		counts.total = total
+		
+		# Forward to caller
+		if on_progress.is_valid():
+			on_progress.call_deferred(extracted, total)
+	
+	var extraction_callable = func() -> bool:
+		var success = extract_archive(archive_path, extract_dir, progress_callback)
+		
+		if success and delete_after:
+			delete_file(archive_path)
+		
+		return success
+	
+	MemoryManager.queue_extraction_task(extraction_callable, func(success: bool):
+		NotificationManager.dismiss_notification_safe(notification_id)
+		
+		var error_msg = ""
+		if not success:
+			error_msg = "Extraction failed for " + display_name
+		
+		if on_complete.is_valid():
+			on_complete.call_deferred(success, error_msg)
+	)
 
 ## Uses the ExtractorService (separate process) for all Android ZIP extractions.
 ## This prevents OOM kills by running extraction outside Godot's memory budget.
 ## Works for any ZIP extraction: games, firmware, emulator assets, saves, etc.
-static func _extract_zip_native_streaming(zip_path: String, extract_dir: String, game_name: String = "") -> bool:
+## progress_callback(extracted_count: int, total_count: int) is called when progress file updates.
+static func _extract_zip_native_streaming(zip_path: String, extract_dir: String, game_name: String = "", progress_callback: Callable = Callable()) -> bool:
 	print("[FileSystemManager] Using ExtractorService for: " + zip_path)
 	
 	var plugin = _get_plugin()
@@ -831,12 +925,15 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	# The service writes this file when done, so we don't depend on signals/broadcasts
 	var completion_marker = abs_extract_dir + "/.extraction_complete"
 	var success_marker = abs_extract_dir + "/.extraction_success"
+	var progress_marker = abs_extract_dir + "/.extraction_progress"
 	
 	# Clean up any old markers
 	if FileAccess.file_exists(completion_marker):
 		DirAccess.remove_absolute(completion_marker)
 	if FileAccess.file_exists(success_marker):
 		DirAccess.remove_absolute(success_marker)
+	if FileAccess.file_exists(progress_marker):
+		DirAccess.remove_absolute(progress_marker)
 	
 	# Start the extraction service
 	var started = plugin.startExtractorService(abs_zip, abs_extract_dir, display_name)
@@ -851,6 +948,7 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	var elapsed = 0.0
 	var completed = false
 	var success = false
+	var last_progress_read = 0.0
 	
 	while elapsed < timeout:
 		# Check for completion marker (most reliable method)
@@ -867,21 +965,31 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 			print("[FileSystemManager] Extraction complete marker found, success=" + str(success))
 			break
 		
-		# Fallback: check if service process is still running
-		# If the service died without writing a marker, something went wrong
+		# Poll progress file every ~2 seconds
+		if progress_callback.is_valid() and elapsed - last_progress_read >= 2.0:
+			if FileAccess.file_exists(progress_marker):
+				var progress_file = FileAccess.open(progress_marker, FileAccess.READ)
+				if progress_file:
+					var json_text = progress_file.get_as_text()
+					progress_file.close()
+					var json = JSON.new()
+					var error = json.parse(json_text)
+					if error == OK and json.data is Dictionary:
+						var extracted = json.data.get("extracted", 0)
+						var total = json.data.get("total", 0)
+						progress_callback.call(extracted, total)
+				last_progress_read = elapsed
 		
 		OS.delay_msec(100)
 		elapsed += 0.1
-		
-		# Log progress every 30 seconds
-		if int(elapsed) % 30 == 0 and elapsed > 0:
-			print("[FileSystemManager] ExtractorService still running... elapsed=" + str(int(elapsed)) + "s")
 	
 	# Clean up markers
 	if FileAccess.file_exists(completion_marker):
 		DirAccess.remove_absolute(completion_marker)
 	if FileAccess.file_exists(success_marker):
 		DirAccess.remove_absolute(success_marker)
+	if FileAccess.file_exists(progress_marker):
+		DirAccess.remove_absolute(progress_marker)
 	
 	if not completed:
 		push_error("[FileSystemManager] Extraction service timed out")
@@ -890,9 +998,12 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	print("[FileSystemManager] ExtractorService result: " + str(success))
 	return success
 
-## Extracts a ZIP archive using 7-Zip binary (fallback for ZIP64/large files)
+## Extracts an archive using the bundled 7-Zip binary.
+## Handles both ZIP and 7z archives on desktop platforms.
+## progress_callback(extracted_count: int, total_count: int) is called every 2 seconds.
+## total_count will always be 0 (unknown) since 7z does not provide file counts.
 ## Returns true on success
-static func _extract_zip_with_7z(zip_path: String, extract_dir: String) -> bool:
+static func _extract_with_7z(archive_path: String, extract_dir: String, progress_callback: Callable = Callable()) -> bool:
 	var binary_path = _get_7z_binary_path()
 	if binary_path == "":
 		push_error("[FileSystemManager] 7-Zip binary not available for fallback extraction")
@@ -900,22 +1011,139 @@ static func _extract_zip_with_7z(zip_path: String, extract_dir: String) -> bool:
 	
 	print("[FileSystemManager] Using 7-Zip fallback for ZIP extraction: " + binary_path)
 	
-	var abs_zip = resolve_native_path(zip_path)
+	var abs_archive = resolve_native_path(archive_path)
 	var abs_extract_dir = resolve_native_path(extract_dir)
 	
-	print("[FileSystemManager] 7-Zip extracting: " + abs_zip + " -> " + abs_extract_dir)
+	print("[FileSystemManager] 7-Zip extracting: " + abs_archive + " -> " + abs_extract_dir)
 	
-	# Use 7z x to extract with full paths
+	# Ensure extraction directory exists before polling
+	if not dir_exists(abs_extract_dir):
+		make_dir_recursive(abs_extract_dir)
+	
+	# Count total files first for accurate progress
+	var total_files = _count_files_in_7z_archive(binary_path, abs_archive)
+	print("[FileSystemManager] 7-Zip total files in archive: " + str(total_files))
+	
+	# Run 7z in a thread so we can poll directory progress while it runs
+	# We're already in a MemoryManager worker thread, but OS.execute blocks,
+	# so we use an inner thread for 7z and poll from the outer thread
+	var result = {"done": false, "success": false}
+	var thread = Thread.new()
+	
+	var run_7z = func():
+		var output = []
+		var args = ["x", abs_archive, "-o" + abs_extract_dir, "-y"]
+		print("[FileSystemManager] 7-Zip command: " + binary_path + " " + " ".join(args))
+		var exit_code = OS.execute(binary_path, args, output, true)
+		
+		print("[FileSystemManager] 7-Zip exit code: " + str(exit_code))
+		if exit_code != 0:
+			push_error("[FileSystemManager] 7-Zip extraction failed with exit code: " + str(exit_code))
+			result.success = false
+		else:
+			result.success = true
+		result.done = true
+	
+	thread.start(run_7z)
+	
+	# Poll directory file count every 500ms for faster progress updates
+	var last_count = 0
+	while not result.done:
+		OS.delay_msec(500)
+		
+		var current_count = count_files_recursive(abs_extract_dir)
+		if current_count != last_count and progress_callback.is_valid():
+			progress_callback.call(current_count, total_files)
+			last_count = current_count
+	
+	thread.wait_to_finish()
+	
+	# Final callback with actual file count
+	var final_count = count_files_recursive(abs_extract_dir)
+	if progress_callback.is_valid():
+		progress_callback.call(final_count, total_files)
+	
+	var success = result.success and final_count > 0
+	if success:
+		print("[FileSystemManager] 7-Zip extraction completed successfully, " + str(final_count) + " files extracted")
+	else:
+		push_error("[FileSystemManager] 7-Zip extraction failed - exit=" + str(result.success) + ", files=" + str(final_count))
+	
+	return success
+
+## Counts total files in a 7z archive using "7z l" command.
+## Returns -1 if counting fails.
+static func _count_files_in_7z_archive(binary_path: String, archive_path: String) -> int:
+	print("[FileSystemManager] Listing archive: " + archive_path)
 	var output = []
-	var args = ["x", abs_zip, "-o" + abs_extract_dir, "-y"]
+	var args = ["l", archive_path]
 	var exit_code = OS.execute(binary_path, args, output, true)
 	
 	if exit_code != 0:
-		push_error("[FileSystemManager] 7-Zip extraction failed with exit code: " + str(exit_code))
-		return false
+		push_warning("[FileSystemManager] Failed to list archive contents, progress will be indeterminate")
+		return -1
 	
-	print("[FileSystemManager] 7-Zip extraction completed successfully")
-	return true
+	# OS.execute returns output as array of strings - often one big string per element on Windows
+	# Join everything and split by newlines to get individual lines
+	var full_text = "\n".join(output)
+	var lines = full_text.split("\n", false)
+	print("[FileSystemManager] 7z list: " + str(lines.size()) + " lines total")
+	
+	# The summary line is typically the last non-empty line
+	# Format: "20643          311  2 files, 0 folders"
+	# We want the number before " files" (field $3 in awk)
+	for i in range(lines.size() - 1, -1, -1):
+		var line = lines[i].strip_edges()
+		if line.is_empty():
+			continue
+		
+		# Look for "files," pattern
+		if line.contains("files,") or line.contains("files "):
+			# Use regex to extract: (number) files
+			var regex = RegEx.new()
+			regex.compile("(\\d+)\\s+files")
+			var match = regex.search(line)
+			if match:
+				var num_str = match.get_string(1)
+				print("[FileSystemManager] Found total files from summary: " + num_str)
+				return int(num_str)
+			
+			# Fallback: manual parse - find " files" and backtrack to the number
+			var idx = line.find(" files")
+			if idx != -1:
+				var num_start = idx - 1
+				while num_start >= 0 and line[num_start].is_digit():
+					num_start -= 1
+				num_start += 1
+				if num_start < idx:
+					var num_str = line.substr(num_start, idx - num_start)
+					print("[FileSystemManager] Found total files from summary (manual): " + num_str)
+					return int(num_str)
+		
+		# Only check last 5 non-empty lines for summary
+		var checked = 0
+		for j in range(i, -1, -1):
+			if not lines[j].strip_edges().is_empty():
+				checked += 1
+				if checked >= 5:
+					break
+		if checked >= 5:
+				break
+	
+	# Fallback: count individual file entries
+	# Format: "YYYY-MM-DD HH:MM:SS .R..A   Size   Compressed  Name"
+	var file_count = 0
+	for line in lines:
+		line = line.strip_edges()
+		if line.length() > 25:
+			# Check for attribute at position 20 (after timestamp "YYYY-MM-DD HH:MM:SS ")
+			var attr = line.substr(20, 5)
+			# Files start with '.', directories start with 'D'
+			if attr.length() == 5 and attr[0] == ".":
+				file_count += 1
+	
+	print("[FileSystemManager] Counted files from entries: " + str(file_count))
+	return file_count if file_count > 0 else -1
 
 ## Gets the bundled 7z binary path for the current platform
 static func _get_7z_binary_path() -> String:
@@ -1006,6 +1234,26 @@ static func find_file_recursive(dir_path: String, filename: String) -> String:
 	
 	return ""
 
+## Recursively counts files (not directories) in a directory
+## Returns the total file count
+static func count_files_recursive(dir_path: String) -> int:
+	if dir_path.is_empty() or not dir_exists(dir_path):
+		return 0
+	
+	var count = 0
+	var items = list_dir(dir_path)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var item_path = join_paths(dir_path, item)
+		if is_dir(item_path):
+			count += count_files_recursive(item_path)
+		else:
+			count += 1
+	
+	return count
+
 ## Moves all contents from source_dir to dest_dir
 ## Tries rename first (fast), falls back to copy+delete for cross-boundary moves
 ## Returns true on success
@@ -1038,17 +1286,26 @@ static func move_dir_contents(source_dir: String, dest_dir: String) -> bool:
 			continue
 		
 		# Rename failed - try copy+delete
+		print("[FileSystemManager] Rename failed for " + source + ", falling back to copy+delete...")
 		if file_exists(source):
+			print("[FileSystemManager] Copying file: " + source + " -> " + dest)
 			if not copy_file(source, dest):
 				push_error("[FileSystemManager] Failed to copy file: " + source + " -> " + dest)
 				return false
-			delete_file(source)
+			print("[FileSystemManager] Deleting source file: " + source)
+			var del_success = delete_file(source)
+			if not del_success:
+				print("[FileSystemManager] WARNING: Failed to delete source file: " + source)
 			moved_count += 1
 		elif is_dir(source):
+			print("[FileSystemManager] Copying directory: " + source + " -> " + dest)
 			if not copy_dir(source, dest):
 				push_error("[FileSystemManager] Failed to copy directory: " + source + " -> " + dest)
 				return false
-			delete_dir_recursive(source)
+			print("[FileSystemManager] Deleting source directory: " + source)
+			var del_success = delete_dir_recursive(source)
+			if not del_success:
+				print("[FileSystemManager] WARNING: Failed to delete source directory: " + source)
 			moved_count += 1
 	
 	print("[FileSystemManager] Moved " + str(moved_count) + " items from " + source_dir + " to " + dest_dir)

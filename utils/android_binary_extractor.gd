@@ -86,12 +86,12 @@ static func extract_all_binaries() -> void:
 	print("[AndroidBinaryExtractor] Extracting all utility binaries...")
 	
 	# CHD reader
-	var chd_path = extract_binary("res://bin/libchdr/android/chd_reader-arm64", "chd_reader")
+	var chd_path = extract_binary("res://bin/libchdr/android/chd_reader-arm64.bin", "chd_reader")
 	if chd_path == "":
 		push_warning("[AndroidBinaryExtractor] Failed to extract chd_reader")
 	
 	# CSO reader  
-	var cso_path = extract_binary("res://bin/cso_reader/android/cso_reader-arm64", "cso_reader")
+	var cso_path = extract_binary("res://bin/cso_reader/android/cso_reader-arm64.bin", "cso_reader")
 	if cso_path == "":
 		push_warning("[AndroidBinaryExtractor] Failed to extract cso_reader")
 	

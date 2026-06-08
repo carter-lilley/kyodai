@@ -6,24 +6,23 @@ signal cycle_prev_clicked()
 signal cycle_next_clicked()
 signal search_clicked()
 
-@onready var _prev_button: Button
-@onready var _search_button: TextureButton
-@onready var _next_button: Button
-@onready var _platform_buttons: Array[Button] = []
+@onready var _search_button: M3IconButton
+@onready var _platform_group: M3ButtonGroup
+@onready var _platform_buttons: Array[M3Button] = []
 
-const PLATFORM_COUNT: int = 5  # Total visible platforms (prev2, prev1, current, next1, next2)
-const INDICATOR_HEIGHT: float = 50.0
+const PLATFORM_COUNT: int = 5
+const TOTAL_GROUP_BUTTONS: int = PLATFORM_COUNT + 2
+const CENTER_PLATFORM_INDEX: int = 2
 
 var _platforms: Array[Dictionary] = []
-var _current_index: int = -1  # -1 means "All Games"
+var _current_index: int = -1
 var _all_games_label: String = "ALL"
-var _visible_indices: Array[int] = []  # Track which platform index each button represents
+var _visible_indices: Array[int] = []
 
 func _ready():
 	_setup_ui()
 
 func _setup_ui():
-	# Main container
 	var hbox = HBoxContainer.new()
 	hbox.name = "MainContainer"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -31,84 +30,75 @@ func _setup_ui():
 	hbox.add_theme_constant_override("separation", 8)
 	add_child(hbox)
 	
-	# Previous button (<)
-	_prev_button = Button.new()
-	_prev_button.name = "PrevButton"
-	_prev_button.text = "<"
-	_prev_button.focus_mode = Control.FOCUS_NONE
-	_prev_button.add_theme_font_size_override("font_size", 20)
-	_prev_button.pressed.connect(_on_prev_clicked)
-	hbox.add_child(_prev_button)
+	# Previous chevron (index 0)
+	var prev_btn = M3Button.new()
+	prev_btn.name = "PrevButton"
+	prev_btn.icon_name = "chevron-left-circle"
+	prev_btn.text = ""
+	prev_btn.button_size = M3Button.Size.SMALL
+	prev_btn.button_variant = M3Button.Variant.OUTLINED
+	prev_btn.focus_mode = Control.FOCUS_NONE
+	prev_btn.pressed.connect(_on_prev_clicked)
 	
-	# Platform buttons container
-	var platform_container = HBoxContainer.new()
-	platform_container.name = "PlatformContainer"
-	platform_container.alignment = BoxContainer.ALIGNMENT_CENTER
-	platform_container.add_theme_constant_override("separation", 24)
-	hbox.add_child(platform_container)
-	
-	# Create platform buttons (will be populated dynamically)
+	# Platform buttons (indices 1-5)
+	var platform_btns: Array[M3Button] = []
 	for i in range(PLATFORM_COUNT):
-		var btn = _create_platform_button(i)
-		platform_container.add_child(btn)
+		var btn = M3Button.new()
+		btn.name = "PlatformButton" + str(i)
+		btn.button_size = M3Button.Size.SMALL
+		if i == CENTER_PLATFORM_INDEX:
+			btn.button_variant = M3Button.Variant.FILLED
+		else:
+			btn.button_variant = M3Button.Variant.ELEVATED
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(_on_platform_button_clicked.bind(i))
+		platform_btns.append(btn)
+	
+	# Next chevron (index 6)
+	var next_btn = M3Button.new()
+	next_btn.name = "NextButton"
+	next_btn.icon_name = "chevron-right-circle"
+	next_btn.text = ""
+	next_btn.button_size = M3Button.Size.SMALL
+	next_btn.button_variant = M3Button.Variant.OUTLINED
+	next_btn.focus_mode = Control.FOCUS_NONE
+	next_btn.pressed.connect(_on_next_clicked)
+	
+	# Build the group with all children BEFORE adding to tree so _ready() runs once
+	# with fully-initialized buttons and computes connected corners correctly.
+	_platform_group = M3ButtonGroup.new()
+	_platform_group.name = "PlatformGroup"
+	_platform_group.select_mode = M3ButtonGroup.SelectMode.NONE
+	_platform_group.mode = M3ButtonGroup.Mode.CONNECTED
+	_platform_group.shape = M3ButtonGroup.Shape.ROUND
+	_platform_group.add_child(prev_btn)
+	for btn in platform_btns:
+		_platform_group.add_child(btn)
 		_platform_buttons.append(btn)
+	_platform_group.add_child(next_btn)
+	hbox.add_child(_platform_group)
 	
-	# Next button (>)
-	_next_button = Button.new()
-	_next_button.name = "NextButton"
-	_next_button.text = ">"
-	_next_button.focus_mode = Control.FOCUS_NONE
-	_next_button.add_theme_font_size_override("font_size", 20)
-	_next_button.pressed.connect(_on_next_clicked)
-	hbox.add_child(_next_button)
-	
-	# Search button
-	_search_button = TextureButton.new()
+	# Search button (outside the group)
+	_search_button = M3IconButton.new()
 	_search_button.name = "SearchButton"
+	_search_button.icon_name = "magnify"
+	_search_button.icon_button_size = M3IconButton.IconSize.SMALL
+	_search_button.icon_button_variant = M3IconButton.IconVariant.STANDARD
 	_search_button.focus_mode = Control.FOCUS_NONE
-	_search_button.custom_minimum_size = Vector2(24, 24)
-	_search_button.ignore_texture_size = true
-	_search_button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-	var search_icon = load("res://assets/icons/search.png")
-	var cross_icon = load("res://assets/icons/cross.png")
-	if search_icon:
-		_search_button.texture_normal = search_icon
 	_search_button.pressed.connect(_on_search_clicked)
 	hbox.add_child(_search_button)
-	
-	# Store icon references for swapping
-	_search_button.set_meta("search_icon", search_icon)
-	_search_button.set_meta("cross_icon", cross_icon)
-
-func _create_platform_button(index: int) -> Button:
-	var btn = Button.new()
-	btn.name = "PlatformButton" + str(index)
-	btn.focus_mode = Control.FOCUS_NONE
-	btn.add_theme_font_size_override("font_size", 16)
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	btn.pressed.connect(_on_platform_button_clicked.bind(index))
-	return btn
 
 func update_display(platforms: Array[Dictionary], current_index: int):
 	_platforms = platforms
 	_current_index = current_index
-	# Make sure prev/next buttons are visible when not in search mode
-	_prev_button.visible = true
-	_next_button.visible = true
 	_refresh_labels()
 
 func _refresh_labels():
 	if _platform_buttons.is_empty():
 		return
 	
-	# Calculate which platforms to show with wrapping
-	# Total items = platforms + "All Games" (-1)
-	# We want to show: prev2, prev1, current, next1, next2
-	
-	var total_items = _platforms.size() + 1  # +1 for "All Games"
+	var total_items = _platforms.size() + 1
 	if total_items <= 1:
-		# Not enough items to show
 		for i in range(PLATFORM_COUNT):
 			_platform_buttons[i].text = ""
 			_platform_buttons[i].disabled = true
@@ -116,20 +106,12 @@ func _refresh_labels():
 	
 	_visible_indices.clear()
 	
-	# Build the list of visible platforms with wrapping
 	for i in range(PLATFORM_COUNT):
-		var offset = i - 2  # -2, -1, 0, 1, 2
-		
-		# Calculate wrapped index
-		# Convert to 0-based index first (All = 0, platforms = 1 to size)
-		var current_0_based = _current_index + 1  # -1 becomes 0, 0 becomes 1, etc.
+		var offset = i - 2
+		var current_0_based = _current_index + 1
 		var target_0_based = current_0_based + offset
-		
-		# Wrap around
 		target_0_based = ((target_0_based % total_items) + total_items) % total_items
-		
-		# Convert back to our index system
-		var target_index = target_0_based - 1  # 0 becomes -1 (All), 1 becomes 0, etc.
+		var target_index = target_0_based - 1
 		_visible_indices.append(target_index)
 		
 		var platform_name: String
@@ -139,61 +121,28 @@ func _refresh_labels():
 			platform_name = _platforms[target_index].get("name", "???")
 		
 		var btn = _platform_buttons[i]
-		var is_center = (i == 2)  # Middle button is current
-		
 		btn.text = platform_name.to_upper().replace(" ", "")
 		btn.disabled = false
 		
-		# Style based on position
-		if is_center:
-			# Current platform - highlighted with pill background on ALL states
-			var pill_style = _create_highlight_style()
-			btn.add_theme_stylebox_override("normal", pill_style)
-			btn.add_theme_stylebox_override("hover", pill_style)
-			btn.add_theme_stylebox_override("pressed", pill_style)
-			btn.add_theme_stylebox_override("focus", pill_style)
-			# Font colors for all states
-			btn.add_theme_color_override("font_color", Color.WHITE)
-			btn.add_theme_color_override("font_hover_color", Color.WHITE)
-			btn.add_theme_color_override("font_pressed_color", Color.WHITE)
-			btn.add_theme_color_override("font_focus_color", Color.WHITE)
-			btn.add_theme_font_size_override("font_size", 18)
+		# Update variant based on position
+		if i == CENTER_PLATFORM_INDEX:
+			btn.button_variant = M3Button.Variant.FILLED
 		else:
-			# Other platforms - visible but not highlighted, no background
-			btn.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_color_override("font_hover_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_color_override("font_focus_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_font_size_override("font_size", 14)
-			# Set transparent background styles to override default button appearance
-			var transparent_style = _create_transparent_style()
-			btn.add_theme_stylebox_override("normal", transparent_style)
-			btn.add_theme_stylebox_override("hover", transparent_style)
-			btn.add_theme_stylebox_override("pressed", transparent_style)
-			btn.add_theme_stylebox_override("focus", transparent_style)
+			btn.button_variant = M3Button.Variant.ELEVATED
 
-func _create_transparent_style() -> StyleBoxFlat:
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0, 0, 0, 0)  # Fully transparent
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	return style
+func _on_platform_button_clicked(button_index: int) -> void:
+	if button_index >= 0 and button_index < _visible_indices.size():
+		var platform_index = _visible_indices[button_index]
+		platform_selected.emit(platform_index)
 
-func _create_highlight_style() -> StyleBoxFlat:
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.25, 0.25, 0.25, 0.9)
-	style.corner_radius_top_left = 16
-	style.corner_radius_top_right = 16
-	style.corner_radius_bottom_left = 16
-	style.corner_radius_bottom_right = 16
-	# Add padding so text doesn't get cut off
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	return style
+func _on_prev_clicked() -> void:
+	cycle_prev_clicked.emit()
+
+func _on_next_clicked() -> void:
+	cycle_next_clicked.emit()
+
+func _on_search_clicked() -> void:
+	search_clicked.emit()
 
 func get_all_games_label() -> String:
 	return _all_games_label
@@ -202,62 +151,21 @@ func set_all_games_label(label: String):
 	_all_games_label = label
 	_refresh_labels()
 
-func _on_platform_button_clicked(button_index: int) -> void:
-	"""Handle click on a platform button."""
-	if button_index >= 0 and button_index < _visible_indices.size():
-		var platform_index = _visible_indices[button_index]
-		platform_selected.emit(platform_index)
-
-func _on_prev_clicked() -> void:
-	"""Handle click on previous arrow."""
-	cycle_prev_clicked.emit()
-
-func _on_next_clicked() -> void:
-	"""Handle click on next arrow."""
-	cycle_next_clicked.emit()
-
-func _on_search_clicked() -> void:
-	"""Handle click on search button."""
-	search_clicked.emit()
-
 func set_search_active(is_active: bool) -> void:
-	"""Swap search button icon between search and cross."""
-	var search_icon = _search_button.get_meta("search_icon") as Texture2D
-	var cross_icon = _search_button.get_meta("cross_icon") as Texture2D
-	if is_active and cross_icon:
-		_search_button.texture_normal = cross_icon
-	elif search_icon:
-		_search_button.texture_normal = search_icon
+	_search_button.icon_name = "close" if is_active else "magnify"
 
 func show_search_mode(query: String):
-	"""Show search mode with query text."""
 	if _platform_buttons.is_empty():
 		return
 	
-	# Hide prev/next buttons during search
-	_prev_button.visible = false
-	_next_button.visible = false
-	
-	# Show "SEARCH" in the center with query
 	for i in range(PLATFORM_COUNT):
 		var btn = _platform_buttons[i]
 		
-		if i == 2:  # Center button
+		if i == CENTER_PLATFORM_INDEX:
 			btn.text = "SEARCH"
 			btn.disabled = false
-			# Highlight style
-			var pill_style = _create_highlight_style()
-			btn.add_theme_stylebox_override("normal", pill_style)
-			btn.add_theme_stylebox_override("hover", pill_style)
-			btn.add_theme_stylebox_override("pressed", pill_style)
-			btn.add_theme_stylebox_override("focus", pill_style)
-			btn.add_theme_color_override("font_color", Color.WHITE)
-			btn.add_theme_color_override("font_hover_color", Color.WHITE)
-			btn.add_theme_color_override("font_pressed_color", Color.WHITE)
-			btn.add_theme_color_override("font_focus_color", Color.WHITE)
-			btn.add_theme_font_size_override("font_size", 18)
+			btn.button_variant = M3Button.Variant.FILLED
 		else:
-			# Show query text on side buttons if there's room
 			if i == 1 or i == 3:
 				var display_query = query
 				if display_query.length() > 12:
@@ -266,14 +174,4 @@ func show_search_mode(query: String):
 			else:
 				btn.text = ""
 			btn.disabled = true
-			# Transparent style
-			var transparent_style = _create_transparent_style()
-			btn.add_theme_stylebox_override("normal", transparent_style)
-			btn.add_theme_stylebox_override("hover", transparent_style)
-			btn.add_theme_stylebox_override("pressed", transparent_style)
-			btn.add_theme_stylebox_override("focus", transparent_style)
-			btn.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_color_override("font_hover_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_color_override("font_focus_color", Color(0.7, 0.7, 0.7, 0.9))
-			btn.add_theme_font_size_override("font_size", 12)
+			btn.button_variant = M3Button.Variant.ELEVATED

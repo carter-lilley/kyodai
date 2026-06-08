@@ -407,7 +407,8 @@ func _get_icon_variant_colors(selected: bool) -> Dictionary:
 				result.hover_bg = M3Theme.state_overlay(M3Theme.get_inverse_surface(), result.text, M3Theme.OPACITY_HOVER)
 				result.pressed_bg = M3Theme.state_overlay(M3Theme.get_inverse_surface(), result.text, M3Theme.OPACITY_PRESSED)
 			else:
-				result.bg = Color.TRANSPARENT
+				var surface = M3Theme.get_surface()
+				result.bg = Color(surface.r, surface.g, surface.b, 0.02)
 				result.text = M3Theme.get_on_surface_variant()
 				result.border_c = M3Theme.get_outline_variant()
 				result.hover_bg = M3Theme.state_overlay(M3Theme.get_surface(), result.text, M3Theme.OPACITY_HOVER)
@@ -415,7 +416,7 @@ func _get_icon_variant_colors(selected: bool) -> Dictionary:
 			result.disabled_bg = Color.TRANSPARENT
 			result.disabled_text = M3Theme.disabled_color(M3Theme.get_on_surface())
 			result.focus_border = result.text
-			result.border_w = 1
+			result.border_w = 2
 	
 	return result
 

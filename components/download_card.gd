@@ -47,7 +47,12 @@ func _update_display():
 			progress_bar.value = download_item.progress * 100
 			cancel_button.text = "Cancel"
 		"extract_pending", "extracting":
-			status_label.text = "Extracting..."
+			if download_item.total_count > 0:
+				status_label.text = "Extracting... (" + str(download_item.extracted_count) + "/" + str(download_item.total_count) + " files)"
+			elif download_item.extracted_count > 0:
+				status_label.text = "Extracting... (" + str(download_item.extracted_count) + " files)"
+			else:
+				status_label.text = "Extracting..."
 			status_label.modulate = Color.ORANGE
 			progress_bar.value = download_item.progress * 100
 			cancel_button.text = "Cancel"

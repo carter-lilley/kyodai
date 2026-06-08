@@ -943,7 +943,7 @@ static func _get_chd_reader_path() -> String:
 		return base_path + "macos/chd_reader"
 	elif PlatformManager.is_android():
 		# Extract binary to internal storage on first use
-		return _AndroidBinaryExtractor.extract_binary(base_path + "android/chd_reader-arm64", "chd_reader")
+		return _AndroidBinaryExtractor.extract_binary(base_path + "android/chd_reader-arm64.bin", "chd_reader")
 	else:
 		push_error("[TitleIDParser] Unsupported platform for CHD reading")
 		return ""
@@ -1604,7 +1604,7 @@ static func _get_cso_reader_path() -> String:
 		return base_path + "macos/cso_reader"
 	elif PlatformManager.is_android():
 		# Extract binary to internal storage on first use
-		return _AndroidBinaryExtractor.extract_binary(base_path + "android/cso_reader-arm64", "cso_reader")
+		return _AndroidBinaryExtractor.extract_binary(base_path + "android/cso_reader-arm64.bin", "cso_reader")
 	else:
 		push_error("[TitleIDParser] Unsupported platform for CSO reading")
 		return ""

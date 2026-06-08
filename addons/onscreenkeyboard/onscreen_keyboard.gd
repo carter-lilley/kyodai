@@ -123,12 +123,22 @@ func _on_viewport_focus_changed(control: Control) -> void:
 			keyboard_opened.emit(control)
 			return
 		
+		# If keyboard is visible but has no active LineEdit (e.g. after reset_focus_tracking
+		# while animating out), re-associate with the newly focused control
+		if visible and _active_line_edit == null:
+			_active_line_edit = control
+			_previous_focus_object = control
+			_passthrough_caret_column = control.caret_column
+			_show_keyboard()
+			return
+		
 		# If keyboard is hidden, open it for the newly focused LineEdit
 		if not visible:
 			_previous_focus_object = control
 			_active_line_edit = control
 			_passthrough_caret_column = control.caret_column
 			_show_keyboard()
+			return
 
 func reconnect_viewport() -> void:
 	"""Reconnect the keyboard to the current viewport's focus system.
@@ -142,9 +152,11 @@ func reconnect_viewport() -> void:
 	reset_focus_tracking()
 	# Force a re-check of current focus owner in case something is already focused
 	if auto_show:
-		var current_focus = get_viewport().gui_get_focus_owner()
-		if current_focus != null and is_keyboard_focus_object(current_focus):
-			_previous_focus_object = current_focus
+		var viewport = get_viewport()
+		if viewport != null:
+			var current_focus = viewport.gui_get_focus_owner()
+			if current_focus != null and is_keyboard_focus_object(current_focus):
+				_previous_focus_object = current_focus
 	
 	# Connect to new viewport's focus signal
 	var new_viewport = get_viewport()
@@ -153,13 +165,6 @@ func reconnect_viewport() -> void:
 
 
 func _input(event):
-	# DEBUG: Log all input events when visible
-	if visible:
-		if event is InputEventMouseButton:
-			print("[OnscreenKeyboard] _input: mousebutton pressed=", event.pressed, " pos=", event.position, " global_pos=", event.global_position, " btn=", event.button_index)
-		elif event is InputEventScreenTouch:
-			print("[OnscreenKeyboard] _input: screentouch pressed=", event.pressed, " pos=", event.position)
-	
 	# If keyboard is hidden and user taps/clicks anywhere, clear the dismissal
 	# so that if the tap lands on a LineEdit it can reopen. We defer the actual
 	# check because _gui_input() (where LineEdit grabs focus) runs AFTER _input().
@@ -184,12 +189,9 @@ func _input(event):
 			click_pos = event.position
 		
 		if click_pos != null:
-			# DEBUG: Log dismissal check
 			var keyboard_top = get_viewport().get_visible_rect().size.y - size.y
-			print("[OnscreenKeyboard] dismissal check: click_pos=", click_pos, " keyboard_top=", keyboard_top, " size=", size, " viewport_size=", get_viewport().get_visible_rect().size)
 			# 1. Touch is inside the keyboard's intended area -> keep open
 			if click_pos.y >= keyboard_top:
-				print("[OnscreenKeyboard] touch inside keyboard, keeping open")
 				return
 			
 			# 2. Touch is on the active LineEdit -> keep open (tapping the
@@ -383,10 +385,8 @@ func _update_auto_display_on_input(event):
 
 
 func _hide_keyboard(key_data=null):
-	print("[OnscreenKeyboard] _hide_keyboard called. visible=", visible, " _is_hiding=", _is_hiding)
 	# Don't hide if already hidden or already hiding - prevents animation toggling visibility
 	if not visible or _is_hiding:
-		print("[OnscreenKeyboard] _hide_keyboard: early return (not visible or already hiding)")
 		return
 	
 	_is_hiding = true
@@ -400,15 +400,18 @@ func _hide_keyboard(key_data=null):
 		_dismissed_line_edit = _active_line_edit
 	_active_line_edit = null
 	if animate:
-		var new_y_pos = get_viewport().get_visible_rect().size.y + 10
-		animate_position(Vector2(position.x, new_y_pos), true)
+		var viewport = get_viewport()
+		if viewport != null:
+			var new_y_pos = viewport.get_visible_rect().size.y + 10
+			animate_position(Vector2(position.x, new_y_pos), true)
+		else:
+			change_visibility(false)
 	else:
 		change_visibility(false)
 
 
 func _on_hide_keyboard_clicked(key_data=null):
 	"""Handle click on hide keyboard button - return focus and hide."""
-	print("[OnscreenKeyboard] _on_hide_keyboard_clicked called")
 	var line_edit_to_focus = _active_line_edit
 	_hide_keyboard()
 	# Defer focus grab to ensure it happens after keyboard starts hiding
@@ -440,26 +443,26 @@ func _deferred_show_keyboard_check():
 
 
 func _show_keyboard(key_data=null):
+	var viewport = get_viewport()
+	if viewport == null:
+		# Keyboard is not in the scene tree yet (e.g. during dual-screen reparenting)
+		return
+	
 	_is_hiding = false
 	_dismissed_line_edit = null
 	var was_hidden = not visible
-	print("[OnscreenKeyboard] _show_keyboard called. visible=", visible, " was_hidden=", was_hidden, " viewport=", get_viewport().name if get_viewport() else "null", " size=", size, " anchors=", anchor_left, ",", anchor_top, ",", anchor_right, ",", anchor_bottom)
 	# Ensure keyboard renders on top of other UI elements
 	move_to_front()
 	change_visibility(true)
-	print("[OnscreenKeyboard] After change_visibility. visible=", visible, " size=", size, " global_rect=", get_global_rect())
 	# Emit signal BEFORE grabbing focus on keys so listeners can prepare
 	if _active_line_edit != null:
 		keyboard_opened.emit(_active_line_edit)
 	if animate:
-		var new_y_pos = get_viewport().get_visible_rect().size.y - size.y
-		print("[OnscreenKeyboard] animating to y=", new_y_pos, " viewport_height=", get_viewport().get_visible_rect().size.y)
+		var new_y_pos = viewport.get_visible_rect().size.y - size.y
 		animate_position(Vector2(position.x, new_y_pos))
 	# Always grab focus on first key when showing keyboard
 	if keys.size() > 0:
-		print("[OnscreenKeyboard] grabbing focus on keys[0]:", keys[0].text)
 		keys[0].grab_focus()
-		print("[OnscreenKeyboard] focus owner after grab:", get_viewport().gui_get_focus_owner())
 
 
 func animate_position(new_position, trigger_visibility:bool=false):
@@ -557,7 +560,6 @@ func _trigger_uppercase(key_data):
 
 
 func _key_released(key_data):
-	print("[OnscreenKeyboard] _key_released: ", key_data.get("display", key_data.get("output", "?")), " output=", key_data.get("output", "null"), " active_line_edit=", _active_line_edit)
 	if key_data.has("output"):
 		var key_value = key_data.get("output")
 

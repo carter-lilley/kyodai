@@ -35,6 +35,8 @@ class QueueItem:
 	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
 	var delete_after_extract: bool = false  # Whether to delete archive after extraction
 	var suppress_notification: bool = false  # If true, don't show per-item notifications
+	var extracted_count: int = 0  # Files extracted so far
+	var total_count: int = 0  # Total files in archive
 
 # Unified queue
 var _queue: Array[QueueItem] = []
@@ -1823,50 +1825,57 @@ func _fail_download(item_id: String, error_msg: String):
 
 func _start_extraction(item: QueueItem):
 	item.status = "extracting"
+	item.extracted_count = 0
+	item.total_count = 0
+	item.progress = 0.0
 	if not _active_items.has(item.id):
 		_active_items[item.id] = item
 	
 	# Start foreground service on Android to prevent app kill during extraction
 	_start_foreground_service(item.name)
 	
-	# Show extraction notification with pulsing progress (indeterminate)
-	# Dismiss old notification first, then create new one (unless suppressed for batch)
-	if not item.suppress_notification:
-		if item.notification_id != -1:
-			NotificationManager.dismiss_notification(item.notification_id)
-		
-		item.notification_id = NotificationManager.show_notification(
-			item.name + "...",
-			NotificationManager.Type.INFO,
-			null,
-			0.0,
-			Callable(),  # No progress callable - using pulsing
-			Callable(),  # No text formatter
-			true  # pulsing = true
-		)
-	
 	extraction_started.emit(item.id)
 	
-	# Determine format and extract
+	# Delegate all extraction to FileSystemManager (handles its own notification)
 	var archive_path = item.destination_path
 	var extract_dir = item.extract_dir
 	
 	print("[DownloadManager] _start_extraction: archive_path=" + archive_path + ", extract_dir=" + extract_dir)
 	
-	if archive_path.ends_with(".zip"):
-		_extract_zip(item, archive_path, extract_dir)
-	elif archive_path.ends_with(".7z"):
-		_extract_7z(item, archive_path, extract_dir)
-	else:
-		item.status = "failed"
-		item.error_message = "Unknown archive format"
-		NotificationManager.update_notification_text(item.notification_id, "Unknown format: " + item.name)
-		_cleanup_item(item)
-		_active_items.erase(item.id)
-		_stop_foreground_service()  # Stop foreground service on failure
-		extraction_completed.emit(item.id, false, "Unknown archive format")
-		queue_changed.emit()
-		_process_queue()
+	FSM.extract_archive_async(
+		archive_path,
+		extract_dir,
+		item.name,
+		item.delete_after_extract,
+		func(extracted: int, total: int):
+			item.extracted_count = extracted
+			item.total_count = total
+			if total > 0:
+				item.progress = float(extracted) / float(total)
+			extraction_progress.emit(item.id, item.progress)
+			queue_changed.emit(),
+		func(success: bool, error_msg: String):
+			if success:
+				item.status = "completed"
+				item.progress = 1.0
+				item.extracted_count = item.total_count
+				_cleanup_item(item)
+				_active_items.erase(item.id)
+				_stop_foreground_service()
+				
+				extraction_completed.emit(item.id, true, extract_dir)
+				queue_changed.emit()
+				_process_queue()
+			else:
+				item.status = "failed"
+				item.error_message = error_msg if error_msg != "" else "Extraction failed"
+				_cleanup_item(item)
+				_active_items.erase(item.id)
+				_stop_foreground_service()
+				extraction_completed.emit(item.id, false, item.error_message)
+				queue_changed.emit()
+				_process_queue()
+	)
 
 func _finish_download_completion(item: QueueItem):
 	"""Complete the download after file operations are done"""
@@ -1914,122 +1923,6 @@ func _finish_download_completion(item: QueueItem):
 		download_completed.emit(item.id, true, item.destination_path)
 		queue_changed.emit()
 		_process_queue()
-
-func _extract_zip(item: QueueItem, archive_path: String, extract_dir: String):
-	# Show extraction notification immediately
-	NotificationManager.update_notification_text(item.notification_id, item.name + "...")
-	
-	# Create extraction callable for MemoryManager
-	var extraction_callable = func() -> bool:
-		print("[DownloadManager] Extraction worker started: " + archive_path + " -> " + extract_dir)
-		
-		# Delegate to FileSystemManager for all ZIP extraction
-		var success = FSM.extract_zip(archive_path, extract_dir)
-		
-		if not success:
-			push_error("[DownloadManager] Extraction failed for: " + archive_path)
-			return false
-		
-		# Clean up archive only if delete_after_extract is true
-		if item.delete_after_extract:
-			FSM.delete_file(archive_path)
-		
-		return true
-	
-	# Queue extraction to MemoryManager
-	MemoryManager.queue_extraction_task(extraction_callable, func(success: bool):
-		if success:
-			item.status = "completed"
-			item.progress = 1.0
-			NotificationManager.dismiss_notification(item.notification_id)
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			_stop_foreground_service()  # Stop foreground service on success
-			
-			extraction_completed.emit(item.id, true, extract_dir)
-			queue_changed.emit()
-			_process_queue()
-		else:
-			item.status = "failed"
-			item.error_message = "Extraction failed"
-			NotificationManager.dismiss_notification(item.notification_id)
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			_stop_foreground_service()  # Stop foreground service on failure
-			extraction_completed.emit(item.id, false, item.error_message)
-			queue_changed.emit()
-			_process_queue()
-	)
-
-func _extract_7z(item: QueueItem, archive_path: String, extract_dir: String):
-	var binary_path = _get_7z_binary_path()
-	
-	if not FileAccess.file_exists(binary_path):
-		item.status = "failed"
-		item.error_message = "7z binary not found"
-		NotificationManager.dismiss_notification(item.notification_id)
-		_cleanup_item(item)
-		_active_items.erase(item.id)
-		extraction_completed.emit(item.id, false, item.error_message)
-		queue_changed.emit()
-		_process_queue()
-		return
-	
-	var abs_archive_path = ProjectSettings.globalize_path(archive_path)
-	var abs_extract_dir = ProjectSettings.globalize_path(extract_dir)
-	
-	# Create extraction callable for MemoryManager
-	var extraction_callable = func() -> bool:
-		# Start extraction process (blocking in thread)
-		var args = ["x", abs_archive_path, "-o" + abs_extract_dir, "-y"]
-		var output = []
-		var exit_code = OS.execute(binary_path, args, output, true)
-		
-		if exit_code != 0:
-			push_error("[DownloadManager] 7z extraction failed with exit code: " + str(exit_code))
-			return false
-		
-		# Clean up archive only if delete_after_extract is true
-		if item.delete_after_extract:
-			FSM.delete_file(archive_path)
-		
-		return true
-	
-	# Queue extraction to MemoryManager
-	MemoryManager.queue_extraction_task(extraction_callable, func(success: bool):
-		if success:
-			item.status = "completed"
-			item.progress = 1.0
-			NotificationManager.dismiss_notification(item.notification_id)
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			
-			extraction_completed.emit(item.id, true, extract_dir)
-			queue_changed.emit()
-			_process_queue()
-		else:
-			item.status = "failed"
-			item.error_message = "Extraction failed"
-			NotificationManager.dismiss_notification(item.notification_id)
-			_cleanup_item(item)
-			_active_items.erase(item.id)
-			extraction_completed.emit(item.id, false, item.error_message)
-			queue_changed.emit()
-			_process_queue()
-	)
-
-func _get_7z_binary_path() -> String:
-	var platform_name = ""
-	match PlatformManager.current_platform:
-		PlatformManager.Platform.WINDOWS:
-			platform_name = "windows"
-		PlatformManager.Platform.LINUX:
-			platform_name = "linux"
-		_:
-			return ""
-	
-	var binary_name = "7za.exe" if PlatformManager.is_windows() else "7z"
-	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
 
 func _cleanup_item(item: QueueItem):
 	if item.notification_id != -1:

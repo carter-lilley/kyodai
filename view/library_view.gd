@@ -83,10 +83,8 @@ func _setup_search_overlay():
 	"""Create and setup the search overlay."""
 	_search_overlay = SearchOverlay.new()
 	_search_overlay.name = "SearchOverlay"
-	_search_overlay.visible = false
 	_search_overlay.search_submitted.connect(_on_search_submitted)
 	_search_overlay.search_cancelled.connect(_on_search_cancelled)
-	add_child(_search_overlay)
 
 func _on_search_button_clicked() -> void:
 	"""Handle search button click — clear active search or show overlay."""
@@ -125,7 +123,7 @@ func _on_search_submitted(query: String):
 			SettingsManager.set_setting(query, last_search_setting)
 			SettingsManager.save_settings()
 	
-	_search_overlay.hide_overlay()
+	_search_overlay.dismiss()
 	
 	# Explicitly grab focus on the games grid to ensure keyboard closes and focus is set
 	if games_grid:
@@ -141,7 +139,7 @@ func _on_search_submitted(query: String):
 
 func _on_search_cancelled():
 	"""Handle search cancellation."""
-	_search_overlay.hide_overlay()
+	_search_overlay.dismiss()
 	_search_query = ""
 	# Explicitly grab focus on the games grid
 	if games_grid:
@@ -616,7 +614,7 @@ func on_view_show():
 	super.on_view_show()
 	# Ensure search overlay is hidden when returning to this view
 	if _search_overlay and _search_overlay.is_active():
-		_search_overlay.hide_overlay()
+		_search_overlay.dismiss()
 
 func on_view_hide():
 	view_hidden.emit()

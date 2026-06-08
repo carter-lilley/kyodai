@@ -25,7 +25,7 @@ const Type = SettingsVar.SettingType
 	Vector2i(800,600)
 ]
 @export var resolution := SettingsVar.new(Type.ARRAY,resolutions[0],State.ENABLED, "Windowed Resolution:", "", 0.0, 1.0, 0.1, resolutions)
-@export var dual_screen_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
+@export var dual_screen_mode := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
 @export var dark_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface")
 
 @export_subgroup("RomM Connection")
