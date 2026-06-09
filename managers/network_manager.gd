@@ -321,6 +321,155 @@ func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0
 		callback.call(data, error)
 	, true, use_cache)  # authenticated=true, use_cache=parameter
 
+## Synchronous fetch for sync thread - uses HTTPClient directly
+## Returns: {"success": bool, "data": Dictionary, "error": String}
+## This is thread-safe and does not depend on the scene tree
+func fetch_games_sync(platform_slug: String = "", offset: int = 0, limit: int = 250, updated_after: String = "") -> Dictionary:
+	if not _is_configured:
+		return {"success": false, "data": {}, "error": "Not configured"}
+	
+	var endpoint = "/roms?offset=%d&limit=%d" % [offset, limit]
+	if platform_slug != "":
+		endpoint += "&platform_ids=" + platform_slug
+	if updated_after != "":
+		endpoint += "&updated_after=" + updated_after.uri_encode()
+	
+	var url = _base_url.rstrip("/") + "/api" + endpoint
+	var headers = ["Authorization: " + _get_auth_header()]
+	
+	return _http_get_sync(url, headers)
+
+## Synchronous HTTP GET using HTTPClient - thread-safe, no scene tree dependency
+func _http_get_sync(url: String, headers: Array = []) -> Dictionary:
+	var result = _http_request_sync(url, headers)
+	if not result.success:
+		return result
+	
+	# Parse JSON from bytes
+	var body_text = result.body.get_string_from_utf8()
+	var json = JSON.new()
+	var parse_result = json.parse(body_text)
+	
+	if parse_result != OK:
+		return {"success": false, "data": {}, "error": "Failed to parse JSON: " + json.get_error_message()}
+	
+	return {"success": true, "data": json.data, "error": ""}
+
+## Downloads raw bytes from URL using HTTPClient - thread-safe, no scene tree dependency
+## Returns: {"success": bool, "body": PackedByteArray, "error": String}
+func _http_get_bytes_sync(url: String, headers: Array = []) -> Dictionary:
+	var result = _http_request_sync(url, headers)
+	if not result.success:
+		return {"success": false, "body": PackedByteArray(), "error": result.error}
+	return {"success": true, "body": result.body, "error": ""}
+
+## Shared HTTP request implementation - returns raw bytes
+func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
+	var http = HTTPClient.new()
+	
+	# Parse URL
+	var protocol = "http"
+	var host = ""
+	var port = 80
+	var path = "/"
+	var query = ""
+	
+	var protocol_end = url.find("://")
+	if protocol_end != -1:
+		protocol = url.substr(0, protocol_end)
+		url = url.substr(protocol_end + 3)
+	
+	if protocol == "https":
+		port = 443
+	
+	var path_start = url.find("/")
+	if path_start == -1:
+		host = url
+	else:
+		host = url.substr(0, path_start)
+		var remainder = url.substr(path_start)
+		var query_start = remainder.find("?")
+		if query_start == -1:
+			path = remainder
+		else:
+			path = remainder.substr(0, query_start)
+			query = remainder.substr(query_start)
+	
+	var port_start = host.find(":")
+	if port_start != -1:
+		port = host.substr(port_start + 1).to_int()
+		host = host.substr(0, port_start)
+	
+	# Connect
+	var err: int
+	if protocol == "https":
+		var tls = TLSOptions.client()
+		err = http.connect_to_host(host, port, tls)
+	else:
+		err = http.connect_to_host(host, port)
+	
+	if err != OK:
+		return {"success": false, "body": PackedByteArray(), "error": "Failed to connect: " + str(err)}
+	
+	# Wait for connection
+	var timeout = 0
+	while http.get_status() == HTTPClient.STATUS_CONNECTING or http.get_status() == HTTPClient.STATUS_RESOLVING:
+		http.poll()
+		OS.delay_usec(1000)
+		timeout += 1
+		if timeout > 10000:  # 10 seconds
+			return {"success": false, "body": PackedByteArray(), "error": "Connection timeout"}
+	
+	if http.get_status() != HTTPClient.STATUS_CONNECTED:
+		return {"success": false, "body": PackedByteArray(), "error": "Not connected, status: " + str(http.get_status())}
+	
+	# Make request
+	var request_headers = headers.duplicate()
+	var has_host = false
+	for header in request_headers:
+		if header.to_lower().begins_with("host:"):
+			has_host = true
+			break
+	if not has_host:
+		request_headers.append("Host: " + host)
+	
+	var has_user_agent = false
+	for header in request_headers:
+		if header.begins_with("User-Agent:"):
+			has_user_agent = true
+			break
+	if not has_user_agent:
+		request_headers.append("User-Agent: Kyodai-Launcher/1.0")
+	
+	err = http.request(HTTPClient.METHOD_GET, path + query, request_headers)
+	if err != OK:
+		return {"success": false, "body": PackedByteArray(), "error": "Failed to make request: " + str(err)}
+	
+	# Wait for response headers
+	while http.get_status() == HTTPClient.STATUS_REQUESTING:
+		http.poll()
+		OS.delay_usec(1000)
+	
+	var response_code = http.get_response_code()
+	
+	if response_code == 401:
+		return {"success": false, "body": PackedByteArray(), "error": "Authentication failed"}
+	
+	if response_code != 200:
+		return {"success": false, "body": PackedByteArray(), "error": "HTTP error: " + str(response_code)}
+	
+	# Read body
+	var body = PackedByteArray()
+	while http.get_status() == HTTPClient.STATUS_BODY:
+		http.poll()
+		var chunk = http.read_response_body_chunk()
+		if chunk.size() > 0:
+			body.append_array(chunk)
+		else:
+			OS.delay_usec(1000)
+	
+	return {"success": true, "body": body, "error": ""}
+
 func fetch_platforms(callback: Callable):
 	if not _is_configured:
 		callback.call({}, "Not configured")

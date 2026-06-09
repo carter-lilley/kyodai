@@ -10,19 +10,23 @@ var _db_thread: Thread
 var _image_threads: Array[Thread] = []
 var _extraction_thread: Thread
 var _download_threads: Array[Thread] = []
+var _sync_thread: Thread
 var _db_queue: Array = []
 var _image_high_priority_queue: Array = []
 var _image_low_priority_queue: Array = []
 var _extraction_queue: Array = []
 var _download_queue: Array = []
+var _sync_queue: Array = []
 var _db_mutex: Mutex
 var _image_mutex: Mutex
 var _extraction_mutex: Mutex
 var _download_mutex: Mutex
+var _sync_mutex: Mutex
 var _db_semaphore: Semaphore
 var _image_semaphore: Semaphore
 var _extraction_semaphore: Semaphore
 var _download_semaphore: Semaphore
+var _sync_semaphore: Semaphore
 var _exit_flag: bool = false
 var _image_task_counter: int = 0
 var _image_tasks: Dictionary = {}
@@ -60,6 +64,7 @@ const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 50
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 const MAX_DOWNLOAD_QUEUE_SIZE = 500
+const MAX_SYNC_QUEUE_SIZE = 10
 
 ## Returns the number of download threads for the current platform
 static func get_download_thread_count() -> int:
@@ -152,12 +157,14 @@ func _initialize_threads():
 	_image_mutex = Mutex.new()
 	_extraction_mutex = Mutex.new()
 	_download_mutex = Mutex.new()
+	_sync_mutex = Mutex.new()
 	_texture_cache_mutex = Mutex.new()
 	_lp_callback_mutex = Mutex.new()
 	_db_semaphore = Semaphore.new()
 	_image_semaphore = Semaphore.new()
 	_extraction_semaphore = Semaphore.new()
 	_download_semaphore = Semaphore.new()
+	_sync_semaphore = Semaphore.new()
 	
 	_db_thread = Thread.new()
 	_db_thread.start(_db_worker)
@@ -178,6 +185,11 @@ func _initialize_threads():
 		var thread = Thread.new()
 		thread.start(_download_worker)
 		_download_threads.append(thread)
+	
+	# Start sync thread for background metadata sync
+	print("[MemoryManager] Initializing sync thread")
+	_sync_thread = Thread.new()
+	_sync_thread.start(_sync_worker)
 
 func _ready():
 	set_process(true)
@@ -323,6 +335,26 @@ static func _download_worker():
 			if task.callback.is_valid():
 				# Use thread-safe callback queue instead of call_deferred
 				# (call_deferred from threads is unreliable on Android)
+				_instance._lp_callback_mutex.lock()
+				_instance._lp_callbacks.append({"callback": task.callback, "result": result})
+				_instance._lp_callback_mutex.unlock()
+
+static func _sync_worker():
+	while not _instance._exit_flag:
+		_instance._sync_semaphore.wait()
+		
+		if _instance._exit_flag:
+			break
+		
+		_instance._sync_mutex.lock()
+		var task = _instance._sync_queue.pop_front()
+		_instance._sync_mutex.unlock()
+		
+		if task:
+			var result = task.callable.call()
+			
+			if task.callback.is_valid():
+				# Use thread-safe callback queue instead of call_deferred
 				_instance._lp_callback_mutex.lock()
 				_instance._lp_callbacks.append({"callback": task.callback, "result": result})
 				_instance._lp_callback_mutex.unlock()
@@ -539,6 +571,27 @@ static func queue_extraction_task(callable: Callable, callback: Callable = Calla
 	_instance._extraction_mutex.unlock()
 	_instance._extraction_semaphore.post()
 
+## Queues a task to the sync thread for background metadata sync
+## This runs the entire sync orchestration off the main thread
+static func queue_sync_task(callable: Callable, callback: Callable = Callable()):
+	if _instance == null:
+		push_error("[MemoryManager] Not initialized - cannot queue sync task")
+		return
+	
+	_instance._sync_mutex.lock()
+	var current_size = _instance._sync_queue.size()
+	
+	if current_size >= MAX_SYNC_QUEUE_SIZE:
+		_instance._sync_mutex.unlock()
+		push_error("[MemoryManager] Sync queue full - cannot queue task")
+		if callback.is_valid():
+			callback.call_deferred(false)
+		return
+	
+	_instance._sync_queue.append({"callable": callable, "callback": callback})
+	_instance._sync_mutex.unlock()
+	_instance._sync_semaphore.post()
+
 ## Queues a parallel download batch using dedicated download threads
 ## Each item is processed in parallel across DOWNLOAD_THREAD_COUNT threads
 ## Returns batch ID for tracking progress
@@ -680,6 +733,7 @@ static func shutdown():
 	_instance._db_semaphore.post()
 	_instance._extraction_semaphore.post()
 	_instance._download_semaphore.post()
+	_instance._sync_semaphore.post()
 	for i in range(IMAGE_THREAD_COUNT):
 		_instance._image_semaphore.post()
 	# Post semaphore for each download thread that was created
@@ -691,6 +745,8 @@ static func shutdown():
 	_instance._extraction_thread.wait_to_finish()
 	for thread in _instance._download_threads:
 		thread.wait_to_finish()
+	if _instance._sync_thread:
+		_instance._sync_thread.wait_to_finish()
 	_instance = null
 
 # ============================================================================

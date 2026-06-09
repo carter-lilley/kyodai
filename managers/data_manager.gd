@@ -106,6 +106,10 @@ var _precalc_platform_totals: Dictionary = {}  # platform_id -> total count
 var _active_downloads: Dictionary = {}  # url -> {callbacks: Array[Callable], completed: bool, success: bool}
 var _active_downloads_mutex: Mutex = Mutex.new()  # Thread-safe access to _active_downloads
 
+# Cover URLs collected during sync for batch downloading on main thread
+var _sync_covers_pending: Array[String] = []
+var _sync_covers_mutex: Mutex = Mutex.new()
+
 # Performance tracking for background thread optimization
 var _perf_batch_start_time: int = 0
 var _perf_phase1_duration: int = 0  # GameResource creation (now on background thread)
@@ -125,6 +129,29 @@ func _ensure_memory_manager():
 	if MemoryManager._instance == null:
 		var mm = MemoryManager.new()
 		add_child(mm)
+
+# ==================== SYNC THREAD SIGNAL WRAPPERS ====================
+# These are called via call_deferred from the sync thread to safely emit signals on the main thread
+
+func _emit_sync_started():
+	sync_started.emit()
+
+func _emit_sync_progress(percent: float, current: int, total: int):
+	sync_progress.emit(percent, current, total)
+
+func _emit_sync_completed(success: bool, message: String):
+	sync_completed.emit(success, message)
+
+func _emit_game_added(game: GameResource):
+	game_added.emit(game)
+
+func _emit_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
+	games_batch_added.emit(platform_slug, start_index, games)
+
+# Wrapper for calling _sync_final_callback via call_deferred
+func _invoke_sync_callback(success: bool, message: String, count: int, error_code: int):
+	if _sync_final_callback.is_valid():
+		_sync_final_callback.call(success, message, count, error_code)
 
 # ==================== ANDROID SYNC FOREGROUND SERVICE ====================
 
@@ -463,325 +490,221 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	
 	print("[Sync] Platforms to disable: %d" % disabled_platforms.size())
 	
+	# Queue the entire sync to the background sync thread
+	# This allows sync to continue even when the app is backgrounded on Android
+	print("[Sync] Queuing sync to background thread...")
+	MemoryManager.queue_sync_task(
+		func():
+			_run_sync_threaded(enabled, disabled_platforms, force_full_sync)
+			return true,
+		func(_result):
+			print("[Sync] Sync thread task completed")
+	)
+
+func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[String], force_full_sync: bool):
+	"""Main sync worker that runs on the sync thread."""
+	print("[SyncThread] Sync started on background thread")
+	
+	# 1. Remove disabled platforms
 	if disabled_platforms.size() > 0:
-		print("[Sync] Starting disabled platform removal...")
-		_remove_disabled_platforms_iterative(disabled_platforms, enabled, callback)
-	else:
-		print("[Sync] No disabled platforms to remove, starting sync directly")
-		_start_sync_iterative(enabled, callback, _sync_force_full)
-
-func _remove_disabled_platforms_iterative(platforms: Array[String], enabled_platforms: Array, final_callback: Callable):
-	"""Remove games from disabled platforms iteratively, then start sync"""
-	print("[Sync] Removing %d disabled platforms..." % platforms.size())
+		print("[SyncThread] Removing %d disabled platforms..." % disabled_platforms.size())
+		for i in range(disabled_platforms.size()):
+			var slug = disabled_platforms[i]
+			print("[SyncThread] Removing platform %d/%d: %s" % [i + 1, disabled_platforms.size(), slug])
+			_remove_platform_sync_threaded(slug)
+			# Small yield to prevent blocking other sync thread tasks
+			OS.delay_usec(1000)
 	
-	var removed_count = 0
-	var total_to_remove = platforms.size()
-	
-	for i in range(platforms.size()):
-		var platform_slug = platforms[i]
-		print("[Sync] Removing platform %d/%d: %s" % [i + 1, total_to_remove, platform_slug])
-		var success = await _remove_platform_sync(platform_slug)
-		if success:
-			removed_count += 1
-			print("[Sync] Successfully removed %s" % platform_slug)
-		else:
-			print("[Sync] Failed to remove %s (continuing)" % platform_slug)
-		
-		# Small delay to prevent UI freezing
-		if i < platforms.size() - 1:
-			await get_tree().process_frame
-	
-	print("[Sync] Removed %d/%d disabled platforms, starting sync with %d enabled platforms" % [removed_count, total_to_remove, enabled_platforms.size()])
-	_start_sync_iterative(enabled_platforms, final_callback, _sync_force_full)
-
-func _remove_platform_sync(platform_slug: String) -> bool:
-	"""Synchronous wrapper to remove a platform - returns success"""
-	print("[Sync] _remove_platform_sync called for: %s" % platform_slug)
-	
-	# Use a dictionary to hold state - more reliable than captured variables
-	var state = {
-		"success": false,
-		"completed": false
-	}
-	
-	remove_platform_games(platform_slug, func(result):
-		print("[Sync] remove_platform_games callback fired with result: %s" % result)
-		state.success = result
-		state.completed = true
-	)
-	
-	print("[Sync] Waiting for removal completion...")
-	# Wait for completion with timeout safety
-	var timeout = 0.0
-	var max_timeout = 30.0  # 30 second timeout
-	
-	while not state.completed:
-		await get_tree().process_frame
-		timeout += get_process_delta_time()
-		
-		if timeout > max_timeout:
-			print("[Sync] ERROR: Timeout waiting for platform removal!")
-			return false
-	
-	print("[Sync] Removal completed with success: %s" % state.success)
-	return state.success
-
-func _start_sync_iterative(enabled: Array, callback: Callable, force_full_sync: bool = false):
-	"""Start the actual sync after cleaning up disabled platforms"""
-	print("[Sync] _start_sync_iterative called")
-	print("[Sync]   - enabled count: %d" % enabled.size())
-	print("[Sync]   - force full sync: %s" % force_full_sync)
-	print("[Sync]   - callback valid: %s" % callback.is_valid())
-	print("[Sync]   - callback hash: %d" % callback.hash())
-	
-	# Store force_full_sync flag for use during platform processing
-	_sync_force_full = force_full_sync
-	
-	if enabled.size() == 0:
-		print("[Sync] No platforms enabled, completing immediately")
-		
-		# Dismiss any notification that might be showing
-		if _sync_notification_id != -1:
-			print("[Sync] Dismissing notification before early return")
-			NotificationManager.dismiss_notification(_sync_notification_id)
-			_sync_notification_id = -1
-		
-		# Stop batch mode if it was started
-		if _sync_batch_mode:
-			print("[Sync] Stopping batch mode")
-			_stop_sync_batch_mode()
-		
-		# Emit sync_completed so LibraryView refreshes even if no platforms to sync
-		print("[Sync] Emitting sync_completed signal")
-		sync_completed.emit(true, "No platforms enabled")
-		
-		# Call the callback
-		if callback.is_valid():
-			print("[Sync] Calling callback with success")
-			callback.call(true, "", 0, 0)
-		else:
-			print("[Sync] WARNING: Callback is not valid!")
-		
-		_sync_state = SyncState.IDLE
-		print("[Sync] State set to IDLE, returning")
-		print("[Sync] ==========================================")
+	# 2. Check if there are platforms to sync
+	if enabled_platforms.size() == 0:
+		print("[SyncThread] No platforms enabled, completing immediately")
+		call_deferred("_emit_sync_completed", true, "No platforms enabled")
+		call_deferred("_invoke_sync_callback", true, "", 0, 0)
 		return
 	
-	# Reset sync state
+	# 3. Start batch mode and foreground service on main thread
+	call_deferred("_start_sync_batch_mode")
+	call_deferred("_start_sync_fg_service", "Game Library", 0, 0)
+	
+	# 4. Start sync immediately - skip pre-calculation to save 20+ seconds
+	# We'll discover per-platform totals as we fetch the first batch of each
+	print("[SyncThread] Starting sync of %d platforms..." % enabled_platforms.size())
+	_sync_state = SyncState.PLATFORM_ITERATING
+	_sync_platforms_list = enabled_platforms
+	_sync_platform_count = enabled_platforms.size()
+	_sync_current_platform_idx = 0
 	_sync_current = 0
-	_sync_platform_index = 0
-	_sync_platform_count = enabled.size()
-	_sync_platforms_list = enabled
-	_sync_final_callback = callback
+	_sync_total = 0  # Will accumulate as we discover totals
+	_sync_total_synced = 0
 	
-	# Start batch mode for efficient UI updates
-	_start_sync_batch_mode()
+	# Start foreground service and notification immediately
+	call_deferred("_start_sync_fg_service", "Game Library", 0, 0)
+	call_deferred("_show_sync_notification")
 	
-	# Pre-calculate total games across all platforms
-	_sync_state = SyncState.CALCULATING_TOTALS
-	_precalculate_totals(enabled, func(grand_total: int):
-		_sync_total = grand_total
+	# Pre-calculate totals in background without blocking
+	# Fire off all pre-calc requests but don't wait for them
+	var platform_totals_discovered = 0
+	for platform in enabled_platforms:
+		var platform_id = str(platform.id)
+		var result = NetworkManager.fetch_games_sync(platform_id, 0, 1)
+		if result.success and result.data is Dictionary:
+			var platform_total = int(result.data.get("total", 0))
+			_precalc_platform_totals[platform_id] = platform_total
+			_sync_total += platform_total
+			platform_totals_discovered += 1
+		# Don't block - just keep going
+		OS.delay_usec(500)
+	
+	print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
+	
+	for platform_idx in range(enabled_platforms.size()):
+		if _sync_state == SyncState.ERROR:
+			break
 		
-		# Start Android foreground service to prevent app kill during sync
-		_start_sync_fg_service("Game Library", 0, grand_total)
+		_sync_current_platform_idx = platform_idx
+		var platform = enabled_platforms[platform_idx]
+		_sync_platform = platform.name
+		_sync_platform_index = platform_idx + 1
 		
-		# Show notification with grand total
-		_sync_notification_id = NotificationManager.show_notification(
-			"Syncing...",
-			NotificationManager.Type.INFO,
-			null,
-			0.0,
-			func() -> float:
-				if _sync_total == 0:
-					return 0.0
-				return float(_sync_current) / float(_sync_total),
-			func(progress: float) -> String:
-				var pct = int(progress * 100)
-				if _sync_platform != "":
-					return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
-				return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct],
-			false,
-			true
-		)
+		# Look up platform ID
+		var platform_id = platform.id
+		if platform_id == 0 and _is_db_ready:
+			platform_id = _lookup_platform_id_sync(platform.slug)
 		
-		# Start iterating through platforms
-		_sync_state = SyncState.PLATFORM_ITERATING
-		_sync_current_platform_idx = 0
-		_process_next_platform()
-	)
-
-func _process_next_platform():
-	"""Process the next platform in the list (iterative instead of recursive)"""
-	if _sync_current_platform_idx >= _sync_platforms_list.size():
-		# All platforms complete - move to completion
-		_sync_state = SyncState.COMPLETING
-		_complete_sync()
-		return
-	
-	var platform = _sync_platforms_list[_sync_current_platform_idx]
-	_sync_platform = platform.name
-	_sync_platform_index = _sync_current_platform_idx + 1  # 1-based index for display
-	
-	# Look up platform ID if it's 0
-	var platform_id = platform.id
-	if platform_id == 0 and _is_db_ready:
-		var lookup_query = "SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform.slug)
-		var query_result = _db_query_array(lookup_query)
-		if query_result.size() > 0:
-			platform_id = query_result[0].get("romm_id", 0)
-	
-	if platform_id == 0:
-		# Skip this platform and continue to next
-		print("[Sync] Skipping platform '%s' - no ID found" % platform.name)
-		_sync_current_platform_idx += 1
-		_process_next_platform()
-		return
-	
-	# Store current platform data
-	_sync_current_platform_data = {
-		"id": platform_id,
-		"slug": platform.slug,
-		"name": platform.name
-	}
-	
-	# Update Android foreground service with current platform
-	_update_sync_fg_service(platform.name, _sync_current, _sync_total)
-	
-	# Determine sync mode for this platform
-	_sync_current_updated_after = ""
-	if not _sync_force_full:
-		var last_sync = get_last_sync_time(platform.slug)
-		if last_sync != "":
-			# Check if it's been more than a week
-			var last_sync_time = Time.get_unix_time_from_datetime_string(last_sync)
-			var one_week_ago = Time.get_unix_time_from_system() - (7 * 24 * 60 * 60)
-			if last_sync_time > one_week_ago:
-				# Use incremental sync
-				_sync_current_updated_after = last_sync
-				print("[Sync] Platform '%s' - Using incremental sync (updated_after: %s)" % [platform.name, last_sync])
+		if platform_id == 0:
+			print("[SyncThread] Skipping platform '%s' - no ID found" % platform.name)
+			continue
+		
+		_sync_current_platform_data = {
+			"id": platform_id,
+			"slug": platform.slug,
+			"name": platform.name
+		}
+		
+		# Update foreground service
+		call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+		
+		# Determine sync mode
+		_sync_current_updated_after = ""
+		if not force_full_sync:
+			var last_sync = _get_last_sync_time_sync(platform.slug)
+			if last_sync != "":
+				var last_sync_time = Time.get_unix_time_from_datetime_string(last_sync)
+				var one_week_ago = Time.get_unix_time_from_system() - (7 * 24 * 60 * 60)
+				if last_sync_time > one_week_ago:
+					_sync_current_updated_after = last_sync
+					print("[SyncThread] Platform '%s' - incremental sync (after: %s)" % [platform.name, last_sync])
+				else:
+					print("[SyncThread] Platform '%s' - full sync (last sync over a week ago)" % platform.name)
 			else:
-				print("[Sync] Platform '%s' - Last sync was over a week ago, using full sync" % platform.name)
+				print("[SyncThread] Platform '%s' - full sync (no previous sync)" % platform.name)
 		else:
-			print("[Sync] Platform '%s' - No previous sync, using full sync" % platform.name)
-	else:
-		print("[Sync] Platform '%s' - Force full sync enabled" % platform.name)
-	
-	# Reset batch tracking for this platform
-	_sync_current_offset = 0
-	_sync_current_synced = 0
-	_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
-	
-	# Check and setup firmware for this platform before syncing games
-	# Skip if emulator is not installed yet (firmware will be set up at launch time)
-	var emulator_id = LaunchManager.get_default_emulator_for_platform(platform.slug)
-	if emulator_id != "":
-		var progress = LaunchManager.get_install_progress(emulator_id)
-		if progress.get("is_installed", false):
-			print("[Sync] Checking firmware for platform '%s' with emulator '%s'" % [platform.name, emulator_id])
-			LaunchManager.setup_platform_firmware(platform.slug, emulator_id)
-		else:
-			print("[Sync] Skipping firmware for platform '%s' - emulator '%s' not installed yet" % [platform.name, emulator_id])
-	
-	# Start fetching this platform
-	_sync_state = SyncState.PLATFORM_FETCHING
-	_fetch_platform_batch()
-
-func _fetch_platform_batch():
-	"""Fetch a batch of games for the current platform"""
-	var batch_size = 250 if not PlatformManager.is_android() else 150
-	var platform_id = _sync_current_platform_data.id
-	
-	_fetch_batch(str(platform_id), _sync_current_offset, batch_size, true, _sync_current_updated_after, func(data, error):
-		if error != "" or not data is Dictionary:
-			# Error fetching - save sync timestamp and skip to next platform
-			print("[Sync] Error fetching platform '%s': %s" % [_sync_current_platform_data.name, error])
-			var current_time = Time.get_datetime_string_from_system(true)
-			set_last_sync_time(_sync_current_platform_data.slug, current_time)
-			print("[Sync] Platform '%s' error - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
-			_sync_current_platform_idx += 1
-			_process_next_platform()
-			return
+			print("[SyncThread] Platform '%s' - force full sync" % platform.name)
 		
-		var total = int(data.get("total", 0))
-		var items = data.get("items", [])
+		# Fetch and process this platform
+		_sync_state = SyncState.PLATFORM_FETCHING
+		_sync_current_offset = 0
+		_sync_current_synced = 0
+		_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
 		
-		if total == 0 or items.size() == 0:
-			# No games - for incremental sync with offset 0, increment progress by platform total
-			if _sync_current_offset == 0 and _sync_current_updated_after != "":
-				# Increment current by this platform's pre-calculated total
-				_sync_current += _sync_precalc_platform_total
-				print("[Sync] Platform '%s' - No changes, advanced progress by %d" % [_sync_current_platform_data.name, _sync_precalc_platform_total])
-				# Update Android foreground service
-				_update_sync_fg_service(_sync_platform, _sync_current, _sync_total)
+		var platform_complete = false
+		var platform_batch_count = 0
+		while not platform_complete and _sync_state != SyncState.ERROR:
+			var batch_size = 250 if not PlatformManager.is_android() else 150
 			
-			# Save sync timestamp and move to next platform
-			var current_time = Time.get_datetime_string_from_system(true)
-			set_last_sync_time(_sync_current_platform_data.slug, current_time)
-			print("[Sync] Platform '%s' has no games - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
-			_sync_current_platform_idx += 1
-			_process_next_platform()
-			return
-		
-		_sync_current_total = total
-		_sync_platform_total = total
-		
-		# Process this batch
-		_sync_state = SyncState.PLATFORM_PROCESSING
-		_process_batch(items, _sync_current_platform_data.slug, func(succeeded: int):
+			# Fetch batch
+			var fetch_start = Time.get_ticks_msec()
+			var result = NetworkManager.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
+			var fetch_time = Time.get_ticks_msec() - fetch_start
+			
+			if not result.success:
+				print("[SyncThread] Error fetching platform '%s': %s (fetch took %dms)" % [platform.name, result.error, fetch_time])
+				var current_time = Time.get_datetime_string_from_system(true)
+				_set_last_sync_time_sync(platform.slug, current_time)
+				platform_complete = true
+				continue
+			
+			var total = int(result.data.get("total", 0))
+			var items = result.data.get("items", [])
+			
+			if total == 0 or items.size() == 0:
+				if _sync_current_offset == 0 and _sync_current_updated_after != "":
+					_sync_current += _sync_precalc_platform_total
+					call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+				
+				var current_time = Time.get_datetime_string_from_system(true)
+				_set_last_sync_time_sync(platform.slug, current_time)
+				platform_complete = true
+				continue
+			
+			_sync_current_total = total
+			_sync_platform_total = total
+			
+			# Process batch
+			_sync_state = SyncState.PLATFORM_PROCESSING
+			var batch_start = Time.get_ticks_msec()
+			var succeeded = _process_batch_sync(items, platform.slug)
+			var batch_time = Time.get_ticks_msec() - batch_start
 			_sync_current_synced += succeeded
 			_sync_total_synced += succeeded
+			_sync_current += succeeded
+			platform_batch_count += 1
 			
-			# Check if we need more batches
+			# Update progress
+			call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+			var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
+			call_deferred("_emit_sync_progress", progress_pct * 0.01, _sync_current, _sync_total)
+			
+			print("[SyncThread] Progress: %d/%d games (%d%%) | Platform %d/%d: %s | Batch %d: fetch=%dms process=%dms" % [
+				_sync_current, _sync_total, int(progress_pct),
+				_sync_platform_index, _sync_platform_count, platform.name,
+				platform_batch_count, fetch_time, batch_time
+			])
+			
 			if _sync_current_synced >= _sync_current_total:
-				# Platform complete - save sync timestamp and move to next
 				var current_time = Time.get_datetime_string_from_system(true)
-				set_last_sync_time(_sync_current_platform_data.slug, current_time)
-				print("[Sync] Platform '%s' complete - saved sync time: %s" % [_sync_current_platform_data.name, current_time])
-				_sync_current_platform_idx += 1
-				_process_next_platform()
+				_set_last_sync_time_sync(platform.slug, current_time)
+				platform_complete = true
 			else:
-				# Need more batches - fetch next
 				_sync_current_offset += batch_size
 				_sync_state = SyncState.PLATFORM_BATCHING
-				if PlatformManager.is_android():
-					await get_tree().process_frame
-				_fetch_platform_batch()
-		)
-	)
-
-func _complete_sync():
-	"""Complete the sync process"""
-	# Flush any remaining batch notifications before stopping
-	_flush_batch_notifications()
+				OS.delay_usec(10000)  # 10ms yield to prevent blocking and reduce CPU
+		
+		print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
+		
+		# Dispatch any remaining covers for this platform
+		_dispatch_covers_to_main_thread()
 	
-	# Stop batch mode
-	_stop_sync_batch_mode()
+	# 7. Complete sync - defer ALL UI work to main thread
+	print("[SyncThread] All platforms complete, finishing...")
+	_sync_state = SyncState.COMPLETING
 	
-	# Clean up download tracking to free memory
-	_active_downloads.clear()
-	
-	# Stop Android foreground service
-	_stop_sync_fg_service()
-	
-	# Get cache statistics
+	# Get cache stats before clearing
 	var cache_stats = NetworkManager.get_and_reset_cache_stats()
 	var games_from_cache = cache_stats.get("games_from_cache", 0)
 	
-	print("[DataManager] Sync complete: %d games synced, %d from cache" % [_sync_total_synced, games_from_cache])
+	print("[SyncThread] Sync complete: %d games synced, %d from cache" % [_sync_total_synced, games_from_cache])
 	
-	# CRITICAL: Flush all pending DB operations before completing sync
-	# This prevents race conditions between DB thread and main thread
-	MemoryManager.queue_db_task(
-		func():
-			# Dummy task - just return true to signal all previous DB operations are done
-			return true,
-		func(_result):
-			# Now safe to proceed with sync completion on main thread
-			_apply_cover_folding_and_complete_sync(_sync_total_synced, games_from_cache, _sync_final_callback)
-	)
+	# Dispatch any remaining covers before completing
+	_dispatch_covers_to_main_thread()
+	
+	# Defer the entire completion sequence to main thread
+	# This avoids calling scene-tree methods from the sync thread
+	call_deferred("_complete_sync_on_main_thread", _sync_total_synced, games_from_cache)
 
-func _apply_cover_folding_and_complete_sync(total_synced: int, games_from_cache: int, callback: Callable):
-	"""Apply cover folding and emit sync completion signals. Called after DB flush."""
+func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
+	"""Complete sync on main thread - safe for UI operations."""
+	print("[Sync] Completing on main thread...")
+	
+	# Flush any remaining batch notifications
+	_flush_batch_notifications()
+	
+	# Clean up
+	_stop_sync_batch_mode()
+	_stop_sync_fg_service()
+	_active_downloads.clear()
+	
+	# Apply cover folding and emit completion
 	apply_cover_folding_to_database(func(folded_count: int):
 		var completion_msg = "Synced " + str(total_synced) + " games"
 		if games_from_cache > 0:
@@ -794,8 +717,226 @@ func _apply_cover_folding_and_complete_sync(total_synced: int, games_from_cache:
 		
 		_sync_state = SyncState.IDLE
 		sync_completed.emit(true, completion_msg)
-		if callback.is_valid():
-			callback.call(true, completion_msg, total_synced, 0)
+		_invoke_sync_callback(true, completion_msg, total_synced, 0)
+	)
+
+func _remove_platform_sync_threaded(platform_slug: String) -> bool:
+	"""Synchronous platform removal for sync thread."""
+	var state = {"success": false, "completed": false}
+	
+	remove_platform_games(platform_slug, func(result):
+		state.success = result
+		state.completed = true
+	)
+	
+	var timeout = 0
+	while not state.completed:
+		OS.delay_usec(10000)  # 10ms sleep
+		timeout += 1
+		if timeout > 6000:  # 60 seconds
+			print("[SyncThread] ERROR: Timeout removing platform %s" % platform_slug)
+			return false
+	
+	return state.success
+
+func _lookup_platform_id_sync(platform_slug: String) -> int:
+	"""Lookup platform ID from DB - must be called on sync thread with care."""
+	if not _is_db_ready:
+		return 0
+	var query_result = _db_query_array("SELECT romm_id FROM platforms WHERE slug = '%s'" % _escape_sql(platform_slug))
+	if query_result.size() > 0:
+		return query_result[0].get("romm_id", 0)
+	return 0
+
+func _get_last_sync_time_sync(platform_slug: String) -> String:
+	"""Get last sync time - thread-safe version."""
+	if not _is_db_ready:
+		return ""
+	var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = 'last_sync_%s'" % _escape_sql(platform_slug))
+	if query_result.size() > 0:
+		return query_result[0].get("value", "")
+	return ""
+
+func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
+	"""Set last sync time - thread-safe version."""
+	if not _is_db_ready:
+		return
+	_db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('last_sync_%s', '%s')" % [_escape_sql(platform_slug), timestamp])
+
+func _precalculate_totals_sync(platforms: Array) -> int:
+	"""Pre-calculate total games for all platforms - sync thread version."""
+	_precalc_platform_totals.clear()
+	var grand_total = 0
+	
+	for platform in platforms:
+		var platform_id = str(platform.id)
+		var fetch_start = Time.get_ticks_msec()
+		var result = NetworkManager.fetch_games_sync(platform_id, 0, 1)
+		var fetch_time = Time.get_ticks_msec() - fetch_start
+		if result.success and result.data is Dictionary:
+			var platform_total = int(result.data.get("total", 0))
+			grand_total += platform_total
+			_precalc_platform_totals[platform_id] = platform_total
+			print("[SyncThread] Pre-calc: %s = %d games (%dms)" % [platform.name, platform_total, fetch_time])
+		else:
+			print("[SyncThread] Pre-calc: %s = FAILED (%dms) - %s" % [platform.name, fetch_time, result.error])
+		OS.delay_usec(1000)
+	
+	return grand_total
+
+func _process_batch_sync(items: Array, platform_slug: String) -> int:
+	"""Process a batch of games on the sync thread.
+	
+	Phases:
+	1. Create GameResources (sync thread CPU work)
+	2. Sibling checks + DB inserts (single combined DB task per batch)
+	3. Collect cover URLs and dispatch to main thread for async download
+	"""
+	if items.is_empty():
+		return 0
+	
+	var batch_start = Time.get_ticks_msec()
+	
+	# Phase 1: Create GameResources
+	var games: Array[GameResource] = []
+	for item in items:
+		var game = _create_game_from_data(item, platform_slug, false)
+		if game != null:
+			games.append(game)
+	
+	if games.is_empty():
+		return 0
+	
+	# Phase 2: Sibling checks + DB inserts in ONE combined DB task
+	var db_start = Time.get_ticks_msec()
+	var inserted = _check_and_insert_games_sync(games)
+	var db_time = Time.get_ticks_msec() - db_start
+	
+	# Phase 3: Collect cover URLs for async download on main thread
+	var cover_start = Time.get_ticks_msec()
+	var cover_count = 0
+	for game in games:
+		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
+			var cache_path = get_cached_image_path(game.cover_url)
+			if not FileAccess.file_exists(cache_path):
+				_sync_covers_mutex.lock()
+				_sync_covers_pending.append(game.cover_url)
+				var pending_count = _sync_covers_pending.size()
+				_sync_covers_mutex.unlock()
+				cover_count += 1
+				# Dispatch covers to main thread every 50 collected
+				if pending_count >= 50:
+					_dispatch_covers_to_main_thread()
+	var cover_time = Time.get_ticks_msec() - cover_start
+	
+	var total_time = Time.get_ticks_msec() - batch_start
+	if total_time > 100:
+		print("[SyncThread] Batch: %d games -> %d inserted, %d covers queued (DB: %dms, covers: %dms, total: %dms)" % [games.size(), inserted, cover_count, db_time, cover_time, total_time])
+	
+	return inserted
+
+func _dispatch_covers_to_main_thread():
+	"""Dispatch collected cover URLs to main thread for async download."""
+	_sync_covers_mutex.lock()
+	if _sync_covers_pending.is_empty():
+		_sync_covers_mutex.unlock()
+		return
+	
+	var urls = _sync_covers_pending.duplicate()
+	_sync_covers_pending.clear()
+	_sync_covers_mutex.unlock()
+	
+	print("[SyncThread] Dispatching %d covers to main thread" % urls.size())
+	call_deferred("_download_covers_on_main_thread", urls)
+
+func _download_covers_on_main_thread(urls: Array[String]):
+	"""Download covers on main thread using existing async infrastructure.
+	
+	Called via call_deferred from sync thread. Queues each cover to
+	DownloadManager for parallel async download.
+	"""
+	var queued = 0
+	var already_cached = 0
+	
+	for url in urls:
+		var cache_path = get_cached_image_path(url)
+		if FileAccess.file_exists(cache_path):
+			already_cached += 1
+			continue
+		
+		# Use existing async download path
+		_download_cover(url, func(_ok): pass)
+		queued += 1
+	
+	if queued > 0:
+		print("[Covers] Queued %d covers for async download (%d already cached)" % [queued, already_cached])
+
+func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
+	"""Check siblings and insert games in a single DB task.
+	
+	This combines what used to be two separate DB tasks (sibling check + insert)
+	into one, halving the DB queue pressure.
+	"""
+	if games.is_empty() or not _is_db_ready:
+		return 0
+	
+	var state = {"success": false, "inserted": 0, "completed": false}
+	
+	MemoryManager.queue_db_task(
+		func():
+			# Step 1: Check siblings for all games
+			for game in games:
+				if game.siblings.size() > 0:
+					var has_sibling = _check_siblings_in_db(game.romm_id, game.siblings)
+					game.is_master_entry = not has_sibling
+			
+			# Step 2: Insert all games in one transaction
+			var success = _insert_games_transaction(games)
+			return success,
+		func(success: bool):
+			state.success = success
+			state.inserted = games.size() if success else 0
+			state.completed = true
+	)
+	
+	# Poll with longer delay to reduce CPU usage (10ms instead of 1ms)
+	var timeout = 0
+	while not state.completed:
+		OS.delay_usec(10000)  # 10ms sleep
+		timeout += 1
+		if timeout > 12000:  # 120 second timeout (12000 * 10ms)
+			print("[SyncThread] ERROR: Timeout waiting for DB check+insert (%d games)" % games.size())
+			break
+	
+	if state.success:
+		# During sync, we skip individual game_added signals to avoid FPS crawl
+		# The library view will refresh when sync_completed is emitted
+		# Only emit if NOT in batch mode (i.e., individual additions outside sync)
+		if not _sync_batch_mode:
+			for game in games:
+				if game.is_master_entry:
+					call_deferred("_emit_game_added", game)
+		return state.inserted
+	else:
+		print("[SyncThread] ERROR: DB check+insert failed for %d games" % games.size())
+		return 0
+
+func _show_sync_notification():
+	"""Show sync notification on main thread."""
+	_sync_notification_id = NotificationManager.show_notification(
+		"Syncing...",
+		NotificationManager.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			if _sync_total == 0:
+				return 0.0
+			return float(_sync_current) / float(_sync_total),
+		func(progress: float) -> String:
+			var pct = int(progress * 100)
+			if _sync_platform != "":
+				return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
+			return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct]
 	)
 
 func _get_db_platform_slugs() -> Array[String]:
