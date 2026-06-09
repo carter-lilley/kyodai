@@ -145,10 +145,19 @@ func _input(event: InputEvent):
 	if not visible:
 		return
 	
-	# Consume all controller navigation events so they don't leak to the grid
+	var focus_owner = get_viewport().gui_get_focus_owner()
+	
+	# Consume controller navigation events so they don't leak to the grid
 	if event.is_action_pressed("ui_up") or event.is_action_pressed("ui_down") or \
-	   event.is_action_pressed("ui_left") or event.is_action_pressed("ui_right") or \
-	   event.is_action_pressed("ui_accept"):
+	   event.is_action_pressed("ui_left") or event.is_action_pressed("ui_right"):
+		get_viewport().set_input_as_handled()
+		return
+	
+	# Allow LineEdit to receive Enter for text_submitted
+	if event.is_action_pressed("ui_accept") and focus_owner == search_bar:
+		return
+	
+	if event.is_action_pressed("ui_accept"):
 		get_viewport().set_input_as_handled()
 		return
 	

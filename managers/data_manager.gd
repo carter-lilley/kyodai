@@ -609,13 +609,37 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		
 		var platform_complete = false
 		var platform_batch_count = 0
+		var batch_size = 250 if not PlatformManager.is_android() else 150
+		
+		# Parallel fetch state
+		var parallel_fetch = {
+			"thread": null,
+			"mutex": Mutex.new(),
+			"result": null,
+			"completed": false,
+			"offset": 0
+		}
+		
 		while not platform_complete and _sync_state != SyncState.ERROR:
-			var batch_size = 250 if not PlatformManager.is_android() else 150
 			
-			# Fetch batch
+			# Fetch batch (or wait for parallel fetch)
 			var fetch_start = Time.get_ticks_msec()
-			var result = NetworkManager.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
-			var fetch_time = Time.get_ticks_msec() - fetch_start
+			var result = null
+			var fetch_time = 0
+			
+			if parallel_fetch.completed and parallel_fetch.offset == _sync_current_offset:
+				# Use pre-fetched result
+				parallel_fetch.mutex.lock()
+				result = parallel_fetch.result
+				parallel_fetch.completed = false
+				parallel_fetch.result = null
+				parallel_fetch.mutex.unlock()
+				fetch_time = Time.get_ticks_msec() - fetch_start
+				print("[SyncThread] Using pre-fetched batch at offset %d" % _sync_current_offset)
+			else:
+				# Fetch synchronously
+				result = NetworkManager.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
+				fetch_time = Time.get_ticks_msec() - fetch_start
 			
 			if not result.success:
 				print("[SyncThread] Error fetching platform '%s': %s (fetch took %dms)" % [platform.name, result.error, fetch_time])
@@ -640,10 +664,26 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 			_sync_current_total = total
 			_sync_platform_total = total
 			
-			# Process batch
+			# Start fetching next batch in parallel while we process this one
+			var next_offset = _sync_current_offset + batch_size
+			if next_offset < total and not platform_complete:
+				parallel_fetch.offset = next_offset
+				parallel_fetch.completed = false
+				parallel_fetch.result = null
+				
+				parallel_fetch.thread = Thread.new()
+				parallel_fetch.thread.start(func():
+					var next_result = NetworkManager.fetch_games_sync(str(platform_id), next_offset, batch_size, _sync_current_updated_after)
+					parallel_fetch.mutex.lock()
+					parallel_fetch.result = next_result
+					parallel_fetch.completed = true
+					parallel_fetch.mutex.unlock()
+				)
+			
+			# Process batch with incremental progress
 			_sync_state = SyncState.PLATFORM_PROCESSING
 			var batch_start = Time.get_ticks_msec()
-			var succeeded = _process_batch_sync(items, platform.slug)
+			var succeeded = _process_batch_sync(items, platform.slug, true)
 			var batch_time = Time.get_ticks_msec() - batch_start
 			_sync_current_synced += succeeded
 			_sync_total_synced += succeeded
@@ -660,6 +700,10 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				_sync_platform_index, _sync_platform_count, platform.name,
 				platform_batch_count, fetch_time, batch_time
 			])
+			
+			# Wait for parallel fetch to finish before next iteration
+			if parallel_fetch.thread != null and parallel_fetch.thread.is_alive():
+				parallel_fetch.thread.wait_to_finish()
 			
 			if _sync_current_synced >= _sync_current_total:
 				var current_time = Time.get_datetime_string_from_system(true)
@@ -784,25 +828,35 @@ func _precalculate_totals_sync(platforms: Array) -> int:
 	
 	return grand_total
 
-func _process_batch_sync(items: Array, platform_slug: String) -> int:
+func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_progress: bool = false) -> int:
 	"""Process a batch of games on the sync thread.
 	
 	Phases:
 	1. Create GameResources (sync thread CPU work)
 	2. Sibling checks + DB inserts (single combined DB task per batch)
 	3. Collect cover URLs and dispatch to main thread for async download
+	4. Optional: Emit incremental progress updates during processing
 	"""
 	if items.is_empty():
 		return 0
 	
 	var batch_start = Time.get_ticks_msec()
+	var base_count = _sync_current  # Starting count before this batch
 	
-	# Phase 1: Create GameResources
+	# Phase 1: Create GameResources with incremental progress
 	var games: Array[GameResource] = []
-	for item in items:
-		var game = _create_game_from_data(item, platform_slug, false)
+	var progress_chunk_size = 25  # Emit progress every 25 games
+	
+	for i in range(items.size()):
+		var game = _create_game_from_data(items[i], platform_slug, false)
 		if game != null:
 			games.append(game)
+		
+		# Emit incremental progress every 25 games
+		if emit_incremental_progress and i > 0 and i % progress_chunk_size == 0:
+			var partial_current = base_count + i
+			var partial_pct = float(partial_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
+			call_deferred("_emit_sync_progress", partial_pct * 0.01, partial_current, _sync_total)
 	
 	if games.is_empty():
 		return 0
