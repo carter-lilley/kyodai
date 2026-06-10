@@ -363,43 +363,51 @@ func _http_get_bytes_sync(url: String, headers: Array = []) -> Dictionary:
 		return {"success": false, "body": PackedByteArray(), "error": result.error}
 	return {"success": true, "body": result.body, "error": ""}
 
-## Shared HTTP request implementation - returns raw bytes
-func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
-	var http = HTTPClient.new()
-	
-	# Parse URL
-	var protocol = "http"
-	var host = ""
-	var port = 80
-	var path = "/"
-	var query = ""
-	
+## Parses a URL into its components.
+## Returns: {"protocol": String, "host": String, "port": int, "path": String, "query": String}
+func parse_url(url: String) -> Dictionary:
+	var result = {"protocol": "http", "host": "", "port": 80, "path": "/", "query": ""}
+
 	var protocol_end = url.find("://")
 	if protocol_end != -1:
-		protocol = url.substr(0, protocol_end)
+		result.protocol = url.substr(0, protocol_end)
 		url = url.substr(protocol_end + 3)
-	
-	if protocol == "https":
-		port = 443
-	
+
+	if result.protocol == "https":
+		result.port = 443
+
 	var path_start = url.find("/")
 	if path_start == -1:
-		host = url
+		result.host = url
 	else:
-		host = url.substr(0, path_start)
+		result.host = url.substr(0, path_start)
 		var remainder = url.substr(path_start)
 		var query_start = remainder.find("?")
 		if query_start == -1:
-			path = remainder
+			result.path = remainder
 		else:
-			path = remainder.substr(0, query_start)
-			query = remainder.substr(query_start)
-	
-	var port_start = host.find(":")
+			result.path = remainder.substr(0, query_start)
+			result.query = remainder.substr(query_start)
+
+	var port_start = result.host.find(":")
 	if port_start != -1:
-		port = host.substr(port_start + 1).to_int()
-		host = host.substr(0, port_start)
-	
+		result.port = result.host.substr(port_start + 1).to_int()
+		result.host = result.host.substr(0, port_start)
+
+	return result
+
+## Shared HTTP request implementation - returns raw bytes
+func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
+	var http = HTTPClient.new()
+
+	# Parse URL
+	var url_parts = parse_url(url)
+	var protocol = url_parts.protocol
+	var host = url_parts.host
+	var port = url_parts.port
+	var path = url_parts.path
+	var query = url_parts.query
+
 	# Connect
 	var err: int
 	if protocol == "https":

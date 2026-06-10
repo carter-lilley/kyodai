@@ -43,13 +43,14 @@ var _queue: Array[QueueItem] = []
 var _active_items: Dictionary = {}  # id -> QueueItem
 var _max_concurrent: int = 5  # Concurrent downloads for better throughput on mobile
 
-# Progress timer for downloads
-var _progress_timers: Dictionary = {}  # item_id -> Timer
+# Unified progress/timeout tracking struct
+class DownloadProgress:
+	var timer: Timer
+	var start_time_ms: int
+	var last_progress_time_ms: int
+	var last_downloaded_bytes: int
 
-# Timeout tracking
-var _download_start_times: Dictionary = {}  # item_id -> start_time_msec
-var _last_progress_times: Dictionary = {}  # item_id -> last_progress_time_msec
-var _last_downloaded_bytes: Dictionary = {}  # item_id -> bytes at last check
+var _download_progress: Dictionary = {}  # item_id -> DownloadProgress
 const DOWNLOAD_TIMEOUT_MS: int = 30 * 60 * 1000  # 30 minutes max
 const STALL_TIMEOUT_MS: int = 120 * 1000  # 120 seconds with no progress = stall
 const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at start
@@ -399,10 +400,12 @@ func _start_download(item: QueueItem):
 		OS.set_low_processor_usage_mode(true)
 		print("[DownloadManager] Enabled low processor mode for download")
 	
-	# Track start time for timeout detection
-	_download_start_times[item.id] = Time.get_ticks_msec()
-	_last_progress_times[item.id] = Time.get_ticks_msec()
-	_last_downloaded_bytes[item.id] = 0
+	# Initialize unified progress tracking
+	var prog = DownloadProgress.new()
+	prog.start_time_ms = Time.get_ticks_msec()
+	prog.last_progress_time_ms = prog.start_time_ms
+	prog.last_downloaded_bytes = 0
+	_download_progress[item.id] = prog
 	
 	# Show notification with progress (unless suppressed for batch downloads)
 	if not item.suppress_notification:
@@ -495,12 +498,13 @@ func _start_download(item: QueueItem):
 	# Setup progress timer - poll frequently for smooth UI updates
 	# 0.5s provides responsive progress without excessive CPU/disk overhead
 	var poll_interval = 0.5
-	_progress_timers[item.id] = Timer.new()
-	_progress_timers[item.id].wait_time = poll_interval
-	_progress_timers[item.id].autostart = true
-	add_child(_progress_timers[item.id])
-	
-	_progress_timers[item.id].timeout.connect(func():
+	var progress = _download_progress[item.id] as DownloadProgress
+	progress.timer = Timer.new()
+	progress.timer.wait_time = poll_interval
+	progress.timer.autostart = true
+	add_child(progress.timer)
+
+	progress.timer.timeout.connect(func():
 		_update_download_progress(item)
 		_check_download_timeout(item.id)
 	)
@@ -592,12 +596,13 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 			item.http_request = item.download_info.get("http", null)
 			
 			# Setup progress timer for fallback download
-			_progress_timers[item.id] = Timer.new()
-			_progress_timers[item.id].wait_time = 1.0
-			_progress_timers[item.id].autostart = true
-			add_child(_progress_timers[item.id])
-			
-			_progress_timers[item.id].timeout.connect(func():
+			var progress2 = _download_progress[item.id] as DownloadProgress
+			progress2.timer = Timer.new()
+			progress2.timer.wait_time = 1.0
+			progress2.timer.autostart = true
+			add_child(progress2.timer)
+
+			progress2.timer.timeout.connect(func():
 				_update_download_progress(item)
 				_check_download_timeout(item.id)
 			)
@@ -729,7 +734,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	print("[DownloadManager] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
 	
 	# Parse URL to get components
-	var url_parts = _parse_url(url)
+	var url_parts = NetworkManager.parse_url(url)
 	
 	# Get or create connection from pool (thread-safe access)
 	var http: HTTPClient
@@ -970,42 +975,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	
 	print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes (connection left open, status=" + str(http.get_status()) + ")")
 	return true
-
-## Parses URL into components
-func _parse_url(url: String) -> Dictionary:
-	var result = {"protocol": "http", "host": "", "port": 80, "path": "/", "query": ""}
-	
-	# Extract protocol
-	var protocol_end = url.find("://")
-	if protocol_end != -1:
-		result.protocol = url.substr(0, protocol_end)
-		url = url.substr(protocol_end + 3)
-	
-	# Set default port based on protocol
-	if result.protocol == "https":
-		result.port = 443
-	
-	# Extract host and path
-	var path_start = url.find("/")
-	if path_start == -1:
-		result.host = url
-	else:
-		result.host = url.substr(0, path_start)
-		var remainder = url.substr(path_start)
-		var query_start = remainder.find("?")
-		if query_start == -1:
-			result.path = remainder
-		else:
-			result.path = remainder.substr(0, query_start)
-			result.query = remainder.substr(query_start)
-	
-	# Check for explicit port in host
-	var port_start = result.host.find(":")
-	if port_start != -1:
-		result.port = result.host.substr(port_start + 1).to_int()
-		result.host = result.host.substr(0, port_start)
-	
-	return result
 
 ## Updates progress when a chunk completes via thread pool
 func _update_chunk_download_progress(item_id: String, chunk_index: int, success: bool):
@@ -1697,13 +1666,15 @@ func _update_download_progress(item: QueueItem):
 				item.progress = -1.0
 			
 			# Track progress periodically (every 50MB change)
-			var last_bytes = _last_downloaded_bytes.get(item.id, 0)
-			if abs(current_size - last_bytes) > 50 * 1024 * 1024:
-				_last_downloaded_bytes[item.id] = current_size
-			
-			# Update stall time if making progress
-			if current_size > 0 and current_size != last_bytes:
-				_last_progress_times[item.id] = Time.get_ticks_msec()
+			var prog = _download_progress.get(item.id) as DownloadProgress
+			if prog != null:
+				var last_bytes = prog.last_downloaded_bytes
+				if abs(current_size - last_bytes) > 50 * 1024 * 1024:
+					prog.last_downloaded_bytes = current_size
+
+				# Update stall time if making progress
+				if current_size > 0 and current_size != last_bytes:
+					prog.last_progress_time_ms = Time.get_ticks_msec()
 		
 		# Check if download completed via request_completed callback
 		if item.download_info.get("completed", false):
@@ -1763,24 +1734,24 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 	_finish_download_completion(item)
 
 func _cleanup_download_tracking(item_id: String):
-	# Stop progress timer
-	if _progress_timers.has(item_id):
-		_progress_timers[item_id].stop()
-		_progress_timers[item_id].queue_free()
-		_progress_timers.erase(item_id)
-	
-	# Clean up timeout tracking
-	_download_start_times.erase(item_id)
-	_last_progress_times.erase(item_id)
-	_last_downloaded_bytes.erase(item_id)
+	var prog = _download_progress.get(item_id) as DownloadProgress
+	if prog != null:
+		if prog.timer != null:
+			prog.timer.stop()
+			prog.timer.queue_free()
+		_download_progress.erase(item_id)
 
 func _check_download_timeout(item_id: String):
 	if not _active_items.has(item_id):
 		return
-	
+
 	var current_time = Time.get_ticks_msec()
-	var start_time = _download_start_times.get(item_id, current_time)
-	var last_progress = _last_progress_times.get(item_id, current_time)
+	var prog = _download_progress.get(item_id) as DownloadProgress
+	var start_time = current_time
+	var last_progress = current_time
+	if prog != null:
+		start_time = prog.start_time_ms
+		last_progress = prog.last_progress_time_ms
 	
 	var _item = _active_items[item_id]
 	var elapsed_since_start = current_time - start_time

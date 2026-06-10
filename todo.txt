@@ -2,7 +2,6 @@
 
 small screen testing in settings menu (never hscroll)
 separate firmware page or indicator?
-sync not working after removing games
 xemu save sync
 vita3k config override issue
 progress notif during sync deletion

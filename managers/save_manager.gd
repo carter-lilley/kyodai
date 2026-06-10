@@ -11,8 +11,11 @@ const MAX_FILE_SIZE := 100 * 1024 * 1024
 # In-memory cache for discovered emulator profiles
 var _emulator_profile_cache: Dictionary = {}
 
+# Strategy pattern lookup table for emulator-specific save operations
+var _emulator_strategies: Dictionary = {}
+
 func _ready() -> void:
-	# Clean up orphaned temp directories on startup
+	_init_strategies()
 	_cleanup_all_temp_dirs()
 
 ## Cleans up all temp directories under user://temp_saves/
@@ -28,6 +31,192 @@ func _cleanup_all_temp_dirs() -> void:
 		if FSM.dir_exists(full_path):
 			print("[SaveManager] Cleaning up temp directory: " + full_path)
 			FSM.delete_dir_recursive(full_path)
+
+## Initializes the emulator strategy lookup table
+func _init_strategies() -> void:
+	_emulator_strategies = {
+		"cemu": {
+			"validate": func(tid: String) -> String:
+				return "" if tid.length() == 16 else "Invalid Title ID for Cemu game.",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_cemu_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				return FSM.join_paths(dir, game.get_active_title_id().substr(8, 8)),
+			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
+				return record_path.get_base_dir(),
+			"save_name": func(game: GameResource, _path: String) -> String:
+				return game.get_active_title_id().substr(8, 8),
+			"zip": func(src: String, dst: String, game: GameResource) -> bool:
+				return FSM.zip_directory(src, dst, -1, game.get_active_title_id().substr(8, 8)),
+		},
+		"dolphin": {
+			"validate": func(tid: String) -> String:
+				return "" if tid != "" else "No game ID available for this Dolphin game.",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				if game.platform_slug == "wii":
+					return discover_local_dolphin_wii_save(dir, game.get_active_title_id())
+				return discover_local_dolphin_gc_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				if game.platform_slug == "wii":
+					return FSM.join_paths(dir, _game_id_to_hex(game.get_active_title_id()))
+				return dir,
+			"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, _zip: String) -> String:
+				if game.platform_slug == "wii":
+					return FSM.join_paths(save_dir, _game_id_to_hex(game.get_active_title_id()))
+				return save_dir,
+			"save_name": func(game: GameResource, _path: String) -> String:
+				if game.platform_slug == "wii":
+					return _game_id_to_hex(game.get_active_title_id())
+				return game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				return FSM.zip_directory(src, dst),
+		},
+		"eden": {
+			"validate": func(tid: String) -> String:
+				return "" if tid.length() == 16 else "Invalid Title ID for Eden game.",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				var emu_dir = LaunchManager._get_emulator_directory("eden")
+				return discover_local_eden_save(dir, game.get_active_title_id(), emu_dir),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				var emu_dir = LaunchManager._get_emulator_directory("eden")
+				var profile_result = _discover_eden_profile(emu_dir)
+				return FSM.join_paths(dir, "0000000000000000", profile_result.profile_id, game.get_active_title_id()),
+			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
+				return record_path,
+			"save_name": func(game: GameResource, _path: String) -> String:
+				return game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				return FSM.zip_directory(src, dst),
+		},
+		"pcsx2": {
+			"validate": func(tid: String) -> String:
+				return "" if tid != "" else "No serial available for this PS2 game. Launch it once to extract the serial.",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_pcsx2_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, _game: GameResource) -> String:
+				return dir,
+			"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, zip_file_name: String) -> String:
+				var folder_name: String
+				if zip_file_name != "":
+					folder_name = zip_file_name.get_basename()
+				else:
+					folder_name = game.get_active_title_id()
+				return FSM.join_paths(save_dir, folder_name),
+			"save_name": func(game: GameResource, local_file_path: String) -> String:
+				return local_file_path.get_file() if local_file_path != "" else game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				return FSM.zip_directory(src, dst),
+		},
+		"ppsspp": {
+			"validate": func(tid: String) -> String:
+				return "" if tid != "" else "No game ID available for this PSP game. Launch it once to extract the ID.",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_psp_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				return FSM.join_paths(dir, game.get_active_title_id()),
+			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
+				return _save_dir,
+			"save_name": func(game: GameResource, local_file_path: String) -> String:
+				return local_file_path.get_file() if local_file_path != "" else game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				var folder_name = src.get_file()
+				return FSM.zip_directory(src, dst, MAX_FILE_SIZE, folder_name),
+		},
+		"vita3k": {
+			"validate": func(tid: String) -> String:
+				return "" if tid != "" else "No Title ID available for this Vita game. Launch it once to extract the Title ID.",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_vita3k_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				return FSM.join_paths(dir, game.get_active_title_id()),
+			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
+				return _save_dir,
+			"save_name": func(game: GameResource, _path: String) -> String:
+				return game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				var folder_name = src.get_file()
+				return FSM.zip_directory(src, dst, -1, folder_name),
+		},
+		"rpcs3": {
+			"validate": func(tid: String) -> String:
+				if tid == "":
+					return "No Title ID available for this PS3 game. Launch it once to extract the Title ID."
+				if tid.length() != 9:
+					return "Invalid Title ID for PS3 game."
+				return "",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_rpcs3_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				return FSM.join_paths(dir, game.get_active_title_id()),
+			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
+				return _save_dir,
+			"save_name": func(game: GameResource, _path: String) -> String:
+				return game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				var folder_name = src.get_file()
+				return FSM.zip_directory(src, dst, -1, folder_name),
+		},
+		"shadps4": {
+			"validate": func(tid: String) -> String:
+				if tid == "":
+					return "No Title ID available for this PS4 game. Launch it once to extract the Title ID."
+				if tid.length() != 9:
+					return "Invalid Title ID for PS4 game."
+				return "",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_shadps4_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				return FSM.join_paths(dir, game.get_active_title_id()),
+			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
+				return _save_dir,
+			"save_name": func(game: GameResource, _path: String) -> String:
+				return game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				var folder_name = src.get_file()
+				return FSM.zip_directory(src, dst, -1, folder_name),
+		},
+		"xenia": {
+			"validate": func(tid: String) -> String:
+				if tid == "":
+					return "No Title ID available for this Xbox 360 game. Launch it once to extract the Title ID."
+				if tid.length() != 8:
+					return "Invalid Title ID for Xbox 360 game."
+				return "",
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return discover_local_xenia_save(dir, game.get_active_title_id()),
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				var profile = _find_first_subdir(dir)
+				if profile == "":
+					profile = "0000000000000000"
+				return FSM.join_paths(dir, profile, game.get_active_title_id()),
+			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
+				return _save_dir,
+			"save_name": func(game: GameResource, _path: String) -> String:
+				return game.get_active_title_id(),
+			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
+				var folder_name = src.get_file()
+				return FSM.zip_directory(src, dst, -1, folder_name),
+		},
+		"azahar": {
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				var short_title_id = game.get_active_title_id().substr(8, 8)
+				return FSM.join_paths(dir, short_title_id),
+			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
+				return record_path,
+		},
+		"retroarch": {
+			"resolve_path": func(dir: String, game: GameResource) -> String:
+				return _resolve_retroarch_save_path(dir, game),
+		},
+	}
+
+func _get_strategy(emulator_id: String, strategy_name: String) -> Callable:
+	if not _emulator_strategies.has(emulator_id):
+		return Callable()
+	var strategies = _emulator_strategies[emulator_id] as Dictionary
+	if not strategies.has(strategy_name):
+		return Callable()
+	return strategies[strategy_name] as Callable
 
 ## Cleans up empty parent directories after removing a temp file
 func _cleanup_temp_dir(file_path: String) -> void:
@@ -756,70 +945,22 @@ func _get_folder_mtime(dir_path: String) -> int:
 ## Validates that a game's title ID is valid for the given emulator
 ## Returns empty string on success, error message on failure
 func _validate_emulator_title_id(emulator_id: String, title_id: String) -> String:
-	match emulator_id:
-		"cemu", "eden":
-			if title_id.length() != 16:
-				return "Invalid Title ID for %s game." % emulator_id.capitalize()
-		"dolphin":
-			if title_id == "":
-				return "No game ID available for this Dolphin game."
-		"pcsx2":
-			if title_id == "":
-				return "No serial available for this PS2 game. Launch it once to extract the serial."
-		"ppsspp":
-			if title_id == "":
-				return "No game ID available for this PSP game. Launch it once to extract the ID."
-		"vita3k":
-			if title_id == "":
-				return "No Title ID available for this Vita game. Launch it once to extract the Title ID."
-		"rpcs3":
-			if title_id == "":
-				return "No Title ID available for this PS3 game. Launch it once to extract the Title ID."
-			if title_id.length() != 9:
-				return "Invalid Title ID for PS3 game."
-		"shadps4":
-			if title_id == "":
-				return "No Title ID available for this PS4 game. Launch it once to extract the Title ID."
-			if title_id.length() != 9:
-				return "Invalid Title ID for PS4 game."
-		"xenia":
-			if title_id == "":
-				return "No Title ID available for this Xbox 360 game. Launch it once to extract the Title ID."
-			if title_id.length() != 8:
-				return "Invalid Title ID for Xbox 360 game."
-		_:
-			if title_id.length() != 16:
-				return "Invalid Title ID for this game."
+	var strategy = _get_strategy(emulator_id, "validate")
+	if strategy.is_valid():
+		return strategy.call(title_id)
+	# Default validation
+	if title_id.length() != 16:
+		return "Invalid Title ID for this game."
 	return ""
 
 ## Discovers local saves for a specific emulator and game
 ## Returns an array of save dictionaries
 func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameResource) -> Array[Dictionary]:
-	var title_id = game.get_active_title_id()
-	match emulator_id:
-		"cemu":
-			return discover_local_cemu_save(save_dir, title_id)
-		"dolphin":
-			if game.platform_slug == "wii":
-				return discover_local_dolphin_wii_save(save_dir, title_id)
-			return discover_local_dolphin_gc_save(save_dir, title_id)
-		"eden":
-			var emu_dir = LaunchManager._get_emulator_directory("eden")
-			return discover_local_eden_save(save_dir, title_id, emu_dir)
-		"pcsx2":
-			return discover_local_pcsx2_save(save_dir, title_id)
-		"ppsspp":
-			return discover_local_psp_save(save_dir, title_id)
-		"vita3k":
-			return discover_local_vita3k_save(save_dir, title_id)
-		"rpcs3":
-			return discover_local_rpcs3_save(save_dir, title_id)
-		"shadps4":
-			return discover_local_shadps4_save(save_dir, title_id)
-		"xenia":
-			return discover_local_xenia_save(save_dir, title_id)
-		_:
-			return discover_local_folder_save(save_dir, title_id)
+	var strategy = _get_strategy(emulator_id, "discover")
+	if strategy.is_valid():
+		return strategy.call(save_dir, game)
+	# Default: folder saves
+	return discover_local_folder_save(save_dir, game.get_active_title_id())
 
 ## Resolves the save path for the default emulator folder structure
 ## Returns a dictionary with "path" and "error" keys
@@ -840,46 +981,12 @@ func _resolve_default_save_path(save_dir: String, title_id: String) -> Dictionar
 ## Resolves the save path for a specific emulator and game
 ## Returns the resolved path string (empty string on failure)
 func _resolve_emulator_save_path(emulator_id: String, save_dir: String, game: GameResource) -> String:
-	var title_id = game.get_active_title_id()
-	match emulator_id:
-		"cemu":
-			return FSM.join_paths(save_dir, title_id.substr(8, 8))
-		"dolphin":
-			if game.platform_slug == "wii":
-				return FSM.join_paths(save_dir, _game_id_to_hex(title_id))
-			return save_dir
-		"eden":
-			var emu_dir = LaunchManager._get_emulator_directory("eden")
-			var profile_result = _discover_eden_profile(emu_dir)
-			# Eden uses full TitleID (16 chars) for save folder names
-			return FSM.join_paths(save_dir, "0000000000000000", profile_result.profile_id, title_id)
-		"pcsx2":
-			return save_dir
-		"ppsspp":
-			return FSM.join_paths(save_dir, title_id)
-		"vita3k":
-			return FSM.join_paths(save_dir, title_id)
-		"rpcs3":
-			return FSM.join_paths(save_dir, title_id)
-		"shadps4":
-			return FSM.join_paths(save_dir, title_id)
-		"xenia":
-			# Xenia saves are in content/PROFILE_ID/TITLE_ID/
-			# We need to find the profile directory first
-			var profile = _find_first_subdir(save_dir)
-			if profile == "":
-				profile = "0000000000000000"
-			return FSM.join_paths(save_dir, profile, title_id)
-		"azahar":
-			# Azahar saves: zip contains {short_title_id}/ as root
-			# Extract directly into save_dir so zip creates {short_title_id}/ folder
-			var short_title_id = title_id.substr(8, 8)
-			return FSM.join_paths(save_dir, short_title_id)
-		"retroarch":
-			return _resolve_retroarch_save_path(save_dir, game)
-		_:
-			var result = _resolve_default_save_path(save_dir, title_id)
-			return result.path
+	var strategy = _get_strategy(emulator_id, "resolve_path")
+	if strategy.is_valid():
+		return strategy.call(save_dir, game)
+	# Default: use standard folder save path resolution
+	var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
+	return result.path
 
 ## Resolves the save path for RetroArch with core-specific subdirectories
 ## Returns the full file path where the .srm should be stored
@@ -904,121 +1011,29 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 ## Determines the extraction destination for downloaded saves based on emulator
 ## Returns the destination directory path
 func _get_extract_dest(emulator_id: String, save_dir: String, record_path: String, game: GameResource, zip_file_name: String = "") -> String:
-	match emulator_id:
-		"cemu":
-			# Cemu saves are in save_dir/{prefix}/{short_id}/
-			# The zip root is {short_id}/, so extract to the prefix directory
-			return record_path.get_base_dir()
-		"dolphin":
-			if game.platform_slug == "wii":
-				var hex_id = _game_id_to_hex(game.get_active_title_id())
-				return FSM.join_paths(save_dir, hex_id)
-			return save_dir
-		"pcsx2":
-			# PCSX2 saves are loose files in a zip named by serial
-			# Extract into save_dir/{serial}/ so the zip contents go into the serial folder
-			# Use the zip filename (without extension) if available, otherwise fall back to the game's title_id
-			var folder_name: String
-			if zip_file_name != "":
-				folder_name = zip_file_name.get_basename()
-			else:
-				folder_name = game.get_active_title_id()
-			return FSM.join_paths(save_dir, folder_name)
-		"ppsspp":
-			return save_dir
-		"vita3k":
-			return save_dir
-		"eden":
-			# Eden saves are loose files in the zip, extract directly into the TitleID folder
-			return record_path
-		"rpcs3":
-			return save_dir
-		"shadps4":
-			return save_dir
-		"xenia":
-			return save_dir
-		"azahar":
-			# Azahar saves: zip contains loose files, extract into {short_title_id}/ folder
-			# record_path is already save_dir/{short_title_id}
-			return record_path
-		_:
-			return record_path.get_base_dir()
+	var strategy = _get_strategy(emulator_id, "extract_dest")
+	if strategy.is_valid():
+		return strategy.call(save_dir, record_path, game, zip_file_name)
+	# Default: extract to the parent directory of the record path
+	return record_path.get_base_dir()
 
 ## Determines the save name for upload based on emulator and game
 ## Returns the save name string
 func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_file_path: String = "") -> String:
-	var title_id = game.get_active_title_id()
-	match emulator_id:
-		"dolphin":
-			if game.platform_slug == "wii":
-				return _game_id_to_hex(title_id)
-			return title_id
-		"pcsx2":
-			# Use actual folder name for PCSX2 saves
-			return local_file_path.get_file() if local_file_path != "" else title_id
-		"ppsspp":
-			# For PSP, always use the specific folder name as the save name
-			# This allows multiple saves (e.g., NPJH50333DAT, NPJH50333USER00) to be uploaded separately
-			if local_file_path != "":
-				return local_file_path.get_file()
-			return title_id
-		"vita3k":
-			# For Vita3K, use the TitleID as the save name
-			return title_id
-		"rpcs3":
-			# For RPCS3, use the TitleID as the save name
-			return title_id
-		"shadps4":
-			# For shadPS4, use the TitleID as the save name
-			return title_id
-		"xenia":
-			# For Xenia, use the TitleID as the save name
-			return title_id
-		"eden":
-			# For Eden, use the full TitleID as the save name
-			return title_id
-		_:
-			return title_id.substr(8, 8)
+	var strategy = _get_strategy(emulator_id, "save_name")
+	if strategy.is_valid():
+		return strategy.call(game, local_file_path)
+	# Default: use the short Title ID (last 8 characters of the 16-character Title ID)
+	return game.get_active_title_id().substr(8, 8)
 
 ## Creates a ZIP archive for a specific emulator's save
 ## Returns true on success
 func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: String, game: GameResource) -> bool:
-	match emulator_id:
-		"cemu":
-			var save_name = game.get_active_title_id().substr(8, 8)
-			return FSM.zip_directory(source_path, zip_path, -1, save_name)
-		"dolphin":
-			return FSM.zip_directory(source_path, zip_path)
-		"eden":
-			# Eden saves are loose files inside the zip (no root folder)
-			# Zip is named with the full TitleID
-			return FSM.zip_directory(source_path, zip_path)
-		"pcsx2":
-			return FSM.zip_directory(source_path, zip_path)
-		"ppsspp":
-			# For individual uploads, zip the specific folder with its name as root
-			# This ensures extraction creates the correct subfolder (e.g., NPJH50333DAT/)
-			# Skip files over 100MB (DLC/install data) to avoid Cloudflare 413 errors
-			var folder_name = source_path.get_file()
-			return FSM.zip_directory(source_path, zip_path, MAX_FILE_SIZE, folder_name)
-		"vita3k":
-			# For Vita3K, zip the save folder with TitleID as root
-			var vita_folder_name = source_path.get_file()
-			return FSM.zip_directory(source_path, zip_path, -1, vita_folder_name)
-		"rpcs3":
-			# For RPCS3, zip the save folder with TitleID as root
-			var rpcs3_folder_name = source_path.get_file()
-			return FSM.zip_directory(source_path, zip_path, -1, rpcs3_folder_name)
-		"shadps4":
-			# For shadPS4, zip the save folder with TitleID as root
-			var shadps4_folder_name = source_path.get_file()
-			return FSM.zip_directory(source_path, zip_path, -1, shadps4_folder_name)
-		"xenia":
-			# For Xenia, zip the save folder with TitleID as root
-			var xenia_folder_name = source_path.get_file()
-			return FSM.zip_directory(source_path, zip_path, -1, xenia_folder_name)
-		_:
-			return FSM.zip_directory(source_path, zip_path)
+	var strategy = _get_strategy(emulator_id, "zip")
+	if strategy.is_valid():
+		return strategy.call(source_path, zip_path, game)
+	# Default: zip the directory without a root folder
+	return FSM.zip_directory(source_path, zip_path)
 
 ## Zips all PSP save folders matching the title_id into a single archive
 ## max_file_size: maximum file size in bytes to include (-1 for no limit)

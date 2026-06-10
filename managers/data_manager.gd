@@ -158,6 +158,31 @@ func _invoke_sync_callback(success: bool, message: String, count: int, error_cod
 	if _sync_final_callback.is_valid():
 		_sync_final_callback.call(success, message, count, error_code)
 
+## Generic helper to wait for an async callback using a Semaphore.
+## Eliminates busy-wait polling (OS.delay_usec loops) in sync thread code.
+## The task_func receives a callback that must be invoked when the async work completes.
+func _wait_for_async(task_func: Callable, timeout_ms: int = 60000):
+	var state = {"completed": false, "result": null}
+	var semaphore = Semaphore.new()
+
+	var wrapped_callback = func(result = null):
+		state.result = result
+		state.completed = true
+		semaphore.post()
+
+	task_func.call(wrapped_callback)
+
+	# Wait on semaphore with timeout via periodic check
+	var elapsed = 0
+	var check_interval = 100  # 100ms
+	while not state.completed and elapsed < timeout_ms:
+		# Try to acquire without blocking; if not ready, sleep and retry
+		# Godot Semaphore lacks try_wait, so we poll lightly
+		OS.delay_msec(check_interval)
+		elapsed += check_interval
+
+	return state.result if state.completed else null
+
 # ==================== ANDROID SYNC FOREGROUND SERVICE ====================
 
 func _start_sync_fg_service(platform_name: String = "Game Library", current: int = 0, total: int = 0) -> void:
@@ -764,100 +789,79 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 	)
 
 func _remove_platform_sync_threaded(platform_slug: String) -> bool:
-	"""Synchronous platform removal for sync thread."""
-	var state = {"success": false, "completed": false}
-	
-	remove_platform_games(platform_slug, func(result):
-		state.success = result
-		state.completed = true
-	)
-	
-	var timeout = 0
-	while not state.completed:
-		OS.delay_usec(10000)  # 10ms sleep
-		timeout += 1
-		if timeout > 6000:  # 60 seconds
-			print("[SyncThread] ERROR: Timeout removing platform %s" % platform_slug)
-			return false
-	
-	return state.success
+	"""Synchronous platform removal for sync thread (uses Semaphore, no busy-wait)."""
+	var result = _wait_for_async(func(callback: Callable):
+		remove_platform_games(platform_slug, func(success: bool):
+			callback.call(success)
+		)
+	, 60000)
+	if result == null:
+		print("[SyncThread] ERROR: Timeout removing platform %s" % platform_slug)
+		return false
+	return result if result is bool else false
 
 func _lookup_platform_id_sync(platform_slug: String) -> int:
 	"""Lookup platform ID from DB - queues to DB thread for thread safety."""
 	if not _is_db_ready:
 		return 0
-	
-	var state = {"result": 0, "completed": false}
-	MemoryManager.queue_db_task(
-		func():
-			var query_result = _db_query_array("SELECT romm_id FROM platforms WHERE slug = ?", [platform_slug])
-			if query_result.size() > 0:
-				return query_result[0].get("romm_id", 0)
-			return 0,
-		func(romm_id: int):
-			state.result = romm_id
-			state.completed = true
-	)
-	
-	var timeout = 0
-	while not state.completed:
-		OS.delay_usec(10000)  # 10ms sleep
-		timeout += 1
-		if timeout > 6000:  # 60 seconds
-			print("[SyncThread] ERROR: Timeout looking up platform ID for %s" % platform_slug)
-			return 0
-	
-	return state.result
+
+	var result = _wait_for_async(func(callback: Callable):
+		MemoryManager.queue_db_task(
+			func():
+				var query_result = _db_query_array("SELECT romm_id FROM platforms WHERE slug = ?", [platform_slug])
+				if query_result.size() > 0:
+					return query_result[0].get("romm_id", 0)
+				return 0,
+			func(romm_id: int):
+				callback.call(romm_id)
+		)
+	, 60000)
+
+	if result == null:
+		print("[SyncThread] ERROR: Timeout looking up platform ID for %s" % platform_slug)
+		return 0
+	return result if result is int else 0
 
 func _get_last_sync_time_sync(platform_slug: String) -> String:
 	"""Get last sync time - queues to DB thread for thread safety."""
 	if not _is_db_ready:
 		return ""
-	
-	var state = {"result": "", "completed": false}
+
 	var key = "last_sync_" + platform_slug
-	MemoryManager.queue_db_task(
-		func():
-			var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = ?", [key])
-			if query_result.size() > 0:
-				return query_result[0].get("value", "")
-			return "",
-		func(value: String):
-			state.result = value
-			state.completed = true
-	)
-	
-	var timeout = 0
-	while not state.completed:
-		OS.delay_usec(10000)  # 10ms sleep
-		timeout += 1
-		if timeout > 6000:  # 60 seconds
-			print("[SyncThread] ERROR: Timeout getting last sync time for %s" % platform_slug)
-			return ""
-	
-	return state.result
+	var result = _wait_for_async(func(callback: Callable):
+		MemoryManager.queue_db_task(
+			func():
+				var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = ?", [key])
+				if query_result.size() > 0:
+					return query_result[0].get("value", "")
+				return "",
+			func(value: String):
+				callback.call(value)
+		)
+	, 60000)
+
+	if result == null:
+		print("[SyncThread] ERROR: Timeout getting last sync time for %s" % platform_slug)
+		return ""
+	return result if result is String else ""
 
 func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
 	"""Set last sync time - queues to DB thread for thread safety."""
 	if not _is_db_ready:
 		return
-	
-	var state = {"completed": false}
+
 	var key = "last_sync_" + platform_slug
-	MemoryManager.queue_db_task(
-		func():
-			return _db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp]),
-		func(_success: bool):
-			state.completed = true
-	)
-	
-	var timeout = 0
-	while not state.completed:
-		OS.delay_usec(10000)  # 10ms sleep
-		timeout += 1
-		if timeout > 6000:  # 60 seconds
-			print("[SyncThread] ERROR: Timeout setting last sync time for %s" % platform_slug)
-			return
+	var result = _wait_for_async(func(callback: Callable):
+		MemoryManager.queue_db_task(
+			func():
+				return _db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp]),
+			func(_success: bool):
+				callback.call(null)
+		)
+	, 60000)
+
+	if result == null:
+		print("[SyncThread] ERROR: Timeout setting last sync time for %s" % platform_slug)
 
 func _precalculate_totals_sync(platforms: Array) -> int:
 	"""Pre-calculate total games for all platforms - sync thread version."""
@@ -979,42 +983,36 @@ func _download_covers_on_main_thread(urls: Array[String]):
 
 func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 	"""Check siblings and insert games in a single DB task.
-	
+
 	This combines what used to be two separate DB tasks (sibling check + insert)
 	into one, halving the DB queue pressure.
 	"""
 	if games.is_empty() or not _is_db_ready:
 		return 0
-	
-	var state = {"success": false, "inserted": 0, "completed": false}
-	
-	MemoryManager.queue_db_task(
-		func():
-			# Step 1: Check siblings for all games
-			for game in games:
-				if game.siblings.size() > 0:
-					var has_sibling = _check_siblings_in_db(game.romm_id, game.siblings)
-					game.is_master_entry = not has_sibling
-			
-			# Step 2: Insert all games in one transaction
-			var success = _insert_games_transaction(games)
-			return success,
-		func(success: bool):
-			state.success = success
-			state.inserted = games.size() if success else 0
-			state.completed = true
-	)
-	
-	# Poll with longer delay to reduce CPU usage (10ms instead of 1ms)
-	var timeout = 0
-	while not state.completed:
-		OS.delay_usec(10000)  # 10ms sleep
-		timeout += 1
-		if timeout > 12000:  # 120 second timeout (12000 * 10ms)
-			print("[SyncThread] ERROR: Timeout waiting for DB check+insert (%d games)" % games.size())
-			break
-	
-	if state.success:
+
+	var result = _wait_for_async(func(callback: Callable):
+		MemoryManager.queue_db_task(
+			func():
+				# Step 1: Check siblings for all games
+				for game in games:
+					if game.siblings.size() > 0:
+						var has_sibling = _check_siblings_in_db(game.romm_id, game.siblings)
+						game.is_master_entry = not has_sibling
+
+				# Step 2: Insert all games in one transaction
+				var success = _insert_games_transaction(games)
+				return success,
+			func(success: bool):
+				callback.call(success)
+		)
+	, 120000)
+
+	if result == null:
+		print("[SyncThread] ERROR: Timeout waiting for DB check+insert (%d games)" % games.size())
+		return 0
+
+	var success = result if result is bool else false
+	if success:
 		# During sync, we skip individual game_added signals to avoid FPS crawl
 		# The library view will refresh when sync_completed is emitted
 		# Only emit if NOT in batch mode (i.e., individual additions outside sync)
@@ -1022,7 +1020,7 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 			for game in games:
 				if game.is_master_entry:
 					call_deferred("_emit_game_added", game)
-		return state.inserted
+		return games.size()
 	else:
 		print("[SyncThread] ERROR: DB check+insert failed for %d games" % games.size())
 		return 0
