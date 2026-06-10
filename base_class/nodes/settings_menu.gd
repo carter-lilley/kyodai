@@ -5,6 +5,8 @@ class_name SettingsMenu
 var subgroup_name: String
 var variables: Array
 
+var accent_color: Color = Color.TRANSPARENT
+
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
 const FSM = preload("res://managers/filesystem_manager.gd")
@@ -137,6 +139,13 @@ func _apply_metadata(control: Control, metadata: Dictionary) -> void:
 		if metadata.has("icon_name"):
 			control.icon_name = metadata["icon_name"]
 
+func _apply_accent(control: Control) -> void:
+	"""Apply accent color to supported M3 components."""
+	if accent_color == Color.TRANSPARENT:
+		return
+	if control is M3Slider or control is M3Switch or control is M3TextField or control is M3ColorPicker:
+		control.accent_color = accent_color
+
 func match_var_type(settingsvar : SettingsVar):
 	match settingsvar.type:
 		Type.BOOL:
@@ -164,6 +173,7 @@ func match_var_type(settingsvar : SettingsVar):
 			hbox.add_child(switch)
 			controls[settingsvar.property_name] = switch
 			_apply_metadata(switch, settingsvar.metadata)
+			_apply_accent(switch)
 			
 			# Connect to dual screen availability changes for dynamic enable/disable
 			if settingsvar.property_name == "dual_screen_mode" and DisplayManager:
@@ -192,6 +202,7 @@ func match_var_type(settingsvar : SettingsVar):
 			add_child(option_button)
 			controls[settingsvar.property_name] = option_button
 			_apply_metadata(option_button, settingsvar.metadata)
+			_apply_accent(option_button)
 			option_button.item_selected.connect(func(value: int):
 				emit_signal("setting_changed", value, settingsvar)
 			)
@@ -223,6 +234,7 @@ func match_var_type(settingsvar : SettingsVar):
 			slider.value = settingsvar.value * display_scale
 			slider.editable = settingsvar.state == 0
 			_apply_metadata(slider, settingsvar.metadata)
+			_apply_accent(slider)
 			
 			slider.value_changed.connect(func(display_value: float):
 				emit_signal("setting_changed", display_value / display_scale, settingsvar)
@@ -236,6 +248,7 @@ func match_var_type(settingsvar : SettingsVar):
 			add_child(text_field)
 			controls[settingsvar.property_name] = text_field
 			_apply_metadata(text_field, settingsvar.metadata)
+			_apply_accent(text_field)
 			text_field.text_changed.connect(func(text: String):
 				emit_signal("setting_changed", text, settingsvar)
 			)
@@ -250,6 +263,7 @@ func match_var_type(settingsvar : SettingsVar):
 			path_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			controls[settingsvar.property_name] = path_field
 			_apply_metadata(path_field, settingsvar.metadata)
+			_apply_accent(path_field)
 			
 			var browse_button = M3Button.new()
 			browse_button.text = "Browse..."
@@ -322,6 +336,7 @@ func match_var_type(settingsvar : SettingsVar):
 			color_picker.disabled = settingsvar.state != 0
 			add_child(color_picker)
 			controls[settingsvar.property_name] = color_picker
+			_apply_accent(color_picker)
 			color_picker.color_changed.connect(func(color: Color):
 				emit_signal("setting_changed", color, settingsvar)
 			)

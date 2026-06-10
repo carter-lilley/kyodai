@@ -4,6 +4,7 @@ extends Manager
 # Combines SQLite database operations and file system image caching
 
 signal database_ready()
+signal database_failed(error_message: String)
 signal sync_completed(success: bool, message: String)
 signal sync_progress(percent: float, current: int, total: int)
 signal game_added(game: GameResource)
@@ -22,6 +23,7 @@ const FSM = preload("res://managers/filesystem_manager.gd")
 
 var _db: SQLite = null
 var _is_db_ready: bool = false
+var _db_init_failed: bool = false  # Fatal flag: database could not be initialized
 
 var _db_mutex: Mutex = Mutex.new()
 
@@ -52,7 +54,28 @@ func _db_query_bool(query: String, bindings: Array = []) -> bool:
 		success = _db.query_with_bindings(query, bindings)
 	_db_unlock()
 	return success
+
+## Unlocked variants for use when caller already holds _db_mutex.
+## Prevents deadlock on platforms with non-reentrant mutexes (Linux/Android).
+func _db_query_array_unlocked(query: String, bindings: Array = []) -> Array:
+	var result: Array
+	if bindings.is_empty():
+		var success = _db.query(query)
+		result = _db.query_result.duplicate() if success else []
+	else:
+		var success = _db.query_with_bindings(query, bindings)
+		result = _db.query_result.duplicate() if success else []
+	return result
+
+func _db_query_bool_unlocked(query: String, bindings: Array = []) -> bool:
+	var success: bool
+	if bindings.is_empty():
+		success = _db.query(query)
+	else:
+		success = _db.query_with_bindings(query, bindings)
+	return success
 var _sync_notification_id: int = -1
+var _removal_notification_id: int = -1
 
 # Android sync foreground service tracking
 var _sync_fg_service_active: bool = false
@@ -158,26 +181,25 @@ func _invoke_sync_callback(success: bool, message: String, count: int, error_cod
 	if _sync_final_callback.is_valid():
 		_sync_final_callback.call(success, message, count, error_code)
 
-## Generic helper to wait for an async callback using a Semaphore.
-## Eliminates busy-wait polling (OS.delay_usec loops) in sync thread code.
-## The task_func receives a callback that must be invoked when the async work completes.
+## Generic helper to wait for an async callback.
+## Polls at 10ms intervals with a fast-path exit to minimize latency.
 func _wait_for_async(task_func: Callable, timeout_ms: int = 60000):
 	var state = {"completed": false, "result": null}
-	var semaphore = Semaphore.new()
 
 	var wrapped_callback = func(result = null):
 		state.result = result
 		state.completed = true
-		semaphore.post()
 
 	task_func.call(wrapped_callback)
 
-	# Wait on semaphore with timeout via periodic check
+	# Fast-path: if callback fired synchronously, return immediately
+	if state.completed:
+		return state.result
+
+	# Poll at 10ms intervals (matching pre-refactor latency)
 	var elapsed = 0
-	var check_interval = 100  # 100ms
+	var check_interval = 10  # 10ms
 	while not state.completed and elapsed < timeout_ms:
-		# Try to acquire without blocking; if not ready, sleep and retry
-		# Godot Semaphore lacks try_wait, so we poll lightly
 		OS.delay_msec(check_interval)
 		elapsed += check_interval
 
@@ -186,41 +208,47 @@ func _wait_for_async(task_func: Callable, timeout_ms: int = 60000):
 # ==================== ANDROID SYNC FOREGROUND SERVICE ====================
 
 func _start_sync_fg_service(platform_name: String = "Game Library", current: int = 0, total: int = 0) -> void:
-	if not PlatformManager.is_android():
-		return
-	
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		push_warning("[DataManager] PackageChecker plugin not available for sync foreground service")
-		return
-	
 	print("[DataManager] Starting sync foreground service: %s (%d/%d)" % [platform_name, current, total])
-	plugin.startSyncForegroundService(platform_name, current, total)
-	_sync_fg_service_active = true
+	if PlatformManager.start_sync_foreground_service(platform_name, current, total):
+		_sync_fg_service_active = true
 
 func _update_sync_fg_service(platform_name: String = "", current: int = 0, total: int = 0) -> void:
-	if not PlatformManager.is_android() or not _sync_fg_service_active:
+	if not _sync_fg_service_active:
 		return
-	
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		return
-	
-	# Use current platform name if not provided
 	var name = platform_name if platform_name != "" else _sync_platform
-	plugin.updateSyncForegroundService(name, current, total)
+	PlatformManager.update_sync_foreground_service(name, current, total)
 
 func _stop_sync_fg_service() -> void:
-	if not PlatformManager.is_android() or not _sync_fg_service_active:
+	if not _sync_fg_service_active:
 		return
-	
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		return
-	
 	print("[DataManager] Stopping sync foreground service")
-	plugin.stopSyncForegroundService()
-	_sync_fg_service_active = false
+	if PlatformManager.stop_sync_foreground_service():
+		_sync_fg_service_active = false
+
+# ==================== REMOVAL PROGRESS NOTIFICATION ====================
+
+func _show_removal_notification(total: int) -> void:
+	_removal_notification_id = NotificationManager.show_notification(
+		"Removing %d platforms..." % total,
+		NotificationManager.Type.INFO,
+		null,
+		0.0,
+		Callable(),
+		Callable(),
+		true  # pulsing
+	)
+
+func _update_removal_notification(current: int, total: int, slug: String) -> void:
+	if _removal_notification_id != -1:
+		NotificationManager.update_notification_text(
+			_removal_notification_id,
+			"Removing platform %d/%d: %s" % [current, total, slug]
+		)
+
+func _dismiss_removal_notification() -> void:
+	if _removal_notification_id != -1:
+		NotificationManager.dismiss_notification(_removal_notification_id)
+		_removal_notification_id = -1
 
 # ==================== SETTINGS CHANGE HANDLER ====================
 
@@ -297,19 +325,30 @@ func _initialize_database():
 	print("[DataManager] _initialize_database() starting...")
 	var dir = DirAccess.open("user://")
 	if not dir.dir_exists("database"):
-		dir.make_dir("database")
-	
+		var mkerr = dir.make_dir("database")
+		if mkerr != OK:
+			var err_msg = "Failed to create database directory: user://database/"
+			push_error("[DataManager] " + err_msg)
+			_db_init_failed = true
+			database_failed.emit(err_msg)
+			NotificationManager.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", NotificationManager.Type.ERROR)
+			return
+
 	_db = SQLite.new()
 	_db.path = DB_PATH
 	_db.verbosity_level = SQLite.QUIET if not _verbose_sql else SQLite.VERBOSE
-	
+
 	if _db.open_db():
 		_create_tables()
 		_is_db_ready = true
 		print("[DataManager] Database ready - emitting signal")
 		database_ready.emit()
 	else:
-		print("[DataManager] ERROR: Failed to open database")
+		var err_msg = "Failed to open database at " + DB_PATH
+		push_error("[DataManager] " + err_msg)
+		_db_init_failed = true
+		database_failed.emit(err_msg)
+		NotificationManager.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", NotificationManager.Type.ERROR)
 
 func _create_tables():
 	_db_query_bool("""
@@ -380,81 +419,6 @@ func _create_tables():
 		)
 	""")
 	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
-	
-	# Migrate old cover_folded column to new cover_group system if needed
-	_migrate_cover_folding_schema()
-
-func _migrate_cover_folding_schema():
-	"""Migrate from old cover_folded column to new cover_group system.
-	
-	This handles databases created before the cover_group system was implemented.
-	It converts cover_folded=1 games to have a cover_group_id and cover_group_master=0.
-	"""
-	# Check if old cover_folded column exists
-	var check_query = "PRAGMA table_info(games)"
-	var query_result = _db_query_array(check_query)
-	if query_result.is_empty():
-		return
-	var has_cover_folded = false
-	var has_cover_group_id = false
-	var has_cover_group_master = false
-	
-	for row in query_result:
-		var col_name = row.get("name", "")
-		if col_name == "cover_folded":
-			has_cover_folded = true
-		elif col_name == "cover_group_id":
-			has_cover_group_id = true
-		elif col_name == "cover_group_master":
-			has_cover_group_master = true
-	
-	# If we have new columns but not old, migration already done
-	if has_cover_group_id and has_cover_group_master and not has_cover_folded:
-		return
-	
-	# If we have old column but not new ones, migrate
-	if has_cover_folded and not has_cover_group_id:
-		print("[DataManager] Migrating cover folding schema...")
-		
-		# Add new columns
-		_db_query_bool("ALTER TABLE games ADD COLUMN cover_group_id TEXT DEFAULT ''")
-		_db_query_bool("ALTER TABLE games ADD COLUMN cover_group_master INTEGER DEFAULT 1")
-		
-		# Migrate data: games with cover_folded=1 get a cover_group_id based on their cover_url
-		var query = """
-			SELECT romm_id, cover_url, cover_folded 
-			FROM games 
-			WHERE cover_folded = 1 AND cover_url != '' AND cover_url IS NOT NULL
-		"""
-		if _db_query_bool(query):
-			# Group by cover_url
-			var cover_groups: Dictionary = {}
-			for row in query_result:
-				var cover_url = row.get("cover_url", "")
-				var romm_id = row.get("romm_id", 0)
-				if cover_url != "" and romm_id != 0:
-					if not cover_groups.has(cover_url):
-						cover_groups[cover_url] = []
-					cover_groups[cover_url].append(romm_id)
-			
-			# For each group, set cover_group_id and determine master
-			for cover_url in cover_groups.keys():
-				var ids = cover_groups[cover_url]
-				if ids.size() < 2:
-					continue
-				
-				var group_id = cover_url.md5_text()
-				var lowest_id = ids.min()
-				
-				for game_id in ids:
-					var is_master = 1 if game_id == lowest_id else 0
-					var update_query = "UPDATE games SET cover_group_id = ?, cover_group_master = ? WHERE romm_id = ?"
-					_db_query_bool(update_query, [group_id, is_master, game_id])
-		
-		print("[DataManager] Cover folding schema migration complete")
-	
-	# Drop old column if it exists (optional - can keep for backwards compatibility)
-	# _db.query("ALTER TABLE games DROP COLUMN cover_folded")
 
 func is_database_ready() -> bool:
 	return _is_db_ready
@@ -479,9 +443,10 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 		_sync_notification_id = -1
 	
 	if not _is_db_ready:
-		print("[Sync] ERROR: Database not ready")
+		var err_msg = "Database initialization failed. App cannot function without database access." if _db_init_failed else "Database not ready"
+		print("[Sync] ERROR: " + err_msg)
 		if callback.is_valid():
-			callback.call(false, "Database not ready", 0, 0)
+			callback.call(false, err_msg, 0, 0)
 		return
 	
 	# Reset sync state
@@ -534,12 +499,15 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	# 1. Remove disabled platforms
 	if disabled_platforms.size() > 0:
 		print("[SyncThread] Removing %d disabled platforms..." % disabled_platforms.size())
+		call_deferred("_show_removal_notification", disabled_platforms.size())
 		for i in range(disabled_platforms.size()):
 			var slug = disabled_platforms[i]
 			print("[SyncThread] Removing platform %d/%d: %s" % [i + 1, disabled_platforms.size(), slug])
+			call_deferred("_update_removal_notification", i + 1, disabled_platforms.size(), slug)
 			_remove_platform_sync_threaded(slug)
 			# Small yield to prevent blocking other sync thread tasks
 			OS.delay_usec(1000)
+		call_deferred("_dismiss_removal_notification")
 	
 	# 2. Check if there are platforms to sync
 	if enabled_platforms.size() == 0:
@@ -855,13 +823,15 @@ func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
 		MemoryManager.queue_db_task(
 			func():
 				return _db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp]),
-			func(_success: bool):
-				callback.call(null)
+			func(success: bool):
+				callback.call(success)
 		)
 	, 60000)
 
 	if result == null:
 		print("[SyncThread] ERROR: Timeout setting last sync time for %s" % platform_slug)
+	elif not (result is bool and result):
+		print("[SyncThread] ERROR: Failed to set last sync time for %s" % platform_slug)
 
 func _precalculate_totals_sync(platforms: Array) -> int:
 	"""Pre-calculate total games for all platforms - sync thread version."""
@@ -878,8 +848,6 @@ func _precalculate_totals_sync(platforms: Array) -> int:
 			grand_total += platform_total
 			_precalc_platform_totals[platform_id] = platform_total
 			print("[SyncThread] Pre-calc: %s = %d games (%dms)" % [platform.name, platform_total, fetch_time])
-		else:
-			print("[SyncThread] Pre-calc: %s = FAILED (%dms) - %s" % [platform.name, fetch_time, result.error])
 		OS.delay_usec(1000)
 	
 	return grand_total
@@ -940,9 +908,8 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var cover_time = Time.get_ticks_msec() - cover_start
 	
 	var total_time = Time.get_ticks_msec() - batch_start
-	if total_time > 100:
-		print("[SyncThread] Batch: %d games -> %d inserted, %d covers queued (DB: %dms, covers: %dms, total: %dms)" % [games.size(), inserted, cover_count, db_time, cover_time, total_time])
-	
+	# Batch timing logging removed for cleaner sync output
+
 	return inserted
 
 func _dispatch_covers_to_main_thread():
@@ -956,7 +923,6 @@ func _dispatch_covers_to_main_thread():
 	_sync_covers_pending.clear()
 	_sync_covers_mutex.unlock()
 	
-	print("[SyncThread] Dispatching %d covers to main thread" % urls.size())
 	call_deferred("_download_covers_on_main_thread", urls)
 
 func _download_covers_on_main_thread(urls: Array[String]):
@@ -978,8 +944,7 @@ func _download_covers_on_main_thread(urls: Array[String]):
 		_download_cover(url, func(_ok): pass)
 		queued += 1
 	
-	if queued > 0:
-		print("[Covers] Queued %d covers for async download (%d already cached)" % [queued, already_cached])
+	# Cover download logging removed for cleaner sync output
 
 func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 	"""Check siblings and insert games in a single DB task.
@@ -1013,13 +978,8 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 
 	var success = result if result is bool else false
 	if success:
-		# During sync, we skip individual game_added signals to avoid FPS crawl
-		# The library view will refresh when sync_completed is emitted
-		# Only emit if NOT in batch mode (i.e., individual additions outside sync)
-		if not _sync_batch_mode:
-			for game in games:
-				if game.is_master_entry:
-					call_deferred("_emit_game_added", game)
+		# Skip all UI emissions during sync for performance
+		# LibraryView will refresh when sync_completed is emitted
 		return games.size()
 	else:
 		print("[SyncThread] ERROR: DB check+insert failed for %d games" % games.size())
@@ -1236,43 +1196,35 @@ func _group_games_by_cover_url(games: Array[GameResource]):
 		var indices = cover_groups[cover_url]
 		if indices.size() < 2:
 			continue
-		
-		# Get all romm_ids in this cover group
-		var cover_group_ids: Array[int] = []
+
+		# Pre-build sibling entries once per group (shared references, no inner-loop alloc)
+		var all_entries: Array[Dictionary] = []
 		for idx in indices:
-			cover_group_ids.append(games[idx].romm_id)
-		
-		# For each game in the group, add other games as siblings (if not already)
+			var g = games[idx]
+			all_entries.append({
+				"id": g.romm_id,
+				"name": g.title,
+				"file_name": g.file_name,
+				"file_size": g.file_size
+			})
+
+		# For each game, add all group entries except self and existing romm siblings
 		for i in range(indices.size()):
 			var current_game = games[indices[i]]
-			var _current_id = current_game.romm_id
-			
-			# Build set of existing sibling IDs (romm siblings + any already added)
-			var existing_sibling_ids: Dictionary = {}
+			var current_id = current_game.romm_id
+
+			# Fast lookup of existing sibling IDs
+			var existing: Dictionary = {}
 			for sibling in current_game.siblings:
-				existing_sibling_ids[sibling.get("id", 0)] = true
-			
-			# Add each other game in the cover group as a sibling if not already
-			for j in range(indices.size()):
-				if i == j:
+				existing[sibling.get("id", 0)] = true
+
+			# Append pre-built entries (skips self + existing romm siblings)
+			for entry in all_entries:
+				var other_id = entry.get("id", 0)
+				if other_id == current_id or existing.has(other_id):
 					continue
-				
-				var other_game = games[indices[j]]
-				var other_id = other_game.romm_id
-				
-				# Skip if already a sibling (romm sibling takes precedence)
-				if existing_sibling_ids.has(other_id):
-					continue
-				
-				# Add as a cover-based sibling
-				var sibling_entry = {
-					"id": other_id,
-					"name": other_game.title,
-					"file_name": other_game.file_name,
-					"file_size": other_game.file_size
-				}
-				current_game.siblings.append(sibling_entry)
-				existing_sibling_ids[other_id] = true
+				current_game.siblings.append(entry)
+				existing[other_id] = true
 
 # ==================== COMPREHENSIVE COVER FOLDING ====================
 
@@ -1591,7 +1543,7 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 	
 	if _is_db_ready and game.romm_id > 0:
 		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master FROM games WHERE romm_id = ?"
-		var query_result = _db_query_array(check_query, [game.romm_id])
+		var query_result = _db_query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			var existing = query_result[0]
 			# Preserve download status from existing record
@@ -2438,8 +2390,9 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 
 func sync_platforms_from_romm(callback: Callable = Callable()):
 	if not _is_db_ready:
+		var err_msg = "Database initialization failed. App cannot function without database access." if _db_init_failed else "Database not ready"
 		if callback.is_valid():
-			callback.call(false, "Database not ready")
+			callback.call(false, err_msg)
 		return
 	
 	NetworkManager.fetch_platforms(func(data, error):
@@ -2508,18 +2461,15 @@ func get_all_platforms() -> Array[PlatformResource]:
 	return platforms
 
 func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
-	print("[Sync] remove_platform_games called for: %s" % platform_slug)
 	if not _is_db_ready:
-		print("[Sync] ERROR: Database not ready in remove_platform_games")
+		push_error("[Sync] ERROR: Database not ready in remove_platform_games")
 		if callback.is_valid():
 			callback.call(false)
 		return
 	
-	print("[Sync] Queueing DB task for platform removal...")
 	# Queue all database operations on the DB thread to avoid race conditions
 	MemoryManager.queue_db_task(
 		func():
-			print("[Sync] DB task executing for %s" % platform_slug)
 			_db_lock()
 			# First, get all games for this platform to delete their covers
 			var query_result = _db_query_array("SELECT cover_url FROM games WHERE platform_slug = ?", [platform_slug])
@@ -2529,13 +2479,9 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				if url != "":
 					cover_urls.append(url)
 			
-			print("[Sync] Found %d games to remove for %s" % [query_result.size(), platform_slug])
-			
 			# Delete games from database and get the count
 			var count_before = query_result.size()
 			var success = _db_query_bool("DELETE FROM games WHERE platform_slug = ?", [platform_slug])
-			
-			print("[Sync] DB delete result: %s" % success)
 			
 			_db_unlock()
 			return {
@@ -2544,7 +2490,6 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				"count": count_before
 			},
 		func(result: Dictionary):
-			print("[Sync] remove_platform_games callback executing")
 			var success = result.get("success", false)
 			var cover_urls = result.get("cover_urls", [])
 			var _count = result.get("count", 0)
@@ -2557,19 +2502,15 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 					if FileAccess.file_exists(cache_path):
 						DirAccess.remove_absolute(cache_path)
 						covers_deleted += 1
-				print("[Sync] Deleted %d/%d cover files for %s" % [covers_deleted, cover_urls.size(), platform_slug])
-			else:
-				print("[Sync] Removal failed for %s, not deleting covers" % platform_slug)
+				if covers_deleted > 0:
+					print("[Sync] Removed %s (%d games, %d covers deleted)" % [platform_slug, _count, covers_deleted])
+			elif not success:
+				push_error("[Sync] Removal failed for %s" % platform_slug)
 			
-			print("[Sync] Emitting games_removed signal for %s" % platform_slug)
 			games_removed.emit(platform_slug)
 			
-			print("[Sync] remove_platform_games callback valid: %s" % callback.is_valid())
 			if callback.is_valid():
-				print("[Sync] Calling callback with success=%s" % success)
 				callback.call(success)
-			else:
-				print("[Sync] WARNING: Callback is not valid in remove_platform_games!")
 	)
 
 # ==================== CACHE ====================

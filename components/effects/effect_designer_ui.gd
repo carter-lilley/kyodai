@@ -22,7 +22,7 @@ var _base_effects: Array = []  # For focus effect inheritance
 var _effects_list: VBoxContainer
 var _add_effect_button: M3OptionButton
 var _scroll_container: ScrollContainer
-var _title_label: Label
+var _title_label: M3Label
 
 # Discovered effects for this context
 var _available_effects: Dictionary = {}  # Maps effect_id -> display_name
@@ -165,19 +165,20 @@ func _setup_ui():
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 	
-	_title_label = Label.new()
+	_title_label = M3Label.new()
 	_title_label.text = title
-	_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_title_label.label_style = M3Label.Style.TITLE_MEDIUM
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_title_label.add_theme_font_size_override("font_size", 16)
 	target.add_child(_title_label)
+	if context == "focus_card":
+		_title_label.add_theme_color_override("font_color", M3Theme.get_secondary())
 	
 	_add_effect_button = M3OptionButton.new()
 	_add_effect_button.multi_select = true
 	_add_effect_button.text = "Add Effect"
 	_add_effect_button.placeholder_text = "Add Effect"
 	_add_effect_button.fit_to_longest_item = false
-	_add_effect_button.field_variant = M3TextField.Variant.FILLED
+	_add_effect_button.field_variant = M3TextField.Variant.OUTLINED if context == "focus_card" else M3TextField.Variant.FILLED
 	_add_effect_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	target.add_child(_add_effect_button)
 	
@@ -229,9 +230,9 @@ func _rebuild_effects_ui():
 	
 	# Show message if no effects
 	if effects.size() == 0:
-		var no_effects_label = Label.new()
+		var no_effects_label = M3Label.new()
 		no_effects_label.text = "No effects added. Click 'Add Effect' to get started."
-		no_effects_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		no_effects_label.label_style = M3Label.Style.BODY_MEDIUM
 		no_effects_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		no_effects_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 		_effects_list.add_child(no_effects_label)
@@ -284,15 +285,21 @@ func _sync_option_button() -> void:
 	var selected_count = _add_effect_button.get_selected_indices().size()
 	_add_effect_button.text = "Add Effect" if selected_count == 0 else ("%d selected" % selected_count)
 
+func _is_focus_designer() -> bool:
+	return context == "focus_card"
+
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()
 	container.title = effect_data.get("effect_id", "Unknown").capitalize()
 	container.collapsed = false
 	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.header_variant = M3Button.Variant.TONAL if _is_focus_designer() else M3Button.Variant.TEXT
 	_effects_list.add_child(container)
 	
-	var remove_btn = Button.new()
-	remove_btn.text = "X"
+	var remove_btn = M3IconButton.new()
+	remove_btn.icon_name = "close"
+	remove_btn.icon_button_variant = M3IconButton.IconVariant.TONAL if _is_focus_designer() else M3IconButton.IconVariant.STANDARD
+	remove_btn.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
 	remove_btn.pressed.connect(func(): _on_remove_effect(index))
 	container.add_header_button(remove_btn)
 	
@@ -303,6 +310,8 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var schema = _get_effect_schema(effect_id)
 	if schema.size() > 0:
 		var settings_menu = SettingsMenu.new()
+		if _is_focus_designer():
+			settings_menu.accent_color = M3Theme.get_secondary()
 		content.add_child(settings_menu)
 		
 		var current_settings = effect_data.get("settings", {})

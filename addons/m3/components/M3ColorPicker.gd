@@ -30,6 +30,14 @@ extends M3Button
 		if _picker:
 			_picker.edit_alpha = value
 
+@export var accent_color: Color = Color.TRANSPARENT:
+	set(value):
+		if value == accent_color:
+			return
+		accent_color = value
+		_update_theme()
+		queue_redraw()
+
 # ============================================
 # SIGNALS
 # ============================================
@@ -92,10 +100,13 @@ func _compute_variant_colors(_selected: bool) -> Dictionary:
 	result.pressed_bg = M3Theme.state_overlay(color, M3Theme.get_on_surface(), M3Theme.OPACITY_PRESSED)
 	result.disabled_bg = M3Theme.disabled_color(color)
 	result.disabled_text = M3Theme.disabled_color(M3Theme.get_on_surface())
-	result.focus_border = M3Theme.get_primary()
+	result.focus_border = _get_accent()
 	result.border_c = M3Theme.get_outline()
 	result.border_w = 1
 	return result
+
+func _get_accent() -> Color:
+	return accent_color if accent_color != Color.TRANSPARENT else M3Theme.get_primary()
 
 func _get_variant_colors(_selected: bool) -> Dictionary:
 	return _compute_variant_colors(false)

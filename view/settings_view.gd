@@ -7,11 +7,12 @@ var _scroll_containers: Array[ScrollContainer] = []
 # Library Appearance tab specific
 var _library_appearance_config: Dictionary = {}
 var _library_effect_menu: SettingsMenu = null
-var _library_effect_dropdown: OptionButton = null
+var _library_effect_dropdown: M3OptionButton = null
+var _effect_ids: Array[String] = []
 var _library_general_menu: SettingsMenu = null  # Store reference to general settings menu
 
 # Theme preset UI
-var _preset_dropdown: OptionButton = null
+var _preset_dropdown: M3OptionButton = null
 var _current_presets: Array[ThemePreset] = []
 var _is_applying_preset: bool = false
 var _loaded_preset: ThemePreset = null
@@ -169,8 +170,6 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	title_label.label_style = M3Label.Style.HEADLINE_SMALL
 	vbox.add_child(title_label)
 	
-	vbox.add_child(HSeparator.new())
-	
 	# General layout settings (from settings_vars, excluding internal ones)
 	var general_menu = SettingsMenu.new()
 	var general_settings: Array[SettingsVar] = []
@@ -179,51 +178,33 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 			general_settings.append(sv)
 	
 	if general_settings.size() > 0:
-		var general_label = M3Label.new()
-		general_label.text = "Layout Settings"
-		general_label.label_style = M3Label.Style.TITLE_MEDIUM
-		vbox.add_child(general_label)
-		
 		general_menu.build_controls_from_settingsvars(general_settings)
 		general_menu.setting_changed.connect(_on_setting_changed)
 		vbox.add_child(general_menu)
 		_library_general_menu = general_menu  # Store reference
-		vbox.add_child(HSeparator.new())
-	
-	# Background Effect section
-	var bg_label = M3Label.new()
-	bg_label.text = "Background Effect"
-	bg_label.label_style = M3Label.Style.TITLE_MEDIUM
-	vbox.add_child(bg_label)
 	
 	# Effect selection dropdown
-	var dropdown_container = HBoxContainer.new()
-	vbox.add_child(dropdown_container)
-	
-	var dropdown_label = Label.new()
-	dropdown_label.text = "Effect Type"
-	dropdown_container.add_child(dropdown_label)
-	
-	_library_effect_dropdown = OptionButton.new()
-	_library_effect_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_library_effect_dropdown = M3OptionButton.new()
+	_library_effect_dropdown.label_text = "Background Effect"
 	
 	# Populate dropdown with available effects
 	var effects = LibraryBackground.get_available_effects()
+	_effect_ids.clear()
 	for i in range(effects.size()):
 		var effect_id = effects[i]
 		var display_name = LibraryBackground.get_effect_display_name(effect_id)
 		_library_effect_dropdown.add_item(display_name, i)
-		_library_effect_dropdown.set_item_metadata(i, effect_id)
+		_effect_ids.append(effect_id)
 	
 	# Select current effect
 	var current_effect_id = _library_appearance_config.get("effect_id", "gradient")
 	for i in range(effects.size()):
 		if effects[i] == current_effect_id:
-			_library_effect_dropdown.select(i)
+			_library_effect_dropdown.selected = i
 			break
 	
 	_library_effect_dropdown.item_selected.connect(_on_library_effect_selected)
-	dropdown_container.add_child(_library_effect_dropdown)
+	vbox.add_child(_library_effect_dropdown)
 	
 	# Dynamic settings menu for the selected effect
 	_library_effect_menu = SettingsMenu.new()
@@ -231,8 +212,6 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	
 	# Build initial controls for current effect
 	_rebuild_library_effect_controls(current_effect_id)
-	
-	vbox.add_child(HSeparator.new())
 	
 	# Theme Presets section
 	_create_preset_section(vbox)
@@ -257,9 +236,8 @@ func _create_preset_section(vbox: VBoxContainer) -> void:
 	vbox.add_child(preset_container)
 	
 	# Preset dropdown
-	_preset_dropdown = OptionButton.new()
-	_preset_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_preset_dropdown.text = "Select Preset..."
+	_preset_dropdown = M3OptionButton.new()
+	_preset_dropdown.label_text = "Theme Preset"
 	_preset_dropdown.item_selected.connect(_on_preset_selected)
 	preset_container.add_child(_preset_dropdown)
 	
@@ -285,23 +263,21 @@ func _refresh_preset_dropdown() -> void:
 		return
 	
 	_preset_dropdown.clear()
-	_preset_dropdown.add_item("New Theme...", -1)
-	_preset_dropdown.set_item_disabled(0, false)
+	_preset_dropdown.add_item("New Theme...", 0)
 	
 	_current_presets = SettingsManager.list_presets()
 	for i in range(_current_presets.size()):
 		var preset = _current_presets[i]
-		_preset_dropdown.add_item(preset.get_display_name(), i)
-		_preset_dropdown.set_item_metadata(i + 1, preset)
+		_preset_dropdown.add_item(preset.get_display_name(), i + 1)
 	
 	# Check if current settings match any preset
 	_check_preset_match()
 
 func _on_preset_selected(index: int) -> void:
-	if _is_applying_preset or index <= 0:
+	if _is_applying_preset or index <= 0 or index > _current_presets.size():
 		return
 	
-	var preset = _preset_dropdown.get_item_metadata(index) as ThemePreset
+	var preset = _current_presets[index - 1] as ThemePreset
 	if not preset:
 		return
 	
@@ -314,8 +290,8 @@ func _on_preset_selected(index: int) -> void:
 		_apply_preset(preset)
 	)
 	dialog.canceled.connect(func():
-		# Reset dropdown to "Select Preset..."
-		_preset_dropdown.select(0)
+		# Reset dropdown to "New Theme..."
+		_preset_dropdown.selected = 0
 	)
 	add_child(dialog)
 	dialog.popup_centered()
@@ -343,7 +319,7 @@ func _apply_preset(preset: ThemePreset) -> void:
 			parent = parent.get_parent()
 	else:
 		NotificationManager.show_notification("Failed to apply preset", NotificationManager.Type.ERROR)
-		_preset_dropdown.select(0)
+		_preset_dropdown.selected = 0
 	
 	_is_applying_preset = false
 
@@ -352,16 +328,14 @@ func _update_preset_dropdown_for_loaded_preset() -> void:
 		return
 	
 	# Find the loaded preset in the dropdown and select it
-	for i in range(_preset_dropdown.get_item_count()):
-		if i == 0:
-			continue
-		var preset = _preset_dropdown.get_item_metadata(i) as ThemePreset
+	for i in range(_current_presets.size()):
+		var preset = _current_presets[i] as ThemePreset
 		if preset and preset.name == _loaded_preset.name:
-			_preset_dropdown.select(i)
+			_preset_dropdown.selected = i + 1
 			return
 	
-	# If not found, select "Select Preset..."
-	_preset_dropdown.select(0)
+	# If not found, select "New Theme..."
+	_preset_dropdown.selected = 0
 
 func _check_preset_match() -> void:
 	if not _preset_dropdown:
@@ -370,9 +344,7 @@ func _check_preset_match() -> void:
 	# If no preset is loaded, ensure we show "New Theme..."
 	if not _loaded_preset:
 		if _preset_dropdown.get_item_count() > 0:
-			_preset_dropdown.set_item_text(0, "New Theme...")
-			_preset_dropdown.set_item_disabled(0, false)
-			_preset_dropdown.select(0)
+			_preset_dropdown.selected = 0
 		return
 	
 	# Check if current settings match the loaded preset
@@ -385,9 +357,7 @@ func _check_preset_match() -> void:
 	else:
 		# Settings deviated, show "New Theme..."
 		if _preset_dropdown.get_item_count() > 0:
-			_preset_dropdown.set_item_text(0, "New Theme...")
-			_preset_dropdown.set_item_disabled(0, false)
-			_preset_dropdown.select(0)
+			_preset_dropdown.selected = 0
 
 func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	# Compare all relevant fields
@@ -453,7 +423,7 @@ func _refresh_all_settings_ui() -> void:
 		var effects = LibraryBackground.get_available_effects()
 		for i in range(effects.size()):
 			if effects[i] == current_effect_id:
-				_library_effect_dropdown.select(i)
+				_library_effect_dropdown.selected = i
 				break
 		_rebuild_library_effect_controls(current_effect_id)
 	
@@ -551,7 +521,7 @@ func _load_library_background_config() -> void:
 		}
 
 func _on_library_effect_selected(index: int) -> void:
-	var effect_id = _library_effect_dropdown.get_item_metadata(index)
+	var effect_id = _effect_ids[index] if index >= 0 and index < _effect_ids.size() else ""
 	_library_appearance_config["effect_id"] = effect_id
 	
 	# Reset settings to defaults for new effect

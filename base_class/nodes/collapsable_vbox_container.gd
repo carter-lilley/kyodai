@@ -18,9 +18,21 @@ extends VBoxContainer
 		if _header_button:
 			_header_button.custom_minimum_size.y = value
 
-var _header_button: Button
-var _title_label: Label
-var _indicator_label: Label
+@export var header_variant: M3Button.Variant = M3Button.Variant.TEXT:
+	set(value):
+		header_variant = value
+		if _header_button:
+			_header_button.button_variant = value
+
+@export var header_size: M3Button.Size = M3Button.Size.SMALL:
+	set(value):
+		header_size = value
+		if _header_button:
+			_header_button.button_size = value
+
+var _header_button: M3Button
+var _title_label: M3Label
+var _indicator_label: M3Label
 var _header_hbox: HBoxContainer
 var _content_container: VBoxContainer
 
@@ -34,9 +46,12 @@ func _initialize_structure():
 		remove_child(child)
 	
 	# Header button (spans full width)
-	_header_button = Button.new()
+	_header_button = M3Button.new()
+	_header_button.auto_size_vertical = false
 	_header_button.custom_minimum_size.y = header_height
 	_header_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_header_button.button_variant = header_variant
+	_header_button.button_size = header_size
 	_header_button.pressed.connect(_on_header_pressed)
 	add_child(_header_button)
 	
@@ -46,15 +61,17 @@ func _initialize_structure():
 	_header_button.add_child(_header_hbox)
 	
 	# Fold indicator
-	_indicator_label = Label.new()
+	_indicator_label = M3Label.new()
 	_indicator_label.text = "▼"
+	_indicator_label.label_style = M3Label.Style.BODY_MEDIUM
 	_indicator_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_indicator_label.custom_minimum_size.x = 24
 	_header_hbox.add_child(_indicator_label)
 	
 	# Title label
-	_title_label = Label.new()
+	_title_label = M3Label.new()
 	_title_label.text = title
+	_title_label.label_style = M3Label.Style.BODY_MEDIUM
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_header_hbox.add_child(_title_label)
 	
@@ -77,11 +94,11 @@ func _update_collapsed_state():
 func set_title(new_title: String) -> void:
 	title = new_title
 
-func add_header_button(button: Button) -> void:
+func add_header_button(button: Control) -> void:
 	if _header_hbox:
 		_header_hbox.add_child(button)
 
-func remove_header_button(button: Button) -> void:
+func remove_header_button(button: Control) -> void:
 	if _header_hbox and button.get_parent() == _header_hbox:
 		_header_hbox.remove_child(button)
 

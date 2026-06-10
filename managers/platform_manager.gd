@@ -192,3 +192,74 @@ func show_install_permission_dialog():
 	# Open Android settings directly - user must manually enable "Install unknown apps"
 	# We don't show a notification since we're taking them directly to settings
 	open_install_unknown_apps_settings()
+
+# ============================================================================
+# ANDROID FOREGROUND SERVICE HELPERS (unified for DownloadManager + DataManager)
+# ============================================================================
+
+func _get_android_plugin() -> Variant:
+	if Engine.has_singleton("PackageChecker"):
+		return Engine.get_singleton("PackageChecker")
+	return null
+
+## Starts the Android download foreground service
+func start_download_foreground_service(game_name: String = "Game") -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		push_warning("[PlatformManager] PackageChecker plugin not available for download foreground service")
+		return false
+	plugin.startDownloadForegroundService(game_name)
+	return true
+
+## Updates the Android download foreground service progress
+func update_download_foreground_service(game_name: String, progress: int) -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	plugin.updateDownloadForegroundService(game_name, progress)
+	return true
+
+## Stops the Android download foreground service
+func stop_download_foreground_service() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	plugin.stopDownloadForegroundService()
+	return true
+
+## Starts the Android sync foreground service
+func start_sync_foreground_service(platform_name: String = "Game Library", current: int = 0, total: int = 0) -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		push_warning("[PlatformManager] PackageChecker plugin not available for sync foreground service")
+		return false
+	plugin.startSyncForegroundService(platform_name, current, total)
+	return true
+
+## Updates the Android sync foreground service progress
+func update_sync_foreground_service(platform_name: String, current: int = 0, total: int = 0) -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	plugin.updateSyncForegroundService(platform_name, current, total)
+	return true
+
+## Stops the Android sync foreground service
+func stop_sync_foreground_service() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	plugin.stopSyncForegroundService()
+	return true

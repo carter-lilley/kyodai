@@ -635,5 +635,9 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				LaunchManager.launch_game(game)
 		"card_designer":
 			UIManager.show_settings_dialog_with_category("card_designer")
+		"add_to_steam":
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				SteamVDFWriter.add_game(game)
 		"hide":
 			pass

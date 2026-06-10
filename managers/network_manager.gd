@@ -1227,7 +1227,7 @@ func register_device(_device_name: String, platform: String, client: String, cli
 	
 	var url = _base_url.rstrip("/") + "/api/devices"
 	var body = JSON.stringify({
-		"name": name,
+		"name": _device_name,
 		"platform": platform,
 		"client": client,
 		"client_version": client_version,

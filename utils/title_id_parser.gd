@@ -72,10 +72,16 @@ static func _resolve_zip_path(zip_path: String) -> String:
 	if OS.get_name() == "Windows":
 		var backslash_path = zip_path.replace("/", "\\")
 		if FSM.file_exists(backslash_path):
+			# Resolve to absolute if it's a virtual path (external tools need real paths)
+			if backslash_path.begins_with("user://") or backslash_path.begins_with("res://"):
+				return FSM.resolve_path(backslash_path, {"format": FSM.PathFormat.ABSOLUTE})
 			return backslash_path
 	
 	# Try original path
 	if FSM.file_exists(zip_path):
+		# Resolve to absolute if it's a virtual path (external tools need real paths)
+		if zip_path.begins_with("user://") or zip_path.begins_with("res://"):
+			return FSM.resolve_path(zip_path, {"format": FSM.PathFormat.ABSOLUTE})
 		return zip_path
 	
 	# Try absolute path (resolves user://, res://, etc.)
@@ -1130,7 +1136,7 @@ static func extract_ps4_title_id(zip_path: String) -> String:
 
 ## 7-Zip fallback for extracting PS4 TitleID from large/ZIP64 archives
 static func _extract_ps4_title_id_with_7z(zip_path: String) -> String:
-	var binary_path = _get_7z_binary_path()
+	var binary_path = FSM._get_7z_binary_path()
 	if binary_path == "":
 		print("[TitleIDParser] 7-Zip binary not available")
 		return ""
@@ -1242,7 +1248,7 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 ## 7-Zip fallback for extracting PS3 TitleID from large/ZIP64 archives
 ## Uses bundled 7z binary to extract PARAM.SFO, then parses it
 static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
-	var binary_path = _get_7z_binary_path()
+	var binary_path = FSM._get_7z_binary_path()
 	if binary_path == "":
 		print("[TitleIDParser] 7-Zip binary not available")
 		return ""
@@ -1320,21 +1326,6 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 	
 	print("[TitleIDParser] PS3 TitleID extracted via 7-Zip fallback: " + title_id)
 	return title_id
-
-
-## Gets the bundled 7z binary path for the current platform
-static func _get_7z_binary_path() -> String:
-	var platform_name = ""
-	match OS.get_name():
-		"Windows":
-			platform_name = "windows"
-		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
-			platform_name = "linux"
-		_:
-			return ""
-	
-	var binary_name = "7za.exe" if OS.get_name() == "Windows" else "7z"
-	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
 
 
 # ============================================================================

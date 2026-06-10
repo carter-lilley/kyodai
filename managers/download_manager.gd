@@ -152,50 +152,27 @@ var _thread_chunk_finish_times: Dictionary = {}  # "item_id_thread_index" -> fin
 
 ## Starts the Android foreground service to prevent app kill during downloads
 func _start_foreground_service(game_name: String = "Game"):
-	if not PlatformManager.is_android():
-		return
-	
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		push_warning("[DownloadManager] PackageChecker plugin not available for foreground service")
-		return
-	
-	# Note: has_method() is unreliable with Android plugins, just call directly
 	if _active_download_count == 0:
 		print("[DownloadManager] Starting foreground service for download: " + game_name)
-		plugin.startDownloadForegroundService(game_name)
-		_foreground_service_active = true
-	
+		if PlatformManager.start_download_foreground_service(game_name):
+			_foreground_service_active = true
+
 	_active_download_count += 1
 	print("[DownloadManager] Active downloads: " + str(_active_download_count))
 
 ## Updates the foreground service notification with progress
 func _update_foreground_service(game_name: String, progress: int):
-	if not PlatformManager.is_android() or not _foreground_service_active:
-		return
-	
-	var plugin = Engine.get_singleton("PackageChecker")
-	if plugin == null:
-		return
-	
-	# Note: has_method() is unreliable with Android plugins, just call directly
-	plugin.updateDownloadForegroundService(game_name, progress)
+	if _foreground_service_active:
+		PlatformManager.update_download_foreground_service(game_name, progress)
 
 ## Stops the Android foreground service when downloads complete
 func _stop_foreground_service():
-	if not PlatformManager.is_android():
-		return
-	
 	_active_download_count = max(0, _active_download_count - 1)
-	
+
 	if _active_download_count == 0 and _foreground_service_active:
-		var plugin = Engine.get_singleton("PackageChecker")
-		if plugin != null:
-			# Note: has_method() is unreliable with Android plugins, just call directly
-			print("[DownloadManager] Stopping foreground service")
-			plugin.stopDownloadForegroundService()
+		print("[DownloadManager] Stopping foreground service")
+		if PlatformManager.stop_download_foreground_service():
 			_foreground_service_active = false
-		
 		# Restore normal CPU mode on Android
 		if PlatformManager.is_android():
 			OS.set_low_processor_usage_mode(false)
@@ -301,13 +278,15 @@ func cancel(item_id: String) -> bool:
 		if item.http_request:
 			item.http_request.cancel_request()
 		item.http_request = null
+		# Clean up chunked download resources if this was a chunked download
+		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
 		_active_items.erase(item_id)
 		queue_changed.emit()
 		download_completed.emit(item_id, false, "Cancelled")
 		_process_queue()
 		return true
-	
+
 	return false
 
 ## Gets the current progress of an item
@@ -596,7 +575,13 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 			item.http_request = item.download_info.get("http", null)
 			
 			# Setup progress timer for fallback download
-			var progress2 = _download_progress[item.id] as DownloadProgress
+			var progress2 = _download_progress.get(item.id) as DownloadProgress
+			if progress2 == null:
+				progress2 = DownloadProgress.new()
+				progress2.start_time_ms = Time.get_ticks_msec()
+				progress2.last_progress_time_ms = progress2.start_time_ms
+				progress2.last_downloaded_bytes = 0
+				_download_progress[item.id] = progress2
 			progress2.timer = Timer.new()
 			progress2.timer.wait_time = 1.0
 			progress2.timer.autostart = true
@@ -747,24 +732,30 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			http = connection_pool[thread_index]
 			var status_before = http.get_status() if http != null else -1
 			print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection status before check: " + str(status_before) + " (CONNECTED=" + str(HTTPClient.STATUS_CONNECTED) + ")")
-			
+
 			# Check for previous chunk finish time to calculate idle time
 			var idle_thread_key = item_id + "_" + str(thread_index)
 			var prev_finish_time = _thread_chunk_finish_times.get(idle_thread_key, 0)
 			if prev_finish_time > 0:
 				var idle_time = chunk_start_time - prev_finish_time
 				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " idle time between chunks: " + str(idle_time) + "ms")
-			
-			# Check if connection is still valid
-			if not _is_connection_valid(http):
+
+			# Check if connection is still valid WITHOUT creating a new one under lock
+			var needs_new_connection = not _is_connection_valid(http)
+			if not needs_new_connection:
+				was_reused = true
+				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
+			_connection_pool_mutex.unlock()
+
+			# Create connection OUTSIDE the mutex to avoid blocking other threads during TCP/TLS handshake
+			if needs_new_connection:
 				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection invalid, creating new for chunk " + str(chunk_index))
 				http = _create_connection(url_parts)
 				if http != null:
+					_connection_pool_mutex.lock()
 					connection_pool[thread_index] = http
+					_connection_pool_mutex.unlock()
 					print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " created new connection (status=" + str(http.get_status()) + ")")
-			else:
-				was_reused = true
-				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
 		else:
 			push_error("[DownloadManager] Thread index out of bounds: " + str(thread_index))
 			_connection_pool_mutex.unlock()
@@ -773,7 +764,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		push_error("[DownloadManager] No connection pool found for item: " + item_id)
 		_connection_pool_mutex.unlock()
 		return false
-	_connection_pool_mutex.unlock()
 	
 	if http == null:
 		push_error("[DownloadManager] Failed to get/create connection for chunk " + str(chunk_index))
@@ -963,10 +953,12 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " finished body after " + str(body_poll_count) + " polls, status: " + str(http.get_status()))
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " download duration: " + str(download_duration) + "ms")
 	
-	# Track finish time for this thread for debugging connection reuse
+	# Track finish time for this thread for debugging connection reuse (mutex-protected)
 	var thread_key = item_id + "_" + str(thread_index)
+	_connection_pool_mutex.lock()
 	_thread_chunk_finish_times[thread_key] = chunk_end_time
-	
+	_connection_pool_mutex.unlock()
+
 	# DO NOT close the connection - leave it open for reuse by other chunks
 	
 	if bytes_downloaded == 0:
@@ -1938,28 +1930,30 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 			state.success = false
 			for cb in state.callbacks:
 				cb.call(false)
-			# Clean up after delay
+			# Clean up after delay (guard against node destruction during await)
 			await get_tree().create_timer(5.0).timeout
-			_active_image_downloads.erase(url)
+			if is_instance_valid(self):
+				_active_image_downloads.erase(url)
 			return
-		
+
 		# Save to cache
 		var file = FileAccess.open(cache_path, FileAccess.WRITE)
 		if file:
 			file.store_buffer(body)
 			file.close()
-		
+
 		# Notify callbacks
 		state.completed = true
 		state.success = true
 		for cb in state.callbacks:
 			cb.call(true)
-		
-		# Clean up after delay
+
+		# Clean up after delay (guard against node destruction during await)
 		await get_tree().create_timer(5.0).timeout
-		_active_image_downloads.erase(url)
+		if is_instance_valid(self):
+			_active_image_downloads.erase(url)
 	)
-	
+
 	return true
 
 ## Helper function to recursively clean up a temp directory

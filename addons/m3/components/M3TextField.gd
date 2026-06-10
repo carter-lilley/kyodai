@@ -91,6 +91,15 @@ enum Variant { FILLED, OUTLINED }
 @export var m3_tooltip_text: String = ""
 @export var m3_tooltip_variant: M3Tooltip.Variant = M3Tooltip.Variant.PLAIN
 
+@export var accent_color: Color = Color.TRANSPARENT:
+	set(value):
+		if value == accent_color:
+			return
+		accent_color = value
+		if _ready_called:
+			_update_theme()
+			queue_redraw()
+
 # ============================================
 # SIGNALS
 # ============================================
@@ -337,7 +346,7 @@ func _draw():
 		border_color = M3Theme.get_error()
 		border_width = M3Units.dp(BORDER_WIDTH_FOCUSED)
 	elif _is_focused or _menu_active:
-		border_color = M3Theme.get_primary()
+		border_color = _get_accent()
 		border_width = M3Units.dp(BORDER_WIDTH_FOCUSED)
 	elif not editable:
 		border_color = M3Theme.disabled_color(M3Theme.get_outline())
@@ -385,7 +394,7 @@ func _draw_outlined(rect: Rect2, border_color: Color, border_width: float):
 			_cached_patch_sb.draw(get_canvas_item(), patch_rect)
 
 func _draw_focus_ring(rect: Rect2):
-	var ring_color = M3Theme.get_primary()
+	var ring_color = _get_accent()
 	var ring_width = M3Units.dp(1)
 	
 	_cached_focus_ring_sb.border_color = ring_color
@@ -440,6 +449,18 @@ func _get_font_icon_settings() -> FontIconSettings:
 		_font_icon_template.icon_font = "MaterialIcons"
 	return _font_icon_template.duplicate()
 
+func _get_accent() -> Color:
+	return accent_color if accent_color != Color.TRANSPARENT else M3Theme.get_primary()
+
+func _get_accent_container() -> Color:
+	if accent_color != Color.TRANSPARENT:
+		# Derive a container color from accent: same hue/sat, but blend toward surface brightness
+		var surface = M3Theme.get_surface()
+		var blended = accent_color.lerp(surface, 0.6)
+		blended.a = 1.0
+		return blended
+	return M3Theme.get_primary_container()
+
 func _update_theme():
 	var has_error = not error_text.is_empty()
 	if _cached_fonts.is_empty():
@@ -455,8 +476,8 @@ func _update_theme():
 	
 	add_theme_color_override("font_color", input_color)
 	add_theme_color_override("font_placeholder_color", M3Theme.get_on_surface_variant())
-	add_theme_color_override("caret_color", M3Theme.get_primary())
-	add_theme_color_override("selection_color", M3Theme.get_primary_container())
+	add_theme_color_override("caret_color", _get_accent())
+	add_theme_color_override("selection_color", _get_accent_container())
 	add_theme_font_override("font", fonts["regular"])
 	add_theme_font_size_override("font_size", M3Units.dp(INPUT_FONT_SIZE))
 	
@@ -467,7 +488,7 @@ func _update_theme():
 	elif has_error:
 		label_color = M3Theme.get_error()
 	elif _is_focused or _menu_active:
-		label_color = M3Theme.get_primary()
+		label_color = _get_accent()
 	else:
 		label_color = M3Theme.get_on_surface_variant()
 	

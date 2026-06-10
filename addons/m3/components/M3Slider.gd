@@ -172,6 +172,14 @@ enum SliderOrientation { HORIZONTAL, VERTICAL }
 @export var m3_tooltip_text: String = ""
 @export var m3_tooltip_variant: M3Tooltip.Variant = M3Tooltip.Variant.PLAIN
 
+@export var accent_color: Color = Color.TRANSPARENT:
+	set(value):
+		if value == accent_color:
+			return
+		accent_color = value
+		_invalidate_color_cache()
+		_request_redraw()
+
 # ============================================
 # INTERNAL
 # ============================================
@@ -870,6 +878,9 @@ func _get_disabled_color(normal_color: Color) -> Color:
 	_cached_colors[color_key] = result
 	return result
 
+func _get_accent() -> Color:
+	return accent_color if accent_color != Color.TRANSPARENT else M3Theme.get_primary()
+
 func _get_stop_positions() -> Array[float]:
 	if _cached_stops_valid:
 		return _cached_stops
@@ -1015,7 +1026,7 @@ func _draw_standard_active_track():
 	var out_radius = _get_track_radius()
 	var in_radius = M3Units.dp(INSIDE_CORNER_SIZE)
 	var gap = M3Units.dp(THUMB_TRACK_GAP)
-	var color = _get_disabled_color(M3Theme.get_primary())
+	var color = _get_disabled_color(_get_accent())
 	var handle_axis = _cached_handle_axis
 	
 	if _is_vertical():
@@ -1037,7 +1048,7 @@ func _draw_centered_active_track():
 	var track_rect = _cached_track_rect
 	var in_radius = M3Units.dp(INSIDE_CORNER_SIZE)
 	var gap = M3Units.dp(THUMB_TRACK_GAP)
-	var color = _get_disabled_color(M3Theme.get_primary())
+	var color = _get_disabled_color(_get_accent())
 	var zero_axis = _get_axis_position(0.0)
 	var handle_axis = _cached_handle_axis
 	
@@ -1084,7 +1095,7 @@ func _draw_range_active_track():
 	var track_rect = _cached_track_rect
 	var in_radius = M3Units.dp(INSIDE_CORNER_SIZE)
 	var gap = M3Units.dp(THUMB_TRACK_GAP)
-	var color = _get_disabled_color(M3Theme.get_primary())
+	var color = _get_disabled_color(_get_accent())
 	
 	var val1 = _cached_handle_axis
 	var val2 = _get_axis_position(range_value)
@@ -1194,7 +1205,7 @@ func _draw_primary_handle():
 	var handle_pos = _get_handle_position(value)
 	var handle_w = _get_handle_w()
 	var handle_h = _get_handle_h()
-	var color = _get_disabled_color(M3Theme.get_primary())
+	var color = _get_disabled_color(_get_accent())
 	
 	if _is_vertical():
 		# Vertical: thin horizontal bar
@@ -1217,7 +1228,7 @@ func _draw_range_handle():
 	var handle_pos = _get_handle_position(range_value)
 	var handle_w = _get_handle_w()
 	var handle_h = _get_handle_h()
-	var prim = _get_disabled_color(M3Theme.get_primary())
+	var prim = _get_disabled_color(_get_accent())
 	var surf = _get_disabled_color(M3Theme.get_surface())
 	
 	if _is_vertical():

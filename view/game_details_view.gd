@@ -231,12 +231,6 @@ func _update_sync_ui() -> void:
 	if not sync_button or not sync_status_label or not _current_game:
 		return
 	
-	var setting = SettingsManager.get_setting("save_sync_enabled")
-	if not setting or not setting.value:
-		sync_button.visible = false
-		sync_status_label.visible = false
-		return
-	
 	var emulator_id = LaunchManager.resolve_emulator_for_game(_current_game)
 	if emulator_id == "":
 		sync_button.visible = false

@@ -1132,20 +1132,30 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 	# Add to scene tree
 	get_tree().root.add_child(dialog)
 	
-	# Wait for user choice
+	# Wait for user choice with timeout and tree-existence guards
+	var timeout_frames = 0
+	var max_timeout_frames = 5 * 60 * 60  # 5 minutes at 60fps
 	while choice.value == "":
 		await get_tree().process_frame
-	
+		timeout_frames += 1
+		if timeout_frames > max_timeout_frames:
+			print("[SaveManager] Conflict dialog timed out after 5 minutes, treating as cancel")
+			choice.value = "cancel"
+			break
+		if not dialog.is_inside_tree():
+			print("[SaveManager] Conflict dialog removed from tree, treating as cancel")
+			choice.value = "cancel"
+			break
+
+	# Clean up dialog if still present
+	if dialog.is_inside_tree():
+		dialog.queue_free()
+
 	return choice.value
 
 
 ## Main sync entry point for manual and auto sync
 func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Callable = Callable()) -> void:
-	if not _is_sync_enabled():
-		if callback.is_valid():
-			callback.call(false, "Save sync is disabled")
-		return
-	
 	if not NetworkManager.is_romm_connected():
 		if callback.is_valid():
 			callback.call(false, "Not connected to RomM")
@@ -1466,9 +1476,6 @@ func _parse_iso_to_unix(iso_string: String) -> int:
 ## Checks for conflicts and shows dialog if both local and server saves have changed
 func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void:
 	print("[SaveManager] auto_upload_saves_for_game called for " + game.get_display_name() + " (" + emulator_id + ")")
-	if not _is_sync_enabled():
-		print("[SaveManager] Auto-upload aborted: sync not enabled")
-		return
 	if not SettingsManager.get_setting("save_sync_auto").value:
 		print("[SaveManager] Auto-upload aborted: save_sync_auto is off")
 		return
@@ -1653,11 +1660,6 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_complete: Callable = Callable()) -> void:
 	print("[SaveManager] auto_download: START for game=" + game.get_display_name() + " emulator=" + emulator_id)
 	
-	if not _is_sync_enabled():
-		print("[SaveManager] auto_download: ABORT - save_sync_enabled is false")
-		if on_complete.is_valid():
-			on_complete.call()
-		return
 	if not SettingsManager.get_setting("save_sync_auto").value:
 		print("[SaveManager] auto_download: ABORT - save_sync_auto is false")
 		if on_complete.is_valid():
@@ -1993,6 +1995,4 @@ func get_save_sync_status_text(game: GameResource, emulator_id: String) -> Strin
 	
 	return "Synced"
 
-func _is_sync_enabled() -> bool:
-	var setting = SettingsManager.get_setting("save_sync_enabled")
-	return setting and setting.value
+

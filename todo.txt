@@ -4,7 +4,6 @@ small screen testing in settings menu (never hscroll)
 separate firmware page or indicator?
 xemu save sync
 vita3k config override issue
-progress notif during sync deletion
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
@@ -27,7 +26,7 @@ progress notif during sync deletion
 	placeholders
 	game title "speech bubble option"
 	
-## hero
+## hero <- currently depreciated
 	postcard-style [[img] name ]
 	card/image/poster style
 	hero placement opt -> '4 way container?'

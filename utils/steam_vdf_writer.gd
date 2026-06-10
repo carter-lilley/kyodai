@@ -421,3 +421,120 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 		return false
 	
 	return true
+
+## Shared helper: add a downloaded game to Steam as a non-Steam game.
+## This method is used by HomeView and LibraryView so the logic lives in one place.
+static func add_game(game: GameResource) -> void:
+	var steam_folder_setting = SettingsManager.get_setting("steam_folder")
+	if not steam_folder_setting or steam_folder_setting.value.is_empty():
+		NotificationManager.show_notification("Steam folder not configured", NotificationManager.Type.WARNING)
+		if AudioManager:
+			AudioManager.play_sfx("error")
+		return
+	
+	var steam_path = steam_folder_setting.value
+	if not is_valid_steam_path(steam_path):
+		NotificationManager.show_notification("Invalid Steam installation folder", NotificationManager.Type.WARNING)
+		if AudioManager:
+			AudioManager.play_sfx("error")
+		return
+	
+	NotificationManager.show_notification("Adding " + game.title + " to Steam...", NotificationManager.Type.INFO)
+	
+	var launch_intent = LaunchManager.create_launch_intent(game)
+	if not launch_intent:
+		NotificationManager.show_notification("Failed to create launch intent for " + game.title, NotificationManager.Type.ERROR)
+		if AudioManager:
+			AudioManager.play_sfx("error")
+		return
+	
+	var exe_path = LaunchManager.get_emulator_install_path(launch_intent.emulator_id)
+	if exe_path.is_empty():
+		NotificationManager.show_notification("Could not find emulator executable for " + game.title, NotificationManager.Type.ERROR)
+		if AudioManager:
+			AudioManager.play_sfx("error")
+		return
+	
+	exe_path = FileSystemManager.resolve_native_path(exe_path)
+	var rom_path: String = FileSystemManager.resolve_native_path(launch_intent.rom_path)
+	
+	var full_command: String = "\"" + exe_path + "\""
+	
+	if not launch_intent.launch_args.is_empty():
+		for i in range(launch_intent.launch_args.size()):
+			var arg: String = launch_intent.launch_args[i]
+			if i == 0 and (arg == exe_path or arg.ends_with(exe_path.get_file())):
+				continue
+			if arg == rom_path or arg.replace("/", "\\") == rom_path:
+				arg = "\"" + arg + "\""
+			full_command += " " + arg
+	
+	var working_dir: String = launch_intent.working_directory
+	if working_dir.is_empty():
+		working_dir = exe_path.get_base_dir()
+	working_dir = FileSystemManager.resolve_native_path(working_dir)
+	
+	var cover_art_path: String = ""
+	const CACHE_FOLDER = "user://cache/covers/"
+	
+	if not game.cover_url.is_empty() and game.cover_url.begins_with("http"):
+		cover_art_path = FileSystemManager.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
+		cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	elif not game.cover_path.is_empty():
+		cover_art_path = game.cover_path
+		if cover_art_path.find("?") != -1:
+			cover_art_path = cover_art_path.substr(0, cover_art_path.find("?"))
+		if FileAccess.file_exists(cover_art_path):
+			cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+	
+	var game_data := {
+		"name": game.title,
+		"exe": full_command,
+		"start_dir": working_dir,
+		"icon": "",
+		"launch_options": "",
+		"last_play_time": 0,
+		"cover_path": cover_art_path
+	}
+	
+	var shortcuts_path = get_shortcuts_vdf_path(steam_path)
+	if shortcuts_path.is_empty():
+		NotificationManager.show_notification("Could not find Steam shortcuts file", NotificationManager.Type.ERROR)
+		if AudioManager:
+			AudioManager.play_sfx("error")
+		return
+	
+	var shortcuts := {}
+	if FileAccess.file_exists(shortcuts_path):
+		shortcuts = read_vdf(shortcuts_path)
+	
+	if not shortcuts.has("shortcuts"):
+		shortcuts["shortcuts"] = {}
+	
+	var shortcuts_list = shortcuts["shortcuts"]
+	for key in shortcuts_list.keys():
+		var entry = shortcuts_list[key]
+		if entry is Dictionary and entry.get("AppName", "") == game.title:
+			NotificationManager.show_notification(game.title + " is already in Steam", NotificationManager.Type.WARNING)
+			if AudioManager:
+				AudioManager.play_sfx("error")
+			return
+	
+	debug_calculate_app_ids(game_data.exe, game.title)
+	
+	var result = add_shortcut(shortcuts, game_data)
+	shortcuts = result.shortcuts
+	var app_id = result.app_id
+	
+	if write_vdf(shortcuts_path, shortcuts):
+		var cover_path = game_data.get("cover_path", "")
+		if not cover_path.is_empty():
+			copy_artwork_to_steam(steam_path, app_id, cover_path)
+		
+		NotificationManager.show_notification(game.title + " added to Steam! Restart Steam to see it.", NotificationManager.Type.SUCCESS)
+		if AudioManager:
+			AudioManager.play_sfx("success")
+	else:
+		NotificationManager.show_notification("Failed to add " + game.title + " to Steam", NotificationManager.Type.ERROR)
+		if AudioManager:
+			AudioManager.play_sfx("error")

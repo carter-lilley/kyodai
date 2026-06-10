@@ -373,9 +373,9 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	
 	var current_size = _instance._db_queue.size()
 	
-	# If queue is full, wait non-blocking with timer
+	# If queue is full, wait with thread-safe sleep (background threads cannot access SceneTree)
 	while current_size >= MAX_DB_QUEUE_SIZE:
-		await _instance.get_tree().create_timer(0.01).timeout
+		OS.delay_msec(10)
 		_instance._db_mutex.lock()
 		current_size = _instance._db_queue.size()
 		_instance._db_mutex.unlock()

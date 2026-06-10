@@ -34,6 +34,13 @@ const THUMB_PADDING := 4.0  # Minimum padding from track edge (dp)
 @export var m3_tooltip_text: String = ""
 @export var m3_tooltip_variant: M3Tooltip.Variant = M3Tooltip.Variant.PLAIN
 
+@export var accent_color: Color = Color.TRANSPARENT:
+	set(value):
+		if value == accent_color:
+			return
+		accent_color = value
+		queue_redraw()
+
 # ============================================
 # INTERNAL
 # ============================================
@@ -216,7 +223,7 @@ func _draw_track(rect: Rect2, is_on: bool, is_disabled: bool):
 	if is_disabled:
 		if is_on:
 			# Disabled ON: very subtle primary
-			var prim = M3Theme.get_primary()
+			var prim = _get_accent()
 			_track_sb.bg_color = Color(prim.r, prim.g, prim.b, 0.12)
 			_track_sb.set_border_width_all(0)
 		else:
@@ -227,7 +234,7 @@ func _draw_track(rect: Rect2, is_on: bool, is_disabled: bool):
 			_track_sb.border_color = Color(outl.r, outl.g, outl.b, 0.12)
 			_track_sb.set_border_width_all(1)
 	elif is_on:
-		_track_sb.bg_color = M3Theme.get_primary()
+		_track_sb.bg_color = _get_accent()
 		_track_sb.set_border_width_all(0)
 	else:
 		_track_sb.bg_color = M3Theme.get_surface_container()
@@ -271,7 +278,7 @@ func _draw_thumb(rect: Rect2, thumb_size_px: float, is_on: bool, is_disabled: bo
 	if _hovered and not is_disabled:
 		var overlay_color: Color
 		if is_on:
-			overlay_color = M3Theme.get_primary()
+			overlay_color = _get_accent()
 		else:
 			overlay_color = M3Theme.get_on_surface()
 		base_color = M3Theme.state_overlay(base_color, overlay_color, M3Theme.OPACITY_HOVER)
@@ -298,11 +305,14 @@ func _update_icon_position(thumb_center: Vector2, thumb_size_px: float, is_on: b
 		var on_surf_var = M3Theme.get_on_surface_variant()
 		icon_color = Color(on_surf_var.r, on_surf_var.g, on_surf_var.b, 0.38)
 	elif is_on:
-		icon_color = M3Theme.get_primary()
+		icon_color = _get_accent()
 	else:
 		icon_color = M3Theme.get_on_surface_variant()
 	
 	_icon_node.icon_settings.icon_color = icon_color
+
+func _get_accent() -> Color:
+	return accent_color if accent_color != Color.TRANSPARENT else M3Theme.get_primary()
 
 # ============================================
 # THEME

@@ -85,7 +85,11 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 		"windowed":
 			windowed_toggle(value)
 		"resolution":
-			set_resolution(value)
+			# ARRAY type stores the selected index (int), but set_resolution expects Vector2i
+			var resolved_value = value
+			if value is int and setting.options.size() > value:
+				resolved_value = setting.options[value]
+			set_resolution(resolved_value)
 		"dual_screen_mode":
 			# Trigger a display check when dual screen setting changes
 			_check_for_dual_screen()

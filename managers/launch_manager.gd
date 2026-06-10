@@ -60,6 +60,44 @@ var _cache_ttl_ms: int = 5000  # 5 second cache TTL
 func clear_validation_cache() -> void:
 	_validation_cache.clear()
 
+# ============================================================================
+# SHELL ESCAPING HELPERS (prevent command injection from user-controlled paths)
+# ============================================================================
+
+## Escapes a string for safe use inside Windows cmd.exe double quotes.
+## Escapes cmd metacharacters: & | < > ^ % ( )"
+func _escape_cmd_meta(s: String) -> String:
+	# Escape caret first (it's the escape character)
+	var result = s.replace("^", "^^")
+	result = result.replace("\u0026", "^\u0026")
+	result = result.replace("|", "^|")
+	result = result.replace("<", "^<")
+	result = result.replace(">", "^>")
+	result = result.replace("(", "^(")
+	result = result.replace(")", "^)")
+	result = result.replace("%", "%%")
+	# Double quotes are escaped by doubling them inside a quoted string
+	result = result.replace('"', '""')
+	return result
+
+## Escapes a string for safe use inside Unix sh single quotes.
+## Wraps in single quotes and handles embedded single quotes.
+func _escape_sh_arg(s: String) -> String:
+	# Single quotes prevent ALL interpretation in sh
+	# To embed a single quote, close the quote, add an escaped quote, reopen
+	return "'" + s.replace("'", "'\"'\"'") + "'"
+
+## Escapes an array of arguments for the current platform's shell.
+func _escape_args_for_shell(args: Array) -> Array:
+	var result = []
+	if PlatformManager.is_windows():
+		for arg in args:
+			result.append('"' + _escape_cmd_meta(arg) + '"')
+	else:
+		for arg in args:
+			result.append(_escape_sh_arg(arg))
+	return result
+
 ## Clears pending launches whose emulators are now installed.
 ## Call on app resume after potential APK installations.
 func clear_stale_pending_launches() -> void:
@@ -373,19 +411,6 @@ func is_emulator_extracting(emulator_id: String) -> bool:
 	return false
 
 ## Helper: Get the bundled 7z binary path
-func _get_7z_binary_path() -> String:
-	var platform_name = ""
-	match PlatformManager.current_platform:
-		PlatformManager.Platform.WINDOWS:
-			platform_name = "windows"
-		PlatformManager.Platform.LINUX:
-			platform_name = "linux"
-		_:
-			return ""
-	
-	var binary_name = "7za.exe" if PlatformManager.is_windows() else "7z"
-	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
-
 ## Recursively searches for executable file up to max_depth (3 levels)
 func _find_executable_recursive(dir_path: String, executable_name: String, max_depth: int = 3, current_depth: int = 0) -> String:
 	if current_depth >= max_depth:
@@ -1042,58 +1067,30 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
-	
+
 	var pid: int
-	
+
 	# If working directory is specified, use shell wrapper to change directory first
 	if intent.working_directory != "":
-		# Build the command with proper quoting for each argument
-		# Wrap each argument in quotes and escape any existing quotes
-		var quoted_args = []
-		for arg in arguments:
-			var escaped = arg.replace('"', '\\"')
-			quoted_args.append('"' + escaped + '"')
-		
+		# Properly escape all arguments for shell safety
+		var safe_args = _escape_args_for_shell(arguments)
+
 		if PlatformManager.is_windows():
-			# Windows: use cmd /c "cd /d WORKING_DIR && exe args"
-			var inner_cmd = 'cd /d "%s" && "%s" %s' % [
-				intent.working_directory,
-				exe_path,
-				" ".join(quoted_args)
-			]
+			# Windows: use cmd /c with properly escaped paths
+			var safe_working_dir = _escape_cmd_meta(intent.working_directory)
+			var safe_exe = _escape_cmd_meta(exe_path)
+			var inner_cmd = 'cd /d "%s" && "%s" %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
 			print("[LaunchManager] Executing command: cmd /c ", inner_cmd)
 			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
 		else:
-			# Linux/macOS: use sh -c "cd WORKING_DIR && exe args"
-			var inner_cmd = 'cd "%s" && "%s" %s' % [
-				intent.working_directory,
-				exe_path,
-				" ".join(quoted_args)
-			]
+			# Linux/macOS: use sh -c with single-quoted arguments
+			var safe_working_dir = _escape_sh_arg(intent.working_directory)
+			var safe_exe = _escape_sh_arg(exe_path)
+			var inner_cmd = 'cd %s && %s %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
 			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 	else:
-		# No working directory specified, but still need to quote arguments properly
-		# Build the command with proper quoting for each argument
-		var quoted_args = []
-		for arg in arguments:
-			var escaped = arg.replace('"', '\\"')
-			quoted_args.append('"' + escaped + '"')
-		
-		if PlatformManager.is_windows():
-			# Windows: use cmd /c "exe args"
-			var inner_cmd = '"%s" %s' % [
-				exe_path,
-				" ".join(quoted_args)
-			]
-			print("[LaunchManager] Executing command: cmd /c ", inner_cmd)
-			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
-		else:
-			# Linux/macOS: use sh -c "exe args"
-			var inner_cmd = '"%s" %s' % [
-				exe_path,
-				" ".join(quoted_args)
-			]
-			pid = OS.create_process("sh", ["-c", inner_cmd], false)
+		# No working directory needed: call executable directly (no shell, no injection risk)
+		pid = OS.create_process(exe_path, arguments, false)
 	
 	if pid == -1:
 		push_error("[LaunchManager] Failed to launch process: " + exe_path)
@@ -4281,12 +4278,19 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 	
 	DownloadManager.extraction_completed.connect(on_complete)
 	
-	# Wait for extraction to complete
+	# Wait for extraction to complete (30 min timeout for large games)
+	var timeout_frames = 0
+	var max_timeout_frames = 30 * 60 * 60  # 30 minutes at 60fps
 	while not completion_tracker.complete:
 		await get_tree().process_frame
-	
+		timeout_frames += 1
+		if timeout_frames > max_timeout_frames:
+			push_error("[LaunchManager] RPCS3: Extraction timed out after 30 minutes")
+			DownloadManager.extraction_completed.disconnect(on_complete)
+			return false
+
 	DownloadManager.extraction_completed.disconnect(on_complete)
-	
+
 	print("[LaunchManager] RPCS3: Extraction complete, success=" + str(completion_tracker.success))
 	return completion_tracker.success
 
@@ -4419,16 +4423,22 @@ func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
 	
 	DownloadManager.extraction_completed.connect(on_complete)
 	
-	# Wait for extraction to complete (NO TIMEOUT - PS4 games can be very large)
-	print("[LaunchManager] shadPS4: Waiting for extraction (no timeout)...")
+	# Wait for extraction to complete (30 min timeout for large games)
+	var timeout_frames = 0
+	var max_timeout_frames = 30 * 60 * 60  # 30 minutes at 60fps
 	while not completion_tracker.complete:
 		await get_tree().process_frame
-	
+		timeout_frames += 1
+		if timeout_frames > max_timeout_frames:
+			push_error("[LaunchManager] shadPS4: Extraction timed out after 30 minutes")
+			DownloadManager.extraction_completed.disconnect(on_complete)
+			return false
+
 	DownloadManager.extraction_completed.disconnect(on_complete)
-	
+
 	print("[LaunchManager] shadPS4: Extraction wait loop ended")
 	print("[LaunchManager] shadPS4: completion_tracker.complete=" + str(completion_tracker.complete) + ", completion_tracker.success=" + str(completion_tracker.success))
-	
+
 	if not completion_tracker.complete:
 		push_error("[LaunchManager] shadPS4: Extraction callback never fired")
 		return false
