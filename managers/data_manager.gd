@@ -1726,8 +1726,9 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	)
 	return true
 
-func delete_game_download(game: GameResource, callback: Callable = Callable()) -> bool:
-	"""Delete a downloaded game file and update the database."""
+func delete_game_download(game: GameResource, callback: Callable = Callable(), force_db_update: bool = false) -> bool:
+	"""Delete a downloaded game file and update the database.
+	If force_db_update is true and the file doesn't exist, the DB entry will be updated anyway."""
 	if not _is_db_ready or not game:
 		push_error("[DataManager] Cannot delete: DB not ready or game is null")
 		if callback.is_valid():
@@ -1759,69 +1760,84 @@ func delete_game_download(game: GameResource, callback: Callable = Callable()) -
 	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 	
 	# Check if file exists
-	if not FileAccess.file_exists(abs_path):
-		push_error("[DataManager] File does not exist: " + abs_path)
-		if callback.is_valid():
-			callback.call(false)
-		return false
+	var file_exists = FileAccess.file_exists(abs_path)
 	
-	# Attempt to delete the file
-	var file_deleted = false
+	if not file_exists:
+		if force_db_update:
+			print("[DataManager] File not found but force_db_update=true, removing DB entry for: " + game.title)
+		else:
+			push_error("[DataManager] File does not exist: " + abs_path)
+			if callback.is_valid():
+				callback.call(false)
+			return false
+	
+	# Attempt to delete the file (only if it exists)
+	var file_deleted = not file_exists  # If file doesn't exist, consider it "deleted" when forcing
 	var error_msg = ""
 	
-	# Method 1: Try using DirAccess with the parent directory
-	var parent_dir = abs_path.get_base_dir()
-	var file_name = abs_path.get_file()
-	
-	var dir = DirAccess.open(parent_dir)
-	
-	if dir:
-		var err = dir.remove(file_name)
-		if err == OK:
-			file_deleted = true
+	if file_exists:
+		# Method 1: Try using DirAccess with the parent directory
+		var parent_dir = abs_path.get_base_dir()
+		var file_name = abs_path.get_file()
+		
+		var dir = DirAccess.open(parent_dir)
+		
+		if dir:
+			var err = dir.remove(file_name)
+			if err == OK:
+				file_deleted = true
+			else:
+				error_msg = "DirAccess.remove failed with error: " + str(err)
 		else:
-			error_msg = "DirAccess.remove failed with error: " + str(err)
-	else:
-		error_msg = "Failed to open directory: " + parent_dir
+			error_msg = "Failed to open directory: " + parent_dir
+		
+		# Method 2: If first method failed, try remove_absolute
+		if not file_deleted:
+			var err = DirAccess.remove_absolute(abs_path)
+			if err == OK:
+				file_deleted = true
+			else:
+				error_msg += " | remove_absolute failed with error: " + str(err)
+		
+		# If file deletion failed, don't update the database (unless forcing)
+		if not file_deleted and not force_db_update:
+			push_error("[DataManager] Failed to delete file: " + abs_path + " | " + error_msg)
+			if callback.is_valid():
+				callback.call(false)
+			return false
+		
+		# Verify file was actually deleted
+		var file_still_exists = FileAccess.file_exists(abs_path)
+		
+		if file_still_exists and not force_db_update:
+			push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
+			if callback.is_valid():
+				callback.call(false)
+			return false
 	
-	# Method 2: If first method failed, try remove_absolute
-	if not file_deleted:
-		var err = DirAccess.remove_absolute(abs_path)
-		if err == OK:
-			file_deleted = true
-		else:
-			error_msg += " | remove_absolute failed with error: " + str(err)
-	
-	# If file deletion failed, don't update the database
-	if not file_deleted:
-		push_error("[DataManager] Failed to delete file: " + abs_path + " | " + error_msg)
-		if callback.is_valid():
-			callback.call(false)
-		return false
-	
-	# Verify file was actually deleted
-	var file_still_exists = FileAccess.file_exists(abs_path)
-	
-	if file_still_exists:
-		push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
-		if callback.is_valid():
-			callback.call(false)
-		return false
-	
-	# Update game state only after successful deletion
+	# Update game state (after successful deletion or forced removal)
 	if active_id == game.romm_id:
 		# Main game
 		game.has_local_copy = false
 		game.file_path = ""
+		# Also clear any downloaded siblings since user is removing this game from library
+		game.downloaded_sibling_ids.clear()
 	else:
 		# Sibling - remove from downloaded list
 		game.downloaded_sibling_ids.erase(active_id)
+	
+	print("[DataManager] delete_game_download: Updating DB for game " + game.title + " (romm_id=" + str(game.romm_id) + ") - has_local_copy=" + str(game.has_local_copy) + ", downloaded_sibling_ids=" + str(game.downloaded_sibling_ids))
 	
 	# Clean up extracted game files for platforms that extract during launch
 	_cleanup_extracted_game_files(game)
 	
 	# Persist to database
-	return update_game(game, callback)
+	var wrapped_callback = func(success: bool):
+		print("[DataManager] delete_game_download: DB update result for " + game.title + " = " + str(success))
+		if callback.is_valid():
+			callback.call(success)
+	
+	return update_game(game, wrapped_callback)
 
 
 ## Cleans up extracted game files when a game is deleted
@@ -2055,7 +2071,9 @@ func get_downloaded_games_count() -> int:
 	if query_result.size() > 0:
 		var row = query_result[0]
 		if row.has("count"):
-			return int(row["count"])
+			var count = int(row["count"])
+			print("[DataManager] get_downloaded_games_count: " + str(count))
+			return count
 	return 0
 
 func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResource]:

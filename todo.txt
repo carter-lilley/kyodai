@@ -3,10 +3,10 @@
 small screen testing in settings menu (never hscroll)
 separate firmware page or indicator?
 xemu save sync
-vita3k config override issue
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
+	"app bar"
 
 ## saves
 	implement argosy sigil
@@ -34,12 +34,12 @@ vita3k config override issue
 	hero fx (screenshots/cropping/shadows/etc)
 	
 ## performance & sync:
-	image priority management.
-	performance.add_custom_monitor for everything
-	how to split important siblings
-	cache image colors on sync
+	further test/check image priority management
+	performance.add_custom_monitor for anything sketchy or big performance drains?
 	check: are sync db actions and load db actions the same?
 	move max_cache_size to memory manager?
+	how to split important siblings
+	cache image colors on sync
 	
 ## launch:
 	azahar save sync

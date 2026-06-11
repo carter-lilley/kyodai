@@ -466,53 +466,68 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				if games_grid:
 					games_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				
+				# Helper function to refresh grid after successful delete
+				var _refresh_after_delete = func():
+					# Remove from GameNative cache if it's a GameNative game
+					if game.source == "gamenative":
+						var gn_idx = -1
+						for i in range(_gamenative_games.size()):
+							if _gamenative_games[i].romm_id == romm_id:
+								gn_idx = i
+								break
+						if gn_idx >= 0:
+							_gamenative_games.remove_at(gn_idx)
+							_gamenative_games_count = _gamenative_games.size()
+							_total_games = _db_games_count + _gamenative_games_count
+					
+					# Clear cache and refresh completely
+					_gamenative_indices.clear()
+					
+					# Force refresh the grid (don't preserve cache to remove the deleted game)
+					_load_total_count_with_callback(false, func():
+						games_grid.refresh_dimensions()
+						
+						# Re-enable grid interaction
+						if games_grid:
+							games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+						
+						# Reset focus to home button
+						if not is_inside_tree() or not get_tree():
+							return
+						var main = get_tree().get_root().get_node_or_null("Main")
+						if main and main.has_method("reset_focus_to_home_button"):
+							main.reset_focus_to_home_button()
+						if AudioManager:
+							AudioManager.play_sfx("error")
+					)
+				
 				# Delete the game
 				DataManager.delete_game_download(game, func(success: bool):
 					if success:
 						NotificationManager.show_notification(game.title + " deleted", NotificationManager.Type.SUCCESS)
+						_refresh_after_delete.call()
+					else:
+						# File not found - ask user if they want to remove from DB anyway
+						var on_confirm = func():
+							M3Dialog.dismiss_current()
+							var on_force_delete = func(force_success: bool):
+								if force_success:
+									NotificationManager.show_notification(game.title + " removed from library", NotificationManager.Type.SUCCESS)
+									_refresh_after_delete.call()
+								else:
+									NotificationManager.show_notification("Failed to remove " + game.title, NotificationManager.Type.ERROR)
+									if games_grid:
+										games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							DataManager.delete_game_download(game, on_force_delete, true)
 						
-						# Remove from GameNative cache if it's a GameNative game
-						if game.source == "gamenative":
-							var gn_idx = -1
-							for i in range(_gamenative_games.size()):
-								if _gamenative_games[i].romm_id == romm_id:
-									gn_idx = i
-									break
-							if gn_idx >= 0:
-								_gamenative_games.remove_at(gn_idx)
-								_gamenative_games_count = _gamenative_games.size()
-								_total_games = _db_games_count + _gamenative_games_count
-					
-						# Clear cache and refresh completely
-						_gamenative_indices.clear()
-						
-						# Force refresh the grid (don't preserve cache to remove the deleted game)
-						_load_total_count_with_callback(false, func():
-							games_grid.refresh_dimensions()
-							
-							# Re-enable grid interaction
+						var on_cancel = func():
+							M3Dialog.dismiss_current()
 							if games_grid:
 								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
-							
-							# Reset focus to home button
-							if not is_inside_tree() or not get_tree():
-								return
-							var main = get_tree().get_root().get_node_or_null("Main")
-							if main and main.has_method("reset_focus_to_home_button"):
-								main.reset_focus_to_home_button()
 							if AudioManager:
 								AudioManager.play_sfx("error")
-						)
-					else:
-						NotificationManager.show_notification("Failed to delete " + game.title, NotificationManager.Type.ERROR)
 						
-						# Re-enable grid interaction on failure too
-						if games_grid:
-							games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
-						
-						# Play error sound
-						if AudioManager:
-							AudioManager.play_sfx("error")
+						M3Dialog.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel)
 				)
 		"hide":
 			pass

@@ -1,4 +1,5 @@
 {
+  "suspend_method": "suspend",
   "meta": {
 	"id": "shadps4",
 	"name": "shadPS4",

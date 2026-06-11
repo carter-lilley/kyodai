@@ -1,4 +1,5 @@
 {
+  "suspend_method": "udp",
   "meta": {
 	"id": "retroarch",
 	"name": "RetroArch",

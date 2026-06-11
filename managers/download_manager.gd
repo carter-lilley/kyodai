@@ -35,6 +35,7 @@ class QueueItem:
 	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
 	var delete_after_extract: bool = false  # Whether to delete archive after extraction
 	var suppress_notification: bool = false  # If true, don't show per-item notifications
+	var update_game_resource: bool = true  # If false, skip DataManager.update_game() on completion
 	var extracted_count: int = 0  # Files extracted so far
 	var total_count: int = 0  # Total files in archive
 
@@ -58,10 +59,11 @@ const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at star
 # Chunked download constants
 const CHUNKED_DOWNLOAD_THRESHOLD: int = 20 * 1024 * 1024  # 20MB minimum for chunking
 const MIN_CHUNK_SIZE: int = 10 * 1024 * 1024  # 10MB minimum chunk size
-const OVER_SUBSCRIPTION_MULTIPLIER_SMALL: float = 1.0  # 1x for files < 100MB
-const OVER_SUBSCRIPTION_MULTIPLIER_MEDIUM: float = 2.0  # 2x for files 100MB-1GB
-const OVER_SUBSCRIPTION_MULTIPLIER_LARGE: float = 3.0  # 3x for files 1GB-5GB
-const OVER_SUBSCRIPTION_MULTIPLIER_XL: float = 4.0  # 4x for files > 5GB
+const MAX_CHUNKS: int = 20  # Hard cap to avoid rate-limiting
+const OVER_SUBSCRIPTION_MULTIPLIER_SMALL: float = 0.5  # 0.5x for files < 100MB
+const OVER_SUBSCRIPTION_MULTIPLIER_MEDIUM: float = 1.0  # 1x for files 100MB-1GB
+const OVER_SUBSCRIPTION_MULTIPLIER_LARGE: float = 1.5  # 1.5x for files 1GB-5GB
+const OVER_SUBSCRIPTION_MULTIPLIER_XL: float = 2.0  # 2x for files > 5GB
 
 var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # Always match thread count
 
@@ -74,10 +76,11 @@ const POLLING_INTERVAL_MS: int = 100
 const POLLING_INTERVAL_US: int = 2000000
 
 ## Calculates optimal chunk size and count using over-subscription strategy
-## Files < 100MB: 1x over-subscription (just fill threads)
-## Files 100MB-1GB: 2x over-subscription (twice as many chunks as threads)
-## Files 1GB-5GB: 3x over-subscription
-## Files > 5GB: 4x over-subscription (capped)
+## Files < 100MB: 0.5x over-subscription (half as many chunks as threads)
+## Files 100MB-1GB: 1x over-subscription (equal to thread count)
+## Files 1GB-5GB: 1.5x over-subscription
+## Files > 5GB: 2x over-subscription
+## Hard cap: 20 chunks max to avoid rate-limiting
 ## Minimum chunk size: 10MB to avoid overhead
 func _calculate_chunk_strategy(file_size: int) -> Dictionary:
 	var thread_count = MemoryManager.get_download_thread_count()
@@ -96,11 +99,19 @@ func _calculate_chunk_strategy(file_size: int) -> Dictionary:
 	# Calculate target number of chunks with over-subscription
 	var target_chunks = max(thread_count, int(multiplier * thread_count))
 	
+	# Apply hard cap to avoid overwhelming servers
+	target_chunks = min(target_chunks, MAX_CHUNKS)
+	
 	# Calculate chunk size, ensuring minimum chunk size
 	var chunk_size = max(MIN_CHUNK_SIZE, file_size / target_chunks)
 	
 	# Recalculate actual number of chunks based on chunk size
 	var num_chunks = ceili(float(file_size) / float(chunk_size))
+	
+	# Ensure we don't exceed max chunks after recalculation
+	if num_chunks > MAX_CHUNKS:
+		chunk_size = ceili(float(file_size) / float(MAX_CHUNKS))
+		num_chunks = ceili(float(file_size) / float(chunk_size))
 	
 	print("[DownloadManager] Chunk strategy for %d bytes: %d chunks x %d bytes (multiplier=%.1f, threads=%d)" % [
 		file_size, num_chunks, chunk_size, multiplier, thread_count
@@ -181,7 +192,7 @@ func _stop_foreground_service():
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0) -> String:
+func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0, update_game_resource: bool = true) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 	
@@ -210,6 +221,7 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
 	item.delete_after_extract = delete_after_extract
 	item.suppress_notification = suppress_notification
+	item.update_game_resource = update_game_resource
 	
 	# Store expected file size for progress tracking
 	item.expected_file_size = expected_file_size
@@ -1843,7 +1855,7 @@ func _start_extraction(item: QueueItem):
 func _finish_download_completion(item: QueueItem):
 	"""Complete the download after file operations are done"""
 	# Update game resource if applicable
-	if item.game_resource:
+	if item.game_resource and item.update_game_resource:
 		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
 		item.game_resource.mark_sibling_downloaded(downloaded_id)
 		item.game_resource.file_path = item.destination_path

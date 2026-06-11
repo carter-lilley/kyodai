@@ -1,4 +1,5 @@
 {
+  "suspend_method": "suspend",
   "meta": {
 	"id": "ppsspp",
 	"name": "PPSSPP",

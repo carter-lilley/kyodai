@@ -17,10 +17,15 @@ const NAV_DESTINATIONS = [
 	{"id": "home",      "label": "Home",      "icon": "home",     "view": "Home"},
 	{"id": "library",   "label": "Library",   "icon": "library",  "view": "Library"},
 	{"id": "downloads", "label": "Downloads", "icon": "download", "view": "Downloads"},
+	{"id": "shuffle",   "label": "Shuffle",   "icon": "shuffle",  "view": ""},
 ]
 
 # Settings dialog
 var _settings_dialog = null
+
+# Shuffler dialog
+var _shuffler_dialog: ShufflerConfigDialog = null
+var _last_nav_index: int = 0
 
 # Default hero height ratio (will be overridden by settings)
 const HERO_SIZE_RATIO_DEFAULT = 0.33
@@ -393,8 +398,19 @@ func _on_nav_node_ready() -> void:
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	"""Handle M3 nav destination selection."""
-	if index >= 0 and index < NAV_DESTINATIONS.size():
-		switch_to_tab(NAV_DESTINATIONS[index].view)
+	if index < 0 or index >= NAV_DESTINATIONS.size():
+		return
+	
+	var dest = NAV_DESTINATIONS[index]
+	if dest.id == "shuffle":
+		# Restore previous nav selection so shuffle doesn't stay highlighted
+		if _nav_node:
+			_nav_node.selected_index = _last_nav_index
+		_show_shuffler_dialog()
+		return
+	
+	_last_nav_index = index
+	switch_to_tab(dest.view)
 
 func _setup_nav_focus_neighbors() -> void:
 	"""Block the one direction that leaks from nav into the game grid.
@@ -762,6 +778,28 @@ func _on_settings_dialog_dismissed() -> void:
 	# the dialog is closed. Hidden views will rebuild when they become visible.
 	if _current_view and _current_view.needs_rebuild:
 		_current_view.check_and_rebuild_if_needed()
+
+func _show_shuffler_dialog() -> void:
+	"""Show the shuffler configuration dialog."""
+	if ShufflerManager.is_session_active():
+		NotificationManager.show_notification("A shuffler session is already active", NotificationManager.Type.INFO)
+		return
+	
+	if not _shuffler_dialog or not is_instance_valid(_shuffler_dialog):
+		var dialog_script = load("res://components/shuffler_config_dialog.gd")
+		if dialog_script:
+			_shuffler_dialog = dialog_script.new()
+			_shuffler_dialog.start_session_requested.connect(_on_shuffler_start_requested)
+	
+	if _shuffler_dialog and not _shuffler_dialog.is_inside_tree():
+		get_tree().root.add_child(_shuffler_dialog)
+	
+	if _shuffler_dialog:
+		_shuffler_dialog.show_overlay()
+
+func _on_shuffler_start_requested(config: Dictionary) -> void:
+	"""Handle shuffler session start request."""
+	ShufflerManager.start_session(config)
 
 func _get_tab_index(tab_title: String) -> int:
 	for i in range(_tab_container.get_tab_count()):
