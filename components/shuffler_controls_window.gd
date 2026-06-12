@@ -32,21 +32,13 @@ func _ready():
 		var btn = _button_group.get_child(i)
 		if btn is Button:
 			btn.pressed.connect(_on_button_pressed.bind(i))
+		if btn is Control:
+			btn.focus_mode = Control.FOCUS_NONE
 
-	# Focus the first button once the window is shown.
-	visibility_changed.connect(_on_visibility_changed)
-	_focus_first_button.call_deferred()
-
-func _on_visibility_changed() -> void:
-	if visible:
-		_focus_first_button()
-
-func _focus_first_button() -> void:
-	if _button_group.get_child_count() == 0:
-		return
-	var first := _button_group.get_child(0) as Control
-	if first and first.is_visible_in_tree() and not first.has_focus():
-		first.grab_focus()
+	# The palette is mouse-only so it doesn't steal controller input from the game.
+	var root := $Root as Control
+	if root:
+		root.focus_mode = Control.FOCUS_NONE
 
 func _on_button_pressed(index: int):
 	match index:

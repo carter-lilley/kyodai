@@ -59,67 +59,49 @@ const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at star
 # Chunked download constants
 const CHUNKED_DOWNLOAD_THRESHOLD: int = 20 * 1024 * 1024  # 20MB minimum for chunking
 const MIN_CHUNK_SIZE: int = 10 * 1024 * 1024  # 10MB minimum chunk size
+const TARGET_CHUNK_SIZE: int = 100 * 1024 * 1024  # 100MB target chunk size
 const MAX_CHUNKS: int = 20  # Hard cap to avoid rate-limiting
-const OVER_SUBSCRIPTION_MULTIPLIER_SMALL: float = 0.5  # 0.5x for files < 100MB
-const OVER_SUBSCRIPTION_MULTIPLIER_MEDIUM: float = 1.0  # 1x for files 100MB-1GB
-const OVER_SUBSCRIPTION_MULTIPLIER_LARGE: float = 1.5  # 1.5x for files 1GB-5GB
-const OVER_SUBSCRIPTION_MULTIPLIER_XL: float = 2.0  # 2x for files > 5GB
+const MAX_CONCURRENT_CHUNKS_DESKTOP: int = 6
+const MAX_CONCURRENT_CHUNKS_ANDROID: int = 3
 
-var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # Always match thread count
+var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # kept for legacy code; active cap is below
 
-# Chunk retry settings
+# Chunk retry / timeout settings
 const MAX_CHUNK_RETRIES: int = 3
 const CHUNK_RETRY_DELAY_SEC: float = 1.5  # 1.5 seconds between retries
+const CHUNK_REQUEST_TIMEOUT_MS: int = 20 * 1000  # time to finish request headers
+const CHUNK_STALL_TIMEOUT_MS: int = 15 * 1000   # no bytes received
+const CHUNK_FALLBACK_TO_SINGLE_STREAM: bool = true
 
 # Polling interval for HTTPClient (2 seconds between polls when no data)
 const POLLING_INTERVAL_MS: int = 100
 const POLLING_INTERVAL_US: int = 2000000
 
-## Calculates optimal chunk size and count using over-subscription strategy
-## Files < 100MB: 0.5x over-subscription (half as many chunks as threads)
-## Files 100MB-1GB: 1x over-subscription (equal to thread count)
-## Files 1GB-5GB: 1.5x over-subscription
-## Files > 5GB: 2x over-subscription
-## Hard cap: 20 chunks max to avoid rate-limiting
+## Calculates chunk size and concurrency using a fixed target size and server-friendly cap
+## Target chunk size: 128MB
+## Hard cap: 16 chunks max
+## Active concurrency: 4 on desktop, 2 on Android
 ## Minimum chunk size: 10MB to avoid overhead
 func _calculate_chunk_strategy(file_size: int) -> Dictionary:
 	var thread_count = MemoryManager.get_download_thread_count()
+	var max_concurrent = MAX_CONCURRENT_CHUNKS_ANDROID if PlatformManager.is_android() else MAX_CONCURRENT_CHUNKS_DESKTOP
+	var concurrency = mini(thread_count, max_concurrent)
 	
-	# Determine over-subscription multiplier based on file size
-	var multiplier: float
-	if file_size < 100 * 1024 * 1024:  # < 100MB
-		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_SMALL
-	elif file_size < 1024 * 1024 * 1024:  # < 1GB
-		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_MEDIUM
-	elif file_size < 5 * 1024 * 1024 * 1024:  # < 5GB
-		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_LARGE
-	else:  # >= 5GB
-		multiplier = OVER_SUBSCRIPTION_MULTIPLIER_XL
+	# Calculate number of chunks from target chunk size
+	var num_chunks = clampi(ceili(float(file_size) / float(TARGET_CHUNK_SIZE)), 1, MAX_CHUNKS)
+	var chunk_size = maxi(MIN_CHUNK_SIZE, ceili(float(file_size) / float(num_chunks)))
 	
-	# Calculate target number of chunks with over-subscription
-	var target_chunks = max(thread_count, int(multiplier * thread_count))
+	# Recalculate after enforcing minimum chunk size
+	num_chunks = ceili(float(file_size) / float(chunk_size))
 	
-	# Apply hard cap to avoid overwhelming servers
-	target_chunks = min(target_chunks, MAX_CHUNKS)
-	
-	# Calculate chunk size, ensuring minimum chunk size
-	var chunk_size = max(MIN_CHUNK_SIZE, file_size / target_chunks)
-	
-	# Recalculate actual number of chunks based on chunk size
-	var num_chunks = ceili(float(file_size) / float(chunk_size))
-	
-	# Ensure we don't exceed max chunks after recalculation
-	if num_chunks > MAX_CHUNKS:
-		chunk_size = ceili(float(file_size) / float(MAX_CHUNKS))
-		num_chunks = ceili(float(file_size) / float(chunk_size))
-	
-	print("[DownloadManager] Chunk strategy for %d bytes: %d chunks x %d bytes (multiplier=%.1f, threads=%d)" % [
-		file_size, num_chunks, chunk_size, multiplier, thread_count
+	print("[DownloadManager] Chunk strategy for %d bytes: %d chunks x %d bytes (concurrency=%d, threads=%d)" % [
+		file_size, num_chunks, chunk_size, concurrency, thread_count
 	])
 	
 	return {
 		"chunk_size": chunk_size,
 		"num_chunks": num_chunks,
+		"concurrency": concurrency,
 		"thread_count": thread_count
 	}
 
@@ -130,6 +112,7 @@ class ChunkedDownloadInfo:
 	var chunks: Array[ChunkInfo] = []
 	var chunks_completed: int = 0
 	var total_chunks: int = 0
+	var concurrency: int = 0  # Active chunk concurrency for this download
 	var temp_dir: String = ""
 	var final_path: String = ""
 	var use_chunking: bool = false
@@ -142,6 +125,7 @@ class ChunkInfo:
 	var index: int
 	var start_byte: int
 	var end_byte: int
+	var original_start_byte: int  # Unchanged start for resume on retry
 	var temp_path: String
 	var completed: bool = false
 	var failed: bool = false
@@ -155,8 +139,11 @@ var _active_download_count: int = 0
 
 # Connection pool for chunked downloads - per-thread persistent connections
 # Reduces TLS handshakes by reusing connections across chunks
-var _download_connection_pools: Dictionary = {}  # item_id -> Array[HTTPClient] (one per thread)
+var _download_connection_pools: Dictionary = {}  # item_id -> Array[HTTPClient] (one per active slot)
 var _connection_pool_mutex: Mutex = Mutex.new()
+
+# Concurrency limiter for chunked downloads (per download)
+var _chunk_concurrency_semaphores: Dictionary = {}  # item_id -> Semaphore
 
 # Track per-thread chunk completion times for debugging connection reuse
 var _thread_chunk_finish_times: Dictionary = {}  # "item_id_thread_index" -> finish_time_msec
@@ -533,6 +520,18 @@ func _is_connection_valid(http: HTTPClient) -> bool:
 		return false
 	return http.get_status() == HTTPClient.STATUS_CONNECTED
 
+## Closes an HTTPClient and clears it from the connection pool so retries get a fresh connection
+func _invalidate_pool_connection(http: HTTPClient, item_id: String, thread_index: int):
+	if http != null:
+		http.close()
+	
+	_connection_pool_mutex.lock()
+	if _download_connection_pools.has(item_id):
+		var pool = _download_connection_pools[item_id]
+		if thread_index >= 0 and thread_index < pool.size():
+			pool[thread_index] = null
+	_connection_pool_mutex.unlock()
+
 ## Checks if a platform needs TitleID extraction for save sync
 func _needs_title_id(game: GameResource) -> bool:
 	match game.platform_slug:
@@ -613,6 +612,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	var strategy = _calculate_chunk_strategy(file_size)
 	var chunk_size = strategy.chunk_size
 	var num_chunks = strategy.num_chunks
+	var concurrency = strategy.concurrency
 	var thread_count = strategy.thread_count
 	
 	# Create temp directory for chunks
@@ -634,6 +634,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	chunked_info.temp_dir = temp_dir
 	chunked_info.final_path = item.destination_path
 	chunked_info.total_chunks = num_chunks
+	chunked_info.concurrency = concurrency
 	chunked_info.use_chunking = true
 	
 	# Create chunk infos
@@ -641,28 +642,33 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		var chunk = ChunkInfo.new()
 		chunk.index = i
 		chunk.start_byte = i * chunk_size
+		chunk.original_start_byte = chunk.start_byte
 		chunk.end_byte = mini((i + 1) * chunk_size - 1, file_size - 1)
 		chunk.temp_path = temp_dir + "/chunk_" + str(i) + ".tmp"
 		chunked_info.chunks.append(chunk)
 	
 	_chunked_downloads[item.id] = chunked_info
 	
-	# Initialize connection pool for persistent TLS connections
-	# Use thread_count from strategy (already calculated)
+	# Initialize per-download concurrency semaphore and connection pool
+	var chunk_sem = Semaphore.new()
+	for _i in range(concurrency):
+		chunk_sem.post()
+	_chunk_concurrency_semaphores[item.id] = chunk_sem
+	
 	var connection_pool: Array[HTTPClient] = []
-	connection_pool.resize(thread_count)
+	connection_pool.resize(concurrency)
 	_connection_pool_mutex.lock()
 	_download_connection_pools[item.id] = connection_pool
 	_connection_pool_mutex.unlock()
 	
 	print("[DownloadManager] Starting chunked download with " + str(num_chunks) + " chunks for: " + item.name)
-	print("[DownloadManager] Using " + str(thread_count) + " threads with connection pool")
+	print("[DownloadManager] Using concurrency=" + str(concurrency) + " (thread pool=" + str(thread_count) + ")")
 	
 	# Queue all chunks to the download thread pool
-	# This distributes chunks across threads for controlled parallelism
+	# The semaphore ensures at most `concurrency` chunks are active at once
 	var chunk_items = []
 	for i in range(num_chunks):
-		var thread_index = i % thread_count
+		var thread_index = i % concurrency
 		chunk_items.append({
 			"item_id": item.id,
 			"chunk_index": i,
@@ -670,6 +676,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 			"temp_path": chunked_info.chunks[i].temp_path,
 			"start_byte": chunked_info.chunks[i].start_byte,
 			"end_byte": chunked_info.chunks[i].end_byte,
+			"original_start_byte": chunked_info.chunks[i].original_start_byte,
 			"headers": headers,
 			"thread_index": thread_index
 		})
@@ -680,7 +687,9 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	await MemoryManager.queue_parallel_downloads(
 		chunk_items,
 		func(chunk_data, _index):
+			chunk_sem.wait()
 			var success = _download_chunk_on_thread(chunk_data)
+			chunk_sem.post()
 			return {
 				"success": success,
 				"chunk_index": chunk_data.chunk_index
@@ -722,11 +731,13 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	var temp_path = chunk_data.temp_path
 	var start_byte = chunk_data.start_byte
 	var end_byte = chunk_data.end_byte
+	var original_start_byte = chunk_data.get("original_start_byte", start_byte) as int
 	var headers = chunk_data.headers
 	var chunk_index = chunk_data.chunk_index
 	var item_id = chunk_data.item_id
 	var thread_index = chunk_data.thread_index
 	
+	var expected_chunk_size = end_byte - original_start_byte + 1
 	var chunk_start_time = Time.get_ticks_msec()
 	print("[DownloadManager] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
 	
@@ -793,9 +804,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	if not has_host:
 		request_headers.append("Host: " + url_parts.host)
 	
-	# Add Range header
-	request_headers.append("Range: bytes=%d-%d" % [start_byte, end_byte])
-	
 	# Add User-Agent if not present
 	var has_user_agent = false
 	for header in request_headers:
@@ -823,21 +831,64 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	if not has_accept:
 		request_headers.append("Accept: */*")
 	
+	# Partial chunk resume: if a partial file exists, resume from its end
+	var bytes_downloaded = 0
+	var resume_offset = 0
+	var file: FileAccess = null
+	
+	if FileAccess.file_exists(temp_path):
+		var partial_file = FileAccess.open(temp_path, FileAccess.READ)
+		if partial_file:
+			var partial_size = partial_file.get_length()
+			partial_file.close()
+			if partial_size >= expected_chunk_size:
+				print("[DownloadManager] Chunk " + str(chunk_index) + " already complete on disk (" + str(partial_size) + " bytes), skipping")
+				return true
+			elif partial_size > 0:
+				resume_offset = partial_size
+				start_byte = original_start_byte + resume_offset
+				bytes_downloaded = partial_size
+				print("[DownloadManager] Chunk " + str(chunk_index) + " resuming from byte " + str(start_byte) + " (already have " + str(partial_size) + " bytes)")
+	
+	# Add Range header (uses possibly resumed start_byte)
+	request_headers.append("Range: bytes=%d-%d" % [start_byte, end_byte])
+	
+	# Open file for writing/appending
+	if resume_offset > 0:
+		file = FileAccess.open(temp_path, FileAccess.READ_WRITE)
+		if file:
+			file.seek_end(0)
+	else:
+		file = FileAccess.open(temp_path, FileAccess.WRITE)
+	
+	if not file:
+		push_error("[DownloadManager] Failed to create chunk file: " + temp_path)
+		return false
+	
 	# Make the request
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " making request, connection status: " + str(http.get_status()))
 	
 	var err = http.request(HTTPClient.METHOD_GET, url_parts.path + url_parts.query, request_headers)
 	if err != OK:
 		push_error("[DownloadManager] Failed to make request: " + str(err))
+		file.close()
 		return false
 	
 	# Wait for response headers
 	var poll_count = 0
+	var request_start_time = Time.get_ticks_msec()
 	while http.get_status() == HTTPClient.STATUS_REQUESTING:
 		http.poll()
 		poll_count += 1
 		if poll_count % 100 == 0:
 			print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " still requesting... (poll " + str(poll_count) + ")")
+		
+		if Time.get_ticks_msec() - request_start_time > CHUNK_REQUEST_TIMEOUT_MS:
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " request phase timed out after " + str(CHUNK_REQUEST_TIMEOUT_MS) + "ms")
+			file.close()
+			_invalidate_pool_connection(http, item_id, thread_index)
+			return false
+		
 		OS.delay_msec(10)
 	
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " finished requesting after " + str(poll_count) + " polls, status: " + str(http.get_status()))
@@ -869,6 +920,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			else:
 				break
 		push_error("[DownloadManager] Chunk " + str(chunk_index) + " HTTP error " + str(response_code) + ": " + error_body)
+		file.close()
+		_invalidate_pool_connection(http, item_id, thread_index)
 		return false
 	
 	# Validate Content-Range header for 206 responses
@@ -904,22 +957,24 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			push_error("[DownloadManager] Chunk " + str(chunk_index) + " Missing Content-Range header for 206 response")
 		
 		if not content_range_valid:
+			file.close()
+			_invalidate_pool_connection(http, item_id, thread_index)
 			return false
 	
-	# Open file for writing
-	var file = FileAccess.open(temp_path, FileAccess.WRITE)
-	if not file:
-		push_error("[DownloadManager] Failed to create chunk file: " + temp_path)
-		return false
-	
-	# Download the chunk with improved polling
-	var bytes_downloaded = 0
-	var last_progress_emit = 0
+	# Download the chunk with stall detection
+	var last_progress_emit = bytes_downloaded
 	var body_poll_count = 0
 	var last_poll_time = Time.get_ticks_msec()
+	var last_byte_time = Time.get_ticks_msec()
 	
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		var current_time = Time.get_ticks_msec()
+		
+		if current_time - last_byte_time > CHUNK_STALL_TIMEOUT_MS:
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " stalled: no data for " + str(CHUNK_STALL_TIMEOUT_MS) + "ms")
+			file.close()
+			_invalidate_pool_connection(http, item_id, thread_index)
+			return false
 		
 		# Poll every POLLING_INTERVAL_MS to balance responsiveness with CPU usage
 		if current_time - last_poll_time >= POLLING_INTERVAL_MS:
@@ -931,6 +986,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		if chunk.size() > 0:
 			file.store_buffer(chunk)
 			bytes_downloaded += chunk.size()
+			last_byte_time = current_time
 			
 			# Emit progress every 10MB
 			if bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
@@ -956,8 +1012,9 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	var actual_size = verify_file.get_length()
 	verify_file.close()
 	
-	if actual_size != bytes_downloaded:
-		push_error("[DownloadManager] Chunk " + str(chunk_index) + " size mismatch: expected " + str(bytes_downloaded) + " bytes, got " + str(actual_size) + " bytes")
+	if actual_size != expected_chunk_size:
+		push_error("[DownloadManager] Chunk " + str(chunk_index) + " size mismatch: expected " + str(expected_chunk_size) + " bytes, got " + str(actual_size) + " bytes")
+		_invalidate_pool_connection(http, item_id, thread_index)
 		return false
 	
 	var chunk_end_time = Time.get_ticks_msec()
@@ -1087,6 +1144,9 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 	if failed_chunks.size() > 0:
 		print("[DownloadManager] Retrying " + str(failed_chunks.size()) + " failed chunks for: " + item.name)
 		
+		var concurrency = chunked_info.concurrency if chunked_info.concurrency > 0 else MemoryManager.get_download_thread_count()
+		var chunk_sem = _chunk_concurrency_semaphores.get(item_id)
+		
 		# Prepare retry items
 		var retry_items = []
 		for chunk in failed_chunks:
@@ -1095,9 +1155,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			chunk.in_progress = false
 			chunk.temp_bytes_downloaded = 0  # Reset progress tracking
 			
-			# Delete partial file
-			if FSM.file_exists(chunk.temp_path):
-				FSM.delete_file(chunk.temp_path)
+			# Keep partial file so the retry can resume from the offset
 			
 			retry_items.append({
 				"item_id": item_id,
@@ -1106,8 +1164,9 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 				"temp_path": chunk.temp_path,
 				"start_byte": chunk.start_byte,
 				"end_byte": chunk.end_byte,
+				"original_start_byte": chunk.original_start_byte,
 				"headers": headers,
-				"thread_index": chunk.index % MemoryManager.get_download_thread_count()
+				"thread_index": chunk.index % concurrency
 			})
 		
 		# Wait before retry using non-blocking timer
@@ -1117,7 +1176,11 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		await MemoryManager.queue_parallel_downloads(
 			retry_items,
 			func(chunk_data, _index):
+				if chunk_sem != null:
+					chunk_sem.wait()
 				var success = _download_chunk_on_thread(chunk_data)
+				if chunk_sem != null:
+					chunk_sem.post()
 				return {
 					"success": success,
 					"chunk_index": chunk_data.chunk_index
@@ -1131,15 +1194,77 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		)
 	else:
 		# No more retries available
-		push_error("[DownloadManager] Chunks failed with no retries remaining for: " + item.name)
+		if CHUNK_FALLBACK_TO_SINGLE_STREAM:
+			print("[DownloadManager] Chunked download failed after retries; falling back to single-stream for: " + item.name)
+			_start_single_stream_fallback(item_id, headers)
+		else:
+			push_error("[DownloadManager] Chunks failed with no retries remaining for: " + item.name)
+			item.status = "failed"
+			item.error_message = "Chunk download failed after " + str(MAX_CHUNK_RETRIES) + " retries"
+			_cleanup_chunked_download(item_id)
+			_cleanup_item(item)
+			_active_items.erase(item_id)
+			download_completed.emit(item_id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
+
+func _start_single_stream_fallback(item_id: String, headers: Array):
+	"""Fall back to a single HTTPRequest download when chunked Range downloads fail."""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	print("[DownloadManager] Starting single-stream fallback for: " + item.name)
+	NotificationManager.update_notification_text(
+		item.notification_id,
+		"Server throttling detected; switching to single-stream download..."
+	)
+	
+	_cleanup_chunked_download(item_id)
+	
+	item.download_info = NetworkManager.http_download_file(
+		item.url,
+		item.destination_path,
+		headers,
+		func(success: bool, _status_code: int, error_msg: String):
+			_on_file_download_complete(item, success, error_msg),
+		item.expected_file_size
+	)
+	
+	if item.download_info.is_empty():
 		item.status = "failed"
-		item.error_message = "Chunk download failed after " + str(MAX_CHUNK_RETRIES) + " retries"
-		_cleanup_chunked_download(item_id)
+		item.error_message = "Failed to start single-stream fallback"
 		_cleanup_item(item)
-		_active_items.erase(item_id)
-		download_completed.emit(item_id, false, item.error_message)
+		_active_items.erase(item.id)
+		download_completed.emit(item.id, false, item.error_message)
 		queue_changed.emit()
 		_process_queue()
+		return
+	
+	item.http_request = item.download_info.get("http", null)
+	
+	# Setup progress timer for fallback download
+	var progress2 = _download_progress.get(item.id) as DownloadProgress
+	if progress2 == null:
+		progress2 = DownloadProgress.new()
+		progress2.start_time_ms = Time.get_ticks_msec()
+		progress2.last_progress_time_ms = progress2.start_time_ms
+		progress2.last_downloaded_bytes = 0
+		_download_progress[item.id] = progress2
+	if progress2.timer != null and is_instance_valid(progress2.timer):
+		progress2.timer.stop()
+		progress2.timer.queue_free()
+	progress2.timer = Timer.new()
+	progress2.timer.wait_time = 1.0
+	progress2.timer.autostart = true
+	add_child(progress2.timer)
+	
+	progress2.timer.timeout.connect(func():
+		_update_download_progress(item)
+		_check_download_timeout(item.id)
+	)
 
 func _update_chunked_progress(item_id: String):
 	"""Update progress by summing bytes from all chunks"""
@@ -1197,7 +1322,7 @@ func _update_chunk_progress(item_id: String, chunk_index: int, bytes_downloaded:
 			progress = min(progress, 0.99)
 			
 			# Emit if progress changed significantly
-			if abs(progress - chunked_info.last_progress_update) >= 0.005:  # 0.5% threshold
+			if abs(progress - chunked_info.last_progress_update) >= 0.001:  # 0.1% threshold for smoother UI
 				chunked_info.last_progress_update = progress
 				chunked_info.item.progress = progress
 				download_progress.emit(item_id, progress)
@@ -1636,6 +1761,9 @@ func _cleanup_chunked_download(item_id: String):
 				http.close()
 		_download_connection_pools.erase(item_id)
 	_connection_pool_mutex.unlock()
+	
+	# Remove concurrency semaphore
+	_chunk_concurrency_semaphores.erase(item_id)
 	
 	# Remove from tracking
 	_chunked_downloads.erase(item_id)

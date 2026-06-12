@@ -32,6 +32,7 @@ var _download_progresses: Dictionary = {}  # item_id -> float
 var _download_sizes: Dictionary = {}       # item_id -> int (bytes)
 var _total_download_bytes: int = 0
 var _completed_download_bytes: int = 0
+var _active_download_item_id: String = ""  # item currently downloading
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -39,6 +40,15 @@ const RETROARCH_SHUFFLER_CFG := {
 	"network_cmd_enable": "true",
 	"savestate_auto_load": "true",
 	"savestate_auto_save": "true",
+}
+
+const PCSX2_SHUFFLER_INI_PATH := "{emulator_dir}/inis/PCSX2.ini"
+const PCSX2_MEMORY_CARD_KEYS := ["Slot1_Enable", "Slot2_Enable", "Slot1_Filename", "Slot2_Filename"]
+const PCSX2_MEMORY_CARD_VALUES := {
+	"Slot1_Enable": "false",
+	"Slot2_Enable": "false",
+	"Slot1_Filename": '""',
+	"Slot2_Filename": '""',
 }
 
 func _ready():
@@ -122,6 +132,10 @@ func stop_session() -> void:
 	# Wait for processes to actually terminate before cleanup (files may be locked)
 	for pid in pids_to_wait:
 		await _confirm_process_dead(pid)
+
+	# Restore emulator configs edited for the shuffler session.
+	LaunchManager.restore_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg")
+	LaunchManager.restore_emulator_file("pcsx2", PCSX2_SHUFFLER_INI_PATH)
 
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
@@ -333,6 +347,8 @@ func _download_next(entries: Array[Dictionary], index: int) -> void:
 		"on_complete": func(success: bool, _path: String):
 			_pending_downloads -= 1
 			_completed_download_bytes += file_size
+			# Mark this download as fully counted so the progress callable skips it
+			_download_progresses[_active_download_item_id] = 1.0
 			var completed = _total_downloads - _pending_downloads
 			download_progress.emit(completed, _total_downloads)
 			if _pending_downloads == 0 and _state == State.DOWNLOADING:
@@ -344,6 +360,7 @@ func _download_next(entries: Array[Dictionary], index: int) -> void:
 	var item_id = DownloadManager.queue_download(download_url, temp_path, "game", "", false, "", game, callbacks, game.romm_id, true, true, file_size, false)
 	
 	if item_id != "":
+		_active_download_item_id = item_id
 		_download_item_ids.append(item_id)
 		_download_sizes[item_id] = file_size
 		_download_progresses[item_id] = 0.0
@@ -382,6 +399,9 @@ func _enter_shuffler_mode() -> void:
 	# Ensure RetroArch is configured for shuffler UDP savestate behavior.
 	_ensure_retroarch_shuffler_config()
 	
+	# Disable PCSX2 memory cards so multiple suspended instances don't fight over the same memcard file.
+	_ensure_pcsx2_shuffler_config()
+	
 	session_started.emit()
 	_switch_to_game(0)
 
@@ -403,7 +423,7 @@ func _switch_to_game(index: int) -> void:
 
 	var method := entry.get("suspend_method", "suspend") as String
 	if method == "suspend" and entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
-		_resume_game(entry)
+		await _resume_game(entry)
 	elif entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
 		# UDP/TCP emulators should have exited by now. Kill any lingering
 		# process before re-launching so we don't end up with two instances.
@@ -441,7 +461,7 @@ func _launch_game(entry: Dictionary) -> void:
 		if pid != -1:
 			entry["pid"] = pid
 			entry["started"] = true
-			_maximize_window(pid)
+			_maximize_with_retry(pid)
 		else:
 			push_error("[ShufflerManager] Failed to launch game: " + game.title)
 
@@ -497,8 +517,11 @@ func _resume_game(entry: Dictionary) -> void:
 	var output: Array[String] = []
 	OS.execute(_pssuspend_path, ["-r", str(entry["pid"])], output, true)
 
-	# Maximize window
-	_maximize_window(entry["pid"])
+	# Give the thawed process a moment before forcing focus.
+	await get_tree().create_timer(0.2).timeout
+
+	# Maximize window with retries
+	await _maximize_with_retry(entry["pid"])
 
 	entry["active"] = true
 
@@ -546,11 +569,24 @@ func _hide_window(pid: int, exe_name: String) -> void:
 		var output: Array[String] = []
 		OS.execute(_ahk_path, [ahk_script, str(pid), exe_name], output, true)
 
-func _maximize_window(pid: int) -> void:
+func _maximize_with_retry(pid: int) -> void:
+	for i in range(3):
+		print("[ShufflerManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
+		if _maximize_window(pid):
+			print("[ShufflerManager] pid " + str(pid) + " maximized successfully")
+			return
+		await get_tree().create_timer(0.5).timeout
+	push_error("[ShufflerManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
+
+func _maximize_window(pid: int) -> bool:
 	var ahk_script = _tools_dir + "maximize_process.ahk"
 	if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
 		var output: Array[String] = []
-		OS.execute(_ahk_path, [ahk_script, str(pid)], output, true)
+		var exit_code := OS.execute(_ahk_path, [ahk_script, str(pid)], output, true)
+		if exit_code != 0:
+			print("[ShufflerManager] maximize_process.ahk failed for pid " + str(pid) + " (exit=" + str(exit_code) + "): " + str(output))
+		return exit_code == 0
+	return false
 
 func _force_kill_process(pid: int) -> void:
 	if PlatformManager.is_windows():
@@ -646,30 +682,39 @@ func _ensure_retroarch_shuffler_config() -> void:
 			"regex": true,
 		})
 	
-	if not LaunchManager.edit_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg", edits, true):
+	if not LaunchManager.edit_emulator_file_with_backup("retroarch", "{emulator_dir}/retroarch.cfg", edits, true, RETROARCH_SHUFFLER_CFG, ""):
 		push_error("[ShufflerManager] Failed to apply retroarch.cfg edits")
-		return
-	
-	# Append any keys that are still missing.
-	var cfg_path := FSM.resolve_emulator_path("{emulator_dir}/retroarch.cfg", "retroarch")
-	if cfg_path == "":
-		return
-	var content := FSM.read_file(cfg_path)
-	for key in RETROARCH_SHUFFLER_CFG:
-		var value: String = RETROARCH_SHUFFLER_CFG[key]
-		var regex := RegEx.new()
-		regex.compile(r'%s\s*=\s*"[^"]*"' % key)
-		if regex.search(content) == null:
-			if not content.is_empty() and not content.ends_with("\n"):
-				content += "\n"
-			content += '%s = "%s"\n' % [key, value]
-	
-	if not FSM.write_file(cfg_path, content):
-		push_error("[ShufflerManager] Failed to write retroarch.cfg")
 
 # ============================================================================
 # CLEANUP
 # ============================================================================
+
+func _ensure_pcsx2_shuffler_config() -> void:
+	var edits: Array[Dictionary] = []
+	for key in PCSX2_MEMORY_CARD_KEYS:
+		edits.append({
+			"old": r'%s\s*=\s*[^\n]*' % key,
+			"new": '%s = %s' % [key, PCSX2_MEMORY_CARD_VALUES[key]],
+			"regex": true,
+		})
+	
+	if not LaunchManager.edit_emulator_file_with_backup("pcsx2", PCSX2_SHUFFLER_INI_PATH, edits, false, PCSX2_MEMORY_CARD_VALUES, "MemoryCards"):
+		push_error("[ShufflerManager] Failed to apply PCSX2.ini memory-card edits")
+		return
+	
+	# Log the MemoryCards section for debugging.
+	var cfg_path := FSM.resolve_emulator_path(PCSX2_SHUFFLER_INI_PATH, "pcsx2")
+	if cfg_path == "":
+		return
+	print("[ShufflerManager] PCSX2 shuffler config path: " + cfg_path)
+	var content := FSM.read_file(cfg_path)
+	var section_regex := RegEx.new()
+	section_regex.compile(r"(?s)\[MemoryCards\].*?(?=\n\[|\Z)")
+	var section_match := section_regex.search(content)
+	if section_match:
+		print("[ShufflerManager] PCSX2 [MemoryCards] section:\n" + section_match.get_string().strip_edges())
+	else:
+		print("[ShufflerManager] PCSX2 [MemoryCards] section not found")
 
 func _cleanup_temp_files() -> void:
 	if DirAccess.dir_exists_absolute(TEMP_DIR):

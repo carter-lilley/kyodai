@@ -2959,8 +2959,17 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 ## Each edit is a Dictionary with "old" and "new". Set "regex": true to treat
 ## "old" as a RegEx pattern. If create_if_missing is true, the file is created
 ## when it doesn't exist.
-func edit_emulator_file(emulator_id: String, file_path: String, edits: Array, create_if_missing := false) -> bool:
-	if emulator_id == "" or file_path == "" or edits.is_empty():
+## If append_if_missing is provided, any key not already present is appended under
+## the named section (or at the end of the file if section_name is empty).
+func edit_emulator_file(
+	emulator_id: String,
+	file_path: String,
+	edits: Array,
+	create_if_missing := false,
+	append_if_missing: Dictionary = {},
+	section_name: String = ""
+) -> bool:
+	if emulator_id == "" or file_path == "" or (edits.is_empty() and append_if_missing.is_empty()):
 		push_error("[LaunchManager] Invalid arguments for edit_emulator_file")
 		return false
 	
@@ -2998,12 +3007,76 @@ func edit_emulator_file(emulator_id: String, file_path: String, edits: Array, cr
 		else:
 			content = content.replace(old_text, new_text)
 	
+	# Append any missing keys so the caller doesn't have to do it manually.
+	if not append_if_missing.is_empty():
+		var has_section := true
+		if section_name != "":
+			var section_regex := RegEx.new()
+			section_regex.compile(r"\[%s\]" % section_name)
+			has_section = section_regex.search(content) != null
+		
+		if not has_section:
+			if not content.is_empty() and not content.ends_with("\n"):
+				content += "\n"
+			content += "[%s]\n" % section_name
+		
+		for key in append_if_missing:
+			var key_regex := RegEx.new()
+			key_regex.compile(r'(?m)^%s\s*=' % key)
+			if key_regex.search(content) == null:
+				if not content.is_empty() and not content.ends_with("\n"):
+					content += "\n"
+				content += '%s = %s\n' % [key, append_if_missing[key]]
+	
 	if not FSM.write_file(full_path, content):
 		push_error("[LaunchManager] Failed to write edited file: " + full_path)
 		return false
 	
 	return true
 
+
+# Config backups for shuffler/session-specific edits.
+var _emulator_file_backups: Dictionary = {}  # resolved_path -> original_content
+
+## Same as edit_emulator_file, but stores the original file content first so it can be restored later.
+func edit_emulator_file_with_backup(
+	emulator_id: String,
+	file_path: String,
+	edits: Array,
+	create_if_missing := false,
+	append_if_missing: Dictionary = {},
+	section_name: String = ""
+) -> bool:
+	var full_path := FSM.resolve_emulator_path(file_path, emulator_id)
+	if full_path == "":
+		push_error("[LaunchManager] Could not resolve emulator path for backup: " + file_path)
+		return false
+	
+	if not _emulator_file_backups.has(full_path):
+		var original := ""
+		if FSM.file_exists(full_path):
+			original = FSM.read_file(full_path)
+		_emulator_file_backups[full_path] = original
+	
+	return edit_emulator_file(emulator_id, file_path, edits, create_if_missing, append_if_missing, section_name)
+
+## Restores a file to the content captured by edit_emulator_file_with_backup().
+func restore_emulator_file(emulator_id: String, file_path: String) -> bool:
+	var full_path := FSM.resolve_emulator_path(file_path, emulator_id)
+	if full_path == "":
+		push_error("[LaunchManager] Could not resolve emulator path for restore: " + file_path)
+		return false
+	
+	if not _emulator_file_backups.has(full_path):
+		return false
+	
+	var success := FSM.write_file(full_path, _emulator_file_backups[full_path])
+	if success:
+		_emulator_file_backups.erase(full_path)
+	else:
+		push_error("[LaunchManager] Failed to restore emulator file: " + full_path)
+	
+	return success
 
 ## Helper function for edit_file action
 func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:

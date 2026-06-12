@@ -6,6 +6,7 @@ signal start_session_requested(config: Dictionary)
 var _platform_grid: GridContainer
 var _platform_buttons: Dictionary[String, M3Button] = {}
 var _selected_platforms: Array[String] = []
+var _toggle_all_button: M3Button
 
 var _bag_size_slider: M3Slider
 var _round_time_min_slider: M3Slider
@@ -108,8 +109,20 @@ func _build_content() -> void:
 	vbox.add_child(time_hbox)
 	
 	# Platforms section
+	var platforms_header = HBoxContainer.new()
+	platforms_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	
 	var platforms_label = _create_section_label("Platforms")
-	vbox.add_child(platforms_label)
+	platforms_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	platforms_header.add_child(platforms_label)
+	
+	_toggle_all_button = M3Button.new()
+	_toggle_all_button.text = "Enable All"
+	_toggle_all_button.button_variant = M3Button.Variant.TEXT
+	_toggle_all_button.pressed.connect(_on_toggle_all_pressed)
+	platforms_header.add_child(_toggle_all_button)
+	
+	vbox.add_child(platforms_header)
 	
 	_platform_grid = GridContainer.new()
 	_platform_grid.columns = 3
@@ -139,6 +152,8 @@ func _load_platforms() -> void:
 		btn.pressed.connect(_on_platform_toggled.bind(slug, btn))
 		_platform_grid.add_child(btn)
 		_platform_buttons[slug] = btn
+	
+	_update_toggle_all_button()
 
 func _on_platform_toggled(slug: String, btn: M3Button) -> void:
 	if btn.button_pressed:
@@ -146,6 +161,30 @@ func _on_platform_toggled(slug: String, btn: M3Button) -> void:
 			_selected_platforms.append(slug)
 	else:
 		_selected_platforms.erase(slug)
+	_update_toggle_all_button()
+
+func _on_toggle_all_pressed() -> void:
+	var all_selected = _selected_platforms.size() == _platform_buttons.size() and _platform_buttons.size() > 0
+	for slug in _platform_buttons:
+		var btn = _platform_buttons[slug]
+		btn.set_pressed_no_signal(not all_selected)
+	if all_selected:
+		_selected_platforms.clear()
+	else:
+		_selected_platforms.clear()
+		for slug in _platform_buttons:
+			_selected_platforms.append(slug)
+	_update_toggle_all_button()
+
+func _update_toggle_all_button() -> void:
+	if _toggle_all_button == null:
+		return
+	if _platform_buttons.is_empty():
+		_toggle_all_button.text = "Enable All"
+		_toggle_all_button.disabled = true
+	else:
+		_toggle_all_button.disabled = false
+		_toggle_all_button.text = "Disable All" if _selected_platforms.size() == _platform_buttons.size() else "Enable All"
 
 func _on_start_pressed() -> void:
 	if _selected_platforms.is_empty():
