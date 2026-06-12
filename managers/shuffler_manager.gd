@@ -22,7 +22,6 @@ var _main_window: Window = null
 var _pending_downloads: int = 0
 var _total_downloads: int = 0
 var _tools_dir: String = ""
-var _sfk_path: String = ""
 var _ahk_path: String = ""
 var _pssuspend_path: String = ""
 var _notification_id: int = -1
@@ -36,12 +35,16 @@ var _completed_download_bytes: int = 0
 
 const TEMP_DIR := "user://shuffler_temp/"
 
+const RETROARCH_SHUFFLER_CFG := {
+	"network_cmd_enable": "true",
+	"savestate_auto_load": "true",
+	"savestate_auto_save": "true",
+}
+
 func _ready():
 	_main_window = get_tree().root
-	var base_dir = OS.get_executable_path().get_base_dir()
-	_tools_dir = base_dir + "/bin/shuffler_tools/"
-	_sfk_path = _tools_dir + "sfk.exe"
-	_ahk_path = base_dir + "/bin/ahk/AutoHotkey64.exe"
+	_tools_dir = ProjectSettings.globalize_path("res://bin/shuffler_tools/")
+	_ahk_path = ProjectSettings.globalize_path("res://bin/ahk/AutoHotkey64.exe")
 	_pssuspend_path = _tools_dir + "pssuspend.exe"
 
 func _exit_tree():
@@ -124,6 +127,9 @@ func stop_session() -> void:
 		_controls_window.queue_free()
 		_controls_window = null
 
+	# Re-enable input to the main window now that the shuffler session is over.
+	get_tree().root.gui_disable_input = false
+
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	# Force window to front after restoring
 	DisplayServer.window_move_to_foreground()
@@ -162,7 +168,7 @@ func restart_game() -> void:
 		return
 	if _current_game_index >= 0:
 		var entry = _bag[_current_game_index]
-		_stop_game(entry)
+		await _stop_game(entry)
 		entry["started"] = false
 		entry["pid"] = -1
 		_launch_game(entry)
@@ -173,7 +179,7 @@ func remove_game() -> void:
 	if _current_game_index < 0:
 		return
 	var entry = _bag[_current_game_index]
-	_stop_game(entry)
+	await _stop_game(entry)
 	_reroll_entry(_current_game_index)
 	_switch_to_game(_current_game_index)
 
@@ -368,6 +374,14 @@ func _enter_shuffler_mode() -> void:
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 
 	_create_controls_window()
+	
+	# Block input to the main window while the shuffler is active.
+	# The controls window is its own viewport and still receives input.
+	get_tree().root.gui_disable_input = true
+	
+	# Ensure RetroArch is configured for shuffler UDP savestate behavior.
+	_ensure_retroarch_shuffler_config()
+	
 	session_started.emit()
 	_switch_to_game(0)
 
@@ -381,14 +395,22 @@ func _switch_to_game(index: int) -> void:
 	if _current_game_index >= 0 and _current_game_index < _bag.size():
 		var prev = _bag[_current_game_index]
 		prev["active"] = false
-		_stop_game(prev)
+		await _stop_game(prev)
 
 	_current_game_index = index
 	var entry = _bag[index]
 	entry["active"] = true
 
-	if entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
+	var method := entry.get("suspend_method", "suspend") as String
+	if method == "suspend" and entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
 		_resume_game(entry)
+	elif entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
+		# UDP/TCP emulators should have exited by now. Kill any lingering
+		# process before re-launching so we don't end up with two instances.
+		_force_kill_process(entry["pid"])
+		entry["started"] = false
+		entry["pid"] = -1
+		_launch_game(entry)
 	else:
 		entry["started"] = false
 		entry["pid"] = -1
@@ -437,12 +459,13 @@ func _stop_game(entry: Dictionary) -> void:
 	match method:
 		"udp":
 			_send_udp_command("localhost", 55355, "QUIT")
+			await get_tree().create_timer(0.5).timeout
 			_send_udp_command("localhost", 55355, "QUIT")
 		"tcp":
 			# Xemu: savevm then quit
 			var hash = str(entry["game"].romm_id)
-			_send_tcp_command("localhost", 4444, "savevm " + hash)
-			_send_tcp_command("localhost", 4444, "quit")
+			await _send_tcp_command("localhost", 4444, "savevm " + hash)
+			await _send_tcp_command("localhost", 4444, "quit")
 		"suspend", _:
 			_suspend_game(entry)
 
@@ -548,14 +571,42 @@ func _confirm_process_dead(pid: int) -> void:
 		elapsed += 0.2
 
 func _send_udp_command(host: String, port: int, command: String) -> void:
-	if FileAccess.file_exists(_sfk_path):
-		var output: Array[String] = []
-		OS.execute(_sfk_path, ["udpsend", host, str(port), command], output, true)
+	# PacketPeerUDP.connect_to_host requires an IP address, not a hostname.
+	var address := IP.resolve_hostname(host, IP.TYPE_IPV4)
+	if address.is_empty():
+		push_error("[ShufflerManager] Failed to resolve host: " + host)
+		return
+
+	var udp = PacketPeerUDP.new()
+	var err = udp.connect_to_host(address, port)
+	if err != OK:
+		push_error("[ShufflerManager] Failed to connect UDP to " + address + ":" + str(port))
+		return
+	udp.put_packet(command.to_utf8_buffer())
+	udp.close()
 
 func _send_tcp_command(host: String, port: int, command: String) -> void:
-	if FileAccess.file_exists(_sfk_path):
-		var output: Array[String] = []
-		OS.execute(_sfk_path, ["connect", host, str(port), "+send", command, "+receive", "1s"], output, true)
+	var tcp = StreamPeerTCP.new()
+	var err = tcp.connect_to_host(host, port)
+	if err != OK:
+		push_error("[ShufflerManager] Failed to connect TCP to " + host + ":" + str(port))
+		return
+	
+	# Wait for connection with timeout
+	var attempts = 0
+	while tcp.get_status() == StreamPeerTCP.STATUS_CONNECTING and attempts < 50:
+		await get_tree().process_frame
+		attempts += 1
+	
+	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		push_error("[ShufflerManager] TCP connection timed out to " + host + ":" + str(port))
+		return
+	
+	tcp.put_data((command + "\n").to_utf8_buffer())
+	
+	# Brief delay to ensure command is sent before disconnect
+	await get_tree().create_timer(0.1).timeout
+	tcp.disconnect_from_host()
 
 # ============================================================================
 # CONTROLS WINDOW
@@ -565,84 +616,56 @@ func _create_controls_window() -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
 
-	var win = Window.new()
-	win.title = "Shuffler"
-	win.size = Vector2i(56, 260)
-	win.borderless = true
-	win.always_on_top = true
-	win.unresizable = true
-	win.transient = false
-	win.position = Vector2i(16, DisplayServer.screen_get_size().y - 276)
-	
-	# Root control to hold everything
-	var root = Control.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	win.add_child(root)
-	
-	# Background panel
-	var panel = Panel.new()
-	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.1, 0.1, 0.12, 0.85)
-	style.corner_radius_top_left = 12
-	style.corner_radius_top_right = 12
-	style.corner_radius_bottom_left = 12
-	style.corner_radius_bottom_right = 12
-	panel.add_theme_stylebox_override("panel", style)
-	root.add_child(panel)
-	
-	# Button container
-	var vbox = VBoxContainer.new()
-	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 8)
-	root.add_child(vbox)
-	
-	# Pause/Resume button
-	var pause_btn = _create_ctrl_button("pause", "Pause")
-	pause_btn.pressed.connect(func():
-		if pause_btn.icon_name == "pause":
-			pause_btn.icon_name = "play"
-			pause_session()
-		else:
-			pause_btn.icon_name = "pause"
-			resume_session()
-	)
-	vbox.add_child(pause_btn)
-	
-	# Skip button
-	var skip_btn = _create_ctrl_button("skip-next", "Skip")
-	skip_btn.pressed.connect(skip_game)
-	vbox.add_child(skip_btn)
-	
-	# Restart button
-	var restart_btn = _create_ctrl_button("restart", "Restart")
-	restart_btn.pressed.connect(restart_game)
-	vbox.add_child(restart_btn)
-	
-	# Remove button
-	var remove_btn = _create_ctrl_button("shuffle-variant", "Reroll")
-	remove_btn.pressed.connect(remove_game)
-	vbox.add_child(remove_btn)
-	
-	# Stop button
-	var stop_btn = _create_ctrl_button("stop", "Stop")
-	stop_btn.pressed.connect(stop_session)
-	vbox.add_child(stop_btn)
-	
-	get_tree().root.add_child(win)
-	win.transient = false
-	win.popup()
-	
-	_controls_window = win
+	var scene = load("res://components/shuffler_controls_window.tscn")
+	if not scene:
+		push_error("[ShufflerManager] Failed to load controls window scene")
+		return
 
-func _create_ctrl_button(icon: String, tooltip: String) -> M3IconButton:
-	var btn = M3IconButton.new()
-	btn.icon_name = icon
-	btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
-	btn.icon_button_size = M3IconButton.IconSize.SMALL
-	btn.tooltip_text = tooltip
-	return btn
+	_controls_window = scene.instantiate()
+	_controls_window.pause_requested.connect(pause_session)
+	_controls_window.resume_requested.connect(resume_session)
+	_controls_window.skip_requested.connect(skip_game)
+	_controls_window.restart_requested.connect(restart_game)
+	_controls_window.remove_requested.connect(remove_game)
+	_controls_window.stop_requested.connect(stop_session)
+	
+	get_tree().root.add_child(_controls_window)
+	_controls_window.popup()
+
+# ============================================================================
+# RETROARCH CONFIG
+# ============================================================================
+
+func _ensure_retroarch_shuffler_config() -> void:
+	var edits: Array[Dictionary] = []
+	for key in RETROARCH_SHUFFLER_CFG:
+		var value: String = RETROARCH_SHUFFLER_CFG[key]
+		edits.append({
+			"old": r'%s\s*=\s*"[^"]*"' % key,
+			"new": '%s = "%s"' % [key, value],
+			"regex": true,
+		})
+	
+	if not LaunchManager.edit_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg", edits, true):
+		push_error("[ShufflerManager] Failed to apply retroarch.cfg edits")
+		return
+	
+	# Append any keys that are still missing.
+	var cfg_path := FSM.resolve_emulator_path("{emulator_dir}/retroarch.cfg", "retroarch")
+	if cfg_path == "":
+		return
+	var content := FSM.read_file(cfg_path)
+	for key in RETROARCH_SHUFFLER_CFG:
+		var value: String = RETROARCH_SHUFFLER_CFG[key]
+		var regex := RegEx.new()
+		regex.compile(r'%s\s*=\s*"[^"]*"' % key)
+		if regex.search(content) == null:
+			if not content.is_empty() and not content.ends_with("\n"):
+				content += "\n"
+			content += '%s = "%s"\n' % [key, value]
+	
+	if not FSM.write_file(cfg_path, content):
+		push_error("[ShufflerManager] Failed to write retroarch.cfg")
 
 # ============================================================================
 # CLEANUP

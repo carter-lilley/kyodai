@@ -1037,8 +1037,10 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	# Optional: Remove overlay
 	# UIManager.set_dimmed(false)
 	
-	# Auto-upload saves after playing
-	if _game:
+	# Auto-upload saves after playing (skip during shuffler sessions)
+	if ShufflerManager.is_session_active():
+		print("[Main] Auto-upload skipped: shuffler session active")
+	elif _game:
 		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
 		print("[Main] Auto-upload check - emulator_id: " + emulator_id)
 		if emulator_id != "":

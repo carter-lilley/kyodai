@@ -8,76 +8,60 @@ signal restart_requested()
 signal remove_requested()
 signal stop_requested()
 
-var _pause_btn: M3IconButton
+@onready var _pause_btn: M3IconButton = $Root/M3ButtonGroup/PauseButton
+@onready var _button_group: M3ButtonGroup = $Root/M3ButtonGroup
+
 var _is_paused: bool = false
 
 func _ready():
-	# Window configuration
-	borderless = true
-	always_on_top = true
-	unresizable = true
-	size = Vector2i(64, 320)
-	position = Vector2i(16, DisplayServer.screen_get_size().y - 336)
+	# Size the window to exactly fit the connected button column.
+	var count := _button_group.get_child_count()
+	if count > 0:
+		var btn := _button_group.get_child(0) as Control
+		var sep := _button_group.get_theme_constant("separation")
+		var width := int(btn.custom_minimum_size.x)
+		var height := int(btn.custom_minimum_size.y) * count + sep * (count - 1)
+		size = Vector2i(width, height)
 	
-	# Create container
-	var vbox = VBoxContainer.new()
-	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 8)
-	add_child(vbox)
+	# Position the palette in the bottom-left of the desktop.
+	var screen_size := DisplayServer.screen_get_size()
+	position = Vector2i(16, screen_size.y - size.y - 16)
 	
-	# Pause/Resume button
-	_pause_btn = _create_icon_button("pause", "Pause")
-	_pause_btn.pressed.connect(_on_pause_pressed)
-	vbox.add_child(_pause_btn)
-	
-	# Skip button
-	var skip_btn = _create_icon_button("skip-next", "Skip")
-	skip_btn.pressed.connect(skip_requested.emit)
-	vbox.add_child(skip_btn)
-	
-	# Restart button
-	var restart_btn = _create_icon_button("restart", "Restart")
-	restart_btn.pressed.connect(restart_requested.emit)
-	vbox.add_child(restart_btn)
-	
-	# Remove button
-	var remove_btn = _create_icon_button("shuffle-variant", "Reroll")
-	remove_btn.pressed.connect(remove_requested.emit)
-	vbox.add_child(remove_btn)
-	
-	# Stop button
-	var stop_btn = _create_icon_button("stop", "Stop")
-	stop_btn.pressed.connect(stop_requested.emit)
-	vbox.add_child(stop_btn)
-	
-	# Style the window background
-	var panel = Panel.new()
-	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.1, 0.1, 0.12, 0.85)
-	style.corner_radius_top_left = 12
-	style.corner_radius_top_right = 12
-	style.corner_radius_bottom_left = 12
-	style.corner_radius_bottom_right = 12
-	panel.add_theme_stylebox_override("panel", style)
-	vbox.add_child(panel)
-	vbox.move_child(panel, 0)
+	# Connect button signals via the button group
+	for i in range(count):
+		var btn = _button_group.get_child(i)
+		if btn is Button:
+			btn.pressed.connect(_on_button_pressed.bind(i))
 
-func _create_icon_button(icon: String, tooltip: String) -> M3IconButton:
-	var btn = M3IconButton.new()
-	btn.icon_name = icon
-	btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
-	btn.icon_button_size = M3IconButton.IconSize.LARGE
-	btn.tooltip_text = tooltip
-	btn.custom_minimum_size = Vector2(48, 48)
-	return btn
+	# Focus the first button once the window is shown.
+	visibility_changed.connect(_on_visibility_changed)
+	_focus_first_button.call_deferred()
 
-func _on_pause_pressed():
-	_is_paused = not _is_paused
-	if _is_paused:
-		_pause_btn.icon_name = "play"
-		pause_requested.emit()
-	else:
-		_pause_btn.icon_name = "pause"
-		resume_requested.emit()
+func _on_visibility_changed() -> void:
+	if visible:
+		_focus_first_button()
+
+func _focus_first_button() -> void:
+	if _button_group.get_child_count() == 0:
+		return
+	var first := _button_group.get_child(0) as Control
+	if first and first.is_visible_in_tree() and not first.has_focus():
+		first.grab_focus()
+
+func _on_button_pressed(index: int):
+	match index:
+		0:  # Pause/Resume
+			_is_paused = not _is_paused
+			_pause_btn.icon_name = "play" if _is_paused else "pause"
+			if _is_paused:
+				pause_requested.emit()
+			else:
+				resume_requested.emit()
+		1:  # Skip
+			skip_requested.emit()
+		2:  # Restart
+			restart_requested.emit()
+		3:  # Reroll
+			remove_requested.emit()
+		4:  # Stop
+			stop_requested.emit()

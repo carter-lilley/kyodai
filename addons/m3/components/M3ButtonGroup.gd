@@ -1,11 +1,12 @@
 @tool
 class_name M3ButtonGroup
-extends HBoxContainer
+extends BoxContainer
 
 ## Material 3 Button Group Component
 ## Manages M3Button and M3IconButton children as a cohesive group.
 ## Supports standard (spaced) and connected visual modes,
 ## single-select and multi-select interaction modes, and round/square shapes.
+## Supports both horizontal and vertical orientations.
 
 enum Mode { STANDARD, CONNECTED }
 enum SelectMode { SINGLE, MULTI, NONE }
@@ -254,10 +255,10 @@ func _update_button_states():
 # ============================================
 
 func _get_button_size_index(btn: Button) -> int:
-	if btn is M3Button:
-		return int(btn.button_size)
-	elif btn is M3IconButton:
+	if btn is M3IconButton:
 		return int(btn.icon_button_size)
+	elif btn is M3Button:
+		return int(btn.button_size)
 	return 2  # Default to MEDIUM
 
 # ============================================
@@ -307,47 +308,92 @@ func _update_connected_corners():
 			# Round connected: outer = fully round (pill), inner = listed size
 			var outer_radius = _get_pill_radius(btn)
 			
-			if i == 0:
-				# First button: round left side
-				tl = outer_radius
-				bl = outer_radius
-				# Right side: inner corner size
-				tr = inner_radius
-				br = inner_radius
-			elif i == count - 1:
-				# Last button: round right side
-				tr = outer_radius
-				br = outer_radius
-				# Left side: inner corner size
-				tl = inner_radius
-				bl = inner_radius
+			if vertical:
+				# Vertical: first=top, last=bottom
+				if i == 0:
+					# First button: round top side
+					tl = outer_radius
+					tr = outer_radius
+					# Bottom side: inner corner size
+					bl = inner_radius
+					br = inner_radius
+				elif i == count - 1:
+					# Last button: round bottom side
+					bl = outer_radius
+					br = outer_radius
+					# Top side: inner corner size
+					tl = inner_radius
+					tr = inner_radius
+				else:
+					# Middle buttons: inner corner size on all corners
+					tl = inner_radius
+					tr = inner_radius
+					bl = inner_radius
+					br = inner_radius
 			else:
-				# Middle buttons: inner corner size on all corners
-				tl = inner_radius
-				tr = inner_radius
-				bl = inner_radius
-				br = inner_radius
+				# Horizontal: first=left, last=right
+				if i == 0:
+					# First button: round left side
+					tl = outer_radius
+					bl = outer_radius
+					# Right side: inner corner size
+					tr = inner_radius
+					br = inner_radius
+				elif i == count - 1:
+					# Last button: round right side
+					tr = outer_radius
+					br = outer_radius
+					# Left side: inner corner size
+					tl = inner_radius
+					bl = inner_radius
+				else:
+					# Middle buttons: inner corner size on all corners
+					tl = inner_radius
+					tr = inner_radius
+					bl = inner_radius
+					br = inner_radius
 		else:
 			# Square connected: outer = listed size, inner = 0 (square)
 			var outer_radius = inner_radius  # Same lookup for square outer
 			
-			if i == 0:
-				# First button: outer size on left, 0 on right
-				tl = outer_radius
-				bl = outer_radius
-				# Right side: square (0)
-				tr = 0
-				br = 0
-			elif i == count - 1:
-				# Last button: outer size on right, 0 on left
-				tr = outer_radius
-				br = outer_radius
-				# Left side: square (0)
-				tl = 0
-				bl = 0
+			if vertical:
+				# Vertical: first=top, last=bottom
+				if i == 0:
+					# First button: outer size on top, 0 on bottom
+					tl = outer_radius
+					tr = outer_radius
+					# Bottom side: square (0)
+					bl = 0
+					br = 0
+				elif i == count - 1:
+					# Last button: outer size on bottom, 0 on top
+					bl = outer_radius
+					br = outer_radius
+					# Top side: square (0)
+					tl = 0
+					tr = 0
+				else:
+					# Middle buttons: all square (0)
+					pass  # All remain 0
 			else:
-				# Middle buttons: all square (0)
-				pass  # All remain 0
+				# Horizontal: first=left, last=right
+				if i == 0:
+					# First button: outer size on left, 0 on right
+					tl = outer_radius
+					bl = outer_radius
+					# Right side: square (0)
+					tr = 0
+					br = 0
+				elif i == count - 1:
+					# Last button: outer size on right, 0 on left
+					tr = outer_radius
+					br = outer_radius
+					# Left side: square (0)
+					tl = 0
+					bl = 0
+				else:
+					# Middle buttons: all square (0)
+					pass  # All remain 0
 		
 		_set_button_corners(btn, tl, tr, bl, br)
 

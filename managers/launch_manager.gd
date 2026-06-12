@@ -1415,7 +1415,7 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 		if on_pid_ready.is_valid():
 			on_pid_ready.call(pid)
 	
-	var ready = await _ensure_prerequisites(game, emulator_id, on_ready)
+	var ready = await _ensure_prerequisites(game, emulator_id, on_ready, false)
 	if not ready:
 		return  # Download pending, callback will handle it
 	# If ready, on_ready was already called
@@ -1506,7 +1506,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 ## Ensures emulator is installed, firmware is ready, and game is prepared.
 ## Returns true if everything is ready and on_ready was called.
 ## Returns false if a download was started (caller should return and wait for callback).
-func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable) -> bool:
+func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable, prepare_game: bool = true) -> bool:
 	var emulator = get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
 	
@@ -1582,14 +1582,17 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		
 		return false
 	
-	# Emulator and firmware are ready - prepare game
-	print("[LaunchManager] _ensure_prerequisites: Preparing game for emulator: " + emulator_id)
-	var prep_success = await _prepare_game_for_launch(game, emulator_id)
-	if not prep_success:
-		push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
-		NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
-		return false
-	print("[LaunchManager] _ensure_prerequisites: Game preparation complete")
+	if prepare_game:
+		# Emulator and firmware are ready - prepare game
+		print("[LaunchManager] _ensure_prerequisites: Preparing game for emulator: " + emulator_id)
+		var prep_success = await _prepare_game_for_launch(game, emulator_id)
+		if not prep_success:
+			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
+			NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
+			return false
+		print("[LaunchManager] _ensure_prerequisites: Game preparation complete")
+	else:
+		print("[LaunchManager] _ensure_prerequisites: Skipping game preparation (shuffler session)")
 	
 	on_ready.call()
 	return true
@@ -2952,6 +2955,56 @@ func _handle_create_pcsx2_superblock_step(emulator_id: String, step_name: String
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
+## Apply a set of text replacements to an emulator-relative config file.
+## Each edit is a Dictionary with "old" and "new". Set "regex": true to treat
+## "old" as a RegEx pattern. If create_if_missing is true, the file is created
+## when it doesn't exist.
+func edit_emulator_file(emulator_id: String, file_path: String, edits: Array, create_if_missing := false) -> bool:
+	if emulator_id == "" or file_path == "" or edits.is_empty():
+		push_error("[LaunchManager] Invalid arguments for edit_emulator_file")
+		return false
+	
+	var full_path := FSM.resolve_emulator_path(file_path, emulator_id)
+	if full_path == "":
+		push_error("[LaunchManager] Could not resolve emulator path: " + file_path)
+		return false
+	
+	if not FSM.file_exists(full_path):
+		if create_if_missing:
+			if not FSM.write_file(full_path, ""):
+				push_error("[LaunchManager] Failed to create file: " + full_path)
+				return false
+		else:
+			push_error("[LaunchManager] File not found for editing: " + full_path)
+			return false
+	
+	var content := FSM.read_file(full_path)
+	# Empty content is allowed so missing keys can be appended later.
+	
+	for edit in edits:
+		var old_text: String = edit.get("old", "")
+		var new_text: String = edit.get("new", "")
+		
+		if old_text == "":
+			continue
+		
+		if edit.get("regex", false):
+			var regex := RegEx.new()
+			var err := regex.compile(old_text)
+			if err != OK:
+				push_error("[LaunchManager] Invalid regex in edit: " + old_text)
+				continue
+			content = regex.sub(content, new_text, true)
+		else:
+			content = content.replace(old_text, new_text)
+	
+	if not FSM.write_file(full_path, content):
+		push_error("[LaunchManager] Failed to write edited file: " + full_path)
+		return false
+	
+	return true
+
+
 ## Helper function for edit_file action
 func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var file_path = platform_config.get("file", "")
@@ -2960,28 +3013,7 @@ func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index:
 	if file_path == "" or edits.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
-	var full_path = FSM.resolve_emulator_path(file_path, emulator_id)
-	
-	if not FSM.file_exists(full_path):
-		push_error("[LaunchManager] File not found for editing: " + full_path)
-		return false
-	
-	var content = FSM.read_file(full_path)
-	if content == "":
-		push_error("[LaunchManager] Failed to read file for editing: " + full_path)
-		return false
-	
-	for edit in edits:
-		var old_text = edit.get("old", "")
-		var new_text = edit.get("new", "")
-		
-		if old_text == "":
-			continue
-		
-		content = content.replace(old_text, new_text)
-	
-	if not FSM.write_file(full_path, content):
-		push_error("[LaunchManager] Failed to write edited file: " + full_path)
+	if not edit_emulator_file(emulator_id, file_path, edits, false):
 		return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)

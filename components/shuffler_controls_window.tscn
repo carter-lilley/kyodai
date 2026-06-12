@@ -1,10 +1,101 @@
 [gd_scene format=3 uid="uid://bbu72xot2222p"]
 
-[ext_resource type="Script" path="res://components/shuffler_controls_window.gd" id="1_ctrl"]
+[ext_resource type="Script" uid="uid://q17trlk114ri" path="res://components/shuffler_controls_window.gd" id="1_ctrl"]
+[ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="2_group"]
+[ext_resource type="Script" uid="uid://ca1nbgxeetvm3" path="res://addons/m3/components/M3IconButton.gd" id="3_icon"]
 
 [node name="ShufflerControlsWindow" type="Window"]
-size = Vector2i(64, 320)
+unresizable = true
 borderless = true
 always_on_top = true
-unresizable = true
+transparent = true
+transparent_bg = true
 script = ExtResource("1_ctrl")
+
+[node name="Root" type="Control" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="M3ButtonGroup" type="VBoxContainer" parent="Root"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+script = ExtResource("2_group")
+mode = 1
+select_mode = 2
+shape = 0
+metadata/_custom_type_script = "uid://dc5stkkoubv5o"
+
+[node name="PauseButton" type="Button" parent="Root/M3ButtonGroup"]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+toggle_mode = true
+button_pressed = true
+script = ExtResource("3_icon")
+icon_button_size = 1
+icon_button_variant = 1
+button_type = 1
+icon_name = "pause"
+m3_tooltip_text = "Pause / Resume"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+metadata/m3_tooltip_text = "Pause / Resume"
+metadata/m3_tooltip_variant = 0
+
+[node name="SkipButton" type="Button" parent="Root/M3ButtonGroup"]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+script = ExtResource("3_icon")
+icon_button_size = 1
+icon_button_variant = 1
+icon_name = "skip-next"
+m3_tooltip_text = "Skip"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+metadata/m3_tooltip_text = "Skip"
+metadata/m3_tooltip_variant = 0
+
+[node name="RestartButton" type="Button" parent="Root/M3ButtonGroup"]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+script = ExtResource("3_icon")
+icon_button_size = 1
+icon_button_variant = 1
+icon_name = "restart"
+m3_tooltip_text = "Restart"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+metadata/m3_tooltip_text = "Restart"
+metadata/m3_tooltip_variant = 0
+
+[node name="ShuffleButton" type="Button" parent="Root/M3ButtonGroup"]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+script = ExtResource("3_icon")
+icon_button_size = 1
+icon_button_variant = 1
+icon_name = "shuffle-variant"
+m3_tooltip_text = "Reroll"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+metadata/m3_tooltip_text = "Reroll"
+metadata/m3_tooltip_variant = 0
+
+[node name="StopButton" type="Button" parent="Root/M3ButtonGroup"]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+script = ExtResource("3_icon")
+icon_button_size = 1
+icon_button_variant = 1
+icon_name = "stop"
+m3_tooltip_text = "Stop"
+metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
+metadata/m3_tooltip_text = "Stop"
+metadata/m3_tooltip_variant = 0
