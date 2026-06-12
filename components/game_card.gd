@@ -45,6 +45,18 @@ var _badge_update_pending: bool = false
 const STATUS_BADGE_SIZE_RATIO: float = 0.04
 const STATUS_BADGE_MARGIN_RATIO: float = 0.05
 
+# Platform badge icon assets
+const PLATFORM_ICON_DIR := "res://assets/icons/platforms"
+const PLATFORM_ICON_MAP := {
+	"psx": "ps",
+	"ps4": "ps4--1",
+	"genesis": "genesis-slash-megadrive",
+	"tg16": "turbografx16--1",
+	"turbografx-cd": "turbografx16--1",
+}
+static var _platform_icon_cache: Dictionary = {}
+static var _platform_icon_missing_warnings: Dictionary = {}
+
 # Focus
 const FOCUS_TWEEN_DURATION: float = 0.12
 const FOCUS_EFFECT_FADE_DURATION: float = 0.15
@@ -585,58 +597,48 @@ func _update_status_icon():
 	_update_status_badge_layout()
 	_update_status_badge_style()
 
-func _update_platform_badge():
-	if not _media_stack:
+func _resolve_platform_icon_name(slug: String) -> String:
+	return PLATFORM_ICON_MAP.get(slug, slug)
+
+
+func _get_platform_icon_texture(slug: String, is_wordmark: bool) -> Texture2D:
+	if slug.is_empty():
+		return null
+
+	var filename := _resolve_platform_icon_name(slug)
+	var prefix := "wordmark_" if is_wordmark else "icon_"
+	var path := PLATFORM_ICON_DIR + "/" + prefix + filename + ".png"
+
+	if _platform_icon_cache.has(path):
+		return _platform_icon_cache[path]
+
+	if not ResourceLoader.exists(path):
+		return null
+
+	var tex := load(path) as Texture2D
+	if tex:
+		_platform_icon_cache[path] = tex
+	return tex
+
+
+func _apply_badge_settings(badge: BadgeEffect, badge_type: int, icon_texture: Texture2D, badge_size_setting: float, inner_radius_setting: float) -> void:
+	if not badge:
 		return
-	
-	var normal_badge = _media_stack.get_effect("badge") as BadgeEffect
-	if not normal_badge:
-		return
-	
-	if not game:
-		normal_badge.set_icon_texture(null)
-		return
-	
-	var platform_slug = game.platform_slug
-	var icon_texture: Texture2D = null
-	
-	var badge_config := {}
-	for effect_data in _media_container.effect_settings:
-		if effect_data is Dictionary and effect_data.get("effect_id") == "badge":
-			badge_config = effect_data
-			break
-	
-	var settings = badge_config.get("settings", {})
-	var badge_type = settings.get("badge_type", 0)
-	var badge_size_setting = settings.get("badge_size", 1.0)
-	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
-	
+
 	var card_width = _media_container.size.x
 	var corner_radius_pixels = _media_container.get_corner_radius_pixels()
 	var total_inset = _media_container.get_total_inset_pixels()
 	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
-	
-	if platform_slug:
-		if badge_type == 1:
-			var wordmark_path = "res://assets/platforms/wordmark/wordmark_" + platform_slug + ".png"
-			if ResourceLoader.exists(wordmark_path):
-				var wordmark_tex = load(wordmark_path)
-				if wordmark_tex:
-					icon_texture = wordmark_tex
-		else:
-			var icon_path = "res://assets/platforms/icon/icon_%s.png" % platform_slug
-			if ResourceLoader.exists(icon_path):
-				icon_texture = load(icon_path)
-	
+
 	var texture_aspect = 1.0
 	if icon_texture:
 		var tex_size = icon_texture.get_size()
 		texture_aspect = tex_size.x / tex_size.y if tex_size.y > 0 else 1.0
 		if badge_type != 1:
 			texture_aspect = 1.0
-	
+
 	const BADGE_SIZE_RATIO: float = 0.16
-	
+
 	if badge_type == 1:
 		var base_badge_size = BADGE_SIZE_RATIO * card_width
 		var top_bar_max_size = card_width * 0.25
@@ -645,16 +647,16 @@ func _update_platform_badge():
 		var top_bar_safe_width = (card_width - total_inset * 2) - (effective_corner_radius * 2)
 		var top_bar_safe_y = total_inset
 		var top_bar_safe_height = bar_height
-		
-		normal_badge.set_badge_dimensions(Vector2(card_width, bar_height))
-		normal_badge.set_border_inset_pixels(total_inset)
-		normal_badge.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
+
+		badge.set_badge_dimensions(Vector2(card_width, bar_height))
+		badge.set_border_inset_pixels(total_inset)
+		badge.set_safe_zone_top_bar(top_bar_safe_x, top_bar_safe_y, top_bar_safe_width, top_bar_safe_height, false)
 	else:
 		var raw_badge_size = BADGE_SIZE_RATIO * card_width * badge_size_setting
 		var min_badge_size = card_width * 0.15
 		var max_badge_size = card_width * 0.45
 		var target_badge_size = clamp(raw_badge_size, min_badge_size, max_badge_size)
-		
+
 		var badge_width: float
 		var badge_height: float
 		if texture_aspect >= 1.0:
@@ -663,7 +665,7 @@ func _update_platform_badge():
 		else:
 			badge_width = target_badge_size
 			badge_height = target_badge_size / texture_aspect
-		
+
 		var corner_midpoint_factor = 1.0 - sqrt(2.0) / 2.0
 		var corner_margin = effective_corner_radius * corner_midpoint_factor
 		var base_min_dim = min(badge_width, badge_height)
@@ -671,17 +673,60 @@ func _update_platform_badge():
 		var inner_corner_margin = base_inner_corner * corner_midpoint_factor
 		var max_corner_margin = badge_width * 0.8
 		var clamped_corner_margin = min(corner_margin, max_corner_margin)
-		
+
 		var safe_x = total_inset + clamped_corner_margin
 		var safe_y = total_inset + clamped_corner_margin
 		var safe_width = max(badge_width - clamped_corner_margin - inner_corner_margin, 0.0)
 		var safe_height = max(badge_height - clamped_corner_margin - inner_corner_margin, 0.0)
-		
-		normal_badge.set_badge_dimensions(Vector2(badge_width, badge_height))
-		normal_badge.set_border_inset_pixels(total_inset)
-		normal_badge.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
-	
-	normal_badge.set_icon_texture(icon_texture)
+
+		badge.set_badge_dimensions(Vector2(badge_width, badge_height))
+		badge.set_border_inset_pixels(total_inset)
+		badge.set_safe_zone(safe_x, safe_y, safe_width, safe_height, false)
+
+	badge.set_icon_texture(icon_texture)
+
+
+func _update_platform_badge():
+	if not _media_stack:
+		return
+
+	var normal_badge = _media_stack.get_effect("badge") as BadgeEffect
+	if not normal_badge:
+		return
+
+	if not game:
+		normal_badge.set_icon_texture(null)
+		var focus_badge_clear = _focus_stack.get_effect("badge") as BadgeEffect if _focus_stack else null
+		if focus_badge_clear:
+			focus_badge_clear.set_icon_texture(null)
+		return
+
+	var platform_slug = game.platform_slug
+	var icon_texture: Texture2D = null
+
+	var badge_config := {}
+	for effect_data in _media_container.effect_settings:
+		if effect_data is Dictionary and effect_data.get("effect_id") == "badge":
+			badge_config = effect_data
+			break
+
+	var settings = badge_config.get("settings", {})
+	var badge_type = settings.get("badge_type", 0)
+	var badge_size_setting = settings.get("badge_size", 1.0)
+	var inner_radius_setting = settings.get("badge_inner_radius", 0.0)
+
+	if platform_slug:
+		icon_texture = _get_platform_icon_texture(platform_slug, badge_type == 1)
+
+		if not icon_texture and not _platform_icon_missing_warnings.has(platform_slug):
+			_platform_icon_missing_warnings[platform_slug] = true
+			push_warning("GameCard: No platform icon found for slug '%s' (looked in %s)" % [platform_slug, PLATFORM_ICON_DIR])
+
+	_apply_badge_settings(normal_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting)
+
+	var focus_badge = _focus_stack.get_effect("badge") as BadgeEffect if _focus_stack else null
+	if focus_badge:
+		_apply_badge_settings(focus_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting)
 
 func _load_cover(high_priority: bool = false):
 	if not game:

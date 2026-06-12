@@ -18,6 +18,7 @@ var _current_game_index: int = -1
 var _round_timer: Timer = null
 var _config: Dictionary = {}
 var _controls_window: Node = null
+var _controls_topmost_timer: Timer = null
 var _main_window: Window = null
 var _pending_downloads: int = 0
 var _total_downloads: int = 0
@@ -137,6 +138,7 @@ func stop_session() -> void:
 	LaunchManager.restore_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg")
 	LaunchManager.restore_emulator_file("pcsx2", PCSX2_SHUFFLER_INI_PATH)
 
+	_stop_controls_topmost_timer()
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
 		_controls_window = null
@@ -570,13 +572,17 @@ func _hide_window(pid: int, exe_name: String) -> void:
 		OS.execute(_ahk_path, [ahk_script, str(pid), exe_name], output, true)
 
 func _maximize_with_retry(pid: int) -> void:
+	var maximized := false
 	for i in range(3):
 		print("[ShufflerManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
 		if _maximize_window(pid):
 			print("[ShufflerManager] pid " + str(pid) + " maximized successfully")
-			return
+			maximized = true
+			break
 		await get_tree().create_timer(0.5).timeout
-	push_error("[ShufflerManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
+	if not maximized:
+		push_error("[ShufflerManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
+	_raise_controls_window()
 
 func _maximize_window(pid: int) -> bool:
 	var ahk_script = _tools_dir + "maximize_process.ahk"
@@ -667,6 +673,34 @@ func _create_controls_window() -> void:
 	
 	get_tree().root.add_child(_controls_window)
 	_controls_window.popup()
+	_raise_controls_window()
+	_start_controls_topmost_timer()
+	print("[ShufflerManager] Controls palette created: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
+
+func _raise_controls_window() -> void:
+	if not _controls_window or not is_instance_valid(_controls_window):
+		return
+	var window_id: int = _controls_window.get_window_id()
+	if window_id == DisplayServer.INVALID_WINDOW_ID:
+		return
+	DisplayServer.window_move_to_foreground(window_id)
+
+func _start_controls_topmost_timer() -> void:
+	_stop_controls_topmost_timer()
+	if not _controls_window or not is_instance_valid(_controls_window):
+		return
+	_controls_topmost_timer = Timer.new()
+	_controls_topmost_timer.wait_time = 0.5
+	_controls_topmost_timer.one_shot = false
+	_controls_topmost_timer.timeout.connect(_raise_controls_window)
+	add_child(_controls_topmost_timer)
+	_controls_topmost_timer.start()
+
+func _stop_controls_topmost_timer() -> void:
+	if _controls_topmost_timer and is_instance_valid(_controls_topmost_timer):
+		_controls_topmost_timer.stop()
+		_controls_topmost_timer.queue_free()
+		_controls_topmost_timer = null
 
 # ============================================================================
 # RETROARCH CONFIG

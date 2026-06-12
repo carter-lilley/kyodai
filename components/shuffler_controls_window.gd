@@ -14,6 +14,9 @@ signal stop_requested()
 var _is_paused: bool = false
 
 func _ready():
+	# Keep the palette visible even when the main launcher window is minimized.
+	transient = false
+
 	# Size the window to exactly fit the connected button column.
 	var count := _button_group.get_child_count()
 	if count > 0:
