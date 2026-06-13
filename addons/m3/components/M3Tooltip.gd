@@ -51,6 +51,7 @@ var _label: Label
 var _rich_label: RichTextLabel
 var _bg_panel: Panel
 var _anchor_start_pos: Vector2 = Vector2.ZERO
+var _movement_timer: Timer = null
 
 # ============================================
 # STATIC BIND API
@@ -173,12 +174,31 @@ func _ready():
 	_create_visuals()
 	_position_and_show()
 
-func _process(_delta):
-	# Dismiss if anchor has moved (e.g., page scrolled)
+func _start_movement_timer() -> void:
+	if _movement_timer != null:
+		return
+	_movement_timer = Timer.new()
+	_movement_timer.wait_time = 0.1
+	_movement_timer.timeout.connect(_check_anchor_moved)
+	add_child(_movement_timer)
+	_movement_timer.start()
+
+func _stop_movement_timer() -> void:
+	if _movement_timer != null and is_instance_valid(_movement_timer):
+		_movement_timer.stop()
+		_movement_timer.queue_free()
+	_movement_timer = null
+
+func _check_anchor_moved() -> void:
 	if not visible or _anchor_node == null or not is_instance_valid(_anchor_node):
+		dismiss()
 		return
 	if _anchor_node.global_position.distance_to(_anchor_start_pos) > 1.0:
 		dismiss()
+
+func dismiss() -> void:
+	_stop_movement_timer()
+	super.dismiss()
 
 func _create_visuals():
 	# Background panel
@@ -208,6 +228,7 @@ func _position_and_show():
 	# Store anchor starting position for scroll dismissal
 	if _anchor_node and is_instance_valid(_anchor_node):
 		_anchor_start_pos = _anchor_node.global_position
+	_start_movement_timer()
 	
 	# Rich tooltips need text set BEFORE measurement (get_content_height)
 	if _tooltip_variant == Variant.RICH:

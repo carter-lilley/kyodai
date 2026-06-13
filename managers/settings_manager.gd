@@ -220,6 +220,7 @@ const BUILTIN_PRESET_FILES: Array[String] = [
 	"CafeOS.tres",
 	"Default.tres",
 	"Horizon3D.tres",
+	"Horizon3D_(Dark).tres",
 	"Horizon_(Dark).tres",
 	"Horizon_(Light).tres",
 	"LiveArea.tres",

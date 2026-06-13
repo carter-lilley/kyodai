@@ -84,7 +84,7 @@ func _build_header() -> HBoxContainer:
 	_back_btn = M3IconButton.new()
 	_back_btn.icon_button_size = M3IconButton.IconSize.SMALL
 	_back_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
-	_back_btn.icon_name = "arrow-back"
+	_back_btn.icon_name = "chevron-left"
 	_back_btn.visible = false
 	header.add_child(_back_btn)
 	
@@ -115,7 +115,13 @@ func _update_appearance():
 		return
 	
 	var style = _sheet_container.get_theme_stylebox("panel")
-	if not style is StyleBoxFlat:
+	if style is StyleBoxFlat:
+		# Duplicate so each sheet instance has its own stylebox. Without this,
+		# corner-radius changes in one sheet (side vs bottom) leak to others
+		# because theme styleboxes are shared Resources.
+		style = style.duplicate()
+		_sheet_container.add_theme_stylebox_override("panel", style)
+	elif not style is StyleBoxFlat:
 		style = StyleBoxFlat.new()
 		style.anti_aliasing = true
 		style.anti_aliasing_size = 1.0

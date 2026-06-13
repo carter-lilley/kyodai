@@ -48,10 +48,6 @@ func _connect_ayn_thor_signals() -> void:
 	if _ayn_thor_manager and _ayn_thor_manager.has_signal("screens_swapped"):
 		_ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
 
-func _process(_delta: float) -> void:
-	if _subviewport_dual_screen_active:
-		_check_subviewport_size_changes()
-
 func _initialize_display_detection() -> void:
 	"""Initialize dual screen detection based on platform."""
 	# Check if we're on Android and get plugin reference
@@ -94,24 +90,28 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 			# Trigger a display check when dual screen setting changes
 			_check_for_dual_screen()
 
-func _check_subviewport_size_changes() -> void:
+func _connect_subviewport_signals() -> void:
 	var ds = get_node_or_null("/root/Main/DualScreenSetup")
 	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
 	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
 	
-	var main_changed = false
-	var second_changed = false
+	if main_viewport and not main_viewport.size_changed.is_connected(_on_subviewport_size_changed):
+		main_viewport.size_changed.connect(_on_subviewport_size_changed)
+	if second_viewport and not second_viewport.size_changed.is_connected(_on_subviewport_size_changed):
+		second_viewport.size_changed.connect(_on_subviewport_size_changed)
+
+func _disconnect_subviewport_signals() -> void:
+	var ds = get_node_or_null("/root/Main/DualScreenSetup")
+	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
+	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
 	
-	if main_viewport and main_viewport.size != _last_main_viewport_size:
-		_last_main_viewport_size = main_viewport.size
-		main_changed = true
-	
-	if second_viewport and second_viewport.size != _last_second_viewport_size:
-		_last_second_viewport_size = second_viewport.size
-		second_changed = true
-	
-	if main_changed or second_changed:
-		_apply_subviewport_scale(_saved_ui_scale)
+	if main_viewport and main_viewport.size_changed.is_connected(_on_subviewport_size_changed):
+		main_viewport.size_changed.disconnect(_on_subviewport_size_changed)
+	if second_viewport and second_viewport.size_changed.is_connected(_on_subviewport_size_changed):
+		second_viewport.size_changed.disconnect(_on_subviewport_size_changed)
+
+func _on_subviewport_size_changed() -> void:
+	_apply_subviewport_scale(_saved_ui_scale)
 
 func _apply_subviewport_scale(scale: float) -> void:
 	if scale <= 0:
@@ -158,14 +158,15 @@ func enter_subviewport_dual_screen_mode() -> void:
 	if _subviewport_dual_screen_active:
 		return
 	_subviewport_dual_screen_active = true
-	#_apply_ui_scale()
+	_connect_subviewport_signals()
+	_apply_subviewport_scale(_saved_ui_scale)
 
 func exit_subviewport_dual_screen_mode() -> void:
 	if not _subviewport_dual_screen_active:
 		return
 	_subviewport_dual_screen_active = false
+	_disconnect_subviewport_signals()
 	_clear_subviewport_scale()
-	#_apply_ui_scale()
 
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]

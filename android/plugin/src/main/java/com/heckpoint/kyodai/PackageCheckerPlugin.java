@@ -66,6 +66,8 @@ public class PackageCheckerPlugin extends GodotPlugin {
     public Set<SignalInfo> getPluginSignals() {
         Set<SignalInfo> signals = new HashSet<>();
         signals.add(new SignalInfo("extraction_complete", Boolean.class, String.class, String.class));
+        signals.add(new SignalInfo("copy_progress", String.class, Long.class, Long.class));
+        signals.add(new SignalInfo("copy_complete", String.class, Boolean.class, String.class, String.class));
         return signals;
     }
     
@@ -854,6 +856,116 @@ public class PackageCheckerPlugin extends GodotPlugin {
             
             return false;
         }
+    }
+    
+    /**
+     * Copies a file asynchronously, emitting progress and completion signals.
+     * Used for the final copy from the app-private temp dir to the destination,
+     * including restricted /Android/data/ paths via DocumentsContract.
+     * 
+     * @param sourcePath Source file path (must be directly readable)
+     * @param destPath Destination file path
+     * @param itemName Display name for signals
+     * @return true if the async copy was started
+     */
+    @UsedByGodot
+    public boolean copyFileAsync(String sourcePath, String destPath, String itemName) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "copyFileAsync() called");
+        Log.d(TAG, "Source: " + sourcePath);
+        Log.d(TAG, "Dest: " + destPath);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        new Thread(() -> {
+            java.io.FileInputStream inputStream = null;
+            java.io.OutputStream outputStream = null;
+            
+            try {
+                java.io.File sourceFile = new java.io.File(sourcePath);
+                if (!sourceFile.exists()) {
+                    throw new Exception("Source file not found: " + sourcePath);
+                }
+                
+                long totalBytes = sourceFile.length();
+                long copiedBytes = 0;
+                long lastProgressBytes = 0;
+                
+                inputStream = new java.io.FileInputStream(sourceFile);
+                
+                // Create output stream, using DocumentsContract for restricted paths
+                if (requiresDocumentsContract(destPath)) {
+                    Uri docUri = pathToDocumentUri(destPath);
+                    if (docUri == null) {
+                        throw new Exception("Could not create document URI for: " + destPath);
+                    }
+                    outputStream = activity.getContentResolver().openOutputStream(docUri);
+                    if (outputStream == null) {
+                        throw new Exception("Could not open output stream for: " + destPath);
+                    }
+                } else {
+                    java.io.File outputFile = new java.io.File(destPath);
+                    java.io.File parentDir = outputFile.getParentFile();
+                    if (parentDir != null && !parentDir.exists()) {
+                        parentDir.mkdirs();
+                    }
+                    outputStream = new java.io.FileOutputStream(outputFile);
+                }
+                
+                // 16MB buffer for efficient copying
+                byte[] buffer = new byte[16 * 1024 * 1024];
+                int bytesRead;
+                
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                    copiedBytes += bytesRead;
+                    
+                    // Emit progress every 50MB
+                    if (copiedBytes - lastProgressBytes > 50 * 1024 * 1024) {
+                        final long progressCopied = copiedBytes;
+                        final long progressTotal = totalBytes;
+                        activity.runOnUiThread(() -> emitSignal("copy_progress", itemName, progressCopied, progressTotal));
+                        lastProgressBytes = copiedBytes;
+                    }
+                }
+                
+                outputStream.flush();
+                outputStream.close();
+                outputStream = null;
+                inputStream.close();
+                inputStream = null;
+                
+                Log.d(TAG, "SUCCESS: Copied " + copiedBytes + " bytes to " + destPath);
+                Log.d(TAG, "==========================================");
+                activity.runOnUiThread(() -> emitSignal("copy_complete", itemName, true, destPath, ""));
+                
+            } catch (Exception e) {
+                Log.e(TAG, "ERROR copying file: " + e.getMessage());
+                Log.e(TAG, "Exception type: " + e.getClass().getName());
+                
+                try {
+                    if (outputStream != null) outputStream.close();
+                    if (inputStream != null) inputStream.close();
+                    // Clean up partial destination file
+                    if (!requiresDocumentsContract(destPath)) {
+                        java.io.File outputFile = new java.io.File(destPath);
+                        if (outputFile.exists()) {
+                            outputFile.delete();
+                        }
+                    }
+                } catch (Exception cleanupError) {
+                    Log.e(TAG, "Error during copy cleanup: " + cleanupError.getMessage());
+                }
+                
+                final String errorMsg = e.getMessage();
+                activity.runOnUiThread(() -> emitSignal("copy_complete", itemName, false, destPath, errorMsg));
+            }
+        }).start();
+        
+        return true;
     }
     
     /**

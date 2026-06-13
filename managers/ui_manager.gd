@@ -45,7 +45,6 @@ var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 # Modal management (now uses M3Menu)
 var _active_menu: M3Menu = null
 var _modal_context: Dictionary = {}
-var _focus_indicator: FocusIndicator = null
 
 # Feedback tracking for navigation sounds
 var _feedback_connected_viewport: Viewport = null
@@ -1611,10 +1610,6 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	
 	_is_nodes_reparented = true
 	
-	# Reconnect FocusIndicator to new viewport after reparenting
-	if _focus_indicator and is_instance_valid(_focus_indicator):
-		_focus_indicator.reconnect_viewport()
-	
 	# Reconnect OnscreenKeyboard to new viewport after reparenting
 	var keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")
 	if keyboard and keyboard.has_method("reconnect_viewport"):
@@ -1682,10 +1677,6 @@ func _restore_ui_to_original_parents() -> void:
 	_main_ui_original_parent = null
 	_ui_layer_original_parent = null
 	_settings_dialog_original_parent = null
-	
-	# Reconnect FocusIndicator to original viewport after restoring
-	if _focus_indicator and is_instance_valid(_focus_indicator):
-		_focus_indicator.reconnect_viewport()
 	
 	# Reconnect OnscreenKeyboard to original viewport after restoring
 	var keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")

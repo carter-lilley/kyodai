@@ -306,6 +306,9 @@ func _toggle_horizontal_grid() -> void:
 		if grid:
 			target_vertical = not grid.grid_vertical
 	
+	# Remember which card had focus so we can restore it after re-layout
+	var focused_index = _get_focused_card_index()
+	
 	# Apply to both Home and Library grids
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
@@ -324,6 +327,10 @@ func _toggle_horizontal_grid() -> void:
 	# Refresh zoom slider so it uses snap ratios for the new orientation
 	if current_view:
 		_update_ui_for_view(current_view.view_name)
+	
+	# Restore focus after the grid has re-laid out
+	if focused_index >= 0:
+		call_deferred("_restore_focus_to_card", focused_index, true)
 
 func _on_tab_changed(view_name: String):
 	# Apply saved zoom first, then sync slider so UI reflects the applied value
@@ -823,6 +830,11 @@ func _try_nav_to_grid(event: InputEvent) -> bool:
 		if nav_type == 0:  # Bar
 			if event.is_action_pressed("ui_up"):
 				return _enter_grid()
+			# Last destination -> Settings (RIGHT)
+			if event.is_action_pressed("ui_right") and focused == last_dest:
+				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
+					settings_btn.grab_focus()
+					return true
 		else:  # Rail
 			if event.is_action_pressed("ui_right"):
 				return _enter_grid()
@@ -927,16 +939,16 @@ func _get_focused_card_index() -> int:
 	
 	return -1
 
-func _restore_focus_to_card(index: int) -> void:
+func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	"""Restore focus to the card at the given virtual index."""
 	var current_view = UIManager.get_current_view()
 	if not current_view:
 		return
 	
-	# For HomeView, always restore to index 0 since it reorders by last played
-	# For LibraryView, restore to the saved index
+	# For HomeView, normally restore to index 0 since it reorders by last played.
+	# When preserve_index is true (e.g. orientation toggle), keep the original index.
 	var target_index = index
-	if current_view is HomeView:
+	if current_view is HomeView and not preserve_index:
 		target_index = 0
 	
 	var games_grid = _get_view_grid(current_view)

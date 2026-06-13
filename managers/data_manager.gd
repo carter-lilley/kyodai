@@ -25,6 +25,10 @@ var _db: SQLite = null
 var _is_db_ready: bool = false
 var _db_init_failed: bool = false  # Fatal flag: database could not be initialized
 
+# Cached count of downloaded games. -1 means "not cached"; invalidate whenever
+# game/download state changes (add, update, delete, sync, scan, cover folding).
+var _downloaded_games_count_cache: int = -1
+
 var _db_mutex: Mutex = Mutex.new()
 
 func _db_lock():
@@ -266,12 +270,22 @@ func _on_setting_changed(value, setting):
 			_remove_cover_based_siblings()
 	elif setting.property_name == "hide_games_without_covers":
 		print("[DataManager] Hide no-cover setting changed to %s" % value)
+		# Filter clause changed; count may be different even without data changes.
+		_invalidate_downloaded_games_count_cache()
 		# Trigger grid refresh so library view updates filtering
 		sync_completed.emit(true, "Hide no-cover games %s" % ("enabled" if value else "disabled"))
 	elif setting.property_name == "fold_romm_siblings":
 		print("[DataManager] Fold RomM siblings setting changed to %s" % value)
+		# Filter clause changed; count may be different even without data changes.
+		_invalidate_downloaded_games_count_cache()
 		# Trigger grid refresh so library view updates filtering
 		sync_completed.emit(true, "RomM sibling folding %s" % ("enabled" if value else "disabled"))
+	elif setting.property_name == "enabled_platforms":
+		print("[DataManager] Enabled platforms changed")
+		# Platform filter changed; count may be different.
+		_invalidate_downloaded_games_count_cache()
+		# Trigger grid refresh so library view updates filtering
+		sync_completed.emit(true, "Enabled platforms changed")
 
 func _should_hide_no_cover_games() -> bool:
 	var setting = SettingsManager.get_setting("hide_games_without_covers")
@@ -301,6 +315,9 @@ func _remove_cover_based_siblings():
 	if not _is_db_ready:
 		return
 	
+	# Unfolding changes cover_group_master, which affects the count query.
+	_invalidate_downloaded_games_count_cache()
+	
 	MemoryManager.queue_db_task(
 		func():
 			# Simple: set cover_group_master = 1 for all games in any cover group
@@ -323,6 +340,8 @@ func _remove_cover_based_siblings():
 
 func _initialize_database():
 	print("[DataManager] _initialize_database() starting...")
+	# Database is being (re)opened; any previous count cache is no longer valid.
+	_invalidate_downloaded_games_count_cache()
 	var dir = DirAccess.open("user://")
 	if not dir.dir_exists("database"):
 		var mkerr = dir.make_dir("database")
@@ -376,7 +395,8 @@ func _create_tables():
 			last_played TEXT DEFAULT '',
 			title_id TEXT DEFAULT '',
 			cover_group_id TEXT DEFAULT '',
-			cover_group_master INTEGER DEFAULT 1
+			cover_group_master INTEGER DEFAULT 1,
+			igdb_metadata TEXT DEFAULT '{}'
 		)
 	""")
 	
@@ -1251,6 +1271,9 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 			callback.call(0)
 		return
 	
+	# Cover folding changes cover_group_master, which affects the count query.
+	_invalidate_downloaded_games_count_cache()
+	
 	print("[CoverFolding] Starting global cover folding...")
 	
 	# Show pulsing notification
@@ -1466,6 +1489,12 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 		var rating_val = data["metadatum"].get("average_rating", 0.0)
 		game.rating = rating_val if rating_val != null else 0.0
 	
+	# Extract raw IGDB metadata blob from RomM if present
+	if data.has("igdb_metadata") and data["igdb_metadata"] is Dictionary:
+		game.igdb_metadata = data["igdb_metadata"].duplicate()
+	else:
+		game.igdb_metadata = {}
+	
 	# Extract siblings from API response
 	var siblings: Array[Dictionary] = []
 	if data.has("siblings") and data["siblings"] is Array:
@@ -1567,8 +1596,8 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 		INSERT OR REPLACE INTO games 
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 		 file_name, file_path, file_size, has_local_copy, last_updated, 
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 	
 	var bindings = [
@@ -1595,7 +1624,8 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 		game.last_played,
 		game.title_id,
 		game.cover_group_id,
-		1 if game.cover_group_master else 0
+		1 if game.cover_group_master else 0,
+		JSON.stringify(game.igdb_metadata)
 	]
 	
 	return {"query": query, "bindings": bindings}
@@ -1606,14 +1636,16 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
 	
+	_invalidate_downloaded_games_count_cache()
+	
 	MemoryManager.queue_db_task(
 		func():
 			var query = """
 				INSERT OR REPLACE INTO games 
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
 				 file_name, file_path, file_size, has_local_copy, last_updated, 
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			"""
 			var bindings = [
 				game.id,
@@ -1639,7 +1671,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.last_played,
 				game.title_id,
 				game.cover_group_id,
-				1 if game.cover_group_master else 0
+				1 if game.cover_group_master else 0,
+				JSON.stringify(game.igdb_metadata)
 			]
 			return _db_query_bool(query, bindings),
 
@@ -1662,6 +1695,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	if not _is_db_ready:
 		return false
+	
+	_invalidate_downloaded_games_count_cache()
 	
 	MemoryManager.queue_db_task(
 		func():
@@ -1688,7 +1723,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					last_played = ?,
 					title_id = ?,
 					cover_group_id = ?,
-					cover_group_master = ?
+					cover_group_master = ?,
+					igdb_metadata = ?
 				WHERE romm_id = ?
 			"""
 			var bindings = [
@@ -1714,6 +1750,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.title_id,
 				game.cover_group_id,
 				1 if game.cover_group_master else 0,
+				JSON.stringify(game.igdb_metadata),
 				game.romm_id
 			]
 			return _db_query_bool(query, bindings),
@@ -1734,6 +1771,9 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 		if callback.is_valid():
 			callback.call(false)
 		return false
+	
+	# Deleting a download changes the downloaded-games count.
+	_invalidate_downloaded_games_count_cache()
 	
 	# Get the file path to delete - construct it from components (like launch_manager does)
 	var active_id = game.get_active_game_id()
@@ -2055,10 +2095,21 @@ func get_search_results_count(query: String) -> int:
 			return int(row["count"])
 	return 0
 
+func _invalidate_downloaded_games_count_cache() -> void:
+	"""Invalidate the cached downloaded-games count so the next query reads fresh data."""
+	_downloaded_games_count_cache = -1
+
 func get_downloaded_games_count() -> int:
-	"""Get count of downloaded games from synced platforms."""
+	"""Get count of downloaded games from synced platforms.
+	
+	Uses a cached value when available to avoid repeated COUNT(*) queries.
+	The cache is invalidated whenever game/download state changes.
+	"""
 	if not _is_db_ready:
 		return 0
+	
+	if _downloaded_games_count_cache >= 0:
+		return _downloaded_games_count_cache
 	
 	var enabled_slugs = _get_enabled_platform_slugs()
 	if enabled_slugs.size() == 0:
@@ -2072,6 +2123,7 @@ func get_downloaded_games_count() -> int:
 		var row = query_result[0]
 		if row.has("count"):
 			var count = int(row["count"])
+			_downloaded_games_count_cache = count
 			print("[DataManager] get_downloaded_games_count: " + str(count))
 			return count
 	return 0
@@ -2274,6 +2326,17 @@ func _row_to_game(row: Dictionary) -> GameResource:
 		game.cover_group_master = row.get("cover_group_master", 1) == 1
 	else:
 		game.cover_group_master = true
+	
+	# Restore IGDB metadata blob
+	if row.has("igdb_metadata") and row["igdb_metadata"] != "":
+		var json_igdb = JSON.new()
+		var err_igdb = json_igdb.parse(row["igdb_metadata"])
+		if err_igdb == OK and json_igdb.data is Dictionary:
+			game.igdb_metadata = json_igdb.data
+		else:
+			game.igdb_metadata = {}
+	else:
+		game.igdb_metadata = {}
 	
 	return game
 
@@ -2484,6 +2547,9 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 		if callback.is_valid():
 			callback.call(false)
 		return
+	
+	# Platform removal can change the downloaded-games count.
+	_invalidate_downloaded_games_count_cache()
 	
 	# Queue all database operations on the DB thread to avoid race conditions
 	MemoryManager.queue_db_task(
@@ -2740,6 +2806,8 @@ func _scan_games_directory(root_path: String, sub_path: String, results: Array[S
 func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
 	"""Update database entries for matched games."""
 	print("[DEBUG] _update_matched_games_in_db called with %d matched games" % matched_games.size())
+	# Scan results change has_local_copy / downloaded_sibling_ids.
+	_invalidate_downloaded_games_count_cache()
 	MemoryManager.queue_db_task(
 		func():
 			var updated_count: int = 0

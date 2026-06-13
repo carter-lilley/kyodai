@@ -17,6 +17,7 @@ var _bag: Array[Dictionary] = []
 var _shuffler_vita_apps: Array[Dictionary] = []  # Tracks Vita3K app folders extracted for this session
 var _current_game_index: int = -1
 var _round_timer: Timer = null
+var _countdown_timer: Timer = null
 var _config: Dictionary = {}
 var _controls_window: Node = null
 var _controls_topmost_timer: Timer = null
@@ -715,19 +716,36 @@ func _start_round_timer(duration: float) -> void:
 	_round_timer.timeout.connect(_on_round_timer_timeout)
 	add_child(_round_timer)
 	_round_timer.start()
+	
+	_countdown_timer = Timer.new()
+	_countdown_timer.one_shot = false
+	_countdown_timer.wait_time = 0.1
+	_countdown_timer.timeout.connect(_emit_timer_updated)
+	add_child(_countdown_timer)
+	_countdown_timer.start()
+	_emit_timer_updated()
 
 func _kill_round_timer() -> void:
 	if _round_timer and is_instance_valid(_round_timer):
 		_round_timer.stop()
 		_round_timer.queue_free()
 		_round_timer = null
+	if _countdown_timer and is_instance_valid(_countdown_timer):
+		_countdown_timer.stop()
+		_countdown_timer.queue_free()
+		_countdown_timer = null
 
 func _on_round_timer_timeout() -> void:
+	if _countdown_timer and is_instance_valid(_countdown_timer):
+		_countdown_timer.stop()
 	_switch_to_next_game()
 
-func _process(_delta: float) -> void:
+func _emit_timer_updated() -> void:
 	if _round_timer and is_instance_valid(_round_timer) and _state == State.ACTIVE:
 		timer_updated.emit(_round_timer.time_left)
+	else:
+		if _countdown_timer and is_instance_valid(_countdown_timer):
+			_countdown_timer.stop()
 
 func _input(event: InputEvent) -> void:
 	if _state == State.IDLE:

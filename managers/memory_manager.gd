@@ -571,6 +571,19 @@ static func queue_extraction_task(callable: Callable, callback: Callable = Calla
 	_instance._extraction_mutex.unlock()
 	_instance._extraction_semaphore.post()
 
+## Queues a callback to run on the main thread during the next _process tick.
+## Safe to call from background threads when call_deferred is unreliable on Android.
+static func queue_main_thread_callback(callback: Callable):
+	if _instance == null:
+		push_error("[MemoryManager] Not initialized - cannot queue main thread callback")
+		return
+	
+	_instance._lp_callback_mutex.lock()
+	# Wrap so the existing _drain_lp_callbacks can pass its result argument
+	# without requiring the user callback to accept one.
+	_instance._lp_callbacks.append({"callback": func(_result): callback.call(), "result": null})
+	_instance._lp_callback_mutex.unlock()
+
 ## Queues a task to the sync thread for background metadata sync
 ## This runs the entire sync orchestration off the main thread
 static func queue_sync_task(callable: Callable, callback: Callable = Callable()):

@@ -30,6 +30,7 @@ var _summoner: Control = null
 var _submenu: M3Menu = null
 var _submenu_item_index: int = -1
 var _summoner_start_pos: Vector2 = Vector2.ZERO
+var _movement_timer: Timer = null
 var _parent_menu: M3Menu = null
 var _item_selected: bool = false
 
@@ -59,16 +60,31 @@ func _init():
 	overlay_type = "menu"
 	overlay_layer = 95
 
-func _process(_delta):
+func _start_movement_timer() -> void:
+	if not track_summoner:
+		return
+	if _movement_timer != null:
+		return
+	_movement_timer = Timer.new()
+	_movement_timer.wait_time = 0.1
+	_movement_timer.timeout.connect(_check_summoner_moved)
+	add_child(_movement_timer)
+	_movement_timer.start()
+
+func _stop_movement_timer() -> void:
+	if _movement_timer != null and is_instance_valid(_movement_timer):
+		_movement_timer.stop()
+		_movement_timer.queue_free()
+	_movement_timer = null
+
+func _check_summoner_moved() -> void:
 	if not track_summoner:
 		return
 	if not visible:
 		return
-	# Dismiss if summoner was freed or removed from tree
 	if _summoner == null or not is_instance_valid(_summoner):
 		dismiss()
 		return
-	# Dismiss if summoner has moved (e.g., page scrolled)
 	if _summoner.global_position.distance_to(_summoner_start_pos) > 1.0:
 		dismiss()
 
@@ -131,6 +147,7 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	_summoner = anchor
 	_summoner_start_pos = anchor.global_position
 	_set_summoner_active(true)
+	_start_movement_timer()
 	
 	# Reset item selection tracking for fresh popup
 	_item_selected = false
@@ -193,6 +210,7 @@ func refresh_theme():
 		_renderer.refresh_theme()
 
 func dismiss():
+	_stop_movement_timer()
 	# Return focus to the summoner before releasing it, but only if the user
 	# didn't select an item (i.e., they cancelled or navigated away). When an
 	# item is selected from a submenu, we skip focus restoration to prevent

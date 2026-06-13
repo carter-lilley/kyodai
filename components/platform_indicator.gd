@@ -5,8 +5,10 @@ signal platform_selected(platform_index: int)
 signal cycle_prev_clicked()
 signal cycle_next_clicked()
 signal search_clicked()
+signal filter_clicked()
 
 @onready var _search_button: M3IconButton
+@onready var _filter_button: M3IconButton
 @onready var _platform_group: M3ButtonGroup
 @onready var _platform_buttons: Array[M3Button] = []
 
@@ -63,6 +65,16 @@ func _setup_ui():
 	next_btn.button_variant = M3Button.Variant.OUTLINED
 	next_btn.focus_mode = Control.FOCUS_NONE
 	next_btn.pressed.connect(_on_next_clicked)
+	
+	# Filter button (outside the group, on the left)
+	_filter_button = M3IconButton.new()
+	_filter_button.name = "FilterButton"
+	_filter_button.icon_name = "filter-check-outline"
+	_filter_button.icon_button_size = M3IconButton.IconSize.SMALL
+	_filter_button.icon_button_variant = M3IconButton.IconVariant.STANDARD
+	_filter_button.focus_mode = Control.FOCUS_NONE
+	_filter_button.pressed.connect(_on_filter_clicked)
+	hbox.add_child(_filter_button)
 	
 	# Build the group with all children BEFORE adding to tree so _ready() runs once
 	# with fully-initialized buttons and computes connected corners correctly.
@@ -144,6 +156,9 @@ func _on_next_clicked() -> void:
 func _on_search_clicked() -> void:
 	search_clicked.emit()
 
+func _on_filter_clicked() -> void:
+	filter_clicked.emit()
+
 func get_all_games_label() -> String:
 	return _all_games_label
 
@@ -153,6 +168,9 @@ func set_all_games_label(label: String):
 
 func set_search_active(is_active: bool) -> void:
 	_search_button.icon_name = "close" if is_active else "magnify"
+
+func set_filter_active(is_active: bool) -> void:
+	_filter_button.icon_name = "filter-check" if is_active else "filter-check-outline"
 
 func show_search_mode(query: String):
 	if _platform_buttons.is_empty():

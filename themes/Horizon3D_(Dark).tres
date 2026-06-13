@@ -25,6 +25,7 @@ script = ExtResource("1_cs6jg")
 name = "Horizon3D (Dark)"
 created_at = "2026-06-05T01:14:47"
 library_navigation_type = 0
+library_grid_vertical = false
 library_grid_padding = 14
 library_card_zoom = 0.20469367019730653
 library_card_display_mode = 2

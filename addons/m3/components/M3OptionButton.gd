@@ -113,6 +113,17 @@ func _ready():
 	# Sync pre-set selection to the text field
 	_update_selected_text()
 
+func _input(event: InputEvent):
+	"""Catch ui_accept/ui_select before GUI subsystems consume them.
+	This is needed on Android and with controllers where _gui_input() does not
+	receive the accept event reliably for focused LineEdit-derived controls."""
+	if not has_focus() or _is_menu_open:
+		return
+	
+	if event.is_action_pressed("ui_accept") or event.is_action_pressed("ui_select"):
+		_show_menu()
+		get_viewport().set_input_as_handled()
+
 func _gui_input(event: InputEvent):
 	if _is_menu_open:
 		# Let native text editing happen when filtering

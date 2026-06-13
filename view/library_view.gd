@@ -75,6 +75,10 @@ func _ready():
 		platform_indicator.cycle_prev_clicked.connect(_on_cycle_prev_clicked)
 		platform_indicator.cycle_next_clicked.connect(_on_cycle_next_clicked)
 		platform_indicator.search_clicked.connect(_on_search_button_clicked)
+		platform_indicator.filter_clicked.connect(_on_filter_button_clicked)
+	
+	# Pre-create the filter side sheet so opening it is stutter-free
+	LibraryFilterSheet.prepare()
 	
 	# Create search overlay
 	_setup_search_overlay()
@@ -85,6 +89,10 @@ func _setup_search_overlay():
 	_search_overlay.name = "SearchOverlay"
 	_search_overlay.search_submitted.connect(_on_search_submitted)
 	_search_overlay.search_cancelled.connect(_on_search_cancelled)
+
+func _on_filter_button_clicked() -> void:
+	"""Handle filter button click — open the library filter side sheet."""
+	LibraryFilterSheet.show_sheet()
 
 func _on_search_button_clicked() -> void:
 	"""Handle search button click — clear active search or show overlay."""

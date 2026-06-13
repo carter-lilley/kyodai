@@ -149,6 +149,10 @@ func _calculate_chunk_strategy(file_size: int) -> Dictionary:
 
 # Chunked download tracking
 var _chunked_downloads: Dictionary = {}  # item_id -> ChunkedDownloadInfo
+
+# Final copy progress for temp-dir in-place assembly (Android)
+var _final_copy_progress: Dictionary = {}  # item_id -> float
+
 class ChunkedDownloadInfo:
 	var item: QueueItem
 	var chunks: Array[ChunkInfo] = []
@@ -911,6 +915,17 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 			)
 	)
 
+func _get_chunk_temp_dir_name(destination_path: String) -> String:
+	"""Returns a deterministic temp directory name based on the destination path.
+	This lets resumed downloads find the same partial file across app restarts."""
+	var safe = destination_path.replace("/", "_").replace("\\", "_").replace(":", "_")
+	# Trim leading/trailing underscores for cleanliness
+	while safe.begins_with("_"):
+		safe = safe.substr(1)
+	while safe.ends_with("_"):
+		safe = safe.substr(0, safe.length() - 1)
+	return safe
+
 func _start_chunked_download(item: QueueItem, headers: Array):
 	"""Start a chunked download using parallel threads"""
 	var file_size = item.expected_file_size
@@ -922,8 +937,8 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	var concurrency = strategy.concurrency
 	var thread_count = strategy.thread_count
 	
-	# Create temp directory for chunks
-	var temp_dir = "user://downloads/chunks/" + item.id
+	# Create temp directory for chunks (deterministic so resume can find it)
+	var temp_dir = "user://downloads/chunks/" + _get_chunk_temp_dir_name(item.destination_path)
 	if not FSM.make_dir_recursive(temp_dir):
 		push_error("[DownloadManager] Failed to create chunk temp directory: " + temp_dir)
 		item.status = "failed"
@@ -940,49 +955,57 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	chunked_info.item = item
 	chunked_info.temp_dir = temp_dir
 	chunked_info.final_path = item.destination_path
-	chunked_info.partial_path = _get_partial_file_path(item.destination_path)
 	chunked_info.total_chunks = num_chunks
 	chunked_info.concurrency = concurrency
 	chunked_info.use_chunking = true
 	
-	# Decide whether to use in-place sparse assembly (desktop only).
-	# This writes each chunk directly into a partial file at the correct offset,
-	# eliminating the post-download reassembly pass.
+	# Decide whether to use in-place assembly.
+	# Desktop: create a sparse partial next to the destination.
+	# Android: always stream into a partial in the temp dir, then copy/move it
+	# to the destination. This avoids the blocking native reassembly step.
 	var in_place_assembly = false
-	if IN_PLACE_CHUNKED_DOWNLOADS and not PlatformManager.is_android():
-		var state_path = _get_state_file_path(item.destination_path)
-		var has_state = FileAccess.file_exists(state_path)
-		var has_partial = FSM.file_exists(chunked_info.partial_path)
-		var partial_ok = false
-		
-		if not has_state or not has_partial:
-			# No valid resume state; start fresh and remove stale artifacts
-			if FSM.file_exists(chunked_info.partial_path):
-				FSM.delete_file(chunked_info.partial_path)
-			if FSM.file_exists(item.destination_path):
-				FSM.delete_file(item.destination_path)
-		elif has_partial:
-			# Resume: keep an existing partial file only if it has the expected size.
-			var partial_check = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
-			if partial_check:
-				var partial_size = partial_check.get_length()
-				partial_check.close()
-				if partial_size == file_size:
-					partial_ok = true
-				else:
-					push_error("[DownloadManager] Existing partial file size mismatch (" + str(partial_size) + " vs " + str(file_size) + "); restarting sparse file")
-					FSM.delete_file(chunked_info.partial_path)
-		
-		if partial_ok:
+	if IN_PLACE_CHUNKED_DOWNLOADS:
+		if PlatformManager.is_android():
+			chunked_info.partial_path = temp_dir + "/partial"
 			in_place_assembly = true
-			print("[DownloadManager] Resuming in-place sparse assembly for: " + item.name)
-		elif _create_sparse_file(chunked_info.partial_path, file_size):
-			in_place_assembly = true
-			print("[DownloadManager] Using in-place sparse assembly for: " + item.name)
+			print("[DownloadManager] Using Android temp-dir in-place assembly for: " + item.name)
 		else:
-			print("[DownloadManager] In-place sparse assembly not available, using temp files for: " + item.name)
-			if FSM.file_exists(chunked_info.partial_path):
-				FSM.delete_file(chunked_info.partial_path)
+			chunked_info.partial_path = _get_partial_file_path(item.destination_path)
+			var state_path = _get_state_file_path(item.destination_path)
+			var has_state = FileAccess.file_exists(state_path)
+			var has_partial = FSM.file_exists(chunked_info.partial_path)
+			var partial_ok = false
+			
+			if not has_state or not has_partial:
+				# No valid resume state; start fresh and remove stale artifacts
+				if FSM.file_exists(chunked_info.partial_path):
+					FSM.delete_file(chunked_info.partial_path)
+				if FSM.file_exists(item.destination_path):
+					FSM.delete_file(item.destination_path)
+			elif has_partial:
+				# Resume: keep an existing partial file only if it has the expected size.
+				var partial_check = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
+				if partial_check:
+					var partial_size = partial_check.get_length()
+					partial_check.close()
+					if partial_size == file_size:
+						partial_ok = true
+					else:
+						push_error("[DownloadManager] Existing partial file size mismatch (" + str(partial_size) + " vs " + str(file_size) + "); restarting sparse file")
+						FSM.delete_file(chunked_info.partial_path)
+			
+			if partial_ok:
+				in_place_assembly = true
+				print("[DownloadManager] Resuming in-place sparse assembly for: " + item.name)
+			elif _create_sparse_file(chunked_info.partial_path, file_size):
+				in_place_assembly = true
+				print("[DownloadManager] Using in-place sparse assembly for: " + item.name)
+			else:
+				print("[DownloadManager] In-place sparse assembly not available, using temp files for: " + item.name)
+				if FSM.file_exists(chunked_info.partial_path):
+					FSM.delete_file(chunked_info.partial_path)
+	else:
+		chunked_info.partial_path = _get_partial_file_path(item.destination_path)
 	
 	chunked_info.in_place_assembly = in_place_assembly
 	if in_place_assembly:
@@ -1008,6 +1031,34 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		print("[DownloadManager] Resuming download from state file for: " + item.name + " (" + str(state.get("chunks", []).size()) + " chunks recorded)")
 	_apply_download_state(chunked_info, state)
 	_save_download_state(chunked_info)
+	
+	# On Android, a fresh download should not inherit a stale temp partial.
+	# (Resume state would have been applied above if it were valid.)
+	if PlatformManager.is_android():
+		if state.is_empty():
+			if FSM.file_exists(chunked_info.partial_path):
+				FSM.delete_file(chunked_info.partial_path)
+			# Also remove any leftover legacy chunk temp files
+			for chunk in chunked_info.chunks:
+				if FSM.file_exists(chunk.temp_path):
+					FSM.delete_file(chunk.temp_path)
+		
+		# Ensure the partial file exists so worker threads can open it READ_WRITE.
+		# Only create it when missing; on resume the existing partial is preserved.
+		if not FSM.file_exists(chunked_info.partial_path):
+			var partial_create = FileAccess.open(chunked_info.partial_path, FileAccess.WRITE)
+			if partial_create:
+				partial_create.close()
+			else:
+				push_error("[DownloadManager] Failed to create Android partial file: " + chunked_info.partial_path)
+				item.status = "failed"
+				item.error_message = "Failed to create partial file"
+				_cleanup_item(item)
+				_active_items.erase(item.id)
+				download_completed.emit(item.id, false, item.error_message)
+				queue_changed.emit()
+				_process_queue()
+				return
 	
 	# Initialize per-download concurrency semaphore and connection pool
 	var chunk_sem = Semaphore.new()
@@ -1291,10 +1342,16 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	# Open file for writing/appending
 	if in_place:
 		file = FileAccess.open(partial_path, FileAccess.READ_WRITE)
+		if not file and not FileAccess.file_exists(partial_path):
+			# Hardening: create the partial file first if it disappeared
+			var partial_create = FileAccess.open(partial_path, FileAccess.WRITE)
+			if partial_create:
+				partial_create.close()
+				file = FileAccess.open(partial_path, FileAccess.READ_WRITE)
 		if file:
 			file.seek(write_offset)
 		else:
-			push_error("[DownloadManager] Failed to open partial file for in-place chunk write: " + partial_path)
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " failed to open partial file for in-place chunk write: " + partial_path)
 			result.error = "Failed to open partial file"
 			return result
 	elif resume_offset > 0:
@@ -2221,10 +2278,67 @@ func _rename_final_file(item_id: String):
 	if FSM.file_exists(final_path):
 		FSM.delete_file(final_path)
 	
-	if not FSM.move(partial_path, final_path):
-		push_error("[DownloadManager] [InPlace] Failed to rename partial file to destination: " + partial_path + " -> " + final_path)
+	if FSM.move(partial_path, final_path):
+		# Fast path: rename succeeded (same filesystem)
+		_delete_download_state(final_path)
+		_cleanup_chunked_download(item_id)
+		_on_file_download_complete(item, true, "")
+		return
+	
+	# Rename failed (usually cross-filesystem). Copy the partial instead.
+	print("[DownloadManager] [InPlace] Move failed, copying partial to final destination: " + partial_path + " -> " + final_path)
+	_copy_partial_to_final(item_id, partial_path, final_path)
+
+func _copy_partial_to_final(item_id: String, partial_path: String, final_path: String):
+	"""Copy the assembled partial file to the final destination off the main thread.
+	Shows real progress in the GUI. Uses the plugin for restricted Android paths."""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	# Switch the notification to a copy progress indicator
+	if item.notification_id != -1:
+		NotificationManager.dismiss_notification(item.notification_id)
+	
+	item.notification_id = NotificationManager.show_notification(
+		"Copying " + item.name + "...",
+		NotificationManager.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			return _final_copy_progress.get(item_id, 0.0),
+		func(progress: float) -> String:
+			var mb_copied = int(item.expected_file_size * progress / (1024.0 * 1024.0))
+			var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
+			return "Copying %s: %d/%d MB (%d%%)" % [item.name, mb_copied, mb_total, int(progress * 100)]
+	)
+	
+	_final_copy_progress[item_id] = 0.0
+	
+	# For restricted Android paths, use the plugin's async copy.
+	var use_plugin_copy = false
+	if PlatformManager.is_android():
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin != null:
+			use_plugin_copy = plugin.call("requiresDocumentsContract", final_path)
+	
+	if use_plugin_copy:
+		_plugin_copy_partial_to_final(item_id, partial_path, final_path)
+	else:
+		_godot_copy_partial_to_final(item_id, partial_path, final_path)
+
+func _plugin_copy_partial_to_final(item_id: String, partial_path: String, final_path: String):
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		push_error("[DownloadManager] PackageChecker plugin not available for copy")
+		_final_copy_progress.erase(item_id)
 		item.status = "failed"
-		item.error_message = "Failed to finalize download"
+		item.error_message = "Plugin not available for copy"
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
 		_active_items.erase(item_id)
@@ -2233,12 +2347,123 @@ func _rename_final_file(item_id: String):
 		_process_queue()
 		return
 	
-	# Remove resume state and clean up chunked state
-	_delete_download_state(final_path)
-	_cleanup_chunked_download(item_id)
+	# Connect plugin signals for this copy operation
+	var copy_token = item.id
 	
-	# Continue with normal completion flow
-	_on_file_download_complete(item, true, "")
+	var on_progress = func(copy_id: String, bytes_copied: int, total_bytes: int):
+		if copy_id != copy_token:
+			return
+		if total_bytes > 0:
+			_final_copy_progress[item_id] = clamp(float(bytes_copied) / float(total_bytes), 0.0, 1.0)
+	
+	var on_complete = func(copy_id: String, success: bool, _dest_path: String, error: String):
+		if copy_id != copy_token:
+			return
+		plugin.disconnect("copy_progress", on_progress)
+		
+		if item.notification_id != -1:
+			NotificationManager.dismiss_notification(item.notification_id)
+			item.notification_id = -1
+		_final_copy_progress.erase(item_id)
+		
+		if not success:
+			push_error("[DownloadManager] [InPlace] Plugin copy failed: " + error)
+			item.status = "failed"
+			item.error_message = "Failed to copy download to destination"
+			_cleanup_chunked_download(item_id)
+			_cleanup_item(item)
+			_active_items.erase(item_id)
+			download_completed.emit(item_id, false, item.error_message)
+			queue_changed.emit()
+			_process_queue()
+			return
+		
+		_delete_download_state(final_path)
+		_cleanup_chunked_download(item_id)
+		_on_file_download_complete(item, true, "")
+	
+	plugin.connect("copy_progress", on_progress)
+	# CONNECT_ONE_SHOT so the engine disconnects this handler automatically,
+	# avoiding the need for the lambda to reference itself.
+	plugin.connect("copy_complete", on_complete, CONNECT_ONE_SHOT)
+	
+	var absolute_source = ProjectSettings.globalize_path(partial_path)
+	plugin.call("copyFileAsync", absolute_source, final_path, copy_token)
+
+func _godot_copy_partial_to_final(item_id: String, partial_path: String, final_path: String):
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	
+	MemoryManager.queue_extraction_task(
+		func() -> bool:
+			return _copy_file_with_progress(partial_path, final_path, item_id),
+		func(success: bool):
+			if item.notification_id != -1:
+				NotificationManager.dismiss_notification(item.notification_id)
+				item.notification_id = -1
+			_final_copy_progress.erase(item_id)
+			
+			if not success:
+				push_error("[DownloadManager] [InPlace] Failed to copy partial to destination: " + partial_path + " -> " + final_path)
+				item.status = "failed"
+				item.error_message = "Failed to copy download to destination"
+				_cleanup_chunked_download(item_id)
+				_cleanup_item(item)
+				_active_items.erase(item_id)
+				download_completed.emit(item_id, false, item.error_message)
+				queue_changed.emit()
+				_process_queue()
+				return
+			
+			_delete_download_state(final_path)
+			_cleanup_chunked_download(item_id)
+			_on_file_download_complete(item, true, "")
+	)
+
+func _copy_file_with_progress(source_path: String, dest_path: String, item_id: String) -> bool:
+	"""Copy a file in chunks, posting progress updates to the main thread.
+	Runs on a background thread."""
+	var source = FileAccess.open(source_path, FileAccess.READ)
+	if not source:
+		push_error("[DownloadManager] Failed to open source file for copy: " + source_path)
+		return false
+	
+	var dest = FileAccess.open(dest_path, FileAccess.WRITE)
+	if not dest:
+		push_error("[DownloadManager] Failed to open destination file for copy: " + dest_path)
+		source.close()
+		return false
+	
+	var total = source.get_length()
+	if total <= 0:
+		total = 1
+	
+	var copied: int = 0
+	const BUFFER_SIZE: int = 8 * 1024 * 1024  # 8 MB
+	var last_reported_progress: float = -1.0
+	
+	while not source.eof_reached():
+		var buffer = source.get_buffer(BUFFER_SIZE)
+		if buffer.size() == 0:
+			break
+		dest.store_buffer(buffer)
+		copied += buffer.size()
+		
+		var progress = clamp(float(copied) / float(total), 0.0, 1.0)
+		if progress - last_reported_progress >= 0.01:
+			last_reported_progress = progress
+			MemoryManager.queue_main_thread_callback(func():
+				_final_copy_progress[item_id] = progress
+			)
+	
+	source.close()
+	dest.close()
+	
+	MemoryManager.queue_main_thread_callback(func():
+		_final_copy_progress[item_id] = 1.0
+	)
+	
+	return true
 
 func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_temp_path: String):
 	"""Handle successful reassembly completion (shared between Android and Desktop)"""

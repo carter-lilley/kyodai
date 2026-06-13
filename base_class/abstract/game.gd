@@ -17,6 +17,9 @@ extends Resource
 @export var genres: Array[String] = []
 @export var rating: float = 0.0
 
+## Raw IGDB metadata blob from RomM (includes multiplayer_modes, related games, etc.)
+@export var igdb_metadata: Dictionary = {}
+
 ## Per-game emulator override (optional)
 @export var preferred_emulator_id: String = ""
 
@@ -139,3 +142,36 @@ func get_cover_image() -> Texture2D:
 		if error == OK:
 			return ImageTexture.create_from_image(img)
 	return null
+
+## Returns the IGDB multiplayer_modes list if present
+func get_igdb_multiplayer_modes() -> Array[Dictionary]:
+	if igdb_metadata.has("multiplayer_modes") and igdb_metadata["multiplayer_modes"] is Array:
+		var result: Array[Dictionary] = []
+		for item in igdb_metadata["multiplayer_modes"]:
+			if item is Dictionary:
+				result.append(item)
+		return result
+	return []
+
+## Returns combined IGDB related games from all relation categories
+func get_igdb_related_games() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not igdb_metadata is Dictionary:
+		return result
+	
+	var categories = [
+		"expansions",
+		"dlcs",
+		"remasters",
+		"remakes",
+		"expanded_games",
+		"ports",
+		"similar_games",
+	]
+	
+	for category in categories:
+		if igdb_metadata.has(category) and igdb_metadata[category] is Array:
+			for item in igdb_metadata[category]:
+				if item is Dictionary:
+					result.append(item)
+	return result

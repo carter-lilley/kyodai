@@ -9,6 +9,14 @@ var _gamenative_games_count: int = 0
 var _is_loading: bool = false
 var _is_scanning: bool = false
 
+# True while a total-count DB task is queued but not yet completed. Used to
+# prevent overlapping count queries from startup paths (database_ready,
+# on_view_show, rebuild_grid) running in quick succession.
+var _total_count_load_pending: bool = false
+
+# Last total-games value we logged; used to avoid repeating identical debug lines.
+var _last_logged_total_games: int = -1
+
 # GameNative games storage - kept separate but merged by last_played
 var _gamenative_games: Array[GameResource] = []
 var _gamenative_loaded: bool = false
@@ -86,6 +94,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	for proper merging by last_played during pagination.
 	"""
 	_is_loading = true
+	_total_count_load_pending = true
 	_update_status("Loading recent games...")
 	
 	# Load GameNative games first (they're small and cached)
@@ -97,6 +106,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			var count = DataManager.get_downloaded_games_count()
 			return count,
 		func(count: int):
+			_total_count_load_pending = false
 			if not is_instance_valid(games_grid):
 				_is_loading = false
 				return
@@ -115,7 +125,10 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			
 			games_grid.set_total_count(_total_games, preserve_cache)
 			
-			print("[DEBUG] _load_total_count: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+			# Only log when the count actually changes to avoid startup noise.
+			if _total_games != _last_logged_total_games:
+				_last_logged_total_games = _total_games
+				print("[DEBUG] _load_total_count: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
 			
 			if _db_games_count == 0:
 				_update_status("No downloaded games found")
@@ -302,17 +315,22 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 	
 	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:
-		# Use callback version to ensure dimensions refresh AFTER data loads
-		_load_total_count_with_callback(false, func():
-			# Also refresh existing cards
-			games_grid.refresh_all_card_effects()
-			# Refresh dimensions AFTER data reload to get correct layout
+		if _total_count_load_pending:
+			# A count load is already in flight; just refresh dimensions for now.
 			games_grid.refresh_dimensions()
-		)
+		else:
+			# Use callback version to ensure dimensions refresh AFTER data loads
+			_load_total_count_with_callback(false, func():
+				# Also refresh existing cards
+				games_grid.refresh_all_card_effects()
+				# Refresh dimensions AFTER data reload to get correct layout
+				games_grid.refresh_dimensions()
+			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
-		_load_total_count(true)
+		if not _total_count_load_pending:
+			_load_total_count(true, true)
 
 ## Returns true when intro animations are complete and cards can accept focus
 ## Note: Intro animations have been removed, so this always returns true
@@ -363,6 +381,7 @@ func _on_gamenative_games_updated():
 func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable(), reload_gamenative: bool = true):
 	"""Get total downloaded game count and call callback when complete."""
 	_is_loading = true
+	_total_count_load_pending = true
 	_update_status("Refreshing...")
 	
 	# Reload GameNative games first (unless we're preserving our updated cache)
@@ -374,6 +393,7 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 			var count = DataManager.get_downloaded_games_count()
 			return count,
 		func(count: int):
+			_total_count_load_pending = false
 			if not is_instance_valid(games_grid):
 				_is_loading = false
 				if on_complete.is_valid():
@@ -426,8 +446,8 @@ func _focus_random_card() -> void:
 func on_view_show():
 	super.on_view_show()
 	# Refresh the view when shown (in case downloads happened while away)
-	# Skip if we haven't loaded data yet (avoid double-load during startup)
-	if not _is_loading and _total_games > 0:
+	# Skip if we haven't loaded data yet or a load is already pending.
+	if not _is_loading and not _total_count_load_pending and _total_games > 0:
 		# Check if cache is still valid before using it
 		if _validate_cached_data():
 			_load_total_count(true, false)

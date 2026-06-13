@@ -3,6 +3,9 @@
 small screen testing in settings menu (never hscroll)
 separate firmware page or indicator?
 xemu save sync
+losing focus when switching zoom levels 
+optionbutton offscreen placement in smalls creen
+overlapping indicator
 
 ## android
 	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
@@ -10,9 +13,7 @@ xemu save sync
 
 ## saves
 	implement argosy sigil
-	user save folder (set by user)
 	emulator save folder (set in emu config)
-	error when no user save and no default save (azahar)
 	check if save is modified
 
 ## general UI
