@@ -249,9 +249,8 @@ func _focus_random_card() -> void:
 	# Generate random index within current filtered set
 	var random_index = randi() % _total_games
 	
-	# Jump directly to the random index without scrolling
-	games_grid.scroll_to_index(random_index, false)
-	_focus_card_at_index(random_index)
+	# Jump directly to the random index and focus once the window is rebuilt.
+	games_grid.scroll_to_index_and_focus(random_index, false)
 
 func _focus_card_at_index(index: int) -> void:
 	"""Focus the game card at the specified index."""

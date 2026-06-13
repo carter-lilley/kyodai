@@ -111,6 +111,13 @@ var _is_redirecting_focus: bool = false
 # Only redirect when focus moves FROM inside the grid TO outside.
 var _grid_had_focus_last: bool = false
 
+# Monotonically-increasing ID used to cancel stale deferred-focus requests.
+var _focus_request_id: int = 0
+
+# Pending focus target set by scroll_to_index_and_focus; applied as soon as the
+# card is created by _on_scroll_value_changed.
+var _pending_focus_index: int = -1
+
 func is_focus_locked_and_active() -> bool:
 	"""Returns true if focus lock is enabled and focus was recently inside this grid."""
 	return focus_lock_enabled and _grid_had_focus_last
@@ -1168,6 +1175,9 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	
 	visible_range_changed.emit(_visible_start_idx, min(_visible_end_idx, _total_items), _total_items)
 	
+	# If a programmatic focus is waiting for this scroll rebuild, try to land it now.
+	_try_apply_pending_focus()
+	
 	if debug_mode:
 		_update_debug_visuals(_visible_start_idx, _visible_end_idx)
 	
@@ -1178,6 +1188,7 @@ func _recycle_card_at_index(index: int):
 		return
 	
 	var card = _active_cards[index]
+	_release_focus_if_inside(card)
 	_active_cards.remove_at(index)
 	var vidx = card.get_meta("virtual_index", -1)
 	if vidx >= 0:
@@ -1301,6 +1312,7 @@ func _batch_recycle_from_start(count: int) -> void:
 	var to_recycle = _active_cards.slice(0, count)
 	_active_cards = _active_cards.slice(count)
 	for card in to_recycle:
+		_release_focus_if_inside(card)
 		var vidx = card.get_meta("virtual_index", -1)
 		if vidx >= 0:
 			_active_cards_by_index.erase(vidx)
@@ -1630,6 +1642,32 @@ func _on_viewport_focus_changed(control: Control) -> void:
 	else:
 		print("[VirtualScrollGridContainer] Focus escaped but last card ", _last_focused_virtual_index, " is no longer valid")
 
+func _release_focus_if_inside(card: Control) -> void:
+	"""Release focus if the current focus owner is inside the given card."""
+	var viewport := get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	var focused := viewport.gui_get_focus_owner()
+	if focused and (focused == card or card.is_ancestor_of(focused)):
+		viewport.gui_release_focus()
+
+func _release_focus_inside_grid() -> void:
+	"""Release focus if it currently belongs to any card inside this grid."""
+	var viewport := get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	var focused := viewport.gui_get_focus_owner()
+	if focused and is_ancestor_of(focused):
+		viewport.gui_release_focus()
+
+func _try_apply_pending_focus() -> void:
+	"""Focus the pending card if it has been created by the latest scroll."""
+	if _pending_focus_index < 0:
+		return
+	var card := get_card_at_index(_pending_focus_index)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		_apply_focus_to_card(card)
+
 func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
 		return
@@ -1771,19 +1809,54 @@ func scroll_to_index(index: int, animate: bool = false, duration_multiplier: flo
 	if _scroll_container:
 		var _items_per_line = _get_items_per_line()
 		var target_pos = _get_slot_position_for_index(index)
+		var focus_overflow = _get_focus_overflow()
 		
 		if vertical:
 			var viewport_height = size.y
-			var card_offset = target_pos + (card_size.y / 2.0) - (viewport_height / 2.0)
-			# Account for top margin so the card ends up truly centered
-			card_offset -= _last_margin_top
+			# The card's content coordinate is target_pos + top overflow; center it in viewport.
+			var card_offset = target_pos + focus_overflow.y + (card_size.y / 2.0) - (viewport_height / 2.0)
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
 		else:
 			var viewport_width = size.x
-			var card_offset = target_pos + (card_size.x / 2.0) - (viewport_width / 2.0)
-			# Account for left margin so the card ends up truly centered
-			card_offset -= _last_margin_left
+			var card_offset = target_pos + focus_overflow.x + (card_size.x / 2.0) - (viewport_width / 2.0)
 			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
+
+func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multiplier: float = 1.0) -> void:
+	"""Scroll to an item and focus it once the virtual grid has rebuilt the window."""
+	_focus_request_id += 1
+	var request_id := _focus_request_id
+	# Defocus the grid before scrolling so the currently focused card is not
+	# recycled mid-jump, which would hand focus to a temporary card and trigger
+	# a competing smooth-scroll back toward the top.
+	_release_focus_inside_grid()
+	_pending_focus_index = index
+	scroll_to_index(index, animate, duration_multiplier)
+	_deferred_focus_index(index, request_id, 0)
+
+func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:
+	"""Wait until the card for `index` exists, then grab focus."""
+	if request_id != _focus_request_id:
+		return
+
+	var card := get_card_at_index(index)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		_apply_focus_to_card(card)
+		return
+
+	# The card may not exist until the scroll value change is processed; retry briefly.
+	if attempt < 5:
+		await get_tree().process_frame
+		_deferred_focus_index(index, request_id, attempt + 1)
+	else:
+		_pending_focus_index = -1
+
+func _apply_focus_to_card(card: Control) -> void:
+	"""Focus a card and suppress the container's follow-focus auto-scroll."""
+	if _scroll_container:
+		_scroll_container.stop_smooth_scroll()
+	card.set_meta("_suppress_smooth_scroll", true)
+	card.grab_focus()
+	_pending_focus_index = -1
 
 func focus_last_or_first_card() -> void:
 	"""Focus the last focused card, or the first card if none was focused."""

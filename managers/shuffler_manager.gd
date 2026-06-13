@@ -14,6 +14,7 @@ signal download_progress(current: int, total: int)
 
 var _state: State = State.IDLE
 var _bag: Array[Dictionary] = []
+var _shuffler_vita_apps: Array[Dictionary] = []  # Tracks Vita3K app folders extracted for this session
 var _current_game_index: int = -1
 var _round_timer: Timer = null
 var _config: Dictionary = {}
@@ -90,6 +91,7 @@ func start_session(config: Dictionary) -> void:
 	_download_sizes.clear()
 	_total_download_bytes = 0
 	_completed_download_bytes = 0
+	_shuffler_vita_apps.clear()
 
 	var platforms = config.get("platforms", [])
 	var bag_size = config.get("bag_size", 4)
@@ -137,6 +139,9 @@ func stop_session() -> void:
 	# Restore emulator configs edited for the shuffler session.
 	LaunchManager.restore_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg")
 	LaunchManager.restore_emulator_file("pcsx2", PCSX2_SHUFFLER_INI_PATH)
+	
+	# Clean up any Vita3K app folders that were extracted for this session.
+	_cleanup_vita3k_shuffler_apps()
 
 	_stop_controls_topmost_timer()
 	if _controls_window and is_instance_valid(_controls_window):
@@ -466,6 +471,24 @@ func _launch_game(entry: Dictionary) -> void:
 			_maximize_with_retry(pid)
 		else:
 			push_error("[ShufflerManager] Failed to launch game: " + game.title)
+		
+		# Track any Vita3K app folder that was extracted for this session so it can
+		# be cleaned up safely when the session ends.
+		if emulator_id.begins_with("vita3k"):
+			var title_id = game.get_active_title_id()
+			if title_id != "":
+				var install_path = LaunchManager.get_emulator_install_path(emulator_id)
+				if install_path != "":
+					var ux0_app_path = install_path.get_base_dir() + "/ux0/app/" + title_id
+					entry["vita_title_id"] = title_id
+					entry["vita_app_path"] = ux0_app_path
+					_shuffler_vita_apps.append({
+						"title_id": title_id,
+						"ux0_app_path": ux0_app_path
+					})
+					print("[ShufflerManager] Tracked Vita3K shuffler app for cleanup: " + ux0_app_path)
+			else:
+				push_warning("[ShufflerManager] Vita3K game launched but no TitleID was extracted: " + game.title)
 
 	LaunchManager.launch_shuffler_game(game, entry["temp_path"], on_pid_ready)
 
@@ -749,6 +772,25 @@ func _ensure_pcsx2_shuffler_config() -> void:
 		print("[ShufflerManager] PCSX2 [MemoryCards] section:\n" + section_match.get_string().strip_edges())
 	else:
 		print("[ShufflerManager] PCSX2 [MemoryCards] section not found")
+
+func _cleanup_vita3k_shuffler_apps() -> void:
+	for entry in _shuffler_vita_apps:
+		var app_path = entry.get("ux0_app_path", "") as String
+		if app_path == "":
+			continue
+		
+		var sentinel_path = app_path + "/.kyodai_shuffler"
+		if not FSM.file_exists(sentinel_path):
+			push_warning("[ShufflerManager] Refusing to clean up Vita3K app folder without sentinel: " + app_path)
+			continue
+		
+		if FSM.dir_exists(app_path):
+			print("[ShufflerManager] Cleaning up Vita3K shuffler app folder: " + app_path)
+			FSM.delete_dir_recursive(app_path)
+		else:
+			print("[ShufflerManager] Vita3K shuffler app folder already gone: " + app_path)
+	
+	_shuffler_vita_apps.clear()
 
 func _cleanup_temp_files() -> void:
 	if DirAccess.dir_exists_absolute(TEMP_DIR):

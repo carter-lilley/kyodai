@@ -51,6 +51,14 @@ var _pending_firmware_downloads: Dictionary = {}
 # platform_slug -> {game: GameResource, emulator_id: String, callback: Callable}
 var _pending_firmware_launches: Dictionary = {}
 
+## Pending emulator versions resolved during install but not yet persisted.
+## Key: emulator_id, Value: version string. Saved only when install completes.
+var _pending_emulator_version: Dictionary = {}
+
+## When true, install-step handlers will execute even if their outputs already exist.
+## Set for updates/reinstalls; cleared on completion or failure.
+var _force_install_step: Dictionary = {}
+
 ## Validation cache to avoid redundant file system operations
 # emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
 var _validation_cache: Dictionary = {}
@@ -65,17 +73,14 @@ func clear_validation_cache() -> void:
 # ============================================================================
 
 ## Escapes a string for safe use inside Windows cmd.exe double quotes.
-## Escapes cmd metacharacters: & | < > ^ % ( )"
+## Inside a quoted cmd string only % and " need special handling:
+##   - % is doubled to prevent environment-variable expansion.
+##   - " is doubled because a pair of double quotes inside a quoted string
+##     represents one literal double quote.
+## Other cmd metacharacters (& | < > ^ ( )) are literal inside quotes,
+## so escaping them with ^ would actually introduce literal carets into paths.
 func _escape_cmd_meta(s: String) -> String:
-	# Escape caret first (it's the escape character)
-	var result = s.replace("^", "^^")
-	result = result.replace("\u0026", "^\u0026")
-	result = result.replace("|", "^|")
-	result = result.replace("<", "^<")
-	result = result.replace(">", "^>")
-	result = result.replace("(", "^(")
-	result = result.replace(")", "^)")
-	result = result.replace("%", "%%")
+	var result = s.replace("%", "%%")
 	# Double quotes are escaped by doubling them inside a quoted string
 	result = result.replace('"', '""')
 	return result
@@ -993,13 +998,17 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# Vita3K special handling for desktop - replace ROM path with TitleID
 		var desktop_vita_title_id = intent.game.get_active_title_id() if intent.game else ""
-		if intent.emulator_id.begins_with("vita3k") and desktop_vita_title_id != "":
-			# Replace the ROM path (ZIP) with the TitleID flag
-			for i in range(intent.launch_args.size()):
-				if intent.launch_args[i] == global_rom_path:
-					intent.launch_args[i] = "-r"
-					intent.launch_args.insert(i + 1, desktop_vita_title_id)
-					break
+		if intent.emulator_id.begins_with("vita3k"):
+			# Force fullscreen for all desktop Vita3K launches.
+			#intent.launch_args.insert(1, "-F")
+			#print("[LaunchManager] Vita3K desktop launch: added -F fullscreen flag")
+			if desktop_vita_title_id != "":
+				# Replace the ROM path (ZIP) with the TitleID flag
+				for i in range(intent.launch_args.size()):
+					if intent.launch_args[i] == global_rom_path:
+						intent.launch_args[i] = "-r"
+						intent.launch_args.insert(i + 1, desktop_vita_title_id)
+						break
 		
 		# RPCS3 special handling for desktop - replace ROM path with game folder path
 		var desktop_rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
@@ -1415,7 +1424,10 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 		if on_pid_ready.is_valid():
 			on_pid_ready.call(pid)
 	
-	var ready = await _ensure_prerequisites(game, emulator_id, on_ready, false)
+	# Vita3K needs TitleID extraction and ZIP extraction even in shuffler mode.
+	# Other emulators skip the normal preparation step.
+	var should_prepare = emulator_id.begins_with("vita3k")
+	var ready = await _ensure_prerequisites(game, emulator_id, on_ready, should_prepare, true, rom_path_override)
 	if not ready:
 		return  # Download pending, callback will handle it
 	# If ready, on_ready was already called
@@ -1506,7 +1518,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 ## Ensures emulator is installed, firmware is ready, and game is prepared.
 ## Returns true if everything is ready and on_ready was called.
 ## Returns false if a download was started (caller should return and wait for callback).
-func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable, prepare_game: bool = true) -> bool:
+func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable, prepare_game: bool = true, is_shuffler: bool = false, rom_path_override: String = "") -> bool:
 	var emulator = get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
 	
@@ -1585,7 +1597,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	if prepare_game:
 		# Emulator and firmware are ready - prepare game
 		print("[LaunchManager] _ensure_prerequisites: Preparing game for emulator: " + emulator_id)
-		var prep_success = await _prepare_game_for_launch(game, emulator_id)
+		var prep_success = await _prepare_game_for_launch(game, emulator_id, is_shuffler, rom_path_override)
 		if not prep_success:
 			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
 			NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
@@ -1880,6 +1892,13 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 		# All steps completed successfully
 		_create_emulator_save_directory(emulator_id)
 		_emulator_install_progress[emulator_id] = ""
+		# Persist the version resolved during the first download step now that the
+		# install is fully complete. This avoids marking an emulator updated when a
+		# download or extraction actually failed partway through.
+		if _pending_emulator_version.has(emulator_id):
+			_save_emulator_version(emulator_id, _pending_emulator_version[emulator_id])
+			_pending_emulator_version.erase(emulator_id)
+		_force_install_step.erase(emulator_id)
 		emulator_extraction_completed.emit(emulator_id, true)
 		return true
 	
@@ -1889,37 +1908,44 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	if platform_config.is_empty():
 		push_error("[LaunchManager] No platform config for step '" + step_name + "' on platform: " + platform_name)
+		_force_install_step.erase(emulator_id)
 		return false
 	
 	var action_type = platform_config.get("action_type", "")
+	var step_success: bool = false
 	
 	# Route to appropriate handler based on action type
 	match action_type:
 		"download_url":
-			return _handle_download_url_step(emulator_id, emulator_name, step_name, step_index, platform_config)
+			step_success = _handle_download_url_step(emulator_id, emulator_name, step_name, step_index, platform_config)
 		"download_repo":
-			return _handle_download_repo_step(emulator_id, emulator_name, step_name, step_index, platform_config)
+			step_success = _handle_download_repo_step(emulator_id, emulator_name, step_name, step_index, platform_config)
 		"download_scrape":
-			return _handle_download_scrape_step(emulator_id, emulator_name, step_name, step_index, platform_config)
+			step_success = _handle_download_scrape_step(emulator_id, emulator_name, step_name, step_index, platform_config)
 		"extract":
-			return _execute_extract_step(emulator_id, step_index, platform_config)
+			step_success = _execute_extract_step(emulator_id, step_index, platform_config)
 		"apk_install":
-			return _execute_apk_install_step(emulator_id, step_index, platform_config)
+			step_success = _execute_apk_install_step(emulator_id, step_index, platform_config)
 		"batch_url_download":
-			return _execute_batch_url_download_step(emulator_id, step_index, platform_config)
+			step_success = _execute_batch_url_download_step(emulator_id, step_index, platform_config)
 		"create_folders":
-			return _handle_create_folders_step(emulator_id, step_name, step_index, platform_config)
+			step_success = _handle_create_folders_step(emulator_id, step_name, step_index, platform_config)
 		"create_files":
-			return _handle_create_files_step(emulator_id, step_name, step_index, platform_config)
+			step_success = _handle_create_files_step(emulator_id, step_name, step_index, platform_config)
 		"create_pcsx2_superblock":
-			return _handle_create_pcsx2_superblock_step(emulator_id, step_name, step_index, platform_config)
+			step_success = _handle_create_pcsx2_superblock_step(emulator_id, step_name, step_index, platform_config)
 		"edit_file":
-			return _handle_edit_file_step(emulator_id, step_name, step_index, platform_config)
+			step_success = _handle_edit_file_step(emulator_id, step_name, step_index, platform_config)
 		"none":
-			return _handle_none_step(emulator_id, step_name, step_index)
+			step_success = _handle_none_step(emulator_id, step_name, step_index)
 		_:
 			push_error("[LaunchManager] Unknown action_type '" + action_type + "' for step: " + step_name)
-			return false
+			step_success = false
+	
+	if not step_success:
+		_force_install_step.erase(emulator_id)
+	
+	return step_success
 
 ## Re-runs a previous install step when current step needs it
 ## Use this when a step's input (downloaded file, etc.) is missing
@@ -2177,10 +2203,12 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# Normalize the path to remove "." and ".." components
 	extract_dir = FSM.normalize_path(extract_dir)
 	
-	# NEW LOGIC: Check validation first (output files exist?)
-	if _validate_install_step(emulator_id, step_index, install_steps):
-		_execute_install_step(emulator_id, step_index + 1)
-		return true
+	# Skip extraction only when resuming a partial install. During an update or
+	# reinstall the flag is set, so we re-extract the new archive over the old files.
+	if not _force_install_step.get(emulator_id, false):
+		if _validate_install_step(emulator_id, step_index, install_steps):
+			_execute_install_step(emulator_id, step_index + 1)
+			return true
 	
 	# Look for the archive file to extract
 	var emulator_dir = _get_emulator_directory(emulator_id).rstrip("/")
@@ -2253,6 +2281,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var extraction_callback = func(success: bool, _message: String):
 		if not success:
 			_emulator_install_progress[emulator_id] = "Extraction failed"
+			_force_install_step.erase(emulator_id)
 			emulator_extraction_completed.emit(emulator_id, false)
 			return
 		
@@ -2513,18 +2542,23 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(url: String, tag: String, error: String, file_size: int, published_at: String):
+		func(url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String):
 			if error != "":
 				push_error("[LaunchManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = "Failed to fetch release"
 				return
-			# Use published_at date as version for date-based comparison
-			# Fall back to tag name if no date available
-			var version_to_save = published_at if published_at != "" else tag
+			# Use the later of the release date and the matched asset's update date.
+			# Asset updated_at is more reliable for rolling/pinned releases where the
+			# release date stays fixed but CI re-uploads new builds.
+			var version_to_save = _latest_iso_date(published_at, asset_updated_at)
+			if version_to_save == "":
+				version_to_save = tag
 			if version_to_save != "":
-				# force=true to overwrite any existing version during install
-				_save_emulator_version(emulator_id, version_to_save, true)
-				print("[LaunchManager] Saved emulator version for " + emulator_id + ": " + version_to_save)
+				# Defer persistence until the entire install succeeds. Stashing it here
+				# and saving it only after all steps complete prevents a failed download
+				# or extraction from leaving a falsely "up to date" stored version.
+				_pending_emulator_version[emulator_id] = version_to_save
+				print("[LaunchManager] Resolved emulator version for " + emulator_id + ": " + version_to_save)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size),
 		release_tag,
 		api_base_url
@@ -2562,9 +2596,11 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 				_emulator_install_progress[emulator_id] = "Failed to scrape release"
 				return
 			if version != "":
-				# force=true to overwrite any existing version during install
-				_save_emulator_version(emulator_id, version, true)
-				print("[LaunchManager] Saved emulator version for " + emulator_id + ": " + version)
+				# Defer persistence until the entire install succeeds. Stashing it here
+				# and saving it only after all steps complete prevents a failed download
+				# or extraction from leaving a falsely "up to date" stored version.
+				_pending_emulator_version[emulator_id] = version
+				print("[LaunchManager] Resolved emulator version for " + emulator_id + ": " + version)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
 		match_strategy,
 		json_path
@@ -2574,7 +2610,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 ## Saves the installed emulator version to settings for update checking.
 ## Only stores the FIRST download step's version to prevent secondary assets
 ## (e.g. shadPS4 Qt launcher) from clobbering the core version.
-## Set force=true to overwrite an existing version (used by async version fetch).
+## Pass force=true to overwrite an existing version when explicitly needed.
 func _save_emulator_version(emulator_id: String, version: String, force: bool = false):
 	if SettingsManager:
 		var setting = SettingsManager.get_setting("installed_emulator_versions")
@@ -2649,16 +2685,17 @@ func _compare_versions(a: String, b: String) -> int:
 	# Opaque strings - incomparable
 	return 2
 
-## Parses an ISO 8601 date string to unix timestamp for comparison
-## Returns -1 if parsing fails
+## Parses an ISO 8601 date string to unix timestamp for comparison.
+## Handles trailing timezone offsets (Z, +HH:MM, -HH:MM) and converts to UTC.
+## Returns -1 if parsing fails.
 func _parse_iso_date(date_str: String) -> int:
 	if date_str == "" or not date_str.contains("-"):
 		return -1
 	
-	# Use regex to validate format first (avoids Godot parser error spam)
-	# Matches: 2024-01-15T10:30:00Z or 2024-01-15T10:30:00+00:00
+	# Validate format and capture optional timezone offset.
+	# Matches: 2024-01-15T10:30:00Z, 2024-01-15T10:30:00+02:00, etc.
 	var regex = RegEx.new()
-	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2})")
+	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?(Z|[+-]\\d{2}:?\\d{2})?")
 	var match_result = regex.search(date_str)
 	if not match_result:
 		return -1
@@ -2669,10 +2706,38 @@ func _parse_iso_date(date_str: String) -> int:
 	var hour = int(match_result.get_string(4))
 	var minute = int(match_result.get_string(5))
 	var second = int(match_result.get_string(6))
+	var tz_str = match_result.get_string(7)
 	
 	var dict = {"year": year, "month": month, "day": day,
 				"hour": hour, "minute": minute, "second": second}
-	return int(Time.get_unix_time_from_datetime_dict(dict))
+	var unix = int(Time.get_unix_time_from_datetime_dict(dict))
+	
+	# Apply timezone offset to get true UTC timestamp.
+	if tz_str != "" and tz_str != "Z":
+		var tz_regex = RegEx.new()
+		tz_regex.compile("([+-])(\\d{2}):?(\\d{2})")
+		var tz_match = tz_regex.search(tz_str)
+		if tz_match:
+			var sign = 1 if tz_match.get_string(1) == "+" else -1
+			var tz_hours = int(tz_match.get_string(2))
+			var tz_minutes = int(tz_match.get_string(3))
+			var offset_seconds = sign * (tz_hours * 3600 + tz_minutes * 60)
+			unix -= offset_seconds
+	
+	return unix
+
+## Returns the later of two ISO 8601 date strings.
+## If only one is valid, returns that one. If neither is valid, returns "".
+func _latest_iso_date(a: String, b: String) -> String:
+	var ta = _parse_iso_date(a)
+	var tb = _parse_iso_date(b)
+	if ta > 0 and tb > 0:
+		return a if ta > tb else b
+	if ta > 0:
+		return a
+	if tb > 0:
+		return b
+	return ""
 
 ## Checks for updates across all installed emulators
 ## callback(updated: Array, up_to_date: Array, failed: Array)
@@ -2810,7 +2875,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	NetworkManager.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(_url: String, tag: String, error: String, _file_size: int, published_at: String):
+		func(_url: String, tag: String, error: String, _file_size: int, published_at: String, asset_updated_at: String):
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
 				_check_updates_complete(results, callback)
@@ -2818,16 +2883,19 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 			
 			var update_available = false
 			
-			# Primary: use published_at date if available (more reliable for repos)
-			if published_at != "":
-				var remote_date = _parse_iso_date(published_at)
+			# Primary: use the later of the release date and the matched asset's
+			# update date. Asset updated_at catches rolling/pinned releases where
+			# the release date stays fixed but CI uploads new builds.
+			var remote_date_str = _latest_iso_date(published_at, asset_updated_at)
+			if remote_date_str != "":
+				var remote_date = _parse_iso_date(remote_date_str)
 				var installed_date = _parse_iso_date(installed_version)
 				
 				if remote_date > 0 and installed_date > 0:
 					# Both are dates - compare directly
 					if remote_date > installed_date:
 						update_available = true
-						print("[LaunchManager] Update available for " + emulator_id + ": " + published_at + " > " + installed_version)
+						print("[LaunchManager] Update available for " + emulator_id + ": " + remote_date_str + " > " + installed_version)
 					else:
 						print("[LaunchManager] " + emulator_id + " is up to date: " + installed_version)
 				else:
@@ -2870,6 +2938,8 @@ func _trigger_emulator_update(emulator_id: String, _emulator_name: String, _plat
 	
 	# Clear stored version so the first download step can save the new version
 	_clear_emulator_version(emulator_id)
+	_pending_emulator_version.erase(emulator_id)
+	_force_install_step[emulator_id] = true
 	
 	# Start installation from step 0
 	_execute_install_step(emulator_id, 0)
@@ -2923,7 +2993,10 @@ func _handle_create_files_step(emulator_id: String, _step_name: String, step_ind
 		var games_dir = games_folder_setting.value.rstrip("/") if games_folder_setting else "user://roms"
 		file_content = file_content.replace("{games_dir}", games_dir)
 		
-		if not FSM.file_exists(full_path):
+		# During an update/reinstall we re-create config files so the new defaults
+		# are applied. Otherwise we only create missing files to preserve user edits.
+		var should_write = _force_install_step.get(emulator_id, false) or not FSM.file_exists(full_path)
+		if should_write:
 			if not FSM.write_file(full_path, file_content):
 				push_error("[LaunchManager] Failed to create file: " + full_path)
 				return false
@@ -3148,6 +3221,19 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 	
 	if progress["status"] == "partial" and progress["next_step_index"] >= 0:
 		start_step = progress["next_step_index"]
+	
+	# Starting from step 0 means this is a fresh install or a reinstall.
+	# Clear any persisted or pending version so the first download step can save
+	# the new one and we don't leak a stale resolved version from a prior attempt.
+	if start_step == 0:
+		_clear_emulator_version(emulator_id)
+		_pending_emulator_version.erase(emulator_id)
+		# If the emulator was already fully installed, this is a reinstall/update:
+		# force all steps to re-run instead of short-circuiting on existing files.
+		if progress["status"] == "complete":
+			_force_install_step[emulator_id] = true
+		else:
+			_force_install_step.erase(emulator_id)
 	
 	return _execute_install_step(emulator_id, start_step)
 
@@ -3395,6 +3481,8 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		
 		if not success:
 			_emulator_install_progress[emulator_id] = "Download failed: " + message
+			_pending_emulator_version.erase(emulator_id)
+			_force_install_step.erase(emulator_id)
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, message)
 			return
@@ -3404,6 +3492,8 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		if not _validate_step(emulator_id, validate_config):
 			push_error("[LaunchManager] Download validation failed for: " + emulator_id)
 			_emulator_install_progress[emulator_id] = "Download validation failed"
+			_pending_emulator_version.erase(emulator_id)
+			_force_install_step.erase(emulator_id)
 			emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, "Validation failed")
 			return
@@ -3456,12 +3546,15 @@ func _store_title_id(game: GameResource, title_id: String) -> void:
 ## Prepares a game for launch by extracting title IDs and game files
 ## This must be called BEFORE save sync so that the title_id is available
 ## Returns true if preparation succeeded (or no prep needed), false on error
-func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
+func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffler: bool = false, rom_path_override: String = "") -> bool:
 	print("[LaunchManager] _prepare_game_for_launch: START for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
 	
 	# Build a temporary intent for ROM path
 	var temp_intent = LaunchIntent.new()
-	if game.file_path != "":
+	if rom_path_override != "":
+		temp_intent.rom_path = rom_path_override
+		print("[LaunchManager] _prepare_game_for_launch: Using shuffler override path = " + rom_path_override)
+	elif game.file_path != "":
 		temp_intent.rom_path = game.file_path
 		print("[LaunchManager] _prepare_game_for_launch: Using game.file_path = " + game.file_path)
 	else:
@@ -3501,7 +3594,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String) -> bool:
 			print("[LaunchManager] _prepare_game_for_launch: PPSSPP prep result = " + str(result))
 		"vita3k", "vita3k-canary":
 			print("[LaunchManager] _prepare_game_for_launch: Preparing Vita3K game...")
-			result = await _prepare_vita3k_game(game, temp_intent)
+			result = await _prepare_vita3k_game(game, temp_intent, is_shuffler)
 			print("[LaunchManager] _prepare_game_for_launch: Vita3K prep result = " + str(result))
 		"rpcs3":
 			print("[LaunchManager] _prepare_game_for_launch: Preparing RPCS3 game...")
@@ -3822,8 +3915,8 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 
 ## Handles Vita3K game extraction and launch preparation
 ## Returns true if ready to launch, false if error
-func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
-	print("[LaunchManager] _prepare_vita3k_game: ENTER for " + game.get_display_name())
+func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler: bool = false) -> bool:
+	print("[LaunchManager] _prepare_vita3k_game: ENTER for " + game.get_display_name() + " (shuffler=" + str(is_shuffler) + ")")
 	
 	var rom_path = intent.rom_path
 	print("[LaunchManager] Vita3K: Preparing game from ROM path: " + rom_path)
@@ -3926,6 +4019,18 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent) -> bool:
 		return false
 	
 	print("[LaunchManager] Vita3K: Extraction successful")
+	
+	# Mark shuffler-managed app folders so they can be safely cleaned up later.
+	if is_shuffler:
+		var sentinel_path = vita_app_path + "/.kyodai_shuffler"
+		if not FSM.file_exists(sentinel_path):
+			var sentinel_file = FileAccess.open(sentinel_path, FileAccess.WRITE)
+			if sentinel_file:
+				sentinel_file.close()
+				print("[LaunchManager] Vita3K: Created shuffler sentinel at " + sentinel_path)
+			else:
+				push_warning("[LaunchManager] Vita3K: Failed to create shuffler sentinel at " + sentinel_path)
+	
 	print("[LaunchManager] _prepare_vita3k_game: EXIT with true")
 	return true
 

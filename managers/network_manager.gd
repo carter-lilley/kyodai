@@ -839,7 +839,7 @@ func format_bytes(bytes: int) -> String:
 ## Supports GitHub, Gitea, Forgejo, and other platforms with GitHub-compatible API
 ## @param repo: Repository path (e.g., "owner/repo")
 ## @param asset_pattern: Regex pattern to match the desired asset filename
-## @param callback: Called with (download_url: String, error: String)
+## @param callback: Called with (download_url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String)
 ## @param release_tag: Specific tag to fetch (empty or "latest" for latest release)
 ## @param api_base_url: API base URL (default: "https://api.github.com", e.g., "https://git.example.com/api/v1")
 func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
@@ -859,7 +859,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	var error = http.request(url, headers)
 	
 	if error != OK:
-		callback.call("", "", "Failed to start request: " + str(error), 0, "")
+		callback.call("", "", "Failed to start request: " + str(error), 0, "", "")
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
@@ -869,11 +869,11 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			_cleanup_http_request(http)
 			
 			if result != HTTPRequest.RESULT_SUCCESS:
-				callback.call("", "", "Request failed: " + str(result), 0, "")
+				callback.call("", "", "Request failed: " + str(result), 0, "", "")
 				return
 			
 			if response_code != 200:
-				callback.call("", "", "HTTP error: " + str(response_code), 0, "")
+				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "")
 				return
 			
 			var body_text = body.get_string_from_utf8()
@@ -881,12 +881,12 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			var parse_result = json.parse(body_text)
 			
 			if parse_result != OK:
-				callback.call("", "", "Failed to parse JSON: " + json.get_error_message(), 0, "")
+				callback.call("", "", "Failed to parse JSON: " + json.get_error_message(), 0, "", "")
 				return
 			
 			var data = json.data
 			if not data.has("assets"):
-				callback.call("", "", "No assets in release", 0, "")
+				callback.call("", "", "No assets in release", 0, "", "")
 				return
 			
 			var regex = RegEx.new()
@@ -900,9 +900,10 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				if regex.search(asset_name) != null:
 					var download_url = asset.get("browser_download_url", "")
 					var asset_size = asset.get("size", 0)
-					callback.call(download_url, tag_name, "", asset_size, published_at)
+					var asset_updated_at = asset.get("updated_at", "")
+					callback.call(download_url, tag_name, "", asset_size, published_at, asset_updated_at)
 					return
-			callback.call("", "", "No asset matched pattern: " + asset_pattern, 0, "")
+			callback.call("", "", "No asset matched pattern: " + asset_pattern, 0, "", "")
 			)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):

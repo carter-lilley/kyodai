@@ -58,41 +58,83 @@ const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at star
 
 # Chunked download constants
 const CHUNKED_DOWNLOAD_THRESHOLD: int = 20 * 1024 * 1024  # 20MB minimum for chunking
-const MIN_CHUNK_SIZE: int = 10 * 1024 * 1024  # 10MB minimum chunk size
-const TARGET_CHUNK_SIZE: int = 100 * 1024 * 1024  # 100MB target chunk size
-const MAX_CHUNKS: int = 20  # Hard cap to avoid rate-limiting
+
+# Dynamic chunk sizing (copyparty-style): start at 1 MiB, grow by 512 KiB steps,
+# targeting <=256 chunks. For very large files we allow up to 4096 chunks once
+# the chunk size has reached 32 MiB. A platform cap keeps memory/temp overhead sane.
+const DYNAMIC_CHUNK_MIN_SIZE: int = 1 * 1024 * 1024
+const DYNAMIC_CHUNK_STEP: int = 512 * 1024
+const DYNAMIC_CHUNK_TARGET_MAX: int = 256
+const DYNAMIC_CHUNK_ABS_MAX: int = 4096
+const DYNAMIC_CHUNK_LARGE_THRESHOLD: int = 32 * 1024 * 1024
+const DYNAMIC_CHUNK_MAX_DESKTOP: int = 32 * 1024 * 1024
+const DYNAMIC_CHUNK_MAX_ANDROID: int = 16 * 1024 * 1024
+
 const MAX_CONCURRENT_CHUNKS_DESKTOP: int = 6
 const MAX_CONCURRENT_CHUNKS_ANDROID: int = 3
+
+# In-place assembly writes chunks directly into the final sparse file at the
+# correct offset, eliminating the post-download reassembly pass.
+# Disabled on Android because external storage often lacks sparse-file support.
+const IN_PLACE_CHUNKED_DOWNLOADS: bool = true
 
 var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # kept for legacy code; active cap is below
 
 # Chunk retry / timeout settings
-const MAX_CHUNK_RETRIES: int = 3
-const CHUNK_RETRY_DELAY_SEC: float = 1.5  # 1.5 seconds between retries
+const MAX_CHUNK_RETRIES: int = 5
 const CHUNK_REQUEST_TIMEOUT_MS: int = 20 * 1000  # time to finish request headers
 const CHUNK_STALL_TIMEOUT_MS: int = 15 * 1000   # no bytes received
 const CHUNK_FALLBACK_TO_SINGLE_STREAM: bool = true
+const CHUNK_MAX_TOTAL_TIME_MS: int = 10 * 60 * 1000  # Hard ceiling per chunk (10 min)
+const CHUNK_WATCHDOG_INTERVAL_SEC: float = 10.0
 
 # Polling interval for HTTPClient (2 seconds between polls when no data)
 const POLLING_INTERVAL_MS: int = 100
 const POLLING_INTERVAL_US: int = 2000000
 
-## Calculates chunk size and concurrency using a fixed target size and server-friendly cap
-## Target chunk size: 128MB
-## Hard cap: 16 chunks max
-## Active concurrency: 4 on desktop, 2 on Android
-## Minimum chunk size: 10MB to avoid overhead
+# Per-download resume state file (sidecar next to destination)
+const DOWNLOAD_STATE_VERSION: int = 1
+const DOWNLOAD_STATE_SUFFIX: String = ".kyodai_download"
+const DOWNLOAD_PARTIAL_SUFFIX: String = ".kyodai_partial"
+
+## Calculates an adaptive chunk size similar to copyparty's up2k client.
+## Starts at 1 MiB and grows by 512 KiB until the file fits in <=256 chunks.
+## Once the chunk size reaches 32 MiB we allow up to 4096 chunks.
+## A platform cap prevents excessive temp-file/memory overhead.
+func _get_chunksize(file_size: int) -> int:
+	if file_size <= 0:
+		return DYNAMIC_CHUNK_MIN_SIZE
+	
+	var chunk_size = DYNAMIC_CHUNK_MIN_SIZE
+	var step = DYNAMIC_CHUNK_STEP
+	while true:
+		for mul in [1, 2]:
+			var nchunks = ceili(float(file_size) / float(chunk_size))
+			if nchunks <= DYNAMIC_CHUNK_TARGET_MAX:
+				return chunk_size
+			if chunk_size >= DYNAMIC_CHUNK_LARGE_THRESHOLD and nchunks <= DYNAMIC_CHUNK_ABS_MAX:
+				return chunk_size
+			chunk_size += step
+			step *= mul
+			# Apply platform cap so we don't keep searching forever
+			var cap = DYNAMIC_CHUNK_MAX_ANDROID if PlatformManager.is_android() else DYNAMIC_CHUNK_MAX_DESKTOP
+			chunk_size = mini(chunk_size, cap)
+			if chunk_size >= cap and nchunks <= DYNAMIC_CHUNK_ABS_MAX:
+				return chunk_size
+			if chunk_size >= cap:
+				return cap
+	
+	# Unreachable, but keeps the static analyzer happy
+	return DYNAMIC_CHUNK_MIN_SIZE
+
+## Calculates chunk size and concurrency for a given file size.
 func _calculate_chunk_strategy(file_size: int) -> Dictionary:
 	var thread_count = MemoryManager.get_download_thread_count()
 	var max_concurrent = MAX_CONCURRENT_CHUNKS_ANDROID if PlatformManager.is_android() else MAX_CONCURRENT_CHUNKS_DESKTOP
 	var concurrency = mini(thread_count, max_concurrent)
 	
-	# Calculate number of chunks from target chunk size
-	var num_chunks = clampi(ceili(float(file_size) / float(TARGET_CHUNK_SIZE)), 1, MAX_CHUNKS)
-	var chunk_size = maxi(MIN_CHUNK_SIZE, ceili(float(file_size) / float(num_chunks)))
-	
-	# Recalculate after enforcing minimum chunk size
-	num_chunks = ceili(float(file_size) / float(chunk_size))
+	var chunk_size = _get_chunksize(file_size)
+	var num_chunks = ceili(float(file_size) / float(chunk_size))
 	
 	print("[DownloadManager] Chunk strategy for %d bytes: %d chunks x %d bytes (concurrency=%d, threads=%d)" % [
 		file_size, num_chunks, chunk_size, concurrency, thread_count
@@ -115,11 +157,19 @@ class ChunkedDownloadInfo:
 	var concurrency: int = 0  # Active chunk concurrency for this download
 	var temp_dir: String = ""
 	var final_path: String = ""
+	var partial_path: String = ""
 	var use_chunking: bool = false
+	var in_place_assembly: bool = false  # Write chunks directly to a sparse partial file
+	var final_file_mutex: Mutex = null  # Serializes writes to the partial file (if shared handle)
 	var active_downloads: int = 0
 	var download_callback: Callable
 	var progress_timer: Timer = null  # Timer for polling chunk progress
 	var last_progress_update: float = 0.0  # Last progress value to reduce emissions
+	var headers: Array = []
+	var start_time_ms: int = 0
+	var watchdog_timer: Timer = null
+	var watchdog_last_total_bytes: int = 0
+	var watchdog_last_progress_time_ms: int = 0
 	
 class ChunkInfo:
 	var index: int
@@ -132,6 +182,263 @@ class ChunkInfo:
 	var in_progress: bool = false
 	var retry_count: int = 0  # Track retry attempts
 	var temp_bytes_downloaded: int = 0  # Track bytes during download for real-time progress
+	# Integrity / resume state (copyparty-style)
+	var expected_hash: String = ""  # Expected SHA-256 of the chunk data
+	var actual_hash: String = ""    # SHA-256 computed after the chunk is written
+	var coolmul: float = 0.5        # Exponential backoff multiplier
+	var cooldown_until_ms: int = 0  # Absolute time (ticks_msec) before retry
+
+# ============================================================================
+# DOWNLOAD STATE FILE (chunk bitmap for resume)
+# ============================================================================
+
+func _get_state_file_path(destination_path: String) -> String:
+	return destination_path + DOWNLOAD_STATE_SUFFIX
+
+func _get_partial_file_path(destination_path: String) -> String:
+	return destination_path + DOWNLOAD_PARTIAL_SUFFIX
+
+## Creates a sparse file of the given size on supported filesystems.
+## Returns true if the file was created and sized successfully.
+## On Windows this uses fsutil; on Linux/macOS it relies on seek+write holes.
+func _create_sparse_file(path: String, size: int) -> bool:
+	if size <= 0:
+		return false
+	
+	# Ensure parent directory exists
+	var parent_dir = path.get_base_dir()
+	if not FSM.dir_exists(parent_dir):
+		if not FSM.make_dir_recursive(parent_dir):
+			push_error("[DownloadManager] Failed to create destination directory: " + parent_dir)
+			return false
+	
+	# Create (or truncate) the destination file
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		push_error("[DownloadManager] Failed to create destination file: " + path)
+		return false
+	file.close()
+	
+	if PlatformManager.is_windows():
+		var native_path = FSM.resolve_native_path(path)
+		var exit_code = OS.execute("fsutil", ["sparse", "setflag", native_path, "1"])
+		if exit_code != 0:
+			push_error("[DownloadManager] fsutil sparse setflag failed for: " + native_path)
+			return false
+		exit_code = OS.execute("fsutil", ["file", "seteof", native_path, str(size)])
+		if exit_code != 0:
+			push_error("[DownloadManager] fsutil file seteof failed for: " + native_path)
+			return false
+	else:
+		# On Linux/macOS/Android, seeking past EOF and writing creates a sparse
+		# hole on filesystems that support it (ext4, btrfs, apfs, etc.).
+		file = FileAccess.open(path, FileAccess.WRITE_READ)
+		if file == null:
+			push_error("[DownloadManager] Failed to open destination file for sizing: " + path)
+			return false
+		file.seek(size - 1)
+		file.store_8(0)
+		file.close()
+		
+		# Probe whether the filesystem actually stored the file sparsely.
+		# If it allocated the whole file (e.g. FAT32/exFAT), sparse assembly
+		# would waste disk space, so fall back to sequential temp-file reassembly.
+		var native_path = FSM.resolve_native_path(path)
+		var stat_args = ["-c", "%b %B", native_path]
+		if PlatformManager.is_macos():
+			stat_args = ["-f", "%b %B", native_path]
+		var output: Array = []
+		var exit_code = OS.execute("stat", stat_args, output, true)
+		if exit_code == 0 and output.size() > 0:
+			var parts = output[0].strip_edges().split(" ")
+			if parts.size() >= 2:
+				var blocks = int(parts[0])
+				var block_size = int(parts[1])
+				var allocated = blocks * block_size
+				# Sparse filesystems should allocate only a few blocks for the
+				# one-byte probe. If the allocation is a large fraction of the
+				# logical size, assume sparse files are not supported.
+				# Use a floor of 64 KiB so that normal single-block allocation on
+				# sparse filesystems does not trigger the fallback.
+				var threshold = maxi(64 * 1024, size / 2)
+				if block_size > 0 and allocated > threshold:
+					push_error("[DownloadManager] Filesystem does not appear to support sparse files: " + path + " (allocated " + str(allocated) + " bytes for " + str(size) + " byte file)")
+					FSM.delete_file(path)
+					return false
+		else:
+			push_warning("[DownloadManager] Could not probe filesystem sparse support for: " + path)
+	
+	# Verify the file reached the expected logical size
+	if not FileAccess.file_exists(path):
+		return false
+	var check = FileAccess.open(path, FileAccess.READ)
+	if check == null:
+		return false
+	var actual_size = check.get_length()
+	check.close()
+	if actual_size != size:
+		push_error("[DownloadManager] Sparse file size mismatch: expected " + str(size) + ", got " + str(actual_size))
+		return false
+	
+	return true
+
+func _delete_download_state(destination_path: String) -> void:
+	var state_path = _get_state_file_path(destination_path)
+	if FileAccess.file_exists(state_path):
+		var err = DirAccess.remove_absolute(state_path)
+		if err != OK:
+			push_error("[DownloadManager] Failed to remove state file: " + state_path)
+
+## Loads a previously saved chunk state file, if it is valid for this URL/size/strategy.
+func _load_download_state(destination_path: String, url: String, file_size: int) -> Dictionary:
+	var state_path = _get_state_file_path(destination_path)
+	if not FileAccess.file_exists(state_path):
+		return {}
+	
+	var file = FileAccess.open(state_path, FileAccess.READ)
+	if file == null:
+		push_error("[DownloadManager] Could not open state file: " + state_path)
+		return {}
+	
+	var text = file.get_as_text()
+	file.close()
+	
+	var json = JSON.new()
+	if json.parse(text) != OK:
+		push_error("[DownloadManager] Corrupt state file, ignoring: " + state_path)
+		return {}
+	
+	var data = json.data
+	if not (data is Dictionary):
+		return {}
+	
+	if int(data.get("version", 0)) != DOWNLOAD_STATE_VERSION:
+		return {}
+	if data.get("url", "") != url:
+		return {}
+	if int(data.get("file_size", 0)) != file_size:
+		return {}
+	
+	var strategy = _calculate_chunk_strategy(file_size)
+	if int(data.get("chunk_size", 0)) != strategy.chunk_size or int(data.get("num_chunks", 0)) != strategy.num_chunks:
+		return {}
+	
+	return data
+
+## Applies a loaded state dictionary to a freshly created ChunkedDownloadInfo.
+func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	
+	var chunks_data = state.get("chunks", [])
+	if not (chunks_data is Array):
+		return
+	
+	for chunk_state in chunks_data:
+		if not (chunk_state is Dictionary):
+			continue
+		var idx = int(chunk_state.get("index", -1))
+		if idx < 0 or idx >= chunked_info.chunks.size():
+			continue
+		
+		var chunk = chunked_info.chunks[idx]
+		chunk.expected_hash = chunk_state.get("expected_hash", "")
+		chunk.actual_hash = chunk_state.get("actual_hash", "")
+		chunk.retry_count = int(chunk_state.get("retry_count", 0))
+		chunk.coolmul = float(chunk_state.get("coolmul", 0.5))
+		chunk.cooldown_until_ms = int(chunk_state.get("cooldown_until_ms", 0))
+		
+		var status = chunk_state.get("status", "pending")
+		if status == "complete":
+			var expected_size = chunk.end_byte - chunk.start_byte + 1
+			var verified = false
+			
+			if chunked_info.in_place_assembly:
+				# For sparse in-place assembly, verify the chunk range in the partial file.
+				if FileAccess.file_exists(chunked_info.partial_path):
+					var partial_file = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
+					if partial_file != null:
+						var partial_size = partial_file.get_length()
+						if partial_size == chunked_info.item.expected_file_size:
+							partial_file.seek(chunk.start_byte)
+							var hasher = HashingContext.new()
+							hasher.start(HashingContext.HASH_SHA256)
+							var remaining = expected_size
+							while remaining > 0:
+								var read_size = mini(remaining, 1024 * 1024)
+								var buf = partial_file.get_buffer(read_size)
+								if buf.size() == 0:
+									break
+								hasher.update(buf)
+								remaining -= buf.size()
+							partial_file.close()
+							
+							if remaining <= 0:
+								var disk_hash = hasher.finish().hex_encode()
+								var expected = chunk.actual_hash if not chunk.actual_hash.is_empty() else chunk.expected_hash
+								if expected.is_empty() or disk_hash == expected:
+									verified = true
+								else:
+									print("[DownloadManager] Resume hash mismatch for chunk " + str(chunk.index) + ", will re-download")
+						else:
+							partial_file.close()
+			else:
+				# Trust the state only if the temp file is actually present and the right size.
+				if FileAccess.file_exists(chunk.temp_path):
+					var f = FileAccess.open(chunk.temp_path, FileAccess.READ)
+					if f != null:
+						var actual_size = f.get_length()
+						f.close()
+						if actual_size == expected_size:
+							verified = true
+			
+			if verified:
+				chunk.completed = true
+				chunked_info.chunks_completed += 1
+
+## Persists the current chunk bitmap so resume can continue after a crash/kill.
+func _save_download_state(chunked_info: ChunkedDownloadInfo) -> void:
+	if chunked_info == null or chunked_info.item == null:
+		return
+	
+	var state_path = _get_state_file_path(chunked_info.final_path)
+	var chunks_data: Array = []
+	for chunk in chunked_info.chunks:
+		var status = "pending"
+		if chunk.completed:
+			status = "complete"
+		elif chunk.failed:
+			status = "failed"
+		elif chunk.in_progress:
+			status = "downloading"
+		chunks_data.append({
+			"index": chunk.index,
+			"start_byte": chunk.start_byte,
+			"end_byte": chunk.end_byte,
+			"status": status,
+			"expected_hash": chunk.expected_hash,
+			"actual_hash": chunk.actual_hash,
+			"retry_count": chunk.retry_count,
+			"coolmul": chunk.coolmul,
+			"cooldown_until_ms": chunk.cooldown_until_ms
+		})
+	
+	var data = {
+		"version": DOWNLOAD_STATE_VERSION,
+		"url": chunked_info.item.url,
+		"destination_path": chunked_info.final_path,
+		"file_size": chunked_info.item.expected_file_size,
+		"chunk_size": chunked_info.chunks[0].end_byte - chunked_info.chunks[0].start_byte + 1 if not chunked_info.chunks.is_empty() else 0,
+		"num_chunks": chunked_info.total_chunks,
+		"chunks": chunks_data
+	}
+	
+	var file = FileAccess.open(state_path, FileAccess.WRITE)
+	if file == null:
+		push_error("[DownloadManager] Failed to write state file: " + state_path)
+		return
+	file.store_string(JSON.stringify(data))
+	file.close()
 
 # Foreground service tracking for Android
 var _foreground_service_active: bool = false
@@ -633,9 +940,53 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	chunked_info.item = item
 	chunked_info.temp_dir = temp_dir
 	chunked_info.final_path = item.destination_path
+	chunked_info.partial_path = _get_partial_file_path(item.destination_path)
 	chunked_info.total_chunks = num_chunks
 	chunked_info.concurrency = concurrency
 	chunked_info.use_chunking = true
+	
+	# Decide whether to use in-place sparse assembly (desktop only).
+	# This writes each chunk directly into a partial file at the correct offset,
+	# eliminating the post-download reassembly pass.
+	var in_place_assembly = false
+	if IN_PLACE_CHUNKED_DOWNLOADS and not PlatformManager.is_android():
+		var state_path = _get_state_file_path(item.destination_path)
+		var has_state = FileAccess.file_exists(state_path)
+		var has_partial = FSM.file_exists(chunked_info.partial_path)
+		var partial_ok = false
+		
+		if not has_state or not has_partial:
+			# No valid resume state; start fresh and remove stale artifacts
+			if FSM.file_exists(chunked_info.partial_path):
+				FSM.delete_file(chunked_info.partial_path)
+			if FSM.file_exists(item.destination_path):
+				FSM.delete_file(item.destination_path)
+		elif has_partial:
+			# Resume: keep an existing partial file only if it has the expected size.
+			var partial_check = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
+			if partial_check:
+				var partial_size = partial_check.get_length()
+				partial_check.close()
+				if partial_size == file_size:
+					partial_ok = true
+				else:
+					push_error("[DownloadManager] Existing partial file size mismatch (" + str(partial_size) + " vs " + str(file_size) + "); restarting sparse file")
+					FSM.delete_file(chunked_info.partial_path)
+		
+		if partial_ok:
+			in_place_assembly = true
+			print("[DownloadManager] Resuming in-place sparse assembly for: " + item.name)
+		elif _create_sparse_file(chunked_info.partial_path, file_size):
+			in_place_assembly = true
+			print("[DownloadManager] Using in-place sparse assembly for: " + item.name)
+		else:
+			print("[DownloadManager] In-place sparse assembly not available, using temp files for: " + item.name)
+			if FSM.file_exists(chunked_info.partial_path):
+				FSM.delete_file(chunked_info.partial_path)
+	
+	chunked_info.in_place_assembly = in_place_assembly
+	if in_place_assembly:
+		chunked_info.final_file_mutex = Mutex.new()
 	
 	# Create chunk infos
 	for i in range(num_chunks):
@@ -648,6 +999,15 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		chunked_info.chunks.append(chunk)
 	
 	_chunked_downloads[item.id] = chunked_info
+	chunked_info.headers = headers
+	chunked_info.start_time_ms = Time.get_ticks_msec()
+	
+	# Load any existing resume state and skip already-complete chunks
+	var state = _load_download_state(item.destination_path, item.url, file_size)
+	if not state.is_empty():
+		print("[DownloadManager] Resuming download from state file for: " + item.name + " (" + str(state.get("chunks", []).size()) + " chunks recorded)")
+	_apply_download_state(chunked_info, state)
+	_save_download_state(chunked_info)
 	
 	# Initialize per-download concurrency semaphore and connection pool
 	var chunk_sem = Semaphore.new()
@@ -664,40 +1024,52 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	print("[DownloadManager] Starting chunked download with " + str(num_chunks) + " chunks for: " + item.name)
 	print("[DownloadManager] Using concurrency=" + str(concurrency) + " (thread pool=" + str(thread_count) + ")")
 	
-	# Queue all chunks to the download thread pool
+	# If every chunk is already complete on disk, go straight to verification/reassembly
+	if chunked_info.chunks_completed >= chunked_info.total_chunks:
+		print("[DownloadManager] All chunks already present on disk for: " + item.name)
+		_on_all_chunks_complete(item.id, headers, {})
+		return
+	
+	# Queue only pending chunks to the download thread pool
 	# The semaphore ensures at most `concurrency` chunks are active at once
 	var chunk_items = []
 	for i in range(num_chunks):
+		if chunked_info.chunks[i].completed:
+			continue
 		var thread_index = i % concurrency
 		chunk_items.append({
 			"item_id": item.id,
 			"chunk_index": i,
 			"url": item.url,
 			"temp_path": chunked_info.chunks[i].temp_path,
+			"partial_path": chunked_info.partial_path,
+			"write_offset": chunked_info.chunks[i].start_byte,
+			"in_place": chunked_info.in_place_assembly,
+			"final_file_mutex": chunked_info.final_file_mutex,
 			"start_byte": chunked_info.chunks[i].start_byte,
 			"end_byte": chunked_info.chunks[i].end_byte,
 			"original_start_byte": chunked_info.chunks[i].original_start_byte,
+			"expected_hash": chunked_info.chunks[i].expected_hash,
 			"headers": headers,
 			"thread_index": thread_index
 		})
 	
-	print("[DownloadManager] Queuing " + str(chunk_items.size()) + " chunks to thread pool for: " + item.name)
+	print("[DownloadManager] Queuing " + str(chunk_items.size()) + " pending chunks to thread pool for: " + item.name)
+	
+	# Start a watchdog that detects stuck chunk workers and falls back to single-stream.
+	_start_chunked_watchdog_timer(item.id, headers)
 	
 	# Use MemoryManager's download thread pool
 	await MemoryManager.queue_parallel_downloads(
 		chunk_items,
 		func(chunk_data, _index):
 			chunk_sem.wait()
-			var success = _download_chunk_on_thread(chunk_data)
+			var result = _download_chunk_on_thread(chunk_data)
 			chunk_sem.post()
-			return {
-				"success": success,
-				"chunk_index": chunk_data.chunk_index
-			},
+			return result,
 		func(_completed, _total, batch_index, result):
-			var success = result.get("success", false) if result is Dictionary else result
 			var chunk_index = result.get("chunk_index", batch_index) if result is Dictionary else batch_index
-			_update_chunk_download_progress(item.id, chunk_index, success),
+			_update_chunk_download_progress(item.id, chunk_index, result),
 		func(_results):
 			_on_all_chunks_complete(item.id, headers, _results)
 	)
@@ -726,19 +1098,38 @@ func _start_chunked_progress_timer(item_id: String):
 ## Downloads a single chunk on a worker thread using HTTPClient
 ## Called by the thread pool - runs on a background thread
 ## Uses connection pooling to reuse TLS connections across chunks
-func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
+## Downloads a single chunk on a worker thread using HTTPClient.
+## Returns a result dictionary with success, hashes, and retry hints.
+## Called by the thread pool - runs on a background thread.
+func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	var url = chunk_data.url
 	var temp_path = chunk_data.temp_path
+	var in_place = chunk_data.get("in_place", false)
+	var partial_path = chunk_data.get("partial_path", "") as String
+	var write_offset = chunk_data.get("write_offset", 0) as int
+	var final_file_mutex = chunk_data.get("final_file_mutex", null)
 	var start_byte = chunk_data.start_byte
 	var end_byte = chunk_data.end_byte
 	var original_start_byte = chunk_data.get("original_start_byte", start_byte) as int
+	var expected_hash = chunk_data.get("expected_hash", "") as String
 	var headers = chunk_data.headers
 	var chunk_index = chunk_data.chunk_index
 	var item_id = chunk_data.item_id
 	var thread_index = chunk_data.thread_index
 	
+	var result = {
+		"success": false,
+		"chunk_index": chunk_index,
+		"actual_hash": "",
+		"expected_hash": expected_hash,
+		"bytes_downloaded": 0,
+		"should_delete_partial": false,
+		"error": ""
+	}
+	
 	var expected_chunk_size = end_byte - original_start_byte + 1
 	var chunk_start_time = Time.get_ticks_msec()
+	var chunk_deadline_ms = chunk_start_time + CHUNK_MAX_TOTAL_TIME_MS
 	print("[DownloadManager] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
 	
 	# Parse URL to get components
@@ -755,21 +1146,21 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			http = connection_pool[thread_index]
 			var status_before = http.get_status() if http != null else -1
 			print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection status before check: " + str(status_before) + " (CONNECTED=" + str(HTTPClient.STATUS_CONNECTED) + ")")
-
+			
 			# Check for previous chunk finish time to calculate idle time
 			var idle_thread_key = item_id + "_" + str(thread_index)
 			var prev_finish_time = _thread_chunk_finish_times.get(idle_thread_key, 0)
 			if prev_finish_time > 0:
 				var idle_time = chunk_start_time - prev_finish_time
 				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " idle time between chunks: " + str(idle_time) + "ms")
-
+			
 			# Check if connection is still valid WITHOUT creating a new one under lock
 			var needs_new_connection = not _is_connection_valid(http)
 			if not needs_new_connection:
 				was_reused = true
 				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
 			_connection_pool_mutex.unlock()
-
+			
 			# Create connection OUTSIDE the mutex to avoid blocking other threads during TCP/TLS handshake
 			if needs_new_connection:
 				print("[DownloadManager] [DEBUG] Thread " + str(thread_index) + " connection invalid, creating new for chunk " + str(chunk_index))
@@ -782,15 +1173,18 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		else:
 			push_error("[DownloadManager] Thread index out of bounds: " + str(thread_index))
 			_connection_pool_mutex.unlock()
-			return false
+			result.error = "Thread index out of bounds"
+			return result
 	else:
 		push_error("[DownloadManager] No connection pool found for item: " + item_id)
 		_connection_pool_mutex.unlock()
-		return false
+		result.error = "No connection pool"
+		return result
 	
 	if http == null:
 		push_error("[DownloadManager] Failed to get/create connection for chunk " + str(chunk_index))
-		return false
+		result.error = "Failed to get/create connection"
+		return result
 	
 	# Prepare headers
 	var request_headers = headers.duplicate()
@@ -831,30 +1225,79 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	if not has_accept:
 		request_headers.append("Accept: */*")
 	
-	# Partial chunk resume: if a partial file exists, resume from its end
+	# Set up SHA-256 hasher for this chunk
+	var hasher = HashingContext.new()
+	hasher.start(HashingContext.HASH_SHA256)
+	
+	# Partial chunk resume: if a partial file exists, hash existing bytes and resume from its end
 	var bytes_downloaded = 0
 	var resume_offset = 0
 	var file: FileAccess = null
 	
-	if FileAccess.file_exists(temp_path):
+	# In-place assembly does not resume within a chunk; pending chunks are re-downloaded whole.
+	if not in_place and FileAccess.file_exists(temp_path):
 		var partial_file = FileAccess.open(temp_path, FileAccess.READ)
 		if partial_file:
 			var partial_size = partial_file.get_length()
 			partial_file.close()
 			if partial_size >= expected_chunk_size:
-				print("[DownloadManager] Chunk " + str(chunk_index) + " already complete on disk (" + str(partial_size) + " bytes), skipping")
-				return true
+				# Already complete on disk; just verify/hash it and return
+				var hash_file = FileAccess.open(temp_path, FileAccess.READ)
+				if hash_file:
+					var remaining = partial_size
+					while remaining > 0:
+						var buf = hash_file.get_buffer(mini(remaining, 1024 * 1024))
+						hasher.update(buf)
+						remaining -= buf.size()
+					hash_file.close()
+				var actual_hash = hasher.finish().hex_encode()
+				result.actual_hash = actual_hash
+				result.bytes_downloaded = partial_size
+				
+				if not expected_hash.is_empty() and actual_hash != expected_hash:
+					# Existing file is corrupt; force a re-download
+					result.success = false
+					result.should_delete_partial = true
+					result.error = "Hash mismatch on existing complete chunk"
+					print("[DownloadManager] Chunk " + str(chunk_index) + " existing file hash mismatch, will re-download")
+					return result
+				
+				result.success = true
+				result.expected_hash = expected_hash if not expected_hash.is_empty() else actual_hash
+				var thread_key = item_id + "_" + str(thread_index)
+				_connection_pool_mutex.lock()
+				_thread_chunk_finish_times[thread_key] = Time.get_ticks_msec()
+				_connection_pool_mutex.unlock()
+				print("[DownloadManager] Chunk " + str(chunk_index) + " already complete on disk, verified " + str(partial_size) + " bytes")
+				return result
 			elif partial_size > 0:
 				resume_offset = partial_size
 				start_byte = original_start_byte + resume_offset
 				bytes_downloaded = partial_size
+				# Hash existing bytes so the final hash covers the whole chunk
+				var hash_file = FileAccess.open(temp_path, FileAccess.READ)
+				if hash_file:
+					var remaining = partial_size
+					while remaining > 0:
+						var buf = hash_file.get_buffer(mini(remaining, 1024 * 1024))
+						hasher.update(buf)
+						remaining -= buf.size()
+					hash_file.close()
 				print("[DownloadManager] Chunk " + str(chunk_index) + " resuming from byte " + str(start_byte) + " (already have " + str(partial_size) + " bytes)")
 	
 	# Add Range header (uses possibly resumed start_byte)
 	request_headers.append("Range: bytes=%d-%d" % [start_byte, end_byte])
 	
 	# Open file for writing/appending
-	if resume_offset > 0:
+	if in_place:
+		file = FileAccess.open(partial_path, FileAccess.READ_WRITE)
+		if file:
+			file.seek(write_offset)
+		else:
+			push_error("[DownloadManager] Failed to open partial file for in-place chunk write: " + partial_path)
+			result.error = "Failed to open partial file"
+			return result
+	elif resume_offset > 0:
 		file = FileAccess.open(temp_path, FileAccess.READ_WRITE)
 		if file:
 			file.seek_end(0)
@@ -863,7 +1306,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	
 	if not file:
 		push_error("[DownloadManager] Failed to create chunk file: " + temp_path)
-		return false
+		result.error = "Failed to create chunk file"
+		return result
 	
 	# Make the request
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " making request, connection status: " + str(http.get_status()))
@@ -872,7 +1316,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	if err != OK:
 		push_error("[DownloadManager] Failed to make request: " + str(err))
 		file.close()
-		return false
+		result.error = "Failed to make request: " + str(err)
+		return result
 	
 	# Wait for response headers
 	var poll_count = 0
@@ -887,7 +1332,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 			push_error("[DownloadManager] Chunk " + str(chunk_index) + " request phase timed out after " + str(CHUNK_REQUEST_TIMEOUT_MS) + "ms")
 			file.close()
 			_invalidate_pool_connection(http, item_id, thread_index)
-			return false
+			result.error = "Request phase timed out"
+			return result
 		
 		OS.delay_msec(10)
 	
@@ -896,14 +1342,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	# Get and log response headers
 	var response_headers = http.get_response_headers()
 	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " response headers: " + str(response_headers))
-	
-	# Check for Connection header in response
-	var connection_header = ""
-	for header in response_headers:
-		if header.to_lower().begins_with("connection:"):
-			connection_header = header.split(":", false, 1)[1].strip_edges().to_lower()
-			break
-	print("[DownloadManager] [DEBUG] Chunk " + str(chunk_index) + " server Connection header: '" + connection_header + "' (was_reused=" + str(was_reused) + ")")
 	
 	# Check response code
 	var response_code = http.get_response_code()
@@ -922,7 +1360,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		push_error("[DownloadManager] Chunk " + str(chunk_index) + " HTTP error " + str(response_code) + ": " + error_body)
 		file.close()
 		_invalidate_pool_connection(http, item_id, thread_index)
-		return false
+		result.error = "HTTP error " + str(response_code)
+		return result
 	
 	# Validate Content-Range header for 206 responses
 	if response_code == 206:
@@ -959,7 +1398,9 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		if not content_range_valid:
 			file.close()
 			_invalidate_pool_connection(http, item_id, thread_index)
-			return false
+			result.error = "Invalid Content-Range header"
+			result.should_delete_partial = true
+			return result
 	
 	# Download the chunk with stall detection
 	var last_progress_emit = bytes_downloaded
@@ -970,11 +1411,19 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		var current_time = Time.get_ticks_msec()
 		
+		if current_time > chunk_deadline_ms:
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " exceeded max total time of " + str(CHUNK_MAX_TOTAL_TIME_MS) + "ms")
+			file.close()
+			_invalidate_pool_connection(http, item_id, thread_index)
+			result.error = "Exceeded max total time"
+			return result
+		
 		if current_time - last_byte_time > CHUNK_STALL_TIMEOUT_MS:
 			push_error("[DownloadManager] Chunk " + str(chunk_index) + " stalled: no data for " + str(CHUNK_STALL_TIMEOUT_MS) + "ms")
 			file.close()
 			_invalidate_pool_connection(http, item_id, thread_index)
-			return false
+			result.error = "Stalled: no data"
+			return result
 		
 		# Poll every POLLING_INTERVAL_MS to balance responsiveness with CPU usage
 		if current_time - last_poll_time >= POLLING_INTERVAL_MS:
@@ -984,7 +1433,14 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 		
 		var chunk = http.read_response_body_chunk()
 		if chunk.size() > 0:
-			file.store_buffer(chunk)
+			if in_place and final_file_mutex != null:
+				final_file_mutex.lock()
+				file.seek(write_offset + bytes_downloaded)
+				file.store_buffer(chunk)
+				final_file_mutex.unlock()
+			else:
+				file.store_buffer(chunk)
+			hasher.update(chunk)
 			bytes_downloaded += chunk.size()
 			last_byte_time = current_time
 			
@@ -999,23 +1455,51 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	
 	file.close()
 	
-	# Verify chunk file exists and has correct size
-	if not FileAccess.file_exists(temp_path):
-		push_error("[DownloadManager] Chunk file not found after download: " + temp_path)
-		return false
-	
-	var verify_file = FileAccess.open(temp_path, FileAccess.READ)
-	if not verify_file:
-		push_error("[DownloadManager] Failed to open chunk file for verification: " + temp_path)
-		return false
-	
-	var actual_size = verify_file.get_length()
-	verify_file.close()
-	
-	if actual_size != expected_chunk_size:
-		push_error("[DownloadManager] Chunk " + str(chunk_index) + " size mismatch: expected " + str(expected_chunk_size) + " bytes, got " + str(actual_size) + " bytes")
+	# Verify downloaded size and (when possible) on-disk chunk
+	if bytes_downloaded != expected_chunk_size:
+		push_error("[DownloadManager] Chunk " + str(chunk_index) + " size mismatch: expected " + str(expected_chunk_size) + " bytes, got " + str(bytes_downloaded) + " bytes")
 		_invalidate_pool_connection(http, item_id, thread_index)
-		return false
+		result.error = "Size mismatch"
+		result.should_delete_partial = not in_place
+		return result
+	
+	if not in_place:
+		if not FileAccess.file_exists(temp_path):
+			push_error("[DownloadManager] Chunk file not found after download: " + temp_path)
+			result.error = "Chunk file not found after download"
+			result.should_delete_partial = true
+			return result
+		
+		var verify_file = FileAccess.open(temp_path, FileAccess.READ)
+		if not verify_file:
+			push_error("[DownloadManager] Failed to open chunk file for verification: " + temp_path)
+			result.error = "Failed to open chunk file for verification"
+			result.should_delete_partial = true
+			return result
+		
+		var actual_size = verify_file.get_length()
+		verify_file.close()
+		
+		if actual_size != expected_chunk_size:
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " size mismatch: expected " + str(expected_chunk_size) + " bytes, got " + str(actual_size) + " bytes")
+			_invalidate_pool_connection(http, item_id, thread_index)
+			result.error = "Size mismatch"
+			result.should_delete_partial = true
+			return result
+	
+	var actual_hash = hasher.finish().hex_encode()
+	if expected_hash.is_empty():
+		expected_hash = actual_hash
+	
+	result.actual_hash = actual_hash
+	result.expected_hash = expected_hash
+	
+	if actual_hash != expected_hash:
+		push_error("[DownloadManager] Chunk " + str(chunk_index) + " hash mismatch: expected " + expected_hash + ", got " + actual_hash)
+		_invalidate_pool_connection(http, item_id, thread_index)
+		result.error = "Hash mismatch"
+		result.should_delete_partial = true
+		return result
 	
 	var chunk_end_time = Time.get_ticks_msec()
 	var download_duration = chunk_end_time - chunk_start_time
@@ -1027,18 +1511,20 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> bool:
 	_connection_pool_mutex.lock()
 	_thread_chunk_finish_times[thread_key] = chunk_end_time
 	_connection_pool_mutex.unlock()
-
-	# DO NOT close the connection - leave it open for reuse by other chunks
 	
 	if bytes_downloaded == 0:
 		push_error("[DownloadManager] Downloaded 0 bytes for chunk " + str(chunk_index))
-		return false
+		result.error = "Downloaded 0 bytes"
+		result.should_delete_partial = true
+		return result
 	
-	print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes (connection left open, status=" + str(http.get_status()) + ")")
-	return true
+	result.success = true
+	result.bytes_downloaded = bytes_downloaded
+	print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes (hash=" + actual_hash + ")")
+	return result
 
 ## Updates progress when a chunk completes via thread pool
-func _update_chunk_download_progress(item_id: String, chunk_index: int, success: bool):
+func _update_chunk_download_progress(item_id: String, chunk_index: int, result: Variant):
 	if not _chunked_downloads.has(item_id):
 		return
 	
@@ -1050,16 +1536,50 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, success:
 	var item = chunked_info.item
 	var chunk = chunked_info.chunks[chunk_index]
 	
+	var success = false
+	var actual_hash = ""
+	var expected_hash = ""
+	var should_delete_partial = false
+	var bytes_downloaded = 0
+	
+	if result is Dictionary:
+		success = result.get("success", false)
+		actual_hash = result.get("actual_hash", "")
+		expected_hash = result.get("expected_hash", "")
+		should_delete_partial = result.get("should_delete_partial", false)
+		bytes_downloaded = result.get("bytes_downloaded", 0)
+	elif result is bool:
+		success = result
+	else:
+		push_error("[DownloadManager] Unexpected chunk result type: " + str(typeof(result)))
+		return
+	
+	chunk.in_progress = false
+	
 	if success:
 		if not chunk.completed:
 			chunk.completed = true
-			chunk.in_progress = false
+			chunk.failed = false
+			chunk.actual_hash = actual_hash
+			chunk.expected_hash = expected_hash
 			chunked_info.chunks_completed += 1
 			print("[DownloadManager] Chunk " + str(chunk_index) + " completed successfully (total: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
 	else:
-		chunk.in_progress = false
 		chunk.failed = true
+		chunk.actual_hash = actual_hash
+		chunk.expected_hash = expected_hash
+		# Reset progress tracking for retry
+		chunk.temp_bytes_downloaded = 0
+		
+		# Delete corrupt/mismatched partial files so the retry starts clean
+		if should_delete_partial and FSM.file_exists(chunk.temp_path):
+			FSM.delete_file(chunk.temp_path)
+			print("[DownloadManager] Deleted partial chunk file after failure: " + chunk.temp_path)
+		
 		print("[DownloadManager] Chunk " + str(chunk_index) + " failed (total completed: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+	
+	# Persist the updated bitmap after every chunk status change
+	_save_download_state(chunked_info)
 	
 	# Update overall progress based on actual bytes
 	var total_downloaded_bytes = 0
@@ -1090,42 +1610,85 @@ func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictiona
 	
 	# Check if all chunks completed successfully
 	if chunked_info.chunks_completed >= chunked_info.total_chunks:
-		print("[DownloadManager] All chunks marked complete for: " + item.name + ", verifying files before reassembly...")
+		print("[DownloadManager] All chunks marked complete for: " + item.name + ", verifying before finalising...")
 		
-		# Verify chunk files actually exist on disk (protects against race conditions / external deletion)
 		var missing_or_bad_chunks = []
-		for chunk in chunked_info.chunks:
-			if not FileAccess.file_exists(chunk.temp_path):
-				push_error("[DownloadManager] Chunk file missing despite being marked complete: " + chunk.temp_path)
-				missing_or_bad_chunks.append(chunk)
+		if chunked_info.in_place_assembly:
+			# For sparse in-place assembly, verify the partial file size and per-chunk hashes.
+			if not FileAccess.file_exists(chunked_info.partial_path):
+				push_error("[DownloadManager] Sparse partial file missing: " + chunked_info.partial_path)
+				missing_or_bad_chunks.append_array(chunked_info.chunks)
 			else:
-				var verify_file = FileAccess.open(chunk.temp_path, FileAccess.READ)
+				var verify_file = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
 				if verify_file:
 					var actual_size = verify_file.get_length()
 					verify_file.close()
-					var expected_size = chunk.end_byte - chunk.start_byte + 1
-					if actual_size != expected_size:
-						push_error("[DownloadManager] Chunk " + str(chunk.index) + " size mismatch despite being marked complete: expected " + str(expected_size) + ", got " + str(actual_size))
-						missing_or_bad_chunks.append(chunk)
+					if actual_size != item.expected_file_size:
+						push_error("[DownloadManager] Sparse partial file size mismatch: expected " + str(item.expected_file_size) + ", got " + str(actual_size))
+						missing_or_bad_chunks.append_array(chunked_info.chunks)
 				else:
-					push_error("[DownloadManager] Cannot open chunk file despite being marked complete: " + chunk.temp_path)
+					push_error("[DownloadManager] Cannot open sparse partial file for verification: " + chunked_info.partial_path)
+					missing_or_bad_chunks.append_array(chunked_info.chunks)
+			
+			if missing_or_bad_chunks.size() == 0:
+				for chunk in chunked_info.chunks:
+					if not chunk.expected_hash.is_empty() and not chunk.actual_hash.is_empty() and chunk.actual_hash != chunk.expected_hash:
+						push_error("[DownloadManager] Chunk " + str(chunk.index) + " hash mismatch despite being marked complete: expected " + chunk.expected_hash + ", got " + chunk.actual_hash)
+						missing_or_bad_chunks.append(chunk)
+		else:
+			# Verify chunk files actually exist on disk and pass integrity checks
+			for chunk in chunked_info.chunks:
+				if not FileAccess.file_exists(chunk.temp_path):
+					push_error("[DownloadManager] Chunk file missing despite being marked complete: " + chunk.temp_path)
 					missing_or_bad_chunks.append(chunk)
+				else:
+					var verify_file = FileAccess.open(chunk.temp_path, FileAccess.READ)
+					if verify_file:
+						var actual_size = verify_file.get_length()
+						verify_file.close()
+						var expected_size = chunk.end_byte - chunk.start_byte + 1
+						if actual_size != expected_size:
+							push_error("[DownloadManager] Chunk " + str(chunk.index) + " size mismatch despite being marked complete: expected " + str(expected_size) + ", got " + str(actual_size))
+							missing_or_bad_chunks.append(chunk)
+						elif not chunk.expected_hash.is_empty() and not chunk.actual_hash.is_empty() and chunk.actual_hash != chunk.expected_hash:
+							push_error("[DownloadManager] Chunk " + str(chunk.index) + " hash mismatch despite being marked complete: expected " + chunk.expected_hash + ", got " + chunk.actual_hash)
+							missing_or_bad_chunks.append(chunk)
+					else:
+						push_error("[DownloadManager] Cannot open chunk file despite being marked complete: " + chunk.temp_path)
+						missing_or_bad_chunks.append(chunk)
 		
 		if missing_or_bad_chunks.size() > 0:
 			print("[DownloadManager] Found " + str(missing_or_bad_chunks.size()) + " chunks marked complete but files missing/bad. Resetting for retry...")
 			for chunk in missing_or_bad_chunks:
 				chunk.completed = false
 				chunked_info.chunks_completed -= 1
+			_save_download_state(chunked_info)
 			_handle_failed_chunks_thread_pool(item_id, headers)
 			return
 		
 		_stop_chunked_progress_timer(item_id)
+		_stop_chunked_watchdog_timer(item_id)
 		_cleanup_download_tracking(item_id)
-		_reassemble_chunks(item_id)
+		
+		if chunked_info.in_place_assembly:
+			# Sparse assembly is already complete; just rename to the real output path.
+			_rename_final_file(item_id)
+		else:
+			_reassemble_chunks(item_id)
 	else:
 		# Some chunks failed - check if we should retry
 		print("[DownloadManager] Not all chunks completed, checking for retries...")
 		_handle_failed_chunks_thread_pool(item_id, headers)
+
+## Exponential cooldown for chunk retries (copyparty-style chill).
+## Doubles the multiplier up to a cap and adds jitter. Returns delay in seconds.
+func _chill(chunk: ChunkInfo) -> float:
+	if chunk.coolmul < 0.5:
+		chunk.coolmul = 0.5
+	chunk.coolmul = min(chunk.coolmul * 2.0, 32.0)
+	var delay_sec = chunk.coolmul + randf() * 4.0 + 2.0
+	chunk.cooldown_until_ms = Time.get_ticks_msec() + int(delay_sec * 1000.0)
+	return delay_sec
 
 ## Handles failed chunks with retry logic for thread pool
 func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
@@ -1147,30 +1710,41 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		var concurrency = chunked_info.concurrency if chunked_info.concurrency > 0 else MemoryManager.get_download_thread_count()
 		var chunk_sem = _chunk_concurrency_semaphores.get(item_id)
 		
-		# Prepare retry items
-		var retry_items = []
+		# Apply exponential backoff to each failed chunk and compute the longest delay
+		var max_delay = 0.0
 		for chunk in failed_chunks:
 			chunk.retry_count += 1
 			chunk.failed = false
 			chunk.in_progress = false
-			chunk.temp_bytes_downloaded = 0  # Reset progress tracking
-			
-			# Keep partial file so the retry can resume from the offset
-			
+			chunk.temp_bytes_downloaded = 0
+			var delay = _chill(chunk)
+			if delay > max_delay:
+				max_delay = delay
+		
+		_save_download_state(chunked_info)
+		
+		# Wait before retry using non-blocking timer
+		await get_tree().create_timer(max_delay).timeout
+		
+		# Prepare retry items (include expected hash so corrupt partials are detected)
+		var retry_items = []
+		for chunk in failed_chunks:
 			retry_items.append({
 				"item_id": item_id,
 				"chunk_index": chunk.index,
 				"url": item.url,
 				"temp_path": chunk.temp_path,
+				"partial_path": chunked_info.partial_path,
+				"write_offset": chunk.start_byte,
+				"in_place": chunked_info.in_place_assembly,
+				"final_file_mutex": chunked_info.final_file_mutex,
 				"start_byte": chunk.start_byte,
 				"end_byte": chunk.end_byte,
 				"original_start_byte": chunk.original_start_byte,
+				"expected_hash": chunk.expected_hash,
 				"headers": headers,
 				"thread_index": chunk.index % concurrency
 			})
-		
-		# Wait before retry using non-blocking timer
-		await get_tree().create_timer(CHUNK_RETRY_DELAY_SEC).timeout
 		
 		# Queue retry via thread pool
 		await MemoryManager.queue_parallel_downloads(
@@ -1178,17 +1752,13 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			func(chunk_data, _index):
 				if chunk_sem != null:
 					chunk_sem.wait()
-				var success = _download_chunk_on_thread(chunk_data)
+				var result = _download_chunk_on_thread(chunk_data)
 				if chunk_sem != null:
 					chunk_sem.post()
-				return {
-					"success": success,
-					"chunk_index": chunk_data.chunk_index
-				},
+				return result,
 			func(_completed, _total, batch_index, result):
-				var success = result.get("success", false) if result is Dictionary else result
 				var chunk_index = result.get("chunk_index", batch_index) if result is Dictionary else batch_index
-				_update_chunk_download_progress(item_id, chunk_index, success),
+				_update_chunk_download_progress(item_id, chunk_index, result),
 			func(results):
 				_on_all_chunks_complete(item_id, headers, results)
 		)
@@ -1223,6 +1793,7 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 	)
 	
 	_cleanup_chunked_download(item_id)
+	_delete_download_state(item.destination_path)
 	
 	item.download_info = NetworkManager.http_download_file(
 		item.url,
@@ -1338,132 +1909,78 @@ func _stop_chunked_progress_timer(item_id: String):
 		chunked_info.progress_timer.queue_free()
 		chunked_info.progress_timer = null
 
-func _start_next_chunk_downloads(item_id: String, headers: Array):
-	"""Start downloading the next batch of chunks up to max_concurrent_chunks"""
+func _start_chunked_watchdog_timer(item_id: String, headers: Array):
+	"""Start a watchdog timer that detects stuck chunk downloads and falls back."""
 	if not _chunked_downloads.has(item_id):
 		return
 	
 	var chunked_info = _chunked_downloads[item_id]
-	var _item = chunked_info.item
+	_stop_chunked_watchdog_timer(item_id)
 	
-	# Count how many chunks are currently downloading
-	var active_count = 0
-	for chunk in chunked_info.chunks:
-		if chunk.in_progress and not chunk.completed and not chunk.failed:
-			active_count += 1
+	chunked_info.headers = headers
+	chunked_info.watchdog_last_total_bytes = 0
+	chunked_info.watchdog_last_progress_time_ms = Time.get_ticks_msec()
 	
-	# Start more downloads until we hit max_concurrent_chunks
-	for chunk in chunked_info.chunks:
-		if active_count >= max_concurrent_chunks:
-			break
-		
-		if not chunk.in_progress and not chunk.completed and not chunk.failed:
-			chunk.in_progress = true
-			active_count += 1
-			
-			# Start this chunk download
-			_start_single_chunk_download(item_id, chunk, headers)
+	var timer := Timer.new()
+	timer.wait_time = CHUNK_WATCHDOG_INTERVAL_SEC
+	timer.one_shot = false
+	timer.timeout.connect(_on_chunked_watchdog.bind(item_id))
+	add_child(timer)
+	timer.start()
+	chunked_info.watchdog_timer = timer
 
-func _start_single_chunk_download(item_id: String, chunk: ChunkInfo, headers: Array):
-	"""Start downloading a single chunk"""
+func _stop_chunked_watchdog_timer(item_id: String):
+	"""Stop and clean up the chunk watchdog timer."""
 	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	if chunked_info.watchdog_timer and is_instance_valid(chunked_info.watchdog_timer):
+		chunked_info.watchdog_timer.stop()
+		chunked_info.watchdog_timer.queue_free()
+		chunked_info.watchdog_timer = null
+
+func _on_chunked_watchdog(item_id: String):
+	if not _chunked_downloads.has(item_id):
+		_stop_chunked_watchdog_timer(item_id)
 		return
 	
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
+	var now := Time.get_ticks_msec()
 	
-	# Add User-Agent if not present
-	var request_headers = headers.duplicate()
-	var has_user_agent = false
-	for header in request_headers:
-		if header.begins_with("User-Agent:"):
-			has_user_agent = true
-			break
-	if not has_user_agent:
-		request_headers.append("User-Agent: Kyodai-Launcher/1.0")
-	
-	# Start the download
-	print("[DownloadManager] Starting chunk " + str(chunk.index) + " for: " + item.name)
-	NetworkManager.http_download_chunk(
-		item.url,
-		chunk.temp_path,
-		chunk.start_byte,
-		chunk.end_byte,
-		request_headers,
-		func(success: bool, _status_code: int, error_msg: String):
-			_on_chunk_download_complete(item_id, chunk.index, success, error_msg, headers)
-	)
-
-func _on_chunk_download_complete(item_id: String, chunk_index: int, success: bool, error_msg: String, headers: Array):
-	"""Called when a chunk download completes"""
-	if not _chunked_downloads.has(item_id):
-		return
-	
-	var chunked_info = _chunked_downloads[item_id]
-	var item = chunked_info.item
-	var chunk = chunked_info.chunks[chunk_index]
-	
-	chunk.in_progress = false
-	
-	if success:
-		chunk.completed = true
-		chunked_info.chunks_completed += 1
-		print("[DownloadManager] Chunk " + str(chunk_index) + " completed for: " + item.name + " (" + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
-		
-		# Note: Progress is now handled by _update_chunked_progress timer which tracks actual bytes
-		# This prevents progress jumps and provides smooth 0-100% updates
-		
-		# Check if all chunks are complete
-		if chunked_info.chunks_completed >= chunked_info.total_chunks:
-			print("[DownloadManager] All chunks complete for: " + item.name)
-			_stop_chunked_progress_timer(item_id)
-			_cleanup_download_tracking(item_id)
-			_reassemble_chunks(item_id)
+	var total_bytes: int = 0
+	var in_progress_count: int = 0
+	var completed_count: int = chunked_info.chunks_completed
+	for chunk in chunked_info.chunks:
+		if chunk.completed:
+			total_bytes += chunk.end_byte - chunk.start_byte + 1
 		else:
-			# Start the next chunk
-			_start_next_chunk_downloads(item_id, headers)
-	else:
-		chunk.retry_count += 1
-		chunk.in_progress = false
-		
-		# Reset progress tracking for retry
-		chunk.temp_bytes_downloaded = 0
-		
-		if chunk.retry_count <= MAX_CHUNK_RETRIES:
-			# Delete partial/failed chunk file
-			if FSM.file_exists(chunk.temp_path):
-				FSM.delete_file(chunk.temp_path)
-				print("[DownloadManager] Deleted failed chunk file: " + chunk.temp_path)
-			
-			# Update progress to show retry status
-			_update_chunked_progress(item_id)
-			
-			NotificationManager.update_notification_text(
-				item.notification_id,
-				"Retrying chunk " + str(chunk_index) + " (" + str(chunk.retry_count) + "/" + str(MAX_CHUNK_RETRIES) + "): " + item.name
-			)
-			
-			print("[DownloadManager] Chunk " + str(chunk_index) + " failed, retrying in " + str(CHUNK_RETRY_DELAY_SEC) + "s (" + str(chunk.retry_count) + "/" + str(MAX_CHUNK_RETRIES) + ")")
-			
-			# Wait before retry
-			await get_tree().create_timer(CHUNK_RETRY_DELAY_SEC).timeout
-			
-			# Retry the chunk
-			chunk.failed = false
-			_start_next_chunk_downloads(item_id, headers)
-		else:
-			# Max retries exceeded - fail the download
-			chunk.failed = true
-			push_error("[DownloadManager] Chunk " + str(chunk_index) + " failed after " + str(MAX_CHUNK_RETRIES) + " retries: " + error_msg)
-			_stop_chunked_progress_timer(item_id)
-			item.status = "failed"
-			item.error_message = "Chunk download failed after " + str(MAX_CHUNK_RETRIES) + " retries: " + error_msg
-			_cleanup_chunked_download(item_id)
-			_cleanup_item(item)
-			_active_items.erase(item_id)
-			download_completed.emit(item_id, false, item.error_message)
-			queue_changed.emit()
-			_process_queue()
+			total_bytes += chunk.temp_bytes_downloaded
+			if chunk.in_progress:
+				in_progress_count += 1
+	
+	print("[DownloadManager] [Watchdog] item=%s chunks=%d/%d in_progress=%d total_bytes=%d" % [
+		item.name, completed_count, chunked_info.total_chunks, in_progress_count, total_bytes])
+	
+	var stalled := false
+	if total_bytes > chunked_info.watchdog_last_total_bytes:
+		chunked_info.watchdog_last_total_bytes = total_bytes
+		chunked_info.watchdog_last_progress_time_ms = now
+	elif now - chunked_info.watchdog_last_progress_time_ms > CHUNK_STALL_TIMEOUT_MS * 2:
+		push_error("[DownloadManager] [Watchdog] Chunked download stalled for: " + item.name + ". Falling back to single-stream.")
+		stalled = true
+	
+	if not stalled:
+		var elapsed: int = now - chunked_info.start_time_ms
+		var max_total_time := maxi(30 * 60 * 1000, item.expected_file_size / 2048)
+		if elapsed > max_total_time:
+			push_error("[DownloadManager] [Watchdog] Chunked download exceeded max total time for: " + item.name + " (elapsed=" + str(elapsed) + "ms). Falling back to single-stream.")
+			stalled = true
+	
+	if stalled:
+		_stop_chunked_watchdog_timer(item_id)
+		_start_single_stream_fallback(item_id, chunked_info.headers)
 
 ## Helper to show reassembly notification on main thread (called via call_deferred)
 func _show_reassembly_notification(item_id: String, item_name: String) -> void:
@@ -1689,6 +2206,40 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		_finish_reassembly_success(item_id, item, reassembly_temp_path)
 	)
 
+func _rename_final_file(item_id: String):
+	"""Finalize an in-place sparse download by renaming the partial file to the destination."""
+	if not _chunked_downloads.has(item_id):
+		return
+	
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	var partial_path = chunked_info.partial_path
+	var final_path = chunked_info.final_path
+	
+	print("[DownloadManager] [InPlace] Renaming sparse partial to final: " + partial_path + " -> " + final_path)
+	
+	if FSM.file_exists(final_path):
+		FSM.delete_file(final_path)
+	
+	if not FSM.move(partial_path, final_path):
+		push_error("[DownloadManager] [InPlace] Failed to rename partial file to destination: " + partial_path + " -> " + final_path)
+		item.status = "failed"
+		item.error_message = "Failed to finalize download"
+		_cleanup_chunked_download(item_id)
+		_cleanup_item(item)
+		_active_items.erase(item_id)
+		download_completed.emit(item_id, false, item.error_message)
+		queue_changed.emit()
+		_process_queue()
+		return
+	
+	# Remove resume state and clean up chunked state
+	_delete_download_state(final_path)
+	_cleanup_chunked_download(item_id)
+	
+	# Continue with normal completion flow
+	_on_file_download_complete(item, true, "")
+
 func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_temp_path: String):
 	"""Handle successful reassembly completion (shared between Android and Desktop)"""
 	if not _chunked_downloads.has(item_id):
@@ -1725,6 +2276,8 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_tem
 		_process_queue()
 		return
 	
+	# Success: remove resume state file and clean up chunked state
+	_delete_download_state(reassembly_temp_path)
 	_cleanup_chunked_download(item_id)
 	
 	# Continue with normal completion flow
@@ -1737,11 +2290,16 @@ func _cleanup_chunked_download(item_id: String):
 	
 	var chunked_info = _chunked_downloads[item_id]
 	
-	# Stop progress timer
+	# Stop progress timer and watchdog
 	if chunked_info.progress_timer and is_instance_valid(chunked_info.progress_timer):
 		chunked_info.progress_timer.stop()
 		chunked_info.progress_timer.queue_free()
 		chunked_info.progress_timer = null
+	
+	if chunked_info.watchdog_timer and is_instance_valid(chunked_info.watchdog_timer):
+		chunked_info.watchdog_timer.stop()
+		chunked_info.watchdog_timer.queue_free()
+		chunked_info.watchdog_timer = null
 	
 	# Clean up temp chunk files
 	for chunk in chunked_info.chunks:

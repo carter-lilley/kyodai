@@ -406,6 +406,23 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 				on_complete.call()
 	)
 
+func _input(event: InputEvent) -> void:
+	"""Handle random-game input when this view is active."""
+	if not UIManager.is_current_view(view_name):
+		return
+	
+	if event.is_action_pressed("random_game"):
+		_focus_random_card()
+		accept_event()
+
+func _focus_random_card() -> void:
+	"""Focus a random downloaded game card in the grid."""
+	if _total_games == 0:
+		return
+	
+	var random_index := randi() % _total_games
+	games_grid.scroll_to_index_and_focus(random_index, false)
+
 func on_view_show():
 	super.on_view_show()
 	# Refresh the view when shown (in case downloads happened while away)

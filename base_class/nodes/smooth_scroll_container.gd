@@ -84,6 +84,11 @@ func _on_focus_changed(control: Control) -> void:
 		control.remove_meta("mouse_hover_focus")
 		return
 	
+	# Skip smooth scroll for programmatic focus changes (e.g., random-game selection).
+	if control.has_meta("_suppress_smooth_scroll"):
+		control.remove_meta("_suppress_smooth_scroll")
+		return
+	
 	# Calculate and smoothly scroll to centered position
 	_target_scroll = _get_centered_scroll_for_control(control)
 	_start_smooth_scroll()
@@ -317,3 +322,9 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 		_start_smooth_scroll(duration_multiplier)
 	else:
 		_set_current_scroll(target)
+
+func stop_smooth_scroll() -> void:
+	"""Stop any active smooth-scroll tween without changing the target."""
+	if _scroll_tween and _scroll_tween.is_valid():
+		_scroll_tween.kill()
+	_is_smooth_scrolling = false
