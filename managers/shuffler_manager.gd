@@ -27,6 +27,9 @@ var _tools_dir: String = ""
 var _ahk_path: String = ""
 var _pssuspend_path: String = ""
 var _notification_id: int = -1
+var _reroll_in_progress: bool = false
+var _reroll_download_id: String = ""
+var _reroll_notification_id: int = -1
 
 # Download progress tracking
 var _download_item_ids: Array[String] = []
@@ -119,6 +122,13 @@ func stop_session() -> void:
 
 	_state = State.STOPPING
 
+	# Cancel any in-progress reroll so its completion callback bails out cleanly.
+	_reroll_in_progress = false
+	if _reroll_notification_id != -1:
+		NotificationManager.dismiss_notification(_reroll_notification_id)
+		_reroll_notification_id = -1
+	_reroll_download_id = ""
+
 	_kill_round_timer()
 
 	# Disconnect from DownloadManager progress signal
@@ -167,12 +177,16 @@ func stop_session() -> void:
 func pause_session() -> void:
 	if _state != State.ACTIVE:
 		return
+	if _reroll_in_progress:
+		return
 	_state = State.PAUSED
 	if _round_timer:
 		_round_timer.paused = true
 
 func resume_session() -> void:
 	if _state != State.PAUSED:
+		return
+	if _reroll_in_progress:
 		return
 	_state = State.ACTIVE
 	if _round_timer:
@@ -181,11 +195,15 @@ func resume_session() -> void:
 func skip_game() -> void:
 	if _state != State.ACTIVE and _state != State.PAUSED:
 		return
+	if _reroll_in_progress:
+		return
 	_kill_round_timer()
 	_switch_to_next_game()
 
 func restart_game() -> void:
 	if _state != State.ACTIVE and _state != State.PAUSED:
+		return
+	if _reroll_in_progress:
 		return
 	if _current_game_index >= 0:
 		var entry = _bag[_current_game_index]
@@ -199,10 +217,100 @@ func remove_game() -> void:
 		return
 	if _current_game_index < 0:
 		return
-	var entry = _bag[_current_game_index]
+	if _reroll_in_progress:
+		return
+
+	_reroll_in_progress = true
+	_state = State.ACTIVE
+	_kill_round_timer()
+
+	var index = _current_game_index
+	var entry = _bag[index]
+	print("[ShufflerManager] Rerolling slot " + str(index) + " (" + entry["game"].title + ")")
+
 	await _stop_game(entry)
-	_reroll_entry(_current_game_index)
-	_switch_to_game(_current_game_index)
+
+	# Bail out if the session was stopped while we were waiting.
+	if _state != State.ACTIVE and _state != State.PAUSED:
+		_reroll_in_progress = false
+		return
+
+	# Fully terminate the outgoing process so it doesn't linger as a suspended zombie.
+	if entry["pid"] != -1:
+		_force_kill_process(entry["pid"])
+		await _confirm_process_dead(entry["pid"])
+	entry["pid"] = -1
+	entry["started"] = false
+	entry["active"] = false
+
+	var candidate = _pick_reroll_candidate(index)
+	if candidate == null:
+		_reroll_in_progress = false
+		NotificationManager.show_notification("No alternative game found for reroll", NotificationManager.Type.ERROR)
+		_switch_to_game(index)
+		return
+
+	if candidate.is_active_variant_downloaded() and FileAccess.file_exists(candidate.file_path):
+		print("[ShufflerManager] Candidate already downloaded: " + candidate.title)
+		_replace_bag_entry(index, candidate, candidate.file_path)
+		_reroll_in_progress = false
+		_switch_to_game(index)
+		return
+
+	print("[ShufflerManager] Downloading reroll candidate: " + candidate.title)
+	var temp_dir = TEMP_DIR + str(candidate.romm_id)
+	var temp_path = FSM.join_paths(temp_dir, candidate.get_active_file_name())
+	FSM.make_dir_recursive(temp_dir)
+
+	var download_url = NetworkManager.get_romm_download_url(candidate.get_active_game_id(), candidate.get_active_file_name())
+	var file_size = candidate.get_active_file_size()
+
+	if not DownloadManager.download_progress.is_connected(_on_download_progress):
+		DownloadManager.download_progress.connect(_on_download_progress)
+
+	var progress_callable = func() -> float:
+		return _download_progresses.get(_reroll_download_id, 0.0)
+
+	var text_formatter = func(progress: float) -> String:
+		return "Rerolling to %s... %d%%" % [candidate.title, int(progress * 100.0)]
+
+	_reroll_notification_id = NotificationManager.show_notification(
+		"Rerolling to " + candidate.title + "...",
+		NotificationManager.Type.INFO,
+		null,
+		0.0,
+		progress_callable,
+		text_formatter,
+		false,
+		true
+	)
+
+	var callbacks = {
+		"on_complete": _on_reroll_download_complete.bind(index, candidate)
+	}
+
+	_reroll_download_id = DownloadManager.queue_download(
+		download_url,
+		temp_path,
+		"game",
+		candidate.title,
+		false,
+		"",
+		candidate,
+		callbacks,
+		candidate.romm_id,
+		true,
+		false,
+		file_size,
+		false
+	)
+
+	if _reroll_download_id == "":
+		_reroll_in_progress = false
+		NotificationManager.dismiss_notification(_reroll_notification_id)
+		_reroll_notification_id = -1
+		NotificationManager.show_notification("Failed to queue reroll download", NotificationManager.Type.ERROR)
+		_switch_to_game(index)
 
 # ============================================================================
 # BAG MANAGEMENT
@@ -238,14 +346,15 @@ func _build_bag(platforms: Array, bag_size: int) -> void:
 		if _bag.size() >= bag_size:
 			break
 
-func _reroll_entry(index: int) -> void:
+func _pick_reroll_candidate(index: int) -> GameResource:
 	if index < 0 or index >= _bag.size():
-		return
+		return null
 
 	var current_platforms: Array[String] = []
 	for entry in _bag:
-		if entry["game"].platform_slug not in current_platforms:
-			current_platforms.append(entry["game"].platform_slug)
+		var slug: String = entry["game"].platform_slug
+		if slug not in current_platforms:
+			current_platforms.append(slug)
 
 	var candidates: Array[GameResource] = []
 	for slug in current_platforms:
@@ -261,17 +370,49 @@ func _reroll_entry(index: int) -> void:
 	for game in candidates:
 		if game.romm_id in existing_ids:
 			continue
-		if game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
-			_bag[index] = {
-				"game": game,
-				"temp_path": game.file_path,
-				"pid": -1,
-				"started": false,
-				"active": false,
-				"emulator_id": "",
-				"suspend_method": "",
-			}
-			break
+		return game
+
+	return null
+
+
+func _replace_bag_entry(index: int, game: GameResource, temp_path: String) -> void:
+	_bag[index] = {
+		"game": game,
+		"temp_path": temp_path,
+		"pid": -1,
+		"started": false,
+		"active": false,
+		"emulator_id": "",
+		"suspend_method": "",
+	}
+
+
+func _on_reroll_download_complete(success: bool, path: String, index: int, game: GameResource) -> void:
+	_reroll_in_progress = false
+
+	if _reroll_notification_id != -1:
+		NotificationManager.dismiss_notification(_reroll_notification_id)
+		_reroll_notification_id = -1
+
+	_reroll_download_id = ""
+
+	if _state != State.ACTIVE and _state != State.PAUSED:
+		print("[ShufflerManager] Reroll download finished but session is no longer active; discarding result")
+		return
+
+	if index < 0 or index >= _bag.size():
+		push_error("[ShufflerManager] Reroll completion called with invalid index " + str(index))
+		return
+
+	if success and FileAccess.file_exists(path):
+		print("[ShufflerManager] Reroll download complete: " + game.title)
+		_replace_bag_entry(index, game, path)
+		_switch_to_game(index)
+		NotificationManager.show_notification("Rerolled to " + game.title, NotificationManager.Type.SUCCESS, null, 2.0)
+	else:
+		push_warning("[ShufflerManager] Reroll download failed for " + game.title + "; relaunching previous game")
+		NotificationManager.show_notification("Reroll failed; relaunching previous game", NotificationManager.Type.ERROR, null, 3.0)
+		_switch_to_game(index)
 
 # ============================================================================
 # DOWNLOADS (sequential — one at a time)
@@ -403,11 +544,23 @@ func _enter_shuffler_mode() -> void:
 	# The controls window is its own viewport and still receives input.
 	get_tree().root.gui_disable_input = true
 	
+	# Only apply emulator-specific shuffler tweaks if the bag actually uses those emulators.
+	var needs_retroarch := false
+	var needs_pcsx2 := false
+	for entry in _bag:
+		var emulator_id := LaunchManager.resolve_emulator_for_game(entry["game"]) as String
+		if emulator_id == "retroarch":
+			needs_retroarch = true
+		elif emulator_id == "pcsx2":
+			needs_pcsx2 = true
+	
 	# Ensure RetroArch is configured for shuffler UDP savestate behavior.
-	_ensure_retroarch_shuffler_config()
+	if needs_retroarch:
+		_ensure_retroarch_shuffler_config()
 	
 	# Disable PCSX2 memory cards so multiple suspended instances don't fight over the same memcard file.
-	_ensure_pcsx2_shuffler_config()
+	if needs_pcsx2:
+		_ensure_pcsx2_shuffler_config()
 	
 	session_started.emit()
 	_switch_to_game(0)

@@ -56,7 +56,7 @@ func _on_button_pressed(index: int):
 			skip_requested.emit()
 		2:  # Restart
 			restart_requested.emit()
-		3:  # Reroll
+		3:  # Shuffle / New game
 			remove_requested.emit()
 		4:  # Stop
 			stop_requested.emit()

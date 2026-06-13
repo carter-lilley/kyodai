@@ -394,9 +394,9 @@ script = ExtResource("3_icon")
 icon_button_size = 1
 icon_button_variant = 1
 icon_name = "shuffle-variant"
-m3_tooltip_text = "Reroll"
+m3_tooltip_text = "Shuffle / New game"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
-metadata/m3_tooltip_text = "Reroll"
+metadata/m3_tooltip_text = "Shuffle / New game"
 metadata/m3_tooltip_variant = 0
 
 [node name="StopButton" type="Button" parent="Root/M3ButtonGroup" unique_id=1539474555]
