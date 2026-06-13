@@ -23,6 +23,24 @@ var _phase1_completed: bool = false
 var _original_card_rect: Rect2
 var _game: GameResource
 
+# Optional explicit source (e.g., the cover art in the details sheet).
+static var _source_override_texture: Texture2D = null
+static var _source_override_rect: Rect2 = Rect2()
+static var _source_override_corner_radius: float = 0.06
+static var _has_source_override: bool = false
+
+static func set_source(texture: Texture2D, rect: Rect2, corner_radius: float = 0.06) -> void:
+	_source_override_texture = texture if is_instance_valid(texture) else null
+	_source_override_rect = rect
+	_source_override_corner_radius = corner_radius
+	_has_source_override = _source_override_texture != null
+
+static func _clear_source_override() -> void:
+	_source_override_texture = null
+	_source_override_rect = Rect2()
+	_source_override_corner_radius = 0.06
+	_has_source_override = false
+
 func is_phase1_complete() -> bool:
 	return _phase1_completed
 
@@ -40,9 +58,11 @@ func _input(event: InputEvent) -> void:
 	if _is_animating and visible:
 		get_viewport().set_input_as_handled()
 
-func _on_game_launch_initiated(_launched_game: GameResource, _focus_index: int):
-	# We get the texture from the focused card, not from the game resource
-	# This avoids filesystem access and works on Android
+func _on_game_launch_initiated(launched_game: GameResource, _focus_index: int):
+	# Remember which game is launching for the title label.
+	_game = launched_game
+	# We get the texture from the focused card by default, but a caller can
+	# override the source with LaunchTransitionOverlay.set_source().
 	_start_transition()
 
 signal phase1_completed
@@ -52,11 +72,23 @@ func _start_transition():
 		return
 	
 	_is_animating = true
-	is_transition_active = true  # Set global static flag
+	is_transition_active = true	 # Set global static flag
 	_phase1_completed = false
 	
-	# Get the focused card and its texture
-	var card_info = _get_focused_card_and_texture()
+	# Get the source texture/rect. Use an explicit override if one was set,
+	# otherwise fall back to the currently focused GameCard.
+	var card_info: Dictionary
+	if _has_source_override and _source_override_texture != null:
+		card_info = {
+			"card": null,
+			"texture": _source_override_texture,
+			"rect": _source_override_rect,
+			"corner_radius": _source_override_corner_radius
+		}
+		_clear_source_override()
+	else:
+		card_info = _get_focused_card_and_texture()
+	
 	var texture = card_info.texture
 	var card_rect = card_info.rect
 	var card = card_info.card
@@ -75,7 +107,6 @@ func _start_transition():
 		return
 	
 	_original_card_rect = card_rect
-	_game = card.game if card else null
 	
 	# Setup margin container with 3% padding
 	if _margin_container:
@@ -101,7 +132,7 @@ func _start_transition():
 			label_font = ThemeDB.fallback_font
 		
 		# Start large and decrease until it fits
-		var font_size = 200  # Start very large
+		var font_size = 200	 # Start very large
 		var text_width = label_font.get_string_size(game_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 		
 		while text_width > max_width and font_size > 12:
@@ -215,7 +246,7 @@ func _animate_transition():
 	
 	# Calculate fullscreen target (screen aspect ratio) with slight overshoot to hide AA edge
 	var viewport_size = Vector2(get_viewport().size)
-	var overshoot = 4.0  # Extend 4px beyond viewport to hide AA edge
+	var overshoot = 4.0	 # Extend 4px beyond viewport to hide AA edge
 	var target_size = viewport_size + Vector2(overshoot * 2, overshoot * 2)
 	var target_pos = Vector2(-overshoot, -overshoot)  # Center the overshoot
 	

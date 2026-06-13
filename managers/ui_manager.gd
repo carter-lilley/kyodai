@@ -51,10 +51,6 @@ var _focus_indicator: FocusIndicator = null
 var _feedback_connected_viewport: Viewport = null
 var _is_first_focus: bool = true
 
-# Game details tab
-var _details_tab_idx: int = -1
-var _game_details_view: View = null
-
 # Input tracking for mouse hover focus
 const MOUSE_IDLE_THRESHOLD_MS: int = 1000  # Mouse must have moved within last 1 second
 const CONTROLLER_PRIORITY_MS: int = 2000   # Controller has priority for 2 seconds after use
@@ -171,6 +167,9 @@ func initialize(
 	var first_run_setting = SettingsManager.get_setting("first_run_completed")
 	if first_run_setting and first_run_setting.value:
 		pre_create_settings_dialog()
+	
+	# Pre-create the game details sheet so the first Details open is smooth.
+	GameDetailsSheet.ensure_pooled()
 	
 	# Connect to dual screen mode changes
 	if DisplayManager:
@@ -1262,6 +1261,10 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	
 	items.append({"id": "card_designer", "text": "Card Designer", "icon": "cards-outline"})
 	items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
+	
+	# Start preloading heavy details while the menu is open.
+	GameDetailsSheet.prepare_for_game(romm_id)
+	
 	return show_context_menu(items, anchor, {"romm_id": romm_id})
 
 func dismiss_modal() -> void:
@@ -1778,25 +1781,10 @@ func _disable_dual_screen_mode_desktop() -> void:
 # ==================== GAME DETAILS VIEW ====================
 
 func show_game_details(romm_id: int) -> void:
-	"""Show the game details view for a specific game."""
+	"""Show the game details bottom sheet for a specific game."""
 	var game = DataManager.get_game_by_id(romm_id)
 	if not game:
 		push_warning("[UIManager] Cannot show details - game not found: ", romm_id)
 		return
 	
-	# Create details tab if it doesn't exist
-	if _details_tab_idx == -1:
-		var details_scene = preload("res://view/game_details_view.tscn")
-		_game_details_view = details_scene.instantiate()
-		_game_details_view.view_name = "Details"
-		
-		_tab_container.add_child(_game_details_view)
-		_details_tab_idx = _tab_container.get_tab_count() - 1
-		_tab_container.set_tab_title(_details_tab_idx, "Details")
-		_views["Details"] = _game_details_view
-	
-	# Set the game data
-	_game_details_view.set_game(game)
-	
-	# Switch to the details tab
-	_tab_container.current_tab = _details_tab_idx
+	GameDetailsSheet.show_for_game(game)

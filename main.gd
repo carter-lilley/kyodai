@@ -689,6 +689,10 @@ func _handle_ui_cancel() -> void:
 	if UIManager and UIManager.is_settings_dialog_open():
 		return
 	
+	# If a bottom sheet overlay is open, let M3Overlay handle dismissal
+	if M3Overlay.is_showing("bottom_sheet"):
+		return
+	
 	# If in Library view with an active search, clear the search first
 	var current_view = UIManager.get_current_view()
 	if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_search"):
