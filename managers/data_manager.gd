@@ -1,7 +1,7 @@
 extends Manager
 
-# DataManager - Self-contained data persistence and caching manager
-# Combines SQLite database operations and file system image caching
+# DataManager - Public facade for data persistence and caching.
+# Delegates all work to child managers in the data_manager.tscn scene.
 
 signal database_ready()
 signal database_failed(error_message: String)
@@ -17,1767 +17,151 @@ signal cache_cleared()
 signal games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource])
 signal sync_started()  # Emitted when a sync begins - allows UI to clear cache
 
-const DB_PATH = "user://database/kyodai.db"
-const CACHE_FOLDER = "user://cache/covers/"
-const FSM = preload("res://managers/filesystem_manager.gd")
+# NEW: Emitted when the downloaded-games scan finishes.
+signal scan_for_downloaded_games_completed(found_count: int)
 
-var _db: SQLite = null
-var _is_db_ready: bool = false
-var _db_init_failed: bool = false  # Fatal flag: database could not be initialized
+@onready var database: DatabaseManager = $DatabaseManager
+@onready var sync: SyncManager = $SyncManager
+@onready var cover: CoverManager = $CoverManager
+@onready var save: SaveSyncManager = $SaveManager
 
-# Cached count of downloaded games. -1 means "not cached"; invalidate whenever
-# game/download state changes (add, update, delete, sync, scan, cover folding).
-var _downloaded_games_count_cache: int = -1
-
-var _db_mutex: Mutex = Mutex.new()
-
-func _db_lock():
-	_db_mutex.lock()
-
-func _db_unlock():
-	_db_mutex.unlock()
-
-func _db_query_array(query: String, bindings: Array = []) -> Array:
-	_db_lock()
-	var result: Array
-	if bindings.is_empty():
-		var success = _db.query(query)
-		result = _db.query_result.duplicate() if success else []
-	else:
-		var success = _db.query_with_bindings(query, bindings)
-		result = _db.query_result.duplicate() if success else []
-	_db_unlock()
-	return result
-
-func _db_query_bool(query: String, bindings: Array = []) -> bool:
-	_db_lock()
-	var success: bool
-	if bindings.is_empty():
-		success = _db.query(query)
-	else:
-		success = _db.query_with_bindings(query, bindings)
-	_db_unlock()
-	return success
-
-## Unlocked variants for use when caller already holds _db_mutex.
-## Prevents deadlock on platforms with non-reentrant mutexes (Linux/Android).
-func _db_query_array_unlocked(query: String, bindings: Array = []) -> Array:
-	var result: Array
-	if bindings.is_empty():
-		var success = _db.query(query)
-		result = _db.query_result.duplicate() if success else []
-	else:
-		var success = _db.query_with_bindings(query, bindings)
-		result = _db.query_result.duplicate() if success else []
-	return result
-
-func _db_query_bool_unlocked(query: String, bindings: Array = []) -> bool:
-	var success: bool
-	if bindings.is_empty():
-		success = _db.query(query)
-	else:
-		success = _db.query_with_bindings(query, bindings)
-	return success
-var _sync_notification_id: int = -1
-var _removal_notification_id: int = -1
-
-# Android sync foreground service tracking
-var _sync_fg_service_active: bool = false
-
-# Logging control
-var _verbose_sql: bool = false  # Set to true to see SQL queries
-
-# Sync state machine
-enum SyncState {
-	IDLE,
-	PRECHECK_DISABLED,      # Remove games from disabled platforms
-	CALCULATING_TOTALS,     # Pre-calculate game counts
-	PLATFORM_ITERATING,     # Iterate through platforms
-	PLATFORM_FETCHING,      # Fetch batch from current platform
-	PLATFORM_PROCESSING,    # Process fetched batch
-	PLATFORM_BATCHING,      # Fetch more batches if needed
-	COVER_FOLDING,          # Apply cover folding
-	COMPLETING,             # Final cleanup
-	ERROR                   # Error state
-}
-
-var _sync_state: SyncState = SyncState.IDLE
-var _sync_platforms_list: Array = []        # Platforms to sync
-var _sync_current_platform_idx: int = 0     # Current platform index (0-based)
-var _sync_current_platform_data: Dictionary = {}  # Current platform info
-var _sync_current_offset: int = 0           # Current batch offset
-var _sync_current_total: int = 0            # Total games in current platform
-var _sync_precalc_platform_total: int = 0   # Pre-calculated total for current platform
-var _sync_current_synced: int = 0           # Games synced in current platform
-var _sync_total_synced: int = 0             # Total synced across all platforms
-var _sync_final_callback: Callable = Callable()
-
-# Incremental sync state
-var _sync_force_full: bool = false          # Force full sync flag
-var _sync_current_updated_after: String = ""  # updated_after timestamp for current platform
-
-# Progress tracking state
-var _sync_current: int = 0
-var _sync_total: int = 0
-var _sync_platform: String = ""
-var _sync_platform_index: int = 0  # Current platform number (1-based)
-var _sync_platform_count: int = 0  # Total platforms
-var _sync_platform_total: int = 0  # Games in current platform
-
-# Batch notification system for incremental UI updates
-var _sync_batch_mode: bool = false
-var _sync_batch_pending: Array[GameResource] = []
-var _sync_batch_pending_mutex: Mutex = Mutex.new()  # Thread-safe access
-var _sync_batch_timer: Timer = null
-var _sync_batch_last_emit_time: int = 0
-const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 800ms during sync
-
-# Pre-calculation state (avoid closures)
-var _precalc_pending: int = 0
-var _precalc_total: int = 0
-var _precalc_callback: Callable = Callable()
-var _precalc_platform_totals: Dictionary = {}  # platform_id -> total count
-
-# Cover URLs collected during sync for batch downloading on main thread
-var _sync_covers_pending: Array[String] = []
-var _sync_covers_mutex: Mutex = Mutex.new()
-
-# Performance tracking for background thread optimization
-var _perf_batch_start_time: int = 0
-var _perf_phase1_duration: int = 0  # GameResource creation (now on background thread)
-var _perf_phase2_duration: int = 0  # Sibling checks
-var _perf_phase3_duration: int = 0  # DB inserts
-var _perf_total_batches: int = 0
 
 func _ready():
 	_ensure_memory_manager()
-	_initialize_database()
-	_ensure_cache_folder()
-	
+	database.initialize_database()
+	cover._ensure_cache_folder()
+
 	# Connect to setting changes for dynamic cover folding
 	SettingsManager.setting_changed.connect(_on_setting_changed)
+
 
 func _ensure_memory_manager():
 	if MemoryManager._instance == null:
 		var mm = MemoryManager.new()
 		add_child(mm)
 
-# ==================== SYNC THREAD SIGNAL WRAPPERS ====================
-# These are called via call_deferred from the sync thread to safely emit signals on the main thread
-
-func _emit_sync_started():
-	sync_started.emit()
-
-func _emit_sync_progress(percent: float, current: int, total: int):
-	sync_progress.emit(percent, current, total)
-
-func _emit_sync_completed(success: bool, message: String):
-	sync_completed.emit(success, message)
-
-func _emit_game_added(game: GameResource):
-	game_added.emit(game)
-
-func _emit_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
-	games_batch_added.emit(platform_slug, start_index, games)
-
-# Wrapper for calling _sync_final_callback via call_deferred
-func _invoke_sync_callback(success: bool, message: String, count: int, error_code: int):
-	if _sync_final_callback.is_valid():
-		_sync_final_callback.call(success, message, count, error_code)
-
-## Generic helper to wait for an async callback.
-## Polls at 10ms intervals with a fast-path exit to minimize latency.
-func _wait_for_async(task_func: Callable, timeout_ms: int = 60000):
-	var state = {"completed": false, "result": null}
-
-	var wrapped_callback = func(result = null):
-		state.result = result
-		state.completed = true
-
-	task_func.call(wrapped_callback)
-
-	# Fast-path: if callback fired synchronously, return immediately
-	if state.completed:
-		return state.result
-
-	# Poll at 10ms intervals (matching pre-refactor latency)
-	var elapsed = 0
-	var check_interval = 10  # 10ms
-	while not state.completed and elapsed < timeout_ms:
-		OS.delay_msec(check_interval)
-		elapsed += check_interval
-
-	return state.result if state.completed else null
-
-# ==================== ANDROID SYNC FOREGROUND SERVICE ====================
-
-func _start_sync_fg_service(platform_name: String = "Game Library", current: int = 0, total: int = 0) -> void:
-	print("[DataManager] Starting sync foreground service: %s (%d/%d)" % [platform_name, current, total])
-	if PlatformManager.start_sync_foreground_service(platform_name, current, total):
-		_sync_fg_service_active = true
-
-func _update_sync_fg_service(platform_name: String = "", current: int = 0, total: int = 0) -> void:
-	if not _sync_fg_service_active:
-		return
-	var name = platform_name if platform_name != "" else _sync_platform
-	PlatformManager.update_sync_foreground_service(name, current, total)
-
-func _stop_sync_fg_service() -> void:
-	if not _sync_fg_service_active:
-		return
-	print("[DataManager] Stopping sync foreground service")
-	if PlatformManager.stop_sync_foreground_service():
-		_sync_fg_service_active = false
-
-# ==================== REMOVAL PROGRESS NOTIFICATION ====================
-
-func _show_removal_notification(total: int) -> void:
-	_removal_notification_id = NotificationManager.show_notification(
-		"Removing %d platforms..." % total,
-		NotificationManager.Type.INFO,
-		null,
-		0.0,
-		Callable(),
-		Callable(),
-		true  # pulsing
-	)
-
-func _update_removal_notification(current: int, total: int, slug: String) -> void:
-	if _removal_notification_id != -1:
-		NotificationManager.update_notification_text(
-			_removal_notification_id,
-			"Removing platform %d/%d: %s" % [current, total, slug]
-		)
-
-func _dismiss_removal_notification() -> void:
-	if _removal_notification_id != -1:
-		NotificationManager.dismiss_notification(_removal_notification_id)
-		_removal_notification_id = -1
-
-# ==================== SETTINGS CHANGE HANDLER ====================
 
 func _on_setting_changed(value, setting):
 	if setting.property_name == "fold_duplicate_covers":
 		if value:
 			print("[CoverFolding] Setting enabled - applying cover folding...")
-			apply_cover_folding_to_database(func(folded_count: int):
+			cover.apply_cover_folding_to_database(func(folded_count: int):
 				print("[CoverFolding] Applied cover folding to %d games" % folded_count)
 				# Trigger grid refresh
 				sync_completed.emit(true, "Cover folding enabled - folded %d games" % folded_count)
 			)
 		else:
 			print("[CoverFolding] Setting disabled - removing cover-based siblings...")
-			_remove_cover_based_siblings()
+			cover._remove_cover_based_siblings()
 	elif setting.property_name == "hide_games_without_covers":
 		print("[DataManager] Hide no-cover setting changed to %s" % value)
 		# Filter clause changed; count may be different even without data changes.
-		_invalidate_downloaded_games_count_cache()
+		database.invalidate_downloaded_games_count_cache()
 		# Trigger grid refresh so library view updates filtering
 		sync_completed.emit(true, "Hide no-cover games %s" % ("enabled" if value else "disabled"))
 	elif setting.property_name == "fold_romm_siblings":
 		print("[DataManager] Fold RomM siblings setting changed to %s" % value)
 		# Filter clause changed; count may be different even without data changes.
-		_invalidate_downloaded_games_count_cache()
+		database.invalidate_downloaded_games_count_cache()
 		# Trigger grid refresh so library view updates filtering
 		sync_completed.emit(true, "RomM sibling folding %s" % ("enabled" if value else "disabled"))
 	elif setting.property_name == "enabled_platforms":
 		# Platform filter changed; count may be different. Do NOT emit sync_completed
 		# here because PlatformsSettingsView updates this setting for each platform
 		# during initialization and emitting sync_completed would spam scans.
-		_invalidate_downloaded_games_count_cache()
+		database.invalidate_downloaded_games_count_cache()
 
-func _should_hide_no_cover_games() -> bool:
-	var setting = SettingsManager.get_setting("hide_games_without_covers")
-	if setting:
-		return setting.value
-	return true
 
-func _should_fold_romm_siblings() -> bool:
-	var setting = SettingsManager.get_setting("fold_romm_siblings")
-	if setting:
-		return setting.value
-	return true
-
-func _get_has_cover_art_clause() -> String:
-	return " AND has_cover_art = 1" if _should_hide_no_cover_games() else ""
-
-func _get_is_master_entry_clause() -> String:
-	return " AND is_master_entry = 1" if _should_fold_romm_siblings() else ""
-
-func _remove_cover_based_siblings():
-	"""Unfold all games by setting cover_group_master = 1 for all games in cover groups.
-	
-	This is the simple inverse of apply_cover_folding_to_database. Since cover_group_id
-	is preserved during sync, we just need to set cover_group_master = 1 for all games
-	that are in a cover group (cover_group_id != '').
-	"""
-	if not _is_db_ready:
-		return
-	
-	# Unfolding changes cover_group_master, which affects the count query.
-	_invalidate_downloaded_games_count_cache()
-	
-	MemoryManager.queue_db_task(
-		func():
-			# Simple: set cover_group_master = 1 for all games in any cover group
-			var query = "UPDATE games SET cover_group_master = 1 WHERE cover_group_id != ''"
-			var success = _db_query_bool(query)
-			
-			# Get count of affected games
-			var count_query = "SELECT changes() as count"
-			var unfolded_count = 0
-			var query_result = _db_query_array(count_query)
-			if success and query_result.size() > 0:
-				unfolded_count = query_result[0].get("count", 0)
-			
-			return unfolded_count,
-		func(unfolded_count: int):
-			print("[CoverFolding] Unfolded %d games" % unfolded_count)
-			# Notify listeners that library needs refresh
-			sync_completed.emit(true, "Cover folding disabled - unfolded %d games" % unfolded_count)
-	)
-
-func _initialize_database():
-	print("[DataManager] _initialize_database() starting...")
-	# Database is being (re)opened; any previous count cache is no longer valid.
-	_invalidate_downloaded_games_count_cache()
-	var dir = DirAccess.open("user://")
-	if not dir.dir_exists("database"):
-		var mkerr = dir.make_dir("database")
-		if mkerr != OK:
-			var err_msg = "Failed to create database directory: user://database/"
-			push_error("[DataManager] " + err_msg)
-			_db_init_failed = true
-			database_failed.emit(err_msg)
-			NotificationManager.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", NotificationManager.Type.ERROR)
-			return
-
-	_db = SQLite.new()
-	_db.path = DB_PATH
-	_db.verbosity_level = SQLite.QUIET if not _verbose_sql else SQLite.VERBOSE
-
-	if _db.open_db():
-		_create_tables()
-		_is_db_ready = true
-		print("[DataManager] Database ready - emitting signal")
-		database_ready.emit()
-	else:
-		var err_msg = "Failed to open database at " + DB_PATH
-		push_error("[DataManager] " + err_msg)
-		_db_init_failed = true
-		database_failed.emit(err_msg)
-		NotificationManager.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", NotificationManager.Type.ERROR)
-
-func _create_tables():
-	_db_query_bool("""
-		CREATE TABLE IF NOT EXISTS games (
-			id TEXT PRIMARY KEY,
-			romm_id INTEGER UNIQUE NOT NULL,
-			title TEXT NOT NULL,
-			platform TEXT,
-			platform_slug TEXT,
-			cover_url TEXT,
-			cover_path TEXT,
-			file_name TEXT,
-			file_path TEXT,
-			file_size INTEGER DEFAULT 0,
-			has_local_copy INTEGER DEFAULT 0,
-			last_updated TEXT,
-			description TEXT,
-			genres TEXT,
-			rating REAL DEFAULT 0.0,
-			siblings TEXT DEFAULT '[]',
-			selected_sibling_id INTEGER DEFAULT 0,
-			is_master_entry INTEGER DEFAULT 1,
-			downloaded_sibling_ids TEXT DEFAULT '[]',
-			has_cover_art INTEGER DEFAULT 1,
-			last_played TEXT DEFAULT '',
-			title_id TEXT DEFAULT '',
-			cover_group_id TEXT DEFAULT '',
-			cover_group_master INTEGER DEFAULT 1,
-			igdb_metadata TEXT DEFAULT '{}'
-		)
-	""")
-	
-	_db_query_bool("""
-		CREATE TABLE IF NOT EXISTS platforms (
-			id TEXT PRIMARY KEY,
-			romm_id INTEGER UNIQUE NOT NULL,
-			name TEXT NOT NULL,
-			slug TEXT UNIQUE NOT NULL,
-			icon_url TEXT,
-			icon_path TEXT,
-			emulator_path TEXT,
-			extensions TEXT
-		)
-	""")
-	
-	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
-	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
-	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
-	
-	# Create cache_metadata table for per-platform sync timestamps
-	_db_query_bool("""
-		CREATE TABLE IF NOT EXISTS cache_metadata (
-			key TEXT PRIMARY KEY,
-			value TEXT
-		)
-	""")
-	
-	# Create save_sync table for tracking save file sync state
-	_db_query_bool("""
-		CREATE TABLE IF NOT EXISTS save_sync (
-			id INTEGER PRIMARY KEY,
-			romm_id INTEGER NOT NULL,
-			emulator_id TEXT NOT NULL,
-			file_name TEXT NOT NULL,
-			file_path TEXT NOT NULL,
-			last_synced_at TEXT DEFAULT '',
-			remote_save_id INTEGER DEFAULT 0,
-			slot TEXT
-		)
-	""")
-	_db_query_bool("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
+# ==================== DATABASE READY ====================
 
 func is_database_ready() -> bool:
-	return _is_db_ready
+	return database.is_database_ready()
 
-func _escape_sql(text: String) -> String:
-	return text.replace("'", "''")
 
-# ==================== SYNC (ITERATIVE STATE MACHINE) ====================
+# ==================== GAME QUERIES ====================
 
-func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bool = false) -> void:
-	print("[Sync] ==========================================")
-	print("[Sync] sync_enabled_platforms called")
-	print("[Sync] Current state: %s" % get_sync_state_name())
-	print("[Sync] Force full sync: %s" % force_full_sync)
-	print("[Sync] Callback valid: %s" % callback.is_valid())
-	print("[Sync] ==========================================")
-	
-	# Dismiss any existing sync notification from previous syncs
-	if _sync_notification_id != -1:
-		print("[Sync] Dismissing existing notification ID: %d" % _sync_notification_id)
-		NotificationManager.dismiss_notification(_sync_notification_id)
-		_sync_notification_id = -1
-	
-	if not _is_db_ready:
-		var err_msg = "Database initialization failed. App cannot function without database access." if _db_init_failed else "Database not ready"
-		print("[Sync] ERROR: " + err_msg)
-		if callback.is_valid():
-			callback.call(false, err_msg, 0, 0)
-		return
-	
-	# Reset sync state
-	_sync_current = 0
-	_sync_total = 0
-	_sync_platform = ""
-	_sync_state = SyncState.PRECHECK_DISABLED
-	_sync_platforms_list = []
-	_sync_current_platform_idx = 0
-	_sync_current_offset = 0
-	_sync_current_total = 0
-	_sync_current_synced = 0
-	_sync_total_synced = 0
-	_sync_final_callback = callback
-	_sync_force_full = force_full_sync
-	_sync_current_updated_after = ""
-	
-	var enabled = _get_enabled_platforms()
-	print("[Sync] Enabled platforms: %d" % enabled.size())
-	
-	# Get all platforms that currently have games in the database
-	var db_platforms = _get_db_platform_slugs()
-	print("[Sync] Platforms with games in DB: %d" % db_platforms.size())
-	
-	var enabled_slugs = enabled.map(func(p): return p.slug)
-	
-	# Find platforms that have games but are now disabled
-	var disabled_platforms: Array[String] = []
-	for slug in db_platforms:
-		if not slug in enabled_slugs:
-			disabled_platforms.append(slug)
-	
-	print("[Sync] Platforms to disable: %d" % disabled_platforms.size())
-	
-	# Queue the entire sync to the background sync thread
-	# This allows sync to continue even when the app is backgrounded on Android
-	print("[Sync] Queuing sync to background thread...")
-	MemoryManager.queue_sync_task(
-		func():
-			_run_sync_threaded(enabled, disabled_platforms, force_full_sync)
-			return true,
-		func(_result):
-			print("[Sync] Sync thread task completed")
-	)
+func get_game_by_id(romm_id: int) -> GameResource:
+	return database.get_game_by_id(romm_id)
 
-func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[String], force_full_sync: bool):
-	"""Main sync worker that runs on the sync thread."""
-	print("[SyncThread] Sync started on background thread")
-	
-	# 1. Remove disabled platforms
-	if disabled_platforms.size() > 0:
-		print("[SyncThread] Removing %d disabled platforms..." % disabled_platforms.size())
-		call_deferred("_show_removal_notification", disabled_platforms.size())
-		for i in range(disabled_platforms.size()):
-			var slug = disabled_platforms[i]
-			print("[SyncThread] Removing platform %d/%d: %s" % [i + 1, disabled_platforms.size(), slug])
-			call_deferred("_update_removal_notification", i + 1, disabled_platforms.size(), slug)
-			_remove_platform_sync_threaded(slug)
-			# Small yield to prevent blocking other sync thread tasks
-			OS.delay_usec(1000)
-		call_deferred("_dismiss_removal_notification")
-	
-	# 2. Check if there are platforms to sync
-	if enabled_platforms.size() == 0:
-		print("[SyncThread] No platforms enabled, completing immediately")
-		call_deferred("_emit_sync_completed", true, "No platforms enabled")
-		call_deferred("_invoke_sync_callback", true, "", 0, 0)
-		return
-	
-	# 3. Start batch mode and foreground service on main thread
-	call_deferred("_start_sync_batch_mode")
-	call_deferred("_start_sync_fg_service", "Game Library", 0, 0)
-	
-	# 4. Start sync immediately - skip pre-calculation to save 20+ seconds
-	# We'll discover per-platform totals as we fetch the first batch of each
-	print("[SyncThread] Starting sync of %d platforms..." % enabled_platforms.size())
-	_sync_state = SyncState.PLATFORM_ITERATING
-	_sync_platforms_list = enabled_platforms
-	_sync_platform_count = enabled_platforms.size()
-	_sync_current_platform_idx = 0
-	_sync_current = 0
-	_sync_total = 0  # Will accumulate as we discover totals
-	_sync_total_synced = 0
-	
-	# Start sync notification on main thread
-	call_deferred("_show_sync_notification")
-	
-	# Pre-calculate totals in background without blocking
-	# Fire off all pre-calc requests but don't wait for them
-	var platform_totals_discovered = 0
-	for platform in enabled_platforms:
-		var platform_id = str(platform.id)
-		var result = NetworkManager.fetch_games_sync(platform_id, 0, 1)
-		if result.success and result.data is Dictionary:
-			var platform_total = int(result.data.get("total", 0))
-			_precalc_platform_totals[platform_id] = platform_total
-			_sync_total += platform_total
-			platform_totals_discovered += 1
-		# Don't block - just keep going
-		OS.delay_usec(500)
-	
-	print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
-	
-	for platform_idx in range(enabled_platforms.size()):
-		if _sync_state == SyncState.ERROR:
-			break
-		
-		_sync_current_platform_idx = platform_idx
-		var platform = enabled_platforms[platform_idx]
-		_sync_platform = platform.name
-		_sync_platform_index = platform_idx + 1
-		
-		# Look up platform ID
-		var platform_id = platform.id
-		if platform_id == 0 and _is_db_ready:
-			platform_id = _lookup_platform_id_sync(platform.slug)
-		
-		if platform_id == 0:
-			print("[SyncThread] Skipping platform '%s' - no ID found" % platform.name)
-			continue
-		
-		_sync_current_platform_data = {
-			"id": platform_id,
-			"slug": platform.slug,
-			"name": platform.name
-		}
-		
-		# Update foreground service
-		call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
-		
-		# Determine sync mode
-		_sync_current_updated_after = ""
-		if not force_full_sync:
-			var last_sync = _get_last_sync_time_sync(platform.slug)
-			if last_sync != "":
-				var last_sync_time = Time.get_unix_time_from_datetime_string(last_sync)
-				var one_week_ago = Time.get_unix_time_from_system() - (7 * 24 * 60 * 60)
-				if last_sync_time > one_week_ago:
-					_sync_current_updated_after = last_sync
-					print("[SyncThread] Platform '%s' - incremental sync (after: %s)" % [platform.name, last_sync])
-				else:
-					print("[SyncThread] Platform '%s' - full sync (last sync over a week ago)" % platform.name)
-			else:
-				print("[SyncThread] Platform '%s' - full sync (no previous sync)" % platform.name)
-		else:
-			print("[SyncThread] Platform '%s' - force full sync" % platform.name)
-		
-		# Fetch and process this platform
-		_sync_state = SyncState.PLATFORM_FETCHING
-		_sync_current_offset = 0
-		_sync_current_synced = 0
-		_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
-		
-		var platform_complete = false
-		var platform_batch_count = 0
-		var batch_size = 250 if not PlatformManager.is_android() else 150
-		
-		# Parallel fetch state
-		var parallel_fetch = {
-			"thread": null,
-			"mutex": Mutex.new(),
-			"result": null,
-			"completed": false,
-			"offset": 0
-		}
-		
-		while not platform_complete and _sync_state != SyncState.ERROR:
-			
-			# Fetch batch (or wait for parallel fetch)
-			var fetch_start = Time.get_ticks_msec()
-			var result = null
-			var fetch_time = 0
-			
-			if parallel_fetch.completed and parallel_fetch.offset == _sync_current_offset:
-				# Use pre-fetched result
-				parallel_fetch.mutex.lock()
-				result = parallel_fetch.result
-				parallel_fetch.completed = false
-				parallel_fetch.result = null
-				parallel_fetch.mutex.unlock()
-				fetch_time = Time.get_ticks_msec() - fetch_start
-				print("[SyncThread] Using pre-fetched batch at offset %d" % _sync_current_offset)
-			else:
-				# Fetch synchronously
-				result = NetworkManager.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
-				fetch_time = Time.get_ticks_msec() - fetch_start
-			
-			if not result.success:
-				print("[SyncThread] Error fetching platform '%s': %s (fetch took %dms)" % [platform.name, result.error, fetch_time])
-				var current_time = Time.get_datetime_string_from_system(true)
-				_set_last_sync_time_sync(platform.slug, current_time)
-				platform_complete = true
-				continue
-			
-			var total = int(result.data.get("total", 0))
-			var items = result.data.get("items", [])
-			
-			if total == 0 or items.size() == 0:
-				if _sync_current_offset == 0 and _sync_current_updated_after != "":
-					_sync_current += _sync_precalc_platform_total
-					call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
-				
-				var current_time = Time.get_datetime_string_from_system(true)
-				_set_last_sync_time_sync(platform.slug, current_time)
-				platform_complete = true
-				continue
-			
-			_sync_current_total = total
-			_sync_platform_total = total
-			
-			# Start fetching next batch in parallel while we process this one
-			var next_offset = _sync_current_offset + batch_size
-			if next_offset < total and not platform_complete:
-				parallel_fetch.offset = next_offset
-				parallel_fetch.completed = false
-				parallel_fetch.result = null
-				
-				parallel_fetch.thread = Thread.new()
-				parallel_fetch.thread.start(func():
-					var next_result = NetworkManager.fetch_games_sync(str(platform_id), next_offset, batch_size, _sync_current_updated_after)
-					parallel_fetch.mutex.lock()
-					parallel_fetch.result = next_result
-					parallel_fetch.completed = true
-					parallel_fetch.mutex.unlock()
-				)
-			
-			# Process batch with incremental progress
-			_sync_state = SyncState.PLATFORM_PROCESSING
-			var batch_start = Time.get_ticks_msec()
-			var succeeded = _process_batch_sync(items, platform.slug, true)
-			var batch_time = Time.get_ticks_msec() - batch_start
-			_sync_current_synced += succeeded
-			_sync_total_synced += succeeded
-			_sync_current += succeeded
-			platform_batch_count += 1
-			
-			# Update progress
-			call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
-			var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
-			call_deferred("_emit_sync_progress", progress_pct * 0.01, _sync_current, _sync_total)
-			
-			print("[SyncThread] Progress: %d/%d games (%d%%) | Platform %d/%d: %s | Batch %d: fetch=%dms process=%dms" % [
-				_sync_current, _sync_total, int(progress_pct),
-				_sync_platform_index, _sync_platform_count, platform.name,
-				platform_batch_count, fetch_time, batch_time
-			])
-			
-			# Wait for parallel fetch to finish before next iteration
-			if parallel_fetch.thread != null and parallel_fetch.thread.is_alive():
-				parallel_fetch.thread.wait_to_finish()
-			
-			if _sync_current_synced >= _sync_current_total:
-				var current_time = Time.get_datetime_string_from_system(true)
-				_set_last_sync_time_sync(platform.slug, current_time)
-				platform_complete = true
-			else:
-				_sync_current_offset += batch_size
-				_sync_state = SyncState.PLATFORM_BATCHING
-				OS.delay_usec(10000)  # 10ms yield to prevent blocking and reduce CPU
-		
-		print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
-		
-		# Dispatch any remaining covers for this platform
-		_dispatch_covers_to_main_thread()
-	
-	# 7. Complete sync - defer ALL UI work to main thread
-	print("[SyncThread] All platforms complete, finishing...")
-	_sync_state = SyncState.COMPLETING
-	
-	# Get cache stats before clearing
-	var cache_stats = NetworkManager.get_and_reset_cache_stats()
-	var games_from_cache = cache_stats.get("games_from_cache", 0)
-	
-	print("[SyncThread] Sync complete: %d games synced, %d from cache" % [_sync_total_synced, games_from_cache])
-	
-	# Dispatch any remaining covers before completing
-	_dispatch_covers_to_main_thread()
-	
-	# Defer the entire completion sequence to main thread
-	# This avoids calling scene-tree methods from the sync thread
-	call_deferred("_complete_sync_on_main_thread", _sync_total_synced, games_from_cache)
 
-func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
-	"""Complete sync on main thread - safe for UI operations."""
-	print("[Sync] Completing on main thread...")
-	
-	# Flush any remaining batch notifications
-	_flush_batch_notifications()
-	
-	# Clean up
-	_stop_sync_batch_mode()
-	_stop_sync_fg_service()
-	
-	# Apply cover folding and emit completion
-	apply_cover_folding_to_database(func(folded_count: int):
-		var completion_msg = "Synced " + str(total_synced) + " games"
-		if games_from_cache > 0:
-			completion_msg += " (" + str(games_from_cache) + " checked from cache"
-			if folded_count > 0:
-				completion_msg += ", " + str(folded_count) + " folded by cover"
-			completion_msg += ")"
-		elif folded_count > 0:
-			completion_msg += " (" + str(folded_count) + " folded by cover)"
-		
-		_sync_state = SyncState.IDLE
-		sync_completed.emit(true, completion_msg)
-		_invoke_sync_callback(true, completion_msg, total_synced, 0)
-	)
+func get_all_games() -> Array[GameResource]:
+	return database.get_all_games()
 
-func _remove_platform_sync_threaded(platform_slug: String) -> bool:
-	"""Synchronous platform removal for sync thread (uses Semaphore, no busy-wait)."""
-	var result = _wait_for_async(func(callback: Callable):
-		remove_platform_games(platform_slug, func(success: bool):
-			callback.call(success)
-		)
-	, 60000)
-	if result == null:
-		print("[SyncThread] ERROR: Timeout removing platform %s" % platform_slug)
-		return false
-	return result if result is bool else false
 
-func _lookup_platform_id_sync(platform_slug: String) -> int:
-	"""Lookup platform ID from DB - queues to DB thread for thread safety."""
-	if not _is_db_ready:
-		return 0
+func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
+	return database.get_games_by_platform(platform_slug)
 
-	var result = _wait_for_async(func(callback: Callable):
-		MemoryManager.queue_db_task(
-			func():
-				var query_result = _db_query_array("SELECT romm_id FROM platforms WHERE slug = ?", [platform_slug])
-				if query_result.size() > 0:
-					return query_result[0].get("romm_id", 0)
-				return 0,
-			func(romm_id: int):
-				callback.call(romm_id)
-		)
-	, 60000)
 
-	if result == null:
-		print("[SyncThread] ERROR: Timeout looking up platform ID for %s" % platform_slug)
-		return 0
-	return result if result is int else 0
+func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "") -> Array[GameResource]:
+	return database.get_games_paginated(offset, limit, sort_field, ascending, platform_slug)
 
-func _get_last_sync_time_sync(platform_slug: String) -> String:
-	"""Get last sync time - queues to DB thread for thread safety."""
-	if not _is_db_ready:
-		return ""
 
-	var key = "last_sync_" + platform_slug
-	var result = _wait_for_async(func(callback: Callable):
-		MemoryManager.queue_db_task(
-			func():
-				var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = ?", [key])
-				if query_result.size() > 0:
-					return query_result[0].get("value", "")
-				return "",
-			func(value: String):
-				callback.call(value)
-		)
-	, 60000)
+func get_platforms_with_games() -> Array[Dictionary]:
+	return database.get_platforms_with_games()
 
-	if result == null:
-		print("[SyncThread] ERROR: Timeout getting last sync time for %s" % platform_slug)
-		return ""
-	return result if result is String else ""
 
-func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
-	"""Set last sync time - queues to DB thread for thread safety."""
-	if not _is_db_ready:
-		return
+func get_total_games_count(platform_slug: String = "") -> int:
+	return database.get_total_games_count(platform_slug)
 
-	var key = "last_sync_" + platform_slug
-	var result = _wait_for_async(func(callback: Callable):
-		MemoryManager.queue_db_task(
-			func():
-				return _db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp]),
-			func(success: bool):
-				callback.call(success)
-		)
-	, 60000)
 
-	if result == null:
-		print("[SyncThread] ERROR: Timeout setting last sync time for %s" % platform_slug)
-	elif not (result is bool and result):
-		print("[SyncThread] ERROR: Failed to set last sync time for %s" % platform_slug)
+func search_games_paginated(query: String, offset: int, limit: int) -> Array[GameResource]:
+	return database.search_games_paginated(query, offset, limit)
 
-func _precalculate_totals_sync(platforms: Array) -> int:
-	"""Pre-calculate total games for all platforms - sync thread version."""
-	_precalc_platform_totals.clear()
-	var grand_total = 0
-	
-	for platform in platforms:
-		var platform_id = str(platform.id)
-		var fetch_start = Time.get_ticks_msec()
-		var result = NetworkManager.fetch_games_sync(platform_id, 0, 1)
-		var fetch_time = Time.get_ticks_msec() - fetch_start
-		if result.success and result.data is Dictionary:
-			var platform_total = int(result.data.get("total", 0))
-			grand_total += platform_total
-			_precalc_platform_totals[platform_id] = platform_total
-			print("[SyncThread] Pre-calc: %s = %d games (%dms)" % [platform.name, platform_total, fetch_time])
-		OS.delay_usec(1000)
-	
-	return grand_total
 
-func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_progress: bool = false) -> int:
-	"""Process a batch of games on the sync thread.
-	
-	Phases:
-	1. Create GameResources (sync thread CPU work)
-	2. Sibling checks + DB inserts (single combined DB task per batch)
-	3. Collect cover URLs and dispatch to main thread for async download
-	4. Optional: Emit incremental progress updates during processing
-	"""
-	if items.is_empty():
-		return 0
-	
-	var batch_start = Time.get_ticks_msec()
-	var base_count = _sync_current  # Starting count before this batch
-	
-	# Phase 1: Create GameResources with incremental progress
-	var games: Array[GameResource] = []
-	var progress_chunk_size = 25  # Emit progress every 25 games
-	
-	for i in range(items.size()):
-		var game = _create_game_from_data(items[i], platform_slug, false)
-		if game != null:
-			games.append(game)
-		
-		# Emit incremental progress every 25 games
-		if emit_incremental_progress and i > 0 and i % progress_chunk_size == 0:
-			var partial_current = base_count + i
-			var partial_pct = float(partial_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
-			call_deferred("_emit_sync_progress", partial_pct * 0.01, partial_current, _sync_total)
-	
-	if games.is_empty():
-		return 0
-	
-	# Phase 2: Sibling checks + DB inserts in ONE combined DB task
-	var db_start = Time.get_ticks_msec()
-	var inserted = _check_and_insert_games_sync(games)
-	var db_time = Time.get_ticks_msec() - db_start
-	
-	# Phase 3: Collect cover URLs for async download on main thread
-	var cover_start = Time.get_ticks_msec()
-	var cover_count = 0
-	for game in games:
-		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
-			var cache_path = get_cached_image_path(game.cover_url)
-			if not FileAccess.file_exists(cache_path):
-				_sync_covers_mutex.lock()
-				_sync_covers_pending.append(game.cover_url)
-				var pending_count = _sync_covers_pending.size()
-				_sync_covers_mutex.unlock()
-				cover_count += 1
-				# Dispatch covers to main thread every 50 collected
-				if pending_count >= 50:
-					_dispatch_covers_to_main_thread()
-	var cover_time = Time.get_ticks_msec() - cover_start
-	
-	var total_time = Time.get_ticks_msec() - batch_start
-	# Batch timing logging removed for cleaner sync output
+func get_search_results_count(query: String) -> int:
+	return database.get_search_results_count(query)
 
-	return inserted
 
-func _dispatch_covers_to_main_thread():
-	"""Dispatch collected cover URLs to main thread for async download."""
-	_sync_covers_mutex.lock()
-	if _sync_covers_pending.is_empty():
-		_sync_covers_mutex.unlock()
-		return
-	
-	var urls = _sync_covers_pending.duplicate()
-	_sync_covers_pending.clear()
-	_sync_covers_mutex.unlock()
-	
-	call_deferred("_download_covers_on_main_thread", urls)
+func get_downloaded_games_count() -> int:
+	return database.get_downloaded_games_count()
 
-func _download_covers_on_main_thread(urls: Array[String]):
-	"""Download covers on main thread using existing async infrastructure.
-	
-	Called via call_deferred from sync thread. Queues each cover to
-	DownloadManager for parallel async download.
-	"""
-	var queued = 0
-	var already_cached = 0
-	
-	for url in urls:
-		var cache_path = get_cached_image_path(url)
-		if FileAccess.file_exists(cache_path):
-			already_cached += 1
-			continue
-		
-		# Use existing async download path
-		_download_cover(url, func(_ok): pass)
-		queued += 1
-	
-	# Cover download logging removed for cleaner sync output
 
-func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
-	"""Check siblings and insert games in a single DB task.
+func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResource]:
+	return database.get_downloaded_games_paginated(offset, limit)
 
-	This combines what used to be two separate DB tasks (sibling check + insert)
-	into one, halving the DB queue pressure.
-	"""
-	if games.is_empty() or not _is_db_ready:
-		return 0
 
-	var result = _wait_for_async(func(callback: Callable):
-		MemoryManager.queue_db_task(
-			func():
-				# Step 1: Check siblings for all games
-				for game in games:
-					if game.siblings.size() > 0:
-						var has_sibling = _check_siblings_in_db(game.romm_id, game.siblings)
-						game.is_master_entry = not has_sibling
+func get_random_game() -> GameResource:
+	return database.get_random_game()
 
-				# Step 2: Insert all games in one transaction
-				var success = _insert_games_transaction(games)
-				return success,
-			func(success: bool):
-				callback.call(success)
-		)
-	, 120000)
 
-	if result == null:
-		print("[SyncThread] ERROR: Timeout waiting for DB check+insert (%d games)" % games.size())
-		return 0
-
-	var success = result if result is bool else false
-	if success:
-		# Skip all UI emissions during sync for performance
-		# LibraryView will refresh when sync_completed is emitted
-		return games.size()
-	else:
-		print("[SyncThread] ERROR: DB check+insert failed for %d games" % games.size())
-		return 0
-
-func _insert_games_transaction(games: Array[GameResource]) -> bool:
-	"""Insert multiple games within a single database transaction.
-	
-	This provides 10-50x speedup over individual inserts by reducing
-	disk sync operations. All games in the batch succeed or fail together.
-	"""
-	if not _is_db_ready or games.is_empty():
-		return false
-	_db_lock()
-	
-	# Start transaction
-	var begin_result = _db.query("BEGIN TRANSACTION")
-	if not begin_result:
-		print("[DataManager] ERROR: Failed to begin transaction")
-		_db_unlock()
-		return false
-	
-	var success = true
-	var error_count = 0
-	
-	# Insert all games in this batch
-	for game in games:
-		if game == null:
-			continue
-		
-		var insert_data = _build_insert_query(game)
-		var insert_result = _db.query_with_bindings(insert_data.query, insert_data.bindings)
-		if not insert_result:
-			success = false
-			error_count += 1
-			print("[DataManager] ERROR: Failed to insert game '%s' (ID: %d)" % [game.title, game.romm_id])
-			# Continue trying to insert others - we'll rollback at the end
-	
-	# Commit or rollback based on success
-	if success:
-		var commit_result = _db.query("COMMIT")
-		if commit_result:
-			_db_unlock()
-			return true
-		else:
-			print("[DataManager] ERROR: Failed to commit transaction")
-			_db.query("ROLLBACK")
-			_db_unlock()
-			return false
-	else:
-		print("[DataManager] ERROR: Transaction failed with %d errors, rolling back %d games" % [error_count, games.size()])
-		_db.query("ROLLBACK")
-		_db_unlock()
-		return false
-
-func _show_sync_notification():
-	"""Show sync notification on main thread."""
-	_sync_notification_id = NotificationManager.show_notification(
-		"Syncing...",
-		NotificationManager.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			if _sync_total == 0:
-				return 0.0
-			return float(_sync_current) / float(_sync_total),
-		func(progress: float) -> String:
-			var pct = int(progress * 100)
-			if _sync_platform != "":
-				return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
-			return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct]
-	)
-
-func _get_db_platform_slugs() -> Array[String]:
-	"""Get list of platform slugs that have games in the database"""
-	var slugs: Array[String] = []
-	if not _is_db_ready:
-		return slugs
-	
-	var query_result = _db_query_array("SELECT DISTINCT platform_slug FROM games ORDER BY platform_slug")
-	for row in query_result:
-		var slug = row.get("platform_slug", "")
-		if slug != "":
-			slugs.append(slug)
-	
-	return slugs
-
-func _get_enabled_platforms() -> Array:
-	var result = []
-	var setting = SettingsManager.get_setting("enabled_platforms")
-	if not setting or not setting.value is Dictionary:
-		return result
-	
-	for slug in setting.value.keys():
-		var data = setting.value[slug]
-		var enabled = false
-		var id = 0
-		var game_name = slug.capitalize()
-		
-		if data is bool:
-			enabled = data
-		elif data is Dictionary:
-			enabled = data.get("enabled", false)
-			id = data.get("id", 0)
-			game_name = data.get("name", slug.capitalize())
-		
-		if enabled:
-			# Include all enabled platforms regardless of ID
-			# ID will be looked up during sync if needed
-			result.append({"slug": slug, "id": id, "name": game_name})
-	
-	return result
-
-func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
-	"""Check if any sibling (NOT including self) exists in DB - to be run on DB thread."""
-	if _db == null:
-		return false
-	
-	# Build list of sibling IDs to check (excluding self)
-	var ids_to_check = []
-	for sibling in siblings:
-		var sid = sibling.get("id", 0)
-		if sid != 0 and sid != romm_id:  # Exclude self
-			ids_to_check.append(sid)
-	
-	if ids_to_check.is_empty():
-		return false
-	
-	# Check if any siblings already exist as master entries
-	var placeholders = ", ".join(ids_to_check.map(func(_id): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % placeholders
-	
-	var query_result = _db_query_array(query, ids_to_check)
-	if query_result.size() > 0:
-		return query_result[0]["count"] > 0
-
-	return false
-
-func _ensure_consistent_masters_in_batch(games: Array[GameResource]):
-	"""Ensure that only the game with the lowest ID in each sibling group is marked as master.
-	
-	This handles the race condition where multiple siblings from the same group are processed
-	in the same batch and all pass the database sibling check."""
-	
-	# Build a map of sibling group IDs to the lowest ID in that group within this batch
-	var sibling_group_lowest: Dictionary = {}
-	
-	for game in games:
-		# Build list of all IDs in this sibling group (including the game itself)
-		var all_ids_in_group = [game.romm_id]
-		for sibling in game.siblings:
-			var sid = sibling.get("id", 0)
-			if sid != 0:
-				all_ids_in_group.append(sid)
-		
-		# Find the lowest ID in this group
-		var lowest_id = all_ids_in_group.min()
-		
-		# Use a unique key for this sibling group (sorted IDs to ensure consistency)
-		all_ids_in_group.sort()
-		var group_key = ",".join(all_ids_in_group.map(func(id): return str(id)))
-		
-		# Track the lowest ID for this group
-		if not sibling_group_lowest.has(group_key):
-			sibling_group_lowest[group_key] = lowest_id
-		else:
-			sibling_group_lowest[group_key] = min(sibling_group_lowest[group_key], lowest_id)
-	
-	# Now apply consistent master selection
-	for game in games:
-		# Skip if already marked as non-master due to DB check
-		if not game.is_master_entry:
-			continue
-		
-		# Build the same group key
-		var all_ids_in_group = [game.romm_id]
-		for sibling in game.siblings:
-			var sid = sibling.get("id", 0)
-			if sid != 0:
-				all_ids_in_group.append(sid)
-		
-		all_ids_in_group.sort()
-		var group_key = ",".join(all_ids_in_group.map(func(id): return str(id)))
-		
-		# Only keep as master if this game has the lowest ID in its group
-		var lowest_id = sibling_group_lowest.get(group_key, game.romm_id)
-		if game.romm_id != lowest_id:
-			game.is_master_entry = false
-
-func _group_games_by_cover_url(games: Array[GameResource]):
-	"""Group games with identical cover URLs as siblings.
-	
-	This function identifies games that share the same cover URL and adds them
-	to each other's sibling lists. RomM siblings take precedence, so we only
-	add cover-based siblings that aren't already romm siblings."""
-	
-	if games.size() < 2:
-		return
-	
-	# Build a map of cover URL -> Array of game indices
-	var cover_groups: Dictionary = {}
-	
-	for i in range(games.size()):
-		var game = games[i]
-		if game.cover_url == "":
-			continue
-		
-		if not cover_groups.has(game.cover_url):
-			cover_groups[game.cover_url] = []
-		cover_groups[game.cover_url].append(i)
-	
-	# For each cover group with 2+ games, cross-reference them as siblings
-	for cover_url in cover_groups.keys():
-		var indices = cover_groups[cover_url]
-		if indices.size() < 2:
-			continue
-
-		# Pre-build sibling entries once per group (shared references, no inner-loop alloc)
-		var all_entries: Array[Dictionary] = []
-		for idx in indices:
-			var g = games[idx]
-			all_entries.append({
-				"id": g.romm_id,
-				"name": g.title,
-				"file_name": g.file_name,
-				"file_size": g.file_size
-			})
-
-		# For each game, add all group entries except self and existing romm siblings
-		for i in range(indices.size()):
-			var current_game = games[indices[i]]
-			var current_id = current_game.romm_id
-
-			# Fast lookup of existing sibling IDs
-			var existing: Dictionary = {}
-			for sibling in current_game.siblings:
-				existing[sibling.get("id", 0)] = true
-
-			# Append pre-built entries (skips self + existing romm siblings)
-			for entry in all_entries:
-				var other_id = entry.get("id", 0)
-				if other_id == current_id or existing.has(other_id):
-					continue
-				current_game.siblings.append(entry)
-				existing[other_id] = true
-
-# ==================== COMPREHENSIVE COVER FOLDING ====================
-
-func apply_cover_folding_to_database(callback: Callable = Callable()):
-	"""Apply cover folding globally across all games in the database.
-	
-	This runs after all syncs complete and groups games with identical covers
-	across all batches and platforms. Skips games that are already RomM siblings.
-	
-	NEW TWO-TIER SYSTEM:
-	- Games with identical covers get the same cover_group_id (hash of cover_url)
-	- Within each cover group, only the game with the lowest romm_id is visible (cover_group_master = 1)
-	- RomM siblings remain untouched (they have their own is_master_entry system)
-	"""
-	if not _is_db_ready:
-		if callback.is_valid():
-			callback.call(0)
-		return
-	
-	# Check if cover folding is enabled
-	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
-	if not fold_covers_setting or not fold_covers_setting.value:
-		if callback.is_valid():
-			callback.call(0)
-		return
-	
-	# Cover folding changes cover_group_master, which affects the count query.
-	_invalidate_downloaded_games_count_cache()
-	
-	print("[CoverFolding] Starting global cover folding...")
-	
-	# Show pulsing notification
-	var notification_id = NotificationManager.show_notification(
-		"Folding duplicate covers...",
-		NotificationManager.Type.INFO,
-		null,
-		0.0,
-		Callable(),
-		Callable(),
-		true  # pulsing
-	)
-	
-	MemoryManager.queue_db_task(
-		func():
-			# Query all games with cover URLs that don't have RomM siblings
-			# We exclude games that already have siblings in the RomM system
-			var query = """
-				SELECT id, romm_id, title, file_name, file_size, cover_url, siblings
-				FROM games
-				WHERE cover_url != '' AND cover_url IS NOT NULL
-			"""
-			
-			var query_result = _db_query_array(query)
-			if query_result.is_empty():
-				return 0
-			var rows = query_result
-			
-			# Build cover groups from games WITHOUT RomM siblings
-			var cover_groups: Dictionary = {}
-			var games_with_romm_siblings: Dictionary = {}
-			
-			for row in rows:
-				var romm_id = row.get("romm_id", 0)
-				var cover_url = row.get("cover_url", "")
-				var siblings_json = row.get("siblings", "[]")
-				
-				if cover_url == "" or romm_id == 0:
-					continue
-				
-				# Check if this game has RomM siblings (not just cover siblings)
-				var has_romm_siblings = false
-				var json = JSON.new()
-				var err = json.parse(siblings_json)
-				if err == OK and json.data is Array:
-					for sibling in json.data:
-						if sibling is Dictionary:
-							var sibling_id = sibling.get("id", 0)
-							# Check if this sibling exists in DB as master (RomM sibling)
-							if sibling_id != 0 and sibling_id != romm_id:
-								var sibling_result = _db_query_array("SELECT COUNT(*) as count FROM games WHERE romm_id = ? AND is_master_entry = 1", [sibling_id])
-								if sibling_result.size() > 0:
-									if sibling_result[0].get("count", 0) > 0:
-										has_romm_siblings = true
-										break
-				
-				if has_romm_siblings:
-					# Don't process games with RomM siblings
-					games_with_romm_siblings[romm_id] = true
-					continue
-				
-				# Add to cover group
-				if not cover_groups.has(cover_url):
-					cover_groups[cover_url] = []
-				
-				cover_groups[cover_url].append({
-					"romm_id": romm_id
-				})
-			
-			var groups_processed = 0
-			var games_folded = 0
-			
-			# Process each cover group with 2+ games
-			for cover_url in cover_groups.keys():
-				var games = cover_groups[cover_url]
-				if games.size() < 2:
-					continue
-				
-				groups_processed += 1
-				
-				# Generate group ID from cover URL hash
-				var group_id = cover_url.md5_text()
-				
-				# Find the lowest romm_id in this group (will be the master)
-				var lowest_id = games[0].romm_id
-				for game in games:
-					if game.romm_id < lowest_id:
-						lowest_id = game.romm_id
-				
-				# Update all games in this group
-				for game in games:
-					var is_master = 1 if game.romm_id == lowest_id else 0
-					
-					var update_query = """
-						UPDATE games 
-						SET cover_group_id = ?, cover_group_master = ?
-						WHERE romm_id = ?
-					"""
-					
-					_db_query_bool(update_query, [group_id, is_master, game.romm_id])
-					
-					# Count non-master games as folded
-					if game.romm_id != lowest_id:
-						games_folded += 1
-			
-			print("[CoverFolding] Processed %d cover groups, folded %d games" % [groups_processed, games_folded])
-			return games_folded,
-		func(folded_count: int):
-			NotificationManager.dismiss_notification(notification_id)
-			
-			if folded_count > 0:
-				NotificationManager.show_notification(
-					"Folded %d duplicate covers" % folded_count,
-					NotificationManager.Type.SUCCESS
-				)
-			
-			print("[CoverFolding] Complete - folded %d games" % folded_count)
-			if callback.is_valid():
-				callback.call(folded_count)
-	)
-
-# ==================== BATCH NOTIFICATION SYSTEM ====================
-
-func _start_sync_batch_mode():
-	"""Start batching game_added signals for efficient UI updates."""
-	_sync_batch_mode = true
-	_sync_batch_pending.clear()
-	_sync_batch_last_emit_time = Time.get_ticks_msec()
-	
-	# Notify listeners that sync is starting - allows UI to clear cache before new data arrives
-	sync_started.emit()
-	
-	# Create timer to periodically flush notifications
-	if _sync_batch_timer:
-		_sync_batch_timer.queue_free()
-	_sync_batch_timer = Timer.new()
-	_sync_batch_timer.wait_time = BATCH_EMIT_INTERVAL_MS / 1000.0  # Convert ms to seconds
-	_sync_batch_timer.one_shot = false
-	_sync_batch_timer.timeout.connect(_flush_batch_notifications)
-	add_child(_sync_batch_timer)
-	_sync_batch_timer.start()
-
-func _stop_sync_batch_mode():
-	"""Stop batch mode and flush any remaining notifications."""
-	_sync_batch_mode = false
-	
-	# Stop the timer first
-	if _sync_batch_timer:
-		_sync_batch_timer.stop()
-		_sync_batch_timer.queue_free()
-		_sync_batch_timer = null
-	
-	# Flush any remaining notifications
-	_sync_batch_pending_mutex.lock()
-	var has_pending = _sync_batch_pending.size() > 0
-	_sync_batch_pending_mutex.unlock()
-	
-	if has_pending:
-		_flush_batch_notifications()
-
-func is_sync_in_progress() -> bool:
-	"""Check if a sync is currently in progress."""
-	return _sync_batch_mode
-
-func _queue_batch_notification(game: GameResource):
-	"""Queue a game notification during batch mode. Called via call_deferred from DB thread."""
-	_sync_batch_pending_mutex.lock()
-	_sync_batch_pending.append(game)
-	_sync_batch_pending_mutex.unlock()
-
-func _flush_batch_notifications():
-	"""Emit batched games and clear the pending list."""
-	_sync_batch_pending_mutex.lock()
-	if _sync_batch_pending.size() == 0:
-		_sync_batch_pending_mutex.unlock()
-		return
-	
-	var games = _sync_batch_pending.duplicate()
-	_sync_batch_pending.clear()
-	_sync_batch_pending_mutex.unlock()
-	
-	var start_index = _sync_current - games.size()
-	
-	games_batch_added.emit(_sync_platform, start_index, games)
-	
-	_sync_batch_last_emit_time = Time.get_ticks_msec()
-
-func _create_game_from_data(data: Dictionary, platform_slug: String, check_siblings: bool = true) -> GameResource:
-	var game = GameResource.new()
-	game.id = str(data.get("id", ""))
-	game.romm_id = data.get("id", 0)
-	game.title = str(data.get("name", ""))
-	game.platform = str(data.get("platform_display_name", ""))
-	game.platform_slug = platform_slug if platform_slug != "" else str(data.get("platform_slug", ""))
-	game.cover_url = str(data.get("url_cover", ""))
-	game.cover_path = str(data.get("path_cover_large", ""))
-	game.file_name = str(data.get("fs_name", ""))
-	game.file_path = str(data.get("full_path", ""))
-	game.file_size = data.get("fs_size_bytes", 0)
-	game.has_local_copy = false
-	game.last_updated = str(data.get("updated_at", ""))
-	game.description = str(data.get("summary", ""))
-	
-	var genres: Array[String] = []
-	if data.has("metadatum") and data["metadatum"] is Dictionary:
-		if data["metadatum"].has("genres") and data["metadatum"]["genres"] is Array:
-			for g in data["metadatum"]["genres"]:
-				if g is String:
-					genres.append(g)
-	game.genres = genres
-	
-	if data.has("metadatum") and data["metadatum"] is Dictionary:
-		var rating_val = data["metadatum"].get("average_rating", 0.0)
-		game.rating = rating_val if rating_val != null else 0.0
-	
-	# Extract raw IGDB metadata blob from RomM if present
-	if data.has("igdb_metadata") and data["igdb_metadata"] is Dictionary:
-		game.igdb_metadata = data["igdb_metadata"].duplicate()
-	else:
-		game.igdb_metadata = {}
-	
-	# Extract siblings from API response
-	var siblings: Array[Dictionary] = []
-	if data.has("siblings") and data["siblings"] is Array:
-		for sibling_data in data["siblings"]:
-			if sibling_data is Dictionary:
-				# Note: Sibling data from API only has basic info (id, name, fs_name_no_ext, etc.)
-				# Full details (including proper file name with extension) will be fetched on-demand
-				# when the user selects the sibling in the game details view
-				
-				var sibling = {
-					"id": sibling_data.get("id", 0),
-					"name": str(sibling_data.get("name", "")),
-					"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
-					"file_size": sibling_data.get("fs_size_bytes", 0),
-					"title_id": ""  # Will be extracted on launch
-				}
-				siblings.append(sibling)
-	else:
-		pass
-	game.siblings = siblings
-	
-	# Determine if this should be a master entry
-	# A game is a master if none of its siblings already exist in our database
-	# This will be checked in batch during sync, or set to true for individual adds
-	if check_siblings:
-		game.is_master_entry = not _has_sibling_in_database(game.romm_id, siblings)
-	else:
-		# During batch sync, we'll check siblings separately
-		game.is_master_entry = true  # Default, will be updated by batch check
-	
-	# Mark games without cover art so filtering can be applied dynamically
-	if game.cover_url == "" or game.cover_url == "null" or game.cover_url == "<null>" or game.cover_url == "None":
-		game.has_cover_art = false
-	
-	return game
-
-func _has_sibling_in_database(romm_id: int, siblings: Array[Dictionary]) -> bool:
-	"""Check if any sibling (NOT including self) already exists as a master entry in the database"""
-	if not _is_db_ready:
-		return false
-	
-	# Build list of sibling IDs to check (excluding self - we only want to check siblings)
-	var ids_to_check = []
-	for sibling in siblings:
-		var sid = sibling.get("id", 0)
-		if sid != 0 and sid != romm_id:  # Exclude self
-			ids_to_check.append(sid)
-	
-	# If no siblings to check, return false
-	if ids_to_check.size() == 0:
-		return false
-	
-	# Check if any siblings already exist as master entries
-	var placeholders = ", ".join(ids_to_check.map(func(_id): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % placeholders
-	var query_result = _db_query_array(query, ids_to_check)
-	
-	if query_result.size() > 0:
-		var count = query_result[0]["count"]
-		return count > 0
-	
-	return false
-
-func _build_insert_query(game: GameResource) -> Dictionary:
-	"""Build SQL INSERT query and bindings for a game - used for batch processing.
-	
-	PRESERVES existing has_local_copy, downloaded_sibling_ids, and file_path 
-	if the game already exists in the database. This prevents downloaded games
-	from disappearing after a re-sync."""
-	
-	# Check if game already exists and preserve download status
-	var has_local_copy = 1 if game.has_local_copy else 0
-	var downloaded_sibling_ids = JSON.stringify(game.downloaded_sibling_ids)
-	var file_path = game.file_path
-	
-	if _is_db_ready and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master FROM games WHERE romm_id = ?"
-		var query_result = _db_query_array_unlocked(check_query, [game.romm_id])
-		if query_result.size() > 0:
-			var existing = query_result[0]
-			# Preserve download status from existing record
-			if existing.get("has_local_copy", 0) == 1:
-				has_local_copy = 1
-			# Preserve downloaded siblings
-			var existing_siblings = existing.get("downloaded_sibling_ids", "[]")
-			if existing_siblings != "[]" and existing_siblings != "":
-				downloaded_sibling_ids = existing_siblings
-			# Preserve file path
-			var existing_path = existing.get("file_path", "")
-			if existing_path != "":
-				file_path = existing_path
-			# Preserve cover group fields (they're managed separately from sync)
-			var existing_cover_group_id = existing.get("cover_group_id", "")
-			if existing_cover_group_id != "":
-				game.cover_group_id = existing_cover_group_id
-				game.cover_group_master = existing.get("cover_group_master", 1) == 1
-	
-	var query = """
-		INSERT OR REPLACE INTO games 
-		(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
-		 file_name, file_path, file_size, has_local_copy, last_updated, 
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	"""
-	
-	var bindings = [
-		game.id,
-		game.romm_id,
-		game.title,
-		game.platform,
-		game.platform_slug,
-		game.cover_url,
-		game.cover_path,
-		game.file_name,
-		file_path,
-		game.file_size,
-		has_local_copy,
-		game.last_updated,
-		game.description,
-		",".join(game.genres),
-		game.rating,
-		JSON.stringify(game.siblings),
-		game.selected_sibling_id,
-		1 if game.is_master_entry else 0,
-		downloaded_sibling_ids,
-		1 if game.has_cover_art else 0,
-		game.last_played,
-		game.title_id,
-		game.cover_group_id,
-		1 if game.cover_group_master else 0,
-		JSON.stringify(game.igdb_metadata)
-	]
-	
-	return {"query": query, "bindings": bindings}
-
-# ==================== DATABASE OPERATIONS ====================
+# ==================== GAME WRITES ====================
 
 func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
-	if not _is_db_ready:
-		return false
-	
-	_invalidate_downloaded_games_count_cache()
-	
-	MemoryManager.queue_db_task(
-		func():
-			var query = """
-				INSERT OR REPLACE INTO games 
-				(id, romm_id, title, platform, platform_slug, cover_url, cover_path, 
-				 file_name, file_path, file_size, has_local_copy, last_updated, 
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			"""
-			var bindings = [
-				game.id,
-				game.romm_id,
-				game.title,
-				game.platform,
-				game.platform_slug,
-				game.cover_url,
-				game.cover_path,
-				game.file_name,
-				game.file_path,
-				game.file_size,
-				1 if game.has_local_copy else 0,
-				game.last_updated,
-				game.description,
-				",".join(game.genres),
-				game.rating,
-				JSON.stringify(game.siblings),
-				game.selected_sibling_id,
-				1 if game.is_master_entry else 0,
-				JSON.stringify(game.downloaded_sibling_ids),
-				1 if game.has_cover_art else 0,
-				game.last_played,
-				game.title_id,
-				game.cover_group_id,
-				1 if game.cover_group_master else 0,
-				JSON.stringify(game.igdb_metadata)
-			]
-			return _db_query_bool(query, bindings),
+	return database.add_game(game, callback)
 
-		func(success: bool):
-			if success:
-				# Use batch notification during sync, individual during normal operations
-				# Only notify for games with cover art (games without covers are hidden)
-				# Only notify for master entries (sibling ROMs are hidden from library view)
-				# AND only if it's a cover group master (or not in a cover group)
-				if _sync_batch_mode:
-					if game.has_cover_art and game.is_master_entry and game.cover_group_master:
-						_queue_batch_notification(game)
-				else:
-					game_added.emit(game)
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
 
 func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
-	if not _is_db_ready:
-		return false
-	
-	_invalidate_downloaded_games_count_cache()
-	
-	MemoryManager.queue_db_task(
-		func():
-			var query = """
-				UPDATE games SET
-					title = ?,
-					platform = ?,
-					platform_slug = ?,
-					cover_url = ?,
-					cover_path = ?,
-					file_name = ?,
-					file_path = ?,
-					file_size = ?,
-					has_local_copy = ?,
-					last_updated = ?,
-					description = ?,
-					genres = ?,
-					rating = ?,
-					siblings = ?,
-					selected_sibling_id = ?,
-					is_master_entry = ?,
-					downloaded_sibling_ids = ?,
-					has_cover_art = ?,
-					last_played = ?,
-					title_id = ?,
-					cover_group_id = ?,
-					cover_group_master = ?,
-					igdb_metadata = ?
-				WHERE romm_id = ?
-			"""
-			var bindings = [
-				game.title,
-				game.platform,
-				game.platform_slug,
-				game.cover_url,
-				game.cover_path,
-				game.file_name,
-				game.file_path,
-				game.file_size,
-				1 if game.has_local_copy else 0,
-				game.last_updated,
-				game.description,
-				",".join(game.genres),
-				game.rating,
-				JSON.stringify(game.siblings),
-				game.selected_sibling_id,
-				1 if game.is_master_entry else 0,
-				JSON.stringify(game.downloaded_sibling_ids),
-				1 if game.has_cover_art else 0,
-				game.last_played,
-				game.title_id,
-				game.cover_group_id,
-				1 if game.cover_group_master else 0,
-				JSON.stringify(game.igdb_metadata),
-				game.romm_id
-			]
-			return _db_query_bool(query, bindings),
+	return database.update_game(game, callback)
 
-		func(success: bool):
-			if success:
-				game_updated.emit(game)
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
+
+func update_game_title_id(romm_id: int, title_id: String, callback: Callable = Callable()) -> bool:
+	return database.update_game_title_id(romm_id, title_id, callback)
+
+
+func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: Callable = Callable()) -> bool:
+	return database.update_game_siblings(romm_id, siblings, callback)
+
+
+func update_game_last_played(romm_id: int, timestamp: String) -> bool:
+	return database.update_game_last_played(romm_id, timestamp)
+
 
 func delete_game_download(game: GameResource, callback: Callable = Callable(), force_db_update: bool = false) -> bool:
 	"""Delete a downloaded game file and update the database.
 	If force_db_update is true and the file doesn't exist, the DB entry will be updated anyway."""
-	if not _is_db_ready or not game:
+	if not database.is_database_ready() or not game:
 		push_error("[DataManager] Cannot delete: DB not ready or game is null")
 		if callback.is_valid():
 			callback.call(false)
 		return false
-	
+
 	# Deleting a download changes the downloaded-games count.
-	_invalidate_downloaded_games_count_cache()
-	
+	database.invalidate_downloaded_games_count_cache()
+
 	# Get the file path to delete - construct it from components (like launch_manager does)
 	var active_id = game.get_active_game_id()
 	var active_file_name = ""
-	
+
 	if active_id == game.romm_id:
 		active_file_name = game.file_name
 	else:
@@ -1786,21 +170,21 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 			if sibling.get("id", 0) == active_id:
 				active_file_name = sibling.get("file_name", "")
 				break
-	
+
 	if active_file_name == "":
 		push_error("[DataManager] Cannot delete: empty file name")
 		if callback.is_valid():
 			callback.call(false)
 		return false
-	
+
 	# Construct the full path (same as launch_manager.gd line 1162)
 	var root_folder = SettingsManager.get_setting("games_root_folder")
 	var root_path = root_folder.value if root_folder else "user://roms/"
 	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
-	
+
 	# Check if file exists
 	var file_exists = FileAccess.file_exists(abs_path)
-	
+
 	if not file_exists:
 		if force_db_update:
 			print("[DataManager] File not found but force_db_update=true, removing DB entry for: " + game.title)
@@ -1809,18 +193,18 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 			if callback.is_valid():
 				callback.call(false)
 			return false
-	
+
 	# Attempt to delete the file (only if it exists)
 	var file_deleted = not file_exists  # If file doesn't exist, consider it "deleted" when forcing
 	var error_msg = ""
-	
+
 	if file_exists:
 		# Method 1: Try using DirAccess with the parent directory
 		var parent_dir = abs_path.get_base_dir()
 		var file_name = abs_path.get_file()
-		
+
 		var dir = DirAccess.open(parent_dir)
-		
+
 		if dir:
 			var err = dir.remove(file_name)
 			if err == OK:
@@ -1829,7 +213,7 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 				error_msg = "DirAccess.remove failed with error: " + str(err)
 		else:
 			error_msg = "Failed to open directory: " + parent_dir
-		
+
 		# Method 2: If first method failed, try remove_absolute
 		if not file_deleted:
 			var err = DirAccess.remove_absolute(abs_path)
@@ -1837,23 +221,23 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 				file_deleted = true
 			else:
 				error_msg += " | remove_absolute failed with error: " + str(err)
-		
+
 		# If file deletion failed, don't update the database (unless forcing)
 		if not file_deleted and not force_db_update:
 			push_error("[DataManager] Failed to delete file: " + abs_path + " | " + error_msg)
 			if callback.is_valid():
 				callback.call(false)
 			return false
-		
+
 		# Verify file was actually deleted
 		var file_still_exists = FileAccess.file_exists(abs_path)
-		
+
 		if file_still_exists and not force_db_update:
 			push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
 			if callback.is_valid():
 				callback.call(false)
 			return false
-	
+
 	# Update game state (after successful deletion or forced removal)
 	if active_id == game.romm_id:
 		# Main game
@@ -1864,1019 +248,119 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	else:
 		# Sibling - remove from downloaded list
 		game.downloaded_sibling_ids.erase(active_id)
-	
+
 	print("[DataManager] delete_game_download: Updating DB for game " + game.title + " (romm_id=" + str(game.romm_id) + ") - has_local_copy=" + str(game.has_local_copy) + ", downloaded_sibling_ids=" + str(game.downloaded_sibling_ids))
-	
+
 	# Clean up extracted game files for platforms that extract during launch
-	_cleanup_extracted_game_files(game)
-	
+	LaunchManager.cleanup_extracted_game_files(game)
+
 	# Persist to database
 	var wrapped_callback = func(success: bool):
 		print("[DataManager] delete_game_download: DB update result for " + game.title + " = " + str(success))
 		if callback.is_valid():
 			callback.call(success)
-	
-	return update_game(game, wrapped_callback)
+
+	return database.update_game(game, wrapped_callback)
 
 
-## Cleans up extracted game files when a game is deleted
-## Platforms that extract: PS3 (RPCS3), Vita (Vita3K)
-func _cleanup_extracted_game_files(game: GameResource) -> void:
-	if not game or game.title_id == "":
-		return
-	
-	var title_id = game.title_id
-	
-	match game.platform_slug:
-		"ps3":
-			# PS3 games are extracted to emulator directories
-			var emulator_dir = _get_emulator_directory("rpcs3")
-			if emulator_dir != "":
-				# Check both disc and digital locations
-				var disc_path = emulator_dir + "/games/" + title_id
-				var digital_path = emulator_dir + "/dev_hdd0/game/" + title_id
-				
-				if FSM.dir_exists(disc_path):
-					print("[DataManager] Cleaning up extracted PS3 disc game: " + disc_path)
-					FSM.delete_dir_recursive(disc_path)
-				
-				if FSM.dir_exists(digital_path):
-					print("[DataManager] Cleaning up extracted PS3 digital game: " + digital_path)
-					FSM.delete_dir_recursive(digital_path)
-		
-		"psvita":
-			# Vita games are extracted to ux0/app/TITLEID
-			var emulator_dir = _get_emulator_directory("vita3k")
-			if emulator_dir != "":
-				var vita_path = emulator_dir + "/ux0/app/" + title_id
-				
-				if FSM.dir_exists(vita_path):
-					print("[DataManager] Cleaning up extracted Vita game: " + vita_path)
-					FSM.delete_dir_recursive(vita_path)
-
-
-## Gets the emulator directory (helper to avoid circular dependency with LaunchManager)
-func _get_emulator_directory(emulator_id: String) -> String:
-	var emulator = LaunchManager.get_emulator(emulator_id)
-	if emulator.is_empty():
-		return ""
-	
-	var install_path = LaunchManager.get_emulator_install_path(emulator_id)
-	if install_path == "":
-		return ""
-	
-	return install_path.get_base_dir()
-
-## Updates only the title_id field for a game (used by Vita3K during launch)
-## This avoids overwriting other fields like file_path and has_local_copy
-func update_game_title_id(romm_id: int, title_id: String, callback: Callable = Callable()) -> bool:
-	if not _is_db_ready:
-		return false
-	
-	MemoryManager.queue_db_task(
-		func():
-			return _db_query_bool("UPDATE games SET title_id = ? WHERE romm_id = ?", [title_id, romm_id]),
-
-		func(success: bool):
-			if success:
-				pass
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
-
-## Updates only the siblings field for a game (used to persist sibling title_ids)
-func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: Callable = Callable()) -> bool:
-	if not _is_db_ready:
-		return false
-	
-	MemoryManager.queue_db_task(
-		func():
-			return _db_query_bool("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(siblings), romm_id]),
-
-		func(success: bool):
-			if success:
-				pass
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
-
-func get_game_by_id(romm_id: int) -> GameResource:
-	if not _is_db_ready:
-		return null
-	var query_result = _db_query_array("SELECT * FROM games WHERE romm_id = ?", [romm_id])
-	if query_result.size() > 0:
-		return _row_to_game(query_result[0])
-	return null
-
-func get_all_games() -> Array[GameResource]:
-	var games: Array[GameResource] = []
-	if not _is_db_ready:
-		return games
-	var query_result = _db_query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title")
-	for row in query_result:
-		games.append(_row_to_game(row))
-	return games
-
-func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
-	var games: Array[GameResource] = []
-	if not _is_db_ready:
-		return games
-	var query = "SELECT * FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title"
-	var query_result = _db_query_array(query, [platform_slug])
-	for row in query_result:
-		games.append(_row_to_game(row))
-	return games
-
-func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "") -> Array[GameResource]:
-	var games: Array[GameResource] = []
-	if not _is_db_ready:
-		return games
-	
-	# Whitelist allowed sort fields to prevent SQL injection
-	var allowed_sort_fields = {"title": true, "romm_id": true, "rating": true, "last_played": true, "platform": true}
-	var safe_sort_field = sort_field if allowed_sort_fields.has(sort_field) else "title"
-	var order = "ASC" if ascending else "DESC"
-	var query: String
-	var bindings: Array = []
-	
-	if platform_slug.is_empty():
-		query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
-		bindings = [limit, offset]
-	else:
-		query = "SELECT * FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
-		bindings = [platform_slug, limit, offset]
-	
-	var query_result = _db_query_array(query, bindings)
-	
-	for row in query_result:
-		games.append(_row_to_game(row))
-	return games
-
-func get_platforms_with_games() -> Array[Dictionary]:
-	"""Get list of platforms that have games, sorted alphabetically with game counts."""
-	var platforms: Array[Dictionary] = []
-	if not _is_db_ready:
-		return platforms
-	
-	# Query for platforms with their game counts, sorted alphabetically
-	var cover_clause = _get_has_cover_art_clause().replace("has_cover_art", "g.has_cover_art")
-	var master_clause = _get_is_master_entry_clause().replace("is_master_entry", "g.is_master_entry")
-	var query = "SELECT g.platform_slug, p.name, COUNT(*) as game_count FROM games g LEFT JOIN platforms p ON g.platform_slug = p.slug WHERE 1=1" + master_clause + cover_clause + " AND g.cover_group_master = 1 GROUP BY g.platform_slug HAVING game_count > 0 ORDER BY g.platform_slug ASC"
-	
-	var query_result = _db_query_array(query)
-	for row in query_result:
-		var slug = row.get("platform_slug", "")
-		var game_name = row.get("name", "")
-		var _count = int(row.get("game_count", 0))
-		
-		# Fallback to capitalized slug if no name in platforms table
-		if game_name == null or game_name == "":
-			game_name = slug.capitalize()
-		
-		platforms.append({
-			"slug": slug,
-			"name": game_name,
-			"count": _count
-		})
-
-	return platforms
-
-func get_total_games_count(platform_slug: String = "") -> int:
-	if not _is_db_ready:
-		return 0
-	
-	var query: String
-	var bindings: Array = []
-	if platform_slug.is_empty():
-		query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1"
-	else:
-		query = "SELECT COUNT(*) as count FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1"
-		bindings = [platform_slug]
-	
-	var query_result = _db_query_array(query, bindings)
-	if query_result.size() > 0:
-		var result = query_result
-		if result != null and result.size() > 0:
-			var row = result[0]
-			if row != null and row.has("count"):
-				return int(row["count"])
-	return 0
-
-func search_games_paginated(query: String, offset: int, limit: int) -> Array[GameResource]:
-	"""Search games by title with pagination."""
-	var games: Array[GameResource] = []
-	if not _is_db_ready:
-		return games
-	
-	var pattern = "%" + query + "%"
-	var sql = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE ? ORDER BY title ASC LIMIT ? OFFSET ?"
-	
-	var query_result = _db_query_array(sql, [pattern, limit, offset])
-	for row in query_result:
-		games.append(_row_to_game(row))
-
-	return games
-
-func get_search_results_count(query: String) -> int:
-	"""Get count of search results."""
-	if not _is_db_ready:
-		return 0
-	
-	var pattern = "%" + query + "%"
-	var sql = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE ?"
-	
-	var query_result = _db_query_array(sql, [pattern])
-	if query_result.size() > 0:
-		var row = query_result[0]
-		if row.has("count"):
-			return int(row["count"])
-	return 0
-
-func _invalidate_downloaded_games_count_cache() -> void:
-	"""Invalidate the cached downloaded-games count so the next query reads fresh data."""
-	_downloaded_games_count_cache = -1
-
-func get_downloaded_games_count() -> int:
-	"""Get count of downloaded games from synced platforms.
-	
-	Uses a cached value when available to avoid repeated COUNT(*) queries.
-	The cache is invalidated whenever game/download state changes.
-	"""
-	if not _is_db_ready:
-		return 0
-	
-	if _downloaded_games_count_cache >= 0:
-		return _downloaded_games_count_cache
-	
-	var enabled_slugs = _get_enabled_platform_slugs()
-	if enabled_slugs.size() == 0:
-		return 0
-	
-	var placeholders = ", ".join(enabled_slugs.map(func(_s): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % placeholders
-	
-	var query_result = _db_query_array(query, enabled_slugs)
-	if query_result.size() > 0:
-		var row = query_result[0]
-		if row.has("count"):
-			var count = int(row["count"])
-			_downloaded_games_count_cache = count
-			print("[DataManager] get_downloaded_games_count: " + str(count))
-			return count
-	return 0
-
-func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResource]:
-	"""Get downloaded games from synced platforms, sorted by most recently played."""
-	var games: Array[GameResource] = []
-	if not _is_db_ready:
-		return games
-	
-	var enabled_slugs = _get_enabled_platform_slugs()
-	if enabled_slugs.size() == 0:
-		return games
-	
-	var placeholders = ", ".join(enabled_slugs.map(func(_s): return "?"))
-	var query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT ? OFFSET ?" % placeholders
-	
-	var bindings: Array = []
-	bindings.append_array(enabled_slugs)
-	bindings.append(limit)
-	bindings.append(offset)
-	var query_result = _db_query_array(query, bindings)
-	for row in query_result:
-		games.append(_row_to_game(row))
-	return games
-
-func _get_enabled_platform_slugs() -> Array[String]:
-	"""Get list of platform slugs that are currently enabled for sync."""
-	var slugs: Array[String] = []
-	var enabled = _get_enabled_platforms()
-	for platform in enabled:
-		slugs.append(platform.slug)
-	
-	# Android/fallback: if no platforms are enabled in settings but we have games in the DB,
-	# return all distinct platform slugs from the database so home view isn't empty.
-	if slugs.size() == 0 and _is_db_ready:
-		var db_slugs = _get_db_platform_slugs()
-		if db_slugs.size() > 0:
-			print("[DataManager] enabled_platforms is empty; falling back to %d platform(s) found in database" % db_slugs.size())
-			return db_slugs
-	return slugs
-
-func update_game_last_played(romm_id: int, timestamp: String) -> bool:
-	"""Update the last_played timestamp for a game."""
-	if not _is_db_ready:
-		return false
-	
-	return _db_query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
-
-func get_romm_device_id() -> String:
-	"""Get the registered RomM device ID."""
-	if not _is_db_ready:
-		return ""
-	var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = 'romm_device_id'")
-	if query_result.size() > 0:
-		return query_result[0].get("value", "")
-	return ""
-
-func set_romm_device_id(device_id: String) -> void:
-	"""Store the registered RomM device ID."""
-	if not _is_db_ready:
-		return
-	_db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('romm_device_id', ?)", [device_id])
-
-func clear_romm_device_id() -> void:
-	"""Clear the stored RomM device ID (e.g. if server no longer recognizes it)."""
-	if not _is_db_ready:
-		return
-	_db_query_bool("DELETE FROM cache_metadata WHERE key = 'romm_device_id'")
-
-func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dictionary]:
-	"""Get save sync records for a game. Optionally filter by emulator."""
-	if not _is_db_ready:
-		return []
-	var bindings: Array = [romm_id]
-	var query = "SELECT * FROM save_sync WHERE romm_id = ?"
-	if emulator_id != "":
-		query += " AND emulator_id = ?"
-		bindings.append(emulator_id)
-	var query_result = _db_query_array(query, bindings)
-	return query_result.duplicate()
-
-func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
-	"""Insert or update a save sync record."""
-	if not _is_db_ready:
-		return false
-	
-	var delete_bindings: Array = [romm_id, emulator_id, file_name]
-	var delete_query = "DELETE FROM save_sync WHERE romm_id = ? AND emulator_id = ? AND file_name = ?"
-	if slot != "":
-		delete_query += " AND slot = ?"
-		delete_bindings.append(slot)
-	else:
-		delete_query += " AND (slot IS NULL OR slot = '')"
-	_db_query_bool(delete_query, delete_bindings)
-	
-	var insert_bindings: Array = [romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id]
-	var insert_query = """
-		INSERT INTO save_sync (romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot)
-		VALUES (?, ?, ?, ?, ?, ?, %s)
-	""" % ("?" if slot != "" else "NULL")
-	if slot != "":
-		insert_bindings.append(slot)
-	return _db_query_bool(insert_query, insert_bindings)
-
-func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: String, slot: String = "") -> bool:
-	"""Delete a save sync record."""
-	if not _is_db_ready:
-		return false
-	var bindings: Array = [romm_id, emulator_id, file_name]
-	var query = "DELETE FROM save_sync WHERE romm_id = ? AND emulator_id = ? AND file_name = ?"
-	if slot != "":
-		query += " AND slot = ?"
-		bindings.append(slot)
-	else:
-		query += " AND (slot IS NULL OR slot = '')"
-	return _db_query_bool(query, bindings)
-
-func _row_to_game(row: Dictionary) -> GameResource:
-	var game = GameResource.new()
-	game.id = row.get("id", "")
-	game.romm_id = row.get("romm_id", 0)
-	game.title = row.get("title", "")
-	game.platform = row.get("platform", "")
-	game.platform_slug = row.get("platform_slug", "")
-	game.cover_url = row.get("cover_url", "")
-	game.cover_path = row.get("cover_path", "")
-	game.file_name = row.get("file_name", "")
-	game.file_path = row.get("file_path", "")
-	game.file_size = row.get("file_size", 0)
-	game.has_local_copy = row.get("has_local_copy", 0) == 1
-	game.last_updated = row.get("last_updated", "")
-	game.description = row.get("description", "")
-	var genres: Array[String] = []
-	if row.get("genres") and row.get("genres") != "":
-		for g in row["genres"].split(","):
-			genres.append(g)
-	game.genres = genres
-	game.rating = row.get("rating", "")
-	
-	# Restore sibling data
-	if row.has("siblings") and row["siblings"] != "":
-		var json = JSON.new()
-		var err = json.parse(row["siblings"])
-		if err == OK and json.data is Array:
-			var siblings: Array[Dictionary] = []
-			for item in json.data:
-				if item is Dictionary:
-					siblings.append(item)
-			game.siblings = siblings
-		else:
-			game.siblings = [] as Array[Dictionary]
-	else:
-		game.siblings = [] as Array[Dictionary]
-	
-	if row.has("selected_sibling_id"):
-		game.selected_sibling_id = row["selected_sibling_id"]
-	else:
-		game.selected_sibling_id = 0
-	
-	if row.has("is_master_entry"):
-		game.is_master_entry = row["is_master_entry"] == 1
-	else:
-		game.is_master_entry = true
-	
-	# Restore has_cover_art flag
-	if row.has("has_cover_art"):
-		game.has_cover_art = row["has_cover_art"] == 1
-	else:
-		game.has_cover_art = true
-	
-	# Restore downloaded sibling IDs
-	if row.has("downloaded_sibling_ids") and row["downloaded_sibling_ids"] != "":
-		var json_ids = JSON.new()
-		var err_ids = json_ids.parse(row["downloaded_sibling_ids"])
-		if err_ids == OK and json_ids.data is Array:
-			var downloaded_ids: Array[int] = []
-			for item in json_ids.data:
-				if item is int or item is float:
-					downloaded_ids.append(int(item))
-			game.downloaded_sibling_ids = downloaded_ids
-		else:
-			game.downloaded_sibling_ids = [] as Array[int]
-	else:
-		game.downloaded_sibling_ids = [] as Array[int]
-	
-	# Restore last_played timestamp
-	game.last_played = row.get("last_played", "")
-	
-	# Restore title_id
-	game.title_id = row.get("title_id", "")
-	
-	# Restore cover group fields
-	if row.has("cover_group_id"):
-		game.cover_group_id = row.get("cover_group_id", "")
-	else:
-		game.cover_group_id = ""
-	
-	if row.has("cover_group_master"):
-		game.cover_group_master = row.get("cover_group_master", 1) == 1
-	else:
-		game.cover_group_master = true
-	
-	# Restore IGDB metadata blob
-	if row.has("igdb_metadata") and row["igdb_metadata"] != "":
-		var json_igdb = JSON.new()
-		var err_igdb = json_igdb.parse(row["igdb_metadata"])
-		if err_igdb == OK and json_igdb.data is Dictionary:
-			game.igdb_metadata = json_igdb.data
-		else:
-			game.igdb_metadata = {}
-	else:
-		game.igdb_metadata = {}
-	
-	return game
-
-# ==================== COVER DOWNLOAD ====================
-
-func _download_cover(url: String, callback: Callable):
-	var cache_path = get_cached_image_path(url)
-	
-	# Check if already cached
-	if FileAccess.file_exists(cache_path):
-		callback.call(true)
-		return
-	
-	# Direct download - DownloadManager handles deduplication
-	DownloadManager.download_image(url, cache_path, callback)
-
-func get_cached_image_path(url: String) -> String:
-	# Extract extension from URL, default to jpg if not found
-	var extension = "jpg"
-	var query_start = url.find("?")
-	var url_without_query = url
-	if query_start != -1:
-		url_without_query = url.substr(0, query_start)
-	
-	var last_dot = url_without_query.rfind(".")
-	if last_dot != -1 and last_dot < url_without_query.length() - 1:
-		var ext = url_without_query.substr(last_dot + 1).to_lower()
-		if ext in ["jpg", "jpeg", "png", "webp"]:
-			extension = ext
-			if extension == "jpeg":
-				extension = "jpg"
-	
-	return CACHE_FOLDER + url.md5_text() + "." + extension
-
-func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") -> Image:
-	if buffer.size() < 16:
-		return null
-	
-	var err = FAILED
-	var image = Image.new()
-	
-	# Always use magic bytes to detect actual format, regardless of file extension
-	# This handles cases where the extension doesn't match the actual content
-	if buffer[0] == 0xFF and buffer[1] == 0xD8:
-		# JPEG magic bytes
-		err = image.load_jpg_from_buffer(buffer)
-	elif buffer[0] == 0x89 and buffer[1] == 0x50:
-		# PNG magic bytes (0x89 0x50 0x4E 0x47)
-		err = image.load_png_from_buffer(buffer)
-	elif buffer[0] == 0x52 and buffer[1] == 0x49:
-		# WebP magic bytes (RIFF header)
-		err = image.load_webp_from_buffer(buffer)
-	else:
-		# Try all formats as fallback
-		err = image.load_jpg_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
-			err = image.load_png_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
-			err = image.load_webp_from_buffer(buffer)
-	
-	if err == OK:
-		return image
-	return null
-
-func load_image(url: String, callback: Callable = Callable()):
-	if url == "" or not url.begins_with("http"):
-		if callback.is_valid():
-			callback.call(null)
-		return
-	
-	var cache_path = get_cached_image_path(url)
-	
-	# Try cache first - using background thread
-	if FileAccess.file_exists(cache_path):
-		MemoryManager.queue_image_task(
-			func():
-				var file = FileAccess.open(cache_path, FileAccess.READ)
-				if file:
-					var buffer = file.get_buffer(file.get_length())
-					file.close()
-					return _load_image_from_memory(buffer, cache_path)
-				return null,
-			func(image):
-				if image:
-					var texture = ImageTexture.create_from_image(image)
-					if texture:
-						if callback.is_valid():
-							callback.call(texture)
-						image_loaded.emit(url, texture)
-					else:
-						# Cache file exists but failed to load, try downloading fresh
-						_load_image_from_network(url, cache_path, callback)
-				else:
-					# Cache file exists but failed to load, try downloading fresh
-					_load_image_from_network(url, cache_path, callback)
-		)
-		return
-	
-	# Download if not cached
-	_load_image_from_network(url, cache_path, callback)
-
-func _load_image_from_network(url: String, cache_path: String, callback: Callable):
-	"""Download and load image from network using background thread."""
-	_download_cover(url, func(_ok):
-		# Check if file was downloaded successfully
-		if not FileAccess.file_exists(cache_path):
-			if callback.is_valid():
-				callback.call(null)
-			return
-		
-		MemoryManager.queue_image_task(
-			func():
-				var file = FileAccess.open(cache_path, FileAccess.READ)
-				if file:
-					var buffer = file.get_buffer(file.get_length())
-					file.close()
-					return _load_image_from_memory(buffer, cache_path)
-				return null,
-			func(image):
-				if image:
-					var texture = ImageTexture.create_from_image(image)
-					if callback.is_valid():
-						callback.call(texture)
-					if texture:
-						image_loaded.emit(url, texture)
-		)
-	)
-
-# ==================== PLATFORMS ====================
-
-func sync_platforms_from_romm(callback: Callable = Callable()):
-	if not _is_db_ready:
-		var err_msg = "Database initialization failed. App cannot function without database access." if _db_init_failed else "Database not ready"
-		if callback.is_valid():
-			callback.call(false, err_msg)
-		return
-	
-	NetworkManager.fetch_platforms(func(data, error):
-		if error != "" or not data is Array:
-			if callback.is_valid():
-				callback.call(false, error if error else "Invalid data")
-			return
-		
-		var count = 0
-		for platform_data in data:
-			var platform = PlatformResource.new()
-			platform.id = str(platform_data.get("id", ""))
-			platform.romm_id = platform_data.get("id", 0)
-			platform.name = platform_data.get("name", "")
-			platform.slug = platform_data.get("slug", "")
-			platform.icon_url = platform_data.get("url_logo", "")
-			add_platform(platform)
-			count += 1
-		
-		sync_completed.emit(true, "Synced " + str(count) + " platforms")
-		if callback.is_valid():
-			callback.call(true, "")
-	)
-
-func add_platform(platform: PlatformResource) -> bool:
-	if not _is_db_ready:
-		return false
-	
-	var query = """
-		INSERT OR REPLACE INTO platforms 
-		(id, romm_id, name, slug, icon_url, icon_path, emulator_path, extensions)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	"""
-	var bindings = [
-		platform.id,
-		platform.romm_id,
-		platform.name,
-		platform.slug,
-		platform.icon_url,
-		platform.icon_path,
-		platform.emulator_path,
-		",".join(platform.extensions)
-	]
-	
-	return _db_query_bool(query, bindings)
-
-func get_all_platforms() -> Array[PlatformResource]:
-	var platforms: Array[PlatformResource] = []
-	if not _is_db_ready:
-		return platforms
-	
-	var query_result = _db_query_array("SELECT * FROM platforms ORDER BY name")
-	for row in query_result:
-		var platform = PlatformResource.new()
-		platform.id = row["id"]
-		platform.romm_id = row["romm_id"]
-		platform.name = row["name"]
-		platform.slug = row["slug"]
-		platform.icon_url = row["icon_url"]
-		platform.icon_path = row["icon_path"]
-		platform.emulator_path = row["emulator_path"]
-		var ext_array = row["extensions"].split(",") if row["extensions"] else []
-		platform.extensions = Array(ext_array, TYPE_STRING, &"", null)
-		platforms.append(platform)
-	
-	return platforms
-
-func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
-	if not _is_db_ready:
-		push_error("[Sync] ERROR: Database not ready in remove_platform_games")
-		if callback.is_valid():
-			callback.call(false)
-		return
-	
-	# Platform removal can change the downloaded-games count.
-	_invalidate_downloaded_games_count_cache()
-	
-	# Queue all database operations on the DB thread to avoid race conditions
-	MemoryManager.queue_db_task(
-		func():
-			_db_lock()
-			# First, get all games for this platform to delete their covers
-			var query_result = _db_query_array("SELECT cover_url FROM games WHERE platform_slug = ?", [platform_slug])
-			var cover_urls: Array[String] = []
-			for row in query_result:
-				var url = row.get("cover_url", "")
-				if url != "":
-					cover_urls.append(url)
-			
-			# Delete games from database and get the count
-			var count_before = query_result.size()
-			var success = _db_query_bool("DELETE FROM games WHERE platform_slug = ?", [platform_slug])
-			
-			_db_unlock()
-			return {
-				"success": success,
-				"cover_urls": cover_urls,
-				"count": count_before
-			},
-		func(result: Dictionary):
-			var success = result.get("success", false)
-			var cover_urls = result.get("cover_urls", [])
-			var _count = result.get("count", 0)
-			
-			if success:
-				# Delete cover cache files on main thread (file system access)
-				var covers_deleted = 0
-				for url in cover_urls:
-					var cache_path = get_cached_image_path(url)
-					if FileAccess.file_exists(cache_path):
-						DirAccess.remove_absolute(cache_path)
-						covers_deleted += 1
-				if covers_deleted > 0:
-					print("[Sync] Removed %s (%d games, %d covers deleted)" % [platform_slug, _count, covers_deleted])
-			elif not success:
-				push_error("[Sync] Removal failed for %s" % platform_slug)
-			
-			games_removed.emit(platform_slug)
-			
-			if callback.is_valid():
-				callback.call(success)
-	)
-
-# ==================== CACHE ====================
-
-func _ensure_cache_folder():
-	var dir = DirAccess.open("user://")
-	if not dir.dir_exists("cache"):
-		dir.make_dir("cache")
-	if not dir.dir_exists("cache/covers"):
-		dir.make_dir("cache/covers")
-
-func clear_cache():
-	var dir = DirAccess.open(CACHE_FOLDER)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir():
-				dir.remove(file_name)
-			file_name = dir.get_next()
-	cache_cleared.emit()
-
-func get_cache_size() -> int:
-	var total_size = 0
-	var dir = DirAccess.open(CACHE_FOLDER)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir():
-				total_size += dir.get_space_left()
-			file_name = dir.get_next()
-	return total_size
-
-func get_random_game() -> GameResource:
-	"""Get a random game from the database."""
-	if not _is_db_ready:
-		return null
-	
-	# Get a random game that has a cover and is a master entry
-	var query_result = _db_query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT 1")
-	if query_result.size() > 0:
-		return _row_to_game(query_result[0])
-	return null
-
-func get_random_cached_cover_path() -> String:
-	"""Get a random cover image from the cache folder."""
-	var dir = DirAccess.open(CACHE_FOLDER)
-	if not dir:
-		return ""
-	
-	var image_files: Array[String] = []
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	while file_name != "":
-		if not dir.current_is_dir() and (file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg") or file_name.ends_with(".webp")):
-			image_files.append(CACHE_FOLDER + file_name)
-		file_name = dir.get_next()
-	
-	if image_files.size() > 0:
-		return image_files[randi() % image_files.size()]
-	return ""
+# ==================== SYNC TIMESTAMPS / DEVICE ID ====================
 
 func get_last_sync_time(platform_slug: String = "") -> String:
-	if not _is_db_ready:
-		return ""
-	var key = "last_sync_" + platform_slug if platform_slug != "" else "last_sync"
-	var query_result = _db_query_array("SELECT value FROM cache_metadata WHERE key = ?", [key])
-	if query_result.size() > 0:
-		return query_result[0]["value"]
-	return ""
+	return database.get_last_sync_time(platform_slug)
+
 
 func set_last_sync_time(platform_slug: String, timestamp: String):
-	if not _is_db_ready:
-		return
-	var key = "last_sync_" + platform_slug if platform_slug != "" else "last_sync"
-	_db_query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp])
+	database.set_last_sync_time(platform_slug, timestamp)
 
-# ==================== DOWNLOADED GAMES SCAN ====================
 
-signal scan_for_downloaded_games_completed(found_count: int)
+func get_romm_device_id() -> String:
+	return database.get_romm_device_id()
 
-func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
-	"""Scan the games folder for downloaded ROMs and update database entries.
-	
-	Matches files against database entries by file_name and platform_slug.
-	Updates has_local_copy and downloaded_sibling_ids for matched games.
-	"""
-	if not _is_db_ready:
-		if callback.is_valid():
-			callback.call(0)
-		return
-	
-	var root_folder_setting = SettingsManager.get_setting("games_root_folder")
-	if not root_folder_setting or root_folder_setting.value == "":
-		if callback.is_valid():
-			callback.call(0)
-		return
-	
-	var root_folder = root_folder_setting.value
-	
-	# Get all games from database to match against
-	var all_games = get_all_games()
-	if all_games.size() == 0:
-		if callback.is_valid():
-			callback.call(0)
-		return
-	
-	# Build lookup dictionary: file_name -> game
-	var game_lookup: Dictionary = {}
-	for game in all_games:
-		# Add main game file
-		if game.file_name != "":
-			var key = game.platform_slug + "/" + game.file_name.to_lower()
-			game_lookup[key] = game
-		
-		# Add sibling files
-		for sibling in game.siblings:
-			var sibling_file_name = sibling.get("file_name", "")
-			if sibling_file_name != "":
-				var sibling_key = game.platform_slug + "/" + sibling_file_name.to_lower()
-				game_lookup[sibling_key] = game
-	
-	# Scan filesystem
-	var found_files: Array[String] = []
-	_scan_games_directory(root_folder, "", found_files)
-	
-	# Match files to games
-	var matched_games: Dictionary = {}  # romm_id -> {game, matched_siblings: [], file_path: ""}
-	var _matched_count: int = 0
-	
-	for file_path in found_files:
-		var parts = file_path.split("/", false, 1)
-		if parts.size() < 2:
-			continue
-		
-		var platform_slug = parts[0]
-		var file_name = parts[1]
-		var lookup_key = platform_slug + "/" + file_name.to_lower()
-		
-		if game_lookup.has(lookup_key):
-			var game = game_lookup[lookup_key]
-			
-			if not matched_games.has(game.romm_id):
-				matched_games[game.romm_id] = {
-					"game": game,
-					"matched_siblings": [],
-					"file_path": ""
-				}
-			
-			var full_file_path = root_folder + "/" + file_path
-			
-			# Check if it's the main game file or a sibling
-			if file_name.to_lower() == game.file_name.to_lower():
-				# It's the main game file - update file_path
-				matched_games[game.romm_id].file_path = full_file_path
-			else:
-				# It's a sibling - find the sibling ID
-				for sibling in game.siblings:
-					var sibling_file = sibling.get("file_name", "")
-					if sibling_file.to_lower() == file_name.to_lower():
-						var sibling_id = sibling.get("id", 0)
-						if sibling_id != 0 and not matched_games[game.romm_id].matched_siblings.has(sibling_id):
-							matched_games[game.romm_id].matched_siblings.append(sibling_id)
-							break
-			
-			_matched_count += 1
-	
-	# Update database for matched games
-	if matched_games.size() > 0:
-		_update_matched_games_in_db(matched_games, callback)
-	else:
-		if callback.is_valid():
-			callback.call(0)
 
-func _scan_games_directory(root_path: String, sub_path: String, results: Array[String]) -> void:
-	"""Recursively scan the games directory for ROM files."""
-	
-	var full_path = root_path
-	if sub_path != "":
-		full_path = root_path + "/" + sub_path
-	
-	var dir = DirAccess.open(full_path)
-	if not dir:
-		return
-	
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	
-	while file_name != "":
-		if file_name == "." or file_name == "..":
-			file_name = dir.get_next()
-			continue
-		
-		var current_path = sub_path
-		if current_path != "":
-			current_path += "/"
-		current_path += file_name
-		
-		if dir.current_is_dir():
-			# Recurse into subdirectory
-			_scan_games_directory(root_path, current_path, results)
-		else:
-			# It's a file - add to results
-			results.append(current_path)
-		
-		file_name = dir.get_next()
+func set_romm_device_id(device_id: String) -> void:
+	database.set_romm_device_id(device_id)
 
-func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
-	"""Update database entries for matched games."""
-	print("[DEBUG] _update_matched_games_in_db called with %d matched games" % matched_games.size())
-	# Scan results change has_local_copy / downloaded_sibling_ids.
-	_invalidate_downloaded_games_count_cache()
-	MemoryManager.queue_db_task(
-		func():
-			var updated_count: int = 0
-			
-			for romm_id in matched_games.keys():
-				var match_data = matched_games[romm_id]
-				var game: GameResource = match_data.game
-				var matched_siblings: Array = match_data.matched_siblings
-				var new_file_path: String = match_data.file_path
-				
-				# Update game object
-				game.has_local_copy = true
-				if new_file_path != "":
-					game.file_path = new_file_path
-				for sibling_id in matched_siblings:
-					if not sibling_id in game.downloaded_sibling_ids:
-						game.downloaded_sibling_ids.append(sibling_id)
-				
-				# Update database
-				var downloaded_ids_json = JSON.stringify(game.downloaded_sibling_ids)
-				var query = "UPDATE games SET has_local_copy = 1, file_path = ?, downloaded_sibling_ids = ? WHERE romm_id = ?"
-				
-				if _db_query_bool(query, [new_file_path, downloaded_ids_json, romm_id]):
-					updated_count += 1
 
-			return updated_count,
-		func(updated_count: int):
-			print("[DEBUG] Scan complete - updated %d games in DB" % updated_count)
-			scan_for_downloaded_games_completed.emit(updated_count)
-			if callback.is_valid():
-				callback.call(updated_count)
-	)
+func clear_romm_device_id() -> void:
+	database.clear_romm_device_id()
+
+
+# ==================== SYNC ====================
+
+func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bool = false) -> void:
+	sync.sync_enabled_platforms(callback, force_full_sync)
+
+
+func sync_platforms_from_romm(callback: Callable = Callable()):
+	sync.sync_platforms_from_romm(callback)
+
+
+func is_sync_in_progress() -> bool:
+	return sync.is_sync_in_progress()
+
 
 func get_sync_state() -> int:
-	"""Get the current sync state for debugging/monitoring."""
-	return _sync_state
+	return sync.get_sync_state()
+
 
 func get_sync_state_name() -> String:
-	"""Get the current sync state as a readable string."""
-	match _sync_state:
-		SyncState.IDLE:
-			return "IDLE"
-		SyncState.PRECHECK_DISABLED:
-			return "PRECHECK_DISABLED"
-		SyncState.CALCULATING_TOTALS:
-			return "CALCULATING_TOTALS"
-		SyncState.PLATFORM_ITERATING:
-			return "PLATFORM_ITERATING"
-		SyncState.PLATFORM_FETCHING:
-			return "PLATFORM_FETCHING"
-		SyncState.PLATFORM_PROCESSING:
-			return "PLATFORM_PROCESSING"
-		SyncState.PLATFORM_BATCHING:
-			return "PLATFORM_BATCHING"
-		SyncState.COVER_FOLDING:
-			return "COVER_FOLDING"
-		SyncState.COMPLETING:
-			return "COMPLETING"
-		SyncState.ERROR:
-			return "ERROR"
-		_:
-			return "UNKNOWN"
+	return sync.get_sync_state_name()
+
 
 func get_current_platform_progress() -> Dictionary:
-	"""Get progress information for the current platform being synced."""
-	return {
-		"platform_index": _sync_platform_index,
-		"total_platforms": _sync_platform_count,
-		"platform_name": _sync_platform,
-		"games_synced": _sync_current_synced,
-		"games_total": _sync_current_total,
-		"batch_offset": _sync_current_offset
-	}
+	return sync.get_current_platform_progress()
+
+
+# ==================== COVERS / CACHE ====================
+
+func load_image(url: String, callback: Callable = Callable()):
+	cover.load_image(url, callback)
+
+
+func get_cached_image_path(url: String) -> String:
+	return cover.get_cached_image_path(url)
+
+
+func clear_cache():
+	cover.clear_cache()
+
+
+func get_cache_size() -> int:
+	return cover.get_cache_size()
+
+
+func get_random_cached_cover_path() -> String:
+	return cover.get_random_cached_cover_path()
+
+
+func apply_cover_folding_to_database(callback: Callable = Callable()):
+	cover.apply_cover_folding_to_database(callback)
+
+
+# ==================== PLATFORMS / SCAN ====================
+
+func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
+	database.scan_for_downloaded_games(callback)
+
+
+func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
+	database.remove_platform_games(platform_slug, callback)
+
+
+func get_all_platforms() -> Array[PlatformResource]:
+	return database.get_all_platforms()
+
+
+# ==================== SAVE SYNC ====================
+
+func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dictionary]:
+	return save.get_save_sync_records(romm_id, emulator_id)
+
+
+
+func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
+	return save.update_save_sync_record(romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot)
+
+
+func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: String, slot: String = "") -> bool:
+	return save.delete_save_sync_record(romm_id, emulator_id, file_name, slot)

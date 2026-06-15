@@ -159,7 +159,7 @@ func show_for_game(game: GameResource) -> GameDetailsSheet:
 
 func prepare_for_game(romm_id: int) -> void:
     """Preload heavy details while the context menu is open."""
-    var game := DataManager.get_game_by_id(romm_id)
+    var game: GameResource = DataManager.get_game_by_id(romm_id)
     if not game:
         return
 

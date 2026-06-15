@@ -258,10 +258,8 @@ func _update_status_indicator():
 			elif active_download.status == "extracting" or active_download.status == "extract_pending":
 				is_extracting = true
 
-	if LaunchManager and LaunchManager._emulator_install_progress.has(effective_emulator):
-		var progress_str = LaunchManager._emulator_install_progress[effective_emulator]
-		if progress_str.find("Extracting") >= 0 or progress_str.find("extracting") >= 0:
-			is_extracting = true
+	if LaunchManager and LaunchManager.is_emulator_install_progress_extracting(effective_emulator):
+		is_extracting = true
 
 	# Update version label
 	if _version_label:
