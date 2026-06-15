@@ -73,12 +73,14 @@ func disable_setting(_name:String):
 	var settingsvar: SettingsVar = get_setting(_name)
 	settingsvar.state = SettingsVar.SettingState.DISABLED
 
-func set_setting(value: Variant, setting: SettingsVar):
+func set_setting(value: Variant, setting: SettingsVar, force: bool = false):
 	if not settings:
 		push_error("No settings loaded, cannot change setting '%s'" % setting.property_name)
 		return
+	var changed = force or setting.value != value
 	setting.value = value
-	emit_signal("setting_changed", value, setting)
+	if changed:
+		emit_signal("setting_changed", value, setting)
 
 func get_setting(_name:String) -> SettingsVar:
 	var settingsvar: SettingsVar = null
@@ -395,3 +397,8 @@ func import_preset(import_path: String) -> ThemePreset:
 		return preset
 	
 	return null
+
+func _exit_tree() -> void:
+	"""Release the loaded settings resource so its SettingsVars don't leak."""
+	settings = null
+	settings_dict.clear()

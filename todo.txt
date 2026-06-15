@@ -1,19 +1,15 @@
 #TODO.TXT
 
-small screen testing in settings menu (never hscroll)
-separate firmware page or indicator?
 xemu save sync
-losing focus when switching zoom levels 
-optionbutton offscreen placement in smalls creen
-overlapping indicator
+losing focus when switching zoom levels / zoom levels are funky
+tst update flow
 
 ## android
-	chunk reassembly notif on android <- plugin file access on main thread locks, cant move it off thread?
 	"app bar"
 
 ## saves
 	implement argosy sigil
-	emulator save folder (set in emu config)
+	check emulator config for save/user folder(s) at synctime
 	check if save is modified
 
 ## general UI
@@ -43,7 +39,6 @@ overlapping indicator
 	cache image colors on sync
 	
 ## launch:
-	azahar save sync
 	add: psp, melonds, ps2, dolphin retroarch cores
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?

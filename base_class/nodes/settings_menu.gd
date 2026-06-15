@@ -16,6 +16,7 @@ func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVa
 	var menu_name_label = M3Label.new()
 	menu_name_label.text = subgroup
 	menu_name_label.label_style = M3Label.Style.HEADLINE_SMALL
+	menu_name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(menu_name_label)
 	build_controls_from_settingsvars(settingsvars)
 
@@ -24,6 +25,7 @@ func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: S
 		var title_label = M3Label.new()
 		title_label.text = title
 		title_label.label_style = M3Label.Style.TITLE_MEDIUM
+		title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		add_child(title_label)
 	
 	for settingsvar in settingsvars:
@@ -156,6 +158,8 @@ func match_var_type(settingsvar : SettingsVar):
 			var label = M3Label.new()
 			label.text = settingsvar.display_name
 			label.label_style = M3Label.Style.BODY_MEDIUM
+			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			hbox.add_child(label)
 			
@@ -186,6 +190,7 @@ func match_var_type(settingsvar : SettingsVar):
 		Type.ENUM, Type.ARRAY:
 			var option_button = M3OptionButton.new()
 			option_button.label_text = settingsvar.display_name
+			option_button.fit_to_longest_item = false
 			var id = 0
 			var matched_index = 0
 			for option in settingsvar.options:
@@ -210,6 +215,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var slider_label = M3Label.new()
 			slider_label.text = settingsvar.display_name
 			slider_label.label_style = M3Label.Style.BODY_MEDIUM
+			slider_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			add_child(slider_label)
 			
 			var display_scale = settingsvar.metadata.get("display_scale", 1.0)
@@ -310,6 +316,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var rangeslider_label = M3Label.new()
 			rangeslider_label.text = settingsvar.display_name
 			rangeslider_label.label_style = M3Label.Style.BODY_MEDIUM
+			rangeslider_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			add_child(rangeslider_label)
 			
 			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, 0.05)
@@ -329,6 +336,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var color_label = M3Label.new()
 			color_label.text = settingsvar.display_name
 			color_label.label_style = M3Label.Style.BODY_MEDIUM
+			color_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			add_child(color_label)
 			
 			var color_picker = M3ColorPicker.new()
@@ -345,6 +353,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var gradient_label = M3Label.new()
 			gradient_label.text = settingsvar.display_name
 			gradient_label.label_style = M3Label.Style.BODY_MEDIUM
+			gradient_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			add_child(gradient_label)
 			
 			var gradient_edit = GradientEdit.new()

@@ -19,6 +19,40 @@ var _search_query: String = ""
 var _is_search_active: bool = false
 var _pre_search_platform_index: int = -1  # Remember platform before search
 
+func _exit_tree() -> void:
+	# Disconnect from autoload signals so the view can be freed when the tree tears down.
+	if SettingsManager:
+		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
+			SettingsManager.setting_changed.disconnect(_on_setting_changed)
+	if DataManager:
+		if DataManager.database_ready.is_connected(_on_database_ready):
+			DataManager.database_ready.disconnect(_on_database_ready)
+		if DataManager.game_added.is_connected(_on_game_added):
+			DataManager.game_added.disconnect(_on_game_added)
+		if DataManager.game_updated.is_connected(_on_game_updated):
+			DataManager.game_updated.disconnect(_on_game_updated)
+		if DataManager.games_removed.is_connected(_on_games_removed):
+			DataManager.games_removed.disconnect(_on_games_removed)
+		if DataManager.sync_completed.is_connected(_on_sync_completed):
+			DataManager.sync_completed.disconnect(_on_sync_completed)
+		if DataManager.sync_progress.is_connected(_on_sync_progress):
+			DataManager.sync_progress.disconnect(_on_sync_progress)
+		if DataManager.games_batch_added.is_connected(_on_games_batch_added):
+			DataManager.games_batch_added.disconnect(_on_games_batch_added)
+		if DataManager.sync_started.is_connected(_on_sync_started):
+			DataManager.sync_started.disconnect(_on_sync_started)
+	if UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
+		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
+	var viewport = get_viewport()
+	if viewport and viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	
+	# The search overlay is created as an orphan; free it explicitly.
+	if _search_overlay and is_instance_valid(_search_overlay):
+		if _search_overlay.get_parent() == null:
+			_search_overlay.free()
+		_search_overlay = null
+
 func _ready():
 	view_name = "Library"
 	
@@ -77,8 +111,8 @@ func _ready():
 		platform_indicator.search_clicked.connect(_on_search_button_clicked)
 		platform_indicator.filter_clicked.connect(_on_filter_button_clicked)
 	
-	# Pre-create the filter side sheet so opening it is stutter-free
-	LibraryFilterSheet.prepare()
+	# Filter sheet is created lazily on first open so it doesn't hold resources
+	# for the entire session.
 	
 	# Create search overlay
 	_setup_search_overlay()

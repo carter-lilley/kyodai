@@ -25,6 +25,10 @@ var _settings_dialog = null
 
 # Shuffler dialog
 var _shuffler_dialog: ShufflerConfigDialog = null
+
+# Game details sheet (owned by UIManager, not a static singleton)
+var _game_details_sheet: GameDetailsSheet = null
+
 var _last_nav_index: int = 0
 
 # Default hero height ratio (will be overridden by settings)
@@ -136,8 +140,9 @@ func initialize(
 		_current_view.on_view_show()
 		_update_hero_visibility(current_tab_title)
 		# Update nav selection
-		for i in range(NAV_DESTINATIONS.size()):
-			if NAV_DESTINATIONS[i].view == current_tab_title:
+		var nav_dests = _get_nav_destinations()
+		for i in range(nav_dests.size()):
+			if nav_dests[i].view == current_tab_title:
 				if _nav_node:
 					_nav_node.selected_index = i
 				break
@@ -161,14 +166,12 @@ func initialize(
 	if primary_color_setting and primary_color_setting.value is Color:
 		M3Theme.set_primary_seed(primary_color_setting.value)
 	
-	# Pre-create settings dialog so first open is instant.
-	# On first launch we skip this; it will be created after OOBE completes.
-	var first_run_setting = SettingsManager.get_setting("first_run_completed")
-	if first_run_setting and first_run_setting.value:
-		pre_create_settings_dialog()
+	# Eagerly create the settings dialog so the first open is stutter-free.
+	# It is persistent and hidden until show_overlay() is called.
+	pre_create_settings_dialog()
 	
-	# Pre-create the game details sheet so the first Details open is smooth.
-	GameDetailsSheet.ensure_pooled()
+	# Game details sheet is created lazily on first use so it doesn't sit in
+	# memory (and hold resources) for the entire session.
 	
 	# Connect to dual screen mode changes
 	if DisplayManager:
@@ -352,7 +355,7 @@ func _create_nav_node() -> void:
 	
 	# Build destinations
 	var dest_data: Array[M3NavigationDestinationData] = []
-	for dest in NAV_DESTINATIONS:
+	for dest in _get_nav_destinations():
 		var d = M3NavigationDestinationData.new()
 		d.id = dest.id
 		d.label = dest.label
@@ -379,6 +382,15 @@ func _create_nav_node() -> void:
 	if not _nav_node.ready.is_connected(_on_nav_node_ready):
 		_nav_node.ready.connect(_on_nav_node_ready)
 
+func _get_nav_destinations() -> Array[Dictionary]:
+	"""Return the nav destinations that should be visible on this platform."""
+	var result: Array[Dictionary] = []
+	for dest in NAV_DESTINATIONS:
+		if dest.id == "shuffle" and PlatformManager.is_android():
+			continue
+		result.append(dest)
+	return result
+
 func _on_nav_node_ready() -> void:
 	"""Apply deferred nav node config now that _ready() has created internal UI."""
 	if not _nav_node:
@@ -396,10 +408,11 @@ func _on_nav_node_ready() -> void:
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	"""Handle M3 nav destination selection."""
-	if index < 0 or index >= NAV_DESTINATIONS.size():
+	var nav_dests = _get_nav_destinations()
+	if index < 0 or index >= nav_dests.size():
 		return
 	
-	var dest = NAV_DESTINATIONS[index]
+	var dest = nav_dests[index]
 	if dest.id == "shuffle":
 		# Restore previous nav selection so shuffle doesn't stay highlighted
 		if _nav_node:
@@ -529,6 +542,7 @@ func _update_zoom_range_for_current_view() -> void:
 func _rebuild_views(reason: String, use_true: bool = false) -> void:
 	"""Rebuild visible views immediately, mark hidden views for rebuild.
 	Defer ALL rebuilds while the SettingsDialog is open to avoid stutter."""
+	print("[UIManager] _rebuild_views called: reason=%s, use_true=%s" % [reason, use_true])
 	var settings_open = _settings_dialog and is_instance_valid(_settings_dialog) and _settings_dialog.visible
 	
 	if _views.has("Home"):
@@ -550,6 +564,7 @@ func _on_apply_preset_begin() -> void:
 	_preset_in_progress = true
 
 func _on_apply_preset_end() -> void:
+	print("[UIManager] _on_apply_preset_end")
 	_preset_in_progress = false
 	# Update nav type from settings before rebuilding
 	var old_nav_type = _nav_type
@@ -584,6 +599,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if _preset_in_progress:
 		# Skip individual rebuilds during preset application; one rebuild at the end
 		return
+	print("[UIManager] _on_setting_changed: %s" % setting.property_name)
 	match setting.property_name:
 		"library_background_config":
 			if _library_background and _value is Dictionary:
@@ -731,7 +747,7 @@ func pre_create_settings_dialog() -> void:
 		_add_settings_dialog_to_correct_parent()
 
 func show_settings_dialog() -> void:
-	"""Show the fullscreen settings dialog."""
+	"""Show the settings popup dialog."""
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):
 		pre_create_settings_dialog()
 	
@@ -963,8 +979,9 @@ func _on_tab_changed(tab_idx: int):
 	
 	# Sync nav selection to the new tab
 	if _nav_node:
-		for i in range(NAV_DESTINATIONS.size()):
-			if NAV_DESTINATIONS[i].view == tab_title:
+		var nav_dests = _get_nav_destinations()
+		for i in range(nav_dests.size()):
+			if nav_dests[i].view == tab_title:
 				_nav_node.selected_index = i
 				break
 	
@@ -1262,7 +1279,8 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
 	
 	# Start preloading heavy details while the menu is open.
-	GameDetailsSheet.prepare_for_game(romm_id)
+	if _game_details_sheet:
+		_game_details_sheet.prepare_for_game(romm_id)
 	
 	return show_context_menu(items, anchor, {"romm_id": romm_id})
 
@@ -1778,4 +1796,65 @@ func show_game_details(romm_id: int) -> void:
 		push_warning("[UIManager] Cannot show details - game not found: ", romm_id)
 		return
 	
-	GameDetailsSheet.show_for_game(game)
+	_ensure_game_details_sheet()
+	_game_details_sheet.show_for_game(game)
+
+func _ensure_game_details_sheet() -> void:
+	if _game_details_sheet and is_instance_valid(_game_details_sheet):
+		return
+	var sheet_scene = preload("res://components/game_details_sheet.tscn")
+	_game_details_sheet = sheet_scene.instantiate() as GameDetailsSheet
+	_game_details_sheet.visible = false
+	# Don't add to the tree here; GameDetailsSheet.ensure_ready() handles
+	# deferred parenting when show_for_game() is called, avoiding "parent is
+	# busy setting up children" errors during UIManager initialization.
+
+func _exit_tree() -> void:
+	"""Release the UIManager's cached references so the engine can free the UI tree.
+	Nodes still in the tree are left for the tree to free; orphaned overlays are
+	freed immediately because queue_free() may not flush during process exit."""
+	_views.clear()
+	_current_view = null
+	
+	# Drop all cached node references so the tree can free them.
+	_tab_container = null
+	_root_control = null
+	_inner_layout = null
+	_nav_node = null
+	_hero_image = null
+	_hero_spacer = null
+	_library_background = null
+	_content_wrapper = null
+	_main_content_vbox = null
+	_active_menu = null
+	_feedback_connected_viewport = null
+	
+	if _game_details_sheet and is_instance_valid(_game_details_sheet):
+		if _game_details_sheet.get_parent() == null:
+			_game_details_sheet.free()
+		_game_details_sheet = null
+	
+	if _settings_dialog and is_instance_valid(_settings_dialog):
+		if _settings_dialog.get_parent() == null:
+			_settings_dialog.free()
+		_settings_dialog = null
+	
+	if _shuffler_dialog and is_instance_valid(_shuffler_dialog):
+		if _shuffler_dialog.get_parent() == null:
+			_shuffler_dialog.free()
+		_shuffler_dialog = null
+	
+	if _hero_secondary_window and is_instance_valid(_hero_secondary_window):
+		if _hero_secondary_window.get_parent() == null:
+			_hero_secondary_window.free()
+		_hero_secondary_window = null
+	
+	# Release static caches that hold resources.
+	MemoryManager.clear_texture_cache()
+	M3Theme.clear_theme_cache()
+	EffectStack.clear_script_cache()
+	GameCard.clear_platform_icon_cache()
+	LaunchTransitionOverlay._clear_source_override()
+	M3NavigationDestination.clear_shared_stylebox()
+	M3MenuRenderer.clear_shared_stylebox()
+	LibraryFilterSheet.cleanup_instance()

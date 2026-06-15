@@ -5,6 +5,9 @@ const M3MenuItem = preload("res://addons/m3/components/M3MenuItem.gd")
 
 static var _shared_empty_stylebox: StyleBoxEmpty = StyleBoxEmpty.new()
 
+static func clear_shared_stylebox() -> void:
+	_shared_empty_stylebox = null
+
 ## Material 3 Menu Renderer
 ## Visual popup layer for M3Menu. Lazy-loaded when popup() is called.
 ## Handles rendering, input, keyboard navigation, and dismissal.
@@ -579,8 +582,6 @@ func _calculate_size_and_position():
 	
 	# Right margin equals half the width of the longest item
 	var width = clamp(max_content_width * 1.5, M3Units.dp(MIN_WIDTH), M3Units.dp(MAX_WIDTH))
-	# For dropdowns: ensure menu is at least as wide as the anchor control
-	width = max(width, _min_width)
 	
 	# Calculate total content height
 	var total_height = pad_v * 2
@@ -605,14 +606,39 @@ func _calculate_size_and_position():
 		viewport_size = viewport.get_visible_rect().size
 	var anchor_rect = _anchor_control.get_global_rect() if _anchor_control else Rect2(Vector2.ZERO, Vector2.ZERO)
 	
+	# Clamp menu size to the actual viewport so fitting is possible on small screens
+	var max_available_width = maxf(viewport_size.x - margin * 2.0, 1.0)
+	var max_available_height = maxf(viewport_size.y - margin * 2.0, 1.0)
+	width = min(width, max_available_width)
+	visible_height = min(visible_height, max_available_height)
+	# For dropdowns: ensure menu is at least as wide as the anchor control, but never wider than the viewport
+	width = max(width, min(_min_width, max_available_width))
+	
 	# Try positions with visible height
 	var positions = _compute_positions(anchor_rect, width, visible_height, gap)
 	
-	var pos: Vector2 = positions[0]  # Default to first (below-start)
+	var pos: Vector2 = positions[0]
+	var found = false
+	# Prefer positions that are fully visible and don't overlap the anchor
 	for try_pos in positions:
 		if _position_fits(try_pos, width, visible_height, viewport_size, margin, anchor_rect):
 			pos = try_pos
+			found = true
 			break
+	if not found:
+		# Allow overlapping the anchor if it keeps the menu fully on screen
+		for try_pos in positions:
+			if _position_fits(try_pos, width, visible_height, viewport_size, margin, anchor_rect, true):
+				pos = try_pos
+				found = true
+				break
+	if not found:
+		# Last resort: use the first candidate and clamp it to the viewport
+		pos = positions[0]
+	
+	# Final safety clamp so the menu is never rendered off-screen
+	pos.x = clampf(pos.x, margin, viewport_size.x - width - margin)
+	pos.y = clampf(pos.y, margin, viewport_size.y - visible_height - margin)
 	
 	global_position = pos
 	size = Vector2(width, visible_height)
@@ -675,7 +701,7 @@ func _compute_positions(anchor_rect: Rect2, menu_w: float, menu_h: float, gap: f
 	
 	return positions
 
-func _position_fits(pos: Vector2, width: float, height: float, viewport_size: Vector2, margin: float, anchor_rect: Rect2) -> bool:
+func _position_fits(pos: Vector2, width: float, height: float, viewport_size: Vector2, margin: float, anchor_rect: Rect2, ignore_overlap: bool = false) -> bool:
 	# Must fit within viewport margins
 	if pos.x < margin or pos.x + width > viewport_size.x - margin:
 		return false
@@ -683,9 +709,10 @@ func _position_fits(pos: Vector2, width: float, height: float, viewport_size: Ve
 		return false
 	
 	# Must not overlap anchor (if possible)
-	var menu_rect = Rect2(pos, Vector2(width, height))
-	if menu_rect.intersects(anchor_rect):
-		return false
+	if not ignore_overlap:
+		var menu_rect = Rect2(pos, Vector2(width, height))
+		if menu_rect.intersects(anchor_rect):
+			return false
 	
 	return true
 

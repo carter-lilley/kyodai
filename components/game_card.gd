@@ -57,6 +57,10 @@ const PLATFORM_ICON_MAP := {
 static var _platform_icon_cache: Dictionary = {}
 static var _platform_icon_missing_warnings: Dictionary = {}
 
+static func clear_platform_icon_cache() -> void:
+	_platform_icon_cache.clear()
+	_platform_icon_missing_warnings.clear()
+
 # Focus
 const FOCUS_TWEEN_DURATION: float = 0.12
 const FOCUS_EFFECT_FADE_DURATION: float = 0.15

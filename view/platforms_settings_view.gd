@@ -4,11 +4,20 @@ extends View
 
 @onready var _scroll_container: ScrollContainer = $ScrollContainer
 @onready var _platforms_container: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer
+@onready var _settings_row: HFlowContainer = $ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow
+@onready var _romm_settings_box: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings
 @onready var _cards_left: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsLeft
 @onready var _cards_right: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsRight
 
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
+var _is_fetching_platforms: bool = false
+
+# Debounce writes for RomM credential text fields so we don't re-check the
+# connection on every keystroke.
+var _credential_debounce_timer: Timer = null
+var _pending_credential_field: M3TextField = null
+var _pending_credential_property: String = ""
 
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
@@ -46,17 +55,17 @@ func _ready():
 	var url_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_URL")
 	var url_setting = SettingsManager.get_setting("romm_url")
 	url_field.text = url_setting.value if url_setting else ""
-	url_field.text_changed.connect(_on_romm_url_changed)
+	url_field.text_changed.connect(_on_credential_text_changed.bind(url_field, "romm_url"))
 	
 	var user_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_User")
 	var user_setting = SettingsManager.get_setting("romm_username")
 	user_field.text = user_setting.value if user_setting else ""
-	user_field.text_changed.connect(_on_romm_username_changed)
+	user_field.text_changed.connect(_on_credential_text_changed.bind(user_field, "romm_username"))
 	
 	var pass_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_Pass")
 	var pass_setting = SettingsManager.get_setting("romm_password")
 	pass_field.text = pass_setting.value if pass_setting else ""
-	pass_field.text_changed.connect(_on_romm_password_changed)
+	pass_field.text_changed.connect(_on_credential_text_changed.bind(pass_field, "romm_password"))
 	
 	# Connect button signals
 	var check_updates_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
@@ -77,6 +86,7 @@ func _ready():
 	# Connect to launch manager signals for extraction
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
 	LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
+	LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
 	
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
@@ -86,10 +96,15 @@ func _ready():
 	
 	# Set initial column visibility
 	_update_column_visibility()
+	_update_settings_row_layout()
 	
 	super._ready()
 
 func _fetch_platforms():
+	if _is_fetching_platforms:
+		return
+	_is_fetching_platforms = true
+	
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
 		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "CardsHBox"]:
@@ -164,7 +179,7 @@ func _fetch_platforms():
 					emulator_platforms[emu_id].append(slug)
 		
 		# Pre-validate each unique emulator once
-		print("[PlatformsSettingsView] Pre-validating " + str(unique_emulators.size()) + " unique emulators for " + str(data.size()) + " platforms")
+		print_verbose("[PlatformsSettingsView] Pre-validating " + str(unique_emulators.size()) + " unique emulators for " + str(data.size()) + " platforms")
 		var precomputed_status: Dictionary = {}
 		for emu_id in unique_emulators:
 			var progress = LaunchManager.get_install_progress(emu_id)
@@ -434,13 +449,20 @@ func _on_emulator_extraction_completed(emulator_id: String, _success: bool):
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
 		var effective_emu = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
-		if 			effective_emu == emulator_id:
+		if effective_emu == emulator_id:
 			# Update install status
 			var progress = LaunchManager.get_install_progress(emulator_id)
 			var is_installed = progress["status"] == "complete"
 			var install_status = {emulator_id: is_installed}
 			card.set_emulator_install_status(install_status)
 			card.refresh_ui()
+
+func _on_firmware_download_completed(platform_slug: String, _success: bool):
+	# Refresh the platform card so the firmware indicator updates immediately
+	LaunchManager.clear_firmware_cache_for_platform(platform_slug)
+	var card = _platform_cards.get(platform_slug)
+	if card:
+		card.refresh_ui()
 
 func _on_check_updates_pressed():
 	var check_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
@@ -570,6 +592,13 @@ func _on_select_all_pressed():
 	# Update button text
 	select_all_button.text = "Deselect All" if new_state else "Select All"
 
+func _update_settings_row_layout() -> void:
+	"""Ensure the settings row flows and the RomM column fills available width."""
+	if _settings_row:
+		_settings_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if _romm_settings_box:
+		_romm_settings_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
 func _update_column_visibility() -> void:
 	var is_narrow = _is_narrow_screen()
 	_cards_right.visible = not is_narrow
@@ -583,6 +612,7 @@ func _update_column_visibility() -> void:
 func _on_viewport_size_changed() -> void:
 	"""Re-layout cards when viewport size crosses the narrow breakpoint."""
 	_update_column_visibility()
+	_update_settings_row_layout()
 	
 	if not _platform_cards.is_empty():
 		# Check if layout mode needs to change
@@ -627,10 +657,17 @@ func on_view_show():
 	_sync_triggered = false
 	
 	# Refresh platform list every time the view is shown
-	_fetch_platforms()
+	if not _is_fetching_platforms:
+		_fetch_platforms()
 	super.on_view_show()
 
 func on_view_hide():
+	# Flush any pending credential write before hiding so we don't lose the
+	# last few keystrokes, then stop the debounce timer.
+	if _credential_debounce_timer and _credential_debounce_timer.time_left > 0:
+		_credential_debounce_timer.stop()
+		_flush_credential_change()
+	
 	_save_settings()
 	super.on_view_hide()
 
@@ -648,6 +685,32 @@ func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 	var setting = SettingsManager.get_setting("fold_romm_siblings")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
+
+func _on_credential_text_changed(_text: String, field: M3TextField, property_name: String) -> void:
+	_pending_credential_field = field
+	_pending_credential_property = property_name
+	
+	if not _credential_debounce_timer:
+		_credential_debounce_timer = Timer.new()
+		_credential_debounce_timer.wait_time = 0.6
+		_credential_debounce_timer.one_shot = true
+		_credential_debounce_timer.timeout.connect(_flush_credential_change)
+		add_child(_credential_debounce_timer)
+	
+	_credential_debounce_timer.stop()
+	_credential_debounce_timer.start()
+
+func _flush_credential_change() -> void:
+	if not _pending_credential_field:
+		return
+	
+	var text = _pending_credential_field.text
+	var setting = SettingsManager.get_setting(_pending_credential_property)
+	if setting:
+		SettingsManager.set_setting(text, setting)
+	
+	_pending_credential_field = null
+	_pending_credential_property = ""
 
 func _on_romm_url_changed(text: String) -> void:
 	var setting = SettingsManager.get_setting("romm_url")

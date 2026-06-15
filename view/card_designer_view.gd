@@ -73,25 +73,27 @@ func _setup_ui():
 	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(left_vbox)
 	
-	var title_label = Label.new()
+	var title_label = M3Label.new()
 	title_label.text = "Card Designer"
-	title_label.add_theme_font_size_override("font_size", 24)
+	title_label.label_style = M3Label.Style.HEADLINE_SMALL
 	left_vbox.add_child(title_label)
 	
-	var subtitle_label = Label.new()
+	var subtitle_label = M3Label.new()
 	subtitle_label.text = "Customize card appearance"
-	subtitle_label.add_theme_font_size_override("font_size", 12)
+	subtitle_label.label_style = M3Label.Style.BODY_SMALL
+	subtitle_label.use_on_surface_variant = true
 	left_vbox.add_child(subtitle_label)
 	
 	left_vbox.add_child(HSeparator.new())
 	
-	var global_label = Label.new()
+	var global_label = M3Label.new()
 	global_label.text = "Global Settings"
-	global_label.add_theme_font_size_override("font_size", 16)
+	global_label.label_style = M3Label.Style.TITLE_MEDIUM
 	left_vbox.add_child(global_label)
 	
-	var card_rounding_label = Label.new()
+	var card_rounding_label = M3Label.new()
 	card_rounding_label.text = "Card Rounding (0-1)"
+	card_rounding_label.label_style = M3Label.Style.BODY_MEDIUM
 	left_vbox.add_child(card_rounding_label)
 	
 	_card_rounding_slider = HSlider.new()

@@ -42,6 +42,12 @@ static func show_sheet() -> LibraryFilterSheet:
 	_instance.show_overlay()
 	return _instance
 
+static func cleanup_instance() -> void:
+	if _instance != null and is_instance_valid(_instance):
+		if _instance.get_parent() == null:
+			_instance.free()
+	_instance = null
+
 static func _ensure_instance(deferred_add: bool = false) -> void:
 	if _instance != null and is_instance_valid(_instance):
 		return

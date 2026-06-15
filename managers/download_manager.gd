@@ -2278,15 +2278,21 @@ func _rename_final_file(item_id: String):
 	if FSM.file_exists(final_path):
 		FSM.delete_file(final_path)
 	
-	if FSM.move(partial_path, final_path):
+	# Ensure destination directory exists before attempting rename
+	var dest_dir = final_path.get_base_dir()
+	if not dest_dir.is_empty() and not FSM.dir_exists(dest_dir):
+		FSM.make_dir_recursive(dest_dir)
+	
+	var move_err = DirAccess.rename_absolute(partial_path, final_path)
+	if move_err == OK:
 		# Fast path: rename succeeded (same filesystem)
 		_delete_download_state(final_path)
 		_cleanup_chunked_download(item_id)
 		_on_file_download_complete(item, true, "")
 		return
 	
-	# Rename failed (usually cross-filesystem). Copy the partial instead.
-	print("[DownloadManager] [InPlace] Move failed, copying partial to final destination: " + partial_path + " -> " + final_path)
+	# Rename failed (usually cross-filesystem). Capture the exact error for diagnostics.
+	print("[DownloadManager] [InPlace] Move failed with error %d (%s), falling back to copy: %s -> %s" % [move_err, error_string(move_err), partial_path, final_path])
 	_copy_partial_to_final(item_id, partial_path, final_path)
 
 func _copy_partial_to_final(item_id: String, partial_path: String, final_path: String):

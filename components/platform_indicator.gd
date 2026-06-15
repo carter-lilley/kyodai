@@ -16,6 +16,9 @@ const PLATFORM_COUNT: int = 5
 const TOTAL_GROUP_BUTTONS: int = PLATFORM_COUNT + 2
 const CENTER_PLATFORM_INDEX: int = 2
 
+const MIN_HEIGHT_DP: float = 50.0
+const VERTICAL_PADDING_DP: float = 8.0
+
 var _platforms: Array[Dictionary] = []
 var _current_index: int = -1
 var _all_games_label: String = "ALL"
@@ -99,6 +102,24 @@ func _setup_ui():
 	_search_button.focus_mode = Control.FOCUS_NONE
 	_search_button.pressed.connect(_on_search_clicked)
 	hbox.add_child(_search_button)
+	
+	_update_minimum_height()
+	# Child _ready() callbacks may run after setup; recalculate once the tree is stable.
+	call_deferred("_update_minimum_height")
+
+func _update_minimum_height() -> void:
+	var hbox = get_node_or_null("MainContainer")
+	if hbox == null:
+		return
+	
+	var max_child_height := 0.0
+	for child in hbox.get_children():
+		if child is Control:
+			max_child_height = max(max_child_height, child.get_combined_minimum_size().y)
+	
+	var min_height_px := M3Units.dp(MIN_HEIGHT_DP)
+	var padded_height_px := max_child_height + M3Units.dp(VERTICAL_PADDING_DP)
+	custom_minimum_size.y = max(min_height_px, padded_height_px)
 
 func update_display(platforms: Array[Dictionary], current_index: int):
 	_platforms = platforms

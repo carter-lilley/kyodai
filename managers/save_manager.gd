@@ -306,13 +306,21 @@ func resolve_save_directories(emulator_id: String, platform_slug: String = "") -
 	var default_path = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
 	candidates.append(default_path.rstrip("/") + "/")
 	
-	# On Android, also add the emulator_dir variant as a secondary candidate
+	# On Android, always generate both {app_data} and {emulator_dir} variants
+	# so the active-directory picker can choose whichever one has saves.
 	if PlatformManager.is_android():
-		# Replace {app_data} with {emulator_dir} in the path string
+		var app_data_variant = dir.replace("{emulator_dir}", "{app_data}")
 		var emulator_dir_variant = dir.replace("{app_data}", "{emulator_dir}")
+		
+		if app_data_variant != dir:
+			var app_data_path = FSM.resolve_emulator_path(app_data_variant, emulator_id, platform_slug).rstrip("/") + "/"
+			if not app_data_path in candidates:
+				candidates.append(app_data_path)
+		
 		if emulator_dir_variant != dir:
-			var variant_path = FSM.resolve_emulator_path(emulator_dir_variant, emulator_id, platform_slug)
-			candidates.append(variant_path.rstrip("/") + "/")
+			var emulator_dir_path = FSM.resolve_emulator_path(emulator_dir_variant, emulator_id, platform_slug).rstrip("/") + "/"
+			if not emulator_dir_path in candidates:
+				candidates.append(emulator_dir_path)
 	
 	return candidates
 

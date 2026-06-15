@@ -65,6 +65,11 @@ func _start_movement_timer() -> void:
 		return
 	if _movement_timer != null:
 		return
+	if not is_inside_tree():
+		# popup() may start the timer before the menu is added to the tree;
+		# retry once we're actually in the scene tree.
+		call_deferred("_start_movement_timer")
+		return
 	_movement_timer = Timer.new()
 	_movement_timer.wait_time = 0.1
 	_movement_timer.timeout.connect(_check_summoner_moved)
@@ -229,12 +234,14 @@ func dismiss():
 	# Don't call super.dismiss() — M3Overlay.dismiss() queue_frees the node,
 	# but M3Menu instances are often reused (e.g., checkable menus that need
 	# to persist state across openings). Do the registry cleanup manually.
-	if _active.get(overlay_type) == self:
+	var current = _get_active_node(overlay_type)
+	if current == self:
 		_active.erase(overlay_type)
 	# Recalculate max layer so lower-layer overlays can dismiss properly
 	if overlay_layer >= _max_layer:
 		_max_layer = 0
-		for overlay in _active.values():
+		for type in _active.keys():
+			var overlay = _get_active_node(type)
 			if is_instance_valid(overlay) and overlay.overlay_layer > _max_layer:
 				_max_layer = overlay.overlay_layer
 	if _renderer and _renderer.focus_changed.is_connected(_on_focus_changed):

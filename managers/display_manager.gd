@@ -176,7 +176,12 @@ func set_resolution(choice : Vector2i):
 func windowed_toggle(value : bool):
 	if value:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-		set_resolution(settings_man.get_setting("resolution").value)
+		var resolution_setting = settings_man.get_setting("resolution")
+		var resolution_value = resolution_setting.value
+		# ARRAY type may store either the selected index (int) or the actual Vector2i
+		if resolution_value is int and resolution_setting.options.size() > resolution_value:
+			resolution_value = resolution_setting.options[resolution_value]
+		set_resolution(resolution_value)
 		settings_man.enable_setting("resolution")
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)

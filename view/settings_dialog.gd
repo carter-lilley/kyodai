@@ -1,7 +1,7 @@
 class_name SettingsDialog
 extends M3Dialog
 
-## Fullscreen settings dialog with two-pane layout.
+## Popup settings dialog with two-pane layout.
 ## Creates category content directly from SettingsManager subgroups instead of
 ## extracting from a SettingsView TabContainer.
 
@@ -22,28 +22,40 @@ var _current_category: String = ""
 var _library_settings_view: SettingsView
 
 func _init():
-	dialog_variant = Variant.FULL_SCREEN
+	dialog_variant = Variant.BASIC
+	dialog_max_width = 900.0
 	title_text = "Settings"
 	persistent = true
 	super._init()
 
 func _ready():
 	super._ready()
-	# Disable outer scroll — each category page scrolls independently
-	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	# Make content slot expand to fill vertical space
-	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	# Hide empty bottom actions bar to reclaim vertical space
-	_bottom_actions.visible = false
+	# Fullscreen variant has an outer scroll; BASIC does not. Each category page
+	# already scrolls independently, so only touch fullscreen-specific nodes.
+	if dialog_variant == Variant.FULL_SCREEN:
+		if _scroll:
+			_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+			_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		if _bottom_actions:
+			_bottom_actions.visible = false
+	# Make content slot expand to fill the dialog interior
+	if content_slot:
+		content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_build_two_pane_layout()
 	await _build_categories()
 	
-	# Hide default title/body labels — we use the top bar title only
-	if _title_label:
-		_title_label.visible = false
+	# Categories are built asynchronously; re-position now that the real content
+	# minimum size is known so the first summon matches subsequent summons.
+	if is_inside_tree():
+		_position_dialog()
+	
+	# Hide default body label; keep the title label as the popup title.
 	if _body_label:
 		_body_label.visible = false
+	
+	# Add an explicit Close action for the popup action bar.
+	add_action("Close", dismiss, false)
 
 func _build_two_pane_layout() -> void:
 	"""Build two-pane HBox inside content_slot: sidebar + divider + content pane."""
@@ -63,10 +75,10 @@ func _build_two_pane_layout() -> void:
 	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
 	
 	var left_margin = MarginContainer.new()
-	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(12)))
-	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(12)))
-	left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(16)))
-	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(16)))
+	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
+	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
+	left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
+	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 	left_margin.add_child(_left_pane)
 	hbox.add_child(left_margin)
 	
@@ -82,10 +94,10 @@ func _build_two_pane_layout() -> void:
 	_right_pane = MarginContainer.new()
 	_right_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_right_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(16)))
-	_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(16)))
-	_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(16)))
-	_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(16)))
+	_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
+	_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
+	_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
+	_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 	hbox.add_child(_right_pane)
 
 func _build_categories() -> void:
@@ -168,6 +180,7 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.follow_focus = true
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
@@ -181,7 +194,9 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Use SHRINK_BEGIN so the ScrollContainer measures true content height
+	# instead of expanding and inflating the popup's minimum size.
+	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	
 	var menu = SettingsMenu.new()
 	menu.initialize_settings_menu(setting_name, settings_vars)

@@ -11,24 +11,24 @@ FontsIcons: Emojis loaded
 [DEBUG] Connected to database_ready signal
 [DEBUG] Database already ready, calling _on_database_ready manually
 [DEBUG] _on_database_ready called
-[DEBUG] _load_total_count called by: database_ready
 [DataManager] get_downloaded_games_count: 97
-[DEBUG] _load_total_count: caller=database_ready, _total_games=97, _db_games_count=97, _gamenative_games_count=0
-[DEBUG] _load_total_count called by: rebuild_grid
-[DEBUG] _load_total_count called by: rebuild_grid
-[DataManager] get_downloaded_games_count: 97
-[DEBUG] _load_total_count_with_callback called by: rebuild_grid_effects
-[DEBUG] _load_total_count_with_callback called by: rebuild_grid_effects
-[DataManager] get_downloaded_games_count: 97
-[DataManager] get_downloaded_games_count: 97
-[DEBUG] _load_total_count: caller=rebuild_grid, _total_games=97, _db_games_count=97, _gamenative_games_count=0
-[DEBUG] _load_total_count_with_callback called by: rebuild_grid_effects
-[DEBUG] _load_total_count: caller=rebuild_grid, _total_games=97, _db_games_count=97, _gamenative_games_count=0
-[DataManager] get_downloaded_games_count: 97
-[DataManager] get_downloaded_games_count: 97
-[DEBUG] _load_total_count_with_callback: caller=rebuild_grid_effects, _total_games=97, _db_games_count=97, _gamenative_games_count=0
-[DEBUG] _load_total_count_with_callback: caller=rebuild_grid_effects, _total_games=97, _db_games_count=97, _gamenative_games_count=0
-[DEBUG] _load_total_count_with_callback: caller=rebuild_grid_effects, _total_games=97, _db_games_count=97, _gamenative_games_count=0
+[UIManager] _on_setting_changed: library_layout_mode
+[UIManager] _rebuild_views called: reason=Layout mode changed, use_true=false
+[DEBUG] _load_total_count: _total_games=97, _db_games_count=97, _gamenative_games_count=0
+[UIManager] _on_setting_changed: dblevel_music
+[UIManager] _on_setting_changed: dblevel_sfx
+[UIManager] _on_setting_changed: library_grid_padding
+[UIManager] _rebuild_views called: reason=Grid padding changed, use_true=false
+[UIManager] _on_setting_changed: library_focus_scale
+[UIManager] _rebuild_views called: reason=Focus scale changed, use_true=false
+[UIManager] _on_setting_changed: card_effect_config
+[UIManager] _rebuild_views called: reason=Card effects changed, use_true=true
+[UIManager] _on_setting_changed: card_effect_config
+[UIManager] _rebuild_views called: reason=Card effects changed, use_true=true
+[UIManager] _on_setting_changed: dblevel_music
+[UIManager] _on_setting_changed: dblevel_sfx
+[UIManager] _on_setting_changed: card_effect_config
+[UIManager] _rebuild_views called: reason=Card effects changed, use_true=true
 [Main] Removed DualScreenSetup from tree (dual-screen not enabled)
 WARNING: 3 RIDs of type "Canvas" were leaked.
    at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2692)

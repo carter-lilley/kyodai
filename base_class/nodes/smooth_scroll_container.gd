@@ -5,10 +5,10 @@ signal scroll_value_changed(value: float)
 signal scroll_completed()
 
 @export var smooth_scrolling: bool = true
-@export var smooth_scroll_duration: float = 2.0
+@export var smooth_scroll_duration: float = 1.0
 @export var smooth_scroll_big_jump_threshold: float = 3500.0
-@export var smooth_scroll_big_jump_multiplier: float = 3.0
-@export var smooth_scroll_max_duration: float = 3.0
+@export var smooth_scroll_big_jump_multiplier: float = 4.0
+@export var smooth_scroll_max_duration: float = 2.5
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:

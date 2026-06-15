@@ -64,9 +64,28 @@ var _force_install_step: Dictionary = {}
 var _validation_cache: Dictionary = {}
 var _cache_ttl_ms: int = 5000  # 5 second cache TTL
 
+## Firmware readiness cache to avoid repeated recursive directory scans
+# key: "platform_slug:emulator_id", value: bool
+var _firmware_ready_cache: Dictionary = {}
+
 ## Clears the validation cache. Call after external install state changes (e.g., APK install).
 func clear_validation_cache() -> void:
 	_validation_cache.clear()
+
+## Clears the firmware readiness cache for a specific platform/emulator.
+func clear_firmware_cache(platform_slug: String, emulator_id: String) -> void:
+	_firmware_ready_cache.erase(platform_slug + ":" + emulator_id)
+
+## Clears the entire firmware readiness cache.
+func clear_all_firmware_cache() -> void:
+	_firmware_ready_cache.clear()
+
+## Clears all cached firmware readiness entries for a given platform.
+func clear_firmware_cache_for_platform(platform_slug: String) -> void:
+	var prefix = platform_slug + ":"
+	for key in _firmware_ready_cache.keys():
+		if key.begins_with(prefix):
+			_firmware_ready_cache.erase(key)
 
 # ============================================================================
 # SHELL ESCAPING HELPERS (prevent command injection from user-controlled paths)
@@ -130,6 +149,7 @@ signal launch_completed(success: bool, message: String)
 @warning_ignore("unused_signal")
 signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
+signal firmware_download_completed(platform_slug: String, success: bool)
 signal game_launched(game: GameResource)  # Emitted when a game is successfully launched
 signal game_launch_initiated(game: GameResource, focus_index: int)  # Emitted when a game launch is initiated (includes focus index for restoration)
 signal background_state_entered(pid: int, game: GameResource)  # Emitted when entering background state (desktop only)
@@ -700,12 +720,18 @@ func get_firmware_directory(emulator_id: String) -> String:
 ## Returns true if firmware directory exists and has any of the expected files
 ## Searches recursively through subdirectories
 func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> bool:
+	var cache_key = platform_slug + ":" + emulator_id
+	if _firmware_ready_cache.has(cache_key):
+		return _firmware_ready_cache[cache_key]
+	
 	var firmware_dir = get_firmware_directory(emulator_id)
 	if firmware_dir == "":
 		# No firmware directory configured, assume not needed
+		_firmware_ready_cache[cache_key] = true
 		return true
 	
 	if not FSM.dir_exists(firmware_dir):
+		_firmware_ready_cache[cache_key] = false
 		return false
 	
 	# Get expected files from platform configuration
@@ -715,13 +741,16 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> b
 	
 	# No expected files means no BIOS needed for this platform
 	if expected_files.is_empty():
+		_firmware_ready_cache[cache_key] = true
 		return true
 	
 	# Check if any expected file exists (searching recursively)
 	for expected_file in expected_files:
 		if _find_file_recursive(firmware_dir, expected_file):
+			_firmware_ready_cache[cache_key] = true
 			return true
 	
+	_firmware_ready_cache[cache_key] = false
 	return false
 
 ## Recursively searches for a file in a directory and its subdirectories
@@ -770,14 +799,22 @@ func _on_firmware_download_complete(success: bool, download_error: String, _noti
 		func(extract_success: bool, error_msg: String):
 			if not extract_success:
 				push_error("[LaunchManager] Failed to extract firmware to: " + firmware_dir + ": " + error_msg)
+				firmware_download_completed.emit(platform_slug, false)
 				if callback.is_valid():
 					callback.call(false, error_msg)
 				return
 			
 			print("[LaunchManager] Firmware successfully installed for " + platform_slug)
+			firmware_download_completed.emit(platform_slug, true)
 			if callback.is_valid():
 				callback.call(true, "Firmware installed")
 	)
+
+## Returns the list of expected firmware files for a platform (empty if none).
+func get_platform_firmware_expected_files(platform_slug: String) -> Array:
+	var platform_config = _platforms_data.get(platform_slug, {})
+	var firmware_config = platform_config.get("firmware", {})
+	return firmware_config.get("expected_files", [])
 
 ## Sets up firmware for a platform by downloading from RomM
 ## This should be called during platform sync

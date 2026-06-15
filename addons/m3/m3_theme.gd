@@ -401,6 +401,10 @@ static func load_fonts() -> Dictionary:
 	_cached_fonts = d
 	return d
 
+static func clear_theme_cache() -> void:
+	_cached_fonts.clear()
+	_empty_texture = null
+
 # ============================================
 # MAIN THEME
 # ============================================

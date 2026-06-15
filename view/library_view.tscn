@@ -31,7 +31,6 @@ grow_vertical = 2
 
 [node name="PlatformIndicator" type="Control" parent="MarginContainer/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 50)
 layout_mode = 2
 script = ExtResource("3_platformindicator")
 

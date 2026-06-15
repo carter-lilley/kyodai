@@ -31,6 +31,7 @@ var registry_default_emulator: String = "":
 		registry_default_emulator = value
 		if is_node_ready():
 			_update_emulator_dropdown()
+			refresh_firmware_indicator()
 
 var _available_emulators: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}
@@ -41,6 +42,7 @@ var _emulator_dropdown: M3OptionButton
 var _status_indicator: Indicator
 var _download_button: M3Button
 var _version_label: Label
+var _firmware_indicator: Indicator
 
 func _ready():
 	card_layout_mode = LayoutMode.HORIZONTAL
@@ -67,6 +69,9 @@ func _ready():
 	timer.timeout.connect(_update_status_indicator)
 	add_child(timer)
 	timer.start()
+	
+	# Defer the first firmware check so creating many cards doesn't block the UI.
+	call_deferred("refresh_firmware_indicator")
 
 func _build_ui():
 	# Platform cards have no media
@@ -88,6 +93,12 @@ func _build_ui():
 	_name_label = Label.new()
 	_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_row.add_child(_name_label)
+
+	_firmware_indicator = Indicator.new()
+	_firmware_indicator.dot_size = Vector2(8, 8)
+	_firmware_indicator.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_firmware_indicator.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top_row.add_child(_firmware_indicator)
 
 	_sync_toggle = M3Checkbox.new()
 	_sync_toggle.toggled.connect(_on_sync_toggled)
@@ -167,7 +178,7 @@ func _update_display():
 		return
 
 	_name_label.text = platform_name if platform_name else platform_slug
-	_sync_toggle.button_pressed = is_sync_enabled
+	_sync_toggle.set_pressed_no_signal(is_sync_enabled)
 
 	# Update emulator dropdown
 	_update_emulator_dropdown()
@@ -305,10 +316,44 @@ func _update_status_indicator():
 			_download_button.disabled = false
 			_download_button.text = "Download"
 
+
 func set_available_emulators(emulators: Array[Dictionary]):
 	_available_emulators = emulators
 	if is_node_ready():
 		_update_emulator_dropdown()
+
+func refresh_firmware_indicator() -> void:
+	"""Refresh the firmware indicator. Safe to call frequently; the underlying
+	LaunchManager call is cached, so repeated checks are cheap."""
+	if not _firmware_indicator:
+		return
+
+	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	if effective_emulator == "" or platform_slug == "":
+		_firmware_indicator.visible = false
+		return
+
+	if not LaunchManager:
+		_firmware_indicator.visible = false
+		return
+
+	var expected_files = LaunchManager.get_platform_firmware_expected_files(platform_slug)
+	if expected_files.is_empty():
+		# No firmware required for this platform
+		_firmware_indicator.visible = false
+		return
+
+	_firmware_indicator.visible = true
+	var firmware_ready = LaunchManager.is_platform_firmware_ready(platform_slug, effective_emulator)
+	var file_list = ", ".join(expected_files)
+	if firmware_ready:
+		_firmware_indicator.set_status(Indicator.Status.SUCCESS, "Firmware installed", "Expected firmware file(s): " + file_list)
+	else:
+		_firmware_indicator.set_status(Indicator.Status.ERROR, "Firmware missing", "Expected firmware file(s): " + file_list)
+
+func _update_firmware_indicator() -> void:
+	# Kept for backward compatibility; delegates to the cached refresh.
+	refresh_firmware_indicator()
 
 func set_emulator_install_status(status: Dictionary):
 	_emulator_install_status = status
@@ -328,6 +373,7 @@ func _on_emulator_selected(index: int):
 	var effective_emu = emulator_id if emulator_id != "" else registry_default_emulator
 	if LaunchManager and effective_emu != "":
 		LaunchManager.scan_emulator_install_state(effective_emu)
+		LaunchManager.clear_firmware_cache(platform_slug, effective_emu)
 
 	emulator_changed.emit(emulator_id)
 	refresh_ui()
@@ -359,6 +405,7 @@ func refresh_ui():
 		LaunchManager.scan_emulator_install_state(effective_emulator)
 
 	_update_status_indicator()
+	refresh_firmware_indicator()
 
 ## Formats a version string for display. If it's an ISO date, shows a friendly date.
 ## Otherwise returns the version string with v/V prefix stripped.

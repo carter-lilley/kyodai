@@ -4,6 +4,9 @@ extends M3Button
 
 static var _shared_empty_stylebox: StyleBoxEmpty = StyleBoxEmpty.new()
 
+static func clear_shared_stylebox() -> void:
+	_shared_empty_stylebox = null
+
 ## Material 3 Navigation Destination
 ## Extends M3Button with navigation-specific layout.
 ## Draws pill-shaped active and hover indicators via _draw().

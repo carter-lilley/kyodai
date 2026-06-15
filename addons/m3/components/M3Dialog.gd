@@ -14,6 +14,8 @@ enum Variant { BASIC, FULL_SCREEN }
 # ============================================
 
 const BASIC_MAX_WIDTH := 560.0
+const BASIC_MAX_HEIGHT := 640.0
+const BASIC_MIN_HEIGHT := 200.0
 const BASIC_RADIUS := 28.0
 const PADDING := 24.0
 const PADDING_TOP_NO_ICON := 16.0
@@ -60,6 +62,7 @@ const FULLSCREEN_ACTIONS_HEIGHT := 64.0
 			_update_hero_icon()
 
 @export var dismissible: bool = true
+@export var dialog_max_width: float = BASIC_MAX_WIDTH
 
 # ============================================
 # SIGNALS
@@ -72,6 +75,7 @@ signal action_pressed(action_label: String)
 # ============================================
 
 var _scrim: ColorRect
+var _dialog_wrapper: Control
 var _dialog_container: PanelContainer
 
 var _vbox: VBoxContainer
@@ -128,6 +132,12 @@ func show_overlay():
 	var parent = M3Overlay.get_overlay_parent()
 	if parent and get_parent() == null:
 		parent.add_child(self)
+	# Defer positioning so dialogs with async-built content (e.g. SettingsDialog)
+	# are measured after their children have finished laying out.
+	_deferred_position_and_show()
+
+func _deferred_position_and_show():
+	await get_tree().process_frame
 	_position_dialog()
 	super.show_overlay()
 
@@ -164,9 +174,16 @@ func _build_layout():
 	_scrim.gui_input.connect(_on_scrim_input)
 	add_child(_scrim)
 	
+	# Wrapper enforces the dialog's fixed size and clips any content that tries
+	# to expand past it (e.g. async-built children inflating PanelContainer).
+	_dialog_wrapper = Control.new()
+	_dialog_wrapper.clip_contents = true
+	add_child(_dialog_wrapper)
+	
 	# Dialog container (PanelContainer)
 	_dialog_container = PanelContainer.new()
-	add_child(_dialog_container)
+	_dialog_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_dialog_wrapper.add_child(_dialog_container)
 	
 	if dialog_variant == Variant.BASIC:
 		_build_basic_layout()
@@ -206,6 +223,8 @@ func _build_basic_layout():
 	_vbox.add_child(body_content_spacer)
 	
 	content_slot = VBoxContainer.new()
+	content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_vbox.add_child(content_slot)
 	
 	_divider = HSeparator.new()
@@ -222,9 +241,6 @@ func _build_basic_layout():
 	_actions_container.alignment = BoxContainer.ALIGNMENT_END
 	_actions_container.add_theme_constant_override("separation", M3Units.dp(ACTIONS_GAP))
 	_vbox.add_child(_actions_container)
-	
-	var max_width = M3Units.dp(BASIC_MAX_WIDTH)
-	_dialog_container.custom_minimum_size = Vector2(max_width, 0)
 
 func _build_fullscreen_layout():
 	var bg_panel = Panel.new()
@@ -350,25 +366,26 @@ func _position_dialog():
 	var viewport_size = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1920, 1080)
 	
 	if dialog_variant == Variant.BASIC:
-		var max_width = M3Units.dp(BASIC_MAX_WIDTH)
-		var dialog_width = min(max_width, viewport_size.x - M3Units.dp(48))
-		var min_height = M3Units.dp(200)
+		var margin = M3Units.dp(48)
+		var max_w = M3Units.dp(dialog_max_width)
+		var max_h = M3Units.dp(BASIC_MAX_HEIGHT)
+		var dialog_width = min(max_w, viewport_size.x - margin)
+		var dialog_height = min(max_h, viewport_size.y - margin)
 		
-		_dialog_container.anchor_left = 0.5
-		_dialog_container.anchor_top = 0.5
-		_dialog_container.anchor_right = 0.5
-		_dialog_container.anchor_bottom = 0.5
-		
-		_dialog_container.offset_left = -dialog_width / 2.0
-		_dialog_container.offset_top = -min_height / 2.0
-		_dialog_container.offset_right = dialog_width / 2.0
-		_dialog_container.offset_bottom = min_height / 2.0
-		
-		_dialog_container.custom_minimum_size = Vector2(dialog_width, min_height)
+		# Fixed, viewport-clamped size. The wrapper clips any content that tries
+		# to expand past it. Callers that need scrolling provide their own ScrollContainer.
+		_dialog_wrapper.anchor_left = 0.0
+		_dialog_wrapper.anchor_top = 0.0
+		_dialog_wrapper.anchor_right = 0.0
+		_dialog_wrapper.anchor_bottom = 0.0
+		_dialog_wrapper.position = (viewport_size - Vector2(dialog_width, dialog_height)) / 2.0
+		_dialog_wrapper.size = Vector2(dialog_width, dialog_height)
+		# _dialog_container fills the wrapper via its full-rect anchors.
 	else:
-		_dialog_container.position = Vector2.ZERO
-		# Use set_deferred to avoid anchor/size conflict warning in fullscreen mode
-		_dialog_container.set_deferred("size", viewport_size)
+		# Fullscreen: wrapper fills the viewport.
+		_dialog_wrapper.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_dialog_wrapper.position = Vector2.ZERO
+		_dialog_wrapper.size = viewport_size
 
 # ============================================
 # APPEARANCE

@@ -552,6 +552,15 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 	_instance._texture_cache_memory += tex_memory
 	_instance._texture_cache_mutex.unlock()
 
+static func clear_texture_cache() -> void:
+	if _instance == null:
+		return
+	_instance._texture_cache_mutex.lock()
+	_instance._texture_cache.clear()
+	_instance._texture_cache_order.clear()
+	_instance._texture_cache_memory = 0
+	_instance._texture_cache_mutex.unlock()
+
 static func queue_extraction_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
 		push_error("[MemoryManager] Not initialized - cannot queue extraction task")
@@ -760,6 +769,7 @@ static func shutdown():
 		thread.wait_to_finish()
 	if _instance._sync_thread:
 		_instance._sync_thread.wait_to_finish()
+	clear_texture_cache()
 	_instance = null
 
 # ============================================================================

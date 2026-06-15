@@ -24,6 +24,7 @@ func _build_view():
 	_scroll_container = ScrollContainer.new()
 	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll_container.follow_focus = true
+	_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(_scroll_container)
 	
 	var margin = MarginContainer.new()
@@ -209,6 +210,7 @@ func _refresh_games_list():
 		var name_label = M3Label.new()
 		name_label.text = game_name
 		name_label.label_style = M3Label.Style.BODY_MEDIUM
+		name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		info.add_child(name_label)
 		
 		var id_label = M3Label.new()

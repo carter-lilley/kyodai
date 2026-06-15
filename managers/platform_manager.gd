@@ -263,3 +263,8 @@ func stop_sync_foreground_service() -> bool:
 		return false
 	plugin.stopSyncForegroundService()
 	return true
+
+func _exit_tree() -> void:
+	"""Disconnect platform-specific scene-tree signals to avoid leaked callables."""
+	if is_android() and get_tree().node_added.is_connected(_on_node_added_android):
+		get_tree().node_added.disconnect(_on_node_added_android)

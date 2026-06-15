@@ -8,8 +8,6 @@ extends M3BottomSheet
 const CONTENT_MARGIN_PATH := ^"MarginContainer"
 const MAX_HEIGHT_DP := 640.0
 
-# Reuse one sheet instance so we don't pay the instantiation cost every open.
-static var _instance: GameDetailsSheet = null
 
 # NOTE: The scene root is a CanvasLayer (M3BottomSheet base). The MarginContainer
 # and its children are direct children of the root in the .tscn file, then
@@ -39,8 +37,8 @@ func _init():
     persistent = true
 
 # Preloaded data while a context menu is open.
-static var _prepared_romm_id: int = 0
-static var _prepared_cover: Texture2D = null
+var _prepared_romm_id: int = 0
+var _prepared_cover: Texture2D = null
 
 func _ready():
     super._ready()
@@ -143,26 +141,23 @@ func _populate_basic_info(game: GameResource) -> void:
     _update_action_button()
     description_label.text = game.description if game.description else "No description available."
 
-static func ensure_pooled() -> void:
-    const SCENE := preload("res://components/game_details_sheet.tscn")
-    if _instance == null or not is_instance_valid(_instance):
-        _instance = SCENE.instantiate() as GameDetailsSheet
-        _instance.visible = false
+func ensure_ready() -> void:
+    if not is_inside_tree():
         var parent := M3Overlay.get_overlay_parent()
         if parent:
-            parent.add_child.call_deferred(_instance)
+            parent.add_child.call_deferred(self)
 
-static func show_for_game(game: GameResource) -> GameDetailsSheet:
-    ensure_pooled()
-    _instance.clear_content()
-    _instance.show_overlay()
+func show_for_game(game: GameResource) -> GameDetailsSheet:
+    ensure_ready()
+    clear_content()
+    show_overlay()
     # Let the slide-in animation start on a clean frame before populating content.
     await Engine.get_main_loop().process_frame
-    if is_instance_valid(_instance):
-        _instance.set_game(game)
-    return _instance
+    if is_instance_valid(self):
+        set_game(game)
+    return self
 
-static func prepare_for_game(romm_id: int) -> void:
+func prepare_for_game(romm_id: int) -> void:
     """Preload heavy details while the context menu is open."""
     var game := DataManager.get_game_by_id(romm_id)
     if not game:
@@ -180,7 +175,7 @@ static func prepare_for_game(romm_id: int) -> void:
                     return img
                 return null,
             func(img: Image):
-                if img:
+                if is_instance_valid(self) and img:
                     _prepared_cover = ImageTexture.create_from_image(img)
         )
 

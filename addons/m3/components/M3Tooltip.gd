@@ -106,7 +106,7 @@ static func _on_control_mouse_entered(control: Control):
 static func _on_control_mouse_exited(control: Control):
 	_cancel_show()
 	if M3Overlay.is_showing("tooltip"):
-		var active = M3Overlay._active.get("tooltip")
+		var active = M3Overlay.get_active_overlay("tooltip")
 		if active is M3Tooltip and active._anchor_node == control:
 			active.dismiss()
 
@@ -116,7 +116,7 @@ static func _on_control_focus_entered(control: Control):
 static func _on_control_focus_exited(control: Control):
 	_cancel_show()
 	if M3Overlay.is_showing("tooltip"):
-		var active = M3Overlay._active.get("tooltip")
+		var active = M3Overlay.get_active_overlay("tooltip")
 		if active is M3Tooltip and active._anchor_node == control:
 			active.dismiss()
 

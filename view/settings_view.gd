@@ -119,6 +119,7 @@ func _create_settings_tab(setting_name: String, settings_vars: Array) -> Control
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.follow_focus = true
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll_containers.append(scroll)
 	
 	var margin = MarginContainer.new()
@@ -186,6 +187,7 @@ func _create_library_appearance_tab(vbox: VBoxContainer, settings_vars: Array) -
 	# Effect selection dropdown
 	_library_effect_dropdown = M3OptionButton.new()
 	_library_effect_dropdown.label_text = "Background Effect"
+	_library_effect_dropdown.fit_to_longest_item = false
 	
 	# Populate dropdown with available effects
 	var effects = LibraryBackground.get_available_effects()
@@ -238,6 +240,8 @@ func _create_preset_section(vbox: VBoxContainer) -> void:
 	# Preset dropdown
 	_preset_dropdown = M3OptionButton.new()
 	_preset_dropdown.label_text = "Theme Preset"
+	_preset_dropdown.fit_to_longest_item = false
+	_preset_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_preset_dropdown.item_selected.connect(_on_preset_selected)
 	preset_container.add_child(_preset_dropdown)
 	

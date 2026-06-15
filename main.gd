@@ -16,8 +16,6 @@ var _keyboard: PanelContainer = null
 # Cached reference to UILayer (survives reparenting in dual-screen mode)
 var _ui_layer: CanvasLayer = null
 
-# Stored reference to DualScreenSetup when removed from tree (prevents input interference on desktop)
-var _dual_screen_setup: Node = null
 
 # Auto-repeat navigation
 var _held_dir: String = ""
@@ -135,16 +133,14 @@ func _ready():
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
 	
-	# Fix: Remove DualScreenSetup from tree when not in dual-screen mode.
-	# SubViewport nodes can interfere with keyboard input propagation on desktop
-	# even when hidden, causing _input() to miss press events while _process()
-	# still detects them via Input singleton.
+	# Keep DualScreenSetup in the scene tree so its SubViewports are freed with Main.
+	# When dual-screen is disabled we disable processing and hide it to avoid input
+	# interference on desktop.
 	var dual_screen_setup = get_node_or_null("DualScreenSetup")
 	if dual_screen_setup:
 		if DisplayManager and not DisplayManager.is_dual_screen_enabled():
-			_dual_screen_setup = dual_screen_setup
-			remove_child(dual_screen_setup)
-			print("[Main] Removed DualScreenSetup from tree (dual-screen not enabled)")
+			_disable_dual_screen_setup(dual_screen_setup)
+			print("[Main] DualScreenSetup disabled (dual-screen not enabled)")
 		else:
 			# Dual-screen IS enabled at startup — just disable focus on containers
 			var main_viewport_container = get_node_or_null("DualScreenSetup/MainViewportContainer")
@@ -627,29 +623,41 @@ func reset_focus_to_home_button() -> void:
 		print("[Main] Could not grab focus — home_button invalid or focus disabled")
 
 ## DualScreenSetup lifecycle management
-## SubViewport nodes interfere with keyboard input on desktop even when hidden,
-## so we remove DualScreenSetup from the tree entirely when not in dual-screen mode.
+## Keep DualScreenSetup in the tree so its SubViewports are freed with Main.
+## When not in use, disable processing and hide it to avoid input interference.
+
+func _disable_dual_screen_setup(ds: Node) -> void:
+	ds.process_mode = Node.PROCESS_MODE_DISABLED
+	ds.visible = false
+	ds.position = Vector2(-10000, -10000)
+	for child in ds.get_children():
+		if child is Control:
+			child.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			child.focus_mode = Control.FOCUS_NONE
+
+func _enable_dual_screen_setup(ds: Node) -> void:
+	ds.process_mode = Node.PROCESS_MODE_INHERIT
+	ds.visible = true
+	ds.position = Vector2.ZERO
+	for child in ds.get_children():
+		if child is Control:
+			child.mouse_filter = Control.MOUSE_FILTER_PASS
+			child.focus_mode = Control.FOCUS_NONE
 
 func ensure_dual_screen_setup() -> Node:
-	"""Ensure DualScreenSetup is in the scene tree. Returns the node or null."""
+	"""Ensure DualScreenSetup is enabled and return it."""
 	var ds = get_node_or_null("DualScreenSetup")
 	if ds:
-		return ds
-	if _dual_screen_setup:
-		add_child(_dual_screen_setup)
-		ds = _dual_screen_setup
-		_dual_screen_setup = null
-		print("[Main] Re-added DualScreenSetup to tree")
+		_enable_dual_screen_setup(ds)
 		return ds
 	return null
 
 func remove_dual_screen_setup() -> void:
-	"""Remove DualScreenSetup from the scene tree and cache it for later."""
+	"""Disable DualScreenSetup without removing it from the tree."""
 	var ds = get_node_or_null("DualScreenSetup")
 	if ds:
-		_dual_screen_setup = ds
-		remove_child(ds)
-		print("[Main] Removed DualScreenSetup from tree")
+		_disable_dual_screen_setup(ds)
+		print("[Main] DualScreenSetup disabled")
 
 func _setup_repeat():
 	_delay_timer = Timer.new()
@@ -1072,3 +1080,36 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	else:
 		# Fallback to home button
 		call_deferred("reset_focus_to_home_button")
+
+func _exit_tree() -> void:
+	"""Release root-level references so the Main node can be fully freed."""
+	# Stop timers so they don't hold references after tree teardown.
+	if _delay_timer:
+		_delay_timer.stop()
+	if _repeat_timer:
+		_repeat_timer.stop()
+	if _zoom_save_timer:
+		_zoom_save_timer.stop()
+
+	# Drop cached node references; the actual nodes are freed with the tree.
+	_keyboard = null
+	_ui_layer = null
+	_m3_theme = null
+
+	# Disconnect signals we own.
+	if UIManager.is_connected("tab_changed", _on_tab_changed):
+		UIManager.tab_changed.disconnect(_on_tab_changed)
+	if UIManager.is_connected("settings_dialog_dismissed", _on_settings_dialog_dismissed):
+		UIManager.settings_dialog_dismissed.disconnect(_on_settings_dialog_dismissed)
+	if SettingsManager and SettingsManager.is_connected("apply_preset_end", _on_preset_applied):
+		SettingsManager.apply_preset_end.disconnect(_on_preset_applied)
+	if LaunchManager:
+		if LaunchManager.is_connected("game_launch_initiated", _on_game_launch_initiated):
+			LaunchManager.game_launch_initiated.disconnect(_on_game_launch_initiated)
+		if LaunchManager.is_connected("background_state_entered", _on_background_state_entered):
+			LaunchManager.background_state_entered.disconnect(_on_background_state_entered)
+		if LaunchManager.is_connected("background_state_exited", _on_background_state_exited):
+			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+	var ayn_thor_manager = get_node_or_null("AynThorManager")
+	if ayn_thor_manager and ayn_thor_manager.is_connected("screens_swapped", _on_screens_swapped):
+		ayn_thor_manager.screens_swapped.disconnect(_on_screens_swapped)

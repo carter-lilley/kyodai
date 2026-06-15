@@ -281,11 +281,10 @@ func _on_setting_changed(value, setting):
 		# Trigger grid refresh so library view updates filtering
 		sync_completed.emit(true, "RomM sibling folding %s" % ("enabled" if value else "disabled"))
 	elif setting.property_name == "enabled_platforms":
-		print("[DataManager] Enabled platforms changed")
-		# Platform filter changed; count may be different.
+		# Platform filter changed; count may be different. Do NOT emit sync_completed
+		# here because PlatformsSettingsView updates this setting for each platform
+		# during initialization and emitting sync_completed would spam scans.
 		_invalidate_downloaded_games_count_cache()
-		# Trigger grid refresh so library view updates filtering
-		sync_completed.emit(true, "Enabled platforms changed")
 
 func _should_hide_no_cover_games() -> bool:
 	var setting = SettingsManager.get_setting("hide_games_without_covers")

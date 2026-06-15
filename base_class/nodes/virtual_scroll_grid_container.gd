@@ -191,6 +191,10 @@ var _active_cards: Array[Control] = []
 var _active_cards_by_index: Dictionary[int, Control] = {}
 var _max_pool_size: int = 120
 
+# In-tree container for pooled cards. Keeping them as children guarantees they
+# are freed automatically when the grid is freed, avoiding orphan leaks.
+var _pool_container: Node = null
+
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
 
 # Resize debounce timer — prevents rapid-fire recalculations during window resize
@@ -366,6 +370,11 @@ func _ready():
 	_resize_debounce_timer.timeout.connect(_on_resize_debounced)
 	add_child(_resize_debounce_timer)
 	
+	# Create an in-tree container so pooled cards are freed with the grid.
+	_pool_container = Node.new()
+	_pool_container.name = "CardPool"
+	add_child(_pool_container)
+	
 	# Load initial grid separation and focus scale from settings
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
@@ -391,6 +400,15 @@ func _exit_tree():
 		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
 			SettingsManager.setting_changed.disconnect(_on_setting_changed)
 	_disconnect_focus_lock_viewport()
+	_free_card_pool()
+
+func _free_card_pool() -> void:
+	"""Release all pooled and active cards so they don't outlive the grid.
+	Cards that are still in the tree will be freed with the grid; orphaned pooled
+	cards are dropped from our arrays so their reference count can reach zero."""
+	_card_pool.clear()
+	_active_cards.clear()
+	_active_cards_by_index.clear()
 
 func _on_settings_saved():
 	_update_focus_scale_from_settings()
@@ -981,6 +999,7 @@ func _instantiate_card_pool():
 		card.visible = false
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
+		_pool_container.add_child(card)
 		_card_pool.append(card)
 
 func set_total_count(count: int, preserve_cache: bool = false):
@@ -1213,6 +1232,10 @@ func _add_to_pool(card: Control) -> void:
 	if _card_pool.size() >= _max_pool_size:
 		card.queue_free()
 	else:
+		if card.get_parent() != _pool_container:
+			if card.get_parent():
+				card.get_parent().remove_child(card)
+			_pool_container.add_child(card)
 		_card_pool.append(card)
 
 
@@ -1327,7 +1350,7 @@ func _batch_recycle_from_start(count: int) -> void:
 				card.game = null
 			if card.get_parent() == _flow_container:
 				_flow_container.remove_child(card)
-			_card_pool.append(card)
+			_add_to_pool(card)
 
 func _batch_add_at_start(target_start: int, count: int) -> void:
 	if count <= 0:
@@ -1385,6 +1408,8 @@ func _acquire_card() -> Control:
 	while _card_pool.size() > 0:
 		var card = _card_pool.pop_back()
 		if is_instance_valid(card):
+			if card.get_parent() == _pool_container:
+				_pool_container.remove_child(card)
 			card.set_meta("pooled", false)
 			if card.has_method("reset"):
 				card.reset()

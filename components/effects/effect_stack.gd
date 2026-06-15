@@ -201,6 +201,9 @@ func has_effect(effect_id: String) -> bool:
 static func get_available_effects() -> Dictionary:
 	return EFFECT_REGISTRY.duplicate()
 
+static func clear_script_cache() -> void:
+	_script_cache.clear()
+
 static func get_effect_display_name(effect_id: String) -> String:
 	return effect_id.replace("_", " ").capitalize()
 
