@@ -22,7 +22,7 @@ addons/icon_finder/preview_size=24
 [autoload]
 
 SettingsManager="*res://managers/settings_manager.gd"
-UIManager="*res://managers/ui_manager.gd"
+UIManager="*res://managers/ui_manager.tscn"
 DisplayManager="*res://managers/display_manager.gd"
 PlatformManager="*res://managers/platform_manager.gd"
 DataManager="*res://managers/data_manager.tscn"

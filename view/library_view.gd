@@ -557,7 +557,7 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 		# Use callback version to ensure dimensions refresh AFTER data loads
 		_load_total_count_with_callback(false, func():
 			# Also refresh existing cards
-			games_grid.refresh_all_card_effects()
+			games_grid.refresh_all_card_effects(true)
 			# Refresh dimensions AFTER data reload to get correct layout
 			games_grid.refresh_dimensions()
 		)
@@ -675,6 +675,9 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			if game:
 				LaunchManager.launch_game(game)
 		"card_designer":
+			var card_designer_game = DataManager.get_game_by_id(romm_id)
+			if card_designer_game:
+				UIManager.set_card_designer_preview_game(card_designer_game.romm_id)
 			UIManager.show_settings_dialog_with_category("card_designer")
 		"add_to_steam":
 			var game = DataManager.get_game_by_id(romm_id)

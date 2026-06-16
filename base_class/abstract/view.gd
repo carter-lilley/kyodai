@@ -182,12 +182,10 @@ func _on_download_requested(game: GameResource):
 func _update_status(_text: String = "") -> void:
 	pass
 
-func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	"""Handle settings changes."""
-	match setting.property_name:
-		"card_effect_config":
-			mark_for_rebuild("Card effects changed")
-		"library_show_title_mode", "library_card_display_mode", "library_card_content_alignment":
-			if games_grid:
-				games_grid.refresh_all_card_effects()
-				games_grid.refresh_dimensions()
+func _on_setting_changed(_value: Variant, _setting: SettingsVar) -> void:
+	"""Handle settings changes.
+	
+	Card config / layout / effect updates are now driven by the grid's own
+	SettingsManager handler and by ViewManager, so the base view no longer
+	needs to trigger its own rebuilds here."""
+	pass

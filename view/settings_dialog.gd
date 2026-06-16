@@ -293,6 +293,11 @@ func get_platforms_settings_view() -> PlatformsSettingsView:
 		return _category_contents["romm"] as PlatformsSettingsView
 	return null
 
+func get_card_designer_view() -> CardDesignerView:
+	if _category_contents.has("card_designer") and _category_contents["card_designer"] is CardDesignerView:
+		return _category_contents["card_designer"] as CardDesignerView
+	return null
+
 func refresh_theme() -> void:
 	super.refresh_theme()
 	for content in _category_contents.values():
