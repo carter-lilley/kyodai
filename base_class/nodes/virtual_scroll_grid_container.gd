@@ -201,6 +201,12 @@ var _last_layout_card_size: Vector2 = Vector2.ZERO
 var _last_layout_focused_card_size: Vector2 = Vector2.ZERO
 var _last_layout_grid_separation: int = -1
 var _last_layout_available_size: Vector2 = Vector2.ZERO
+var _last_layout_display_mode: int = -1
+var _last_layout_media_aspect_ratio: int = -1
+
+# Deferred layout recalc guard — coalesces multiple settings-driven recalc
+# requests into a single call at the end of the frame.
+var _layout_recalc_scheduled: bool = false
 
 # Resize debounce timer — prevents rapid-fire recalculations during window resize
 var _resize_debounce_timer: Timer = null
@@ -386,19 +392,17 @@ func _ready():
 	_ready_called = true
 
 func _enter_tree():
-	# Connect to settings signals (idempotent via is_connected guards)
-	if SettingsManager:
-		if not SettingsManager.settings_saved.is_connected(_on_settings_saved):
-			SettingsManager.settings_saved.connect(_on_settings_saved)
-		if not SettingsManager.setting_changed.is_connected(_on_setting_changed):
-			SettingsManager.setting_changed.connect(_on_setting_changed)
+	# Connect to centralized card settings state (idempotent via is_connected guards)
+	if UIManager and UIManager.card_settings_state:
+		var state = UIManager.card_settings_state
+		if not state.changed.is_connected(_on_card_settings_state_changed):
+			state.changed.connect(_on_card_settings_state_changed)
 
 func _exit_tree():
-	if SettingsManager:
-		if SettingsManager.settings_saved.is_connected(_on_settings_saved):
-			SettingsManager.settings_saved.disconnect(_on_settings_saved)
-		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
-			SettingsManager.setting_changed.disconnect(_on_setting_changed)
+	if UIManager and UIManager.card_settings_state:
+		var state = UIManager.card_settings_state
+		if state.changed.is_connected(_on_card_settings_state_changed):
+			state.changed.disconnect(_on_card_settings_state_changed)
 	_disconnect_focus_lock_viewport()
 	# Only free the pool when the grid itself is being freed. If the grid is
 	# just reparented, clearing active-card tracking leaves orphaned cards in
@@ -417,66 +421,78 @@ func _free_card_pool() -> void:
 	_active_cards.clear()
 	_active_cards_by_index.clear()
 
-func _on_settings_saved():
-	_update_focus_scale_from_settings()
-	_update_focus_lock_from_settings()
-	_refresh_cached_settings()
-	refresh_all_card_configs()
+func _on_card_settings_state_changed(mask: int) -> void:
+	if not UIManager or not UIManager.card_settings_state:
+		return
+
+	var state = UIManager.card_settings_state
+
+	# Layout-affecting settings: orientation, zoom, padding, focus scale
+	if mask & CardSettingsState.ChangeMask.LAYOUT:
+		var new_mode: ViewMode
+		match state.layout_mode:
+			0: new_mode = ViewMode.GRID
+			1: new_mode = ViewMode.LIST
+			2: new_mode = ViewMode.CAROUSEL
+			_: new_mode = ViewMode.GRID
+		set_grid_orientation(new_mode, state.grid_vertical, 1.0 + state.focus_scale_ratio)
+
+		var new_zoom = state.card_zoom_ratio
+		if not is_equal_approx(target_card_width_ratio, new_zoom):
+			target_card_width_ratio = new_zoom
+
+		var new_separation = int(M3Units.dp(float(state.grid_padding)))
+		if grid_separation != new_separation:
+			grid_separation = new_separation
+			if _flow_container:
+				_flow_container.add_theme_constant_override("h_separation", grid_separation)
+				_flow_container.add_theme_constant_override("v_separation", grid_separation)
+			_recalculate_layout()
+			_refresh_buffer()
+
+	# Display mode / content alignment / media aspect ratio
+	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
+		_refresh_cached_settings()
+		refresh_all_card_configs()
+		_schedule_layout_recalc()
+
+	# Card effect configuration changed
+	if mask & CardSettingsState.ChangeMask.EFFECTS:
+		refresh_all_card_effects(true)
+		_schedule_layout_recalc()
+
+	# Focus lock toggle
+	if mask & CardSettingsState.ChangeMask.FOCUS_LOCK:
+		focus_lock_enabled = state.focus_lock_enabled
+
+	# Theme changes (dark mode / primary color) do not affect grid geometry directly.
+
+func _schedule_layout_recalc() -> void:
+	"""Queue a single deferred layout recalc. Multiple calls in one frame collapse."""
+	if _layout_recalc_scheduled:
+		return
+	_layout_recalc_scheduled = true
+	call_deferred("_do_scheduled_layout_recalc")
+
+func _do_scheduled_layout_recalc() -> void:
+	_layout_recalc_scheduled = false
 	_recalculate_layout()
 
-func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	# Update caches immediately for settings that affect card layout.
-	# ViewManager now drives structural changes (layout_mode / grid_vertical) and
-	# effect refreshes, so those are intentionally not handled here.
-	match setting.property_name:
-		"card_media_aspect_ratio", "library_card_display_mode", "library_card_content_alignment":
-			_refresh_cached_settings()
-			refresh_all_card_configs()
-		"library_show_title_mode":
-			refresh_all_card_displays()
-		"library_card_zoom":
-			if _value is float:
-				target_card_width_ratio = _value
-		"library_grid_padding":
-			_update_grid_separation_from_settings()
-			call_deferred("_recalculate_layout")
-		"library_focus_scale":
-			_update_focus_scale_from_settings()
-		"focus_lock_enabled":
-			_update_focus_lock_from_settings()
-
 func _update_focus_lock_from_settings() -> void:
-	if not SettingsManager:
-		return
-	var setting = SettingsManager.get_setting("focus_lock_enabled")
-	if setting and setting.value is bool:
-		focus_lock_enabled = setting.value
+	if UIManager and UIManager.card_settings_state:
+		focus_lock_enabled = UIManager.card_settings_state.focus_lock_enabled
 	else:
 		focus_lock_enabled = false
 
 func _refresh_cached_settings() -> void:
-	if not SettingsManager:
+	if not UIManager or not UIManager.card_settings_state:
 		return
-	
-	var ratio_setting = SettingsManager.get_setting("card_media_aspect_ratio")
-	if ratio_setting and ratio_setting.value is int:
-		var idx = clampi(ratio_setting.value, 0, _RATIO_LOOKUP.size() - 1)
-		_cached_media_aspect_ratio = _RATIO_LOOKUP[idx]
-	else:
-		_cached_media_aspect_ratio = -1.0
-	
-	var mode_setting = SettingsManager.get_setting("library_card_display_mode")
-	if mode_setting and mode_setting.value is int:
-		_cached_card_display_mode = clampi(mode_setting.value, 0, 2)
-	else:
-		_cached_card_display_mode = 0
-	
-	var align_setting = SettingsManager.get_setting("library_card_content_alignment")
-	if align_setting and align_setting.value is int:
-		var align_idx = clampi(align_setting.value, 0, 2)
-		_cached_content_alignment = align_idx as M3Card.ContentAlignment
-	else:
-		_cached_content_alignment = M3Card.ContentAlignment.START
+
+	var state = UIManager.card_settings_state
+	var idx = clampi(state.media_aspect_ratio, 0, _RATIO_LOOKUP.size() - 1)
+	_cached_media_aspect_ratio = _RATIO_LOOKUP[idx]
+	_cached_card_display_mode = clampi(state.display_mode, 0, 2)
+	_cached_content_alignment = clampi(state.content_alignment, 0, 2) as M3Card.ContentAlignment
 
 var _last_resized_size: Vector2 = Vector2.ZERO
 var _is_recalculating_layout: bool = false
@@ -514,14 +530,11 @@ func _on_resize_debounced():
 		_initial_load()
 
 func _update_grid_separation_from_settings() -> void:
-	if not SettingsManager:
-		return
-	var setting = SettingsManager.get_setting("library_grid_padding")
-	if setting and (setting.value is int or setting.value is float):
-		grid_separation = int(M3Units.dp(float(setting.value)))
+	if UIManager and UIManager.card_settings_state:
+		grid_separation = int(M3Units.dp(float(UIManager.card_settings_state.grid_padding)))
 	else:
 		grid_separation = int(M3Units.dp(10))
-	
+
 	# Apply to FlowContainer if it exists
 	if _flow_container:
 		if _flow_container.get_theme_constant("h_separation") != grid_separation:
@@ -530,11 +543,8 @@ func _update_grid_separation_from_settings() -> void:
 			_flow_container.add_theme_constant_override("v_separation", grid_separation)
 
 func _update_focus_scale_from_settings() -> void:
-	if not SettingsManager:
-		return
-	var setting = SettingsManager.get_setting("library_focus_scale")
-	if setting and (setting.value is int or setting.value is float):
-		focus_scale = 1.0 + float(setting.value)
+	if UIManager and UIManager.card_settings_state:
+		focus_scale = 1.0 + UIManager.card_settings_state.focus_scale_ratio
 	else:
 		focus_scale = 1.08
 
@@ -773,11 +783,19 @@ func _recalculate_layout():
 	var card_geometry_changed = not card_size.is_equal_approx(_last_layout_card_size) or not focused_card_size.is_equal_approx(_last_layout_focused_card_size)
 	var separation_changed = grid_separation != _last_layout_grid_separation
 	var available_changed = not available.is_equal_approx(_last_layout_available_size)
-	
-	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed:
+
+	# Display mode and media aspect ratio affect base card dimensions, which
+	# feed into card_geometry_changed. Cache them explicitly so a recalc that
+	# runs after these settings change cannot be skipped incorrectly.
+	var state = UIManager.card_settings_state if UIManager else null
+	var current_display_mode = state.display_mode if state else _cached_card_display_mode
+	var current_media_ratio = state.media_aspect_ratio if state else 0
+	var display_or_ratio_changed = current_display_mode != _last_layout_display_mode or current_media_ratio != _last_layout_media_aspect_ratio
+
+	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed:
 		_is_recalculating_layout = false
 		return
-	
+
 	# Update the input cache now that we know work is required
 	_last_layout_view_mode = view_mode
 	_last_layout_grid_vertical = grid_vertical
@@ -786,6 +804,8 @@ func _recalculate_layout():
 	_last_layout_focused_card_size = focused_card_size
 	_last_layout_grid_separation = grid_separation
 	_last_layout_available_size = available
+	_last_layout_display_mode = current_display_mode
+	_last_layout_media_aspect_ratio = current_media_ratio
 	
 	# Invalidate then pre-compute scroll math before downstream consumers read it
 	_cached_items_per_line = -1

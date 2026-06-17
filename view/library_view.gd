@@ -546,11 +546,9 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 	
 	_update_grid_orientation()
 	
-	# Apply zoom from settings
-	if SettingsManager and games_grid:
-		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
-		if zoom_setting and zoom_setting.value is float:
-			games_grid.target_card_width_ratio = zoom_setting.value
+	# Apply zoom from centralized card settings state
+	if UIManager and UIManager.card_settings_state and games_grid:
+		games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
 	
 	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:

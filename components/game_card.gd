@@ -28,15 +28,9 @@ var _focus_effect_tweens: Array[Tween] = []
 func _remove_focus_tween(tween: Tween) -> void:
 	_focus_effect_tweens.erase(tween)
 
-var _loading_game_id: String = ""
-var _image_retry_count: int = 0
-var _current_image_task_id: int = -1
-const MAX_IMAGE_RETRIES: int = 3
-
-var _download_retry_count: int = 0
-const MAX_DOWNLOAD_RETRIES: int = 2
-var _current_download_id: int = -1
-const MAX_COVER_TEXTURE_SIZE: int = 512
+# Cover/media loading is delegated to CardMediaLoader so GameCard stays focused
+# on card behavior (focus, input, badges) rather than download/cache logic.
+var _media_loader: CardMediaLoader = null
 
 # Status badge overlay (direct child of GameCard, positioned over media panel)
 var _status_badge: Panel = null
@@ -82,32 +76,31 @@ var _touch_is_holding: bool = false
 func _ready():
 	super._ready()
 	_sync_focus_visuals()
-	
+
+	_media_loader = CardMediaLoader.new(self)
+	_media_loader.texture_loaded.connect(_on_media_texture_loaded)
+
 	if preview_mode:
 		_setup_preview_mode()
 		return
-	
+
 	_update_card_state_from_settings()
 	_update_display()
-	
+
 	# Connect M3Card signals
 	pressed.connect(_on_card_pressed)
 	gui_input.connect(_on_card_gui_input)
 	focus_entered.connect(_on_focus_entered)
 	focus_exited.connect(_on_focus_exited)
 	mouse_entered.connect(_on_card_mouse_entered)
-	
+
 	_setup_status_badge()
 
 func _exit_tree():
 	# Cancel any in-flight image operations to prevent callbacks from keeping this card alive
-	if _current_image_task_id > 0 and MemoryManager:
-		MemoryManager.cancel_image_task(_current_image_task_id)
-		_current_image_task_id = -1
-	
-	# Increment download ID to invalidate any pending download callbacks
-	_current_download_id += 1
-	
+	if _media_loader:
+		_media_loader.cancel()
+
 	# Kill any focus effect tweens
 	for tween in _focus_effect_tweens:
 		if tween and is_instance_valid(tween):
@@ -185,7 +178,10 @@ func _setup_preview_mode():
 
 func _build_media_stack(force_full_rebuild: bool = true):
 	var effect_settings := []
-	if SettingsManager:
+	if UIManager and UIManager.card_settings_state:
+		effect_settings = UIManager.card_settings_state.get_base_effects()
+	elif SettingsManager:
+		# Fallback if UIManager state is not yet available
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			effect_settings = config_setting.value.get("effects", [])
@@ -203,11 +199,19 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		set_media_content(_media_stack)
 	
 	_reparent_status_badge_to_media_stack()
-	_build_focus_stack(force_full_rebuild)
+	# Focus stack is built lazily when this card becomes focused (or in preview mode).
+	# Keeping it absent for unfocused cards avoids creating effect nodes for every
+	# card in the virtual-scroll buffer. If it already exists (e.g., this card was
+	# previously focused), rebuild it so effect config changes stay in sync.
+	if (_focus_stack and is_instance_valid(_focus_stack)) or preview_mode or _is_focused:
+		_build_focus_stack(force_full_rebuild)
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	var focus_effect_settings := []
-	if SettingsManager:
+	if UIManager and UIManager.card_settings_state:
+		focus_effect_settings = UIManager.card_settings_state.get_focus_effects()
+	elif SettingsManager:
+		# Fallback if UIManager state is not yet available
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			focus_effect_settings = config_setting.value.get("focus_effects", [])
@@ -407,39 +411,62 @@ func _show_focus_effects(p_show: bool) -> void:
 var _display_mode: int = 0
 
 func _update_card_state_from_settings():
-	if SettingsManager:
+	var state = UIManager.card_settings_state if UIManager else null
+	if state:
+		var config = state.card_effect_config
+		_media_container.effect_settings = state.get_base_effects()
+		_media_container.focus_effect_settings = state.get_focus_effects()
+
+		# Migrate old keys to unified card_rounding
+		var config_dict = config.duplicate(true)
+		if not config_dict.has("card_rounding"):
+			if config_dict.has("art_rounding"):
+				config_dict["card_rounding"] = config_dict["art_rounding"]
+			elif config_dict.has("corner_radius"):
+				config_dict["card_rounding"] = config_dict["corner_radius"]
+
+		var corner_value = config_dict.get("card_rounding", 0.12)
+		if corner_value is float and corner_value > 1.0:
+			# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
+			const LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP: float = 202.0
+			_media_container.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
+		else:
+			_media_container.corner_radius_ratio = float(corner_value)
+
+		# Apply the same rounding to the M3Card background clip
+		card_rounding_ratio = _media_container.corner_radius_ratio
+
+		# Apply insets immediately so the base card shader pushes the image inward
+		# even if the effect-stack rebuild is delayed or skipped.
+		_apply_effect_insets_to_media_container(_media_container.effect_settings)
+
+		_display_mode = state.display_mode
+	elif SettingsManager:
+		# Fallback if UIManager state is not yet available
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_media_container.effect_settings = config_setting.value.get("effects", [])
 			_media_container.focus_effect_settings = config_setting.value.get("focus_effects", [])
-			# Migrate old keys to unified card_rounding
 			var config_dict = config_setting.value.duplicate(true)
 			if not config_dict.has("card_rounding"):
 				if config_dict.has("art_rounding"):
 					config_dict["card_rounding"] = config_dict["art_rounding"]
 				elif config_dict.has("corner_radius"):
 					config_dict["card_rounding"] = config_dict["corner_radius"]
-			
 			var corner_value = config_dict.get("card_rounding", 0.12)
 			if corner_value > 1.0:
-				# Backward compat: old configs stored absolute pixels against the 3:4 vertical base width
 				const LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP: float = 202.0
 				_media_container.corner_radius_ratio = corner_value / M3Units.dp(LEGACY_CORNER_RADIUS_REFERENCE_WIDTH_DP)
 			else:
 				_media_container.corner_radius_ratio = corner_value
-			
-			# Apply the same rounding to the M3Card background clip
 			card_rounding_ratio = _media_container.corner_radius_ratio
-			
-			# Apply insets immediately so the base card shader pushes the image inward
-			# even if the effect-stack rebuild is delayed or skipped.
 			_apply_effect_insets_to_media_container(_media_container.effect_settings)
-		
+
 		var display_setting = SettingsManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
 			_display_mode = display_setting.value
-		
-		_apply_display_mode()
+
+	_apply_display_mode()
 
 func _apply_effect_insets_to_media_container(effects: Array) -> void:
 	"""Scan base effects and set media-container insets from their settings.
@@ -510,9 +537,6 @@ func reset() -> void:
 	game = null
 	_current_texture = null
 	_is_focused = false
-	_loading_game_id = ""
-	_image_retry_count = 0
-	_download_retry_count = 0
 	set_meta("_cached_show_delete", null)
 	if _focus_tween:
 		_focus_tween.kill()
@@ -523,24 +547,20 @@ func reset() -> void:
 				tween.kill()
 		_focus_effect_tweens.clear()
 	_sync_focus_visuals()
-	if _current_image_task_id > 0 and MemoryManager:
-		MemoryManager.cancel_image_task(_current_image_task_id)
-		_current_image_task_id = -1
+	if _media_loader:
+		_media_loader.cancel()
 	if _status_badge:
 		_status_badge.visible = false
 	headline = ""
 	supporting_text = ""
 	if _media_stack:
 		_media_stack.set_game_texture(null)
-	if _focus_stack:
+	if _focus_stack and is_instance_valid(_focus_stack):
 		_focus_stack.set_game_texture(null)
-		# Ensure focus stack is hidden after reset
-		if _focus_stack.visible:
-			_focus_stack.visible = false
-			_focus_stack.modulate = Color(1, 1, 1, 1)
-			for child in _focus_stack.get_children():
-				if child is EffectBase and child.material is ShaderMaterial:
-					child.material.set_shader_parameter("effect_alpha", 0.0)
+		# Drop the focus stack so recycled cards don't carry effect nodes around.
+		# It will be rebuilt lazily if this card is focused again.
+		_focus_stack.queue_free()
+		_focus_stack = null
 
 func set_placeholder(_enabled: bool) -> void:
 	# No-op for M3Card-based GameCard
@@ -549,13 +569,9 @@ func set_placeholder(_enabled: bool) -> void:
 func set_image_priority(high_priority: bool) -> void:
 	if _current_texture and _current_texture != _loading_texture:
 		return  # Already loaded
-	
-	if _current_image_task_id > 0:
-		if MemoryManager:
-			MemoryManager.update_image_priority(_current_image_task_id, high_priority)
-	elif high_priority:
-		# No task in flight and no texture - retry load with high priority
-		_load_cover(true)
+
+	if _media_loader:
+		_media_loader.set_priority(high_priority, game)
 
 func restore_focus_animation() -> void:
 	# Re-sync visuals without full tween when layout changes underneath us
@@ -764,159 +780,14 @@ func _update_platform_badge():
 	if focus_badge:
 		_apply_badge_settings(focus_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting)
 
-func _load_cover(high_priority: bool = false):
-	if not game:
-		_set_texture(_loading_texture)
-		return
-	
-	_loading_game_id = game.id
-	_image_retry_count = 0
-	_download_retry_count = 0
-	
-	var cache_path = ""
-	var cover_url = ""
-	if game.cover_path and FileAccess.file_exists(game.cover_path):
-		cache_path = game.cover_path
-	elif game.cover_url != "" and game.cover_url.begins_with("http"):
-		cover_url = game.cover_url
-		cache_path = _get_cached_cover_path(cover_url)
-		if not FileAccess.file_exists(cache_path):
-			if DataManager.is_sync_in_progress():
-				_set_texture(_loading_texture)
-				return
-			else:
-				_download_cover_and_retry(cover_url, cache_path, high_priority)
-				return
-	
-	if cache_path == "":
-		_set_texture(_loading_texture)
-		return
-	
-	var cached_tex = MemoryManager.get_cached_texture(cache_path)
-	if cached_tex:
-		_set_texture(cached_tex)
-		return
-	
-	_load_cached_cover(cache_path, high_priority)
-
-func _get_cached_cover_path(url: String) -> String:
-	const CACHE_FOLDER = "user://cache/covers/"
-	var extension = "jpg"
-	var query_start = url.find("?")
-	var url_without_query = url
-	if query_start != -1:
-		url_without_query = url.substr(0, query_start)
-	
-	var last_dot = url_without_query.rfind(".")
-	if last_dot != -1 and last_dot < url_without_query.length() - 1:
-		var ext = url_without_query.substr(last_dot + 1).to_lower()
-		if ext in ["jpg", "jpeg", "png", "webp"]:
-			extension = ext
-			if extension == "jpeg":
-				extension = "jpg"
-	
-	return CACHE_FOLDER + url.md5_text() + "." + extension
-
-func _load_cached_cover(cache_path: String, high_priority: bool = false):
-	var target_game_id = _loading_game_id
-	
-	if not MemoryManager:
-		_set_texture(_loading_texture)
-		return
-	
-	if _current_image_task_id > 0:
-		MemoryManager.cancel_image_task(_current_image_task_id)
-	
-	var load_callable = func():
-		var file = FileAccess.open(cache_path, FileAccess.READ)
-		if file:
-			var buffer = file.get_buffer(file.get_length())
-			file.close()
-			return _load_image_from_buffer(buffer)
-		return null
-	
-	var callback_callable = func(image):
-		_current_image_task_id = -1
-		if not is_instance_valid(self):
-			return
-		if not game or game.id != target_game_id:
-			return
-		
-		if image:
-			var texture = ImageTexture.create_from_image(image)
-			if texture:
-				MemoryManager.cache_texture(cache_path, texture)
-				_set_texture(texture)
-		else:
-			_image_retry_count += 1
-			if _image_retry_count < MAX_IMAGE_RETRIES:
-				await get_tree().create_timer(0.1 * _image_retry_count).timeout
-				if is_instance_valid(self) and game and game.id == target_game_id:
-					_load_cached_cover(cache_path, high_priority)
-	
-	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority, cache_path)
-
-func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false):
-	var target_game_id = _loading_game_id
-	
-	_download_retry_count += 1
-	if _download_retry_count > MAX_DOWNLOAD_RETRIES:
-		_set_texture(_loading_texture)
-		return
-	
-	_set_texture(_loading_texture)
-	
-	var download_id = _current_download_id + 1
-	_current_download_id = download_id
-	
-	DataManager.load_image(cover_url, func(loaded_texture: Texture2D):
-		if not is_instance_valid(self):
-			return
-		if download_id != _current_download_id:
-			return
-		if not game or game.id != target_game_id:
-			return
-		if loaded_texture:
-			MemoryManager.cache_texture(cache_path, loaded_texture)
-			_set_texture(loaded_texture)
-		elif FileAccess.file_exists(cache_path):
-			_load_cover(high_priority)
-		else:
-			_set_texture(_loading_texture)
-	)
-
-func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
-	if buffer.size() < 16:
-		return null
-	
-	var err = FAILED
-	var image = Image.new()
-	
-	if buffer[0] == 0xFF and buffer[1] == 0xD8:
-		err = image.load_jpg_from_buffer(buffer)
-	elif buffer[0] == 0x89 and buffer[1] == 0x50:
-		err = image.load_png_from_buffer(buffer)
-	elif buffer[0] == 0x52 and buffer[1] == 0x49:
-		err = image.load_webp_from_buffer(buffer)
+func _load_cover(high_priority: bool = false) -> void:
+	if _media_loader:
+		_media_loader.load_cover(game, high_priority)
 	else:
-		err = image.load_jpg_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
-			err = image.load_png_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
-			err = image.load_webp_from_buffer(buffer)
-	
-	if err == OK:
-		# Downscale large images to save GPU memory and improve sampling performance
-		var max_dim = max(image.get_width(), image.get_height())
-		if max_dim > MAX_COVER_TEXTURE_SIZE:
-			var resize_scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
-			var new_width = max(1, int(image.get_width() * resize_scale))
-			var new_height = max(1, int(image.get_height() * resize_scale))
-			image.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
-		return image
-	return null
+		_set_texture(_loading_texture)
+
+func _on_media_texture_loaded(texture: Texture2D) -> void:
+	_set_texture(texture)
 
 func _set_texture(tex: Texture2D) -> void:
 	if tex == _current_texture:
@@ -1080,7 +951,13 @@ func _sync_focus_visuals() -> void:
 
 func _on_focus_entered():
 	_is_focused = true
-	
+
+	# Build the focus stack lazily the first time this card is focused.
+	# Most cards in the virtual-scroll buffer never need one.
+	if not _focus_stack or not is_instance_valid(_focus_stack):
+		_build_focus_stack(true)
+		_update_platform_badge()
+
 	if AudioManager:
 		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
 	

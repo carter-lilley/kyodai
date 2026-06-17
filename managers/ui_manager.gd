@@ -10,6 +10,10 @@ extends Manager
 @onready var theme = $ThemeManager
 @onready var dual_screen = $DualScreenManager
 
+# Centralized card/grid settings state. Owned by UIManager; consumers read this
+# instead of querying SettingsManager directly for card/grid settings.
+var card_settings_state: CardSettingsState = null
+
 # Layout management - NEW ARCHITECTURE
 var _root_control: Control = null  # Plain control, never replaced
 var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orientation change
@@ -87,10 +91,16 @@ func initialize(
 	theme.setup()
 	dual_screen.setup(_root_control, hero_image, hero_spacer)
 
+	# Create and sync the centralized card/grid settings state.
+	card_settings_state = CardSettingsState.new()
+	card_settings_state.sync_from_settings_manager()
+	card_settings_state.changed.connect(_on_card_settings_state_changed)
+
 	# Connect settings signals
 	SettingsManager.setting_changed.connect(_on_setting_changed)
-	SettingsManager.apply_preset_begin.connect(theme._on_apply_preset_begin)
-	SettingsManager.apply_preset_end.connect(theme._on_apply_preset_end)
+	SettingsManager.settings_saved.connect(_on_settings_saved)
+	SettingsManager.apply_preset_begin.connect(_on_apply_preset_begin)
+	SettingsManager.apply_preset_end.connect(_on_apply_preset_end)
 
 	# Apply dark mode setting on startup
 	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
@@ -211,11 +221,37 @@ func is_settings_dialog_open() -> bool:
 # High-level setting-change dispatcher
 # ============================================================================
 
+func _on_settings_saved() -> void:
+	"""Re-sync CardSettingsState after a save in case anything bypassed set_setting."""
+	if card_settings_state:
+		card_settings_state.sync_from_settings_manager()
+
+func _on_apply_preset_begin() -> void:
+	"""Batch card settings updates during preset application."""
+	if card_settings_state:
+		card_settings_state.begin_batch()
+	theme._on_apply_preset_begin()
+
+func _on_apply_preset_end() -> void:
+	"""Flush batched card settings, then let ThemeManager drive the rebuild."""
+	if card_settings_state:
+		card_settings_state.end_batch()
+	theme._on_apply_preset_end()
+
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	"""Handle settings changes."""
+	"""Handle settings changes.
+
+	Always update the centralized CardSettingsState. During a preset the actual
+	view rebuild is deferred to ThemeManager._on_apply_preset_end(); outside of
+	presets we still drive navigation/background/hero changes here.
+	"""
+	if card_settings_state:
+		card_settings_state.apply_setting(setting.property_name, _value)
+
 	if theme._preset_in_progress:
-		# Skip individual rebuilds during preset application; one rebuild at the end
+		# During preset application ThemeManager handles the final rebuild.
 		return
+
 	print("[UIManager] _on_setting_changed: %s" % setting.property_name)
 	match setting.property_name:
 		"library_background_config":
@@ -223,13 +259,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_navigation_type":
 			navigation.set_nav_type(setting.value)
 			navigation._rebuild_nav_and_layout()
-		"library_layout_mode":
-			view.update_structure()
-			view._update_zoom_range_for_current_view()
-		"library_grid_vertical":
-			view.update_structure()
-		"card_effect_config":
-			view.refresh_effects(false)
 		"hero_effect_config":
 			if hero_background._hero_image and hero_background._hero_image.has_method("refresh_from_settings"):
 				hero_background._hero_image.refresh_from_settings()
@@ -241,12 +270,21 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_primary_color":
 			M3Theme.set_primary_seed(_value)
 			theme._request_theme_refresh()
-		# The following settings are applied directly by VirtualScrollGridContainer's
-		# own setting_changed handler (card config / focus scale / padding / zoom).
-		# They do not need a full view rebuild.
-		"library_focus_scale", "library_grid_padding", "card_media_aspect_ratio", \
-		"library_card_display_mode", "library_card_content_alignment", "library_card_zoom":
+		# Card/grid specific settings (layout_mode, grid_vertical, card_zoom,
+		# grid_padding, focus_scale, display_mode, content_alignment, media_ratio,
+		# show_title_mode, card_effect_config, focus_lock) are owned by
+		# CardSettingsState. VirtualScrollGridContainer and GameCard react to its
+		# typed change events directly.
+		_:
 			pass
+
+func _on_card_settings_state_changed(_mask: int) -> void:
+	"""React to batched card/grid settings changes.
+
+	Currently this is a hook for future centralized handling. Grid and card
+	consumers connect to CardSettingsState.changed directly.
+	"""
+	pass
 
 # ============================================================================
 # Cleanup

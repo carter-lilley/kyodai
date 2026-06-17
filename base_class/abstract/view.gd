@@ -93,12 +93,12 @@ func rebuild_grid(_refresh_effects: bool = false) -> void:
 # ============================================
 
 func _update_grid_orientation() -> void:
-	if not SettingsManager:
+	var state = UIManager.card_settings_state if UIManager else null
+	if not state:
 		return
-	
-	var mode_setting = SettingsManager.get_setting("library_layout_mode")
-	var layout_mode_val = mode_setting.value if mode_setting else 0
-	
+
+	var layout_mode_val = state.layout_mode
+
 	var new_mode: VirtualScrollGridContainer.ViewMode
 	match layout_mode_val:
 		0:
@@ -107,13 +107,12 @@ func _update_grid_orientation() -> void:
 			new_mode = VirtualScrollGridContainer.ViewMode.LIST
 		2:
 			new_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
-	
-	var grid_vertical_setting = SettingsManager.get_setting("library_grid_vertical")
-	var new_grid_vertical = grid_vertical_setting.value if grid_vertical_setting else true
-	
-	var focus_scale_setting = SettingsManager.get_setting("library_focus_scale")
-	var new_focus_scale = 1.0 + (focus_scale_setting.value if focus_scale_setting else 0.08)
-	
+		_:
+			new_mode = VirtualScrollGridContainer.ViewMode.GRID
+
+	var new_grid_vertical = state.grid_vertical
+	var new_focus_scale = 1.0 + state.focus_scale_ratio
+
 	# Batch-apply to avoid redundant rebuilds from individual setters
 	games_grid.set_grid_orientation(new_mode, new_grid_vertical, new_focus_scale)
 
