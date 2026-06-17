@@ -18,6 +18,9 @@ enum ViewMode { GRID, LIST, CAROUSEL }
 
 @export var view_mode: ViewMode = ViewMode.GRID:
 	set(value):
+		if _batching_layout:
+			view_mode = value
+			return
 		if view_mode != value:
 			var old_focused = _focused_virtual_index
 			view_mode = value
@@ -28,6 +31,9 @@ enum ViewMode { GRID, LIST, CAROUSEL }
 # Grid orientation toggle. Only affects GRID mode; LIST is always vertical, CAROUSEL always horizontal.
 var grid_vertical: bool = true:
 	set(value):
+		if _batching_layout:
+			grid_vertical = value
+			return
 		if value == grid_vertical:
 			return
 		var old_focused = _focused_virtual_index
@@ -42,29 +48,103 @@ var grid_vertical: bool = true:
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
 func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_scale: float) -> void:
-	var needs_refresh: bool = false
-	var old_focused = _focused_virtual_index
-	
-	if view_mode != p_view_mode:
-		view_mode = p_view_mode
-		_update_view_mode()
-		needs_refresh = true
-	
-	if grid_vertical != p_grid_vertical:
-		grid_vertical = p_grid_vertical
-		if view_mode == ViewMode.GRID:
-			_update_view_mode()
-			needs_refresh = true
-	
-	if not is_equal_approx(focus_scale, p_focus_scale):
-		focus_scale = maxf(p_focus_scale, 1.0)
-		needs_refresh = true
+	var old_focused: int = _focused_virtual_index
+	var needs_refresh: bool = _apply_view_mode_and_vertical(p_view_mode, p_grid_vertical)
+	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
 	
 	if needs_refresh:
 		refresh_dimensions()
 		queue_redraw()
 		if old_focused >= 0:
 			call_deferred("scroll_to_index", old_focused, false)
+
+# Layout-application helpers: mutate state without emitting side effects, returning true if changed.
+# Used by set_grid_orientation and _batch_apply_layout_state to coalesce layout recalculations.
+func _apply_view_mode_and_vertical(p_view_mode: ViewMode, p_grid_vertical: bool) -> bool:
+	var changed: bool = false
+	if view_mode != p_view_mode:
+		_batching_layout = true
+		view_mode = p_view_mode
+		_batching_layout = false
+		_configure_view_mode()
+		changed = true
+	if grid_vertical != p_grid_vertical:
+		_batching_layout = true
+		grid_vertical = p_grid_vertical
+		_batching_layout = false
+		if view_mode == ViewMode.GRID:
+			_configure_view_mode()
+		changed = true
+	return changed
+
+func _apply_focus_scale(p_focus_scale: float) -> bool:
+	var clamped_scale: float = maxf(p_focus_scale, 1.0)
+	if is_equal_approx(focus_scale, clamped_scale):
+		return false
+	_batching_layout = true
+	focus_scale = clamped_scale
+	_batching_layout = false
+	return true
+
+func _apply_zoom_ratio(p_ratio: float) -> bool:
+	var max_ratio = _calculate_max_ratio()
+	var clamped = clampf(p_ratio, 0.05, max_ratio)
+	var snapped_ratio = _calculate_snapped_ratio(clamped)
+	if is_equal_approx(target_card_width_ratio, snapped_ratio):
+		return false
+	_batching_layout = true
+	target_card_width_ratio = snapped_ratio
+	_batching_layout = false
+	return true
+
+func _apply_grid_padding(p_padding: int) -> bool:
+	var new_separation: int = int(M3Units.dp(float(p_padding)))
+	if grid_separation != new_separation:
+		grid_separation = new_separation
+		if _flow_container:
+			_flow_container.add_theme_constant_override("h_separation", grid_separation)
+			_flow_container.add_theme_constant_override("v_separation", grid_separation)
+		return true
+	return false
+
+func _batch_apply_layout_state() -> void:
+	"""Apply all LAYOUT-affecting CardSettingsState fields in one pass.
+	For structure changes this results in exactly one _recalculate_layout() call."""
+	if not UIManager or not UIManager.card_settings_state:
+		return
+	var state = UIManager.card_settings_state
+
+	var new_mode: ViewMode
+	match state.layout_mode:
+		0: new_mode = ViewMode.GRID
+		1: new_mode = ViewMode.LIST
+		2: new_mode = ViewMode.CAROUSEL
+		_: new_mode = ViewMode.GRID
+
+	# Apply structure first so zoom/padding math uses the correct geometry.
+	# Then apply padding before zoom because separation affects available space.
+	var old_focused: int = _focused_virtual_index
+
+	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
+	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
+	var zoom_changed: bool = _apply_zoom_ratio(state.card_zoom_ratio)
+	var focus_changed: bool = _apply_focus_scale(1.0 + state.focus_scale_ratio)
+
+	if not structure_changed and not zoom_changed and not padding_changed and not focus_changed:
+		return
+
+	if structure_changed:
+		# One rebuild path: configure flags then refresh buffer, which recalculates layout.
+		_refresh_buffer()
+		queue_redraw()
+		if old_focused >= 0:
+			call_deferred("scroll_to_index", old_focused, false)
+	else:
+		# Non-structure changes share the same rebuild path to guarantee a single recalc.
+		if focus_changed or padding_changed:
+			_refresh_buffer()
+		elif zoom_changed:
+			_recalculate_layout()
 
 # Computed scroll axis: GRID respects grid_vertical; LIST is vertical; CAROUSEL is horizontal.
 var vertical: bool:
@@ -126,8 +206,12 @@ func is_focus_locked_and_active() -> bool:
 # by this amount. Edge overflow is prevented by focus-safe container margins.
 var focus_scale: float = 1.08:
 	set(value):
-		if not is_equal_approx(focus_scale, value):
-			focus_scale = maxf(value, 1.0)
+		if _batching_layout:
+			focus_scale = value
+			return
+		var clamped_scale = maxf(value, 1.0)
+		if not is_equal_approx(focus_scale, clamped_scale):
+			focus_scale = clamped_scale
 			_recalculate_layout()
 			_refresh_buffer()
 
@@ -135,6 +219,9 @@ var focus_scale: float = 1.08:
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
 	set(value):
+		if _batching_layout:
+			target_card_width_ratio = value
+			return
 		# Calculate dynamic max zoom (one card fills available space)
 		var max_ratio = _calculate_max_ratio()
 		var clamped = clampf(value, 0.05, max_ratio)
@@ -158,6 +245,10 @@ var focused_card_size: Vector2 = Vector2(228.96, 302.4)
 
 # Currently focused virtual index for dynamic stride math
 var _focused_virtual_index: int = -1
+
+# When true, public setters suppress their side effects so _batch_apply_layout_state()
+# can apply multiple inputs and recalculate exactly once.
+var _batching_layout: bool = false
 
 # Backward compatibility - still compute these from card_size
 var item_height: float = 280.0:
@@ -253,7 +344,8 @@ const MAX_CACHE_SIZE: int = 5000
 var _cache_lru_tick: Dictionary[int, int] = {}
 var _lru_counter: int = 0
 
-func _update_view_mode() -> void:
+func _configure_view_mode() -> void:
+	"""Update scroll/flow container flags for the current view_mode/grid_vertical without rebuilding cards."""
 	if not _flow_container or not _scroll_container:
 		return
 	match view_mode:
@@ -274,6 +366,10 @@ func _update_view_mode() -> void:
 			_flow_container.vertical = true
 	_update_center_container_flags()
 	_update_flow_container_flags()
+
+func _update_view_mode() -> void:
+	"""Apply view-mode configuration and rebuild the card buffer."""
+	_configure_view_mode()
 	_refresh_buffer()
 
 func _update_flow_container_flags() -> void:
@@ -429,26 +525,7 @@ func _on_card_settings_state_changed(mask: int) -> void:
 
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
-		var new_mode: ViewMode
-		match state.layout_mode:
-			0: new_mode = ViewMode.GRID
-			1: new_mode = ViewMode.LIST
-			2: new_mode = ViewMode.CAROUSEL
-			_: new_mode = ViewMode.GRID
-		set_grid_orientation(new_mode, state.grid_vertical, 1.0 + state.focus_scale_ratio)
-
-		var new_zoom = state.card_zoom_ratio
-		if not is_equal_approx(target_card_width_ratio, new_zoom):
-			target_card_width_ratio = new_zoom
-
-		var new_separation = int(M3Units.dp(float(state.grid_padding)))
-		if grid_separation != new_separation:
-			grid_separation = new_separation
-			if _flow_container:
-				_flow_container.add_theme_constant_override("h_separation", grid_separation)
-				_flow_container.add_theme_constant_override("v_separation", grid_separation)
-			_recalculate_layout()
-			_refresh_buffer()
+		_batch_apply_layout_state()
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
@@ -530,17 +607,8 @@ func _on_resize_debounced():
 		_initial_load()
 
 func _update_grid_separation_from_settings() -> void:
-	if UIManager and UIManager.card_settings_state:
-		grid_separation = int(M3Units.dp(float(UIManager.card_settings_state.grid_padding)))
-	else:
-		grid_separation = int(M3Units.dp(10))
-
-	# Apply to FlowContainer if it exists
-	if _flow_container:
-		if _flow_container.get_theme_constant("h_separation") != grid_separation:
-			_flow_container.add_theme_constant_override("h_separation", grid_separation)
-		if _flow_container.get_theme_constant("v_separation") != grid_separation:
-			_flow_container.add_theme_constant_override("v_separation", grid_separation)
+	var padding: int = UIManager.card_settings_state.grid_padding if UIManager and UIManager.card_settings_state else 10
+	_apply_grid_padding(padding)
 
 func _update_focus_scale_from_settings() -> void:
 	if UIManager and UIManager.card_settings_state:
