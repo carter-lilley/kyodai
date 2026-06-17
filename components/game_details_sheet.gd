@@ -141,14 +141,7 @@ func _populate_basic_info(game: GameResource) -> void:
     _update_action_button()
     description_label.text = game.description if game.description else "No description available."
 
-func ensure_ready() -> void:
-    if not is_inside_tree():
-        var parent := M3Overlay.get_overlay_parent()
-        if parent:
-            parent.add_child.call_deferred(self)
-
 func show_for_game(game: GameResource) -> GameDetailsSheet:
-    ensure_ready()
     clear_content()
     show_overlay()
     # Let the slide-in animation start on a clean frame before populating content.

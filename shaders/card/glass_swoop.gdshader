@@ -70,8 +70,16 @@ void fragment() {
 	float boundary_aa = fwidth(dist_to_boundary) * 0.5;
 	float is_in_swoop = smoothstep(-boundary_aa, boundary_aa, dist_to_boundary);
 	
+	// Fade alpha vertically from full intensity at the swoop boundary
+	// down to zero at the bottom of the card (UV.y == 1.0).
+	float swoop_range = 1.0 - boundary_y;
+	float vertical_fade = 0.0;
+	if (swoop_range > 0.0) {
+		vertical_fade = clamp((1.0 - UV.y) / swoop_range, 0.0, 1.0);
+	}
+	
 	// Apply intensity
-	float alpha = is_in_swoop * swoop_intensity;
+	float alpha = is_in_swoop * vertical_fade * swoop_intensity;
 	
 	// Output darkened glass color (much darker version of glass_color)
 	vec3 dark_glass = glass_color.rgb * 0.3;  // Darken to 30% of original brightness

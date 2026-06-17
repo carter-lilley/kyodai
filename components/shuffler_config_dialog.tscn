@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://components/shuffler_config_dialog.gd" id="1_shuffler"]
+
+[node name="ShufflerConfigDialog" type="CanvasLayer"]
+script = ExtResource("1_shuffler")
