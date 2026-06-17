@@ -13,15 +13,15 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// The media area is inset by the total of border + glass insets.
-	// total_inset_pixels (from MediaContainer) already combines both.
-	vec2 inner_size = card_size - vec2(total_inset_pixels * 2.0);
-	vec2 inner_offset = vec2(total_inset_pixels);
+	// Use shared shape parameters from MediaContainer
+	// total_inset_pixels already includes border + glass insets
+	float effective_border_inset = total_inset_pixels;
 	
-	// Safety: extreme insets could collapse the inner area.
-	if (inner_size.x <= 0.0 || inner_size.y <= 0.0) {
-		discard;
-	}
+	// For glass inset calculation, derive glass pixels from the ratio
+	float glass_inset_pixels = glass_inset_ratio * card_size.x;
+	
+	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
+	vec2 inner_offset = vec2(effective_border_inset);
 	
 	// Calculate the outer edge (base card shape)
 	// Use shared corner_radius_pixels from MediaContainer for consistent rounding
@@ -42,33 +42,45 @@ void fragment() {
 		}
 	}
 	
-	// Calculate the inner edge (media area after border + glass insets)
-	float inner_radius_pixels = max(0.0, corner_radius_pixels - total_inset_pixels);
-	float inner_radius_ratio = 0.0;
-	if (min(inner_size.x, inner_size.y) > 0.0) {
-		inner_radius_ratio = inner_radius_pixels / (min(inner_size.x, inner_size.y) / 2.0);
+	// Calculate the inner edge (glass inset area) - clip the base card to this shape
+	// Reuse glass_inset_pixels from earlier calculation
+	vec2 glass_inner_size = card_size - vec2(glass_inset_pixels * 2.0);
+	vec2 glass_inner_offset = vec2(glass_inset_pixels);
+	
+	// Calculate inner corner radius for glass inset
+	// Use precomputed corner_radius_pixels (rounded) for consistent alignment with outer edge
+	float glass_inner_radius_pixels = max(0.0, corner_radius_pixels - glass_inset_pixels);
+	float glass_inner_radius_ratio = 0.0;
+	if (min(glass_inner_size.x, glass_inner_size.y) > 0.0) {
+		glass_inner_radius_ratio = glass_inner_radius_pixels / (min(glass_inner_size.x, glass_inner_size.y) / 2.0);
 	}
 	
-	vec2 inner_pixel_pos = pixel_pos - inner_offset;
-	float inner_sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, inner_radius_ratio);
-	float inner_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, inner_sdf_dist);
+	// Check if inside glass inset area
+	vec2 glass_pixel_pos = pixel_pos - glass_inner_offset;
+	float glass_sdf_dist = rounded_rect_sdf_ratio(glass_pixel_pos, glass_inner_size, glass_inner_radius_ratio);
+	float glass_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, glass_sdf_dist);
 	
-	// Clip the base card to the inset media shape
-	if (total_inset_pixels > 0.0 && inner_edge_alpha <= 0.0) {
+	// If there's a glass inset, clip the base card to the inner shape
+	if (glass_inset_ratio > 0.0 && glass_edge_alpha <= 0.0) {
 		discard;
 	}
 	
+	vec2 inner_pixel_pos = pixel_pos - inner_offset;
 	vec2 inner_uv = inner_pixel_pos / inner_size;
+	
+	if (inner_uv.x < 0.0 || inner_uv.x > 1.0 || inner_uv.y < 0.0 || inner_uv.y > 1.0) {
+		discard;
+	}
 	
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
 	
 	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
 	vec4 tex_color = texture(game_texture, tex_uv);
 	
-	// Combine outer edge alpha with inner inset alpha
+	// Combine edge_alpha with glass_edge_alpha to clip base card to glass inset shape
 	float final_alpha = edge_alpha;
-	if (total_inset_pixels > 0.0) {
-		final_alpha = min(edge_alpha, inner_edge_alpha);
+	if (glass_inset_ratio > 0.0) {
+		final_alpha = min(edge_alpha, glass_edge_alpha);
 	}
 	
 	tex_color.a *= final_alpha * alpha;

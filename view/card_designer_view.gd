@@ -8,7 +8,6 @@ func _init():
 var _current_config: Dictionary = {}
 
 var _preview_card: GameCard
-var _preview_game: GameResource = null
 var _card_rounding_slider: HSlider
 
 
@@ -60,12 +59,15 @@ func _setup_ui():
 	)
 	add_child(hsplit)
 	
+	var left_panel = Panel.new()
+	left_panel.clip_contents = true
+	hsplit.add_child(left_panel)
+	
 	var scroll = ScrollContainer.new()
-	scroll.clip_contents = true
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.follow_focus = true
-	hsplit.add_child(scroll)
+	left_panel.add_child(scroll)
 	
 	var left_vbox = VBoxContainer.new()
 	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -119,19 +121,17 @@ func _setup_ui():
 	_focus_effect_designer.config_changed.connect(_on_focus_config_changed)
 	left_vbox.add_child(_focus_effect_designer)
 	
-	# Right side uses a plain Control so the LibraryBackground provides the only surface.
-	var right_container = Control.new()
-	right_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hsplit.add_child(right_container)
+	var right_panel = Panel.new()
+	hsplit.add_child(right_panel)
 	
 	# Add library background to show cards in context
 	var library_bg = preload("res://components/library_background.tscn").instantiate()
 	library_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	right_container.add_child(library_bg)
+	right_panel.add_child(library_bg)
 	
 	var preview_container = CenterContainer.new()
 	preview_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	right_container.add_child(preview_container)
+	right_panel.add_child(preview_container)
 	
 	_preview_card = preload("res://components/game_card.tscn").instantiate()
 	_preview_card.preview_mode = true
@@ -205,12 +205,6 @@ func _get_default_config() -> Dictionary:
 		"card_rounding": 0.12,
 	}
 
-func set_preview_game(game: GameResource) -> void:
-	"""Set the game whose cover should appear in the Card Designer preview."""
-	_preview_game = game
-	if _preview_card and is_instance_valid(_preview_card):
-		_preview_card.set_game_with_priority(game, true)
-
 func _setup_preview_card():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
@@ -220,10 +214,6 @@ func _setup_preview_card():
 	# Save current config to SettingsManager so refresh_settings() picks it up
 	_save_to_settings()
 	_preview_card.refresh_settings()
-	
-	# Apply the requested preview game, if any, after the card has been set up.
-	if _preview_game and is_instance_valid(_preview_game):
-		_preview_card.set_game_with_priority(_preview_game, true)
 
 func _on_base_config_changed(config: Dictionary):
 	_current_config["effects"] = config.get("effects", []).duplicate(true)

@@ -183,7 +183,7 @@ func _setup_preview_mode():
 	# Ensure focus effects match preview_show_focus after all setup
 	_show_focus_effects(preview_show_focus)
 
-func _build_media_stack(force_full_rebuild: bool = true):
+func _build_media_stack():
 	var effect_settings := []
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
@@ -192,7 +192,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	
 	if _media_stack and is_instance_valid(_media_stack):
 		# Hot-reload: update configs in-place instead of rebuilding the node tree
-		_media_stack.update_effect_configs(effect_settings, force_full_rebuild)
+		_media_stack.update_effect_configs(effect_settings)
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 	else:
@@ -203,9 +203,9 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		set_media_content(_media_stack)
 	
 	_reparent_status_badge_to_media_stack()
-	_build_focus_stack(force_full_rebuild)
+	_build_focus_stack()
 
-func _build_focus_stack(force_full_rebuild: bool = true) -> void:
+func _build_focus_stack() -> void:
 	var focus_effect_settings := []
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
@@ -215,14 +215,14 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	# If no focus effects configured, clear and hide existing stack
 	if focus_effect_settings.is_empty():
 		if _focus_stack and is_instance_valid(_focus_stack):
-			_focus_stack.update_effect_configs([], force_full_rebuild)
+			_focus_stack.update_effect_configs([])
 			_focus_stack.visible = false
 		return
 	
 	if _focus_stack and is_instance_valid(_focus_stack):
 		# Hot-reload: update configs in-place
 		_focus_stack.visible = false
-		_focus_stack.update_effect_configs(focus_effect_settings, force_full_rebuild)
+		_focus_stack.update_effect_configs(focus_effect_settings)
 		
 		# Re-apply focus state setup after config update
 		var focus_base_node = _focus_stack.get_effect("base")
@@ -471,14 +471,6 @@ func refresh_settings() -> void:
 	_update_platform_badge()
 	_update_display()
 	# Ensure focus effects match current preview state after rebuild
-	if preview_mode:
-		_show_focus_effects(preview_show_focus)
-
-func refresh_effects(force_full_rebuild: bool = false) -> void:
-	"""Rebuild or hot-reload effects without touching card data/display state."""
-	_build_media_stack(force_full_rebuild)
-	_update_platform_badge()
-	_update_display()
 	if preview_mode:
 		_show_focus_effects(preview_show_focus)
 

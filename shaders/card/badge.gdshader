@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float inner_corner_radius_pixels = 0.0;  // Radius after total inset (border + glass)
+uniform float inner_corner_radius_pixels = 0.0;  // Radius after glass inset
 uniform float glass_inset_ratio = 0.0;  // For calculating inner size
 
 uniform bool hide_background = false;
@@ -132,11 +132,13 @@ void fragment() {
 		}
 	}
 	
-	// Clip to the inner media shape using shared shape parameters from MediaContainer.
-	// total_inset_pixels combines border + glass insets, matching the base card clip.
-	vec2 inner_size = card_size - vec2(total_inset_pixels * 2.0);
-	vec2 inner_offset = vec2(total_inset_pixels);
+	// Clip to card shape using shared shape parameters from MediaContainer
+	// Calculate inner size (after glass inset) and check SDF against that
+	float glass_inset_pixels = glass_inset_ratio * card_size.x;
+	vec2 inner_size = card_size - vec2(glass_inset_pixels * 2.0);
+	vec2 inner_offset = vec2(glass_inset_pixels);
 	
+	// Check if pixel is inside the inner area (after glass inset)
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;
 	float inner_sdf = rounded_rect_sdf_pixels(inner_pixel_pos, inner_size, inner_corner_radius_pixels);
 	

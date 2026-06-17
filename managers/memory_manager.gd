@@ -212,20 +212,8 @@ func _drain_lp_callbacks():
 	_lp_callback_mutex.unlock()
 	
 	for item in batch:
-		if _callback_has_freed_capture(item.callback):
-			continue
 		if item.callback.is_valid():
 			item.callback.call(item.result)
-
-func _callback_has_freed_capture(callback: Callable) -> bool:
-	"""Return true if any captured Object argument has been freed.
-	This prevents crashes when a node-bound lambda outlives its node."""
-	if callback.is_null():
-		return true
-	for arg in callback.get_bound_arguments():
-		if arg is Object and not is_instance_valid(arg):
-			return true
-	return false
 
 # ============================================================================
 # THREAD WORKERS
@@ -372,8 +360,6 @@ static func _sync_worker():
 				_instance._lp_callback_mutex.unlock()
 
 func _execute_callback(callback: Callable, result):
-	if _callback_has_freed_capture(callback):
-		return
 	callback.call(result)
 
 # ============================================================================

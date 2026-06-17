@@ -70,8 +70,8 @@ func get_total_inset_pixels() -> float:
 	return (border_inset_ratio + glass_inset_ratio) * bounds.size.x
 
 func get_inner_corner_radius_pixels() -> float:
-	var total_px = get_total_inset_pixels()
-	return max(0.0, get_corner_radius_pixels() - total_px)
+	var glass_px = glass_inset_ratio * bounds.size.x
+	return max(0.0, get_corner_radius_pixels() - glass_px)
 
 # --- Live UV transforms (don't rely on pipeline cache) ---
 func get_uv_transforms() -> Dictionary:

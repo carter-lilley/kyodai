@@ -197,15 +197,6 @@ var _pool_container: Node = null
 
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
 
-# Layout input cache — used to skip redundant _recalculate_layout() work
-var _last_layout_view_mode: ViewMode = ViewMode.GRID
-var _last_layout_grid_vertical: bool = true
-var _last_layout_focus_scale: float = 1.08
-var _last_layout_card_size: Vector2 = Vector2.ZERO
-var _last_layout_focused_card_size: Vector2 = Vector2.ZERO
-var _last_layout_grid_separation: int = -1
-var _last_layout_available_size: Vector2 = Vector2.ZERO
-
 # Resize debounce timer — prevents rapid-fire recalculations during window resize
 var _resize_debounce_timer: Timer = null
 const RESIZE_DEBOUNCE_SECONDS: float = 0.05
@@ -427,15 +418,21 @@ func _on_settings_saved():
 	_recalculate_layout()
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	# Update caches immediately for settings that affect card layout.
-	# ViewManager now drives structural changes (layout_mode / grid_vertical) and
-	# effect refreshes, so those are intentionally not handled here.
+	# Update caches immediately for settings that affect card layout
+	# so that immediate refreshes (from View/UIManager via refresh_dimensions())
+	# use correct values. Also defer a recalculation in case signal order
+	# causes stale caches during a rebuild.
 	match setting.property_name:
-		"card_media_aspect_ratio", "library_card_display_mode", "library_card_content_alignment":
+		"card_media_aspect_ratio", "library_card_display_mode", "library_card_content_alignment", "library_layout_mode":
 			_refresh_cached_settings()
 			refresh_all_card_configs()
-		"library_show_title_mode":
-			refresh_all_card_displays()
+			call_deferred("_recalculate_layout")
+		"library_grid_vertical":
+			if _value is bool:
+				grid_vertical = _value
+			_refresh_cached_settings()
+			refresh_all_card_configs()
+			call_deferred("_recalculate_layout")
 		"library_card_zoom":
 			if _value is float:
 				target_card_width_ratio = _value
@@ -444,6 +441,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			call_deferred("_recalculate_layout")
 		"library_focus_scale":
 			_update_focus_scale_from_settings()
+			call_deferred("_recalculate_layout")
 		"focus_lock_enabled":
 			_update_focus_lock_from_settings()
 
@@ -767,28 +765,6 @@ func _recalculate_layout():
 			card_size = Vector2(base_dims.x * current_zoom, card_height)
 			focused_card_size = card_size * focus_scale
 	
-	var available = _get_available_size()
-	
-	# Determine which parts of the layout actually changed
-	var structure_changed = view_mode != _last_layout_view_mode or grid_vertical != _last_layout_grid_vertical
-	var focus_changed = not is_equal_approx(focus_scale, _last_layout_focus_scale)
-	var card_geometry_changed = not card_size.is_equal_approx(_last_layout_card_size) or not focused_card_size.is_equal_approx(_last_layout_focused_card_size)
-	var separation_changed = grid_separation != _last_layout_grid_separation
-	var available_changed = not available.is_equal_approx(_last_layout_available_size)
-	
-	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed:
-		_is_recalculating_layout = false
-		return
-	
-	# Update the input cache now that we know work is required
-	_last_layout_view_mode = view_mode
-	_last_layout_grid_vertical = grid_vertical
-	_last_layout_focus_scale = focus_scale
-	_last_layout_card_size = card_size
-	_last_layout_focused_card_size = focused_card_size
-	_last_layout_grid_separation = grid_separation
-	_last_layout_available_size = available
-	
 	# Invalidate then pre-compute scroll math before downstream consumers read it
 	_cached_items_per_line = -1
 	_cached_normal_stride = -1.0
@@ -814,23 +790,19 @@ func _recalculate_layout():
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
 	
-	var update_card_geometry = card_geometry_changed or structure_changed
-	var update_focus = focus_changed
-	
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
 		if "focus_scale_enabled" in card:
 			card.focus_scale_enabled = true
 			card.focus_scale_inverted = _get_focus_scale_inverted()
-		if update_focus and card.has_method("set_focus_scale"):
+		if card.has_method("set_focus_scale"):
 			card.set_focus_scale(focus_scale)
-		if update_card_geometry:
-			_configure_card_size_flags(card)
-			# Force immediate media-panel refresh so the effect stack picks up the
-			# new bounds without waiting for Godot's deferred layout pass.
-			if card.has_method("_update_media_panel_size"):
-				card._update_media_panel_size(true)
+		_configure_card_size_flags(card)
+		# Force immediate media-panel refresh so the effect stack picks up the
+		# new bounds without waiting for Godot's deferred layout pass.
+		if card.has_method("_update_media_panel_size"):
+			card._update_media_panel_size(true)
 	
 	_is_recalculating_layout = false
 
@@ -2200,16 +2172,10 @@ func refresh_if_visible(start_index: int, end_index: int):
 				if card.has_method("update_display"):
 					card.update_display()
 
-func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
-	"""Refresh effects on all active cards (call when card settings change).
-	Pass force_full_rebuild=true when the effect ID list may have changed; otherwise
-	each card can push parameters to its existing effect nodes."""
+func refresh_all_card_effects() -> void:
+	"""Refresh effects on all active cards (call when card settings change)."""
 	for card in _active_cards:
-		if not is_instance_valid(card):
-			continue
-		if card.has_method("refresh_effects"):
-			card.refresh_effects(force_full_rebuild)
-		elif card.has_method("refresh_settings"):
+		if is_instance_valid(card) and card.has_method("refresh_settings"):
 			card.refresh_settings()
 
 func refresh_all_card_configs() -> void:
@@ -2221,13 +2187,6 @@ func refresh_all_card_configs() -> void:
 			_configure_card_size_flags(card)
 			if card.has_method("_update_media_panel_size"):
 				card._update_media_panel_size(true)
-
-func refresh_all_card_displays() -> void:
-	"""Refresh text/display state on all active cards without rebuilding effects.
-	Used for settings like library_show_title_mode."""
-	for card in _active_cards:
-		if is_instance_valid(card) and card.has_method("update_display"):
-			card.update_display()
 
 func _update_cache_access_order(cache_key: int):
 	_lru_counter += 1

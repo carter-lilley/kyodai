@@ -42,29 +42,8 @@ func initialize(container: MediaContainer, effect_configs: Array, context: Strin
 	_context = context
 	_rebuild_effects()
 
-func update_effect_configs(effect_configs: Array, force_full_rebuild: bool = true):
+func update_effect_configs(effect_configs: Array):
 	_effect_configs = effect_configs.duplicate(true)
-	if not force_full_rebuild:
-		var active_effect_ids: Array[String] = []
-		for config in _effect_configs:
-			if config is Dictionary:
-				var effect_id = config.get("effect_id", "")
-				if effect_id and EFFECT_REGISTRY.has(effect_id):
-					active_effect_ids.append(effect_id)
-		# Ensure base effect always exists
-		if not "base" in active_effect_ids:
-			active_effect_ids.append("base")
-		
-		# Fast path: same effect IDs, just push new settings to existing nodes.
-		if active_effect_ids.size() == _effects.size():
-			var same_ids = true
-			for effect_id in active_effect_ids:
-				if not _effects.has(effect_id):
-					same_ids = false
-					break
-			if same_ids:
-				_update_effect_settings_only()
-				return
 	_rebuild_effects()
 
 func set_game_texture(texture: Texture2D):
@@ -160,39 +139,6 @@ func _rebuild_effects():
 	# Run pipeline to compute shared values
 	_run_pipeline()
 	
-	effects_changed.emit()
-
-func _update_effect_settings_only() -> void:
-	"""Push new settings to existing effect nodes without rebuilding the tree."""
-	# Reset insets on media container
-	if media_container:
-		media_container.border_inset_ratio = 0.0
-		media_container.glass_inset_ratio = 0.0
-	
-	for effect_id in EFFECT_LAYER_ORDER:
-		if _effects.has(effect_id):
-			var config = _get_effect_config(effect_id)
-			var settings = config.get("settings", {})
-			var effect = _effects[effect_id]
-			effect.visible = true
-			effect.media_container = media_container
-			effect.effect_stack = self
-			effect.update_settings(settings)
-			
-			if _context != "focus_card":
-				match effect_id:
-					"border":
-						if media_container:
-							media_container.border_inset_ratio = settings.get("border_size", 0.0)
-					"glass":
-						if media_container:
-							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
-			
-			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)
-			if layer_index >= 0:
-				effect.z_index = max(0, layer_index - 2)
-	
-	_run_pipeline()
 	effects_changed.emit()
 
 func _run_pipeline() -> void:

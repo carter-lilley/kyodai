@@ -18,6 +18,3 @@ android/*.keystore
 # The canonical AAR is in addons/PackageChecker/ and should be in version control
 android/plugin/PackageCheckerPlugin.aar
 android/plugins/
-
-# Local headless smoke-test artifacts
-.kimi/smoke/
