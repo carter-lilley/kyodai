@@ -192,13 +192,13 @@ func _rebuild_views(reason: String, use_true: bool = false) -> void:
 		if is_current_view("Home") and not settings_open:
 			home_view.rebuild_grid(use_true)
 		else:
-			home_view.mark_for_rebuild(reason)
+			home_view.mark_for_rebuild(reason, use_true)
 	if _views.has("Library"):
 		var library_view = _views["Library"]
 		if is_current_view("Library") and not settings_open:
 			library_view.rebuild_grid(use_true)
 		else:
-			library_view.mark_for_rebuild(reason)
+			library_view.mark_for_rebuild(reason, use_true)
 
 func mark_view_for_rebuild(view_name: String, reason: String) -> void:
 	if _views.has(view_name):

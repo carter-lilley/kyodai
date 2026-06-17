@@ -35,20 +35,26 @@ func on_view_show():
 func on_view_hide():
 	view_hidden.emit()
 
-func mark_for_rebuild(reason: String = "") -> void:
+# Whether the pending rebuild should also do a full card-effect refresh.
+var _pending_refresh_effects: bool = false
+
+func mark_for_rebuild(reason: String = "", refresh_effects: bool = false) -> void:
 	"""Mark this view as needing a rebuild. Will be rebuilt when next shown."""
 	needs_rebuild = true
 	needs_rebuild_reason = reason
+	_pending_refresh_effects = refresh_effects
 
 func check_and_rebuild_if_needed() -> void:
 	"""Override: Capture reason before it's cleared, then defer rebuild."""
 	if needs_rebuild:
 		var reason = needs_rebuild_reason
+		var refresh_effects = _pending_refresh_effects
 		# Clear flags now since we're handling the rebuild
 		needs_rebuild = false
 		needs_rebuild_reason = ""
+		_pending_refresh_effects = false
 		# Pass the captured reason to the deferred rebuild
-		call_deferred("_do_rebuild", reason)
+		call_deferred("_do_rebuild", reason, refresh_effects)
 	else:
 		_rebuild_attempts = 0
 
@@ -56,7 +62,7 @@ func perform_rebuild() -> void:
 	"""Override in subclasses to perform the actual rebuild."""
 	pass
 
-func _do_rebuild(reason: String = "") -> void:
+func _do_rebuild(reason: String = "", refresh_effects: bool = false) -> void:
 	# Ensure we have valid dimensions before rebuilding
 	if size.x <= 0 or size.y <= 0:
 		_deferred_rebuild_attempts += 1
@@ -64,7 +70,7 @@ func _do_rebuild(reason: String = "") -> void:
 			push_warning("[%s] Max deferred rebuild attempts reached with invalid size, aborting" % view_name)
 			_deferred_rebuild_attempts = 0
 			return
-		call_deferred("_do_rebuild", reason)
+		call_deferred("_do_rebuild", reason, refresh_effects)
 		return
 	
 	# Reset counter on successful rebuild
@@ -74,9 +80,9 @@ func _do_rebuild(reason: String = "") -> void:
 		# Force a layout recalculation with the new valid size
 		games_grid.queue_redraw()
 	
-	# Check if rebuild is due to card effects change
-	var refresh_effects = reason == "Card effects changed"
-	rebuild_grid(refresh_effects)
+	# Preset-applied rebuilds and card-effect changes need a full effect refresh.
+	var do_refresh_effects = refresh_effects or reason == "Card effects changed"
+	rebuild_grid(do_refresh_effects)
 
 # Subclasses override this; base version is a no-op for safety.
 func rebuild_grid(_refresh_effects: bool = false) -> void:

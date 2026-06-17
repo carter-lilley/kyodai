@@ -430,12 +430,35 @@ func _update_card_state_from_settings():
 			
 			# Apply the same rounding to the M3Card background clip
 			card_rounding_ratio = _media_container.corner_radius_ratio
+			
+			# Apply insets immediately so the base card shader pushes the image inward
+			# even if the effect-stack rebuild is delayed or skipped.
+			_apply_effect_insets_to_media_container(_media_container.effect_settings)
 		
 		var display_setting = SettingsManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
 			_display_mode = display_setting.value
 		
 		_apply_display_mode()
+
+func _apply_effect_insets_to_media_container(effects: Array) -> void:
+	"""Scan base effects and set media-container insets from their settings.
+	This must happen before any shader refresh so the base card shader uses
+	the correct total inset."""
+	var border_inset: float = 0.0
+	var glass_inset: float = 0.0
+	for effect in effects:
+		if not effect is Dictionary:
+			continue
+		var effect_id = effect.get("effect_id", "")
+		var settings = effect.get("settings", {})
+		match effect_id:
+			"border":
+				border_inset = settings.get("border_size", 0.0)
+			"glass":
+				glass_inset = settings.get("additional_inset_ratio", 0.0)
+	_media_container.border_inset_ratio = border_inset
+	_media_container.glass_inset_ratio = glass_inset
 
 func _apply_display_mode() -> void:
 	# Map display mode to background/text visibility and edge AA
@@ -475,7 +498,8 @@ func refresh_settings() -> void:
 		_show_focus_effects(preview_show_focus)
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
-	"""Rebuild or hot-reload effects without touching card data/display state."""
+	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
+	_update_card_state_from_settings()
 	_build_media_stack(force_full_rebuild)
 	_update_platform_badge()
 	_update_display()

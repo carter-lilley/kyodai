@@ -71,9 +71,9 @@ func _on_apply_preset_end() -> void:
 	var primary_color_setting = SettingsManager.get_setting("library_primary_color")
 	if primary_color_setting and primary_color_setting.value is Color:
 		M3Theme.set_primary_seed(primary_color_setting.value)
-	# Ensure theme is refreshed in case accent color or dark mode changed
+	# Ensure theme is refreshed in case accent color or dark mode changed.
+	# Always schedule the deferred refresh; if nav type changed the rebuild above
+	# already ran, and the deferred refresh will pick up the new tree state.
 	if not _theme_refresh_pending:
 		_theme_refresh_pending = true
-		# Defer refresh until nav is ready if nav type changed; otherwise defer normally
-		if new_nav_type == old_nav_type:
-			call_deferred("_do_refresh_theme")
+		call_deferred("_do_refresh_theme")

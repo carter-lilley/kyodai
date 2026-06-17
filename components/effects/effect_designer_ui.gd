@@ -60,7 +60,20 @@ var _effect_defaults: Dictionary = {
 	},
 	"glass": {
 		"distortion": 0.5,
-		"glass_color": Color(0.2, 0.4, 1.0, 0.3)
+		"glass_color": Color(0.2, 0.4, 1.0, 0.3),
+		"additional_inset_ratio": 0.0,
+		"specular_power": 32.0,
+		"specular_intensity": 0.8,
+		"light_angle": 45.0,
+		"light_height": 0.5,
+		"bounce_intensity": 0.4,
+		"bounce_softness": 3.0,
+		"rim_intensity": 1.0,
+		"rim_sharpness": 5.0,
+		"swoop_intensity": 0.3,
+		"swoop_height": 0.25,
+		"swoop_curve": 0.5,
+		"swoop_tilt": 0.0
 	},
 	"distort": {
 		"distortion": 0.5,

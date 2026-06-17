@@ -191,10 +191,6 @@ var _active_cards: Array[Control] = []
 var _active_cards_by_index: Dictionary[int, Control] = {}
 var _max_pool_size: int = 120
 
-# In-tree container for pooled cards. Keeping them as children guarantees they
-# are freed automatically when the grid is freed, avoiding orphan leaks.
-var _pool_container: Node = null
-
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
 
 # Layout input cache — used to skip redundant _recalculate_layout() work
@@ -379,11 +375,6 @@ func _ready():
 	_resize_debounce_timer.timeout.connect(_on_resize_debounced)
 	add_child(_resize_debounce_timer)
 	
-	# Create an in-tree container so pooled cards are freed with the grid.
-	_pool_container = Node.new()
-	_pool_container.name = "CardPool"
-	add_child(_pool_container)
-	
 	# Load initial grid separation and focus scale from settings
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
@@ -409,12 +400,19 @@ func _exit_tree():
 		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
 			SettingsManager.setting_changed.disconnect(_on_setting_changed)
 	_disconnect_focus_lock_viewport()
-	_free_card_pool()
+	# Only free the pool when the grid itself is being freed. If the grid is
+	# just reparented, clearing active-card tracking leaves orphaned cards in
+	# the FlowContainer and causes blank/duplicate cards on re-entry.
+	if is_queued_for_deletion():
+		_free_card_pool()
 
 func _free_card_pool() -> void:
-	"""Release all pooled and active cards so they don't outlive the grid.
-	Cards that are still in the tree will be freed with the grid; orphaned pooled
-	cards are dropped from our arrays so their reference count can reach zero."""
+	"""Release all pooled and active card references.
+	Pooled cards are not in the tree, so free them explicitly to avoid leaks.
+	Active cards remain in the FlowContainer and are freed with the grid."""
+	for card in _card_pool:
+		if is_instance_valid(card):
+			card.queue_free()
 	_card_pool.clear()
 	_active_cards.clear()
 	_active_cards_by_index.clear()
@@ -983,10 +981,18 @@ func refresh_dimensions() -> void:
 	# This fixes issues where layout was calculated while view was hidden (size=0)
 	if _flow_container:
 		_flow_container.custom_minimum_size = Vector2(0, 0)
+		# Also reset the cached flow dimensions so _update_margin() restores the
+		# correct custom_minimum_size instead of skipping because the old value matches.
+		_last_flow_width = 0.0
+		_last_flow_height = 0.0
 	
 	# Re-snap zoom to ensure it fits the new dimensions/margins
 	var current_ratio = target_card_width_ratio
 	var snapped_ratio = _calculate_snapped_ratio(current_ratio)
+	# Force a full layout pass. The layout cache in _recalculate_layout() can
+	# otherwise skip _update_layout() if visible geometry hasn't changed, leaving
+	# the FlowContainer's custom_minimum_size at the zero we just set above.
+	_last_layout_available_size = Vector2.ZERO
 	# Always update ratio - the setter will handle recalculation
 	target_card_width_ratio = snapped_ratio
 	
@@ -1027,7 +1033,6 @@ func _instantiate_card_pool():
 		card.visible = false
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
-		_pool_container.add_child(card)
 		_card_pool.append(card)
 
 func set_total_count(count: int, preserve_cache: bool = false):
@@ -1260,10 +1265,6 @@ func _add_to_pool(card: Control) -> void:
 	if _card_pool.size() >= _max_pool_size:
 		card.queue_free()
 	else:
-		if card.get_parent() != _pool_container:
-			if card.get_parent():
-				card.get_parent().remove_child(card)
-			_pool_container.add_child(card)
 		_card_pool.append(card)
 
 
@@ -1436,8 +1437,6 @@ func _acquire_card() -> Control:
 	while _card_pool.size() > 0:
 		var card = _card_pool.pop_back()
 		if is_instance_valid(card):
-			if card.get_parent() == _pool_container:
-				_pool_container.remove_child(card)
 			card.set_meta("pooled", false)
 			if card.has_method("reset"):
 				card.reset()
@@ -2213,14 +2212,19 @@ func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 			card.refresh_settings()
 
 func refresh_all_card_configs() -> void:
-	"""Re-apply size flags, alignment, and aspect ratio to all active cards.
+	"""Re-apply size flags, alignment, aspect ratio, and display mode to all active cards.
 	Call when cached settings (alignment, ratio, display mode) change so that
 	cards already in the viewport pick up the new values immediately."""
 	for card in _active_cards:
-		if is_instance_valid(card):
-			_configure_card_size_flags(card)
-			if card.has_method("_update_media_panel_size"):
-				card._update_media_panel_size(true)
+		if not is_instance_valid(card):
+			continue
+		_configure_card_size_flags(card)
+		if card.has_method("_update_media_panel_size"):
+			card._update_media_panel_size(true)
+		# Display mode affects text/background visibility and card geometry, so
+		# re-apply card state whenever cached config changes.
+		if card.has_method("_update_card_state_from_settings"):
+			card._update_card_state_from_settings()
 
 func refresh_all_card_displays() -> void:
 	"""Refresh text/display state on all active cards without rebuilding effects.

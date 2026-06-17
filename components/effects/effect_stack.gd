@@ -105,8 +105,9 @@ func _rebuild_effects():
 				effect.queue_free()
 			_effects.erase(effect_id)
 	
-	# Reset insets on media container
-	if media_container:
+	# Reset insets on media container. Only the base card context manages these;
+	# the focus stack shares the same MediaContainer and must not wipe base insets.
+	if media_container and _context != "focus_card":
 		media_container.border_inset_ratio = 0.0
 		media_container.glass_inset_ratio = 0.0
 	
@@ -164,8 +165,9 @@ func _rebuild_effects():
 
 func _update_effect_settings_only() -> void:
 	"""Push new settings to existing effect nodes without rebuilding the tree."""
-	# Reset insets on media container
-	if media_container:
+	# Reset insets on media container. Only the base card context manages these;
+	# the focus stack shares the same MediaContainer and must not wipe base insets.
+	if media_container and _context != "focus_card":
 		media_container.border_inset_ratio = 0.0
 		media_container.glass_inset_ratio = 0.0
 	
