@@ -766,6 +766,36 @@ static func shutdown():
 	if _instance == null:
 		return
 	_instance._exit_flag = true
+	
+	# Clear all pending work so threads don't start new tasks after waking.
+	_instance._db_mutex.lock()
+	_instance._db_queue.clear()
+	_instance._db_mutex.unlock()
+	
+	_instance._image_mutex.lock()
+	_instance._image_high_priority_queue.clear()
+	_instance._image_low_priority_queue.clear()
+	_instance._image_tasks.clear()
+	_instance._inflight_image_callbacks.clear()
+	_instance._image_mutex.unlock()
+	
+	_instance._extraction_mutex.lock()
+	_instance._extraction_queue.clear()
+	_instance._extraction_mutex.unlock()
+	
+	_instance._download_mutex.lock()
+	_instance._download_queue.clear()
+	_instance._download_mutex.unlock()
+	
+	_instance._sync_mutex.lock()
+	_instance._sync_queue.clear()
+	_instance._sync_mutex.unlock()
+	
+	_instance._lp_callback_mutex.lock()
+	_instance._lp_callbacks.clear()
+	_instance._lp_callback_mutex.unlock()
+	
+	# Wake all threads so they can observe the exit flag and terminate.
 	_instance._db_semaphore.post()
 	_instance._extraction_semaphore.post()
 	_instance._download_semaphore.post()
@@ -783,7 +813,12 @@ static func shutdown():
 		thread.wait_to_finish()
 	if _instance._sync_thread:
 		_instance._sync_thread.wait_to_finish()
+	
 	clear_texture_cache()
+	# Release static caches held by UI components so their Texture/CanvasItem RIDs
+	# are not leaked when the rendering server finalizes.
+	GameCard.clear_platform_icon_cache()
+	EffectStack.clear_script_cache()
 	_instance = null
 
 # ============================================================================

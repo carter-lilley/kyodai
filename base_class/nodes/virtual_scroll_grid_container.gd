@@ -334,6 +334,8 @@ var _last_v_separation: int = -1
 var _last_margin_virtual_start: int = -1
 var _last_margin_virtual_end: int = -1
 
+
+
 var _data_cache: Dictionary = {}
 var _pending_loads: Dictionary = {}
 
@@ -493,29 +495,41 @@ func _enter_tree():
 		var state = UIManager.card_settings_state
 		if not state.changed.is_connected(_on_card_settings_state_changed):
 			state.changed.connect(_on_card_settings_state_changed)
+	# If the grid was reparented, the pool was freed in _exit_tree().
+	# Recreate it so cards can be reused again. On initial entry _card_scene is
+	# still null, so this is a no-op.
+	if _card_scene and _card_pool.is_empty():
+		print("[VirtualScrollGridContainer] Recreating pool after reparenting")
+		_instantiate_card_pool()
 
 func _exit_tree():
+	print("[VirtualScrollGridContainer] _exit_tree() pool_size=%d active=%d queued=%s" % [_card_pool.size(), _active_cards.size(), str(is_queued_for_deletion())])
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
 		if state.changed.is_connected(_on_card_settings_state_changed):
 			state.changed.disconnect(_on_card_settings_state_changed)
 	_disconnect_focus_lock_viewport()
-	# Only free the pool when the grid itself is being freed. If the grid is
-	# just reparented, clearing active-card tracking leaves orphaned cards in
-	# the FlowContainer and causes blank/duplicate cards on re-entry.
+	# Always free the pooled cards when leaving the tree. Pooled nodes are not in
+	# the tree, so they would not be cleaned up automatically. Use free() because
+	# these nodes are not displayed and queue_free() may not process at shutdown.
+	_free_card_pool()
+	# Only clear active-card tracking when the grid is being destroyed.
 	if is_queued_for_deletion():
-		_free_card_pool()
+		_active_cards.clear()
+		_active_cards_by_index.clear()
 
 func _free_card_pool() -> void:
-	"""Release all pooled and active card references.
-	Pooled cards are not in the tree, so free them explicitly to avoid leaks.
-	Active cards remain in the FlowContainer and are freed with the grid."""
+	"""Release pooled card references.
+	Pooled nodes are not in the tree, so they must be freed explicitly.
+	Use free() because these nodes are not displayed and queue_free() may not
+	process before the rendering server shuts down at engine exit."""
+	var freed_count: int = 0
 	for card in _card_pool:
 		if is_instance_valid(card):
-			card.queue_free()
+			card.free()
+			freed_count += 1
+	print("[VirtualScrollGridContainer] _free_card_pool() freed %d cards" % freed_count)
 	_card_pool.clear()
-	_active_cards.clear()
-	_active_cards_by_index.clear()
 
 func _on_card_settings_state_changed(mask: int) -> void:
 	if not UIManager or not UIManager.card_settings_state:

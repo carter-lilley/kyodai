@@ -49,6 +49,11 @@ var _m3_theme: Theme = null
 func _ready():
 	_setup_repeat()
 	
+	# Disable automatic quit so we can free the scene tree before the rendering
+	# server shuts down. Without this, get_tree().quit() exits without destroying
+	# nodes, which causes CanvasItem/Texture RID leaks.
+	get_tree().auto_accept_quit = false
+	
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 	
@@ -1001,6 +1006,17 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		# The OS asked us to close. Free the entire scene tree now so all node
+		# RIDs are released before the rendering server finalizes, then quit.
+		# auto_accept_quit is disabled in _ready(), so the default quit() is
+		# suppressed and we take over the shutdown sequence.
+		var tree = get_tree()
+		if tree:
+			tree.root.queue_free()
+			call_deferred("_deferred_quit")
+		return
+	
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		print("[Main] NOTIFICATION_APPLICATION_RESUMED received, _last_focused_index = ", _last_focused_index)
 		
@@ -1033,6 +1049,11 @@ func _notification(what: int) -> void:
 		if NotificationManager:
 			NotificationManager.dismiss_all_notifications()
 			print("[Main] Dismissed all notifications after resume")
+
+func _deferred_quit() -> void:
+	var tree = get_tree()
+	if tree:
+		tree.quit()
 
 func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	"""Save the focused card index when a game launch is initiated."""

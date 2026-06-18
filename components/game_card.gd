@@ -28,6 +28,18 @@ var _focus_effect_tweens: Array[Tween] = []
 func _remove_focus_tween(tween: Tween) -> void:
 	_focus_effect_tweens.erase(tween)
 
+func _kill_focus_tweens() -> void:
+	"""Stop any running focus-effect tweens and reset base-effect tween locks."""
+	for tween in _focus_effect_tweens:
+		if tween and is_instance_valid(tween):
+			tween.kill()
+	_focus_effect_tweens.clear()
+	
+	if _media_stack:
+		for child in _media_stack.get_children():
+			if child is EffectBase:
+				child._is_tweening = false
+
 # Cover/media loading is delegated to CardMediaLoader so GameCard stays focused
 # on card behavior (focus, input, badges) rather than download/cache logic.
 var _media_loader: CardMediaLoader = null
@@ -102,16 +114,7 @@ func _exit_tree():
 		_media_loader.cancel()
 
 	# Kill any focus effect tweens
-	for tween in _focus_effect_tweens:
-		if tween and is_instance_valid(tween):
-			tween.kill()
-	_focus_effect_tweens.clear()
-	
-	# Reset _is_tweening so the card doesn't leave the effect in a blocked state
-	if _media_stack:
-		for child in _media_stack.get_children():
-			if child is EffectBase:
-				child._is_tweening = false
+	_kill_focus_tweens()
 
 func _setup_status_badge():
 	_status_badge = Panel.new()
@@ -306,18 +309,7 @@ func set_preview_focus(show: bool) -> void:
 	_show_focus_effects(show)
 
 func _show_focus_effects(p_show: bool) -> void:
-	# Kill any existing focus effect tweens to prevent callbacks on freed objects
-	for tween in _focus_effect_tweens:
-		if tween and is_instance_valid(tween):
-			tween.kill()
-	_focus_effect_tweens.clear()
-	
-	# Reset _is_tweening on all base effects so _on_media_changed() isn't blocked
-	# after a tween is interrupted (e.g. rapid hover in/out)
-	if _media_stack:
-		for child in _media_stack.get_children():
-			if child is EffectBase:
-				child._is_tweening = false
+	_kill_focus_tweens()
 	
 	if preview_mode:
 		p_show = preview_show_focus
@@ -541,11 +533,7 @@ func reset() -> void:
 	if _focus_tween:
 		_focus_tween.kill()
 		_focus_tween = null
-	if _focus_effect_tweens:
-		for tween in _focus_effect_tweens:
-			if tween and is_instance_valid(tween):
-				tween.kill()
-		_focus_effect_tweens.clear()
+	_kill_focus_tweens()
 	_sync_focus_visuals()
 	if _media_loader:
 		_media_loader.cancel()
@@ -991,6 +979,7 @@ func _on_focus_exited():
 	_is_focused = false
 	_update_status_icon()
 	z_index = 0
+	_kill_focus_tweens()
 	if _focus_tween:
 		_focus_tween.kill()
 	_focus_tween = create_tween()
