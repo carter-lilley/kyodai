@@ -182,7 +182,9 @@ func _build_layout():
 	
 	# Dialog container (PanelContainer)
 	_dialog_container = PanelContainer.new()
-	_dialog_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_dialog_container.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_dialog_container.size_flags_horizontal = Control.SIZE_FILL
+	_dialog_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_dialog_wrapper.add_child(_dialog_container)
 	
 	if dialog_variant == Variant.BASIC:
@@ -224,7 +226,7 @@ func _build_basic_layout():
 	
 	content_slot = VBoxContainer.new()
 	content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content_slot.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_vbox.add_child(content_slot)
 	
 	_divider = HSeparator.new()
@@ -369,23 +371,28 @@ func _position_dialog():
 		var margin = M3Units.dp(48)
 		var max_w = M3Units.dp(dialog_max_width)
 		var max_h = M3Units.dp(BASIC_MAX_HEIGHT)
+		var min_h = M3Units.dp(BASIC_MIN_HEIGHT)
 		var dialog_width = min(max_w, viewport_size.x - margin)
-		var dialog_height = min(max_h, viewport_size.y - margin)
 		
-		# Fixed, viewport-clamped size. The wrapper clips any content that tries
-		# to expand past it. Callers that need scrolling provide their own ScrollContainer.
-		_dialog_wrapper.anchor_left = 0.0
-		_dialog_wrapper.anchor_top = 0.0
-		_dialog_wrapper.anchor_right = 0.0
-		_dialog_wrapper.anchor_bottom = 0.0
-		_dialog_wrapper.position = (viewport_size - Vector2(dialog_width, dialog_height)) / 2.0
-		_dialog_wrapper.size = Vector2(dialog_width, dialog_height)
-		# _dialog_container fills the wrapper via its full-rect anchors.
+		_dialog_container.set_anchors_preset(Control.PRESET_TOP_WIDE, false)
+		_dialog_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		_dialog_container.custom_minimum_size = Vector2(dialog_width, 0)
+		await get_tree().process_frame
+		var content_height := _dialog_container.get_combined_minimum_size().y
+		content_height += M3Units.dp(PADDING * 2)
+		var dialog_height = clamp(content_height, min_h, max_h)
+		dialog_height = min(dialog_height, viewport_size.y - margin)
+		
+		_dialog_container.set_deferred("custom_minimum_size", Vector2(dialog_width, dialog_height))
+		_dialog_wrapper.set_anchors_preset(Control.PRESET_CENTER, false)
+		_dialog_wrapper.set_deferred("size", Vector2(dialog_width, dialog_height))
+		_dialog_wrapper.set_deferred("position", (viewport_size - Vector2(dialog_width, dialog_height)) / 2.0)
 	else:
 		# Fullscreen: wrapper fills the viewport.
 		_dialog_wrapper.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_dialog_wrapper.position = Vector2.ZERO
 		_dialog_wrapper.size = viewport_size
+
 
 # ============================================
 # APPEARANCE

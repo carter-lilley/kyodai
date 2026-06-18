@@ -61,12 +61,12 @@ func _build_ui():
 	self.last_search_button = search_history_button
 	
 	# Results label
-	var results_count_label = Label.new()
+	var results_count_label = M3Label.new()
 	results_count_label.name = "ResultsLabel"
 	results_count_label.text = ""
 	results_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	results_count_label.add_theme_font_size_override("font_size", 14)
-	results_count_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+	results_count_label.label_style = M3Label.Style.BODY_SMALL
+	results_count_label.use_on_surface_variant = true
 	_main_container.add_child(results_count_label)
 	self.results_label = results_count_label
 

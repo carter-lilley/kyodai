@@ -307,18 +307,17 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		push_warning("[ProcessManager] MANAGE_EXTERNAL_STORAGE permission not granted - FileProvider may fail for SD card files")
 		# Show dialog to user explaining they need to grant the permission manually
 		if UIManager:
-			var dialog = ConfirmationDialog.new()
-			dialog.title = "Permission Required"
-			dialog.dialog_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
-			dialog.ok_button_text = "Open Settings"
-			dialog.cancel_button_text = "Cancel"
+			var dialog = M3Dialog.new()
+			dialog.title_text = "Permission Required"
+			dialog.body_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
 			
 			var on_confirmed = func():
 				plugin.requestManageExternalStoragePermission()
 			
-			dialog.confirmed.connect(on_confirmed)
+			dialog.add_action("Cancel", Callable(), false)
+			dialog.add_action("Open Settings", on_confirmed, true)
 			UIManager.add_child(dialog)
-			dialog.popup_centered()
+			dialog.show_overlay()
 		return false
 	
 	# Format the core path for RetroArch

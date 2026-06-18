@@ -1,4 +1,5 @@
 [gd_scene format=3 uid="uid://bbu72xot2222p"]
+[ext_resource type="Script" uid="uid://dv82iypo8etp8" path="res://addons/m3/components/M3Button.gd" id="m3button"]
 
 [ext_resource type="Script" uid="uid://q17trlk114ri" path="res://components/shuffler_controls_window.gd" id="1_ctrl"]
 [ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="2_group"]
@@ -268,7 +269,6 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 0
 alignment = 1
 script = ExtResource("2_group")
 mode = 1
@@ -277,26 +277,10 @@ shape = 0
 metadata/_custom_type_script = "uid://dc5stkkoubv5o"
 
 [node name="PauseButton" type="Button" parent="Root/M3ButtonGroup" unique_id=2066796670]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_5sxyd")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_5sxyd")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_egwno")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_egwno")
-theme_override_styles/hover = SubResource("StyleBoxFlat_yu6xv")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_yu6xv")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_g5pfo")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_g5pfo")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_tx8mm")
-theme_override_styles/focus = SubResource("StyleBoxFlat_g0i5p")
 toggle_mode = true
 button_pressed = true
 script = ExtResource("3_icon")
@@ -310,26 +294,10 @@ metadata/m3_tooltip_text = "Pause / Resume"
 metadata/m3_tooltip_variant = 0
 
 [node name="SkipButton" type="Button" parent="Root/M3ButtonGroup" unique_id=1528243517]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_q1soh")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_q1soh")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_uvy2v")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_uvy2v")
-theme_override_styles/hover = SubResource("StyleBoxFlat_xnwj4")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_xnwj4")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_pjhf5")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_pjhf5")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_ch86v")
-theme_override_styles/focus = SubResource("StyleBoxFlat_liebx")
 script = ExtResource("3_icon")
 icon_button_size = 1
 icon_button_variant = 1
@@ -340,26 +308,10 @@ metadata/m3_tooltip_text = "Skip"
 metadata/m3_tooltip_variant = 0
 
 [node name="RestartButton" type="Button" parent="Root/M3ButtonGroup" unique_id=1277668285]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_o5lr0")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_o5lr0")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_ss2e5")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_ss2e5")
-theme_override_styles/hover = SubResource("StyleBoxFlat_4ssik")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_4ssik")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_rktdk")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_rktdk")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_d1rjs")
-theme_override_styles/focus = SubResource("StyleBoxFlat_fo1ia")
 script = ExtResource("3_icon")
 icon_button_size = 1
 icon_button_variant = 1
@@ -370,26 +322,10 @@ metadata/m3_tooltip_text = "Restart"
 metadata/m3_tooltip_variant = 0
 
 [node name="ShuffleButton" type="Button" parent="Root/M3ButtonGroup" unique_id=1013709174]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_65euy")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_65euy")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_r4f7i")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_r4f7i")
-theme_override_styles/hover = SubResource("StyleBoxFlat_7otaj")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_7otaj")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_uqrlg")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_uqrlg")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_fduyq")
-theme_override_styles/focus = SubResource("StyleBoxFlat_m4bu0")
 script = ExtResource("3_icon")
 icon_button_size = 1
 icon_button_variant = 1
@@ -400,26 +336,10 @@ metadata/m3_tooltip_text = "Shuffle / New game"
 metadata/m3_tooltip_variant = 0
 
 [node name="StopButton" type="Button" parent="Root/M3ButtonGroup" unique_id=1539474555]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_u4bf1")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_u4bf1")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_3nv5r")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_3nv5r")
-theme_override_styles/hover = SubResource("StyleBoxFlat_ahrre")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_ahrre")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_cg7mx")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_cg7mx")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_dewrn")
-theme_override_styles/focus = SubResource("StyleBoxFlat_vrlby")
 script = ExtResource("3_icon")
 icon_button_size = 1
 icon_button_variant = 1

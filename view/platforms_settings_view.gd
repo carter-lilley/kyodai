@@ -34,80 +34,83 @@ func _is_narrow_screen() -> bool:
 
 func _ready():
 	view_name = "RomM"
-	
+
 	# Connect M3 checkbox signals and set initial values from settings
 	var m3_dup_covers: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_DuplicateCovers")
 	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
 	m3_dup_covers.button_pressed = fold_covers_setting.value if fold_covers_setting else false
 	m3_dup_covers.toggled.connect(_on_fold_covers_toggled)
-	
+
 	var m3_hide: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Hide")
 	var hide_no_covers_setting = SettingsManager.get_setting("hide_games_without_covers")
 	m3_hide.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
 	m3_hide.toggled.connect(_on_hide_no_covers_toggled)
-	
+
 	var m3_siblings: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Siblings")
 	var fold_romm_setting = SettingsManager.get_setting("fold_romm_siblings")
 	m3_siblings.button_pressed = fold_romm_setting.value if fold_romm_setting else true
 	m3_siblings.toggled.connect(_on_fold_romm_siblings_toggled)
-	
+
 	# Connect RomM text field signals and set initial values
 	var url_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_URL")
 	var url_setting = SettingsManager.get_setting("romm_url")
 	url_field.text = url_setting.value if url_setting else ""
 	url_field.text_changed.connect(_on_credential_text_changed.bind(url_field, "romm_url"))
-	
+
 	var user_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_User")
 	var user_setting = SettingsManager.get_setting("romm_username")
 	user_field.text = user_setting.value if user_setting else ""
 	user_field.text_changed.connect(_on_credential_text_changed.bind(user_field, "romm_username"))
-	
+
 	var pass_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_Pass")
 	var pass_setting = SettingsManager.get_setting("romm_password")
 	pass_field.text = pass_setting.value if pass_setting else ""
 	pass_field.text_changed.connect(_on_credential_text_changed.bind(pass_field, "romm_password"))
-	
+
 	# Connect button signals
-	var check_updates_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
+	var check_updates_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
 	check_updates_button.pressed.connect(_on_check_updates_pressed)
-	
-	var select_all_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
+
+	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
 	select_all_button.pressed.connect(_on_select_all_pressed)
-	
-	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
+
+	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
 	sync_button.pressed.connect(_on_sync_pressed)
-	
-	var full_sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
+
+	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
 	full_sync_button.pressed.connect(_on_full_sync_pressed)
-	
+
 	# Add connection status UI below the button row
 	_add_connection_status_ui()
-	
+
+	# Listen for connection coming online so we can auto-refresh platforms
+	NetworkManager.network_status_changed.connect(_on_network_status_changed)
+
 	# Connect to launch manager signals for extraction
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
 	LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
 	LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
-	
+
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
-	
+
 	# Connect to viewport resize to update card layout
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
-	
+
 	# Set initial column visibility
 	_update_column_visibility()
 	_update_settings_row_layout()
-	
+
 	super._ready()
 
 func _fetch_platforms():
 	if _is_fetching_platforms:
 		return
 	_is_fetching_platforms = true
-	
+
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "CardsHBox"]:
+		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "ConnectionStatusUI", "CardsHBox"]:
 			continue
 		if child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -116,58 +119,65 @@ func _fetch_platforms():
 	for child in _cards_right.get_children():
 		child.queue_free()
 	_platform_cards.clear()
-	
+
 	# Show loading indicator
-	var loading_label = Label.new()
+	var loading_label = M3Label.new()
 	loading_label.text = "Loading platforms..."
 	loading_label.name = "LoadingLabel"
 	_platforms_container.add_child(loading_label)
-	
+
+	# Make sure the loading label sits right above the cards
+	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
+	_platforms_container.move_child(loading_label, cards_index)
+
 	NetworkManager.fetch_platforms(func(data, error):
 		# Remove loading label
 		for child in _platforms_container.get_children():
 			if child.name == "LoadingLabel":
 				child.queue_free()
 				break
-		
+
 		if error != "":
 			push_error("[PlatformsSettingsView] Failed to fetch platforms: " + error)
 			NotificationManager.show_notification("Failed to fetch platforms: " + error, NotificationManager.Type.ERROR)
-			
-			var error_label = Label.new()
+
+			var error_label = M3Label.new()
 			error_label.name = "ErrorLabel"
 			error_label.text = "Failed to fetch platforms from RomM. Check connection settings."
 			error_label.modulate = Color.RED
 			_platforms_container.add_child(error_label)
-			
-			var retry_button = Button.new()
+
+			var retry_button = M3Button.new()
 			retry_button.text = "Retry"
+			retry_button.button_size = M3Button.Size.MEDIUM
 			retry_button.pressed.connect(_fetch_platforms)
 			_platforms_container.add_child(retry_button)
-			
+
 			_load_platforms_from_database()
+			_is_fetching_platforms = false
 			return
-		
+
 		if not data is Array:
 			push_error("[PlatformsSettingsView] Unexpected platform data format")
+			_is_fetching_platforms = false
 			return
-		
+
 		_platforms_data = data
 		var enabled_platforms = _get_enabled_platforms()
 		var fetched_slugs: Array[String] = []
-		
+
 		# Collect unique emulators and pre-validate them once
 		var unique_emulators: Array[String] = []
 		var emulator_platforms: Dictionary = {}  # emulator_id -> Array[slug]
-		
+
 		for platform_data in data:
 			if not platform_data is Dictionary:
 				continue
-			
+
 			var slug = platform_data.get("slug", "")
 			if slug == "":
 				continue
-			
+
 			# Get emulators for this platform
 			var platform_emulators = LaunchManager.get_emulators_for_platform(slug)
 			for emulator in platform_emulators:
@@ -177,29 +187,29 @@ func _fetch_platforms():
 					emulator_platforms[emu_id] = []
 				if emu_id != "":
 					emulator_platforms[emu_id].append(slug)
-		
+
 		# Pre-validate each unique emulator once
 		print_verbose("[PlatformsSettingsView] Pre-validating " + str(unique_emulators.size()) + " unique emulators for " + str(data.size()) + " platforms")
 		var precomputed_status: Dictionary = {}
 		for emu_id in unique_emulators:
 			var progress = LaunchManager.get_install_progress(emu_id)
 			precomputed_status[emu_id] = progress["status"] == "complete"
-		
+
 		# Create platform cards with precomputed status
 		for platform_data in data:
 			if not platform_data is Dictionary:
 				continue
-			
+
 			var slug = platform_data.get("slug", "")
 			var platform_name = platform_data.get("name", slug)
 			var romm_id = platform_data.get("id", 0)
 			var icon_url = platform_data.get("icon_url", "")
-			
+
 			if slug == "" or romm_id == 0:
 				continue
-			
+
 			fetched_slugs.append(slug)
-			
+
 			# Create platform card with precomputed validation results
 			var card = _create_platform_card(slug, platform_name, romm_id, icon_url, enabled_platforms, precomputed_status)
 			# Distribute cards: single column on narrow screens, two columns on wide
@@ -211,19 +221,21 @@ func _fetch_platforms():
 				else:
 					_cards_right.add_child(card)
 			_platform_cards[slug] = card
-		
+
 		# Remove platforms that no longer exist on RomM
 		_remove_deleted_platforms(fetched_slugs)
-		
+
 		# Update select all button text
 		_update_select_all_button_text()
-	)
+
+		_is_fetching_platforms = false
+	, false)  # bypass cache for explicit user-driven fetches
 
 func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCard.new()
 	card.platform_slug = slug
 	card.platform_name = platform_name
-	
+
 	# Set sync enabled status
 	var platform_config = enabled_platforms.get(slug, {})
 	var is_enabled = false
@@ -232,21 +244,21 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 	elif platform_config is Dictionary:
 		is_enabled = platform_config.get("enabled", false)
 	card.is_sync_enabled = is_enabled
-	
+
 	# Set selected emulator (user override only - empty means use registry default)
 	var emulator_id = ""
 	if platform_config is Dictionary:
 		emulator_id = platform_config.get("emulator_id", "")
 	card.selected_emulator = emulator_id
-	
+
 	# Set registry default emulator for "Auto" display
 	var registry_default = LaunchManager.get_default_emulator_for_platform(slug)
 	card.registry_default_emulator = registry_default
-	
+
 	# Load available emulators for this platform
 	var available_emulators = LaunchManager.get_emulators_for_platform(slug)
 	card.set_available_emulators(available_emulators)
-	
+
 	# Set install status for each emulator (use precomputed status if available)
 	var install_status = {}
 	for emulator in available_emulators:
@@ -260,22 +272,22 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 				var progress = LaunchManager.get_install_progress(emu_id)
 				install_status[emu_id] = progress["status"] == "complete"
 	card.set_emulator_install_status(install_status)
-	
+
 	# Connect signals
 	card.sync_toggled.connect(func(enabled: bool):
 		_set_platform_enabled(slug, romm_id, enabled)
 		_update_select_all_button_text()
 	)
-	
+
 	card.emulator_changed.connect(func(emu_id: String):
 		_set_platform_emulator(slug, emu_id)
 	)
-	
+
 	# Connect download button
 	card.download_requested.connect(func(emu_id: String):
 		_on_emulator_download_requested(emu_id, card)
 	)
-	
+
 	return card
 
 func _load_platforms_from_database():
@@ -284,25 +296,25 @@ func _load_platforms_from_database():
 		if child.name == "LoadingLabel":
 			child.queue_free()
 			break
-	
+
 	var platforms = DataManager.get_all_platforms()
 	var enabled_platforms = _get_enabled_platforms()
-	
+
 	# Clear existing cards
 	for child in _cards_left.get_children():
 		child.queue_free()
 	for child in _cards_right.get_children():
 		child.queue_free()
 	_platform_cards.clear()
-	
+
 	for platform in platforms:
 		var slug = platform.slug
 		var platform_name = platform.name
 		var icon_url = platform.icon_url
-		
+
 		if slug == "":
 			continue
-		
+
 		# Create offline card (no romm_id available)
 		var card = _create_platform_card(slug, platform_name, 0, icon_url, enabled_platforms)
 		card.disabled = true
@@ -315,9 +327,9 @@ func _load_platforms_from_database():
 			else:
 				_cards_right.add_child(card)
 		_platform_cards[slug] = card
-	
+
 	if platforms.size() == 0:
-		var no_platforms_label = Label.new()
+		var no_platforms_label = M3Label.new()
 		no_platforms_label.name = "NoPlatformsLabel"
 		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
 		_cards_left.add_child(no_platforms_label)
@@ -325,16 +337,16 @@ func _load_platforms_from_database():
 func _remove_deleted_platforms(current_slugs: Array[String]):
 	var enabled_platforms = _get_enabled_platforms()
 	var slugs_to_remove: Array[String] = []
-	
+
 	for slug in enabled_platforms.keys():
 		if not slug in current_slugs:
 			slugs_to_remove.append(slug)
 			# Remove games for this deleted platform
 			DataManager.remove_platform_games(slug)
-	
+
 	for slug in slugs_to_remove:
 		enabled_platforms.erase(slug)
-	
+
 	# Save updated enabled_platforms
 	var setting = SettingsManager.get_setting("enabled_platforms")
 	if setting:
@@ -348,7 +360,7 @@ func _get_enabled_platforms() -> Dictionary:
 
 func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 	var enabled_platforms = _get_enabled_platforms()
-	
+
 	# Look up the actual platform ID from our data if not provided or is 0
 	var actual_platform_id = platform_id
 	if actual_platform_id == 0:
@@ -356,7 +368,7 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 			if platform_data.get("slug", "") == slug:
 				actual_platform_id = platform_data.get("id", 0)
 				break
-	
+
 	# Get existing config or create new
 	var config = enabled_platforms.get(slug, {})
 	if config is bool:
@@ -369,33 +381,33 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 			config["id"] = actual_platform_id
 	else:
 		config = {"id": actual_platform_id, "enabled": enabled, "emulator_id": ""}
-	
+
 	# Preserve emulator_id if it exists
 	if not config.has("emulator_id"):
 		config["emulator_id"] = ""
 	# Ensure ID is set (fallback to looked-up ID)
 	if config.get("id", 0) == 0:
 		config["id"] = actual_platform_id
-	
+
 	enabled_platforms[slug] = config
-	
+
 	var setting = SettingsManager.get_setting("enabled_platforms")
 	if setting:
 		SettingsManager.set_setting(enabled_platforms, setting)
 
 func _set_platform_emulator(slug: String, emulator_id: String):
 	var enabled_platforms = _get_enabled_platforms()
-	
+
 	# Get existing config or create new
 	var config = enabled_platforms.get(slug, {})
-	
+
 	# Look up the actual platform ID from our data
 	var platform_id = 0
 	for platform_data in _platforms_data:
 		if platform_data.get("slug", "") == slug:
 			platform_id = platform_data.get("id", 0)
 			break
-	
+
 	if config is bool:
 		# Migrate old format - use looked-up ID
 		config = {"id": platform_id, "enabled": config, "emulator_id": emulator_id}
@@ -407,16 +419,16 @@ func _set_platform_emulator(slug: String, emulator_id: String):
 	else:
 		# Create new config with looked-up ID
 		config = {"id": platform_id, "enabled": false, "emulator_id": emulator_id}
-	
+
 	# Preserve other fields
 	if not config.has("enabled"):
 		config["enabled"] = false
 	# Ensure ID is set (fallback to looked-up ID)
 	if config.get("id", 0) == 0:
 		config["id"] = platform_id
-	
+
 	enabled_platforms[slug] = config
-	
+
 	var setting = SettingsManager.get_setting("enabled_platforms")
 	if setting:
 		SettingsManager.set_setting(enabled_platforms, setting)
@@ -427,7 +439,7 @@ func _save_settings():
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	# Track which platform initiated the download for focus restoration later
 	_last_active_platform_slug = card.platform_slug
-	
+
 	# Start the download
 	var success = LaunchManager.download_emulator(emulator_id)
 	if success:
@@ -468,13 +480,13 @@ func _on_check_updates_pressed():
 	var check_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
 	if check_button:
 		check_button.disabled = true
-	
+
 	NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
-	
+
 	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array):
 		if check_button:
 			check_button.disabled = false
-		
+
 		if _updated.size() > 0:
 			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), NotificationManager.Type.SUCCESS)
 		elif _failed.size() > 0:
@@ -486,20 +498,20 @@ func _on_check_updates_pressed():
 func _on_sync_pressed():
 	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
 	_sync_triggered = true
-	
+
 	if not NetworkManager.is_online():
 		NotificationManager.show_notification("Not connected to RomM - check settings", NotificationManager.Type.ERROR)
 		return
-	
-	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
-	
+
+	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
+
 	if sync_button:
 		sync_button.disabled = true
-	
+
 	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
 		if sync_button:
 			sync_button.disabled = false
-		
+
 		if _success:
 			NotificationManager.show_notification("Sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
 		else:
@@ -509,28 +521,28 @@ func _on_sync_pressed():
 func _on_full_sync_pressed():
 	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
 	_sync_triggered = true
-	
+
 	if not NetworkManager.is_online():
 		NotificationManager.show_notification("Not connected to RomM - check settings", NotificationManager.Type.ERROR)
 		return
-	
-	var full_sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
-	var sync_button: Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
-	
+
+	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
+	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
+
 	if full_sync_button:
 		full_sync_button.disabled = true
-	
+
 	if sync_button:
 		sync_button.disabled = true
-	
+
 	# Call sync with force_full_sync = true
 	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
 		if full_sync_button:
 			full_sync_button.disabled = false
-		
+
 		if sync_button:
 			sync_button.disabled = false
-		
+
 		if _success:
 			NotificationManager.show_notification("Full sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
 		else:
@@ -538,10 +550,10 @@ func _on_full_sync_pressed():
 	, true)  # true = force_full_sync
 
 func _update_select_all_button_text():
-	var select_all_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
+	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
 	if not select_all_button:
 		return
-	
+
 	# Check if all platforms are currently selected
 	var all_selected = true
 	var has_platforms = false
@@ -550,18 +562,18 @@ func _update_select_all_button_text():
 		if not card.is_sync_enabled:
 			all_selected = false
 			break
-	
+
 	if not has_platforms:
 		select_all_button.text = "Select All"
 		return
-	
+
 	select_all_button.text = "Deselect All" if all_selected else "Select All"
 
 func _on_select_all_pressed():
-	var select_all_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
+	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
 	if not select_all_button:
 		return
-	
+
 	# Check if all platforms are currently selected
 	var all_selected = true
 	var has_platforms = false
@@ -570,25 +582,25 @@ func _on_select_all_pressed():
 		if not card.is_sync_enabled:
 			all_selected = false
 			break
-	
+
 	if not has_platforms:
 		return
-	
+
 	# Toggle all cards
 	var new_state = not all_selected
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
 		card.is_sync_enabled = new_state
-		
+
 		# Find the platform ID
 		var platform_id = 0
 		for platform_data in _platforms_data:
 			if platform_data.get("slug", "") == slug:
 				platform_id = platform_data.get("id", 0)
 				break
-		
+
 		_set_platform_enabled(slug, platform_id, new_state)
-	
+
 	# Update button text
 	select_all_button.text = "Deselect All" if new_state else "Select All"
 
@@ -613,12 +625,12 @@ func _on_viewport_size_changed() -> void:
 	"""Re-layout cards when viewport size crosses the narrow breakpoint."""
 	_update_column_visibility()
 	_update_settings_row_layout()
-	
+
 	if not _platform_cards.is_empty():
 		# Check if layout mode needs to change
 		var is_narrow = _is_narrow_screen()
 		var has_right_cards = _cards_right.get_child_count() > 0
-		
+
 		if is_narrow and has_right_cards:
 			# Move all cards from right to left
 			for child in _cards_right.get_children():
@@ -630,7 +642,7 @@ func _on_viewport_size_changed() -> void:
 			for child in _cards_left.get_children():
 				all_cards.append(child)
 				_cards_left.remove_child(child)
-			
+
 			for i in range(all_cards.size()):
 				if i % 2 == 0:
 					_cards_left.add_child(all_cards[i])
@@ -655,7 +667,7 @@ func restore_focus_to_last_active() -> void:
 func on_view_show():
 	# Take snapshot of current enabled state before user makes changes
 	_sync_triggered = false
-	
+
 	# Refresh platform list every time the view is shown
 	if not _is_fetching_platforms:
 		_fetch_platforms()
@@ -667,7 +679,7 @@ func on_view_hide():
 	if _credential_debounce_timer and _credential_debounce_timer.time_left > 0:
 		_credential_debounce_timer.stop()
 		_flush_credential_change()
-	
+
 	_save_settings()
 	super.on_view_hide()
 
@@ -689,26 +701,26 @@ func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 func _on_credential_text_changed(_text: String, field: M3TextField, property_name: String) -> void:
 	_pending_credential_field = field
 	_pending_credential_property = property_name
-	
+
 	if not _credential_debounce_timer:
 		_credential_debounce_timer = Timer.new()
 		_credential_debounce_timer.wait_time = 0.6
 		_credential_debounce_timer.one_shot = true
 		_credential_debounce_timer.timeout.connect(_flush_credential_change)
 		add_child(_credential_debounce_timer)
-	
+
 	_credential_debounce_timer.stop()
 	_credential_debounce_timer.start()
 
 func _flush_credential_change() -> void:
 	if not _pending_credential_field:
 		return
-	
+
 	var text = _pending_credential_field.text
 	var setting = SettingsManager.get_setting(_pending_credential_property)
 	if setting:
 		SettingsManager.set_setting(text, setting)
-	
+
 	_pending_credential_field = null
 	_pending_credential_property = ""
 
@@ -734,37 +746,53 @@ func _on_romm_password_changed(text: String) -> void:
 func _add_connection_status_ui():
 	var container = HBoxContainer.new()
 	container.name = "ConnectionStatusUI"
-	container.custom_minimum_size = Vector2(0, 30)
-	
+	container.custom_minimum_size = Vector2(0, M3Units.dp(30))
+
 	var indicator = Indicator.new()
 	indicator.name = "ConnectionIndicator"
 	indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	container.add_child(indicator)
-	
+
 	var test_button = M3Button.new()
 	test_button.name = "TestButton"
 	test_button.text = "Test"
 	test_button.button_size = M3Button.Size.SMALL
 	container.add_child(test_button)
-	
+
+	# Add right after the button row so it sits above the platform cards
 	_platforms_container.add_child(container)
-	
+	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
+	_platforms_container.move_child(container, cards_index)
+
 	# Set initial status
 	_update_connection_status(indicator)
-	
+
 	# Connect test button
 	test_button.pressed.connect(func():
-		_test_connection(indicator)
+		_test_connection(indicator, test_button)
 	)
 
-func _test_connection(indicator: Indicator):
+func _test_connection(indicator: Indicator, test_button: M3Button = null):
+	# Flush any pending credential change so we test what the user typed
+	if _credential_debounce_timer and _credential_debounce_timer.time_left > 0:
+		_credential_debounce_timer.stop()
+		_flush_credential_change()
+
+	SettingsManager.save_settings()
+
+	if test_button:
+		test_button.disabled = true
 	indicator.set_status(Indicator.Status.WARNING, "Testing connection...")
-	
+
 	NetworkManager.test_connection(func(online: bool):
 		if online:
 			indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
 			NotificationManager.show_notification("Connected to RomM successfully", NotificationManager.Type.SUCCESS)
+			# Re-run platform scan now that credentials are verified
+			_fetch_platforms()
 		else:
+			if test_button:
+				test_button.disabled = false
 			if not NetworkManager.is_configured():
 				indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
 				NotificationManager.show_notification("RomM not configured - check URL, username, password", NotificationManager.Type.ERROR)
@@ -772,6 +800,15 @@ func _test_connection(indicator: Indicator):
 				indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
 				NotificationManager.show_notification("Connection failed - check credentials", NotificationManager.Type.ERROR)
 	)
+
+func _on_network_status_changed(online: bool) -> void:
+	if online and not _is_fetching_platforms:
+		_fetch_platforms()
+
+	# Keep the indicator in sync regardless of how we got here
+	var indicator = _platforms_container.get_node_or_null("ConnectionStatusUI/ConnectionIndicator")
+	if indicator:
+		_update_connection_status(indicator)
 
 func _update_connection_status(indicator: Indicator):
 	if NetworkManager.is_online():
@@ -787,10 +824,10 @@ func reconnect_viewport() -> void:
 	var viewport = get_viewport()
 	if not is_instance_valid(viewport):
 		return
-	
+
 	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
 		viewport.gui_focus_changed.disconnect(_on_focus_changed)
-	
+
 	viewport.gui_focus_changed.connect(_on_focus_changed)
 
 func _on_focus_changed(control: Control) -> void:

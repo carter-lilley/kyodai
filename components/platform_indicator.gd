@@ -32,7 +32,7 @@ func _setup_ui():
 	hbox.name = "MainContainer"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hbox.add_theme_constant_override("separation", 8)
+	hbox.add_theme_constant_override("separation", M3Units.dp(8))
 	add_child(hbox)
 	
 	# Previous chevron (index 0)

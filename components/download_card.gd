@@ -1,11 +1,11 @@
 class_name DownloadCard
 extends PanelContainer
 
-@onready var title_label: Label = $MarginContainer/VBoxContainer/HBoxContainer/TitleLabel
-@onready var platform_label: Label = $MarginContainer/VBoxContainer/HBoxContainer/PlatformLabel
-@onready var progress_bar: ProgressBar = $MarginContainer/VBoxContainer/ProgressBar
-@onready var status_label: Label = $MarginContainer/VBoxContainer/StatusLabel
-@onready var cancel_button: Button = $MarginContainer/VBoxContainer/HBoxContainer/CancelButton
+@onready var title_label: M3Label = $MarginContainer/VBoxContainer/HBoxContainer/TitleLabel
+@onready var platform_label: M3Label = $MarginContainer/VBoxContainer/HBoxContainer/PlatformLabel
+@onready var progress_bar: M3Progress = $MarginContainer/VBoxContainer/ProgressBar
+@onready var status_label: M3Label = $MarginContainer/VBoxContainer/StatusLabel
+@onready var cancel_button: M3Button = $MarginContainer/VBoxContainer/HBoxContainer/CancelButton
 
 var download_item = null  # Will be set to DownloadManager.QueueItem
 

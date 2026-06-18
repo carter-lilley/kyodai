@@ -31,10 +31,10 @@ func _build_view():
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_top", 20)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_bottom", 20)
+	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
 	_scroll_container.add_child(margin)
 	
 	var vbox = VBoxContainer.new()

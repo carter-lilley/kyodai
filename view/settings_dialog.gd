@@ -187,10 +187,10 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_top", 20)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_bottom", 20)
+	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
 	
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL

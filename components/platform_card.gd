@@ -36,12 +36,12 @@ var registry_default_emulator: String = "":
 var _available_emulators: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}
 
-var _name_label: Label
+var _name_label: M3Label
 var _sync_toggle: M3Checkbox
 var _emulator_dropdown: M3OptionButton
 var _status_indicator: Indicator
 var _download_button: M3Button
-var _version_label: Label
+var _version_label: M3Label
 var _firmware_indicator: Indicator
 
 func _ready():
@@ -90,12 +90,12 @@ func _build_ui():
 	top_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_text_content.add_child(top_row)
 
-	_name_label = Label.new()
+	_name_label = M3Label.new()
 	_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_row.add_child(_name_label)
 
 	_firmware_indicator = Indicator.new()
-	_firmware_indicator.dot_size = Vector2(8, 8)
+	_firmware_indicator.dot_size = Vector2(M3Units.dp(8), M3Units.dp(8))
 	_firmware_indicator.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_firmware_indicator.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	top_row.add_child(_firmware_indicator)
@@ -127,7 +127,7 @@ func _build_ui():
 	_text_content.add_child(status_row)
 
 	_status_indicator = Indicator.new()
-	_status_indicator.dot_size = Vector2(10, 10)
+	_status_indicator.dot_size = Vector2(M3Units.dp(10), M3Units.dp(10))
 	_status_indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(_status_indicator)
 
@@ -138,7 +138,7 @@ func _build_ui():
 	_download_button.pressed.connect(_on_download_pressed)
 	status_row.add_child(_download_button)
 
-	_version_label = Label.new()
+	_version_label = M3Label.new()
 	_version_label.visible = false
 	_version_label.size_flags_horizontal = Control.SIZE_SHRINK_END
 	status_row.add_child(_version_label)
@@ -155,23 +155,12 @@ func _update_media_panel_size(force: bool = false) -> void:
 		_text_margin.size.x = size.x
 
 func _apply_m3_text_styles():
-	var fonts = M3Theme.load_fonts()
-	var on_surface = M3Theme.get_on_surface()
-	var on_surface_variant = M3Theme.get_on_surface_variant()
-
-	var headline_size = M3Units.dp(16)
-	var body_size = M3Units.dp(14)
-	var small_size = M3Units.dp(12)
-
 	if _name_label:
-		_name_label.add_theme_font_override("font", fonts["medium"])
-		_name_label.add_theme_font_size_override("font_size", headline_size)
-		_name_label.add_theme_color_override("font_color", on_surface)
+		_name_label.label_style = M3Label.Style.TITLE_MEDIUM
 
 	if _version_label:
-		_version_label.add_theme_font_override("font", fonts["regular"])
-		_version_label.add_theme_font_size_override("font_size", small_size)
-		_version_label.add_theme_color_override("font_color", on_surface_variant)
+		_version_label.label_style = M3Label.Style.BODY_SMALL
+		_version_label.use_on_surface_variant = true
 
 func _update_display():
 	if not is_node_ready():

@@ -1,5 +1,8 @@
 [gd_scene format=3 uid="uid://oa15cvl0ceqq"]
 
+[ext_resource type="Script" uid="uid://dv82iypo8etp8" path="res://addons/m3/components/M3Button.gd" id="m3button"]
+[ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="m3label"]
+
 [ext_resource type="Script" uid="uid://4p4i1nlgkicx" path="res://main.gd" id="1_main"]
 [ext_resource type="PackedScene" uid="uid://c8yvxg3ulq3a8" path="res://components/library_background.tscn" id="4_libbg"]
 [ext_resource type="Script" uid="uid://63mocgx1dxi4" path="res://addons/m3/components/M3Slider.gd" id="4_w48qg"]
@@ -276,8 +279,8 @@ size_flags_horizontal = 3
 layout_mode = 2
 
 [node name="Title" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1709345551]
+script = ExtResource("m3label")
 layout_mode = 2
-theme_override_font_sizes/font_size = 24
 text = "K"
 
 [node name="M3Slider_Zoom" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1438207355]
@@ -299,33 +302,16 @@ size_flags_horizontal = 3
 
 [node name="M3ButtonGroup" type="HBoxContainer" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=575083622]
 layout_mode = 2
-theme_override_constants/separation = 0
 script = ExtResource("4_ycdy4")
 mode = 1
 shape = 0
 metadata/_custom_type_script = "uid://dc5stkkoubv5o"
 
 [node name="Grid" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer/M3ButtonGroup" unique_id=1245219119]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_efxa6")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_efxa6")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_dg77c")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_dg77c")
-theme_override_styles/hover = SubResource("StyleBoxFlat_ycdy4")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_ycdy4")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_w48qg")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_w48qg")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_vivmo")
-theme_override_styles/focus = SubResource("StyleBoxFlat_2cqfq")
 toggle_mode = true
 button_pressed = true
 script = ExtResource("5_w48qg")
@@ -336,26 +322,10 @@ icon_name = "view-grid"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
 [node name="List" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer/M3ButtonGroup" unique_id=1403336029]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_focus_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_hover_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_hover_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_yaehf")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_yaehf")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_074og")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_074og")
-theme_override_styles/hover = SubResource("StyleBoxFlat_cegan")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_cegan")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_82xsv")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_82xsv")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_getpj")
-theme_override_styles/focus = SubResource("StyleBoxFlat_ryguw")
 toggle_mode = true
 script = ExtResource("5_w48qg")
 icon_button_size = 1
@@ -366,26 +336,10 @@ icon_name = "view-list"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
 [node name="Carosel" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer/M3ButtonGroup" unique_id=686027265]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_focus_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_hover_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_hover_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_d13ii")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_d13ii")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_1u8w0")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_1u8w0")
-theme_override_styles/hover = SubResource("StyleBoxFlat_0odxb")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_0odxb")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_lswn8")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_lswn8")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_a6jrf")
-theme_override_styles/focus = SubResource("StyleBoxFlat_xuqvo")
 toggle_mode = true
 script = ExtResource("5_w48qg")
 icon_button_size = 1
@@ -395,26 +349,10 @@ icon_name = "view-carousel"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
 [node name="M3IconButton_More" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1391264046]
+script = ExtResource("m3button")
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
-theme_override_colors/font_color = Color(0, 0, 0, 1)
-theme_override_colors/font_focus_color = Color(0, 0, 0, 1)
-theme_override_colors/font_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
-theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
-theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
-theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_qsp4k")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_qsp4k")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_kq58d")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_kq58d")
-theme_override_styles/hover = SubResource("StyleBoxFlat_seu75")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_seu75")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_htxhm")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_htxhm")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_jq2sk")
-theme_override_styles/focus = SubResource("StyleBoxFlat_4k2k6")
 script = ExtResource("5_w48qg")
 icon_button_size = 1
 icon_button_width = 1
@@ -487,6 +425,7 @@ grow_vertical = 2
 mouse_filter = 2
 
 [node name="GameTitleLabel" type="Label" parent="UILayer/LaunchTransitionOverlay/MarginContainer" unique_id=123456793]
+script = ExtResource("m3label")
 z_index = 1001
 layout_mode = 2
 size_flags_vertical = 8

@@ -209,19 +209,19 @@ func _on_start_pressed() -> void:
 	start_session_requested.emit(config)
 
 func _create_section_label(text: String) -> Label:
-	var label = Label.new()
+	var label = M3Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", M3Units.dp(20))
 	return label
 
 func _create_sub_label(text: String) -> Label:
-	var label = Label.new()
+	var label = M3Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", M3Units.dp(14))
 	return label
 
 func _create_value_label(text: String) -> Label:
-	var label = Label.new()
+	var label = M3Label.new()
 	label.text = text
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", M3Units.dp(14))

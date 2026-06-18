@@ -169,6 +169,14 @@ enum SliderOrientation { HORIZONTAL, VERTICAL }
 		_slider.value = v
 		_request_redraw()
 
+## Minimum width of the slider in dp. Used for horizontal sliders whose
+## width must be expressed in density-independent units instead of raw pixels.
+@export var min_width_dp: float = 0.0:
+	set(value):
+		if value == min_width_dp:
+			return
+		min_width_dp = value
+		_update_size()
 @export var m3_tooltip_text: String = ""
 @export var m3_tooltip_variant: M3Tooltip.Variant = M3Tooltip.Variant.PLAIN
 
@@ -557,6 +565,9 @@ func _update_size():
 		# Component height = handle height (handle extends above/below track)
 		var min_h = M3Units.dp(spec["handle_h"])
 		custom_minimum_size.y = max(custom_minimum_size.y, min_h)
+		# Optional density-independent width
+		if min_width_dp > 0.0:
+			custom_minimum_size.x = max(custom_minimum_size.x, M3Units.dp(min_width_dp))
 	_update_icons()
 
 func refresh_theme():

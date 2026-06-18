@@ -9,7 +9,7 @@ var _current_config: Dictionary = {}
 
 var _preview_card: GameCard
 var _preview_game: GameResource = null
-var _card_rounding_slider: HSlider
+var _card_rounding_slider: M3Slider
 
 
 # Shared effect designer UI instances
@@ -94,7 +94,7 @@ func _setup_ui():
 	card_rounding_label.label_style = M3Label.Style.BODY_MEDIUM
 	left_vbox.add_child(card_rounding_label)
 	
-	_card_rounding_slider = HSlider.new()
+	_card_rounding_slider = M3Slider.new()
 	_card_rounding_slider.min_value = 0.0
 	_card_rounding_slider.max_value = 1.0
 	_card_rounding_slider.step = 0.01

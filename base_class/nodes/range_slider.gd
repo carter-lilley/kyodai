@@ -2,35 +2,65 @@
 extends Control
 class_name RangeSlider
 
-# Internal sliders
-var min_slider : HSlider = HSlider.new()
-var max_slider : HSlider = HSlider.new()
+# Internal M3Slider used in RANGE mode
+var _slider: M3Slider
 
 signal value_changed(value: Vector2)
 
-# Called when the node enters the scene tree for the first time.
-func _init(range_start: float = 0.25, range_end: float = 0.75, _step: float = 0.1, min_range: float = 0.0, max_range: float = 1.0) -> void:
-	#min_slider.focus_mode = 2
-	min_slider.min_value = min_range
-	min_slider.max_value = max_range
-	min_slider.step = _step
-	min_slider.value = range_start
-	#max_slider.focus_mode = 2
-	max_slider.min_value = min_range
-	max_slider.max_value = max_range
-	max_slider.step = _step
-	max_slider.value = range_end
-	min_slider.connect("value_changed", _on_min_changed)
-	max_slider.connect("value_changed", _on_max_changed)
+var _step: float = 0.1
+var _min_value: float = 0.0
+var _max_value: float = 1.0
 
-func _on_min_changed(value: float) -> void:
-	if value > max_slider.value:
-		value = max_slider.value
-		min_slider.value = value
-	emit_signal("value_changed", Vector2(value, max_slider.value))
+var range_start: float = 0.25:
+	set(v):
+		range_start = v
+		if _slider:
+			_slider.value = v
 
-func _on_max_changed(value: float) -> void:
-	if value < min_slider.value:
-		value = min_slider.value
-		max_slider.value = value
-	emit_signal("value_changed", Vector2(min_slider.value, value))
+var range_end: float = 0.75:
+	set(v):
+		range_end = v
+		if _slider:
+			_slider.range_value = v
+
+var editable: bool = true:
+	set(v):
+		editable = v
+		if _slider:
+			_slider.editable = v
+
+func _init(p_range_start: float = 0.25, p_range_end: float = 0.75, p_step: float = 0.1, p_min_value: float = 0.0, p_max_value: float = 1.0) -> void:
+	_step = p_step
+	_min_value = p_min_value
+	_max_value = p_max_value
+	range_start = p_range_start
+	range_end = p_range_end
+
+func _ready() -> void:
+	_slider = M3Slider.new()
+	_slider.slider_variant = M3Slider.Variant.RANGE
+	_slider.min_value = _min_value
+	_slider.max_value = _max_value
+	_slider.step = _step
+	_slider.value = range_start
+	_slider.range_value = range_end
+	_slider.editable = editable
+	_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(_slider)
+	_slider.value_changed.connect(_on_value_changed)
+	_slider.range_value_changed.connect(_on_range_value_changed)
+
+func _on_value_changed(_value: float) -> void:
+	_emit()
+
+func _on_range_value_changed(_value: float) -> void:
+	_emit()
+
+func _emit() -> void:
+	range_start = _slider.value
+	range_end = _slider.range_value
+	value_changed.emit(Vector2(range_start, range_end))
+
+func set_range(p_start: float, p_end: float) -> void:
+	range_start = p_start
+	range_end = p_end

@@ -7,7 +7,7 @@ class_name Indicator
 
 enum Status { NEUTRAL, SUCCESS, ERROR, WARNING }
 
-@export var dot_size: Vector2 = Vector2(12, 12):
+@export var dot_size: Vector2 = Vector2(M3Units.dp(12), M3Units.dp(12)):
 	set(value):
 		dot_size = value
 		if _status_dot:
@@ -22,7 +22,7 @@ enum Status { NEUTRAL, SUCCESS, ERROR, WARNING }
 @export var text_prefix: String = ""
 
 var _status_dot: ColorRect
-var _status_label: Label
+var _status_label: M3Label
 var _spacer: Control
 
 func _ready() -> void:
@@ -42,15 +42,13 @@ func _build_ui() -> void:
 	
 	# Spacer
 	_spacer = Control.new()
-	_spacer.custom_minimum_size = Vector2(8, 0)
+	_spacer.custom_minimum_size = Vector2(M3Units.dp(8), 0)
 	hbox.add_child(_spacer)
 	
 	# Status label
-	_status_label = Label.new()
+	_status_label = M3Label.new()
 	_status_label.visible = show_text
-	var fonts = M3Theme.load_fonts()
-	_status_label.add_theme_font_override("font", fonts["regular"])
-	_status_label.add_theme_color_override("font_color", M3Theme.get_on_surface())
+	_status_label.label_style = M3Label.Style.BODY_MEDIUM
 	hbox.add_child(_status_label)
 
 func set_status(status: Status, message: String = "", tooltip: String = "") -> void:
@@ -96,6 +94,6 @@ func set_tooltip(tooltip: String) -> void:
 
 func refresh_theme() -> void:
 	if _status_label:
-		_status_label.add_theme_color_override("font_color", M3Theme.get_on_surface())
+		_status_label.refresh_theme()
 
 var _tooltip_text: String = ""

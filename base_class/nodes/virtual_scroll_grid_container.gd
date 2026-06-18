@@ -2056,11 +2056,13 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 			debug_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 			debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			
-			var label = Label.new()
+			var label = M3Label.new()
 			label.name = "_debug_label"
 			label.set_anchors_preset(Control.PRESET_TOP_LEFT)
-			label.position = Vector2(5, 5)
-			label.add_theme_font_size_override("font_size", 14)
+			label.position = Vector2(M3Units.dp(5), M3Units.dp(5))
+			label.label_style = M3Label.Style.BODY_SMALL
+			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+			label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 			debug_panel.add_child(label)
 			
 			card.add_child(debug_panel)

@@ -319,14 +319,10 @@ func match_var_type(settingsvar : SettingsVar):
 			rangeslider_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			add_child(rangeslider_label)
 			
-			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, 0.05)
-			rangeslider.set("_step", 0.05)
-			rangeslider.set("range_start", settingsvar.value.x)
-			rangeslider.set("range_end", settingsvar.value.y)
-			add_child(rangeslider.min)
-			add_child(rangeslider.max)
-			rangeslider.min.editable = settingsvar.state == 0
-			rangeslider.max.editable = settingsvar.state == 0
+			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, settingsvar.step, settingsvar.min_value, settingsvar.max_value)
+			rangeslider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rangeslider.editable = settingsvar.state == 0
+			add_child(rangeslider)
 			controls[settingsvar.property_name] = rangeslider
 			rangeslider.value_changed.connect(func(value: Vector2):
 				emit_signal("setting_changed", value, settingsvar)

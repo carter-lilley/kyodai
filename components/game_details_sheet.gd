@@ -24,7 +24,7 @@ const MAX_HEIGHT_DP := 640.0
 @onready var status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow/StatusLabel
 @onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/TitleIdLabel
 @onready var description_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/DescriptionLabel
-@onready var sibling_dropdown: OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SiblingDropdown
+@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SiblingDropdown
 @onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/ActionButton
 @onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/SyncButton
 @onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SyncStatusLabel
@@ -198,7 +198,7 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
     var active_id = game.selected_sibling_id if game.selected_sibling_id != 0 else game.romm_id
     for i in range(_sibling_options.size()):
         if _sibling_options[i].get("id", 0) == active_id:
-            sibling_dropdown.select(i)
+            sibling_dropdown.selected = i
             break
 
     # Show/hide dropdown based on whether there are siblings

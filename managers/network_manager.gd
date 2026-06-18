@@ -478,7 +478,7 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 	
 	return {"success": true, "body": body, "error": ""}
 
-func fetch_platforms(callback: Callable):
+func fetch_platforms(callback: Callable, use_cache: bool = true):
 	if not _is_configured:
 		callback.call({}, "Not configured")
 		return
@@ -487,7 +487,7 @@ func fetch_platforms(callback: Callable):
 		var success = error == ""
 		api_request_completed.emit("platforms", success, data if success else error)
 		callback.call(data, error)
-	, true, true)  # authenticated=true, use_cache=true
+	, true, use_cache)  # authenticated=true, use_cache=parameter
 
 func get_and_reset_cache_stats() -> Dictionary:
 	"""Get cache statistics and reset counters."""

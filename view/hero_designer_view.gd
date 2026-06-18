@@ -7,8 +7,8 @@ var _current_config: Dictionary = {}
 var _preview_hero: HeroImage
 var _preview_container: Control
 var _effect_designer_ui: EffectDesignerUI
-var _corner_slider: HSlider
-var _height_preset_btn: OptionButton
+var _corner_slider: M3Slider
+var _height_preset_btn: M3OptionButton
 
 const HEIGHT_RATIOS = [1.0, 0.66, 0.5, 0.33, 0.0]
 
@@ -99,29 +99,29 @@ func _setup_ui():
 	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(left_vbox)
 	
-	var title_label = Label.new()
+	var title_label = M3Label.new()
 	title_label.text = "Hero Designer"
-	title_label.add_theme_font_size_override("font_size", 24)
+	title_label.label_style = M3Label.Style.HEADLINE_SMALL
 	left_vbox.add_child(title_label)
 	
-	var subtitle_label = Label.new()
+	var subtitle_label = M3Label.new()
 	subtitle_label.text = "Customize hero image appearance"
-	subtitle_label.add_theme_font_size_override("font_size", 12)
+	subtitle_label.label_style = M3Label.Style.BODY_SMALL
 	left_vbox.add_child(subtitle_label)
 	
 	left_vbox.add_child(HSeparator.new())
 	
 	# Global Settings section (similar to Card Designer)
-	var global_label = Label.new()
+	var global_label = M3Label.new()
 	global_label.text = "Global Settings"
-	global_label.add_theme_font_size_override("font_size", 16)
+	global_label.label_style = M3Label.Style.TITLE_MEDIUM
 	left_vbox.add_child(global_label)
 	
-	var corner_label = Label.new()
+	var corner_label = M3Label.new()
 	corner_label.text = "Hero Rounding (0-1)"
 	left_vbox.add_child(corner_label)
 	
-	_corner_slider = HSlider.new()
+	_corner_slider = M3Slider.new()
 	_corner_slider.min_value = 0.0
 	_corner_slider.max_value = 1.0
 	_corner_slider.step = 0.01
@@ -129,11 +129,11 @@ func _setup_ui():
 	_corner_slider.value_changed.connect(_on_corner_radius_changed)
 	left_vbox.add_child(_corner_slider)
 	
-	var height_label = Label.new()
+	var height_label = M3Label.new()
 	height_label.text = "Hero Height"
 	left_vbox.add_child(height_label)
 	
-	_height_preset_btn = OptionButton.new()
+	_height_preset_btn = M3OptionButton.new()
 	_height_preset_btn.add_item("Full (100%)", 0)
 	_height_preset_btn.add_item("Two Thirds (66%)", 1)
 	_height_preset_btn.add_item("Half (50%)", 2)
@@ -187,7 +187,7 @@ func _load_current_config():
 	if _height_preset_btn:
 		var height_index = _current_config.get("hero_height", 0)
 		if height_index is int and height_index >= 0 and height_index < HEIGHT_RATIOS.size():
-			_height_preset_btn.select(height_index)
+			_height_preset_btn.selected = height_index
 	
 	# Update effect designer UI
 	if _effect_designer_ui:

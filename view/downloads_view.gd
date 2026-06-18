@@ -3,7 +3,7 @@ extends View
 
 @onready var scroll_container: ScrollContainer = $VBoxContainer/ScrollContainer
 @onready var downloads_list: VBoxContainer = $VBoxContainer/ScrollContainer/DownloadsList
-@onready var clear_completed_button: Button = $VBoxContainer/Toolbar/ClearCompletedButton
+@onready var clear_completed_button: M3Button = $VBoxContainer/Toolbar/ClearCompletedButton
 
 var _download_items: Dictionary = {}  # item_id -> DownloadCard
 

@@ -22,12 +22,12 @@ func _build_content() -> void:
 	for child in _content_slot.get_children():
 		child.queue_free()
 	
-	var placeholder := Label.new()
+	var placeholder := M3Label.new()
 	placeholder.text = "IGDB filters coming soon"
 	placeholder.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	placeholder.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	placeholder.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	placeholder.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
+	placeholder.use_on_surface_variant = true
 	_content_slot.add_child(placeholder)
 
 static func prepare() -> void:

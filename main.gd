@@ -48,15 +48,15 @@ var _m3_theme: Theme = null
 
 func _ready():
 	_setup_repeat()
-	
+
 	# Disable automatic quit so we can free the scene tree before the rendering
 	# server shuts down. Without this, get_tree().quit() exits without destroying
 	# nodes, which causes CanvasItem/Texture RID leaks.
 	get_tree().auto_accept_quit = false
-	
+
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
-	
+
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
 	hero_image = get_node("RootLayout/ContentWrapper/HeroImage")
@@ -65,11 +65,11 @@ func _ready():
 	content_wrapper = get_node("RootLayout/ContentWrapper")
 	main_content_vbox = get_node("RootLayout/ContentWrapper/MainContentVBox")
 	root_layout = get_node("RootLayout")
-	
+
 	# Cache the on-screen keyboard and UILayer references (survive reparenting in dual-screen mode)
 	_ui_layer = get_node_or_null("UILayer")
 	_keyboard = get_node_or_null("UILayer/OnscreenKeyboard")
-	
+
 	# Initialize UIManager with all the pre-built nodes
 	UIManager.initialize(
 		tab_container,
@@ -80,64 +80,64 @@ func _ready():
 		main_content_vbox,
 		root_layout
 	)
-	
+
 	# Create debounced zoom save timer (replaces _process polling)
 	_zoom_save_timer = Timer.new()
 	_zoom_save_timer.one_shot = true
 	_zoom_save_timer.wait_time = ZOOM_SAVE_DELAY_MS / 1000.0
 	_zoom_save_timer.timeout.connect(_on_zoom_save_timer_timeout)
 	add_child(_zoom_save_timer)
-	
+
 	# Connect zoom slider signals
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	if zoom_slider:
 		zoom_slider.value_changed.connect(_on_zoom_changed)
 		zoom_slider.drag_ended.connect(_on_zoom_changed_finished)
-	
+
 	# Connect view mode buttons
 	# Note: UIManager.initialize() reparents ContentWrapper, so we must use the
 	# cached main_content_vbox reference instead of a root-relative path.
 	view_mode_group = main_content_vbox.get_node("HBoxContainer/M3ButtonGroup")
 	view_mode_group.selection_changed.connect(_on_view_mode_changed)
 	_sync_view_mode_button_to_setting()
-	
+
 	# Connect settings gear button (if present in scene; nav footer button is primary)
 	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
 	if settings_button:
 		settings_button.pressed.connect(_on_settings_button_pressed)
-	
+
 	# Connect more-options button
 	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
 	if more_button:
 		more_button.pressed.connect(_on_more_button_pressed)
-	
+
 	# Connect to UIManager for tab changes and settings dialog
 	UIManager.tab_changed.connect(_on_tab_changed)
 	UIManager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
-	
+
 	# Connect to SettingsManager to sync UI when presets are applied
 	if SettingsManager:
 		SettingsManager.apply_preset_end.connect(_on_preset_applied)
-	
+
 	# Connect to LaunchManager to save focus before game launch
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
 		# Connect to background state signals for desktop
 		LaunchManager.background_state_entered.connect(_on_background_state_entered)
 		LaunchManager.background_state_exited.connect(_on_background_state_exited)
-	
+
 	# Set initial view
 	_update_ui_for_view("Home")
-	
+
 	# Load and apply saved zoom setting (wait for views to be ready)
 	await get_tree().process_frame
 	_load_and_apply_saved_zoom()
-	
+
 	# Connect to screen swap signal for dual screen handling
 	var ayn_thor_manager = get_node_or_null("AynThorManager")
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
-	
+
 	# Keep DualScreenSetup in the scene tree so its SubViewports are freed with Main.
 	# When dual-screen is disabled we disable processing and hide it to avoid input
 	# interference on desktop.
@@ -154,14 +154,14 @@ func _ready():
 			var second_viewport_container = get_node_or_null("DualScreenSetup/SecondViewportContainer")
 			if second_viewport_container:
 				second_viewport_container.focus_mode = Control.FOCUS_NONE
-	
+
 	# Extract native binaries on Android (non-blocking, happens in background)
 	if PlatformManager.is_android():
 		AndroidBinaryExtractor.extract_all_binaries()
-	
+
 	# Check if first-run wizard needs to be shown
 	_show_oobe_wizard_if_needed()
-	
+
 	# Apply M3 theme to root for fallback native control styling (scrollbars, etc.)
 	_apply_m3_theme()
 
@@ -178,12 +178,25 @@ func _show_oobe_wizard_if_needed():
 	var is_first_run = true
 	if first_run_setting:
 		is_first_run = not first_run_setting.value
-	
+
 	if is_first_run:
 		print("[Main] First run detected, showing OOBE wizard")
 		var wizard = OobeWizard.new()
 		wizard.wizard_completed.connect(_on_oobe_wizard_completed)
+		# If storage paths were already set in a previous incomplete run, resume
+		# at the RomM connection page instead of making the user re-enter them.
 		wizard.start_wizard()
+		_resume_oobe_if_needed.call_deferred(wizard)
+
+func _resume_oobe_if_needed(wizard: OobeWizard):
+	if not wizard:
+		return
+	var games_setting = SettingsManager.get_setting("games_root_folder")
+	var emulators_setting = SettingsManager.get_setting("emulators_folder")
+	var has_storage_paths = games_setting and not str(games_setting.value).is_empty() \
+		and emulators_setting and not str(emulators_setting.value).is_empty()
+	if has_storage_paths:
+		wizard.show_page.call_deferred(OobeWizard.Page.ROMM_CONNECTION)
 
 func _on_oobe_wizard_completed():
 	print("[Main] OOBE wizard completed")
@@ -203,7 +216,7 @@ func _on_settings_dialog_dismissed() -> void:
 	if nav_settings_btn and nav_settings_btn.focus_mode != Control.FOCUS_NONE:
 		nav_settings_btn.grab_focus()
 		return
-	
+
 	# Fallback to scene settings button
 	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
 	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
@@ -214,26 +227,26 @@ func _on_more_button_pressed() -> void:
 	var current_view = UIManager.get_current_view()
 	var is_grid = false
 	var is_horizontal = false
-	
+
 	if current_view:
 		var grid = _get_view_grid(current_view)
 		if grid:
 			is_grid = grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
 			is_horizontal = not grid.grid_vertical
-	
+
 	menu.add_check_item("Horizontal Grid", is_horizontal, _toggle_horizontal_grid)
 	if not is_grid:
 		menu.get_item(menu.get_item_count() - 1).disabled = true
-	
+
 	menu.add_separator()
-	
+
 	# Card Display Mode submenu
 	var display_mode = 0
 	if SettingsManager:
 		var display_setting = SettingsManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
 			display_mode = display_setting.value
-	
+
 	var display_submenu = M3Menu.new()
 	display_submenu.auto_free = false
 	display_submenu.radio_group = true
@@ -241,14 +254,14 @@ func _on_more_button_pressed() -> void:
 	display_submenu.add_check_item("Transparent", display_mode == 1, func(): _set_card_display_mode(1))
 	display_submenu.add_check_item("Media Only", display_mode == 2, func(): _set_card_display_mode(2))
 	menu.add_submenu_item("Card Display Mode", display_submenu, "cards-outline")
-	
+
 	# Card Media Ratio submenu
 	var media_ratio = 0
 	if SettingsManager:
 		var ratio_setting = SettingsManager.get_setting("card_media_aspect_ratio")
 		if ratio_setting and ratio_setting.value is int:
 			media_ratio = ratio_setting.value
-	
+
 	var ratio_submenu = M3Menu.new()
 	ratio_submenu.auto_free = false
 	ratio_submenu.radio_group = true
@@ -258,14 +271,14 @@ func _on_more_button_pressed() -> void:
 	ratio_submenu.add_check_item("1:1", media_ratio == 3, func(): _set_card_media_ratio(3))
 	ratio_submenu.add_check_item("16:11", media_ratio == 4, func(): _set_card_media_ratio(4))
 	menu.add_submenu_item("Card Media Ratio", ratio_submenu, "aspect-ratio")
-	
+
 	# Content Alignment submenu
 	var content_alignment = 0
 	if SettingsManager:
 		var align_setting = SettingsManager.get_setting("library_card_content_alignment")
 		if align_setting and align_setting.value is int:
 			content_alignment = align_setting.value
-	
+
 	var align_submenu = M3Menu.new()
 	align_submenu.auto_free = false
 	align_submenu.radio_group = true
@@ -273,7 +286,7 @@ func _on_more_button_pressed() -> void:
 	align_submenu.add_check_item("Center / Middle", content_alignment == 1, func(): _set_content_alignment(1))
 	align_submenu.add_check_item("Right / Bottom", content_alignment == 2, func(): _set_content_alignment(2))
 	menu.add_submenu_item("Content Alignment", align_submenu, "format-align-center")
-	
+
 	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
 	if more_button:
 		menu.popup(more_button)
@@ -306,10 +319,10 @@ func _toggle_horizontal_grid() -> void:
 		var grid = _get_view_grid(current_view)
 		if grid:
 			target_vertical = not grid.grid_vertical
-	
+
 	# Remember which card had focus so we can restore it after re-layout
 	var focused_index = _get_focused_card_index()
-	
+
 	# Apply to both Home and Library grids
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
@@ -317,18 +330,18 @@ func _toggle_horizontal_grid() -> void:
 			var grid = _get_view_grid(view)
 			if grid:
 				grid.grid_vertical = target_vertical
-	
+
 	# Persist
 	if SettingsManager:
 		var setting = SettingsManager.get_setting("library_grid_vertical")
 		if setting:
 			SettingsManager.set_setting(target_vertical, setting)
 			SettingsManager.save_settings()
-	
+
 	# Refresh zoom slider so it uses snap ratios for the new orientation
 	if current_view:
 		_update_ui_for_view(current_view.view_name)
-	
+
 	# Restore focus after the grid has re-laid out
 	if focused_index >= 0:
 		call_deferred("_restore_focus_to_card", focused_index, true)
@@ -344,28 +357,28 @@ func _apply_zoom_to_view_deferred(view_name: String) -> void:
 	var view = UIManager.get_view(view_name)
 	if not view:
 		return
-	
+
 	var grid = _get_view_grid(view)
 	if not grid or not SettingsManager:
 		return
-	
+
 	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 	if not zoom_setting:
 		return
-	
+
 	# Keep checking until grid has valid dimensions
 	if grid.size.x <= 0 or grid.size.y <= 0:
 		await get_tree().process_frame
 		_apply_zoom_to_view_deferred(view_name)
 		return
-	
+
 	grid.target_card_width_ratio = zoom_setting.value
 
 func _update_ui_for_view(view_name: String):
 	# Show/hide view mode buttons only on Home and Library
 	if view_mode_group:
 		view_mode_group.visible = view_name in ["Home", "Library"]
-	
+
 	# Update zoom slider to match current view's grid
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	if zoom_slider:
@@ -400,7 +413,7 @@ func _update_zoom_slider_stops(zoom_slider: M3Slider, games_grid: VirtualScrollG
 	# Reverse so index 0 = smallest ratio (zoomed out, most items per line)
 	# and max index = largest ratio (zoomed in, fewest items per line)
 	snap_ratios.reverse()
-	
+
 	# Guard: ensure at least 2 snap ratios to prevent division-by-zero in slider
 	# and to provide meaningful zoom range. If only 1 ratio, add a second.
 	if snap_ratios.size() == 1:
@@ -408,7 +421,7 @@ func _update_zoom_slider_stops(zoom_slider: M3Slider, games_grid: VirtualScrollG
 		var second_ratio = maxf(0.05, snap_ratios[0] * 0.7)
 		if not is_equal_approx(second_ratio, snap_ratios[0]):
 			snap_ratios.insert(0, second_ratio)
-	
+
 	_current_snap_ratios = snap_ratios
 	if snap_ratios.size() >= 2:
 		# Grid mode: use integer indices so stops are evenly spaced visually.
@@ -454,10 +467,10 @@ func _find_nearest_snap_index(ratio: float) -> int:
 func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 	if selected_indices.is_empty():
 		return
-	
+
 	var new_mode: VirtualScrollGridContainer.ViewMode
 	var setting_value: int
-	
+
 	match selected_indices[0]:
 		0:  # Grid
 			new_mode = VirtualScrollGridContainer.ViewMode.GRID
@@ -470,7 +483,7 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			setting_value = 2
 		_:
 			return
-	
+
 	# Apply to both Home and Library grids
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
@@ -482,14 +495,14 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 				push_error("[Main] No grid found for view: " + view_name)
 		else:
 			push_error("[Main] View not found: " + view_name)
-	
+
 	# Save to settings
 	if SettingsManager:
 		var mode_setting = SettingsManager.get_setting("library_layout_mode")
 		if mode_setting:
 			SettingsManager.set_setting(setting_value, mode_setting)
 			SettingsManager.save_settings()
-	
+
 	# Update zoom slider stops/range since max zoom and snap levels differ per mode
 	var current_view = UIManager.get_current_view()
 	if current_view:
@@ -514,17 +527,17 @@ func _on_preset_applied() -> void:
 func _sync_view_mode_button_to_setting() -> void:
 	if not view_mode_group or not SettingsManager:
 		return
-	
+
 	var mode_setting = SettingsManager.get_setting("library_layout_mode")
 	var layout_mode_val = mode_setting.value if mode_setting else 0
-	
+
 	var button_index: int
 	match layout_mode_val:
 		0: button_index = 0  # Grid
 		1: button_index = 1  # List
 		2: button_index = 2  # Carousel
 		_: button_index = 0
-	
+
 	view_mode_group.select_button(button_index)
 
 func _on_zoom_changed(value: float):
@@ -534,7 +547,7 @@ func _on_zoom_changed(value: float):
 		# Grid mode: value is an integer index — map to actual ratio
 		var index = clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
 		actual_zoom = _current_snap_ratios[index]
-	
+
 	# Apply zoom to BOTH Home and Library grids for consistent zoom across views
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
@@ -558,7 +571,7 @@ func _on_zoom_changed_finished(value_changed: bool):
 			saved_value = _current_snap_ratios[index]
 		else:
 			saved_value = zoom_slider.value
-	
+
 	# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
 	if SettingsManager:
 		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
@@ -588,13 +601,13 @@ func _load_and_apply_saved_zoom() -> void:
 	"""Load saved zoom from settings and apply to both grids for parity."""
 	if not SettingsManager:
 		return
-	
+
 	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
 	if not zoom_setting:
 		return
-	
+
 	var saved_zoom = zoom_setting.value
-	
+
 	# Apply to BOTH Home and Library views for consistent zoom across views
 	for view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
@@ -602,7 +615,7 @@ func _load_and_apply_saved_zoom() -> void:
 			var grid = _get_view_grid(view)
 			if grid:
 				grid.target_card_width_ratio = saved_zoom
-	
+
 	# Set zoom slider to saved value and refresh stops
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	if zoom_slider:
@@ -670,7 +683,7 @@ func _setup_repeat():
 	_delay_timer.one_shot = true
 	_delay_timer.timeout.connect(_on_delay_timeout)
 	add_child(_delay_timer)
-	
+
 	_repeat_timer = Timer.new()
 	_repeat_timer.wait_time = REPEAT_DELAY
 	_repeat_timer.timeout.connect(_on_repeat)
@@ -681,13 +694,13 @@ func _handle_ui_cancel() -> void:
 	# Block during background state (emulator running)
 	if LaunchManager and LaunchManager.is_in_background_state():
 		return
-	
+
 	# Block if OOBE wizard is visible
 	if _ui_layer:
 		for child in _ui_layer.get_children():
 			if child.has_method("start_wizard") and child.visible:
 				return
-	
+
 	# Check if keyboard is visible - let keyboard handle it
 	print("[Main] _handle_ui_cancel: _keyboard=", _keyboard, " visible=", _keyboard.visible if _keyboard else "N/A", " in_second_viewport=", UIManager._keyboard_is_in_second_viewport if UIManager else "N/A")
 	if _keyboard and _keyboard.visible:
@@ -704,21 +717,21 @@ func _handle_ui_cancel() -> void:
 			return
 		else:
 			return
-	
+
 	# Check if settings dialog is open - let it handle dismissal
 	if UIManager and UIManager.is_settings_dialog_open():
 		return
-	
+
 	# If a bottom sheet overlay is open, let M3Overlay handle dismissal
 	if M3Overlay.is_showing("bottom_sheet"):
 		return
-	
+
 	# If in Library view with an active search, clear the search first
 	var current_view = UIManager.get_current_view()
 	if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_search"):
 		if current_view.try_clear_search():
 			return
-	
+
 	# If focus is locked in a grid, escape to the nav bar instead of switching to Home
 	if current_view and current_view.games_grid:
 		var grid = current_view.games_grid
@@ -739,7 +752,7 @@ func _handle_ui_cancel() -> void:
 					home_button.grab_focus()
 					print("[Main] _handle_ui_cancel: escaped locked grid to home button")
 			return
-	
+
 	# Play return sound
 	if AudioManager:
 		AudioManager.play_sfx("return")
@@ -754,15 +767,15 @@ func _input(event: InputEvent):
 	if LaunchManager and LaunchManager.is_in_background_state():
 		get_viewport().set_input_as_handled()
 		return
-	
+
 	# Block input if OOBE wizard is visible
 	if _ui_layer:
 		for child in _ui_layer.get_children():
 			if child.has_method("start_wizard") and child.visible:
 				return
-	
+
 	var dirs = ["ui_left", "ui_right", "ui_up", "ui_down"]
-	
+
 	for dir in dirs:
 		if event.is_action_pressed(dir):
 			if event is InputEventKey:
@@ -770,7 +783,7 @@ func _input(event: InputEvent):
 				if now - _last_press < 80:
 					return
 				_last_press = now
-			
+
 			# Only handle nav transitions on the initial press, not auto-repeats.
 			# Joystick analog input generates a stream of events; without this,
 			# focus would skip past nav items before the user can release.
@@ -780,11 +793,11 @@ func _input(event: InputEvent):
 					_delay_timer.start()
 					get_viewport().set_input_as_handled()
 					return
-			
+
 			_held_dir = dir
 			_delay_timer.start()
 			return
-		
+
 		if event.is_action_released(dir) and _held_dir == dir:
 			# Ignore synthetic release events from our repeat system
 			if event is InputEventAction:
@@ -793,7 +806,7 @@ func _input(event: InputEvent):
 			_delay_timer.stop()
 			_repeat_timer.stop()
 			return
-	
+
 	# Handle zoom in/out with triggers - only on press, not hold
 	if event.is_action_pressed("zoom_in"):
 		if not _zoom_in_pressed:
@@ -805,7 +818,7 @@ func _input(event: InputEvent):
 	elif event.is_action_released("zoom_in"):
 		_zoom_in_pressed = false
 		return
-	
+
 	if event.is_action_pressed("zoom_out"):
 		if not _zoom_out_pressed:
 			if AudioManager:
@@ -816,7 +829,7 @@ func _input(event: InputEvent):
 	elif event.is_action_released("zoom_out"):
 		_zoom_out_pressed = false
 		return
-	
+
 	# Handle ui_cancel: return to Home unless blocked by overlay.
 	if event.is_action_pressed("ui_cancel"):
 		_handle_ui_cancel()
@@ -833,11 +846,11 @@ func _try_nav_to_grid(event: InputEvent) -> bool:
 	var focused = _get_focus_owner()
 	if not focused:
 		return false
-	
+
 	var nav_type = UIManager.get_nav_type()
 	var settings_btn = UIManager.find_nav_settings_button()
 	var last_dest = UIManager.get_last_nav_destination()
-	
+
 	# From nav destination -> Grid (UP for bar, RIGHT for rail)
 	if focused is M3NavigationDestination:
 		if nav_type == 0:  # Bar
@@ -857,7 +870,7 @@ func _try_nav_to_grid(event: InputEvent) -> bool:
 					settings_btn.grab_focus()
 					return true
 		return false
-	
+
 	# From Settings -> Last nav destination (LEFT for bar, UP for rail)
 	if focused == settings_btn:
 		if nav_type == 0:  # Bar
@@ -871,7 +884,7 @@ func _try_nav_to_grid(event: InputEvent) -> bool:
 					last_dest.grab_focus()
 					return true
 		return false
-	
+
 	return false
 
 func _enter_grid() -> bool:
@@ -885,14 +898,14 @@ func _adjust_zoom(delta: float) -> void:
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	if not zoom_slider:
 		return
-	
+
 	var current_view = UIManager.get_current_view()
 	var is_grid = false
 	if current_view:
 		var games_grid = _get_view_grid(current_view)
 		if games_grid:
 			is_grid = games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
-	
+
 	if _current_snap_ratios.size() > 0 and is_grid:
 		# Grid mode: move by whole stop indices
 		var current_index = int(round(zoom_slider.value))
@@ -911,13 +924,13 @@ func _adjust_zoom(delta: float) -> void:
 					if _zoom_save_timer:
 						_zoom_save_timer.start()
 		return
-	
+
 	# List/Carousel mode: step by slider step to avoid snapping back
 	var current_zoom = zoom_slider.value
 	var max_zoom = 0.5
 	var effective_delta = sign(delta) * zoom_slider.step
 	var new_zoom = clampf(current_zoom + effective_delta, 0.05, max_zoom)
-	
+
 	if not is_equal_approx(current_zoom, new_zoom):
 		var focused_index = _get_focused_card_index()
 		zoom_slider.set_value_no_signal(new_zoom)
@@ -938,18 +951,18 @@ func _get_focused_card_index() -> int:
 	var viewport = get_viewport()
 	if not viewport:
 		return -1
-	
+
 	var focused = viewport.gui_get_focus_owner()
 	if not focused:
 		return -1
-	
+
 	# Find the GameCard that contains the focused control
 	var parent = focused
 	while parent:
 		if parent.has_meta("virtual_index"):
 			return parent.get_meta("virtual_index", -1)
 		parent = parent.get_parent()
-	
+
 	return -1
 
 func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
@@ -957,21 +970,21 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	var current_view = UIManager.get_current_view()
 	if not current_view:
 		return
-	
+
 	# For HomeView, normally restore to index 0 since it reorders by last played.
 	# When preserve_index is true (e.g. orientation toggle), keep the original index.
 	var target_index = index
 	if current_view is HomeView and not preserve_index:
 		target_index = 0
-	
+
 	var games_grid = _get_view_grid(current_view)
 	if not games_grid:
 		return
-	
+
 	var card = games_grid.get_card_at_index(target_index)
 	if not card:
 		return
-	
+
 	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node)
 	if card is Control and card.focus_mode != Control.FOCUS_NONE:
 		card.grab_focus()
@@ -992,7 +1005,7 @@ func _resend():
 		press.action = _held_dir
 		press.pressed = true
 		Input.parse_input_event(press)
-		
+
 		# Send release event to reset action state (allows analog sticks to work)
 		var release = InputEventAction.new()
 		release.action = _held_dir
@@ -1007,6 +1020,10 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		# Flush any pending settings changes before shutdown
+		if SettingsManager:
+			SettingsManager.save_settings()
+
 		# The OS asked us to close. Free the entire scene tree now so all node
 		# RIDs are released before the rendering server finalizes, then quit.
 		# auto_accept_quit is disabled in _ready(), so the default quit() is
@@ -1016,22 +1033,22 @@ func _notification(what: int) -> void:
 			tree.root.queue_free()
 			call_deferred("_deferred_quit")
 		return
-	
+
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		print("[Main] NOTIFICATION_APPLICATION_RESUMED received, _last_focused_index = ", _last_focused_index)
-		
+
 		# On Android, exiting background state when we resume triggers save upload
 		if LaunchManager and LaunchManager.is_in_background_state():
 			print("[Main] In background state on resume, exiting to trigger save upload")
 			LaunchManager.force_exit_background_state()
-		
+
 		# Restore focus when app returns to foreground (Android)
 		if _last_focused_index >= 0:
 			print("[Main] Calling _restore_focus_to_card deferred")
 			call_deferred("_restore_focus_to_card", _last_focused_index)
 		else:
 			print("[Main] No saved focus index, skipping restoration")
-		
+
 		# Clear emulator validation cache and stale pending launches
 		# This handles APK installs that completed while the app was in the background
 		if LaunchManager:
@@ -1044,7 +1061,7 @@ func _notification(what: int) -> void:
 			# Restore focus to the platform card the user was last interacting with
 			if platforms_view.has_method("restore_focus_to_last_active"):
 				call_deferred("_restore_platform_focus")
-		
+
 		# Dismiss any stale notifications (e.g., extraction notifications that completed while backgrounded)
 		if NotificationManager:
 			NotificationManager.dismiss_all_notifications()
@@ -1058,11 +1075,11 @@ func _deferred_quit() -> void:
 func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	"""Save the focused card index when a game launch is initiated."""
 	print("[Main] _on_game_launch_initiated() called with focus_index: ", focus_index)
-	
+
 	# Store the focused card index (passed from card before focus is lost)
 	_last_focused_index = focus_index
 	print("[Main] Saved _last_focused_index: ", _last_focused_index)
-	
+
 	# Note: Pre-launch save sync is now handled inside LaunchManager.launch_game()
 
 func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
@@ -1081,7 +1098,7 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	print("[Main] Background state exited - restoring focus")
 	# Optional: Remove overlay
 	# UIManager.set_dimmed(false)
-	
+
 	# Auto-upload saves after playing (skip during shuffler sessions)
 	if ShufflerManager.is_session_active():
 		print("[Main] Auto-upload skipped: shuffler session active")
@@ -1094,7 +1111,7 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 			print("[Main] Auto-upload skipped: no emulator resolved")
 	else:
 		print("[Main] Auto-upload skipped: _game is null")
-	
+
 	# Restore focus to the last known position
 	if _last_focused_index >= 0:
 		call_deferred("_restore_focus_to_card", _last_focused_index)

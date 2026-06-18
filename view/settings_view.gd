@@ -126,10 +126,10 @@ func _create_settings_tab(setting_name: String, settings_vars: Array) -> Control
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_top", 20)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_bottom", 20)
+	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
 	
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -234,7 +234,7 @@ func _create_preset_section(vbox: VBoxContainer) -> void:
 	
 	# Preset dropdown and buttons container
 	var preset_container = HBoxContainer.new()
-	preset_container.custom_minimum_size = Vector2(0, 30)
+	preset_container.custom_minimum_size = Vector2(0, M3Units.dp(30))
 	vbox.add_child(preset_container)
 	
 	# Preset dropdown
@@ -246,15 +246,17 @@ func _create_preset_section(vbox: VBoxContainer) -> void:
 	preset_container.add_child(_preset_dropdown)
 	
 	# Load button (opens file dialog)
-	var load_button = Button.new()
+	var load_button = M3Button.new()
 	load_button.text = "Load"
+	load_button.button_size = M3Button.Size.SMALL
 	load_button.tooltip_text = "Import preset from file"
 	load_button.pressed.connect(_on_load_preset_pressed)
 	preset_container.add_child(load_button)
 	
 	# Export button
-	var export_button = Button.new()
+	var export_button = M3Button.new()
 	export_button.text = "Export"
+	export_button.button_size = M3Button.Size.SMALL
 	export_button.tooltip_text = "Export current settings as preset"
 	export_button.pressed.connect(_on_export_preset_pressed)
 	preset_container.add_child(export_button)
@@ -285,20 +287,18 @@ func _on_preset_selected(index: int) -> void:
 	if not preset:
 		return
 	
-	# Show confirmation dialog
-	var dialog = ConfirmationDialog.new()
-	dialog.title = "Load Theme Preset"
-	dialog.dialog_text = "Load preset '%s'?\n\nThis will overwrite your current library and card settings." % preset.name
-	dialog.get_ok_button().text = "Load"
-	dialog.confirmed.connect(func():
+	var dialog = M3Dialog.new()
+	dialog.title_text = "Load Theme Preset"
+	dialog.body_text = "Load preset '%s'?\n\nThis will overwrite your current library and card settings." % preset.name
+	dialog.add_action("Cancel", func(): dialog.dismiss(), false)
+	dialog.add_action("Load", func():
 		_apply_preset(preset)
-	)
-	dialog.canceled.connect(func():
-		# Reset dropdown to "New Theme..."
+		dialog.dismiss()
+	, true)
+	dialog.dismissed.connect(func():
 		_preset_dropdown.selected = 0
 	)
-	add_child(dialog)
-	dialog.popup_centered()
+	dialog.show_overlay()
 
 func _apply_preset(preset: ThemePreset) -> void:
 	_is_applying_preset = true
@@ -453,21 +453,24 @@ func _on_load_preset_pressed() -> void:
 			_refresh_preset_dropdown()
 			
 			# Auto-apply the imported preset with confirmation
-			var dialog = ConfirmationDialog.new()
-			dialog.title = "Apply Imported Preset"
-			dialog.dialog_text = "Apply the imported preset '%s' now?" % preset.name
-			dialog.get_ok_button().text = "Apply"
-			dialog.confirmed.connect(func():
+			var dialog = M3Dialog.new()
+			dialog.title_text = "Apply Imported Preset"
+			dialog.body_text = "Apply the imported preset '%s' now?" % preset.name
+			dialog.add_action("Cancel", func(): dialog.dismiss(), false)
+			dialog.add_action("Apply", func():
 				_apply_preset(preset)
+				dialog.dismiss()
+			, true)
+			dialog.dismissed.connect(func():
+				_preset_dropdown.selected = 0
 			)
-			add_child(dialog)
-			dialog.popup_centered()
+			dialog.show_overlay()
 		else:
 			NotificationManager.show_notification("Failed to import preset", NotificationManager.Type.ERROR)
 	)
 	
 	add_child(file_dialog)
-	file_dialog.popup_centered(Vector2(800, 600))
+	file_dialog.popup_centered(Vector2(M3Units.dp(800), M3Units.dp(600)))
 
 func _on_export_preset_pressed() -> void:
 	if not SettingsManager.settings:
@@ -476,18 +479,19 @@ func _on_export_preset_pressed() -> void:
 	var preset = ThemePreset.from_current_settings(SettingsManager.settings)
 	
 	# Ask for preset name
-	var name_dialog = ConfirmationDialog.new()
-	name_dialog.title = "Export Theme Preset"
-	name_dialog.dialog_text = "Enter a name for this preset:"
-	name_dialog.get_ok_button().text = "Save"
+	var name_dialog = M3Dialog.new()
+	name_dialog.title_text = "Export Theme Preset"
+	name_dialog.body_text = "Enter a name for this preset:"
 	
-	var line_edit = LineEdit.new()
+	var line_edit = M3TextField.new()
+	line_edit.label_text = "Preset Name"
 	line_edit.text = preset.name
 	line_edit.placeholder_text = "Preset Name"
 	line_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_dialog.add_child(line_edit)
+	name_dialog.content_slot.add_child(line_edit)
 	
-	name_dialog.confirmed.connect(func():
+	name_dialog.add_action("Cancel", Callable(), false)
+	name_dialog.add_action("Save", func():
 		if line_edit.text.is_empty():
 			NotificationManager.show_notification("Preset name cannot be empty", NotificationManager.Type.WARNING)
 			return
@@ -502,10 +506,9 @@ func _on_export_preset_pressed() -> void:
 			_refresh_preset_dropdown()
 		else:
 			NotificationManager.show_notification("Failed to save preset", NotificationManager.Type.ERROR)
-	)
+	, true)
 	
-	add_child(name_dialog)
-	name_dialog.popup_centered()
+	name_dialog.show_overlay()
 
 func _load_library_background_config() -> void:
 	var config_setting = SettingsManager.get_setting("library_background_config")
