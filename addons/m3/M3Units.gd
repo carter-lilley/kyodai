@@ -2,20 +2,53 @@ class_name M3Units
 extends RefCounted
 
 ## Material 3 Density-Independent Pixel (DP) Utilities
-## All M3 components use this for consistent DP-to-pixel scaling
+## All M3 components use this for consistent DP-to-pixel scaling.
+## When a DisplayManager is available, the scale is owned by it (screen/monitor
+## based). Otherwise this class falls back to a standalone computation.
 
 static var _cached_scale: float = -1.0
 
-## Get the DP-to-pixel scale factor based on screen DPI.
-## Desktop default: 96 DPI → scale = 0.6 (96/160)
-## High-DPI displays: scale > 1.0
-## Minimum scale: 1.0 to avoid tiny UI
+const BASE_HEIGHT := 1080.0
+const BASE_DPI := 160.0
+const DEFAULT_DPI := 96.0
+const MIN_SCALE := 1.0
+const MAX_SCALE := 4.0
+
+static func _get_display_manager() -> Node:
+	var main_loop := Engine.get_main_loop()
+	if not main_loop:
+		return null
+	var root: Window = main_loop.root
+	if not root:
+		return null
+	return root.get_node_or_null("/root/DisplayManager")
+
+## Get the DP-to-pixel scale factor.
+## Prefers DisplayManager's screen-based scale when available.
 static func get_scale() -> float:
-	if _cached_scale < 0:
-		var dpi = DisplayServer.screen_get_dpi()
-		if dpi <= 0:
-			dpi = 96  # Default desktop DPI
-		_cached_scale = max(1.0, dpi / 160.0)
+	if _cached_scale >= 0:
+		return _cached_scale
+
+	var dm := _get_display_manager()
+	if dm and dm.has_method("get_ui_scale"):
+		_cached_scale = dm.get_ui_scale()
+		return _cached_scale
+
+	# Fallback standalone computation (used when DisplayManager isn't ready yet).
+	var screen := DisplayServer.window_get_current_screen()
+	var os_scale := DisplayServer.screen_get_scale(screen)
+	if os_scale <= 0:
+		os_scale = 1.0
+
+	var screen_size := DisplayServer.screen_get_size(screen)
+	var resolution_scale := sqrt(screen_size.y / BASE_HEIGHT)
+
+	var dpi := DisplayServer.screen_get_dpi()
+	if dpi <= 0:
+		dpi = DEFAULT_DPI
+	var dpi_scale := dpi / BASE_DPI
+
+	_cached_scale = clamp(max(os_scale, resolution_scale, dpi_scale), MIN_SCALE, MAX_SCALE)
 	return _cached_scale
 
 ## Invalidate cached scale (call after display/window changes)

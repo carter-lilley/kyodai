@@ -46,7 +46,7 @@ func _setup_home_tab():
 
 	# Connect hero image signal
 	if home_view.has_signal("hero_game_changed"):
-		home_view.hero_game_changed.connect(ui_manager.hero_background._on_hero_game_changed)
+		home_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
 
 func _setup_library_tab():
 	var library_idx = _get_tab_index("Library")
@@ -69,7 +69,7 @@ func _setup_library_tab():
 
 	# Connect hero image signal
 	if library_view.has_signal("hero_game_changed"):
-		library_view.hero_game_changed.connect(ui_manager.hero_background._on_hero_game_changed)
+		library_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
 
 func _setup_downloads_tab():
 	var downloads_idx = _get_tab_index("Downloads")
@@ -96,7 +96,6 @@ func _sync_current_view_from_tab() -> void:
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
-		ui_manager.hero_background._update_hero_visibility(current_tab_title)
 		ui_manager.navigation._sync_nav_selection(current_tab_title)
 
 func _on_tab_changed(tab_idx: int):
@@ -113,9 +112,6 @@ func _on_tab_changed(tab_idx: int):
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
 		_current_view.on_view_show()
-
-		# Update hero image visibility based on view
-		ui_manager.hero_background._update_hero_visibility(tab_title)
 
 	ui_manager.tab_changed.emit(tab_title)
 

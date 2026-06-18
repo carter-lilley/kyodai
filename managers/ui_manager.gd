@@ -5,10 +5,13 @@ extends Manager
 
 @onready var view = $ViewManager
 @onready var navigation = $NavigationManager
-@onready var hero_background = $HeroBackgroundManager
 @onready var overlay = $OverlayManager
 @onready var theme = $ThemeManager
 @onready var dual_screen = $DualScreenManager
+
+# Cached references passed during initialization
+var _library_background: LibraryBackground = null
+var _hero_image: HeroImage = null
 
 # Centralized card/grid settings state. Owned by UIManager; consumers read this
 # instead of querying SettingsManager directly for card/grid settings.
@@ -50,6 +53,8 @@ func initialize(
 	_root_control = root_layout
 	_content_wrapper = content_wrapper
 	_main_content_vbox = main_content_vbox
+	_library_background = library_background
+	_hero_image = hero_image
 
 	# Get navigation type setting
 	var nav_type: int = 0
@@ -85,11 +90,16 @@ func initialize(
 
 	# Configure child managers
 	navigation.setup(_root_control, _content_wrapper, _inner_layout, nav_type)
-	hero_background.setup(hero_image, hero_spacer, library_background, content_wrapper, tab_container)
 	view.setup(tab_container)
 	overlay.setup(_root_control)
-	theme.setup()
+	theme.setup(tab_container)
 	dual_screen.setup(_root_control, hero_image, hero_spacer)
+
+	# Apply library background configuration now and when settings change
+	if _library_background and SettingsManager:
+		var bg_setting = SettingsManager.get_setting("library_background_config")
+		if bg_setting and bg_setting.value is Dictionary:
+			_library_background.set_background_config(bg_setting.value)
 
 	# Create and sync the centralized card/grid settings state.
 	card_settings_state = CardSettingsState.new()
@@ -255,16 +265,16 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	print("[UIManager] _on_setting_changed: %s" % setting.property_name)
 	match setting.property_name:
 		"library_background_config":
-			hero_background._apply_library_background_config()
+			if _library_background and _value is Dictionary:
+				_library_background.set_background_config(_value)
 		"library_navigation_type":
 			navigation.set_nav_type(setting.value)
 			navigation._rebuild_nav_and_layout()
 		"hero_effect_config":
-			if hero_background._hero_image and hero_background._hero_image.has_method("refresh_from_settings"):
-				hero_background._hero_image.refresh_from_settings()
-			hero_background._update_hero_size()
-			view.mark_view_for_rebuild("Home", "Hero height changed")
-			view.mark_view_for_rebuild("Library", "Hero height changed")
+			if _hero_image and _hero_image.has_method("refresh_from_settings"):
+				_hero_image.refresh_from_settings()
+			view.mark_view_for_rebuild("Home", "Hero effect config changed")
+			view.mark_view_for_rebuild("Library", "Hero effect config changed")
 		"dark_mode":
 			theme._apply_dark_mode(_value)
 		"library_primary_color":
@@ -285,6 +295,55 @@ func _on_card_settings_state_changed(_mask: int) -> void:
 	consumers connect to CardSettingsState.changed directly.
 	"""
 	pass
+
+# ============================================================================
+# Hero / library background helpers (moved from removed HeroBackgroundManager)
+# ============================================================================
+
+func _apply_library_background_config() -> void:
+	"""Apply the current library background configuration from settings."""
+	if not _library_background or not SettingsManager:
+		return
+	var config_setting = SettingsManager.get_setting("library_background_config")
+	if config_setting and config_setting.value is Dictionary:
+		_library_background.set_background_config(config_setting.value)
+
+func _on_hero_game_changed(game: GameResource) -> void:
+	"""Handle hero game change from views. Updates both the main hero and the
+	second-screen copy when dual screen is active."""
+	if not _hero_image:
+		return
+
+	var current_view = view.get_current_view()
+	var current_view_name = current_view.view_name if current_view else ""
+	if current_view_name not in ["Home", "Library"]:
+		return
+
+	# Check if hero height is set to 0% (hidden)
+	var hero_config_setting = SettingsManager.get_setting("hero_effect_config") if SettingsManager else null
+	var hero_config = hero_config_setting.value if hero_config_setting and hero_config_setting.value is Dictionary else {}
+	var height_index = hero_config.get("hero_height", 0)
+	var height_ratio = 0.0
+	if height_index is int or height_index is float:
+		var idx = int(height_index)
+		var ratios = [1.0, 0.66, 0.5, 0.33, 0.0]
+		if idx >= 0 and idx < ratios.size():
+			height_ratio = ratios[idx]
+	if height_ratio == 0.0:
+		return
+
+	if game:
+		_hero_image.set_game(game)
+		if dual_screen and dual_screen._dual_screen_active and dual_screen._hero_copy_in_second_viewport and dual_screen._hero_copy_in_second_viewport.has_method("set_game"):
+			dual_screen._hero_copy_in_second_viewport.set_game(game)
+		if dual_screen and dual_screen._dual_screen_active:
+			var ayn_thor_manager = get_node_or_null("/root/Main/AynThorManager")
+			if ayn_thor_manager and ayn_thor_manager.has_method("force_hero_viewport_update"):
+				ayn_thor_manager.force_hero_viewport_update()
+	else:
+		_hero_image.clear()
+		if dual_screen and dual_screen._dual_screen_active and dual_screen._hero_copy_in_second_viewport and dual_screen._hero_copy_in_second_viewport.has_method("clear"):
+			dual_screen._hero_copy_in_second_viewport.clear()
 
 # ============================================================================
 # Cleanup

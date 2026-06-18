@@ -5,12 +5,27 @@ var ui_manager: Node
 
 var _theme_refresh_pending: bool = false
 var _preset_in_progress: bool = false
+var _tab_container: TabContainer = null
 
 func _ready():
 	ui_manager = get_parent()
 
-func setup() -> void:
-	pass
+func setup(tab_container: TabContainer) -> void:
+	_tab_container = tab_container
+	_setup_library_appearance()
+
+func _setup_library_appearance() -> void:
+	"""Make the TabContainer panel transparent so the LibraryBackground shows through."""
+	if not _tab_container:
+		return
+	var transparent_style := StyleBoxFlat.new()
+	transparent_style.bg_color = Color(0, 0, 0, 0)
+	transparent_style.border_color = Color(0, 0, 0, 0)
+	transparent_style.border_width_bottom = 0
+	transparent_style.border_width_left = 0
+	transparent_style.border_width_right = 0
+	transparent_style.border_width_top = 0
+	_tab_container.add_theme_stylebox_override("panel", transparent_style)
 
 func _apply_dark_mode(enabled: bool) -> void:
 	M3Theme.is_dark_mode = enabled
@@ -55,7 +70,7 @@ func _on_apply_preset_end() -> void:
 	if type_setting:
 		new_nav_type = type_setting.value
 	# Apply background config in case it changed
-	ui_manager.hero_background._apply_library_background_config()
+	ui_manager._apply_library_background_config()
 	# Rebuild navigation FIRST if navigation type changed so grids calculate correctly
 	if new_nav_type != old_nav_type:
 		ui_manager.navigation.set_nav_type(new_nav_type)
@@ -77,3 +92,5 @@ func _on_apply_preset_end() -> void:
 	if not _theme_refresh_pending:
 		_theme_refresh_pending = true
 		call_deferred("_do_refresh_theme")
+	# Re-apply tab container transparency after theme refresh in case overrides were reset
+	call_deferred("_setup_library_appearance")

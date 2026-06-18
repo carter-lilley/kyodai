@@ -51,7 +51,7 @@ func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_
 	var old_focused: int = _focused_virtual_index
 	var needs_refresh: bool = _apply_view_mode_and_vertical(p_view_mode, p_grid_vertical)
 	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
-	
+
 	if needs_refresh:
 		refresh_dimensions()
 		queue_redraw()
@@ -432,7 +432,7 @@ func _get_available_size() -> Vector2:
 		var h_scroll = _scroll_container.get_h_scroll_bar()
 		if h_scroll:
 			scrollbar_y = h_scroll.get_combined_minimum_size().y
-	
+
 	if vertical:
 		return Vector2(maxf(size.x - scrollbar_x, 1.0), maxf(size.y, 1.0))
 	else:
@@ -470,15 +470,15 @@ func set_focused_card(virtual_index: int) -> void:
 
 func _ready():
 	_setup_ui()
-	resized.connect(_on_resized)
-	
-	# Setup resize debounce timer
-	_resize_debounce_timer = Timer.new()
-	_resize_debounce_timer.one_shot = true
-	_resize_debounce_timer.wait_time = RESIZE_DEBOUNCE_SECONDS
-	_resize_debounce_timer.timeout.connect(_on_resize_debounced)
-	add_child(_resize_debounce_timer)
-	
+
+	# Use DisplayManager as the single source of resize truth when available.
+	# It debounces viewport changes so we don't recalculate layout on every pixel.
+	if DisplayManager:
+		DisplayManager.viewport_size_changed.connect(_on_display_size_changed)
+	else:
+		resized.connect(_on_resized)
+		_setup_internal_resize_debounce()
+
 	# Load initial grid separation and focus scale from settings
 	# Use call_deferred to ensure SettingsManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
@@ -488,6 +488,35 @@ func _ready():
 	call_deferred("_recalculate_layout")
 	call_deferred("_connect_focus_lock_viewport")
 	_ready_called = true
+
+func _setup_internal_resize_debounce():
+	_resize_debounce_timer = Timer.new()
+	_resize_debounce_timer.one_shot = true
+	_resize_debounce_timer.wait_time = RESIZE_DEBOUNCE_SECONDS
+	_resize_debounce_timer.timeout.connect(_on_resize_debounced)
+	add_child(_resize_debounce_timer)
+
+func _on_resized():
+	# Ignore resize events that don't actually change size (sub-pixel or duplicate)
+	var new_size = Vector2(size.x, size.y)
+	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
+		return
+	_last_resized_size = new_size
+
+	# Debounce rapid resize events (e.g. during window resize or layout transitions)
+	if _resize_debounce_timer:
+		_resize_debounce_timer.start()
+
+func _on_display_size_changed(_new_size: Vector2):
+	"""Handler for DisplayManager's debounced viewport_size_changed signal."""
+	# Ignore resize events that don't actually change this container's size.
+	var new_size = Vector2(size.x, size.y)
+	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
+		return
+	_last_resized_size = new_size
+
+	# Run the same debounced logic the internal timer used to trigger.
+	_on_resize_debounced()
 
 func _enter_tree():
 	# Connect to centralized card settings state (idempotent via is_connected guards)
@@ -501,6 +530,12 @@ func _enter_tree():
 	if _card_scene and _card_pool.is_empty():
 		print("[VirtualScrollGridContainer] Recreating pool after reparenting")
 		_instantiate_card_pool()
+
+	# Reset cached size so the next display resize check will recalculate layout
+	# (the current parent may give us a different size than before reparenting).
+	_last_resized_size = Vector2.ZERO
+	if DisplayManager:
+		_on_display_size_changed(DisplayManager.get_viewport_size())
 
 func _exit_tree():
 	print("[VirtualScrollGridContainer] _exit_tree() pool_size=%d active=%d queued=%s" % [_card_pool.size(), _active_cards.size(), str(is_queued_for_deletion())])
@@ -598,17 +633,6 @@ var _suppress_recycle_until_frame: int = -1
 # container sorts triggered by add_child() inside _on_scroll_value_changed().
 var _is_processing_scroll: bool = false
 
-func _on_resized():
-	# Ignore resize events that don't actually change size (sub-pixel or duplicate)
-	var new_size = Vector2(size.x, size.y)
-	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
-		return
-	_last_resized_size = new_size
-	
-	# Debounce rapid resize events (e.g. during window resize or layout transitions)
-	if _resize_debounce_timer:
-		_resize_debounce_timer.start()
-
 func _on_resize_debounced():
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
 	# during a zoom-driven layout pass can fire _on_resized() mid-flight).
@@ -636,7 +660,7 @@ func _calculate_zoom() -> float:
 	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
 	var ratio = clampf(target_card_width_ratio, 0.05, _calculate_max_ratio())
-	
+
 	match view_mode:
 		ViewMode.GRID:
 			var viewport_area = available.x * available.y
@@ -652,21 +676,21 @@ func _calculate_zoom() -> float:
 func _calculate_max_ratio() -> float:
 	if size.x <= 0 or size.y <= 0:
 		return 0.5
-	
+
 	var base_dims = _get_base_dimensions_for_mode()
-	
+
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
 		return 0.5
-	
+
 	var available = _get_available_size()
-	
+
 	var zoom_width = available.x / base_dims.x
 	var zoom_height = available.y / base_dims.y
 	var card_zoom = min(zoom_width, zoom_height)
 	var viewport_area = available.x * available.y
 	var card_area = (base_dims.x * card_zoom) * (base_dims.y * card_zoom)
 	var ratio = sqrt(card_area / viewport_area)
-	
+
 	return max(ratio, 0.05)
 
 ## Returns all possible snap ratios for the current viewport configuration.
@@ -675,15 +699,15 @@ func _calculate_max_ratio() -> float:
 func get_snap_ratios() -> Array[float]:
 	if size.x <= 0 or size.y <= 0:
 		return []
-	
+
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
 		# No discrete snapping in these modes
 		return []
-	
+
 	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
 	var viewport_area = available.x * available.y
-	
+
 	# Determine max items per line based on minimum card size (10% of base)
 	var max_items_per_line: int
 	if vertical:
@@ -692,9 +716,9 @@ func get_snap_ratios() -> Array[float]:
 	else:
 		var min_item_height = base_dims.y * 0.1 + grid_separation
 		max_items_per_line = max(1, int(available.y / min_item_height))
-	
+
 	var ratios: Array[float] = []
-	
+
 	# Cap at a reasonable number so the slider doesn't have too many stops,
 	# but ensure at least 2 distinct ratios for a usable zoom range.
 	# If the viewport can only fit 1-2 items, don't artificially cap — let
@@ -704,7 +728,7 @@ func get_snap_ratios() -> Array[float]:
 		# Very small viewport: allow all natural stops so user has some range
 		max_stops = max_items_per_line
 	var capped_max = min(max_items_per_line, max_stops)
-	
+
 	for items_per_line in range(1, capped_max + 1):
 		var ratio = _compute_ratio_for_items_per_line(items_per_line, base_dims, available, viewport_area)
 		if ratio > 0:
@@ -715,28 +739,28 @@ func get_snap_ratios() -> Array[float]:
 					break
 			if not is_duplicate:
 				ratios.append(ratio)
-	
+
 	# Sort descending so largest cards (fewest per line) come first
 	ratios.sort_custom(func(a, b): return a > b)
-	
+
 	# Defensive: log when we have fewer than 2 ratios for debugging
 	if ratios.size() < 2:
 		push_warning("[VirtualScrollGridContainer] Only %d snap ratio(s) for view_mode=%s, size=%s, base_dims=%s, available=%s" % [ratios.size(), view_mode, size, base_dims, available])
-	
+
 	return ratios
 
 ## Compute the exact snap ratio for a given number of items per line.
 func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, available: Vector2, viewport_area: float) -> float:
 	var effective_width = available.x
 	var effective_height = available.y
-	
+
 	# Iterate a few times to converge focus overflow
 	for i in range(3):
 		var prev_effective_width = effective_width
 		var prev_effective_height = effective_height
 		var target_card_width: float
 		var target_card_height: float
-		
+
 		if vertical:
 			var target_item_width = (effective_width - (items_per_line - 1) * grid_separation) / items_per_line
 			target_card_width = target_item_width
@@ -745,24 +769,24 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 			var target_item_height = (effective_height - (items_per_line - 1) * grid_separation) / items_per_line
 			target_card_height = target_item_height
 			target_card_width = target_card_height * (base_dims.x / base_dims.y)
-		
+
 		target_card_width = max(target_card_width, base_dims.x * 0.1)
 		target_card_height = max(target_card_height, base_dims.y * 0.1)
-		
+
 		var focus_overflow_x = maxf(0.0, target_card_width * (focus_scale - 1.0) / 2.0)
 		var focus_overflow_y = maxf(0.0, target_card_height * (focus_scale - 1.0) / 2.0)
-		
+
 		effective_width = maxf(1.0, available.x - focus_overflow_x * 2.0)
 		effective_height = maxf(1.0, available.y - focus_overflow_y * 2.0)
-		
+
 		# Convergence check: if effective dimensions stabilized, stop iterating
 		if is_equal_approx(effective_width, prev_effective_width) and is_equal_approx(effective_height, prev_effective_height):
 			break
-	
+
 	# Final computation
 	var final_card_width: float
 	var final_card_height: float
-	
+
 	if vertical:
 		var target_item_width = (effective_width - (items_per_line - 1) * grid_separation) / items_per_line
 		final_card_width = target_item_width
@@ -771,48 +795,48 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 		var target_item_height = (effective_height - (items_per_line - 1) * grid_separation) / items_per_line
 		final_card_height = target_item_height
 		final_card_width = final_card_height * (base_dims.x / base_dims.y)
-	
+
 	final_card_width = max(final_card_width, base_dims.x * 0.1)
 	final_card_height = max(final_card_height, base_dims.y * 0.1)
-	
+
 	var target_card_area = final_card_width * final_card_height
 	var ratio = sqrt(target_card_area / viewport_area)
-	
+
 	return clampf(ratio, 0.05, _calculate_max_ratio())
 
 func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	if size.x <= 0 or size.y <= 0:
 		return desired_ratio
-	
+
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
 		return clampf(desired_ratio, 0.05, _calculate_max_ratio())
-	
+
 	var base_dims = _get_base_dimensions_for_mode()
 	var available = _get_available_size()
-	
+
 	var viewport_area = available.x * available.y
 	var target_card_area = viewport_area * desired_ratio * desired_ratio
 	var desired_zoom = sqrt(target_card_area / (base_dims.x * base_dims.y))
 	var desired_card_width = base_dims.x * desired_zoom
 	var desired_card_height = base_dims.y * desired_zoom
-	
+
 	# Account for focus overflow so snapping matches _get_items_per_line()
 	var desired_focus_overflow_x = maxf(0.0, desired_card_width * (focus_scale - 1.0) / 2.0)
 	var desired_focus_overflow_y = maxf(0.0, desired_card_height * (focus_scale - 1.0) / 2.0)
-	
+
 	# Use same formula as _get_items_per_line() for consistency
 	var effective_width = maxf(1.0, available.x + grid_separation - desired_focus_overflow_x * 2.0)
 	var effective_height = maxf(1.0, available.y + grid_separation - desired_focus_overflow_y * 2.0)
-	
+
 	var desired_item_width = desired_card_width + grid_separation
 	var desired_item_height = desired_card_height + grid_separation
-	
+
 	var desired_items_per_line: int
 	if vertical:
 		desired_items_per_line = max(1, int(effective_width / desired_item_width + 0.0001))
 	else:
 		desired_items_per_line = max(1, int(effective_height / desired_item_height + 0.0001))
-	
+
 	# Use the exact same helper for consistency
 	return _compute_ratio_for_items_per_line(desired_items_per_line, base_dims, available, viewport_area)
 
@@ -823,23 +847,23 @@ func _recalculate_layout():
 		return
 	if size.x <= 0 or size.y <= 0:
 		return
-	
+
 	# Ensure cached settings are fresh before any layout math
 	_refresh_cached_settings()
-	
+
 	_is_recalculating_layout = true
 	_suppress_recycle_until_frame = Engine.get_process_frames() + 1
-	
+
 	var current_zoom = _calculate_zoom()
-	
+
 	if current_zoom <= 0:
 		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
 		_is_recalculating_layout = false
 		return
-	
+
 	var base_dims = _get_base_dimensions_for_mode()
 	base_card_size = base_dims
-	
+
 	match view_mode:
 		ViewMode.GRID:
 			card_size = base_dims * current_zoom
@@ -856,9 +880,9 @@ func _recalculate_layout():
 			var card_height = _get_available_size().y / focus_scale
 			card_size = Vector2(base_dims.x * current_zoom, card_height)
 			focused_card_size = card_size * focus_scale
-	
+
 	var available = _get_available_size()
-	
+
 	# Determine which parts of the layout actually changed
 	var structure_changed = view_mode != _last_layout_view_mode or grid_vertical != _last_layout_grid_vertical
 	var focus_changed = not is_equal_approx(focus_scale, _last_layout_focus_scale)
@@ -888,13 +912,13 @@ func _recalculate_layout():
 	_last_layout_available_size = available
 	_last_layout_display_mode = current_display_mode
 	_last_layout_media_aspect_ratio = current_media_ratio
-	
+
 	# Invalidate then pre-compute scroll math before downstream consumers read it
 	_cached_items_per_line = -1
 	_cached_normal_stride = -1.0
 	_cached_items_per_line = _get_items_per_line()
 	_cached_normal_stride = _get_normal_stride()
-	
+
 	# Only override separation theme constants when the value actually changed
 	if grid_separation != _last_h_separation:
 		_flow_container.add_theme_constant_override("h_separation", grid_separation)
@@ -902,7 +926,7 @@ func _recalculate_layout():
 	if grid_separation != _last_v_separation:
 		_flow_container.add_theme_constant_override("v_separation", grid_separation)
 		_last_v_separation = grid_separation
-	
+
 	_update_layout()
 	_update_margin()
 	_flow_container.queue_sort()
@@ -910,13 +934,13 @@ func _recalculate_layout():
 		_on_scroll_value_changed(_scroll_container.scroll_vertical, false)
 	else:
 		_on_scroll_value_changed(_scroll_container.scroll_horizontal, false)
-	
+
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
-	
+
 	var update_card_geometry = card_geometry_changed or structure_changed
 	var update_focus = focus_changed
-	
+
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
@@ -931,7 +955,7 @@ func _recalculate_layout():
 			# new bounds without waiting for Godot's deferred layout pass.
 			if card.has_method("_update_media_panel_size"):
 				card._update_media_panel_size(true)
-	
+
 	_is_recalculating_layout = false
 
 func _get_items_per_line() -> int:
@@ -941,7 +965,7 @@ func _get_items_per_line() -> int:
 		return 1
 	if _cached_items_per_line > 0:
 		return _cached_items_per_line
-	
+
 	var available = _get_available_size()
 	var focus_overflow = _get_focus_overflow()
 	if vertical:
@@ -961,7 +985,7 @@ func _get_card_display_mode() -> int:
 
 func _get_base_card_height_for_ratio(media_h: float) -> float:
 	"""Compute card height that guarantees M3Card's text area fits.
-	
+
 	Delegates to M3Card.get_min_text_height_dp() so the threshold logic
 	lives in one place and never drifts out of sync."""
 	var card_h = media_h + 500.0  # start well above any threshold
@@ -986,7 +1010,7 @@ func _get_base_dimensions_for_mode() -> Vector2:
 			ViewMode.CAROUSEL:
 				return Vector2(BASE_CAROUSEL_WIDTH_DP, 0.0)
 		return _get_base_dimensions()
-	
+
 	# Ratio mode
 	match view_mode:
 		ViewMode.GRID:
@@ -1024,7 +1048,7 @@ func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	
+
 	_scroll_container = SmoothScrollContainer.new()
 	_scroll_container.vertical = vertical
 	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1032,14 +1056,14 @@ func _setup_ui():
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.scroll_vertical = 0
 	add_child(_scroll_container)
-	
+
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
-	
+
 	_margin_container = MarginContainer.new()
 	_margin_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_margin_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.add_child(_margin_container)
-	
+
 	_center_container = CenterContainer.new()
 	if vertical:
 		_center_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1048,17 +1072,17 @@ func _setup_ui():
 		_center_container.size_flags_horizontal = Control.SIZE_FILL
 		_center_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_margin_container.add_child(_center_container)
-	
+
 	_flow_container = FlowContainer.new()
 	_flow_container.vertical = not vertical
 	_update_flow_container_flags()
 	_flow_container.add_theme_constant_override("h_separation", grid_separation)
 	_flow_container.add_theme_constant_override("v_separation", grid_separation)
 	_center_container.add_child(_flow_container)
-	
+
 	if debug_mode:
 		_setup_debug_camera()
-	
+
 	_recalculate_dimensions()
 
 func _get_base_dimensions() -> Vector2:
@@ -1075,10 +1099,10 @@ func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change or margin change)."""
 	# Ensure cached settings are fresh before any layout math
 	_refresh_cached_settings()
-	
+
 	# Update grid separation from settings
 	_update_grid_separation_from_settings()
-	
+
 	# Reset FlowContainer's custom_minimum_size to force recalculation with current viewport size
 	# This fixes issues where layout was calculated while view was hidden (size=0)
 	if _flow_container:
@@ -1087,7 +1111,7 @@ func refresh_dimensions() -> void:
 		# correct custom_minimum_size instead of skipping because the old value matches.
 		_last_flow_width = 0.0
 		_last_flow_height = 0.0
-	
+
 	# Re-snap zoom to ensure it fits the new dimensions/margins
 	var current_ratio = target_card_width_ratio
 	var snapped_ratio = _calculate_snapped_ratio(current_ratio)
@@ -1097,12 +1121,12 @@ func refresh_dimensions() -> void:
 	_last_layout_available_size = Vector2.ZERO
 	# Always update ratio - the setter will handle recalculation
 	target_card_width_ratio = snapped_ratio
-	
+
 	var current_zoom = _calculate_zoom()
 	var zoom_changed = not is_equal_approx(current_zoom, _last_applied_zoom)
 	if zoom_changed:
 		_last_applied_zoom = current_zoom
-	
+
 	# _recalculate_layout() (triggered by the target_card_width_ratio setter above)
 	# already loops through active cards and calls refresh_settings(), so the
 	# manual refresh loop that used to live here was completely redundant.
@@ -1110,9 +1134,9 @@ func refresh_dimensions() -> void:
 func setup(card_scene_resource: PackedScene, total_items: int):
 	_card_scene = card_scene_resource
 	_total_items = total_items
-	
+
 	_instantiate_card_pool()
-	
+
 	# Wait for container sizing before initial load
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -1124,12 +1148,12 @@ func setup(card_scene_resource: PackedScene, total_items: int):
 func _instantiate_card_pool():
 	if not _card_scene:
 		return
-	
+
 	for card in _card_pool:
 		if is_instance_valid(card):
 			card.queue_free()
 	_card_pool.clear()
-	
+
 	for i in range(_max_pool_size):
 		var card = _card_scene.instantiate()
 		card.visible = false
@@ -1141,7 +1165,7 @@ func set_total_count(count: int, preserve_cache: bool = false):
 	var count_changed = _total_items != count
 	_total_items = count
 	_update_layout()
-	
+
 	# Clear cache if count changed (index-to-data mapping is now stale)
 	# or if preserve_cache is explicitly false
 	if count_changed or not preserve_cache:
@@ -1149,7 +1173,7 @@ func set_total_count(count: int, preserve_cache: bool = false):
 
 func _update_layout():
 	var items_per_line = _get_items_per_line()
-	
+
 	match view_mode:
 		ViewMode.GRID:
 			if vertical:
@@ -1172,7 +1196,7 @@ func _initial_load():
 		return
 	if size.x <= 0 or size.y <= 0:
 		return
-	
+
 	var items_per_line = _get_items_per_line()
 	var eff = _get_normal_stride()
 	var visible_count: int
@@ -1184,17 +1208,17 @@ func _initial_load():
 		var viewport_width = size.x
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		visible_count = visible_cols * items_per_line
-	
+
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 	# For small libraries, just load everything to avoid edge-case recycling bugs
 	# that can clip the last partial row in grid mode.
 	if _total_items <= 200:
 		total_card_count = _total_items
 	var card_count = min(total_card_count, _total_items, _max_pool_size)
-	
+
 	_virtual_start = 0
 	_virtual_end = card_count - 1
-	
+
 	for i in range(card_count):
 		var card = _acquire_card()
 		if card:
@@ -1211,7 +1235,7 @@ func _initial_load():
 			if card.has_method("refresh_settings"):
 				card.refresh_settings()
 			item_created.emit(card, i)
-	
+
 	_update_margin()
 	_request_data(0, card_count)
 
@@ -1222,7 +1246,7 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	var visible_lines = ceili(viewport_size / stride) if stride > 0 else 1
 	_visible_start_idx = line * items_per_line
 	_visible_end_idx = min(_visible_start_idx + visible_lines * items_per_line, _total_items) - 1
-	
+
 	var visible_count = _get_visible_count()
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 	# For small libraries, just load everything to avoid edge-case recycling bugs
@@ -1232,18 +1256,18 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	var half_buffer = int((total_card_count - visible_count) / 2.0)
 	_buffer_target_start = max(0, _visible_start_idx - half_buffer)
 	_buffer_target_end = min(_total_items, _buffer_target_start + total_card_count)
-	
+
 	if _buffer_target_end == _total_items:
 		_buffer_target_start = max(0, _total_items - total_card_count)
-	
+
 	# Align target_start to items_per_line so the first buffered card always starts
 	# at the beginning of a row/column. Without this, FlowContainer misaligns cards
 	# when the buffer starts mid-row after incremental recycling or zoom changes.
 	_buffer_target_start = (_buffer_target_start / items_per_line) * items_per_line
-	
+
 	# Recompute target_end after alignment so the buffer size stays consistent
 	_buffer_target_end = min(_total_items, _buffer_target_start + total_card_count)
-	
+
 	# When we're near the end of the list, alignment can leave a partial row
 	# outside the buffer (e.g. 98 items, buffer covers 56-97, missing index 97).
 	# Extend target_end to always include the last partial row.
@@ -1254,24 +1278,24 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	if _is_processing_scroll:
 		return
 	_is_processing_scroll = true
-	
+
 	if _total_items == 0 or not _scroll_container:
 		_is_processing_scroll = false
 		return
-	
+
 	# Suppress recycling during the frame(s) after a layout recalculation.
 	# ScrollContainer may clamp its scroll value at end-of-frame and emit a
 	# signal that would otherwise recycle cards with allow_recycle=true.
 	if Engine.get_process_frames() <= _suppress_recycle_until_frame:
 		allow_recycle = false
-	
+
 	var scroll_pos = int(value)
 	var items_per_line = _get_items_per_line()
 	var stride = _get_normal_stride()
-	
+
 	var viewport_size = size.y if vertical else size.x
 	_compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
-	
+
 	# Batch recycle from top — skip during layout recalculations (zoom changes)
 	# so cards are not reset and their images stay loaded.
 	if allow_recycle:
@@ -1284,16 +1308,16 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 				break
 		if recycle_top_count > 0:
 			_batch_recycle_from_start(recycle_top_count)
-		
+
 		while _active_cards.size() > 0:
 			var last_card = _active_cards[_active_cards.size() - 1]
 			var last_idx = last_card.get_meta("virtual_index", -1)
-			
+
 			if last_idx >= _buffer_target_end:
 				_recycle_card_at_index(_active_cards.size() - 1)
 			else:
 				break
-	
+
 	# If buffer was fully recycled (e.g. scrolled to a completely different range),
 	# populate the target range from scratch
 	if _active_cards.size() == 0:
@@ -1304,19 +1328,19 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 		while current_last < _buffer_target_end - 1 and current_last < _total_items - 1:
 			_add_card_at_end(current_last + 1)
 			current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-	
+
 		if _active_cards.size() > 0:
 			var current_first = _active_cards[0].get_meta("virtual_index", 0)
 			if current_first > _buffer_target_start and current_first > 0:
 				var add_start_count = mini(current_first - _buffer_target_start, current_first)
 				_batch_add_at_start(_buffer_target_start, add_start_count)
-	
+
 	if _active_cards.size() > 0:
 		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
 		_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-	
+
 	_request_missing_data()
-	
+
 	var should_update_margin = true
 	if _active_cards.size() > 0:
 		var current_first = _active_cards[0].get_meta("virtual_index", 0)
@@ -1326,42 +1350,42 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 		_update_margin()
 	_check_preload_needed()
 	_update_card_priorities(_visible_start_idx, _visible_end_idx)
-	
+
 	visible_range_changed.emit(_visible_start_idx, min(_visible_end_idx, _total_items), _total_items)
-	
+
 	# If a programmatic focus is waiting for this scroll rebuild, try to land it now.
 	_try_apply_pending_focus()
-	
+
 	if debug_mode:
 		_update_debug_visuals(_visible_start_idx, _visible_end_idx)
-	
+
 	_is_processing_scroll = false
 
 func _recycle_card_at_index(index: int):
 	if index < 0 or index >= _active_cards.size():
 		return
-	
+
 	var card = _active_cards[index]
 	_release_focus_if_inside(card)
 	_active_cards.remove_at(index)
 	var vidx = card.get_meta("virtual_index", -1)
 	if vidx >= 0:
 		_active_cards_by_index.erase(vidx)
-	
+
 	if is_instance_valid(card):
 		_disconnect_card_signals(card)
 		card.visible = false
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
-		
+
 		if card.has_method("reset"):
 			card.reset()
 		elif "game" in card:
 			card.game = null
-		
+
 		if card.get_parent() == _flow_container:
 			_flow_container.remove_child(card)
-		
+
 		_add_to_pool(card)
 func _add_to_pool(card: Control) -> void:
 	if _card_pool.size() >= _max_pool_size:
@@ -1373,7 +1397,7 @@ func _add_to_pool(card: Control) -> void:
 func _configure_card_size_flags(card: Control) -> void:
 	if not card is M3Card:
 		return
-	
+
 	match view_mode:
 		ViewMode.GRID:
 			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
@@ -1390,7 +1414,7 @@ func _configure_card_size_flags(card: Control) -> void:
 			card.custom_minimum_size = card_size
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	
+
 	# Apply content alignment for all modes (GRID also supports START/CENTER/END)
 	if card.has_method("set_content_alignment"):
 		var alignment = _get_content_alignment()
@@ -1403,7 +1427,7 @@ func _add_card_at_end(virtual_index: int):
 	var card = _acquire_card()
 	if not card:
 		return
-	
+
 	card.set_meta("virtual_index", virtual_index)
 	if "focus_scale_enabled" in card:
 		card.focus_scale_enabled = true
@@ -1414,11 +1438,11 @@ func _add_card_at_end(virtual_index: int):
 	_active_cards.append(card)
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
-	
+
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
 		card.refresh_settings()
-	
+
 	if _data_cache.has(virtual_index):
 		var card_visible = _is_index_visible(virtual_index)
 		if card.has_method("set_game_with_priority"):
@@ -1426,14 +1450,14 @@ func _add_card_at_end(virtual_index: int):
 		else:
 			card.game = _data_cache[virtual_index]
 		_update_cache_access_order(virtual_index)
-	
+
 	item_created.emit(card, virtual_index)
 
 func _add_card_at_start(virtual_index: int):
 	var card = _acquire_card()
 	if not card:
 		return
-	
+
 	card.set_meta("virtual_index", virtual_index)
 	if "focus_scale_enabled" in card:
 		card.focus_scale_enabled = true
@@ -1445,11 +1469,11 @@ func _add_card_at_start(virtual_index: int):
 	_configure_card_size_flags(card)
 	if card.has_method("set_focus_scale"):
 		card.set_focus_scale(focus_scale)
-	
+
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
 	if card.has_method("refresh_settings"):
 		card.refresh_settings()
-	
+
 	if _data_cache.has(virtual_index):
 		var card_visible = _is_index_visible(virtual_index)
 		if card.has_method("set_game_with_priority"):
@@ -1457,7 +1481,7 @@ func _add_card_at_start(virtual_index: int):
 		else:
 			card.game = _data_cache[virtual_index]
 		_update_cache_access_order(virtual_index)
-	
+
 	item_created.emit(card, virtual_index)
 
 func _batch_recycle_from_start(count: int) -> void:
@@ -1518,7 +1542,7 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 func _get_visible_range() -> void:
 	var items_per_line = _get_items_per_line()
 	var eff = _get_normal_stride()
-	
+
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
@@ -1544,12 +1568,12 @@ func _acquire_card() -> Control:
 				card.reset()
 			card.visible = true
 			return card
-	
+
 	if _card_scene:
 		var card = _card_scene.instantiate()
 		card.set_meta("pooled", false)
 		return card
-	
+
 	return null
 
 func _disconnect_card_signals(card: Control):
@@ -1580,7 +1604,7 @@ func _update_margin():
 			_flow_container.custom_minimum_size.x = 0
 			_last_flow_width = 0
 		return
-	
+
 	var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	_last_margin_virtual_start = first_idx
@@ -1589,7 +1613,7 @@ func _update_margin():
 	var items_per_line = _get_items_per_line()
 	var stride = _get_normal_stride()
 	var focus_overflow = _get_focus_overflow()
-	
+
 	if vertical:
 		# Add focus overflow padding to top/bottom so edge rows have room to scale.
 		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
@@ -1602,17 +1626,17 @@ func _update_margin():
 		var margin_top = first_pos + focus_overflow.y
 		var margin_bottom = total_end - after_last_pos + focus_overflow.y
 		var flow_height = after_last_pos - first_pos
-		
+
 		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
 			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
 			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
 			_last_margin_top = int(margin_top)
 			_last_margin_bottom = int(margin_bottom)
-		
+
 		if not is_equal_approx(flow_height, _last_flow_height):
 			_flow_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
-		
+
 		# Add horizontal margins for cross-axis focus overflow in GRID mode.
 		# Focused cards in edge columns extend horizontally; without this padding
 		# they clip against the viewport edge.
@@ -1633,17 +1657,17 @@ func _update_margin():
 		var margin_left = first_pos + focus_overflow.x
 		var margin_right = total_end - after_last_pos + focus_overflow.x
 		var flow_width = after_last_pos - first_pos
-		
+
 		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
 			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
 			_margin_container.add_theme_constant_override("margin_right", int(margin_right))
 			_last_margin_left = int(margin_left)
 			_last_margin_right = int(margin_right)
-		
+
 		if not is_equal_approx(flow_width, _last_flow_width):
 			_flow_container.custom_minimum_size.x = flow_width
 			_last_flow_width = flow_width
-		
+
 		# Add vertical margins for cross-axis focus overflow in GRID mode.
 		# Focused cards in edge rows extend vertically; without this padding
 		# they clip against the viewport edge.
@@ -1668,19 +1692,19 @@ func _is_index_pending(idx: int) -> bool:
 func _request_missing_data():
 	if _active_cards.size() == 0:
 		return
-	
+
 	var missing_indices: Array[int] = []
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx >= 0 and not _data_cache.has(idx) and not _is_index_pending(idx):
 			missing_indices.append(idx)
-	
+
 	if missing_indices.size() == 0:
 		return
-	
+
 	var batches: Array[Array] = []
 	var current_batch: Array[int] = [missing_indices[0]]
-	
+
 	for i in range(1, missing_indices.size()):
 		if missing_indices[i] == missing_indices[i - 1] + 1:
 			current_batch.append(missing_indices[i])
@@ -1688,7 +1712,7 @@ func _request_missing_data():
 			batches.append(current_batch)
 			current_batch = [missing_indices[i]]
 	batches.append(current_batch)
-	
+
 	for batch in batches:
 		if batch.size() > 0:
 			var offset = batch[0]
@@ -1699,14 +1723,14 @@ func _check_preload_needed():
 	var visible_count = _get_visible_count()
 	var preload_distance = visible_count * data_preload_multiplier
 	var buffer_size = visible_count * data_buffer_multiplier
-	
+
 	if _virtual_end < _total_items - 1:
 		var distance_to_end = _total_items - 1 - _virtual_end
 		if distance_to_end > 0 and distance_to_end <= preload_distance:
 			var next_batch_start = _virtual_end + 1
 			if not _pending_loads.has(next_batch_start) and not _data_cache.has(next_batch_start):
 				_request_data(next_batch_start, min(buffer_size, _total_items - next_batch_start))
-	
+
 	if _virtual_start > 0:
 		var distance_to_start = _virtual_start
 		if distance_to_start > 0 and distance_to_start <= preload_distance:
@@ -1719,9 +1743,9 @@ func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 		var idx = card.get_meta("virtual_index", -1)
 		if idx < 0:
 			continue
-		
+
 		var card_visible = idx >= visible_start_idx and idx < visible_end_idx
-		
+
 		if card.has_method("set_image_priority"):
 			card.set_image_priority(card_visible)
 
@@ -1743,7 +1767,7 @@ func _disconnect_focus_lock_viewport() -> void:
 func _on_viewport_focus_changed(control: Control) -> void:
 	if not control:
 		return
-	
+
 	# Check if focus moved to a card inside this grid
 	if is_ancestor_of(control):
 		var node = control
@@ -1754,7 +1778,7 @@ func _on_viewport_focus_changed(control: Control) -> void:
 			node = node.get_parent()
 		_grid_had_focus_last = true
 		return
-	
+
 	# Focus is outside this grid
 	if not focus_lock_enabled:
 		_grid_had_focus_last = false
@@ -1767,7 +1791,7 @@ func _on_viewport_focus_changed(control: Control) -> void:
 		return
 	if _is_redirecting_focus:
 		return
-	
+
 	# Don't redirect if focus moved to an overlay/dialog (CanvasLayer)
 	var parent_node = control.get_parent()
 	while parent_node:
@@ -1775,17 +1799,17 @@ func _on_viewport_focus_changed(control: Control) -> void:
 			_grid_had_focus_last = false
 			return
 		parent_node = parent_node.get_parent()
-	
+
 	# Only redirect when controller has priority (not mouse)
 	if not UIManager or not UIManager.controller_has_priority():
 		_grid_had_focus_last = false
 		return
-	
+
 	# Only redirect if focus was previously inside this grid.
 	# If the user is already navigating the nav bar, don't snap back.
 	if not _grid_had_focus_last:
 		return
-	
+
 	# Redirect back to the last focused card
 	var card = get_card_at_index(_last_focused_virtual_index)
 	if card and is_instance_valid(card) and card.is_inside_tree():
@@ -1825,28 +1849,28 @@ func _try_apply_pending_focus() -> void:
 func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
 		return
-	
+
 	limit = min(limit, _total_items - offset)
 	_pending_loads[offset] = limit
-	
+
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
 	_pending_loads.erase(offset)
-	
+
 	if items.is_empty():
 		return
-	
+
 	# Clear deduplication tracking for each batch to avoid false positives
 	# when scrolling causes overlapping ranges from the parent view
 	_cached_game_ids.clear()
-	
+
 	var duplicates_found: int = 0
-	
+
 	for i in range(items.size()):
 		var cache_key = offset + i
 		var game = items[i]
-		
+
 		# Deduplication check: warn if this game ID is already cached at a different index
 		# but still cache it at the new index so cards get their data
 		if game and game.romm_id != 0:
@@ -1860,20 +1884,20 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 					push_warning("[VirtualScrollGridContainer] Duplicate game detected: '%s' (romm_id: %d) at indices %d and %d" % [game.title, game.romm_id, existing_key, cache_key])
 			else:
 				_cached_game_ids[game.romm_id] = cache_key
-		
+
 		if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
 			_evict_oldest_cache_entries(items.size())
-		
+
 		_data_cache[cache_key] = game
 		_update_cache_access_order(cache_key)
-	
+
 	if duplicates_found > 0:
 		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
-	
+
 	_get_visible_range()
 	var visible_start_idx: int = _visible_start_idx
 	var visible_end_idx: int = _visible_end_idx
-	
+
 	var assigned_count = 0
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
@@ -1887,13 +1911,13 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 					card.game = items[data_idx]
 				_update_cache_access_order(idx)
 				assigned_count += 1
-	
+
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 
 func _refresh_buffer():
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)
-	
+
 	_data_cache.clear()
 	_cached_game_ids.clear()
 	_cache_lru_tick.clear()
@@ -1906,14 +1930,14 @@ func _refresh_buffer():
 	_flow_container.custom_minimum_size = Vector2(0, 0)
 	_virtual_start = 0
 	_virtual_end = 0
-	
+
 	# Reset scroll position to prevent stale scroll values from causing
 	# immediate recycling of freshly-created cards after view mode switches.
 	if _scroll_container:
 		_scroll_container.scroll_vertical = 0
 		_scroll_container.scroll_horizontal = 0
 		_scroll_container._target_scroll = 0.0
-	
+
 	_recalculate_layout()
 	if _active_cards.size() == 0:
 		_initial_load()
@@ -1924,14 +1948,14 @@ func get_target_scroll() -> float:
 func get_visible_range() -> Dictionary:
 	var items_per_line = _get_items_per_line()
 	var eff = _get_normal_stride()
-	
+
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
 		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
 		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
-		
+
 		return {
 			"start": visible_start,
 			"end": visible_end,
@@ -1946,7 +1970,7 @@ func get_visible_range() -> Dictionary:
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
-		
+
 		return {
 			"start": visible_start,
 			"end": visible_end,
@@ -1964,7 +1988,7 @@ func scroll_to_index(index: int, animate: bool = false, duration_multiplier: flo
 		var _items_per_line = _get_items_per_line()
 		var target_pos = _get_slot_position_for_index(index)
 		var focus_overflow = _get_focus_overflow()
-		
+
 		if vertical:
 			var viewport_height = size.y
 			# The card's content coordinate is target_pos + top overflow; center it in viewport.
@@ -2039,15 +2063,15 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 		_debug_style_buffer_loading.border_color = Color(0.5, 0.5, 0.5, 0.5)
 		_debug_style_buffer_loading.bg_color = Color(0.5, 0.5, 0.5, 0.05)
 		_debug_style_buffer_loading.set_border_width_all(3)
-	
+
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx < 0:
 			continue
-		
+
 		var card_visible = idx >= visible_start_idx and idx <= visible_end_idx
 		var has_data = _data_cache.has(idx)
-		
+
 		# Use cached metadata reference instead of tree traversal for performance
 		var debug_panel = card.get_meta("_debug_panel_ref", null)
 		if not debug_panel or not is_instance_valid(debug_panel):
@@ -2055,7 +2079,7 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 			debug_panel.name = "_debug_panel"
 			debug_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 			debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			
+
 			var label = M3Label.new()
 			label.name = "_debug_label"
 			label.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -2064,30 +2088,30 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 			label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 			debug_panel.add_child(label)
-			
+
 			card.add_child(debug_panel)
 			card.move_child(debug_panel, 0)
 			card.set_meta("_debug_panel_ref", debug_panel)
-		
+
 		var style: StyleBoxFlat
 		if card_visible:
 			style = _debug_style_visible_data if has_data else _debug_style_visible_loading
 		else:
 			style = _debug_style_buffer_data if has_data else _debug_style_buffer_loading
 		debug_panel.add_theme_stylebox_override("panel", style)
-		
+
 		var debug_label = debug_panel.get_node("_debug_label")
 		if debug_label:
 			var status = "DATA" if has_data else "LOADING"
 			var location = "VISIBLE" if card_visible else "BUFFER"
 			debug_label.text = "#%d\n%s\n%s" % [idx, status, location]
-	
+
 	_update_debug_flow_panel_position()
 
 func _update_debug_mode():
 	if not is_inside_tree():
 		return
-	
+
 	if debug_mode:
 		_setup_debug_camera()
 		_setup_debug_flow_panel()
@@ -2121,7 +2145,7 @@ func _update_debug_mode():
 func _setup_debug_camera():
 	if _debug_camera:
 		return
-	
+
 	_debug_camera = Camera2D.new()
 	_debug_camera.zoom = Vector2(0.5, 0.5)
 	_debug_camera.enabled = true
@@ -2136,7 +2160,7 @@ func _update_debug_camera_position():
 func _setup_debug_flow_panel():
 	if _debug_flow_panel:
 		return
-	
+
 	_debug_flow_panel = Panel.new()
 	_debug_flow_panel.name = "_debug_flow_panel"
 	_debug_flow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2160,26 +2184,26 @@ func _update_debug_flow_panel_position():
 func increment_total_count(amount: int = 1) -> int:
 	if amount <= 0:
 		return _total_items
-	
+
 	var start_index = _total_items
 	_total_items += amount
-	
+
 	_update_layout()
-	
+
 	if start_index == 0 and _active_cards.size() == 0 and _total_items > 0:
 		_initial_load_from_increment()
 		return start_index
-	
+
 	var items_per_line = _get_items_per_line()
 	var eff = _get_normal_stride()
-	
+
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = size.y
 		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
 		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
-		
+
 		visible_range_changed.emit(visible_start, visible_end, _total_items)
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
@@ -2187,16 +2211,16 @@ func increment_total_count(amount: int = 1) -> int:
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
 		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
-		
+
 		visible_range_changed.emit(visible_start, visible_end, _total_items)
-	
+
 	return start_index
 
 func _initial_load_from_increment():
 	var items_per_line = _get_items_per_line()
 	var visible_count: int
 	var eff = _get_normal_stride()
-	
+
 	if vertical:
 		var viewport_height = float(size.y) if size.y > 0 else 600.0
 		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
@@ -2205,14 +2229,14 @@ func _initial_load_from_increment():
 		var viewport_width = float(size.x) if size.x > 0 else 800.0
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
 		visible_count = visible_cols * items_per_line
-	
+
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 	# Cap card count to pool size to prevent creating too many cards
 	var card_count = min(total_card_count, _total_items, _max_pool_size)
-	
+
 	_virtual_start = 0
 	_virtual_end = card_count - 1
-	
+
 	for i in range(card_count):
 		var card = _acquire_card()
 		if card:
@@ -2224,7 +2248,7 @@ func _initial_load_from_increment():
 			_active_cards.append(card)
 			_active_cards_by_index[i] = card
 			_flow_container.add_child(card)
-			
+
 			if _data_cache.has(i):
 				var card_visible = i < visible_count
 				if card.has_method("set_game_with_priority"):
@@ -2233,9 +2257,9 @@ func _initial_load_from_increment():
 					card.game = _data_cache[i]
 				if card.has_method("update_display"):
 					card.update_display()
-			
+
 			item_created.emit(card, i)
-	
+
 	_update_margin()
 
 func cache_items_at_offset(items: Array[GameResource], offset: int):
@@ -2243,7 +2267,7 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 		if offset + i < _total_items:
 			var cache_key = offset + i
 			var game = items[i]
-			
+
 			# Deduplication check
 			if game and game.romm_id != 0:
 				if _cached_game_ids.has(game.romm_id):
@@ -2253,16 +2277,16 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 						_cached_game_ids.erase(game.romm_id)
 					elif existing_key != cache_key:
 						continue
-				
+
 				_cached_game_ids[game.romm_id] = cache_key
-			
+
 			_update_cache_access_order(cache_key)
-	
+
 	if items.size() > 0:
 		_get_visible_range()
 		var visible_start_idx: int = _visible_start_idx
 		var visible_end_idx: int = _visible_end_idx
-		
+
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= offset and idx < offset + items.size():
@@ -2279,18 +2303,18 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 func refresh_if_visible(start_index: int, end_index: int):
 	if _active_cards.size() == 0:
 		return
-	
+
 	var current_first = _active_cards[0].get_meta("virtual_index", 0)
 	var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-	
+
 	var overlap_start = max(start_index, current_first)
 	var overlap_end = min(end_index, current_last)
-	
+
 	if overlap_start <= overlap_end:
 		_get_visible_range()
 		var visible_start_idx: int = _visible_start_idx
 		var visible_end_idx: int = _visible_end_idx
-		
+
 		for card in _active_cards:
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
@@ -2345,22 +2369,22 @@ func _evict_oldest_cache_entries(count: int):
 	var to_evict = mini(count, _data_cache.size())
 	if to_evict <= 0:
 		return
-	
+
 	# Linear scan for oldest entry, repeated to_evict times.
 	# Avoids allocating an Array[Array] of all entries (~5000 sub-arrays).
 	for i in range(to_evict):
 		var oldest_key = -1
 		var oldest_tick = INF
-		
+
 		for key in _cache_lru_tick.keys():
 			var tick = _cache_lru_tick[key]
 			if tick < oldest_tick:
 				oldest_tick = tick
 				oldest_key = key
-		
+
 		if oldest_key < 0:
 			break
-		
+
 		_cache_lru_tick.erase(oldest_key)
 		if _data_cache.has(oldest_key):
 			var game = _data_cache[oldest_key]

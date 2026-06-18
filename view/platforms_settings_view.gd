@@ -22,10 +22,13 @@ var _pending_credential_property: String = ""
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
 var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
+var _was_narrow: bool = false
 
 const NARROW_BREAKPOINT_DP := 850.0
 
 func _is_narrow_screen() -> bool:
+	if DisplayManager:
+		return DisplayManager.is_narrow_viewport(NARROW_BREAKPOINT_DP)
 	var viewport = get_viewport()
 	if viewport == null:
 		return true
@@ -94,10 +97,12 @@ func _ready():
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 
-	# Connect to viewport resize to update card layout
-	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	# Connect to viewport resize to update card layout (debounced by DisplayManager)
+	if DisplayManager:
+		DisplayManager.viewport_size_changed.connect(_on_viewport_size_changed)
 
 	# Set initial column visibility
+	_was_narrow = _is_narrow_screen()
 	_update_column_visibility()
 	_update_settings_row_layout()
 
@@ -621,33 +626,40 @@ func _update_column_visibility() -> void:
 		_cards_right.custom_minimum_size = Vector2(M3Units.dp(300), 0)
 		_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-func _on_viewport_size_changed() -> void:
-	"""Re-layout cards when viewport size crosses the narrow breakpoint."""
+func _on_viewport_size_changed(_new_size: Vector2) -> void:
+	"""Re-layout cards when viewport size crosses the narrow breakpoint.
+	DisplayManager debounces this signal, so this only runs after the user
+	stops resizing."""
 	_update_column_visibility()
 	_update_settings_row_layout()
 
-	if not _platform_cards.is_empty():
-		# Check if layout mode needs to change
-		var is_narrow = _is_narrow_screen()
-		var has_right_cards = _cards_right.get_child_count() > 0
+	if _platform_cards.is_empty():
+		return
 
-		if is_narrow and has_right_cards:
-			# Move all cards from right to left
-			for child in _cards_right.get_children():
-				_cards_right.remove_child(child)
-				_cards_left.add_child(child)
-		elif not is_narrow and not has_right_cards and _cards_left.get_child_count() > 1:
-			# Re-distribute cards evenly across both columns
-			var all_cards = []
-			for child in _cards_left.get_children():
-				all_cards.append(child)
-				_cards_left.remove_child(child)
+	var is_narrow := _is_narrow_screen()
+	if is_narrow == _was_narrow:
+		return
+	_was_narrow = is_narrow
 
-			for i in range(all_cards.size()):
-				if i % 2 == 0:
-					_cards_left.add_child(all_cards[i])
-				else:
-					_cards_right.add_child(all_cards[i])
+	var has_right_cards := _cards_right.get_child_count() > 0
+
+	if is_narrow and has_right_cards:
+		# Move all cards from right to left
+		for child in _cards_right.get_children():
+			_cards_right.remove_child(child)
+			_cards_left.add_child(child)
+	elif not is_narrow and not has_right_cards and _cards_left.get_child_count() > 1:
+		# Re-distribute cards evenly across both columns
+		var all_cards = []
+		for child in _cards_left.get_children():
+			all_cards.append(child)
+			_cards_left.remove_child(child)
+
+		for i in range(all_cards.size()):
+			if i % 2 == 0:
+				_cards_left.add_child(all_cards[i])
+			else:
+				_cards_right.add_child(all_cards[i])
 
 func refresh_cards() -> void:
 	"""Refresh UI for all existing platform cards without re-fetching from network."""

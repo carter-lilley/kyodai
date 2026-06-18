@@ -79,10 +79,6 @@ func build_categories() -> Dictionary:
 	var designer_tab = _create_card_designer_tab()
 	result["Card Designer"] = designer_tab
 	
-	# Hero Designer tab - hidden for now
-	# var hero_designer_tab = _create_hero_designer_tab()
-	# result["Hero Designer"] = hero_designer_tab
-	
 	# Add GameNative tab (Android only)
 	if PlatformManager.is_android():
 		var gamenative_tab = _create_gamenative_tab()
@@ -92,11 +88,6 @@ func build_categories() -> Dictionary:
 
 func _create_card_designer_tab() -> Control:
 	var designer = preload("res://view/card_designer_view.tscn").instantiate()
-	designer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	return designer
-
-func _create_hero_designer_tab() -> Control:
-	var designer = preload("res://view/hero_designer_view.tscn").instantiate()
 	designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	return designer
 

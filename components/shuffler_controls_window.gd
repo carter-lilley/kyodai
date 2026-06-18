@@ -17,6 +17,12 @@ func _ready():
 	# Keep the palette visible even when the main launcher window is minimized.
 	transient = false
 
+	# Ensure the OS window is fully transparent and doesn't inherit any theme
+	# background styleboxes from the main UI.
+	transparent = true
+	transparent_bg = true
+	theme = Theme.new()
+
 	# Size the window to exactly fit the connected button column.
 	var count := _button_group.get_child_count()
 	if count > 0:

@@ -93,9 +93,6 @@ func _rebuild_nav_and_layout() -> void:
 	# Re-add children in correct order
 	_update_inner_layout_children()
 
-	# Update hero size
-	ui_manager.hero_background._update_hero_size()
-
 	# Emit signal
 	ui_manager.layout_changed.emit("bar" if is_bar else "rail")
 

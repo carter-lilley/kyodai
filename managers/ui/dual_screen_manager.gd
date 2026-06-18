@@ -195,10 +195,10 @@ func _disable_dual_screen_mode() -> void:
 	if _hero_image:
 		_hero_image.set_dual_screen_mode(false)
 
-	# Show hero spacer again
+	# Hide hero spacer in single-screen mode
 	if _hero_spacer:
-		_hero_spacer.visible = true
-		ui_manager.hero_background._update_hero_size()  # This will set the correct spacer size
+		_hero_spacer.visible = false
+		_hero_spacer.custom_minimum_size = Vector2.ZERO
 
 	_dual_screen_active = false
 
@@ -503,7 +503,11 @@ func _disable_dual_screen_mode_desktop() -> void:
 	# Restore hero to original parent
 	if _hero_original_parent and _hero_image:
 		_hero_original_parent.add_child(_hero_image)
-		ui_manager.hero_background._update_hero_size()
+		_hero_image.visible = false
+
+	if _hero_spacer:
+		_hero_spacer.visible = false
+		_hero_spacer.custom_minimum_size = Vector2.ZERO
 
 	# Close secondary window
 	if _hero_secondary_window:
