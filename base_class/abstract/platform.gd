@@ -14,6 +14,6 @@ func get_icon() -> Texture2D:
 	if icon_path and FileAccess.file_exists(icon_path):
 		var img = Image.new()
 		var error = img.load(icon_path)
-		if error == OK:
+		if error == OK and not img.is_empty():
 			return ImageTexture.create_from_image(img)
 	return null

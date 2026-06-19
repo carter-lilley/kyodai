@@ -24,8 +24,12 @@ func _ready():
 func setup(root_control: Control) -> void:
 	_root_control = root_control
 
-func pre_create_settings_dialog() -> void:
-	"""Eagerly build the settings dialog in the background."""
+func pre_create_settings_dialog(force: bool = false) -> void:
+	"""Eagerly build the settings dialog in the background.
+	If a valid dialog already exists and force is false, this is a no-op."""
+	if _settings_dialog and is_instance_valid(_settings_dialog) and not force:
+		return
+
 	if _settings_dialog and is_instance_valid(_settings_dialog):
 		_settings_dialog.queue_free()
 		_settings_dialog = null

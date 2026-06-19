@@ -124,6 +124,8 @@ func set_game(game: GameResource):
 				err = img.load_webp_from_buffer(buffer)
 		
 		if err == OK:
+			if img.is_empty():
+				return null
 			# Downscale large images to save GPU memory
 			var max_dim = max(img.get_width(), img.get_height())
 			if max_dim > MAX_HERO_TEXTURE_SIZE:

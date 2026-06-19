@@ -37,19 +37,39 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("swap_screens"):
 		swap_screens()
 		
+func set_screen_resources(main: Screen, second: Screen) -> void:
+	main_screen = main
+	second_screen = second
+	refresh_screens()
+
+func refresh_screens() -> void:
+	if main_screen:
+		main_screen.setup(self)
+		if main_screen.viewport: _main_viewport = main_screen.viewport
+		if main_screen.container: _main_container = main_screen.container
+
+	if second_screen:
+		second_screen.setup(self)
+		if second_screen.container: _second_container = second_screen.container
+		if second_screen.viewport: _second_viewport = second_screen.viewport
+
+	if _main_viewport:
+		_main_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		_main_viewport.size = original_main_size
+	if _second_viewport:
+		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		_second_viewport.size = original_second_size
+
+	if _main_container:
+		_main_container.position = Vector2.ZERO
+	if _second_container:
+		_second_container.position = Vector2(-10000, 0)
+
 func _ready():
 	is_android = OS.get_name() == "Android"
 	
 	if Engine.has_singleton("AynThor"):
-		if main_screen:
-			main_screen.setup(self)
-			if main_screen.viewport: _main_viewport = main_screen.viewport
-			if main_screen.container: _main_container = main_screen.container
-			
-		if second_screen:
-			second_screen.setup(self)
-			if second_screen.container: _second_container = second_screen.container
-			if second_screen.viewport: _second_viewport = second_screen.viewport
+		refresh_screens()
 		
 		ayn_thor_plugin = Engine.get_singleton("AynThor")
 		ayn_thor_plugin.connect("second_screen_connected", _on_screen_connected)
@@ -70,18 +90,8 @@ func _ready():
 		original_main_size = Vector2i(1920, 1080)
 	
 	original_second_size = Vector2i(1080, 1240)
-	
-	if _main_viewport:
-		_main_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		_main_viewport.size = original_main_size
-	if _second_viewport:
-		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		_second_viewport.size = original_second_size
+	refresh_screens()
 
-	if _main_container:
-		_main_container.position = Vector2.ZERO
-	if _second_container:
-		_second_container.position = Vector2(-10000, 0)
 
 var skip_frames: int = 0
 

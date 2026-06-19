@@ -4,21 +4,35 @@
 [ext_resource type="PackedScene" uid="uid://c8yvxg3ulq3a8" path="res://components/library_background.tscn" id="4_libbg"]
 [ext_resource type="Script" uid="uid://63mocgx1dxi4" path="res://addons/m3/components/M3Slider.gd" id="4_w48qg"]
 [ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="4_ycdy4"]
-[ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/hero_image.tscn" id="5_heroimg"]
 [ext_resource type="Script" uid="uid://ca1nbgxeetvm3" path="res://addons/m3/components/M3IconButton.gd" id="5_w48qg"]
 [ext_resource type="Script" uid="uid://sgqdjn7yeqxm" path="res://addons/onscreenkeyboard/onscreen_keyboard.gd" id="6_onscreenkeyboard"]
 [ext_resource type="Script" uid="uid://dpvnpkj275ewq" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
-[ext_resource type="Script" uid="uid://dnfalaub1s338" path="res://addons/AynThor/screen_resource.gd" id="9_screenres"]
 [ext_resource type="Script" uid="uid://dt6xlxivwdgeh" path="res://components/launch_transition_overlay.gd" id="11_launchoverlay"]
 [ext_resource type="Script" uid="uid://kuhi06ldq5a7" path="res://components/effects/effect_stack.gd" id="12_effectstack"]
 [ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="m3label"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4c57u"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.92, 0.9055686, 0.91639215, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_efxa6"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 1)
+shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dg77c"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.92, 0.9055686, 0.91639215, 1)
+bg_color = Color(0.869302, 0.8547702, 0.8678651, 1)
 shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ycdy4"]
@@ -34,26 +48,10 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.869302, 0.8547702, 0.8678651, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vivmo"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0, 0, 0, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_2cqfq"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
 bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yaehf"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vivmo"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -66,12 +64,28 @@ border_width_bottom = 3
 border_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_074og"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_2cqfq"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
 bg_color = Color(0.92, 0.9055686, 0.91639215, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yaehf"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_074og"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.869302, 0.8547702, 0.8678651, 1)
 shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cegan"]
@@ -87,26 +101,10 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.869302, 0.8547702, 0.8678651, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_getpj"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0, 0, 0, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ryguw"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
 bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_d13ii"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_getpj"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -119,12 +117,28 @@ border_width_bottom = 3
 border_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1u8w0"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ryguw"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
 bg_color = Color(0.92, 0.9055686, 0.91639215, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_d13ii"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1u8w0"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.869302, 0.8547702, 0.8678651, 1)
 shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0odxb"]
@@ -140,26 +154,10 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.869302, 0.8547702, 0.8678651, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_a6jrf"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0, 0, 0, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_xuqvo"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
 bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_qsp4k"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_a6jrf"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -172,6 +170,22 @@ border_width_bottom = 3
 border_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
 shadow_color = Color(1, 1, 1, 0)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_xuqvo"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 1)
+shadow_color = Color(1, 1, 1, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_qsp4k"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 1)
+shadow_color = Color(1, 1, 1, 0)
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_kq58d"]
 content_margin_left = 0.0
 content_margin_top = 0.0
@@ -181,24 +195,8 @@ bg_color = Color(0, 0, 0, 1)
 shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_seu75"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0, 0, 0, 1)
-shadow_color = Color(1, 1, 1, 0)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_htxhm"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0, 0, 0, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jq2sk"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4k2k6"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -206,7 +204,7 @@ content_margin_bottom = 0.0
 bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
 shadow_color = Color(1, 1, 1, 0)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0rl1p"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jq2sk"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -218,16 +216,6 @@ border_width_right = 3
 border_width_bottom = 3
 border_color = Color(0, 0, 0, 1)
 shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="Resource" id="Screen_1"]
-script = ExtResource("9_screenres")
-container_path = NodePath("../DualScreenSetup/MainViewportContainer")
-viewport_path = NodePath("../DualScreenSetup/MainViewportContainer/MainViewport")
-
-[sub_resource type="Resource" id="Screen_2"]
-script = ExtResource("9_screenres")
-container_path = NodePath("../DualScreenSetup/SecondViewportContainer")
-viewport_path = NodePath("../DualScreenSetup/SecondViewportContainer/SecondViewport")
 
 [node name="Main" type="Control" unique_id=527286469]
 layout_mode = 3
@@ -313,16 +301,16 @@ theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
 theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_dg77c")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_dg77c")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_ycdy4")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_ycdy4")
-theme_override_styles/hover = SubResource("StyleBoxFlat_w48qg")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_w48qg")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_vivmo")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_vivmo")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_2cqfq")
-theme_override_styles/focus = SubResource("StyleBoxFlat_yaehf")
+theme_override_styles/normal = SubResource("StyleBoxFlat_4c57u")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_4c57u")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_efxa6")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_efxa6")
+theme_override_styles/hover = SubResource("StyleBoxFlat_dg77c")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_dg77c")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_ycdy4")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_ycdy4")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_w48qg")
+theme_override_styles/focus = SubResource("StyleBoxFlat_vivmo")
 toggle_mode = true
 button_pressed = true
 script = ExtResource("5_w48qg")
@@ -343,16 +331,16 @@ theme_override_colors/font_hover_color = Color(0.28627452, 0.27058825, 0.3098039
 theme_override_colors/font_hover_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_074og")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_074og")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_cegan")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_cegan")
-theme_override_styles/hover = SubResource("StyleBoxFlat_82xsv")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_82xsv")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_getpj")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_getpj")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_ryguw")
-theme_override_styles/focus = SubResource("StyleBoxFlat_d13ii")
+theme_override_styles/normal = SubResource("StyleBoxFlat_2cqfq")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_2cqfq")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_yaehf")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_yaehf")
+theme_override_styles/hover = SubResource("StyleBoxFlat_074og")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_074og")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_cegan")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_cegan")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_82xsv")
+theme_override_styles/focus = SubResource("StyleBoxFlat_getpj")
 toggle_mode = true
 script = ExtResource("5_w48qg")
 icon_button_size = 1
@@ -373,16 +361,16 @@ theme_override_colors/font_hover_color = Color(0.28627452, 0.27058825, 0.3098039
 theme_override_colors/font_hover_pressed_color = Color(0.28627452, 0.27058825, 0.30980393, 1)
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_1u8w0")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_1u8w0")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_0odxb")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_0odxb")
-theme_override_styles/hover = SubResource("StyleBoxFlat_lswn8")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_lswn8")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_a6jrf")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_a6jrf")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_xuqvo")
-theme_override_styles/focus = SubResource("StyleBoxFlat_qsp4k")
+theme_override_styles/normal = SubResource("StyleBoxFlat_ryguw")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_ryguw")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_d13ii")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_d13ii")
+theme_override_styles/hover = SubResource("StyleBoxFlat_1u8w0")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_1u8w0")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_0odxb")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_0odxb")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_lswn8")
+theme_override_styles/focus = SubResource("StyleBoxFlat_a6jrf")
 toggle_mode = true
 script = ExtResource("5_w48qg")
 icon_button_size = 1
@@ -402,16 +390,16 @@ theme_override_colors/font_hover_color = Color(0, 0, 0, 1)
 theme_override_colors/font_hover_pressed_color = Color(0, 0, 0, 1)
 theme_override_colors/font_disabled_color = Color(0.10980392, 0.105882354, 0.12156863, 0.38)
 theme_override_font_sizes/font_size = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_kq58d")
-theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_kq58d")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_seu75")
-theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_seu75")
-theme_override_styles/hover = SubResource("StyleBoxFlat_htxhm")
-theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_htxhm")
-theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_jq2sk")
-theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_jq2sk")
-theme_override_styles/disabled = SubResource("StyleBoxFlat_4k2k6")
-theme_override_styles/focus = SubResource("StyleBoxFlat_0rl1p")
+theme_override_styles/normal = SubResource("StyleBoxFlat_xuqvo")
+theme_override_styles/normal_mirrored = SubResource("StyleBoxFlat_xuqvo")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_qsp4k")
+theme_override_styles/pressed_mirrored = SubResource("StyleBoxFlat_qsp4k")
+theme_override_styles/hover = SubResource("StyleBoxFlat_kq58d")
+theme_override_styles/hover_mirrored = SubResource("StyleBoxFlat_kq58d")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_seu75")
+theme_override_styles/hover_pressed_mirrored = SubResource("StyleBoxFlat_seu75")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_htxhm")
+theme_override_styles/focus = SubResource("StyleBoxFlat_jq2sk")
 script = ExtResource("5_w48qg")
 icon_button_size = 1
 icon_button_width = 1
@@ -489,34 +477,3 @@ script = ExtResource("m3label")
 
 [node name="AynThorManager" type="Node" parent="." unique_id=999999001]
 script = ExtResource("8_aynthor")
-main_screen = SubResource("Screen_1")
-second_screen = SubResource("Screen_2")
-
-[node name="DualScreenSetup" type="Control" parent="." unique_id=999999002]
-visible = false
-anchors_preset = 0
-offset_left = -10000.0
-offset_top = -10000.0
-
-[node name="MainViewportContainer" type="SubViewportContainer" parent="DualScreenSetup" unique_id=512595305]
-layout_mode = 0
-offset_right = 1920.0
-offset_bottom = 1080.0
-
-[node name="MainViewport" type="SubViewport" parent="DualScreenSetup/MainViewportContainer" unique_id=613151917]
-handle_input_locally = false
-size = Vector2i(1920, 1080)
-render_target_update_mode = 0
-
-[node name="SecondViewportContainer" type="SubViewportContainer" parent="DualScreenSetup" unique_id=961374817]
-layout_mode = 0
-offset_left = 2000.0
-offset_right = 3080.0
-offset_bottom = 1240.0
-
-[node name="SecondViewport" type="SubViewport" parent="DualScreenSetup/SecondViewportContainer" unique_id=1178559437]
-handle_input_locally = false
-size = Vector2i(1080, 1240)
-render_target_update_mode = 0
-
-[node name="HeroImageSecondScreen" parent="DualScreenSetup/SecondViewportContainer/SecondViewport" unique_id=1788902033 instance=ExtResource("5_heroimg")]

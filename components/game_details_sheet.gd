@@ -164,11 +164,11 @@ func prepare_for_game(romm_id: int) -> void:
         MemoryManager.queue_image_task(
             func() -> Image:
                 var img := Image.new()
-                if img.load(game.cover_path) == OK:
+                if img.load(game.cover_path) == OK and not img.is_empty():
                     return img
                 return null,
             func(img: Image):
-                if is_instance_valid(self) and img:
+                if is_instance_valid(self) and img and not img.is_empty():
                     _prepared_cover = ImageTexture.create_from_image(img)
         )
 
@@ -310,11 +310,11 @@ func _load_cover(game: GameResource) -> void:
         MemoryManager.queue_image_task(
             func() -> Image:
                 var img := Image.new()
-                if img.load(game.cover_path) == OK:
+                if img.load(game.cover_path) == OK and not img.is_empty():
                     return img
                 return null,
             func(img: Image):
-                if is_instance_valid(cover_texture) and img:
+                if is_instance_valid(cover_texture) and img and not img.is_empty():
                     cover_texture.texture = ImageTexture.create_from_image(img)
         )
         return

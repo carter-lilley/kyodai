@@ -11,7 +11,6 @@ extends Manager
 
 # Cached references passed during initialization
 var _library_background: LibraryBackground = null
-var _hero_image: HeroImage = null
 
 # Centralized card/grid settings state. Owned by UIManager; consumers read this
 # instead of querying SettingsManager directly for card/grid settings.
@@ -41,20 +40,17 @@ signal settings_dialog_dismissed()
 
 func initialize(
 	tab_container: TabContainer,
-	hero_image: HeroImage,
-	hero_spacer: Control,
 	library_background: LibraryBackground,
 	content_wrapper: Control,
 	main_content_vbox: VBoxContainer,
 	root_layout: Control
 ) -> void:
-	"""Initialize UIManager with all pre-built nodes from main.tscn."""
+	"""Initialize UIManager with all the pre-built nodes from main.tscn."""
 
 	_root_control = root_layout
 	_content_wrapper = content_wrapper
 	_main_content_vbox = main_content_vbox
 	_library_background = library_background
-	_hero_image = hero_image
 
 	# Get navigation type setting
 	var nav_type: int = 0
@@ -93,7 +89,7 @@ func initialize(
 	view.setup(tab_container)
 	overlay.setup(_root_control)
 	theme.setup(tab_container)
-	dual_screen.setup(_root_control, hero_image, hero_spacer)
+	dual_screen.setup(_root_control)
 
 	# Apply library background configuration now and when settings change
 	if _library_background and SettingsManager:
@@ -221,8 +217,8 @@ func controller_has_priority() -> bool:
 func should_card_grab_focus_on_hover() -> bool:
 	return navigation.should_card_grab_focus_on_hover()
 
-func pre_create_settings_dialog() -> void:
-	overlay.pre_create_settings_dialog()
+func pre_create_settings_dialog(force: bool = false) -> void:
+	overlay.pre_create_settings_dialog(force)
 
 func is_settings_dialog_open() -> bool:
 	return overlay.is_settings_dialog_open()
@@ -305,8 +301,9 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			navigation.set_nav_type(setting.value)
 			navigation._rebuild_nav_and_layout()
 		"hero_effect_config":
-			if _hero_image and _hero_image.has_method("refresh_from_settings"):
-				_hero_image.refresh_from_settings()
+			var hero_image = get_hero_image()
+			if hero_image and hero_image.has_method("refresh_from_settings"):
+				hero_image.refresh_from_settings()
 			view.mark_view_for_rebuild("Home", "Hero effect config changed")
 			view.mark_view_for_rebuild("Library", "Hero effect config changed")
 		"dark_mode":
@@ -321,6 +318,11 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# typed change events directly.
 		_:
 			pass
+
+func get_hero_image() -> HeroImage:
+	if dual_screen:
+		return dual_screen.get_hero_image()
+	return null
 
 func _on_card_settings_state_changed(_mask: int) -> void:
 	"""React to batched card/grid settings changes.
@@ -345,7 +347,8 @@ func _apply_library_background_config() -> void:
 func _on_hero_game_changed(game: GameResource) -> void:
 	"""Handle hero game change from views. Updates both the main hero and the
 	second-screen copy when dual screen is active."""
-	if not _hero_image:
+	var hero_image = get_hero_image()
+	if not hero_image:
 		return
 
 	var current_view = view.get_current_view()
@@ -367,7 +370,7 @@ func _on_hero_game_changed(game: GameResource) -> void:
 		return
 
 	if game:
-		_hero_image.set_game(game)
+		hero_image.set_game(game)
 		if dual_screen and dual_screen._dual_screen_active and dual_screen._hero_copy_in_second_viewport and dual_screen._hero_copy_in_second_viewport.has_method("set_game"):
 			dual_screen._hero_copy_in_second_viewport.set_game(game)
 		if dual_screen and dual_screen._dual_screen_active:
@@ -375,7 +378,7 @@ func _on_hero_game_changed(game: GameResource) -> void:
 			if ayn_thor_manager and ayn_thor_manager.has_method("force_hero_viewport_update"):
 				ayn_thor_manager.force_hero_viewport_update()
 	else:
-		_hero_image.clear()
+		hero_image.clear()
 		if dual_screen and dual_screen._dual_screen_active and dual_screen._hero_copy_in_second_viewport and dual_screen._hero_copy_in_second_viewport.has_method("clear"):
 			dual_screen._hero_copy_in_second_viewport.clear()
 

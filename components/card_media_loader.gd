@@ -192,6 +192,8 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 			err = image.load_webp_from_buffer(buffer)
 
 	if err == OK:
+		if image.is_empty():
+			return null
 		var max_dim = max(image.get_width(), image.get_height())
 		if max_dim > MAX_COVER_TEXTURE_SIZE:
 			var resize_scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim

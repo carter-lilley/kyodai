@@ -82,6 +82,8 @@ func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") 
 			err = image.load_webp_from_buffer(buffer)
 
 	if err == OK:
+		if image.is_empty():
+			return null
 		return image
 	return null
 

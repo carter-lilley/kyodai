@@ -2,8 +2,6 @@ extends Control
 
 # UI Nodes - initialized in _ready()
 var tab_container: TabContainer
-var hero_image: HeroImage
-var hero_spacer: Control
 var library_background: LibraryBackground
 var content_wrapper: Control
 var main_content_vbox: VBoxContainer
@@ -71,8 +69,6 @@ func _ready():
 	# Initialize UIManager with all the pre-built nodes
 	UIManager.initialize(
 		tab_container,
-		hero_image,
-		hero_spacer,
 		library_background,
 		content_wrapper,
 		main_content_vbox,
@@ -136,23 +132,6 @@ func _ready():
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
 
-	# Keep DualScreenSetup in the scene tree so its SubViewports are freed with Main.
-	# When dual-screen is disabled we disable processing and hide it to avoid input
-	# interference on desktop.
-	var dual_screen_setup = get_node_or_null("DualScreenSetup")
-	if dual_screen_setup:
-		if DisplayManager and not DisplayManager.is_dual_screen_enabled():
-			_disable_dual_screen_setup(dual_screen_setup)
-			print("[Main] DualScreenSetup disabled (dual-screen not enabled)")
-		else:
-			# Dual-screen IS enabled at startup — just disable focus on containers
-			var main_viewport_container = get_node_or_null("DualScreenSetup/MainViewportContainer")
-			if main_viewport_container:
-				main_viewport_container.focus_mode = Control.FOCUS_NONE
-			var second_viewport_container = get_node_or_null("DualScreenSetup/SecondViewportContainer")
-			if second_viewport_container:
-				second_viewport_container.focus_mode = Control.FOCUS_NONE
-
 	# Extract native binaries on Android (non-blocking, happens in background)
 	if PlatformManager.is_android():
 		AndroidBinaryExtractor.extract_all_binaries()
@@ -199,7 +178,7 @@ func _resume_oobe_if_needed(wizard: OobeWizard):
 func _on_oobe_wizard_completed():
 	print("[Main] OOBE wizard completed")
 	# Rebuild settings dialog with updated path/RomM values so it's fresh
-	UIManager.pre_create_settings_dialog()
+	UIManager.pre_create_settings_dialog(true)
 	# Refresh any views that might need updated settings
 	UIManager.rebuild_game_grid()
 	# Restore focus to the home button
@@ -651,39 +630,6 @@ func reset_focus_to_home_button() -> void:
 ## DualScreenSetup lifecycle management
 ## Keep DualScreenSetup in the tree so its SubViewports are freed with Main.
 ## When not in use, disable processing and hide it to avoid input interference.
-
-func _disable_dual_screen_setup(ds: Node) -> void:
-	ds.process_mode = Node.PROCESS_MODE_DISABLED
-	ds.visible = false
-	ds.position = Vector2(-10000, -10000)
-	for child in ds.get_children():
-		if child is Control:
-			child.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			child.focus_mode = Control.FOCUS_NONE
-
-func _enable_dual_screen_setup(ds: Node) -> void:
-	ds.process_mode = Node.PROCESS_MODE_INHERIT
-	ds.visible = true
-	ds.position = Vector2.ZERO
-	for child in ds.get_children():
-		if child is Control:
-			child.mouse_filter = Control.MOUSE_FILTER_PASS
-			child.focus_mode = Control.FOCUS_NONE
-
-func ensure_dual_screen_setup() -> Node:
-	"""Ensure DualScreenSetup is enabled and return it."""
-	var ds = get_node_or_null("DualScreenSetup")
-	if ds:
-		_enable_dual_screen_setup(ds)
-		return ds
-	return null
-
-func remove_dual_screen_setup() -> void:
-	"""Disable DualScreenSetup without removing it from the tree."""
-	var ds = get_node_or_null("DualScreenSetup")
-	if ds:
-		_disable_dual_screen_setup(ds)
-		print("[Main] DualScreenSetup disabled")
 
 func _setup_repeat():
 	_delay_timer = Timer.new()

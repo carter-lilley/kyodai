@@ -139,7 +139,7 @@ func get_cover_image() -> Texture2D:
 	if cover_path and FileAccess.file_exists(cover_path):
 		var img = Image.new()
 		var error = img.load(cover_path)
-		if error == OK:
+		if error == OK and not img.is_empty():
 			return ImageTexture.create_from_image(img)
 	return null
 

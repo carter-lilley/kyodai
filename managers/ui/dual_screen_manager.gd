@@ -26,15 +26,83 @@ var _hero_original_parent: Node = null
 
 var _root_control: Control = null
 var _hero_image: HeroImage = null
-var _hero_spacer: Control = null
+
+var _dual_screen_setup_scene: PackedScene = preload("res://scenes/dual_screen_setup.tscn")
+var _dual_screen_setup: Control = null
+var _main_viewport: SubViewport = null
+var _second_viewport: SubViewport = null
 
 func _ready():
 	ui_manager = get_parent()
 
-func setup(root_control: Control, hero_image: HeroImage, hero_spacer: Control) -> void:
+func setup(root_control: Control) -> void:
 	_root_control = root_control
-	_hero_image = hero_image
-	_hero_spacer = hero_spacer
+
+func ensure_dual_screen_setup() -> Control:
+	"""Create or return the DualScreenSetup scene under /root/Main.
+	Also re-resolves AynThorManager screen references if available."""
+	if _dual_screen_setup and is_instance_valid(_dual_screen_setup):
+		_enable_dual_screen_setup_node(_dual_screen_setup)
+		return _dual_screen_setup
+
+	var main = get_node_or_null("/root/Main")
+	if not main:
+		push_error("[DualScreenManager] Cannot create DualScreenSetup - Main node not found")
+		return null
+
+	_dual_screen_setup = _dual_screen_setup_scene.instantiate()
+	_dual_screen_setup.name = "DualScreenSetup"
+	main.add_child(_dual_screen_setup)
+
+	_main_viewport = _dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
+	_second_viewport = _dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport")
+	_hero_image = _dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport/HeroImageSecondScreen")
+	_hero_copy_in_second_viewport = _hero_image
+
+	var ayn = main.get_node_or_null("AynThorManager")
+	if ayn and ayn.has_method("set_screen_resources"):
+		var main_screen = Screen.new()
+		main_screen.container_path = NodePath("../DualScreenSetup/MainViewportContainer")
+		main_screen.viewport_path = NodePath("../DualScreenSetup/MainViewportContainer/MainViewport")
+		var second_screen = Screen.new()
+		second_screen.container_path = NodePath("../DualScreenSetup/SecondViewportContainer")
+		second_screen.viewport_path = NodePath("../DualScreenSetup/SecondViewportContainer/SecondViewport")
+		ayn.set_screen_resources(main_screen, second_screen)
+
+	_enable_dual_screen_setup_node(_dual_screen_setup)
+	return _dual_screen_setup
+
+func remove_dual_screen_setup() -> void:
+	"""Disable DualScreenSetup without removing it from the tree."""
+	if _dual_screen_setup and is_instance_valid(_dual_screen_setup):
+		_disable_dual_screen_setup_node(_dual_screen_setup)
+
+func get_hero_image() -> HeroImage:
+	return _hero_image
+
+func get_main_viewport() -> SubViewport:
+	return _main_viewport
+
+func get_second_viewport() -> SubViewport:
+	return _second_viewport
+
+func _enable_dual_screen_setup_node(ds: Node) -> void:
+	ds.process_mode = Node.PROCESS_MODE_INHERIT
+	ds.visible = true
+	ds.position = Vector2.ZERO
+	for child in ds.get_children():
+		if child is Control:
+			child.mouse_filter = Control.MOUSE_FILTER_PASS
+			child.focus_mode = Control.FOCUS_NONE
+
+func _disable_dual_screen_setup_node(ds: Node) -> void:
+	ds.process_mode = Node.PROCESS_MODE_DISABLED
+	ds.visible = false
+	ds.position = Vector2(-10000, -10000)
+	for child in ds.get_children():
+		if child is Control:
+			child.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			child.focus_mode = Control.FOCUS_NONE
 
 func _initialize_dual_screen() -> void:
 	"""Initialize dual screen mode (called deferred to allow plugin initialization)."""
@@ -69,20 +137,10 @@ func _enable_dual_screen_mode(second_screen_index: int) -> void:
 func _enable_dual_screen_viewport_mode() -> void:
 	"""Enable dual screen using viewport plugin (generic dual screen support)."""
 
-	# Ensure DualScreenSetup is in the tree (it may have been removed on desktop)
-	var main_node = get_node_or_null("/root/Main")
-	var dual_screen_setup = null
-	var second_viewport = null
-	_hero_copy_in_second_viewport = null
-
-	if main_node and main_node.has_method("ensure_dual_screen_setup"):
-		dual_screen_setup = main_node.ensure_dual_screen_setup()
-	else:
-		dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
-
-	if dual_screen_setup:
-		second_viewport = dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport")
-		_hero_copy_in_second_viewport = dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport/HeroImageSecondScreen")
+	# Ensure DualScreenSetup is in the tree
+	var dual_screen_setup = ensure_dual_screen_setup()
+	var second_viewport = _second_viewport
+	_hero_copy_in_second_viewport = _hero_image
 
 	if not dual_screen_setup or not second_viewport or not _hero_copy_in_second_viewport:
 		push_warning("[DualScreenManager] Dual screen setup nodes not found")
@@ -96,7 +154,7 @@ func _enable_dual_screen_viewport_mode() -> void:
 	M3Overlay.dismiss_type("sheet")
 
 	# REPARENTING: Move main UI nodes into MainViewport
-	var main_viewport = dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
+	var main_viewport = _main_viewport
 	if main_viewport:
 		# Mark viewport as overlay parent so M3 components render inside it
 		main_viewport.add_to_group("m3_overlay_parent")
@@ -109,9 +167,6 @@ func _enable_dual_screen_viewport_mode() -> void:
 		second_viewport.handle_input_locally = true
 
 	# Hide hero in main UI since it will be on second screen
-	if _hero_spacer:
-		_hero_spacer.visible = false
-		_hero_spacer.custom_minimum_size = Vector2.ZERO
 	if _hero_image:
 		_hero_image.set_dual_screen_mode(true)
 
@@ -128,8 +183,9 @@ func _enable_dual_screen_viewport_mode() -> void:
 
 	# Position and make dual screen setup visible
 	# MainViewportContainer will be at (0,0) relative to this, so position at (0,0)
-	dual_screen_setup.position = Vector2.ZERO
-	dual_screen_setup.visible = true
+	if dual_screen_setup:
+		dual_screen_setup.position = Vector2.ZERO
+		dual_screen_setup.visible = true
 
 	_dual_screen_active = true
 	_dual_screen_viewport_mode = true
@@ -146,15 +202,9 @@ func _disable_dual_screen_mode() -> void:
 	_restore_keyboard_to_original_parent()
 
 	# Remove main viewport from overlay parent group so M3 components attach to root viewport
-	var dual_screen_setup = null
-	var main_node = get_node_or_null("/root/Main")
-	if main_node and main_node.has_method("ensure_dual_screen_setup"):
-		dual_screen_setup = main_node.ensure_dual_screen_setup()
-	else:
-		dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
-
+	var dual_screen_setup = _dual_screen_setup
 	if dual_screen_setup:
-		var main_viewport = dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
+		var main_viewport = _main_viewport
 		if main_viewport:
 			main_viewport.remove_from_group("m3_overlay_parent")
 
@@ -163,25 +213,14 @@ func _disable_dual_screen_mode() -> void:
 
 	if _dual_screen_viewport_mode:
 		# Restore input handling to default (forward to parent viewport)
-		var main_vp = null
-		var second_vp = null
-		if dual_screen_setup:
-			main_vp = dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
-			second_vp = dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport")
+		var main_vp = _main_viewport
+		var second_vp = _second_viewport
 		if main_vp:
 			main_vp.handle_input_locally = false
 		if second_vp:
 			second_vp.handle_input_locally = false
 
-		# Remove dual screen setup from tree (prevents input interference on desktop)
-		main_node = get_node_or_null("/root/Main")
-		if main_node and main_node.has_method("remove_dual_screen_setup"):
-			main_node.remove_dual_screen_setup()
-		else:
-			dual_screen_setup = get_node_or_null("/root/Main/DualScreenSetup")
-			if dual_screen_setup:
-				dual_screen_setup.visible = false
-				dual_screen_setup.position = Vector2(-10000, -10000)
+		remove_dual_screen_setup()
 
 		_dual_screen_viewport_mode = false
 	else:
@@ -194,11 +233,6 @@ func _disable_dual_screen_mode() -> void:
 	# Show hero in main UI again
 	if _hero_image:
 		_hero_image.set_dual_screen_mode(false)
-
-	# Hide hero spacer in single-screen mode
-	if _hero_spacer:
-		_hero_spacer.visible = false
-		_hero_spacer.custom_minimum_size = Vector2.ZERO
 
 	_dual_screen_active = false
 
@@ -450,6 +484,10 @@ func _enable_dual_screen_mode_desktop(second_screen_index: int) -> void:
 
 func _setup_desktop_dual_screen(_second_screen_index: int) -> void:
 	"""Setup desktop dual screen (called deferred to avoid race conditions)."""
+	if not _hero_image:
+		push_error("[DualScreenManager] Desktop dual screen requested but no hero image is available")
+		return
+
 	# Store reference to original parent
 	_hero_original_parent = _hero_image.get_parent()
 
@@ -487,11 +525,6 @@ func _setup_desktop_dual_screen(_second_screen_index: int) -> void:
 	# Add window to scene tree
 	get_tree().root.add_child(_hero_secondary_window)
 
-	# Hide hero spacer since hero is now in separate window
-	if _hero_spacer:
-		_hero_spacer.visible = false
-		_hero_spacer.custom_minimum_size = Vector2.ZERO
-
 	_dual_screen_active = true
 
 func _disable_dual_screen_mode_desktop() -> void:
@@ -504,10 +537,6 @@ func _disable_dual_screen_mode_desktop() -> void:
 	if _hero_original_parent and _hero_image:
 		_hero_original_parent.add_child(_hero_image)
 		_hero_image.visible = false
-
-	if _hero_spacer:
-		_hero_spacer.visible = false
-		_hero_spacer.custom_minimum_size = Vector2.ZERO
 
 	# Close secondary window
 	if _hero_secondary_window:
