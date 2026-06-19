@@ -42,9 +42,8 @@ func _exit_tree():
 		SettingsManager.settings_saved.disconnect(_on_settings_saved)
 
 func on_view_hide():
-	# Don't save here - the Card Designer reloads from SettingsManager when shown
-	# This prevents stale internal config from overwriting preset changes
-	pass
+	# Safety net: persist any pending card designer changes before the view is hidden.
+	_save_to_settings()
 
 func on_view_show():
 	# Reload config from SettingsManager to ensure we have latest (including preset changes)

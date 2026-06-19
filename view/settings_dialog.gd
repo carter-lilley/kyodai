@@ -21,6 +21,10 @@ var _category_contents: Dictionary[String, Control] = {}
 var _current_category: String = ""
 var _library_settings_view: SettingsView
 
+# Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
+var _snapshot: Dictionary = {}
+var _cancelled: bool = false
+
 func _init():
 	dialog_variant = Variant.BASIC
 	dialog_max_width = 900.0
@@ -54,8 +58,11 @@ func _ready():
 	if _body_label:
 		_body_label.visible = false
 	
-	# Add an explicit Close action for the popup action bar.
-	add_action("Close", dismiss, false)
+	# Replace the default action with explicit Cancel / OK buttons.
+	# OK applies changes and closes; Cancel reverts to the snapshot taken on open.
+	clear_actions()
+	add_action("Cancel", _on_cancel_pressed, false)
+	add_action("OK", _on_ok_pressed, true)
 
 func _build_two_pane_layout() -> void:
 	"""Build two-pane HBox inside content_slot: sidebar + divider + content pane."""
@@ -261,6 +268,8 @@ func select_category(id: String) -> void:
 			_right_content.on_view_show()
 
 func show_overlay() -> void:
+	_cancelled = false
+	_take_snapshot()
 	super.show_overlay()
 	if _right_content and _right_content.has_method("on_view_show"):
 		_right_content.on_view_show()
@@ -277,10 +286,55 @@ func dismiss() -> void:
 	if _right_content and _right_content.has_method("on_view_hide"):
 		_right_content.on_view_hide()
 	
+	# Cancel reverts to the snapshot taken on open. All other dismiss paths
+	# (OK, outside-click, ui_cancel, default close) apply pending settings.
+	if _cancelled:
+		_restore_snapshot()
+
+	if not _cancelled:
+		_apply_settings()
+
 	if SettingsManager:
 		SettingsManager.save_settings()
-	
+
 	super.dismiss()
+
+func _on_ok_pressed() -> void:
+	dismiss()
+
+func _on_cancel_pressed() -> void:
+	_cancelled = true
+	dismiss()
+
+func _take_snapshot() -> void:
+	_snapshot.clear()
+	if not SettingsManager or not SettingsManager.settings:
+		return
+	for property_name in SettingsManager.get_settings().keys():
+		_snapshot[property_name] = _copy_value(SettingsManager.get_setting(property_name).value)
+
+func _restore_snapshot() -> void:
+	if _snapshot.is_empty() or not SettingsManager or not SettingsManager.settings:
+		return
+	for property_name in _snapshot.keys():
+		var setting = SettingsManager.get_setting(property_name)
+		if not setting:
+			continue
+		SettingsManager.set_setting(_copy_value(_snapshot[property_name]), setting)
+	refresh_all_category_values()
+
+func _copy_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		return value.duplicate(true)
+	if value is Array:
+		return value.duplicate(true)
+	if value is Object and value.has_method("duplicate"):
+		return value.duplicate(true)
+	return value
+
+func _apply_settings() -> void:
+	if UIManager:
+		UIManager.apply_settings_now()
 
 func get_platforms_settings_view() -> PlatformsSettingsView:
 	if _category_contents.has("romm") and _category_contents["romm"] is PlatformsSettingsView:

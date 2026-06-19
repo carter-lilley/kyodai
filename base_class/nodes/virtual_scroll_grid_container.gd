@@ -536,6 +536,8 @@ func _enter_tree():
 	_last_resized_size = Vector2.ZERO
 	if DisplayManager:
 		_on_display_size_changed(DisplayManager.get_viewport_size())
+	# Ensure focus-lock viewport signal is active after reparenting.
+	_reconnect_focus_lock_viewport()
 
 func _exit_tree():
 	print("[VirtualScrollGridContainer] _exit_tree() pool_size=%d active=%d queued=%s" % [_card_pool.size(), _active_cards.size(), str(is_queued_for_deletion())])
@@ -587,9 +589,9 @@ func _on_card_settings_state_changed(mask: int) -> void:
 		refresh_all_card_effects(true)
 		_schedule_layout_recalc()
 
-	# Focus lock toggle
-	if mask & CardSettingsState.ChangeMask.FOCUS_LOCK:
-		focus_lock_enabled = state.focus_lock_enabled
+	# Focus lock toggle (always re-sync from state in case a LAYOUT/EFFECTS rebuild
+	# was batched and the FOCUS_LOCK mask was not emitted independently).
+	focus_lock_enabled = state.focus_lock_enabled
 
 	# Theme changes (dark mode / primary color) do not affect grid geometry directly.
 
@@ -1762,7 +1764,18 @@ func _disconnect_focus_lock_viewport() -> void:
 	if _viewport_focus_connection and is_instance_valid(_viewport_focus_connection):
 		if _viewport_focus_connection.gui_focus_changed.is_connected(_on_viewport_focus_changed):
 			_viewport_focus_connection.gui_focus_changed.disconnect(_on_viewport_focus_changed)
-		_viewport_focus_connection = null
+	_viewport_focus_connection = null
+
+func _reconnect_focus_lock_viewport() -> void:
+	_disconnect_focus_lock_viewport()
+	_connect_focus_lock_viewport()
+
+func refresh_focus_lock() -> void:
+	"""Re-sync focus-lock state from CardSettingsState and ensure the viewport
+	signal is connected. Call after reparenting or when the setting may have
+	changed outside the normal change event flow."""
+	_update_focus_lock_from_settings()
+	_reconnect_focus_lock_viewport()
 
 func _on_viewport_focus_changed(control: Control) -> void:
 	if not control:

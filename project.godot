@@ -141,7 +141,9 @@ onscreenkeyboard/enabled=true
 
 [rendering]
 
+rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+driver/threads/thread_model=2
 textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/msaa_2d=1
 anti_aliasing/quality/use_debanding=true

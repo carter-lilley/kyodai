@@ -13,7 +13,7 @@ signal dual_screen_lost()
 signal dual_screen_mode_changed(enabled: bool, second_screen_index: int)
 signal dual_screen_availability_changed(available: bool)
 
-const RESIZE_DEBOUNCE_SECONDS := 0.1
+const RESIZE_DEBOUNCE_SECONDS := 0.25
 const BASE_HEIGHT := 1080.0
 const BASE_DPI := 160.0
 const DEFAULT_DPI := 96.0
@@ -62,6 +62,9 @@ func _ready() -> void:
 
 	# Initialize display detection
 	_initialize_display_detection()
+
+	# Apply the saved windowed size once the OS window is ready.
+	call_deferred("_apply_initial_window_size")
 
 	# UI scale setting disabled — now using DP-based scaling via M3Units
 	#_apply_ui_scale()
@@ -115,6 +118,10 @@ func _on_resize_debounced() -> void:
 
 	viewport_size_changed.emit(_viewport_size)
 
+	# Continuously save the windowed size so we don't rely solely on close-time
+	# reads, which can return stale/zero values during shutdown.
+	save_last_window_size()
+
 func get_viewport_size() -> Vector2:
 	if _viewport_size == Vector2.ZERO:
 		var viewport = get_viewport()
@@ -156,6 +163,16 @@ func _calculate_ui_scale() -> float:
 
 	_ui_scale = clamp(max(os_scale, resolution_scale, dpi_scale), MIN_UI_SCALE, MAX_UI_SCALE)
 	return _ui_scale
+
+func _apply_initial_window_size() -> void:
+	var windowed_setting = settings_man.get_setting("windowed")
+	if windowed_setting and windowed_setting.value:
+		# Restore last size if available; otherwise let the existing signal/rez path handle it.
+		var last_size := restore_last_window_size()
+		if last_size == Vector2i.ZERO:
+			print("[DisplayManager] No saved window size, using resolution preset")
+		else:
+			print("[DisplayManager] Restored saved window size: ", last_size)
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	match setting.property_name:
@@ -254,15 +271,54 @@ func set_resolution(choice : Vector2i):
 	DisplayServer.window_set_size(choice)
 	DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(choice) / 2.0))
 
+func _clamp_window_size(size: Vector2i) -> Vector2i:
+	var screen := DisplayServer.window_get_current_screen()
+	var screen_size := DisplayServer.screen_get_size(screen)
+	var min_size := Vector2i(400, 300)
+	return Vector2i(
+		clampi(size.x, min_size.x, screen_size.x),
+		clampi(size.y, min_size.y, screen_size.y)
+	)
+
+func restore_last_window_size() -> Vector2i:
+	var last_size_setting = settings_man.get_setting("last_window_size")
+	if last_size_setting and last_size_setting.value is Vector2i:
+		var last_size: Vector2i = last_size_setting.value
+		if last_size.x > 0 and last_size.y > 0:
+			last_size = _clamp_window_size(last_size)
+			DisplayServer.window_set_size(last_size)
+			print("[DisplayManager] Restored last window size: ", last_size)
+			return last_size
+	return Vector2i.ZERO
+
+func save_last_window_size() -> void:
+	if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
+		return
+	# Use the OS window size directly; fall back to the root viewport size if
+	# DisplayServer returns a zero/invalid value during shutdown.
+	var size := DisplayServer.window_get_size()
+	if size.x <= 0 or size.y <= 0:
+		var viewport = get_viewport()
+		if viewport:
+			size = Vector2i(viewport.size)
+	if size.x <= 0 or size.y <= 0:
+		return
+	var last_size_setting = settings_man.get_setting("last_window_size")
+	if last_size_setting:
+		settings_man.set_setting(size, last_size_setting)
+		print("[DisplayManager] Saved last window size: ", size)
+
 func windowed_toggle(value : bool):
 	if value:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-		var resolution_setting = settings_man.get_setting("resolution")
-		var resolution_value = resolution_setting.value
-		# ARRAY type may store either the selected index (int) or the actual Vector2i
-		if resolution_value is int and resolution_setting.options.size() > resolution_value:
-			resolution_value = resolution_setting.options[resolution_value]
-		set_resolution(resolution_value)
+		var last_size := restore_last_window_size()
+		if last_size == Vector2i.ZERO:
+			var resolution_setting = settings_man.get_setting("resolution")
+			var resolution_value = resolution_setting.value
+			# ARRAY type may store either the selected index (int) or the actual Vector2i
+			if resolution_value is int and resolution_setting.options.size() > resolution_value:
+				resolution_value = resolution_setting.options[resolution_value]
+			set_resolution(resolution_value)
 		settings_man.enable_setting("resolution")
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)

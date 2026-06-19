@@ -149,6 +149,10 @@ func reconnect_viewport() -> void:
 	if games_grid and games_grid._scroll_container:
 		games_grid._scroll_container.reconnect_viewport()
 
+	# Reconnect focus-lock viewport signal on the grid
+	if games_grid and games_grid.has_method("refresh_focus_lock"):
+		games_grid.refresh_focus_lock()
+
 func _on_game_updated(game: GameResource):
 	# Find and update any visible cards for this game
 	var range_info = games_grid.get_visible_range()

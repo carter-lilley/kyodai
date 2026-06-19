@@ -227,6 +227,42 @@ func pre_create_settings_dialog() -> void:
 func is_settings_dialog_open() -> bool:
 	return overlay.is_settings_dialog_open()
 
+func apply_settings_now() -> void:
+	"""Flush settings changes to the live UI immediately.
+
+	Called when the Settings dialog is dismissed with OK or outside-click.
+	Syncs CardSettingsState, rebuilds views, and refreshes theme/background.
+	"""
+	print("[UIManager] apply_settings_now")
+
+	# Sync centralized card/grid state with current SettingsManager values.
+	if card_settings_state:
+		card_settings_state.sync_from_settings_manager()
+
+	# Rebuild navigation layout if the navigation type changed.
+	var type_setting = SettingsManager.get_setting("library_navigation_type")
+	if type_setting:
+		var new_nav_type = type_setting.value
+		if new_nav_type != navigation.get_nav_type():
+			navigation.set_nav_type(new_nav_type)
+			navigation._rebuild_nav_and_layout()
+
+	# Rebuild all views so card size / layout changes are visible immediately.
+	view._rebuild_views("Settings applied", true)
+
+	# Apply library background and theme colors.
+	_apply_library_background_config()
+
+	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
+	if dark_mode_setting:
+		theme._apply_dark_mode(dark_mode_setting.value)
+
+	var primary_color_setting = SettingsManager.get_setting("library_primary_color")
+	if primary_color_setting and primary_color_setting.value is Color:
+		M3Theme.set_primary_seed(primary_color_setting.value)
+
+	theme._request_theme_refresh()
+
 # ============================================================================
 # High-level setting-change dispatcher
 # ============================================================================

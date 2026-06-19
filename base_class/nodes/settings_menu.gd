@@ -56,6 +56,7 @@ func update_control_value(property_name: String, value: Variant) -> void:
 		control.value = value * control.get_meta("display_scale", 1.0)
 	elif control is M3TextField:
 		control.text = str(value)
+		control.refresh_visuals()
 	elif control is M3ColorPicker:
 		control.color = value
 	elif control is RangeSlider:
@@ -297,6 +298,7 @@ func match_var_type(settingsvar : SettingsVar):
 				dialog.dir_selected.connect(func(dir: String):
 					var resolved_dir = FSM.resolve_content_uri(dir)
 					path_field.text = resolved_dir
+					path_field.refresh_visuals()
 					emit_signal("setting_changed", resolved_dir, settingsvar)
 					dialog.queue_free()
 				)

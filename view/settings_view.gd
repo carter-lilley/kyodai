@@ -427,8 +427,6 @@ func _refresh_all_settings_ui() -> void:
 	var card_effect_setting = SettingsManager.get_setting("card_effect_config")
 	if card_effect_setting:
 		SettingsManager.setting_changed.emit(card_effect_setting.value, card_effect_setting)
-	
-	SettingsManager.settings_saved.emit()
 
 func _on_load_preset_pressed() -> void:
 	var file_dialog = FileDialog.new()

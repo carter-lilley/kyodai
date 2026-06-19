@@ -140,6 +140,16 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 				saved_var.value = default_var.value
 		elif default_var.type == SettingsVar.SettingType.INT or default_var.type == SettingsVar.SettingType.FLOAT:
 			saved_var.value = clamp(old_value, default_var.min_value, default_var.max_value)
+		elif default_var.type == SettingsVar.SettingType.VECTOR2I:
+			# Clamp each axis independently using the per-axis min/max from metadata.
+			var min_limit := int(default_var.min_value)
+			var max_limit := int(default_var.max_value)
+			if max_limit <= 0:
+				max_limit = 16384
+			saved_var.value = Vector2i(
+				clampi(int(old_value.x), min_limit, max_limit),
+				clampi(int(old_value.y), min_limit, max_limit)
+			)
 		else:
 			saved_var.value = old_value
 		
@@ -358,6 +368,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 			emit_signal("setting_changed", settings.card_media_aspect_ratio.value, settings.card_media_aspect_ratio)
 		if settings.get("dark_mode") != null:
 			emit_signal("setting_changed", settings.dark_mode.value, settings.dark_mode)
+		if settings.get("focus_lock_enabled") != null:
+			emit_signal("setting_changed", settings.focus_lock_enabled.value, settings.focus_lock_enabled)
 		# Emit for card effect config - this triggers grid rebuild
 		if settings.get("card_effect_config") != null:
 			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)

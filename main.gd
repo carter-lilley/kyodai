@@ -1020,6 +1020,10 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		# Remember the current windowed size before shutdown.
+		if DisplayManager:
+			DisplayManager.save_last_window_size()
+
 		# Flush any pending settings changes before shutdown
 		if SettingsManager:
 			SettingsManager.save_settings()

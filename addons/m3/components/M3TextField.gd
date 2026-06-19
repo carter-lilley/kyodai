@@ -323,6 +323,17 @@ func set_menu_active(active: bool):
 	_update_layout()
 	queue_redraw()
 
+func refresh_visuals() -> void:
+	"""Public helper to re-evaluate floating label and supporting text after
+	external value changes (programmatic text assignment does not emit
+	text_changed, so the visual state must be refreshed explicitly)."""
+	if not _ready_called:
+		return
+	_update_floating_label()
+	_update_supporting_text()
+	_update_layout()
+	queue_redraw()
+
 func _on_text_changed(_new_text: String):
 	_update_floating_label()
 	_update_layout()

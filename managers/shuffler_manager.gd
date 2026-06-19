@@ -163,6 +163,11 @@ func stop_session() -> void:
 	get_tree().root.gui_disable_input = false
 
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	# Restore the last known windowed size, falling back to the resolution preset if none.
+	if DisplayManager:
+		var last_size := DisplayManager.restore_last_window_size()
+		if last_size == Vector2i.ZERO:
+			DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(DisplayServer.window_get_size()) / 2.0))
 	# Force window to front after restoring
 	DisplayServer.window_move_to_foreground()
 
