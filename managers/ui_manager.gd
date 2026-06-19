@@ -233,8 +233,6 @@ func apply_settings_now() -> void:
 	Called when the Settings dialog is dismissed with OK or outside-click.
 	Syncs CardSettingsState, rebuilds views, and refreshes theme/background.
 	"""
-	print("[UIManager] apply_settings_now")
-
 	# Sync centralized card/grid state with current SettingsManager values.
 	if card_settings_state:
 		card_settings_state.sync_from_settings_manager()

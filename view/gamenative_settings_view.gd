@@ -6,11 +6,14 @@ var _app_id_input: M3TextField
 var _add_button: M3Button
 var _status_label: M3Label
 var _scroll_container: ScrollContainer
+var _is_initializing: bool = false
 
 func _ready():
 	view_name = "GameNative"
+	_is_initializing = true
 	_build_view()
 	_refresh_games_list()
+	_is_initializing = false
 	
 	# Connect to manager signals
 	GameNativeManager.games_updated.connect(_on_games_updated)

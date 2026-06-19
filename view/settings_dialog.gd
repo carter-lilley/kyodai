@@ -2,8 +2,7 @@ class_name SettingsDialog
 extends M3Dialog
 
 ## Popup settings dialog with two-pane layout.
-## Creates category content directly from SettingsManager subgroups instead of
-## extracting from a SettingsView TabContainer.
+## Creates category content directly from SettingsManager subgroups.
 
 const SUBGROUP_ICONS: Dictionary[String, String] = {
 	"Audio": "volume-high",
@@ -19,7 +18,6 @@ var _right_content: Control
 var _category_buttons: Dictionary[String, M3Button] = {}
 var _category_contents: Dictionary[String, Control] = {}
 var _current_category: String = ""
-var _library_settings_view: SettingsView
 
 # Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
 var _snapshot: Dictionary = {}
@@ -129,8 +127,8 @@ func _build_categories() -> void:
 		_add_category_button(id, subgroup_name, icon)
 		
 		if subgroup_name == "Library Appearance":
-			# Library Appearance has complex custom UI — extract from SettingsView
-			_category_contents[id] = await _create_library_appearance_content()
+			# Library Appearance has complex custom UI — build it directly.
+			_category_contents[id] = preload("res://view/library_appearance_settings_view.gd").new()
 		else:
 			# Regular subgroup: SettingsMenu in a scrollable wrapper
 			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars)
@@ -207,35 +205,6 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	margin.add_child(vbox)
 	scroll.add_child(margin)
 	return scroll
-
-func _create_library_appearance_content() -> Control:
-	"""Library Appearance has complex custom UI — build via SettingsView and extract the tab."""
-	_library_settings_view = SettingsView.new()
-	add_child(_library_settings_view)
-	_library_settings_view.visible = false
-	
-	if not _library_settings_view.is_node_ready():
-		await _library_settings_view.ready
-	
-	var tab_container = _library_settings_view.get_settings_container()
-	if not tab_container:
-		push_error("[SettingsDialog] SettingsView did not create TabContainer for Library Appearance")
-		return Control.new()
-	
-	for i in range(tab_container.get_tab_count()):
-		if tab_container.get_tab_title(i) == "Library Appearance":
-			var content = tab_container.get_tab_control(i)
-			tab_container.remove_child(content)
-			content.visible = true
-			content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-			# Return the ScrollContainer wrapper directly to preserve scrolling behavior
-			if content is ScrollContainer:
-				return content
-			return content
-	
-	push_error("[SettingsDialog] Library Appearance tab not found in SettingsView")
-	return Control.new()
 
 func _on_category_selected(id: String) -> void:
 	select_category(id)
@@ -320,8 +289,20 @@ func _restore_snapshot() -> void:
 		var setting = SettingsManager.get_setting(property_name)
 		if not setting:
 			continue
-		SettingsManager.set_setting(_copy_value(_snapshot[property_name]), setting)
+		var snapshot_value = _snapshot[property_name]
+		if not _values_equal(snapshot_value, setting.value):
+			SettingsManager.set_setting(_copy_value(snapshot_value), setting)
 	refresh_all_category_values()
+
+func _values_equal(a: Variant, b: Variant) -> bool:
+	if typeof(a) != typeof(b):
+		return false
+	if a is Dictionary or a is Array or (a is Object and a.has_method("duplicate")):
+		# Deep-compare containers; for Objects, fall back to == if available.
+		if a is Object and b is Object:
+			return a == b or a.duplicate(true) == b.duplicate(true)
+		return a == b
+	return a == b
 
 func _copy_value(value: Variant) -> Variant:
 	if value is Dictionary:
@@ -373,5 +354,4 @@ func _refresh_settings_menu_values_recursive(node: Node) -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
-		if _library_settings_view and is_instance_valid(_library_settings_view):
-			_library_settings_view.queue_free()
+		pass

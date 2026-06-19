@@ -290,10 +290,12 @@ func _sync_option_button() -> void:
 		var effect_id = effect.get("effect_id", "")
 		if effect_id:
 			active_ids.append(effect_id)
+	_add_effect_button.set_block_signals(true)
 	for dropdown_id in _effect_id_map.keys():
 		var effect_id = _effect_id_map[dropdown_id]
 		if effect_id in active_ids:
 			_add_effect_button.select_option(dropdown_id)
+	_add_effect_button.set_block_signals(false)
 	# Override auto-text so the button never appears blank when empty
 	var selected_count = _add_effect_button.get_selected_indices().size()
 	_add_effect_button.text = "Add Effect" if selected_count == 0 else ("%d selected" % selected_count)

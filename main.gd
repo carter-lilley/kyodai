@@ -59,8 +59,6 @@ func _ready():
 
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
-	hero_image = get_node("RootLayout/ContentWrapper/HeroImage")
-	hero_spacer = get_node("RootLayout/ContentWrapper/MainContentVBox/HeroSpacer")
 	library_background = get_node("RootLayout/ContentWrapper/LibraryBackground")
 	content_wrapper = get_node("RootLayout/ContentWrapper")
 	main_content_vbox = get_node("RootLayout/ContentWrapper/MainContentVBox")
@@ -402,10 +400,12 @@ func _update_ui_for_view(view_name: String):
 					return
 				games_grid.set_meta("_ui_view_retry_count", 0)
 				_update_zoom_slider_stops(zoom_slider, games_grid)
+				zoom_slider.set_block_signals(true)
 				if _current_snap_ratios.size() > 0:
 					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
 				else:
 					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+				zoom_slider.set_block_signals(false)
 
 func _update_zoom_slider_stops(zoom_slider: M3Slider, games_grid: VirtualScrollGridContainer) -> void:
 	"""Update slider stops to match the grid's calculated snap levels."""
@@ -511,11 +511,14 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 			if zoom_slider:
 				_update_zoom_slider_stops(zoom_slider, games_grid)
-				# Sync slider value to the grid's actual current ratio
-				if _current_snap_ratios.size() > 0:
-					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
-				else:
-					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+			# Sync slider value to the grid's actual current ratio
+			zoom_slider.set_block_signals(true)
+			if _current_snap_ratios.size() > 0:
+				zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+			else:
+				zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+			zoom_slider.set_block_signals(false)
+
 
 func _on_preset_applied() -> void:
 	"""Sync UI controls after a theme preset is applied."""
@@ -538,7 +541,10 @@ func _sync_view_mode_button_to_setting() -> void:
 		2: button_index = 2  # Carousel
 		_: button_index = 0
 
+	# Block signals during programmatic sync so it isn't treated as a user change.
+	view_mode_group.set_block_signals(true)
 	view_mode_group.select_button(button_index)
+	view_mode_group.set_block_signals(false)
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""
@@ -625,10 +631,12 @@ func _load_and_apply_saved_zoom() -> void:
 			_update_zoom_slider_stops(zoom_slider, games_grid)
 		# Use the grid's actual snapped ratio (not the raw saved value) so slider matches reality
 		var actual_zoom = games_grid.target_card_width_ratio if games_grid else saved_zoom
+		zoom_slider.set_block_signals(true)
 		if _current_snap_ratios.size() > 0:
 			zoom_slider.set_value_no_signal(_find_nearest_snap_index(actual_zoom))
 		else:
 			zoom_slider.set_value_no_signal(actual_zoom)
+		zoom_slider.set_block_signals(false)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""

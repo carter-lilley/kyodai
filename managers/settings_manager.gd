@@ -12,6 +12,7 @@ const PRESETS_FOLDER := "user://themes/"
 const BUILTIN_PRESETS_FOLDER := "res://themes/"
 var settings: Settings
 var settings_dict: Dictionary[String, SettingsVar] = {}
+var _is_dirty: bool = false
 
 func _init() -> void:
 	#print("[SettingsManager]: initialized.")
@@ -80,6 +81,7 @@ func set_setting(value: Variant, setting: SettingsVar, force: bool = false):
 	var changed = force or setting.value != value
 	setting.value = value
 	if changed:
+		_is_dirty = true
 		emit_signal("setting_changed", value, setting)
 
 func get_setting(_name:String) -> SettingsVar:
@@ -163,15 +165,17 @@ func store_property_names(_settings : Settings):
 			setting.property_name = prop.name
 
 func save_settings() -> void:
-	if settings:
-		_encrypt_settings()
-		var err = ResourceSaver.save(settings, SAVE_PATH)
-		_decrypt_settings()  # Restore decrypted values for runtime use
-		
-		if err != OK:
-			push_error("Failed to save preferences: %s" % err)
-		else:
-			emit_signal("settings_saved")
+	if not settings or not _is_dirty:
+		return
+	_encrypt_settings()
+	var err = ResourceSaver.save(settings, SAVE_PATH)
+	_decrypt_settings()  # Restore decrypted values for runtime use
+
+	if err != OK:
+		push_error("Failed to save preferences: %s" % err)
+	else:
+		_is_dirty = false
+		emit_signal("settings_saved")
 
 const PASSWORD_KEY = "kyodai_v1"
 
@@ -203,6 +207,7 @@ func _is_base64(text: String) -> bool:
 
 func reset_settings() -> void:
 	settings = Settings.new()
+	_is_dirty = true
 	save_settings()
 
 func _xor_encrypt(text: String, key: String) -> String:
@@ -338,6 +343,7 @@ func apply_preset(preset: ThemePreset) -> bool:
 	var success = preset.apply_to_settings(settings)
 	
 	if success:
+		_is_dirty = true
 		emit_signal("apply_preset_begin")
 		
 		# Emit setting_changed for all library settings so views get notified
@@ -377,7 +383,6 @@ func apply_preset(preset: ThemePreset) -> bool:
 		emit_signal("apply_preset_end")
 		
 		save_settings()
-		emit_signal("settings_saved")
 	else:
 		push_error("[SettingsManager] preset.apply_to_settings returned false")
 	

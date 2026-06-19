@@ -149,6 +149,13 @@ func apply_to_settings(settings: Settings) -> bool:
 	
 	# Apply card settings
 	if settings.get("card_effect_config") != null:
+		var effects_count := 0
+		var focus_effects_count := 0
+		if card_effect_config.get("effects") is Array:
+			effects_count = card_effect_config.effects.size()
+		if card_effect_config.get("focus_effects") is Array:
+			focus_effects_count = card_effect_config.focus_effects.size()
+		print("[ThemePreset] apply_to_settings card_effect_config: effects=", effects_count, " focus_effects=", focus_effects_count, " config=", card_effect_config)
 		settings.card_effect_config.value = card_effect_config.duplicate(true)
 	
 	return true

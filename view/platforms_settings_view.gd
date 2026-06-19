@@ -23,6 +23,7 @@ var _pending_credential_property: String = ""
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
 var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
 var _was_narrow: bool = false
+var _is_initializing: bool = false
 
 const NARROW_BREAKPOINT_DP := 850.0
 
@@ -37,38 +38,53 @@ func _is_narrow_screen() -> bool:
 
 func _ready():
 	view_name = "RomM"
+	_is_initializing = true
 
 	# Connect M3 checkbox signals and set initial values from settings
 	var m3_dup_covers: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_DuplicateCovers")
 	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
+	m3_dup_covers.set_block_signals(true)
 	m3_dup_covers.button_pressed = fold_covers_setting.value if fold_covers_setting else false
+	m3_dup_covers.set_block_signals(false)
 	m3_dup_covers.toggled.connect(_on_fold_covers_toggled)
 
 	var m3_hide: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Hide")
 	var hide_no_covers_setting = SettingsManager.get_setting("hide_games_without_covers")
+	m3_hide.set_block_signals(true)
 	m3_hide.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
+	m3_hide.set_block_signals(false)
 	m3_hide.toggled.connect(_on_hide_no_covers_toggled)
 
 	var m3_siblings: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Siblings")
 	var fold_romm_setting = SettingsManager.get_setting("fold_romm_siblings")
+	m3_siblings.set_block_signals(true)
 	m3_siblings.button_pressed = fold_romm_setting.value if fold_romm_setting else true
+	m3_siblings.set_block_signals(false)
 	m3_siblings.toggled.connect(_on_fold_romm_siblings_toggled)
 
 	# Connect RomM text field signals and set initial values
 	var url_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_URL")
 	var url_setting = SettingsManager.get_setting("romm_url")
+	url_field.set_block_signals(true)
 	url_field.text = url_setting.value if url_setting else ""
+	url_field.set_block_signals(false)
 	url_field.text_changed.connect(_on_credential_text_changed.bind(url_field, "romm_url"))
 
 	var user_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_User")
 	var user_setting = SettingsManager.get_setting("romm_username")
+	user_field.set_block_signals(true)
 	user_field.text = user_setting.value if user_setting else ""
+	user_field.set_block_signals(false)
 	user_field.text_changed.connect(_on_credential_text_changed.bind(user_field, "romm_username"))
 
 	var pass_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_Pass")
 	var pass_setting = SettingsManager.get_setting("romm_password")
+	pass_field.set_block_signals(true)
 	pass_field.text = pass_setting.value if pass_setting else ""
+	pass_field.set_block_signals(false)
 	pass_field.text_changed.connect(_on_credential_text_changed.bind(pass_field, "romm_password"))
+
+	_is_initializing = false
 
 	# Connect button signals
 	var check_updates_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
@@ -696,21 +712,29 @@ func on_view_hide():
 	super.on_view_hide()
 
 func _on_fold_covers_toggled(enabled: bool) -> void:
+	if _is_initializing:
+		return
 	var setting = SettingsManager.get_setting("fold_duplicate_covers")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 
 func _on_hide_no_covers_toggled(enabled: bool) -> void:
+	if _is_initializing:
+		return
 	var setting = SettingsManager.get_setting("hide_games_without_covers")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 
 func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
+	if _is_initializing:
+		return
 	var setting = SettingsManager.get_setting("fold_romm_siblings")
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 
 func _on_credential_text_changed(_text: String, field: M3TextField, property_name: String) -> void:
+	if _is_initializing:
+		return
 	_pending_credential_field = field
 	_pending_credential_property = property_name
 

@@ -14,6 +14,7 @@ enum RefreshType { STRUCTURE = 1, EFFECTS = 2 }
 
 var _pending_refresh_mask: int = 0
 var _pending_effects_full_rebuild: bool = false
+var _skip_next_dialog_dismiss_flush: bool = false
 
 func setup(tab_container: TabContainer) -> void:
 	_tab_container = tab_container
@@ -166,7 +167,28 @@ func _apply_effects_refresh(force_full_rebuild: bool = false) -> void:
 			view.games_grid.refresh_all_card_effects(force_full_rebuild)
 
 func _on_settings_dialog_dismissed() -> void:
+	if _skip_next_dialog_dismiss_flush:
+		_skip_next_dialog_dismiss_flush = false
+		return
 	_apply_pending_refresh()
+
+func skip_next_dialog_dismiss_flush() -> void:
+	"""Signal that the next settings-dialog dismissal should not flush
+	pending rebuilds. Used when opening a confirmation popup that replaces
+	the settings dialog; the rebuild is deferred until the popup closes."""
+	_skip_next_dialog_dismiss_flush = true
+
+func flush_pending_rebuilds_if_no_dialog() -> void:
+	"""Flush pending structure/effects rebuilds only if no dialog is open.
+	This lets confirmation popups replace the settings dialog without
+	triggering an immediate rebuild; the rebuild is deferred until the
+	confirmation dialog itself closes."""
+	if M3Overlay.is_showing("dialog"):
+		return
+	_apply_pending_refresh()
+	var current_view = get_current_view()
+	if current_view and current_view.needs_rebuild:
+		current_view.check_and_rebuild_if_needed()
 
 func _apply_pending_refresh() -> void:
 	if _pending_refresh_mask & RefreshType.STRUCTURE:
@@ -178,20 +200,19 @@ func _apply_pending_refresh() -> void:
 
 func _rebuild_views(reason: String, use_true: bool = false) -> void:
 	"""Rebuild visible views immediately, mark hidden views for rebuild.
-	Defer ALL rebuilds while the SettingsDialog is open to avoid stutter.
-	Kept for data-level rebuilds and preset application."""
-	print("[ViewManager] _rebuild_views called: reason=%s, use_true=%s" % [reason, use_true])
-	var settings_open = ui_manager.overlay.is_settings_dialog_open()
+	Defer ALL rebuilds while any dialog overlay is open to avoid stutter
+	and to prevent confirmation popups from triggering premature rebuilds."""
+	var any_dialog_open = M3Overlay.is_showing("dialog")
 
 	if _views.has("Home"):
 		var home_view = _views["Home"]
-		if is_current_view("Home") and not settings_open:
+		if is_current_view("Home") and not any_dialog_open:
 			home_view.rebuild_grid(use_true)
 		else:
 			home_view.mark_for_rebuild(reason, use_true)
 	if _views.has("Library"):
 		var library_view = _views["Library"]
-		if is_current_view("Library") and not settings_open:
+		if is_current_view("Library") and not any_dialog_open:
 			library_view.rebuild_grid(use_true)
 		else:
 			library_view.mark_for_rebuild(reason, use_true)

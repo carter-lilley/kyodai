@@ -10,11 +10,15 @@ var _current_config: Dictionary = {}
 var _preview_card: GameCard
 var _preview_game: GameResource = null
 var _card_rounding_slider: M3Slider
+var _preview_background: LibraryBackground = null
 
 
 # Shared effect designer UI instances
 var _base_effect_designer: EffectDesignerUI
 var _focus_effect_designer: EffectDesignerUI
+
+# Guards against emitting save signals before the view has loaded real config.
+var _config_loaded: bool = false
 
 func _ready():
 	_setup_ui()
@@ -24,6 +28,7 @@ func _ready():
 	# Connect to settings changes so we refresh when a preset is applied
 	if SettingsManager:
 		SettingsManager.settings_saved.connect(_on_settings_saved)
+		SettingsManager.setting_changed.connect(_on_setting_changed)
 	
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
@@ -36,19 +41,33 @@ func _on_settings_saved():
 	if _preview_card and is_instance_valid(_preview_card):
 		_preview_card.refresh_settings()
 
+func _on_setting_changed(value: Variant, setting: SettingsVar) -> void:
+	if setting.property_name == "library_background_config":
+		if _preview_background and value is Dictionary:
+			_preview_background.set_background_config(value)
+
 func _exit_tree():
 	# Disconnect signal to prevent callbacks on freed object
 	if SettingsManager and SettingsManager.settings_saved.is_connected(_on_settings_saved):
 		SettingsManager.settings_saved.disconnect(_on_settings_saved)
+	if SettingsManager and SettingsManager.setting_changed.is_connected(_on_setting_changed):
+		SettingsManager.setting_changed.disconnect(_on_setting_changed)
 
 func on_view_hide():
-	# Safety net: persist any pending card designer changes before the view is hidden.
-	_save_to_settings()
+	# Only save if we've actually loaded config. During initialization the
+	# preview card setup can trigger saves before config is populated.
+	if _config_loaded:
+		_save_to_settings()
 
 func on_view_show():
 	# Reload config from SettingsManager to ensure we have latest (including preset changes)
 	_load_current_config()
 	_setup_preview_card()
+	# Sync preview background in case it changed while the view was hidden
+	if _preview_background and SettingsManager:
+		var bg_setting = SettingsManager.get_setting("library_background_config")
+		if bg_setting and bg_setting.value is Dictionary:
+			_preview_background.set_background_config(bg_setting.value)
 
 func _setup_ui():
 	var hsplit = HSplitContainer.new()
@@ -127,6 +146,7 @@ func _setup_ui():
 	var library_bg = preload("res://components/library_background.tscn").instantiate()
 	library_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	right_container.add_child(library_bg)
+	_preview_background = library_bg
 	
 	var preview_container = CenterContainer.new()
 	preview_container.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -151,21 +171,11 @@ func _setup_ui():
 	)
 
 func _load_current_config():
+	_config_loaded = false
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_current_config = config_setting.value.duplicate(true)
-			# Debug: print all gradient points in loaded config
-			for i in range(_current_config.get("effects", []).size()):
-				var effect = _current_config["effects"][i]
-				var settings = effect.get("settings", {})
-				for key in settings.keys():
-					if settings[key] is Gradient:
-						var grad = settings[key]
-						var points_str = ""
-						for j in range(grad.get_point_count()):
-							points_str += "(" + str(grad.get_offset(j)) + ":" + str(grad.get_color(j)) + ") "
-						print("[CardDesigner] Effect ", i, " - ", key, " points: ", points_str)
 		else:
 			_current_config = _get_default_config()
 	else:
@@ -196,6 +206,9 @@ func _load_current_config():
 	if _focus_effect_designer:
 		_focus_effect_designer.set_config(_current_config)
 		_focus_effect_designer.set_base_effects(_current_config.get("effects", []))
+
+	_config_loaded = true
+
 
 func _get_default_config() -> Dictionary:
 	return {
@@ -257,9 +270,18 @@ func _save_to_settings() -> void:
 	"""Save the current config to SettingsManager immediately."""
 	if not SettingsManager:
 		return
+	if not _config_loaded:
+		return
 	
 	var config_setting = SettingsManager.get_setting("card_effect_config")
 	if config_setting:
+		var effects_count := 0
+		var focus_effects_count := 0
+		if _current_config.get("effects") is Array:
+			effects_count = _current_config.effects.size()
+		if _current_config.get("focus_effects") is Array:
+			focus_effects_count = _current_config.focus_effects.size()
+		print("[CardDesignerView] _save_to_settings: effects=", effects_count, " focus_effects=", focus_effects_count, " config=", _current_config)
 		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
 
 func reconnect_viewport() -> void:

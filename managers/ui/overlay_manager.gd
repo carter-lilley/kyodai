@@ -106,10 +106,10 @@ func _on_settings_dialog_dismissed() -> void:
 	ui_manager.settings_dialog_dismissed.emit()
 
 	# Trigger any deferred rebuilds on the currently visible view now that
-	# the dialog is closed. Hidden views will rebuild when they become visible.
-	var current_view = ui_manager.view.get_current_view()
-	if current_view and current_view.needs_rebuild:
-		current_view.check_and_rebuild_if_needed()
+	# the dialog is closed. If another dialog (e.g. a confirmation popup)
+	# replaced this one, the rebuild stays deferred until that dialog closes.
+	ui_manager.view.flush_pending_rebuilds_if_no_dialog()
+
 
 func _show_shuffler_dialog() -> void:
 	"""Show the shuffler configuration dialog."""
