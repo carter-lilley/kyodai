@@ -11,6 +11,25 @@
 [ext_resource type="Script" uid="uid://kuhi06ldq5a7" path="res://components/effects/effect_stack.gd" id="12_effectstack"]
 [ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="m3label"]
 
+[sub_resource type="Shader" id="Shader_controlbar_mask"]
+code = "shader_type canvas_item;
+
+void fragment() {
+	float alpha = clamp(1.0 - (UV.y - 0.15) / 0.85, 0.0, 1.0);
+	COLOR = vec4(0.0, 0.0, 0.0, alpha);
+}
+"
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_controlbar_mask"]
+shader = SubResource("Shader_controlbar_mask")
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_controlbar"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 0)
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4c57u"]
 content_margin_left = 0.0
 content_margin_top = 0.0
@@ -248,6 +267,15 @@ layout_mode = 1
 anchor_right = 1.0
 anchor_bottom = 1.0
 
+[node name="controlbar_mask" type="Panel" parent="RootLayout/ContentWrapper" unique_id=459632085]
+z_index = 5
+material = SubResource("ShaderMaterial_controlbar_mask")
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+grow_horizontal = 2
+mouse_filter = 2
+
 [node name="MainContentVBox" type="VBoxContainer" parent="RootLayout/ContentWrapper" unique_id=888888005]
 layout_mode = 1
 anchors_preset = 15
@@ -257,15 +285,20 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 3
 
-[node name="HBoxContainer" type="HBoxContainer" parent="RootLayout/ContentWrapper/MainContentVBox" unique_id=73443605]
+[node name="controlbar_background" type="PanelContainer" parent="RootLayout/ContentWrapper/MainContentVBox" unique_id=244514102]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_controlbar")
+
+[node name="controlbar_hbox" type="HBoxContainer" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background" unique_id=73443605]
 layout_mode = 2
 
-[node name="Title" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1709345551]
+[node name="Title" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1709345551]
 layout_mode = 2
 text = "K"
 script = ExtResource("m3label")
 
-[node name="M3Slider_Zoom" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1438207355]
+[node name="M3Slider_Zoom" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1438207355]
 custom_minimum_size = Vector2(250, 0)
 layout_mode = 2
 script = ExtResource("4_w48qg")
@@ -278,11 +311,11 @@ step = 0.05
 value = 0.15
 metadata/_custom_type_script = "uid://63mocgx1dxi4"
 
-[node name="Control" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=283909580]
+[node name="Control" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=283909580]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="M3ButtonGroup" type="HBoxContainer" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=575083622]
+[node name="M3ButtonGroup" type="HBoxContainer" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=575083622]
 layout_mode = 2
 theme_override_constants/separation = 0
 script = ExtResource("4_ycdy4")
@@ -290,7 +323,7 @@ mode = 1
 shape = 0
 metadata/_custom_type_script = "uid://dc5stkkoubv5o"
 
-[node name="Grid" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer/M3ButtonGroup" unique_id=1245219119]
+[node name="Grid" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox/M3ButtonGroup" unique_id=1245219119]
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
@@ -320,7 +353,7 @@ button_type = 1
 icon_name = "view-grid"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
-[node name="List" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer/M3ButtonGroup" unique_id=1403336029]
+[node name="List" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox/M3ButtonGroup" unique_id=1403336029]
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
@@ -350,7 +383,7 @@ button_type = 1
 icon_name = "view-list"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
-[node name="Carosel" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer/M3ButtonGroup" unique_id=686027265]
+[node name="Carosel" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox/M3ButtonGroup" unique_id=686027265]
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
@@ -379,7 +412,7 @@ button_type = 1
 icon_name = "view-carousel"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
-[node name="M3IconButton_More" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/HBoxContainer" unique_id=1391264046]
+[node name="M3IconButton_More" type="Button" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1391264046]
 layout_mode = 2
 size_flags_horizontal = 0
 size_flags_vertical = 0
@@ -408,6 +441,7 @@ icon_name = "dots-vertical"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
 
 [node name="TabContainer" type="TabContainer" parent="RootLayout/ContentWrapper/MainContentVBox" unique_id=263907133]
+clip_contents = true
 layout_mode = 2
 size_flags_vertical = 3
 current_tab = 0

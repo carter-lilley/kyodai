@@ -470,7 +470,8 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	if step_index < install_steps.size():
 		step_name = install_steps[step_index].get("step", "")
 	
-	var step_display_name = _get_step_display_name(step_name)
+	var emulator_name = emulator.get("name", emulator_id)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
 	# Track batch progress using Dictionary for proper reference semantics in closures
 	var total_cores = cores.size()
@@ -637,7 +638,8 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	if step_index < install_steps.size():
 		step_name = install_steps[step_index].get("step", "")
 	
-	var step_display_name = _get_step_display_name(step_name)
+	var emulator_name = emulator.get("name", emulator_id)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
@@ -731,7 +733,8 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	if step_index < install_steps.size():
 		step_name = install_steps[step_index].get("step", "")
 	
-	var step_display_name = _get_step_display_name(step_name)
+	var emulator_name = emulator.get("name", emulator_id)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
 	# Show batch progress
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(archive_paths.size()) + ")"
@@ -892,7 +895,7 @@ func _handle_download_url_step(emulator_id: String, emulator_name: String, step_
 		push_error("[EmulatorManager] No download URL for step '" + step_name + "'")
 		return false
 	
-	var step_display_name = _get_step_display_name(step_name)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config)
 	return true
 
@@ -910,7 +913,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	
 	_emulator_install_progress[emulator_id] = "Fetching release info..."
 	
-	var step_display_name = _get_step_display_name(step_name)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
 	NetworkManager.fetch_repo_release(
 		github_repo,
@@ -957,7 +960,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 	
 	_emulator_install_progress[emulator_id] = "Scraping for latest version..."
 	
-	var step_display_name = _get_step_display_name(step_name)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
 	NetworkManager.fetch_scraped_release(
 		scrape_url,
@@ -1302,30 +1305,34 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 	return _execute_install_step(emulator_id, start_step)
 
 ## Gets display name for a step based on step_name
-func _get_step_display_name(step_name: String) -> String:
+## Optionally prepends the emulator name for context in notifications
+func _get_step_display_name(step_name: String, emulator_name: String = "") -> String:
 	# Map step names to user-friendly display names
+	var step_label = ""
 	match step_name:
 		"download_emulator":
-			return "Downloading Emulator"
+			step_label = "Downloading"
 		"install_emulator":
-			return "Installing Emulator"
+			step_label = "Installing"
 		"download_cores":
-			return "Downloading Cores"
+			step_label = "Downloading Cores"
 		"install_cores":
-			return "Installing Cores"
+			step_label = "Installing Cores"
 		"download_system_files":
-			return "Downloading System Files"
+			step_label = "Downloading System Files"
 		"install_system_files":
-			return "Installing System Files"
+			step_label = "Installing System Files"
 		_:
 			# Convert snake_case to Title Case with spaces
 			var words = step_name.split("_")
-			var result = ""
-			for word in words:
-				if result != "":
-					result += " "
-				result += word.capitalize()
-			return result
+			for i in range(words.size()):
+				if i > 0:
+					step_label += " "
+				step_label += words[i].capitalize()
+	
+	if emulator_name != "":
+		return emulator_name + " - " + step_label
+	return step_label
 
 ## Checks if an Android package is installed using the PackageChecker plugin
 func _is_android_package_installed(package_name: String) -> bool:
@@ -1410,6 +1417,8 @@ func _compute_install_progress(emulator_id: String) -> Dictionary:
 	}
 	
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
+	var emulator_name = emulator.get("name", emulator_id)
+
 	if emulator.is_empty():
 		return result
 	
@@ -1420,7 +1429,7 @@ func _compute_install_progress(emulator_id: String) -> Dictionary:
 	for i in range(install_steps.size()):
 		var step = install_steps[i]
 		var step_name = step.get("step", "")
-		
+		var step_display_name = _get_step_display_name(step_name, emulator_name)
 		if _validate_install_step(emulator_id, i, install_steps):
 			result["completed_steps"] += 1
 		else:

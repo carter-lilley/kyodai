@@ -502,17 +502,25 @@ func _on_check_updates_pressed():
 	if check_button:
 		check_button.disabled = true
 
-	NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
+	var checking_notification = NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
 
-	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array):
+	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array, _failed_details: Dictionary):
+		NotificationManager.dismiss_notification(checking_notification)
+
 		if check_button:
 			check_button.disabled = false
 
 		if _updated.size() > 0:
 			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), NotificationManager.Type.SUCCESS)
-		elif _failed.size() > 0:
-			NotificationManager.show_notification("Failed to check %d emulator(s)" % _failed.size(), NotificationManager.Type.WARNING)
-		else:
+
+		if _failed.size() > 0:
+			var failure_parts: Array[String] = []
+			for emu_id in _failed:
+				var reason = _failed_details.get(emu_id, "Unknown error")
+				failure_parts.append(emu_id + " (" + reason + ")")
+			var failure_msg = "Failed to check: " + ", ".join(failure_parts)
+			NotificationManager.show_notification(failure_msg, NotificationManager.Type.WARNING)
+		elif _updated.is_empty():
 			NotificationManager.show_notification("All emulators are up to date", NotificationManager.Type.INFO)
 	)
 

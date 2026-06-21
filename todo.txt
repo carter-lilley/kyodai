@@ -3,6 +3,10 @@
 xemu save sync
 tst update flow on android
 
+major refactor: decouple VSG inputs from visuals.
+we cannot natively overflow visuals without also overflowing input
+idea: two paralell VSGs, one clip_content, one doesnt?
+
 ## android
 	"app bar"
 

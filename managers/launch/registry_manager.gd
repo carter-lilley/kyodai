@@ -237,10 +237,10 @@ func get_retroarch_core_name(platform_slug: String) -> String:
 	return platform.get("retroarch_core", "")
 
 ## Checks for updates across all installed emulators
-## callback(updated: Array, up_to_date: Array, failed: Array)
+## callback(updated: Array, up_to_date: Array, failed: Array, failed_details: Dictionary)
 func check_for_updates(callback: Callable):
 	if not SettingsManager:
-		callback.call([], [], [])
+		callback.call([], [], [], {})
 		return
 	
 	var version_setting = SettingsManager.get_setting("installed_emulator_versions")
@@ -254,6 +254,7 @@ func check_for_updates(callback: Callable):
 		"updated": [],
 		"up_to_date": [],
 		"failed": [],
+		"failed_details": {},
 		"pending": 0
 	}
 	
@@ -307,13 +308,13 @@ func check_for_updates(callback: Callable):
 	
 	# If nothing was pending and nothing was auto-updated, call callback immediately
 	if results.pending == 0 and results.updated.is_empty():
-		callback.call(results.updated, results.up_to_date, results.failed)
+		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
 
 ## Internal helper to check if all pending checks are done
 func _check_updates_complete(results: Dictionary, callback: Callable):
 	results.pending -= 1
 	if results.pending <= 0:
-		callback.call(results.updated, results.up_to_date, results.failed)
+		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
 
 ## Checks for a scrape-based update
 func _check_scrape_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable):
@@ -325,12 +326,14 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 	
 	if scrape_url == "" or url_template == "":
 		results.failed.append(emulator_id)
+		results.failed_details[emulator_id] = "Invalid scrape configuration"
 		_check_updates_complete(results, callback)
 		return
 	
 	# version_pattern is required for HTML scraping, optional for JSON API mode
 	if json_path == "" and version_pattern == "":
 		results.failed.append(emulator_id)
+		results.failed_details[emulator_id] = "Invalid scrape configuration"
 		_check_updates_complete(results, callback)
 		return
 	
@@ -341,16 +344,29 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 		func(_url: String, version: String, error: String):
 			if error != "" or version == "":
 				results.failed.append(emulator_id)
+				results.failed_details[emulator_id] = error if error != "" else "No version found"
 				_check_updates_complete(results, callback)
 				return
 			
-			var comparison = _compare_versions(installed_version, version)
-			if comparison == -1 or comparison == 2:
-				# Update available or incomparable (treat as update)
+			# Check for format mismatch before comparing. If installed version
+			# is a date but remote is a tag (or vice versa), we can't compare
+			# reliably and should treat it as needing an update.
+			var installed_is_date = _is_date_version(installed_version)
+			var remote_is_date = _is_date_version(version)
+			
+			if installed_is_date != remote_is_date:
+				# Mixed formats - can't compare, assume update needed
 				results.updated.append(emulator_id)
+				print("[RegistryManager] " + emulator_id + " version format mismatch ('" + installed_version + "' vs '" + version + "'), assuming update needed")
 				_trigger_emulator_update(emulator_id, emulator_name, platform_config)
 			else:
-				results.up_to_date.append(emulator_id)
+				var comparison = _compare_versions(installed_version, version)
+				if comparison == -1 or comparison == 2:
+					# Update available or incomparable (treat as update)
+					results.updated.append(emulator_id)
+					_trigger_emulator_update(emulator_id, emulator_name, platform_config)
+				else:
+					results.up_to_date.append(emulator_id)
 			
 			_check_updates_complete(results, callback),
 		match_strategy,
@@ -366,6 +382,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	
 	if github_repo == "" or asset_pattern == "":
 		results.failed.append(emulator_id)
+		results.failed_details[emulator_id] = "Invalid repo configuration"
 		_check_updates_complete(results, callback)
 		return
 	
@@ -375,6 +392,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 		func(_url: String, tag: String, error: String, _file_size: int, published_at: String, asset_updated_at: String):
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
+				results.failed_details[emulator_id] = error if error != "" else "No matching release asset found"
 				_check_updates_complete(results, callback)
 				return
 			
@@ -400,20 +418,32 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 					print("[RegistryManager] " + emulator_id + " has legacy version format, triggering update")
 					update_available = true
 			else:
-				# Fallback: version string comparison when no date available
-				var comparison = _compare_versions(installed_version, tag)
+				# Fallback: no dates available from API. Determine what each
+				# version represents and compare accordingly.
+				var installed_is_date = _is_date_version(installed_version)
+				var tag_is_date = _is_date_version(tag)
 				
-				if comparison == -1:
-					# Remote version is newer
+				if installed_is_date and tag_is_date:
+					# Both are dates - compare timestamps
+					var remote_date = _parse_iso_date(tag)
+					var installed_date = _parse_iso_date(installed_version)
+					if remote_date > installed_date:
+						update_available = true
+						print("[RegistryManager] Update available for " + emulator_id + ": " + tag + " > " + installed_version)
+					else:
+						print("[RegistryManager] " + emulator_id + " is up to date: " + installed_version)
+				elif installed_is_date != tag_is_date:
+					# Mixed formats (date vs tag) - can't compare, assume update needed
 					update_available = true
-					print("[RegistryManager] Update available for " + emulator_id + ": " + tag + " > " + installed_version)
-				elif comparison == 0 or comparison == 1:
-					# Same version or installed is newer
-					print("[RegistryManager] " + emulator_id + " is up to date: " + installed_version)
-				elif comparison == 2:
-					# Versions are incomparable - assume update needed to be safe
-					print("[RegistryManager] " + emulator_id + " versions incomparable ('" + installed_version + "' vs '" + tag + "'), assuming update needed")
-					update_available = true
+					print("[RegistryManager] " + emulator_id + " version format mismatch ('" + installed_version + "' vs '" + tag + "'), assuming update needed")
+				else:
+					# Both are version tags - semver comparison
+					var comparison = _compare_versions(installed_version, tag)
+					if comparison == -1 or comparison == 2:
+						update_available = true
+						print("[RegistryManager] Update available for " + emulator_id + ": " + tag + " > " + installed_version)
+					else:
+						print("[RegistryManager] " + emulator_id + " is up to date: " + installed_version)
 			
 			if update_available:
 				results.updated.append(emulator_id)
@@ -456,6 +486,10 @@ func _is_semver(version: String) -> bool:
 	var regex = RegEx.new()
 	regex.compile("^[0-9]+(\\.[0-9]+)*")
 	return regex.search(normalized) != null
+
+## Returns true if a version string looks like an ISO 8601 date
+func _is_date_version(version: String) -> bool:
+	return _parse_iso_date(version) > 0
 
 ## Compares two version strings
 ## Returns: -1 (a < b), 0 (equal), 1 (a > b), 2 (incomparable)

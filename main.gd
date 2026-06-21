@@ -84,12 +84,31 @@ func _ready():
 
 	# Raise toolbar above the card grid (grid has z_index=-1 to let card focus
 	# overflow render behind sibling UI; toolbar must sit above that).
-	var toolbar = main_content_vbox.get_node_or_null("HBoxContainer")
+	var toolbar = main_content_vbox.get_node_or_null("controlbar_background")
 	if toolbar:
 		toolbar.z_index = 10
 
+	# Sync the top background mask height to match the control bar.
+	# The mask covers the area behind the toolbar so cards scrolling up
+	# don't peek through. It sits between the grid (z=-1) and toolbar (z=10).
+	# Note: UIManager wraps MainContentVBox in a MarginContainer (dp(16) margins),
+	# so the toolbar is offset from ContentWrapper's top-left. We must compute the
+	# toolbar's bottom edge in ContentWrapper coordinates, not just use size.y.
+	var mask = content_wrapper.get_node_or_null("controlbar_mask")
+	if mask and toolbar:
+		var _update_mask_height := func():
+			var toolbar_bottom: float = toolbar.global_position.y - content_wrapper.global_position.y + toolbar.size.y
+			mask.custom_minimum_size.y = toolbar_bottom
+			mask.offset_top = 0
+			mask.offset_bottom = toolbar_bottom
+		toolbar.resized.connect(_update_mask_height)
+		# Deferred sync: toolbar size may not be final on first signal.
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_update_mask_height.call()
+
 	# Connect zoom slider signals
-	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
 		zoom_slider.value_changed.connect(_on_zoom_changed)
 		zoom_slider.drag_ended.connect(_on_zoom_changed_finished)
@@ -97,17 +116,17 @@ func _ready():
 	# Connect view mode buttons
 	# Note: UIManager.initialize() reparents ContentWrapper, so we must use the
 	# cached main_content_vbox reference instead of a root-relative path.
-	view_mode_group = main_content_vbox.get_node("HBoxContainer/M3ButtonGroup")
+	view_mode_group = main_content_vbox.get_node("controlbar_background/controlbar_hbox/M3ButtonGroup")
 	view_mode_group.selection_changed.connect(_on_view_mode_changed)
 	_sync_view_mode_button_to_setting()
 
 	# Connect settings gear button (if present in scene; nav footer button is primary)
-	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
+	var settings_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/SettingsButton")
 	if settings_button:
 		settings_button.pressed.connect(_on_settings_button_pressed)
 
 	# Connect more-options button
-	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
+	var more_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3IconButton_More")
 	if more_button:
 		more_button.pressed.connect(_on_more_button_pressed)
 
@@ -207,7 +226,7 @@ func _on_settings_dialog_dismissed() -> void:
 		return
 
 	# Fallback to scene settings button
-	var settings_button = main_content_vbox.get_node_or_null("HBoxContainer/SettingsButton")
+	var settings_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/SettingsButton")
 	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
 		settings_button.grab_focus()
 
@@ -276,7 +295,7 @@ func _on_more_button_pressed() -> void:
 	align_submenu.add_check_item("Right / Bottom", content_alignment == 2, func(): _set_content_alignment(2))
 	menu.add_submenu_item("Content Alignment", align_submenu, "format-align-center")
 
-	var more_button = main_content_vbox.get_node_or_null("HBoxContainer/M3IconButton_More")
+	var more_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3IconButton_More")
 	if more_button:
 		menu.popup(more_button)
 
@@ -374,7 +393,7 @@ func _on_viewport_resized(_new_size: Vector2) -> void:
 	if view_name not in ["Home", "Library"]:
 		return
 
-	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if not zoom_slider:
 		return
 
@@ -399,7 +418,7 @@ func _update_ui_for_view(view_name: String):
 		view_mode_group.visible = view_name in ["Home", "Library"]
 
 	# Update zoom slider to match current view's grid
-	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
 		zoom_slider.visible = view_name in ["Home", "Library"]
 		var view = UIManager.get_view(view_name)
@@ -529,7 +548,7 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 	if current_view:
 		var games_grid = _get_view_grid(current_view)
 		if games_grid:
-			var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+			var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 			if zoom_slider:
 				_update_zoom_slider_stops(zoom_slider, games_grid)
 			# Sync slider value to the grid's actual current ratio
@@ -589,7 +608,7 @@ func _on_zoom_changed_finished(value_changed: bool):
 	"""Called when drag ends - saves the current slider value to settings."""
 	if not value_changed:
 		return
-	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	var saved_value = 0.15
 	if zoom_slider:
 		if _current_snap_ratios.size() > 0:
@@ -644,7 +663,7 @@ func _load_and_apply_saved_zoom() -> void:
 				grid.target_card_width_ratio = saved_zoom
 
 	# Set zoom slider to saved value and refresh stops
-	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
 		var current_view = UIManager.get_current_view()
 		var games_grid = _get_view_grid(current_view) if current_view else null
@@ -891,7 +910,7 @@ func _enter_grid() -> bool:
 	return true
 
 func _adjust_zoom(delta: float) -> void:
-	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if not zoom_slider:
 		return
 

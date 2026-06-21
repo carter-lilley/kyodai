@@ -854,6 +854,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
 	
 	var http = _create_http_request()
+	http.timeout = 15.0
 	_active_request_count += 1
 	
 	var error = http.request(url, headers)
@@ -868,6 +869,9 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			_active_request_count -= 1
 			_cleanup_http_request(http)
 			
+			if result == HTTPRequest.RESULT_TIMEOUT:
+				callback.call("", "", "Request timed out", 0, "", "")
+				return
 			if result != HTTPRequest.RESULT_SUCCESS:
 				callback.call("", "", "Request failed: " + str(result), 0, "", "")
 				return
@@ -908,6 +912,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):
 	var http = _create_http_request()
+	http.timeout = 15.0
 	_active_request_count += 1
 	
 	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
@@ -922,6 +927,9 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		
+		if result == HTTPRequest.RESULT_TIMEOUT:
+			callback.call("", "", "Request timed out")
+			return
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "", "Request failed: " + str(result))
 			return
