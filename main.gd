@@ -82,6 +82,12 @@ func _ready():
 	_zoom_save_timer.timeout.connect(_on_zoom_save_timer_timeout)
 	add_child(_zoom_save_timer)
 
+	# Raise toolbar above the card grid (grid has z_index=-1 to let card focus
+	# overflow render behind sibling UI; toolbar must sit above that).
+	var toolbar = main_content_vbox.get_node_or_null("HBoxContainer")
+	if toolbar:
+		toolbar.z_index = 10
+
 	# Connect zoom slider signals
 	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
 	if zoom_slider:
@@ -108,6 +114,12 @@ func _ready():
 	# Connect to UIManager for tab changes and settings dialog
 	UIManager.tab_changed.connect(_on_tab_changed)
 	UIManager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
+
+	# Re-sync zoom slider when viewport size changes (e.g. window resize).
+	# The grid re-snaps its zoom in _on_resize_debounced(), but the slider
+	# stops and position need to be updated from main.gd since it owns the UI.
+	if DisplayManager:
+		DisplayManager.viewport_size_changed.connect(_on_viewport_resized)
 
 	# Connect to SettingsManager to sync UI when presets are applied
 	if SettingsManager:
@@ -351,6 +363,36 @@ func _apply_zoom_to_view_deferred(view_name: String) -> void:
 
 	grid.target_card_width_ratio = zoom_setting.value
 
+func _on_viewport_resized(_new_size: Vector2) -> void:
+	"""Re-sync zoom slider after viewport resize. The grid re-snaps its zoom
+	in _on_resize_debounced(), but the slider stops and position are owned
+	by main.gd and must be updated to match."""
+	var current_view = UIManager.get_current_view()
+	if not current_view:
+		return
+	var view_name = current_view.view_name
+	if view_name not in ["Home", "Library"]:
+		return
+
+	var zoom_slider = main_content_vbox.get_node_or_null("HBoxContainer/M3Slider_Zoom")
+	if not zoom_slider:
+		return
+
+	var games_grid = _get_view_grid(current_view)
+	if not games_grid:
+		return
+
+	# Wait one frame for the grid to finish its resize recalculation
+	await get_tree().process_frame
+
+	_update_zoom_slider_stops(zoom_slider, games_grid)
+	zoom_slider.set_block_signals(true)
+	if _current_snap_ratios.size() > 0:
+		zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+	else:
+		zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+	zoom_slider.set_block_signals(false)
+
 func _update_ui_for_view(view_name: String):
 	# Show/hide view mode buttons only on Home and Library
 	if view_mode_group:
@@ -435,7 +477,7 @@ func _find_nearest_snap_index(ratio: float) -> int:
 	if _current_snap_ratios.is_empty():
 		return 0
 	var nearest_idx = 0
-	var nearest_dist = abs(ratio - _current_snap_ratios[0])
+	var nearest_dist = INF
 	for i in range(_current_snap_ratios.size()):
 		var dist = abs(ratio - _current_snap_ratios[i])
 		if dist < nearest_dist:

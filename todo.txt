@@ -1,8 +1,7 @@
 #TODO.TXT
 
 xemu save sync
-losing focus when switching zoom levels / zoom levels are funky
-tst update flow
+tst update flow on android
 
 ## android
 	"app bar"
@@ -13,6 +12,9 @@ tst update flow
 	check if save is modified
 
 ## general UI
+	remove platform from game title option
+	option for text centering 
+	option for scrolling trunaction in game title?
 	m3 master color sync with game
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)

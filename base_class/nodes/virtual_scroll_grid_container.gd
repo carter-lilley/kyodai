@@ -282,6 +282,22 @@ var _active_cards: Array[Control] = []
 var _active_cards_by_index: Dictionary[int, Control] = {}
 var _max_pool_size: int = 120
 
+# Cached card capability flags — set once in _instantiate_card_pool() to avoid
+# repeated has_method() and string lookups in hot loops.
+var _card_has_focus_scale_enabled: bool = false
+var _card_has_set_focus_scale: bool = false
+var _card_has_set_game_with_priority: bool = false
+var _card_has_refresh_settings: bool = false
+var _card_has_reset: bool = false
+var _card_has_game_prop: bool = false
+var _card_has_update_media_panel_size: bool = false
+var _card_has_update_display: bool = false
+var _card_has_set_image_priority: bool = false
+var _card_has_set_content_alignment: bool = false
+var _card_has_set_media_aspect_ratio: bool = false
+var _card_has_refresh_effects: bool = false
+var _card_has_update_card_state_from_settings: bool = false
+
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
 
 # Layout input cache — used to skip redundant _recalculate_layout() work
@@ -640,7 +656,14 @@ func _on_resize_debounced():
 	# during a zoom-driven layout pass can fire _on_resized() mid-flight).
 	if _is_recalculating_layout:
 		return
-	# Recalculate layout with current snapped zoom
+	# Re-snap zoom ratio to a valid stop for the new available size. Without
+	# this, target_card_width_ratio holds the old snap point which may no
+	# longer correspond to a whole number of cards at the new viewport size.
+	var snapped = _calculate_snapped_ratio(target_card_width_ratio)
+	if not is_equal_approx(target_card_width_ratio, snapped):
+		_batching_layout = true
+		target_card_width_ratio = snapped
+		_batching_layout = false
 	_recalculate_layout()
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
 	if _active_cards.size() == 0 and _total_items > 0 and size.x > 0 and size.y > 0:
@@ -685,13 +708,10 @@ func _calculate_max_ratio() -> float:
 		return 0.5
 
 	var available = _get_available_size()
-
-	var zoom_width = available.x / base_dims.x
-	var zoom_height = available.y / base_dims.y
-	var card_zoom = min(zoom_width, zoom_height)
 	var viewport_area = available.x * available.y
-	var card_area = (base_dims.x * card_zoom) * (base_dims.y * card_zoom)
-	var ratio = sqrt(card_area / viewport_area)
+
+	# Cap at 2 cards per line — never allow a single card to fill the viewport.
+	var ratio = _compute_ratio_for_items_per_line(2, base_dims, available, viewport_area)
 
 	return max(ratio, 0.05)
 
@@ -710,13 +730,13 @@ func get_snap_ratios() -> Array[float]:
 	var available = _get_available_size()
 	var viewport_area = available.x * available.y
 
-	# Determine max items per line based on minimum card size (10% of base)
+	# Determine max items per line based on minimum card size (15% of base)
 	var max_items_per_line: int
 	if vertical:
-		var min_item_width = base_dims.x * 0.1 + grid_separation
+		var min_item_width = base_dims.x * 0.15 + grid_separation
 		max_items_per_line = max(1, int(available.x / min_item_width))
 	else:
-		var min_item_height = base_dims.y * 0.1 + grid_separation
+		var min_item_height = base_dims.y * 0.15 + grid_separation
 		max_items_per_line = max(1, int(available.y / min_item_height))
 
 	var ratios: Array[float] = []
@@ -729,9 +749,12 @@ func get_snap_ratios() -> Array[float]:
 	if max_items_per_line <= 2:
 		# Very small viewport: allow all natural stops so user has some range
 		max_stops = max_items_per_line
-	var capped_max = min(max_items_per_line, max_stops)
+	# Ensure at least 2 items per line so the loop always produces ratios.
+	# On very small viewports, max_items_per_line can be 1, which would make
+	# range(2, 2) empty and return zero ratios.
+	var capped_max = max(2, min(max_items_per_line, max_stops))
 
-	for items_per_line in range(1, capped_max + 1):
+	for items_per_line in range(2, capped_max + 1):
 		var ratio = _compute_ratio_for_items_per_line(items_per_line, base_dims, available, viewport_area)
 		if ratio > 0:
 			var is_duplicate = false
@@ -753,48 +776,18 @@ func get_snap_ratios() -> Array[float]:
 
 ## Compute the exact snap ratio for a given number of items per line.
 func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, available: Vector2, viewport_area: float) -> float:
-	var effective_width = available.x
-	var effective_height = available.y
-
-	# Iterate a few times to converge focus overflow
-	for i in range(3):
-		var prev_effective_width = effective_width
-		var prev_effective_height = effective_height
-		var target_card_width: float
-		var target_card_height: float
-
-		if vertical:
-			var target_item_width = (effective_width - (items_per_line - 1) * grid_separation) / items_per_line
-			target_card_width = target_item_width
-			target_card_height = target_card_width * (base_dims.y / base_dims.x)
-		else:
-			var target_item_height = (effective_height - (items_per_line - 1) * grid_separation) / items_per_line
-			target_card_height = target_item_height
-			target_card_width = target_card_height * (base_dims.x / base_dims.y)
-
-		target_card_width = max(target_card_width, base_dims.x * 0.1)
-		target_card_height = max(target_card_height, base_dims.y * 0.1)
-
-		var focus_overflow_x = maxf(0.0, target_card_width * (focus_scale - 1.0) / 2.0)
-		var focus_overflow_y = maxf(0.0, target_card_height * (focus_scale - 1.0) / 2.0)
-
-		effective_width = maxf(1.0, available.x - focus_overflow_x * 2.0)
-		effective_height = maxf(1.0, available.y - focus_overflow_y * 2.0)
-
-		# Convergence check: if effective dimensions stabilized, stop iterating
-		if is_equal_approx(effective_width, prev_effective_width) and is_equal_approx(effective_height, prev_effective_height):
-			break
-
-	# Final computation
+	# Compute card dimensions that exactly fill the available space for the
+	# given items_per_line. No focus-overflow subtraction here so cards fill
+	# the viewport edge-to-edge. Focused edge cards may clip slightly.
 	var final_card_width: float
 	var final_card_height: float
 
 	if vertical:
-		var target_item_width = (effective_width - (items_per_line - 1) * grid_separation) / items_per_line
+		var target_item_width = (available.x - (items_per_line - 1) * grid_separation) / items_per_line
 		final_card_width = target_item_width
 		final_card_height = final_card_width * (base_dims.y / base_dims.x)
 	else:
-		var target_item_height = (effective_height - (items_per_line - 1) * grid_separation) / items_per_line
+		var target_item_height = (available.y - (items_per_line - 1) * grid_separation) / items_per_line
 		final_card_height = target_item_height
 		final_card_width = final_card_height * (base_dims.x / base_dims.y)
 
@@ -804,7 +797,7 @@ func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, 
 	var target_card_area = final_card_width * final_card_height
 	var ratio = sqrt(target_card_area / viewport_area)
 
-	return clampf(ratio, 0.05, _calculate_max_ratio())
+	return max(ratio, 0.05)
 
 func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	if size.x <= 0 or size.y <= 0:
@@ -822,22 +815,18 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	var desired_card_width = base_dims.x * desired_zoom
 	var desired_card_height = base_dims.y * desired_zoom
 
-	# Account for focus overflow so snapping matches _get_items_per_line()
-	var desired_focus_overflow_x = maxf(0.0, desired_card_width * (focus_scale - 1.0) / 2.0)
-	var desired_focus_overflow_y = maxf(0.0, desired_card_height * (focus_scale - 1.0) / 2.0)
-
 	# Use same formula as _get_items_per_line() for consistency
-	var effective_width = maxf(1.0, available.x + grid_separation - desired_focus_overflow_x * 2.0)
-	var effective_height = maxf(1.0, available.y + grid_separation - desired_focus_overflow_y * 2.0)
+	var effective_width = maxf(1.0, available.x + grid_separation)
+	var effective_height = maxf(1.0, available.y + grid_separation)
 
 	var desired_item_width = desired_card_width + grid_separation
 	var desired_item_height = desired_card_height + grid_separation
 
 	var desired_items_per_line: int
 	if vertical:
-		desired_items_per_line = max(1, int(effective_width / desired_item_width + 0.0001))
+		desired_items_per_line = max(2, int(effective_width / desired_item_width + 0.0001))
 	else:
-		desired_items_per_line = max(1, int(effective_height / desired_item_height + 0.0001))
+		desired_items_per_line = max(2, int(effective_height / desired_item_height + 0.0001))
 
 	# Use the exact same helper for consistency
 	return _compute_ratio_for_items_per_line(desired_items_per_line, base_dims, available, viewport_area)
@@ -855,6 +844,10 @@ func _recalculate_layout():
 
 	_is_recalculating_layout = true
 	_suppress_recycle_until_frame = Engine.get_process_frames() + 1
+
+	# Save focus state before layout recalculation so we can restore it after
+	# cards are recycled and recreated.
+	var saved_focus_index: int = _focused_virtual_index
 
 	var current_zoom = _calculate_zoom()
 
@@ -946,19 +939,24 @@ func _recalculate_layout():
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
-		if "focus_scale_enabled" in card:
+		if _card_has_focus_scale_enabled:
 			card.focus_scale_enabled = true
 			card.focus_scale_inverted = _get_focus_scale_inverted()
-		if update_focus and card.has_method("set_focus_scale"):
+		if update_focus and _card_has_set_focus_scale:
 			card.set_focus_scale(focus_scale)
 		if update_card_geometry:
 			_configure_card_size_flags(card)
 			# Force immediate media-panel refresh so the effect stack picks up the
 			# new bounds without waiting for Godot's deferred layout pass.
-			if card.has_method("_update_media_panel_size"):
+			if _card_has_update_media_panel_size:
 				card._update_media_panel_size(true)
 
 	_is_recalculating_layout = false
+
+	# Restore focus to the card that was focused before layout recalculation.
+	# Cards may have been recycled and recreated, so grab focus by virtual index.
+	if saved_focus_index >= 0:
+		call_deferred("_restore_focus_after_layout", saved_focus_index)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -969,14 +967,11 @@ func _get_items_per_line() -> int:
 		return _cached_items_per_line
 
 	var available = _get_available_size()
-	var focus_overflow = _get_focus_overflow()
 	if vertical:
-		# Subtract 2× overflow so centered flow leaves room on both sides
-		# for focused cards to expand without clipping the viewport edge.
-		var effective_width = maxf(1.0, available.x + grid_separation - focus_overflow.x * 2.0)
+		var effective_width = maxf(1.0, available.x + grid_separation)
 		return max(1, int(effective_width / item_width + 0.0001))
 	else:
-		var effective_height = maxf(1.0, available.y + grid_separation - focus_overflow.y * 2.0)
+		var effective_height = maxf(1.0, available.y + grid_separation)
 		return max(1, int(effective_height / item_height + 0.0001))
 
 func _get_media_aspect_ratio() -> float:
@@ -1050,6 +1045,7 @@ func _setup_ui():
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
+	z_index = -1
 
 	_scroll_container = SmoothScrollContainer.new()
 	_scroll_container.vertical = vertical
@@ -1057,6 +1053,7 @@ func _setup_ui():
 	_scroll_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.scroll_vertical = 0
+	_scroll_container.clip_contents = false
 	add_child(_scroll_container)
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
@@ -1085,17 +1082,8 @@ func _setup_ui():
 	if debug_mode:
 		_setup_debug_camera()
 
-	_recalculate_dimensions()
-
 func _get_base_dimensions() -> Vector2:
 	return Vector2(BASE_CARD_WIDTH_DP, BASE_CARD_HEIGHT_DP)
-
-func _recalculate_dimensions():
-	var current_zoom = _calculate_zoom()
-	var base_dims = _get_base_dimensions()
-	base_card_size = base_dims
-	card_size = base_dims * current_zoom
-	focused_card_size = card_size * focus_scale
 
 func refresh_dimensions() -> void:
 	"""Recalculate dimensions and refresh layout (call after orientation change or margin change)."""
@@ -1163,6 +1151,24 @@ func _instantiate_card_pool():
 		card.set_meta("virtual_index", -1)
 		_card_pool.append(card)
 
+	# Cache card capability flags from the first instantiated card so we can
+	# skip has_method() / string lookups in hot loops.
+	var probe = _card_scene.instantiate()
+	probe.queue_free()
+	_card_has_focus_scale_enabled = "focus_scale_enabled" in probe
+	_card_has_set_focus_scale = probe.has_method("set_focus_scale")
+	_card_has_set_game_with_priority = probe.has_method("set_game_with_priority")
+	_card_has_refresh_settings = probe.has_method("refresh_settings")
+	_card_has_reset = probe.has_method("reset")
+	_card_has_game_prop = "game" in probe
+	_card_has_update_media_panel_size = probe.has_method("_update_media_panel_size")
+	_card_has_update_display = probe.has_method("update_display")
+	_card_has_set_image_priority = probe.has_method("set_image_priority")
+	_card_has_set_content_alignment = probe.has_method("set_content_alignment")
+	_card_has_set_media_aspect_ratio = probe.has_method("set_media_aspect_ratio")
+	_card_has_refresh_effects = probe.has_method("refresh_effects")
+	_card_has_update_card_state_from_settings = probe.has_method("_update_card_state_from_settings")
+
 func set_total_count(count: int, preserve_cache: bool = false):
 	var count_changed = _total_items != count
 	_total_items = count
@@ -1225,16 +1231,16 @@ func _initial_load():
 		var card = _acquire_card()
 		if card:
 			card.set_meta("virtual_index", i)
-			if "focus_scale_enabled" in card:
+			if _card_has_focus_scale_enabled:
 				card.focus_scale_enabled = true
 				card.focus_scale_inverted = _get_focus_scale_inverted()
 			_active_cards.append(card)
 			_active_cards_by_index[i] = card
 			_flow_container.add_child(card)
 			_configure_card_size_flags(card)
-			if card.has_method("set_focus_scale"):
+			if _card_has_set_focus_scale:
 				card.set_focus_scale(focus_scale)
-			if card.has_method("refresh_settings"):
+			if _card_has_refresh_settings:
 				card.refresh_settings()
 			item_created.emit(card, i)
 
@@ -1380,9 +1386,9 @@ func _recycle_card_at_index(index: int):
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
 
-		if card.has_method("reset"):
+		if _card_has_reset:
 			card.reset()
-		elif "game" in card:
+		elif _card_has_game_prop:
 			card.game = null
 
 		if card.get_parent() == _flow_container:
@@ -1418,11 +1424,11 @@ func _configure_card_size_flags(card: Control) -> void:
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 	# Apply content alignment for all modes (GRID also supports START/CENTER/END)
-	if card.has_method("set_content_alignment"):
+	if _card_has_set_content_alignment:
 		var alignment = _get_content_alignment()
 		card.set_content_alignment(alignment)
 
-	if card.has_method("set_media_aspect_ratio"):
+	if _card_has_set_media_aspect_ratio:
 		card.set_media_aspect_ratio(_get_media_aspect_ratio())
 
 func _add_card_at_end(virtual_index: int):
@@ -1431,23 +1437,23 @@ func _add_card_at_end(virtual_index: int):
 		return
 
 	card.set_meta("virtual_index", virtual_index)
-	if "focus_scale_enabled" in card:
+	if _card_has_focus_scale_enabled:
 		card.focus_scale_enabled = true
 		card.focus_scale_inverted = _get_focus_scale_inverted()
 	_configure_card_size_flags(card)
-	if card.has_method("set_focus_scale"):
+	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
 	_active_cards.append(card)
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
 
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
-	if card.has_method("refresh_settings"):
+	if _card_has_refresh_settings:
 		card.refresh_settings()
 
 	if _data_cache.has(virtual_index):
 		var card_visible = _is_index_visible(virtual_index)
-		if card.has_method("set_game_with_priority"):
+		if _card_has_set_game_with_priority:
 			card.set_game_with_priority(_data_cache[virtual_index], card_visible)
 		else:
 			card.game = _data_cache[virtual_index]
@@ -1461,7 +1467,7 @@ func _add_card_at_start(virtual_index: int):
 		return
 
 	card.set_meta("virtual_index", virtual_index)
-	if "focus_scale_enabled" in card:
+	if _card_has_focus_scale_enabled:
 		card.focus_scale_enabled = true
 		card.focus_scale_inverted = _get_focus_scale_inverted()
 	_active_cards.insert(0, card)
@@ -1469,16 +1475,16 @@ func _add_card_at_start(virtual_index: int):
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
 	_configure_card_size_flags(card)
-	if card.has_method("set_focus_scale"):
+	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
 
 	# Refresh settings (orientation, etc.) - will only rebuild effects if orientation changed
-	if card.has_method("refresh_settings"):
+	if _card_has_refresh_settings:
 		card.refresh_settings()
 
 	if _data_cache.has(virtual_index):
 		var card_visible = _is_index_visible(virtual_index)
-		if card.has_method("set_game_with_priority"):
+		if _card_has_set_game_with_priority:
 			card.set_game_with_priority(_data_cache[virtual_index], card_visible)
 		else:
 			card.game = _data_cache[virtual_index]
@@ -1489,9 +1495,9 @@ func _add_card_at_start(virtual_index: int):
 func _batch_recycle_from_start(count: int) -> void:
 	if count <= 0 or count > _active_cards.size():
 		return
-	var to_recycle = _active_cards.slice(0, count)
-	_active_cards = _active_cards.slice(count)
-	for card in to_recycle:
+	# Recycle in-place to avoid array allocation from slice().
+	for i in range(count - 1, -1, -1):
+		var card = _active_cards[i]
 		_release_focus_if_inside(card)
 		var vidx = card.get_meta("virtual_index", -1)
 		if vidx >= 0:
@@ -1501,13 +1507,14 @@ func _batch_recycle_from_start(count: int) -> void:
 			card.visible = false
 			card.set_meta("pooled", true)
 			card.set_meta("virtual_index", -1)
-			if card.has_method("reset"):
+			if _card_has_reset:
 				card.reset()
-			elif "game" in card:
+			elif _card_has_game_prop:
 				card.game = null
 			if card.get_parent() == _flow_container:
 				_flow_container.remove_child(card)
 			_add_to_pool(card)
+	_active_cards = _active_cards.slice(count)
 
 func _batch_add_at_start(target_start: int, count: int) -> void:
 	if count <= 0:
@@ -1519,19 +1526,19 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		if not card:
 			break
 		card.set_meta("virtual_index", virtual_index)
-		if "focus_scale_enabled" in card:
+		if _card_has_focus_scale_enabled:
 			card.focus_scale_enabled = true
 			card.focus_scale_inverted = _get_focus_scale_inverted()
 		_flow_container.add_child(card)
 		_flow_container.move_child(card, i)
 		_configure_card_size_flags(card)
-		if card.has_method("set_focus_scale"):
+		if _card_has_set_focus_scale:
 			card.set_focus_scale(focus_scale)
-		if card.has_method("refresh_settings"):
+		if _card_has_refresh_settings:
 			card.refresh_settings()
 		if _data_cache.has(virtual_index):
 			var card_visible = _is_index_visible(virtual_index)
-			if card.has_method("set_game_with_priority"):
+			if _card_has_set_game_with_priority:
 				card.set_game_with_priority(_data_cache[virtual_index], card_visible)
 			else:
 				card.game = _data_cache[virtual_index]
@@ -1566,7 +1573,7 @@ func _acquire_card() -> Control:
 		var card = _card_pool.pop_back()
 		if is_instance_valid(card):
 			card.set_meta("pooled", false)
-			if card.has_method("reset"):
+			if _card_has_reset:
 				card.reset()
 			card.visible = true
 			return card
@@ -1639,16 +1646,14 @@ func _update_margin():
 			_flow_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
 
-		# Add horizontal margins for cross-axis focus overflow in GRID mode.
-		# Focused cards in edge columns extend horizontally; without this padding
-		# they clip against the viewport edge.
-		var margin_left = focus_overflow.x
-		var margin_right = focus_overflow.x
-		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
-			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
-			_margin_container.add_theme_constant_override("margin_right", int(margin_right))
-			_last_margin_left = int(margin_left)
-			_last_margin_right = int(margin_right)
+		# No horizontal margins — cards fill the viewport edge-to-edge.
+		# Focused cards in edge columns may clip slightly; this is preferred
+		# over leaving visible gaps on either side of the grid.
+		if _last_margin_left != 0 or _last_margin_right != 0:
+			_margin_container.add_theme_constant_override("margin_left", 0)
+			_margin_container.add_theme_constant_override("margin_right", 0)
+			_last_margin_left = 0
+			_last_margin_right = 0
 		if _last_flow_width != 0:
 			_flow_container.custom_minimum_size.x = 0
 			_last_flow_width = 0
@@ -1670,16 +1675,14 @@ func _update_margin():
 			_flow_container.custom_minimum_size.x = flow_width
 			_last_flow_width = flow_width
 
-		# Add vertical margins for cross-axis focus overflow in GRID mode.
-		# Focused cards in edge rows extend vertically; without this padding
-		# they clip against the viewport edge.
-		var margin_top = focus_overflow.y
-		var margin_bottom = focus_overflow.y
-		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
-			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
-			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
-			_last_margin_top = int(margin_top)
-			_last_margin_bottom = int(margin_bottom)
+		# No vertical margins — cards fill the viewport edge-to-edge.
+		# Focused cards in edge rows may clip slightly; this is preferred
+		# over leaving visible gaps above and below the grid.
+		if _last_margin_top != 0 or _last_margin_bottom != 0:
+			_margin_container.add_theme_constant_override("margin_top", 0)
+			_margin_container.add_theme_constant_override("margin_bottom", 0)
+			_last_margin_top = 0
+			_last_margin_bottom = 0
 		if _last_flow_height != 0:
 			_flow_container.custom_minimum_size.y = 0
 			_last_flow_height = 0
@@ -1748,7 +1751,7 @@ func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 
 		var card_visible = idx >= visible_start_idx and idx < visible_end_idx
 
-		if card.has_method("set_image_priority"):
+		if _card_has_set_image_priority:
 			card.set_image_priority(card_visible)
 
 func _connect_focus_lock_viewport() -> void:
@@ -1918,7 +1921,7 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 			var data_idx = idx - offset
 			if data_idx < items.size():
 				var card_visible = idx >= visible_start_idx and idx < visible_end_idx
-				if card.has_method("set_game_with_priority"):
+				if _card_has_set_game_with_priority:
 					card.set_game_with_priority(items[data_idx], card_visible)
 				else:
 					card.game = items[data_idx]
@@ -2048,6 +2051,12 @@ func _apply_focus_to_card(card: Control) -> void:
 	card.set_meta("_suppress_smooth_scroll", true)
 	card.grab_focus()
 	_pending_focus_index = -1
+
+func _restore_focus_after_layout(index: int) -> void:
+	"""Restore focus to a card by virtual index after layout recalculation."""
+	var card = get_card_at_index(index)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		card.grab_focus()
 
 func focus_last_or_first_card() -> void:
 	"""Focus the last focused card, or the first card if none was focused."""
@@ -2254,7 +2263,7 @@ func _initial_load_from_increment():
 		var card = _acquire_card()
 		if card:
 			card.set_meta("virtual_index", i)
-			if "focus_scale_enabled" in card:
+			if _card_has_focus_scale_enabled:
 				card.focus_scale_enabled = true
 				card.focus_scale_inverted = _get_focus_scale_inverted()
 			_configure_card_size_flags(card)
@@ -2264,11 +2273,11 @@ func _initial_load_from_increment():
 
 			if _data_cache.has(i):
 				var card_visible = i < visible_count
-				if card.has_method("set_game_with_priority"):
+				if _card_has_set_game_with_priority:
 					card.set_game_with_priority(_data_cache[i], card_visible)
 				else:
 					card.game = _data_cache[i]
-				if card.has_method("update_display"):
+				if _card_has_update_display:
 					card.update_display()
 
 			item_created.emit(card, i)
@@ -2305,12 +2314,12 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 			if idx >= offset and idx < offset + items.size():
 				if _data_cache.has(idx):
 					var card_visible = idx >= visible_start_idx and idx < visible_end_idx
-					if card.has_method("set_game_with_priority"):
+					if _card_has_set_game_with_priority:
 						card.set_game_with_priority(_data_cache[idx], card_visible)
 					else:
 						card.game = _data_cache[idx]
 					_update_cache_access_order(idx)
-					if card.has_method("update_display"):
+					if _card_has_update_display:
 						card.update_display()
 
 func refresh_if_visible(start_index: int, end_index: int):
@@ -2332,12 +2341,12 @@ func refresh_if_visible(start_index: int, end_index: int):
 			var idx = card.get_meta("virtual_index", -1)
 			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
 				var card_visible = idx >= visible_start_idx and idx < visible_end_idx
-				if card.has_method("set_game_with_priority"):
+				if _card_has_set_game_with_priority:
 					card.set_game_with_priority(_data_cache[idx], card_visible)
 				else:
 					card.game = _data_cache[idx]
 				_update_cache_access_order(idx)
-				if card.has_method("update_display"):
+				if _card_has_update_display:
 					card.update_display()
 
 func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
@@ -2347,9 +2356,9 @@ func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
-		if card.has_method("refresh_effects"):
+		if _card_has_refresh_effects:
 			card.refresh_effects(force_full_rebuild)
-		elif card.has_method("refresh_settings"):
+		elif _card_has_refresh_settings:
 			card.refresh_settings()
 
 func refresh_all_card_configs() -> void:
@@ -2360,18 +2369,18 @@ func refresh_all_card_configs() -> void:
 		if not is_instance_valid(card):
 			continue
 		_configure_card_size_flags(card)
-		if card.has_method("_update_media_panel_size"):
+		if _card_has_update_media_panel_size:
 			card._update_media_panel_size(true)
 		# Display mode affects text/background visibility and card geometry, so
 		# re-apply card state whenever cached config changes.
-		if card.has_method("_update_card_state_from_settings"):
+		if _card_has_update_card_state_from_settings:
 			card._update_card_state_from_settings()
 
 func refresh_all_card_displays() -> void:
 	"""Refresh text/display state on all active cards without rebuilding effects.
 	Used for settings like library_show_title_mode."""
 	for card in _active_cards:
-		if is_instance_valid(card) and card.has_method("update_display"):
+		if is_instance_valid(card) and _card_has_update_display:
 			card.update_display()
 
 func _update_cache_access_order(cache_key: int):

@@ -121,7 +121,7 @@ func _setup_status_badge():
 	_status_badge.name = "StatusBadge"
 	_status_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_status_badge.visible = false
-	_status_badge.z_index = 20
+	_status_badge.z_index = 8
 	_status_badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	_status_badge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_status_badge.grow_vertical = Control.GROW_DIRECTION_BEGIN
