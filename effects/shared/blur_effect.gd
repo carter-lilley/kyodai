@@ -14,7 +14,7 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/card/blur.gdshader")
 
 func _apply_settings() -> void:
-	_update_shader_params()
+	pass  # Offsets: compute_pipeline(). Shader params: _run_pipeline().
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -24,6 +24,10 @@ func _update_shader_params() -> void:
 	var blur_samples = _settings.get("blur_samples", 8)
 	
 	var uv = media_container.get_uv_transforms()
+	
+	# Resolution-dependent quality: reduce blur samples at higher resolutions
+	var screen_height = DisplayManager.get_viewport_size().y
+	var quality_scale = clamp(1080.0 / screen_height, 0.4, 1.0)
 	
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
@@ -35,11 +39,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("game_texture", media_container.texture)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	_set_shader_param("vertical_offset", media_container.vertical_offset)
+	_set_shader_param("quality_scale", quality_scale)
 
 func set_game_texture(texture: Texture2D) -> void:
-	if media_container:
-		media_container.texture = texture
-		_update_shader_params()
+	pass  # EffectStack handles this via media_container.texture + _update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

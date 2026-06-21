@@ -38,12 +38,12 @@ const EFFECT_LAYER_ORDER: Array = [
 
 func initialize(container: MediaContainer, effect_configs: Array, context: String = "base_card"):
 	media_container = container
-	_effect_configs = effect_configs.duplicate(true)
+	_effect_configs = _clone_effect_configs(effect_configs)
 	_context = context
 	_rebuild_effects()
 
 func update_effect_configs(effect_configs: Array, force_full_rebuild: bool = true):
-	_effect_configs = effect_configs.duplicate(true)
+	_effect_configs = _clone_effect_configs(effect_configs)
 	if not force_full_rebuild:
 		var active_effect_ids: Array[String] = []
 		for config in _effect_configs:
@@ -111,10 +111,19 @@ func _rebuild_effects():
 		media_container.border_inset_ratio = 0.0
 		media_container.glass_inset_ratio = 0.0
 	
+	# Build config lookup map
+	var config_map: Dictionary = {}
+	for config in _effect_configs:
+		if config is Dictionary:
+			var id = config.get("effect_id", "")
+			if id:
+				config_map[id] = config
+	
 	# Create/update effects in layer order
-	for effect_id in EFFECT_LAYER_ORDER:
+	for i in range(EFFECT_LAYER_ORDER.size()):
+		var effect_id = EFFECT_LAYER_ORDER[i]
 		if effect_id in active_effect_ids:
-			var config = _get_effect_config(effect_id)
+			var config = config_map.get(effect_id, {})
 			var settings = config.get("settings", {})
 			
 			if _effects.has(effect_id):
@@ -148,10 +157,7 @@ func _rebuild_effects():
 						if media_container:
 							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
 			
-			# Set layer order
-			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)
-			if layer_index >= 0:
-				_effects[effect_id].z_index = max(0, layer_index - 2)  # Clamp to prevent behind-background rendering
+			_effects[effect_id].z_index = i - 2
 	
 	# Ensure proper child order
 	for effect_id in EFFECT_LAYER_ORDER:
@@ -171,9 +177,18 @@ func _update_effect_settings_only() -> void:
 		media_container.border_inset_ratio = 0.0
 		media_container.glass_inset_ratio = 0.0
 	
-	for effect_id in EFFECT_LAYER_ORDER:
+	# Build config lookup map
+	var config_map: Dictionary = {}
+	for config in _effect_configs:
+		if config is Dictionary:
+			var id = config.get("effect_id", "")
+			if id:
+				config_map[id] = config
+	
+	for i in range(EFFECT_LAYER_ORDER.size()):
+		var effect_id = EFFECT_LAYER_ORDER[i]
 		if _effects.has(effect_id):
-			var config = _get_effect_config(effect_id)
+			var config = config_map.get(effect_id, {})
 			var settings = config.get("settings", {})
 			var effect = _effects[effect_id]
 			effect.visible = true
@@ -190,9 +205,7 @@ func _update_effect_settings_only() -> void:
 						if media_container:
 							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
 			
-			var layer_index = EFFECT_LAYER_ORDER.find(effect_id)
-			if layer_index >= 0:
-				effect.z_index = max(0, layer_index - 2)
+			effect.z_index = i - 2
 	
 	_run_pipeline()
 	effects_changed.emit()
@@ -205,10 +218,10 @@ func _run_pipeline() -> void:
 		if effect_id in _effects and _effects[effect_id].visible:
 			layers.append(_effects[effect_id])
 	media_container.run_pipeline(layers)
-	# Update all effects after pipeline runs
+	# Update visible effects after pipeline runs
 	for effect_id in _effects:
 		var effect = _effects[effect_id]
-		if effect:
+		if effect and effect.visible:
 			effect._update_shader_params()
 
 static var _script_cache: Dictionary[String, Script] = {}
@@ -235,18 +248,12 @@ func _create_effect(effect_id: String) -> EffectBase:
 	
 	# Set anchors based on effect type
 	if effect_id in ["glow", "drop_shadow"]:
-		effect.set_anchors_preset(Control.PRESET_CENTER)
+		pass  # Effects set their own anchors
 	else:
 		effect.anchor_right = 1.0
 		effect.anchor_bottom = 1.0
 	
 	return effect
-
-func _get_effect_config(effect_id: String) -> Dictionary:
-	for config in _effect_configs:
-		if config is Dictionary and config.get("effect_id") == effect_id:
-			return config
-	return {}
 
 func get_effect(effect_id: String) -> EffectBase:
 	return _effects.get(effect_id, null)
@@ -267,8 +274,14 @@ func force_refresh() -> void:
 	"""Public method to force a full pipeline refresh."""
 	_run_pipeline()
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED:
-		# Update media container bounds with actual size
-		if media_container and size.x > 0 and size.y > 0:
-			media_container.bounds = Rect2(Vector2.ZERO, size)
+func _clone_effect_configs(configs: Array) -> Array:
+	"""Shallow-clone the config array; deep-clone only the settings dicts."""
+	var result: Array = []
+	for config in configs:
+		if config is Dictionary:
+			var clone = {"effect_id": config.get("effect_id", "")}
+			var settings = config.get("settings", {})
+			if settings is Dictionary:
+				clone["settings"] = settings.duplicate()
+			result.append(clone)
+	return result

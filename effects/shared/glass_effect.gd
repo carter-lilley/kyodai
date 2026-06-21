@@ -26,7 +26,7 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/card/glass.gdshader")
 
 func _apply_settings() -> void:
-	_update_shader_params()
+	pass  # Offsets: compute_pipeline(). Shader params: _run_pipeline().
 
 func _update_shader_params() -> void:
 	if not media_container:

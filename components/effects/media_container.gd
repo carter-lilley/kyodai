@@ -10,6 +10,8 @@ var bounds: Rect2:
 	set(value):
 		if bounds != value:
 			bounds = value
+			_shape_cache_valid = false
+			_uv_cache_valid = false
 			changed.emit()
 
 # --- Source texture ---
@@ -17,19 +19,26 @@ var texture: Texture2D:
 	set(value):
 		if texture != value:
 			texture = value
+			_uv_cache_valid = false
 			changed.emit()
 
 # --- Visual properties (shared by all layers) ---
-var corner_radius_ratio: float = 0.12
+var corner_radius_ratio: float = 0.12:
+	set(value):
+		if not is_equal_approx(corner_radius_ratio, value):
+			corner_radius_ratio = value
+			_shape_cache_valid = false
 var border_inset_ratio: float = 0.0:
 	set(value):
 		if not is_equal_approx(border_inset_ratio, value):
 			border_inset_ratio = value
+			_shape_cache_valid = false
 			changed.emit()
 var glass_inset_ratio: float = 0.0:
 	set(value):
 		if not is_equal_approx(glass_inset_ratio, value):
 			glass_inset_ratio = value
+			_shape_cache_valid = false
 			changed.emit()
 var vertical_offset: float = 0.0:
 	set(value):
@@ -62,43 +71,72 @@ var size: Vector2:
 var position: Vector2:
 	get: return bounds.position
 
-# --- Precomputed shape values ---
+# --- Cached shape values (invalidated on property change) ---
+var _corner_radius_px: float = 0.0
+var _total_inset_px: float = 0.0
+var _inner_corner_radius_px: float = 0.0
+var _shape_cache_valid: bool = false
+
+func _recompute_shape_cache() -> void:
+	var w = bounds.size.x
+	var h = bounds.size.y
+	_corner_radius_px = round(corner_radius_ratio * min(w, h) / 2.0)
+	_total_inset_px = (border_inset_ratio + glass_inset_ratio) * w
+	_inner_corner_radius_px = max(0.0, _corner_radius_px - _total_inset_px)
+	_shape_cache_valid = true
+
 func get_corner_radius_pixels() -> float:
-	return round(corner_radius_ratio * min(bounds.size.x, bounds.size.y) / 2.0)
+	if not _shape_cache_valid:
+		_recompute_shape_cache()
+	return _corner_radius_px
 
 func get_total_inset_pixels() -> float:
-	return (border_inset_ratio + glass_inset_ratio) * bounds.size.x
+	if not _shape_cache_valid:
+		_recompute_shape_cache()
+	return _total_inset_px
 
 func get_inner_corner_radius_pixels() -> float:
-	var total_px = get_total_inset_pixels()
-	return max(0.0, get_corner_radius_pixels() - total_px)
+	if not _shape_cache_valid:
+		_recompute_shape_cache()
+	return _inner_corner_radius_px
 
-# --- Live UV transforms (don't rely on pipeline cache) ---
-func get_uv_transforms() -> Dictionary:
-	var result = {
-		"uv_transform_scale": Vector2.ONE,
-		"uv_transform_offset": Vector2.ZERO,
-	}
+# --- Cached UV transforms (invalidated on bounds/texture change) ---
+var _uv_scale: Vector2 = Vector2.ONE
+var _uv_offset: Vector2 = Vector2.ZERO
+var _uv_cache_valid: bool = false
+
+func _recompute_uv_cache() -> void:
+	_uv_scale = Vector2.ONE
+	_uv_offset = Vector2.ZERO
 	if not texture:
-		return result
-	
+		_uv_cache_valid = true
+		return
 	var card_size = size
 	var tex_size = Vector2(texture.get_width(), texture.get_height())
-	
 	if card_size.x <= 0 or card_size.y <= 0 or tex_size.x <= 0 or tex_size.y <= 0:
-		return result
-	
+		_uv_cache_valid = true
+		return
 	var card_aspect = card_size.x / card_size.y
 	var tex_aspect = tex_size.x / tex_size.y
-	
-	var tex_scale = Vector2(1.0, 1.0)
 	if card_aspect > tex_aspect:
-		tex_scale.y = tex_aspect / card_aspect
+		_uv_scale.y = tex_aspect / card_aspect
 	else:
-		tex_scale.x = card_aspect / tex_aspect
-	
-	var offset = (Vector2(1.0, 1.0) - tex_scale) * 0.5
-	
-	result["uv_transform_scale"] = tex_scale
-	result["uv_transform_offset"] = offset
-	return result
+		_uv_scale.x = card_aspect / tex_aspect
+	_uv_offset = (Vector2(1.0, 1.0) - _uv_scale) * 0.5
+	_uv_cache_valid = true
+
+func get_uv_scale() -> Vector2:
+	if not _uv_cache_valid:
+		_recompute_uv_cache()
+	return _uv_scale
+
+func get_uv_offset() -> Vector2:
+	if not _uv_cache_valid:
+		_recompute_uv_cache()
+	return _uv_offset
+
+func get_uv_transforms() -> Dictionary:
+	return {
+		"uv_transform_scale": get_uv_scale(),
+		"uv_transform_offset": get_uv_offset(),
+	}

@@ -5,8 +5,11 @@ static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
 var _gradient_texture: ImageTexture = null
+var _gradient_hash_cache: Array = []
 var _inner_stroke_gradient_texture: ImageTexture = null
+var _inner_stroke_hash: Array = []
 var _outer_stroke_gradient_texture: ImageTexture = null
+var _outer_stroke_hash: Array = []
 
 func _ready():
 	super._ready()
@@ -14,8 +17,6 @@ func _ready():
 	effect_id = "border"
 
 func update_settings(settings: Dictionary) -> void:
-	visible = true
-	queue_redraw()
 	super.update_settings(settings)
 
 func _setup_shader() -> void:
@@ -23,7 +24,7 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/card/border.gdshader")
 
 func _apply_settings() -> void:
-	_update_shader_params()
+	pass  # Offsets: compute_pipeline(). Shader params: _run_pipeline().
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -47,7 +48,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("gradient_direction", gradient_direction)
 	
 	if inner_stroke_gradient is Gradient:
-		_inner_stroke_gradient_texture = _gradient_to_texture(inner_stroke_gradient)
+		var hash = _gradient_hash(inner_stroke_gradient)
+		if hash != _inner_stroke_hash:
+			_inner_stroke_hash = hash
+			_inner_stroke_gradient_texture = _gradient_to_texture(inner_stroke_gradient)
 		_set_shader_param("inner_stroke_gradient_texture", _inner_stroke_gradient_texture)
 		_set_shader_param("use_inner_stroke_gradient", true)
 	else:
@@ -55,7 +59,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("inner_stroke_width_ratio", inner_stroke_width)
 	
 	if outer_stroke_gradient is Gradient:
-		_outer_stroke_gradient_texture = _gradient_to_texture(outer_stroke_gradient)
+		var hash = _gradient_hash(outer_stroke_gradient)
+		if hash != _outer_stroke_hash:
+			_outer_stroke_hash = hash
+			_outer_stroke_gradient_texture = _gradient_to_texture(outer_stroke_gradient)
 		_set_shader_param("outer_stroke_gradient_texture", _outer_stroke_gradient_texture)
 		_set_shader_param("use_outer_stroke_gradient", true)
 	else:
@@ -63,7 +70,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("outer_stroke_width_ratio", outer_stroke_width)
 	
 	if border_gradient is Gradient:
-		_gradient_texture = _gradient_to_texture(border_gradient)
+		var hash = _gradient_hash(border_gradient)
+		if hash != _gradient_hash_cache:
+			_gradient_hash_cache = hash
+			_gradient_texture = _gradient_to_texture(border_gradient)
 		_set_shader_param("gradient_texture", _gradient_texture)
 		_set_shader_param("use_gradient", true)
 	else:
@@ -73,36 +83,19 @@ func _update_shader_params() -> void:
 	
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
-func set_border_size(border_size: float) -> void:
-	_settings["border_size"] = border_size
-	_update_shader_params()
-
-func tween_border_size(target_size: float, duration: float = 0.15) -> Tween:
-	var tween = create_tween()
-	tween.set_trans(Tween.TRANS_QUAD)
-	tween.set_ease(Tween.EASE_OUT)
-	
-	var start_size = _settings.get("border_size", 0.0)
-	tween.tween_method(func(t): 
-		var current_size = lerp(start_size, target_size, t)
-		set_border_size(current_size)
-	, 0.0, 1.0, duration)
-	
-	return tween
-
 func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
 	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
-	var debug_str = "[BorderEffect] Generating texture from gradient with " + str(gradient.get_point_count()) + " points: "
-	for i in range(gradient.get_point_count()):
-		debug_str += "(" + str(gradient.get_offset(i)) + ":" + str(gradient.get_color(i)) + ") "
-	#print(debug_str)
-	
 	for i in range(256):
-		var t = i / 255.0  # Sample at pixel edges: 0.0 to 1.0 inclusive
-		var border_color = gradient.sample(t)
-		image.set_pixel(i, 0, border_color)
-	
+		var t = i / 255.0
+		image.set_pixel(i, 0, gradient.sample(t))
 	return ImageTexture.create_from_image(image)
+
+func _gradient_hash(gradient: Gradient) -> Array:
+	var h: Array = []
+	for i in range(gradient.get_point_count()):
+		h.append(gradient.get_offset(i))
+		h.append(gradient.get_color(i))
+	return h
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

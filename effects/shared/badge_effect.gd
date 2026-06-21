@@ -23,10 +23,9 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/card/badge.gdshader")
 
 func _apply_settings() -> void:
-	_update_shader_params()
+	pass  # Offsets: compute_pipeline(). Shader params: _run_pipeline().
 
 func update_settings(settings: Dictionary) -> void:
-	visible = true
 	super.update_settings(settings)
 
 func _update_shader_params() -> void:
@@ -36,7 +35,6 @@ func _update_shader_params() -> void:
 	var hide_background = _settings.get("hide_background", false)
 	var badge_inner_radius = _settings.get("badge_inner_radius", 0.0)
 	var badge_color = _settings.get("badge_color", Color.WHITE)
-	var _badge_aspect = _settings.get("badge_aspect", Vector2(1.0, 1.0))
 	var badge_type = _settings.get("badge_type", 0)
 	var icon_padding = _settings.get("icon_padding", 0.5)
 	var icon_color = _settings.get("icon_color", Color.WHITE)

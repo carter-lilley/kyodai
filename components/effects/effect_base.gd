@@ -152,16 +152,20 @@ func _apply_tweened_settings(temp_settings: Dictionary) -> void:
 	# interpolated values, so that the changed signal (which triggers
 	# _update_shader_params on all effects) doesn't overwrite them.
 	if media_container:
+		var needs_refresh = false
 		match effect_id:
 			"border":
-				media_container.border_inset_ratio = temp_settings.get("border_size", media_container.border_inset_ratio)
+				var new_inset = temp_settings.get("border_size", media_container.border_inset_ratio)
+				if not is_equal_approx(new_inset, media_container.border_inset_ratio):
+					media_container.border_inset_ratio = new_inset
+					needs_refresh = true
 			"glass":
-				media_container.glass_inset_ratio = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
+				var new_inset = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
+				if not is_equal_approx(new_inset, media_container.glass_inset_ratio):
+					media_container.glass_inset_ratio = new_inset
+					needs_refresh = true
 		
-		# Force all effects in the stack to update immediately so the base card
-		# and other layers stay in sync with the inset change (prevents holes
-		# when the border shrinks during focus transitions).
-		if effect_stack:
+		if needs_refresh and effect_stack:
 			effect_stack.force_refresh()
 	
 	# Restore original settings

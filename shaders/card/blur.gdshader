@@ -8,6 +8,7 @@ uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 uniform float blur_strength : hint_range(0.0, 32.0) = 4.0;
 uniform float blur_samples : hint_range(1.0, 24.0) = 8.0;
+uniform float quality_scale = 1.0;
 
 vec4 sample_blur(vec2 uv, vec2 tex_size) {
 	vec4 color = vec4(0.0);
@@ -15,7 +16,7 @@ vec4 sample_blur(vec2 uv, vec2 tex_size) {
 	
 	float step_x = blur_strength / tex_size.x;
 	float step_y = blur_strength / tex_size.y;
-	int samples = int(blur_samples);
+	int samples = int(blur_samples * quality_scale);
 	
 	for (int x = -samples; x <= samples; x++) {
 		for (int y = -samples; y <= samples; y++) {

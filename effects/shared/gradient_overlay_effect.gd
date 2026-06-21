@@ -5,6 +5,7 @@ static func get_allowed_contexts() -> Array[String]:
 	return ["base_card", "focus_card"]
 
 var _gradient_texture: ImageTexture = null
+var _gradient_hash_cache: Array = []
 
 func _ready():
 	super._ready()
@@ -12,7 +13,6 @@ func _ready():
 	effect_id = "gradient_overlay"
 
 func update_settings(settings: Dictionary) -> void:
-	visible = true
 	super.update_settings(settings)
 
 func _setup_shader() -> void:
@@ -20,7 +20,7 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/card/gradient_overlay.gdshader")
 
 func _apply_settings() -> void:
-	_update_shader_params()
+	pass  # Offsets: compute_pipeline(). Shader params: _run_pipeline().
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -35,18 +35,17 @@ func _update_shader_params() -> void:
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	
 	if gradient is Gradient:
-		_gradient_texture = _gradient_to_texture(gradient)
+		var h: Array = []
+		for i in range(gradient.get_point_count()):
+			h.append(gradient.get_offset(i))
+			h.append(gradient.get_color(i))
+		if h != _gradient_hash_cache:
+			_gradient_hash_cache = h
+			var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
+			for i in range(256):
+				image.set_pixel(i, 0, gradient.sample(i / 255.0))
+			_gradient_texture = ImageTexture.create_from_image(image)
 		_set_shader_param("gradient_texture", _gradient_texture)
-
-func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
-	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
-	
-	for i in range(256):
-		var t = i / 255.0
-		var sampled_color = gradient.sample(t)
-		image.set_pixel(i, 0, sampled_color)
-	
-	return ImageTexture.create_from_image(image)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

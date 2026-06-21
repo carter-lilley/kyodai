@@ -154,7 +154,7 @@ func _calculate_ui_scale() -> float:
 		os_scale = 1.0
 
 	var screen_size := DisplayServer.screen_get_size(_current_screen)
-	var resolution_scale := sqrt(screen_size.y / BASE_HEIGHT)
+	var resolution_scale := pow(screen_size.y / BASE_HEIGHT, 0.75)
 
 	var dpi := DisplayServer.screen_get_dpi()
 	if dpi <= 0:

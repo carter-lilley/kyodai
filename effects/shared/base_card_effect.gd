@@ -4,8 +4,6 @@ extends EffectBase
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
-var _current_texture: Texture2D = null
-
 func _ready():
 	super._ready()
 	effect_name = "Base"
@@ -70,7 +68,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 func set_game_texture(texture: Texture2D) -> void:
-	_current_texture = texture
+	pass  # EffectStack handles this via media_container.texture + _update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	return []

@@ -14,7 +14,7 @@ func _setup_shader() -> void:
 	mat.shader = preload("res://shaders/card/hsl.gdshader")
 
 func _apply_settings() -> void:
-	_update_shader_params()
+	pass  # Offsets: compute_pipeline(). Shader params: _run_pipeline().
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -40,9 +40,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("vertical_offset", media_container.vertical_offset)
 
 func set_game_texture(texture: Texture2D) -> void:
-	if media_container:
-		media_container.texture = texture
-		_update_shader_params()
+	pass  # EffectStack handles this via media_container.texture + _update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
