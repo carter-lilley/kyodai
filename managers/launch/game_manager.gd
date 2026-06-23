@@ -173,7 +173,7 @@ func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> S
 	for root in search_roots:
 		var db_path = root + "/cache/game_list/game_list.db"
 		print("[GameManager] Eden DB lookup: checking " + db_path)
-		if not FileAccess.file_exists(db_path):
+		if not FSM.file_exists(db_path):
 			print("[GameManager] Eden DB lookup: file does not exist")
 			continue
 		print("[GameManager] Eden DB lookup: file exists, opening...")
@@ -352,7 +352,7 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var serial = ""
 	
 	# Try extracting serial from ROM
-	if FileAccess.file_exists(rom_path):
+	if FSM.file_exists(rom_path):
 		serial = TitleIDParser.extract_ps2_serial(rom_path)
 		if serial != "":
 			print("[GameManager] PCSX2: Serial from ROM: " + serial)
@@ -384,7 +384,7 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var game_id = ""
 	
 	# Try extracting game ID from ROM
-	if FileAccess.file_exists(rom_path):
+	if FSM.file_exists(rom_path):
 		game_id = TitleIDParser.extract_psp_game_id(rom_path)
 		if game_id != "":
 			print("[GameManager] PPSSPP: Game ID from ROM: " + game_id)
@@ -516,9 +516,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 	if is_shuffler:
 		var sentinel_path = vita_app_path + "/.kyodai_shuffler"
 		if not FSM.file_exists(sentinel_path):
-			var sentinel_file = FileAccess.open(sentinel_path, FileAccess.WRITE)
-			if sentinel_file:
-				sentinel_file.close()
+			if FSM.write_file(sentinel_path, ""):
 				print("[GameManager] Vita3K: Created shuffler sentinel at " + sentinel_path)
 			else:
 				push_warning("[GameManager] Vita3K: Failed to create shuffler sentinel at " + sentinel_path)

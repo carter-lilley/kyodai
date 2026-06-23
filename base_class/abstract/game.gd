@@ -1,6 +1,8 @@
 class_name GameResource
 extends Resource
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 @export var id: String
 @export var romm_id: int
 @export var title: String
@@ -128,7 +130,7 @@ func get_sibling_file_path(sibling_id: int, root_folder: String) -> String:
 		if sibling.get("id", 0) == sibling_id:
 			var sibling_file_name = sibling.get("file_name", "")
 			if sibling_file_name != "":
-				return root_folder + "/" + platform_slug + "/" + sibling_file_name
+				return FSM.join_paths(root_folder, platform_slug, sibling_file_name)
 	
 	return file_path
 
@@ -136,7 +138,7 @@ func get_display_name() -> String:
 	return title if title else file_name
 
 func get_cover_image() -> Texture2D:
-	if cover_path and FileAccess.file_exists(cover_path):
+	if cover_path and FSM.file_exists(cover_path):
 		var img = Image.new()
 		var error = img.load(cover_path)
 		if error == OK and not img.is_empty():

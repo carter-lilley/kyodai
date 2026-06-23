@@ -8,7 +8,6 @@
 [ext_resource type="Script" uid="uid://sgqdjn7yeqxm" path="res://addons/onscreenkeyboard/onscreen_keyboard.gd" id="6_onscreenkeyboard"]
 [ext_resource type="Script" uid="uid://dpvnpkj275ewq" path="res://addons/AynThor/AynThorManager.gd" id="8_aynthor"]
 [ext_resource type="Script" uid="uid://dt6xlxivwdgeh" path="res://components/launch_transition_overlay.gd" id="11_launchoverlay"]
-[ext_resource type="Script" uid="uid://kuhi06ldq5a7" path="res://components/effects/effect_stack.gd" id="12_effectstack"]
 [ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="m3label"]
 
 [sub_resource type="Shader" id="Shader_controlbar_mask"]
@@ -485,12 +484,6 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("11_launchoverlay")
-
-[node name="EffectStack" type="Control" parent="UILayer/LaunchTransitionOverlay" unique_id=123456792]
-anchors_preset = 0
-offset_right = 202.0
-offset_bottom = 270.0
-script = ExtResource("12_effectstack")
 
 [node name="MarginContainer" type="MarginContainer" parent="UILayer/LaunchTransitionOverlay" unique_id=123456794]
 layout_mode = 1

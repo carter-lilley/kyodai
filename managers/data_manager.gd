@@ -1,5 +1,7 @@
 extends Manager
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 # DataManager - Public facade for data persistence and caching.
 # Delegates all work to child managers in the data_manager.tscn scene.
 
@@ -183,7 +185,7 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
 
 	# Check if file exists
-	var file_exists = FileAccess.file_exists(abs_path)
+	var file_exists = FSM.file_exists(abs_path)
 
 	if not file_exists:
 		if force_db_update:
@@ -199,28 +201,10 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	var error_msg = ""
 
 	if file_exists:
-		# Method 1: Try using DirAccess with the parent directory
-		var parent_dir = abs_path.get_base_dir()
-		var file_name = abs_path.get_file()
-
-		var dir = DirAccess.open(parent_dir)
-
-		if dir:
-			var err = dir.remove(file_name)
-			if err == OK:
-				file_deleted = true
-			else:
-				error_msg = "DirAccess.remove failed with error: " + str(err)
+		if FSM.delete_file(abs_path):
+			file_deleted = true
 		else:
-			error_msg = "Failed to open directory: " + parent_dir
-
-		# Method 2: If first method failed, try remove_absolute
-		if not file_deleted:
-			var err = DirAccess.remove_absolute(abs_path)
-			if err == OK:
-				file_deleted = true
-			else:
-				error_msg += " | remove_absolute failed with error: " + str(err)
+			error_msg = "FileSystemManager.delete_file failed"
 
 		# If file deletion failed, don't update the database (unless forcing)
 		if not file_deleted and not force_db_update:
@@ -230,7 +214,7 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 			return false
 
 		# Verify file was actually deleted
-		var file_still_exists = FileAccess.file_exists(abs_path)
+		var file_still_exists = FSM.file_exists(abs_path)
 
 		if file_still_exists and not force_db_update:
 			push_error("[DataManager] File still exists after deletion attempt: " + abs_path)

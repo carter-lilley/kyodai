@@ -2,6 +2,8 @@
 class_name GameCard
 extends M3Card
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 signal download_requested(game: GameResource)
 
 @export var game: GameResource:
@@ -29,16 +31,15 @@ func _remove_focus_tween(tween: Tween) -> void:
 	_focus_effect_tweens.erase(tween)
 
 func _kill_focus_tweens() -> void:
-	"""Stop any running focus-effect tweens and reset base-effect tween locks."""
 	for tween in _focus_effect_tweens:
 		if tween and is_instance_valid(tween):
 			tween.kill()
 	_focus_effect_tweens.clear()
-	
+
 	if _media_stack:
-		for child in _media_stack.get_children():
-			if child is EffectBase:
-				child._is_tweening = false
+		for effect in _media_stack.get_effects():
+			if effect is EffectBase:
+				effect._is_tweening = false
 
 # Cover/media loading is delegated to CardMediaLoader so GameCard stays focused
 # on card behavior (focus, input, badges) rather than download/cache logic.
@@ -116,6 +117,13 @@ func _exit_tree():
 	# Kill any focus effect tweens
 	_kill_focus_tweens()
 
+	if _media_stack:
+		_media_stack.free_rids()
+		_media_stack = null
+	if _focus_stack:
+		_focus_stack.free_rids()
+		_focus_stack = null
+
 func _setup_status_badge():
 	_status_badge = Panel.new()
 	_status_badge.name = "StatusBadge"
@@ -129,19 +137,6 @@ func _setup_status_badge():
 	_status_badge.add_theme_stylebox_override("panel", _status_badge_style)
 	add_child(_status_badge)
 	_update_status_badge_style()
-	_reparent_status_badge_to_media_stack()
-
-func _reparent_status_badge_to_media_stack():
-	if not _status_badge:
-		return
-	if not _media_stack or not is_instance_valid(_media_stack):
-		return
-	if _status_badge.get_parent() == _media_stack:
-		return
-	if _status_badge.get_parent() and is_instance_valid(_status_badge.get_parent()):
-		_status_badge.get_parent().remove_child(_status_badge)
-	_media_stack.add_child(_status_badge)
-	_update_status_badge_layout()
 
 func get_card_state() -> MediaContainer:
 	return _media_container
@@ -159,8 +154,7 @@ func get_current_texture() -> Texture2D:
 func _setup_preview_mode():
 	_update_card_state_from_settings()
 	_build_media_stack()
-	_reparent_status_badge_to_media_stack()
-	
+
 	if DataManager:
 		var random_game = DataManager.get_random_game()
 		if random_game:
@@ -169,13 +163,13 @@ func _setup_preview_mode():
 			_set_texture(_loading_texture)
 	else:
 		_set_texture(_loading_texture)
-	
+
 	if _status_badge:
 		_status_badge.visible = false
-	
+
 	disabled = true
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	
+
 	# Ensure focus effects match preview_show_focus after all setup
 	_show_focus_effects(preview_show_focus)
 
@@ -188,25 +182,28 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			effect_settings = config_setting.value.get("effects", [])
-	
-	if _media_stack and is_instance_valid(_media_stack):
-		# Hot-reload: update configs in-place instead of rebuilding the node tree
+
+	if _media_stack:
+		# Hot-reload: update configs in-place instead of rebuilding
 		_media_stack.update_effect_configs(effect_settings, force_full_rebuild)
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
+		_media_stack.update_draw_rects()
 	else:
 		_media_stack = EffectStack.new()
 		_media_stack.initialize(_media_container, effect_settings, "base_card")
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
-		set_media_content(_media_stack)
-	
-	_reparent_status_badge_to_media_stack()
+		_media_stack.set_parent_rid(_media_panel.get_canvas_item())
+		# The base card shader handles rounded corners; don't clip on the
+		# node-less stack (it has no geometry of its own to clip against).
+		_media_stack.set_clip_children(false)
+		_media_stack.update_draw_rects()
+		if _media_panel:
+			_media_panel.visible = true
+
 	# Focus stack is built lazily when this card becomes focused (or in preview mode).
-	# Keeping it absent for unfocused cards avoids creating effect nodes for every
-	# card in the virtual-scroll buffer. If it already exists (e.g., this card was
-	# previously focused), rebuild it so effect config changes stay in sync.
-	if (_focus_stack and is_instance_valid(_focus_stack)) or preview_mode or _is_focused:
+	if (_focus_stack) or preview_mode or _is_focused:
 		_build_focus_stack(force_full_rebuild)
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
@@ -218,81 +215,78 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 		var config_setting = SettingsManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			focus_effect_settings = config_setting.value.get("focus_effects", [])
-	
+
 	# If no focus effects configured, clear and hide existing stack
 	if focus_effect_settings.is_empty():
-		if _focus_stack and is_instance_valid(_focus_stack):
+		if _focus_stack:
 			_focus_stack.update_effect_configs([], force_full_rebuild)
-			_focus_stack.visible = false
+			_focus_stack.set_visible(false)
 		return
-	
-	if _focus_stack and is_instance_valid(_focus_stack):
+
+	if _focus_stack:
 		# Hot-reload: update configs in-place
-		_focus_stack.visible = false
+		_focus_stack.set_visible(false)
 		_focus_stack.update_effect_configs(focus_effect_settings, force_full_rebuild)
-		
+
 		# Re-apply focus state setup after config update
 		var focus_base_node = _focus_stack.get_effect("base")
 		if focus_base_node:
-			focus_base_node.visible = false
-			focus_base_node.modulate.a = 0.0
-		
+			focus_base_node.set_visible(false)
+			focus_base_node.set_alpha(0.0)
+
 		# In preview mode, respect preview_show_focus for initial alpha
 		var target_focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
-		for child in _focus_stack.get_children():
-			if child is EffectBase and child.material is ShaderMaterial:
-				child.material.set_shader_parameter("effect_alpha", target_focus_alpha)
-		
+		for effect in _focus_stack.get_effects():
+			if effect is EffectBase and effect._material is ShaderMaterial:
+				effect._material.set_shader_parameter("effect_alpha", target_focus_alpha)
+
 		if preview_mode:
-			_focus_stack.visible = preview_show_focus
-		
+			_focus_stack.set_visible(preview_show_focus)
+
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
 		_link_overlapping_effects()
 		return
-	
+
 	_focus_stack = EffectStack.new()
-	_focus_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_focus_stack.z_index = 5
-	_focus_stack.visible = false
-	_focus_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_focus_stack)
-	
+	_focus_stack.set_parent_rid(get_canvas_item())
+	_focus_stack.set_clip_children(false)
+	_focus_stack.set_visible(false)
+
 	_focus_stack.initialize(_media_container, focus_effect_settings, "focus_card")
 	if _current_texture:
 		_focus_stack.set_game_texture(_current_texture)
-	
+
 	# Hide base effect in focus stack — focus effects are overlays only
 	var focus_base = _focus_stack.get_effect("base")
 	if focus_base:
-		focus_base.visible = false
-		focus_base.modulate.a = 0.0
-	
+		focus_base.set_visible(false)
+		focus_base.set_alpha(0.0)
+
 	# Initialize focus effects with effect_alpha based on preview_show_focus
-	# so they start in the correct state before any tweens
 	var focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
-	for child in _focus_stack.get_children():
-		if child is EffectBase and child.material is ShaderMaterial:
-			child.material.set_shader_parameter("effect_alpha", focus_alpha)
-	
+	for effect in _focus_stack.get_effects():
+		if effect is EffectBase and effect._material is ShaderMaterial:
+			effect._material.set_shader_parameter("effect_alpha", focus_alpha)
+
 	if preview_mode:
-		_focus_stack.visible = preview_show_focus
-	
+		_focus_stack.set_visible(preview_show_focus)
+
 	_link_overlapping_effects()
 
 func _link_overlapping_effects() -> void:
 	if not _media_stack or not _focus_stack:
 		return
-	
+
 	var base_effect_ids: Array[String] = []
-	for child in _media_stack.get_children():
-		if child is EffectBase:
-			base_effect_ids.append(child.effect_id)
-	
-	for child in _focus_stack.get_children():
-		if not (child is EffectBase):
+	for effect in _media_stack.get_effects():
+		if effect is EffectBase:
+			base_effect_ids.append(effect.effect_id)
+
+	for effect in _focus_stack.get_effects():
+		if not (effect is EffectBase):
 			continue
-		var focus_effect = child as EffectBase
+		var focus_effect = effect as EffectBase
 		if focus_effect.effect_id in base_effect_ids:
 			var base_effect = _media_stack.get_effect(focus_effect.effect_id)
 			if base_effect:
@@ -310,36 +304,36 @@ func set_preview_focus(show: bool) -> void:
 
 func _show_focus_effects(p_show: bool) -> void:
 	_kill_focus_tweens()
-	
+
 	if preview_mode:
 		p_show = preview_show_focus
-	
+
 	if not _focus_stack or not _media_stack:
 		return
-	
+
 	var overlapping_effects: Array[EffectBase] = []
 	var non_overlapping_effects: Array[EffectBase] = []
-	
-	for child in _focus_stack.get_children():
-		if not (child is EffectBase):
+
+	for effect in _focus_stack.get_effects():
+		if not (effect is EffectBase):
 			continue
-		var focus_effect = child as EffectBase
+		var focus_effect = effect as EffectBase
 		if focus_effect._base_effect != null:
 			overlapping_effects.append(focus_effect)
 		else:
 			non_overlapping_effects.append(focus_effect)
-	
+
 	# Overlapping effects: tween the base effect's shader settings directly
 	for focus_effect in overlapping_effects:
 		var base_effect = focus_effect._base_effect
 		if not base_effect:
 			continue
-		
+
 		var base_settings = base_effect._settings
 		var focus_settings = focus_effect._settings
 		var base_copy = base_settings.duplicate(true)
 		var focus_copy = focus_settings.duplicate(true)
-		
+
 		var base_effect_ref = weakref(base_effect)
 		if p_show:
 			var settings_tween = create_tween()
@@ -349,7 +343,7 @@ func _show_focus_effects(p_show: bool) -> void:
 			settings_tween.set_ease(Tween.EASE_OUT)
 			var tween_callable = func(t: float):
 				var eff = base_effect_ref.get_ref()
-				if eff and is_instance_valid(eff):
+				if eff:
 					eff.tween_settings(base_copy, focus_copy, t)
 			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 		else:
@@ -360,22 +354,21 @@ func _show_focus_effects(p_show: bool) -> void:
 			settings_tween.set_ease(Tween.EASE_OUT)
 			var tween_callable = func(t: float):
 				var eff = base_effect_ref.get_ref()
-				if eff and is_instance_valid(eff):
+				if eff:
 					eff.tween_settings(focus_copy, base_copy, t)
 			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
-	
+
 	# Non-overlapping effects: fade in/out via alpha overlay
 	if non_overlapping_effects.size() > 0:
 		if p_show:
-			_focus_stack.visible = true
-			_focus_stack.modulate = Color(1, 1, 1, 1)
-		
+			_focus_stack.set_visible(true)
+
 		for focus_effect in non_overlapping_effects:
-			if focus_effect.material is ShaderMaterial:
+			if focus_effect._material is ShaderMaterial:
 				var start_alpha = 0.0 if p_show else 1.0
 				var target_alpha = 1.0 if p_show else 0.0
-				focus_effect.material.set_shader_parameter("effect_alpha", 0.0)
-				
+				focus_effect._material.set_shader_parameter("effect_alpha", 0.0)
+
 				var fade_tween = create_tween()
 				_focus_effect_tweens.append(fade_tween)
 				fade_tween.finished.connect(_remove_focus_tween.bind(fade_tween))
@@ -383,11 +376,11 @@ func _show_focus_effects(p_show: bool) -> void:
 				fade_tween.set_ease(Tween.EASE_OUT)
 				fade_tween.tween_method(
 					func(t: float, eff: EffectBase = focus_effect):
-						if eff and is_instance_valid(eff) and eff.material is ShaderMaterial:
-							eff.material.set_shader_parameter("effect_alpha", t),
+						if eff and eff._material is ShaderMaterial:
+							eff._material.set_shader_parameter("effect_alpha", t),
 					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
 				)
-		
+
 		if not p_show:
 			var hide_tween = create_tween()
 			_focus_effect_tweens.append(hide_tween)
@@ -396,8 +389,8 @@ func _show_focus_effects(p_show: bool) -> void:
 			hide_tween.set_ease(Tween.EASE_OUT)
 			hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
 			hide_tween.finished.connect(func():
-				if _focus_stack and is_instance_valid(_focus_stack):
-					_focus_stack.visible = false
+				if _focus_stack:
+					_focus_stack.set_visible(false)
 			)
 
 var _display_mode: int = 0
@@ -461,9 +454,7 @@ func _update_card_state_from_settings():
 	_apply_display_mode()
 
 func _apply_effect_insets_to_media_container(effects: Array) -> void:
-	"""Scan base effects and set media-container insets from their settings.
-	This must happen before any shader refresh so the base card shader uses
-	the correct total inset."""
+	"""Scan base effects and set media-container insets from their settings."""
 	var border_inset: float = 0.0
 	var glass_inset: float = 0.0
 	for effect in effects:
@@ -494,12 +485,12 @@ func _apply_display_mode() -> void:
 			show_background = false
 			show_text_margin = false
 			_media_container.edge_aa_enabled = true
-	
+
 	# Push the new AA flag to the shader immediately so the edge doesn't stay
 	# jagged when switching into transparent/media-only mode.
-	if _media_stack and is_instance_valid(_media_stack):
+	if _media_stack:
 		_media_stack.force_refresh()
-	
+
 	# Update text immediately so shadow state reflects the new display mode
 	_update_text()
 
@@ -543,11 +534,13 @@ func reset() -> void:
 	supporting_text = ""
 	if _media_stack:
 		_media_stack.set_game_texture(null)
-	if _focus_stack and is_instance_valid(_focus_stack):
+		_media_stack.free_rids()
+		_media_stack = null
+	if _focus_stack:
 		_focus_stack.set_game_texture(null)
 		# Drop the focus stack so recycled cards don't carry effect nodes around.
 		# It will be rebuilt lazily if this card is focused again.
-		_focus_stack.queue_free()
+		_focus_stack.free_rids()
 		_focus_stack = null
 
 func set_placeholder(_enabled: bool) -> void:
@@ -592,16 +585,14 @@ func _deferred_update_badges():
 func _update_status_badge_layout():
 	if not _status_badge:
 		return
-	if not _media_stack or not is_instance_valid(_media_stack):
-		return
-	
+
 	var panel_width: float = size.x
-	if _media_stack.size.x > 0:
-		panel_width = _media_stack.size.x
-	
+	if _media_container.size.x > 0:
+		panel_width = _media_container.size.x
+
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
-	
+
 	_status_badge.size = Vector2(badge_size, badge_size)
 	_status_badge.offset_left = -badge_size - margin
 	_status_badge.offset_top = -badge_size - margin
@@ -612,16 +603,16 @@ func _update_status_badge_style():
 	if not _status_badge:
 		return
 	var panel_width = size.x if size.x > 0 else _media_container.size.x
-	if _media_stack and is_instance_valid(_media_stack) and _media_stack.size.x > 0:
-		panel_width = _media_stack.size.x
+	if _media_container.size.x > 0:
+		panel_width = _media_container.size.x
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var circle_radius = int(badge_size / 2.0)
-	
+
 	if game and game.is_active_variant_downloaded():
 		_status_badge_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)
 	else:
 		_status_badge_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)
-	
+
 	_status_badge_style.corner_radius_top_left = circle_radius
 	_status_badge_style.corner_radius_top_right = circle_radius
 	_status_badge_style.corner_radius_bottom_left = circle_radius
@@ -781,6 +772,8 @@ func _set_texture(tex: Texture2D) -> void:
 	if tex == _current_texture:
 		return
 	_current_texture = tex
+	if _media_panel:
+		_media_panel.visible = true
 	if _media_stack:
 		_media_stack.set_game_texture(tex)
 	if _focus_stack:
@@ -789,25 +782,25 @@ func _set_texture(tex: Texture2D) -> void:
 func _on_card_pressed():
 	if not game:
 		return
-	
+
 	var focus_index = self.get_meta("virtual_index", -1)
-	
+
 	if game.source == "gamenative":
 		if LaunchManager:
 			LaunchManager.launch_game(game, focus_index)
 		return
-	
+
 	if game.is_active_variant_downloaded():
 		var root_folder = SettingsManager.get_setting("games_root_folder") if SettingsManager else null
 		if root_folder and root_folder.value != "":
 			var active_file_name = game.get_active_file_name()
-			var file_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
-			if not FileAccess.file_exists(file_path):
+			var file_path = FSM.join_paths(root_folder.value, game.platform_slug, active_file_name)
+			if not FSM.file_exists(file_path):
 				if NotificationManager:
 					NotificationManager.show_notification("File not found - redownloading", NotificationManager.Type.WARNING)
 				download_requested.emit(game)
 				return
-		
+
 		if LaunchManager:
 			LaunchManager.launch_game(game, focus_index)
 	else:
@@ -818,7 +811,7 @@ func _get_show_delete() -> bool:
 	var cached = get_meta("_cached_show_delete", null)
 	if cached != null:
 		return cached
-	
+
 	var parent = get_parent()
 	while parent:
 		if parent is HomeView or parent is LibraryView:
@@ -848,10 +841,10 @@ func _input(event: InputEvent) -> void:
 	var is_touch_event = (event is InputEventScreenTouch or event is InputEventScreenDrag)
 	if is_touch_event and not PlatformManager.is_android():
 		return
-	
+
 	if not _can_accept_focus():
 		return
-	
+
 	if event.is_action_pressed("ui_select"):
 		var focused = get_viewport().gui_get_focus_owner()
 		if focused == self and game and UIManager:
@@ -859,7 +852,7 @@ func _input(event: InputEvent) -> void:
 				AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 			UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 			get_viewport().set_input_as_handled()
-	
+
 	if PlatformManager.is_android() and event is InputEventScreenTouch:
 		if event.pressed:
 			var touch_pos = event.position
@@ -873,7 +866,7 @@ func _input(event: InputEvent) -> void:
 				if _is_long_press_elapsed():
 					_trigger_long_press()
 				_touch_is_holding = false
-	
+
 	if PlatformManager.is_android() and event is InputEventScreenDrag:
 		if _touch_is_holding:
 			var current_pos = event.position
@@ -918,9 +911,20 @@ func _find_home_view() -> Node:
 
 func _apply_content_scale() -> void:
 	super._apply_content_scale()
-	if _focus_stack and is_instance_valid(_focus_stack):
-		_focus_stack.scale = content_scale
-		_focus_stack.pivot_offset = size / 2.0
+	_update_effect_transforms()
+
+func _update_effect_transforms() -> void:
+	# Sync the RS focus stack transform to match the Control content scale.
+	# The media stack is clipped inside _media_panel, which inherits scaling from RootContainer.
+	if _focus_stack:
+		var ci = _focus_stack._stack_canvas_item
+		if ci.is_valid():
+			var pivot = size / 2.0
+			var t = Transform2D()
+			t = t.translated(pivot)
+			t = t.scaled(content_scale)
+			t = t.translated(-pivot)
+			RenderingServer.canvas_item_set_transform(ci, t)
 
 func _sync_focus_visuals() -> void:
 	if not focus_scale_enabled:
@@ -938,21 +942,20 @@ func _on_focus_entered():
 	_is_focused = true
 
 	# Build the focus stack lazily the first time this card is focused.
-	# Most cards in the virtual-scroll buffer never need one.
-	if not _focus_stack or not is_instance_valid(_focus_stack):
+	if not _focus_stack:
 		_build_focus_stack(true)
 		_update_platform_badge()
 
 	if AudioManager:
 		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
-	
+
 	if PlatformManager.is_android():
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin:
 			plugin.call("vibrateDevice", 50)
 	else:
 		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
-	
+
 	_update_status_icon()
 	z_index = 1
 	if _focus_tween:
@@ -995,7 +998,7 @@ func _on_focus_exited():
 	_show_focus_effects(false)
 
 func _update_focus_stack_bounds() -> void:
-	if not _focus_stack or not is_instance_valid(_focus_stack) or not _media_panel:
+	if not _focus_stack or not _media_panel:
 		return
 	# Use the actual media panel size when available (authoritative after sort).
 	var target_w := _focus_target_w
@@ -1007,17 +1010,29 @@ func _update_focus_stack_bounds() -> void:
 		target_w = size.x
 	if target_h <= 0.0:
 		target_h = size.y
+
+	# Update the media container bounds used by the focus stack so overlays align.
+	# The focus stack's own canvas item is parented to the card's canvas item, so
+	# we express the media region in card-local coordinates.
+	var media_x := 0.0
+	var media_y := 0.0
+	if _media_panel:
+		media_x = _media_panel.position.x
+		media_y = _media_panel.position.y
+
 	if not show_background:
 		# Transparent / Media Only: shrink focus stack to match media panel
-		_focus_stack.offset_top = 0.0
-		_focus_stack.offset_left = 0.0
-		_focus_stack.offset_bottom = -(size.y - target_h)
-		_focus_stack.offset_right = -(size.x - target_w)
+		_media_container.bounds = Rect2(media_x, media_y, target_w, target_h)
 	else:
-		_focus_stack.offset_top = 0.0
-		_focus_stack.offset_left = 0.0
-		_focus_stack.offset_bottom = 0.0
-		_focus_stack.offset_right = 0.0
+		_media_container.bounds = Rect2(0.0, 0.0, size.x, size.y)
+
+	_focus_stack.update_draw_rects()
+
+func _update_media_panel_size(force: bool = false) -> void:
+	super._update_media_panel_size(force)
+	if _media_stack:
+		_media_stack.update_draw_rects()
+		_media_stack.force_refresh()
 
 func _update_focus_ring_bounds() -> void:
 	super._update_focus_ring_bounds()
@@ -1030,6 +1045,12 @@ func _notification(what: int):
 		if not _badge_update_pending:
 			_badge_update_pending = true
 			call_deferred("_deferred_update_badges")
+		call_deferred("_deferred_refresh_media_stack")
 	if what == NOTIFICATION_PARENTED:
 		# Invalidate cached parent-chain lookup so _get_show_delete() recomputes
 		remove_meta("_cached_show_delete")
+
+func _deferred_refresh_media_stack() -> void:
+	if _media_stack:
+		_media_stack.update_draw_rects()
+		_media_stack.force_refresh()

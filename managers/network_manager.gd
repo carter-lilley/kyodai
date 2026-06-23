@@ -1372,8 +1372,8 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 	
 	# Ensure destination directory exists
 	var dest_dir = destination_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dest_dir):
-		DirAccess.make_dir_recursive_absolute(dest_dir)
+	if not FSM.dir_exists(dest_dir):
+		FSM.make_dir_recursive(dest_dir)
 	
 	var http = _create_http_request()
 	_active_request_count += 1

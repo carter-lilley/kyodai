@@ -23,45 +23,52 @@ func set_dual_screen_mode(enabled: bool) -> void:
 func _ready():
 	# Create gray fallback texture
 	_create_gray_texture()
-	
+
 	_setup_effect_stack()
-	
+
 	# Show gray initially
 	clear()
 
 func _setup_effect_stack():
 	# Create MediaContainer and EffectStack
 	_media_container = MediaContainer.new()
-	
+
 	_effect_stack = EffectStack.new()
-	_effect_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_effect_stack.name = "EffectStack"
-	# Clip children to ensure effects don't draw outside the hero area
-	_effect_stack.clip_children = CanvasItem.CLIP_CHILDREN_AND_DRAW
-	add_child(_effect_stack)
-	
+	_effect_stack.set_parent_rid(get_canvas_item())
+	# The node-less stack has no geometry of its own, so clipping against it
+	# would hide everything. The base shader handles the rounded corners.
+	_effect_stack.set_clip_children(false)
 	# Load configuration
 	_load_effect_config()
 
 func _load_effect_config():
 	if not _effect_stack:
 		return
-		
+
 	var config = {}
 	if SettingsManager:
 		var config_setting = SettingsManager.get_setting("hero_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			config = config_setting.value
-	
+
 	_media_container.corner_radius_ratio = config.get("corner_radius", 0.06)
 	_media_container.effect_settings = config.get("effects", [])
 	_effect_stack.initialize(_media_container, _media_container.effect_settings, "hero")
+	_effect_stack.update_draw_rects()
 
 func _notification(what: int) -> void:
 	# Update size when resized
 	if what == NOTIFICATION_RESIZED:
 		if _media_container and size.x > 0 and size.y > 0:
 			_media_container.bounds = Rect2(Vector2.ZERO, size)
+			if _effect_stack:
+				_effect_stack.update_draw_rects()
+
+func _exit_tree() -> void:
+	if _effect_stack:
+		_effect_stack.free_rids()
+		_effect_stack = null
+	_media_container = null
 
 func _create_gray_texture():
 	var img = Image.create(4, 4, false, Image.FORMAT_RGB8)
@@ -80,39 +87,39 @@ func _get_cache_path(game: GameResource) -> String:
 func set_game(game: GameResource):
 	if game == _current_game:
 		return
-	
+
 	_current_game = game
-	
+
 	if not game or not game.has_cover_art:
 		clear()
 		return
-	
+
 	var cache_path = _get_cache_path(game)
 	if cache_path == "":
 		clear()
 		return
-	
+
 	# Check texture cache first
 	var cached_tex = MemoryManager.get_cached_texture(cache_path)
 	if cached_tex:
 		_set_texture(cached_tex)
 		return
-	
+
 	# Cancel any pending image load
 	if _current_image_task_id > 0:
 		MemoryManager.cancel_image_task(_current_image_task_id)
-	
+
 	_loading_game_id = game.id if game else ""
-	
+
 	const MAX_HERO_TEXTURE_SIZE: int = 1024
-	
+
 	var load_callable = func() -> Image:
 		var file = FileAccess.open(cache_path, FileAccess.READ)
 		if not file:
 			return null
 		var buffer = file.get_buffer(file.get_length())
 		file.close()
-		
+
 		var img = Image.new()
 		var err = FAILED
 		if buffer.size() >= 2:
@@ -122,7 +129,7 @@ func set_game(game: GameResource):
 				err = img.load_png_from_buffer(buffer)
 			else:
 				err = img.load_webp_from_buffer(buffer)
-		
+
 		if err == OK:
 			if img.is_empty():
 				return null
@@ -135,23 +142,23 @@ func set_game(game: GameResource):
 				img.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
 			return img
 		return null
-	
+
 	var callback_callable = func(image: Image):
 		_current_image_task_id = -1
 		if not is_instance_valid(self):
 			return
 		if not _current_game or _current_game.id != _loading_game_id:
 			return
-		
+
 		if image and not image.is_empty():
 			var tex = ImageTexture.create_from_image(image.duplicate())
 			if tex:
 				MemoryManager.cache_texture(cache_path, tex)
 				_set_texture(tex)
 				return
-		
+
 		clear()
-	
+
 	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, true)
 
 func _set_texture(tex: Texture2D):
@@ -165,7 +172,6 @@ func clear():
 		_current_image_task_id = -1
 	if _gray_texture:
 		_set_texture(_gray_texture)
-	# EffectStack handles visibility - no legacy ColorRect to manage
 
 func get_current_game() -> GameResource:
 	return _current_game
@@ -192,3 +198,4 @@ func refresh_from_settings():
 		# Restore the size to maintain aspect ratio
 		if current_size != Vector2.ZERO:
 			_media_container.bounds = Rect2(Vector2.ZERO, current_size)
+			_effect_stack.update_draw_rects()

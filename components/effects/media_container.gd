@@ -61,7 +61,7 @@ func run_pipeline(layers: Array) -> void:
 	"""Execute compute_pipeline() on all registered layers in order."""
 	pipeline_cache.clear()
 	for layer in layers:
-		if layer is EffectBase and layer.visible and layer.enabled:
+		if layer is EffectBase and layer.enabled:
 			layer.compute_pipeline(pipeline_cache)
 
 # --- Convenience accessors ---

@@ -1,6 +1,8 @@
 class_name GameDetailsSheet
 extends M3BottomSheet
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 ## Game details bottom sheet.
 ## Extends M3BottomSheet so the details UI is a native Material 3 overlay
 ## instead of a full-screen tab.
@@ -160,7 +162,7 @@ func prepare_for_game(romm_id: int) -> void:
     _prepared_cover = null
 
     # Decode the local cover on a background thread so it's ready if Details is selected.
-    if game.cover_path and FileAccess.file_exists(game.cover_path):
+    if game.cover_path and FSM.file_exists(game.cover_path):
         MemoryManager.queue_image_task(
             func() -> Image:
                 var img := Image.new()
@@ -306,7 +308,7 @@ func _load_cover(game: GameResource) -> void:
         return
 
     # Local file: decode on a background thread.
-    if game.cover_path and FileAccess.file_exists(game.cover_path):
+    if game.cover_path and FSM.file_exists(game.cover_path):
         MemoryManager.queue_image_task(
             func() -> Image:
                 var img := Image.new()
@@ -412,9 +414,9 @@ func _on_action_button_pressed() -> void:
         if root_folder and root_folder.value != "":
             # Construct the full file path from known components (don't rely on file_path which may be relative)
             var active_file_name = _current_game.get_active_file_name()
-            var file_path = root_folder.value + "/" + _current_game.platform_slug + "/" + active_file_name
+            var file_path = FSM.join_paths(root_folder.value, _current_game.platform_slug, active_file_name)
 
-            if not FileAccess.file_exists(file_path):
+            if not FSM.file_exists(file_path):
                 # File is marked as downloaded but doesn't exist - redownload
                 NotificationManager.show_notification("File not found - redownloading", NotificationManager.Type.WARNING)
                 _queue_download()

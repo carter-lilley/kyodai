@@ -77,7 +77,8 @@ func set_priority(high_priority: bool, current_game: GameResource = null) -> voi
 		load_cover(current_game, true)
 
 func _set_loading_texture() -> void:
-	emit_signal("texture_loaded", _card._loading_texture)
+	if is_instance_valid(_card):
+		emit_signal("texture_loaded", _card._loading_texture)
 
 func _emit_texture(texture: Texture2D) -> void:
 	if not is_instance_valid(_card):

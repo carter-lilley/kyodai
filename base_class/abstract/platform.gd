@@ -1,6 +1,8 @@
 class_name PlatformResource
 extends Resource
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 @export var id: String
 @export var slug: String
 @export var name: String
@@ -11,7 +13,7 @@ extends Resource
 @export var extensions: Array[String] = []
 
 func get_icon() -> Texture2D:
-	if icon_path and FileAccess.file_exists(icon_path):
+	if icon_path and FSM.file_exists(icon_path):
 		var img = Image.new()
 		var error = img.load(icon_path)
 		if error == OK and not img.is_empty():

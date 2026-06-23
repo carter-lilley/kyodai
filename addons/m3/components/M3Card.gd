@@ -2,6 +2,9 @@
 class_name M3Card
 extends Button
 
+const EffectStack = preload("res://components/effects/effect_stack.gd")
+const EffectBase = preload("res://components/effects/effect_base.gd")
+
 ## Material 3 Card Component
 ## Extends native Button so the whole card is focusable and clickable.
 ## Internal children use MOUSE_FILTER_IGNORE — only the card handles input.
@@ -791,9 +794,9 @@ func set_media_content(content: Control):
 		if _media_panel:
 			_media_panel.add_child(_media_content)
 			_media_panel.visible = true
-		# If it's an EffectStack, pass our media container
-		if _media_content is EffectStack and _media_container:
-			var stack = _media_content as EffectStack
+		# If it's the node-less EffectStack, pass our media container
+		if _media_content.has_method("set_parent_rid") and _media_container:
+			var stack = _media_content
 			stack.media_container = _media_container
 	else:
 		# Restore default media rect
@@ -1038,14 +1041,18 @@ func _update_media_panel_size(force: bool = false) -> void:
 func _refresh_media_effects() -> void:
 	if not _media_content:
 		return
-	# Walk the effect tree and force shader param refresh on every EffectBase.
-	# This bypasses the changed-signal path which can be blocked by _is_tweening.
+	# If the media content is the node-less EffectStack, refresh directly.
+	if _media_content.has_method("force_refresh"):
+		var stack = _media_content
+		stack.force_refresh()
+		return
+	# Legacy fallback for any remaining node-based effect stacks.
 	var stack := []
 	stack.append(_media_content)
 	while stack.size() > 0:
 		var node = stack.pop_back() as Node
 		if node is EffectBase:
-			var effect = node as EffectBase
+			var effect: EffectBase = node
 			if effect.enabled:
 				effect._update_shader_params()
 		for child in node.get_children():

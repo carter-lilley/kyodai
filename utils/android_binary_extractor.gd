@@ -5,6 +5,8 @@
 class_name AndroidBinaryExtractor
 extends RefCounted
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 const BIN_DIR := "user://bin/"
 
 ## Extracts a binary from res:// to user://bin/ if needed
@@ -19,7 +21,7 @@ static func extract_binary(res_path: String, binary_name: String) -> String:
 	var abs_dest = ProjectSettings.globalize_path(dest_path)
 	
 	# Check if already extracted and valid
-	if FileAccess.file_exists(dest_path):
+	if FSM.file_exists(dest_path):
 		# Verify it has executable permissions by trying to run it with --version
 		var output = []
 		var exit_code = OS.execute(abs_dest, ["--version"], output, true)
@@ -30,36 +32,14 @@ static func extract_binary(res_path: String, binary_name: String) -> String:
 			print("[AndroidBinaryExtractor] Cached binary invalid, re-extracting: " + dest_path)
 	
 	# Ensure bin directory exists
-	var dir = DirAccess.open("user://")
-	if dir == null:
-		push_error("[AndroidBinaryExtractor] Failed to open user:// directory")
+	if not FSM.make_dir_recursive(dest_dir):
+		push_error("[AndroidBinaryExtractor] Failed to create bin directory: " + dest_dir)
 		return ""
-	
-	if not dir.dir_exists("bin"):
-		var err = dir.make_dir("bin")
-		if err != OK:
-			push_error("[AndroidBinaryExtractor] Failed to create bin directory: " + str(err))
-			return ""
 	
 	# Copy binary from res:// to user://bin/
-	var source_file = FileAccess.open(res_path, FileAccess.READ)
-	if not source_file:
-		push_error("[AndroidBinaryExtractor] Failed to open source binary: " + res_path)
+	if not FSM.copy_file(res_path, dest_path):
+		push_error("[AndroidBinaryExtractor] Failed to copy binary: " + res_path + " -> " + dest_path)
 		return ""
-	
-	var dest_file = FileAccess.open(dest_path, FileAccess.WRITE)
-	if not dest_file:
-		push_error("[AndroidBinaryExtractor] Failed to create destination file: " + dest_path)
-		source_file.close()
-		return ""
-	
-	var buffer_size = 65536  # 64KB chunks
-	while not source_file.eof_reached():
-		var chunk = source_file.get_buffer(buffer_size)
-		dest_file.store_buffer(chunk)
-	
-	source_file.close()
-	dest_file.close()
 	
 	print("[AndroidBinaryExtractor] Extracted binary: " + res_path + " -> " + dest_path)
 	

@@ -1,5 +1,5 @@
 class_name EffectBase
-extends ColorRect
+extends RefCounted
 
 @export var effect_name: String = "Effect"
 @export var effect_id: String = ""
@@ -7,116 +7,130 @@ extends ColorRect
 var _settings: Dictionary = {}
 var media_container: MediaContainer = null
 
-# Reference to base effect (for focus effects that overlap with base)
 var _base_effect: EffectBase = null
-
-# Reference to the EffectStack that owns this effect
 var effect_stack: EffectStack = null
 
 var enabled: bool = true
 
-# These signals are part of the public API for subclasses and external systems.
-@warning_ignore("unused_signal")
 signal effect_enabled_changed(enabled: bool)
-@warning_ignore("unused_signal")
 signal settings_changed(setting_name: String, value: Variant)
 
-func _ready():
-	if material == null:
-		material = ShaderMaterial.new()
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Make the ColorRect transparent so shader can control visibility
-	color = Color.TRANSPARENT
-	# If initialize() ran before _ready() (deferred), push shader params now that material exists
-	if media_container:
-		_update_shader_params()
+var _canvas_item_rid: RID = RID()
+var _material: ShaderMaterial = null
+var _visible: bool = true
+var _z_index: int = 0
+
+func _init():
+	_material = ShaderMaterial.new()
+	_setup_shader()
+
+func free_rid() -> void:
+	if _canvas_item_rid.is_valid():
+		RenderingServer.free_rid(_canvas_item_rid)
+		_canvas_item_rid = RID()
+	_material = null
+
+func ensure_canvas_item(parent_rid: RID) -> RID:
+	if not _canvas_item_rid.is_valid():
+		_canvas_item_rid = RenderingServer.canvas_item_create()
+		RenderingServer.canvas_item_set_material(_canvas_item_rid, _material.get_rid())
+		RenderingServer.canvas_item_set_draw_index(_canvas_item_rid, _z_index)
+	if parent_rid.is_valid():
+		RenderingServer.canvas_item_set_parent(_canvas_item_rid, parent_rid)
+	return _canvas_item_rid
+
+func set_parent_rid(parent_rid: RID) -> void:
+	ensure_canvas_item(parent_rid)
+
+func set_z_index(value: int) -> void:
+	_z_index = value
+	if _canvas_item_rid.is_valid():
+		RenderingServer.canvas_item_set_draw_index(_canvas_item_rid, value)
+
+func get_z_index() -> int:
+	return _z_index
+
+func set_visible(value: bool) -> void:
+	_visible = value
+	if _canvas_item_rid.is_valid():
+		RenderingServer.canvas_item_set_visible(_canvas_item_rid, value)
+
+func is_visible() -> bool:
+	return _visible
+
+func set_offset_rect(rect: Rect2) -> void:
+	ensure_canvas_item(RID())
+	RenderingServer.canvas_item_clear(_canvas_item_rid)
+	# Add the visible rect used by the shader. We also draw a tiny placeholder
+	# rect when collapsed to keep the canvas item valid for transforms.
+	var draw_rect := rect
+	if draw_rect.size.x <= 0.0 or draw_rect.size.y <= 0.0:
+		draw_rect = Rect2(Vector2.ZERO, Vector2(1, 1))
+	RenderingServer.canvas_item_add_rect(_canvas_item_rid, draw_rect, Color.WHITE)
+	RenderingServer.canvas_item_set_visible(_canvas_item_rid, _visible)
 
 func initialize(container: MediaContainer, settings: Dictionary) -> void:
-	# Disconnect from previous container to prevent stale signal connections
 	if media_container and media_container.changed.is_connected(_on_media_changed):
 		media_container.changed.disconnect(_on_media_changed)
-	
+
 	media_container = container
 	_settings = settings.duplicate()
-	if material == null:
-		material = ShaderMaterial.new()
 	_setup_shader()
 	_apply_settings()
 	if media_container:
 		media_container.changed.connect(_on_media_changed)
 	_update_shader_params()
 
-func _exit_tree() -> void:
-	if media_container and media_container.changed.is_connected(_on_media_changed):
-		media_container.changed.disconnect(_on_media_changed)
-	effect_stack = null
-
 func set_base_effect(base: EffectBase) -> void:
-	"""Set the base effect that this focus effect should tween from."""
 	_base_effect = base
 
 func update_settings(settings: Dictionary) -> void:
 	_settings = settings.duplicate()
 	_apply_settings()
+	_update_shader_params()
 
 func get_settings_schema() -> Array[SettingsVar]:
 	return []
 
 func get_tweenable_settings() -> Array[String]:
-	"""Return list of setting property names that can be tweened numerically.
-	Automatically detects tweenable types from the settings schema (FLOAT, INT, VECTOR2, COLOR)."""
 	var tweenable: Array[String] = []
 	var schema = get_settings_schema()
-	
+
 	for setting in schema:
 		if setting.type == SettingsVar.SettingType.FLOAT or \
 		   setting.type == SettingsVar.SettingType.INT or \
 		   setting.type == SettingsVar.SettingType.VECTOR2 or \
 		   setting.type == SettingsVar.SettingType.COLOR:
 			tweenable.append(setting.property_name)
-	
+
 	return tweenable
 
-var _is_tweening: bool = false  # Track if currently in a tween to prevent shader resets
+var _is_tweening: bool = false
 
 func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress: float) -> void:
-	"""Apply settings interpolated between from and to based on progress (0.0-1.0).
-	Note: This applies interpolated values to the shader but does NOT modify _settings
-	to preserve the original focus effect configuration."""
 	var tweenables = get_tweenable_settings()
-	
-	# Reset tweening flag in case a previous tween was killed before completion
+
 	_is_tweening = true
-	
-	# Create a temporary settings dict for interpolation
+
 	var temp_settings = _settings.duplicate()
-	
+
 	for setting_name in tweenables:
 		if from_settings.has(setting_name) and to_settings.has(setting_name):
 			var from_val = from_settings[setting_name]
 			var to_val = to_settings[setting_name]
-			
-			# Interpolate based on type
-			var current_val = _interpolate_value(from_val, to_val, progress)
-			temp_settings[setting_name] = current_val
-	
-	# Apply the interpolated settings WITHOUT storing them in _settings
+			temp_settings[setting_name] = _interpolate_value(from_val, to_val, progress)
+
 	_apply_tweened_settings(temp_settings)
-	
-	# Mark tween as complete when progress reaches 1.0
+
 	if progress >= 1.0:
 		_is_tweening = false
 
 func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> Variant:
-	"""Interpolate between two values based on their type."""
 	var from_type = typeof(from_val)
 	var to_type = typeof(to_val)
-	
-	# Handle numeric types (both float and int)
+
 	if (from_type == TYPE_FLOAT or from_type == TYPE_INT) and (to_type == TYPE_FLOAT or to_type == TYPE_INT):
-		var from_f = float(from_val)
-		var to_f = float(to_val)
-		return lerpf(from_f, to_f, progress)
+		return lerpf(float(from_val), float(to_val), progress)
 	elif from_val is Color and to_val is Color:
 		return from_val.lerp(to_val, progress)
 	elif from_val is Vector2 and to_val is Vector2:
@@ -124,12 +138,9 @@ func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> 
 	elif from_val is Vector3 and to_val is Vector3:
 		return from_val.lerp(to_val, progress)
 	else:
-		# For non-interpolatable types, use threshold
 		return to_val if progress >= 0.5 else from_val
 
 func compute_pipeline(cache: Dictionary) -> void:
-	"""Override to compute shared values and write to pipeline cache.
-	Called in layer order before _update_shader_params()."""
 	pass
 
 func _setup_shader() -> void:
@@ -139,18 +150,10 @@ func _apply_settings() -> void:
 	pass
 
 func _apply_tweened_settings(temp_settings: Dictionary) -> void:
-	"""Apply temporary interpolated settings to the shader without storing them.
-	This preserves the original _settings for future tweens."""
-	# Store original settings
 	var original_settings = _settings
-	# Temporarily use interpolated settings
 	_settings = temp_settings
-	# Apply to shader
 	_apply_settings()
-	
-	# Sync shared media-container insets while _settings still holds
-	# interpolated values, so that the changed signal (which triggers
-	# _update_shader_params on all effects) doesn't overwrite them.
+
 	if media_container:
 		var needs_refresh = false
 		match effect_id:
@@ -164,22 +167,26 @@ func _apply_tweened_settings(temp_settings: Dictionary) -> void:
 				if not is_equal_approx(new_inset, media_container.glass_inset_ratio):
 					media_container.glass_inset_ratio = new_inset
 					needs_refresh = true
-		
+
 		if needs_refresh and effect_stack:
 			effect_stack.force_refresh()
-	
-	# Restore original settings
+
 	_settings = original_settings
 
 func _update_shader_params() -> void:
 	pass
 
 func _set_shader_param(param: String, value: Variant) -> void:
-	var mat = material as ShaderMaterial
-	if mat:
-		mat.set_shader_parameter(param, value)
+	if _material:
+		_material.set_shader_parameter(param, value)
 
 func _on_media_changed() -> void:
 	if _is_tweening:
 		return
 	_update_shader_params()
+
+func set_game_texture(texture: Texture2D) -> void:
+	pass
+
+func set_alpha(value: float) -> void:
+	_set_shader_param("alpha", value)
