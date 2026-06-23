@@ -821,12 +821,9 @@ func _get_show_delete() -> bool:
 	
 	var parent = get_parent()
 	while parent:
-		if parent is HomeView:
+		if parent is HomeView or parent is LibraryView:
 			set_meta("_cached_show_delete", true)
 			return true
-		elif parent is LibraryView:
-			set_meta("_cached_show_delete", false)
-			return false
 		parent = parent.get_parent()
 	set_meta("_cached_show_delete", false)
 	return false

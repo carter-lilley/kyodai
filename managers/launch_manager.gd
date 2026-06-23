@@ -88,8 +88,8 @@ func get_app_data_path(emulator_id: String) -> String:
 func get_retroarch_core_name(platform_slug: String) -> String:
 	return registry.get_retroarch_core_name(platform_slug)
 
-func check_for_updates(callback: Callable):
-	registry.check_for_updates(callback)
+func check_for_updates(callback: Callable, progress_callback: Callable = Callable()):
+	registry.check_for_updates(callback, progress_callback)
 
 # ============================================================================
 # Emulator install/update wrappers
@@ -97,6 +97,9 @@ func check_for_updates(callback: Callable):
 
 func clear_validation_cache() -> void:
 	emulator.clear_validation_cache()
+
+func repair_emulator_config(emulator_id: String) -> bool:
+	return emulator.repair_emulator_config(emulator_id)
 
 func clear_stale_pending_launches() -> void:
 	emulator.clear_stale_pending_launches()

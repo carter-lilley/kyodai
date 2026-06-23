@@ -5,7 +5,6 @@ extends View
 @onready var _scroll_container: ScrollContainer = $ScrollContainer
 @onready var _platforms_container: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer
 @onready var _settings_row: HFlowContainer = $ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow
-@onready var _romm_settings_box: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings
 @onready var _cards_left: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsLeft
 @onready var _cards_right: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsRight
 
@@ -13,17 +12,13 @@ var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
 var _is_fetching_platforms: bool = false
 
-# Debounce writes for RomM credential text fields so we don't re-check the
-# connection on every keystroke.
-var _credential_debounce_timer: Timer = null
-var _pending_credential_field: M3TextField = null
-var _pending_credential_property: String = ""
-
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
 var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
 var _was_narrow: bool = false
 var _is_initializing: bool = false
+
+var _romm_connection_panel: RommConnectionPanel = null
 
 const NARROW_BREAKPOINT_DP := 850.0
 
@@ -62,27 +57,13 @@ func _ready():
 	m3_siblings.set_block_signals(false)
 	m3_siblings.toggled.connect(_on_fold_romm_siblings_toggled)
 
-	# Connect RomM text field signals and set initial values
-	var url_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_URL")
-	var url_setting = SettingsManager.get_setting("romm_url")
-	url_field.set_block_signals(true)
-	url_field.text = url_setting.value if url_setting else ""
-	url_field.set_block_signals(false)
-	url_field.text_changed.connect(_on_credential_text_changed.bind(url_field, "romm_url"))
-
-	var user_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_User")
-	var user_setting = SettingsManager.get_setting("romm_username")
-	user_field.set_block_signals(true)
-	user_field.text = user_setting.value if user_setting else ""
-	user_field.set_block_signals(false)
-	user_field.text_changed.connect(_on_credential_text_changed.bind(user_field, "romm_username"))
-
-	var pass_field: M3TextField = _platforms_container.get_node("HboxSettingsRow/VboxRommSettings/M3TextField_Pass")
-	var pass_setting = SettingsManager.get_setting("romm_password")
-	pass_field.set_block_signals(true)
-	pass_field.text = pass_setting.value if pass_setting else ""
-	pass_field.set_block_signals(false)
-	pass_field.text_changed.connect(_on_credential_text_changed.bind(pass_field, "romm_password"))
+	# Add reusable RomM connection panel to the settings row
+	_romm_connection_panel = RommConnectionPanel.new()
+	_romm_connection_panel.test_button_text = "Test"
+	_romm_connection_panel.test_button_size = M3Button.Size.SMALL
+	_romm_connection_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_romm_connection_panel.connection_succeeded.connect(_on_romm_connection_succeeded)
+	_settings_row.add_child(_romm_connection_panel)
 
 	_is_initializing = false
 
@@ -98,9 +79,6 @@ func _ready():
 
 	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
 	full_sync_button.pressed.connect(_on_full_sync_pressed)
-
-	# Add connection status UI below the button row
-	_add_connection_status_ui()
 
 	# Listen for connection coming online so we can auto-refresh platforms
 	NetworkManager.network_status_changed.connect(_on_network_status_changed)
@@ -131,7 +109,7 @@ func _fetch_platforms():
 
 	# Clear existing platform cards (keep UI controls)
 	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "ConnectionStatusUI", "CardsHBox"]:
+		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "CardsHBox"]:
 			continue
 		if child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
@@ -502,7 +480,11 @@ func _on_check_updates_pressed():
 	if check_button:
 		check_button.disabled = true
 
-	var checking_notification = NotificationManager.show_notification("Checking for emulator updates...", NotificationManager.Type.INFO)
+	var checking_notification = NotificationManager.show_notification(
+		"Checking emulator updates...", NotificationManager.Type.INFO,
+		null, 999999.0,
+		Callable(), Callable(), false, true
+	)
 
 	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array, _failed_details: Dictionary):
 		NotificationManager.dismiss_notification(checking_notification)
@@ -522,6 +504,12 @@ func _on_check_updates_pressed():
 			NotificationManager.show_notification(failure_msg, NotificationManager.Type.WARNING)
 		elif _updated.is_empty():
 			NotificationManager.show_notification("All emulators are up to date", NotificationManager.Type.INFO)
+	,
+	func(completed: int, total: int):
+		NotificationManager.update_notification_text(
+			checking_notification,
+			"Checking emulator updates... (%d/%d)" % [completed, total]
+		)
 	)
 
 func _on_sync_pressed():
@@ -634,11 +622,11 @@ func _on_select_all_pressed():
 	select_all_button.text = "Deselect All" if new_state else "Select All"
 
 func _update_settings_row_layout() -> void:
-	"""Ensure the settings row flows and the RomM column fills available width."""
+	"""Ensure the settings row flows and the RomM panel fills available width."""
 	if _settings_row:
 		_settings_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if _romm_settings_box:
-		_romm_settings_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if _romm_connection_panel:
+		_romm_connection_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 func _update_column_visibility() -> void:
 	var is_narrow = _is_narrow_screen()
@@ -710,12 +698,6 @@ func on_view_show():
 	super.on_view_show()
 
 func on_view_hide():
-	# Flush any pending credential write before hiding so we don't lose the
-	# last few keystrokes, then stop the debounce timer.
-	if _credential_debounce_timer and _credential_debounce_timer.time_left > 0:
-		_credential_debounce_timer.stop()
-		_flush_credential_change()
-
 	_save_settings()
 	super.on_view_hide()
 
@@ -740,127 +722,16 @@ func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 	if setting:
 		SettingsManager.set_setting(enabled, setting)
 
-func _on_credential_text_changed(_text: String, field: M3TextField, property_name: String) -> void:
-	if _is_initializing:
-		return
-	_pending_credential_field = field
-	_pending_credential_property = property_name
-
-	if not _credential_debounce_timer:
-		_credential_debounce_timer = Timer.new()
-		_credential_debounce_timer.wait_time = 0.6
-		_credential_debounce_timer.one_shot = true
-		_credential_debounce_timer.timeout.connect(_flush_credential_change)
-		add_child(_credential_debounce_timer)
-
-	_credential_debounce_timer.stop()
-	_credential_debounce_timer.start()
-
-func _flush_credential_change() -> void:
-	if not _pending_credential_field:
-		return
-
-	var text = _pending_credential_field.text
-	var setting = SettingsManager.get_setting(_pending_credential_property)
-	if setting:
-		SettingsManager.set_setting(text, setting)
-
-	_pending_credential_field = null
-	_pending_credential_property = ""
-
-func _on_romm_url_changed(text: String) -> void:
-	var setting = SettingsManager.get_setting("romm_url")
-	if setting:
-		SettingsManager.set_setting(text, setting)
-
-func _on_romm_username_changed(text: String) -> void:
-	var setting = SettingsManager.get_setting("romm_username")
-	if setting:
-		SettingsManager.set_setting(text, setting)
-
-func _on_romm_password_changed(text: String) -> void:
-	var setting = SettingsManager.get_setting("romm_password")
-	if setting:
-		SettingsManager.set_setting(text, setting)
-
-# ============================================
-# CONNECTION STATUS
-# ============================================
-
-func _add_connection_status_ui():
-	var container = HBoxContainer.new()
-	container.name = "ConnectionStatusUI"
-	container.custom_minimum_size = Vector2(0, M3Units.dp(30))
-
-	var indicator = Indicator.new()
-	indicator.name = "ConnectionIndicator"
-	indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	container.add_child(indicator)
-
-	var test_button = M3Button.new()
-	test_button.name = "TestButton"
-	test_button.text = "Test"
-	test_button.button_size = M3Button.Size.SMALL
-	container.add_child(test_button)
-
-	# Add right after the button row so it sits above the platform cards
-	_platforms_container.add_child(container)
-	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
-	_platforms_container.move_child(container, cards_index)
-
-	# Set initial status
-	_update_connection_status(indicator)
-
-	# Connect test button
-	test_button.pressed.connect(func():
-		_test_connection(indicator, test_button)
-	)
-
-func _test_connection(indicator: Indicator, test_button: M3Button = null):
-	# Flush any pending credential change so we test what the user typed
-	if _credential_debounce_timer and _credential_debounce_timer.time_left > 0:
-		_credential_debounce_timer.stop()
-		_flush_credential_change()
-
-	SettingsManager.save_settings()
-
-	if test_button:
-		test_button.disabled = true
-	indicator.set_status(Indicator.Status.WARNING, "Testing connection...")
-
-	NetworkManager.test_connection(func(online: bool):
-		if online:
-			indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-			NotificationManager.show_notification("Connected to RomM successfully", NotificationManager.Type.SUCCESS)
-			# Re-run platform scan now that credentials are verified
-			_fetch_platforms()
-		else:
-			if test_button:
-				test_button.disabled = false
-			if not NetworkManager.is_configured():
-				indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
-				NotificationManager.show_notification("RomM not configured - check URL, username, password", NotificationManager.Type.ERROR)
-			else:
-				indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
-				NotificationManager.show_notification("Connection failed - check credentials", NotificationManager.Type.ERROR)
-	)
-
 func _on_network_status_changed(online: bool) -> void:
 	if online and not _is_fetching_platforms:
 		_fetch_platforms()
 
 	# Keep the indicator in sync regardless of how we got here
-	var indicator = _platforms_container.get_node_or_null("ConnectionStatusUI/ConnectionIndicator")
-	if indicator:
-		_update_connection_status(indicator)
+	if _romm_connection_panel:
+		_romm_connection_panel.refresh_indicator()
 
-func _update_connection_status(indicator: Indicator):
-	if NetworkManager.is_online():
-		indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-	elif not NetworkManager.is_configured():
-		indicator.set_status(Indicator.Status.NEUTRAL, "Not configured")
-	else:
-		indicator.set_status(Indicator.Status.ERROR, "Disconnected")
+func _on_romm_connection_succeeded() -> void:
+	_fetch_platforms()
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.

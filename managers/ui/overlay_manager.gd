@@ -56,6 +56,10 @@ func show_settings_dialog() -> void:
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):
 		pre_create_settings_dialog()
 
+	if not _settings_dialog or not is_instance_valid(_settings_dialog):
+		push_error("[OverlayManager] Settings dialog unavailable")
+		return
+
 	if not _settings_dialog.is_inside_tree():
 		_add_settings_dialog_to_correct_parent()
 
@@ -183,7 +187,9 @@ func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dicti
 	scrim.color = Color(0, 0, 0, 0.5)
 	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+	scrim.z_index = -1
 	menu.add_child(scrim)
+	menu.move_child(scrim, 0)
 
 	# Find and pause the scroll container so the anchor doesn't move
 	var scroll_container = anchor

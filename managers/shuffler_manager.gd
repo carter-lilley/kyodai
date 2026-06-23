@@ -167,6 +167,14 @@ func stop_session() -> void:
 	if DisplayManager:
 		var last_size := DisplayManager.restore_last_window_size()
 		if last_size == Vector2i.ZERO:
+			# No saved size — fall back to the resolution preset (mirrors windowed_toggle).
+			var resolution_setting = DisplayManager.settings_man.get_setting("resolution")
+			if resolution_setting:
+				var resolution_value = resolution_setting.value
+				if resolution_value is int and resolution_setting.options.size() > resolution_value:
+					resolution_value = resolution_setting.options[resolution_value]
+				DisplayManager.set_resolution(resolution_value)
+			# Center the window on screen as a final fallback.
 			DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(DisplayServer.window_get_size()) / 2.0))
 	# Force window to front after restoring
 	DisplayServer.window_move_to_foreground()
@@ -541,6 +549,11 @@ func _enter_shuffler_mode() -> void:
 	if _notification_id != -1:
 		NotificationManager.dismiss_notification(_notification_id)
 		_notification_id = -1
+
+	# Save the current windowed size before minimizing — the continuous save in
+	# DisplayManager stops firing once the window leaves WINDOWED mode.
+	if DisplayManager:
+		DisplayManager.save_last_window_size()
 
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 
@@ -923,6 +936,16 @@ func _ensure_retroarch_shuffler_config() -> void:
 # ============================================================================
 
 func _ensure_pcsx2_shuffler_config() -> void:
+	# Ensure portable mode is active so PCSX2 reads/writes INI files from the
+	# emulator directory rather than %APPDATA%.  Without this the shuffler's
+	# INI edits target a file PCSX2 never opens.
+	var emu_dir := FSM.resolve_emulator_path("{emulator_dir}", "pcsx2")
+	if emu_dir != "":
+		var portable_path := FSM.join_paths(emu_dir, "portable.txt")
+		if not FSM.file_exists(portable_path):
+			FSM.write_file(portable_path, "")
+			print("[ShufflerManager] Created portable.txt to force PCSX2 portable mode")
+	
 	var edits: Array[Dictionary] = []
 	for key in PCSX2_MEMORY_CARD_KEYS:
 		edits.append({

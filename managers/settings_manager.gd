@@ -167,9 +167,10 @@ func store_property_names(_settings : Settings):
 func save_settings() -> void:
 	if not settings or not _is_dirty:
 		return
-	_encrypt_settings()
-	var err = ResourceSaver.save(settings, SAVE_PATH)
-	_decrypt_settings()  # Restore decrypted values for runtime use
+	# Encrypt a disposable copy so runtime values are never mutated.
+	var settings_to_save = settings.duplicate(true)
+	_encrypt_settings(settings_to_save)
+	var err = ResourceSaver.save(settings_to_save, SAVE_PATH)
 
 	if err != OK:
 		push_error("Failed to save preferences: %s" % err)
@@ -179,9 +180,9 @@ func save_settings() -> void:
 
 const PASSWORD_KEY = "kyodai_v1"
 
-func _encrypt_settings() -> void:
-	for prop in settings.get_property_list():
-		var setting = settings.get(prop.name)
+func _encrypt_settings(target: Settings) -> void:
+	for prop in target.get_property_list():
+		var setting = target.get(prop.name)
 		if setting is SettingsVar and setting.encrypted and setting.value:
 			if setting.value is String and not setting.value.is_empty():
 				setting.value = _xor_encrypt(setting.value, PASSWORD_KEY)

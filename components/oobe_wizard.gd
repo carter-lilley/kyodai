@@ -23,10 +23,7 @@ var _games_path_field: M3TextField
 var _emulators_path_field: M3TextField
 var _steam_path_field: M3TextField
 
-var _romm_url_field: M3TextField
-var _romm_username_field: M3TextField
-var _romm_password_field: M3TextField
-var _romm_indicator: Indicator
+var _romm_connection_panel: RommConnectionPanel
 
 var _perm_storage_indicator: Indicator
 var _perm_install_indicator: Indicator
@@ -187,46 +184,11 @@ func _build_romm_connection_page() -> VBoxContainer:
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
-	var desc = M3Label.new()
-	desc.text = "Connect to your RomM server to browse and download games. You can skip this and configure it later in Settings."
-	desc.label_style = M3Label.Style.BODY_MEDIUM
-	vbox.add_child(desc)
-
-	vbox.add_child(HSeparator.new())
-
-	# URL
-	_romm_url_field = M3TextField.new()
-	_romm_url_field.label_text = "RomM URL"
-	_romm_url_field.placeholder_text = "https://your-romm-server.com"
-	vbox.add_child(_romm_url_field)
-
-	# Username
-	_romm_username_field = M3TextField.new()
-	_romm_username_field.label_text = "Username"
-	_romm_username_field.placeholder_text = "username"
-	vbox.add_child(_romm_username_field)
-
-	# Password
-	_romm_password_field = M3TextField.new()
-	_romm_password_field.label_text = "Password"
-	_romm_password_field.secret = true
-	_romm_password_field.placeholder_text = "password"
-	vbox.add_child(_romm_password_field)
-
-	# Connection test row
-	var test_container = HBoxContainer.new()
-	test_container.custom_minimum_size = Vector2(0, M3Units.dp(40))
-	vbox.add_child(test_container)
-
-	_romm_indicator = Indicator.new()
-	_romm_indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	test_container.add_child(_romm_indicator)
-
-	var test_button = M3Button.new()
-	test_button.text = "Test Connection"
-	test_button.button_variant = M3Button.Variant.TONAL
-	test_button.pressed.connect(_test_romm_connection)
-	test_container.add_child(test_button)
+	_romm_connection_panel = RommConnectionPanel.new()
+	_romm_connection_panel.show_description = true
+	_romm_connection_panel.description_text = "Connect to your RomM server to browse and download games. You can skip this and configure it later in Settings."
+	_romm_connection_panel.test_button_text = "Test Connection"
+	vbox.add_child(_romm_connection_panel)
 
 	return vbox
 
@@ -383,8 +345,8 @@ func _focus_first_element():
 			if _perm_storage_button and _perm_storage_button.visible:
 				_perm_storage_button.grab_focus()
 		Page.ROMM_CONNECTION:
-			if _romm_url_field:
-				_romm_url_field.grab_focus()
+			if _romm_connection_panel:
+				_romm_connection_panel.focus_url_field()
 		Page.DONE:
 			# Focus on finish button (handled by dialog)
 			pass
@@ -399,7 +361,8 @@ func _on_back_pressed():
 func _on_next_pressed():
 	if _current_page == Page.ROMM_CONNECTION:
 		# Save RomM settings if entered
-		_save_romm_settings()
+		if _romm_connection_panel:
+			_romm_connection_panel.save_to_settings(true)
 		SettingsManager.save_settings()
 		_show_page(Page.DONE)
 	elif _current_page < Page.DONE:
@@ -445,7 +408,8 @@ func _validate_android_storage_paths() -> bool:
 
 func _on_skip_pressed():
 	_is_romm_skipped = true
-	_save_romm_settings()
+	if _romm_connection_panel:
+		_romm_connection_panel.save_to_settings(true)
 	SettingsManager.save_settings()
 	_show_page(Page.DONE)
 
@@ -545,63 +509,6 @@ func _update_permission_indicators():
 
 	if _perm_install_indicator:
 		_perm_install_indicator.set_status(Indicator.Status.WARNING, "Check in Settings")
-
-# RomM connection
-
-func _test_romm_connection():
-	if not _romm_indicator:
-		return
-
-	var url = _romm_url_field.text.strip_edges()
-	var username = _romm_username_field.text.strip_edges()
-	var password = _romm_password_field.text.strip_edges()
-
-	if url.is_empty() or username.is_empty() or password.is_empty():
-		_romm_indicator.set_status(Indicator.Status.ERROR, "Fill in all fields")
-		return
-
-	_romm_indicator.set_status(Indicator.Status.WARNING, "Testing...")
-
-	# Save to settings first so NetworkManager picks them up
-	var url_setting = SettingsManager.get_setting("romm_url")
-	var user_setting = SettingsManager.get_setting("romm_username")
-	var pass_setting = SettingsManager.get_setting("romm_password")
-
-	if url_setting:
-		SettingsManager.set_setting(url, url_setting)
-	if user_setting:
-		SettingsManager.set_setting(username, user_setting)
-	if pass_setting:
-		SettingsManager.set_setting(password, pass_setting)
-
-	SettingsManager.save_settings()
-
-	await get_tree().process_frame
-
-	NetworkManager.test_connection(func(online: bool):
-		if online:
-			_romm_indicator.set_status(Indicator.Status.SUCCESS, "Connected")
-		else:
-			_romm_indicator.set_status(Indicator.Status.ERROR, "Connection failed")
-	)
-
-func _save_romm_settings():
-	var url = _romm_url_field.text.strip_edges()
-	var username = _romm_username_field.text.strip_edges()
-	var password = _romm_password_field.text.strip_edges()
-
-	if not url.is_empty() and not username.is_empty() and not password.is_empty():
-		var url_setting = SettingsManager.get_setting("romm_url")
-		var user_setting = SettingsManager.get_setting("romm_username")
-		var pass_setting = SettingsManager.get_setting("romm_password")
-
-		if url_setting:
-			SettingsManager.set_setting(url, url_setting)
-		if user_setting:
-			SettingsManager.set_setting(username, user_setting)
-		if pass_setting:
-			SettingsManager.set_setting(password, pass_setting)
-			SettingsManager.save_settings()
 
 func _save_storage_settings():
 	var games_path = _games_path_field.text.strip_edges()

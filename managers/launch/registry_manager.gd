@@ -238,7 +238,8 @@ func get_retroarch_core_name(platform_slug: String) -> String:
 
 ## Checks for updates across all installed emulators
 ## callback(updated: Array, up_to_date: Array, failed: Array, failed_details: Dictionary)
-func check_for_updates(callback: Callable):
+## progress_callback(completed: int, total: int) - fires per async check completion
+func check_for_updates(callback: Callable, progress_callback: Callable = Callable()):
 	if not SettingsManager:
 		callback.call([], [], [], {})
 		return
@@ -255,7 +256,9 @@ func check_for_updates(callback: Callable):
 		"up_to_date": [],
 		"failed": [],
 		"failed_details": {},
-		"pending": 0
+		"pending": 0,
+		"total": 0,
+		"completed": 0
 	}
 	
 	var all_emulators = get_all_emulators()
@@ -298,10 +301,10 @@ func check_for_updates(callback: Callable):
 		match action_type:
 			"download_scrape":
 				results.pending += 1
-				_check_scrape_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback)
+				_check_scrape_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback, progress_callback)
 			"download_repo":
 				results.pending += 1
-				_check_repo_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback)
+				_check_repo_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback, progress_callback)
 			"download_url":
 				# Hardcoded URL - can't check for updates automatically
 				results.up_to_date.append(emulator_id)
@@ -309,15 +312,27 @@ func check_for_updates(callback: Callable):
 	# If nothing was pending and nothing was auto-updated, call callback immediately
 	if results.pending == 0 and results.updated.is_empty():
 		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
+		return
+
+	# Set total for progress tracking and fire initial progress
+	results.total = results.pending
+	if results.pending == 0:
+		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
+		return
+	if not progress_callback.is_null():
+		progress_callback.call(0, results.total)
 
 ## Internal helper to check if all pending checks are done
-func _check_updates_complete(results: Dictionary, callback: Callable):
+func _check_updates_complete(results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
 	results.pending -= 1
+	results.completed += 1
+	if not progress_callback.is_null():
+		progress_callback.call(results.completed, results.total)
 	if results.pending <= 0:
 		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
 
 ## Checks for a scrape-based update
-func _check_scrape_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable):
+func _check_scrape_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
 	var scrape_url = platform_config.get("scrape_url", "")
 	var version_pattern = platform_config.get("version_pattern", "")
 	var url_template = platform_config.get("url_template", "")
@@ -327,14 +342,14 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 	if scrape_url == "" or url_template == "":
 		results.failed.append(emulator_id)
 		results.failed_details[emulator_id] = "Invalid scrape configuration"
-		_check_updates_complete(results, callback)
+		_check_updates_complete(results, callback, progress_callback)
 		return
 	
 	# version_pattern is required for HTML scraping, optional for JSON API mode
 	if json_path == "" and version_pattern == "":
 		results.failed.append(emulator_id)
 		results.failed_details[emulator_id] = "Invalid scrape configuration"
-		_check_updates_complete(results, callback)
+		_check_updates_complete(results, callback, progress_callback)
 		return
 	
 	NetworkManager.fetch_scraped_release(
@@ -345,7 +360,7 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 			if error != "" or version == "":
 				results.failed.append(emulator_id)
 				results.failed_details[emulator_id] = error if error != "" else "No version found"
-				_check_updates_complete(results, callback)
+				_check_updates_complete(results, callback, progress_callback)
 				return
 			
 			# Check for format mismatch before comparing. If installed version
@@ -368,13 +383,13 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 				else:
 					results.up_to_date.append(emulator_id)
 			
-			_check_updates_complete(results, callback),
+			_check_updates_complete(results, callback, progress_callback),
 		match_strategy,
 		json_path
 	)
 
 ## Checks for a repo-based update
-func _check_repo_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable):
+func _check_repo_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
 	var github_repo = platform_config.get("github_repo", "")
 	var asset_pattern = platform_config.get("asset_pattern", "")
 	var release_tag = platform_config.get("release_tag", "")
@@ -383,7 +398,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 	if github_repo == "" or asset_pattern == "":
 		results.failed.append(emulator_id)
 		results.failed_details[emulator_id] = "Invalid repo configuration"
-		_check_updates_complete(results, callback)
+		_check_updates_complete(results, callback, progress_callback)
 		return
 	
 	NetworkManager.fetch_repo_release(
@@ -393,7 +408,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
 				results.failed_details[emulator_id] = error if error != "" else "No matching release asset found"
-				_check_updates_complete(results, callback)
+				_check_updates_complete(results, callback, progress_callback)
 				return
 			
 			var update_available = false
@@ -451,7 +466,7 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 			else:
 				results.up_to_date.append(emulator_id)
 			
-			_check_updates_complete(results, callback),
+			_check_updates_complete(results, callback, progress_callback),
 		release_tag,
 		api_base_url
 	)

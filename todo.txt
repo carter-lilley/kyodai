@@ -6,6 +6,8 @@ tst update flow on android
 major refactor: decouple VSG inputs from visuals.
 we cannot natively overflow visuals without also overflowing input
 idea: two paralell VSGs, one clip_content, one doesnt?
+use rendering server instead of nodes for cards.
+use new ui offsets instead of nested nodes for animations.
 
 ## android
 	"app bar"

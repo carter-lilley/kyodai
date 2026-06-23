@@ -166,13 +166,21 @@ func _calculate_ui_scale() -> float:
 
 func _apply_initial_window_size() -> void:
 	var windowed_setting = settings_man.get_setting("windowed")
-	if windowed_setting and windowed_setting.value:
-		# Restore last size if available; otherwise let the existing signal/rez path handle it.
+	if windowed_setting and not windowed_setting.value:
+		# Fullscreen (windowed = false): restore exclusive fullscreen.
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		print("[DisplayManager] Restored fullscreen mode")
+	elif windowed_setting and windowed_setting.value:
+		# Windowed: restore last size if available; otherwise let the existing
+		# signal/resize path handle it.
 		var last_size := restore_last_window_size()
 		if last_size == Vector2i.ZERO:
 			print("[DisplayManager] No saved window size, using resolution preset")
 		else:
 			print("[DisplayManager] Restored saved window size: ", last_size)
+	else:
+		# Setting missing; leave default window mode alone.
+		pass
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	match setting.property_name:
@@ -323,6 +331,9 @@ func windowed_toggle(value : bool):
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 		settings_man.disable_setting("resolution")
+		# Force immediate cascade so consumers (zoom, popups, grid) get the
+		# new fullscreen resolution without waiting for the OS signal + debounce.
+		_on_resize_debounced()
 
 # ============================================================================
 # Dual Screen Detection and Management

@@ -267,9 +267,6 @@ func _check_notifications() -> void:
 			var percent = int(progress_f * 100)
 			_current_progress_snackbar.setup(_progress_entry.base_text + " (" + str(percent) + "%)" )
 
-		if progress_f >= 1.0:
-			_current_progress_snackbar.dismiss()
-
 func get_active_notification_count() -> int:
 	var count = 0
 	for snackbar in _active_snackbars:

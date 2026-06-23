@@ -681,5 +681,46 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				SteamVDFWriter.add_game(game)
+		"delete":
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				NotificationManager.show_notification("Deleting " + game.title + "...", NotificationManager.Type.INFO)
+
+				if games_grid:
+					games_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+				var _refresh_after_delete = func():
+					_load_total_count_with_platform(false)
+					if games_grid:
+						games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+					if AudioManager:
+						AudioManager.play_sfx("error")
+
+				DataManager.delete_game_download(game, func(success: bool):
+					if success:
+						NotificationManager.show_notification(game.title + " deleted", NotificationManager.Type.SUCCESS)
+						_refresh_after_delete.call()
+					else:
+						var on_confirm = func():
+							M3Dialog.dismiss_current()
+							var on_force_delete = func(force_success: bool):
+								if force_success:
+									NotificationManager.show_notification(game.title + " removed from library", NotificationManager.Type.SUCCESS)
+									_refresh_after_delete.call()
+								else:
+									NotificationManager.show_notification("Failed to remove " + game.title, NotificationManager.Type.ERROR)
+									if games_grid:
+										games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							DataManager.delete_game_download(game, on_force_delete, true)
+
+						var on_cancel = func():
+							M3Dialog.dismiss_current()
+							if games_grid:
+								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							if AudioManager:
+								AudioManager.play_sfx("error")
+
+						M3Dialog.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel)
+				)
 		"hide":
 			pass

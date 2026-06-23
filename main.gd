@@ -551,13 +551,13 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 			if zoom_slider:
 				_update_zoom_slider_stops(zoom_slider, games_grid)
-			# Sync slider value to the grid's actual current ratio
-			zoom_slider.set_block_signals(true)
-			if _current_snap_ratios.size() > 0:
-				zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
-			else:
-				zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
-			zoom_slider.set_block_signals(false)
+				# Sync slider value to the grid's actual current ratio
+				zoom_slider.set_block_signals(true)
+				if _current_snap_ratios.size() > 0:
+					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+				else:
+					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+				zoom_slider.set_block_signals(false)
 
 
 func _on_preset_applied() -> void:
@@ -631,16 +631,9 @@ func _on_zoom_save_timer_timeout() -> void:
 		SettingsManager.save_settings()
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
-	# Safely get the games grid from a view
-	# New structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer (for platform indicator)
+	# Standard structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer
 	if view.has_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer"):
 		return view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
-	# Old structure: MarginContainer/VirtualScrollGridContainer
-	elif view.has_node("MarginContainer/VirtualScrollGridContainer"):
-		return view.get_node("MarginContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
-	# Very old structure: VirtualScrollGridContainer
-	elif view.has_node("VirtualScrollGridContainer"):
-		return view.get_node("VirtualScrollGridContainer") as VirtualScrollGridContainer
 	return null
 
 func _load_and_apply_saved_zoom() -> void:

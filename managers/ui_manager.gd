@@ -84,6 +84,13 @@ func initialize(
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
+	# Create and sync the centralized card/grid settings state BEFORE views are
+	# instantiated so that HomeView/LibraryView and their grids can read the
+	# saved layout/orientation during _ready()/_enter_tree().
+	card_settings_state = CardSettingsState.new()
+	card_settings_state.sync_from_settings_manager()
+	card_settings_state.changed.connect(_on_card_settings_state_changed)
+
 	# Configure child managers
 	navigation.setup(_root_control, _content_wrapper, _inner_layout, nav_type)
 	view.setup(tab_container)
@@ -96,11 +103,6 @@ func initialize(
 		var bg_setting = SettingsManager.get_setting("library_background_config")
 		if bg_setting and bg_setting.value is Dictionary:
 			_library_background.set_background_config(bg_setting.value)
-
-	# Create and sync the centralized card/grid settings state.
-	card_settings_state = CardSettingsState.new()
-	card_settings_state.sync_from_settings_manager()
-	card_settings_state.changed.connect(_on_card_settings_state_changed)
 
 	# Connect settings signals
 	SettingsManager.setting_changed.connect(_on_setting_changed)

@@ -126,8 +126,8 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 		if not _card.game or _card.game.id != target_game_id:
 			return
 
-		if image:
-			var texture = ImageTexture.create_from_image(image)
+		if image and not image.is_empty():
+			var texture = ImageTexture.create_from_image(image.duplicate())
 			if texture:
 				MemoryManager.cache_texture(cache_path, texture)
 				_emit_texture(texture)

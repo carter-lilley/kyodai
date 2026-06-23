@@ -373,40 +373,6 @@ flat = true
 script = ExtResource("3_lo3qa")
 metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
-[node name="VboxRommSettings" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow" unique_id=1807028875]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="M3TextField_URL" type="LineEdit" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings" unique_id=1012644857]
-script = ExtResource("4_lo3qa")
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 4
-script = ExtResource("4_lo3qa")
-field_variant = 0
-label_text = "Romm URL"
-metadata/_custom_type_script = "uid://dxu4u734ecmxi"
-
-[node name="M3TextField_User" type="LineEdit" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings" unique_id=261766622]
-script = ExtResource("4_lo3qa")
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 4
-script = ExtResource("4_lo3qa")
-field_variant = 0
-label_text = "Username"
-metadata/_custom_type_script = "uid://dxu4u734ecmxi"
-
-[node name="M3TextField_Pass" type="LineEdit" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxRommSettings" unique_id=521830116]
-script = ExtResource("4_lo3qa")
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 4
-script = ExtResource("4_lo3qa")
-field_variant = 0
-label_text = "Password"
-metadata/_custom_type_script = "uid://dxu4u734ecmxi"
-
 [node name="HboxButtonRow" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=890940306]
 layout_mode = 2
 

@@ -37,7 +37,7 @@ func _ready():
 	view_name = "Home"
 	
 	# Initialize grid reference (declared in base View class)
-	games_grid = $MarginContainer/VirtualScrollGridContainer as VirtualScrollGridContainer
+	games_grid = $MarginContainer/VBoxContainer/VirtualScrollGridContainer as VirtualScrollGridContainer
 	
 	# Setup VirtualScrollGridContainer
 	if not games_grid:

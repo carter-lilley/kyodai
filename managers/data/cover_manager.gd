@@ -106,19 +106,19 @@ func load_image(url: String, callback: Callable = Callable()):
 					file.close()
 					return _load_image_from_memory(buffer, cache_path)
 				return null,
-			func(image):
-				if image:
-					var texture = ImageTexture.create_from_image(image)
-					if texture:
-						if callback.is_valid():
-							callback.call(texture)
-						data_manager.image_loaded.emit(url, texture)
-					else:
-						# Cache file exists but failed to load, try downloading fresh
-						_load_image_from_network(url, cache_path, callback)
+		func(image):
+			if image and not image.is_empty():
+				var texture = ImageTexture.create_from_image(image.duplicate())
+				if texture:
+					if callback.is_valid():
+						callback.call(texture)
+					data_manager.image_loaded.emit(url, texture)
 				else:
 					# Cache file exists but failed to load, try downloading fresh
 					_load_image_from_network(url, cache_path, callback)
+			else:
+				# Cache file exists but failed to load, try downloading fresh
+				_load_image_from_network(url, cache_path, callback)
 		)
 		return
 
@@ -143,13 +143,12 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 					file.close()
 					return _load_image_from_memory(buffer, cache_path)
 				return null,
-			func(image):
-				if image:
-					var texture = ImageTexture.create_from_image(image)
-					if callback.is_valid():
-						callback.call(texture)
-					if texture:
-						data_manager.image_loaded.emit(url, texture)
+		func(image):
+			if image and not image.is_empty():
+				var texture = ImageTexture.create_from_image(image.duplicate())
+				if callback.is_valid():
+					callback.call(texture)
+				data_manager.image_loaded.emit(url, texture)
 		)
 	)
 

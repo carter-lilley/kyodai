@@ -250,6 +250,27 @@ func download_emulator(emulator_id: String) -> bool:
 	
 	return _execute_install_steps(emulator_id, emulator, install_steps)
 
+## Re-runs all non-download install steps to repair/refresh config files.
+## Skips step 0 (download) since the emulator binary is already present.
+## Forces re-creation of portable.txt, INIs, superblocks, etc.
+func repair_emulator_config(emulator_id: String) -> bool:
+	var emulator = launch_manager.registry.get_emulator(emulator_id)
+	if emulator.is_empty():
+		push_error("[EmulatorManager] Unknown emulator: " + emulator_id)
+		return false
+	
+	var install_steps = emulator.get("install", [])
+	if install_steps.size() <= 1:
+		push_error("[EmulatorManager] No config steps to repair for: " + emulator_id)
+		return false
+	
+	# Force all steps to re-apply (overwrite existing config files)
+	_force_install_step[emulator_id] = true
+	
+	# Start from step 1 (skip download)
+	print("[EmulatorManager] Repairing config for " + emulator_id + " from step 1")
+	return _execute_install_step(emulator_id, 1)
+
 ## Executes a single install step by index
 func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
@@ -911,7 +932,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 		push_error("[EmulatorManager] Invalid download_repo config for step: " + step_name)
 		return false
 	
-	_emulator_install_progress[emulator_id] = "Fetching release info..."
+	_emulator_install_progress[emulator_id] = emulator_name + " - Fetching release info..."
 	
 	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
@@ -921,7 +942,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 		func(url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String):
 			if error != "":
 				push_error("[EmulatorManager] Failed to fetch release: " + error)
-				_emulator_install_progress[emulator_id] = "Failed to fetch release"
+				_emulator_install_progress[emulator_id] = emulator_name + " - Failed to fetch release"
 				return
 			# Use the later of the release date and the matched asset's update date.
 			# Asset updated_at is more reliable for rolling/pinned releases where the
@@ -958,7 +979,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 		push_error("[EmulatorManager] download_scrape requires either version_pattern or json_path for step: " + step_name)
 		return false
 	
-	_emulator_install_progress[emulator_id] = "Scraping for latest version..."
+	_emulator_install_progress[emulator_id] = emulator_name + " - Scraping for latest version..."
 	
 	var step_display_name = _get_step_display_name(step_name, emulator_name)
 	
@@ -969,7 +990,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 		func(url: String, version: String, error: String):
 			if error != "":
 				push_error("[EmulatorManager] Failed to scrape release: " + error)
-				_emulator_install_progress[emulator_id] = "Failed to scrape release"
+				_emulator_install_progress[emulator_id] = emulator_name + " - Failed to scrape release"
 				return
 			if version != "":
 				# Defer persistence until the entire install succeeds. Stashing it here
@@ -1226,7 +1247,7 @@ func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index:
 	if file_path == "" or edits.is_empty():
 		return _execute_install_step(emulator_id, step_index + 1)
 	
-	if not edit_emulator_file(emulator_id, file_path, edits, false):
+	if not edit_emulator_file(emulator_id, file_path, edits, true):
 		return false
 	
 	return _execute_install_step(emulator_id, step_index + 1)
@@ -1437,7 +1458,7 @@ func _compute_install_progress(emulator_id: String) -> Dictionary:
 			if result["next_step_index"] == -1:
 				result["next_step_index"] = i
 				result["next_step_name"] = step_name
-				result["next_step_display"] = _get_step_display_name(step_name)
+				result["next_step_display"] = _get_step_display_name(step_name, emulator_name)
 	
 	# Determine status
 	if result["completed_steps"] == 0:

@@ -143,8 +143,8 @@ func set_game(game: GameResource):
 		if not _current_game or _current_game.id != _loading_game_id:
 			return
 		
-		if image:
-			var tex = ImageTexture.create_from_image(image)
+		if image and not image.is_empty():
+			var tex = ImageTexture.create_from_image(image.duplicate())
 			if tex:
 				MemoryManager.cache_texture(cache_path, tex)
 				_set_texture(tex)

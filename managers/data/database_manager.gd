@@ -530,6 +530,7 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 	invalidate_downloaded_games_count_cache()
 	MemoryManager.queue_db_task(
 		func():
+			_db_lock()
 			var updated_count: int = 0
 
 			for romm_id in matched_games.keys():
@@ -550,9 +551,10 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 				var downloaded_ids_json = JSON.stringify(game.downloaded_sibling_ids)
 				var query = "UPDATE games SET has_local_copy = 1, file_path = ?, downloaded_sibling_ids = ? WHERE romm_id = ?"
 
-				if query_bool(query, [new_file_path, downloaded_ids_json, romm_id]):
+				if query_bool_unlocked(query, [new_file_path, downloaded_ids_json, romm_id]):
 					updated_count += 1
 
+			_db_unlock()
 			return updated_count,
 		func(updated_count: int):
 			print("[DEBUG] Scan complete - updated %d games in DB" % updated_count)
@@ -624,7 +626,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 		func():
 			_db_lock()
 			# First, get all games for this platform to delete their covers
-			var query_result = query_array("SELECT cover_url FROM games WHERE platform_slug = ?", [platform_slug])
+			var query_result = query_array_unlocked("SELECT cover_url FROM games WHERE platform_slug = ?", [platform_slug])
 			var cover_urls: Array[String] = []
 			for row in query_result:
 				var url = row.get("cover_url", "")
@@ -633,7 +635,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 
 			# Delete games from database and get the count
 			var count_before = query_result.size()
-			var success = query_bool("DELETE FROM games WHERE platform_slug = ?", [platform_slug])
+			var success = query_bool_unlocked("DELETE FROM games WHERE platform_slug = ?", [platform_slug])
 
 			_db_unlock()
 			return {
@@ -676,6 +678,7 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 
 	MemoryManager.queue_db_task(
 		func():
+			_db_lock()
 			var query = """
 				INSERT OR REPLACE INTO games
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
@@ -710,7 +713,9 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.cover_group_master else 0,
 				JSON.stringify(game.igdb_metadata)
 			]
-			return query_bool(query, bindings),
+			var success = query_bool_unlocked(query, bindings)
+			_db_unlock()
+			return success,
 
 		func(success: bool):
 			if success:
@@ -737,6 +742,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 
 	MemoryManager.queue_db_task(
 		func():
+			_db_lock()
 			var query = """
 				UPDATE games SET
 					title = ?,
@@ -790,7 +796,9 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				JSON.stringify(game.igdb_metadata),
 				game.romm_id
 			]
-			return query_bool(query, bindings),
+			var success = query_bool_unlocked(query, bindings)
+			_db_unlock()
+			return success,
 
 		func(success: bool):
 			if success:
@@ -807,7 +815,10 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 
 	MemoryManager.queue_db_task(
 		func():
-			return query_bool("UPDATE games SET title_id = ? WHERE romm_id = ?", [title_id, romm_id]),
+			_db_lock()
+			var success = query_bool_unlocked("UPDATE games SET title_id = ? WHERE romm_id = ?", [title_id, romm_id])
+			_db_unlock()
+			return success,
 
 		func(success: bool):
 			if success:
@@ -824,7 +835,10 @@ func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: C
 
 	MemoryManager.queue_db_task(
 		func():
-			return query_bool("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(siblings), romm_id]),
+			_db_lock()
+			var success = query_bool_unlocked("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(siblings), romm_id])
+			_db_unlock()
+			return success,
 
 		func(success: bool):
 			if success:

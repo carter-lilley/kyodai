@@ -106,6 +106,7 @@ func _create_visuals():
 	_scroll.mouse_filter = Control.MOUSE_FILTER_PASS
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_scroll.follow_focus = true
 	add_child(_scroll)
 	
 	# Vertical container for items
@@ -732,9 +733,10 @@ func _input(event: InputEvent):
 	# Outside-click dismissal only; ui_cancel is handled by M3Overlay base class
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not get_global_rect().has_point(event.global_position):
-			# Don't dismiss if the click is inside an open submenu
+			# Don't dismiss if the click is inside an open submenu or the scroll container
 			if not _submenu_rect.has_point(event.global_position):
-				dismiss()
+				if not (_scroll and _scroll.get_global_rect().has_point(event.global_position)):
+					dismiss()
 		return
 	
 	# Right arrow opens submenu for the focused item
