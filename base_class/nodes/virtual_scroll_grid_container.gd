@@ -1836,6 +1836,93 @@ func _on_viewport_focus_changed(control: Control) -> void:
 	else:
 		print("[VirtualScrollGridContainer] Focus escaped but last card ", _last_focused_virtual_index, " is no longer valid")
 
+func _input(event: InputEvent) -> void:
+	# Proactive edge navigation: when focus lock is active and the user presses
+	# toward a valid offscreen row/column, scroll to it and focus it instead of
+	# letting focus escape and get yanked back to the same edge card.
+	if not focus_lock_enabled:
+		return
+	if not visible or not is_inside_tree():
+		return
+	if not UIManager or not UIManager.controller_has_priority():
+		return
+
+	var dir := 0
+	if event.is_action_pressed("ui_up"):
+		dir = -1 if vertical else 0
+	elif event.is_action_pressed("ui_down"):
+		dir = 1 if vertical else 0
+	elif event.is_action_pressed("ui_left"):
+		dir = 0 if vertical else -1
+	elif event.is_action_pressed("ui_right"):
+		dir = 0 if vertical else 1
+	else:
+		return
+
+	var current_idx := _get_focused_virtual_index()
+	if current_idx < 0:
+		return
+
+	var target_idx := _compute_target_index(current_idx, dir)
+	if target_idx < 0 or target_idx == current_idx:
+		return
+
+	# If the target is already visible, let normal spatial navigation handle it.
+	if target_idx >= _visible_start_idx and target_idx <= _visible_end_idx:
+		return
+
+	# The target is offscreen. Scroll to it and focus it.
+	get_viewport().set_input_as_handled()
+	scroll_to_index_and_focus(target_idx, true)
+
+func _get_focused_virtual_index() -> int:
+	var viewport := get_viewport()
+	if not is_instance_valid(viewport):
+		return -1
+	var focused := viewport.gui_get_focus_owner()
+	if not focused or not is_ancestor_of(focused):
+		return -1
+	var node := focused
+	while node != self:
+		if node.has_meta("virtual_index"):
+			return node.get_meta("virtual_index", -1)
+		node = node.get_parent()
+	return -1
+
+func _compute_target_index(current_idx: int, dir: int) -> int:
+	if _total_items <= 0 or current_idx < 0 or current_idx >= _total_items:
+		return -1
+
+	var items_per_line := _get_items_per_line()
+	if items_per_line <= 0:
+		items_per_line = 1
+
+	# LIST/CAROUSEL: simple linear movement.
+	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL or items_per_line == 1:
+		var target := current_idx + dir
+		return clamp(target, 0, _total_items - 1)
+
+	var line := current_idx / items_per_line
+	var col := current_idx % items_per_line
+	var total_lines := ceili(float(_total_items) / items_per_line)
+
+	if vertical:
+		# dir is -1 for up, +1 for down.
+		var target_line := line + dir
+		if target_line < 0 or target_line >= total_lines:
+			return -1
+		var target_idx := target_line * items_per_line + col
+		return min(target_idx, _total_items - 1)
+	else:
+		# dir is -1 for left, +1 for right.
+		var target_col := col + dir
+		if target_col < 0 or target_col >= items_per_line:
+			return -1
+		var target_idx := line * items_per_line + target_col
+		if target_idx >= _total_items:
+			return -1
+		return target_idx
+
 func _release_focus_if_inside(card: Control) -> void:
 	"""Release focus if the current focus owner is inside the given card."""
 	var viewport := get_viewport()
@@ -2045,9 +2132,10 @@ func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:
 		_pending_focus_index = -1
 
 func _apply_focus_to_card(card: Control) -> void:
-	"""Focus a card and suppress the container's follow-focus auto-scroll."""
-	if _scroll_container:
-		_scroll_container.stop_smooth_scroll()
+	"""Focus a card and suppress the container's follow-focus auto-scroll.
+	We intentionally do NOT stop an in-flight smooth scroll here: this helper is
+	used by scroll-to-focus paths that already started a centered scroll, and
+	interrupting it leaves offscreen targets sitting at the viewport edge."""
 	card.set_meta("_suppress_smooth_scroll", true)
 	card.grab_focus()
 	_pending_focus_index = -1
