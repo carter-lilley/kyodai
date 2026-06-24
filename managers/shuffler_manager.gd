@@ -21,6 +21,7 @@ var _countdown_timer: Timer = null
 var _config: Dictionary = {}
 var _controls_window: Node = null
 var _controls_topmost_timer: Timer = null
+var _cursor_overlay_pid: int = -1
 var _main_window: Window = null
 var _pending_downloads: int = 0
 var _total_downloads: int = 0
@@ -158,6 +159,7 @@ func stop_session() -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
 		_controls_window = null
+	_stop_cursor_overlay()
 
 	# Re-enable input to the main window now that the shuffler session is over.
 	get_tree().root.gui_disable_input = false
@@ -562,10 +564,10 @@ func _enter_shuffler_mode() -> void:
 	if DisplayManager:
 		DisplayManager.save_last_window_size()
 
+	_create_controls_window()
+
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 
-	_create_controls_window()
-	
 	# Block input to the main window while the shuffler is active.
 	# The controls window is its own viewport and still receives input.
 	get_tree().root.gui_disable_input = true
@@ -589,6 +591,7 @@ func _enter_shuffler_mode() -> void:
 		_ensure_pcsx2_shuffler_config()
 	
 	session_started.emit()
+	call_deferred("_start_cursor_overlay")
 	_switch_to_game(0)
 
 func _switch_to_next_game() -> void:
@@ -921,6 +924,34 @@ func _stop_controls_topmost_timer() -> void:
 		_controls_topmost_timer.stop()
 		_controls_topmost_timer.queue_free()
 		_controls_topmost_timer = null
+
+func _start_cursor_overlay() -> void:
+	if _state != State.ACTIVE:
+		return
+
+	_stop_cursor_overlay()
+
+	var cursor_ahk := _tools_dir + "shuffler_cursor_overlay.ahk"
+	var cursor_asset := ProjectSettings.globalize_path("res://assets/Cursor.png")
+	if not FileAccess.file_exists(cursor_ahk) or not FileAccess.file_exists(_ahk_path) or not FileAccess.file_exists(cursor_asset):
+		push_warning("[ShufflerManager] Cursor overlay files missing; skipping")
+		return
+
+	var output: Array[String] = []
+	var pid: int = OS.create_process(_ahk_path, [cursor_ahk, cursor_asset], true)
+	if pid == -1:
+		push_error("[ShufflerManager] Failed to start cursor overlay process")
+		return
+	_cursor_overlay_pid = pid
+	print("[ShufflerManager] Cursor overlay started pid=" + str(pid))
+
+func _stop_cursor_overlay() -> void:
+	if _cursor_overlay_pid == -1:
+		return
+	if PlatformManager.is_windows():
+		var output: Array[String] = []
+		OS.execute("taskkill", ["/F", "/PID", str(_cursor_overlay_pid)], output, true)
+	_cursor_overlay_pid = -1
 
 # ============================================================================
 # RETROARCH CONFIG

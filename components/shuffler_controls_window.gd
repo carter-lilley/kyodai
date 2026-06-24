@@ -10,12 +10,15 @@ signal stop_requested()
 
 const CURSOR_PATH := "res://assets/Cursor.png"
 const WARP_COOLDOWN_SECONDS := 0.3
+const WARP_TRIGGER_THRESHOLD := 0.5
 
 @onready var _pause_btn: M3IconButton = $Root/M3ButtonGroup/PauseButton
 @onready var _button_group: M3ButtonGroup = $Root/M3ButtonGroup
 
 var _is_paused: bool = false
 var _warp_cooldown: float = 0.0
+var _select_held: bool = false
+var _l_trigger_held: bool = false
 
 func _ready():
 	# Keep the palette visible even when the main launcher window is minimized.
@@ -53,6 +56,8 @@ func _ready():
 	if root:
 		root.focus_mode = Control.FOCUS_NONE
 
+	# Use the custom cursor inside the controls window. The AHK overlay handles
+	# rendering the same cursor everywhere else during a shuffler session.
 	_apply_custom_cursor()
 	tree_exiting.connect(_restore_default_cursor)
 
@@ -60,23 +65,32 @@ func _process(delta: float) -> void:
 	_warp_cooldown = maxf(0.0, _warp_cooldown - delta)
 
 func _input(event: InputEvent) -> void:
-	if event.is_action_pressed("shuffler_warp_cursor") and _warp_cooldown <= 0.0:
+	_update_chord_state(event)
+
+	if _select_held and _l_trigger_held and _warp_cooldown <= 0.0:
 		_warp_cooldown = WARP_COOLDOWN_SECONDS
 		_warp_cursor_to_bottom_button()
 		get_viewport().set_input_as_handled()
 
+func _update_chord_state(event: InputEvent) -> void:
+	if event is InputEventJoypadButton:
+		if event.button_index == JOY_BUTTON_BACK:
+			_select_held = event.pressed
+	elif event is InputEventJoypadMotion:
+		if event.axis == JOY_AXIS_TRIGGER_LEFT:
+			var now_held: bool = event.axis_value >= WARP_TRIGGER_THRESHOLD
+			_l_trigger_held = now_held
+
 func _warp_cursor_to_bottom_button() -> void:
-	var window_id := get_window_id()
-	if window_id == DisplayServer.INVALID_WINDOW_ID:
-		return
+	var btn_size := _pause_btn.size
+	if btn_size == Vector2.ZERO:
+		btn_size = _pause_btn.custom_minimum_size
+	if btn_size == Vector2.ZERO:
+		btn_size = Vector2(40, 40)
 
-	var bottom_btn := _get_bottom_button()
-	if not bottom_btn:
-		return
-
-	var window_pos := DisplayServer.window_get_position(window_id)
-	var btn_center := bottom_btn.global_position + (bottom_btn.size / 2.0)
-	var target := Vector2i(window_pos) + Vector2i(btn_center)
+	# DisplayServer.warp_mouse() on a sub-Window interprets coordinates as
+	# window-relative, not screen-relative, so pass local button center.
+	var target := Vector2i(_pause_btn.position + btn_size / 2.0)
 	DisplayServer.warp_mouse(target)
 
 func _get_bottom_button() -> Control:
@@ -90,7 +104,9 @@ func _get_bottom_button() -> Control:
 func _apply_custom_cursor() -> void:
 	var cursor_tex := load(CURSOR_PATH) as Texture2D
 	if cursor_tex:
-		DisplayServer.cursor_set_custom_image(cursor_tex, DisplayServer.CURSOR_ARROW, Vector2.ZERO)
+		var cursor_size := cursor_tex.get_size()
+		var hotspot := Vector2(cursor_size.x * 0.35, cursor_size.y * 0.175)
+		DisplayServer.cursor_set_custom_image(cursor_tex, DisplayServer.CURSOR_ARROW, hotspot)
 
 func _restore_default_cursor() -> void:
 	DisplayServer.cursor_set_custom_image(null, DisplayServer.CURSOR_ARROW)

@@ -17,8 +17,9 @@ var _pending_launches: Dictionary = {}
 # platform_slug -> bool
 var _pending_firmware_downloads: Dictionary = {}
 
-# platform_slug -> {game: GameResource, emulator_id: String, callback: Callable}
-var _pending_firmware_launches: Dictionary = {}
+# Array[Dictionary] supporting multiple pending launches for the same platform
+# Each entry: {game: GameResource, emulator_id: String, callback: Callable}
+var _pending_firmware_launches: Array[Dictionary] = []
 
 # Signals
 signal game_launched(game: GameResource)
@@ -398,31 +399,47 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		if _pending_firmware_downloads.has(game.platform_slug):
 			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
 			NotificationManager.show_notification("Firmware download in progress for " + game.platform_slug + "...", NotificationManager.Type.INFO)
-			_pending_firmware_launches[game.platform_slug] = {game = game, emulator_id = emulator_id, callback = on_ready}
+			_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "callback": on_ready})
 			return false
 		
 		print("[LaunchManager] Firmware not ready for " + game.platform_slug + ", downloading...")
 		NotificationManager.show_notification("Downloading firmware for " + game.platform_slug + "...", NotificationManager.Type.INFO)
 		
 		_pending_firmware_downloads[game.platform_slug] = true
-		_pending_firmware_launches[game.platform_slug] = {game = game, emulator_id = emulator_id, callback = on_ready}
+		_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "callback": on_ready})
 		
 		firmware.setup_platform_firmware(game.platform_slug, emulator_id, func(success: bool, message: String):
 			_pending_firmware_downloads.erase(game.platform_slug)
 			
-			var pending = _pending_firmware_launches.get(game.platform_slug)
-			if pending:
-				_pending_firmware_launches.erase(game.platform_slug)
+			var matching_indices: Array[int] = []
+			for i in range(_pending_firmware_launches.size()):
+				var pending = _pending_firmware_launches[i]
+				if pending.get("emulator_id", "") == emulator_id:
+					matching_indices.append(i)
+			
+			if matching_indices.is_empty():
+				return
+			
+			if not success:
+				push_error("[LaunchManager] Firmware download failed for " + game.platform_slug + ": " + message)
+				NotificationManager.show_notification("Failed to download firmware for " + game.platform_slug, NotificationManager.Type.ERROR)
+				for i in matching_indices:
+					var pending = _pending_firmware_launches[i]
+					var pending_callback = pending.callback
+					if pending_callback.is_valid():
+						pending_callback.call(false)
+				for i in range(matching_indices.size() - 1, -1, -1):
+					_pending_firmware_launches.remove_at(matching_indices[i])
+				return
+			
+			print("[LaunchManager] Firmware ready for " + game.platform_slug + ", continuing launch...")
+			for i in matching_indices:
+				var pending = _pending_firmware_launches[i]
 				var pending_callback = pending.callback
-				
-				if not success:
-					push_error("[LaunchManager] Firmware download failed for " + game.platform_slug + ": " + message)
-					NotificationManager.show_notification("Failed to download firmware for " + game.platform_slug, NotificationManager.Type.ERROR)
-					return
-				
-				print("[LaunchManager] Firmware ready for " + game.platform_slug + ", continuing launch...")
 				if pending_callback.is_valid():
 					pending_callback.call()
+			for i in range(matching_indices.size() - 1, -1, -1):
+				_pending_firmware_launches.remove_at(matching_indices[i])
 		)
 		
 		return false

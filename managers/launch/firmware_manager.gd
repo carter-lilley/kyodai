@@ -115,7 +115,7 @@ func _find_file_recursive(dir: String, filename: String) -> bool:
 	
 	return false
 
-func _on_firmware_download_complete(success: bool, download_error: String, _notification_id: int, temp_path: String, firmware_dir: String, platform_slug: String, callback: Callable, _last_progress_mb: Array):
+func _on_firmware_download_complete(success: bool, download_error: String, _notification_id: int, temp_path: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable, _last_progress_mb: Array):
 	NotificationManager.dismiss_notification(_notification_id)
 	
 	if not success:
@@ -142,6 +142,7 @@ func _on_firmware_download_complete(success: bool, download_error: String, _noti
 				return
 			
 			print("[FirmwareManager] Firmware successfully installed for " + platform_slug)
+			clear_firmware_cache(platform_slug, emulator_id)
 			launch_manager.firmware_download_completed.emit(platform_slug, true)
 			if callback.is_valid():
 				callback.call(true, "Firmware installed")
@@ -227,7 +228,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			firmware_id,
 			file_name,
 			temp_path,
-			_on_firmware_download_complete.bind(_firmware_notification_id, temp_path, firmware_dir, platform_slug, callback, _last_progress_mb),
+			_on_firmware_download_complete.bind(_firmware_notification_id, temp_path, firmware_dir, platform_slug, emulator_id, callback, _last_progress_mb),
 			func(size_mb: int):
 				if size_mb != _last_progress_mb[0]:
 					_last_progress_mb[0] = size_mb
