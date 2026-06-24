@@ -25,6 +25,8 @@ var _all_games_label: String = "ALL"
 var _visible_indices: Array[int] = []
 
 func _ready():
+	# Render above focused cards (z_index 1) and their effects.
+	z_index = 5
 	_setup_ui()
 
 func _setup_ui():

@@ -1081,7 +1081,7 @@ func _setup_ui():
 	_scroll_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.scroll_vertical = 0
-	_scroll_container.clip_contents = false
+	_scroll_container.clip_contents = true
 	add_child(_scroll_container)
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)

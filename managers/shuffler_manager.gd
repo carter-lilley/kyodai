@@ -203,8 +203,15 @@ func resume_session() -> void:
 	if _reroll_in_progress:
 		return
 	_state = State.ACTIVE
-	if _round_timer:
+	if _round_timer and is_instance_valid(_round_timer):
 		_round_timer.paused = false
+	else:
+		# If skip was used while paused, no timer exists yet. Start a fresh one.
+		var round_time = randf_range(
+			_config.get("round_time_min", 30.0),
+			_config.get("round_time_max", 120.0)
+		)
+		_start_round_timer(round_time)
 
 func skip_game() -> void:
 	if _state != State.ACTIVE and _state != State.PAUSED:
@@ -619,7 +626,8 @@ func _switch_to_game(index: int) -> void:
 		_config.get("round_time_min", 30.0),
 		_config.get("round_time_max", 120.0)
 	)
-	_start_round_timer(round_time)
+	if _state == State.ACTIVE:
+		_start_round_timer(round_time)
 
 	var game = entry["game"]
 	game_switched.emit(game.title, game.platform_slug)
