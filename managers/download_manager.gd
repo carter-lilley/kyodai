@@ -78,8 +78,6 @@ const MAX_CONCURRENT_CHUNKS_ANDROID: int = 3
 # Disabled on Android because external storage often lacks sparse-file support.
 const IN_PLACE_CHUNKED_DOWNLOADS: bool = true
 
-var max_concurrent_chunks: int = MemoryManager.get_download_thread_count()  # kept for legacy code; active cap is below
-
 # Chunk retry / timeout settings
 const MAX_CHUNK_RETRIES: int = 5
 const CHUNK_REQUEST_TIMEOUT_MS: int = 20 * 1000  # time to finish request headers
@@ -90,7 +88,6 @@ const CHUNK_WATCHDOG_INTERVAL_SEC: float = 10.0
 
 # Polling interval for HTTPClient (2 seconds between polls when no data)
 const POLLING_INTERVAL_MS: int = 100
-const POLLING_INTERVAL_US: int = 2000000
 
 # Per-download resume state file (sidecar next to destination)
 const DOWNLOAD_STATE_VERSION: int = 1
@@ -273,13 +270,9 @@ func _create_sparse_file(path: String, size: int) -> bool:
 			push_warning("[DownloadManager] Could not probe filesystem sparse support for: " + path)
 	
 	# Verify the file reached the expected logical size
-	if not FileAccess.file_exists(path):
+	if not FSM.file_exists(path):
 		return false
-	var check = FileAccess.open(path, FileAccess.READ)
-	if check == null:
-		return false
-	var actual_size = check.get_length()
-	check.close()
+	var actual_size = FSM.get_file_size(path)
 	if actual_size != size:
 		push_error("[DownloadManager] Sparse file size mismatch: expected " + str(size) + ", got " + str(actual_size))
 		return false
@@ -288,24 +281,20 @@ func _create_sparse_file(path: String, size: int) -> bool:
 
 func _delete_download_state(destination_path: String) -> void:
 	var state_path = _get_state_file_path(destination_path)
-	if FileAccess.file_exists(state_path):
-		var err = DirAccess.remove_absolute(state_path)
-		if err != OK:
+	if FSM.file_exists(state_path):
+		if not FSM.delete_file(state_path):
 			push_error("[DownloadManager] Failed to remove state file: " + state_path)
 
 ## Loads a previously saved chunk state file, if it is valid for this URL/size/strategy.
 func _load_download_state(destination_path: String, url: String, file_size: int) -> Dictionary:
 	var state_path = _get_state_file_path(destination_path)
-	if not FileAccess.file_exists(state_path):
+	if not FSM.file_exists(state_path):
 		return {}
 	
-	var file = FileAccess.open(state_path, FileAccess.READ)
-	if file == null:
-		push_error("[DownloadManager] Could not open state file: " + state_path)
+	var text = FSM.read_file_bytes(state_path).get_string_from_utf8()
+	if text.is_empty():
+		push_error("[DownloadManager] Could not read state file: " + state_path)
 		return {}
-	
-	var text = file.get_as_text()
-	file.close()
 	
 	var json = JSON.new()
 	if json.parse(text) != OK:
@@ -437,12 +426,8 @@ func _save_download_state(chunked_info: ChunkedDownloadInfo) -> void:
 		"chunks": chunks_data
 	}
 	
-	var file = FileAccess.open(state_path, FileAccess.WRITE)
-	if file == null:
+	if not FSM.write_file(state_path, JSON.stringify(data)):
 		push_error("[DownloadManager] Failed to write state file: " + state_path)
-		return
-	file.store_string(JSON.stringify(data))
-	file.close()
 
 # Foreground service tracking for Android
 var _foreground_service_active: bool = false
@@ -972,7 +957,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		else:
 			chunked_info.partial_path = _get_partial_file_path(item.destination_path)
 			var state_path = _get_state_file_path(item.destination_path)
-			var has_state = FileAccess.file_exists(state_path)
+			var has_state = FSM.file_exists(state_path)
 			var has_partial = FSM.file_exists(chunked_info.partial_path)
 			var partial_ok = false
 			
@@ -984,15 +969,12 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 					FSM.delete_file(item.destination_path)
 			elif has_partial:
 				# Resume: keep an existing partial file only if it has the expected size.
-				var partial_check = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
-				if partial_check:
-					var partial_size = partial_check.get_length()
-					partial_check.close()
-					if partial_size == file_size:
-						partial_ok = true
-					else:
-						push_error("[DownloadManager] Existing partial file size mismatch (" + str(partial_size) + " vs " + str(file_size) + "); restarting sparse file")
-						FSM.delete_file(chunked_info.partial_path)
+				var partial_size = FSM.get_file_size(chunked_info.partial_path)
+				if partial_size == file_size:
+					partial_ok = true
+				else:
+					push_error("[DownloadManager] Existing partial file size mismatch (" + str(partial_size) + " vs " + str(file_size) + "); restarting sparse file")
+					FSM.delete_file(chunked_info.partial_path)
 			
 			if partial_ok:
 				in_place_assembly = true
@@ -2225,10 +2207,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		
 		var final_size = 0
 		if FSM.file_exists(final_path):
-			var size_file = FileAccess.open(final_path, FileAccess.READ)
-			if size_file:
-				final_size = size_file.get_length()
-				size_file.close()
+			final_size = FSM.get_file_size(final_path)
 		
 		print("[DownloadManager] [Reassembly] Desktop reassembly complete for: " + item.name + ". Final size: " + str(final_size) + " bytes")
 		return true
@@ -2283,8 +2262,7 @@ func _rename_final_file(item_id: String):
 	if not dest_dir.is_empty() and not FSM.dir_exists(dest_dir):
 		FSM.make_dir_recursive(dest_dir)
 	
-	var move_err = DirAccess.rename_absolute(partial_path, final_path)
-	if move_err == OK:
+	if FSM.move(partial_path, final_path):
 		# Fast path: rename succeeded (same filesystem)
 		_delete_download_state(final_path)
 		_cleanup_chunked_download(item_id)
@@ -2292,7 +2270,7 @@ func _rename_final_file(item_id: String):
 		return
 	
 	# Rename failed (usually cross-filesystem). Capture the exact error for diagnostics.
-	print("[DownloadManager] [InPlace] Move failed with error %d (%s), falling back to copy: %s -> %s" % [move_err, error_string(move_err), partial_path, final_path])
+	print("[DownloadManager] [InPlace] Move failed, falling back to copy: %s -> %s" % [partial_path, final_path])
 	_copy_partial_to_final(item_id, partial_path, final_path)
 
 func _copy_partial_to_final(item_id: String, partial_path: String, final_path: String):
@@ -2568,14 +2546,7 @@ func _update_download_progress(item: QueueItem):
 		# Check file size on disk (64-bit, no overflow)
 		# Use FileSystemManager for Android external storage compatibility
 		if FSM.file_exists(file_path):
-			var file = FileAccess.open(file_path, FileAccess.READ)
-			var current_size = 0
-			if file:
-				current_size = file.get_length()
-				file.close()
-			else:
-				# Fallback to plugin file size for Android external storage
-				current_size = FSM.get_file_size(file_path)
+			var current_size = FSM.get_file_size(file_path)
 			
 			# Use expected_file_size from game data for accurate progress
 			if item.expected_file_size > 0:
@@ -2830,7 +2801,7 @@ var _active_image_downloads: Dictionary = {}  # url -> {callbacks: [], completed
 ## callback(success: bool)
 func download_image(url: String, cache_path: String, callback: Callable) -> bool:
 	# Check if already cached
-	if FileAccess.file_exists(cache_path):
+	if FSM.file_exists(cache_path):
 		callback.call(true)
 		return true
 	
@@ -2866,10 +2837,7 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 			return
 
 		# Save to cache
-		var file = FileAccess.open(cache_path, FileAccess.WRITE)
-		if file:
-			file.store_buffer(body)
-			file.close()
+		FSM.write_file_bytes(cache_path, body)
 
 		# Notify callbacks
 		state.completed = true
@@ -2887,21 +2855,4 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 
 ## Helper function to recursively clean up a temp directory
 func _cleanup_temp_dir(dir_path: String) -> void:
-	var dir = DirAccess.open(dir_path)
-	if dir == null:
-		return
-	
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	
-	while file_name != "":
-		if file_name != "." and file_name != "..":
-			var full_path = dir_path + "/" + file_name
-			if dir.current_is_dir():
-				_cleanup_temp_dir(full_path)
-			else:
-				FSM.delete_file(full_path)
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
 	FSM.delete_dir_recursive(dir_path)

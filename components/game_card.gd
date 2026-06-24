@@ -27,6 +27,10 @@ var _media_stack: EffectStack = null
 var _focus_stack: EffectStack = null
 var _focus_effect_tweens: Array[Tween] = []
 
+# Focus stack needs its own bounds (full card vs media panel) independent of
+# the media stack, which lives in media-panel-local space.
+var _focus_media_container: MediaContainer = null
+
 func _remove_focus_tween(tween: Tween) -> void:
 	_focus_effect_tweens.erase(tween)
 
@@ -46,7 +50,7 @@ func _kill_focus_tweens() -> void:
 var _media_loader: CardMediaLoader = null
 
 # Status badge overlay (direct child of GameCard, positioned over media panel)
-var _status_badge: Panel = null
+var _status_badge_canvas_item: RID = RID()
 var _status_badge_style: StyleBoxFlat = null
 var _badge_update_pending: bool = false
 const STATUS_BADGE_SIZE_RATIO: float = 0.04
@@ -88,6 +92,12 @@ var _touch_is_holding: bool = false
 
 func _ready():
 	super._ready()
+
+	# Focus effects need a separate container so their bounds (full card or
+	# media panel in card space) don't overwrite the media stack's bounds.
+	_focus_media_container = MediaContainer.new()
+	_sync_focus_container_properties()
+
 	_sync_focus_visuals()
 
 	_media_loader = CardMediaLoader.new(self)
@@ -124,18 +134,23 @@ func _exit_tree():
 		_focus_stack.free_rids()
 		_focus_stack = null
 
+	_free_status_badge_canvas_item()
+
+func _free_status_badge_canvas_item() -> void:
+	if _status_badge_canvas_item.is_valid():
+		RenderingServer.free_rid(_status_badge_canvas_item)
+		_status_badge_canvas_item = RID()
+	_status_badge_style = null
+
 func _setup_status_badge():
-	_status_badge = Panel.new()
-	_status_badge.name = "StatusBadge"
-	_status_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_status_badge.visible = false
-	_status_badge.z_index = 8
-	_status_badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_status_badge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_status_badge.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_free_status_badge_canvas_item()
 	_status_badge_style = StyleBoxFlat.new()
-	_status_badge.add_theme_stylebox_override("panel", _status_badge_style)
-	add_child(_status_badge)
+	_status_badge_style.anti_aliasing = true
+	_status_badge_style.anti_aliasing_size = 1.0
+	_status_badge_canvas_item = RenderingServer.canvas_item_create()
+	RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, get_canvas_item())
+	RenderingServer.canvas_item_set_draw_index(_status_badge_canvas_item, 50)
+	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 	_update_status_badge_style()
 
 func get_card_state() -> MediaContainer:
@@ -164,8 +179,8 @@ func _setup_preview_mode():
 	else:
 		_set_texture(_loading_texture)
 
-	if _status_badge:
-		_status_badge.visible = false
+	if _status_badge_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 
 	disabled = true
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -207,6 +222,8 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		_build_focus_stack(force_full_rebuild)
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
+	_sync_focus_container_properties()
+
 	var focus_effect_settings := []
 	if UIManager and UIManager.card_settings_state:
 		focus_effect_settings = UIManager.card_settings_state.get_focus_effects()
@@ -253,7 +270,10 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	_focus_stack.set_clip_children(false)
 	_focus_stack.set_visible(false)
 
-	_focus_stack.initialize(_media_container, focus_effect_settings, "focus_card")
+	_sync_focus_container_properties()
+	_focus_stack.initialize(_focus_media_container, focus_effect_settings, "focus_card")
+	_update_effect_transforms()
+	_update_focus_stack_bounds()
 	if _current_texture:
 		_focus_stack.set_game_texture(_current_texture)
 
@@ -452,6 +472,7 @@ func _update_card_state_from_settings():
 			_display_mode = display_setting.value
 
 	_apply_display_mode()
+	_sync_focus_container_properties()
 
 func _apply_effect_insets_to_media_container(effects: Array) -> void:
 	"""Scan base effects and set media-container insets from their settings."""
@@ -528,8 +549,8 @@ func reset() -> void:
 	_sync_focus_visuals()
 	if _media_loader:
 		_media_loader.cancel()
-	if _status_badge:
-		_status_badge.visible = false
+	if _status_badge_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 	headline = ""
 	supporting_text = ""
 	if _media_stack:
@@ -583,7 +604,7 @@ func _deferred_update_badges():
 	_update_platform_badge()
 
 func _update_status_badge_layout():
-	if not _status_badge:
+	if not _status_badge_canvas_item.is_valid():
 		return
 
 	var panel_width: float = size.x
@@ -593,14 +614,15 @@ func _update_status_badge_layout():
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
 
-	_status_badge.size = Vector2(badge_size, badge_size)
-	_status_badge.offset_left = -badge_size - margin
-	_status_badge.offset_top = -badge_size - margin
-	_status_badge.offset_right = -margin
-	_status_badge.offset_bottom = -margin
+	var pos = Vector2(size.x - badge_size - margin, size.y - badge_size - margin)
+	var rect = Rect2(pos, Vector2(badge_size, badge_size))
+
+	RenderingServer.canvas_item_clear(_status_badge_canvas_item)
+	_update_status_badge_style()
+	_status_badge_style.draw(_status_badge_canvas_item, rect)
 
 func _update_status_badge_style():
-	if not _status_badge:
+	if not _status_badge_style:
 		return
 	var panel_width = size.x if size.x > 0 else _media_container.size.x
 	if _media_container.size.x > 0:
@@ -613,26 +635,22 @@ func _update_status_badge_style():
 	else:
 		_status_badge_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)
 
-	_status_badge_style.corner_radius_top_left = circle_radius
-	_status_badge_style.corner_radius_top_right = circle_radius
-	_status_badge_style.corner_radius_bottom_left = circle_radius
-	_status_badge_style.corner_radius_bottom_right = circle_radius
+	_status_badge_style.set_corner_radius_all(circle_radius)
 
 func _update_status_icon():
-	if not _status_badge:
+	if not _status_badge_canvas_item.is_valid():
 		return
 	if not game:
-		_status_badge.visible = false
+		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 		return
-	_status_badge.visible = true
+	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, true)
 	_update_status_badge_layout()
-	_update_status_badge_style()
 
-func _resolve_platform_icon_name(slug: String) -> String:
+static func _resolve_platform_icon_name(slug: String) -> String:
 	return PLATFORM_ICON_MAP.get(slug, slug)
 
 
-func _get_platform_icon_texture(slug: String, is_wordmark: bool) -> Texture2D:
+static func _get_platform_icon_texture(slug: String, is_wordmark: bool) -> Texture2D:
 	if slug.is_empty():
 		return null
 
@@ -652,13 +670,13 @@ func _get_platform_icon_texture(slug: String, is_wordmark: bool) -> Texture2D:
 	return tex
 
 
-func _apply_badge_settings(badge: BadgeEffect, badge_type: int, icon_texture: Texture2D, badge_size_setting: float, inner_radius_setting: float) -> void:
+static func _apply_badge_settings(badge: BadgeEffect, badge_type: int, icon_texture: Texture2D, badge_size_setting: float, inner_radius_setting: float, media_container: MediaContainer) -> void:
 	if not badge:
 		return
 
-	var card_width = _media_container.size.x
-	var corner_radius_pixels = _media_container.get_corner_radius_pixels()
-	var total_inset = _media_container.get_total_inset_pixels()
+	var card_width = media_container.size.x
+	var corner_radius_pixels = media_container.get_corner_radius_pixels()
+	var total_inset = media_container.get_total_inset_pixels()
 	var effective_corner_radius = max(0, corner_radius_pixels - total_inset)
 
 	var texture_aspect = 1.0
@@ -753,11 +771,11 @@ func _update_platform_badge():
 			_platform_icon_missing_warnings[platform_slug] = true
 			push_warning("GameCard: No platform icon found for slug '%s' (looked in %s)" % [platform_slug, PLATFORM_ICON_DIR])
 
-	_apply_badge_settings(normal_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting)
+	_apply_badge_settings(normal_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
 
 	var focus_badge = _focus_stack.get_effect("badge") as BadgeEffect if _focus_stack else null
 	if focus_badge:
-		_apply_badge_settings(focus_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting)
+		_apply_badge_settings(focus_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
 
 func _load_cover(high_priority: bool = false) -> void:
 	if _media_loader:
@@ -916,15 +934,39 @@ func _apply_content_scale() -> void:
 func _update_effect_transforms() -> void:
 	# Sync the RS focus stack transform to match the Control content scale.
 	# The media stack is clipped inside _media_panel, which inherits scaling from RootContainer.
-	if _focus_stack:
-		var ci = _focus_stack._stack_canvas_item
-		if ci.is_valid():
-			var pivot = size / 2.0
-			var t = Transform2D()
-			t = t.translated(pivot)
-			t = t.scaled(content_scale)
-			t = t.translated(-pivot)
-			RenderingServer.canvas_item_set_transform(ci, t)
+	if not _focus_stack:
+		return
+	var ci = _focus_stack._stack_canvas_item
+	if not ci.is_valid():
+		return
+
+	var pivot = size / 2.0
+	# Scale around the card centre. Godot applies Transform2D operations
+	# right-to-left, so translate(-pivot) first, then scale, then
+	# translate(+pivot) to put the origin back.
+	var scale_transform := Transform2D()
+	scale_transform = scale_transform.translated(-pivot)
+	scale_transform = scale_transform.scaled(content_scale)
+	scale_transform = scale_transform.translated(pivot)
+
+	var t := scale_transform
+	# If the focus stack tracks the media panel (transparent/media-only),
+	# prepend a translation to the panel's top-left so it lands in the same
+	# place as the media stack after scaling.
+	if _focus_media_container:
+		t = scale_transform * Transform2D().translated(_focus_media_container.bounds.position)
+	RenderingServer.canvas_item_set_transform(ci, t)
+
+func _sync_focus_container_properties() -> void:
+	if not _focus_media_container or not _media_container:
+		return
+	_focus_media_container.corner_radius_ratio = _media_container.corner_radius_ratio
+	_focus_media_container.border_inset_ratio = _media_container.border_inset_ratio
+	_focus_media_container.glass_inset_ratio = _media_container.glass_inset_ratio
+	_focus_media_container.edge_aa_enabled = _media_container.edge_aa_enabled
+	_focus_media_container.vertical_offset = _media_container.vertical_offset
+	_focus_media_container.effect_settings = _media_container.effect_settings
+	_focus_media_container.focus_effect_settings = _media_container.focus_effect_settings
 
 func _sync_focus_visuals() -> void:
 	if not focus_scale_enabled:
@@ -1020,19 +1062,32 @@ func _update_focus_stack_bounds() -> void:
 		media_x = _media_panel.position.x
 		media_y = _media_panel.position.y
 
+	var new_bounds: Rect2
 	if not show_background:
 		# Transparent / Media Only: shrink focus stack to match media panel
-		_media_container.bounds = Rect2(media_x, media_y, target_w, target_h)
+		new_bounds = Rect2(media_x, media_y, target_w, target_h)
 	else:
-		_media_container.bounds = Rect2(0.0, 0.0, size.x, size.y)
+		new_bounds = Rect2(0.0, 0.0, size.x, size.y)
+
+	var bounds_changed := not _focus_media_container.bounds.is_equal_approx(new_bounds)
+	_focus_media_container.bounds = new_bounds
 
 	_focus_stack.update_draw_rects()
+	if bounds_changed:
+		_focus_stack.force_refresh()
+	_update_effect_transforms()
 
 func _update_media_panel_size(force: bool = false) -> void:
 	super._update_media_panel_size(force)
+	if _media_container and _media_panel:
+		# The media stack is parented to _media_panel, so its bounds must be
+		# expressed in media-panel-local coordinates rather than card coords.
+		_media_container.bounds = Rect2(Vector2.ZERO, _media_panel.size)
 	if _media_stack:
 		_media_stack.update_draw_rects()
 		_media_stack.force_refresh()
+	if _focus_stack:
+		_update_focus_stack_bounds()
 
 func _update_focus_ring_bounds() -> void:
 	super._update_focus_ring_bounds()

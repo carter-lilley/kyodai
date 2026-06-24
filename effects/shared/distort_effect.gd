@@ -6,15 +6,11 @@ static func get_allowed_contexts() -> Array[String]:
 
 func _init():
 	super._init()
-	effect_name = "Distort"
 	effect_id = "distort"
 
 func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/distort.gdshader")
-
-func _apply_settings() -> void:
-	pass
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -36,9 +32,6 @@ func _update_shader_params() -> void:
 	_set_shader_param("game_texture", media_container.texture)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	_set_shader_param("vertical_offset", media_container.vertical_offset)
-
-func set_game_texture(texture: Texture2D) -> void:
-	pass
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

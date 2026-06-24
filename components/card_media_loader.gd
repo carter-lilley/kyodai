@@ -1,6 +1,8 @@
 class_name CardMediaLoader
 extends RefCounted
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 ## Loads and caches cover art for a GameCard.
 ##
 ## Owned by GameCard. Encapsulates image download, cache lookup, retry logic,
@@ -8,7 +10,6 @@ extends RefCounted
 ## focus, and badge logic.
 
 signal texture_loaded(texture: Texture2D)
-signal load_failed()
 
 var _card: GameCard = null
 var _loading_game_id: String = ""
@@ -36,12 +37,12 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 
 	var cache_path = ""
 	var cover_url = ""
-	if game.cover_path and FileAccess.file_exists(game.cover_path):
+	if game.cover_path and FSM.file_exists(game.cover_path):
 		cache_path = game.cover_path
 	elif game.cover_url != "" and game.cover_url.begins_with("http"):
 		cover_url = game.cover_url
 		cache_path = _get_cached_cover_path(cover_url)
-		if not FileAccess.file_exists(cache_path):
+		if not FSM.file_exists(cache_path):
 			if DataManager.is_sync_in_progress():
 				_set_loading_texture()
 				return
@@ -113,12 +114,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 		MemoryManager.cancel_image_task(_current_image_task_id)
 
 	var load_callable = func():
-		var file = FileAccess.open(cache_path, FileAccess.READ)
-		if file:
-			var buffer = file.get_buffer(file.get_length())
-			file.close()
-			return _load_image_from_buffer(buffer)
-		return null
+		return _load_image_from_buffer(FSM.read_file_bytes(cache_path))
 
 	var callback_callable = func(image):
 		_current_image_task_id = -1
@@ -164,7 +160,7 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		if loaded_texture:
 			MemoryManager.cache_texture(cache_path, loaded_texture)
 			_emit_texture(loaded_texture)
-		elif FileAccess.file_exists(cache_path):
+		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)
 		else:
 			_set_loading_texture()

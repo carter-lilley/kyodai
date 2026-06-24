@@ -222,12 +222,14 @@ func _on_settings_dialog_dismissed() -> void:
 	# Try nav footer settings button first
 	var nav_settings_btn = UIManager.find_nav_settings_button()
 	if nav_settings_btn and nav_settings_btn.focus_mode != Control.FOCUS_NONE:
+		UIManager.suppress_next_focus_sound()
 		nav_settings_btn.grab_focus()
 		return
 
 	# Fallback to scene settings button
 	var settings_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/SettingsButton")
 	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
+		UIManager.suppress_next_focus_sound()
 		settings_button.grab_focus()
 
 func _on_more_button_pressed() -> void:
@@ -681,6 +683,12 @@ func reset_focus_to_home_button() -> void:
 	else:
 		print("[Main] Could not grab focus — home_button invalid or focus disabled")
 
+func _is_home_button_focused() -> bool:
+	var home_button = UIManager.find_home_button()
+	if not home_button or not home_button is Control:
+		return false
+	return home_button == _get_focus_owner()
+
 ## DualScreenSetup lifecycle management
 ## Keep DualScreenSetup in the tree so its SubViewports are freed with Main.
 ## When not in use, disable processing and hide it to avoid input interference.
@@ -728,6 +736,12 @@ func _handle_ui_cancel() -> void:
 
 	# Check if settings dialog is open - let it handle dismissal
 	if UIManager and UIManager.is_settings_dialog_open():
+		return
+
+	# Second cancel while on Home tab and Home button is focused opens Settings.
+	if UIManager and UIManager.is_current_view("Home") and _is_home_button_focused():
+		UIManager.show_settings_dialog()
+		get_viewport().set_input_as_handled()
 		return
 
 	# If a bottom sheet overlay is open, let M3Overlay handle dismissal

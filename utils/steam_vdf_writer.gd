@@ -3,28 +3,22 @@
 
 class_name SteamVDFWriter
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 # VDF Type markers
 const TYPE_NONE := 0x00
 const TYPE_STRING := 0x01
 const TYPE_INT32 := 0x02
-const TYPE_FLOAT32 := 0x03
-const TYPE_POINTER := 0x04
-const TYPE_WIDESTRING := 0x05
-const TYPE_COLOR := 0x06
 const TYPE_UINT64 := 0x07
 const TYPE_ENDOFOBJECT := 0x08
-const TYPE_INT64 := 0x0A
 const TYPE_ENDOFOBJECT_ALT := 0x0B
 
 ## Reads a VDF file and returns the parsed data
 static func read_vdf(path: String) -> Dictionary:
 	var result := {}
-	var file := FileAccess.open(path, FileAccess.READ)
-	if not file:
+	var data := FSM.read_file_bytes(path)
+	if data.is_empty():
 		return result
-	
-	var data := file.get_buffer(file.get_length())
-	file.close()
 	
 	var pos := 0
 	result = _parse_object(data, pos)
@@ -97,25 +91,13 @@ static func write_vdf(path: String, data: Dictionary) -> bool:
 	
 	# Ensure directory exists
 	var dir_path := path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		var err = DirAccess.make_dir_recursive_absolute(dir_path)
-		if err != OK:
+	if not FSM.dir_exists(dir_path):
+		if not FSM.make_dir_recursive(dir_path):
 			push_error("[SteamVDF] Failed to create directory: " + dir_path)
 			return false
 	
-
-	
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if not file:
-		push_error("[SteamVDF] Failed to open file for writing: " + path)
-		return false
-	
-	file.store_buffer(buffer)
-	var error = file.get_error()
-	file.close()
-	
-	if error != OK:
-		push_error("[SteamVDF] Failed to write file: " + str(error))
+	if not FSM.write_file_bytes(path, buffer):
+		push_error("[SteamVDF] Failed to write file: " + path)
 		return false
 	
 	return true
@@ -294,17 +276,11 @@ static func get_shortcuts_vdf_path(steam_path: String, user_id: String = "") -> 
 	if user_id.is_empty():
 		# Try to find the first user ID
 		var userdata_path := steam_path.path_join("userdata")
-		if DirAccess.dir_exists_absolute(userdata_path):
-			var dir := DirAccess.open(userdata_path)
-			if dir:
-				dir.list_dir_begin()
-				var folder := dir.get_next()
-				while folder != "":
-					if dir.current_is_dir() and folder != "0" and folder != "ac":
-						user_id = folder
-						break
-					folder = dir.get_next()
-					dir.list_dir_end()
+		if FSM.dir_exists(userdata_path):
+			for folder in FSM.list_dir(userdata_path):
+				if FSM.is_dir(userdata_path.path_join(folder)) and folder != "0" and folder != "ac":
+					user_id = folder
+					break
 	
 	if not user_id.is_empty():
 		return steam_path.path_join("userdata").path_join(user_id).path_join("config").path_join("shortcuts.vdf")
@@ -317,15 +293,15 @@ static func is_valid_steam_path(path: String) -> bool:
 		return false
 	
 	# Check for steam.exe on Windows
-	if FileAccess.file_exists(path.path_join("steam.exe")):
+	if FSM.file_exists(path.path_join("steam.exe")):
 		return true
 	
 	# Check for steam executable on Linux
-	if FileAccess.file_exists(path.path_join("steam")):
+	if FSM.file_exists(path.path_join("steam")):
 		return true
 	
 	# Check for userdata folder (exists on both platforms)
-	if DirAccess.dir_exists_absolute(path.path_join("userdata")):
+	if FSM.dir_exists(path.path_join("userdata")):
 		return true
 	
 	return false
@@ -334,17 +310,11 @@ static func is_valid_steam_path(path: String) -> bool:
 static func get_steam_grid_path(steam_path: String, user_id: String = "") -> String:
 	if user_id.is_empty():
 		var userdata_path := steam_path.path_join("userdata")
-		if DirAccess.dir_exists_absolute(userdata_path):
-			var dir := DirAccess.open(userdata_path)
-			if dir:
-				dir.list_dir_begin()
-				var folder := dir.get_next()
-				while folder != "":
-					if dir.current_is_dir() and folder != "0" and folder != "ac":
-						user_id = folder
-						break
-					folder = dir.get_next()
-					dir.list_dir_end()
+		if FSM.dir_exists(userdata_path):
+			for folder in FSM.list_dir(userdata_path):
+				if FSM.is_dir(userdata_path.path_join(folder)) and folder != "0" and folder != "ac":
+					user_id = folder
+					break
 	
 	if not user_id.is_empty():
 		return steam_path.path_join("userdata").path_join(user_id).path_join("config").path_join("grid")
@@ -358,7 +328,7 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 	if query_index != -1:
 		cover_path = cover_path.substr(0, query_index)
 	
-	if cover_path.is_empty() or not FileAccess.file_exists(cover_path):
+	if cover_path.is_empty() or not FSM.file_exists(cover_path):
 		push_warning("[SteamVDF] Cover path not found: " + cover_path)
 		return false
 	
@@ -368,22 +338,18 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 		return false
 	
 	# Ensure grid directory exists
-	if not DirAccess.dir_exists_absolute(grid_path):
-		var err := DirAccess.make_dir_recursive_absolute(grid_path)
-		if err != OK:
+	if not FSM.dir_exists(grid_path):
+		if not FSM.make_dir_recursive(grid_path):
 			push_error("[SteamVDF] Failed to create grid directory: " + grid_path)
 			return false
 	
 	var app_id_str := str(app_id)
 	
 	# Read file bytes and detect format
-	var file := FileAccess.open(cover_path, FileAccess.READ)
-	if not file:
-		push_warning("[SteamVDF] Failed to open file: " + cover_path)
+	var bytes := FSM.read_file_bytes(cover_path)
+	if bytes.is_empty():
+		push_warning("[SteamVDF] Failed to read file: " + cover_path)
 		return false
-	
-	var bytes := file.get_buffer(file.get_length())
-	file.close()
 	
 	# Load image from buffer
 	var image := Image.new()
@@ -484,7 +450,7 @@ static func add_game(game: GameResource) -> void:
 		cover_art_path = game.cover_path
 		if cover_art_path.find("?") != -1:
 			cover_art_path = cover_art_path.substr(0, cover_art_path.find("?"))
-		if FileAccess.file_exists(cover_art_path):
+		if FSM.file_exists(cover_art_path):
 			cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
 	
 	var game_data := {
@@ -505,7 +471,7 @@ static func add_game(game: GameResource) -> void:
 		return
 	
 	var shortcuts := {}
-	if FileAccess.file_exists(shortcuts_path):
+	if FSM.file_exists(shortcuts_path):
 		shortcuts = read_vdf(shortcuts_path)
 	
 	if not shortcuts.has("shortcuts"):

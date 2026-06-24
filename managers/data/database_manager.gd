@@ -88,16 +88,13 @@ func initialize_database():
 	print("[DatabaseManager] initialize_database() starting...")
 	# Database is being (re)opened; any previous count cache is no longer valid.
 	invalidate_downloaded_games_count_cache()
-	var dir = DirAccess.open("user://")
-	if not dir.dir_exists("database"):
-		var mkerr = dir.make_dir("database")
-		if mkerr != OK:
-			var err_msg = "Failed to create database directory: user://database/"
-			push_error("[DatabaseManager] " + err_msg)
-			_db_init_failed = true
-			data_manager.database_failed.emit(err_msg)
-			NotificationManager.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", NotificationManager.Type.ERROR)
-			return
+	if not FSM.make_dir_recursive("user://database"):
+		var err_msg = "Failed to create database directory: user://database/"
+		push_error("[DatabaseManager] " + err_msg)
+		_db_init_failed = true
+		data_manager.database_failed.emit(err_msg)
+		NotificationManager.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", NotificationManager.Type.ERROR)
+		return
 
 	_db = SQLite.new()
 	_db.path = DB_PATH
@@ -494,18 +491,14 @@ func _scan_games_directory(root_path: String, sub_path: String, results: Array[S
 
 	var full_path = root_path
 	if sub_path != "":
-		full_path = root_path + "/" + sub_path
+		full_path = FSM.join_paths(root_path, sub_path)
 
-	var dir = DirAccess.open(full_path)
-	if not dir:
+	var entries = FSM.list_dir(full_path)
+	if entries.is_empty() and not FSM.dir_exists(full_path):
 		return
 
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-
-	while file_name != "":
+	for file_name in entries:
 		if file_name == "." or file_name == "..":
-			file_name = dir.get_next()
 			continue
 
 		var current_path = sub_path
@@ -513,14 +506,13 @@ func _scan_games_directory(root_path: String, sub_path: String, results: Array[S
 			current_path += "/"
 		current_path += file_name
 
-		if dir.current_is_dir():
+		var child_full_path = FSM.join_paths(full_path, file_name)
+		if FSM.is_dir(child_full_path):
 			# Recurse into subdirectory
 			_scan_games_directory(root_path, current_path, results)
 		else:
 			# It's a file - add to results
 			results.append(current_path)
-
-		file_name = dir.get_next()
 
 
 func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
@@ -653,9 +645,9 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				var covers_deleted = 0
 				for url in cover_urls:
 					var cache_path = data_manager.cover.get_cached_image_path(url)
-					if FileAccess.file_exists(cache_path):
-						DirAccess.remove_absolute(cache_path)
-						covers_deleted += 1
+					if FSM.file_exists(cache_path):
+						if FSM.delete_file(cache_path):
+							covers_deleted += 1
 				if covers_deleted > 0:
 					print("[Sync] Removed %s (%d games, %d covers deleted)" % [platform_slug, _count, covers_deleted])
 			elif not success:

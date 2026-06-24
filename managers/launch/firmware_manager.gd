@@ -5,14 +5,6 @@ class_name FirmwareManager
 
 const FSM = preload("res://managers/filesystem_manager.gd")
 
-## Track pending firmware downloads to avoid duplicates
-# platform_slug -> bool
-var _pending_firmware_downloads: Dictionary = {}
-
-## Track pending launches waiting for firmware download
-# platform_slug -> {game: GameResource, emulator_id: String, callback: Callable}
-var _pending_firmware_launches: Dictionary = {}
-
 ## Firmware readiness cache to avoid repeated recursive directory scans
 # key: "platform_slug:emulator_id", value: bool
 var _firmware_ready_cache: Dictionary = {}

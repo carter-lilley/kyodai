@@ -15,18 +15,11 @@ var _icon_texture: Texture2D = null
 
 func _init():
 	super._init()
-	effect_name = "Platform Badge"
 	effect_id = "badge"
 
 func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/badge.gdshader")
-
-func _apply_settings() -> void:
-	pass
-
-func update_settings(settings: Dictionary) -> void:
-	super.update_settings(settings)
 
 func _update_shader_params() -> void:
 	if not media_container:

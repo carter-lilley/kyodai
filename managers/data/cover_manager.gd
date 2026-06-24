@@ -1,6 +1,8 @@
 extends Manager
 class_name CoverManager
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 var data_manager: Node
 
 const CACHE_FOLDER = "user://cache/covers/"
@@ -11,11 +13,7 @@ func _ready():
 
 
 func _ensure_cache_folder():
-	var dir = DirAccess.open("user://")
-	if not dir.dir_exists("cache"):
-		dir.make_dir("cache")
-	if not dir.dir_exists("cache/covers"):
-		dir.make_dir("cache/covers")
+	FSM.make_dir_recursive(CACHE_FOLDER)
 
 
 func get_cached_image_path(url: String) -> String:
@@ -41,7 +39,7 @@ func _download_cover(url: String, callback: Callable):
 	var cache_path = get_cached_image_path(url)
 
 	# Check if already cached
-	if FileAccess.file_exists(cache_path):
+	if FSM.file_exists(cache_path):
 		callback.call(true)
 		return
 
@@ -97,15 +95,10 @@ func load_image(url: String, callback: Callable = Callable()):
 	var cache_path = get_cached_image_path(url)
 
 	# Try cache first - using background thread
-	if FileAccess.file_exists(cache_path):
+	if FSM.file_exists(cache_path):
 		MemoryManager.queue_image_task(
 			func():
-				var file = FileAccess.open(cache_path, FileAccess.READ)
-				if file:
-					var buffer = file.get_buffer(file.get_length())
-					file.close()
-					return _load_image_from_memory(buffer, cache_path)
-				return null,
+				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
 		func(image):
 			if image and not image.is_empty():
 				var texture = ImageTexture.create_from_image(image.duplicate())
@@ -130,19 +123,14 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 	"""Download and load image from network using background thread."""
 	_download_cover(url, func(_ok):
 		# Check if file was downloaded successfully
-		if not FileAccess.file_exists(cache_path):
+		if not FSM.file_exists(cache_path):
 			if callback.is_valid():
 				callback.call(null)
 			return
 
 		MemoryManager.queue_image_task(
 			func():
-				var file = FileAccess.open(cache_path, FileAccess.READ)
-				if file:
-					var buffer = file.get_buffer(file.get_length())
-					file.close()
-					return _load_image_from_memory(buffer, cache_path)
-				return null,
+				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
 		func(image):
 			if image and not image.is_empty():
 				var texture = ImageTexture.create_from_image(image.duplicate())
@@ -154,43 +142,24 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 
 
 func clear_cache():
-	var dir = DirAccess.open(CACHE_FOLDER)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir():
-				dir.remove(file_name)
-			file_name = dir.get_next()
+	for file_name in FSM.list_dir(CACHE_FOLDER):
+		FSM.delete_file(FSM.join_paths(CACHE_FOLDER, file_name))
 	data_manager.cache_cleared.emit()
 
 
 func get_cache_size() -> int:
 	var total_size = 0
-	var dir = DirAccess.open(CACHE_FOLDER)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir():
-				total_size += dir.get_space_left()
-			file_name = dir.get_next()
+	for file_name in FSM.list_dir(CACHE_FOLDER):
+		total_size += FSM.get_file_size(FSM.join_paths(CACHE_FOLDER, file_name))
 	return total_size
 
 
 func get_random_cached_cover_path() -> String:
 	"""Get a random cover image from the cache folder."""
-	var dir = DirAccess.open(CACHE_FOLDER)
-	if not dir:
-		return ""
-
 	var image_files: Array[String] = []
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	while file_name != "":
-		if not dir.current_is_dir() and (file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg") or file_name.ends_with(".webp")):
-			image_files.append(CACHE_FOLDER + file_name)
-		file_name = dir.get_next()
+	for file_name in FSM.list_dir(CACHE_FOLDER):
+		if file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg") or file_name.ends_with(".webp"):
+			image_files.append(FSM.join_paths(CACHE_FOLDER, file_name))
 
 	if image_files.size() > 0:
 		return image_files[randi() % image_files.size()]

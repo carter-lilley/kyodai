@@ -248,6 +248,8 @@ func _set_initial_focus() -> void:
 	await get_tree().process_frame
 	for child in _left_pane.get_children():
 		if child is M3Button and child.focus_mode != Control.FOCUS_NONE:
+			if UIManager:
+				UIManager.suppress_next_focus_sound()
 			child.grab_focus()
 			return
 

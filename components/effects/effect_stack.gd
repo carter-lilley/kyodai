@@ -109,8 +109,8 @@ func set_game_texture(texture: Texture2D):
 		if not effect:
 			continue
 		if effect.has_method("set_game_texture"):
-			effect.set_game_texture(texture)
-		effect._update_shader_params()
+			effect.call_deferred("set_game_texture", texture)
+		effect.call_deferred("_update_shader_params")
 
 func get_effect_configs() -> Array:
 	return _effect_configs.duplicate(true)
@@ -285,9 +285,6 @@ func _create_effect(effect_id: String) -> EffectBase:
 	var effect = script.new()
 	if not effect is EffectBase:
 		push_error("EffectStack: Effect script does not extend EffectBase: " + script_path)
-		if effect is RefCounted:
-			# Cannot queue_free RefCounted; just drop reference
-			pass
 		return null
 
 	return effect
@@ -298,14 +295,8 @@ func get_effect(effect_id: String) -> EffectBase:
 func has_effect(effect_id: String) -> bool:
 	return _effects.has(effect_id) and _effects[effect_id].is_visible()
 
-static func get_available_effects() -> Dictionary:
-	return EFFECT_REGISTRY.duplicate()
-
 static func clear_script_cache() -> void:
 	_script_cache.clear()
-
-static func get_effect_display_name(effect_id: String) -> String:
-	return effect_id.replace("_", " ").capitalize()
 
 func force_refresh() -> void:
 	_update_effect_draw_rects()

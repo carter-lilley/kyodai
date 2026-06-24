@@ -353,7 +353,7 @@ func _get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 	
 	var effect = script.new()
 	var schema = effect.get_settings_schema()
-	effect.free_rid() if effect.has_method("free_rid") else effect.queue_free() if effect is Node else null
+	effect.free_rid()
 	
 	return schema
 

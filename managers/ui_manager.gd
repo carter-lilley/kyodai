@@ -225,6 +225,10 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 func is_settings_dialog_open() -> bool:
 	return overlay.is_settings_dialog_open()
 
+func suppress_next_focus_sound() -> void:
+	if navigation:
+		navigation.suppress_next_focus_sound()
+
 func apply_settings_now() -> void:
 	"""Flush settings changes to the live UI immediately.
 

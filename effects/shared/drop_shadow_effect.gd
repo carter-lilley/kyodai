@@ -10,23 +10,20 @@ var _draw_rect: Rect2 = Rect2()
 
 func _init():
 	super._init()
-	effect_name = "Drop Shadow"
 	effect_id = "drop_shadow"
 
 func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/drop_shadow.gdshader")
 
-func _apply_settings() -> void:
-	pass
-
 func compute_pipeline(cache: Dictionary) -> void:
 	_update_shadow_offsets()
 
 func _update_shadow_offsets():
+	var shadow_offset_x_ratio = _settings.get("shadow_offset_x", 0.0)
 	var shadow_offset_y_ratio = _settings.get("shadow_offset_y", 0.05)
 	var shadow_softness_ratio = _settings.get("shadow_softness", 0.04)
-	var margin_ratio = SHADOW_MARGIN_RATIO + abs(shadow_offset_y_ratio) + shadow_softness_ratio
+	var margin_ratio = SHADOW_MARGIN_RATIO + max(abs(shadow_offset_x_ratio), abs(shadow_offset_y_ratio)) + shadow_softness_ratio
 
 	if not media_container:
 		return
@@ -35,6 +32,26 @@ func _update_shadow_offsets():
 	var margin_x = margin_ratio * card_size.x
 	var margin_y = margin_ratio * card_size.y
 	_draw_rect = Rect2(Vector2(-margin_x, -margin_y), card_size + Vector2(margin_x * 2.0, margin_y * 2.0))
+
+func _compute_draw_rect() -> Rect2:
+	if not media_container:
+		return _draw_rect
+
+	var shadow_offset_x_ratio = _settings.get("shadow_offset_x", 0.0)
+	var shadow_offset_y_ratio = _settings.get("shadow_offset_y", 0.05)
+	var shadow_softness_ratio = _settings.get("shadow_softness", 0.04)
+	var margin_ratio = SHADOW_MARGIN_RATIO + max(abs(shadow_offset_x_ratio), abs(shadow_offset_y_ratio)) + shadow_softness_ratio
+
+	var card_size = media_container.size
+	var margin_x = margin_ratio * card_size.x
+	var margin_y = margin_ratio * card_size.y
+	return Rect2(Vector2(-margin_x, -margin_y), card_size + Vector2(margin_x * 2.0, margin_y * 2.0))
+
+func get_draw_rect() -> Rect2:
+	return _compute_draw_rect()
+
+func _apply_settings() -> void:
+	_update_shadow_offsets()
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -68,9 +85,6 @@ func _update_shader_params() -> void:
 	_set_shader_param("shadow_expand", shadow_expand)
 	_set_shader_param("shadow_margin", shadow_margin)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
-
-func get_draw_rect() -> Rect2:
-	return _draw_rect
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

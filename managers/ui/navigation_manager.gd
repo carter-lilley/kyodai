@@ -422,6 +422,13 @@ func should_card_grab_focus_on_hover() -> bool:
 
 # ==================== FOCUS FEEDBACK (Navigation Sounds) ====================
 
+# Temporarily set to true around deliberate focus grabs (e.g. menu open/dismiss)
+# to avoid playing the navigation click for the programmatic focus change.
+var _suppress_next_focus_sound: bool = false
+
+func suppress_next_focus_sound() -> void:
+	_suppress_next_focus_sound = true
+
 func _setup_feedback_handlers() -> void:
 	"""Connect to viewport focus changes for navigation sounds."""
 	_reconnect_feedback_viewport()
@@ -455,6 +462,11 @@ func _on_feedback_focus_changed(control: Control) -> void:
 	# Skip first focus (app startup)
 	if _is_first_focus:
 		_is_first_focus = false
+		return
+
+	# Suppress programmatic focus grabs (e.g. menu open/dismiss)
+	if _suppress_next_focus_sound:
+		_suppress_next_focus_sound = false
 		return
 
 	# Non-game card focus - play generic click sound

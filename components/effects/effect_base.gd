@@ -1,8 +1,7 @@
 class_name EffectBase
 extends RefCounted
 
-@export var effect_name: String = "Effect"
-@export var effect_id: String = ""
+var effect_id: String = ""
 
 var _settings: Dictionary = {}
 var media_container: MediaContainer = null
@@ -11,9 +10,6 @@ var _base_effect: EffectBase = null
 var effect_stack: EffectStack = null
 
 var enabled: bool = true
-
-signal effect_enabled_changed(enabled: bool)
-signal settings_changed(setting_name: String, value: Variant)
 
 var _canvas_item_rid: RID = RID()
 var _material: ShaderMaterial = null
@@ -25,6 +21,12 @@ func _init():
 	_setup_shader()
 
 func free_rid() -> void:
+	if media_container and media_container.changed.is_connected(_on_media_changed):
+		media_container.changed.disconnect(_on_media_changed)
+	media_container = null
+	effect_stack = null
+	_base_effect = null
+
 	if _canvas_item_rid.is_valid():
 		RenderingServer.free_rid(_canvas_item_rid)
 		_canvas_item_rid = RID()
@@ -150,9 +152,17 @@ func _apply_settings() -> void:
 	pass
 
 func _apply_tweened_settings(temp_settings: Dictionary) -> void:
-	var original_settings = _settings
+	# Tweened values become the active visual state. We intentionally do NOT
+	# restore the original _settings afterwards; otherwise shader params and
+	# geometry can snap back to base values while the card is still focused,
+	# causing effects like glow to misalign.
 	_settings = temp_settings
 	_apply_settings()
+
+	# Push interpolated values to the shader while _settings holds the tweened
+	# values. Without this, effects like glow keep their base uniforms during
+	# the focus tween and scale from the wrong size/center.
+	_update_shader_params()
 
 	if media_container:
 		var needs_refresh = false
@@ -167,11 +177,13 @@ func _apply_tweened_settings(temp_settings: Dictionary) -> void:
 				if not is_equal_approx(new_inset, media_container.glass_inset_ratio):
 					media_container.glass_inset_ratio = new_inset
 					needs_refresh = true
+			"glow", "drop_shadow":
+				# These effects change their canvas draw rect with their settings,
+				# so refresh geometry during the tween to keep alignment.
+				needs_refresh = true
 
 		if needs_refresh and effect_stack:
 			effect_stack.force_refresh()
-
-	_settings = original_settings
 
 func _update_shader_params() -> void:
 	pass

@@ -1,8 +1,7 @@
 class_name HeroImage
 extends Control
 
-@warning_ignore("unused_signal")
-signal game_changed(game: GameResource)
+const FSM := preload("res://managers/filesystem_manager.gd")
 
 var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
@@ -114,11 +113,9 @@ func set_game(game: GameResource):
 	const MAX_HERO_TEXTURE_SIZE: int = 1024
 
 	var load_callable = func() -> Image:
-		var file = FileAccess.open(cache_path, FileAccess.READ)
-		if not file:
+		var buffer = FSM.read_file_bytes(cache_path)
+		if buffer.is_empty():
 			return null
-		var buffer = file.get_buffer(file.get_length())
-		file.close()
 
 		var img = Image.new()
 		var err = FAILED

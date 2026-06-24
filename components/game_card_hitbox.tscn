@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://components/visual/game_card_hitbox.gd" id="1_hitbox"]
+
+[node name="GameCardHitbox" type="Button"]
+flat = true
+script = ExtResource("1_hitbox")

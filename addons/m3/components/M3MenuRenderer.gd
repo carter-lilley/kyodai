@@ -139,7 +139,7 @@ func _update_appearance():
 # PUBLIC API
 # ============================================
 
-func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = ColorVariant.STANDARD, alignment: MenuAlignment = MenuAlignment.START, auto_focus_first: bool = true, min_width: float = 0.0, multi_select: bool = false, radio_group: bool = false, submenu_mode: bool = false):
+func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = ColorVariant.STANDARD, alignment: MenuAlignment = MenuAlignment.START, auto_focus_first: bool = true, min_width: float = 0.0, multi_select: bool = false, radio_group: bool = false, submenu_mode: bool = false, silent_focus_first: bool = true):
 	_ensure_visuals()
 	_cached_fonts = M3Theme.load_fonts()
 	
@@ -168,6 +168,8 @@ func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = Co
 	if auto_focus_first:
 		for node in _item_nodes:
 			if node is Button:
+				if silent_focus_first and UIManager:
+					UIManager.suppress_next_focus_sound()
 				node.grab_focus()
 				break
 	_update_item_visuals()

@@ -2,6 +2,8 @@
 #settings_manager.gd
 extends Manager
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 signal setting_changed(value: Variant, setting: SettingsVar)
 signal settings_saved
 signal apply_preset_begin
@@ -11,7 +13,6 @@ const SAVE_PATH := "user://user_prefs.tres"
 const PRESETS_FOLDER := "user://themes/"
 const BUILTIN_PRESETS_FOLDER := "res://themes/"
 var settings: Settings
-var settings_dict: Dictionary[String, SettingsVar] = {}
 var _is_dirty: bool = false
 
 func _init() -> void:
@@ -93,7 +94,7 @@ func get_setting(_name:String) -> SettingsVar:
 	return settingsvar
 
 func load_settings() -> void:
-	if FileAccess.file_exists(SAVE_PATH):
+	if FSM.file_exists(SAVE_PATH):
 		settings = ResourceLoader.load(SAVE_PATH) as Settings
 	if settings:
 		_refresh_setting_metadata(settings)
@@ -228,10 +229,7 @@ func _xor_decrypt(encrypted: String, key: String) -> String:
 ## === Theme Preset Management ===
 
 func _ensure_presets_folder() -> void:
-	var dir = DirAccess.open("user://")
-	if dir:
-		if not dir.dir_exists("themes"):
-			dir.make_dir("themes")
+	FSM.make_dir_recursive(PRESETS_FOLDER)
 
 # List of built-in preset filenames (needed for Android where DirAccess doesn't work on res://)
 const BUILTIN_PRESET_FILES: Array[String] = [
@@ -263,37 +261,31 @@ func list_presets() -> Array[ThemePreset]:
 					presets.append(preset)
 					loaded_names.append(preset.name)
 	else:
-		# Fallback: try DirAccess (works on desktop)
-		var dir = DirAccess.open(BUILTIN_PRESETS_FOLDER)
-		if dir:
-			dir.list_dir_begin()
-			var file_name = dir.get_next()
-			while file_name != "":
-				if not dir.current_is_dir() and (file_name.ends_with(".tres") or file_name.ends_with(".tres.remap")):
-					# Strip .remap extension if present - it's a mapping file, load the actual resource
-					var preset_path = BUILTIN_PRESETS_FOLDER + file_name
-					if preset_path.ends_with(".remap"):
-						preset_path = preset_path.substr(0, preset_path.length() - 6)
-					var loaded_resource = ResourceLoader.load(preset_path)
-					var preset = loaded_resource as ThemePreset
-					if preset and preset.name not in loaded_names:
-						presets.append(preset)
-						loaded_names.append(preset.name)
-				file_name = dir.get_next()
+		# Fallback: try FSM (works on desktop)
+		for file_name in FSM.list_dir(BUILTIN_PRESETS_FOLDER):
+			if FSM.is_dir(FSM.join_paths(BUILTIN_PRESETS_FOLDER, file_name)):
+				continue
+			if file_name.ends_with(".tres") or file_name.ends_with(".tres.remap"):
+				# Strip .remap extension if present - it's a mapping file, load the actual resource
+				var preset_path = FSM.join_paths(BUILTIN_PRESETS_FOLDER, file_name)
+				if preset_path.ends_with(".remap"):
+					preset_path = preset_path.substr(0, preset_path.length() - 6)
+				var loaded_resource = ResourceLoader.load(preset_path)
+				var preset = loaded_resource as ThemePreset
+				if preset and preset.name not in loaded_names:
+					presets.append(preset)
+					loaded_names.append(preset.name)
 	
 	# Load user presets (from user://) - these can override built-ins
-	var user_dir = DirAccess.open(PRESETS_FOLDER)
-	if user_dir:
-		user_dir.list_dir_begin()
-		var user_file_name = user_dir.get_next()
-		while user_file_name != "":
-			if not user_dir.current_is_dir() and (user_file_name.ends_with(".tres") or user_file_name.ends_with(".tres.remap")):
-				var user_preset_path = PRESETS_FOLDER + user_file_name
-				var user_preset = ResourceLoader.load(user_preset_path) as ThemePreset
-				if user_preset and user_preset.name not in loaded_names:
-					presets.append(user_preset)
-					loaded_names.append(user_preset.name)
-			user_file_name = user_dir.get_next()
+	for file_name in FSM.list_dir(PRESETS_FOLDER):
+		if FSM.is_dir(FSM.join_paths(PRESETS_FOLDER, file_name)):
+			continue
+		if file_name.ends_with(".tres") or file_name.ends_with(".tres.remap"):
+			var user_preset_path = FSM.join_paths(PRESETS_FOLDER, file_name)
+			var user_preset = ResourceLoader.load(user_preset_path) as ThemePreset
+			if user_preset and user_preset.name not in loaded_names:
+				presets.append(user_preset)
+				loaded_names.append(user_preset.name)
 	
 	# Sort by name
 	presets.sort_custom(func(a, b): return a.name < b.name)
@@ -317,7 +309,7 @@ func save_preset(preset: ThemePreset) -> bool:
 	return true
 
 func load_preset(preset_path: String) -> ThemePreset:
-	if not FileAccess.file_exists(preset_path):
+	if not FSM.file_exists(preset_path):
 		push_error("Preset file not found: %s" % preset_path)
 		return null
 	
@@ -401,7 +393,7 @@ func export_preset(preset: ThemePreset, export_path: String) -> bool:
 	return true
 
 func import_preset(import_path: String) -> ThemePreset:
-	if not FileAccess.file_exists(import_path):
+	if not FSM.file_exists(import_path):
 		push_error("Import file not found: %s" % import_path)
 		return null
 	
@@ -419,4 +411,3 @@ func import_preset(import_path: String) -> ThemePreset:
 func _exit_tree() -> void:
 	"""Release the loaded settings resource so its SettingsVars don't leak."""
 	settings = null
-	settings_dict.clear()

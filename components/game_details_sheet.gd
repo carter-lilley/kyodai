@@ -103,6 +103,8 @@ func set_game(game: GameResource) -> void:
     if is_instance_valid(_content_root):
         _content_root.visible = true
     if action_button:
+        if UIManager:
+            UIManager.suppress_next_focus_sound()
         action_button.grab_focus.call_deferred()
 
     await Engine.get_main_loop().process_frame

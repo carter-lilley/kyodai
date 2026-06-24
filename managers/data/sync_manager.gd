@@ -50,22 +50,12 @@ var _sync_batch_timer: Timer = null
 var _sync_batch_last_emit_time: int = 0
 const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 800ms during sync
 
-# Pre-calculation state (avoid closures)
-var _precalc_pending: int = 0
-var _precalc_total: int = 0
-var _precalc_callback: Callable = Callable()
-var _precalc_platform_totals: Dictionary = {}  # platform_id -> total count
-
 # Cover URLs collected during sync for batch downloading on main thread
 var _sync_covers_pending: Array[String] = []
 var _sync_covers_mutex: Mutex = Mutex.new()
 
-# Performance tracking for background thread optimization
-var _perf_batch_start_time: int = 0
-var _perf_phase1_duration: int = 0  # GameResource creation (now on background thread)
-var _perf_phase2_duration: int = 0  # Sibling checks
-var _perf_phase3_duration: int = 0  # DB inserts
-var _perf_total_batches: int = 0
+# Platform pre-calculation totals
+var _precalc_platform_totals: Dictionary = {}  # platform_id -> total count
 
 var _sync_notification_id: int = -1
 var _removal_notification_id: int = -1
@@ -661,7 +651,7 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	for game in games:
 		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
 			var cache_path = data_manager.cover.get_cached_image_path(game.cover_url)
-			if not FileAccess.file_exists(cache_path):
+			if not FSM.file_exists(cache_path):
 				_sync_covers_mutex.lock()
 				_sync_covers_pending.append(game.cover_url)
 				var pending_count = _sync_covers_pending.size()
@@ -703,7 +693,7 @@ func _download_covers_on_main_thread(urls: Array[String]):
 
 	for url in urls:
 		var cache_path = data_manager.cover.get_cached_image_path(url)
-		if FileAccess.file_exists(cache_path):
+		if FSM.file_exists(cache_path):
 			already_cached += 1
 			continue
 

@@ -14,10 +14,6 @@ const ProcessManager := preload("res://managers/launch/process_manager.gd")
 # emulator_id -> {game: GameResource, callback: Callable}
 var _pending_launches: Dictionary = {}
 
-# Track pending launches waiting for game download
-# item_id -> GameResource
-var _pending_game_downloads: Dictionary = {}
-
 # platform_slug -> bool
 var _pending_firmware_downloads: Dictionary = {}
 

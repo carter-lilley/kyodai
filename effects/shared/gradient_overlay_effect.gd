@@ -9,18 +9,11 @@ var _gradient_hash_cache: Array = []
 
 func _init():
 	super._init()
-	effect_name = "Gradient Overlay"
 	effect_id = "gradient_overlay"
-
-func update_settings(settings: Dictionary) -> void:
-	super.update_settings(settings)
 
 func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/gradient_overlay.gdshader")
-
-func _apply_settings() -> void:
-	pass
 
 func _update_shader_params() -> void:
 	if not media_container:

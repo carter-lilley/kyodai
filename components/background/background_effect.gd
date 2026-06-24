@@ -6,9 +6,6 @@ extends ColorRect
 
 var _settings: Dictionary = {}
 
-@warning_ignore("unused_signal")
-signal settings_changed(setting_name: String, value: Variant)
-
 func _ready():
 	material = ShaderMaterial.new()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE

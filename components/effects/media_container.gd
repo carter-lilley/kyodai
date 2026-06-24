@@ -45,24 +45,19 @@ var vertical_offset: float = 0.0:
 		if not is_equal_approx(vertical_offset, value):
 			vertical_offset = value
 			changed.emit()
-var zoom_level: float = 1.0
 var edge_aa_enabled: bool = false
 
 # --- Effect configuration (for saving/loading themes) ---
 var effect_settings: Array = []
 var focus_effect_settings: Array = []
 
-# --- Pipeline cache (write-once per frame) ---
-var pipeline_cache: Dictionary = {}
-
 signal changed
 
 func run_pipeline(layers: Array) -> void:
 	"""Execute compute_pipeline() on all registered layers in order."""
-	pipeline_cache.clear()
 	for layer in layers:
 		if layer is EffectBase and layer.enabled:
-			layer.compute_pipeline(pipeline_cache)
+			layer.compute_pipeline({})
 
 # --- Convenience accessors ---
 var size: Vector2:

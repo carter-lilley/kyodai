@@ -143,7 +143,9 @@ func get_item(index: int) -> M3MenuItem:
 
 ## Show the menu popup anchored to the given Control.
 ## as_submenu: when true, skips the M3Overlay singleton registry so the parent menu stays open.
-func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, min_width: float = 0.0, as_submenu: bool = false):
+## silent_focus_first: when true, suppresses the navigation focus sound for the
+## programmatic focus grab on the first item (avoids double sound on open).
+func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, min_width: float = 0.0, as_submenu: bool = false, silent_focus_first: bool = true):
 	if _items.is_empty():
 		return
 	
@@ -168,7 +170,7 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 		show_overlay()
 	
 	_ensure_renderer()
-	_renderer.popup(_items, anchor, menu_variant, alignment, auto_focus_first, min_width, multi_select, radio_group, as_submenu)
+	_renderer.popup(_items, anchor, menu_variant, alignment, auto_focus_first, min_width, multi_select, radio_group, as_submenu, silent_focus_first)
 	# Disconnect old one-shot connections before reconnecting (prevents duplicates on reopen)
 	if _renderer.item_pressed.is_connected(_on_item_pressed):
 		_renderer.item_pressed.disconnect(_on_item_pressed)
@@ -221,6 +223,8 @@ func dismiss():
 	# item is selected from a submenu, we skip focus restoration to prevent
 	# re-triggering the submenu open via _on_item_focus_entered.
 	if not _item_selected and _summoner != null and is_instance_valid(_summoner):
+		if UIManager:
+			UIManager.suppress_next_focus_sound()
 		_summoner.grab_focus()
 	_release_summoner()
 	_close_submenu()

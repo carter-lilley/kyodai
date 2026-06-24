@@ -2,6 +2,12 @@
 .godot/
 .import
 
+# Godot / editor lock files and addon temp artifacts
+**/~*.tmp
+**/~*.TMP
+**/~*.tmp~
+**/~*.TMP~
+
 node_modules/
 
 # Android build artifacts and cache

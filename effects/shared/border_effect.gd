@@ -13,18 +13,11 @@ var _outer_stroke_hash: Array = []
 
 func _init():
 	super._init()
-	effect_name = "Border"
 	effect_id = "border"
-
-func update_settings(settings: Dictionary) -> void:
-	super.update_settings(settings)
 
 func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/border.gdshader")
-
-func _apply_settings() -> void:
-	pass
 
 func _update_shader_params() -> void:
 	if not media_container:

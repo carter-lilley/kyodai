@@ -8,11 +8,9 @@ var _swoop_renderer: EffectBase = null
 
 func _init():
 	super._init()
-	effect_name = "Glass"
 	effect_id = "glass"
 
 	_swoop_renderer = EffectBase.new()
-	_swoop_renderer.effect_name = "GlassSwoop"
 	_swoop_renderer.effect_id = "glass_swoop"
 	var swoop_mat = ShaderMaterial.new()
 	swoop_mat.shader = preload("res://shaders/card/glass_swoop.gdshader")
@@ -27,9 +25,6 @@ func free_rid() -> void:
 func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/glass.gdshader")
-
-func _apply_settings() -> void:
-	pass
 
 func _update_shader_params() -> void:
 	if not media_container:
