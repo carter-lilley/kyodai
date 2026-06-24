@@ -517,6 +517,11 @@ func _on_resized():
 	var new_size = Vector2(size.x, size.y)
 	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
 		return
+
+	# Ignore tiny size jitters that don't meaningfully affect layout.
+	if abs(new_size.x - _last_resized_size.x) < RESIZE_IGNORE_DELTA and abs(new_size.y - _last_resized_size.y) < RESIZE_IGNORE_DELTA:
+		return
+
 	_last_resized_size = new_size
 
 	# Debounce rapid resize events (e.g. during window resize or layout transitions)
@@ -529,6 +534,11 @@ func _on_display_size_changed(_new_size: Vector2):
 	var new_size = Vector2(size.x, size.y)
 	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
 		return
+
+	# Ignore tiny size jitters that don't meaningfully affect layout.
+	if abs(new_size.x - _last_resized_size.x) < RESIZE_IGNORE_DELTA and abs(new_size.y - _last_resized_size.y) < RESIZE_IGNORE_DELTA:
+		return
+
 	_last_resized_size = new_size
 
 	# Run the same debounced logic the internal timer used to trigger.
@@ -589,19 +599,23 @@ func _on_card_settings_state_changed(mask: int) -> void:
 		return
 
 	var state = UIManager.card_settings_state
+	print("[VirtualScrollGridContainer] _on_card_settings_state_changed mask=", mask, " active_cards=", _active_cards.size())
 
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
+		print("[VirtualScrollGridContainer] applying LAYOUT")
 		_batch_apply_layout_state()
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
+		print("[VirtualScrollGridContainer] applying DISPLAY/MEDIA_SHAPE")
 		_refresh_cached_settings()
 		refresh_all_card_configs()
 		_schedule_layout_recalc()
 
 	# Card effect configuration changed
 	if mask & CardSettingsState.ChangeMask.EFFECTS:
+		print("[VirtualScrollGridContainer] applying EFFECTS")
 		refresh_all_card_effects(true)
 		_schedule_layout_recalc()
 
@@ -610,6 +624,7 @@ func _on_card_settings_state_changed(mask: int) -> void:
 	focus_lock_enabled = state.focus_lock_enabled
 
 	# Theme changes (dark mode / primary color) do not affect grid geometry directly.
+	print("[VirtualScrollGridContainer] done mask=", mask)
 
 func _schedule_layout_recalc() -> void:
 	"""Queue a single deferred layout recalc. Multiple calls in one frame collapse."""
@@ -650,6 +665,19 @@ var _suppress_recycle_until_frame: int = -1
 # Guard against recursive scroll_value_changed signals that can fire during
 # container sorts triggered by add_child() inside _on_scroll_value_changed().
 var _is_processing_scroll: bool = false
+
+# Throttle window resize: ignore tiny size jitters and avoid duplicate back-to-back
+# recalculations caused by scrollbar visibility toggling.
+var _pending_resize_size: Vector2 = Vector2.ZERO
+var _resize_debounce_frames: int = 0
+const RESIZE_IGNORE_DELTA: float = 2.0
+const RESIZE_FRAME_DELAY: int = 1
+
+func _process(_delta: float):
+	if _resize_debounce_frames > 0:
+		_resize_debounce_frames -= 1
+		if _resize_debounce_frames == 0:
+			_on_resize_debounced()
 
 func _on_resize_debounced():
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
@@ -1387,7 +1415,7 @@ func _recycle_card_at_index(index: int):
 		card.set_meta("virtual_index", -1)
 
 		if _card_has_reset:
-			card.reset()
+			card.reset(true)
 		elif _card_has_game_prop:
 			card.game = null
 
@@ -1508,7 +1536,7 @@ func _batch_recycle_from_start(count: int) -> void:
 			card.set_meta("pooled", true)
 			card.set_meta("virtual_index", -1)
 			if _card_has_reset:
-				card.reset()
+				card.reset(true)
 			elif _card_has_game_prop:
 				card.game = null
 			if card.get_parent() == _flow_container:
@@ -1574,7 +1602,7 @@ func _acquire_card() -> Control:
 		if is_instance_valid(card):
 			card.set_meta("pooled", false)
 			if _card_has_reset:
-				card.reset()
+				card.reset(true)
 			card.visible = true
 			return card
 
@@ -2441,6 +2469,7 @@ func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 	"""Refresh effects on all active cards (call when card settings change).
 	Pass force_full_rebuild=true when the effect ID list may have changed; otherwise
 	each card can push parameters to its existing effect nodes."""
+	print("[VirtualScrollGridContainer] refresh_all_card_effects force_full_rebuild=", force_full_rebuild, " active_cards=", _active_cards.size())
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue

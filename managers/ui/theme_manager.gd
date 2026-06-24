@@ -75,9 +75,20 @@ func _on_apply_preset_end() -> void:
 	if new_nav_type != old_nav_type:
 		ui_manager.navigation.set_nav_type(new_nav_type)
 		ui_manager.navigation._rebuild_nav_and_layout()
-	# One rebuild after preset is fully applied
-	# use_true=true to ensure card effects are fully refreshed
-	ui_manager.view._rebuild_views("Preset applied", true)
+
+	# Only force a full view rebuild if the preset actually changed effect
+	# configuration. Layout, display, media shape, focus lock and theme changes
+	# are already applied live by CardSettingsState / the grid.
+	var mask := CardSettingsState.ChangeMask.NONE
+	if ui_manager.card_settings_state:
+		mask = ui_manager.card_settings_state.sync_from_settings_manager()
+		print("[ThemeManager] preset end sync mask=", mask, " has EFFECTS=", bool(mask & CardSettingsState.ChangeMask.EFFECTS))
+	if mask & CardSettingsState.ChangeMask.EFFECTS:
+		print("[ThemeManager] triggering _rebuild_views due to EFFECTS")
+		ui_manager.view._rebuild_views("Preset applied", true)
+	else:
+		print("[ThemeManager] skipping _rebuild_views; no EFFECTS change")
+
 	# Apply dark mode in case it changed during preset
 	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
 	if dark_mode_setting:

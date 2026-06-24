@@ -189,6 +189,7 @@ func _setup_preview_mode():
 	_show_focus_effects(preview_show_focus)
 
 func _build_media_stack(force_full_rebuild: bool = true):
+	print("[GameCard] _build_media_stack force_full_rebuild=", force_full_rebuild, " _media_stack=", _media_stack != null, " _current_texture=", _current_texture != null)
 	var effect_settings := []
 	if UIManager and UIManager.card_settings_state:
 		effect_settings = UIManager.card_settings_state.get_base_effects()
@@ -201,6 +202,12 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	if _media_stack:
 		# Hot-reload: update configs in-place instead of rebuilding
 		_media_stack.update_effect_configs(effect_settings, force_full_rebuild)
+		# The media panel may have been recreated by a layout change (e.g. card
+		# orientation/alignment), so always re-parent the existing stack canvas
+		# item to the current panel to avoid rendering into a freed RID.
+		if _media_panel:
+			_media_stack.set_parent_rid(_media_panel.get_canvas_item())
+			_media_panel.visible = true
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.update_draw_rects()
@@ -209,7 +216,8 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		_media_stack.initialize(_media_container, effect_settings, "base_card")
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
-		_media_stack.set_parent_rid(_media_panel.get_canvas_item())
+		if _media_panel:
+			_media_stack.set_parent_rid(_media_panel.get_canvas_item())
 		# The base card shader handles rounded corners; don't clip on the
 		# node-less stack (it has no geometry of its own to clip against).
 		_media_stack.set_clip_children(false)
@@ -529,6 +537,7 @@ func refresh_settings() -> void:
 		_show_focus_effects(preview_show_focus)
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
+	print("[GameCard] refresh_effects force_full_rebuild=", force_full_rebuild, " game=", game.title if game else null, " _media_stack=", _media_stack != null, " _focus_stack=", _focus_stack != null)
 	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
 	_update_card_state_from_settings()
 	_build_media_stack(force_full_rebuild)
@@ -537,9 +546,13 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	if preview_mode:
 		_show_focus_effects(preview_show_focus)
 
-func reset() -> void:
+func reset(for_pooling: bool = false) -> void:
+	"""Reset the card for reuse.
+	
+	when for_pooling is true, we keep the effect stacks and current texture
+	allocated so recycled cards don't have to rebuild them from scratch. This
+	avoids the empty-card flash when the grid recycles during zoom/resize."""
 	game = null
-	_current_texture = null
 	_is_focused = false
 	set_meta("_cached_show_delete", null)
 	if _focus_tween:
@@ -553,32 +566,29 @@ func reset() -> void:
 		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 	headline = ""
 	supporting_text = ""
-	if _media_stack:
-		_media_stack.set_game_texture(null)
-		_media_stack.free_rids()
-		_media_stack = null
-	if _focus_stack:
-		_focus_stack.set_game_texture(null)
-		# Drop the focus stack so recycled cards don't carry effect nodes around.
-		# It will be rebuilt lazily if this card is focused again.
-		_focus_stack.free_rids()
-		_focus_stack = null
+
+	if for_pooling:
+		# Hide and clear textures but keep stacks allocated for fast reuse.
+		# Retain _current_texture so the same game can be restored instantly.
+		if _media_stack:
+			_media_stack.set_game_texture(null)
+		if _focus_stack:
+			_focus_stack.set_game_texture(null)
+			_focus_stack.set_visible(false)
+	else:
+		_current_texture = null
+		if _media_stack:
+			_media_stack.set_game_texture(null)
+			_media_stack.free_rids()
+			_media_stack = null
+		if _focus_stack:
+			_focus_stack.set_game_texture(null)
+			_focus_stack.free_rids()
+			_focus_stack = null
 
 func set_placeholder(_enabled: bool) -> void:
 	# No-op for M3Card-based GameCard
 	pass
-
-func set_image_priority(high_priority: bool) -> void:
-	if _current_texture and _current_texture != _loading_texture:
-		return  # Already loaded
-
-	if _media_loader:
-		_media_loader.set_priority(high_priority, game)
-
-func restore_focus_animation() -> void:
-	# Re-sync visuals without full tween when layout changes underneath us
-	_sync_focus_visuals()
-	_show_focus_effects(_is_focused)
 
 func _update_display():
 	if not game or not is_node_ready():
@@ -594,7 +604,12 @@ func _update_display_with_priority(high_priority: bool):
 		return
 	_update_status_icon()
 	_update_platform_badge()
-	_load_cover(high_priority)
+	# If the texture is already cached and the game hasn't changed, reuse it
+	# synchronously to avoid the empty-card flash during recycling.
+	if _current_texture and _current_texture != _loading_texture:
+		_set_texture(_current_texture)
+	else:
+		_load_cover(high_priority)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
 
@@ -787,6 +802,7 @@ func _on_media_texture_loaded(texture: Texture2D) -> void:
 	_set_texture(texture)
 
 func _set_texture(tex: Texture2D) -> void:
+	print("[GameCard] _set_texture tex=", tex != null, " current=", _current_texture != null, " game=", game.title if game else null)
 	if tex == _current_texture:
 		return
 	_current_texture = tex

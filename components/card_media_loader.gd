@@ -54,6 +54,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		_set_loading_texture()
 		return
 
+	# Memory cache hit: apply immediately without queueing a worker task.
 	var cached_tex = MemoryManager.get_cached_texture(cache_path)
 	if cached_tex:
 		_emit_texture(cached_tex)

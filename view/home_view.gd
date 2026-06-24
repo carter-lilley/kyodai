@@ -303,17 +303,25 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 		var end_num = mini(end_index, total_count)
 		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
 
-func rebuild_grid(refresh_effects: bool = false) -> void:
-	"""Rebuild the grid to reflect card size/orientation changes."""
+func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> void:
+	"""Rebuild the grid to reflect card size/orientation changes.
+	
+	refresh_effects: when true, fully refresh card effect configurations.
+	preserve_data: when true (default), keep the existing data cache and active
+	cards; only recalculate layout/geometry. Set false only when the underlying
+	data model changed (filter, search, game add/remove)."""
 	_update_grid_orientation()
 	
 	# Apply zoom from centralized card settings state
 	if UIManager and UIManager.card_settings_state and games_grid:
 		games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
 	
-	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:
-		if _total_count_load_pending:
+		# Effect configuration changed.
+		if preserve_data:
+			games_grid.refresh_dimensions()
+			games_grid.refresh_all_card_effects(true)
+		elif _total_count_load_pending:
 			# A count load is already in flight; just refresh dimensions for now.
 			games_grid.refresh_dimensions()
 		else:
@@ -327,8 +335,12 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
-		if not _total_count_load_pending:
-			_load_total_count(true, true)
+		if preserve_data:
+			if not _total_count_load_pending:
+				_load_total_count(true, true)
+		else:
+			if not _total_count_load_pending:
+				_load_total_count(true, false)
 
 ## Returns true when intro animations are complete and cards can accept focus
 ## Note: Intro animations have been removed, so this always returns true

@@ -541,8 +541,13 @@ func _get_current_platform_name() -> String:
 		return _platforms[_current_platform_index].get("name", "Unknown")
 	return "Unknown"
 
-func rebuild_grid(refresh_effects: bool = false) -> void:
-	"""Rebuild the grid to reflect card size/orientation changes."""
+func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> void:
+	"""Rebuild the grid to reflect card size/orientation changes.
+	
+	refresh_effects: when true, fully refresh card effect configurations.
+	preserve_data: when true (default), keep the existing data cache and active
+	cards; only recalculate layout/geometry. Set false only when the underlying
+	data model changed (filter, search, game add/remove)."""
 	
 	_update_grid_orientation()
 	
@@ -550,22 +555,31 @@ func rebuild_grid(refresh_effects: bool = false) -> void:
 	if UIManager and UIManager.card_settings_state and games_grid:
 		games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
 	
-	# If refreshing effects, reload data first (clears cache), then refresh dimensions
 	if refresh_effects:
-		# Use callback version to ensure dimensions refresh AFTER data loads
-		_load_total_count_with_callback(false, func():
-			# Also refresh existing cards
-			games_grid.refresh_all_card_effects(true)
-			# Refresh dimensions AFTER data reload to get correct layout
+		# Effect configuration changed: reload data if we're also clearing the cache,
+		# then refresh dimensions and effects.
+		if preserve_data:
 			games_grid.refresh_dimensions()
-		)
+			games_grid.refresh_all_card_effects(true)
+		else:
+			# Use callback version to ensure dimensions refresh AFTER data loads
+			_load_total_count_with_callback(false, func():
+				# Also refresh existing cards
+				games_grid.refresh_all_card_effects(true)
+				# Refresh dimensions AFTER data reload to get correct layout
+				games_grid.refresh_dimensions()
+			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
 		games_grid.refresh_dimensions()
-		if _is_search_active:
-			_load_total_count_with_search()
+		if preserve_data:
+			# Data is unchanged; just make sure visible cards have their data.
+			games_grid._request_missing_data()
 		else:
-			_load_total_count(true)
+			if _is_search_active:
+				_load_total_count_with_search()
+			else:
+				_load_total_count(true)
 
 func _on_database_ready():
 	_load_total_count()

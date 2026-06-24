@@ -233,11 +233,13 @@ func apply_settings_now() -> void:
 	"""Flush settings changes to the live UI immediately.
 
 	Called when the Settings dialog is dismissed with OK or outside-click.
-	Syncs CardSettingsState, rebuilds views, and refreshes theme/background.
+	Syncs CardSettingsState, rebuilds views only when necessary, and refreshes
+	theme/background.
 	"""
 	# Sync centralized card/grid state with current SettingsManager values.
+	var mask := CardSettingsState.ChangeMask.NONE
 	if card_settings_state:
-		card_settings_state.sync_from_settings_manager()
+		mask = card_settings_state.sync_from_settings_manager()
 
 	# Rebuild navigation layout if the navigation type changed.
 	var type_setting = SettingsManager.get_setting("library_navigation_type")
@@ -247,8 +249,12 @@ func apply_settings_now() -> void:
 			navigation.set_nav_type(new_nav_type)
 			navigation._rebuild_nav_and_layout()
 
-	# Rebuild all views so card size / layout changes are visible immediately.
-	view._rebuild_views("Settings applied", true)
+	# Only force a full view rebuild when the change actually requires it
+	# (effect configuration or data-affecting settings). LAYOUT, DISPLAY,
+	# MEDIA_SHAPE, FOCUS_LOCK and THEME are already applied live by the grid.
+	var rebuild_mask := CardSettingsState.ChangeMask.EFFECTS
+	if mask & rebuild_mask:
+		view._rebuild_views("Settings applied", true)
 
 	# Apply library background and theme colors.
 	_apply_library_background_config()

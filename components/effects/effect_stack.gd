@@ -102,6 +102,7 @@ func update_effect_configs(effect_configs: Array, force_full_rebuild: bool = tru
 	_rebuild_effects()
 
 func set_game_texture(texture: Texture2D):
+	print("[EffectStack] set_game_texture texture=", texture != null, " media_container=", media_container != null, " effects=", _effects.keys())
 	if media_container:
 		media_container.texture = texture
 	for effect_id in _effects:
@@ -112,10 +113,8 @@ func set_game_texture(texture: Texture2D):
 			effect.call_deferred("set_game_texture", texture)
 		effect.call_deferred("_update_shader_params")
 
-func get_effect_configs() -> Array:
-	return _effect_configs.duplicate(true)
-
 func _rebuild_effects():
+	print("[EffectStack] _rebuild_effects effect_configs=", _effect_configs.size(), " media_container=", media_container != null)
 	var active_effect_ids: Array[String] = []
 	for config in _effect_configs:
 		if config is Dictionary:
