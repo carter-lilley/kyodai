@@ -31,6 +31,10 @@ signal download_requested(emulator_id: String)
 		selected_core_id = value
 		_update_display()
 
+# Cached default core id supplied by the parent view. If set, the card avoids
+# querying LaunchManager for the default core.
+var registry_default_core_id: String = ""
+
 var registry_default_emulator: String = "":
 	set(value):
 		registry_default_emulator = value
@@ -72,19 +76,13 @@ func _ready():
 	_build_ui()
 	_update_display()
 
-	# If install status wasn't pre-set by parent, scan on ready
+	# If install status wasn't pre-set by parent, scan on ready.
+	# Parent passes precomputed status, so this fallback should rarely run.
 	if _emulator_install_status.is_empty():
 		var _effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
 		if _effective_emulator != "" and LaunchManager:
 			LaunchManager.scan_emulator_install_state(_effective_emulator)
 			_update_status_indicator()
-	
-	# Poll for download progress updates every second
-	var timer = Timer.new()
-	timer.wait_time = 1.0
-	timer.timeout.connect(_update_status_indicator)
-	add_child(timer)
-	timer.start()
 	
 	# Defer the first firmware check so creating many cards doesn't block the UI.
 	call_deferred("refresh_firmware_indicator")
@@ -207,8 +205,7 @@ func _update_emulator_dropdown():
 		_emulator_dropdown.remove_item(_emulator_dropdown.get_item_count() - 1)
 	_dropdown_entries.clear()
 
-	# Compute the real (non-Auto) options first so we know whether to collapse
-	# single-option platforms into a single Auto entry.
+	# Compute the available standalone emulators and RetroArch cores.
 	var standalone_options: Array[Dictionary] = []
 	for i in range(_available_emulators.size()):
 		var emulator = _available_emulators[i]
@@ -221,8 +218,14 @@ func _update_emulator_dropdown():
 	if _has_retroarch():
 		retroarch_cores = _get_available_retroarch_cores()
 	
-	var total_options = standalone_options.size() + retroarch_cores.size()
-	var collapse_single_option = total_options == 1
+	# Determine the default core id for RetroArch when that's the platform default.
+	# Prefer the cached value supplied by the parent view.
+	var default_core_id = ""
+	if registry_default_emulator == "retroarch":
+		if registry_default_core_id != "":
+			default_core_id = registry_default_core_id
+		else:
+			default_core_id = LaunchManager.get_default_core_id_for_platform("retroarch", platform_slug) if LaunchManager else ""
 
 	# Add "Auto" option first if we have a registry default
 	var selected_index = 0
@@ -235,22 +238,12 @@ func _update_emulator_dropdown():
 		_emulator_dropdown.add_item("Not Configured", 0)
 		_dropdown_entries.append({"type": "auto", "emulator_id": "", "core_id": ""})
 
-	# When there's only one real option, the Auto entry represents it; skip
-	# adding a duplicate explicit entry. The user remains in auto mode.
-	if collapse_single_option:
-		_emulator_dropdown.selected = selected_index
-		
-		# Reconnect the selection signal now that the rebuild is done.
-		if not _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
-			_emulator_dropdown.item_selected.connect(_on_emulator_selected)
-		
-		_is_rebuilding_dropdown = false
-		_update_status_indicator()
-		return
-
-	# Add available standalone emulators
+	# Add non-default standalone emulators
 	for emulator in standalone_options:
 		var emulator_id = emulator.get("id", "")
+		# Skip the default standalone emulator; it's represented by Auto.
+		if emulator_id == registry_default_emulator:
+			continue
 		var emulator_name = emulator.get("name", emulator_id)
 		var index = _dropdown_entries.size()
 		_emulator_dropdown.add_item(emulator_name, index)
@@ -258,15 +251,28 @@ func _update_emulator_dropdown():
 		if emulator_id == selected_emulator:
 			selected_index = index
 
-	# Add RetroArch core options grouped together
+	# Add non-default RetroArch core options grouped together
 	for core in retroarch_cores:
 		var core_id = core.get("id", "")
+		# Skip the default RetroArch core; it's represented by Auto.
+		if registry_default_emulator == "retroarch" and core_id == default_core_id:
+			continue
 		var core_name = core.get("name", core_id)
 		var index = _dropdown_entries.size()
 		_emulator_dropdown.add_item("RetroArch - " + core_name, index)
 		_dropdown_entries.append({"type": "core", "emulator_id": "retroarch", "core_id": core_id})
 		if selected_emulator == "retroarch" and selected_core_id == core_id:
 			selected_index = index
+
+	# If the current selection matches the default, treat it as Auto so the UI
+	# doesn't show a non-existent explicit entry.
+	if registry_default_emulator != "":
+		if selected_emulator == "":
+			selected_index = 0
+		elif selected_emulator == registry_default_emulator and registry_default_emulator != "retroarch":
+			selected_index = 0
+		elif selected_emulator == "retroarch" and selected_core_id == default_core_id:
+			selected_index = 0
 
 	_emulator_dropdown.selected = selected_index
 	
@@ -279,7 +285,9 @@ func _update_emulator_dropdown():
 
 func _get_default_entry_text(emulator_id: String) -> String:
 	if emulator_id == "retroarch":
-		var default_core_id = LaunchManager.get_default_core_id_for_platform("retroarch", platform_slug) if LaunchManager else ""
+		var default_core_id = registry_default_core_id
+		if default_core_id == "" and LaunchManager:
+			default_core_id = LaunchManager.get_default_core_id_for_platform("retroarch", platform_slug)
 		var default_core_name = _get_core_display_name(default_core_id)
 		return "RetroArch - " + default_core_name if default_core_name != "" else "RetroArch"
 	return _get_emulator_name(emulator_id)

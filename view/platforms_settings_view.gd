@@ -20,6 +20,10 @@ var _is_initializing: bool = false
 
 var _romm_connection_panel: RommConnectionPanel = null
 
+# Shared timer for polling platform card install/download state. Each card used
+# to create its own Timer, which added overhead when dozens of cards were built.
+var _status_poll_timer: Timer = null
+
 const NARROW_BREAKPOINT_DP := 850.0
 
 func _is_narrow_screen() -> bool:
@@ -100,6 +104,14 @@ func _ready():
 	_update_column_visibility()
 	_update_settings_row_layout()
 
+	# Create a single shared timer to refresh all platform cards' status
+	# indicators, replacing per-card timers.
+	_status_poll_timer = Timer.new()
+	_status_poll_timer.wait_time = 1.0
+	_status_poll_timer.timeout.connect(_refresh_all_card_status)
+	add_child(_status_poll_timer)
+	_status_poll_timer.start()
+
 	super._ready()
 
 func _fetch_platforms():
@@ -165,9 +177,13 @@ func _fetch_platforms():
 		var enabled_platforms = _get_enabled_platforms()
 		var fetched_slugs: Array[String] = []
 
-		# Collect unique emulators and pre-validate them once
+		# Collect unique emulators and pre-validate them once.
+		# Also cache emulator lists per platform and default core ids so cards
+		# don't re-query the registry.
 		var unique_emulators: Array[String] = []
 		var emulator_platforms: Dictionary = {}  # emulator_id -> Array[slug]
+		var platform_emulator_cache: Dictionary = {}
+		var platform_default_core_cache: Dictionary = {}
 
 		for platform_data in data:
 			if not platform_data is Dictionary:
@@ -177,8 +193,11 @@ func _fetch_platforms():
 			if slug == "":
 				continue
 
-			# Get emulators for this platform
+			# Get emulators for this platform and cache the result
 			var platform_emulators = LaunchManager.get_emulators_for_platform(slug)
+			platform_emulator_cache[slug] = platform_emulators
+			# Cache the default RetroArch core id for this platform
+			platform_default_core_cache[slug] = LaunchManager.get_default_core_id_for_platform("retroarch", slug)
 			for emulator in platform_emulators:
 				var emu_id = emulator.get("id", "")
 				if emu_id != "" and not unique_emulators.has(emu_id):
@@ -194,46 +213,81 @@ func _fetch_platforms():
 			var progress = LaunchManager.get_install_progress(emu_id)
 			precomputed_status[emu_id] = progress["status"] == "complete"
 
-		# Create platform cards with precomputed status
+		# Prepare card creation payloads so the work can be batched across frames.
+		var card_payloads: Array[Dictionary] = []
 		for platform_data in data:
 			if not platform_data is Dictionary:
 				continue
-
 			var slug = platform_data.get("slug", "")
 			var platform_name = platform_data.get("name", slug)
 			var romm_id = platform_data.get("id", 0)
-			var icon_url = platform_data.get("icon_url", "")
-
 			if slug == "" or romm_id == 0:
 				continue
-
 			fetched_slugs.append(slug)
-
-			# Create platform card with precomputed validation results
-			var card = _create_platform_card(slug, platform_name, romm_id, icon_url, enabled_platforms, precomputed_status)
-			# Distribute cards: single column on narrow screens, two columns on wide
-			if _is_narrow_screen():
-				_cards_left.add_child(card)
-			else:
-				if _platform_cards.size() % 2 == 0:
-					_cards_left.add_child(card)
-				else:
-					_cards_right.add_child(card)
-			_platform_cards[slug] = card
-
-		# Remove platforms that no longer exist on RomM
-		_remove_deleted_platforms(fetched_slugs)
-
-		# Update select all button text
-		_update_select_all_button_text()
-
-		_is_fetching_platforms = false
+			card_payloads.append({
+				"slug": slug,
+				"platform_name": platform_name,
+				"romm_id": romm_id,
+				"icon_url": platform_data.get("icon_url", "")
+			})
+		
+		# Spread card creation across frames to avoid stuttering the UI.
+		# Use MemoryManager's batch worker for smooth per-frame processing.
+		MemoryManager.start_batch(
+			card_payloads,
+			func(payload: Dictionary, _index: int) -> PlatformCard:
+				return _create_platform_card(
+					payload.slug,
+					payload.platform_name,
+					payload.romm_id,
+					payload.icon_url,
+					enabled_platforms,
+					precomputed_status,
+					platform_emulator_cache,
+					platform_default_core_cache
+				),
+			MemoryManager.BatchMode.SYNC,
+			3,
+			func(_processed: int, _total: int):
+				pass,
+			func(results: Array):
+				for card in results:
+					if not card is PlatformCard:
+						continue
+					var slug: String = card.platform_slug
+					# Distribute cards: single column on narrow screens, two columns on wide
+					if _is_narrow_screen():
+						_cards_left.add_child(card)
+					else:
+						if _platform_cards.size() % 2 == 0:
+							_cards_left.add_child(card)
+						else:
+							_cards_right.add_child(card)
+					_platform_cards[slug] = card
+				
+				# Remove loading label now that the first batch has rendered.
+				for child in _platforms_container.get_children():
+					if child.name == "LoadingLabel":
+						child.queue_free()
+						break
+				
+				# Remove platforms that no longer exist on RomM
+				_remove_deleted_platforms(fetched_slugs)
+				
+				# Update select all button text
+				_update_select_all_button_text()
+				
+				_is_fetching_platforms = false
+		)
 	, false)  # bypass cache for explicit user-driven fetches
 
-func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}) -> PlatformCard:
+func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCard.new()
 	card.platform_slug = slug
 	card.platform_name = platform_name
+	# Pass cached default core id so the card doesn't re-query the registry.
+	if default_core_cache.has(slug):
+		card.registry_default_core_id = default_core_cache[slug]
 
 	# Set sync enabled status
 	var platform_config = enabled_platforms.get(slug, {})
@@ -257,8 +311,12 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 	var registry_default = LaunchManager.get_default_emulator_for_platform(slug)
 	card.registry_default_emulator = registry_default
 
-	# Load available emulators for this platform
-	var available_emulators = LaunchManager.get_emulators_for_platform(slug)
+	# Load available emulators for this platform (use cached lookup when available)
+	var available_emulators: Array[Dictionary]
+	if emulator_cache.has(slug):
+		available_emulators = emulator_cache[slug]
+	else:
+		available_emulators = LaunchManager.get_emulators_for_platform(slug)
 	card.set_available_emulators(available_emulators)
 
 	# Set install status for each emulator (use precomputed status if available)
@@ -309,6 +367,15 @@ func _load_platforms_from_database():
 		child.queue_free()
 	_platform_cards.clear()
 
+	# Cache emulator lists to avoid duplicate registry queries during batch creation
+	var emulator_cache: Dictionary = {}
+	for platform in platforms:
+		var slug = platform.slug
+		if slug == "":
+			continue
+		emulator_cache[slug] = LaunchManager.get_emulators_for_platform(slug)
+
+	var platform_payloads: Array[Dictionary] = []
 	for platform in platforms:
 		var slug = platform.slug
 		var platform_name = platform.name
@@ -317,24 +384,44 @@ func _load_platforms_from_database():
 		if slug == "":
 			continue
 
-		# Create offline card (no romm_id available)
-		var card = _create_platform_card(slug, platform_name, 0, icon_url, enabled_platforms)
-		card.disabled = true
-		card.tooltip_text = "Connect to RomM to configure this platform"
-		if _is_narrow_screen():
-			_cards_left.add_child(card)
-		else:
-			if _platform_cards.size() % 2 == 0:
-				_cards_left.add_child(card)
-			else:
-				_cards_right.add_child(card)
-		_platform_cards[slug] = card
+		platform_payloads.append({
+			"slug": slug,
+			"platform_name": platform_name,
+			"icon_url": icon_url
+		})
 
-	if platforms.size() == 0:
-		var no_platforms_label = M3Label.new()
-		no_platforms_label.name = "NoPlatformsLabel"
-		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
-		_cards_left.add_child(no_platforms_label)
+	# Spread offline card creation across frames
+	MemoryManager.start_batch(
+		platform_payloads,
+		func(payload: Dictionary, _index: int) -> PlatformCard:
+			var card = _create_platform_card(payload.slug, payload.platform_name, 0, payload.icon_url, enabled_platforms, {}, emulator_cache)
+			card.disabled = true
+			card.tooltip_text = "Connect to RomM to configure this platform"
+			return card,
+		MemoryManager.BatchMode.SYNC,
+		5,
+		func(_processed: int, _total: int):
+			pass,
+		func(results: Array):
+			for card in results:
+				if not card is PlatformCard:
+					continue
+				var slug: String = card.platform_slug
+				if _is_narrow_screen():
+					_cards_left.add_child(card)
+				else:
+					if _platform_cards.size() % 2 == 0:
+						_cards_left.add_child(card)
+					else:
+						_cards_right.add_child(card)
+				_platform_cards[slug] = card
+
+			if platforms.size() == 0:
+				var no_platforms_label = M3Label.new()
+				no_platforms_label.name = "NoPlatformsLabel"
+				no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
+				_cards_left.add_child(no_platforms_label)
+	)
 
 func _remove_deleted_platforms(current_slugs: Array[String]):
 	var enabled_platforms = _get_enabled_platforms()
@@ -480,6 +567,13 @@ func _on_firmware_download_completed(platform_slug: String, _success: bool):
 	var card = _platform_cards.get(platform_slug)
 	if card:
 		card.refresh_ui()
+
+func _refresh_all_card_status() -> void:
+	"""Refresh install/download status indicators for all platform cards."""
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		if is_instance_valid(card):
+			card.refresh_ui()
 
 func _on_check_updates_pressed():
 	var check_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
