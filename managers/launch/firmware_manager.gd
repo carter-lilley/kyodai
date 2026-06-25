@@ -15,8 +15,11 @@ func _ready():
 	launch_manager = get_parent()
 
 ## Clears the firmware readiness cache for a specific platform/emulator.
-func clear_firmware_cache(platform_slug: String, emulator_id: String) -> void:
-	_firmware_ready_cache.erase(platform_slug + ":" + emulator_id)
+func clear_firmware_cache(platform_slug: String, emulator_id: String, core_id: String = "") -> void:
+	var key = platform_slug + ":" + emulator_id
+	if core_id != "":
+		key += ":" + core_id
+	_firmware_ready_cache.erase(key)
 
 ## Clears the entire firmware readiness cache.
 func clear_all_firmware_cache() -> void:
@@ -31,15 +34,25 @@ func clear_firmware_cache_for_platform(platform_slug: String) -> void:
 
 ## Gets the firmware directory for an emulator
 ## Resolves paths with wildcards ({emulator_dir}, {app_data}, etc.)
-func get_firmware_directory(emulator_id: String) -> String:
+## Optional core_id for core-specific firmware paths (e.g. RetroArch PCSX2).
+func get_firmware_directory(emulator_id: String, platform_slug: String = "", core_id: String = "") -> String:
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
 	if emulator.is_empty():
 		return ""
 	
 	var paths = emulator.get("paths", {})
 	var firmware = paths.get("firmware", {})
-	var default_config = firmware.get("_default", {})
-	var directories = default_config.get("directories", {})
+	var config: Dictionary = firmware.get("_default", {})
+	
+	# For RetroArch, check core-specific firmware config first
+	if emulator_id == "retroarch" and core_id != "" and platform_slug != "":
+		var core_config = launch_manager.registry.get_core_config(emulator_id, platform_slug, core_id)
+		var core_paths = core_config.get("paths", {})
+		var core_firmware = core_paths.get("firmware", {})
+		if not core_firmware.is_empty():
+			config = core_firmware
+	
+	var directories = config.get("directories", {})
 	
 	var platform_name = PlatformManager.get_platform_name().to_lower()
 	var dir = directories.get(platform_name, "")
@@ -50,18 +63,20 @@ func get_firmware_directory(emulator_id: String) -> String:
 		return ""
 	
 	# Resolve wildcards
-	dir = FSM.resolve_emulator_path(dir, emulator_id)
+	dir = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
 	return dir.rstrip("/") + "/"
 
 ## Checks if firmware is ready for a platform/emulator
 ## Returns true if firmware directory exists and has any of the expected files
 ## Searches recursively through subdirectories
-func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> bool:
+func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core_id: String = "") -> bool:
 	var cache_key = platform_slug + ":" + emulator_id
+	if core_id != "":
+		cache_key += ":" + core_id
 	if _firmware_ready_cache.has(cache_key):
 		return _firmware_ready_cache[cache_key]
 	
-	var firmware_dir = get_firmware_directory(emulator_id)
+	var firmware_dir = get_firmware_directory(emulator_id, platform_slug, core_id)
 	if firmware_dir == "":
 		# No firmware directory configured, assume not needed
 		_firmware_ready_cache[cache_key] = true
@@ -157,18 +172,18 @@ func get_platform_firmware_expected_files(platform_slug: String) -> Array:
 ## Sets up firmware for a platform by downloading from RomM
 ## This should be called during platform sync
 ## callback(success: bool, message: String)
-func setup_platform_firmware(platform_slug: String, emulator_id: String, callback: Callable = Callable()) -> void:
+func setup_platform_firmware(platform_slug: String, emulator_id: String, callback: Callable = Callable(), core_id: String = "") -> void:
 	print("[FirmwareManager] Checking firmware for " + platform_slug + " / " + emulator_id)
 	
 	# Check if firmware is already ready
-	if is_platform_firmware_ready(platform_slug, emulator_id):
+	if is_platform_firmware_ready(platform_slug, emulator_id, core_id):
 		print("[FirmwareManager] Firmware already ready for " + platform_slug)
 		if callback.is_valid():
 			callback.call(true, "Firmware already installed")
 		return
 	
 	# Get firmware directory
-	var firmware_dir = get_firmware_directory(emulator_id)
+	var firmware_dir = get_firmware_directory(emulator_id, platform_slug, core_id)
 	if firmware_dir == "":
 		print("[FirmwareManager] No firmware directory configured for " + emulator_id)
 		if callback.is_valid():

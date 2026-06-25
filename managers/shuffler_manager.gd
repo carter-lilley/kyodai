@@ -33,6 +33,10 @@ var _reroll_in_progress: bool = false
 var _reroll_download_id: String = ""
 var _reroll_notification_id: int = -1
 
+# Session log capture
+var _session_log_path: String = "user://logs/session.log"
+var _session_log_start_offset: int = -1
+
 # Download progress tracking
 var _download_item_ids: Array[String] = []
 var _download_progresses: Dictionary = {}  # item_id -> float
@@ -67,6 +71,64 @@ func _ready():
 func _exit_tree():
 	if is_session_active():
 		stop_session()
+
+# ============================================================================
+# SESSION LOGGING
+# ============================================================================
+
+func _start_session_log_capture() -> void:
+	var logs_dir := ProjectSettings.globalize_path("user://logs/")
+	if not DirAccess.dir_exists_absolute(logs_dir):
+		DirAccess.make_dir_recursive_absolute(logs_dir)
+
+	var session_log := ProjectSettings.globalize_path(_session_log_path)
+	var offset := 0
+	if FileAccess.file_exists(session_log):
+		var file := FileAccess.open(session_log, FileAccess.READ)
+		if file:
+			offset = file.get_length()
+			file.close()
+
+	_session_log_start_offset = offset
+	print("[ShufflerManager] Session log capture started at offset " + str(offset))
+
+func _finalize_session_log() -> void:
+	if _session_log_start_offset < 0:
+		return
+
+	var session_log := ProjectSettings.globalize_path(_session_log_path)
+	var start_offset := _session_log_start_offset
+	_session_log_start_offset = -1
+
+	if not FileAccess.file_exists(session_log):
+		return
+
+	var file := FileAccess.open(session_log, FileAccess.READ)
+	if not file:
+		push_error("[ShufflerManager] Failed to read session log")
+		return
+
+	var size := file.get_length()
+	if size <= start_offset:
+		file.close()
+		return
+
+	file.seek(start_offset)
+	var chunk := file.get_buffer(size - start_offset)
+	file.close()
+
+	var dt := Time.get_datetime_dict_from_system()
+	var filename := "shuffler_%04d-%02d-%02d_%02d-%02d-%02d.log" % [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second]
+	var output_path := ProjectSettings.globalize_path("user://logs/" + filename)
+
+	var out := FileAccess.open(output_path, FileAccess.WRITE)
+	if not out:
+		push_error("[ShufflerManager] Failed to write session log: " + output_path)
+		return
+
+	out.store_buffer(chunk)
+	out.close()
+	print("[ShufflerManager] Session log saved: " + output_path)
 
 # ============================================================================
 # PUBLIC API
@@ -188,6 +250,7 @@ func stop_session() -> void:
 	_config.clear()
 	_state = State.IDLE
 
+	_finalize_session_log()
 	session_stopped.emit()
 
 func pause_session() -> void:
@@ -244,6 +307,7 @@ func remove_game() -> void:
 		return
 
 	_reroll_in_progress = true
+	_set_controls_reroll_enabled(false)
 	_state = State.ACTIVE
 	_kill_round_timer()
 
@@ -256,6 +320,7 @@ func remove_game() -> void:
 	# Bail out if the session was stopped while we were waiting.
 	if _state != State.ACTIVE and _state != State.PAUSED:
 		_reroll_in_progress = false
+		_set_controls_reroll_enabled(true)
 		return
 
 	# Fully terminate the outgoing process so it doesn't linger as a suspended zombie.
@@ -269,6 +334,7 @@ func remove_game() -> void:
 	var candidate = _pick_reroll_candidate(index)
 	if candidate == null:
 		_reroll_in_progress = false
+		_set_controls_reroll_enabled(true)
 		NotificationManager.show_notification("No alternative game found for reroll", NotificationManager.Type.ERROR)
 		_switch_to_game(index)
 		return
@@ -277,6 +343,7 @@ func remove_game() -> void:
 		print("[ShufflerManager] Candidate already downloaded: " + candidate.title)
 		_replace_bag_entry(index, candidate, candidate.file_path)
 		_reroll_in_progress = false
+		_set_controls_reroll_enabled(true)
 		_switch_to_game(index)
 		return
 
@@ -330,6 +397,7 @@ func remove_game() -> void:
 
 	if _reroll_download_id == "":
 		_reroll_in_progress = false
+		_set_controls_reroll_enabled(true)
 		NotificationManager.dismiss_notification(_reroll_notification_id)
 		_reroll_notification_id = -1
 		NotificationManager.show_notification("Failed to queue reroll download", NotificationManager.Type.ERROR)
@@ -412,6 +480,7 @@ func _replace_bag_entry(index: int, game: GameResource, temp_path: String) -> vo
 
 func _on_reroll_download_complete(success: bool, path: String, index: int, game: GameResource) -> void:
 	_reroll_in_progress = false
+	_set_controls_reroll_enabled(true)
 
 	if _reroll_notification_id != -1:
 		NotificationManager.dismiss_notification(_reroll_notification_id)
@@ -436,6 +505,10 @@ func _on_reroll_download_complete(success: bool, path: String, index: int, game:
 		push_warning("[ShufflerManager] Reroll download failed for " + game.title + "; relaunching previous game")
 		NotificationManager.show_notification("Reroll failed; relaunching previous game", NotificationManager.Type.ERROR, null, 3.0)
 		_switch_to_game(index)
+
+func _set_controls_reroll_enabled(enabled: bool) -> void:
+	if _controls_window and is_instance_valid(_controls_window):
+		_controls_window.set_reroll_enabled(enabled)
 
 # ============================================================================
 # DOWNLOADS (sequential — one at a time)
@@ -550,6 +623,7 @@ func _on_download_progress(item_id: String, progress: float) -> void:
 
 func _enter_shuffler_mode() -> void:
 	_state = State.ACTIVE
+	_start_session_log_capture()
 
 	# Disconnect from DownloadManager progress signal
 	if DownloadManager.download_progress.is_connected(_on_download_progress):

@@ -28,6 +28,23 @@ func resolve_emulator_for_game(game: GameResource) -> String:
 	# 3. Use registry default (from _platform_defaults or first available)
 	return launch_manager.registry.get_default_emulator_for_platform(game.platform_slug)
 
+## Resolves which RetroArch core id to use for a game.
+## Priority: 1. Game override, 2. User platform setting, 3. platforms.json default
+func resolve_core_for_game(game: GameResource) -> String:
+	# 1. Check game override
+	if game.preferred_core_id != "":
+		return game.preferred_core_id
+	
+	# 2. Check user platform settings
+	var enabled_platforms = _get_enabled_platforms()
+	var platform_config = enabled_platforms.get(game.platform_slug, {})
+	var platform_core = platform_config.get("core_id", "")
+	if platform_core != "":
+		return platform_core
+	
+	# 3. Use platforms.json default
+	return launch_manager.registry.get_retroarch_core_name(game.platform_slug)
+
 ## Creates a launch intent for a game
 func create_launch_intent(game: GameResource, rom_path_override: String = "") -> LaunchIntent:
 	if rom_path_override == "" and not game.is_active_variant_downloaded():
@@ -64,8 +81,11 @@ func create_launch_intent(game: GameResource, rom_path_override: String = "") ->
 	var emulator = launch_manager.registry.get_emulator(intent.emulator_id)
 	intent.emulator_name = emulator.get("name", intent.emulator_id)
 	
-	# Get core if needed (for RetroArch)
-	intent.core_name = launch_manager.registry.get_core_for_platform(intent.emulator_id, game.platform_slug)
+	# Resolve core if needed (for RetroArch)
+	var core_id = ""
+	if intent.emulator_id == "retroarch":
+		core_id = resolve_core_for_game(game)
+	intent.core_name = launch_manager.registry.get_core_for_platform(intent.emulator_id, game.platform_slug, core_id)
 	
 	# Build launch arguments based on platform
 	_build_launch_args(intent, emulator)

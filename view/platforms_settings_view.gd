@@ -246,9 +246,12 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 
 	# Set selected emulator (user override only - empty means use registry default)
 	var emulator_id = ""
+	var core_id = ""
 	if platform_config is Dictionary:
 		emulator_id = platform_config.get("emulator_id", "")
+		core_id = platform_config.get("core_id", "")
 	card.selected_emulator = emulator_id
+	card.selected_core_id = core_id
 
 	# Set registry default emulator for "Auto" display
 	var registry_default = LaunchManager.get_default_emulator_for_platform(slug)
@@ -278,8 +281,8 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		_update_select_all_button_text()
 	)
 
-	card.emulator_changed.connect(func(emu_id: String):
-		_set_platform_emulator(slug, emu_id)
+	card.emulator_changed.connect(func(emu_id: String, core_id: String):
+		_set_platform_emulator(slug, emu_id, core_id)
 	)
 
 	# Connect download button
@@ -372,18 +375,20 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 	var config = enabled_platforms.get(slug, {})
 	if config is bool:
 		# Migrate old format
-		config = {"id": actual_platform_id, "enabled": config, "emulator_id": ""}
+		config = {"id": actual_platform_id, "enabled": config, "emulator_id": "", "core_id": ""}
 	elif config is Dictionary:
 		config["enabled"] = enabled
 		# Update ID if we found a valid one and current is 0
 		if config.get("id", 0) == 0 and actual_platform_id > 0:
 			config["id"] = actual_platform_id
 	else:
-		config = {"id": actual_platform_id, "enabled": enabled, "emulator_id": ""}
+		config = {"id": actual_platform_id, "enabled": enabled, "emulator_id": "", "core_id": ""}
 
-	# Preserve emulator_id if it exists
+	# Preserve emulator_id/core_id if they exist
 	if not config.has("emulator_id"):
 		config["emulator_id"] = ""
+	if not config.has("core_id"):
+		config["core_id"] = ""
 	# Ensure ID is set (fallback to looked-up ID)
 	if config.get("id", 0) == 0:
 		config["id"] = actual_platform_id
@@ -394,7 +399,7 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 	if setting:
 		SettingsManager.set_setting(enabled_platforms, setting)
 
-func _set_platform_emulator(slug: String, emulator_id: String):
+func _set_platform_emulator(slug: String, emulator_id: String, core_id: String = ""):
 	var enabled_platforms = _get_enabled_platforms()
 
 	# Get existing config or create new
@@ -409,15 +414,16 @@ func _set_platform_emulator(slug: String, emulator_id: String):
 
 	if config is bool:
 		# Migrate old format - use looked-up ID
-		config = {"id": platform_id, "enabled": config, "emulator_id": emulator_id}
+		config = {"id": platform_id, "enabled": config, "emulator_id": emulator_id, "core_id": core_id}
 	elif config is Dictionary:
 		config["emulator_id"] = emulator_id
+		config["core_id"] = core_id
 		# Ensure we have the correct ID
 		if config.get("id", 0) == 0 and platform_id > 0:
 			config["id"] = platform_id
 	else:
 		# Create new config with looked-up ID
-		config = {"id": platform_id, "enabled": false, "emulator_id": emulator_id}
+		config = {"id": platform_id, "enabled": false, "emulator_id": emulator_id, "core_id": core_id}
 
 	# Preserve other fields
 	if not config.has("enabled"):

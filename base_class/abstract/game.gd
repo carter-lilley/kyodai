@@ -25,6 +25,9 @@ const FSM := preload("res://managers/filesystem_manager.gd")
 ## Per-game emulator override (optional)
 @export var preferred_emulator_id: String = ""
 
+## Per-game RetroArch core override (optional)
+@export var preferred_core_id: String = ""
+
 ## Sibling ROMs - variants of the same game (different regions, versions, etc.)
 @export var siblings: Array[Dictionary] = []  # [{id, name, file_name, file_size, title_id}, ...]
 @export var selected_sibling_id: int = 0  # 0 means use this game itself

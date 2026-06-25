@@ -102,7 +102,7 @@ func get_emulators_for_platform(platform_slug: String) -> Array[Dictionary]:
 	
 	for emulator_id in _emulator_registry.keys():
 		var emulator = _emulator_registry[emulator_id]
-		var platforms = emulator.get("platforms", [])
+		var platforms = emulator.get("meta", {}).get("platforms", [])
 		
 		if platform_slug in platforms:
 			var emu_copy = emulator.duplicate()
@@ -203,14 +203,75 @@ func get_emulator_install_path(emulator_id: String) -> String:
 	
 	return ""
 
-## Gets the core name for a platform (for RetroArch-style emulators)
-func get_core_for_platform(emulator_id: String, platform_slug: String) -> String:
+## Returns the raw core array for a platform from an emulator's registry data.
+## Each entry is a Dictionary with id/name/mapping/save_name/default etc.
+func get_cores_for_platform(emulator_id: String, platform_slug: String) -> Array[Dictionary]:
 	var emulator = get_emulator(emulator_id)
 	if emulator.is_empty():
-		return ""
+		return []
 	
 	var cores = emulator.get("cores", {})
-	var core = cores.get(platform_slug, {})
+	var platform_cores = cores.get(platform_slug, [])
+	
+	# Backward compatibility: old single-core dicts become single-element arrays.
+	if platform_cores is Dictionary:
+		var migrated: Array[Dictionary] = []
+		var copy = platform_cores.duplicate()
+		if not copy.has("id"):
+			copy["id"] = copy.get("mapping", platform_slug)
+		if not copy.has("name"):
+			copy["name"] = copy.get("save_name", copy["id"])
+		migrated.append(copy)
+		return migrated
+	
+	if platform_cores is Array:
+		var result: Array[Dictionary] = []
+		for core in platform_cores:
+			if core is Dictionary:
+				result.append(core.duplicate())
+		return result
+	
+	return []
+
+## Gets the default core id for a platform, falling back to the first available core.
+func get_default_core_id_for_platform(emulator_id: String, platform_slug: String) -> String:
+	var cores = get_cores_for_platform(emulator_id, platform_slug)
+	
+	for core in cores:
+		if core.get("default", false):
+			return core.get("id", "")
+	
+	if cores.size() > 0:
+		return cores[0].get("id", "")
+	
+	return ""
+
+## Looks up a specific core config by id for a platform.
+func get_core_config(emulator_id: String, platform_slug: String, core_id: String) -> Dictionary:
+	if core_id == "":
+		return {}
+	
+	var cores = get_cores_for_platform(emulator_id, platform_slug)
+	for core in cores:
+		if core.get("id", "") == core_id:
+			return core
+	return {}
+
+## Gets the OS-specific libretro core base name for a platform/core (for RetroArch-style emulators).
+## Returns the desktop "mapping" or Android "android_mapping" when available.
+func get_core_for_platform(emulator_id: String, platform_slug: String, core_id: String = "") -> String:
+	var core = get_core_config(emulator_id, platform_slug, core_id)
+	if core.is_empty():
+		core = get_core_config(emulator_id, platform_slug, get_default_core_id_for_platform(emulator_id, platform_slug))
+	
+	if core.is_empty():
+		return ""
+	
+	if PlatformManager.is_android():
+		var android_mapping = core.get("android_mapping", "")
+		if android_mapping != "":
+			return android_mapping
+	
 	return core.get("mapping", "")
 
 ## Gets the app data directory for an emulator on Android
@@ -230,8 +291,8 @@ func get_app_data_path(emulator_id: String) -> String:
 	
 	return "/storage/emulated/0/Android/data/" + package + "/files/"
 
-## Gets the RetroArch core name for a platform from platforms.json
-## This is the display name used for save directories (e.g., "SwanStation", "Snes9x")
+## Gets the RetroArch core id for a platform from platforms.json
+## This is the default core id used when no user/game override exists.
 func get_retroarch_core_name(platform_slug: String) -> String:
 	var platform = _platforms_data.get(platform_slug, {})
 	return platform.get("retroarch_core", "")

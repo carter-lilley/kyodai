@@ -76,8 +76,20 @@ func get_emulator_install_path(emulator_id: String) -> String:
 func _get_emulator_directory(emulator_id: String) -> String:
 	return registry._get_emulator_directory(emulator_id)
 
-func get_core_for_platform(emulator_id: String, platform_slug: String) -> String:
-	return registry.get_core_for_platform(emulator_id, platform_slug)
+func get_core_for_platform(emulator_id: String, platform_slug: String, core_id: String = "") -> String:
+	return registry.get_core_for_platform(emulator_id, platform_slug, core_id)
+
+func resolve_core_for_game(game: GameResource) -> String:
+	return intent.resolve_core_for_game(game)
+
+func get_cores_for_platform(emulator_id: String, platform_slug: String) -> Array[Dictionary]:
+	return registry.get_cores_for_platform(emulator_id, platform_slug)
+
+func get_default_core_id_for_platform(emulator_id: String, platform_slug: String) -> String:
+	return registry.get_default_core_id_for_platform(emulator_id, platform_slug)
+
+func get_core_config(emulator_id: String, platform_slug: String, core_id: String) -> Dictionary:
+	return registry.get_core_config(emulator_id, platform_slug, core_id)
 
 func get_app_data_path(emulator_id: String) -> String:
 	return registry.get_app_data_path(emulator_id)
@@ -162,8 +174,8 @@ func cleanup_extracted_game_files(game: GameResource) -> void:
 # Firmware wrappers
 # ============================================================================
 
-func clear_firmware_cache(platform_slug: String, emulator_id: String) -> void:
-	firmware.clear_firmware_cache(platform_slug, emulator_id)
+func clear_firmware_cache(platform_slug: String, emulator_id: String, core_id: String = "") -> void:
+	firmware.clear_firmware_cache(platform_slug, emulator_id, core_id)
 
 func clear_all_firmware_cache() -> void:
 	firmware.clear_all_firmware_cache()
@@ -171,17 +183,17 @@ func clear_all_firmware_cache() -> void:
 func clear_firmware_cache_for_platform(platform_slug: String) -> void:
 	firmware.clear_firmware_cache_for_platform(platform_slug)
 
-func get_firmware_directory(emulator_id: String) -> String:
-	return firmware.get_firmware_directory(emulator_id)
+func get_firmware_directory(emulator_id: String, platform_slug: String = "", core_id: String = "") -> String:
+	return firmware.get_firmware_directory(emulator_id, platform_slug, core_id)
 
-func is_platform_firmware_ready(platform_slug: String, emulator_id: String) -> bool:
-	return firmware.is_platform_firmware_ready(platform_slug, emulator_id)
+func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core_id: String = "") -> bool:
+	return firmware.is_platform_firmware_ready(platform_slug, emulator_id, core_id)
 
 func get_platform_firmware_expected_files(platform_slug: String) -> Array:
 	return firmware.get_platform_firmware_expected_files(platform_slug)
 
-func setup_platform_firmware(platform_slug: String, emulator_id: String, callback: Callable = Callable()) -> void:
-	firmware.setup_platform_firmware(platform_slug, emulator_id, callback)
+func setup_platform_firmware(platform_slug: String, emulator_id: String, callback: Callable = Callable(), core_id: String = "") -> void:
+	firmware.setup_platform_firmware(platform_slug, emulator_id, callback, core_id)
 
 # ============================================================================
 # Launch intent wrappers
@@ -395,18 +407,22 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		return false
 	
 	# Emulator is installed - check firmware
-	if not firmware.is_platform_firmware_ready(game.platform_slug, emulator_id):
+	var core_id_for_firmware = ""
+	if emulator_id == "retroarch":
+		core_id_for_firmware = intent.resolve_core_for_game(game)
+	
+	if not firmware.is_platform_firmware_ready(game.platform_slug, emulator_id, core_id_for_firmware):
 		if _pending_firmware_downloads.has(game.platform_slug):
 			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
 			NotificationManager.show_notification("Firmware download in progress for " + game.platform_slug + "...", NotificationManager.Type.INFO)
-			_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "callback": on_ready})
+			_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "core_id": core_id_for_firmware, "callback": on_ready})
 			return false
 		
 		print("[LaunchManager] Firmware not ready for " + game.platform_slug + ", downloading...")
 		NotificationManager.show_notification("Downloading firmware for " + game.platform_slug + "...", NotificationManager.Type.INFO)
 		
 		_pending_firmware_downloads[game.platform_slug] = true
-		_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "callback": on_ready})
+		_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "core_id": core_id_for_firmware, "callback": on_ready})
 		
 		firmware.setup_platform_firmware(game.platform_slug, emulator_id, func(success: bool, message: String):
 			_pending_firmware_downloads.erase(game.platform_slug)
@@ -414,7 +430,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			var matching_indices: Array[int] = []
 			for i in range(_pending_firmware_launches.size()):
 				var pending = _pending_firmware_launches[i]
-				if pending.get("emulator_id", "") == emulator_id:
+				if pending.get("emulator_id", "") == emulator_id and pending.get("core_id", "") == core_id_for_firmware:
 					matching_indices.append(i)
 			
 			if matching_indices.is_empty():
@@ -440,7 +456,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 					pending_callback.call()
 			for i in range(matching_indices.size() - 1, -1, -1):
 				_pending_firmware_launches.remove_at(matching_indices[i])
-		)
+		, core_id_for_firmware)
 		
 		return false
 	

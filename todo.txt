@@ -47,7 +47,6 @@ use new ui offsets instead of nested nodes for animations.
 	cache image colors on sync
 	
 ## launch:
-	add: psp, melonds, ps2, dolphin retroarch cores
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?
 	linux

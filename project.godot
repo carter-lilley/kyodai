@@ -37,6 +37,11 @@ GameNativeManager="*res://managers/gamenative_manager.gd"
 FileSystemManager="*res://managers/filesystem_manager.gd"
 IconsFonts="*uid://b573s24lmntbd"
 
+[debug]
+
+file_logging/enable_file_logging=true
+file_logging/log_path="user://logs/session.log"
+
 [display]
 
 window/size/transparent=true

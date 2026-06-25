@@ -3,7 +3,7 @@ class_name PlatformCard
 extends M3Card
 
 signal sync_toggled(enabled: bool)
-signal emulator_changed(emulator_id: String)
+signal emulator_changed(emulator_id: String, core_id: String)
 signal download_requested(emulator_id: String)
 
 @export var platform_slug: String = "":
@@ -26,6 +26,11 @@ signal download_requested(emulator_id: String)
 		selected_emulator = value
 		_update_display()
 
+@export var selected_core_id: String = "":
+	set(value):
+		selected_core_id = value
+		_update_display()
+
 var registry_default_emulator: String = "":
 	set(value):
 		registry_default_emulator = value
@@ -34,7 +39,18 @@ var registry_default_emulator: String = "":
 			refresh_firmware_indicator()
 
 var _available_emulators: Array[Dictionary] = []
+var _available_cores: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}
+
+# Reentrancy guard for dropdown rebuilds. Setting selected_emulator/selected_core_id
+# from _on_emulator_selected triggers _update_display() -> _update_emulator_dropdown(),
+# and without this guard the menu items can be rebuilt/appended while a selection is
+# still in flight.
+var _is_rebuilding_dropdown: bool = false
+
+# Tracks the dropdown entry type for each index.
+# Each entry is {type: "auto"|"emulator"|"core", emulator_id: String, core_id: String}.
+var _dropdown_entries: Array[Dictionary] = []
 
 var _name_label: M3Label
 var _sync_toggle: M3Checkbox
@@ -175,37 +191,122 @@ func _update_display():
 func _update_emulator_dropdown():
 	if not _emulator_dropdown:
 		return
+	if _is_rebuilding_dropdown:
+		return
+	_is_rebuilding_dropdown = true
+	
+	# Disconnect the selection signal so restoring the selected index can't
+	# re-trigger _on_emulator_selected while we're rebuilding.
+	if _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
+		_emulator_dropdown.item_selected.disconnect(_on_emulator_selected)
+	
+	# Belt-and-suspenders: clear() should empty _items, but also remove any
+	# leftover items through the public API in case clear() is shadowed.
 	_emulator_dropdown.clear()
+	while _emulator_dropdown.get_item_count() > 0:
+		_emulator_dropdown.remove_item(_emulator_dropdown.get_item_count() - 1)
+	_dropdown_entries.clear()
 
-	# Determine effective emulator (what's actually being used)
-	var _effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
-	var selected_index = 0
-
-	# Add "Auto" option if we have a registry default
-	if registry_default_emulator != "":
-		var default_emu_name = _get_emulator_name(registry_default_emulator)
-		var auto_text = "Auto (%s)" % default_emu_name
-		_emulator_dropdown.add_item(auto_text, 0)
-
-		if selected_emulator == "":
-			selected_index = 0
-	else:
-		# No registry default - add "Not Configured" option
-		_emulator_dropdown.add_item("Not Configured", 0)
-
-	# Add available emulators
+	# Compute the real (non-Auto) options first so we know whether to collapse
+	# single-option platforms into a single Auto entry.
+	var standalone_options: Array[Dictionary] = []
 	for i in range(_available_emulators.size()):
 		var emulator = _available_emulators[i]
 		var emulator_id = emulator.get("id", "")
+		if emulator_id == "" or emulator_id == "retroarch":
+			continue
+		standalone_options.append(emulator)
+	
+	var retroarch_cores: Array[Dictionary] = []
+	if _has_retroarch():
+		retroarch_cores = _get_available_retroarch_cores()
+	
+	var total_options = standalone_options.size() + retroarch_cores.size()
+	var collapse_single_option = total_options == 1
+
+	# Add "Auto" option first if we have a registry default
+	var selected_index = 0
+	if registry_default_emulator != "":
+		var default_text = _get_default_entry_text(registry_default_emulator)
+		var auto_text = default_text + " (Auto)"
+		_emulator_dropdown.add_item(auto_text, 0)
+		_dropdown_entries.append({"type": "auto", "emulator_id": "", "core_id": ""})
+	else:
+		_emulator_dropdown.add_item("Not Configured", 0)
+		_dropdown_entries.append({"type": "auto", "emulator_id": "", "core_id": ""})
+
+	# When there's only one real option, the Auto entry represents it; skip
+	# adding a duplicate explicit entry. The user remains in auto mode.
+	if collapse_single_option:
+		_emulator_dropdown.selected = selected_index
+		
+		# Reconnect the selection signal now that the rebuild is done.
+		if not _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
+			_emulator_dropdown.item_selected.connect(_on_emulator_selected)
+		
+		_is_rebuilding_dropdown = false
+		_update_status_indicator()
+		return
+
+	# Add available standalone emulators
+	for emulator in standalone_options:
+		var emulator_id = emulator.get("id", "")
 		var emulator_name = emulator.get("name", emulator_id)
-
-		_emulator_dropdown.add_item(emulator_name, i + 1)
-
+		var index = _dropdown_entries.size()
+		_emulator_dropdown.add_item(emulator_name, index)
+		_dropdown_entries.append({"type": "emulator", "emulator_id": emulator_id, "core_id": ""})
 		if emulator_id == selected_emulator:
-			selected_index = i + 1
+			selected_index = index
+
+	# Add RetroArch core options grouped together
+	for core in retroarch_cores:
+		var core_id = core.get("id", "")
+		var core_name = core.get("name", core_id)
+		var index = _dropdown_entries.size()
+		_emulator_dropdown.add_item("RetroArch - " + core_name, index)
+		_dropdown_entries.append({"type": "core", "emulator_id": "retroarch", "core_id": core_id})
+		if selected_emulator == "retroarch" and selected_core_id == core_id:
+			selected_index = index
 
 	_emulator_dropdown.selected = selected_index
+	
+	# Reconnect the selection signal now that the rebuild is done.
+	if not _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
+		_emulator_dropdown.item_selected.connect(_on_emulator_selected)
+	
+	_is_rebuilding_dropdown = false
 	_update_status_indicator()
+
+func _get_default_entry_text(emulator_id: String) -> String:
+	if emulator_id == "retroarch":
+		var default_core_id = LaunchManager.get_default_core_id_for_platform("retroarch", platform_slug) if LaunchManager else ""
+		var default_core_name = _get_core_display_name(default_core_id)
+		return "RetroArch - " + default_core_name if default_core_name != "" else "RetroArch"
+	return _get_emulator_name(emulator_id)
+
+func _get_core_display_name(core_id: String) -> String:
+	var cores = _get_available_retroarch_cores()
+	for core in cores:
+		if core.get("id", "") == core_id:
+			return core.get("name", core_id)
+	return core_id
+
+func _has_retroarch() -> bool:
+	for emu in _available_emulators:
+		if emu.get("id", "") == "retroarch":
+			return true
+	return false
+
+func _get_available_retroarch_cores() -> Array[Dictionary]:
+	if platform_slug == "" or not LaunchManager:
+		return []
+	var all_cores = LaunchManager.get_cores_for_platform("retroarch", platform_slug)
+	var filtered: Array[Dictionary] = []
+	for core in all_cores:
+		if core.get("desktop_only", false) and PlatformManager.is_android():
+			continue
+		filtered.append(core)
+	return filtered
 
 func _get_emulator_name(emulator_id: String) -> String:
 	for emu in _available_emulators:
@@ -316,6 +417,7 @@ func refresh_firmware_indicator() -> void:
 		return
 
 	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	var core_id = selected_core_id if selected_emulator == "retroarch" else ""
 	if effective_emulator == "" or platform_slug == "":
 		_firmware_indicator.visible = false
 		return
@@ -331,7 +433,7 @@ func refresh_firmware_indicator() -> void:
 		return
 
 	_firmware_indicator.visible = true
-	var firmware_ready = LaunchManager.is_platform_firmware_ready(platform_slug, effective_emulator)
+	var firmware_ready = LaunchManager.is_platform_firmware_ready(platform_slug, effective_emulator, core_id)
 	var file_list = ", ".join(expected_files)
 	if firmware_ready:
 		_firmware_indicator.set_status(Indicator.Status.SUCCESS, "Firmware installed", "Expected firmware file(s): " + file_list)
@@ -351,18 +453,17 @@ func _on_sync_toggled(enabled: bool):
 	sync_toggled.emit(enabled)
 
 func _on_emulator_selected(index: int):
-	var emulator_id = ""
-	if index >= 0:
-		emulator_id = _emulator_dropdown.get_item_id(index)
-	selected_emulator = emulator_id
+	var entry = _dropdown_entries[index] if index >= 0 and index < _dropdown_entries.size() else {"type": "auto", "emulator_id": "", "core_id": ""}
+	selected_emulator = entry["emulator_id"]
+	selected_core_id = entry["core_id"]
 
 	# Force step-based validation scan for this emulator
-	var effective_emu = emulator_id if emulator_id != "" else registry_default_emulator
+	var effective_emu = selected_emulator if selected_emulator != "" else registry_default_emulator
 	if LaunchManager and effective_emu != "":
 		LaunchManager.scan_emulator_install_state(effective_emu)
-		LaunchManager.clear_firmware_cache(platform_slug, effective_emu)
+		LaunchManager.clear_firmware_cache(platform_slug, effective_emu, selected_core_id)
 
-	emulator_changed.emit(emulator_id)
+	emulator_changed.emit(selected_emulator, selected_core_id)
 	refresh_ui()
 
 func _on_download_pressed():

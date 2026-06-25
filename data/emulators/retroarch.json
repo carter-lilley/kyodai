@@ -23,10 +23,14 @@
 	  "neogeoaes",
 	  "neo-geo-pocket-color",
 	  "n64",
+	  "nds",
 	  "nes",
+	  "ngc",
 	  "win3x",
 	  "pico8",
 	  "psx",
+	  "ps2",
+	  "psp",
 	  "sega32",
 	  "segacd",
 	  "gamegear",
@@ -37,7 +41,9 @@
 	  "snes",
 	  "tg16",
 	  "turbografx-cd",
-      "virtualboy"
+	  "virtualboy",
+	  "wii",
+	  "3ds"
 	]
   },
   "paths": {
@@ -45,6 +51,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/saves",
+		  "linux": "{emulator_dir}/saves",
 		  "android": "/storage/emulated/0/RetroArch/saves"
 		},
 		"extensions": [
@@ -57,6 +64,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/system",
+		  "linux": "{emulator_dir}/system",
 		  "android": "/storage/emulated/0/RetroArch/system"
 		}
 	  }
@@ -73,6 +81,17 @@
 		  "{core}",
 		  "{rom}",
           "-f"
+		]
+	  },
+	  "linux": {
+		"type": "command",
+		"executable": "retroarch",
+		"template": [
+		  "{exe}",
+		  "-L",
+		  "{core}",
+		  "{rom}",
+		  "-f"
 		]
 	  },
 	  "android": {
@@ -106,6 +125,13 @@
 		  "url_template": "https://buildbot.libretro.com/stable/{version}/windows/x86_64/RetroArch.7z",
 		  "match_strategy": "latest_semver"
 		},
+		"linux": {
+		  "action_type": "download_scrape",
+		  "scrape_url": "https://buildbot.libretro.com/stable/",
+		  "version_pattern": "href=\"/stable/([0-9]+\\.[0-9]+\\.[0-9]+)/\"",
+		  "url_template": "https://buildbot.libretro.com/stable/{version}/linux/x86_64/RetroArch.7z",
+		  "match_strategy": "latest_semver"
+		},
 		"android": {
 		  "action_type": "download_scrape",
 		  "scrape_url": "https://buildbot.libretro.com/stable/",
@@ -125,6 +151,15 @@
 		  "validate": {
 			"action_type": "file_exists",
 			"file": "retroarch.exe"
+		  }
+		},
+		"linux": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "retroarch"
 		  }
 		},
 		"android": {
@@ -154,27 +189,67 @@
 		  "url_pattern": "{name}_libretro_android.so.zip",
 		  "cores": [
 			"opera",
+			"fbneo",
 			"mame2003_plus",
+			"mamearcade",
+			"mame2010",
 			"stella",
+			"stella2023",
 			"handy",
+			"holani",
 			"flycast",
 			"vice_x64",
+			"puae",
 			"dosbox_pure",
+			"dosbox_core",
+			"dosbox_svn",
 			"nestopia",
+			"fceumm",
+			"mesen",
 			"gw",
 			"gambatte",
+			"sameboy",
+			"gearboy",
+			"DoubleCherryGB",
 			"mgba",
+			"vbam",
+			"vba_next",
 			"bluemsx",
-			"fbneo",
+			"fmsx",
 			"mednafen_ngp",
 			"mupen64plus_next_gles3",
-			"swanstation",
-			"picodrive",
-			"genesis_plus_gx",
-			"yabasanshiro",
+			"parallel_n64",
+			"melonds",
+			"melondsds",
+			"desmume",
+			"desmume2015",
 			"snes9x",
+			"snes9x2010",
+			"bsnes",
+			"bsnes_hd_beta",
+			"mesen-s",
+			"genesis_plus_gx",
+			"picodrive",
+			"swanstation",
+			"mednafen_psx",
+			"mednafen_psx_hw",
+			"pcsx_rearmed",
+			"mednafen_saturn",
+			"yabasanshiro",
+			"kronos",
 			"mednafen_pce",
-            "mednafen_vb"
+			"mednafen_pce_fast",
+			"mednafen_vb",
+			"citra",
+			"citra2018",
+			"panda3ds",
+			"azahar",
+			"dolphin",
+			"ppsspp",
+			"pico8",
+			"mednafen_gba",
+			"mednafen_snes",
+			"same_cdi"
 		  ],
 		  "extract_to": "{emulator_dir}/cores",
 		  "validate": {
@@ -199,6 +274,17 @@
 			"pattern": "*.dll"
 		  }
 		},
+		"linux": {
+		  "action_type": "extract",
+		  "extract_to": ".",
+		  "strip_top_directory": true,
+		  "flatten_target": "RetroArch-Linux-x86_64",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "cores",
+			"pattern": "*.so"
+		  }
+		},
 		"android": {
 		  "action_type": "extract",
 		  "extract_to": "{emulator_dir}/cores",
@@ -213,137 +299,799 @@
 	}
   ],
   "cores": {
-	"3do": {
-	  "mapping": "opera",
-	  "save_name": "Opera"
-	},
-	"arcade": {
-	  "mapping": "mame2003_plus",
-	  "save_name": "MAME 2003-Plus"
-	},
-	"atari2600": {
-	  "mapping": "stella",
-	  "save_name": "Stella"
-	},
-	"lynx": {
-	  "mapping": "handy",
-	  "save_name": "Handy"
-	},
-	"atomiswave": {
-	  "mapping": "flycast",
-	  "save_name": "Flycast"
-	},
-	"c64": {
-	  "mapping": "vice_x64",
-	  "save_name": "VICE x64"
-	},
-	"dos": {
-	  "mapping": "dosbox_pure",
-	  "save_name": "DOSBox-pure"
-	},
-	"dc": {
-	  "mapping": "flycast",
-	  "save_name": "Flycast"
-	},
-	"fds": {
-	  "mapping": "nestopia",
-	  "save_name": "Nestopia"
-	},
-	"g-and-w": {
-	  "mapping": "gw",
-	  "save_name": "Game & Watch"
-	},
-	"gb": {
-	  "mapping": "gambatte",
-	  "save_name": "Gambatte"
-	},
-	"gba": {
-	  "mapping": "mgba",
-	  "save_name": "mGBA"
-	},
-	"gbc": {
-	  "mapping": "gambatte",
-	  "save_name": "Gambatte"
-	},
-	"msx": {
-	  "mapping": "bluemsx",
-	  "save_name": "blueMSX"
-	},
-	"naomi": {
-	  "mapping": "flycast",
-	  "save_name": "Flycast"
-	},
-	"naomi2": {
-	  "mapping": "flycast",
-	  "save_name": "Flycast"
-	},
-	"neogeoaes": {
-	  "mapping": "fbneo",
-	  "save_name": "FinalBurn Neo"
-	},
-	"neo-geo-pocket-color": {
-	  "mapping": "mednafen_ngp",
-	  "save_name": "Beetle NeoPop"
-	},
-	"n64": {
-	  "mapping": "mupen64plus_next_gles3",
-	  "save_name": "Mupen64Plus-Next"
-	},
-	"nes": {
-	  "mapping": "nestopia",
-	  "save_name": "Nestopia"
-	},
-	"win3x": {
-	  "mapping": "dosbox_pure",
-	  "save_name": "DOSBox-pure"
-	},
-	"psx": {
-	  "mapping": "swanstation",
-	  "save_name": "SwanStation"
-	},
-	"sega32": {
-	  "mapping": "picodrive",
-	  "save_name": "PicoDrive"
-	},
-	"segacd": {
-	  "mapping": "genesis_plus_gx",
-	  "save_name": "Genesis Plus GX"
-	},
-	"gamegear": {
-	  "mapping": "genesis_plus_gx",
-	  "save_name": "Genesis Plus GX"
-	},
-	"sms": {
-	  "mapping": "genesis_plus_gx",
-	  "save_name": "Genesis Plus GX"
-	},
-	"genesis": {
-	  "mapping": "genesis_plus_gx",
-	  "save_name": "Genesis Plus GX"
-	},
-	"saturn": {
-	  "mapping": "yabasanshiro",
-	  "save_name": "YabaSanshiro"
-	},
-	"sg1000": {
-	  "mapping": "genesis_plus_gx",
-	  "save_name": "Genesis Plus GX"
-	},
-	"snes": {
-	  "mapping": "snes9x",
-	  "save_name": "Snes9x"
-	},
-	"tg16": {
-	  "mapping": "mednafen_pce",
-	  "save_name": "Beetle PCE"
-	},
-	"turbografx-cd": {
-	  "mapping": "mednafen_pce",
-	  "save_name": "Beetle PCE"
-	},
-	"virtualboy": {
-	  "mapping": "mednafen_vb",
-	  "save_name": "Beetle VB"
-	}
+	"3do": [
+	  {
+		"id": "opera",
+		"name": "Opera",
+		"mapping": "opera",
+		"android_mapping": "opera",
+		"save_name": "Opera",
+		"default": true
+	  }
+	],
+	"arcade": [
+	  {
+		"id": "fbneo",
+		"name": "FinalBurn Neo",
+		"mapping": "fbneo",
+		"android_mapping": "fbneo",
+		"save_name": "FinalBurn Neo",
+		"default": true
+	  },
+	  {
+		"id": "mame2003_plus",
+		"name": "MAME 2003-Plus",
+		"mapping": "mame2003_plus",
+		"android_mapping": "mame2003_plus",
+		"save_name": "MAME 2003-Plus"
+	  },
+	  {
+		"id": "mame",
+		"name": "MAME",
+		"mapping": "mame",
+		"android_mapping": "mamearcade",
+		"save_name": "MAME"
+	  },
+	  {
+		"id": "mame2010",
+		"name": "MAME 2010",
+		"mapping": "mame2010",
+		"android_mapping": "mame2010",
+		"save_name": "MAME 2010"
+	  }
+	],
+	"atari2600": [
+	  {
+		"id": "stella",
+		"name": "Stella",
+		"mapping": "stella",
+		"android_mapping": "stella",
+		"save_name": "Stella",
+		"default": true
+	  },
+	  {
+		"id": "stella2023",
+		"name": "Stella 2023",
+		"mapping": "stella2023",
+		"android_mapping": "stella2023",
+		"save_name": "Stella 2023"
+	  }
+	],
+	"lynx": [
+	  {
+		"id": "handy",
+		"name": "Handy",
+		"mapping": "handy",
+		"android_mapping": "handy",
+		"save_name": "Handy",
+		"default": true
+	  },
+	  {
+		"id": "holani",
+		"name": "Holani",
+		"mapping": "holani",
+		"android_mapping": "holani",
+		"save_name": "Holani"
+	  },
+	  {
+		"id": "mednafen_lynx",
+		"name": "Beetle Lynx",
+		"mapping": "mednafen_lynx",
+		"android_mapping": "mednafen_lynx",
+		"save_name": "Beetle Lynx"
+	  }
+	],
+	"atomiswave": [
+	  {
+		"id": "flycast",
+		"name": "Flycast",
+		"mapping": "flycast",
+		"android_mapping": "flycast",
+		"save_name": "Flycast",
+		"default": true
+	  }
+	],
+	"c64": [
+	  {
+		"id": "vice_x64",
+		"name": "VICE x64",
+		"mapping": "vice_x64",
+		"android_mapping": "vice_x64",
+		"save_name": "VICE x64"
+	  },
+	  {
+		"id": "puae",
+		"name": "PUAE",
+		"mapping": "puae",
+		"android_mapping": "puae",
+		"save_name": "PUAE",
+		"default": true
+	  }
+	],
+	"dos": [
+	  {
+		"id": "dosbox_pure",
+		"name": "DOSBox-pure",
+		"mapping": "dosbox_pure",
+		"android_mapping": "dosbox_pure",
+		"save_name": "DOSBox-pure",
+		"default": true
+	  },
+	  {
+		"id": "dosbox_core",
+		"name": "DOSBox-core",
+		"mapping": "dosbox_core",
+		"android_mapping": "dosbox_core",
+		"save_name": "DOSBox-core"
+	  },
+	  {
+		"id": "dosbox_svn",
+		"name": "DOSBox SVN",
+		"mapping": "dosbox_svn",
+		"android_mapping": "dosbox_svn",
+		"save_name": "DOSBox SVN"
+	  }
+	],
+	"dc": [
+	  {
+		"id": "flycast",
+		"name": "Flycast",
+		"mapping": "flycast",
+		"android_mapping": "flycast",
+		"save_name": "Flycast",
+		"default": true
+	  }
+	],
+	"fds": [
+	  {
+		"id": "nestopia",
+		"name": "Nestopia",
+		"mapping": "nestopia",
+		"android_mapping": "nestopia",
+		"save_name": "Nestopia",
+		"default": true
+	  }
+	],
+	"g-and-w": [
+	  {
+		"id": "gw",
+		"name": "Game & Watch",
+		"mapping": "gw",
+		"android_mapping": "gw",
+		"save_name": "Game & Watch",
+		"default": true
+	  }
+	],
+	"gb": [
+	  {
+		"id": "gambatte",
+		"name": "Gambatte",
+		"mapping": "gambatte",
+		"android_mapping": "gambatte",
+		"save_name": "Gambatte",
+		"default": true
+	  },
+	  {
+		"id": "sameboy",
+		"name": "SameBoy",
+		"mapping": "sameboy",
+		"android_mapping": "sameboy",
+		"save_name": "SameBoy"
+	  },
+	  {
+		"id": "gearboy",
+		"name": "Gearboy",
+		"mapping": "gearboy",
+		"android_mapping": "gearboy",
+		"save_name": "Gearboy"
+	  },
+	  {
+		"id": "DoubleCherryGB",
+		"name": "DoubleCherryGB",
+		"mapping": "DoubleCherryGB",
+		"android_mapping": "DoubleCherryGB",
+		"save_name": "DoubleCherryGB"
+	  }
+	],
+	"gba": [
+	  {
+		"id": "mgba",
+		"name": "mGBA",
+		"mapping": "mgba",
+		"android_mapping": "mgba",
+		"save_name": "mGBA",
+		"default": true
+	  },
+	  {
+		"id": "vbam",
+		"name": "VBA-M",
+		"mapping": "vbam",
+		"android_mapping": "vbam",
+		"save_name": "VBA-M"
+	  },
+	  {
+		"id": "vba_next",
+		"name": "VBA Next",
+		"mapping": "vba_next",
+		"android_mapping": "vba_next",
+		"save_name": "VBA Next"
+	  },
+	  {
+		"id": "mednafen_gba",
+		"name": "Beetle GBA",
+		"mapping": "mednafen_gba",
+		"android_mapping": "mednafen_gba",
+		"save_name": "Beetle GBA"
+	  }
+	],
+	"gbc": [
+	  {
+		"id": "gambatte",
+		"name": "Gambatte",
+		"mapping": "gambatte",
+		"android_mapping": "gambatte",
+		"save_name": "Gambatte",
+		"default": true
+	  },
+	  {
+		"id": "sameboy",
+		"name": "SameBoy",
+		"mapping": "sameboy",
+		"android_mapping": "sameboy",
+		"save_name": "SameBoy"
+	  },
+	  {
+		"id": "gearboy",
+		"name": "Gearboy",
+		"mapping": "gearboy",
+		"android_mapping": "gearboy",
+		"save_name": "Gearboy"
+	  },
+	  {
+		"id": "DoubleCherryGB",
+		"name": "DoubleCherryGB",
+		"mapping": "DoubleCherryGB",
+		"android_mapping": "DoubleCherryGB",
+		"save_name": "DoubleCherryGB"
+	  }
+	],
+	"msx": [
+	  {
+		"id": "bluemsx",
+		"name": "blueMSX",
+		"mapping": "bluemsx",
+		"android_mapping": "bluemsx",
+		"save_name": "blueMSX",
+		"default": true
+	  },
+	  {
+		"id": "fmsx",
+		"name": "fMSX",
+		"mapping": "fmsx",
+		"android_mapping": "fmsx",
+		"save_name": "fMSX"
+	  }
+	],
+	"naomi": [
+	  {
+		"id": "flycast",
+		"name": "Flycast",
+		"mapping": "flycast",
+		"android_mapping": "flycast",
+		"save_name": "Flycast",
+		"default": true
+	  }
+	],
+	"naomi2": [
+	  {
+		"id": "flycast",
+		"name": "Flycast",
+		"mapping": "flycast",
+		"android_mapping": "flycast",
+		"save_name": "Flycast",
+		"default": true
+	  }
+	],
+	"neogeoaes": [
+	  {
+		"id": "fbneo",
+		"name": "FinalBurn Neo",
+		"mapping": "fbneo",
+		"android_mapping": "fbneo",
+		"save_name": "FinalBurn Neo",
+		"default": true
+	  }
+	],
+	"neo-geo-pocket-color": [
+	  {
+		"id": "mednafen_ngp",
+		"name": "Beetle NeoPop",
+		"mapping": "mednafen_ngp",
+		"android_mapping": "mednafen_ngp",
+		"save_name": "Beetle NeoPop",
+		"default": true
+	  }
+	],
+	"n64": [
+	  {
+		"id": "mupen64plus_next",
+		"name": "Mupen64Plus-Next",
+		"mapping": "mupen64plus_next",
+		"android_mapping": "mupen64plus_next_gles3",
+		"save_name": "Mupen64Plus-Next",
+		"default": true
+	  },
+	  {
+		"id": "parallel_n64",
+		"name": "ParaLLEl N64",
+		"mapping": "parallel_n64",
+		"android_mapping": "parallel_n64",
+		"save_name": "ParaLLEl N64"
+	  }
+	],
+	"nds": [
+	  {
+		"id": "melonds",
+		"name": "melonDS",
+		"mapping": "melonds",
+		"android_mapping": "melonds",
+		"save_name": "melonDS",
+		"default": true
+	  },
+	  {
+		"id": "melondsds",
+		"name": "melonDS DS",
+		"mapping": "melondsds",
+		"android_mapping": "melondsds",
+		"save_name": "melonDS DS"
+	  },
+	  {
+		"id": "desmume",
+		"name": "DeSmuME",
+		"mapping": "desmume",
+		"android_mapping": "desmume",
+		"save_name": "DeSmuME"
+	  },
+	  {
+		"id": "desmume2015",
+		"name": "DeSmuME 2015",
+		"mapping": "desmume2015",
+		"android_mapping": "desmume2015",
+		"save_name": "DeSmuME 2015"
+	  }
+	],
+	"nes": [
+	  {
+		"id": "nestopia",
+		"name": "Nestopia",
+		"mapping": "nestopia",
+		"android_mapping": "nestopia",
+		"save_name": "Nestopia",
+		"default": true
+	  },
+	  {
+		"id": "fceumm",
+		"name": "FCEUmm",
+		"mapping": "fceumm",
+		"android_mapping": "fceumm",
+		"save_name": "FCEUmm"
+	  },
+	  {
+		"id": "mesen",
+		"name": "Mesen",
+		"mapping": "mesen",
+		"android_mapping": "mesen",
+		"save_name": "Mesen"
+	  }
+	],
+	"ngc": [
+	  {
+		"id": "dolphin_ngc",
+		"name": "Dolphin",
+		"mapping": "dolphin",
+		"android_mapping": "dolphin",
+		"save_name": "Dolphin",
+		"default": true,
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/dolphin-emu/User/GC/USA/Card A",
+			  "linux": "{emulator_dir}/saves/dolphin-emu/User/GC/USA/Card A",
+			  "android": "/storage/emulated/0/RetroArch/saves/dolphin-emu/User/GC/USA/Card A"
+			},
+			"extensions": ["gci"],
+			"uses_folder_saves": true
+		  },
+		  "firmware": {
+			"directories": {
+			  "windows": "{emulator_dir}/system",
+			  "linux": "{emulator_dir}/system",
+			  "android": "/storage/emulated/0/RetroArch/system"
+			}
+		  }
+		}
+	  }
+	],
+	"win3x": [
+	  {
+		"id": "dosbox_pure",
+		"name": "DOSBox-pure",
+		"mapping": "dosbox_pure",
+		"android_mapping": "dosbox_pure",
+		"save_name": "DOSBox-pure",
+		"default": true
+	  }
+	],
+	"pico8": [
+	  {
+		"id": "pico8",
+		"name": "PICO-8",
+		"mapping": "pico8",
+		"android_mapping": "pico8",
+		"save_name": "PICO-8",
+		"default": true
+	  }
+	],
+	"psx": [
+	  {
+		"id": "swanstation",
+		"name": "SwanStation",
+		"mapping": "swanstation",
+		"android_mapping": "swanstation",
+		"save_name": "SwanStation"
+	  },
+	  {
+		"id": "pcsx_rearmed",
+		"name": "PCSX ReARMed",
+		"mapping": "pcsx_rearmed",
+		"android_mapping": "pcsx_rearmed",
+		"save_name": "PCSX ReARMed",
+		"default": true
+	  },
+	  {
+		"id": "mednafen_psx",
+		"name": "Beetle PSX",
+		"mapping": "mednafen_psx",
+		"android_mapping": "mednafen_psx",
+		"save_name": "Beetle PSX"
+	  },
+	  {
+		"id": "mednafen_psx_hw",
+		"name": "Beetle PSX HW",
+		"mapping": "mednafen_psx_hw",
+		"android_mapping": "mednafen_psx_hw",
+		"save_name": "Beetle PSX HW"
+	  }
+	],
+	"ps2": [
+	  {
+		"id": "pcsx2",
+		"name": "PCSX2",
+		"mapping": "pcsx2",
+		"save_name": "PCSX2",
+		"default": true,
+		"desktop_only": true,
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/system/pcsx2/memcards/main.ps2",
+			  "linux": "{emulator_dir}/system/pcsx2/memcards/main.ps2"
+			},
+			"extensions": ["*"],
+			"uses_folder_saves": true
+		  },
+		  "firmware": {
+			"directories": {
+			  "windows": "{emulator_dir}/system/pcsx2/bios",
+			  "linux": "{emulator_dir}/system/pcsx2/bios"
+			}
+		  }
+		}
+	  }
+	],
+	"psp": [
+	  {
+		"id": "ppsspp",
+		"name": "PPSSPP",
+		"mapping": "ppsspp",
+		"android_mapping": "ppsspp",
+		"save_name": "PPSSPP",
+		"default": true,
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/PPSSPP/PSP/SAVEDATA",
+			  "linux": "{emulator_dir}/saves/PPSSPP/PSP/SAVEDATA",
+			  "android": "/storage/emulated/0/RetroArch/saves/PPSSPP/PSP/SAVEDATA"
+			},
+			"extensions": ["*"],
+			"uses_folder_saves": true
+		  }
+		}
+	  }
+	],
+	"sega32": [
+	  {
+		"id": "picodrive",
+		"name": "PicoDrive",
+		"mapping": "picodrive",
+		"android_mapping": "picodrive",
+		"save_name": "PicoDrive",
+		"default": true
+	  }
+	],
+	"segacd": [
+	  {
+		"id": "genesis_plus_gx",
+		"name": "Genesis Plus GX",
+		"mapping": "genesis_plus_gx",
+		"android_mapping": "genesis_plus_gx",
+		"save_name": "Genesis Plus GX",
+		"default": true
+	  }
+	],
+	"gamegear": [
+	  {
+		"id": "genesis_plus_gx",
+		"name": "Genesis Plus GX",
+		"mapping": "genesis_plus_gx",
+		"android_mapping": "genesis_plus_gx",
+		"save_name": "Genesis Plus GX",
+		"default": true
+	  }
+	],
+	"sms": [
+	  {
+		"id": "genesis_plus_gx",
+		"name": "Genesis Plus GX",
+		"mapping": "genesis_plus_gx",
+		"android_mapping": "genesis_plus_gx",
+		"save_name": "Genesis Plus GX",
+		"default": true
+	  }
+	],
+	"genesis": [
+	  {
+		"id": "genesis_plus_gx",
+		"name": "Genesis Plus GX",
+		"mapping": "genesis_plus_gx",
+		"android_mapping": "genesis_plus_gx",
+		"save_name": "Genesis Plus GX",
+		"default": true
+	  },
+	  {
+		"id": "picodrive",
+		"name": "PicoDrive",
+		"mapping": "picodrive",
+		"android_mapping": "picodrive",
+		"save_name": "PicoDrive"
+	  }
+	],
+	"saturn": [
+	  {
+		"id": "mednafen_saturn",
+		"name": "Beetle Saturn",
+		"mapping": "mednafen_saturn",
+		"android_mapping": "mednafen_saturn",
+		"save_name": "Beetle Saturn",
+		"default": true
+	  },
+	  {
+		"id": "yabasanshiro",
+		"name": "YabaSanshiro",
+		"mapping": "yabasanshiro",
+		"android_mapping": "yabasanshiro",
+		"save_name": "YabaSanshiro"
+	  },
+	  {
+		"id": "kronos",
+		"name": "Kronos",
+		"mapping": "kronos",
+		"android_mapping": "kronos",
+		"save_name": "Kronos"
+	  }
+	],
+	"sg1000": [
+	  {
+		"id": "genesis_plus_gx",
+		"name": "Genesis Plus GX",
+		"mapping": "genesis_plus_gx",
+		"android_mapping": "genesis_plus_gx",
+		"save_name": "Genesis Plus GX",
+		"default": true
+	  }
+	],
+	"snes": [
+	  {
+		"id": "snes9x",
+		"name": "Snes9x",
+		"mapping": "snes9x",
+		"android_mapping": "snes9x",
+		"save_name": "Snes9x",
+		"default": true
+	  },
+	  {
+		"id": "snes9x2010",
+		"name": "Snes9x 2010",
+		"mapping": "snes9x2010",
+		"android_mapping": "snes9x2010",
+		"save_name": "Snes9x 2010"
+	  },
+	  {
+		"id": "bsnes",
+		"name": "bsnes",
+		"mapping": "bsnes",
+		"android_mapping": "bsnes",
+		"save_name": "bsnes"
+	  },
+	  {
+		"id": "bsnes_hd_beta",
+		"name": "bsnes-hd",
+		"mapping": "bsnes_hd_beta",
+		"android_mapping": "bsnes_hd_beta",
+		"save_name": "bsnes-hd"
+	  },
+	  {
+		"id": "mesen-s",
+		"name": "Mesen-S",
+		"mapping": "mesen-s",
+		"android_mapping": "mesen-s",
+		"save_name": "Mesen-S"
+	  },
+	  {
+		"id": "mednafen_snes",
+		"name": "Beetle bsnes",
+		"mapping": "mednafen_snes",
+		"android_mapping": "mednafen_snes",
+		"save_name": "Beetle bsnes"
+	  }
+	],
+	"tg16": [
+	  {
+		"id": "mednafen_pce",
+		"name": "Beetle PCE",
+		"mapping": "mednafen_pce",
+		"android_mapping": "mednafen_pce",
+		"save_name": "Beetle PCE",
+		"default": true
+	  },
+	  {
+		"id": "mednafen_pce_fast",
+		"name": "Beetle PCE FAST",
+		"mapping": "mednafen_pce_fast",
+		"android_mapping": "mednafen_pce_fast",
+		"save_name": "Beetle PCE FAST"
+	  }
+	],
+	"turbografx-cd": [
+	  {
+		"id": "mednafen_pce",
+		"name": "Beetle PCE",
+		"mapping": "mednafen_pce",
+		"android_mapping": "mednafen_pce",
+		"save_name": "Beetle PCE",
+		"default": true
+	  },
+	  {
+		"id": "mednafen_pce_fast",
+		"name": "Beetle PCE FAST",
+		"mapping": "mednafen_pce_fast",
+		"android_mapping": "mednafen_pce_fast",
+		"save_name": "Beetle PCE FAST"
+	  }
+	],
+	"virtualboy": [
+	  {
+		"id": "mednafen_vb",
+		"name": "Beetle VB",
+		"mapping": "mednafen_vb",
+		"android_mapping": "mednafen_vb",
+		"save_name": "Beetle VB",
+		"default": true
+	  }
+	],
+	"wii": [
+	  {
+		"id": "dolphin_wii",
+		"name": "Dolphin",
+		"mapping": "dolphin",
+		"android_mapping": "dolphin",
+		"save_name": "Dolphin",
+		"default": true,
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/dolphin-emu/User/Wii/title/00010000",
+			  "linux": "{emulator_dir}/saves/dolphin-emu/User/Wii/title/00010000",
+			  "android": "/storage/emulated/0/RetroArch/saves/dolphin-emu/User/Wii/title/00010000"
+			},
+			"extensions": ["zip"],
+			"uses_folder_saves": true
+		  },
+		  "firmware": {
+			"directories": {
+			  "windows": "{emulator_dir}/system",
+			  "linux": "{emulator_dir}/system",
+			  "android": "/storage/emulated/0/RetroArch/system"
+			}
+		  }
+		}
+	  }
+	],
+	"3ds": [
+	  {
+		"id": "citra",
+		"name": "Citra",
+		"mapping": "citra",
+		"android_mapping": "citra",
+		"save_name": "Citra",
+		"default": true,
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/Citra/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "linux": "{emulator_dir}/saves/Citra/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "android": "/storage/emulated/0/RetroArch/saves/Citra/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			},
+			"extensions": ["*"],
+			"uses_folder_saves": true
+		  }
+		}
+	  },
+	  {
+		"id": "citra2018",
+		"name": "Citra 2018",
+		"mapping": "citra2018",
+		"android_mapping": "citra2018",
+		"save_name": "Citra 2018",
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/Citra 2018/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "linux": "{emulator_dir}/saves/Citra 2018/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "android": "/storage/emulated/0/RetroArch/saves/Citra 2018/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			},
+			"extensions": ["*"],
+			"uses_folder_saves": true
+		  }
+		}
+	  },
+	  {
+		"id": "panda3ds",
+		"name": "Panda3DS",
+		"mapping": "panda3ds",
+		"android_mapping": "panda3ds",
+		"save_name": "Panda3DS",
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/Panda3DS/Panda3DS/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "linux": "{emulator_dir}/saves/Panda3DS/Panda3DS/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "android": "/storage/emulated/0/RetroArch/saves/Panda3DS/Panda3DS/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			},
+			"extensions": ["*"],
+			"uses_folder_saves": true
+		  }
+		}
+	  },
+	  {
+		"id": "azahar",
+		"name": "Azahar",
+		"mapping": "azahar",
+		"android_mapping": "azahar",
+		"save_name": "Azahar",
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves/Azahar/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "linux": "{emulator_dir}/saves/Azahar/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
+			  "android": "/storage/emulated/0/RetroArch/saves/Azahar/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			},
+			"extensions": ["*"],
+			"uses_folder_saves": true
+		  }
+		}
+	  }
+	]
   }
 }

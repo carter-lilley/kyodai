@@ -14,11 +14,16 @@ const WARP_TRIGGER_THRESHOLD := 0.5
 
 @onready var _pause_btn: M3IconButton = $Root/M3ButtonGroup/PauseButton
 @onready var _button_group: M3ButtonGroup = $Root/M3ButtonGroup
+@onready var _shuffle_btn: M3IconButton = $Root/M3ButtonGroup/ShuffleButton
 
 var _is_paused: bool = false
 var _warp_cooldown: float = 0.0
 var _select_held: bool = false
 var _l_trigger_held: bool = false
+
+func set_reroll_enabled(enabled: bool) -> void:
+	if _shuffle_btn and is_instance_valid(_shuffle_btn):
+		_shuffle_btn.disabled = not enabled
 
 func _ready():
 	# Keep the palette visible even when the main launcher window is minimized.

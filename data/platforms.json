@@ -189,6 +189,7 @@
 	"3ds": {
 		"name": "3Ds",
 		"default_emulator": "azahar",
+		"retroarch_core": "citra",
 		"firmware": {
 
 		}
@@ -223,6 +224,7 @@
 	"ngc": {
 		"name": "Ngc",
 		"default_emulator": "dolphin",
+		"retroarch_core": "dolphin_ngc",
 		"firmware": {
 
 		}
@@ -241,6 +243,7 @@
 	"pico8": {
 		"name": "Pico8",
 		"default_emulator": "retroarch",
+		"retroarch_core": "pico8",
 		"firmware": {
 
 		}
@@ -248,7 +251,7 @@
 	"psx": {
 		"name": "Psx",
 		"default_emulator": "retroarch",
-		"retroarch_core": "swanstation",
+		"retroarch_core": "pcsx_rearmed",
 		"firmware": {
 			"expected_files": [
 				"scph5500.bin",
@@ -264,6 +267,7 @@
 	"ps2": {
 		"name": "Ps2",
 		"default_emulator": "pcsx2",
+		"retroarch_core": "pcsx2",
 		"firmware": {
 			"expected_files": [
 				"bios/ps2-0200a-20040614.bin",
@@ -291,6 +295,7 @@
 	"psp": {
 		"name": "Psp",
 		"default_emulator": "ppsspp",
+		"retroarch_core": "ppsspp",
 		"firmware": {
 
 		}
@@ -425,6 +430,7 @@
 	"wii": {
 		"name": "Wii",
 		"default_emulator": "dolphin",
+		"retroarch_core": "dolphin_wii",
 		"firmware": {
 
 		}
