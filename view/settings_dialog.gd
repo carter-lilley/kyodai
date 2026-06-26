@@ -46,16 +46,16 @@ func _ready():
 		content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_build_two_pane_layout()
 	await _build_categories()
-	
+
 	# Categories are built asynchronously; re-position now that the real content
 	# minimum size is known so the first summon matches subsequent summons.
 	if is_inside_tree():
 		_position_dialog()
-	
+
 	# Hide default body label; keep the title label as the popup title.
 	if _body_label:
 		_body_label.visible = false
-	
+
 	# Replace the default action with explicit Cancel / OK buttons.
 	# OK applies changes and closes; Cancel reverts to the snapshot taken on open.
 	clear_actions()
@@ -64,21 +64,21 @@ func _ready():
 
 func _build_two_pane_layout() -> void:
 	"""Build two-pane HBox inside content_slot: sidebar + divider + content pane."""
-	
+
 	for child in content_slot.get_children():
 		child.queue_free()
-	
+
 	var hbox = HBoxContainer.new()
 	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content_slot.add_child(hbox)
-	
+
 	# Left sidebar
 	_left_pane = VBoxContainer.new()
 	_left_pane.custom_minimum_size = Vector2(M3Units.dp(160), 0)
 	_left_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
-	
+
 	var left_margin = MarginContainer.new()
 	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
 	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
@@ -86,7 +86,7 @@ func _build_two_pane_layout() -> void:
 	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 	left_margin.add_child(_left_pane)
 	hbox.add_child(left_margin)
-	
+
 	# Divider
 	var divider = VSeparator.new()
 	var divider_sb = StyleBoxLine.new()
@@ -94,7 +94,7 @@ func _build_two_pane_layout() -> void:
 	divider_sb.thickness = 1
 	divider.add_theme_stylebox_override("separator", divider_sb)
 	hbox.add_child(divider)
-	
+
 	# Right content pane
 	_right_pane = MarginContainer.new()
 	_right_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -107,55 +107,56 @@ func _build_two_pane_layout() -> void:
 
 func _build_categories() -> void:
 	"""Create category buttons and content directly from SettingsManager + scenes."""
-	
+
 	var subgroups = SettingsManager.get_settings_by_subgroup()
-	
+
 	# Regular subgroups — build SettingsMenu content directly
 	for subgroup_name in subgroups.keys():
 		if subgroup_name == "RomM Connection":
 			continue
-		
+
 		var id = subgroup_name.to_snake_case()
 		var icon = SUBGROUP_ICONS.get(subgroup_name, "tune")
 		var settings_vars = subgroups[subgroup_name]
-		
+
 		# Filter out platform-specific settings
 		if subgroup_name == "Storage":
 			if not (PlatformManager.is_windows() or PlatformManager.is_linux()):
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Steam Installation Folder")
-		
+			# Move Download Speed to the end so storage paths appear first.
+			settings_vars.sort_custom(func(a, b): return int(b.display_name == "Download Speed") - int(a.display_name == "Download Speed"))
 		_add_category_button(id, subgroup_name, icon)
-		
+
 		if subgroup_name == "Library Appearance":
 			# Library Appearance has complex custom UI — build it directly.
 			_category_contents[id] = preload("res://view/library_appearance_settings_view.gd").new()
 		else:
 			# Regular subgroup: SettingsMenu in a scrollable wrapper
 			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars)
-	
+
 	# RomM — platform settings scene
 	_add_category_button("romm", "RomM", "cloud-sync")
 	var platforms_view = preload("res://view/platforms_settings_view.tscn").instantiate()
 	platforms_view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["romm"] = platforms_view
-	
+
 	# Card Designer
 	_add_category_button("card_designer", "Card Designer", "cards-outline")
 	var card_designer = preload("res://view/card_designer_view.tscn").instantiate()
 	card_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["card_designer"] = card_designer
-	
+
 	# GameNative (Android only)
 	if PlatformManager.is_android():
 		_add_category_button("gamenative", "GameNative", "android")
 		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
 		_category_contents["gamenative"] = gamenative
-	
+
 	# Spacer at bottom of sidebar
 	var spacer = Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_left_pane.add_child(spacer)
-	
+
 	# Select first category that has content
 	for btn_id in _category_buttons.keys():
 		if _category_contents.has(btn_id):
@@ -182,7 +183,7 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	
+
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -190,18 +191,18 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
 	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
 	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
-	
+
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# Use SHRINK_BEGIN so the ScrollContainer measures true content height
 	# instead of expanding and inflating the popup's minimum size.
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	
+
 	var menu = SettingsMenu.new()
 	menu.initialize_settings_menu(setting_name, settings_vars)
 	menu.setting_changed.connect(func(value, setting): SettingsManager.set_setting(value, setting))
 	vbox.add_child(menu)
-	
+
 	margin.add_child(vbox)
 	scroll.add_child(margin)
 	return scroll
@@ -212,15 +213,15 @@ func _on_category_selected(id: String) -> void:
 func select_category(id: String) -> void:
 	if _current_category == id:
 		return
-	
+
 	# Hide previous content
 	if _right_content and _right_content.get_parent() == _right_pane:
 		if _right_content.has_method("on_view_hide"):
 			_right_content.on_view_hide()
 		_right_pane.remove_child(_right_content)
-	
+
 	_current_category = id
-	
+
 	# Update button visuals
 	for btn_id in _category_buttons.keys():
 		var btn = _category_buttons[btn_id]
@@ -228,7 +229,7 @@ func select_category(id: String) -> void:
 			btn.button_variant = M3Button.Variant.TONAL
 		else:
 			btn.button_variant = M3Button.Variant.TEXT
-	
+
 	# Show new content
 	if _category_contents.has(id):
 		_right_content = _category_contents[id]
@@ -256,7 +257,7 @@ func _set_initial_focus() -> void:
 func dismiss() -> void:
 	if _right_content and _right_content.has_method("on_view_hide"):
 		_right_content.on_view_hide()
-	
+
 	# Cancel reverts to the snapshot taken on open. All other dismiss paths
 	# (OK, outside-click, ui_cancel, default close) apply pending settings.
 	if _cancelled:

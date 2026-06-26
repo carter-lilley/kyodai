@@ -42,6 +42,7 @@ const Type = SettingsVar.SettingType
 @export var emulators_folder := SettingsVar.new(Type.PATH, "user://emulators/", State.ENABLED, "Emulators Folder", "Directory where emulators are installed")
 @export var steam_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Steam Installation Folder", "Path to your Steam installation (e.g., C:\\Program Files (x86)\\Steam)")
 @export var save_sync_auto := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Auto-sync saves", "Automatically upload saves after playing and download before launch")
+@export var download_speed_profile := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Download Speed", "Higher settings use more network connections per file and more simultaneous downloads", 0.0, 3.0, 1.0, ["Conservative", "Balanced", "Fast", "Unrestricted"])
 
 # Internal GameNative games list (not displayed in settings menu)
 @export var gamenative_games := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "GameNative Games")

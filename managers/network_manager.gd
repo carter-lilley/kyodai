@@ -59,17 +59,17 @@ func _load_credentials():
 		var url_setting = SettingsManager.get_setting("romm_url")
 		if url_setting:
 			_base_url = url_setting.value if url_setting.value else ""
-	
+
 	if _username.is_empty():
 		var user_setting = SettingsManager.get_setting("romm_username")
 		if user_setting:
 			_username = user_setting.value if user_setting.value else ""
-	
+
 	if _password.is_empty():
 		var pass_setting = SettingsManager.get_setting("romm_password")
 		if pass_setting:
 			_password = pass_setting.value if pass_setting.value else ""
-	
+
 	_check_configuration()
 
 func _check_configuration():
@@ -96,7 +96,7 @@ func _get_pooled_request() -> HTTPRequest:
 		http.accept_gzip = true
 		http.use_threads = false
 		return http
-	
+
 	http = HTTPRequest.new()
 	add_child(http)
 	return http
@@ -105,16 +105,16 @@ func _return_request(http: HTTPRequest) -> void:
 	"""Return an HTTPRequest to the pool for reuse (desktop only)."""
 	if http == null or not is_instance_valid(http):
 		return
-	
+
 	# Always free on Android to save memory
 	if not _use_pooling():
 		http.queue_free()
 		return
-	
+
 	# On desktop, try to pool it
 	for conn in http.request_completed.get_connections():
 		http.request_completed.disconnect(conn.callable)
-	
+
 	if _request_pool.size() < _max_pool_size:
 		_request_pool.append(http)
 	else:
@@ -154,7 +154,7 @@ func _get_cached_response(endpoint: String) -> Dictionary:
 func _store_cached_response(endpoint: String, response_hash: String, data: Variant):
 	"""Store response data in cache with its hash."""
 	var key = _get_cache_key(endpoint)
-	
+
 	# If key already exists, just update and refresh LRU order
 	if _response_cache.has(key):
 		_response_cache[key] = {"hash": response_hash, "data": data}
@@ -163,7 +163,7 @@ func _store_cached_response(endpoint: String, response_hash: String, data: Varia
 			_response_cache_order.remove_at(idx)
 			_response_cache_order.append(key)
 		return
-	
+
 	# Evict oldest entries if at capacity
 	if _response_cache.size() >= MAX_RESPONSE_CACHE_SIZE:
 		var to_evict = _response_cache.size() - MAX_RESPONSE_CACHE_SIZE + 1
@@ -171,7 +171,7 @@ func _store_cached_response(endpoint: String, response_hash: String, data: Varia
 			if _response_cache_order.size() > 0:
 				var oldest_key = _response_cache_order.pop_front()
 				_response_cache.erase(oldest_key)
-	
+
 	_response_cache[key] = {
 		"hash": response_hash,
 		"data": data
@@ -197,12 +197,12 @@ func _check_connection():
 		_is_online = false
 		network_status_changed.emit(false)
 		return
-	
+
 	# Try to fetch platforms to verify connection
 	fetch_platforms(func(_data, error):
 		var was_online = _is_online
 		_is_online = error == ""
-		
+
 		if was_online != _is_online:
 			network_status_changed.emit(_is_online)
 	)
@@ -212,54 +212,54 @@ func _check_connection():
 func make_request(endpoint: String, callback: Callable, authenticated: bool = true, use_cache: bool = false):
 	var http = _create_http_request()
 	_active_request_count += 1
-	
+
 	var url = _base_url.rstrip("/") + "/api" + endpoint
-	
+
 	var headers = []
 	if authenticated:
 		var auth_header = _get_auth_header()
 		headers.append("Authorization: " + auth_header)
-	
+
 	# Get cached data for hash comparison
 	var cached = _get_cached_response(endpoint) if use_cache else {}
-	
+
 	var error = http.request(url, headers, HTTPClient.METHOD_GET)
-	
+
 	if error != OK:
 		callback.call({}, "Failed to start request: " + str(error))
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if response_code == 401:
 			authentication_failed.emit()
 			callback.call({}, "Authentication failed")
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call({}, "Request failed with result: " + str(result))
 			return
-		
+
 		if response_code != 200:
 			callback.call({}, "HTTP error: " + str(response_code))
 			return
-		
+
 		var body_text = body.get_string_from_utf8()
-		
+
 		var json = JSON.new()
 		var parse_result = json.parse(body_text)
-		
+
 		if parse_result != OK:
 			callback.call({}, "Failed to parse JSON: " + json.get_error_message())
 			return
-		
+
 		# Client-side hash-based caching: compute hash of sorted rom IDs
 		var body_hash = _compute_content_hash(json.data)
-		
+
 		if use_cache and not cached.is_empty():
 			var cached_hash = cached.get("hash", "")
 			if body_hash == cached_hash:
@@ -270,18 +270,18 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 				_games_from_cache += game_count
 				callback.call(cached_data, "")
 				return
-		
+
 		if use_cache:
 			_cache_misses += 1
 			_store_cached_response(endpoint, body_hash, json.data)
-		
+
 		callback.call(json.data, "")
 	)
 
 func _compute_content_hash(data: Variant) -> String:
 	"""Compute a stable hash of the response content (sorted rom IDs)."""
 	var rom_ids: Array[int] = []
-	
+
 	if data is Dictionary and data.has("items") and data["items"] is Array:
 		for item in data["items"]:
 			if item is Dictionary and item.has("id"):
@@ -290,7 +290,7 @@ func _compute_content_hash(data: Variant) -> String:
 		for item in data:
 			if item is Dictionary and item.has("id"):
 				rom_ids.append(int(item["id"]))
-	
+
 	rom_ids.sort()
 	return str(rom_ids).md5_text()
 
@@ -308,13 +308,13 @@ func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0
 	if not _is_online:
 		callback.call({}, "Not connected")
 		return
-	
+
 	var endpoint = "/roms?offset=%d&limit=%d" % [offset, limit]
 	if platform_slug != "":
 		endpoint += "&platform_ids=" + platform_slug
 	if updated_after != "":
 		endpoint += "&updated_after=" + updated_after.uri_encode()
-	
+
 	make_request(endpoint, func(data, error):
 		var success = error == ""
 		api_request_completed.emit("games", success, data if success else error)
@@ -327,16 +327,16 @@ func fetch_games(callback: Callable, platform_slug: String = "", offset: int = 0
 func fetch_games_sync(platform_slug: String = "", offset: int = 0, limit: int = 250, updated_after: String = "") -> Dictionary:
 	if not _is_configured:
 		return {"success": false, "data": {}, "error": "Not configured"}
-	
+
 	var endpoint = "/roms?offset=%d&limit=%d" % [offset, limit]
 	if platform_slug != "":
 		endpoint += "&platform_ids=" + platform_slug
 	if updated_after != "":
 		endpoint += "&updated_after=" + updated_after.uri_encode()
-	
+
 	var url = _base_url.rstrip("/") + "/api" + endpoint
 	var headers = ["Authorization: " + _get_auth_header()]
-	
+
 	return _http_get_sync(url, headers)
 
 ## Synchronous HTTP GET using HTTPClient - thread-safe, no scene tree dependency
@@ -344,15 +344,15 @@ func _http_get_sync(url: String, headers: Array = []) -> Dictionary:
 	var result = _http_request_sync(url, headers)
 	if not result.success:
 		return result
-	
+
 	# Parse JSON from bytes
 	var body_text = result.body.get_string_from_utf8()
 	var json = JSON.new()
 	var parse_result = json.parse(body_text)
-	
+
 	if parse_result != OK:
 		return {"success": false, "data": {}, "error": "Failed to parse JSON: " + json.get_error_message()}
-	
+
 	return {"success": true, "data": json.data, "error": ""}
 
 ## Downloads raw bytes from URL using HTTPClient - thread-safe, no scene tree dependency
@@ -415,10 +415,10 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 		err = http.connect_to_host(host, port, tls)
 	else:
 		err = http.connect_to_host(host, port)
-	
+
 	if err != OK:
 		return {"success": false, "body": PackedByteArray(), "error": "Failed to connect: " + str(err)}
-	
+
 	# Wait for connection
 	var timeout = 0
 	while http.get_status() == HTTPClient.STATUS_CONNECTING or http.get_status() == HTTPClient.STATUS_RESOLVING:
@@ -427,10 +427,10 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 		timeout += 1
 		if timeout > 10000:  # 10 seconds
 			return {"success": false, "body": PackedByteArray(), "error": "Connection timeout"}
-	
+
 	if http.get_status() != HTTPClient.STATUS_CONNECTED:
 		return {"success": false, "body": PackedByteArray(), "error": "Not connected, status: " + str(http.get_status())}
-	
+
 	# Make request
 	var request_headers = headers.duplicate()
 	var has_host = false
@@ -440,7 +440,7 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 			break
 	if not has_host:
 		request_headers.append("Host: " + host)
-	
+
 	var has_user_agent = false
 	for header in request_headers:
 		if header.begins_with("User-Agent:"):
@@ -448,24 +448,24 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 			break
 	if not has_user_agent:
 		request_headers.append("User-Agent: Kyodai-Launcher/1.0")
-	
+
 	err = http.request(HTTPClient.METHOD_GET, path + query, request_headers)
 	if err != OK:
 		return {"success": false, "body": PackedByteArray(), "error": "Failed to make request: " + str(err)}
-	
+
 	# Wait for response headers
 	while http.get_status() == HTTPClient.STATUS_REQUESTING:
 		http.poll()
 		OS.delay_usec(1000)
-	
+
 	var response_code = http.get_response_code()
-	
+
 	if response_code == 401:
 		return {"success": false, "body": PackedByteArray(), "error": "Authentication failed"}
-	
+
 	if response_code != 200:
 		return {"success": false, "body": PackedByteArray(), "error": "HTTP error: " + str(response_code)}
-	
+
 	# Read body
 	var body = PackedByteArray()
 	while http.get_status() == HTTPClient.STATUS_BODY:
@@ -475,14 +475,14 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 			body.append_array(chunk)
 		else:
 			OS.delay_usec(1000)
-	
+
 	return {"success": true, "body": body, "error": ""}
 
 func fetch_platforms(callback: Callable, use_cache: bool = true):
 	if not _is_configured:
 		callback.call({}, "Not configured")
 		return
-	
+
 	make_request("/platforms", func(data, error):
 		var success = error == ""
 		api_request_completed.emit("platforms", success, data if success else error)
@@ -505,7 +505,7 @@ func fetch_game_details(game_id: int, callback: Callable):
 	if not _is_online:
 		callback.call({}, "Not connected")
 		return
-	
+
 	make_request("/roms/" + str(game_id), func(data, error):
 		var success = error == ""
 		api_request_completed.emit("game_details", success, data if success else error)
@@ -519,36 +519,36 @@ func fetch_game_details(game_id: int, callback: Callable):
 func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
 	var http = _create_http_request()
 	_active_request_count += 1
-	
+
 	var error = http.request(url, headers)
-	
+
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, PackedByteArray(), 0, "Failed to start request: " + str(error))
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return null
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if not callback.is_valid():
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call(false, PackedByteArray(), response_code, "Request failed: " + str(result))
 			return
-		
+
 		if response_code >= 400:
 			if response_code == 401:
 				authentication_failed.emit()
 			callback.call(false, body, response_code, "HTTP error: " + str(response_code))
 			return
-		
+
 		callback.call(true, body, response_code, "")
 	)
-	
+
 	return http
 
 ## Downloads a large file directly to disk - avoids memory issues with big files
@@ -558,10 +558,10 @@ func http_get(url: String, headers: Array = [], callback: Callable = Callable())
 func http_download_file(url: String, destination_path: String, headers: Array = [], callback: Callable = Callable(), expected_size: int = 0) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
-	
+
 	# Normalize path separators for the platform
 	var normalized_path = destination_path.replace("\\", "/")
-	
+
 	# Verify directory exists before starting download
 	var dest_dir = normalized_path.get_base_dir()
 	if not FSM.dir_exists(dest_dir):
@@ -570,16 +570,15 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 				callback.call(false, 0, "Failed to create destination directory")
 			http.queue_free()
 			return {}
-	
+
 	# Configure HTTPRequest for large file downloads
 	http.download_file = normalized_path
 	http.timeout = 0.0  # Never timeout - let DownloadManager handle this
-	# NOTE: Threading disabled on desktop to reduce CPU usage
-	# Only enable threading on Android where it helps prevent UI blocking
-	http.use_threads = PlatformManager.is_android()
+	# Threading is enabled on Android and on desktop when the speed profile allows.
+	http.use_threads = _use_threads_for_downloads()
 	http.accept_gzip = false  # Disable compression to get accurate file sizes
 	http.body_size_limit = -1  # No limit
-	
+
 	# Dynamic chunk size based on expected file size and platform
 	# Note: download_file is only used for large files (games), images use http_get
 	# Desktop uses larger buffers for better throughput on fast connections
@@ -603,15 +602,15 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 			http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks
 		else:
 			http.download_chunk_size = 1 * 1024 * 1024  # 1MB chunks
-	
+
 	var error = http.request(url, headers)
-	
+
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, 0, "Failed to start download: " + str(error))
 		http.queue_free()
 		return {}
-	
+
 	# Store callback for later use (DownloadManager will poll for completion)
 	var result = {
 		"http": http,
@@ -619,19 +618,19 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 		"path": normalized_path,
 		"completed": false
 	}
-	
+
 	http.request_completed.connect(func(request_result, response_code, _response_headers, _body):
 		# Check callback validity first
 		if not callback.is_valid():
 			http.queue_free()
 			return
-		
+
 		if request_result != HTTPRequest.RESULT_SUCCESS:
 			result["error"] = "Download failed: " + str(request_result)
 			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
-		
+
 		if response_code >= 400:
 			if response_code == 401:
 				authentication_failed.emit()
@@ -639,22 +638,22 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
-		
+
 		if not FSM.file_exists(normalized_path):
 			result["error"] = "Download file not created"
 			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
-		
+
 		var file_size = FSM.get_file_size(normalized_path)
 		print("[NetworkManager] Download complete: " + normalized_path + " (response=" + str(response_code) + ", size=" + str(file_size) + " bytes)")
-		
+
 		# Only mark as completed on success
 		result.completed = true
 		callback.call(true, response_code, "")
 		http.queue_free()
 	)
-	
+
 	return result
 
 ## Gets the RomM download URL for a game (DownloadManager will handle the actual download)
@@ -672,31 +671,46 @@ func is_romm_connected() -> bool:
 
 # ==================== CHUNKED DOWNLOAD SUPPORT ====================
 
+func _use_threads_for_downloads() -> bool:
+	"""Return true if HTTPRequest should use background threads for file downloads.
+
+	Threading is always enabled on Android. On desktop it is enabled unless the
+	download speed profile is set to Conservative (0), matching the previous
+	CPU-conscious default.
+	"""
+	if PlatformManager.is_android():
+		return true
+	if SettingsManager and SettingsManager.settings:
+		var setting = SettingsManager.get_setting("download_speed_profile")
+		if setting and setting.value is int:
+			return setting.value > 0  # Conservative = no threads
+	return true
+
 ## Checks if the server supports HTTP Range requests
 ## callback(supports_range: bool, error_message: String)
 func check_range_support(url: String, headers: Array = [], callback: Callable = Callable()) -> void:
 	var http = _create_http_request()
 	_active_request_count += 1
-	
+
 	# Add HEAD method to check capabilities without downloading
 	var error = http.request(url, headers, HTTPClient.METHOD_HEAD)
-	
+
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, "Failed to start HEAD request: " + str(error), 0)
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, _response_code, response_headers, _body):
 		_active_request_count -= 1
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call(false, "HEAD request failed: " + str(result), 0)
 			_cleanup_http_request(http)
 			return
-		
+
 		# Check for Accept-Ranges header
 		var supports_range = false
 		var content_length = 0
@@ -709,10 +723,10 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 			elif lower_header.begins_with("content-length:"):
 				var length_str = header.split(":", false, 1)[1].strip_edges()
 				content_length = int(length_str)
-		
+
 		if callback.is_valid():
 			callback.call(supports_range, "", content_length)
-		
+
 		_cleanup_http_request(http)
 	)
 
@@ -723,7 +737,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 func http_download_chunk(url: String, destination_path: String, start_byte: int, end_byte: int, headers: Array = [], callback: Callable = Callable()) -> void:
 	# Normalize path separators for the platform
 	var normalized_path = destination_path.replace("\\", "/")
-	
+
 	# Verify directory exists before starting download
 	var dest_dir = normalized_path.get_base_dir()
 	if not FSM.dir_exists(dest_dir):
@@ -731,11 +745,11 @@ func http_download_chunk(url: String, destination_path: String, start_byte: int,
 			if callback.is_valid():
 				callback.call(false, 0, "Failed to create destination directory")
 			return
-	
+
 	# Add Range header
 	var range_header = "Range: bytes=%d-%d" % [start_byte, end_byte]
 	headers.append(range_header)
-	
+
 	# Add User-Agent if not present
 	var has_user_agent = false
 	for header in headers:
@@ -744,7 +758,7 @@ func http_download_chunk(url: String, destination_path: String, start_byte: int,
 			break
 	if not has_user_agent:
 		headers.append("User-Agent: Kyodai-Launcher/1.0")
-	
+
 	# Queue the download to be started on the main thread
 	# This is necessary because HTTPRequest nodes can only be added to the SceneTree from the main thread
 	call_deferred("_start_chunk_download_on_main_thread", url, normalized_path, start_byte, end_byte, headers, callback)
@@ -754,12 +768,12 @@ func http_download_chunk(url: String, destination_path: String, start_byte: int,
 func _start_chunk_download_on_main_thread(url: String, normalized_path: String, _start_byte: int, _end_byte: int, headers: Array, callback: Callable):
 	var http = HTTPRequest.new()
 	add_child(http)
-	
+
 	# Configure HTTPRequest for chunk download
 	http.download_file = normalized_path
 	http.timeout = 0.0  # Never timeout - let caller handle this
-	# NOTE: Threading disabled on desktop to reduce CPU usage
-	http.use_threads = PlatformManager.is_android()
+	# Threading is enabled on Android and on desktop when the speed profile allows.
+	http.use_threads = _use_threads_for_downloads()
 	http.accept_gzip = false  # Disable compression to get accurate file sizes
 	http.body_size_limit = -1  # No limit
 	# Platform-specific buffer size for chunked downloads
@@ -767,38 +781,38 @@ func _start_chunk_download_on_main_thread(url: String, normalized_path: String, 
 		http.download_chunk_size = 4 * 1024 * 1024  # 4MB chunks for Android (memory optimized)
 	else:
 		http.download_chunk_size = 8 * 1024 * 1024  # 8MB chunks for desktop (performance)
-	
+
 	var error = http.request(url, headers)
-	
+
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, 0, "Failed to start chunk download: " + str(error))
 		http.queue_free()
 		return
-	
+
 	http.request_completed.connect(func(request_result, response_code, _response_headers, _body):
 		# Check callback validity first
 		if not callback.is_valid():
 			http.queue_free()
 			return
-		
+
 		if request_result != HTTPRequest.RESULT_SUCCESS:
 			callback.call(false, response_code, "Chunk download failed: " + str(request_result))
 			http.queue_free()
 			return
-		
+
 		if response_code >= 400:
 			if response_code == 401:
 				authentication_failed.emit()
 			callback.call(false, response_code, "HTTP error: " + str(response_code))
 			http.queue_free()
 			return
-		
+
 		if not FSM.file_exists(normalized_path):
 			callback.call(false, response_code, "Chunk file not created")
 			http.queue_free()
 			return
-		
+
 		# Success
 		callback.call(true, response_code, "")
 		http.queue_free()
@@ -812,7 +826,7 @@ func test_connection(callback: Callable = Callable()):
 		if callback.is_valid():
 			callback.call(false)
 		return
-	
+
 	# Perform a direct request instead of relying on the cached _is_online state.
 	# _check_connection() is asynchronous; a fixed timer races the HTTP round-trip.
 	make_request("/platforms", func(_data, error):
@@ -845,60 +859,60 @@ func format_bytes(bytes: int) -> String:
 func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
 	# Use GitHub as default if no api_base_url provided
 	var base_url = api_base_url if api_base_url != "" else "https://api.github.com"
-	
+
 	var url = ""
 	if release_tag != "" and release_tag != "latest":
 		url = base_url + "/repos/" + repo + "/releases/tags/" + release_tag
 	else:
 		url = base_url + "/repos/" + repo + "/releases/latest"
 	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
-	
+
 	var http = _create_http_request()
 	http.timeout = 15.0
 	_active_request_count += 1
-	
+
 	var error = http.request(url, headers)
-	
+
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error), 0, "", "")
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
 			_active_request_count -= 1
 			_cleanup_http_request(http)
-			
+
 			if result == HTTPRequest.RESULT_TIMEOUT:
 				callback.call("", "", "Request timed out", 0, "", "")
 				return
 			if result != HTTPRequest.RESULT_SUCCESS:
 				callback.call("", "", "Request failed: " + str(result), 0, "", "")
 				return
-			
+
 			if response_code != 200:
 				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "")
 				return
-			
+
 			var body_text = body.get_string_from_utf8()
 			var json = JSON.new()
 			var parse_result = json.parse(body_text)
-			
+
 			if parse_result != OK:
 				callback.call("", "", "Failed to parse JSON: " + json.get_error_message(), 0, "", "")
 				return
-			
+
 			var data = json.data
 			if not data.has("assets"):
 				callback.call("", "", "No assets in release", 0, "", "")
 				return
-			
+
 			var regex = RegEx.new()
 			regex.compile(asset_pattern)
-			
+
 			var tag_name = data.get("tag_name", "")
 			var published_at = data.get("published_at", "")
-			
+
 			for asset in data.assets:
 				var asset_name = asset.get("name", "")
 				if regex.search(asset_name) != null:
@@ -914,33 +928,33 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 	var http = _create_http_request()
 	http.timeout = 15.0
 	_active_request_count += 1
-	
+
 	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
-	
+
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error))
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if result == HTTPRequest.RESULT_TIMEOUT:
 			callback.call("", "", "Request timed out")
 			return
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "", "Request failed: " + str(result))
 			return
-		
+
 		if response_code != 200:
 			callback.call("", "", "HTTP error: " + str(response_code))
 			return
-		
+
 		var body_text = body.get_string_from_utf8()
 		var version: String = ""
-		
+
 		if json_path != "":
 			# JSON API mode: parse JSON and extract version via path
 			var json = JSON.new()
@@ -948,7 +962,7 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 			if parse_result != OK:
 				callback.call("", "", "Failed to parse JSON: " + json.get_error_message())
 				return
-			
+
 			# Check if path contains a wildcard array iterator [*]
 			var wildcard_idx = json_path.find("[*]")
 			if wildcard_idx != -1:
@@ -957,29 +971,29 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 				var suffix_path = json_path.substr(wildcard_idx + 3)  # skip "[*]"
 				if suffix_path.begins_with("."):
 					suffix_path = suffix_path.substr(1)
-				
+
 				var array_data = _extract_json_value(json.data, prefix_path)
 				if array_data == null or not (array_data is Array):
 					callback.call("", "", "JSON path did not resolve to an array: " + prefix_path)
 					return
-				
+
 				print("[NetworkManager] Fetched " + str(array_data.size()) + " tags from GitHub API")
-				
+
 				var regex = RegEx.new()
 				if version_pattern != "":
 					regex.compile(version_pattern)
-				
+
 				for item in array_data:
 					var item_value = item
 					if suffix_path != "":
 						item_value = _extract_json_value(item, suffix_path)
-					
+
 					if item_value == null:
 						continue
-					
+
 					var item_str = str(item_value)
 					print("[NetworkManager] Checking tag: " + item_str)
-					
+
 					if version_pattern != "":
 						var match_result = regex.search(item_str)
 						if match_result != null:
@@ -989,7 +1003,7 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 					else:
 						version = item_str
 						break
-				
+
 				if version == "":
 					callback.call("", "", "No array item matched version pattern: " + version_pattern)
 					return
@@ -1004,23 +1018,23 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 			# HTML scraping mode: use regex on response body
 			var regex = RegEx.new()
 			regex.compile(version_pattern)
-			
+
 			if match_strategy == "latest_semver":
 				var all_matches = regex.search_all(body_text)
 				if all_matches.is_empty():
 					callback.call("", "", "Could not find version pattern in page")
 					return
-				
+
 				var versions: Array[String] = []
 				for m in all_matches:
 					var v = m.get_string(1)
 					if v not in versions:
 						versions.append(v)
-				
+
 				if versions.is_empty():
 					callback.call("", "", "Could not find version pattern in page")
 					return
-				
+
 				# Parse and sort by semver (descending)
 				versions.sort_custom(func(a: String, b: String) -> int:
 					var a_parts = a.split(".")
@@ -1043,9 +1057,9 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 					callback.call("", "", "Could not find version pattern in page")
 					return
 				version = match_result.get_string(1)
-		
+
 		var download_url = url_template.replace("{version}", version)
-		
+
 		callback.call(download_url, version, "")
 	)
 
@@ -1097,12 +1111,12 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 		if callback.is_valid():
 			callback.call({}, "Not connected")
 		return
-	
+
 	if not FSM.file_exists(file_path):
 		if callback.is_valid():
 			callback.call({}, "File not found: " + file_path)
 		return
-	
+
 	var file = FSM.open_file_read(file_path)
 	if not file:
 		if callback.is_valid():
@@ -1110,17 +1124,17 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 		return
 	var file_data = file.get_buffer(file.get_length())
 	file.close()
-	
+
 	var boundary = "----KyodaiBoundary" + str(Time.get_ticks_msec())
 	var file_name = file_path.get_file()
-	
+
 	var body = PackedByteArray()
 	body.append_array(("--" + boundary + "\r\n").to_utf8_buffer())
 	body.append_array(("Content-Disposition: form-data; name=\"saveFile\"; filename=\"" + file_name + "\"\r\n").to_utf8_buffer())
 	body.append_array("Content-Type: application/octet-stream\r\n\r\n".to_utf8_buffer())
 	body.append_array(file_data)
 	body.append_array(("\r\n--" + boundary + "--\r\n").to_utf8_buffer())
-	
+
 	var url = _base_url.rstrip("/") + "/api/saves?rom_id=" + str(rom_id) + "&overwrite=" + str(overwrite).to_lower()
 	if emulator != "":
 		url += "&emulator=" + emulator.uri_encode()
@@ -1128,15 +1142,15 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 		url += "&slot=" + slot.uri_encode()
 	if device_id != "":
 		url += "&device_id=" + device_id.uri_encode()
-	
+
 	var headers = [
 		"Content-Type: multipart/form-data; boundary=" + boundary,
 		"Authorization: " + _get_auth_header()
 	]
-	
+
 	var http = _create_http_request()
 	_active_request_count += 1
-	
+
 	print("[NetworkManager] upload_save URL: " + url)
 	var error = http.request_raw(url, headers, HTTPClient.METHOD_POST, body)
 	if error != OK:
@@ -1145,24 +1159,24 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if response_code == 401:
 			authentication_failed.emit()
 			if callback.is_valid():
 				callback.call({}, "Authentication failed")
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call({}, "Upload failed: " + str(result))
 			return
-		
+
 		var body_text = response_body.get_string_from_utf8()
-		
+
 		if response_code < 200 or response_code >= 300:
 			var error_msg = "HTTP error: " + str(response_code)
 			if response_code == 404:
@@ -1171,7 +1185,7 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 			if callback.is_valid():
 				callback.call({}, error_msg)
 			return
-		
+
 		var json = JSON.new()
 		var parse_result = json.parse(body_text)
 		if parse_result != OK:
@@ -1179,7 +1193,7 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 			if callback.is_valid():
 				callback.call({}, "Failed to parse response: " + json.get_error_message())
 			return
-		
+
 		print("[NetworkManager] upload_save success: " + str(json.data))
 		if callback.is_valid():
 			callback.call(json.data, "")
@@ -1192,13 +1206,13 @@ func fetch_saves(rom_id: int, device_id: String = "", callback: Callable = Calla
 		if callback.is_valid():
 			callback.call([], "Not connected")
 		return
-	
+
 	var endpoint = "/saves?rom_id=" + str(rom_id)
 	if device_id != "":
 		endpoint += "&device_id=" + device_id.uri_encode()
-	
+
 	print("[NetworkManager] fetch_saves URL: " + (_base_url.rstrip("/") + "/api" + endpoint))
-	
+
 	make_request(endpoint, func(data, error):
 		if error != "":
 			print("[NetworkManager] fetch_saves error: " + error)
@@ -1222,7 +1236,7 @@ func download_save(save_id: int, device_id: String, destination_path: String, ca
 	var url = _base_url.rstrip("/") + "/api/saves/" + str(save_id) + "/content"
 	if device_id != "":
 		url += "?device_id=" + device_id.uri_encode()
-	
+
 	var headers = ["Authorization: " + _get_auth_header()]
 	return http_download_file(url, destination_path, headers, callback)
 
@@ -1233,7 +1247,7 @@ func register_device(_device_name: String, platform: String, client: String, cli
 		if callback.is_valid():
 			callback.call({}, "Not connected")
 		return
-	
+
 	var url = _base_url.rstrip("/") + "/api/devices"
 	var body = JSON.stringify({
 		"name": _device_name,
@@ -1247,7 +1261,7 @@ func register_device(_device_name: String, platform: String, client: String, cli
 		"Content-Type: application/json",
 		"Authorization: " + _get_auth_header()
 	]
-	
+
 	var http = _create_http_request()
 	_active_request_count += 1
 	var error = http.request(url, headers, HTTPClient.METHOD_POST, body)
@@ -1257,27 +1271,27 @@ func register_device(_device_name: String, platform: String, client: String, cli
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, _response_body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if response_code == 401:
 			authentication_failed.emit()
 			if callback.is_valid():
 				callback.call({}, "Authentication failed")
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call({}, "Request failed: " + str(result))
 			return
-			
+
 		if response_code < 200 or response_code >= 300:
 			if callback.is_valid():
 				callback.call({}, "HTTP error: " + str(response_code))
 			return
-		
+
 		# Success - parse response body for device data
 		var body_text = _response_body.get_string_from_utf8()
 		var json = JSON.new()
@@ -1285,7 +1299,7 @@ func register_device(_device_name: String, platform: String, client: String, cli
 		var response_data = {}
 		if parse_result == OK:
 			response_data = json.data
-		
+
 		if callback.is_valid():
 			callback.call(response_data, "")
 		http.queue_free()
@@ -1300,12 +1314,12 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 		if callback.is_valid():
 			callback.call({}, "Not connected")
 		return
-	
+
 	var url = _base_url.rstrip("/") + "/api/platforms"
 	var headers = [
 		"Authorization: " + _get_auth_header()
 	]
-	
+
 	var http = _create_http_request()
 	_active_request_count += 1
 	var error = http.request(url, headers, HTTPClient.METHOD_GET)
@@ -1315,27 +1329,27 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if response_code == 401:
 			authentication_failed.emit()
 			if callback.is_valid():
 				callback.call({}, "Authentication failed")
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call({}, "Request failed: " + str(result))
 			return
-		
+
 		if response_code < 200 or response_code >= 300:
 			if callback.is_valid():
 				callback.call({}, "HTTP error: " + str(response_code))
 			return
-		
+
 		var body_text = response_body.get_string_from_utf8()
 		var json = JSON.new()
 		var parse_result = json.parse(body_text)
@@ -1343,7 +1357,7 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 			if callback.is_valid():
 				callback.call({}, "Failed to parse response")
 			return
-		
+
 		# Find the platform in the list
 		var platforms = json.data
 		var platform_data = {}
@@ -1352,7 +1366,7 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 				if platform.get("slug", "") == platform_slug:
 					platform_data = platform
 					break
-		
+
 		if callback.is_valid():
 			callback.call(platform_data, "")
 	)
@@ -1364,33 +1378,33 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 		if callback.is_valid():
 			callback.call(false, "Not connected")
 		return
-	
+
 	var url = _base_url.rstrip("/") + "/api/firmware/" + str(firmware_id) + "/content/" + file_name
 	var headers = [
 		"Authorization: " + _get_auth_header()
 	]
-	
+
 	# Ensure destination directory exists
 	var dest_dir = destination_path.get_base_dir()
 	if not FSM.dir_exists(dest_dir):
 		FSM.make_dir_recursive(dest_dir)
-	
+
 	var http = _create_http_request()
 	_active_request_count += 1
-	
+
 	# Set up file download
 	http.download_file = destination_path
-	
+
 	# Track download progress with a timer
 	var progress_timer: Timer = null
 	var last_reported_mb = [-1]
-	
+
 	if progress_callback.is_valid():
 		progress_timer = Timer.new()
 		progress_timer.wait_time = 0.5
 		progress_timer.one_shot = false
 		add_child(progress_timer)
-		
+
 		progress_timer.timeout.connect(func():
 			if FSM.file_exists(destination_path):
 				var file_size = FSM.get_file_size(destination_path)
@@ -1400,7 +1414,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 					progress_callback.call(size_mb)
 		)
 		progress_timer.start()
-	
+
 	var error = http.request(url, headers, HTTPClient.METHOD_GET)
 	if error != OK:
 		if progress_timer:
@@ -1411,31 +1425,31 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, _response_body):
 		if progress_timer:
 			progress_timer.stop()
 			progress_timer.queue_free()
-		
+
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if response_code == 401:
 			authentication_failed.emit()
 			if callback.is_valid():
 				callback.call(false, "Authentication failed")
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call(false, "Download failed: " + str(result))
 			return
-		
+
 		if response_code < 200 or response_code >= 300:
 			if callback.is_valid():
 				callback.call(false, "HTTP error: " + str(response_code))
 			return
-		
+
 		print("[NetworkManager] Firmware downloaded: " + destination_path)
 		if callback.is_valid():
 			callback.call(true, "")
@@ -1448,14 +1462,14 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 		if callback.is_valid():
 			callback.call({}, "Not connected")
 		return
-	
+
 	var url = _base_url.rstrip("/") + "/api/saves/" + str(save_id) + "/downloaded"
 	var body = JSON.stringify({"device_id": device_id})
 	var headers = [
 		"Content-Type: application/json",
 		"Authorization: " + _get_auth_header()
 	]
-	
+
 	var http = _create_http_request()
 	_active_request_count += 1
 	var error = http.request(url, headers, HTTPClient.METHOD_POST, body)
@@ -1465,22 +1479,22 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 		_active_request_count -= 1
 		_cleanup_http_request(http)
 		return
-	
+
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
 		_active_request_count -= 1
 		_cleanup_http_request(http)
-		
+
 		if response_code == 401:
 			authentication_failed.emit()
 			if callback.is_valid():
 				callback.call({}, "Authentication failed")
 			return
-		
+
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call({}, "Request failed: " + str(result))
 			return
-		
+
 		if response_code < 200 or response_code >= 300:
 			var error_msg = "HTTP error: " + str(response_code)
 			if response_code == 404:
@@ -1488,7 +1502,7 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 			if callback.is_valid():
 				callback.call({}, error_msg)
 			return
-		
+
 		var body_text = response_body.get_string_from_utf8()
 		var json = JSON.new()
 		var parse_result = json.parse(body_text)
@@ -1496,7 +1510,7 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 			if callback.is_valid():
 				callback.call({}, "Failed to parse response")
 			return
-		
+
 		if callback.is_valid():
 			callback.call(json.data, "")
 	)

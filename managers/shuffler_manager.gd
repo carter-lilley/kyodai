@@ -47,7 +47,6 @@ var _download_item_ids: Array[String] = []
 var _download_progresses: Dictionary = {}  # item_id -> float
 var _download_sizes: Dictionary = {}       # item_id -> int (bytes)
 var _total_download_bytes: int = 0
-var _completed_download_bytes: int = 0
 var _active_download_item_id: String = ""  # item currently downloading
 
 const TEMP_DIR := "user://shuffler_temp/"
@@ -179,7 +178,7 @@ func start_session(config: Dictionary) -> void:
 	_download_progresses.clear()
 	_download_sizes.clear()
 	_total_download_bytes = 0
-	_completed_download_bytes = 0
+	_active_download_item_id = ""
 	_shuffler_vita_apps.clear()
 
 	var platforms = config.get("platforms", [])
@@ -235,7 +234,7 @@ func stop_session() -> void:
 	# Restore emulator configs edited for the shuffler session.
 	LaunchManager.restore_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg")
 	LaunchManager.restore_emulator_file("pcsx2", PCSX2_SHUFFLER_INI_PATH)
-	
+
 	# Clean up any Vita3K app folders that were extracted for this session.
 	_cleanup_vita3k_shuffler_apps()
 
@@ -541,11 +540,11 @@ func _download_bag_games() -> void:
 	_pending_downloads = 0
 	_total_downloads = 0
 	var need_download: Array[Dictionary] = []
-	
+
 	# Connect to DownloadManager progress signal
 	if not DownloadManager.download_progress.is_connected(_on_download_progress):
 		DownloadManager.download_progress.connect(_on_download_progress)
-	
+
 	for entry in _bag:
 		var game = entry["game"]
 		if game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
@@ -555,29 +554,27 @@ func _download_bag_games() -> void:
 			_total_downloads += 1
 			need_download.append(entry)
 			_total_download_bytes += game.get_active_file_size()
-	
+
 	if need_download.is_empty():
 		_call_enter_shuffler_mode()
 		return
-	
+
 	# Show progress notification now that we know the total size
 	var progress_callable = func() -> float:
 		if _total_download_bytes == 0:
 			return 0.0
-		var downloaded = float(_completed_download_bytes)
-		# Find the active download (only one is active at a time in sequential mode)
+		var downloaded = 0.0
+		# Sum progress across all queued shuffler downloads so the notification
+		# stays smooth even when multiple games download in parallel.
 		for item_id in _download_item_ids:
-			var progress = _download_progresses.get(item_id, 0.0)
-			if progress > 0.0 and progress < 1.0:
-				downloaded += progress * float(_download_sizes.get(item_id, 0))
-				break
+			downloaded += _download_progresses.get(item_id, 0.0) * float(_download_sizes.get(item_id, 0))
 		return downloaded / float(_total_download_bytes)
-	
+
 	var text_formatter = func(progress: float) -> String:
 		var total_mb = _total_download_bytes / (1024.0 * 1024.0)
 		var downloaded_mb = total_mb * progress
 		return "Preparing shuffle... %d/%d MB (%d%%)" % [int(downloaded_mb), int(total_mb), int(progress * 100)]
-	
+
 	_notification_id = NotificationManager.show_notification(
 		"Preparing shuffle...",
 		NotificationManager.Type.INFO,
@@ -588,49 +585,69 @@ func _download_bag_games() -> void:
 		false,
 		true
 	)
-	
+
 	download_progress.emit(0, _total_downloads)
 	_download_next(need_download, 0)
 
 func _download_next(entries: Array[Dictionary], index: int) -> void:
 	if index >= entries.size():
 		return
-	
-	var entry = entries[index]
-	var game = entry["game"]
-	var active_game_id = game.get_active_game_id()
-	var active_file_name = game.get_active_file_name()
-	
-	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
-	var temp_dir = TEMP_DIR + str(game.romm_id)
-	var temp_path = FSM.join_paths(temp_dir, active_file_name)
-	
-	FSM.make_dir_recursive(temp_dir)
-	entry["temp_path"] = temp_path
-	
-	var file_size = game.get_active_file_size()
-	
-	var callbacks = {
-		"on_complete": func(success: bool, _path: String):
-			_pending_downloads -= 1
-			_completed_download_bytes += file_size
-			# Mark this download as fully counted so the progress callable skips it
-			_download_progresses[_active_download_item_id] = 1.0
-			var completed = _total_downloads - _pending_downloads
-			download_progress.emit(completed, _total_downloads)
-			if _pending_downloads == 0 and _state == State.DOWNLOADING:
-				_call_enter_shuffler_mode()
-			else:
-				_download_next(entries, index + 1)
-	}
-	
-	var item_id = DownloadManager.queue_download(download_url, temp_path, "game", "", false, "", game, callbacks, game.romm_id, true, true, file_size, false)
-	
-	if item_id != "":
-		_active_download_item_id = item_id
-		_download_item_ids.append(item_id)
-		_download_sizes[item_id] = file_size
-		_download_progresses[item_id] = 0.0
+
+	# Enqueue downloads in parallel up to the active profile's concurrent limit,
+	# rather than waiting for each one to finish before queueing the next.
+	var batch_size := _get_preload_count()
+	var end_index := mini(index + batch_size, entries.size())
+
+	for i in range(index, end_index):
+		var entry = entries[i]
+		var game = entry["game"]
+		var active_game_id = game.get_active_game_id()
+		var active_file_name = game.get_active_file_name()
+
+		var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
+		var temp_dir = TEMP_DIR + str(game.romm_id)
+		var temp_path = FSM.join_paths(temp_dir, active_file_name)
+
+		FSM.make_dir_recursive(temp_dir)
+		entry["temp_path"] = temp_path
+
+		var file_size = game.get_active_file_size()
+
+		var captured_item_id: String = ""
+
+		var callbacks = {
+			"on_complete": func(success: bool, _path: String):
+				_pending_downloads -= 1
+				# Mark this specific download as fully counted.
+				_download_progresses[captured_item_id] = 1.0
+				var completed = _total_downloads - _pending_downloads
+				download_progress.emit(completed, _total_downloads)
+				if _pending_downloads == 0 and _state == State.DOWNLOADING:
+					_call_enter_shuffler_mode()
+				else:
+					_download_next(entries, end_index)
+		}
+
+		var item_id = DownloadManager.queue_download(download_url, temp_path, "game", "", false, "", game, callbacks, game.romm_id, true, true, file_size, false)
+
+		if item_id != "":
+			captured_item_id = item_id
+			_active_download_item_id = item_id
+			_download_item_ids.append(item_id)
+			_download_sizes[item_id] = file_size
+			_download_progresses[item_id] = 0.0
+
+func _get_preload_count() -> int:
+	if SettingsManager and SettingsManager.settings:
+		var setting = SettingsManager.get_setting("download_speed_profile")
+		if setting and setting.value is int:
+			# Conservative: keep sequential behavior; higher profiles preload more.
+			match clampi(setting.value, 0, 3):
+				0: return 1
+				1: return 2
+				2: return 4
+				3: return 6
+	return 2
 
 func _call_enter_shuffler_mode() -> void:
 	# Defer to avoid thread issues from download callbacks
@@ -669,7 +686,7 @@ func _enter_shuffler_mode() -> void:
 	# Block input to the main window while the shuffler is active.
 	# The controls window is its own viewport and still receives input.
 	get_tree().root.gui_disable_input = true
-	
+
 	# Only apply emulator-specific shuffler tweaks if the bag actually uses those emulators.
 	var needs_retroarch := false
 	var needs_pcsx2 := false
@@ -679,15 +696,15 @@ func _enter_shuffler_mode() -> void:
 			needs_retroarch = true
 		elif emulator_id == "pcsx2":
 			needs_pcsx2 = true
-	
+
 	# Ensure RetroArch is configured for shuffler UDP savestate behavior.
 	if needs_retroarch:
 		_ensure_retroarch_shuffler_config()
-	
+
 	# Disable PCSX2 memory cards so multiple suspended instances don't fight over the same memcard file.
 	if needs_pcsx2:
 		_ensure_pcsx2_shuffler_config()
-	
+
 	session_started.emit()
 	call_deferred("_start_cursor_overlay")
 	_switch_to_game(0)
@@ -752,7 +769,7 @@ func _launch_game(entry: Dictionary) -> void:
 			_maximize_with_retry(pid)
 		else:
 			push_error("[ShufflerManager] Failed to launch game: " + game.title)
-		
+
 		# Track any Vita3K app folder that was extracted for this session so it can
 		# be cleaned up safely when the session ends.
 		if emulator_id.begins_with("vita3k"):
@@ -843,7 +860,7 @@ func _start_round_timer(duration: float) -> void:
 	_round_timer.timeout.connect(_on_round_timer_timeout)
 	add_child(_round_timer)
 	_round_timer.start()
-	
+
 	_countdown_timer = Timer.new()
 	_countdown_timer.one_shot = false
 	_countdown_timer.wait_time = 0.1
@@ -954,19 +971,19 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 	if err != OK:
 		push_error("[ShufflerManager] Failed to connect TCP to " + host + ":" + str(port))
 		return
-	
+
 	# Wait for connection with timeout
 	var attempts = 0
 	while tcp.get_status() == StreamPeerTCP.STATUS_CONNECTING and attempts < 50:
 		await get_tree().process_frame
 		attempts += 1
-	
+
 	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
 		push_error("[ShufflerManager] TCP connection timed out to " + host + ":" + str(port))
 		return
-	
+
 	tcp.put_data((command + "\n").to_utf8_buffer())
-	
+
 	# Brief delay to ensure command is sent before disconnect
 	await get_tree().create_timer(0.1).timeout
 	tcp.disconnect_from_host()
@@ -991,7 +1008,7 @@ func _create_controls_window() -> void:
 	_controls_window.restart_requested.connect(restart_game)
 	_controls_window.remove_requested.connect(remove_game)
 	_controls_window.stop_requested.connect(stop_session)
-	
+
 	get_tree().root.add_child(_controls_window)
 	_controls_window.popup()
 	_raise_controls_window()
@@ -1064,7 +1081,7 @@ func _ensure_retroarch_shuffler_config() -> void:
 			"new": '%s = "%s"' % [key, value],
 			"regex": true,
 		})
-	
+
 	if not LaunchManager.edit_emulator_file_with_backup("retroarch", "{emulator_dir}/retroarch.cfg", edits, true, RETROARCH_SHUFFLER_CFG, ""):
 		push_error("[ShufflerManager] Failed to apply retroarch.cfg edits")
 
@@ -1082,7 +1099,7 @@ func _ensure_pcsx2_shuffler_config() -> void:
 		if not FSM.file_exists(portable_path):
 			FSM.write_file(portable_path, "")
 			print("[ShufflerManager] Created portable.txt to force PCSX2 portable mode")
-	
+
 	var edits: Array[Dictionary] = []
 	for key in PCSX2_MEMORY_CARD_KEYS:
 		edits.append({
@@ -1090,11 +1107,11 @@ func _ensure_pcsx2_shuffler_config() -> void:
 			"new": '%s = %s' % [key, PCSX2_MEMORY_CARD_VALUES[key]],
 			"regex": true,
 		})
-	
+
 	if not LaunchManager.edit_emulator_file_with_backup("pcsx2", PCSX2_SHUFFLER_INI_PATH, edits, false, PCSX2_MEMORY_CARD_VALUES, "MemoryCards"):
 		push_error("[ShufflerManager] Failed to apply PCSX2.ini memory-card edits")
 		return
-	
+
 	# Log the MemoryCards section for debugging.
 	var cfg_path := FSM.resolve_emulator_path(PCSX2_SHUFFLER_INI_PATH, "pcsx2")
 	if cfg_path == "":
@@ -1114,18 +1131,18 @@ func _cleanup_vita3k_shuffler_apps() -> void:
 		var app_path = entry.get("ux0_app_path", "") as String
 		if app_path == "":
 			continue
-		
+
 		var sentinel_path = app_path + "/.kyodai_shuffler"
 		if not FSM.file_exists(sentinel_path):
 			push_warning("[ShufflerManager] Refusing to clean up Vita3K app folder without sentinel: " + app_path)
 			continue
-		
+
 		if FSM.dir_exists(app_path):
 			print("[ShufflerManager] Cleaning up Vita3K shuffler app folder: " + app_path)
 			FSM.delete_dir_recursive(app_path)
 		else:
 			print("[ShufflerManager] Vita3K shuffler app folder already gone: " + app_path)
-	
+
 	_shuffler_vita_apps.clear()
 
 func _cleanup_temp_files() -> void:
