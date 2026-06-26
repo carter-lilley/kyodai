@@ -198,6 +198,11 @@ var _focus_request_id: int = 0
 # card is created by _on_scroll_value_changed.
 var _pending_focus_index: int = -1
 
+# Tracks whether a helper-scroll event has already been handled this process
+# frame. This prevents bunched-up OS key-repeat events from skipping multiple
+# rows/columns in a single frame while still allowing held-key repetition.
+var _helper_scroll_consumed_this_frame: bool = false
+
 func is_focus_locked_and_active() -> bool:
 	"""Returns true if focus lock is enabled and focus was recently inside this grid."""
 	return focus_lock_enabled and _grid_had_focus_last
@@ -678,6 +683,11 @@ func _process(_delta: float):
 		_resize_debounce_frames -= 1
 		if _resize_debounce_frames == 0:
 			_on_resize_debounced()
+
+	# Reset the helper-scroll input guard each frame so held keys can repeat,
+	# but bunched key-repeat events cannot skip multiple rows/columns in one frame.
+	if _helper_scroll_consumed_this_frame:
+		_helper_scroll_consumed_this_frame = false
 
 func _on_resize_debounced():
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
@@ -1899,9 +1909,13 @@ func _input(event: InputEvent) -> void:
 	if target_idx >= _visible_start_idx and target_idx <= _visible_end_idx:
 		return
 
-	# The target is offscreen. Scroll to it and focus it.
+	# The target is offscreen. Scroll to it and focus it. Throttle to one
+	# helper-scroll per process frame so OS key-repeat bursts don't skip rows.
+	if _helper_scroll_consumed_this_frame:
+		return
+	_helper_scroll_consumed_this_frame = true
 	get_viewport().set_input_as_handled()
-	scroll_to_index_and_focus(target_idx, true)
+	scroll_to_index_and_focus(target_idx, true, 0.6)
 
 func _get_focused_virtual_index() -> int:
 	var viewport := get_viewport()

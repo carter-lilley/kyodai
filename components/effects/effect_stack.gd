@@ -113,7 +113,6 @@ func set_game_texture(texture: Texture2D):
 		effect.call_deferred("_update_shader_params")
 
 func _rebuild_effects():
-	print("[EffectStack] _rebuild_effects effect_configs=", _effect_configs.size(), " media_container=", media_container != null)
 	var active_effect_ids: Array[String] = []
 	for config in _effect_configs:
 		if config is Dictionary:

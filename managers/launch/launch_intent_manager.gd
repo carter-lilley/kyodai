@@ -11,13 +11,19 @@ func _ready():
 	launch_manager = get_parent()
 
 ## Resolves which emulator to use for a game
-## Priority: 1. Game override, 2. User platform setting, 3. Registry default
+## Priority: 1. Game override, 2. Active shuffler override, 3. User platform setting, 4. Registry default
 func resolve_emulator_for_game(game: GameResource) -> String:
 	# 1. Check game override
 	if game.preferred_emulator_id != "":
 		return game.preferred_emulator_id
 	
-	# 2. Check user platform settings (empty = use registry default)
+	# 2. Check active shuffler override
+	if ShufflerManager and ShufflerManager.is_shuffle_session_active():
+		var override = ShufflerManager.get_shuffle_override(game.platform_slug)
+		if override.get("emulator_id", "") != "":
+			return override["emulator_id"]
+	
+	# 3. Check user platform settings (empty = use registry default)
 	var enabled_platforms = _get_enabled_platforms()
 	var platform_config = enabled_platforms.get(game.platform_slug, {})
 	var platform_emulator = platform_config.get("emulator_id", "")
@@ -25,24 +31,30 @@ func resolve_emulator_for_game(game: GameResource) -> String:
 	if platform_emulator != "":
 		return platform_emulator
 	
-	# 3. Use registry default (from _platform_defaults or first available)
+	# 4. Use registry default (from _platform_defaults or first available)
 	return launch_manager.registry.get_default_emulator_for_platform(game.platform_slug)
 
 ## Resolves which RetroArch core id to use for a game.
-## Priority: 1. Game override, 2. User platform setting, 3. platforms.json default
+## Priority: 1. Game override, 2. Active shuffler override, 3. User platform setting, 4. platforms.json default
 func resolve_core_for_game(game: GameResource) -> String:
 	# 1. Check game override
 	if game.preferred_core_id != "":
 		return game.preferred_core_id
 	
-	# 2. Check user platform settings
+	# 2. Check active shuffler override
+	if ShufflerManager and ShufflerManager.is_shuffle_session_active():
+		var override = ShufflerManager.get_shuffle_override(game.platform_slug)
+		if override.get("core_id", "") != "":
+			return override["core_id"]
+	
+	# 3. Check user platform settings
 	var enabled_platforms = _get_enabled_platforms()
 	var platform_config = enabled_platforms.get(game.platform_slug, {})
 	var platform_core = platform_config.get("core_id", "")
 	if platform_core != "":
 		return platform_core
 	
-	# 3. Use platforms.json default
+	# 4. Use platforms.json default
 	return launch_manager.registry.get_retroarch_core_name(game.platform_slug)
 
 ## Creates a launch intent for a game

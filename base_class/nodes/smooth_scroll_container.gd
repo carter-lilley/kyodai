@@ -89,6 +89,12 @@ func _on_focus_changed(control: Control) -> void:
 		control.remove_meta("_suppress_smooth_scroll")
 		return
 	
+	# If the control is already fully visible, don't re-center it. This prevents
+	# subtle vertical/horizontal drift when moving across a row/column that is
+	# already inside the viewport.
+	if _is_control_fully_visible(control):
+		return
+
 	# Calculate and smoothly scroll to centered position
 	_target_scroll = _get_centered_scroll_for_control(control)
 	_start_smooth_scroll()
@@ -183,6 +189,18 @@ func _get_centered_scroll_for_control(p_control: Control) -> float:
 			target = clampf(target, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
 		
 		return target
+
+func _is_control_fully_visible(p_control: Control) -> bool:
+	"""Returns true if the control is completely within the viewport bounds."""
+	var control_rect = p_control.get_global_rect()
+	var scroll_rect = get_global_rect()
+
+	if vertical:
+		return control_rect.position.y >= scroll_rect.position.y \
+			and control_rect.end.y <= scroll_rect.end.y
+	else:
+		return control_rect.position.x >= scroll_rect.position.x \
+			and control_rect.end.x <= scroll_rect.end.x
 
 func _on_gui_input(event: InputEvent):
 	if not smooth_scrolling or scroll_paused:

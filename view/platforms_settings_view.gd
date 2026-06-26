@@ -24,6 +24,11 @@ var _romm_connection_panel: RommConnectionPanel = null
 # to create its own Timer, which added overhead when dozens of cards were built.
 var _status_poll_timer: Timer = null
 
+# Track any in-flight batched card creation so it can be cancelled if the view
+# exits the tree before the batch finishes. Prevents pooled cards from being
+# added to orphaned containers and leaked.
+var _active_batch_id: int = -1
+
 const NARROW_BREAKPOINT_DP := 850.0
 
 func _is_narrow_screen() -> bool:
@@ -125,11 +130,10 @@ func _fetch_platforms():
 			continue
 		if child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
 			child.queue_free()
-	for child in _cards_left.get_children():
-		child.queue_free()
-	for child in _cards_right.get_children():
-		child.queue_free()
-	_platform_cards.clear()
+	_return_all_cards()
+	if _active_batch_id != -1:
+		MemoryManager.cancel_batch(_active_batch_id)
+		_active_batch_id = -1
 
 	# Show loading indicator
 	var loading_label = M3Label.new()
@@ -233,7 +237,7 @@ func _fetch_platforms():
 		
 		# Spread card creation across frames to avoid stuttering the UI.
 		# Use MemoryManager's batch worker for smooth per-frame processing.
-		MemoryManager.start_batch(
+		_active_batch_id = MemoryManager.start_batch(
 			card_payloads,
 			func(payload: Dictionary, _index: int) -> PlatformCard:
 				return _create_platform_card(
@@ -251,10 +255,16 @@ func _fetch_platforms():
 			func(_processed: int, _total: int):
 				pass,
 			func(results: Array):
+				_active_batch_id = -1
+				if not is_inside_tree():
+					_return_all_cards()
+					return
+				
 				for card in results:
 					if not card is PlatformCard:
 						continue
 					var slug: String = card.platform_slug
+					card.visible = true
 					# Distribute cards: single column on narrow screens, two columns on wide
 					if _is_narrow_screen():
 						_cards_left.add_child(card)
@@ -283,6 +293,7 @@ func _fetch_platforms():
 
 func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCard.new()
+	card.shuffler_mode = false
 	card.platform_slug = slug
 	card.platform_name = platform_name
 	# Pass cached default core id so the card doesn't re-query the registry.
@@ -350,6 +361,25 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 
 	return card
 
+func _return_all_cards() -> void:
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		if card:
+			card.queue_free()
+	_platform_cards.clear()
+
+func _exit_tree() -> void:
+	_return_all_cards()
+	if _active_batch_id != -1:
+		MemoryManager.cancel_batch(_active_batch_id)
+		_active_batch_id = -1
+	if _status_poll_timer:
+		_status_poll_timer.stop()
+
+func _enter_tree() -> void:
+	if _status_poll_timer:
+		_status_poll_timer.start()
+
 func _load_platforms_from_database():
 	# Remove loading label if exists
 	for child in _platforms_container.get_children():
@@ -361,11 +391,10 @@ func _load_platforms_from_database():
 	var enabled_platforms = _get_enabled_platforms()
 
 	# Clear existing cards
-	for child in _cards_left.get_children():
-		child.queue_free()
-	for child in _cards_right.get_children():
-		child.queue_free()
-	_platform_cards.clear()
+	_return_all_cards()
+	if _active_batch_id != -1:
+		MemoryManager.cancel_batch(_active_batch_id)
+		_active_batch_id = -1
 
 	# Cache emulator lists to avoid duplicate registry queries during batch creation
 	var emulator_cache: Dictionary = {}
@@ -391,7 +420,7 @@ func _load_platforms_from_database():
 		})
 
 	# Spread offline card creation across frames
-	MemoryManager.start_batch(
+	_active_batch_id = MemoryManager.start_batch(
 		platform_payloads,
 		func(payload: Dictionary, _index: int) -> PlatformCard:
 			var card = _create_platform_card(payload.slug, payload.platform_name, 0, payload.icon_url, enabled_platforms, {}, emulator_cache)
@@ -403,6 +432,11 @@ func _load_platforms_from_database():
 		func(_processed: int, _total: int):
 			pass,
 		func(results: Array):
+			_active_batch_id = -1
+			if not is_inside_tree():
+				_return_all_cards()
+				return
+
 			for card in results:
 				if not card is PlatformCard:
 					continue

@@ -135,6 +135,9 @@ func initialize(
 	# Setup focus feedback handlers (navigation sounds)
 	navigation._setup_feedback_handlers()
 
+func _ready():
+	pass
+
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	"""Create the inner layout container (VBox or HBox)."""
 	var layout: BoxContainer

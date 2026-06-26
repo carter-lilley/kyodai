@@ -228,6 +228,10 @@ func get_cores_for_platform(emulator_id: String, platform_slug: String) -> Array
 		var result: Array[Dictionary] = []
 		for core in platform_cores:
 			if core is Dictionary:
+				if core.get("desktop_only", false) and PlatformManager.is_android():
+					continue
+				if core.get("android_only", false) and not PlatformManager.is_android():
+					continue
 				result.append(core.duplicate())
 		return result
 	

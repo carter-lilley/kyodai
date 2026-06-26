@@ -189,7 +189,6 @@ func _setup_preview_mode():
 	_show_focus_effects(preview_show_focus)
 
 func _build_media_stack(force_full_rebuild: bool = true):
-	print("[GameCard] _build_media_stack force_full_rebuild=", force_full_rebuild, " _media_stack=", _media_stack != null, " _current_texture=", _current_texture != null)
 	var effect_settings := []
 	if UIManager and UIManager.card_settings_state:
 		effect_settings = UIManager.card_settings_state.get_base_effects()
@@ -537,7 +536,6 @@ func refresh_settings() -> void:
 		_show_focus_effects(preview_show_focus)
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
-	print("[GameCard] refresh_effects force_full_rebuild=", force_full_rebuild, " game=", game.title if game else null, " _media_stack=", _media_stack != null, " _focus_stack=", _focus_stack != null)
 	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
 	_update_card_state_from_settings()
 	_build_media_stack(force_full_rebuild)

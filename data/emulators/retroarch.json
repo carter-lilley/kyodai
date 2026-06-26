@@ -728,6 +728,7 @@
 		"name": "PICO-8",
 		"mapping": "pico8",
 		"android_mapping": "pico8",
+		"android_only": true,
 		"save_name": "PICO-8",
 		"default": true
 	  }
@@ -782,8 +783,8 @@
 		  },
 		  "firmware": {
 			"directories": {
-			  "windows": "{emulator_dir}/system/pcsx2/bios",
-			  "linux": "{emulator_dir}/system/pcsx2/bios"
+			  "windows": "{emulator_dir}/system/pcsx2",
+			  "linux": "{emulator_dir}/system/pcsx2"
 			}
 		  }
 		}
@@ -1079,6 +1080,7 @@
 		"name": "Azahar",
 		"mapping": "azahar",
 		"android_mapping": "azahar",
+		"android_only": true,
 		"save_name": "Azahar",
 		"paths": {
 		  "saves": {

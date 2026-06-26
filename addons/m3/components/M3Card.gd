@@ -594,7 +594,6 @@ func _configure_stylebox_for_state():
 # ============================================
 
 func _update_media():
-	print("[M3Card] _update_media _media_content=", _media_content != null, " _media_rect=", _media_rect != null, " media_texture=", media_texture != null, " _media_panel.visible=", _media_panel.visible if _media_panel else "n/a")
 	if _media_content and is_instance_valid(_media_content):
 		if _media_panel:
 			_media_panel.visible = true
@@ -813,7 +812,6 @@ func set_media_content(content: Control):
 			_update_media()
 
 func refresh_theme():
-	print("[M3Card] refresh_theme ", name, " _media_content=", _media_content != null, " _media_panel.visible=", _media_panel.visible if _media_panel else "n/a", " media_texture=", media_texture != null)
 	_cached_fonts = M3Theme.load_fonts()
 	_update_text()
 	# Update focus ring color to match new primary accent

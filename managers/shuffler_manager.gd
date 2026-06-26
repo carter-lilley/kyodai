@@ -33,6 +33,11 @@ var _reroll_in_progress: bool = false
 var _reroll_download_id: String = ""
 var _reroll_notification_id: int = -1
 
+# Temporary per-session emulator/core overrides selected in the shuffler config
+# dialog. These are in-memory only and do not modify persistent settings.
+var _shuffle_overrides: Dictionary = {}  # platform_slug -> {"emulator_id": String, "core_id": String}
+var _shuffle_session_active: bool = false
+
 # Session log capture
 var _session_log_path: String = "user://logs/session.log"
 var _session_log_start_offset: int = -1
@@ -139,6 +144,23 @@ func is_session_active() -> bool:
 
 func get_state() -> State:
 	return _state
+
+func is_shuffle_session_active() -> bool:
+	return _shuffle_session_active
+
+## Sets a temporary emulator/core override for a platform during shuffler config.
+## This does not modify persistent settings.
+func set_shuffle_override(platform_slug: String, emulator_id: String, core_id: String) -> void:
+	_shuffle_overrides[platform_slug] = {"emulator_id": emulator_id, "core_id": core_id}
+
+## Returns the temporary override for a platform, or an empty dict if none.
+func get_shuffle_override(platform_slug: String) -> Dictionary:
+	return _shuffle_overrides.get(platform_slug, {})
+
+## Clears all temporary shuffler overrides. Called when the config dialog opens.
+func clear_shuffle_overrides() -> void:
+	_shuffle_overrides.clear()
+	_shuffle_session_active = false
 
 func start_session(config: Dictionary) -> void:
 	if _state != State.IDLE:
@@ -249,6 +271,7 @@ func stop_session() -> void:
 	_current_game_index = -1
 	_config.clear()
 	_state = State.IDLE
+	_shuffle_session_active = false
 
 	_finalize_session_log()
 	session_stopped.emit()
@@ -623,6 +646,7 @@ func _on_download_progress(item_id: String, progress: float) -> void:
 
 func _enter_shuffler_mode() -> void:
 	_state = State.ACTIVE
+	_shuffle_session_active = true
 	_start_session_log_capture()
 
 	# Disconnect from DownloadManager progress signal

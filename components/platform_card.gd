@@ -1,10 +1,17 @@
-@tool
 class_name PlatformCard
 extends M3Card
 
 signal sync_toggled(enabled: bool)
 signal emulator_changed(emulator_id: String, core_id: String)
 signal download_requested(emulator_id: String)
+
+## When true, the card is being used in the shuffler config dialog.
+## Status indicators, the download button, and the version label are hidden,
+## and the sync toggle means "include in shuffle".
+@export var shuffler_mode: bool = false:
+	set(value):
+		shuffler_mode = value
+		_update_shuffler_mode()
 
 @export var platform_slug: String = "":
 	set(value):
@@ -57,12 +64,19 @@ var _is_rebuilding_dropdown: bool = false
 var _dropdown_entries: Array[Dictionary] = []
 
 var _name_label: M3Label
-var _sync_toggle: M3Checkbox
+var _sync_toggle: M3Switch
 var _emulator_dropdown: M3OptionButton
 var _status_indicator: Indicator
 var _download_button: M3Button
 var _version_label: M3Label
 var _firmware_indicator: Indicator
+var _status_row: HBoxContainer
+
+# Track signal connections so we can disconnect them cleanly when the card is
+# returned to a pool and rebound to a new consumer.
+var _sync_toggle_connected: bool = false
+var _emulator_dropdown_connected: bool = false
+var _download_button_connected: bool = false
 
 func _ready():
 	card_layout_mode = LayoutMode.HORIZONTAL
@@ -70,8 +84,12 @@ func _ready():
 	clickable = false
 
 	super._ready()
-	# Allow card to grow to fit content; set a sane minimum for horizontal mode
-	custom_minimum_size.y = M3Units.dp(140)
+	# Allow card to grow to fit content; set a sane minimum for horizontal mode.
+	# custom_minimum_size.x must be set because pooled cards are created from
+	# PlatformCard.new() and won't inherit the value from the .tscn file.
+	custom_minimum_size = Vector2(M3Units.dp(320), M3Units.dp(140))
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	print("[PlatformCard] _ready set custom_minimum_size=%s scale=%s" % [custom_minimum_size, M3Units.get_scale()])
 
 	_build_ui()
 	_update_display()
@@ -108,15 +126,17 @@ func _build_ui():
 	_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_row.add_child(_name_label)
 
+	_sync_toggle = M3Switch.new()
+	_sync_toggle.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_sync_toggle.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top_row.add_child(_sync_toggle)
+	_connect_sync_toggle()
+
 	_firmware_indicator = Indicator.new()
 	_firmware_indicator.dot_size = Vector2(M3Units.dp(8), M3Units.dp(8))
 	_firmware_indicator.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_firmware_indicator.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	top_row.add_child(_firmware_indicator)
-
-	_sync_toggle = M3Checkbox.new()
-	_sync_toggle.toggled.connect(_on_sync_toggled)
-	top_row.add_child(_sync_toggle)
 
 	# Emulator row: Icon + Dropdown
 	var emulator_row = HBoxContainer.new()
@@ -125,40 +145,41 @@ func _build_ui():
 
 	var emulator_icon = FontIcon.new()
 	emulator_icon.icon_settings = FontIconSettings.new()
-	emulator_icon.icon_settings.icon_name = "gamepad-variant"
+	emulator_icon.icon_settings.icon_name = "gamepad"
 	emulator_icon.icon_settings.icon_size = M3Units.dp(20)
 	emulator_icon.icon_settings.icon_color = M3Theme.get_on_surface_variant()
 	emulator_row.add_child(emulator_icon)
 
 	_emulator_dropdown = M3OptionButton.new()
 	_emulator_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_emulator_dropdown.item_selected.connect(_on_emulator_selected)
 	emulator_row.add_child(_emulator_dropdown)
+	_connect_emulator_dropdown()
 
 	# Status row: Indicator + Download button + version label
-	var status_row = HBoxContainer.new()
-	status_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_text_content.add_child(status_row)
+	_status_row = HBoxContainer.new()
+	_status_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text_content.add_child(_status_row)
 
 	_status_indicator = Indicator.new()
 	_status_indicator.dot_size = Vector2(M3Units.dp(10), M3Units.dp(10))
 	_status_indicator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	status_row.add_child(_status_indicator)
+	_status_row.add_child(_status_indicator)
 
 	_download_button = M3Button.new()
 	_download_button.text = "Download"
 	_download_button.visible = false
 	_download_button.button_size = M3Button.Size.EXTRA_SMALL
-	_download_button.pressed.connect(_on_download_pressed)
-	status_row.add_child(_download_button)
+	_status_row.add_child(_download_button)
+	_connect_download_button()
 
 	_version_label = M3Label.new()
 	_version_label.visible = false
 	_version_label.size_flags_horizontal = Control.SIZE_SHRINK_END
-	status_row.add_child(_version_label)
+	_status_row.add_child(_version_label)
 
 	# Apply M3 fonts and colors
 	_apply_m3_text_styles()
+	_update_shuffler_mode()
 
 func _update_media_panel_size(force: bool = false) -> void:
 	super._update_media_panel_size(force)
@@ -313,6 +334,8 @@ func _get_available_retroarch_cores() -> Array[Dictionary]:
 	for core in all_cores:
 		if core.get("desktop_only", false) and PlatformManager.is_android():
 			continue
+		if core.get("android_only", false) and not PlatformManager.is_android():
+			continue
 		filtered.append(core)
 	return filtered
 
@@ -457,6 +480,70 @@ func set_emulator_install_status(status: Dictionary):
 	if is_node_ready():
 		_update_status_indicator()
 
+func _update_shuffler_mode() -> void:
+	if not is_node_ready():
+		return
+	if _status_row:
+		_status_row.visible = not shuffler_mode
+	if _firmware_indicator:
+		_firmware_indicator.visible = not shuffler_mode
+	refresh_firmware_indicator()
+
+## Resets transient state and disconnects view-specific signals so this card
+## can be safely returned to a pool and reused by a different view.
+func reset_for_borrow() -> void:
+	if _sync_toggle_connected:
+		if _sync_toggle.toggled.is_connected(_on_sync_toggled):
+			_sync_toggle.toggled.disconnect(_on_sync_toggled)
+		_sync_toggle_connected = false
+	
+	if _emulator_dropdown_connected:
+		if _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
+			_emulator_dropdown.item_selected.disconnect(_on_emulator_selected)
+		_emulator_dropdown_connected = false
+	
+	if _download_button_connected:
+		if _download_button.pressed.is_connected(_on_download_pressed):
+			_download_button.pressed.disconnect(_on_download_pressed)
+		_download_button_connected = false
+	
+	# Disconnect any view-specific signal handlers so stale lambdas don't fire
+	# when this card is reused by a different consumer.
+	_disconnect_all("sync_toggled")
+	_disconnect_all("emulator_changed")
+	_disconnect_all("download_requested")
+	
+	# Clear per-view settings without triggering full display rebuilds
+	selected_emulator = ""
+	selected_core_id = ""
+	is_sync_enabled = false
+	_emulator_install_status = {}
+	
+	if get_parent():
+		get_parent().remove_child(self)
+
+func _disconnect_all(signal_name: String) -> void:
+	var connections = get_signal_connection_list(signal_name)
+	for conn in connections:
+		var callable := conn["callable"] as Callable
+		if callable.is_valid():
+			disconnect(signal_name, callable)
+
+func _connect_sync_toggle() -> void:
+	if not _sync_toggle_connected and _sync_toggle:
+		_sync_toggle.toggled.connect(_on_sync_toggled)
+		_sync_toggle_connected = true
+
+func _connect_emulator_dropdown() -> void:
+	if not _emulator_dropdown_connected and _emulator_dropdown:
+		_emulator_dropdown.item_selected.connect(_on_emulator_selected)
+		_emulator_dropdown_connected = true
+
+func _connect_download_button() -> void:
+	if not _download_button_connected and _download_button:
+		_download_button.pressed.connect(_on_download_pressed)
+		_download_button_connected = true
+
 func _on_sync_toggled(enabled: bool):
 	sync_toggled.emit(enabled)
 
@@ -494,7 +581,7 @@ func focus_sync_toggle() -> void:
 	if _sync_toggle and _sync_toggle.focus_mode != Control.FOCUS_NONE:
 		_sync_toggle.grab_focus()
 
-func refresh_ui():
+func refresh_ui() -> void:
 	# Called by parent to refresh button states (e.g., when download starts/completes)
 	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
 	if effective_emulator != "" and LaunchManager:
