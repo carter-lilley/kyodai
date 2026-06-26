@@ -7,6 +7,10 @@ const FSM = preload("res://managers/filesystem_manager.gd")
 
 var launch_manager: Node
 
+# Set by _prepare_game_for_launch to the final ROM path used during preparation.
+# LaunchManager reads this after calling prepare_game_for_shuffler() to update bag entries.
+var _last_prepared_rom_path: String = ""
+
 func _ready():
 	launch_manager = get_parent()
 
@@ -90,7 +94,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 			print("[GameManager] _prepare_game_for_launch: Vita3K prep result = " + str(result))
 		"rpcs3":
 			print("[GameManager] _prepare_game_for_launch: Preparing RPCS3 game...")
-			result = await _prepare_rpcs3_game(game, temp_intent)
+			result = await _prepare_rpcs3_game(game, temp_intent, is_shuffler)
 			print("[GameManager] _prepare_game_for_launch: RPCS3 prep result = " + str(result))
 		"shadps4":
 			print("[GameManager] _prepare_game_for_launch: Preparing shadPS4 game...")
@@ -104,6 +108,10 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 			print("[GameManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
 	
 	print("[GameManager] _prepare_game_for_launch: END result = " + str(result))
+	if result:
+		_last_prepared_rom_path = temp_intent.rom_path
+	else:
+		_last_prepared_rom_path = ""
 	return result
 
 func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
@@ -677,14 +685,14 @@ func _rpcs3_game_has_files(game_path: String) -> bool:
 ## Prepares a PS3 game for launch by extracting ZIP to a folder next to the ZIP
 ## The extracted folder path is passed to aPS3e via the game_dir intent extra
 ## Works on both desktop and Android
-func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
+func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: bool = false) -> bool:
 	print("[GameManager] RPCS3: _prepare_rpcs3_game called for: " + game.get_display_name())
 	
 	if not game or not intent:
 		print("[GameManager] RPCS3: ERROR - game or intent is null")
 		return false
 	
-	var rom_path := game.file_path
+	var rom_path := intent.rom_path if intent.rom_path != "" else game.file_path
 	print("[GameManager] RPCS3: ROM path: " + rom_path)
 	
 	if rom_path == "":
@@ -718,7 +726,8 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 						
 						# Update intent and game file_path
 						intent.rom_path = rom_path
-						_store_file_path(game, rom_path)
+						if not is_shuffler:
+							_store_file_path(game, rom_path)
 						
 						# Also update title_id if it's different
 						if game.get_active_title_id() != title_id_from_sfo:
@@ -865,20 +874,23 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 		if _ps3_game_has_files(desktop_disc_path):
 			print("[GameManager] RPCS3: Game already extracted at disc path: " + desktop_disc_path)
 			intent.rom_path = desktop_disc_path
-			_store_file_path(game, desktop_disc_path)
+			if not is_shuffler:
+				_store_file_path(game, desktop_disc_path)
 			return true
 		elif _ps3_game_has_files(desktop_digital_path):
 			print("[GameManager] RPCS3: Game already extracted at digital path: " + desktop_digital_path)
 			intent.rom_path = desktop_digital_path
-			_store_file_path(game, desktop_digital_path)
+			if not is_shuffler:
+				_store_file_path(game, desktop_digital_path)
 			return true
 	
 	if _ps3_game_has_files(extract_path):
 		print("[GameManager] RPCS3: Game already extracted at: " + extract_path)
-		# Update intent and game to point to extracted folder
+		# Update intent to point to extracted folder
 		intent.rom_path = extract_path
 		print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
-		_store_file_path(game, extract_path)
+		if not is_shuffler:
+			_store_file_path(game, extract_path)
 		print("[GameManager] RPCS3: After _store_file_path, game.file_path=" + game.file_path)
 		return true
 	
@@ -980,9 +992,11 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent) -> bool:
 	# Step 8: Update intent to point to extracted folder
 	intent.rom_path = final_extract_path
 	
-	# Also update game.file_path so create_launch_intent() picks up the extracted folder
-	_store_file_path(game, final_extract_path)
-	print("[GameManager] RPCS3: Updated game.file_path to: " + final_extract_path)
+	# Also update game.file_path so create_launch_intent() picks up the extracted folder,
+	# but only persist it outside of shuffler sessions.
+	if not is_shuffler:
+		_store_file_path(game, final_extract_path)
+		print("[GameManager] RPCS3: Updated game.file_path to: " + final_extract_path)
 	
 	print("[GameManager] RPCS3: Game extracted successfully at: " + final_extract_path)
 	return true

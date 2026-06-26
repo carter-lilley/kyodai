@@ -556,7 +556,8 @@ func _download_bag_games() -> void:
 			_total_download_bytes += game.get_active_file_size()
 
 	if need_download.is_empty():
-		_call_enter_shuffler_mode()
+		if await _prepare_downloaded_bag_games():
+			_call_enter_shuffler_mode()
 		return
 
 	# Show progress notification now that we know the total size
@@ -623,7 +624,8 @@ func _download_next(entries: Array[Dictionary], index: int) -> void:
 				var completed = _total_downloads - _pending_downloads
 				download_progress.emit(completed, _total_downloads)
 				if _pending_downloads == 0 and _state == State.DOWNLOADING:
-					_call_enter_shuffler_mode()
+					if await _prepare_downloaded_bag_games():
+						_call_enter_shuffler_mode()
 				else:
 					_download_next(entries, end_index)
 		}
@@ -648,6 +650,32 @@ func _get_preload_count() -> int:
 				2: return 4
 				3: return 6
 	return 2
+
+
+## For emulators that require pre-launch extraction (Vita3K, RPCS3), prepare all
+## already-downloaded bag entries before the shuffler session starts so that
+## switching rounds is fast and doesn't risk the round timer expiring mid-prep.
+func _prepare_downloaded_bag_games() -> bool:
+	var any_failed := false
+	for entry in _bag:
+		var game = entry["game"]
+		var emulator_id = LaunchManager.resolve_emulator_for_game(game)
+		if emulator_id == "" or not (emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")):
+			continue
+		if entry["temp_path"] == "":
+			push_warning("[ShufflerManager] Skipping preparation for " + game.title + " - no temp_path")
+			continue
+		var prep_success = await LaunchManager.prepare_game_for_shuffler(game, emulator_id, entry["temp_path"])
+		if not prep_success:
+			push_error("[ShufflerManager] Failed to prepare " + game.title + " for shuffler session")
+			any_failed = true
+			continue
+		# Update the bag entry with the prepared ROM path (e.g. extracted folder)
+		var prepared_path = LaunchManager.get_last_prepared_rom_path(game)
+		if prepared_path != "":
+			entry["temp_path"] = prepared_path
+	return not any_failed
+
 
 func _call_enter_shuffler_mode() -> void:
 	# Defer to avoid thread issues from download callbacks
@@ -726,9 +754,9 @@ func _switch_to_game(index: int) -> void:
 	entry["active"] = true
 
 	var method := entry.get("suspend_method", "suspend") as String
-	if method == "suspend" and entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
+	if method == "suspend" and entry["started"] and entry["pid"] != -1 and await _is_process_running_async(entry["pid"]):
 		await _resume_game(entry)
-	elif entry["started"] and entry["pid"] != -1 and _is_process_running(entry["pid"]):
+	elif entry["started"] and entry["pid"] != -1 and await _is_process_running_async(entry["pid"]):
 		# UDP/TCP emulators should have exited by now. Kill any lingering
 		# process before re-launching so we don't end up with two instances.
 		_force_kill_process(entry["pid"])
@@ -824,7 +852,7 @@ func _suspend_game(entry: Dictionary) -> void:
 	exe_name = pc.get("executable", "")
 
 	# Hide window
-	_hide_window(entry["pid"], exe_name)
+	_hide_window_async(entry["pid"], exe_name)
 
 	# Freeze threads with pssuspend
 	var output: Array[String] = []
@@ -903,17 +931,19 @@ func _input(event: InputEvent) -> void:
 # WINDOW / PROCESS HELPERS
 # ============================================================================
 
-func _hide_window(pid: int, exe_name: String) -> void:
+func _hide_window_async(pid: int, exe_name: String) -> void:
 	var ahk_script = _tools_dir + "minimize_window.ahk"
 	if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
-		var output: Array[String] = []
-		OS.execute(_ahk_path, [ahk_script, str(pid), exe_name], output, true)
+		MemoryManager.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name])
+
+func _hide_window(pid: int, exe_name: String) -> void:
+	_hide_window_async(pid, exe_name)
 
 func _maximize_with_retry(pid: int) -> void:
 	var maximized := false
 	for i in range(3):
 		print("[ShufflerManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
-		if _maximize_window(pid):
+		if await _maximize_window_async(pid):
 			print("[ShufflerManager] pid " + str(pid) + " maximized successfully")
 			maximized = true
 			break
@@ -922,15 +952,32 @@ func _maximize_with_retry(pid: int) -> void:
 		push_error("[ShufflerManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
 	_raise_controls_window()
 
-func _maximize_window(pid: int) -> bool:
+func _maximize_window_async(pid: int) -> bool:
 	var ahk_script = _tools_dir + "maximize_process.ahk"
-	if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
-		var output: Array[String] = []
-		var exit_code := OS.execute(_ahk_path, [ahk_script, str(pid)], output, true)
-		if exit_code != 0:
-			print("[ShufflerManager] maximize_process.ahk failed for pid " + str(pid) + " (exit=" + str(exit_code) + "): " + str(output))
-		return exit_code == 0
-	return false
+	if not FileAccess.file_exists(ahk_script) or not FileAccess.file_exists(_ahk_path):
+		return false
+
+	var completed := false
+	var success := false
+	var output_text := ""
+
+	MemoryManager.queue_os_execute(_ahk_path, [ahk_script, str(pid)], func(result: Dictionary):
+		completed = true
+		success = (result.get("exit_code", -1) == 0)
+		var output: Array = result.get("output", [])
+		output_text = "".join(output)
+		if not success:
+			print("[ShufflerManager] maximize_process.ahk failed for pid " + str(pid) + " (exit=" + str(result.get("exit_code", -1)) + "): " + output_text)
+	)
+
+	while not completed:
+		await get_tree().process_frame
+
+	return success
+
+func _maximize_window(pid: int) -> bool:
+	# Kept for compatibility; runs async under the hood.
+	return await _maximize_window_async(pid)
 
 func _force_kill_process(pid: int) -> void:
 	if PlatformManager.is_windows():
@@ -939,6 +986,24 @@ func _force_kill_process(pid: int) -> void:
 	else:
 		OS.execute("kill", ["-9", str(pid)], [], true)
 
+func _is_process_running_async(pid: int) -> bool:
+	var completed := false
+	var running := false
+	if PlatformManager.is_windows():
+		MemoryManager.queue_os_execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], func(result: Dictionary):
+			completed = true
+			var output: Array = result.get("output", [])
+			running = result.get("exit_code", -1) == 0 and output.size() > 0 and str(pid) in str(output[0])
+		)
+	else:
+		MemoryManager.queue_os_execute("ps", ["-p", str(pid)], func(result: Dictionary):
+			completed = true
+			running = result.get("exit_code", -1) == 0
+		)
+	while not completed:
+		await get_tree().process_frame
+	return running
+
 func _is_process_running(pid: int) -> bool:
 	var output: Array[String] = []
 	var exit_code = OS.execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], output, true)
@@ -946,7 +1011,10 @@ func _is_process_running(pid: int) -> bool:
 
 func _confirm_process_dead(pid: int) -> void:
 	var elapsed = 0.0
-	while _is_process_running(pid) and elapsed < 5.0:
+	while elapsed < 5.0:
+		var running = await _is_process_running_async(pid)
+		if not running:
+			return
 		await get_tree().create_timer(0.2).timeout
 		elapsed += 0.2
 
@@ -966,10 +1034,11 @@ func _send_udp_command(host: String, port: int, command: String) -> void:
 	udp.close()
 
 func _send_tcp_command(host: String, port: int, command: String) -> void:
+	var address := IP.resolve_hostname(host, IP.TYPE_IPV4)
 	var tcp = StreamPeerTCP.new()
-	var err = tcp.connect_to_host(host, port)
+	var err = tcp.connect_to_host(address, port)
 	if err != OK:
-		push_error("[ShufflerManager] Failed to connect TCP to " + host + ":" + str(port))
+		push_error("[ShufflerManager] Failed to connect TCP to " + address + ":" + str(port))
 		return
 
 	# Wait for connection with timeout

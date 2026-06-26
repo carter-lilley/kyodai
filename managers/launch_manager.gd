@@ -238,6 +238,10 @@ func _create_process_from_intent(intent: LaunchIntent) -> int:
 # Launch orchestration
 # ============================================================================
 
+# Tracks the most recent prepared ROM path for a shuffler game so callers can
+# update their bag entry after pre-launch preparation.
+var _last_prepared_rom_paths: Dictionary = {}  # game romm_id -> prepared path
+
 ## Launch a game for the shuffler (no save sync, no background state).
 ## Calls on_pid_ready(pid) when the process is created. PID may be -1 on failure.
 ## If a download is pending, the function returns immediately and on_pid_ready will be called later.
@@ -252,7 +256,8 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 		return
 	
 	var on_ready = func():
-		var launch_intent = intent.create_launch_intent(game, rom_path_override)
+		var prepared_rom_path = _last_prepared_rom_paths.get(game.romm_id, rom_path_override) as String
+		var launch_intent = intent.create_launch_intent(game, prepared_rom_path)
 		if not launch_intent:
 			push_error("[LaunchManager] Failed to create launch intent")
 			if on_pid_ready.is_valid():
@@ -271,13 +276,28 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 		if on_pid_ready.is_valid():
 			on_pid_ready.call(pid)
 	
-	# Vita3K needs TitleID extraction and ZIP extraction even in shuffler mode.
+	# Vita3K and RPCS3 need TitleID extraction and ZIP extraction even in shuffler mode.
 	# Other emulators skip the normal preparation step.
-	var should_prepare = emulator_id.begins_with("vita3k")
+	var should_prepare = emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")
 	var ready = await _ensure_prerequisites(game, emulator_id, on_ready, should_prepare, true, rom_path_override)
 	if not ready:
 		return  # Download pending, callback will handle it
 	# If ready, on_ready was already called
+
+
+## Prepares a game for a shuffler session ahead of time. Returns true if the game
+## is ready to launch. If preparation updates the ROM path (e.g. extracting a PS3
+## ZIP to a folder), the new path can be retrieved with get_last_prepared_rom_path().
+func prepare_game_for_shuffler(game: GameResource, emulator_id: String, rom_path_override: String) -> bool:
+	var prep_success = await $GameManager._prepare_game_for_launch(game, emulator_id, true, rom_path_override)
+	if prep_success:
+		_last_prepared_rom_paths[game.romm_id] = $GameManager._last_prepared_rom_path
+	return prep_success
+
+
+func get_last_prepared_rom_path(game: GameResource) -> String:
+	return _last_prepared_rom_paths.get(game.romm_id, "") as String
+
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource, focus_index: int = -1) -> void:
@@ -468,6 +488,9 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
 			NotificationManager.show_notification("Failed to prepare game for launch", NotificationManager.Type.ERROR)
 			return false
+		# Cache the prepared ROM path for shuffler launches so callers can update bag entries.
+		if is_shuffler:
+			_last_prepared_rom_paths[game.romm_id] = $GameManager._last_prepared_rom_path
 		print("[LaunchManager] _ensure_prerequisites: Game preparation complete")
 	else:
 		print("[LaunchManager] _ensure_prerequisites: Skipping game preparation (shuffler session)")

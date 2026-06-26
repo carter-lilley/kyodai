@@ -16,6 +16,15 @@ var _material: ShaderMaterial = null
 var _visible: bool = true
 var _z_index: int = 0
 
+static var _fallback_texture: Texture2D = null
+
+static func get_fallback_texture() -> Texture2D:
+	if _fallback_texture == null:
+		var img = Image.create(2, 2, false, Image.FORMAT_RGBA8)
+		img.fill(M3Theme.get_elevation_surface(5))
+		_fallback_texture = ImageTexture.create_from_image(img)
+	return _fallback_texture
+
 func _init():
 	_material = ShaderMaterial.new()
 	_setup_shader()
@@ -189,8 +198,12 @@ func _update_shader_params() -> void:
 	pass
 
 func _set_shader_param(param: String, value: Variant) -> void:
-	if _material:
-		_material.set_shader_parameter(param, value)
+	if not _material:
+		return
+	if param == "game_texture" and (value == null or not value is Texture2D):
+		_material.set_shader_parameter(param, get_fallback_texture())
+		return
+	_material.set_shader_parameter(param, value)
 
 func _on_media_changed() -> void:
 	if _is_tweening:

@@ -16,7 +16,7 @@ var launch_manager: Node
 
 func _ready():
 	launch_manager = get_parent()
-	
+
 	# Initialize background state polling (desktop only)
 	if not PlatformManager.is_android():
 		_background_poll_timer = Timer.new()
@@ -79,19 +79,19 @@ func enter_background_state(pid: int, game: GameResource) -> void:
 	if _is_in_background_state:
 		print("[ProcessManager] Warning: Already in background state, ignoring new PID ", pid)
 		return
-	
+
 	if pid <= 0:
 		push_error("[ProcessManager] Invalid PID for background state: " + str(pid))
 		return
-	
+
 	print("[ProcessManager] Entering background state with PID: ", pid)
 	_background_active_pid = pid
 	_background_active_game = game
 	_is_in_background_state = true
-	
+
 	if _background_poll_timer:
 		_background_poll_timer.start()
-	
+
 	launch_manager.background_state_entered.emit(pid, game)
 
 ## Enter background state for Android (no PID polling)
@@ -99,32 +99,32 @@ func enter_background_state_android(game: GameResource) -> void:
 	if _is_in_background_state:
 		print("[ProcessManager] Warning: Already in background state, ignoring Android entry")
 		return
-	
+
 	print("[ProcessManager] Entering background state for Android launch")
 	_background_active_pid = -1  # No PID on Android
 	_background_active_game = game
 	_is_in_background_state = true
-	
+
 	# Don't start poll timer on Android - we rely on resume notification
-	
+
 	launch_manager.background_state_entered.emit(-1, game)
 
 ## Exit background state
 func exit_background_state(exit_code: int = 0) -> void:
 	if not _is_in_background_state:
 		return
-	
+
 	print("[ProcessManager] Exiting background state. PID was: ", _background_active_pid)
-	
+
 	var game = _background_active_game
-	
+
 	if _background_poll_timer:
 		_background_poll_timer.stop()
-	
+
 	_background_active_pid = -1
 	_background_active_game = null
 	_is_in_background_state = false
-	
+
 	launch_manager.background_state_exited.emit(game, exit_code)
 
 ## Poll callback - check if process is still running
@@ -200,7 +200,7 @@ func execute_launch(intent: LaunchIntent) -> bool:
 	if not intent or not intent.is_valid():
 		push_error("[ProcessManager] Invalid launch intent")
 		return false
-	
+
 	# Check if emulator is fully installed using step validation (all emulators use registry steps)
 	var emulator = launch_manager.registry.get_emulator(intent.emulator_id)
 	var is_actually_installed = false
@@ -210,12 +210,12 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		if not launch_manager.emulator._validate_install_step(intent.emulator_id, i, install_steps):
 			is_actually_installed = false
 			break
-	
+
 	if not is_actually_installed:
 		push_error("[ProcessManager] Emulator not fully installed: " + intent.emulator_id)
 		NotificationManager.show_notification("Emulator not ready: " + intent.emulator_name, NotificationManager.Type.ERROR)
 		return false
-	
+
 	if PlatformManager.is_android():
 		return _execute_android(intent)
 	else:
@@ -225,7 +225,7 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	if intent.launch_args.is_empty():
 		push_error("[ProcessManager] No launch arguments for desktop")
 		return false
-	
+
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
 
@@ -252,15 +252,15 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	else:
 		# No working directory needed: call executable directly (no shell, no injection risk)
 		pid = OS.create_process(exe_path, arguments, false)
-	
+
 	if pid == -1:
 		push_error("[ProcessManager] Failed to launch process: " + exe_path)
 		launch_manager.launch_completed.emit(false, "Failed to start emulator")
 		return false
-	
+
 	# Store PID and enter background state for desktop
 	enter_background_state(pid, intent.game)
-	
+
 	launch_manager.launch_completed.emit(true, "Game launched successfully")
 	return true
 
@@ -270,11 +270,11 @@ func _create_process_from_intent(intent: LaunchIntent) -> int:
 	if intent.launch_args.is_empty():
 		push_error("[ProcessManager] No launch arguments for desktop")
 		return -1
-	
+
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
 	var pid: int
-	
+
 	if intent.working_directory != "":
 		var safe_args = _escape_args_for_shell(arguments)
 		if PlatformManager.is_windows():
@@ -289,11 +289,11 @@ func _create_process_from_intent(intent: LaunchIntent) -> int:
 			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 	else:
 		pid = OS.create_process(exe_path, arguments, false)
-	
+
 	if pid == -1:
 		push_error("[ProcessManager] Failed to launch process: " + exe_path)
 		return -1
-	
+
 	return pid
 
 func _execute_android(intent: LaunchIntent) -> bool:
@@ -301,7 +301,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	if plugin == null:
 		push_error("[ProcessManager] PackageChecker plugin not available for Android launch")
 		return false
-	
+
 	# Check if we need MANAGE_EXTERNAL_STORAGE permission for FileProvider to work with SD cards
 	if not plugin.hasManageExternalStoragePermission():
 		push_warning("[ProcessManager] MANAGE_EXTERNAL_STORAGE permission not granted - FileProvider may fail for SD card files")
@@ -310,19 +310,19 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			var dialog = M3Dialog.new()
 			dialog.title_text = "Permission Required"
 			dialog.body_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
-			
+
 			var on_confirmed = func():
 				plugin.requestManageExternalStoragePermission()
-			
+
 			dialog.add_action("Cancel", Callable(), false)
 			dialog.add_action("Open Settings", on_confirmed, true)
 			UIManager.add_child(dialog)
 			dialog.show_overlay()
 		return false
-	
+
 	# Format the core path for RetroArch
 	var core_path = ""
-	
+
 	# Check if using CoreSideloadActivity (for testing sideloaded cores)
 	if intent.android_class == "com.retroarch.browser.debug.CoreSideloadActivity":
 		# Use downloaded core from emulator directory
@@ -344,12 +344,12 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			else:
 				# Fallback if package name is somehow empty
 				core_path = "/data/data/com.retroarch/cores/" + core_filename
-	
+
 	# Resolve ROM path to absolute filesystem path for the Java plugin.
 	# The plugin creates File objects directly, so user:// virtual paths won't work.
 	var absolute_rom_path = FSM.resolve_path(intent.rom_path, {"format": FSM.PathFormat.ABSOLUTE})
 	print("[ProcessManager] Resolved ROM path for Android intent: " + absolute_rom_path)
-	
+
 	# Get configuration from android_config
 	var rom_delivery = intent.android_config.get("rom_delivery", "intent_data")
 	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
@@ -357,12 +357,12 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	var grant_uri_permission = intent.android_config.get("grant_uri_permission", true)
 	var use_document_uri = intent.android_config.get("use_document_uri", false)
 	var use_file_uri = intent.android_config.get("use_file_uri", false)
-	
+
 	# Convert extras array to JSON string
 	var extras_array = intent.android_extras
 	if extras_array.is_empty() and intent.android_config.has("extras"):
 		extras_array = intent.android_config.get("extras", [])
-	
+
 	# Convert extras to JSON using proper JSON.stringify to handle escaping correctly
 	# Replace {core_path} placeholder with actual core path
 	var extras_json = "[]"
@@ -373,7 +373,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			if value.contains("{core_path}"):
 				value = value.replace("{core_path}", core_path)
 				print("[ProcessManager] Replaced {core_path} with: " + core_path)
-			
+
 			extras_to_serialize.append({
 				"key": extra.get("key", ""),
 				"value": value,
@@ -384,7 +384,7 @@ func _execute_android(intent: LaunchIntent) -> bool:
 			push_error("[ProcessManager] Failed to serialize extras to JSON")
 		else:
 			extras_json = json_result
-	
+
 	# Launch using unified method
 	var success = plugin.call("launchAndroidIntent",
 		intent.android_action,
@@ -400,14 +400,14 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		use_document_uri,
 		use_file_uri
 	)
-	
+
 	if not success:
 		push_error("[ProcessManager] Failed to launch Android intent")
 		return false
-	
+
 	# Enter background state for Android - we track the game and exit on resume
 	enter_background_state_android(intent.game)
-	
+
 	return true
 
 ## Shows a reminder dialog on Android after APK installation
@@ -416,10 +416,10 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	# Only show on Android
 	if PlatformManager.get_platform_name().to_lower() != "android":
 		return
-	
+
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
-	
+
 	# Create M3Dialog reminder as a distinct overlay type so it stacks above the settings dialog
 	var dialog = M3Dialog.new()
 	dialog.overlay_type = "alert"
@@ -428,11 +428,11 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	dialog.body_text = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
 	dialog.dismissible = false
 	dialog.add_action("Got it", func(): dialog.dismiss(), true)
-	
+
 	# Show directly (not via M3Dialog.show_dialog which would force overlay_type back to "dialog")
 	var parent = M3Overlay.get_overlay_parent()
 	if parent and dialog.get_parent() == null:
 		parent.add_child(dialog)
 	dialog.show_overlay()
-	
+
 	print("[ProcessManager] Shown Android permissions reminder for: " + emulator_name)
