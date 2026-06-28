@@ -173,7 +173,7 @@ func prepare_for_game(romm_id: int) -> void:
                 return null,
             func(img: Image):
                 if is_instance_valid(self) and img and not img.is_empty():
-                    _prepared_cover = ImageTexture.create_from_image(img.duplicate())
+                    _prepared_cover = MemoryManager.create_texture_from_image(img)
         )
 
 func _setup_sibling_dropdown(game: GameResource) -> void:
@@ -319,7 +319,7 @@ func _load_cover(game: GameResource) -> void:
                 return null,
             func(img: Image):
                 if is_instance_valid(cover_texture) and img and not img.is_empty():
-                    cover_texture.texture = ImageTexture.create_from_image(img.duplicate())
+                    cover_texture.texture = MemoryManager.create_texture_from_image(img)
         )
         return
 

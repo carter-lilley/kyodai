@@ -140,6 +140,7 @@ func _deferred_position_and_show():
 	await get_tree().process_frame
 	_position_dialog()
 	super.show_overlay()
+	_focus_first_action()
 
 # ============================================
 # LIFECYCLE
@@ -164,6 +165,8 @@ func _ready():
 	
 	_add_default_action()
 	_ready_called = true
+	if get_viewport():
+		get_viewport().gui_focus_changed.connect(_on_focus_changed)
 
 func _build_layout():
 	# Scrim
@@ -361,8 +364,24 @@ func _on_action_pressed(label: String):
 
 func _on_scrim_input(event: InputEvent):
 	if event is InputEventMouseButton and event.pressed:
+		get_viewport().set_input_as_handled()
 		if dismissible:
 			dismiss()
+
+func _focus_first_action() -> void:
+	for btn in _actions:
+		if btn is Control and btn.focus_mode != Control.FOCUS_NONE:
+			if UIManager and UIManager.has_method("suppress_next_focus_sound"):
+				UIManager.suppress_next_focus_sound()
+			btn.grab_focus()
+			return
+
+func _on_focus_changed(control: Control) -> void:
+	if not visible or not is_instance_valid(control):
+		return
+	if control == self or control.is_ancestor_of(self) or is_ancestor_of(control):
+		return
+	_focus_first_action()
 
 func _position_dialog():
 	var viewport_size = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1920, 1080)

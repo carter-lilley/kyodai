@@ -125,6 +125,9 @@ func _build_categories() -> void:
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Steam Installation Folder")
 			# Move Download Speed to the end so storage paths appear first.
 			settings_vars.sort_custom(func(a, b): return int(b.display_name == "Download Speed") - int(a.display_name == "Download Speed"))
+		elif subgroup_name == "Display":
+			if PlatformManager.is_android():
+				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
 		_add_category_button(id, subgroup_name, icon)
 
 		if subgroup_name == "Library Appearance":

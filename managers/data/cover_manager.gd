@@ -101,7 +101,7 @@ func load_image(url: String, callback: Callable = Callable()):
 				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
 		func(image):
 			if image and not image.is_empty():
-				var texture = ImageTexture.create_from_image(image.duplicate())
+				var texture = MemoryManager.create_texture_from_image(image)
 				if texture:
 					if callback.is_valid():
 						callback.call(texture)
@@ -133,11 +133,12 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
 		func(image):
 			if image and not image.is_empty():
-				var texture = ImageTexture.create_from_image(image.duplicate())
+				var texture = MemoryManager.create_texture_from_image(image)
 				if callback.is_valid():
 					callback.call(texture)
 				data_manager.image_loaded.emit(url, texture)
-		)
+	)
+
 	)
 
 

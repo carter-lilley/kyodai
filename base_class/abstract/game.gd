@@ -145,7 +145,7 @@ func get_cover_image() -> Texture2D:
 		var img = Image.new()
 		var error = img.load(cover_path)
 		if error == OK and not img.is_empty():
-			return ImageTexture.create_from_image(img)
+			return MemoryManager.create_texture_from_image(img)
 	return null
 
 ## Returns the IGDB multiplayer_modes list if present

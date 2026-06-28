@@ -70,9 +70,9 @@ func _exit_tree() -> void:
 	_media_container = null
 
 func _create_gray_texture():
-	var img = Image.create(4, 4, false, Image.FORMAT_RGB8)
+	var img = Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	if img:
-		img.fill(Color(0.5, 0.5, 0.5))
+		img.fill(Color(0.5, 0.5, 0.5, 1.0))
 		_gray_texture = ImageTexture.create_from_image(img)
 
 func _get_cache_path(game: GameResource) -> String:
@@ -148,7 +148,7 @@ func set_game(game: GameResource):
 			return
 
 		if image and not image.is_empty():
-			var tex = ImageTexture.create_from_image(image.duplicate())
+			var tex = MemoryManager.create_texture_from_image(image)
 			if tex:
 				MemoryManager.cache_texture(cache_path, tex)
 				_set_texture(tex)

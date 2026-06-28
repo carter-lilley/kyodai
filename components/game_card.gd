@@ -320,8 +320,8 @@ func _link_overlapping_effects() -> void:
 				focus_effect.set_base_effect(base_effect)
 				# In preview mode, respect preview_show_focus instead of _is_focused
 				var show_focus = preview_show_focus if preview_mode else _is_focused
-				if not show_focus and base_effect._settings.size() > 0:
-					focus_effect.tween_settings(base_effect._settings, base_effect._settings, 1.0)
+				if not show_focus and base_effect._base_settings.size() > 0:
+					focus_effect.tween_settings(base_effect._base_settings, base_effect._base_settings, 1.0)
 
 var preview_show_focus: bool = false
 
@@ -356,7 +356,7 @@ func _show_focus_effects(p_show: bool) -> void:
 		if not base_effect:
 			continue
 
-		var base_settings = base_effect._settings
+		var base_settings = base_effect._base_settings
 		var focus_settings = focus_effect._settings
 		var base_copy = base_settings.duplicate(true)
 		var focus_copy = focus_settings.duplicate(true)
@@ -1096,9 +1096,22 @@ func _update_media_panel_size(force: bool = false) -> void:
 		# The media stack is parented to _media_panel, so its bounds must be
 		# expressed in media-panel-local coordinates rather than card coords.
 		_media_container.bounds = Rect2(Vector2.ZERO, _media_panel.size)
-	if _media_stack:
+
+	# _media_panel can be recreated by M3Card._rebuild_layout() when layout mode,
+	# content alignment, or media aspect ratio changed. The node-less effect stack
+	# must be reparented to the new panel or its CanvasItem stays parented to a
+	# freed RID and disappears. Also ensure the panel stays visible because
+	# M3Card._update_media() hides it when media_texture is null, but GameCard
+	# renders via the effect stack instead.
+	if _media_stack and _media_panel:
+		_media_stack.set_parent_rid(_media_panel.get_canvas_item())
+		_media_stack.set_clip_children(false)
+		_media_panel.visible = true
+		if _current_texture:
+			_media_stack.set_game_texture(_current_texture)
 		_media_stack.update_draw_rects()
 		_media_stack.force_refresh()
+
 	if _focus_stack:
 		_update_focus_stack_bounds()
 

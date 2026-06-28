@@ -125,7 +125,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 			return
 
 		if image and not image.is_empty():
-			var texture = ImageTexture.create_from_image(image.duplicate())
+			var texture = MemoryManager.create_texture_from_image(image)
 			if texture:
 				MemoryManager.cache_texture(cache_path, texture)
 				_emit_texture(texture)

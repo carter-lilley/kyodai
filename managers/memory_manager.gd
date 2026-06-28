@@ -614,6 +614,26 @@ static func clear_texture_cache() -> void:
 	_instance._texture_cache_memory = 0
 	_instance._texture_cache_mutex.unlock()
 
+
+static func create_texture_from_image(image: Image) -> Texture2D:
+	"""Create an ImageTexture from an Image, converting unsupported formats first.
+
+	Godot's internal format conversion during ImageTexture.create_from_image
+	can trigger _texture_2d_update with an empty image on some hardware/drivers.
+	This helper converts every image to RGBA8 up-front and guards empty/null images.
+	"""
+	if image == null or image.is_empty():
+		return null
+
+	var img := image.duplicate()
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+
+	if img.is_empty():
+		return null
+
+	return ImageTexture.create_from_image(img)
+
 static func queue_extraction_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
 		push_error("[MemoryManager] Not initialized - cannot queue extraction task")

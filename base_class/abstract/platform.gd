@@ -17,5 +17,5 @@ func get_icon() -> Texture2D:
 		var img = Image.new()
 		var error = img.load(icon_path)
 		if error == OK and not img.is_empty():
-			return ImageTexture.create_from_image(img)
+			return MemoryManager.create_texture_from_image(img)
 	return null

@@ -241,8 +241,9 @@ func _load_cover_async(url: String, texture_rect: TextureRect) -> void:
 			var image = Image.new()
 			var err = image.load_jpg_from_buffer(body)
 			if err == OK and not image.is_empty():
-				var texture = ImageTexture.create_from_image(image)
-				texture_rect.texture = texture
+				var texture = MemoryManager.create_texture_from_image(image)
+				if texture:
+					texture_rect.texture = texture
 		http.queue_free()
 	)
 	

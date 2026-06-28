@@ -80,12 +80,15 @@ func set_offset_rect(rect: Rect2) -> void:
 	RenderingServer.canvas_item_add_rect(_canvas_item_rid, draw_rect, Color.WHITE)
 	RenderingServer.canvas_item_set_visible(_canvas_item_rid, _visible)
 
+var _base_settings: Dictionary = {}
+
 func initialize(container: MediaContainer, settings: Dictionary) -> void:
 	if media_container and media_container.changed.is_connected(_on_media_changed):
 		media_container.changed.disconnect(_on_media_changed)
 
 	media_container = container
 	_settings = settings.duplicate()
+	_base_settings = settings.duplicate()
 	_setup_shader()
 	_apply_settings()
 	if media_container:
@@ -97,6 +100,7 @@ func set_base_effect(base: EffectBase) -> void:
 
 func update_settings(settings: Dictionary) -> void:
 	_settings = settings.duplicate()
+	_base_settings = settings.duplicate()
 	_apply_settings()
 	_update_shader_params()
 
