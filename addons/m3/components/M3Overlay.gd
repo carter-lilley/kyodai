@@ -13,6 +13,11 @@ extends CanvasLayer
 static var _active: Dictionary = {}
 static var _max_layer: int = 0
 
+# Temporary suppression for focus pull-back, used when an overlay (e.g. a menu)
+# is returning focus to its summoner and the underlying overlay must not yank it
+# back, which would otherwise cause infinite recursion.
+static var _suppress_focus_pullback: bool = false
+
 ## Get the effective parent node for overlays.
 ## In dual-screen mode the "m3_overlay_parent" node group is used so overlays
 ## render in the correct SubViewport instead of the root viewport.
@@ -51,6 +56,8 @@ func _ready():
 		get_viewport().gui_focus_changed.connect(_on_overlay_focus_changed)
 
 func _on_overlay_focus_changed(control: Control) -> void:
+	if _suppress_focus_pullback:
+		return
 	if not visible:
 		return
 	var topmost = _get_topmost_overlay()
@@ -67,7 +74,7 @@ func _on_overlay_focus_changed(control: Control) -> void:
 
 func _focus_first() -> void:
 	var first = _find_first_focusable(self)
-	if first:
+	if first and first != get_viewport().gui_get_focus_owner():
 		if UIManager and UIManager.has_method("suppress_next_focus_sound"):
 			UIManager.suppress_next_focus_sound()
 		first.grab_focus()

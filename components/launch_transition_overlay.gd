@@ -152,7 +152,10 @@ func _start_transition():
 		_game_title_label.visible = true
 
 	# Setup the EffectStack at the card's position
-	_setup_effect_stack(texture, card_rect, start_corner_radius)
+	if not _setup_effect_stack(texture, card_rect, start_corner_radius):
+		_is_animating = false
+		is_transition_active = false
+		return
 
 	# Show and animate
 	visible = true
@@ -210,11 +213,11 @@ func _get_focused_card_and_texture() -> Dictionary:
 	push_error("[LaunchTransitionOverlay] No GameCard found in parent chain")
 	return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 
-func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float):
+func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float) -> bool:
 
 	if not _effect_stack:
 		push_error("[LaunchTransitionOverlay] _effect_stack is null")
-		return
+		return false
 
 	# Position and size the EffectStack exactly at the card's location
 	# Add 2px overshoot to compensate for shader AA edge
@@ -250,8 +253,15 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	var ci = _effect_stack._stack_canvas_item
 	if ci.is_valid():
 		RenderingServer.canvas_item_set_transform(ci, Transform2D(0.0, card_rect.position - Vector2(2, 2)))
+	return true
 
 func _animate_transition():
+	if not _effect_stack:
+		push_error("[LaunchTransitionOverlay] Cannot animate: _effect_stack is null")
+		_is_animating = false
+		is_transition_active = false
+		return
+
 	var tween = create_tween()
 	if not tween:
 		push_error("[LaunchTransitionOverlay] Failed to create tween")

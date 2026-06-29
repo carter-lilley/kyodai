@@ -800,8 +800,6 @@ func _on_media_texture_loaded(texture: Texture2D) -> void:
 	_set_texture(texture)
 
 func _set_texture(tex: Texture2D) -> void:
-	if tex == _current_texture:
-		return
 	_current_texture = tex
 	if _media_panel:
 		_media_panel.visible = true

@@ -165,8 +165,9 @@ func _ready():
 	
 	_add_default_action()
 	_ready_called = true
-	if get_viewport():
-		get_viewport().gui_focus_changed.connect(_on_focus_changed)
+
+func _focus_first() -> void:
+	_focus_first_action()
 
 func _build_layout():
 	# Scrim
@@ -375,13 +376,6 @@ func _focus_first_action() -> void:
 				UIManager.suppress_next_focus_sound()
 			btn.grab_focus()
 			return
-
-func _on_focus_changed(control: Control) -> void:
-	if not visible or not is_instance_valid(control):
-		return
-	if control == self or control.is_ancestor_of(self) or is_ancestor_of(control):
-		return
-	_focus_first_action()
 
 func _position_dialog():
 	var viewport_size = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1920, 1080)

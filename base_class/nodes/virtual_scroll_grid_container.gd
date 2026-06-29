@@ -203,10 +203,13 @@ var _pending_focus_index: int = -1
 # rows/columns in a single frame while still allowing held-key repetition.
 var _helper_scroll_consumed_this_frame: bool = false
 
-# Throttle analog-thumbstick helper-scroll repeats so holding a stick does not
-# scroll at frame rate. D-pad and keyboard repeats keep using the per-frame guard.
-var _last_helper_scroll_time_ms: int = 0
-const HELPER_SCROLL_ANALOG_REPEAT_MS: int = 120
+# Analog-thumbstick navigation state. We accumulate stick deflection over time
+# and require the stick to return near center after each move, so the grid does
+# not feel "slippery" when the stick hovers above the action deadzone.
+var _analog_scroll_accumulator: float = 0.0
+var _analog_needs_release: bool = false
+const ANALOG_SCROLL_SPEED: float = 5.0
+const ANALOG_SCROLL_DEADZONE: float = 0.25
 
 func is_focus_locked_and_active() -> bool:
 	"""Returns true if focus lock is enabled and focus was recently inside this grid."""
@@ -694,14 +697,75 @@ func _process(_delta: float):
 	if _helper_scroll_consumed_this_frame:
 		_helper_scroll_consumed_this_frame = false
 
-	# Decay the analog throttle when the stick is released so the first tick of a
-	# new thumbstick movement is always responsive.
-	if _last_helper_scroll_time_ms > 0 and not _is_direction_held():
-		_last_helper_scroll_time_ms = 0
+	# Accumulate analog thumbstick input and trigger grid navigation at a rate
+	# scaled by how far the stick is pushed. Require the stick to return near the
+	# center after each move so it doesn't auto-repeat while hovering.
+	var raw_strength := _get_direction_raw_strength()
+	if raw_strength < ANALOG_SCROLL_DEADZONE:
+		_analog_needs_release = false
+		_analog_scroll_accumulator = 0.0
+	elif not _analog_needs_release:
+		_analog_scroll_accumulator += raw_strength * ANALOG_SCROLL_SPEED * _delta
+		if _analog_scroll_accumulator >= 1.0:
+			_analog_scroll_accumulator = 0.0
+			_analog_needs_release = true
+			_analog_trigger_navigation()
 
-func _is_direction_held() -> bool:
-	return Input.is_action_pressed("ui_up") or Input.is_action_pressed("ui_down") \
-		or Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_right")
+func _analog_trigger_navigation() -> void:
+	if not focus_lock_enabled or not visible or not is_inside_tree():
+		return
+	if not UIManager or not UIManager.controller_has_priority():
+		return
+
+	var vertical := vertical
+	var raw_strength := _get_direction_raw_strength()
+	if raw_strength < ANALOG_SCROLL_DEADZONE:
+		return
+
+	var row_delta := 0
+	var col_delta := 0
+	if Input.is_action_pressed("ui_up") and Input.get_action_raw_strength("ui_up") >= Input.get_action_raw_strength("ui_down"):
+		row_delta = -1
+	elif Input.is_action_pressed("ui_down"):
+		row_delta = 1
+	elif Input.is_action_pressed("ui_left") and Input.get_action_raw_strength("ui_left") >= Input.get_action_raw_strength("ui_right"):
+		col_delta = -1
+	elif Input.is_action_pressed("ui_right"):
+		col_delta = 1
+	else:
+		return
+
+	# For horizontal grids the "line" runs top-to-bottom, so swap axis meaning.
+	if not vertical:
+		var tmp := row_delta
+		row_delta = col_delta
+		col_delta = tmp
+
+	var current_idx := _get_focused_virtual_index()
+	if current_idx < 0:
+		return
+
+	var target_idx := _compute_target_index(current_idx, row_delta, col_delta)
+	if target_idx < 0 or target_idx == current_idx:
+		return
+
+	var card = get_card_at_index(target_idx)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		card.grab_focus()
+	else:
+		scroll_to_index_and_focus(target_idx, true, 0.6)
+
+func _get_direction_raw_strength() -> float:
+	return maxf(
+		Input.get_action_raw_strength("ui_up"),
+		maxf(
+			Input.get_action_raw_strength("ui_down"),
+			maxf(
+				Input.get_action_raw_strength("ui_left"),
+				Input.get_action_raw_strength("ui_right")
+			)
+		)
+	)
 
 func _on_resize_debounced():
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
@@ -1899,37 +1963,42 @@ func _input(event: InputEvent) -> void:
 	if not UIManager or not UIManager.controller_has_priority():
 		return
 
-	var dir := 0
+	var row_delta := 0
+	var col_delta := 0
 	if event.is_action_pressed("ui_up"):
-		dir = -1 if vertical else 0
+		row_delta = -1
 	elif event.is_action_pressed("ui_down"):
-		dir = 1 if vertical else 0
+		row_delta = 1
 	elif event.is_action_pressed("ui_left"):
-		dir = 0 if vertical else -1
+		col_delta = -1
 	elif event.is_action_pressed("ui_right"):
-		dir = 0 if vertical else 1
+		col_delta = 1
 	else:
 		return
+
+	# For horizontal grids the "line" runs top-to-bottom, so swap axis meaning
+	# so left/right always move along the line and up/down move between lines.
+	if not vertical:
+		var tmp := row_delta
+		row_delta = col_delta
+		col_delta = tmp
 
 	var current_idx := _get_focused_virtual_index()
 	if current_idx < 0:
 		return
 
-	var target_idx := _compute_target_index(current_idx, dir)
+	var target_idx := _compute_target_index(current_idx, row_delta, col_delta)
 	if target_idx < 0 or target_idx == current_idx:
 		# Boundary: consume the event so spatial navigation cannot move focus
 		# outside the grid.
 		get_viewport().set_input_as_handled()
 		return
 
-	# Throttle analog-thumbstick input to a reasonable repeat rate. D-pad and
-	# keyboard events keep the per-frame guard below.
+	# Analog thumbstick navigation is handled in _process() via an accumulator
+	# so it scales with stick deflection and requires a release between moves.
 	if event is InputEventJoypadMotion:
-		var now_ms := Time.get_ticks_msec()
-		if now_ms - _last_helper_scroll_time_ms < HELPER_SCROLL_ANALOG_REPEAT_MS:
-			get_viewport().set_input_as_handled()
-			return
-		_last_helper_scroll_time_ms = now_ms
+		get_viewport().set_input_as_handled()
+		return
 
 	# Throttle to one helper-scroll per process frame so OS key-repeat bursts
 	# don't skip rows.
@@ -1965,7 +2034,13 @@ func _get_focused_virtual_index() -> int:
 		node = node.get_parent()
 	return -1
 
-func _compute_target_index(current_idx: int, dir: int) -> int:
+func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> int:
+	"""Compute the target virtual index from a 2D row/column delta.
+
+	For vertical grids a "row" is a horizontal line and the column is the
+	intra-line index. For horizontal grids a "row" is a vertical line and the
+	column is the intra-line index. This lets left/right navigate within a
+	line and up/down navigate between lines regardless of orientation."""
 	if _total_items <= 0 or current_idx < 0 or current_idx >= _total_items:
 		return -1
 
@@ -1975,29 +2050,25 @@ func _compute_target_index(current_idx: int, dir: int) -> int:
 
 	# LIST/CAROUSEL: simple linear movement.
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL or items_per_line == 1:
-		var target := current_idx + dir
+		var target := current_idx + row_delta + col_delta
 		return clamp(target, 0, _total_items - 1)
 
 	var line := current_idx / items_per_line
 	var col := current_idx % items_per_line
 	var total_lines := ceili(float(_total_items) / items_per_line)
 
-	if vertical:
-		# dir is -1 for up, +1 for down.
-		var target_line := line + dir
-		if target_line < 0 or target_line >= total_lines:
-			return -1
-		var target_idx := target_line * items_per_line + col
-		return min(target_idx, _total_items - 1)
-	else:
-		# dir is -1 for left, +1 for right.
-		var target_col := col + dir
-		if target_col < 0 or target_col >= items_per_line:
-			return -1
-		var target_idx := line * items_per_line + target_col
-		if target_idx >= _total_items:
-			return -1
-		return target_idx
+	var target_line := line + row_delta
+	var target_col := col + col_delta
+
+	if target_line < 0 or target_line >= total_lines:
+		return -1
+	if target_col < 0 or target_col >= items_per_line:
+		return -1
+
+	var target_idx := target_line * items_per_line + target_col
+	if target_idx >= _total_items:
+		return -1
+	return target_idx
 
 func _release_focus_if_inside(card: Control) -> void:
 	"""Release focus if the current focus owner is inside the given card."""

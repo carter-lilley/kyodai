@@ -218,15 +218,6 @@ func refresh_theme():
 
 func dismiss():
 	_stop_movement_timer()
-	# Return focus to the summoner before releasing it. For root menus (no parent
-	# menu) this happens both on cancellation and on item selection so the
-	# originating control, e.g. an M3OptionButton, regains focus. For submenus we
-	# skip restoration here; the parent menu manages focus when its submenu closes.
-	if _parent_menu == null and _summoner != null and is_instance_valid(_summoner):
-		if UIManager:
-			UIManager.suppress_next_focus_sound()
-		_summoner.grab_focus()
-	_release_summoner()
 	_close_submenu()
 	# Free any non-auto_free submenus so they don't leak
 	for item in _items:
@@ -254,8 +245,25 @@ func dismiss():
 		_renderer.submenu_requested.disconnect(_on_submenu_requested)
 	if _renderer and _renderer.navigated_off_edge.is_connected(_on_navigated_off_edge):
 		_renderer.navigated_off_edge.disconnect(_on_navigated_off_edge)
-	dismissed.emit()
+
+	# Hide the menu before returning focus so this menu's own focus pull-back
+	# (and any active overlay's pull-back) doesn't fight the summoner focus.
 	visible = false
+	dismissed.emit()
+
+	# Return focus to the summoner. For root menus (no parent menu) this happens
+	# both on cancellation and on item selection so the originating control,
+	# e.g. an M3OptionButton, regains focus. Suppress overlay pull-back while we
+	# do this to prevent infinite recursion with the underlying overlay.
+	M3Overlay._suppress_focus_pullback = true
+	if _parent_menu == null and _summoner != null and is_instance_valid(_summoner):
+		if UIManager:
+			UIManager.suppress_next_focus_sound()
+		_summoner.grab_focus()
+	M3Overlay._suppress_focus_pullback = false
+
+	_release_summoner()
+
 	if auto_free:
 		queue_free()
 

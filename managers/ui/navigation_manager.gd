@@ -96,6 +96,47 @@ func _rebuild_nav_and_layout() -> void:
 	# Emit signal
 	ui_manager.layout_changed.emit("bar" if is_bar else "rail")
 
+	# Reparenting ContentWrapper changes the grid's available size without a
+	# viewport resize, so DisplayManager won't fire its resize signal. Refresh
+	# the current view's grid once the new layout has settled.
+	call_deferred("_refresh_current_view_grid")
+
+func _refresh_current_view_grid() -> void:
+	"""Refresh the current view's grid after a nav layout change.
+
+	Reparenting ContentWrapper changes the grid's available size without a
+	viewport resize, so the grid's DisplayManager-driven recalc won't fire.
+	The hidden Home/Library view is marked for rebuild so it also recalculates
+	when next shown."""
+	if not ui_manager or not ui_manager.view:
+		return
+
+	var current_view = ui_manager.view.get_current_view()
+	if not current_view or not current_view.games_grid:
+		return
+
+	var grid = current_view.games_grid
+	if grid.size.x <= 0 or grid.size.y <= 0:
+		# Layout hasn't settled yet; retry a few times.
+		if not has_meta("_nav_rebuild_retry_count"):
+			set_meta("_nav_rebuild_retry_count", 0)
+		var retry_count = get_meta("_nav_rebuild_retry_count")
+		if retry_count < 5:
+			set_meta("_nav_rebuild_retry_count", retry_count + 1)
+			call_deferred("_refresh_current_view_grid")
+		else:
+			set_meta("_nav_rebuild_retry_count", 0)
+		return
+
+	set_meta("_nav_rebuild_retry_count", 0)
+	grid.refresh_dimensions()
+
+	# Mark the other grid-bearing view for rebuild so it recalculates when shown.
+	for view_name in ["Home", "Library"]:
+		if view_name == current_view.view_name:
+			continue
+		ui_manager.view.mark_view_for_rebuild(view_name, "Navigation layout changed")
+
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	"""Create the inner layout container (VBox or HBox)."""
 	var layout: BoxContainer
