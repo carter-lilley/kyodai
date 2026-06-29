@@ -47,6 +47,41 @@ func _init():
 
 func _ready():
 	visible = false
+	if get_viewport():
+		get_viewport().gui_focus_changed.connect(_on_overlay_focus_changed)
+
+func _on_overlay_focus_changed(control: Control) -> void:
+	if not visible:
+		return
+	var topmost = _get_topmost_overlay()
+	if topmost != self:
+		return
+	if not is_instance_valid(control):
+		return
+	# If focus moved outside this overlay's subtree, pull it back to the first
+	# focusable child. This prevents controller/gamepad focus from escaping to
+	# controls behind the overlay.
+	if control == self or control.is_ancestor_of(self) or is_ancestor_of(control):
+		return
+	_focus_first()
+
+func _focus_first() -> void:
+	var first = _find_first_focusable(self)
+	if first:
+		if UIManager and UIManager.has_method("suppress_next_focus_sound"):
+			UIManager.suppress_next_focus_sound()
+		first.grab_focus()
+
+func _find_first_focusable(node: Node) -> Control:
+	if node is Control:
+		var ctrl := node as Control
+		if ctrl.focus_mode != Control.FOCUS_NONE and ctrl.visible:
+			return ctrl
+	for child in node.get_children():
+		var found = _find_first_focusable(child)
+		if found:
+			return found
+	return null
 
 # ============================================
 # STATIC HELPERS
@@ -121,6 +156,16 @@ static func dismiss_type(type: String):
 	if overlay != null:
 		overlay.dismiss()
 
+# Return the topmost active interactive overlay, or null if none.
+static func _get_topmost_overlay() -> M3Overlay:
+	_cleanup_stale_entries()
+	var topmost: M3Overlay = null
+	for type in _active.keys():
+		var overlay = _get_active_node(type)
+		if overlay != null and overlay.visible and (topmost == null or overlay.overlay_layer > topmost.overlay_layer):
+			topmost = overlay
+	return topmost
+
 # ============================================
 # INPUT
 # ============================================
@@ -138,3 +183,4 @@ func _input(event: InputEvent):
 			return
 		get_viewport().set_input_as_handled()
 		dismiss()
+		return

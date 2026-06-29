@@ -6,18 +6,10 @@ const FSM := preload("res://managers/filesystem_manager.gd")
 var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
 var _effect_stack: EffectStack = null
-var _dual_screen_mode: bool = false
 var _media_container: MediaContainer = null
 
 var _current_image_task_id: int = -1
 var _loading_game_id: String = ""
-
-func set_dual_screen_mode(enabled: bool) -> void:
-	_dual_screen_mode = enabled
-	if enabled:
-		# Hide when dual screen is active
-		visible = false
-	# Don't auto-show when dual screen is disabled - visibility controlled by UIManager
 
 func _ready():
 	# Create gray fallback texture
@@ -62,6 +54,12 @@ func _notification(what: int) -> void:
 			_media_container.bounds = Rect2(Vector2.ZERO, size)
 			if _effect_stack:
 				_effect_stack.update_draw_rects()
+	elif what == NOTIFICATION_PARENTED:
+		# When the hero is reparented (e.g., desktop dual screen moves it into a
+		# secondary Window), the EffectStack must be reattached to the new CanvasItem.
+		if _effect_stack:
+			_effect_stack.set_parent_rid(get_canvas_item())
+			_effect_stack.update_draw_rects()
 
 func _exit_tree() -> void:
 	if _effect_stack:
@@ -172,12 +170,6 @@ func clear():
 
 func get_current_game() -> GameResource:
 	return _current_game
-
-func set_game_texture_direct(texture: Texture2D) -> void:
-	"""Directly set the game texture - used for second screen copy."""
-	if texture and _effect_stack:
-		_effect_stack.set_game_texture(texture)
-		visible = true
 
 func refresh_from_settings():
 	"""Reload configuration from settings - called when settings change."""

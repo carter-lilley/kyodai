@@ -164,15 +164,21 @@ func popup(items: Array[M3MenuItem], anchor: Control, variant: ColorVariant = Co
 	if _scroll:
 		_scroll.scroll_vertical = 0
 	
-	# Focus the first Button (for keyboard navigation; disable for dropdowns)
+	# Focus the first Button (for keyboard navigation; disable for dropdowns).
+	# Defer so the renderer and its items have finished their first layout pass
+	# before we grab focus, otherwise focus_entered may not fire and the custom
+	# focus overlay stays hidden.
 	if auto_focus_first:
-		for node in _item_nodes:
-			if node is Button:
-				if silent_focus_first and UIManager:
-					UIManager.suppress_next_focus_sound()
-				node.grab_focus()
-				break
+		call_deferred("_focus_first_item", silent_focus_first)
 	_update_item_visuals()
+
+func _focus_first_item(silent: bool) -> void:
+	for node in _item_nodes:
+		if node is Button and node.focus_mode != Control.FOCUS_NONE:
+			if silent and UIManager:
+				UIManager.suppress_next_focus_sound()
+			node.grab_focus()
+			break
 
 func dismiss():
 	visible = false

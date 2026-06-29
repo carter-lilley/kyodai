@@ -386,16 +386,12 @@ func _on_hero_game_changed(game: GameResource) -> void:
 
 	if game:
 		hero_image.set_game(game)
-		if dual_screen and dual_screen._dual_screen_active and dual_screen._hero_copy_in_second_viewport and dual_screen._hero_copy_in_second_viewport.has_method("set_game"):
-			dual_screen._hero_copy_in_second_viewport.set_game(game)
 		if dual_screen and dual_screen._dual_screen_active:
 			var ayn_thor_manager = get_node_or_null("/root/Main/AynThorManager")
 			if ayn_thor_manager and ayn_thor_manager.has_method("force_hero_viewport_update"):
 				ayn_thor_manager.force_hero_viewport_update()
 	else:
 		hero_image.clear()
-		if dual_screen and dual_screen._dual_screen_active and dual_screen._hero_copy_in_second_viewport and dual_screen._hero_copy_in_second_viewport.has_method("clear"):
-			dual_screen._hero_copy_in_second_viewport.clear()
 
 # ============================================================================
 # Cleanup

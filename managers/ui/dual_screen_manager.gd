@@ -5,7 +5,6 @@ var ui_manager: Node
 
 var _dual_screen_active: bool = false
 var _dual_screen_viewport_mode: bool = false
-var _hero_copy_in_second_viewport: Node = null
 
 # Node reparenting state for Android dual screen
 var _main_ui_original_parent: Node = null
@@ -57,7 +56,6 @@ func ensure_dual_screen_setup() -> Control:
 	_main_viewport = _dual_screen_setup.get_node_or_null("MainViewportContainer/MainViewport")
 	_second_viewport = _dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport")
 	_hero_image = _dual_screen_setup.get_node_or_null("SecondViewportContainer/SecondViewport/HeroImageSecondScreen")
-	_hero_copy_in_second_viewport = _hero_image
 
 	var ayn = main.get_node_or_null("AynThorManager")
 	if ayn and ayn.has_method("set_screen_resources"):
@@ -120,6 +118,9 @@ func _enable_dual_screen_mode(second_screen_index: int) -> void:
 	if _dual_screen_active:
 		return
 
+	# Ensure the DualScreenSetup scene exists and resolve the hero image from it.
+	ensure_dual_screen_setup()
+
 	if not _hero_image:
 		push_error("[DualScreenManager] Cannot enable dual screen - hero image not available")
 		return
@@ -140,9 +141,8 @@ func _enable_dual_screen_viewport_mode() -> void:
 	# Ensure DualScreenSetup is in the tree
 	var dual_screen_setup = ensure_dual_screen_setup()
 	var second_viewport = _second_viewport
-	_hero_copy_in_second_viewport = _hero_image
 
-	if not dual_screen_setup or not second_viewport or not _hero_copy_in_second_viewport:
+	if not dual_screen_setup or not second_viewport or not _hero_image:
 		push_warning("[DualScreenManager] Dual screen setup nodes not found")
 		return
 
@@ -166,10 +166,6 @@ func _enable_dual_screen_viewport_mode() -> void:
 	if second_viewport:
 		second_viewport.handle_input_locally = true
 
-	# Hide hero in main UI since it will be on second screen
-	if _hero_image:
-		_hero_image.set_dual_screen_mode(true)
-
 	# Reparent keyboard to SecondViewport for fullscreen display on secondary screen
 	_reparent_keyboard_to_second_viewport(second_viewport)
 
@@ -178,8 +174,8 @@ func _enable_dual_screen_viewport_mode() -> void:
 	if _hero_image:
 		if _hero_image.has_method("get_current_game"):
 			current_game = _hero_image.get_current_game()
-			if current_game and _hero_copy_in_second_viewport.has_method("set_game"):
-				_hero_copy_in_second_viewport.set_game(current_game)
+			if current_game and _hero_image.has_method("set_game"):
+				_hero_image.set_game(current_game)
 
 	# Position and make dual screen setup visible
 	# MainViewportContainer will be at (0,0) relative to this, so position at (0,0)
@@ -229,10 +225,6 @@ func _disable_dual_screen_mode() -> void:
 
 	# Clear SubViewport-based UI scaling and restore Window scaling
 	DisplayManager.exit_subviewport_dual_screen_mode()
-
-	# Show hero in main UI again
-	if _hero_image:
-		_hero_image.set_dual_screen_mode(false)
 
 	_dual_screen_active = false
 

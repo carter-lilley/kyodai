@@ -218,11 +218,11 @@ func refresh_theme():
 
 func dismiss():
 	_stop_movement_timer()
-	# Return focus to the summoner before releasing it, but only if the user
-	# didn't select an item (i.e., they cancelled or navigated away). When an
-	# item is selected from a submenu, we skip focus restoration to prevent
-	# re-triggering the submenu open via _on_item_focus_entered.
-	if not _item_selected and _summoner != null and is_instance_valid(_summoner):
+	# Return focus to the summoner before releasing it. For root menus (no parent
+	# menu) this happens both on cancellation and on item selection so the
+	# originating control, e.g. an M3OptionButton, regains focus. For submenus we
+	# skip restoration here; the parent menu manages focus when its submenu closes.
+	if _parent_menu == null and _summoner != null and is_instance_valid(_summoner):
 		if UIManager:
 			UIManager.suppress_next_focus_sound()
 		_summoner.grab_focus()

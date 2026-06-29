@@ -203,6 +203,11 @@ var _pending_focus_index: int = -1
 # rows/columns in a single frame while still allowing held-key repetition.
 var _helper_scroll_consumed_this_frame: bool = false
 
+# Throttle analog-thumbstick helper-scroll repeats so holding a stick does not
+# scroll at frame rate. D-pad and keyboard repeats keep using the per-frame guard.
+var _last_helper_scroll_time_ms: int = 0
+const HELPER_SCROLL_ANALOG_REPEAT_MS: int = 120
+
 func is_focus_locked_and_active() -> bool:
 	"""Returns true if focus lock is enabled and focus was recently inside this grid."""
 	return focus_lock_enabled and _grid_had_focus_last
@@ -688,6 +693,15 @@ func _process(_delta: float):
 	# but bunched key-repeat events cannot skip multiple rows/columns in one frame.
 	if _helper_scroll_consumed_this_frame:
 		_helper_scroll_consumed_this_frame = false
+
+	# Decay the analog throttle when the stick is released so the first tick of a
+	# new thumbstick movement is always responsive.
+	if _last_helper_scroll_time_ms > 0 and not _is_direction_held():
+		_last_helper_scroll_time_ms = 0
+
+func _is_direction_held() -> bool:
+	return Input.is_action_pressed("ui_up") or Input.is_action_pressed("ui_down") \
+		or Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_right")
 
 func _on_resize_debounced():
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
@@ -1903,18 +1917,38 @@ func _input(event: InputEvent) -> void:
 
 	var target_idx := _compute_target_index(current_idx, dir)
 	if target_idx < 0 or target_idx == current_idx:
+		# Boundary: consume the event so spatial navigation cannot move focus
+		# outside the grid.
+		get_viewport().set_input_as_handled()
 		return
 
-	# If the target is already visible, let normal spatial navigation handle it.
-	if target_idx >= _visible_start_idx and target_idx <= _visible_end_idx:
-		return
+	# Throttle analog-thumbstick input to a reasonable repeat rate. D-pad and
+	# keyboard events keep the per-frame guard below.
+	if event is InputEventJoypadMotion:
+		var now_ms := Time.get_ticks_msec()
+		if now_ms - _last_helper_scroll_time_ms < HELPER_SCROLL_ANALOG_REPEAT_MS:
+			get_viewport().set_input_as_handled()
+			return
+		_last_helper_scroll_time_ms = now_ms
 
-	# The target is offscreen. Scroll to it and focus it. Throttle to one
-	# helper-scroll per process frame so OS key-repeat bursts don't skip rows.
+	# Throttle to one helper-scroll per process frame so OS key-repeat bursts
+	# don't skip rows.
 	if _helper_scroll_consumed_this_frame:
+		get_viewport().set_input_as_handled()
 		return
 	_helper_scroll_consumed_this_frame = true
+
 	get_viewport().set_input_as_handled()
+
+	# If the target is already visible, move focus directly to it instead of
+	# falling through to spatial navigation, which can leak focus out of the grid.
+	if target_idx >= _visible_start_idx and target_idx <= _visible_end_idx:
+		var card = get_card_at_index(target_idx)
+		if card and is_instance_valid(card) and card.is_inside_tree():
+			card.grab_focus()
+			return
+
+	# The target is offscreen. Scroll to it and focus it.
 	scroll_to_index_and_focus(target_idx, true, 0.6)
 
 func _get_focused_virtual_index() -> int:
