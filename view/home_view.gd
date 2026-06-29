@@ -82,10 +82,10 @@ func _ready():
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
 	
-	# Connect to focus changes for hero image
-	get_viewport().gui_focus_changed.connect(_on_focus_changed)
-	
 	# Initial load is handled by _on_database_ready() when the DB is ready
+	
+	# Let the base View class own the focus signal connection.
+	reconnect_viewport()
 
 func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
 	"""Get total downloaded game count for virtual scrolling setup.

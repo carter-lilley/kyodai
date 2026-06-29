@@ -20,6 +20,9 @@ func _ready():
 	DownloadManager.extraction_completed.connect(_on_extraction_completed)
 	
 	_refresh_list()
+	
+	# Let the base View class own the focus signal connection.
+	reconnect_viewport()
 
 func _refresh_list():
 	# Clear existing

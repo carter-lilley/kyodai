@@ -21,6 +21,7 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 
 var _loading_texture: Texture2D = preload("res://icon.svg")
 var _current_texture: Texture2D = null
+var _current_texture_game_id: String = ""
 
 # Media effect stack rendered inside M3Card's media panel
 var _media_stack: EffectStack = null
@@ -166,6 +167,10 @@ func get_focus_shape_params() -> Dictionary:
 func get_current_texture() -> Texture2D:
 	return _current_texture
 
+func set_image_priority(high_priority: bool) -> void:
+	if _media_loader:
+		_media_loader.set_priority(high_priority, game)
+
 func _setup_preview_mode():
 	_update_card_state_from_settings()
 	_build_media_stack()
@@ -229,6 +234,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		_build_focus_stack(force_full_rebuild)
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
+	_kill_focus_tweens()
 	_sync_focus_container_properties()
 
 	var focus_effect_settings := []
@@ -258,7 +264,8 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 			focus_base_node.set_visible(false)
 			focus_base_node.set_alpha(0.0)
 
-		# In preview mode, respect preview_show_focus for initial alpha
+		# In preview mode, respect preview_show_focus for initial alpha.
+		# Otherwise start from zero so _show_focus_effects can tween from the correct state.
 		var target_focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
 		for effect in _focus_stack.get_effects():
 			if effect is EffectBase and effect._material is ShaderMaterial:
@@ -531,9 +538,12 @@ func refresh_settings() -> void:
 	_build_media_stack()
 	_update_platform_badge()
 	_update_display()
-	# Ensure focus effects match current preview state after rebuild
+	_sync_focus_visuals()
+	# Ensure focus effects match current preview/focus state after rebuild
 	if preview_mode:
 		_show_focus_effects(preview_show_focus)
+	elif _is_focused:
+		_show_focus_effects(true)
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
 	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
@@ -541,8 +551,12 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	_build_media_stack(force_full_rebuild)
 	_update_platform_badge()
 	_update_display()
+	_sync_focus_visuals()
+	# Ensure focus effects match current preview/focus state after rebuild
 	if preview_mode:
 		_show_focus_effects(preview_show_focus)
+	elif _is_focused:
+		_show_focus_effects(true)
 
 func reset(for_pooling: bool = false) -> void:
 	"""Reset the card for reuse.
@@ -575,6 +589,7 @@ func reset(for_pooling: bool = false) -> void:
 			_focus_stack.set_visible(false)
 	else:
 		_current_texture = null
+		_current_texture_game_id = ""
 		if _media_stack:
 			_media_stack.set_game_texture(null)
 			_media_stack.free_rids()
@@ -604,7 +619,7 @@ func _update_display_with_priority(high_priority: bool):
 	_update_platform_badge()
 	# If the texture is already cached and the game hasn't changed, reuse it
 	# synchronously to avoid the empty-card flash during recycling.
-	if _current_texture and _current_texture != _loading_texture:
+	if _current_texture and _current_texture != _loading_texture and _current_texture_game_id == game.id:
 		_set_texture(_current_texture)
 	else:
 		_load_cover(high_priority)
@@ -801,6 +816,8 @@ func _on_media_texture_loaded(texture: Texture2D) -> void:
 
 func _set_texture(tex: Texture2D) -> void:
 	_current_texture = tex
+	if game:
+		_current_texture_game_id = game.id
 	if _media_panel:
 		_media_panel.visible = true
 	if _media_stack:

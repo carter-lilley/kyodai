@@ -43,10 +43,6 @@ func _exit_tree() -> void:
 			DataManager.sync_started.disconnect(_on_sync_started)
 	if UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
-	var viewport = get_viewport()
-	if viewport and viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		viewport.gui_focus_changed.disconnect(_on_focus_changed)
-	
 	# The search overlay is created as an orphan; free it explicitly.
 	if _search_overlay and is_instance_valid(_search_overlay):
 		if _search_overlay.get_parent() == null:
@@ -116,6 +112,9 @@ func _ready():
 	
 	# Create search overlay
 	_setup_search_overlay()
+	
+	# Let the base View class own the focus signal connection.
+	reconnect_viewport()
 
 func _setup_search_overlay():
 	"""Create and setup the search overlay."""
