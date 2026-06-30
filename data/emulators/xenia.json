@@ -31,7 +31,7 @@
 	"platforms": {
 	  "windows": {
 		"type": "command",
-		"executable": "xenia_canary.exe",
+		"executable": "xenia_edge.exe",
 		"template": [
 		  "{exe}",
 		  "{rom}",
@@ -40,19 +40,19 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "xenia_canary",
+		"executable": "xenia_edge",
 		"template": [
 		  "{exe}",
           "{rom}"
 		]
 	  },
-      "android": {
-        "action": "android.intent.action.VIEW",
-        "package": "emu.x360.mobile",
-        "class": "emu.x360.mobile.X360MobileGameLaunchActivity",
-        "rom_delivery": "intent_data",
-        "mime_type": "application/octet-stream"
-      }
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "emu.x360.mobile",
+		"class": "emu.x360.mobile.X360MobileGameLaunchActivity",
+		"rom_delivery": "intent_data",
+		"mime_type": "application/octet-stream"
+	  }
 	}
   },
   "install": [
@@ -61,15 +61,11 @@
 	  "platforms": {
 		"windows": {
 		  "action_type": "download_repo",
-		  "github_repo": "xenia-canary/xenia-canary-releases",
-		  "release_tag": "canary_experimental",
-		  "asset_pattern": "xenia_canary_windows\\.zip"
+		  "github_repo": "has207/xenia-edge",
+		  "asset_pattern": "xenia_edge_windows\\.zip"
 		},
-  		"linux": {
-		  "action_type": "download_repo",
-		  "github_repo": "xenia-canary/xenia-canary-releases",
-		  "release_tag": "canary_experimental",
-		  "asset_pattern": "xenia_canary_linux\\.tar\\.xz"
+   		"linux": {
+		  "action_type": "none"
 		},
 		"android": {
 		  "action_type": "download_repo",
@@ -87,16 +83,14 @@
 		  "strip_top_directory": true,
 		  "validate": {
 			"action_type": "file_exists",
-			"file": "xenia_canary.exe"
+			"file": "xenia_edge.exe"
 		  }
 		},
 		"linux": {
-		  "action_type": "extract",
-		  "extract_to": ".",
-		  "strip_top_directory": true,
+		  "action_type": "none",
 		  "validate": {
 			"action_type": "file_exists",
-			"file": "xenia_canary"
+			"file": "xenia_edge"
 		  }
 		},
 		"android": {

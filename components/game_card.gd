@@ -84,6 +84,28 @@ var focus_scale_enabled: bool = true
 # If false, card starts at 1.0 and grows to focus_scale when focused (GRID).
 var focus_scale_inverted: bool = false
 
+func _has_real_focus() -> bool:
+	# A card is focused if it or any of its descendants currently owns viewport focus.
+	var viewport = get_viewport()
+	if not viewport:
+		return false
+	var owner = viewport.gui_get_focus_owner()
+	if not owner:
+		return false
+	return owner == self or is_ancestor_of(owner)
+
+func _sync_focus_state_from_viewport() -> void:
+	var real_focus = _has_real_focus()
+	if _is_focused == real_focus:
+		return
+	_is_focused = real_focus
+	_sync_focus_visuals()
+	# If this card is focused but has no focus stack yet, build it now so the
+	# subsequent media-stack rebuild can see the correct focus state.
+	if _is_focused and not _focus_stack:
+		_build_focus_stack(true)
+		_update_platform_badge()
+
 # Android touch-and-hold
 const LONG_PRESS_DURATION: float = 0.6
 const LONG_PRESS_TOLERANCE_DP: float = 20.0
@@ -325,10 +347,6 @@ func _link_overlapping_effects() -> void:
 			var base_effect = _media_stack.get_effect(focus_effect.effect_id)
 			if base_effect:
 				focus_effect.set_base_effect(base_effect)
-				# In preview mode, respect preview_show_focus instead of _is_focused
-				var show_focus = preview_show_focus if preview_mode else _is_focused
-				if not show_focus and base_effect._base_settings.size() > 0:
-					focus_effect.tween_settings(base_effect._base_settings, base_effect._base_settings, 1.0)
 
 var preview_show_focus: bool = false
 
@@ -369,6 +387,18 @@ func _show_focus_effects(p_show: bool) -> void:
 		var focus_copy = focus_settings.duplicate(true)
 
 		var base_effect_ref = weakref(base_effect)
+
+		print("[GameCard] _show_focus_effects p_show=", p_show,
+			" virtual_index=", get_meta("virtual_index", -1),
+			" _is_focused=", _is_focused,
+			" has_real_focus=", _has_real_focus(),
+			" effect_id=", focus_effect.effect_id,
+			" base_effect._is_tweening=", base_effect._is_tweening,
+			" base_border=", base_copy.get("border_size", "N/A"),
+			" focus_border=", focus_copy.get("border_size", "N/A"),
+			" base_settings.border=", base_effect._settings.get("border_size", "N/A"),
+			" base_base_settings.border=", base_effect._base_settings.get("border_size", "N/A"))
+
 		if p_show:
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
@@ -381,6 +411,10 @@ func _show_focus_effects(p_show: bool) -> void:
 					eff.tween_settings(base_copy, focus_copy, t)
 			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 		else:
+			# Animate from the base effect's current visual state back to base
+			# settings. This avoids imposing the focus config on an unfocused card
+			# (which produces a transient "stuck focused" flash) while still
+			# correctly tweening a previously-focused card back to its base look.
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
 			settings_tween.finished.connect(_remove_focus_tween.bind(settings_tween))
@@ -389,7 +423,7 @@ func _show_focus_effects(p_show: bool) -> void:
 			var tween_callable = func(t: float):
 				var eff = base_effect_ref.get_ref()
 				if eff:
-					eff.tween_settings(focus_copy, base_copy, t)
+					eff.tween_settings(eff._settings, base_copy, t)
 			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 
 	# Non-overlapping effects: fade in/out via alpha overlay
@@ -535,28 +569,52 @@ func set_focus_scale(value: float) -> void:
 
 func refresh_settings() -> void:
 	_update_card_state_from_settings()
+	# Sync focus state first so _build_media_stack sees the correct _is_focused
+	# and builds the focus stack for focused cards.
+	_sync_focus_state_from_viewport()
 	_build_media_stack()
+	_update_status_icon()
 	_update_platform_badge()
-	_update_display()
-	_sync_focus_visuals()
-	# Ensure focus effects match current preview/focus state after rebuild
-	if preview_mode:
-		_show_focus_effects(preview_show_focus)
-	elif _is_focused:
-		_show_focus_effects(true)
+	_update_card_text()
+	# Now that both media and focus stacks exist, run the focus tween.
+	if _focus_stack:
+		_show_focus_effects(_is_focused)
+	print("[GameCard] refresh_settings done index=", get_meta("virtual_index", -1),
+		" _is_focused=", _is_focused,
+		" has_real_focus=", _has_real_focus())
+	# If the card has no valid cached texture for the current game, trigger a
+	# cover load as a safety net so cards don't stay blank after a rebuild.
+	if game and (not _current_texture or _current_texture_game_id != game.id):
+		_load_cover(false)
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
 	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
 	_update_card_state_from_settings()
+	# Sync focus state first so _build_media_stack sees the correct _is_focused
+	# and builds the focus stack for focused cards.
+	_sync_focus_state_from_viewport()
 	_build_media_stack(force_full_rebuild)
+	_update_status_icon()
 	_update_platform_badge()
-	_update_display()
-	_sync_focus_visuals()
-	# Ensure focus effects match current preview/focus state after rebuild
-	if preview_mode:
-		_show_focus_effects(preview_show_focus)
-	elif _is_focused:
-		_show_focus_effects(true)
+	_update_card_text()
+	# Now that both media and focus stacks exist, run the focus tween.
+	if _focus_stack:
+		_show_focus_effects(_is_focused)
+	print("[GameCard] refresh_effects done index=", get_meta("virtual_index", -1),
+		" _is_focused=", _is_focused,
+		" has_real_focus=", _has_real_focus())
+	# If the card has no valid cached texture for the current game, trigger a
+	# cover load as a safety net so cards don't stay blank after a rebuild.
+	if game and (not _current_texture or _current_texture_game_id != game.id):
+		_load_cover(false)
+
+func _update_card_text() -> void:
+	if game:
+		headline = game.title
+		supporting_text = game.platform if game.platform else ""
+	else:
+		headline = ""
+		supporting_text = ""
 
 func reset(for_pooling: bool = false) -> void:
 	"""Reset the card for reuse.
@@ -587,6 +645,14 @@ func reset(for_pooling: bool = false) -> void:
 		if _focus_stack:
 			_focus_stack.set_game_texture(null)
 			_focus_stack.set_visible(false)
+			# Reset any shader alphas left mid-tween so the next focus-in fades cleanly
+			# and a pooled card never enters the grid with focus effects visible.
+			for effect in _focus_stack.get_effects():
+				if effect is EffectBase and effect._material is ShaderMaterial:
+					effect._material.set_shader_parameter("effect_alpha", 0.0)
+		# Ensure the inherited M3Card focus ring is never carried into reuse.
+		if _focus_ring:
+			_focus_ring.visible = false
 	else:
 		_current_texture = null
 		_current_texture_game_id = ""

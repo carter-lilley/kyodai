@@ -16,6 +16,8 @@ var _material: ShaderMaterial = null
 var _visible: bool = true
 var _z_index: int = 0
 
+var _shader_params_dirty: bool = false
+
 static var _fallback_texture: Texture2D = null
 
 static func get_fallback_texture() -> Texture2D:
@@ -123,6 +125,12 @@ func get_tweenable_settings() -> Array[String]:
 var _is_tweening: bool = false
 
 func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress: float) -> void:
+	print("[EffectBase] tween_settings effect_id=", effect_id,
+		" progress=", progress,
+		" from_border=", from_settings.get("border_size", "N/A"),
+		" to_border=", to_settings.get("border_size", "N/A"),
+		" current_border=", _settings.get("border_size", "N/A"),
+		" _is_tweening=", _is_tweening)
 	var tweenables = get_tweenable_settings()
 
 	_is_tweening = true
@@ -138,6 +146,11 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 	_apply_tweened_settings(temp_settings)
 
 	if progress >= 1.0:
+		# Snap to the exact target settings so non-tweenable parameters don't
+		# linger with stale values from the starting configuration.
+		_settings = to_settings.duplicate(true)
+		_apply_settings()
+		_update_shader_params()
 		_is_tweening = false
 
 func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> Variant:
@@ -212,6 +225,18 @@ func _set_shader_param(param: String, value: Variant) -> void:
 func _on_media_changed() -> void:
 	if _is_tweening:
 		return
+	_mark_shader_params_dirty()
+
+func _mark_shader_params_dirty() -> void:
+	if _shader_params_dirty:
+		return
+	_shader_params_dirty = true
+	call_deferred("_flush_shader_params")
+
+func _flush_shader_params() -> void:
+	if not is_instance_valid(self):
+		return
+	_shader_params_dirty = false
 	_update_shader_params()
 
 func set_game_texture(texture: Texture2D) -> void:

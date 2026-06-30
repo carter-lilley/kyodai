@@ -334,7 +334,6 @@ func _launch_gamenative_game(game: GameResource) -> void:
 	var success = GameNativeManager.launch_game(game.steam_app_id)
 	if success:
 		_update_last_played(game)
-		game_launched.emit(game)
 	else:
 		push_error("[LaunchManager] Failed to launch GameNative game")
 		NotificationManager.show_notification("Failed to launch GameNative. Is the app installed?", NotificationManager.Type.ERROR)
@@ -607,6 +606,11 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 func _update_last_played(game: GameResource) -> void:
 	var timestamp = Time.get_datetime_string_from_system(false, true)  # UTC format
 	game.last_played = timestamp
+	
+	# GameNative games are not stored in the database, so persist in settings instead.
+	if game.source == "gamenative":
+		GameNativeManager.update_last_played(game.steam_app_id, timestamp)
+		return
 	
 	# Update in database
 	DataManager.update_game_last_played(game.romm_id, timestamp)

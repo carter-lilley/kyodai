@@ -561,12 +561,13 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 			games_grid.refresh_dimensions()
 			games_grid.refresh_all_card_effects(true)
 		else:
-			# Use callback version to ensure dimensions refresh AFTER data loads
+			# Use callback version to ensure dimensions refresh BEFORE rebuilding
+			# effects, so cards are rebuilt against final bounds.
 			_load_total_count_with_callback(false, func():
-				# Also refresh existing cards
-				games_grid.refresh_all_card_effects(true)
-				# Refresh dimensions AFTER data reload to get correct layout
+				# Refresh dimensions first to establish final card bounds.
 				games_grid.refresh_dimensions()
+				# Then refresh existing cards.
+				games_grid.refresh_all_card_effects(true)
 			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance

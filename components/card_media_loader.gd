@@ -60,6 +60,9 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		_emit_texture(cached_tex)
 		return
 
+	# No memory cache: show the loading texture immediately, then queue the
+	# async file read so cards never render blank while waiting.
+	_set_loading_texture()
 	_load_cached_cover(cache_path, high_priority)
 
 func cancel() -> void:

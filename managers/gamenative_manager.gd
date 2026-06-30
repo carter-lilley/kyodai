@@ -38,9 +38,8 @@ func _save_games() -> void:
 	
 	var setting = SettingsManager.get_setting("gamenative_games")
 	if setting:
-		setting.value = games_array
-		# Note: Don't call set_setting - we already modified the setting object directly
-		# SettingsManager.set_setting expects (value, setting) but we already set setting.value
+		# Use set_setting so the dirty flag is set and save_settings actually persists.
+		SettingsManager.set_setting(games_array, setting)
 		SettingsManager.save_settings()
 	
 	games_updated.emit()
@@ -128,7 +127,8 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 				"name": game_name,
 				"source": "STEAM",
 				"added_at": Time.get_datetime_string_from_system(),
-				"cover_path": cover_path_ref[0]
+				"cover_path": cover_path_ref[0],
+				"last_played": "1970-01-01T00:00:00"
 			})
 			_save_games()
 			
@@ -184,13 +184,20 @@ func create_game_resources() -> Array[GameResource]:
 		game.is_master_entry = true
 		game.source = "gamenative"
 		game.steam_app_id = app_id
-		# Initialize last_played to epoch time so unplayed games sort at the end
-		# This will be updated when the game is launched
-		game.last_played = "1970-01-01T00:00:00"
+		# Use persisted last_played so the recent order survives app restarts.
+		game.last_played = game_data.get("last_played", "1970-01-01T00:00:00")
 		
 		games.append(game)
 	
 	return games
+
+func update_last_played(app_id: int, timestamp: String) -> void:
+	"""Persist the last_played timestamp for a GameNative game."""
+	for game in _games_data:
+		if game.get("app_id", 0) == app_id:
+			game["last_played"] = timestamp
+			_save_games()
+			return
 
 func get_game_count() -> int:
 	"""Get number of GameNative games."""

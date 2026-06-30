@@ -22,7 +22,7 @@ enum ViewMode { GRID, LIST, CAROUSEL }
 			view_mode = value
 			return
 		if view_mode != value:
-			var old_focused = _focused_virtual_index
+			var old_focused = _last_focused_virtual_index
 			view_mode = value
 			_update_view_mode()
 			if old_focused >= 0:
@@ -36,7 +36,7 @@ var grid_vertical: bool = true:
 			return
 		if value == grid_vertical:
 			return
-		var old_focused = _focused_virtual_index
+		var old_focused = _last_focused_virtual_index
 		grid_vertical = value
 		if _ready_called and view_mode == ViewMode.GRID:
 			_update_view_mode()
@@ -48,7 +48,7 @@ var grid_vertical: bool = true:
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
 func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_scale: float) -> void:
-	var old_focused: int = _focused_virtual_index
+	var old_focused: int = _last_focused_virtual_index
 	var needs_refresh: bool = _apply_view_mode_and_vertical(p_view_mode, p_grid_vertical)
 	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
 
@@ -123,7 +123,7 @@ func _batch_apply_layout_state() -> void:
 
 	# Apply structure first so zoom/padding math uses the correct geometry.
 	# Then apply padding before zoom because separation affects available space.
-	var old_focused: int = _focused_virtual_index
+	var old_focused: int = _last_focused_virtual_index
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
@@ -204,11 +204,11 @@ var _pending_focus_index: int = -1
 var _helper_scroll_consumed_this_frame: bool = false
 
 # Analog-thumbstick navigation state. We accumulate stick deflection over time
-# and require the stick to return near center after each move, so the grid does
-# not feel "slippery" when the stick hovers above the action deadzone.
+# and trigger a grid move each time the accumulator crosses the threshold.
+# The repeat rate scales with stick deflection; there is no release gate so a
+# held stick naturally auto-repeats.
 var _analog_scroll_accumulator: float = 0.0
-var _analog_needs_release: bool = false
-const ANALOG_SCROLL_SPEED: float = 5.0
+const ANALOG_SCROLL_SPEED: float = 8.0
 const ANALOG_SCROLL_DEADZONE: float = 0.25
 
 func is_focus_locked_and_active() -> bool:
@@ -355,6 +355,14 @@ var _visible_end_idx: int = 0
 var _buffer_target_start: int = 0
 var _buffer_target_end: int = 0
 
+# Incremental effect rebuild queue — populated when effect configs change.
+# Cards in the visible zone rebuild immediately; the rest are drained over frames.
+const EFFECT_REBUILD_BUFFER_LINES: int = 2
+const EFFECT_REBUILD_CARDS_PER_FRAME: int = 2
+var _pending_effect_rebuilds: Array[Control] = []
+var _pending_effect_rebuild_force_full: bool = false
+var _pending_effect_rebuild_set: Dictionary = {}
+
 # Flow-container separation caching - only override when value changes
 var _last_h_separation: int = -1
 var _last_v_separation: int = -1
@@ -374,6 +382,12 @@ var _cached_game_ids: Dictionary = {}  # romm_id -> cache_key
 const MAX_CACHE_SIZE: int = 5000
 var _cache_lru_tick: Dictionary[int, int] = {}
 var _lru_counter: int = 0
+
+# When settings change, layout must settle before effect rebuilds run against
+# final card bounds. This flag defers refresh_all_card_effects until after the
+# scheduled layout recalc completes.
+var _pending_effects_refresh_after_layout: bool = false
+var _pending_effects_refresh_force_full: bool = false
 
 func _configure_view_mode() -> void:
 	"""Update scroll/flow container flags for the current view_mode/grid_vertical without rebuilding cards."""
@@ -567,7 +581,6 @@ func _enter_tree():
 	# Recreate it so cards can be reused again. On initial entry _card_scene is
 	# still null, so this is a no-op.
 	if _card_scene and _card_pool.is_empty():
-		print("[VirtualScrollGridContainer] Recreating pool after reparenting")
 		_instantiate_card_pool()
 
 	# Reset cached size so the next display resize check will recalculate layout
@@ -579,7 +592,6 @@ func _enter_tree():
 	_reconnect_focus_lock_viewport()
 
 func _exit_tree():
-	print("[VirtualScrollGridContainer] _exit_tree() pool_size=%d active=%d queued=%s" % [_card_pool.size(), _active_cards.size(), str(is_queued_for_deletion())])
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
 		if state.changed.is_connected(_on_card_settings_state_changed):
@@ -604,7 +616,6 @@ func _free_card_pool() -> void:
 		if is_instance_valid(card):
 			card.free()
 			freed_count += 1
-	print("[VirtualScrollGridContainer] _free_card_pool() freed %d cards" % freed_count)
 	_card_pool.clear()
 
 func _on_card_settings_state_changed(mask: int) -> void:
@@ -612,32 +623,28 @@ func _on_card_settings_state_changed(mask: int) -> void:
 		return
 
 	var state = UIManager.card_settings_state
-	print("[VirtualScrollGridContainer] _on_card_settings_state_changed mask=", mask, " active_cards=", _active_cards.size())
 
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
-		print("[VirtualScrollGridContainer] applying LAYOUT")
 		_batch_apply_layout_state()
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
-		print("[VirtualScrollGridContainer] applying DISPLAY/MEDIA_SHAPE")
 		_refresh_cached_settings()
 		refresh_all_card_configs()
 		_schedule_layout_recalc()
 
-	# Card effect configuration changed
+	# Card effect configuration changed. Defer the effect refresh until after the
+	# layout recalc so cards are rebuilt against final bounds and newly added cards
+	# are included in the refresh snapshot.
 	if mask & CardSettingsState.ChangeMask.EFFECTS:
-		print("[VirtualScrollGridContainer] applying EFFECTS")
-		refresh_all_card_effects(true)
+		_pending_effects_refresh_after_layout = true
+		_pending_effects_refresh_force_full = true
 		_schedule_layout_recalc()
 
 	# Focus lock toggle (always re-sync from state in case a LAYOUT/EFFECTS rebuild
 	# was batched and the FOCUS_LOCK mask was not emitted independently).
 	focus_lock_enabled = state.focus_lock_enabled
-
-	# Theme changes (dark mode / primary color) do not affect grid geometry directly.
-	print("[VirtualScrollGridContainer] done mask=", mask)
 
 func _schedule_layout_recalc() -> void:
 	"""Queue a single deferred layout recalc. Multiple calls in one frame collapse."""
@@ -649,6 +656,12 @@ func _schedule_layout_recalc() -> void:
 func _do_scheduled_layout_recalc() -> void:
 	_layout_recalc_scheduled = false
 	_recalculate_layout()
+	
+	# Now that layout has settled, apply any deferred effect refresh. This ensures
+	# effect rebuilds use final card bounds and include cards added during recalc.
+	if _pending_effects_refresh_after_layout:
+		_pending_effects_refresh_after_layout = false
+		refresh_all_card_effects(_pending_effects_refresh_force_full)
 
 func _update_focus_lock_from_settings() -> void:
 	if UIManager and UIManager.card_settings_state:
@@ -698,18 +711,20 @@ func _process(_delta: float):
 		_helper_scroll_consumed_this_frame = false
 
 	# Accumulate analog thumbstick input and trigger grid navigation at a rate
-	# scaled by how far the stick is pushed. Require the stick to return near the
-	# center after each move so it doesn't auto-repeat while hovering.
+	# scaled by how far the stick is pushed. A held stick auto-repeats without
+	# requiring a release between moves, and leftover fractional deflection is
+	# preserved for the next frame so small nudges still register quickly.
 	var raw_strength := _get_direction_raw_strength()
 	if raw_strength < ANALOG_SCROLL_DEADZONE:
-		_analog_needs_release = false
 		_analog_scroll_accumulator = 0.0
-	elif not _analog_needs_release:
+	else:
 		_analog_scroll_accumulator += raw_strength * ANALOG_SCROLL_SPEED * _delta
-		if _analog_scroll_accumulator >= 1.0:
-			_analog_scroll_accumulator = 0.0
-			_analog_needs_release = true
+		while _analog_scroll_accumulator >= 1.0:
+			_analog_scroll_accumulator -= 1.0
 			_analog_trigger_navigation()
+
+	# Drain any queued off-screen effect rebuilds a few cards per frame.
+	_drain_pending_effect_rebuilds()
 
 func _analog_trigger_navigation() -> void:
 	if not focus_lock_enabled or not visible or not is_inside_tree():
@@ -963,7 +978,7 @@ func _recalculate_layout():
 
 	# Save focus state before layout recalculation so we can restore it after
 	# cards are recycled and recreated.
-	var saved_focus_index: int = _focused_virtual_index
+	var saved_focus_index: int = _get_focused_virtual_index()
 
 	var current_zoom = _calculate_zoom()
 
@@ -1369,7 +1384,7 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	var line = int(scroll_pos / stride) if stride > 0 else 0
 	var visible_lines = ceili(viewport_size / stride) if stride > 0 else 1
 	_visible_start_idx = line * items_per_line
-	_visible_end_idx = min(_visible_start_idx + visible_lines * items_per_line, _total_items) - 1
+	_visible_end_idx = min(_visible_start_idx + visible_lines * items_per_line, _total_items)
 
 	var visible_count = _get_visible_count()
 	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
@@ -1474,8 +1489,12 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 		_update_margin()
 	_check_preload_needed()
 	_update_card_priorities(_visible_start_idx, _visible_end_idx)
+	
+	# Scrolling may bring queued effect-rebuild cards into the visible zone;
+	# rebuild them immediately so the user doesn't see stale effects.
+	_flush_pending_effect_rebuilds_for_visible_zone()
 
-	visible_range_changed.emit(_visible_start_idx, min(_visible_end_idx, _total_items), _total_items)
+	visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
 
 	# If a programmatic focus is waiting for this scroll rebuild, try to land it now.
 	_try_apply_pending_focus()
@@ -1501,6 +1520,12 @@ func _recycle_card_at_index(index: int):
 		card.visible = false
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
+
+		# Remove from pending effect rebuild queue so recycled cards don't
+		# rebuild after they're returned to the pool.
+		if _pending_effect_rebuild_set.has(card):
+			_pending_effect_rebuilds.erase(card)
+			_pending_effect_rebuild_set.erase(card)
 
 		if _card_has_reset:
 			card.reset(true)
@@ -1546,6 +1571,11 @@ func _configure_card_size_flags(card: Control) -> void:
 
 	if _card_has_set_media_aspect_ratio:
 		card.set_media_aspect_ratio(_get_media_aspect_ratio())
+
+	# Re-sync focus visuals so a recycled card does not carry a stale focused
+	# content_scale into the grid after a layout/theme change.
+	if _card_has_set_focus_scale:
+		card.set_focus_scale(focus_scale)
 
 func _add_card_at_end(virtual_index: int):
 	var card = _acquire_card()
@@ -1945,12 +1975,9 @@ func _on_viewport_focus_changed(control: Control) -> void:
 	# Redirect back to the last focused card
 	var card = get_card_at_index(_last_focused_virtual_index)
 	if card and is_instance_valid(card) and card.is_inside_tree():
-		print("[VirtualScrollGridContainer] Focus escaped to ", control.name, " — redirecting back to card ", _last_focused_virtual_index)
 		_is_redirecting_focus = true
 		card.grab_focus()
 		_is_redirecting_focus = false
-	else:
-		print("[VirtualScrollGridContainer] Focus escaped but last card ", _last_focused_virtual_index, " is no longer valid")
 
 func _input(event: InputEvent) -> void:
 	# Proactive edge navigation: when focus lock is active and the user presses
@@ -2011,7 +2038,7 @@ func _input(event: InputEvent) -> void:
 
 	# If the target is already visible, move focus directly to it instead of
 	# falling through to spatial navigation, which can leak focus out of the grid.
-	if target_idx >= _visible_start_idx and target_idx <= _visible_end_idx:
+	if target_idx >= _visible_start_idx and target_idx < _visible_end_idx:
 		var card = get_card_at_index(target_idx)
 		if card and is_instance_valid(card) and card.is_inside_tree():
 			card.grab_focus()
@@ -2165,6 +2192,9 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 
 func _refresh_buffer():
+	# Capture live focus state before recycling so we can restore it after rebuild.
+	var saved_focus_index: int = _get_focused_virtual_index()
+
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)
 
@@ -2173,6 +2203,9 @@ func _refresh_buffer():
 	_cache_lru_tick.clear()
 	_pending_loads.clear()
 	_active_cards_by_index.clear()
+	_pending_effect_rebuilds.clear()
+	_pending_effect_rebuild_set.clear()
+	_pending_effects_refresh_after_layout = false
 	_margin_container.add_theme_constant_override("margin_top", 0)
 	_margin_container.add_theme_constant_override("margin_bottom", 0)
 	_margin_container.add_theme_constant_override("margin_left", 0)
@@ -2191,6 +2224,11 @@ func _refresh_buffer():
 	_recalculate_layout()
 	if _active_cards.size() == 0:
 		_initial_load()
+
+	# Restore focus to the card that owned it before recycle. If focus moved
+	# elsewhere in the meantime, _restore_focus_after_layout will safely skip.
+	if saved_focus_index >= 0:
+		call_deferred("_restore_focus_after_layout", saved_focus_index)
 
 func get_target_scroll() -> float:
 	return _scroll_container.get_target_scroll() if _scroll_container else 0.0
@@ -2288,7 +2326,11 @@ func _apply_focus_to_card(card: Control) -> void:
 	_pending_focus_index = -1
 
 func _restore_focus_after_layout(index: int) -> void:
-	"""Restore focus to a card by virtual index after layout recalculation."""
+	"""Restore focus to a card by virtual index after layout recalculation.
+	Skips if focus already belongs to another control so we don't steal focus."""
+	var viewport := get_viewport()
+	if is_instance_valid(viewport) and viewport.gui_get_focus_owner() != null:
+		return
 	var card = get_card_at_index(index)
 	if card and is_instance_valid(card) and card.is_inside_tree():
 		card.grab_focus()
@@ -2585,17 +2627,99 @@ func refresh_if_visible(start_index: int, end_index: int):
 					card.update_display()
 
 func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
-	"""Refresh effects on all active cards (call when card settings change).
-	Pass force_full_rebuild=true when the effect ID list may have changed; otherwise
-	each card can push parameters to its existing effect nodes."""
-	print("[VirtualScrollGridContainer] refresh_all_card_effects force_full_rebuild=", force_full_rebuild, " active_cards=", _active_cards.size())
+	"""Refresh effects on active cards. Cards in the visible zone plus a small
+	buffer are rebuilt immediately; the rest are queued and drained over frames
+	to avoid stalling on large grids."""
+	# A new full-grid refresh supersedes any still-pending queue.
+	_pending_effect_rebuilds.clear()
+	_pending_effect_rebuild_set.clear()
+	_pending_effect_rebuild_force_full = force_full_rebuild
+
+	_get_visible_range()
+
+	var items_per_line = _get_items_per_line()
+	var eff = _get_normal_stride()
+	var stride_cards: int = items_per_line
+	if eff > 0:
+		var row_size: int = maxi(items_per_line, 1)
+		stride_cards = row_size * EFFECT_REBUILD_BUFFER_LINES
+
+	var sync_start: int = maxi(0, _visible_start_idx - stride_cards)
+	var sync_end: int = mini(_visible_end_idx + stride_cards, _total_items)
+
 	for card in _active_cards:
 		if not is_instance_valid(card):
+			continue
+		var idx = card.get_meta("virtual_index", -1)
+		var in_sync_zone = idx >= sync_start and idx < sync_end
+		if in_sync_zone:
+			if _card_has_refresh_effects:
+				card.refresh_effects(force_full_rebuild)
+			elif _card_has_refresh_settings:
+				card.refresh_settings()
+		else:
+			if not _pending_effect_rebuild_set.has(card):
+				_pending_effect_rebuilds.append(card)
+				_pending_effect_rebuild_set[card] = true
+
+func _drain_pending_effect_rebuilds() -> void:
+	if _pending_effect_rebuilds.is_empty():
+		return
+
+	var force_full_rebuild: bool = _pending_effect_rebuild_force_full
+	var processed: int = 0
+	while processed < EFFECT_REBUILD_CARDS_PER_FRAME and not _pending_effect_rebuilds.is_empty():
+		var card = _pending_effect_rebuilds[0]
+		_pending_effect_rebuilds.remove_at(0)
+		_pending_effect_rebuild_set.erase(card)
+		if not is_instance_valid(card):
+			continue
+		# Skip cards that are no longer active.
+		if not _active_cards.has(card):
 			continue
 		if _card_has_refresh_effects:
 			card.refresh_effects(force_full_rebuild)
 		elif _card_has_refresh_settings:
 			card.refresh_settings()
+		processed += 1
+
+func _flush_pending_effect_rebuilds_for_visible_zone() -> void:
+	if _pending_effect_rebuilds.is_empty():
+		return
+
+	_get_visible_range()
+
+	var items_per_line = _get_items_per_line()
+	var eff = _get_normal_stride()
+	var stride_cards: int = items_per_line
+	if eff > 0:
+		var row_size: int = maxi(items_per_line, 1)
+		stride_cards = row_size * EFFECT_REBUILD_BUFFER_LINES
+
+	var sync_start: int = maxi(0, _visible_start_idx - stride_cards)
+	var sync_end: int = mini(_visible_end_idx + stride_cards, _total_items)
+
+	var i: int = 0
+	while i < _pending_effect_rebuilds.size():
+		var card = _pending_effect_rebuilds[i]
+		if not is_instance_valid(card):
+			_pending_effect_rebuilds.remove_at(i)
+			_pending_effect_rebuild_set.erase(card)
+			continue
+		if not _active_cards.has(card):
+			_pending_effect_rebuilds.remove_at(i)
+			_pending_effect_rebuild_set.erase(card)
+			continue
+		var idx = card.get_meta("virtual_index", -1)
+		if idx >= sync_start and idx < sync_end:
+			_pending_effect_rebuilds.remove_at(i)
+			_pending_effect_rebuild_set.erase(card)
+			if _card_has_refresh_effects:
+				card.refresh_effects(_pending_effect_rebuild_force_full)
+			elif _card_has_refresh_settings:
+				card.refresh_settings()
+			continue
+		i += 1
 
 func refresh_all_card_configs() -> void:
 	"""Re-apply size flags, alignment, aspect ratio, and display mode to all active cards.

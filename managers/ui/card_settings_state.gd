@@ -201,9 +201,10 @@ func sync_from_settings_manager() -> int:
 	set_dark_mode(_get_bool_setting("dark_mode", true))
 	set_primary_color(_get_color_setting("library_primary_color", Color.WHITE))
 	set_focus_lock_enabled(_get_bool_setting("focus_lock_enabled", false))
+	var emitted_mask := pending_mask
 	end_batch()
 
-	return pending_mask if _batch_depth > 0 else ChangeMask.NONE
+	return emitted_mask
 
 func apply_setting(property_name: String, value: Variant) -> int:
 	match property_name:

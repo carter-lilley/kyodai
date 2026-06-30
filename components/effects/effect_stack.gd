@@ -101,16 +101,13 @@ func update_effect_configs(effect_configs: Array, force_full_rebuild: bool = tru
 				return
 	_rebuild_effects()
 
-func set_game_texture(texture: Texture2D):
+func set_game_texture(texture: Texture2D) -> void:
 	if media_container:
 		media_container.texture = texture
 	for effect_id in _effects:
 		var effect = _effects[effect_id]
-		if not effect:
-			continue
-		if effect.has_method("set_game_texture"):
-			effect.call_deferred("set_game_texture", texture)
-		effect.call_deferred("_update_shader_params")
+		if effect:
+			effect._mark_shader_params_dirty()
 
 func _rebuild_effects():
 	var active_effect_ids: Array[String] = []
