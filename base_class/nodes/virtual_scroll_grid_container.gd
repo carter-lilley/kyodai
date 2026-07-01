@@ -632,6 +632,9 @@ func _on_card_settings_state_changed(mask: int) -> void:
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
 		_refresh_cached_settings()
 		refresh_all_card_configs()
+		# Queue effect rebuilds for the whole grid so cards outside the visible
+		# buffer pick up new effects/geometry when they scroll back in.
+		refresh_all_card_effects(true)
 		_schedule_layout_recalc()
 
 	# Card effect configuration changed. Defer the effect refresh until after the
@@ -2659,6 +2662,8 @@ func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 		var idx = card.get_meta("virtual_index", -1)
 		var in_sync_zone = idx >= sync_start and idx < sync_end
 		if in_sync_zone:
+			if _card_has_update_media_panel_size:
+				card._update_media_panel_size(true)
 			if _card_has_refresh_effects:
 				card.refresh_effects(force_full_rebuild)
 			elif _card_has_refresh_settings:
@@ -2683,6 +2688,11 @@ func _drain_pending_effect_rebuilds() -> void:
 		# Skip cards that are no longer active.
 		if not _active_cards.has(card):
 			continue
+		# Make sure bounds and stack parenting are current before rebuilding;
+		# cards that were queued during a layout change can otherwise rebuild
+		# against stale/zero media bounds and stay blank.
+		if _card_has_update_media_panel_size:
+			card._update_media_panel_size(true)
 		if _card_has_refresh_effects:
 			card.refresh_effects(force_full_rebuild)
 		elif _card_has_refresh_settings:
@@ -2720,6 +2730,8 @@ func _flush_pending_effect_rebuilds_for_visible_zone() -> void:
 		if idx >= sync_start and idx < sync_end:
 			_pending_effect_rebuilds.remove_at(i)
 			_pending_effect_rebuild_set.erase(card)
+			if _card_has_update_media_panel_size:
+				card._update_media_panel_size(true)
 			if _card_has_refresh_effects:
 				card.refresh_effects(_pending_effect_rebuild_force_full)
 			elif _card_has_refresh_settings:

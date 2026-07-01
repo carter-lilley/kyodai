@@ -4,54 +4,29 @@ extends Button
 
 const EffectStack = preload("res://components/effects/effect_stack.gd")
 const EffectBase = preload("res://components/effects/effect_base.gd")
-
-## Material 3 Card Component
-## Extends native Button so the whole card is focusable and clickable.
-## Internal children use MOUSE_FILTER_IGNORE — only the card handles input.
+const RoundedMediaShader = preload("res://addons/m3/shaders/card/rounded_media.gdshader")
 
 enum Variant { ELEVATED, FILLED, OUTLINED }
 enum LayoutMode { VERTICAL, HORIZONTAL }
 enum ContentAlignment { START, CENTER, END }
 
-# ============================================
-# SIZE SPECS (all values in dp)
-# ============================================
-
 const PADDING := 16.0
-
-# Card corner rounding ratio: 0.0 = square, 1.0 = capsule (min(w,h)/2)
-var card_rounding_ratio: float = 0.12:
-	set(value):
-		var clamped = clampf(value, 0.0, 1.0)
-		if is_equal_approx(clamped, card_rounding_ratio):
-			return
-		card_rounding_ratio = clamped
-		if _ready_called:
-			queue_redraw()
-			_update_focus_ring_radius()
-
 const MEDIA_WIDTH_LIST := 256.0
-# M3 type-scale tiers keyed by minimum card-height (dp).
-# Headline uses medium weight; supporting uses regular weight.
 const _HEADLINE_SCALE := [
-	{ "threshold_dp": 280.0, "size": 22.0, "weight": "medium" },  # Title Large
-	{ "threshold_dp": 200.0, "size": 16.0, "weight": "medium" },  # Title Medium
-	{ "threshold_dp": 140.0, "size": 14.0, "weight": "medium" },  # Title Small
-	{ "threshold_dp":   0.0, "size": 12.0, "weight": "medium" },  # Label Medium
+	{ "threshold_dp": 280.0, "size": 22.0, "weight": "medium" },
+	{ "threshold_dp": 200.0, "size": 16.0, "weight": "medium" },
+	{ "threshold_dp": 140.0, "size": 14.0, "weight": "medium" },
+	{ "threshold_dp":   0.0, "size": 12.0, "weight": "medium" },
 ]
 const _SUPPORTING_SCALE := [
-	{ "threshold_dp": 200.0, "size": 14.0, "weight": "regular" }, # Body Medium
-	{ "threshold_dp": 140.0, "size": 12.0, "weight": "regular" }, # Body Small
-	{ "threshold_dp":   0.0, "size": 11.0, "weight": "medium" },  # Label Small
+	{ "threshold_dp": 200.0, "size": 14.0, "weight": "regular" },
+	{ "threshold_dp": 140.0, "size": 12.0, "weight": "regular" },
+	{ "threshold_dp":   0.0, "size": 11.0, "weight": "medium" },
 ]
 const ACTIONS_GAP := 8.0
 const LABEL_GAP := 4.0
 const MIN_HEIGHT_VERTICAL_DP := 240.0
 const MIN_HEIGHT_HORIZONTAL_DP := 80.0
-
-# ============================================
-# EXPORTS
-# ============================================
 
 @export var card_variant: Variant = Variant.ELEVATED:
 	set(value):
@@ -89,7 +64,6 @@ var media_aspect_ratio: float = -1.0:
 	set(value):
 		if is_equal_approx(media_aspect_ratio, value):
 			return
-		# Sentinel -1.0 = fill mode; any other value must be positive
 		if value != -1.0 and value <= 0.0:
 			push_warning("M3Card: media_aspect_ratio must be > 0 or -1.0 (fill). Got %f, ignoring." % value)
 			return
@@ -154,61 +128,22 @@ var show_text_margin: bool = true:
 			return
 		show_text_margin = value
 		if _ready_called:
-			if _text_margin:
-				_text_margin.visible = value
+			if _text_content:
+				_text_content.visible = value
+			if _text_row:
+				_text_row.visible = value
 			_update_media_panel_size(true)
 			queue_redraw()
 
-# ============================================
-# INTERNAL
-# ============================================
-
-var _root_container: Control
-var _media_panel: Control
-var _media_rect: TextureRect
-var _text_margin: MarginContainer
-var _text_content: VBoxContainer
-var _headline_label: Label
-var _supporting_label: Label
-var _actions_hbox: HBoxContainer
-var _focus_ring: Panel
-
-# Media container shared with effect stack
-var _media_container: MediaContainer
-
-var _cached_stylebox: StyleBoxFlat
-var _cached_fonts: Dictionary = {}
-var _action_labels: Array[String] = []
-
-# Deferred-call guard to prevent accumulation during rapid resize/zoom drags
-var _focus_ring_bounds_queued: bool = false
-var _ready_called: bool = false
-var _media_content: Control = null
-var _applied_headline_size_dp: float = -1.0
-var _applied_supporting_size_dp: float = -1.0
-
-# Computed media dimensions for focus-ring sizing in Transparent mode
-var _focus_target_w: float = 0.0
-var _focus_target_h: float = 0.0
-
-# Cache last-applied theme values to avoid redundant overrides
-var _applied_font_color: Color = Color(-1, -1, -1)
-var _applied_supporting_color: Color = Color(-1, -1, -1)
-var _applied_text_shadow_enabled: bool = false
-var _applied_margin_left: int = -1
-var _applied_margin_right: int = -1
-var _applied_margin_top: int = -1
-var _applied_margin_bottom: int = -1
-
-# Cache last-set media panel min sizes to prevent layout thrashing
-var _last_media_min_y: float = -1.0
-var _last_media_min_x: float = -1.0
-var _last_media_pos_x: float = -1.0
-var _last_media_pos_y: float = -1.0
-
-# ============================================
-# CONTENT SCALE (visual pop without affecting parent layout)
-# ============================================
+var card_rounding_ratio: float = 0.12:
+	set(value):
+		var clamped = clampf(value, 0.0, 1.0)
+		if is_equal_approx(clamped, card_rounding_ratio):
+			return
+		card_rounding_ratio = clamped
+		if _ready_called:
+			queue_redraw()
+			_update_focus_ring_bounds()
 
 var content_scale: Vector2 = Vector2.ONE:
 	set(value):
@@ -218,92 +153,76 @@ var content_scale: Vector2 = Vector2.ONE:
 		_apply_content_scale()
 		queue_redraw()
 
-func _update_focus_ring_radius() -> void:
-	if not _focus_ring:
-		return
-	var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
-	if not focus_sb:
-		return
-	# Use _focus_target_w/h which are set authoritatively by _update_media_panel_size.
-	# Don't use _media_panel.size here — it may be stale during the immediate call
-	# before Godot's layout system has finished resizing the panel.
-	var target_w = _focus_target_w if _focus_target_w > 0.0 else _focus_ring.size.x
-	var target_h = _focus_target_h if _focus_target_h > 0.0 else _focus_ring.size.y
-	var max_radius = min(target_w, target_h) / 2.0
-	var radius = card_rounding_ratio * max_radius
-	# The focus ring is scaled by content_scale in _apply_content_scale().
-	# StyleBoxFlat corner radius scales with the control, but the shader renders
-	# in unscaled local space. Compensate so screen-space radii match.
-	if not is_equal_approx(content_scale.x, 1.0):
-		radius = radius / content_scale.x
-	focus_sb.set_corner_radius_all(int(round(radius)))
+var _text_content: VBoxContainer
+var _text_row: HBoxContainer
+var _headline_label: Label
+var _supporting_label: Label
+var _actions_hbox: HBoxContainer
+var _media_content: Control = null
+
+var _media_container: MediaContainer
+
+var _cached_stylebox: StyleBoxFlat
+var _cached_fonts: Dictionary = {}
+var _action_labels: Array[String] = []
+
+var _focus_ring_bounds_queued: bool = false
+var _ready_called: bool = false
+
+var _focus_target_w: float = 0.0
+var _focus_target_h: float = 0.0
+
+var _media_bounds: Rect2 = Rect2()
+var _text_bounds: Rect2 = Rect2()
+
+var _media_canvas_item: RID = RID()
+var _focus_ring_canvas_item: RID = RID()
+var _focus_ring_style: StyleBoxFlat
+var _rounded_media_material: ShaderMaterial
+
+var _applied_headline_size_dp: float = -1.0
+var _applied_supporting_size_dp: float = -1.0
+var _applied_font_color: Color = Color(-1, -1, -1)
+var _applied_supporting_color: Color = Color(-1, -1, -1)
+var _applied_text_shadow_enabled: bool = false
+
+var _last_media_min_x: float = -1.0
+var _last_media_min_y: float = -1.0
+var _last_media_pos_x: float = -1.0
+var _last_media_pos_y: float = -1.0
 
 func _update_focus_ring_bounds() -> void:
 	_focus_ring_bounds_queued = false
-	if not _focus_ring or not _media_panel:
+	if not _focus_ring_canvas_item.is_valid():
 		return
-	# Use our computed targets (_focus_target_w/h are set authoritatively
-	# by _update_media_panel_size). Don't overwrite them with _media_panel.size
-	# which may be stale during immediate calls before layout settles.
 	var target_w := _focus_target_w
 	var target_h := _focus_target_h
 	if target_w <= 0.0:
 		target_w = size.x
 	if target_h <= 0.0:
 		target_h = size.y
+	var ring_rect: Rect2
 	if not show_background:
-		# Transparent / Media Only: focus ring only around the media area
-		# Account for content alignment — media panel may be centered or offset
-		var media_x := 0.0
-		var media_y := 0.0
-		var media_w := target_w
-		var media_h := target_h
-		if _media_panel:
-			media_x = _media_panel.position.x
-			media_y = _media_panel.position.y
-			# Use actual media panel size when available — _focus_target_w/h may
-			# be stale if the container allocated a different size than expected.
-			if _media_panel.size.x > 0.0:
-				media_w = _media_panel.size.x
-			if _media_panel.size.y > 0.0:
-				media_h = _media_panel.size.y
-		_focus_ring.offset_top = media_y
-		_focus_ring.offset_left = media_x
-		_focus_ring.offset_bottom = -(size.y - media_y - media_h)
-		_focus_ring.offset_right = -(size.x - media_x - media_w)
+		var media_w := _media_bounds.size.x if _media_bounds.size.x > 0.0 else target_w
+		var media_h := _media_bounds.size.y if _media_bounds.size.y > 0.0 else target_h
+		ring_rect = Rect2(_media_bounds.position, Vector2(media_w, media_h))
 	else:
-		# Standard: focus ring fills the card
-		_focus_ring.offset_top = 0.0
-		_focus_ring.offset_left = 0.0
-		_focus_ring.offset_bottom = 0.0
-		_focus_ring.offset_right = 0.0
-	_update_focus_ring_radius()
+		ring_rect = Rect2(Vector2.ZERO, size)
+	_update_focus_ring_radius(target_w, target_h)
+	RenderingServer.canvas_item_clear(_focus_ring_canvas_item)
+	_focus_ring_style.draw(_focus_ring_canvas_item, ring_rect)
+
+func _update_focus_ring_radius(target_w: float, target_h: float) -> void:
+	var max_radius: float = min(target_w, target_h) / 2.0
+	var radius: float = card_rounding_ratio * max_radius
+	_focus_ring_style.set_corner_radius_all(int(round(radius)))
 
 func _apply_content_scale() -> void:
-	if _root_container:
-		_root_container.scale = content_scale
-		_root_container.pivot_offset = _root_container.size / 2.0
-	if _focus_ring:
-		_focus_ring.scale = content_scale
-		# Scale the focus ring around the card's centre so it stays in sync
-		# with the content inside _root_container (which also pivots around
-		# the card centre). The focus ring's local origin is at (media_x,
-		# media_y) because of its FULL_RECT anchors + offsets, so we have to
-		# offset the pivot by that amount.
-		var media_x := 0.0
-		var media_y := 0.0
-		if _media_panel:
-			media_x = _media_panel.position.x
-			media_y = _media_panel.position.y
-		_focus_ring.pivot_offset = Vector2(size.x / 2.0 - media_x, size.y / 2.0 - media_y)
-		# In transparent/media-only mode the focus ring tracks the media panel,
-		# so refresh bounds after scaling to stay in sync.
-		if not show_background:
-			_update_focus_ring_bounds()
-
-# ============================================
-# LIFECYCLE
-# ============================================
+	offset_transform_visual_only = true
+	offset_transform_pivot_ratio = Vector2(0.5, 0.5)
+	offset_transform_position_ratio = Vector2.ZERO
+	offset_transform_scale = content_scale
+	offset_transform_enabled = not content_scale.is_equal_approx(Vector2.ONE)
 
 func _ready():
 	flat = true
@@ -314,19 +233,14 @@ func _ready():
 	
 	_cached_fonts = M3Theme.load_fonts()
 	_initialize_styleboxes()
+	_setup_rs_items()
 	_rebuild_layout()
 	_update_media()
 	_update_text()
 	_update_appearance()
 	
-	# Suppress native focus stylebox; we use a child panel instead
 	add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	
-	# Mouse / focus state tracking
-	# NOTE: mouse enter/exit redraws are handled by NOTIFICATION_MOUSE_ENTER/EXIT
-	# below, which is more comprehensive (also updates focus ring, media panel,
-	# text sizing, etc.). Do NOT connect mouse_entered/exited signals here or
-	# queue_redraw() will fire twice per event.
 	focus_entered.connect(_on_focus_changed)
 	focus_exited.connect(_on_focus_changed)
 	button_down.connect(queue_redraw)
@@ -334,6 +248,44 @@ func _ready():
 	
 	_apply_clickable_state()
 	_ready_called = true
+
+func _exit_tree():
+	_free_rs_items()
+
+func _free_rs_items() -> void:
+	if _media_canvas_item.is_valid():
+		RenderingServer.free_rid(_media_canvas_item)
+		_media_canvas_item = RID()
+	if _focus_ring_canvas_item.is_valid():
+		RenderingServer.free_rid(_focus_ring_canvas_item)
+		_focus_ring_canvas_item = RID()
+
+func _setup_rs_items() -> void:
+	_free_rs_items()
+	_media_canvas_item = RenderingServer.canvas_item_create()
+	RenderingServer.canvas_item_set_parent(_media_canvas_item, get_canvas_item())
+	RenderingServer.canvas_item_set_draw_index(_media_canvas_item, 1)
+	RenderingServer.canvas_item_set_visible(_media_canvas_item, false)
+	
+	_focus_ring_canvas_item = RenderingServer.canvas_item_create()
+	RenderingServer.canvas_item_set_parent(_focus_ring_canvas_item, get_canvas_item())
+	RenderingServer.canvas_item_set_draw_index(_focus_ring_canvas_item, 100)
+	RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, false)
+
+func _enter_tree():
+	if not _ready_called:
+		return
+	if not _media_canvas_item.is_valid() or not _focus_ring_canvas_item.is_valid():
+		_setup_rs_items()
+		_update_media()
+		_update_focus_ring_bounds()
+		_update_media_panel_size(true)
+	# Subclasses may need to rebuild node-less effect stacks after RS items are
+	# recreated (e.g. when a pooled card re-enters the tree).
+	_on_rs_items_recreated()
+
+func _on_rs_items_recreated() -> void:
+	pass
 
 func _apply_clickable_state():
 	if clickable:
@@ -353,104 +305,66 @@ func _initialize_styleboxes():
 	_cached_stylebox.anti_aliasing = true
 	_cached_stylebox.anti_aliasing_size = 1.0
 	_cached_stylebox.set_border_width_all(0)
+	
+	_focus_ring_style = StyleBoxFlat.new()
+	_focus_ring_style.bg_color = Color.TRANSPARENT
+	_focus_ring_style.border_color = M3Theme.get_primary()
+	_focus_ring_style.set_border_width_all(M3Units.dp(2))
+	_focus_ring_style.anti_aliasing = true
+	_focus_ring_style.anti_aliasing_size = 1.0
+	
+	_rounded_media_material = ShaderMaterial.new()
+	_rounded_media_material.shader = RoundedMediaShader
 
 func _rebuild_layout():
-	# Reset all applied-state trackers since the entire node tree is being recreated.
-	# Without this, guards in _update_text(), _update_appearance(), and
-	# _update_media_panel_size() will incorrectly skip applying values to new nodes.
 	_applied_headline_size_dp = -1.0
 	_applied_supporting_size_dp = -1.0
 	_applied_font_color = Color(-1, -1, -1)
 	_applied_supporting_color = Color(-1, -1, -1)
-	_applied_margin_left = -1
-	_applied_margin_right = -1
-	_applied_margin_top = -1
-	_applied_margin_bottom = -1
-	_last_media_min_y = -1.0
+	_applied_text_shadow_enabled = false
 	_last_media_min_x = -1.0
+	_last_media_min_y = -1.0
 	_last_media_pos_x = -1.0
 	_last_media_pos_y = -1.0
 	
-	# --- Preserve reusable children before destroying old tree ---
-	# Extract media content/rect so they survive root container destruction
 	var preserved_media_content: Control = null
-	var preserved_media_rect: TextureRect = null
-	if _media_panel and is_instance_valid(_media_panel):
-		for child in _media_panel.get_children():
-			if child == _media_content and is_instance_valid(child):
-				preserved_media_content = child
-				_media_panel.remove_child(child)
-			elif child == _media_rect and is_instance_valid(child):
-				preserved_media_rect = child
-				_media_panel.remove_child(child)
+	if _media_content and is_instance_valid(_media_content) and _media_content.get_parent() == self:
+		preserved_media_content = _media_content
+		remove_child(_media_content)
 	
-	# Extract labels so they can be reparented
 	var preserved_headline: Label = null
 	var preserved_supporting: Label = null
+	if _headline_label and is_instance_valid(_headline_label) and _headline_label.get_parent():
+		preserved_headline = _headline_label
+		_headline_label.get_parent().remove_child(_headline_label)
+	if _supporting_label and is_instance_valid(_supporting_label) and _supporting_label.get_parent():
+		preserved_supporting = _supporting_label
+		_supporting_label.get_parent().remove_child(_supporting_label)
+	
+	if _text_row and is_instance_valid(_text_row):
+		if _text_row.get_parent() == self:
+			remove_child(_text_row)
+		_text_row.queue_free()
+		_text_row = null
+		_text_content = null
+		_actions_hbox = null
+	
 	if _text_content and is_instance_valid(_text_content):
-		for child in _text_content.get_children():
-			if child == _headline_label and is_instance_valid(child):
-				preserved_headline = child
-				_text_content.remove_child(child)
-			elif child == _supporting_label and is_instance_valid(child):
-				preserved_supporting = child
-				_text_content.remove_child(child)
-	
-	# Remove old root container and focus ring from the tree immediately
-	# so the new nodes don't get auto-renamed by Godot.
-	if _root_container and is_instance_valid(_root_container):
-		if _root_container.get_parent() == self:
-			remove_child(_root_container)
-		_root_container.queue_free()
-	if _focus_ring and is_instance_valid(_focus_ring):
-		if _focus_ring.get_parent() == self:
-			remove_child(_focus_ring)
-		_focus_ring.queue_free()
-	
-	# Use a plain Control as root and manually position children.
-	# BoxContainer's asynchronous layout was causing race conditions during mode switches.
-	_root_container = Control.new()
-	_root_container.name = "RootContainer"
-	_root_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_root_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_root_container)
-	
-	# Media panel
-	_media_panel = Control.new()
-	_media_panel.name = "MediaPanel"
-	_media_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if _text_content.get_parent() == self:
+			remove_child(_text_content)
+		_text_content.queue_free()
+		_text_content = null
+		_actions_hbox = null
 	
 	if preserved_media_content:
-		_media_panel.add_child(preserved_media_content)
-	elif preserved_media_rect:
-		_media_panel.add_child(preserved_media_rect)
-	else:
-		_media_rect = TextureRect.new()
-		_media_rect.name = "MediaRect"
-		_media_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		_media_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		_media_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_media_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-		_media_rect.visible = false
-		_media_panel.add_child(_media_rect)
-	_root_container.add_child(_media_panel)
-	
-	# Text margin
-	_text_margin = MarginContainer.new()
-	_text_margin.name = "TextMargin"
-	_text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_text_margin.visible = show_text_margin
-	_root_container.add_child(_text_margin)
+		add_child(preserved_media_content)
 	
 	if card_layout_mode == LayoutMode.HORIZONTAL:
-		# Horizontal: text and actions in a row, vertically centered
-		var text_row = HBoxContainer.new()
-		text_row.name = "TextRow"
-		text_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		text_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		text_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		text_row.alignment = BoxContainer.ALIGNMENT_CENTER
-		_text_margin.add_child(text_row)
+		_text_row = HBoxContainer.new()
+		_text_row.name = "TextRow"
+		_text_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_text_row.visible = show_text_margin
+		add_child(_text_row)
 		
 		_text_content = VBoxContainer.new()
 		_text_content.name = "TextContent"
@@ -458,7 +372,7 @@ func _rebuild_layout():
 		_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_text_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_text_content.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		text_row.add_child(_text_content)
+		_text_row.add_child(_text_content)
 		
 		_actions_hbox = HBoxContainer.new()
 		_actions_hbox.name = "Actions"
@@ -466,14 +380,14 @@ func _rebuild_layout():
 		_actions_hbox.visible = false
 		_actions_hbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_actions_hbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		text_row.add_child(_actions_hbox)
+		_text_row.add_child(_actions_hbox)
 	else:
-		# Vertical: text stacked with actions below
 		_text_content = VBoxContainer.new()
 		_text_content.name = "TextContent"
 		_text_content.add_theme_constant_override("separation", M3Units.dp(LABEL_GAP))
 		_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_text_margin.add_child(_text_content)
+		_text_content.visible = show_text_margin
+		add_child(_text_content)
 		
 		_actions_hbox = HBoxContainer.new()
 		_actions_hbox.name = "Actions"
@@ -505,54 +419,20 @@ func _rebuild_layout():
 		_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_content.add_child(_supporting_label)
 	
-	# Focus ring panel (draws on top of everything)
-	_focus_ring = Panel.new()
-	_focus_ring.name = "FocusRing"
-	_focus_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_focus_ring.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_focus_ring.visible = false
-	_focus_ring.z_index = 10
-	var focus_sb = StyleBoxFlat.new()
-	focus_sb.bg_color = Color.TRANSPARENT
-	focus_sb.border_color = M3Theme.get_primary()
-	focus_sb.set_border_width_all(M3Units.dp(2))
-	focus_sb.anti_aliasing = true
-	focus_sb.anti_aliasing_size = 1.0
-	_focus_ring.add_theme_stylebox_override("panel", focus_sb)
-	_update_focus_ring_radius()
-	add_child(_focus_ring)
-	
 	_rebuild_actions()
 	_apply_content_scale()
-	# _update_media_panel_size() needs the card's final size, which isn't
-	# available until FlowContainer finishes its layout pass. Defer the call
-	# so it runs after the card has been properly sized.
 	call_deferred("_update_media_panel_size", true)
-
-# ============================================
-# DRAW
-# ============================================
 
 func _draw():
 	if not _cached_stylebox:
 		return
-	
 	var rect = Rect2(Vector2.ZERO, size)
 	var max_radius = min(size.x, size.y) / 2.0
 	var radius = int(round(card_rounding_ratio * max_radius))
-	
 	_configure_stylebox_for_state()
 	_cached_stylebox.set_corner_radius_all(radius)
-	
-	# Draw card background — scale from center to match content_scale
 	if show_background:
-		if content_scale.is_equal_approx(Vector2.ONE):
-			draw_style_box(_cached_stylebox, rect)
-		else:
-			var center = size / 2.0
-			draw_set_transform(center, 0.0, content_scale)
-			draw_style_box(_cached_stylebox, Rect2(-size / 2.0, size))
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		draw_style_box(_cached_stylebox, rect)
 
 func _configure_stylebox_for_state():
 	var bg: Color
@@ -589,21 +469,54 @@ func _configure_stylebox_for_state():
 	_cached_stylebox.shadow_offset = shadow_off
 	_cached_stylebox.shadow_color = shadow_col
 
-# ============================================
-# UPDATES
-# ============================================
+func _has_media_content() -> bool:
+	return _media_content != null or media_texture != null
 
 func _update_media():
+	var has_media := _has_media_content()
+	if _media_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_media_canvas_item, has_media)
 	if _media_content and is_instance_valid(_media_content):
-		if _media_panel:
-			_media_panel.visible = true
+		_media_content.visible = has_media
+	if not has_media or _media_content != null or media_texture == null:
+		if _media_canvas_item.is_valid():
+			RenderingServer.canvas_item_clear(_media_canvas_item)
 		return
-	if not _media_rect:
+	_draw_default_media()
+
+func _draw_default_media():
+	if not _media_canvas_item.is_valid() or not media_texture:
 		return
-	_media_rect.texture = media_texture
-	_media_rect.visible = media_texture != null
-	if _media_panel:
-		_media_panel.visible = media_texture != null
+	var media_size := _media_bounds.size
+	if media_size.x <= 0.0 or media_size.y <= 0.0:
+		return
+	var rect := Rect2(Vector2.ZERO, media_size)
+	var radius := int(round(card_rounding_ratio * min(media_size.x, media_size.y) / 2.0))
+	var tex_size := Vector2(media_texture.get_width(), media_texture.get_height())
+	var uv := _compute_cover_uv(media_size, tex_size)
+	_rounded_media_material.set_shader_parameter("game_texture", media_texture)
+	_rounded_media_material.set_shader_parameter("card_size", media_size)
+	_rounded_media_material.set_shader_parameter("corner_radius_pixels", float(radius))
+	_rounded_media_material.set_shader_parameter("uv_transform_scale", uv.scale)
+	_rounded_media_material.set_shader_parameter("uv_transform_offset", uv.offset)
+	_rounded_media_material.set_shader_parameter("alpha", 1.0)
+	RenderingServer.canvas_item_set_material(_media_canvas_item, _rounded_media_material.get_rid())
+	RenderingServer.canvas_item_clear(_media_canvas_item)
+	RenderingServer.canvas_item_add_rect(_media_canvas_item, rect, Color.WHITE)
+
+func _compute_cover_uv(target_size: Vector2, tex_size: Vector2) -> Dictionary:
+	var scale := Vector2.ONE
+	var offset := Vector2.ZERO
+	if target_size.x <= 0.0 or target_size.y <= 0.0 or tex_size.x <= 0.0 or tex_size.y <= 0.0:
+		return { "scale": scale, "offset": offset }
+	var card_aspect := target_size.x / target_size.y
+	var tex_aspect := tex_size.x / tex_size.y
+	if card_aspect > tex_aspect:
+		scale.y = tex_aspect / card_aspect
+	else:
+		scale.x = card_aspect / tex_aspect
+	offset = (Vector2.ONE - scale) * 0.5
+	return { "scale": scale, "offset": offset }
 
 static func _pick_headline_spec(height_dp: float) -> Dictionary:
 	for spec in _HEADLINE_SCALE:
@@ -618,21 +531,13 @@ static func _pick_supporting_spec(height_dp: float) -> Dictionary:
 	return _SUPPORTING_SCALE[-1]
 
 static func get_min_text_height_dp(card_height_dp: float) -> float:
-	"""Return the minimum height the text area needs for this card height in dp.
-	
-	Matches the padding, margins, and font thresholds used in _rebuild_layout
-	and _update_text."""
 	const PAD := 16.0
 	const HALF_PAD := 8.0
 	const LABEL_GAP := 4.0
-	
 	var headline_spec = _pick_headline_spec(card_height_dp)
 	var headline_h = headline_spec.size
-	
-	# Supporting text is hidden when card is shorter than 100 dp
 	if card_height_dp < 100.0:
 		return HALF_PAD + headline_h + PAD
-	
 	var supporting_spec = _pick_supporting_spec(card_height_dp)
 	var supporting_h = supporting_spec.size
 	return HALF_PAD + headline_h + LABEL_GAP + supporting_h + PAD
@@ -650,7 +555,6 @@ func _get_horizontal_alignment() -> HorizontalAlignment:
 func _update_text():
 	if not _headline_label or not _supporting_label:
 		return
-	
 	var height_dp = size.y / M3Units.get_scale()
 	if _cached_fonts.is_empty():
 		_cached_fonts = M3Theme.load_fonts()
@@ -669,7 +573,6 @@ func _update_text():
 		_applied_font_color = font_color
 		_headline_label.add_theme_color_override("font_color", font_color)
 	
-	# Apply content alignment to labels
 	var h_align = _get_horizontal_alignment()
 	if _headline_label.horizontal_alignment != h_align:
 		_headline_label.horizontal_alignment = h_align
@@ -688,7 +591,6 @@ func _update_text():
 	if _supporting_label.horizontal_alignment != h_align:
 		_supporting_label.horizontal_alignment = h_align
 	
-	# Text shadow in transparent mode for readability (headline only)
 	var needs_shadow = not show_background
 	if needs_shadow and not _applied_text_shadow_enabled:
 		_applied_text_shadow_enabled = true
@@ -696,7 +598,6 @@ func _update_text():
 		var shadow_offset_x = M3Units.dp(1.5)
 		var shadow_offset_y = M3Units.dp(2.5)
 		var shadow_outline = M3Units.dp(5.0)
-		# Apply shadow to headline only, remove from supporting text
 		_headline_label.add_theme_color_override("font_shadow_color", shadow_color)
 		_headline_label.add_theme_constant_override("shadow_offset_x", shadow_offset_x)
 		_headline_label.add_theme_constant_override("shadow_offset_y", shadow_offset_y)
@@ -714,35 +615,9 @@ func _update_text():
 			label.remove_theme_constant_override("shadow_outline_size")
 
 func _update_appearance():
-	if not _text_margin:
-		return
-	
-	var pad = M3Units.dp(PADDING)
-	var half_pad = M3Units.dp(PADDING / 2.0)
-	
-	# Padding inside the text area
-	var margin_left = int(pad)
-	var margin_right = int(pad)
-	var margin_top = int(half_pad)
-	var margin_bottom = int(pad)
-	if margin_left != _applied_margin_left:
-		_applied_margin_left = margin_left
-		_text_margin.add_theme_constant_override("margin_left", margin_left)
-	if margin_right != _applied_margin_right:
-		_applied_margin_right = margin_right
-		_text_margin.add_theme_constant_override("margin_right", margin_right)
-	if margin_top != _applied_margin_top:
-		_applied_margin_top = margin_top
-		_text_margin.add_theme_constant_override("margin_top", margin_top)
-	if margin_bottom != _applied_margin_bottom:
-		_applied_margin_bottom = margin_bottom
-		_text_margin.add_theme_constant_override("margin_bottom", margin_bottom)
-	
-	# Set minimum card height based on layout mode (only if caller hasn't set one)
 	var default_min_height = MIN_HEIGHT_VERTICAL_DP if card_layout_mode == LayoutMode.VERTICAL else MIN_HEIGHT_HORIZONTAL_DP
 	if custom_minimum_size.y <= 0:
 		custom_minimum_size.y = M3Units.dp(default_min_height)
-	
 	queue_redraw()
 
 func _rebuild_actions():
@@ -762,10 +637,6 @@ func _rebuild_actions():
 	
 	_actions_hbox.visible = not _action_labels.is_empty()
 
-# ============================================
-# PUBLIC API
-# ============================================
-
 func add_action(label: String):
 	_action_labels.append(label)
 	if _ready_called:
@@ -777,53 +648,33 @@ func clear_actions():
 		_rebuild_actions()
 
 func set_media_content(content: Control):
-	# Remove existing custom content
-	if _media_content and is_instance_valid(_media_content) and _media_content.get_parent() == _media_panel:
-		_media_panel.remove_child(_media_content)
-
+	if _media_content and is_instance_valid(_media_content) and _media_content.get_parent() == self:
+		remove_child(_media_content)
+		if _media_content != content:
+			_media_content.queue_free()
+	
 	_media_content = content
-
-	# Remove default media rect if it exists
-	if _media_rect and is_instance_valid(_media_rect) and _media_rect.get_parent() == _media_panel:
-		_media_rect.queue_free()
-		_media_rect = null
-
+	
 	if _media_content:
-		_media_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+		add_child(_media_content)
+		_media_content.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		_media_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		if _media_panel:
-			_media_panel.add_child(_media_content)
-			_media_panel.visible = true
-		# If it's the node-less EffectStack, pass our media container
-		if _media_content.has_method("set_parent_rid") and _media_container:
-			var stack = _media_content
-			stack.media_container = _media_container
+		if _media_content.has_method("set_parent_rid") and _media_canvas_item.is_valid():
+			_media_content.set_parent_rid(_media_canvas_item)
+		if _media_content.has_method("set_media_container") and _media_container:
+			_media_content.set_media_container(_media_container)
+		elif _media_container:
+			_media_content.set("media_container", _media_container)
+		_update_media_panel_size(true)
 	else:
-		# Restore default media rect
-		if _media_panel and not _media_rect:
-			_media_rect = TextureRect.new()
-			_media_rect.name = "MediaRect"
-			_media_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			_media_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-			_media_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			_media_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-			_media_rect.visible = false
-			_media_panel.add_child(_media_rect)
-			_update_media()
+		_update_media()
 
 func refresh_theme():
 	_cached_fonts = M3Theme.load_fonts()
 	_update_text()
-	# Update focus ring color to match new primary accent
-	if _focus_ring:
-		var focus_sb = _focus_ring.get_theme_stylebox("panel") as StyleBoxFlat
-		if focus_sb:
-			focus_sb.border_color = M3Theme.get_primary()
+	if _focus_ring_style:
+		_focus_ring_style.border_color = M3Theme.get_primary()
 	queue_redraw()
-
-# ============================================
-# INPUT / STATE
-# ============================================
 
 var _hovered: bool = false
 var _is_pressing: bool = false
@@ -831,16 +682,10 @@ var _is_pressing: bool = false
 func _notification(what: int):
 	match what:
 		NOTIFICATION_RESIZED:
-			# The FlowContainer (or any parent) has set our final size.
-			# Recompute media panel and text now that size is authoritative.
-			# This is essential because _rebuild_layout() runs before the
-			# parent has laid us out, so _update_media_panel_size() sees
-			# stale dimensions at that moment.
 			if not is_node_ready() or size.x <= 0 or size.y <= 0:
 				return
-			_update_focus_ring_radius()
 			queue_redraw()
-			_update_media_panel_size(true)  # Force update with actual size
+			_update_media_panel_size(true)
 			_update_text()
 			_apply_content_scale()
 		NOTIFICATION_MOUSE_ENTER:
@@ -852,6 +697,9 @@ func _notification(what: int):
 				_hovered = false
 				_is_pressing = false
 				queue_redraw()
+		NOTIFICATION_PREDELETE:
+			_free_rs_items()
+
 func _gui_input(event: InputEvent):
 	if not clickable:
 		return
@@ -859,8 +707,6 @@ func _gui_input(event: InputEvent):
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			_is_pressing = event.pressed
 			queue_redraw()
-			# Inside a SubViewport, Button ignores clicks because is_hovered() is false.
-			# Manually trigger press/release signals.
 			var vp = get_viewport()
 			if vp is SubViewport:
 				accept_event()
@@ -872,12 +718,9 @@ func _gui_input(event: InputEvent):
 					pressed.emit()
 
 func _update_media_panel_size(force: bool = false) -> void:
-	if not _media_panel or not _text_margin:
+	if not _text_content:
 		return
 	
-	# Use custom_minimum_size (set authoritatively by the grid) instead of size.
-	# During mode switches, size still carries the old dimensions until FlowContainer
-	# finishes its layout pass, which leads to media being sized for the wrong card.
 	var card_w := custom_minimum_size.x
 	var card_h := custom_minimum_size.y
 	if card_w <= 0.0:
@@ -885,155 +728,148 @@ func _update_media_panel_size(force: bool = false) -> void:
 	if card_h <= 0.0:
 		card_h = size.y
 	
-	# Safety clamp: card must have reasonable dimensions
 	card_w = maxf(card_w, M3Units.dp(40.0))
 	card_h = maxf(card_h, M3Units.dp(40.0))
 	
-	var media_w: float
-	var media_h: float
-	var text_w: float
-	var text_h: float
-	var media_x: float
-	var media_y: float
-	var text_x: float
-	var text_y: float
+	var media_w: float = 0.0
+	var media_h: float = 0.0
+	var text_w: float = card_w
+	var text_h: float = card_h
+	var media_x: float = 0.0
+	var media_y: float = 0.0
+	var text_x: float = 0.0
+	var text_y: float = 0.0
 	
-	if card_layout_mode == LayoutMode.VERTICAL:
-		# VERTICAL: media on top, text below (or vice versa for END)
-		text_w = card_w
-		media_w = card_w
-		
-		if media_aspect_ratio > 0.0:
-			var desired_h = card_w / media_aspect_ratio
-			var max_h = card_h
-			if show_text_margin:
-				var min_text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
-				max_h = card_h - min_text_h
-			media_h = clampf(desired_h, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_h))
-			# Maintain aspect ratio
-			if desired_h > max_h and max_h > 0:
-				media_w = max_h * media_aspect_ratio
-		else:
-			var min_text_h := 0.0
-			if show_text_margin:
-				min_text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
-			media_h = maxf(M3Units.dp(40.0), card_h - min_text_h)
-			if not show_text_margin:
-				media_h = card_h
-		
-		media_h = minf(media_h, card_h)
-		text_h = card_h - media_h
-		
-		# Position based on alignment
-		if content_alignment == ContentAlignment.END:
-			# Text at top, media at bottom
-			text_y = 0
-			media_y = text_h
-		elif content_alignment == ContentAlignment.CENTER:
-			if show_text_margin:
-				# Fixed text height = minimum needed (including margins)
-				text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
-				var total_h = media_h + text_h
-				var start_y = (card_h - total_h) / 2.0
-				media_y = start_y
-				text_y = start_y + media_h
+	if _has_media_content():
+		if card_layout_mode == LayoutMode.VERTICAL:
+			text_w = card_w
+			media_w = card_w
+			
+			if media_aspect_ratio > 0.0:
+				var desired_h = card_w / media_aspect_ratio
+				var max_h = card_h
+				if show_text_margin:
+					var min_text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
+					max_h = card_h - min_text_h
+				media_h = clampf(desired_h, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_h))
+				if desired_h > max_h and max_h > 0:
+					media_w = max_h * media_aspect_ratio
 			else:
-				# Media Only: center media alone
-				text_h = 0
-				media_y = (card_h - media_h) / 2.0
+				var min_text_h := 0.0
+				if show_text_margin:
+					min_text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
+				media_h = maxf(M3Units.dp(40.0), card_h - min_text_h)
+				if not show_text_margin:
+					media_h = card_h
+			
+			media_h = minf(media_h, card_h)
+			text_h = card_h - media_h
+			
+			if content_alignment == ContentAlignment.END:
 				text_y = 0
-		else:
-			# Media at top, text at bottom (START)
-			media_y = 0
-			text_y = media_h
-		
-		media_x = (card_w - media_w) / 2.0  # Center horizontally
-		text_x = 0
-		
-	elif card_layout_mode == LayoutMode.HORIZONTAL:
-		# HORIZONTAL: media on one side, text on the other
-		media_h = card_h
-		text_h = card_h
-		
-		if media_aspect_ratio > 0.0:
-			var desired_w = card_h * media_aspect_ratio
-			var max_w = card_w
-			if show_text_margin:
-				max_w = card_w - M3Units.dp(80.0)
-			media_w = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
-			# Maintain aspect ratio
-			if desired_w > max_w and max_w > 0:
-				media_h = max_w / media_aspect_ratio
-		else:
-			media_w = M3Units.dp(MEDIA_WIDTH_LIST)
-			if show_text_margin:
-				media_w = minf(media_w, card_w - M3Units.dp(80.0))
-			media_w = maxf(media_w, M3Units.dp(40.0))
-			if not show_text_margin:
-				media_w = card_w
-		
-		media_w = minf(media_w, card_w)
-		media_h = minf(media_h, card_h)
-		
-		# Position based on alignment
-		if content_alignment == ContentAlignment.END:
-			# Text at left, media at right
-			text_w = card_w - media_w
-			text_x = 0
-			media_x = text_w
-		elif content_alignment == ContentAlignment.CENTER:
-			if show_text_margin:
-				# Fixed text content width (160dp), plus margin container padding
-				var text_content_w = M3Units.dp(160.0)
-				var margin_pad = M3Units.dp(PADDING)
-				text_w = text_content_w + margin_pad * 2.0
-				var total_w = media_w + text_w
-				var start_x = (card_w - total_w) / 2.0
-				media_x = start_x
-				text_x = start_x + media_w
+				media_y = text_h
+			elif content_alignment == ContentAlignment.CENTER:
+				if show_text_margin:
+					text_h = M3Units.dp(get_min_text_height_dp(card_h / M3Units.get_scale()))
+					var total_h = media_h + text_h
+					var start_y = (card_h - total_h) / 2.0
+					media_y = start_y
+					text_y = start_y + media_h
+				else:
+					text_h = 0
+					media_y = (card_h - media_h) / 2.0
+					text_y = 0
 			else:
-				# Media Only: center media alone
-				text_w = 0
-				media_x = (card_w - media_w) / 2.0
+				media_y = 0
+				text_y = media_h
+			
+			media_x = (card_w - media_w) / 2.0
+			text_x = 0
+			
+		elif card_layout_mode == LayoutMode.HORIZONTAL:
+			media_h = card_h
+			text_h = card_h
+			
+			if media_aspect_ratio > 0.0:
+				var desired_w = card_h * media_aspect_ratio
+				var max_w = card_w
+				if show_text_margin:
+					max_w = card_w - M3Units.dp(80.0)
+				media_w = clampf(desired_w, M3Units.dp(40.0), maxf(M3Units.dp(40.0), max_w))
+				if desired_w > max_w and max_w > 0:
+					media_h = max_w / media_aspect_ratio
+			else:
+				media_w = M3Units.dp(MEDIA_WIDTH_LIST)
+				if show_text_margin:
+					media_w = minf(media_w, card_w - M3Units.dp(80.0))
+				media_w = maxf(media_w, M3Units.dp(40.0))
+				if not show_text_margin:
+					media_w = card_w
+			
+			media_w = minf(media_w, card_w)
+			media_h = minf(media_h, card_h)
+			
+			if content_alignment == ContentAlignment.END:
+				text_w = card_w - media_w
 				text_x = 0
-		else:
-			# Media at left, text at right (START)
-			text_w = card_w - media_w
-			media_x = 0
-			text_x = media_w
-		
-		media_y = (card_h - media_h) / 2.0  # Center vertically
-		text_y = 0
+				media_x = text_w
+			elif content_alignment == ContentAlignment.CENTER:
+				if show_text_margin:
+					var text_content_w = M3Units.dp(160.0)
+					var margin_pad = M3Units.dp(PADDING)
+					text_w = text_content_w + margin_pad * 2.0
+					var total_w = media_w + text_w
+					var start_x = (card_w - total_w) / 2.0
+					media_x = start_x
+					text_x = start_x + media_w
+				else:
+					text_w = 0
+					media_x = (card_w - media_w) / 2.0
+					text_x = 0
+			else:
+				text_w = card_w - media_w
+				media_x = 0
+				text_x = media_w
+			
+			media_y = (card_h - media_h) / 2.0
+			text_y = 0
 	
-	# Apply computed sizes and positions directly.
-	# Using a plain Control root means we have full control — no container sorting races.
-	if force or not is_equal_approx(media_w, _last_media_min_x) or not is_equal_approx(media_h, _last_media_min_y) or not is_equal_approx(media_x, _last_media_pos_x) or not is_equal_approx(media_y, _last_media_pos_y):
-		_last_media_min_x = media_w
-		_last_media_min_y = media_h
-		_last_media_pos_x = media_x
-		_last_media_pos_y = media_y
-		_media_panel.position = Vector2(media_x, media_y)
-		_media_panel.size = Vector2(media_w, media_h)
+	_media_bounds = Rect2(media_x, media_y, media_w, media_h)
+	_text_bounds = Rect2(text_x, text_y, text_w, text_h)
 	
-	_text_margin.position = Vector2(text_x, text_y)
-	_text_margin.size = Vector2(text_w, text_h)
+	if _media_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_transform(_media_canvas_item, Transform2D().translated(_media_bounds.position))
+	
+	var pad = M3Units.dp(PADDING)
+	var half_pad = M3Units.dp(PADDING / 2.0)
+	if card_layout_mode == LayoutMode.HORIZONTAL:
+		if _text_row:
+			_text_row.position = Vector2(text_x + pad, text_y + half_pad)
+			_text_row.size = Vector2(text_w - pad * 2.0, text_h - half_pad - pad)
+			_text_row.visible = show_text_margin
+	else:
+		if _text_content:
+			_text_content.position = Vector2(text_x + pad, text_y + half_pad)
+			_text_content.size = Vector2(text_w - pad * 2.0, text_h - half_pad - pad)
+			_text_content.visible = show_text_margin
+	
+	if _media_content and is_instance_valid(_media_content):
+		_media_content.position = _media_bounds.position
+		_media_content.size = _media_bounds.size
+		if _media_content.has_method("set_parent_rid") and _media_canvas_item.is_valid():
+			_media_content.set_parent_rid(_media_canvas_item)
 	
 	_focus_target_w = media_w
 	_focus_target_h = media_h
 	
-	# Update media container with authoritative bounds
 	if _media_container:
-		_media_container.bounds = Rect2(media_x, media_y, media_w, media_h)
+		_media_container.bounds = Rect2(Vector2.ZERO, _media_bounds.size)
 		_media_container.corner_radius_ratio = card_rounding_ratio
-		# Force an explicit refresh on all effects — the changed signal can be
-		# missed when _is_tweening is stuck or when Godot defers layout.
 		_refresh_media_effects()
 	
-	# Update text minimum sizes for consistent CENTER mode
 	_update_text_content_sizes()
-	
+	_update_media()
 	_update_focus_ring_bounds()
-	# Guard prevents accumulation during rapid resize/zoom drags.
 	if not _focus_ring_bounds_queued:
 		_focus_ring_bounds_queued = true
 		call_deferred("_update_focus_ring_bounds")
@@ -1041,12 +877,10 @@ func _update_media_panel_size(force: bool = false) -> void:
 func _refresh_media_effects() -> void:
 	if not _media_content:
 		return
-	# If the media content is the node-less EffectStack, refresh directly.
 	if _media_content.has_method("force_refresh"):
 		var stack = _media_content
 		stack.force_refresh()
 		return
-	# Legacy fallback for any remaining node-based effect stacks.
 	var stack := []
 	stack.append(_media_content)
 	while stack.size() > 0:
@@ -1061,28 +895,23 @@ func _refresh_media_effects() -> void:
 func _update_text_content_sizes() -> void:
 	if not _text_content or not _ready_called:
 		return
-	
-	# Clear previous minimums first
 	if _text_content.custom_minimum_size.x != 0:
 		_text_content.custom_minimum_size.x = 0
 	if _text_content.custom_minimum_size.y != 0:
 		_text_content.custom_minimum_size.y = 0
 	
 	if card_layout_mode == LayoutMode.HORIZONTAL:
-		# Horizontal mode: text needs a minimum width to be readable
 		if content_alignment != ContentAlignment.CENTER:
-			# START/END: set minimum so text is readable
 			var min_text_w = M3Units.dp(80.0)
 			if not is_equal_approx(_text_content.custom_minimum_size.x, min_text_w):
 				_text_content.custom_minimum_size.x = min_text_w
-		# CENTER: text width is fixed by _text_margin.size, let labels fill and truncate
 	else:
-		# Vertical mode: text needs a minimum height for fonts
 		var min_text_h = M3Units.dp(get_min_text_height_dp(size.y / M3Units.get_scale()))
 		if not is_equal_approx(_text_content.custom_minimum_size.y, min_text_h):
 			_text_content.custom_minimum_size.y = min_text_h
 
 func _on_focus_changed():
-	if _focus_ring:
-		_focus_ring.visible = has_focus() and not disabled
+	if _focus_ring_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, has_focus() and not disabled)
 	queue_redraw()
+

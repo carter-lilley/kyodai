@@ -113,6 +113,27 @@ var _touch_start_time: float = 0.0
 var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
 
+func _enter_tree():
+	super._enter_tree()
+	if not _ready_called:
+		return
+	# When a pooled card re-enters the tree its RS items are recreated, but the
+	# node-less media stack was freed in _exit_tree. Rebuild it here if needed so
+	# the card doesn't stay blank until a later deferred refresh.
+	if not _media_stack:
+		_build_media_stack()
+	if _media_stack and _media_canvas_item.is_valid():
+		_media_stack.set_parent_rid(_media_canvas_item)
+	if _focus_stack:
+		_focus_stack.set_parent_rid(get_canvas_item())
+		_update_effect_transforms()
+	if _status_badge_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, get_canvas_item())
+	else:
+		_setup_status_badge()
+	_update_status_icon()
+	_update_media()
+
 func _ready():
 	super._ready()
 
@@ -142,6 +163,9 @@ func _ready():
 
 	_setup_status_badge()
 
+func _has_media_content() -> bool:
+	return _media_stack != null
+
 func _exit_tree():
 	# Cancel any in-flight image operations to prevent callbacks from keeping this card alive
 	if _media_loader:
@@ -158,6 +182,7 @@ func _exit_tree():
 		_focus_stack = null
 
 	_free_status_badge_canvas_item()
+	super._exit_tree()
 
 func _free_status_badge_canvas_item() -> void:
 	if _status_badge_canvas_item.is_valid():
@@ -228,12 +253,10 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	if _media_stack:
 		# Hot-reload: update configs in-place instead of rebuilding
 		_media_stack.update_effect_configs(effect_settings, force_full_rebuild)
-		# The media panel may have been recreated by a layout change (e.g. card
-		# orientation/alignment), so always re-parent the existing stack canvas
-		# item to the current panel to avoid rendering into a freed RID.
-		if _media_panel:
-			_media_stack.set_parent_rid(_media_panel.get_canvas_item())
-			_media_panel.visible = true
+		# The media canvas item may have been recreated by a layout change, so
+		# always re-parent the existing stack canvas item to the current item.
+		if _media_canvas_item.is_valid():
+			_media_stack.set_parent_rid(_media_canvas_item)
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.update_draw_rects()
@@ -242,14 +265,14 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		_media_stack.initialize(_media_container, effect_settings, "base_card")
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
-		if _media_panel:
-			_media_stack.set_parent_rid(_media_panel.get_canvas_item())
+		if _media_canvas_item.is_valid():
+			_media_stack.set_parent_rid(_media_canvas_item)
 		# The base card shader handles rounded corners; don't clip on the
 		# node-less stack (it has no geometry of its own to clip against).
 		_media_stack.set_clip_children(false)
 		_media_stack.update_draw_rects()
-		if _media_panel:
-			_media_panel.visible = true
+
+	_update_media()
 
 	# Focus stack is built lazily when this card becomes focused (or in preview mode),
 	# but pre-building it for all cards when focus effects are configured avoids
@@ -569,6 +592,7 @@ func refresh_settings() -> void:
 	# Sync focus state first so _build_media_stack sees the correct _is_focused
 	# and builds the focus stack for focused cards.
 	_sync_focus_state_from_viewport()
+	_ensure_media_stack_parent()
 	_build_media_stack()
 	_update_status_icon()
 	_update_platform_badge()
@@ -587,6 +611,7 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	# Sync focus state first so _build_media_stack sees the correct _is_focused
 	# and builds the focus stack for focused cards.
 	_sync_focus_state_from_viewport()
+	_ensure_media_stack_parent()
 	_build_media_stack(force_full_rebuild)
 	_update_status_icon()
 	_update_platform_badge()
@@ -598,6 +623,10 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	# cover load as a safety net so cards don't stay blank after a rebuild.
 	if game and (not _current_texture or _current_texture_game_id != game.id):
 		_load_cover(false)
+
+func _ensure_media_stack_parent() -> void:
+	if _media_stack and _media_canvas_item.is_valid():
+		_media_stack.set_parent_rid(_media_canvas_item)
 
 func _update_card_text() -> void:
 	if game:
@@ -642,8 +671,8 @@ func reset(for_pooling: bool = false) -> void:
 				if effect is EffectBase and effect._material is ShaderMaterial:
 					effect._material.set_shader_parameter("effect_alpha", 0.0)
 		# Ensure the inherited M3Card focus ring is never carried into reuse.
-		if _focus_ring:
-			_focus_ring.visible = false
+		if _focus_ring_canvas_item.is_valid():
+			RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, false)
 	else:
 		_current_texture = null
 		_current_texture_game_id = ""
@@ -875,12 +904,15 @@ func _set_texture(tex: Texture2D) -> void:
 	_current_texture = tex
 	if game:
 		_current_texture_game_id = game.id
-	if _media_panel:
-		_media_panel.visible = true
+	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
+	# rebuild it now so the texture actually has somewhere to render.
+	if not _media_stack:
+		_build_media_stack()
 	if _media_stack:
 		_media_stack.set_game_texture(tex)
 	if _focus_stack:
 		_focus_stack.set_game_texture(tex)
+	_update_media()
 
 func _on_card_pressed():
 	if not game:
@@ -1017,29 +1049,18 @@ func _apply_content_scale() -> void:
 	_update_effect_transforms()
 
 func _update_effect_transforms() -> void:
-	# Sync the RS focus stack transform to match the Control content scale.
-	# The media stack is clipped inside _media_panel, which inherits scaling from RootContainer.
+	# The focus stack is parented to the card's canvas item, so it inherits
+	# the card's offset-transform scale. We only need to translate it to the
+	# media region when in transparent/media-only mode.
 	if not _focus_stack:
 		return
 	var ci = _focus_stack._stack_canvas_item
 	if not ci.is_valid():
 		return
 
-	var pivot = size / 2.0
-	# Scale around the card centre. Godot applies Transform2D operations
-	# right-to-left, so translate(-pivot) first, then scale, then
-	# translate(+pivot) to put the origin back.
-	var scale_transform := Transform2D()
-	scale_transform = scale_transform.translated(-pivot)
-	scale_transform = scale_transform.scaled(content_scale)
-	scale_transform = scale_transform.translated(pivot)
-
-	var t := scale_transform
-	# If the focus stack tracks the media panel (transparent/media-only),
-	# prepend a translation to the panel's top-left so it lands in the same
-	# place as the media stack after scaling.
-	if _focus_media_container:
-		t = scale_transform * Transform2D().translated(_focus_media_container.bounds.position)
+	var t := Transform2D()
+	if not show_background and _focus_media_container:
+		t = Transform2D().translated(_focus_media_container.bounds.position)
 	RenderingServer.canvas_item_set_transform(ci, t)
 
 func _sync_focus_container_properties() -> void:
@@ -1125,32 +1146,20 @@ func _on_focus_exited():
 	_show_focus_effects(false)
 
 func _update_focus_stack_bounds() -> void:
-	if not _focus_stack or not _media_panel:
+	if not _focus_stack:
 		return
-	# Use the actual media panel size when available (authoritative after sort).
+	# Use the authoritative media targets.
 	var target_w := _focus_target_w
 	var target_h := _focus_target_h
-	if _media_panel.size.x > 0.0 and _media_panel.size.y > 0.0:
-		target_w = _media_panel.size.x
-		target_h = _media_panel.size.y
 	if target_w <= 0.0:
 		target_w = size.x
 	if target_h <= 0.0:
 		target_h = size.y
 
-	# Update the media container bounds used by the focus stack so overlays align.
-	# The focus stack's own canvas item is parented to the card's canvas item, so
-	# we express the media region in card-local coordinates.
-	var media_x := 0.0
-	var media_y := 0.0
-	if _media_panel:
-		media_x = _media_panel.position.x
-		media_y = _media_panel.position.y
-
 	var new_bounds: Rect2
 	if not show_background:
-		# Transparent / Media Only: shrink focus stack to match media panel
-		new_bounds = Rect2(media_x, media_y, target_w, target_h)
+		# Transparent / Media Only: shrink focus stack to match media bounds
+		new_bounds = Rect2(_media_bounds.position.x, _media_bounds.position.y, target_w, target_h)
 	else:
 		new_bounds = Rect2(0.0, 0.0, size.x, size.y)
 
@@ -1164,21 +1173,18 @@ func _update_focus_stack_bounds() -> void:
 
 func _update_media_panel_size(force: bool = false) -> void:
 	super._update_media_panel_size(force)
-	if _media_container and _media_panel:
-		# The media stack is parented to _media_panel, so its bounds must be
-		# expressed in media-panel-local coordinates rather than card coords.
-		_media_container.bounds = Rect2(Vector2.ZERO, _media_panel.size)
+	if _media_container and _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
+		# The media stack is parented to _media_canvas_item, so its bounds are
+		# expressed in media-local coordinates rather than card coords.
+		_media_container.bounds = Rect2(Vector2.ZERO, _media_bounds.size)
 
-	# _media_panel can be recreated by M3Card._rebuild_layout() when layout mode,
+	# _media_canvas_item is recreated by M3Card._rebuild_layout() when layout mode,
 	# content alignment, or media aspect ratio changed. The node-less effect stack
-	# must be reparented to the new panel or its CanvasItem stays parented to a
-	# freed RID and disappears. Also ensure the panel stays visible because
-	# M3Card._update_media() hides it when media_texture is null, but GameCard
-	# renders via the effect stack instead.
-	if _media_stack and _media_panel:
-		_media_stack.set_parent_rid(_media_panel.get_canvas_item())
+	# must be reparented to the new item or its CanvasItem stays parented to a
+	# freed RID and disappears.
+	if _media_stack and _media_canvas_item.is_valid():
+		_media_stack.set_parent_rid(_media_canvas_item)
 		_media_stack.set_clip_children(false)
-		_media_panel.visible = true
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.update_draw_rects()

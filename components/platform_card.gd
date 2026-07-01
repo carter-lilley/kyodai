@@ -107,9 +107,6 @@ func _ready():
 
 func _build_ui():
 	# Platform cards have no media
-	if _media_panel:
-		_media_panel.visible = false
-
 	# Hide M3Card's default text labels (we build our own layout inside _text_content)
 	if _headline_label:
 		_headline_label.visible = false
@@ -181,13 +178,16 @@ func _build_ui():
 	_apply_m3_text_styles()
 	_update_shuffler_mode()
 
+func _has_media_content() -> bool:
+	return false
+
 func _update_media_panel_size(force: bool = false) -> void:
 	super._update_media_panel_size(force)
 	# When media panel is hidden, reset text margin to fill entire card width
 	# instead of leaving a gap where the media panel would be.
-	if _media_panel and not _media_panel.visible and _text_margin:
-		_text_margin.position.x = 0
-		_text_margin.size.x = size.x
+	if _text_content:
+		_text_content.position.x = M3Units.dp(PADDING)
+		_text_content.size.x = size.x - M3Units.dp(PADDING) * 2.0
 
 func _apply_m3_text_styles():
 	if _name_label:

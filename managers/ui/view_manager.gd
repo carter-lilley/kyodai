@@ -15,6 +15,7 @@ enum RefreshType { STRUCTURE = 1, EFFECTS = 2 }
 var _pending_refresh_mask: int = 0
 var _pending_effects_full_rebuild: bool = false
 var _skip_next_dialog_dismiss_flush: bool = false
+var _effects_refresh_was_deferred: bool = false
 
 func setup(tab_container: TabContainer) -> void:
 	_tab_container = tab_container
@@ -148,6 +149,7 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	to avoid rebuilding the effect node tree. Deferred while settings dialog is open."""
 	if ui_manager.overlay.is_settings_dialog_open():
 		_pending_refresh_mask |= RefreshType.EFFECTS
+		_effects_refresh_was_deferred = true
 		if force_full_rebuild:
 			_pending_effects_full_rebuild = true
 		return
@@ -171,6 +173,7 @@ func _on_settings_dialog_dismissed() -> void:
 		_skip_next_dialog_dismiss_flush = false
 		return
 	_apply_pending_refresh()
+	_effects_refresh_was_deferred = false
 
 func skip_next_dialog_dismiss_flush() -> void:
 	"""Signal that the next settings-dialog dismissal should not flush
@@ -189,6 +192,12 @@ func flush_pending_rebuilds_if_no_dialog() -> void:
 	var current_view = get_current_view()
 	if current_view and current_view.needs_rebuild:
 		current_view.check_and_rebuild_if_needed()
+	# Only force a full off-screen effect refresh if actual effect work was
+	# deferred while the dialog was open. Otherwise opening/closing settings
+	# with no changes rebuilds every card for no reason.
+	if _effects_refresh_was_deferred and current_view and current_view.games_grid:
+		current_view.games_grid.refresh_all_card_effects(true)
+	_effects_refresh_was_deferred = false
 
 func _apply_pending_refresh() -> void:
 	if _pending_refresh_mask & RefreshType.STRUCTURE:
@@ -197,6 +206,7 @@ func _apply_pending_refresh() -> void:
 		_apply_effects_refresh(_pending_effects_full_rebuild)
 	_pending_refresh_mask = 0
 	_pending_effects_full_rebuild = false
+	_effects_refresh_was_deferred = false
 
 func _rebuild_views(reason: String, use_true: bool = false) -> void:
 	"""Rebuild visible views immediately, mark hidden views for rebuild.
