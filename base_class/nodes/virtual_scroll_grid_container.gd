@@ -26,7 +26,7 @@ enum ViewMode { GRID, LIST, CAROUSEL }
 			view_mode = value
 			_update_view_mode()
 			if old_focused >= 0:
-				call_deferred("scroll_to_index", old_focused, false)
+				call_deferred("scroll_to_index_and_focus", old_focused, false)
 
 # Grid orientation toggle. Only affects GRID mode; LIST is always vertical, CAROUSEL always horizontal.
 var grid_vertical: bool = true:
@@ -43,7 +43,7 @@ var grid_vertical: bool = true:
 			refresh_dimensions()
 			queue_redraw()
 			if old_focused >= 0:
-				call_deferred("scroll_to_index", old_focused, false)
+				call_deferred("scroll_to_index_and_focus", old_focused, false)
 
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
@@ -56,7 +56,7 @@ func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_
 		refresh_dimensions()
 		queue_redraw()
 		if old_focused >= 0:
-			call_deferred("scroll_to_index", old_focused, false)
+			call_deferred("scroll_to_index_and_focus", old_focused, false)
 
 # Layout-application helpers: mutate state without emitting side effects, returning true if changed.
 # Used by set_grid_orientation and _batch_apply_layout_state to coalesce layout recalculations.
@@ -138,7 +138,7 @@ func _batch_apply_layout_state() -> void:
 		_refresh_buffer()
 		queue_redraw()
 		if old_focused >= 0:
-			call_deferred("scroll_to_index", old_focused, false)
+			call_deferred("scroll_to_index_and_focus", old_focused, false)
 	else:
 		# Non-structure changes share the same rebuild path to guarantee a single recalc.
 		if focus_changed or padding_changed:
@@ -1085,9 +1085,10 @@ func _recalculate_layout():
 	_is_recalculating_layout = false
 
 	# Restore focus to the card that was focused before layout recalculation.
-	# Cards may have been recycled and recreated, so grab focus by virtual index.
+	# scroll_to_index_and_focus waits for the target card to exist and suppresses
+	# the smooth-scroll response, avoiding focus loss during long centering tweens.
 	if saved_focus_index >= 0:
-		call_deferred("_restore_focus_after_layout", saved_focus_index)
+		call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -1721,6 +1722,10 @@ func _acquire_card() -> Control:
 			card.set_meta("pooled", false)
 			if _card_has_reset:
 				card.reset(true)
+			# Ensure a recycled card can always receive focus; some paths (preview,
+			# manual disabling) may leave these in a non-focusable state.
+			card.disabled = false
+			card.focus_mode = Control.FOCUS_ALL
 			card.visible = true
 			return card
 
@@ -2225,10 +2230,11 @@ func _refresh_buffer():
 	if _active_cards.size() == 0:
 		_initial_load()
 
-	# Restore focus to the card that owned it before recycle. If focus moved
-	# elsewhere in the meantime, _restore_focus_after_layout will safely skip.
+	# Restore focus to the card that owned it before recycle.
+	# scroll_to_index_and_focus waits for the target card to exist and suppresses
+	# the smooth-scroll response, avoiding focus loss during long centering tweens.
 	if saved_focus_index >= 0:
-		call_deferred("_restore_focus_after_layout", saved_focus_index)
+		call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 
 func get_target_scroll() -> float:
 	return _scroll_container.get_target_scroll() if _scroll_container else 0.0

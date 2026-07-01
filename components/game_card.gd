@@ -251,8 +251,17 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		if _media_panel:
 			_media_panel.visible = true
 
-	# Focus stack is built lazily when this card becomes focused (or in preview mode).
-	if (_focus_stack) or preview_mode or _is_focused:
+	# Focus stack is built lazily when this card becomes focused (or in preview mode),
+	# but pre-building it for all cards when focus effects are configured avoids
+	# creating nodes inside _on_focus_entered, which can disrupt native focus.
+	var has_focus_effects := false
+	if UIManager and UIManager.card_settings_state:
+		has_focus_effects = not UIManager.card_settings_state.get_focus_effects().is_empty()
+	elif SettingsManager:
+		var config_setting = SettingsManager.get_setting("card_effect_config")
+		if config_setting and config_setting.value is Dictionary:
+			has_focus_effects = not config_setting.value.get("focus_effects", []).is_empty()
+	if preview_mode or _is_focused or has_focus_effects:
 		_build_focus_stack(force_full_rebuild)
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
@@ -387,18 +396,6 @@ func _show_focus_effects(p_show: bool) -> void:
 		var focus_copy = focus_settings.duplicate(true)
 
 		var base_effect_ref = weakref(base_effect)
-
-		print("[GameCard] _show_focus_effects p_show=", p_show,
-			" virtual_index=", get_meta("virtual_index", -1),
-			" _is_focused=", _is_focused,
-			" has_real_focus=", _has_real_focus(),
-			" effect_id=", focus_effect.effect_id,
-			" base_effect._is_tweening=", base_effect._is_tweening,
-			" base_border=", base_copy.get("border_size", "N/A"),
-			" focus_border=", focus_copy.get("border_size", "N/A"),
-			" base_settings.border=", base_effect._settings.get("border_size", "N/A"),
-			" base_base_settings.border=", base_effect._base_settings.get("border_size", "N/A"))
-
 		if p_show:
 			var settings_tween = create_tween()
 			_focus_effect_tweens.append(settings_tween)
@@ -579,9 +576,6 @@ func refresh_settings() -> void:
 	# Now that both media and focus stacks exist, run the focus tween.
 	if _focus_stack:
 		_show_focus_effects(_is_focused)
-	print("[GameCard] refresh_settings done index=", get_meta("virtual_index", -1),
-		" _is_focused=", _is_focused,
-		" has_real_focus=", _has_real_focus())
 	# If the card has no valid cached texture for the current game, trigger a
 	# cover load as a safety net so cards don't stay blank after a rebuild.
 	if game and (not _current_texture or _current_texture_game_id != game.id):
@@ -600,9 +594,6 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	# Now that both media and focus stacks exist, run the focus tween.
 	if _focus_stack:
 		_show_focus_effects(_is_focused)
-	print("[GameCard] refresh_effects done index=", get_meta("virtual_index", -1),
-		" _is_focused=", _is_focused,
-		" has_real_focus=", _has_real_focus())
 	# If the card has no valid cached texture for the current game, trigger a
 	# cover load as a safety net so cards don't stay blank after a rebuild.
 	if game and (not _current_texture or _current_texture_game_id != game.id):

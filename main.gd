@@ -219,18 +219,11 @@ func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
 
 func _on_settings_dialog_dismissed() -> void:
-	# Try nav footer settings button first
-	var nav_settings_btn = UIManager.find_nav_settings_button()
-	if nav_settings_btn and nav_settings_btn.focus_mode != Control.FOCUS_NONE:
+	# Restore focus to the Home button so controller users land in a known
+	# location after closing settings with ui_cancel or the OK button.
+	if UIManager:
 		UIManager.suppress_next_focus_sound()
-		nav_settings_btn.grab_focus()
-		return
-
-	# Fallback to scene settings button
-	var settings_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/SettingsButton")
-	if settings_button and settings_button.focus_mode != Control.FOCUS_NONE:
-		UIManager.suppress_next_focus_sound()
-		settings_button.grab_focus()
+	call_deferred("reset_focus_to_home_button")
 
 func _on_more_button_pressed() -> void:
 	var menu = M3Menu.new()

@@ -79,6 +79,12 @@ func _ready():
 	_container.mouse_exited.connect(_on_mouse_exited)
 	get_viewport().size_changed.connect(_on_viewport_resized)
 
+func _on_overlay_focus_changed(control: Control) -> void:
+	# Snackbars are transient, non-modal notifications and should never trap
+	# controller focus. Skipping the base implementation prevents focus from
+	# being yanked away from the underlying UI while a snackbar is visible.
+	pass
+
 func _create_visuals():
 	_container = Panel.new()
 	_container.mouse_filter = Control.MOUSE_FILTER_PASS

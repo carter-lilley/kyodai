@@ -148,8 +148,10 @@ func dismiss():
 			var overlay = _get_active_node(type)
 			if overlay != null and overlay.overlay_layer > _max_layer:
 				_max_layer = overlay.overlay_layer
-	dismissed.emit()
+	# Hide before emitting dismissed so focus callbacks can't pull focus back
+	# into this overlay while it's still marked visible.
 	visible = false
+	dismissed.emit()
 	if not persistent:
 		queue_free()
 

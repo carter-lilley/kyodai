@@ -125,12 +125,6 @@ func get_tweenable_settings() -> Array[String]:
 var _is_tweening: bool = false
 
 func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress: float) -> void:
-	print("[EffectBase] tween_settings effect_id=", effect_id,
-		" progress=", progress,
-		" from_border=", from_settings.get("border_size", "N/A"),
-		" to_border=", to_settings.get("border_size", "N/A"),
-		" current_border=", _settings.get("border_size", "N/A"),
-		" _is_tweening=", _is_tweening)
 	var tweenables = get_tweenable_settings()
 
 	_is_tweening = true
