@@ -1275,38 +1275,84 @@ func _ensure_device_registered(callback: Callable) -> void:
 ## Shows the save conflict dialog and waits for user choice
 ## Returns: "local", "server", "cancel", or "" (on error)
 func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int) -> String:
-	var dialog = preload("res://components/save_conflict_dialog.tscn").instantiate()
-	dialog.setup(game.get_display_name(), server_time, local_time)
-	
-	var choice = {"value": ""}
-	
-	dialog.server_selected.connect(func(): choice.value = "server")
-	dialog.local_selected.connect(func(): choice.value = "local")
-	dialog.cancelled.connect(func(): choice.value = "cancel")
-	
-	# Add to scene tree
-	get_tree().root.add_child(dialog)
-	
-	# Wait for user choice with timeout and tree-existence guards
-	var timeout_frames = 0
-	var max_timeout_frames = 5 * 60 * 60  # 5 minutes at 60fps
-	while choice.value == "":
-		await get_tree().process_frame
-		timeout_frames += 1
-		if timeout_frames > max_timeout_frames:
-			print("[SaveManager] Conflict dialog timed out after 5 minutes, treating as cancel")
-			choice.value = "cancel"
-			break
-		if not dialog.is_inside_tree():
-			print("[SaveManager] Conflict dialog removed from tree, treating as cancel")
-			choice.value = "cancel"
-			break
+	var choice := ""
 
-	# Clean up dialog if still present
-	if dialog.is_inside_tree():
-		dialog.queue_free()
+	var on_server := func(): choice = "server"
+	var on_local := func(): choice = "local"
+	var on_cancel := func(): choice = "cancel"
 
-	return choice.value
+	UIManager.show_custom_dialog(func(dialog: M3Dialog):
+		dialog.title_text = "Save Conflict"
+		dialog.body_text = "Your local save data for %s conflicts with what is stored on the server.\n\nWhichever save data you choose to keep will be synced to this device and the cloud. The option you choose not to keep will be overwritten." % game.get_display_name()
+		dialog.dismissible = true
+
+		var content = VBoxContainer.new()
+		content.alignment = BoxContainer.ALIGNMENT_BEGIN
+
+		var spacer = Control.new()
+		spacer.custom_minimum_size = Vector2(0, M3Units.dp(16))
+		content.add_child(spacer)
+
+		var server_btn = M3Button.new()
+		server_btn.custom_minimum_size = Vector2(0, M3Units.dp(80))
+		server_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		server_btn.button_size = M3Button.Size.LARGE
+		server_btn.text = "Server Save\nModified: " + _format_conflict_timestamp(server_time)
+		server_btn.pressed.connect(func():
+			on_server.call()
+			dialog.dismiss()
+		)
+		content.add_child(server_btn)
+
+		var local_btn = M3Button.new()
+		local_btn.custom_minimum_size = Vector2(0, M3Units.dp(80))
+		local_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		local_btn.button_size = M3Button.Size.LARGE
+		local_btn.text = "Local Save\nModified: " + _format_conflict_timestamp(local_time)
+		local_btn.pressed.connect(func():
+			on_local.call()
+			dialog.dismiss()
+		)
+		content.add_child(local_btn)
+
+		dialog.content_slot.add_child(content)
+		dialog.add_action("Cancel", func():
+			on_cancel.call()
+			dialog.dismiss()
+		, false)
+	)
+
+	# Wait until the user picks one of the three choices.
+	await UIManager.overlay._active_dialogs[-1].dismissed
+
+	return choice
+
+func _format_conflict_timestamp(unix_time: int) -> String:
+	if unix_time <= 0:
+		return "Unknown"
+
+	var dict = Time.get_datetime_dict_from_unix_time(unix_time)
+
+	var tz_info = Time.get_time_zone_from_system()
+	var tz_offset_minutes = tz_info.get("bias", 0)
+	var adjusted_unix = unix_time + (tz_offset_minutes * 60)
+	dict = Time.get_datetime_dict_from_unix_time(adjusted_unix)
+	var month_names = ["January", "February", "March", "April", "May", "June",
+					"July", "August", "September", "October", "November", "December"]
+
+	var month = month_names[dict.month - 1]
+	var day = dict.day
+	var year = dict.year
+	var hour = dict.hour
+	var minute = dict.minute
+	var ampm = "AM" if hour < 12 else "PM"
+
+	if hour > 12:
+		hour -= 12
+	elif hour == 0:
+		hour = 12
+
+	return "%s %d, %d at %d:%02d %s" % [month, day, year, hour, minute, ampm]
 
 
 ## Main sync entry point for manual and auto sync
@@ -1387,10 +1433,10 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		var last_synced_unix = 0
 		var local_mtime = local.modified_time
 		if db_rec:
-			last_synced_unix = _parse_iso_to_unix(db_rec.last_synced_at)
+			last_synced_unix = parse_iso_timestamp(db_rec.last_synced_at)
 		
 		if remote:
-			var remote_updated_unix = _parse_iso_to_unix(remote.get("updated_at", ""))
+			var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", ""))
 			
 			if local_mtime > last_synced_unix and remote_updated_unix > last_synced_unix:
 				# CONFLICT: Both changed since last sync - show dialog
@@ -1594,38 +1640,46 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			)
 		)
 
-func _parse_iso_to_unix(iso_string: String) -> int:
+## Parses an ISO 8601 timestamp string to Unix seconds.
+## Handles trailing timezone offsets (Z, +HH:MM, -HH:MM) and converts to UTC.
+## Returns 0 if parsing fails or the input is empty.
+func parse_iso_timestamp(iso_string: String) -> int:
 	if iso_string == "":
 		return 0
 	
-	# Extract date/time without timezone (Godot's parser ignores timezone offsets)
-	var dt_string = iso_string.substr(0, 19).replace("T", " ")
-	
-	var dict = Time.get_datetime_dict_from_datetime_string(dt_string, false)
-	if dict.is_empty():
+	# Validate format and capture optional timezone offset.
+	# Matches: 2024-01-15T10:30:00Z, 2024-01-15T10:30:00+02:00, etc.
+	var regex = RegEx.new()
+	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?(Z|[+-]\\d{2}:?\\d{2})?")
+	var match_result = regex.search(iso_string)
+	if not match_result:
 		return 0
 	
-	# Godot treats the parsed time as local time, but the server sends UTC
-	# We need to adjust by the timezone offset
-	var parsed_unix = Time.get_unix_time_from_datetime_dict(dict)
+	var year = int(match_result.get_string(1))
+	var month = int(match_result.get_string(2))
+	var day = int(match_result.get_string(3))
+	var hour = int(match_result.get_string(4))
+	var minute = int(match_result.get_string(5))
+	var second = int(match_result.get_string(6))
+	var tz_str = match_result.get_string(7)
 	
-	# Calculate timezone offset by comparing local and UTC representations of "now"
-	var correct_now_unix = Time.get_unix_time_from_system()
-	var utc_date = Time.get_date_dict_from_system(true)
-	var utc_time = Time.get_time_dict_from_system(true)
-	var utc_now_dict = {
-		"year": utc_date.year,
-		"month": utc_date.month,
-		"day": utc_date.day,
-		"hour": utc_time.hour,
-		"minute": utc_time.minute,
-		"second": utc_time.second
-	}
-	var wrong_now_unix = Time.get_unix_time_from_datetime_dict(utc_now_dict)
-	var tz_offset_seconds = correct_now_unix - wrong_now_unix
+	var dict = {"year": year, "month": month, "day": day,
+				"hour": hour, "minute": minute, "second": second}
+	var unix = int(Time.get_unix_time_from_datetime_dict(dict))
 	
-	# Adjust: the ISO time was UTC but treated as local
-	return int(parsed_unix + tz_offset_seconds)
+	# Apply timezone offset to get true UTC timestamp.
+	if tz_str != "" and tz_str != "Z":
+		var tz_regex = RegEx.new()
+		tz_regex.compile("([+-])(\\d{2}):?(\\d{2})")
+		var tz_match = tz_regex.search(tz_str)
+		if tz_match:
+			var sign = 1 if tz_match.get_string(1) == "+" else -1
+			var tz_hours = int(tz_match.get_string(2))
+			var tz_minutes = int(tz_match.get_string(3))
+			var offset_seconds = sign * (tz_hours * 3600 + tz_minutes * 60)
+			unix -= offset_seconds
+	
+	return unix
 
 ## Auto-upload saves after playing (post-exit hook)
 ## Checks for conflicts and shows dialog if both local and server saves have changed
@@ -1696,11 +1750,11 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				var db_rec = db_by_name.get(file_name)
 				var last_synced_unix = 0
 				if db_rec:
-					last_synced_unix = _parse_iso_to_unix(db_rec.last_synced_at)
+					last_synced_unix = parse_iso_timestamp(db_rec.last_synced_at)
 				
 				for remote in remote_saves:
 					if remote.file_name == file_name:
-						var remote_updated_unix = _parse_iso_to_unix(remote.get("updated_at", ""))
+						var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", ""))
 						if local.modified_time > last_synced_unix and remote_updated_unix > last_synced_unix:
 							has_conflict = true
 							conflict_local_time = local.modified_time
@@ -1909,7 +1963,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				
 				var file_name = remote.get("file_name", "save")
 				var save_id = remote.get("id", 0)
-				var remote_updated_unix = _parse_iso_to_unix(remote.get("updated_at", ""))
+				var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", ""))
 				
 				print("[SaveManager] auto_download: checking remote save id=" + str(save_id) + " file_name='" + file_name + "' updated=" + str(remote_updated_unix))
 				
@@ -1917,7 +1971,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				var db_rec = db_by_name.get(file_name)
 				var last_synced_unix = 0
 				if db_rec:
-					last_synced_unix = _parse_iso_to_unix(db_rec.last_synced_at)
+					last_synced_unix = parse_iso_timestamp(db_rec.last_synced_at)
 				
 				var should_download = false
 				if not local:
@@ -2135,7 +2189,7 @@ func get_save_sync_status_text(game: GameResource, emulator_id: String) -> Strin
 	if latest == "":
 		return "Not synced"
 	
-	var unix = _parse_iso_to_unix(latest)
+	var unix = parse_iso_timestamp(latest)
 	if unix > 0:
 		var now = Time.get_unix_time_from_system()
 		var diff = int(now - unix)

@@ -1397,6 +1397,12 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 	# Open file for writing/appending
 	if in_place:
+		if final_file_mutex == null:
+			push_error("[DownloadManager] Chunk " + str(chunk_index) + " in-place assembly requested without mutex")
+			result.error = "In-place assembly missing mutex"
+			return result
+
+		final_file_mutex.lock()
 		file = FileAccess.open(partial_path, FileAccess.READ_WRITE)
 		if not file and not FileAccess.file_exists(partial_path):
 			# Hardening: create the partial file first if it disappeared
@@ -1406,9 +1412,11 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 				file = FileAccess.open(partial_path, FileAccess.READ_WRITE)
 		if file:
 			file.seek(write_offset)
+			final_file_mutex.unlock()
 		else:
 			push_error("[DownloadManager] Chunk " + str(chunk_index) + " failed to open partial file for in-place chunk write: " + partial_path)
 			result.error = "Failed to open partial file"
+			final_file_mutex.unlock()
 			return result
 	elif resume_offset > 0:
 		file = FileAccess.open(temp_path, FileAccess.READ_WRITE)
@@ -1546,7 +1554,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 		var chunk = http.read_response_body_chunk()
 		if chunk.size() > 0:
-			if in_place and final_file_mutex != null:
+			if in_place:
 				final_file_mutex.lock()
 				file.seek(write_offset + bytes_downloaded)
 				file.store_buffer(chunk)

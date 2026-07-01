@@ -330,7 +330,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		if not force_full_sync:
 			var last_sync = _get_last_sync_time_sync(platform.slug)
 			if last_sync != "":
-				var last_sync_time = Time.get_unix_time_from_datetime_string(last_sync)
+				var last_sync_time = SaveManager.parse_iso_timestamp(last_sync)
 				var one_week_ago = Time.get_unix_time_from_system() - (7 * 24 * 60 * 60)
 				if last_sync_time > one_week_ago:
 					_sync_current_updated_after = last_sync

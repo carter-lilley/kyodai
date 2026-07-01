@@ -603,45 +603,9 @@ func _compare_versions(a: String, b: String) -> int:
 	return 2
 
 ## Parses an ISO 8601 date string to unix timestamp for comparison.
-## Handles trailing timezone offsets (Z, +HH:MM, -HH:MM) and converts to UTC.
-## Returns -1 if parsing fails.
+## Delegates to SaveManager for a single, timezone-aware implementation.
 func _parse_iso_date(date_str: String) -> int:
-	if date_str == "" or not date_str.contains("-"):
-		return -1
-	
-	# Validate format and capture optional timezone offset.
-	# Matches: 2024-01-15T10:30:00Z, 2024-01-15T10:30:00+02:00, etc.
-	var regex = RegEx.new()
-	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?(Z|[+-]\\d{2}:?\\d{2})?")
-	var match_result = regex.search(date_str)
-	if not match_result:
-		return -1
-	
-	var year = int(match_result.get_string(1))
-	var month = int(match_result.get_string(2))
-	var day = int(match_result.get_string(3))
-	var hour = int(match_result.get_string(4))
-	var minute = int(match_result.get_string(5))
-	var second = int(match_result.get_string(6))
-	var tz_str = match_result.get_string(7)
-	
-	var dict = {"year": year, "month": month, "day": day,
-				"hour": hour, "minute": minute, "second": second}
-	var unix = int(Time.get_unix_time_from_datetime_dict(dict))
-	
-	# Apply timezone offset to get true UTC timestamp.
-	if tz_str != "" and tz_str != "Z":
-		var tz_regex = RegEx.new()
-		tz_regex.compile("([+-])(\\d{2}):?(\\d{2})")
-		var tz_match = tz_regex.search(tz_str)
-		if tz_match:
-			var sign = 1 if tz_match.get_string(1) == "+" else -1
-			var tz_hours = int(tz_match.get_string(2))
-			var tz_minutes = int(tz_match.get_string(3))
-			var offset_seconds = sign * (tz_hours * 3600 + tz_minutes * 60)
-			unix -= offset_seconds
-	
-	return unix
+	return SaveManager.parse_iso_timestamp(date_str)
 
 ## Returns the later of two ISO 8601 date strings.
 ## If only one is valid, returns that one. If neither is valid, returns "".
