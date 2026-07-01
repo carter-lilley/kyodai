@@ -307,17 +307,11 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		push_warning("[ProcessManager] MANAGE_EXTERNAL_STORAGE permission not granted - FileProvider may fail for SD card files")
 		# Show dialog to user explaining they need to grant the permission manually
 		if UIManager:
-			var dialog = M3Dialog.new()
-			dialog.title_text = "Permission Required"
-			dialog.body_text = "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files"
-
-			var on_confirmed = func():
-				plugin.requestManageExternalStoragePermission()
-
-			dialog.add_action("Cancel", Callable(), false)
-			dialog.add_action("Open Settings", on_confirmed, true)
-			UIManager.add_child(dialog)
-			dialog.show_overlay()
+			UIManager.show_alert("Permission Required", "To launch games from SD card storage, Kyodai needs 'All Files Access' permission.\n\nPlease grant this permission in Settings → Apps → Kyodai → Permissions → Files",
+				func(): plugin.requestManageExternalStoragePermission(),
+				Callable(),
+				{"ok_text": "Open Settings"}
+			)
 		return false
 
 	# Format the core path for RetroArch
@@ -421,18 +415,10 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	var emulator_name = emulator.get("name", emulator_id)
 
 	# Create M3Dialog reminder as a distinct overlay type so it stacks above the settings dialog
-	var dialog = M3Dialog.new()
-	dialog.overlay_type = "alert"
-	dialog.overlay_layer = 95
-	dialog.title_text = "Installation Reminder"
-	dialog.body_text = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
-	dialog.dismissible = false
-	dialog.add_action("Got it", func(): dialog.dismiss(), true)
-
-	# Show directly (not via M3Dialog.show_dialog which would force overlay_type back to "dialog")
-	var parent = M3Overlay.get_overlay_parent()
-	if parent and dialog.get_parent() == null:
-		parent.add_child(dialog)
-	dialog.show_overlay()
+	UIManager.show_alert("Installation Reminder", "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games.",
+		Callable(),
+		Callable(),
+		{"ok_text": "Got it", "overlay_type": "alert", "overlay_layer": 95, "dismissible": false}
+	)
 
 	print("[ProcessManager] Shown Android permissions reminder for: " + emulator_name)

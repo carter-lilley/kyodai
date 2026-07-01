@@ -286,28 +286,11 @@ func match_var_type(settingsvar : SettingsVar):
 			add_child(path_row)
 			
 			browse_button.pressed.connect(func():
-				var dialog = FileDialog.new()
-				dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
-				dialog.access = FileDialog.ACCESS_FILESYSTEM
-				dialog.use_native_dialog = true
-				dialog.current_dir = path_field.text if path_field.text else OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-				dialog.title = "Select " + settingsvar.display_name
-				
-				add_child(dialog)
-				
-				dialog.dir_selected.connect(func(dir: String):
-					var resolved_dir = FSM.resolve_content_uri(dir)
-					path_field.text = resolved_dir
+				UIManager.show_folder_dialog("Select " + settingsvar.display_name, path_field.text, func(dir: String):
+					path_field.text = dir
 					path_field.refresh_visuals()
-					emit_signal("setting_changed", resolved_dir, settingsvar)
-					dialog.queue_free()
+					emit_signal("setting_changed", dir, settingsvar)
 				)
-				
-				dialog.canceled.connect(func():
-					dialog.queue_free()
-				)
-				
-				dialog.show()
 			)
 			
 			path_field.text_changed.connect(func(text: String):

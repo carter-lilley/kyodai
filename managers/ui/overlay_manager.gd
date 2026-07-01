@@ -1,6 +1,8 @@
 class_name OverlayManager
 extends Manager
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 var ui_manager: Node
 
 # Settings dialog
@@ -15,6 +17,10 @@ var _game_details_sheet: GameDetailsSheet = null
 # Modal management (now uses M3Menu)
 var _active_menu: M3Menu = null
 var _modal_context: Dictionary = {}
+
+# Active generic dialogs tracked so we can flush deferred rebuilds only when
+# the last dialog has closed.
+var _active_dialogs: Array[M3Dialog] = []
 
 var _root_control: Control = null
 
@@ -118,8 +124,164 @@ func _on_settings_dialog_dismissed() -> void:
 	# replaced this one, the rebuild stays deferred until that dialog closes.
 	ui_manager.view.flush_pending_rebuilds_if_no_dialog()
 
+func _track_dialog(dialog: M3Dialog) -> void:
+	if dialog in _active_dialogs:
+		return
+	_active_dialogs.append(dialog)
+	dialog.dismissed.connect(_on_generic_dialog_dismissed.bind(dialog))
 
-func _show_shuffler_dialog() -> void:
+func _on_generic_dialog_dismissed(dialog: M3Dialog) -> void:
+	_active_dialogs.erase(dialog)
+	# Only flush deferred rebuilds once all tracked dialogs are closed.
+	if _active_dialogs.is_empty():
+		ui_manager.view.flush_pending_rebuilds_if_no_dialog()
+
+func _add_overlay_to_root(overlay: Node) -> void:
+	"""Add an overlay node to the correct parent for the current display mode."""
+	var parent = M3Overlay.get_overlay_parent()
+	if parent and overlay.get_parent() == null:
+		parent.add_child(overlay)
+	elif not overlay.is_inside_tree():
+		if _root_control:
+			_root_control.add_child(overlay)
+		else:
+			get_tree().root.add_child(overlay)
+
+# ==================== FILE DIALOGS ====================
+
+func show_folder_dialog(title: String, initial_dir: String, on_dir_selected: Callable, use_native: bool = true) -> FileDialog:
+	"""Show a folder picker and return the dialog instance."""
+	var dialog := FileDialog.new()
+	dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	dialog.access = FileDialog.ACCESS_FILESYSTEM
+	dialog.use_native_dialog = use_native
+	dialog.title = title
+	dialog.current_dir = initial_dir if initial_dir else OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+
+	dialog.dir_selected.connect(func(dir: String):
+		if on_dir_selected.is_valid():
+			on_dir_selected.call(FSM.resolve_content_uri(dir))
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(dialog.queue_free)
+
+	_add_overlay_to_root(dialog)
+	dialog.show()
+	return dialog
+
+func show_file_dialog(title: String, filters: PackedStringArray, initial_dir: String, on_file_selected: Callable, use_native: bool = true) -> FileDialog:
+	"""Show a file picker and return the dialog instance."""
+	var dialog := FileDialog.new()
+	dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	dialog.access = FileDialog.ACCESS_FILESYSTEM
+	dialog.use_native_dialog = use_native
+	dialog.title = title
+	dialog.filters = filters
+	dialog.current_dir = initial_dir if initial_dir else OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+
+	dialog.file_selected.connect(func(path: String):
+		if on_file_selected.is_valid():
+			on_file_selected.call(path)
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(dialog.queue_free)
+
+	_add_overlay_to_root(dialog)
+	if use_native:
+		dialog.show()
+	else:
+		dialog.popup_centered(Vector2(M3Units.dp(800), M3Units.dp(600)))
+	return dialog
+
+# ==================== GENERIC DIALOGS ====================
+
+func show_confirm(title: String, body: String, on_accept: Callable = Callable(), on_cancel: Callable = Callable(), on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
+	"""Show a confirmation dialog with Accept/Cancel actions."""
+	var accept_text: String = options.get("accept_text", "Accept")
+	var cancel_text: String = options.get("cancel_text", "Cancel")
+	var auto_dismiss: bool = options.get("auto_dismiss", true)
+
+	var dialog := M3Dialog.new()
+	_apply_dialog_options(dialog, options)
+	dialog.title_text = title
+	dialog.body_text = body
+
+	var wrapped_cancel = func():
+		if on_cancel.is_valid():
+			on_cancel.call()
+		dialog.dismiss()
+
+	var wrapped_accept = func():
+		if on_accept.is_valid():
+			on_accept.call()
+		if auto_dismiss:
+			dialog.dismiss()
+
+	dialog.add_action(cancel_text, wrapped_cancel, false)
+	dialog.add_action(accept_text, wrapped_accept, true)
+
+	if on_dismissed.is_valid():
+		dialog.dismissed.connect(on_dismissed)
+
+	_add_overlay_to_root(dialog)
+	dialog.show_overlay()
+	_track_dialog(dialog)
+	return dialog
+
+func show_alert(title: String, body: String, on_ok: Callable = Callable(), on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
+	"""Show an alert dialog with a single OK action."""
+	var ok_text: String = options.get("ok_text", "OK")
+	var auto_dismiss: bool = options.get("auto_dismiss", true)
+
+	var dialog := M3Dialog.new()
+	_apply_dialog_options(dialog, options)
+	dialog.title_text = title
+	dialog.body_text = body
+
+	var wrapped_ok = func():
+		if on_ok.is_valid():
+			on_ok.call()
+		if auto_dismiss:
+			dialog.dismiss()
+
+	dialog.add_action(ok_text, wrapped_ok, true)
+
+	if on_dismissed.is_valid():
+		dialog.dismissed.connect(on_dismissed)
+
+	_add_overlay_to_root(dialog)
+	dialog.show_overlay()
+	_track_dialog(dialog)
+	return dialog
+
+func show_custom_dialog(build_fn: Callable, on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
+	"""Show a dialog built by the caller. The build_fn receives the M3Dialog."""
+	var dialog := M3Dialog.new()
+	_apply_dialog_options(dialog, options)
+
+	if build_fn.is_valid():
+		build_fn.call(dialog)
+
+	if on_dismissed.is_valid():
+		dialog.dismissed.connect(on_dismissed)
+
+	_add_overlay_to_root(dialog)
+	dialog.show_overlay()
+	_track_dialog(dialog)
+	return dialog
+
+func _apply_dialog_options(dialog: M3Dialog, options: Dictionary) -> void:
+	"""Apply optional overlay styling to a generic dialog."""
+	if options.has("overlay_type"):
+		dialog.overlay_type = options["overlay_type"]
+	if options.has("overlay_layer"):
+		dialog.overlay_layer = options["overlay_layer"]
+	if options.has("dismissible"):
+		dialog.dismissible = options["dismissible"]
+	if options.has("hero_icon_name"):
+		dialog.hero_icon_name = options["hero_icon_name"]
+
+
 	"""Show the shuffler configuration dialog."""
 	if ShufflerManager.is_session_active():
 		NotificationManager.show_notification("A shuffler session is already active", NotificationManager.Type.INFO)

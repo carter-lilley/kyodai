@@ -728,13 +728,12 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 							DataManager.delete_game_download(game, on_force_delete, true)
 
 						var on_cancel = func():
-							M3Dialog.dismiss_current()
 							if games_grid:
 								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
 							if AudioManager:
 								AudioManager.play_sfx("error")
 
-						M3Dialog.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel)
+						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 				)
 		"hide":
 			pass

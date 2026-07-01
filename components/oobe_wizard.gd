@@ -434,24 +434,9 @@ func _mark_first_run_completed():
 # Path browsing
 
 func _on_browse_pressed(field: M3TextField):
-	var dialog = FileDialog.new()
-	dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
-	dialog.access = FileDialog.ACCESS_FILESYSTEM
-	dialog.use_native_dialog = true
-	dialog.current_dir = field.text if field.text else OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-
-	add_child(dialog)
-
-	dialog.dir_selected.connect(func(dir: String):
-		field.text = FSM.resolve_content_uri(dir)
-		dialog.queue_free()
+	UIManager.show_folder_dialog("Select Folder", field.text, func(dir: String):
+		field.text = dir
 	)
-
-	dialog.canceled.connect(func():
-		dialog.queue_free()
-	)
-
-	dialog.show()
 
 # Permission handling (Android)
 

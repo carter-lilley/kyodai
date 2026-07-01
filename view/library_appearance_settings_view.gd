@@ -273,21 +273,12 @@ func _on_preset_selected(index: int) -> void:
 	if not preset:
 		return
 	
-	UIManager.view.skip_next_dialog_dismiss_flush()
-	
-	var dialog = M3Dialog.new()
-	dialog.title_text = "Load Theme Preset"
-	dialog.body_text = "Load preset '%s'?\n\nThis will overwrite your current library and card settings." % preset.name
-	dialog.add_action("Cancel", func(): dialog.dismiss(), false)
-	dialog.add_action("Load", func():
-		_apply_preset(preset)
-		dialog.dismiss()
-	, true)
-	dialog.dismissed.connect(func():
-		_preset_dropdown.selected = 0
-		UIManager.view.flush_pending_rebuilds_if_no_dialog()
+	UIManager.show_confirm("Load Theme Preset", "Load preset '%s'?\n\nThis will overwrite your current library and card settings." % preset.name,
+		func(): _apply_preset(preset),
+		Callable(),
+		func(): _preset_dropdown.selected = 0,
+		{"cancel_text": "Cancel", "accept_text": "Load"}
 	)
-	dialog.show_overlay()
 
 func _apply_preset(preset: ThemePreset) -> void:
 	_is_applying_preset = true
@@ -373,39 +364,20 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 	return true
 
 func _on_load_preset_pressed() -> void:
-	var file_dialog = FileDialog.new()
-	file_dialog.title = "Import Theme Preset"
-	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	file_dialog.filters = PackedStringArray(["*.tres ; Theme Preset Files"])
-	
-	file_dialog.file_selected.connect(func(path: String):
-		var preset = SettingsManager.import_preset(path)
-		if preset:
-			NotificationManager.show_notification("Imported preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
+	UIManager.show_file_dialog("Import Theme Preset", PackedStringArray(["*.tres ; Theme Preset Files"]), "", func(path: String):
+		var imported = SettingsManager.import_preset(path)
+		if imported:
+			NotificationManager.show_notification("Imported preset: %s" % imported.name, NotificationManager.Type.SUCCESS)
 			_refresh_preset_dropdown()
-			
-			UIManager.view.skip_next_dialog_dismiss_flush()
-			
-			var dialog = M3Dialog.new()
-			dialog.title_text = "Apply Imported Preset"
-			dialog.body_text = "Apply the imported preset '%s' now?" % preset.name
-			dialog.add_action("Cancel", func(): dialog.dismiss(), false)
-			dialog.add_action("Apply", func():
-				_apply_preset(preset)
-				dialog.dismiss()
-			, true)
-			dialog.dismissed.connect(func():
-				_preset_dropdown.selected = 0
-				UIManager.view.flush_pending_rebuilds_if_no_dialog()
+			UIManager.show_confirm("Apply Imported Preset", "Apply the imported preset '%s' now?" % imported.name,
+				func(): _apply_preset(imported),
+				Callable(),
+				func(): _preset_dropdown.selected = 0,
+				{"cancel_text": "Cancel", "accept_text": "Apply"}
 			)
-			dialog.show_overlay()
 		else:
 			NotificationManager.show_notification("Failed to import preset", NotificationManager.Type.ERROR)
-	)
-	
-	add_child(file_dialog)
-	file_dialog.popup_centered(Vector2(M3Units.dp(800), M3Units.dp(600)))
+	, false)
 
 func _on_export_preset_pressed() -> void:
 	if not SettingsManager.settings:
@@ -413,35 +385,34 @@ func _on_export_preset_pressed() -> void:
 	
 	var preset = SettingsManager.create_preset_from_current()
 	
-	var name_dialog = M3Dialog.new()
-	name_dialog.title_text = "Export Theme Preset"
-	name_dialog.body_text = "Enter a name for this preset:"
-	
-	var line_edit = M3TextField.new()
-	line_edit.label_text = "Preset Name"
-	line_edit.text = preset.name
-	line_edit.placeholder_text = "Preset Name"
-	line_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_dialog.content_slot.add_child(line_edit)
-	
-	name_dialog.add_action("Cancel", Callable(), false)
-	name_dialog.add_action("Save", func():
-		if line_edit.text.is_empty():
-			NotificationManager.show_notification("Preset name cannot be empty", NotificationManager.Type.WARNING)
-			return
+	UIManager.show_custom_dialog(func(dialog: M3Dialog):
+		dialog.title_text = "Export Theme Preset"
+		dialog.body_text = "Enter a name for this preset:"
 		
-		preset.name = line_edit.text
-		preset.created_at = Time.get_datetime_string_from_system()
+		var line_edit = M3TextField.new()
+		line_edit.label_text = "Preset Name"
+		line_edit.text = preset.name
+		line_edit.placeholder_text = "Preset Name"
+		line_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		dialog.content_slot.add_child(line_edit)
 		
-		var success = SettingsManager.save_preset(preset)
-		if success:
-			NotificationManager.show_notification("Saved preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
-			_refresh_preset_dropdown()
-		else:
-			NotificationManager.show_notification("Failed to save preset", NotificationManager.Type.ERROR)
-	, true)
-	
-	name_dialog.show_overlay()
+		dialog.add_action("Cancel", Callable(), false)
+		dialog.add_action("Save", func():
+			if line_edit.text.is_empty():
+				NotificationManager.show_notification("Preset name cannot be empty", NotificationManager.Type.WARNING)
+				return
+			
+			preset.name = line_edit.text
+			preset.created_at = Time.get_datetime_string_from_system()
+			
+			var success = SettingsManager.save_preset(preset)
+			if success:
+				NotificationManager.show_notification("Saved preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
+				_refresh_preset_dropdown()
+			else:
+				NotificationManager.show_notification("Failed to save preset", NotificationManager.Type.ERROR)
+		, true)
+	, func(): _preset_dropdown.selected = 0)
 
 func refresh_values() -> void:
 	_refresh_all_settings_ui()

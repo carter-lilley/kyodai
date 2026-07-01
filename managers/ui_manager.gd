@@ -192,6 +192,21 @@ func dismiss_modal() -> void:
 func is_modal_open() -> bool:
 	return overlay.is_modal_open()
 
+func show_folder_dialog(title: String, initial_dir: String, on_dir_selected: Callable, use_native: bool = true) -> FileDialog:
+	return overlay.show_folder_dialog(title, initial_dir, on_dir_selected, use_native)
+
+func show_file_dialog(title: String, filters: PackedStringArray, initial_dir: String, on_file_selected: Callable, use_native: bool = true) -> FileDialog:
+	return overlay.show_file_dialog(title, filters, initial_dir, on_file_selected, use_native)
+
+func show_confirm(title: String, body: String, on_accept: Callable = Callable(), on_cancel: Callable = Callable(), on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
+	return overlay.show_confirm(title, body, on_accept, on_cancel, on_dismissed, options)
+
+func show_alert(title: String, body: String, on_ok: Callable = Callable(), on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
+	return overlay.show_alert(title, body, on_ok, on_dismissed, options)
+
+func show_custom_dialog(build_fn: Callable, on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
+	return overlay.show_custom_dialog(build_fn, on_dismissed, options)
+
 func find_home_button() -> Control:
 	return navigation.find_home_button()
 
