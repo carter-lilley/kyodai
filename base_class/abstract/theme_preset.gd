@@ -54,8 +54,14 @@ class_name ThemePreset
 	"hero_height": 4
 }
 
-## Creates a ThemePreset from current settings
+## Creates a ThemePreset from current settings.
+## DEPRECATED: Use SettingsManager.create_preset_from_current() instead.
+## Kept for backwards compatibility with existing saved resources/tests.
 static func from_current_settings(settings: Settings) -> ThemePreset:
+	if settings == null:
+		push_error("[ThemePreset] Cannot create preset from null settings")
+		return null
+	
 	var preset = ThemePreset.new()
 	preset.name = "New Preset"
 	preset.description = ""
@@ -110,55 +116,11 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	
 	return preset
 
-## Applies this preset to the given settings object
-## Returns true if successful
-func apply_to_settings(settings: Settings) -> bool:
-	if settings == null:
-		push_error("[ThemePreset] Cannot apply to null settings")
-		return false
-	
-	# Apply library settings (with null checks)
-	if settings.get("library_layout_mode") != null:
-		settings.library_layout_mode.value = library_layout_mode
-	if settings.get("library_navigation_type") != null:
-		settings.library_navigation_type.value = library_navigation_type
-	if settings.get("library_grid_padding") != null:
-		settings.library_grid_padding.value = library_grid_padding
-	if settings.get("library_card_zoom") != null:
-		settings.library_card_zoom.value = library_card_zoom
-	if settings.get("library_show_title_mode") != null:
-		settings.library_show_title_mode.value = library_show_title_mode
-	if settings.get("library_card_display_mode") != null:
-		settings.library_card_display_mode.value = library_card_display_mode
-	if settings.get("library_focus_scale") != null:
-		settings.library_focus_scale.value = library_focus_scale
-	if settings.get("library_card_content_alignment") != null:
-		settings.library_card_content_alignment.value = library_card_content_alignment
-	# Version 2 fields: only apply if preset was saved with these fields
-	if version >= 2:
-		if settings.get("library_grid_vertical") != null:
-			settings.library_grid_vertical.value = library_grid_vertical
-		if settings.get("card_media_aspect_ratio") != null:
-			settings.card_media_aspect_ratio.value = card_media_aspect_ratio
-	if settings.get("library_background_config") != null:
-		settings.library_background_config.value = library_background_config.duplicate(true)
-	if settings.get("library_primary_color") != null:
-		settings.library_primary_color.value = library_primary_color
-	if settings.get("dark_mode") != null:
-		settings.dark_mode.value = dark_mode
-	
-	# Apply card settings
-	if settings.get("card_effect_config") != null:
-		var effects_count := 0
-		var focus_effects_count := 0
-		if card_effect_config.get("effects") is Array:
-			effects_count = card_effect_config.effects.size()
-		if card_effect_config.get("focus_effects") is Array:
-			focus_effects_count = card_effect_config.focus_effects.size()
-		print("[ThemePreset] apply_to_settings card_effect_config: effects=", effects_count, " focus_effects=", focus_effects_count, " config=", card_effect_config)
-		settings.card_effect_config.value = card_effect_config.duplicate(true)
-	
-	return true
+## Returns a display name for the preset
+func get_display_name() -> String:
+	if name.is_empty():
+		return "Unnamed Preset"
+	return name
 
 ## Merges missing settings from another preset (for defaults/updates)
 func merge_with_defaults(default_preset: ThemePreset) -> void:
@@ -179,9 +141,3 @@ func merge_with_defaults(default_preset: ThemePreset) -> void:
 	if card_effect_config.is_empty():
 		if not default_preset.card_effect_config.is_empty():
 			card_effect_config = default_preset.card_effect_config.duplicate(true)
-
-## Returns a display name for the preset
-func get_display_name() -> String:
-	if name.is_empty():
-		return "Unnamed Preset"
-	return name

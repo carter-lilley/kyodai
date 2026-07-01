@@ -325,7 +325,7 @@ func _check_preset_match() -> void:
 			_preset_dropdown.selected = 0
 		return
 	
-	var current_preset = ThemePreset.from_current_settings(SettingsManager.settings)
+	var current_preset = SettingsManager.create_preset_from_current()
 	var is_match = _presets_equal(current_preset, _loaded_preset)
 	
 	if is_match:
@@ -411,7 +411,7 @@ func _on_export_preset_pressed() -> void:
 	if not SettingsManager.settings:
 		return
 	
-	var preset = ThemePreset.from_current_settings(SettingsManager.settings)
+	var preset = SettingsManager.create_preset_from_current()
 	
 	var name_dialog = M3Dialog.new()
 	name_dialog.title_text = "Export Theme Preset"

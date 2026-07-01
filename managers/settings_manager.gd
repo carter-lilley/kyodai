@@ -85,6 +85,74 @@ func set_setting(value: Variant, setting: SettingsVar, force: bool = false):
 		_is_dirty = true
 		emit_signal("setting_changed", value, setting)
 
+## Builds a ThemePreset from the live settings using the public get_setting() API.
+func create_preset_from_current() -> ThemePreset:
+	return create_preset_from_settings(settings)
+
+## Builds a ThemePreset from the given Settings object.
+func create_preset_from_settings(source_settings: Settings) -> ThemePreset:
+	var preset := ThemePreset.new()
+	preset.name = "New Preset"
+	preset.description = ""
+	preset.created_at = Time.get_datetime_string_from_system()
+	preset.version = 2
+	
+	preset.library_layout_mode = _preset_value_from(source_settings, "library_layout_mode", 0)
+	preset.library_navigation_type = _preset_value_from(source_settings, "library_navigation_type", 1)
+	preset.library_grid_padding = _preset_value_from(source_settings, "library_grid_padding", 22)
+	preset.library_card_zoom = _preset_value_from(source_settings, "library_card_zoom", 0.25)
+	preset.library_show_title_mode = _preset_value_from(source_settings, "library_show_title_mode", 0)
+	preset.library_card_display_mode = _preset_value_from(source_settings, "library_card_display_mode", 0)
+	preset.library_focus_scale = _preset_value_from(source_settings, "library_focus_scale", 0.09)
+	preset.library_card_content_alignment = _preset_value_from(source_settings, "library_card_content_alignment", 0)
+	preset.library_grid_vertical = _preset_value_from(source_settings, "library_grid_vertical", true)
+	preset.card_media_aspect_ratio = _preset_value_from(source_settings, "card_media_aspect_ratio", 0)
+	preset.library_background_config = _preset_value_from(source_settings, "library_background_config", {
+		"effect_id": "none",
+		"settings": {}
+	}).duplicate(true)
+	preset.library_primary_color = _preset_value_from(source_settings, "library_primary_color", Color.WHITE)
+	preset.dark_mode = _preset_value_from(source_settings, "dark_mode", true)
+	preset.card_effect_config = _preset_value_from(source_settings, "card_effect_config", {
+		"card_orientation": 2,
+		"card_rounding": 0.24,
+		"effects": [{
+			"effect_id": "drop_shadow",
+			"settings": {
+				"shadow_color": Color(0, 0, 0, 0.5),
+				"shadow_expand": 0.066,
+				"shadow_offset_x": 0.0,
+				"shadow_offset_y": 0.043,
+				"shadow_softness": 0.15,
+				"shadow_spread": 0.0
+			}
+		}],
+		"focus_effects": [{
+			"effect_id": "glow",
+			"settings": {
+				"blur_amount": 6.5,
+				"glow_intensity": 0.3,
+				"glow_radius": 0.14,
+				"glow_spread": 0.06,
+				"threshold": 0.41
+			}
+		}],
+		"hero_height": 4
+	}).duplicate(true)
+	
+	return preset
+
+func _preset_value_from(source_settings: Settings, name: String, default: Variant) -> Variant:
+	if source_settings == null:
+		return default
+	var setting: SettingsVar = source_settings.get(name)
+	if setting == null:
+		return default
+	var value = setting.value
+	if value == null:
+		return default
+	return value
+
 func get_setting(_name:String) -> SettingsVar:
 	var settingsvar: SettingsVar = null
 	if not settings:
@@ -330,56 +398,40 @@ func apply_preset(preset: ThemePreset) -> bool:
 		return false
 	
 	# Create a default preset for merging missing values
-	var default_preset = ThemePreset.from_current_settings(Settings.new())
+	var default_preset = create_preset_from_settings(Settings.new())
 	preset.merge_with_defaults(default_preset)
 	
-	var success = preset.apply_to_settings(settings)
+	emit_signal("apply_preset_begin")
 	
-	if success:
-		_is_dirty = true
-		emit_signal("apply_preset_begin")
-		
-		# Emit setting_changed for all library settings so views get notified
-		# Emit the SETTING VALUE (settings.X.value), not the preset value
-		if settings.get("library_navigation_type") != null:
-			emit_signal("setting_changed", settings.library_navigation_type.value, settings.library_navigation_type)
-		if settings.get("library_grid_padding") != null:
-			emit_signal("setting_changed", settings.library_grid_padding.value, settings.library_grid_padding)
-		if settings.get("library_card_zoom") != null:
-			emit_signal("setting_changed", settings.library_card_zoom.value, settings.library_card_zoom)
-		if settings.get("library_background_config") != null:
-			emit_signal("setting_changed", settings.library_background_config.value, settings.library_background_config)
-		if settings.get("library_show_title_mode") != null:
-			emit_signal("setting_changed", settings.library_show_title_mode.value, settings.library_show_title_mode)
-		if settings.get("library_card_display_mode") != null:
-			emit_signal("setting_changed", settings.library_card_display_mode.value, settings.library_card_display_mode)
-		if settings.get("library_card_content_alignment") != null:
-			emit_signal("setting_changed", settings.library_card_content_alignment.value, settings.library_card_content_alignment)
-		if settings.get("library_focus_scale") != null:
-			emit_signal("setting_changed", settings.library_focus_scale.value, settings.library_focus_scale)
-		if settings.get("library_layout_mode") != null:
-			emit_signal("setting_changed", settings.library_layout_mode.value, settings.library_layout_mode)
-		if settings.get("library_primary_color") != null:
-			emit_signal("setting_changed", settings.library_primary_color.value, settings.library_primary_color)
-		if settings.get("library_grid_vertical") != null:
-			emit_signal("setting_changed", settings.library_grid_vertical.value, settings.library_grid_vertical)
-		if settings.get("card_media_aspect_ratio") != null:
-			emit_signal("setting_changed", settings.card_media_aspect_ratio.value, settings.card_media_aspect_ratio)
-		if settings.get("dark_mode") != null:
-			emit_signal("setting_changed", settings.dark_mode.value, settings.dark_mode)
-		if settings.get("focus_lock_enabled") != null:
-			emit_signal("setting_changed", settings.focus_lock_enabled.value, settings.focus_lock_enabled)
-		# Emit for card effect config - this triggers grid rebuild
-		if settings.get("card_effect_config") != null:
-			emit_signal("setting_changed", settings.card_effect_config.value, settings.card_effect_config)
-		
-		emit_signal("apply_preset_end")
-		
-		save_settings()
-	else:
-		push_error("[SettingsManager] preset.apply_to_settings returned false")
+	# Apply every preset field through the public setter so dirty flags and
+	# setting_changed signals are emitted consistently.
+	var mapping := {
+		"library_layout_mode": preset.library_layout_mode,
+		"library_navigation_type": preset.library_navigation_type,
+		"library_grid_padding": preset.library_grid_padding,
+		"library_card_zoom": preset.library_card_zoom,
+		"library_show_title_mode": preset.library_show_title_mode,
+		"library_card_display_mode": preset.library_card_display_mode,
+		"library_focus_scale": preset.library_focus_scale,
+		"library_card_content_alignment": preset.library_card_content_alignment,
+		"library_grid_vertical": preset.library_grid_vertical,
+		"card_media_aspect_ratio": preset.card_media_aspect_ratio,
+		"library_background_config": preset.library_background_config.duplicate(true),
+		"library_primary_color": preset.library_primary_color,
+		"dark_mode": preset.dark_mode,
+		"card_effect_config": preset.card_effect_config.duplicate(true),
+	}
 	
-	return success
+	for key in mapping:
+		var setting := get_setting(key)
+		if setting:
+			set_setting(mapping[key], setting, true)
+	
+	emit_signal("apply_preset_end")
+	
+	save_settings()
+	
+	return true
 
 func export_preset(preset: ThemePreset, export_path: String) -> bool:
 	if not preset:
