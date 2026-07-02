@@ -632,7 +632,12 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	return null
 
 func _load_and_apply_saved_zoom() -> void:
-	"""Load saved zoom from settings and apply to both grids for parity."""
+	"""Sync the zoom slider to the saved zoom setting.
+
+	The grid itself now reads the saved zoom ratio during view setup
+	(_update_grid_orientation), so we only need to update the slider here to
+	avoid a late zoom write that causes visible settling.
+	"""
 	if not SettingsManager:
 		return
 
@@ -641,14 +646,6 @@ func _load_and_apply_saved_zoom() -> void:
 		return
 
 	var saved_zoom = zoom_setting.value
-
-	# Apply to BOTH Home and Library views for consistent zoom across views
-	for view_name in ["Home", "Library"]:
-		var view = UIManager.get_view(view_name)
-		if view:
-			var grid = _get_view_grid(view)
-			if grid:
-				grid.target_card_width_ratio = saved_zoom
 
 	# Set zoom slider to saved value and refresh stops
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
@@ -799,18 +796,21 @@ func _input(event: InputEvent):
 					return
 				_last_press = now
 
-			# Only handle nav transitions on the initial press, not auto-repeats.
-			# Joystick analog input generates a stream of events; without this,
-			# focus would skip past nav items before the user can release.
-			if _held_dir == "":
-				if _try_nav_to_grid(event):
-					_held_dir = dir
-					_delay_timer.start()
-					get_viewport().set_input_as_handled()
+			if _held_dir == dir:
+				if event is InputEventAction:
+					print("[Repeat] synthetic repeat allowed for ", dir)
 					return
+				print("[Repeat] engine echo swallowed for ", dir)
+				get_viewport().set_input_as_handled()
+				return
 
+			print("[Repeat] first press ", dir, " held_dir='", _held_dir, "'")
+			var nav_handled := _try_nav_to_grid(event)
 			_held_dir = dir
+			print("[Repeat] starting delay timer: ", _delay_timer.wait_time)
 			_delay_timer.start()
+			if nav_handled:
+				get_viewport().set_input_as_handled()
 			return
 
 		if event.is_action_released(dir) and _held_dir == dir:
@@ -1005,16 +1005,20 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 		card.grab_focus()
 
 func _on_delay_timeout():
+	print("[Repeat] delay timeout fired, held_dir=", _held_dir)
 	if _held_dir != "":
+		print("[Repeat] starting repeat timer: ", _repeat_timer.wait_time)
 		_repeat_timer.start()
 		_resend()
 
 func _on_repeat():
+	print("[Repeat] repeat timeout fired, held_dir=", _held_dir)
 	if _held_dir != "":
 		_resend()
 
 func _resend():
 	if _held_dir != "":
+		print("[Repeat] resending ", _held_dir)
 		# Send press event
 		var press = InputEventAction.new()
 		press.action = _held_dir

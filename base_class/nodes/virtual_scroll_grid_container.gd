@@ -464,9 +464,15 @@ func _get_available_size() -> Vector2:
 		var v_scroll = _scroll_container.get_v_scroll_bar()
 		if v_scroll:
 			scrollbar_x = v_scroll.get_combined_minimum_size().x
+			# Always reserve the scrollbar width so the layout doesn't snap to a
+			# different cards-per-line stop when the scrollbar appears/disappears.
+			if scrollbar_x <= 0.0:
+				scrollbar_x = M3Units.dp(M3Theme.SCROLLBAR_THICKNESS)
 		var h_scroll = _scroll_container.get_h_scroll_bar()
 		if h_scroll:
 			scrollbar_y = h_scroll.get_combined_minimum_size().y
+			if scrollbar_y <= 0.0:
+				scrollbar_y = M3Units.dp(M3Theme.SCROLLBAR_THICKNESS)
 
 	if vertical:
 		return Vector2(maxf(size.x - scrollbar_x, 1.0), maxf(size.y, 1.0))
@@ -520,7 +526,7 @@ func _ready():
 	call_deferred("_update_focus_scale_from_settings")
 	call_deferred("_update_focus_lock_from_settings")
 	call_deferred("_refresh_cached_settings")
-	call_deferred("_recalculate_layout")
+	call_deferred("_recalculate_layout_until_stable")
 	call_deferred("_connect_focus_lock_viewport")
 	_ready_called = true
 
@@ -777,6 +783,19 @@ func _get_direction_raw_strength() -> float:
 		)
 	)
 
+func _recalculate_layout_until_stable(max_passes: int = 3) -> void:
+	"""Run _recalculate_layout() repeatedly until the available size stabilizes.
+
+	Scrollbar visibility toggles can change the usable viewport width between
+	passes. Converging before the frame renders prevents visible zoom snapping.
+	"""
+	for i in range(max_passes):
+		var before = _get_available_size()
+		_recalculate_layout()
+		var after = _get_available_size()
+		if before.is_equal_approx(after):
+			break
+
 func _on_resize_debounced():
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
 	# during a zoom-driven layout pass can fire _on_resized() mid-flight).
@@ -790,10 +809,12 @@ func _on_resize_debounced():
 		_batching_layout = true
 		target_card_width_ratio = snapped
 		_batching_layout = false
-	_recalculate_layout()
+	_recalculate_layout_until_stable()
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
 	if _active_cards.size() == 0 and _total_items > 0 and size.x > 0 and size.y > 0:
 		_initial_load()
+		# After populating cards the scrollbar state may change; converge again.
+		_recalculate_layout_until_stable()
 
 func _update_grid_separation_from_settings() -> void:
 	var padding: int = UIManager.card_settings_state.grid_padding if UIManager and UIManager.card_settings_state else 10
@@ -2232,15 +2253,11 @@ func _refresh_buffer(preserve_scroll: bool = false):
 		_scroll_container.scroll_horizontal = 0
 		_scroll_container._target_scroll = 0.0
 
-	_recalculate_layout()
+	_recalculate_layout_until_stable()
 	if _active_cards.size() == 0:
 		_initial_load()
-		# After populating cards the scrollbar becomes visible and the available
-		# width shrinks. Re-run layout immediately so the card width is re-snapped
-		# against the reduced width before the frame renders, preventing a
-		# one-row collapse.
-		_last_layout_available_size = Vector2.ZERO
-		_recalculate_layout()
+		# After populating cards the scrollbar state may change; converge again.
+		_recalculate_layout_until_stable()
 
 	# Restore focus to the card that owned it before recycle; fall back to the
 	# saved raw scroll offset if no focus target exists. scroll_to_index_and_focus

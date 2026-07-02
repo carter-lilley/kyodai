@@ -113,6 +113,11 @@ func _update_grid_orientation() -> void:
 	var new_grid_vertical = state.grid_vertical
 	var new_focus_scale = 1.0 + state.focus_scale_ratio
 
+	# Apply the saved zoom ratio before any cards are created so the first
+	# visible layout uses the user's saved zoom instead of the default 0.15.
+	if games_grid and not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_ratio):
+		games_grid.target_card_width_ratio = state.card_zoom_ratio
+
 	# Batch-apply to avoid redundant rebuilds from individual setters
 	games_grid.set_grid_orientation(new_mode, new_grid_vertical, new_focus_scale)
 
