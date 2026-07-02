@@ -93,9 +93,6 @@ func _ready():
 	# Connect to UIManager modal signals
 	UIManager.modal_item_selected.connect(_on_modal_item_selected)
 	
-	# Connect to focus changes for hero image
-	get_viewport().gui_focus_changed.connect(_on_focus_changed)
-	
 	# Load platforms list for indicator
 	_load_platforms_list()
 	
@@ -668,6 +665,11 @@ func on_view_show():
 	# Ensure search overlay is hidden when returning to this view
 	if _search_overlay and _search_overlay.is_active():
 		_search_overlay.dismiss()
+	# Ensure the grid catches up if it initialized while hidden (e.g. Library tab).
+	if games_grid:
+		if games_grid._active_cards.size() == 0 and games_grid._total_items > 0 and games_grid.size.x > 0 and games_grid.size.y > 0:
+			games_grid._initial_load()
+		games_grid._request_missing_data()
 
 func on_view_hide():
 	view_hidden.emit()

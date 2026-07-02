@@ -279,7 +279,9 @@ func _enter_tree():
 		_setup_rs_items()
 		_update_media()
 		_update_focus_ring_bounds()
-		_update_media_panel_size(true)
+	# Recompute media bounds whenever the card re-enters the tree so pooled cards
+	# don't render with stale/zero bounds from their previous lifecycle.
+	_update_media_panel_size(true)
 	# Subclasses may need to rebuild node-less effect stacks after RS items are
 	# recreated (e.g. when a pooled card re-enters the tree).
 	_on_rs_items_recreated()
@@ -481,8 +483,10 @@ func _update_media():
 	if not has_media or _media_content != null or media_texture == null:
 		if _media_canvas_item.is_valid():
 			RenderingServer.canvas_item_clear(_media_canvas_item)
+		queue_redraw()
 		return
 	_draw_default_media()
+	queue_redraw()
 
 func _draw_default_media():
 	if not _media_canvas_item.is_valid() or not media_texture:

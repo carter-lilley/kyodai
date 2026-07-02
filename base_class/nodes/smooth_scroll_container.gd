@@ -339,6 +339,7 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 		# Focus callback disabled - see _start_smooth_scroll() for details
 		_start_smooth_scroll(duration_multiplier)
 	else:
+		_target_scroll = target
 		_set_current_scroll(target)
 
 func stop_smooth_scroll() -> void:

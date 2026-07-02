@@ -22,11 +22,8 @@ enum ViewMode { GRID, LIST, CAROUSEL }
 			view_mode = value
 			return
 		if view_mode != value:
-			var old_focused = _last_focused_virtual_index
 			view_mode = value
 			_update_view_mode()
-			if old_focused >= 0:
-				call_deferred("scroll_to_index_and_focus", old_focused, false)
 
 # Grid orientation toggle. Only affects GRID mode; LIST is always vertical, CAROUSEL always horizontal.
 var grid_vertical: bool = true:
@@ -36,14 +33,11 @@ var grid_vertical: bool = true:
 			return
 		if value == grid_vertical:
 			return
-		var old_focused = _last_focused_virtual_index
 		grid_vertical = value
 		if _ready_called and view_mode == ViewMode.GRID:
 			_update_view_mode()
 			refresh_dimensions()
 			queue_redraw()
-			if old_focused >= 0:
-				call_deferred("scroll_to_index_and_focus", old_focused, false)
 
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
@@ -53,10 +47,9 @@ func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_
 	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
 
 	if needs_refresh:
+		_refresh_buffer(true)
 		refresh_dimensions()
 		queue_redraw()
-		if old_focused >= 0:
-			call_deferred("scroll_to_index_and_focus", old_focused, false)
 
 # Layout-application helpers: mutate state without emitting side effects, returning true if changed.
 # Used by set_grid_orientation and _batch_apply_layout_state to coalesce layout recalculations.
@@ -135,14 +128,12 @@ func _batch_apply_layout_state() -> void:
 
 	if structure_changed:
 		# One rebuild path: configure flags then refresh buffer, which recalculates layout.
-		_refresh_buffer()
+		_refresh_buffer(true)
 		queue_redraw()
-		if old_focused >= 0:
-			call_deferred("scroll_to_index_and_focus", old_focused, false)
 	else:
 		# Non-structure changes share the same rebuild path to guarantee a single recalc.
 		if focus_changed or padding_changed:
-			_refresh_buffer()
+			_refresh_buffer(true)
 		elif zoom_changed:
 			_recalculate_layout()
 
@@ -226,7 +217,7 @@ var focus_scale: float = 1.08:
 		if not is_equal_approx(focus_scale, clamped_scale):
 			focus_scale = clamped_scale
 			_recalculate_layout()
-			_refresh_buffer()
+			_refresh_buffer(true)
 
 # Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
@@ -415,7 +406,7 @@ func _configure_view_mode() -> void:
 func _update_view_mode() -> void:
 	"""Apply view-mode configuration and rebuild the card buffer."""
 	_configure_view_mode()
-	_refresh_buffer()
+	_refresh_buffer(true)
 
 func _update_flow_container_flags() -> void:
 	if not _flow_container:
@@ -2199,9 +2190,18 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 
-func _refresh_buffer():
+func _refresh_buffer(preserve_scroll: bool = false):
 	# Capture live focus state before recycling so we can restore it after rebuild.
 	var saved_focus_index: int = _get_focused_virtual_index()
+	# Remember the last focused index for fallback restoration even if focus is
+	# not currently owned by this grid.
+	if saved_focus_index < 0 and _last_focused_virtual_index >= 0:
+		saved_focus_index = _last_focused_virtual_index
+	# Capture the raw scroll offset when requested so we can restore position for
+	# non-focused cards (e.g. mouse users) across view-mode switches.
+	var saved_scroll_offset: float = 0.0
+	if preserve_scroll and _scroll_container:
+		saved_scroll_offset = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
 
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)
@@ -2222,9 +2222,9 @@ func _refresh_buffer():
 	_virtual_start = 0
 	_virtual_end = 0
 
-	# Reset scroll position to prevent stale scroll values from causing
-	# immediate recycling of freshly-created cards after view mode switches.
-	if _scroll_container:
+	# Only zero the scroll when not preserving it. View-mode switches remember
+	# the focused item (or raw offset) and restore it after the rebuild.
+	if not preserve_scroll and _scroll_container:
 		_scroll_container.scroll_vertical = 0
 		_scroll_container.scroll_horizontal = 0
 		_scroll_container._target_scroll = 0.0
@@ -2233,11 +2233,23 @@ func _refresh_buffer():
 	if _active_cards.size() == 0:
 		_initial_load()
 
-	# Restore focus to the card that owned it before recycle.
-	# scroll_to_index_and_focus waits for the target card to exist and suppresses
-	# the smooth-scroll response, avoiding focus loss during long centering tweens.
-	if saved_focus_index >= 0:
-		call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
+	# Restore focus to the card that owned it before recycle; fall back to the
+	# saved raw scroll offset if no focus target exists. scroll_to_index_and_focus
+	# waits for the target card to exist and suppresses the smooth-scroll
+	# response, so the jump is instantaneous.
+	if preserve_scroll:
+		if saved_focus_index >= 0:
+			call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
+		elif _scroll_container:
+			# Clamp to valid range after the new layout is known.
+			var scrollbar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+			var max_scroll: float = scrollbar.max_value - scrollbar.page if scrollbar else 0.0
+			var clamped_offset: int = int(clampf(saved_scroll_offset, 0.0, max_scroll))
+			if vertical:
+				_scroll_container.scroll_vertical = clamped_offset
+			else:
+				_scroll_container.scroll_horizontal = clamped_offset
+			_scroll_container._target_scroll = clamped_offset
 
 func get_target_scroll() -> float:
 	return _scroll_container.get_target_scroll() if _scroll_container else 0.0
@@ -2588,6 +2600,8 @@ func cache_items_at_offset(items: Array[GameResource], offset: int):
 
 				_cached_game_ids[game.romm_id] = cache_key
 
+			# Actually cache the game so it can be assigned to cards.
+			_data_cache[cache_key] = game
 			_update_cache_access_order(cache_key)
 
 	if items.size() > 0:
