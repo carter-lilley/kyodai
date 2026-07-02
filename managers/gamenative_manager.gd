@@ -2,6 +2,8 @@ extends Node
 
 ## Manager for GameNative integration - handles loading/saving game list and fetching Steam metadata
 
+const FSM := preload("res://managers/filesystem_manager.gd")
+
 const STEAM_CDN_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
 
 ## Signal emitted when games list changes
@@ -9,12 +11,68 @@ signal games_updated()
 
 var _games_data: Array[Dictionary] = []
 var _http_request: HTTPRequest
+var _pending_scan_app_ids: Array[int] = []
 
 func _ready():
 	_http_request = HTTPRequest.new()
 	add_child(_http_request)
 	_http_request.request_completed.connect(_on_http_request_completed)
 	_load_games()
+	# On Android, discover any .steam files placed in {games_root_folder}/steam and
+	# add them as permanent GameNative entries just like manually-added games.
+	call_deferred("_scan_steam_folder")
+
+func _scan_steam_folder() -> void:
+	if not PlatformManager.is_android():
+		return
+	
+	var root_setting = SettingsManager.get_setting("games_root_folder")
+	if not root_setting or root_setting.value == "":
+		return
+	
+	var steam_folder := FSM.join_paths(root_setting.value, "steam")
+	if not FSM.dir_exists(steam_folder):
+		return
+	
+	for filename in FSM.get_files(steam_folder):
+		if not filename.ends_with(".steam"):
+			continue
+		var file_path := FSM.join_paths(steam_folder, filename)
+		var content := FSM.read_file(file_path)
+		if content == "":
+			continue
+		
+		# The .steam file should contain only the Steam App ID.
+		var app_id_str := content.strip_edges().get_slice("\n", 0).strip_edges()
+		if not app_id_str.is_valid_int():
+			continue
+		var app_id := int(app_id_str)
+		if app_id <= 0:
+			continue
+		
+		# Skip IDs already in the persisted GameNative list.
+		var already_exists := false
+		for game in _games_data:
+			if game.get("app_id", 0) == app_id:
+				already_exists = true
+				break
+		if already_exists:
+			continue
+		
+		_pending_scan_app_ids.append(app_id)
+	
+	_process_scan_queue()
+
+func _process_scan_queue() -> void:
+	if _pending_scan_app_ids.is_empty():
+		return
+	if _is_validating:
+		return
+	var app_id: int = _pending_scan_app_ids.pop_front()
+	add_game(app_id, func(_success: bool, _message: String):
+		# Continue to the next .steam file once this one finishes.
+		call_deferred("_process_scan_queue")
+	)
 
 func _load_games() -> void:
 	"""Load GameNative games from Settings."""

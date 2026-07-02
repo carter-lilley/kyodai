@@ -314,6 +314,7 @@ var _last_layout_grid_separation: int = -1
 var _last_layout_available_size: Vector2 = Vector2.ZERO
 var _last_layout_display_mode: int = -1
 var _last_layout_media_aspect_ratio: int = -1
+var _last_layout_total_items: int = -1
 
 # Deferred layout recalc guard — coalesces multiple settings-driven recalc
 # requests into a single call at the end of the frame.
@@ -1009,6 +1010,7 @@ func _recalculate_layout():
 	var card_geometry_changed = not card_size.is_equal_approx(_last_layout_card_size) or not focused_card_size.is_equal_approx(_last_layout_focused_card_size)
 	var separation_changed = grid_separation != _last_layout_grid_separation
 	var available_changed = not available.is_equal_approx(_last_layout_available_size)
+	var total_items_changed = _total_items != _last_layout_total_items
 
 	# Display mode and media aspect ratio affect base card dimensions, which
 	# feed into card_geometry_changed. Cache them explicitly so a recalc that
@@ -1018,7 +1020,7 @@ func _recalculate_layout():
 	var current_media_ratio = state.media_aspect_ratio if state else 0
 	var display_or_ratio_changed = current_display_mode != _last_layout_display_mode or current_media_ratio != _last_layout_media_aspect_ratio
 
-	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed:
+	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed:
 		_is_recalculating_layout = false
 		return
 
@@ -1032,6 +1034,7 @@ func _recalculate_layout():
 	_last_layout_available_size = available
 	_last_layout_display_mode = current_display_mode
 	_last_layout_media_aspect_ratio = current_media_ratio
+	_last_layout_total_items = _total_items
 
 	# Invalidate then pre-compute scroll math before downstream consumers read it
 	_cached_items_per_line = -1
@@ -2232,6 +2235,12 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	_recalculate_layout()
 	if _active_cards.size() == 0:
 		_initial_load()
+		# After populating cards the scrollbar becomes visible and the available
+		# width shrinks. Re-run layout immediately so the card width is re-snapped
+		# against the reduced width before the frame renders, preventing a
+		# one-row collapse.
+		_last_layout_available_size = Vector2.ZERO
+		_recalculate_layout()
 
 	# Restore focus to the card that owned it before recycle; fall back to the
 	# saved raw scroll offset if no focus target exists. scroll_to_index_and_focus
