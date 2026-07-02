@@ -14,7 +14,6 @@ signal download_requested(game: GameResource)
 		_update_display()
 
 func set_game_with_priority(value: GameResource, high_priority: bool):
-	print("[GC] set_game_with_priority vidx=", get_meta("virtual_index", -1), " game=", value.title if value else "null", " hp=", high_priority, " in_tree=", is_inside_tree(), " media_stack=", _media_stack != null)
 	game = value
 	_update_display_with_priority(high_priority)
 
@@ -118,21 +117,26 @@ var _touch_start_time: float = 0.0
 var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
 
+func _on_rs_items_recreated() -> void:
+	# Rebuild the node-less effect stacks as soon as the RenderingServer items
+	# are recreated (called from M3Card._enter_tree before _update_media_panel_size).
+	# Without this, _has_media_content() returns false during bounds calculation
+	# and the card renders with zero-sized media.
+	if not _media_stack:
+		_build_media_stack()
+	if _focus_stack:
+		_build_focus_stack(true)
+
 func _enter_tree():
-	print("[GC] _enter_tree vidx=", get_meta("virtual_index", -1), " game=", game.title if game else "null", " in_tree=", is_inside_tree())
 	super._enter_tree()
 	if not _ready_called:
 		return
-	# When a pooled card re-enters the tree its RS items are recreated, but the
-	# node-less media stack was freed in _exit_tree. Rebuild it here if needed so
-	# the card doesn't stay blank until a later deferred refresh.
-	var stack_rebuilt := false
-	if not _media_stack:
-		print("[GC] _enter_tree rebuilding media stack vidx=", get_meta("virtual_index", -1))
-		_build_media_stack()
-		stack_rebuilt = true
+	# The media stack is rebuilt in _on_rs_items_recreated() before bounds are
+	# computed. The code below just reparents/resyncs in case anything changed.
 	if _media_stack and _media_canvas_item.is_valid():
 		_media_stack.set_parent_rid(_media_canvas_item)
+		if _current_texture:
+			_media_stack.set_game_texture(_current_texture)
 	if _focus_stack:
 		_focus_stack.set_parent_rid(get_canvas_item())
 		_update_effect_transforms()
@@ -142,13 +146,6 @@ func _enter_tree():
 		_setup_status_badge()
 	_update_status_icon()
 	_update_media()
-	# M3Card._enter_tree recomputed media bounds before the stack existed, so
-	# _has_media_content() returned false and bounds were zeroed. Now that the
-	# stack is rebuilt, recompute bounds so the node-less stack gets valid
-	# geometry and a full refresh.
-	if stack_rebuilt:
-		print("[GC] _enter_tree recomputing media bounds vidx=", get_meta("virtual_index", -1))
-		_update_media_panel_size(true)
 
 func _ready():
 	super._ready()
@@ -183,7 +180,6 @@ func _has_media_content() -> bool:
 	return _media_stack != null
 
 func _exit_tree():
-	print("[GC] _exit_tree vidx=", get_meta("virtual_index", -1), " game=", game.title if game else "null")
 	# Cancel any in-flight image operations to prevent callbacks from keeping this card alive
 	if _media_loader:
 		_media_loader.cancel()
@@ -191,13 +187,8 @@ func _exit_tree():
 	# Kill any focus effect tweens
 	_kill_focus_tweens()
 
-	if _media_stack:
-		_media_stack.free_rids()
-		_media_stack = null
-	if _focus_stack:
-		_focus_stack.free_rids()
-		_focus_stack = null
-
+	# Keep the node-less effect stacks allocated while the card is pooled. They
+	# are only freed in NOTIFICATION_PREDELETE when the card is truly destroyed.
 	_free_status_badge_canvas_item()
 	super._exit_tree()
 
@@ -723,17 +714,14 @@ func _update_display():
 
 func _update_display_with_priority(high_priority: bool):
 	if not game or not is_node_ready():
-		print("[GC] _update_display_with_priority early return game=", game != null, " ready=", is_node_ready())
 		return
 	_update_status_icon()
 	_update_platform_badge()
 	# If the texture is already cached and the game hasn't changed, reuse it
 	# synchronously to avoid the empty-card flash during recycling.
 	if _current_texture and _current_texture != _loading_texture and _current_texture_game_id == game.id:
-		print("[GC] _update_display_with_priority reusing cached texture vidx=", get_meta("virtual_index", -1))
 		_set_texture(_current_texture)
 	else:
-		print("[GC] _update_display_with_priority loading cover vidx=", get_meta("virtual_index", -1), " current_tex=", _current_texture != null, " current_id=", _current_texture_game_id, " game_id=", game.id)
 		_load_cover(high_priority)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
@@ -918,20 +906,16 @@ func _update_platform_badge():
 		_apply_badge_settings(focus_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
 
 func _load_cover(high_priority: bool = false) -> void:
-	print("[GC] _load_cover vidx=", get_meta("virtual_index", -1), " game=", game.title if game else "null", " hp=", high_priority, " loader=", _media_loader != null)
 	if _media_loader:
 		_media_loader.load_cover(game, high_priority)
 	else:
 		_set_texture(_loading_texture)
 
 func _on_media_texture_loaded(texture: Texture2D) -> void:
-	print("[GC] _on_media_texture_loaded vidx=", get_meta("virtual_index", -1), " tex_null=", texture == null, " game=", game.title if game else "null", " in_tree=", is_inside_tree(), " stack=", _media_stack != null)
 	_set_texture(texture)
 
 func _set_texture(tex: Texture2D) -> void:
-	print("[GC] _set_texture vidx=", get_meta("virtual_index", -1), " tex_null=", tex == null, " game=", game.title if game else "null", " media_stack=", _media_stack != null, " focus_stack=", _focus_stack != null, " bounds=", _media_bounds)
 	if _current_texture == tex:
-		print("[GC] _set_texture early_return same_texture vidx=", get_meta("virtual_index", -1))
 		return
 	_current_texture = tex
 	if game:
@@ -939,7 +923,6 @@ func _set_texture(tex: Texture2D) -> void:
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
 	# rebuild it now so the texture actually has somewhere to render.
 	if not _media_stack:
-		print("[GC] _set_texture rebuilding media stack vidx=", get_meta("virtual_index", -1))
 		_build_media_stack()
 	if _media_stack:
 		_media_stack.set_game_texture(tex)
@@ -947,10 +930,7 @@ func _set_texture(tex: Texture2D) -> void:
 		# set_game_texture() already marks shader params dirty, so if bounds are
 		# unchanged the deferred flush will push the new texture to the shader.
 		if not _media_bounds.is_equal_approx(_last_refreshed_media_bounds):
-			print("[GC] _set_texture force_refresh media vidx=", get_meta("virtual_index", -1), " bounds_changed")
 			_media_stack.force_refresh()
-		else:
-			print("[GC] _set_texture skipping media force_refresh vidx=", get_meta("virtual_index", -1), " bounds_unchanged")
 	if _focus_stack:
 		_focus_stack.set_game_texture(tex)
 		if not _media_bounds.is_equal_approx(_last_refreshed_media_bounds):
@@ -1232,11 +1212,11 @@ func _update_media_panel_size(force: bool = false) -> void:
 		_media_stack.set_clip_children(false)
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
-		# Only pay for a full geometry/shader refresh when the media bounds
-		# actually changed. Reparenting and texture sync above are cheap.
+		# Always update draw rects on entry/resize so the stack has valid geometry.
+		# Only pay for a full shader pipeline refresh when bounds actually changed.
 		var bounds_changed := not _media_bounds.is_equal_approx(_last_refreshed_media_bounds)
+		_media_stack.update_draw_rects()
 		if bounds_changed or force:
-			_media_stack.update_draw_rects()
 			_media_stack.force_refresh()
 			_last_refreshed_media_bounds = _media_bounds
 
@@ -1254,12 +1234,24 @@ func _notification(what: int):
 		if not _badge_update_pending:
 			_badge_update_pending = true
 			call_deferred("_deferred_update_badges")
-		call_deferred("_deferred_refresh_media_stack")
+		# _update_media_panel_size(true) is called by the layout system on resize,
+		# which already refreshes the media stack. Avoid a second deferred refresh
+		# that duplicates the work and can stall the render thread.
 	if what == NOTIFICATION_PARENTED:
 		# Invalidate cached parent-chain lookup so _get_show_delete() recomputes
 		remove_meta("_cached_show_delete")
+	if what == NOTIFICATION_PREDELETE:
+		if _media_stack:
+			_media_stack.free_rids()
+			_media_stack = null
+		if _focus_stack:
+			_focus_stack.free_rids()
+			_focus_stack = null
 
 func _deferred_refresh_media_stack() -> void:
 	if _media_stack:
-		_media_stack.update_draw_rects()
-		_media_stack.force_refresh()
+		var bounds_changed := not _media_bounds.is_equal_approx(_last_refreshed_media_bounds)
+		if bounds_changed:
+			_media_stack.update_draw_rects()
+			_media_stack.force_refresh()
+			_last_refreshed_media_bounds = _media_bounds

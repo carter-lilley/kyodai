@@ -12,9 +12,12 @@ var effect_stack: EffectStack = null
 var enabled: bool = true
 
 var _canvas_item_rid: RID = RID()
+var _last_parent_rid: RID = RID()
 var _material: ShaderMaterial = null
 var _visible: bool = true
 var _z_index: int = 0
+
+var _last_offset_rect: Rect2 = Rect2()
 
 var _shader_params_dirty: bool = false
 
@@ -48,7 +51,8 @@ func ensure_canvas_item(parent_rid: RID) -> RID:
 		_canvas_item_rid = RenderingServer.canvas_item_create()
 		RenderingServer.canvas_item_set_material(_canvas_item_rid, _material.get_rid())
 		RenderingServer.canvas_item_set_draw_index(_canvas_item_rid, _z_index)
-	if parent_rid.is_valid():
+	if parent_rid.is_valid() and not _last_parent_rid == parent_rid:
+		_last_parent_rid = parent_rid
 		RenderingServer.canvas_item_set_parent(_canvas_item_rid, parent_rid)
 	return _canvas_item_rid
 
@@ -72,6 +76,9 @@ func is_visible() -> bool:
 	return _visible
 
 func set_offset_rect(rect: Rect2) -> void:
+	if _last_offset_rect == rect:
+		return
+	_last_offset_rect = rect
 	ensure_canvas_item(RID())
 	RenderingServer.canvas_item_clear(_canvas_item_rid)
 	# Add the visible rect used by the shader. We also draw a tiny placeholder

@@ -195,6 +195,15 @@ func _update_focus_ring_bounds() -> void:
 	_focus_ring_bounds_queued = false
 	if not _focus_ring_canvas_item.is_valid():
 		return
+	# Skip expensive draw command rebuilds while the ring is hidden and the card
+	# is not focused. It will be rebuilt on the next focus change anyway.
+	if not has_focus() and not _focus_ring_canvas_item.is_valid():
+		return
+	if not has_focus():
+		# If the ring is currently hidden, we can bail unless its geometry was
+		# never built yet (target size is zero means it hasn't been initialized).
+		if _focus_target_w > 0.0 and _focus_target_h > 0.0:
+			return
 	var target_w := _focus_target_w
 	var target_h := _focus_target_h
 	if target_w <= 0.0:
@@ -250,7 +259,9 @@ func _ready():
 	_ready_called = true
 
 func _exit_tree():
-	_free_rs_items()
+	# Keep the flattened RS items allocated while the card is pooled. They are
+	# freed in NOTIFICATION_PREDELETE when the card is truly destroyed.
+	pass
 
 func _free_rs_items() -> void:
 	if _media_canvas_item.is_valid():
@@ -279,12 +290,13 @@ func _enter_tree():
 		_setup_rs_items()
 		_update_media()
 		_update_focus_ring_bounds()
-	# Recompute media bounds whenever the card re-enters the tree so pooled cards
-	# don't render with stale/zero bounds from their previous lifecycle.
-	_update_media_panel_size(true)
 	# Subclasses may need to rebuild node-less effect stacks after RS items are
 	# recreated (e.g. when a pooled card re-enters the tree).
 	_on_rs_items_recreated()
+	# Recompute media bounds now that subclasses have had a chance to recreate
+	# their node-less media content. Without this, _has_media_content() can
+	# return false for flattened cards and bounds end up zeroed/blank.
+	_update_media_panel_size(true)
 
 func _on_rs_items_recreated() -> void:
 	pass
@@ -916,6 +928,9 @@ func _update_text_content_sizes() -> void:
 
 func _on_focus_changed():
 	if _focus_ring_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, has_focus() and not disabled)
+		var should_show := has_focus() and not disabled
+		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, should_show)
+		if should_show:
+			_update_focus_ring_bounds()
 	queue_redraw()
 

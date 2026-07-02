@@ -20,7 +20,7 @@ var _held_dir: String = ""
 var _delay_timer: Timer
 var _repeat_timer: Timer
 const INITIAL_DELAY: float = 0.5
-const REPEAT_DELAY: float = 0.1
+const REPEAT_DELAY: float = 1.75
 var _last_press: int = 0
 
 # Nav transition cooldown (prevents joystick from skipping past nav items)

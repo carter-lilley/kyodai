@@ -102,6 +102,8 @@ func update_effect_configs(effect_configs: Array, force_full_rebuild: bool = tru
 	_rebuild_effects()
 
 func set_game_texture(texture: Texture2D) -> void:
+	if media_container and media_container.texture == texture:
+		return
 	if media_container:
 		media_container.texture = texture
 	for effect_id in _effects:
