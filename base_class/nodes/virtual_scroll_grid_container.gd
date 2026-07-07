@@ -171,16 +171,9 @@ var grid_separation: int = int(M3Units.dp(10))
 # When true, controller focus is prevented from escaping the grid at edges
 var focus_lock_enabled: bool = false
 
-# Track the last focused card's virtual index so we can redirect focus back if it escapes
+# Track the last focused card's virtual index so we can restore it after layout recalculations.
 var _last_focused_virtual_index: int = -1
 var _viewport_focus_connection: Viewport = null
-
-# Guard to prevent recursive focus redirection
-var _is_redirecting_focus: bool = false
-
-# Tracks whether the previous focus change originated from inside this grid.
-# Only redirect when focus moves FROM inside the grid TO outside.
-var _grid_had_focus_last: bool = false
 
 # Monotonically-increasing ID used to cancel stale deferred-focus requests.
 var _focus_request_id: int = 0
@@ -189,22 +182,9 @@ var _focus_request_id: int = 0
 # card is created by _on_scroll_value_changed.
 var _pending_focus_index: int = -1
 
-# Tracks whether a helper-scroll event has already been handled this process
-# frame. This prevents bunched-up OS key-repeat events from skipping multiple
-# rows/columns in a single frame while still allowing held-key repetition.
-var _helper_scroll_consumed_this_frame: bool = false
-
-# Analog-thumbstick navigation state. We accumulate stick deflection over time
-# and trigger a grid move each time the accumulator crosses the threshold.
-# The repeat rate scales with stick deflection; there is no release gate so a
-# held stick naturally auto-repeats.
-var _analog_scroll_accumulator: float = 0.0
-const ANALOG_SCROLL_SPEED: float = 8.0
-const ANALOG_SCROLL_DEADZONE: float = 0.25
-
 func is_focus_locked_and_active() -> bool:
-	"""Returns true if focus lock is enabled and focus was recently inside this grid."""
-	return focus_lock_enabled and _grid_had_focus_last
+	"""Returns true if focus lock is enabled and UIManager has locked focus to this grid."""
+	return focus_lock_enabled and UIManager and UIManager.is_focus_lock_active()
 
 # Scale factor applied when a card is focused. Cards scale UP from their normal size
 # by this amount. Edge overflow is prevented by focus-safe container margins.
@@ -570,6 +550,7 @@ func _on_display_size_changed(_new_size: Vector2):
 	_on_resize_debounced()
 
 func _enter_tree():
+	print("[Grid] _enter_tree: active=%s pool=%s flow_children=%s" % [_active_cards.size(), _card_pool.size(), _flow_container.get_child_count() if _flow_container else 0])
 	# Connect to centralized card settings state (idempotent via is_connected guards)
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
@@ -595,14 +576,31 @@ func _exit_tree():
 		if state.changed.is_connected(_on_card_settings_state_changed):
 			state.changed.disconnect(_on_card_settings_state_changed)
 	_disconnect_focus_lock_viewport()
+	# Release scene-wide focus lock if this grid held it.
+	if UIManager:
+		UIManager.exit_focus_lock(self)
+	print("[Grid] _exit_tree: active=%s pool=%s queued=%s" % [_active_cards.size(), _card_pool.size(), is_queued_for_deletion()])
 	# Always free the pooled cards when leaving the tree. Pooled nodes are not in
 	# the tree, so they would not be cleaned up automatically. Use free() because
-	# these nodes are not displayed and queue_free() may not process at shutdown.
-	_free_card_pool()
-	# Only clear active-card tracking when the grid is being destroyed.
+	# queue_free() may not flush during process exit.
+	for card in _card_pool:
+		if is_instance_valid(card):
+			card.free()
+	_card_pool.clear()
+
+	# Only clear active-card tracking when the grid is being destroyed. When the
+	# grid is reparented (e.g. nav type change), the active cards stay in the
+	# FlowContainer and _active_cards keeps pointing to them so the next
+	# _recalculate_layout can recycle/update them. Clearing this while leaving the
+	# cards in the tree produces stale blank cards that are not tracked.
 	if is_queued_for_deletion():
 		_active_cards.clear()
 		_active_cards_by_index.clear()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
+		if UIManager:
+			UIManager.exit_focus_lock(self)
 
 func _free_card_pool() -> void:
 	"""Release pooled card references.
@@ -706,82 +704,8 @@ func _process(_delta: float):
 		if _resize_debounce_frames == 0:
 			_on_resize_debounced()
 
-	# Reset the helper-scroll input guard each frame so held keys can repeat,
-	# but bunched key-repeat events cannot skip multiple rows/columns in one frame.
-	if _helper_scroll_consumed_this_frame:
-		_helper_scroll_consumed_this_frame = false
-
-	# Accumulate analog thumbstick input and trigger grid navigation at a rate
-	# scaled by how far the stick is pushed. A held stick auto-repeats without
-	# requiring a release between moves, and leftover fractional deflection is
-	# preserved for the next frame so small nudges still register quickly.
-	var raw_strength := _get_direction_raw_strength()
-	if raw_strength < ANALOG_SCROLL_DEADZONE:
-		_analog_scroll_accumulator = 0.0
-	else:
-		_analog_scroll_accumulator += raw_strength * ANALOG_SCROLL_SPEED * _delta
-		while _analog_scroll_accumulator >= 1.0:
-			_analog_scroll_accumulator -= 1.0
-			_analog_trigger_navigation()
-
 	# Drain any queued off-screen effect rebuilds a few cards per frame.
 	_drain_pending_effect_rebuilds()
-
-func _analog_trigger_navigation() -> void:
-	if not focus_lock_enabled or not visible or not is_inside_tree():
-		return
-	if not UIManager or not UIManager.controller_has_priority():
-		return
-
-	var vertical := vertical
-	var raw_strength := _get_direction_raw_strength()
-	if raw_strength < ANALOG_SCROLL_DEADZONE:
-		return
-
-	var row_delta := 0
-	var col_delta := 0
-	if Input.is_action_pressed("ui_up") and Input.get_action_raw_strength("ui_up") >= Input.get_action_raw_strength("ui_down"):
-		row_delta = -1
-	elif Input.is_action_pressed("ui_down"):
-		row_delta = 1
-	elif Input.is_action_pressed("ui_left") and Input.get_action_raw_strength("ui_left") >= Input.get_action_raw_strength("ui_right"):
-		col_delta = -1
-	elif Input.is_action_pressed("ui_right"):
-		col_delta = 1
-	else:
-		return
-
-	# For horizontal grids the "line" runs top-to-bottom, so swap axis meaning.
-	if not vertical:
-		var tmp := row_delta
-		row_delta = col_delta
-		col_delta = tmp
-
-	var current_idx := _get_focused_virtual_index()
-	if current_idx < 0:
-		return
-
-	var target_idx := _compute_target_index(current_idx, row_delta, col_delta)
-	if target_idx < 0 or target_idx == current_idx:
-		return
-
-	var card = get_card_at_index(target_idx)
-	if card and is_instance_valid(card) and card.is_inside_tree():
-		card.grab_focus()
-	else:
-		scroll_to_index_and_focus(target_idx, true, 0.6)
-
-func _get_direction_raw_strength() -> float:
-	return maxf(
-		Input.get_action_raw_strength("ui_up"),
-		maxf(
-			Input.get_action_raw_strength("ui_down"),
-			maxf(
-				Input.get_action_raw_strength("ui_left"),
-				Input.get_action_raw_strength("ui_right")
-			)
-		)
-	)
 
 func _recalculate_layout_until_stable(max_passes: int = 3) -> void:
 	"""Run _recalculate_layout() repeatedly until the available size stabilizes.
@@ -1074,10 +998,31 @@ func _recalculate_layout():
 	_update_layout()
 	_update_margin()
 	_flow_container.queue_sort()
+	var active_before: int = _active_cards.size()
+	var first_before: int = -1
+	var last_before: int = -1
+	if _active_cards.size() > 0:
+		first_before = _active_cards[0].get_meta("virtual_index", -1)
+		last_before = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+	print("[Grid] _recalculate_layout before: active=%s first=%s last=%s scroll=%s vertical=%s" % [active_before, first_before, last_before, _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal, vertical])
+	# Always recycle cards that fall outside the new buffer target during a layout
+	# recalculation. A preset can reset the scroll position while the active cards
+	# still hold indices from the previous scroll offset; without recycling, the
+	# grid prepends a large range of stale blank cards instead of rebuilding the
+	# correct visible range. The end-of-frame ScrollContainer clamp signal is still
+	# suppressed by _suppress_recycle_until_frame, so this does not cause extra
+	# recycling from that deferred signal.
 	if vertical:
-		_on_scroll_value_changed(_scroll_container.scroll_vertical, false)
+		_on_scroll_value_changed(_scroll_container.scroll_vertical, true)
 	else:
-		_on_scroll_value_changed(_scroll_container.scroll_horizontal, false)
+		_on_scroll_value_changed(_scroll_container.scroll_horizontal, true)
+	var active_after: int = _active_cards.size()
+	var first_after: int = -1
+	var last_after: int = -1
+	if _active_cards.size() > 0:
+		first_after = _active_cards[0].get_meta("virtual_index", -1)
+		last_after = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+	print("[Grid] _recalculate_layout after: active=%s first=%s last=%s flow_children=%s" % [active_after, first_after, last_after, _flow_container.get_child_count() if _flow_container else 0])
 
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
@@ -1496,6 +1441,8 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	if _active_cards.size() > 0:
 		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
 		_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
+
+	print("[Grid] _on_scroll_value_changed end: active=%s first=%s last=%s flow_children=%s" % [_active_cards.size(), _virtual_start, _virtual_end, _flow_container.get_child_count() if _flow_container else 0])
 
 	_request_missing_data()
 
@@ -1953,7 +1900,7 @@ func _on_viewport_focus_changed(control: Control) -> void:
 	if not control:
 		return
 
-	# Check if focus moved to a card inside this grid
+	# Check if focus moved to a card inside this grid.
 	if is_ancestor_of(control):
 		var node = control
 		while node != self:
@@ -1961,70 +1908,37 @@ func _on_viewport_focus_changed(control: Control) -> void:
 				_last_focused_virtual_index = node.get_meta("virtual_index", -1)
 				break
 			node = node.get_parent()
-		_grid_had_focus_last = true
+		# Tell UIManager to lock focus to this grid when focus lock is enabled.
+		if focus_lock_enabled and UIManager:
+			UIManager.enter_focus_lock(self)
 		return
 
-	# Focus is outside this grid
+	# Focus is outside this grid.
+	if focus_lock_enabled and UIManager:
+		UIManager.exit_focus_lock(self)
+
+func navigate_direction(dir: String, from_index: int = -1) -> bool:
+	"""Move focus one step in the given direction. Returns true if the event was consumed."""
 	if not focus_lock_enabled:
-		_grid_had_focus_last = false
-		return
+		return false
 	if not visible or not is_inside_tree():
-		_grid_had_focus_last = false
-		return
-	if _last_focused_virtual_index < 0:
-		_grid_had_focus_last = false
-		return
-	if _is_redirecting_focus:
-		return
-
-	# Don't redirect if focus moved to an overlay/dialog (CanvasLayer)
-	var parent_node = control.get_parent()
-	while parent_node:
-		if parent_node is CanvasLayer:
-			_grid_had_focus_last = false
-			return
-		parent_node = parent_node.get_parent()
-
-	# Only redirect when controller has priority (not mouse)
+		return false
 	if not UIManager or not UIManager.controller_has_priority():
-		_grid_had_focus_last = false
-		return
-
-	# Only redirect if focus was previously inside this grid.
-	# If the user is already navigating the nav bar, don't snap back.
-	if not _grid_had_focus_last:
-		return
-
-	# Redirect back to the last focused card
-	var card = get_card_at_index(_last_focused_virtual_index)
-	if card and is_instance_valid(card) and card.is_inside_tree():
-		_is_redirecting_focus = true
-		card.grab_focus()
-		_is_redirecting_focus = false
-
-func _input(event: InputEvent) -> void:
-	# Proactive edge navigation: when focus lock is active and the user presses
-	# toward a valid offscreen row/column, scroll to it and focus it instead of
-	# letting focus escape and get yanked back to the same edge card.
-	if not focus_lock_enabled:
-		return
-	if not visible or not is_inside_tree():
-		return
-	if not UIManager or not UIManager.controller_has_priority():
-		return
+		return false
 
 	var row_delta := 0
 	var col_delta := 0
-	if event.is_action_pressed("ui_up"):
-		row_delta = -1
-	elif event.is_action_pressed("ui_down"):
-		row_delta = 1
-	elif event.is_action_pressed("ui_left"):
-		col_delta = -1
-	elif event.is_action_pressed("ui_right"):
-		col_delta = 1
-	else:
-		return
+	match dir:
+		"ui_up":
+			row_delta = -1
+		"ui_down":
+			row_delta = 1
+		"ui_left":
+			col_delta = -1
+		"ui_right":
+			col_delta = 1
+		_:
+			return false
 
 	# For horizontal grids the "line" runs top-to-bottom, so swap axis meaning
 	# so left/right always move along the line and up/down move between lines.
@@ -2033,31 +1947,14 @@ func _input(event: InputEvent) -> void:
 		row_delta = col_delta
 		col_delta = tmp
 
-	var current_idx := _get_focused_virtual_index()
+	var current_idx := from_index if from_index >= 0 else _get_focused_virtual_index()
 	if current_idx < 0:
-		return
+		return false
 
 	var target_idx := _compute_target_index(current_idx, row_delta, col_delta)
 	if target_idx < 0 or target_idx == current_idx:
-		# Boundary: consume the event so spatial navigation cannot move focus
-		# outside the grid.
-		get_viewport().set_input_as_handled()
-		return
-
-	# Analog thumbstick navigation is handled in _process() via an accumulator
-	# so it scales with stick deflection and requires a release between moves.
-	if event is InputEventJoypadMotion:
-		get_viewport().set_input_as_handled()
-		return
-
-	# Throttle to one helper-scroll per process frame so OS key-repeat bursts
-	# don't skip rows.
-	if _helper_scroll_consumed_this_frame:
-		get_viewport().set_input_as_handled()
-		return
-	_helper_scroll_consumed_this_frame = true
-
-	get_viewport().set_input_as_handled()
+		# Boundary: consume the event so focus cannot leave the grid.
+		return true
 
 	# If the target is already visible, move focus directly to it instead of
 	# falling through to spatial navigation, which can leak focus out of the grid.
@@ -2065,10 +1962,11 @@ func _input(event: InputEvent) -> void:
 		var card = get_card_at_index(target_idx)
 		if card and is_instance_valid(card) and card.is_inside_tree():
 			card.grab_focus()
-			return
+			return true
 
 	# The target is offscreen. Scroll to it and focus it.
 	scroll_to_index_and_focus(target_idx, true, 0.6)
+	return true
 
 func _get_focused_virtual_index() -> int:
 	var viewport := get_viewport()

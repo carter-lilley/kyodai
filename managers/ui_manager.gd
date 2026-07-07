@@ -22,6 +22,12 @@ var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orienta
 var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 var _content_wrapper: Control = null
 
+# Focus lock state: when a locked grid owns focus, all other focusable controls
+# in the scene are temporarily set to FOCUS_NONE so directional input cannot leak.
+var _focus_lock_active: bool = false
+var _focus_locked_grid: VirtualScrollGridContainer = null
+var _saved_focus_modes: Dictionary[NodePath, int] = {}
+
 # Proxy for legacy external access to dual-screen keyboard state.
 var _keyboard_is_in_second_viewport: bool:
 	get:
@@ -37,6 +43,7 @@ signal modal_item_selected(item_id: String, context: Dictionary)
 signal tab_changed(view_name: String)
 signal layout_changed(position: String)
 signal settings_dialog_dismissed()
+signal focus_lock_changed(active: bool)
 
 func initialize(
 	tab_container: TabContainer,
@@ -120,26 +127,13 @@ func initialize(
 	if primary_color_setting and primary_color_setting.value is Color:
 		M3Theme.set_primary_seed(primary_color_setting.value)
 
-	# Eagerly create the settings dialog so the first open is stutter-free.
-	overlay.pre_create_settings_dialog()
+	theme._request_theme_refresh()
 
-	# Connect to dual screen mode changes
-	if DisplayManager:
-		DisplayManager.dual_screen_mode_changed.connect(dual_screen._on_dual_screen_mode_changed)
-		if DisplayManager.is_dual_screen_enabled():
-			dual_screen._initialize_dual_screen()
-
-	# Set initial focus
-	navigation._set_initial_focus()
-
-	# Setup focus feedback handlers (navigation sounds)
-	navigation._setup_feedback_handlers()
-
-func _ready():
-	pass
+# ============================================================================
+# Layout helpers
+# ============================================================================
 
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
-	"""Create the inner layout container (VBox or HBox)."""
 	var layout: BoxContainer
 	if is_horizontal:
 		layout = VBoxContainer.new()
@@ -174,8 +168,23 @@ func rebuild_game_grid() -> void:
 func show_settings_dialog() -> void:
 	overlay.show_settings_dialog()
 
+func pre_create_settings_dialog(force: bool = false) -> void:
+	overlay.pre_create_settings_dialog(force)
+
+func is_settings_dialog_open() -> bool:
+	return overlay.is_settings_dialog_open()
+
 func show_settings_dialog_with_category(category_id: String) -> void:
 	overlay.show_settings_dialog_with_category(category_id)
+
+func show_shuffler_dialog() -> void:
+	overlay.show_shuffler_dialog()
+
+func set_card_designer_preview_game(romm_id: int) -> void:
+	overlay.set_card_designer_preview_game(romm_id)
+
+func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
+	return overlay.get_settings_dialog_platforms_view()
 
 func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
 	return overlay.show_game_context_menu(romm_id, anchor, show_delete)
@@ -222,70 +231,110 @@ func get_active_nav_destination() -> Control:
 func get_nav_type() -> int:
 	return navigation.get_nav_type()
 
-func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
-	return overlay.get_settings_dialog_platforms_view()
-
-func set_card_designer_preview_game(romm_id: int) -> void:
-	overlay.set_card_designer_preview_game(romm_id)
-
-func is_mouse_recently_active() -> bool:
-	return navigation.is_mouse_recently_active()
-
-func controller_has_priority() -> bool:
-	return navigation.controller_has_priority()
+func is_focus_lock_active() -> bool:
+	return _focus_lock_active
 
 func should_card_grab_focus_on_hover() -> bool:
 	return navigation.should_card_grab_focus_on_hover()
 
-func pre_create_settings_dialog(force: bool = false) -> void:
-	overlay.pre_create_settings_dialog(force)
-
-func is_settings_dialog_open() -> bool:
-	return overlay.is_settings_dialog_open()
-
 func suppress_next_focus_sound() -> void:
-	if navigation:
-		navigation.suppress_next_focus_sound()
+	navigation.suppress_next_focus_sound()
 
-func apply_settings_now() -> void:
-	"""Flush settings changes to the live UI immediately.
+func controller_has_priority() -> bool:
+	return navigation.controller_has_priority()
 
-	Called when the Settings dialog is dismissed with OK or outside-click.
-	Syncs CardSettingsState, rebuilds views only when necessary, and refreshes
-	theme/background.
-	"""
-	# Sync centralized card/grid state with current SettingsManager values.
-	var mask := CardSettingsState.ChangeMask.NONE
-	if card_settings_state:
-		mask = card_settings_state.sync_from_settings_manager()
+func handle_directional_input(event: InputEvent) -> bool:
+	return navigation.handle_directional_input(event)
 
-	# Rebuild navigation layout if the navigation type changed.
-	var type_setting = SettingsManager.get_setting("library_navigation_type")
-	if type_setting:
-		var new_nav_type = type_setting.value
-		if new_nav_type != navigation.get_nav_type():
-			navigation.set_nav_type(new_nav_type)
-			navigation._rebuild_nav_and_layout()
+# ============================================================================
+# Focus lock: disable focus on all non-grid controls while a locked grid owns focus
+# ============================================================================
 
-	# Only force a full view rebuild when the change actually requires it
-	# (effect configuration or data-affecting settings). LAYOUT, DISPLAY,
-	# MEDIA_SHAPE, FOCUS_LOCK and THEME are already applied live by the grid.
-	var rebuild_mask := CardSettingsState.ChangeMask.EFFECTS
-	if mask & rebuild_mask:
-		view._rebuild_views("Settings applied", true)
+func enter_focus_lock(grid: VirtualScrollGridContainer) -> void:
+	"""Activate scene-wide focus lock around the given grid."""
+	if _focus_lock_active and _focus_locked_grid == grid:
+		return
+	# If we were already locked to a different grid, restore first.
+	if _focus_lock_active:
+		_exit_focus_lock(false)
+	_focus_locked_grid = grid
+	_focus_lock_active = true
+	_apply_focus_lock()
+	focus_lock_changed.emit(true)
 
-	# Apply library background and theme colors.
-	_apply_library_background_config()
+func exit_focus_lock(grid: VirtualScrollGridContainer) -> void:
+	"""Exit focus lock if it is currently held by the given grid."""
+	if not _focus_lock_active:
+		return
+	if _focus_locked_grid != grid:
+		return
+	_exit_focus_lock(true)
 
-	var dark_mode_setting = SettingsManager.get_setting("dark_mode")
-	if dark_mode_setting:
-		theme._apply_dark_mode(dark_mode_setting.value)
+func _exit_focus_lock(emit: bool) -> void:
+	if not _focus_lock_active:
+		return
+	_focus_lock_active = false
+	_focus_locked_grid = null
+	_restore_focus_modes()
+	if emit:
+		focus_lock_changed.emit(false)
 
-	var primary_color_setting = SettingsManager.get_setting("library_primary_color")
-	if primary_color_setting and primary_color_setting.value is Color:
-		M3Theme.set_primary_seed(primary_color_setting.value)
+func refresh_focus_lock_state() -> void:
+	"""Re-apply the current focus lock after layout/theme changes."""
+	if not _focus_lock_active or not _focus_locked_grid:
+		return
+	if not is_instance_valid(_focus_locked_grid) or not _focus_locked_grid.is_inside_tree():
+		_exit_focus_lock(true)
+		return
+	# Only remain locked if the grid still has focus.
+	var viewport := get_viewport()
+	if not is_instance_valid(viewport):
+		_exit_focus_lock(true)
+		return
+	var focused := viewport.gui_get_focus_owner()
+	if not focused or not _focus_locked_grid.is_ancestor_of(focused):
+		_exit_focus_lock(true)
+		return
+	# Re-apply in case new focusable controls were created.
+	_apply_focus_lock()
 
-	theme._request_theme_refresh()
+func _apply_focus_lock() -> void:
+	"""Save and disable focus modes for all controls outside the locked grid."""
+	if not _focus_locked_grid or not _root_control:
+		return
+	_saved_focus_modes.clear()
+	var focusables := _gather_focusable_controls(_root_control)
+	for ctrl in focusables:
+		if not is_instance_valid(ctrl):
+			continue
+		var path := ctrl.get_path()
+		_saved_focus_modes[path] = ctrl.focus_mode
+		ctrl.focus_mode = Control.FOCUS_NONE
+
+func _restore_focus_modes() -> void:
+	"""Restore original focus modes saved by _apply_focus_lock."""
+	for path in _saved_focus_modes.keys():
+		var node := get_node_or_null(path)
+		if node is Control and is_instance_valid(node):
+			node.focus_mode = _saved_focus_modes[path]
+	_saved_focus_modes.clear()
+
+func _gather_focusable_controls(node: Node) -> Array[Control]:
+	"""Recursively collect Controls with non-NONE focus modes."""
+	var result: Array[Control] = []
+	if node is Control and node.focus_mode != Control.FOCUS_NONE:
+		result.append(node)
+	for child in node.get_children():
+		if not is_instance_valid(child):
+			continue
+		# Don't descend into the locked grid or its children.
+		if _focus_locked_grid and (_focus_locked_grid == child or _focus_locked_grid.is_ancestor_of(child)):
+			continue
+		# Don't descend into overlays/dialogs (CanvasLayer children).
+		if child is CanvasLayer:
+			continue
+		result.append_array(_gather_focusable_controls(child))
+	return result
 
 # ============================================================================
 # High-level setting-change dispatcher
@@ -295,6 +344,10 @@ func _on_settings_saved() -> void:
 	"""Re-sync CardSettingsState after a save in case anything bypassed set_setting."""
 	if card_settings_state:
 		card_settings_state.sync_from_settings_manager()
+
+func apply_settings_now() -> void:
+	"""Public hook for settings dialog dismissal; ensures CardSettingsState re-syncs."""
+	_on_settings_saved()
 
 func _on_apply_preset_begin() -> void:
 	"""Batch card settings updates during preset application."""
@@ -307,6 +360,8 @@ func _on_apply_preset_end() -> void:
 	if card_settings_state:
 		card_settings_state.end_batch()
 	theme._on_apply_preset_end()
+	# Theme/layout may have created new focusable controls; re-apply lock if needed.
+	call_deferred("refresh_focus_lock_state")
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes.
@@ -330,6 +385,8 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_navigation_type":
 			navigation.set_nav_type(setting.value)
 			navigation._rebuild_nav_and_layout()
+			# Nav rebuild may add/reparent focusable controls; re-apply lock.
+			call_deferred("refresh_focus_lock_state")
 		"hero_effect_config":
 			var hero_image = get_hero_image()
 			if hero_image and hero_image.has_method("refresh_from_settings"):
@@ -349,11 +406,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		_:
 			pass
 
-func get_hero_image() -> HeroImage:
-	if dual_screen:
-		return dual_screen.get_hero_image()
-	return null
-
 func _on_card_settings_state_changed(_mask: int) -> void:
 	"""React to batched card/grid settings changes.
 
@@ -365,6 +417,11 @@ func _on_card_settings_state_changed(_mask: int) -> void:
 # ============================================================================
 # Hero / library background helpers (moved from removed HeroBackgroundManager)
 # ============================================================================
+
+func get_hero_image() -> HeroImage:
+	if dual_screen:
+		return dual_screen.get_hero_image()
+	return null
 
 func _apply_library_background_config() -> void:
 	"""Apply the current library background configuration from settings."""
@@ -402,9 +459,7 @@ func _on_hero_game_changed(game: GameResource) -> void:
 	if game:
 		hero_image.set_game(game)
 		if dual_screen and dual_screen._dual_screen_active:
-			var ayn_thor_manager = get_node_or_null("/root/Main/AynThorManager")
-			if ayn_thor_manager and ayn_thor_manager.has_method("force_hero_viewport_update"):
-				ayn_thor_manager.force_hero_viewport_update()
+			dual_screen.set_hero_game(game)
 	else:
 		hero_image.clear()
 
@@ -416,6 +471,8 @@ func _exit_tree() -> void:
 	"""Release the UIManager's cached references so the engine can free the UI tree.
 	Nodes still in the tree are left for the tree to free; orphaned overlays are
 	freed immediately because queue_free() may not flush during process exit."""
+
+	_exit_focus_lock(false)
 
 	# Drop all cached node references so the tree can free them.
 	_root_control = null

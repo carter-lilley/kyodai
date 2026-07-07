@@ -2,6 +2,20 @@
 
 xemu save sync
 tst update flow on android
+settings ui too big on android?
+massive lag opening platform card screen
+settings menu should have 'X' to close
+hero in 'add to steam'
+clicking "outside" of card in list/carosel is annoying. 
+pagination view?
+instead of auto-center scroll, just scroll 'onscreen' like switch ui
+better extraction notifications
+
+romm;
+- mark 'played' if played
+- 'add to collection'
+- sort by played
+- sort by favorite? wishlist?
 
 major refactor: decouple VSG inputs from visuals.
 we cannot natively overflow visuals without also overflowing input
@@ -11,6 +25,7 @@ use new ui offsets instead of nested nodes for animations.
 
 ## android
 	"app bar"
+	- ability to pin things to bar
 
 ## saves
 	implement argosy sigil

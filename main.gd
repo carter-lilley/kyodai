@@ -15,18 +15,6 @@ var _keyboard: PanelContainer = null
 var _ui_layer: CanvasLayer = null
 
 
-# Auto-repeat navigation
-var _held_dir: String = ""
-var _delay_timer: Timer
-var _repeat_timer: Timer
-const INITIAL_DELAY: float = 2.0
-const REPEAT_DELAY: float = 1.75
-var _last_press: int = 0
-
-# Nav transition cooldown (prevents joystick from skipping past nav items)
-var _last_nav_transition_time: int = 0
-const NAV_TRANSITION_COOLDOWN_MS: int = 150
-
 # Zoom state tracking for analog triggers
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
@@ -45,8 +33,6 @@ const ZOOM_SAVE_DELAY_MS: int = 1500
 var _m3_theme: Theme = null
 
 func _ready():
-	_setup_repeat()
-
 	# Disable automatic quit so we can free the scene tree before the rendering
 	# server shuts down. Without this, get_tree().quit() exits without destroying
 	# nodes, which causes CanvasItem/Texture RID leaks.
@@ -683,18 +669,6 @@ func _is_home_button_focused() -> bool:
 ## Keep DualScreenSetup in the tree so its SubViewports are freed with Main.
 ## When not in use, disable processing and hide it to avoid input interference.
 
-func _setup_repeat():
-	_delay_timer = Timer.new()
-	_delay_timer.wait_time = INITIAL_DELAY
-	_delay_timer.one_shot = true
-	_delay_timer.timeout.connect(_on_delay_timeout)
-	add_child(_delay_timer)
-
-	_repeat_timer = Timer.new()
-	_repeat_timer.wait_time = REPEAT_DELAY
-	_repeat_timer.timeout.connect(_on_repeat)
-	add_child(_repeat_timer)
-
 func _handle_ui_cancel() -> void:
 	"""Handle ui_cancel: return to Home unless blocked by overlay."""
 	# Block during background state (emulator running)
@@ -748,8 +722,9 @@ func _handle_ui_cancel() -> void:
 	if current_view and current_view.games_grid:
 		var grid = current_view.games_grid
 		if grid.is_focus_locked_and_active():
-			# Mark that we're intentionally leaving the grid so it doesn't redirect back
-			grid._grid_had_focus_last = false
+			# Release scene-wide focus lock before moving focus to the nav bar.
+			if UIManager:
+				UIManager.exit_focus_lock(grid)
 			var nav_dest = UIManager.get_active_nav_destination()
 			if nav_dest and nav_dest is Control and nav_dest.focus_mode != Control.FOCUS_NONE:
 				if AudioManager:
@@ -786,41 +761,10 @@ func _input(event: InputEvent):
 			if child.has_method("start_wizard") and child.visible:
 				return
 
-	var dirs = ["ui_left", "ui_right", "ui_up", "ui_down"]
-
-	for dir in dirs:
-		if event.is_action_pressed(dir):
-			if event is InputEventKey:
-				var now = Time.get_ticks_msec()
-				if now - _last_press < 80:
-					return
-				_last_press = now
-
-			if _held_dir == dir:
-				if event is InputEventAction:
-					print("[Repeat] synthetic repeat allowed for ", dir)
-					return
-				print("[Repeat] engine echo swallowed for ", dir)
-				get_viewport().set_input_as_handled()
-				return
-
-			print("[Repeat] first press ", dir, " held_dir='", _held_dir, "'")
-			var nav_handled := _try_nav_to_grid(event)
-			_held_dir = dir
-			print("[Repeat] starting delay timer: ", _delay_timer.wait_time)
-			_delay_timer.start()
-			if nav_handled:
-				get_viewport().set_input_as_handled()
-			return
-
-		if event.is_action_released(dir) and _held_dir == dir:
-			# Ignore synthetic release events from our repeat system
-			if event is InputEventAction:
-				return
-			_held_dir = ""
-			_delay_timer.stop()
-			_repeat_timer.stop()
-			return
+	# Delegate directional input to NavigationManager for unified delay/repeat handling.
+	if UIManager and UIManager.handle_directional_input(event):
+		get_viewport().set_input_as_handled()
+		return
 
 	# Handle zoom in/out with triggers - only on press, not hold
 	if event.is_action_pressed("zoom_in"):
@@ -854,60 +798,6 @@ func _get_focus_owner() -> Control:
 	if root_layout and root_layout.is_inside_tree():
 		return root_layout.get_viewport().gui_get_focus_owner()
 	return get_viewport().gui_get_focus_owner()
-
-func _try_nav_to_grid(event: InputEvent) -> bool:
-	"""Handle manual focus navigation between nav, settings, and grid.
-	Avoids NodePaths which break when nodes are reparented (dual screen mode)."""
-	var focused = _get_focus_owner()
-	if not focused:
-		return false
-
-	var nav_type = UIManager.get_nav_type()
-	var settings_btn = UIManager.find_nav_settings_button()
-	var last_dest = UIManager.get_last_nav_destination()
-
-	# From nav destination -> Grid (UP for bar, RIGHT for rail)
-	if focused is M3NavigationDestination:
-		if nav_type == 0:  # Bar
-			if event.is_action_pressed("ui_up"):
-				return _enter_grid()
-			# Last destination -> Settings (RIGHT)
-			if event.is_action_pressed("ui_right") and focused == last_dest:
-				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
-					settings_btn.grab_focus()
-					return true
-		else:  # Rail
-			if event.is_action_pressed("ui_right"):
-				return _enter_grid()
-			# Last destination -> Settings (DOWN)
-			if event.is_action_pressed("ui_down") and focused == last_dest:
-				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
-					settings_btn.grab_focus()
-					return true
-		return false
-
-	# From Settings -> Last nav destination (LEFT for bar, UP for rail)
-	if focused == settings_btn:
-		if nav_type == 0:  # Bar
-			if event.is_action_pressed("ui_left"):
-				if last_dest and last_dest.focus_mode != Control.FOCUS_NONE:
-					last_dest.grab_focus()
-					return true
-		else:  # Rail
-			if event.is_action_pressed("ui_up"):
-				if last_dest and last_dest.focus_mode != Control.FOCUS_NONE:
-					last_dest.grab_focus()
-					return true
-		return false
-
-	return false
-
-func _enter_grid() -> bool:
-	var current_view = UIManager.get_current_view()
-	if not current_view or not current_view.games_grid:
-		return false
-	current_view.games_grid.focus_last_or_first_card()
-	return true
 
 func _adjust_zoom(delta: float) -> void:
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
@@ -1003,33 +893,6 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node)
 	if card is Control and card.focus_mode != Control.FOCUS_NONE:
 		card.grab_focus()
-
-func _on_delay_timeout():
-	print("[Repeat] delay timeout fired, held_dir=", _held_dir)
-	if _held_dir != "":
-		print("[Repeat] starting repeat timer: ", _repeat_timer.wait_time)
-		_repeat_timer.start()
-		_resend()
-
-func _on_repeat():
-	print("[Repeat] repeat timeout fired, held_dir=", _held_dir)
-	if _held_dir != "":
-		_resend()
-
-func _resend():
-	if _held_dir != "":
-		print("[Repeat] resending ", _held_dir)
-		# Send press event
-		var press = InputEventAction.new()
-		press.action = _held_dir
-		press.pressed = true
-		Input.parse_input_event(press)
-
-		# Send release event to reset action state (allows analog sticks to work)
-		var release = InputEventAction.new()
-		release.action = _held_dir
-		release.pressed = false
-		Input.parse_input_event(release)
 
 func _on_screens_swapped(_is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
@@ -1145,10 +1008,6 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 func _exit_tree() -> void:
 	"""Release root-level references so the Main node can be fully freed."""
 	# Stop timers so they don't hold references after tree teardown.
-	if _delay_timer:
-		_delay_timer.stop()
-	if _repeat_timer:
-		_repeat_timer.stop()
 	if _zoom_save_timer:
 		_zoom_save_timer.stop()
 

@@ -71,13 +71,18 @@ func _build_pages():
 	_pages.append(_build_romm_connection_page())
 	_pages.append(_build_done_page())
 
+func _create_placeholder_texture() -> Texture2D:
+	var img := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	img.fill(Color("#1C1B1F"))
+	return ImageTexture.create_from_image(img)
+
 func _build_welcome_page() -> VBoxContainer:
 	var vbox = VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	var icon = TextureRect.new()
-	icon.texture = load("res://icon.svg")
+	icon.texture = _create_placeholder_texture()
 	icon.custom_minimum_size = Vector2(M3Units.dp(128), M3Units.dp(128))
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.expand_mode = TextureRect.EXPAND_KEEP_SIZE

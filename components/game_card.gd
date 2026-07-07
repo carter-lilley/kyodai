@@ -19,7 +19,14 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 
 @export var preview_mode: bool = false
 
-var _loading_texture: Texture2D = preload("res://icon.svg")
+static var _placeholder_texture: Texture2D = _create_placeholder_texture()
+
+static func _create_placeholder_texture() -> Texture2D:
+	var img := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	img.fill(Color("#1C1B1F"))
+	return ImageTexture.create_from_image(img)
+
+var _loading_texture: Texture2D = _placeholder_texture
 var _current_texture: Texture2D = null
 var _current_texture_game_id: String = ""
 
@@ -249,6 +256,8 @@ func _setup_preview_mode():
 	_show_focus_effects(preview_show_focus)
 
 func _build_media_stack(force_full_rebuild: bool = true):
+	if not _media_container:
+		return
 	var effect_settings := []
 	if UIManager and UIManager.card_settings_state:
 		effect_settings = UIManager.card_settings_state.get_base_effects()
@@ -296,6 +305,8 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		_build_focus_stack(force_full_rebuild)
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
+	if not _focus_media_container:
+		return
 	_kill_focus_tweens()
 	_sync_focus_container_properties()
 
@@ -492,6 +503,9 @@ func _show_focus_effects(p_show: bool) -> void:
 var _display_mode: int = 0
 
 func _update_card_state_from_settings():
+	if not _media_container:
+		return
+
 	var state = UIManager.card_settings_state if UIManager else null
 	if state:
 		var config = state.card_effect_config
@@ -596,6 +610,8 @@ func set_focus_scale(value: float) -> void:
 	_sync_focus_visuals()
 
 func refresh_settings() -> void:
+	if not _ready_called:
+		return
 	_update_card_state_from_settings()
 	# Sync focus state first so _build_media_stack sees the correct _is_focused
 	# and builds the focus stack for focused cards.
@@ -618,6 +634,8 @@ func refresh_settings() -> void:
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
 	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
+	if not _ready_called:
+		return
 	_update_card_state_from_settings()
 	# Sync focus state first so _build_media_stack sees the correct _is_focused
 	# and builds the focus stack for focused cards.
@@ -915,9 +933,12 @@ func _on_media_texture_loaded(texture: Texture2D) -> void:
 	_set_texture(texture)
 
 func _set_texture(tex: Texture2D) -> void:
-	if _current_texture == tex:
+	# Use the placeholder for any null texture so cards never render the default
+	# white fallback texture in the shader.
+	var resolved_tex: Texture2D = tex if tex else _loading_texture
+	if _current_texture == resolved_tex and _media_stack:
 		return
-	_current_texture = tex
+	_current_texture = resolved_tex
 	if game:
 		_current_texture_game_id = game.id
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
@@ -925,14 +946,14 @@ func _set_texture(tex: Texture2D) -> void:
 	if not _media_stack:
 		_build_media_stack()
 	if _media_stack:
-		_media_stack.set_game_texture(tex)
+		_media_stack.set_game_texture(resolved_tex)
 		# Only pay for a full force_refresh when the media geometry changed.
 		# set_game_texture() already marks shader params dirty, so if bounds are
 		# unchanged the deferred flush will push the new texture to the shader.
 		if not _media_bounds.is_equal_approx(_last_refreshed_media_bounds):
 			_media_stack.force_refresh()
 	if _focus_stack:
-		_focus_stack.set_game_texture(tex)
+		_focus_stack.set_game_texture(resolved_tex)
 		if not _media_bounds.is_equal_approx(_last_refreshed_media_bounds):
 			_focus_stack.force_refresh()
 	_update_media()
@@ -1171,7 +1192,7 @@ func _on_focus_exited():
 	_show_focus_effects(false)
 
 func _update_focus_stack_bounds() -> void:
-	if not _focus_stack:
+	if not _focus_media_container or not _focus_stack:
 		return
 	# Use the authoritative media targets.
 	var target_w := _focus_target_w

@@ -69,6 +69,13 @@ func show_settings_dialog() -> void:
 	if not _settings_dialog.is_inside_tree():
 		_add_settings_dialog_to_correct_parent()
 
+	# Release scene-wide focus lock before opening settings so settings controls
+	# can receive focus.
+	if ui_manager:
+		var current_view = ui_manager.get_current_view()
+		if current_view and current_view.games_grid:
+			ui_manager.exit_focus_lock(current_view.games_grid)
+
 	_settings_dialog.show_overlay()
 
 func _add_settings_dialog_to_correct_parent() -> void:
@@ -123,6 +130,10 @@ func _on_settings_dialog_dismissed() -> void:
 	# the dialog is closed. If another dialog (e.g. a confirmation popup)
 	# replaced this one, the rebuild stays deferred until that dialog closes.
 	ui_manager.view.flush_pending_rebuilds_if_no_dialog()
+
+	# If focus returns to a locked grid, re-apply scene-wide focus lock.
+	ui_manager.refresh_focus_lock_state()
+
 
 func _track_dialog(dialog: M3Dialog) -> void:
 	if dialog in _active_dialogs:
@@ -281,7 +292,7 @@ func _apply_dialog_options(dialog: M3Dialog, options: Dictionary) -> void:
 	if options.has("hero_icon_name"):
 		dialog.hero_icon_name = options["hero_icon_name"]
 
-
+func show_shuffler_dialog() -> void:
 	"""Show the shuffler configuration dialog."""
 	if ShufflerManager.is_session_active():
 		NotificationManager.show_notification("A shuffler session is already active", NotificationManager.Type.INFO)

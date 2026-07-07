@@ -1281,7 +1281,7 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 	var on_local := func(): choice = "local"
 	var on_cancel := func(): choice = "cancel"
 
-	UIManager.show_custom_dialog(func(dialog: M3Dialog):
+	var dialog = UIManager.show_custom_dialog(func(dialog: M3Dialog):
 		dialog.title_text = "Save Conflict"
 		dialog.body_text = "Your local save data for %s conflicts with what is stored on the server.\n\nWhichever save data you choose to keep will be synced to this device and the cloud. The option you choose not to keep will be overwritten." % game.get_display_name()
 		dialog.dismissible = true
@@ -1323,7 +1323,7 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 	)
 
 	# Wait until the user picks one of the three choices.
-	await UIManager.overlay._active_dialogs[-1].dismissed
+	await dialog.dismissed
 
 	return choice
 
