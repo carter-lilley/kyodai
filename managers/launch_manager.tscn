@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://managers/launch/firmware_manager.gd" id="5_2n8rc"]
 [ext_resource type="Script" path="res://managers/launch/launch_intent_manager.gd" id="6_4s7tw"]
 [ext_resource type="Script" path="res://managers/launch/process_manager.gd" id="7_1v5yz"]
+[ext_resource type="Script" path="res://managers/launch/core_manager.gd" id="8_core"]
 
 [node name="LaunchManager" type="Node"]
 script = ExtResource("1_8h4fk")
@@ -28,3 +29,6 @@ script = ExtResource("6_4s7tw")
 
 [node name="ProcessManager" type="Node" parent="."]
 script = ExtResource("7_1v5yz")
+
+[node name="CoreManager" type="Node" parent="."]
+script = ExtResource("8_core")

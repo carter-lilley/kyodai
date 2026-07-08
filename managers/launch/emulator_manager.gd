@@ -471,6 +471,15 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var url_pattern = batch_config.get("url_pattern", "{name}")
 	var cores = batch_config.get("cores", [])
 	var extract_to = batch_config.get("extract_to", ".")
+	var dynamic_cores = batch_config.get("dynamic_cores", false)
+	
+	# On Android RetroArch, generate the default-core list from the registry so it
+	# stays in sync with the supported platform/core mappings.
+	if dynamic_cores and emulator_id == "retroarch" and PlatformManager.is_android():
+		cores = launch_manager.core.get_default_core_download_list(emulator_id) as Array
+		if cores.is_empty():
+			push_error("[EmulatorManager] No default cores found in registry for Android RetroArch")
+			return false
 	
 	# Resolve {emulator_dir} templates
 	extract_to = FSM.resolve_emulator_path(extract_to, emulator_id)
@@ -818,6 +827,12 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 			if strip_top:
 				_flatten_extracted_directory(emulator_id, extract_dir, flatten_target)
 			
+			# For Android RetroArch, persist a manifest of expected default cores
+			# so validation knows exactly which files should be present.
+			if emulator_id == "retroarch" and PlatformManager.is_android():
+				var manifest: Dictionary = launch_manager.core.build_default_core_manifest(emulator_id) as Dictionary
+				launch_manager.core.write_manifest(emulator_id, manifest)
+			
 			# Validate extraction
 			var validate_config = extract_config.get("validate", {})
 			if not _validate_step(emulator_id, validate_config):
@@ -902,6 +917,13 @@ func _validate_step(emulator_id: String, validate_config: Dictionary) -> bool:
 			else:
 				# On desktop, always return true (package concept doesn't apply)
 				return true
+		
+		"core_manifest":
+			# Android RetroArch only: validate that the core manifest is present
+			# and every expected default core file exists on disk.
+			if not launch_manager or not launch_manager.core:
+				return false
+			return launch_manager.core.validate_core_manifest(emulator_id) as bool
 		
 		"always_pass":
 			return true

@@ -9,6 +9,7 @@ const GameManager := preload("res://managers/launch/game_manager.gd")
 const FirmwareManager := preload("res://managers/launch/firmware_manager.gd")
 const LaunchIntentManager := preload("res://managers/launch/launch_intent_manager.gd")
 const ProcessManager := preload("res://managers/launch/process_manager.gd")
+const CoreManager := preload("res://managers/launch/core_manager.gd")
 
 # Pending-launch orchestration state
 # emulator_id -> {game: GameResource, callback: Callable}
@@ -21,6 +22,13 @@ var _pending_firmware_downloads: Dictionary = {}
 # Each entry: {game: GameResource, emulator_id: String, callback: Callable}
 var _pending_firmware_launches: Array[Dictionary] = []
 
+# Tracks on-demand core downloads and the launches waiting on them.
+# key: "platform_slug:core_id", value: true
+var _pending_core_downloads: Dictionary = {}
+
+# Each entry: {game: GameResource, platform_slug: String, core_id: String, callback: Callable}
+var _pending_core_launches: Array[Dictionary] = []
+
 # Signals
 signal game_launched(game: GameResource)
 signal game_launch_initiated(game: GameResource, focus_index: int)
@@ -31,6 +39,7 @@ signal emulator_registry_loaded(success: bool)
 signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
 signal firmware_download_completed(platform_slug: String, success: bool)
+signal core_download_completed(platform_slug: String, core_id: String, success: bool)
 
 @onready var registry: RegistryManager = $RegistryManager
 @onready var emulator: EmulatorManager = $EmulatorManager
@@ -38,6 +47,7 @@ signal firmware_download_completed(platform_slug: String, success: bool)
 @onready var firmware: FirmwareManager = $FirmwareManager
 @onready var intent: LaunchIntentManager = $LaunchIntentManager
 @onready var process: ProcessManager = $ProcessManager
+@onready var core: CoreManager = $CoreManager
 
 func _ready():
 	registry._load_registry()
@@ -46,6 +56,9 @@ func _ready():
 	# Connect to DownloadManager signals
 	DownloadManager.extraction_completed.connect(emulator._on_download_manager_extraction_completed)
 	DownloadManager.download_completed.connect(emulator._on_unified_download_completed)
+	
+	# Forward CoreManager signal so UI only needs to listen to LaunchManager.
+	core.core_download_completed.connect(_on_core_download_completed)
 	
 	# Scan existing installations to detect partial installs
 	# Wait a frame to ensure everything is initialized
@@ -425,6 +438,30 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			_pending_launches.erase(emulator_id)
 		return false
 	
+	# Emulator is installed - check if the selected RetroArch core is ready (Android only)
+	if PlatformManager.is_android() and emulator_id == "retroarch":
+		var core_id_for_launch: String = intent.resolve_core_for_game(game)
+		if not core.is_core_ready(emulator_id, game.platform_slug, core_id_for_launch):
+			var core_key: String = game.platform_slug + ":" + core_id_for_launch
+			if _pending_core_downloads.has(core_key):
+				print("[LaunchManager] Core download already in progress for " + core_key + ", will launch when ready")
+				NotificationManager.show_notification("Core download in progress for " + game.platform_slug + "...", NotificationManager.Type.INFO)
+				_pending_core_launches.append({"game": game, "platform_slug": game.platform_slug, "core_id": core_id_for_launch, "callback": on_ready})
+				return false
+			
+			print("[LaunchManager] Core not ready for " + game.platform_slug + ", downloading...")
+			NotificationManager.show_notification("Downloading core for " + game.platform_slug + "...", NotificationManager.Type.INFO)
+			
+			_pending_core_downloads[core_key] = true
+			_pending_core_launches.append({"game": game, "platform_slug": game.platform_slug, "core_id": core_id_for_launch, "callback": on_ready})
+			
+			core.setup_platform_core(emulator_id, game.platform_slug, core_id_for_launch, func(_success: bool):
+				# Completion is handled by _on_core_download_completed via CoreManager signal.
+				# This lambda exists because setup_platform_core requires a callback.
+				pass
+			)
+			return false
+	
 	# Emulator is installed - check firmware
 	var core_id_for_firmware = ""
 	if emulator_id == "retroarch":
@@ -556,6 +593,44 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 		print("[LaunchManager] _on_emulator_installed_for_launch: Calling ready callback for emulator: " + emulator_id)
 		if callback.is_valid():
 			callback.call()
+
+## Handler for on-demand core downloads - resumes pending launches
+func _on_core_download_completed(platform_slug: String, core_id: String, success: bool):
+	var core_key: String = platform_slug + ":" + core_id
+	_pending_core_downloads.erase(core_key)
+	
+	var matching_indices: Array[int] = []
+	for i in range(_pending_core_launches.size()):
+		var pending = _pending_core_launches[i]
+		if pending.get("platform_slug", "") == platform_slug and pending.get("core_id", "") == core_id:
+			matching_indices.append(i)
+	
+	if matching_indices.is_empty():
+		return
+	
+	if not success:
+		push_error("[LaunchManager] Core download failed for " + core_key)
+		NotificationManager.show_notification("Failed to download core for " + platform_slug, NotificationManager.Type.ERROR)
+		for i in matching_indices:
+			var pending = _pending_core_launches[i]
+			var pending_callback = pending.callback
+			if pending_callback.is_valid():
+				pending_callback.call(false)
+		for i in range(matching_indices.size() - 1, -1, -1):
+			_pending_core_launches.remove_at(matching_indices[i])
+		core_download_completed.emit(platform_slug, core_id, false)
+		return
+	
+	print("[LaunchManager] Core ready for " + core_key + ", continuing launch...")
+	core_download_completed.emit(platform_slug, core_id, true)
+	for i in matching_indices:
+		var pending = _pending_core_launches[i]
+		var game: GameResource = pending.game as GameResource
+		var pending_callback = pending.callback
+		var pending_emulator_id: String = intent.resolve_emulator_for_game(game)
+		await _ensure_prerequisites(game, pending_emulator_id, pending_callback)
+	for i in range(matching_indices.size() - 1, -1, -1):
+		_pending_core_launches.remove_at(matching_indices[i])
 
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
