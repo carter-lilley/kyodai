@@ -246,6 +246,7 @@ var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
 var _center_container: CenterContainer
 var _flow_container: FlowContainer
+var _visual_layer: Control
 var _debug_camera: Camera2D
 var _debug_flow_panel: Panel
 
@@ -518,6 +519,12 @@ func _setup_internal_resize_debounce():
 	add_child(_resize_debounce_timer)
 
 func _on_resized():
+	# Keep the top-level visual layer pinned to the viewport so it can draw
+	# outside the grid's bounds without being clipped by margins or scroll.
+	if _visual_layer and _visual_layer.top_level:
+		_visual_layer.position = Vector2.ZERO
+		_visual_layer.size = get_viewport_rect().size
+
 	# Ignore resize events that don't actually change size (sub-pixel or duplicate)
 	var new_size = Vector2(size.x, size.y)
 	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
@@ -535,6 +542,11 @@ func _on_resized():
 
 func _on_display_size_changed(_new_size: Vector2):
 	"""Handler for DisplayManager's debounced viewport_size_changed signal."""
+	# Keep the top-level visual layer pinned to the viewport.
+	if _visual_layer and _visual_layer.top_level:
+		_visual_layer.position = Vector2.ZERO
+		_visual_layer.size = get_viewport_rect().size
+
 	# Ignore resize events that don't actually change this container's size.
 	var new_size = Vector2(size.x, size.y)
 	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
@@ -550,7 +562,6 @@ func _on_display_size_changed(_new_size: Vector2):
 	_on_resize_debounced()
 
 func _enter_tree():
-	print("[Grid] _enter_tree: active=%s pool=%s flow_children=%s" % [_active_cards.size(), _card_pool.size(), _flow_container.get_child_count() if _flow_container else 0])
 	# Connect to centralized card settings state (idempotent via is_connected guards)
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
@@ -579,7 +590,6 @@ func _exit_tree():
 	# Release scene-wide focus lock if this grid held it.
 	if UIManager:
 		UIManager.exit_focus_lock(self)
-	print("[Grid] _exit_tree: active=%s pool=%s queued=%s" % [_active_cards.size(), _card_pool.size(), is_queued_for_deletion()])
 	# Always free the pooled cards when leaving the tree. Pooled nodes are not in
 	# the tree, so they would not be cleaned up automatically. Use free() because
 	# queue_free() may not flush during process exit.
@@ -620,13 +630,17 @@ func _on_card_settings_state_changed(mask: int) -> void:
 
 	var state = UIManager.card_settings_state
 
+	# Refresh cached media/display settings before any layout work so that
+	# _batch_apply_layout_state() snaps target_card_width_ratio against the
+	# correct base dimensions.
+	_refresh_cached_settings()
+
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
 		_batch_apply_layout_state()
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
-		_refresh_cached_settings()
 		refresh_all_card_configs()
 		# Queue effect rebuilds for the whole grid so cards outside the visible
 		# buffer pick up new effects/geometry when they scroll back in.
@@ -913,6 +927,19 @@ func _recalculate_layout():
 	# Ensure cached settings are fresh before any layout math
 	_refresh_cached_settings()
 
+	# Defensive: if display mode or media aspect ratio changed, re-snap the target
+	# ratio so layout uses a valid stop for the new base dimensions.
+	if UIManager and UIManager.card_settings_state:
+		var state = UIManager.card_settings_state
+		if state.display_mode != _last_layout_display_mode or state.media_aspect_ratio != _last_layout_media_aspect_ratio:
+			var max_ratio = _calculate_max_ratio()
+			var clamped = clampf(target_card_width_ratio, 0.05, max_ratio)
+			var snapped_ratio = _calculate_snapped_ratio(clamped)
+			if not is_equal_approx(target_card_width_ratio, snapped_ratio):
+				_batching_layout = true
+				target_card_width_ratio = snapped_ratio
+				_batching_layout = false
+
 	_is_recalculating_layout = true
 	_suppress_recycle_until_frame = Engine.get_process_frames() + 1
 
@@ -1004,7 +1031,6 @@ func _recalculate_layout():
 	if _active_cards.size() > 0:
 		first_before = _active_cards[0].get_meta("virtual_index", -1)
 		last_before = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
-	print("[Grid] _recalculate_layout before: active=%s first=%s last=%s scroll=%s vertical=%s" % [active_before, first_before, last_before, _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal, vertical])
 	# Always recycle cards that fall outside the new buffer target during a layout
 	# recalculation. A preset can reset the scroll position while the active cards
 	# still hold indices from the previous scroll offset; without recycling, the
@@ -1022,7 +1048,6 @@ func _recalculate_layout():
 	if _active_cards.size() > 0:
 		first_after = _active_cards[0].get_meta("virtual_index", -1)
 		last_after = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
-	print("[Grid] _recalculate_layout after: active=%s first=%s last=%s flow_children=%s" % [active_after, first_after, last_after, _flow_container.get_child_count() if _flow_container else 0])
 
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
@@ -1046,6 +1071,10 @@ func _recalculate_layout():
 				card._update_media_panel_size(true)
 
 	_is_recalculating_layout = false
+	_update_visual_draw_order()
+	# Sync and reveal visual items after the deferred FlowContainer sort has run.
+	# Relying only on NOTIFICATION_TRANSFORM_CHANGED misses some rebuild paths.
+	call_deferred("_sync_and_mark_card_visual_transforms")
 
 	# Restore focus to the card that was focused before layout recalculation.
 	# scroll_to_index_and_focus waits for the target card to exist and suppresses
@@ -1149,7 +1178,23 @@ func _setup_ui():
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.scroll_vertical = 0
 	_scroll_container.clip_contents = true
+
+	_visual_layer = Control.new()
+	_visual_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_visual_layer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_visual_layer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_visual_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_visual_layer.clip_contents = false
+	_visual_layer.z_index = -1
+	_visual_layer.top_level = true
+	add_child(_visual_layer)
+	_visual_layer.position = Vector2.ZERO
+	_visual_layer.size = get_viewport_rect().size
+
 	add_child(_scroll_container)
+
+	# Make the scroll container panel transparent so the visual layer behind it is visible.
+	_scroll_container.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
 
@@ -1176,6 +1221,11 @@ func _setup_ui():
 
 	if debug_mode:
 		_setup_debug_camera()
+
+func get_visual_layer_rid() -> RID:
+	if _visual_layer and _visual_layer.is_inside_tree():
+		return _visual_layer.get_canvas_item()
+	return RID()
 
 func _get_base_dimensions() -> Vector2:
 	return Vector2(BASE_CARD_WIDTH_DP, BASE_CARD_HEIGHT_DP)
@@ -1284,15 +1334,19 @@ func _update_layout():
 				if items_per_line > 1:
 					row_width += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.x = max(row_width, 0.0)
+				_flow_container.update_minimum_size()
 			else:
 				var col_height = items_per_line * card_size.y
 				if items_per_line > 1:
 					col_height += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.y = max(col_height, 0.0)
+				_flow_container.update_minimum_size()
 		ViewMode.LIST:
 			_flow_container.custom_minimum_size.x = 0
+			_flow_container.update_minimum_size()
 		ViewMode.CAROUSEL:
 			_flow_container.custom_minimum_size.y = 0
+			_flow_container.update_minimum_size()
 
 func _initial_load():
 	if _active_cards.size() > 0:
@@ -1329,17 +1383,17 @@ func _initial_load():
 			if _card_has_focus_scale_enabled:
 				card.focus_scale_enabled = true
 				card.focus_scale_inverted = _get_focus_scale_inverted()
+			_configure_card_visual_layer(card)
+			_configure_card_size_flags(card)
 			_active_cards.append(card)
 			_active_cards_by_index[i] = card
 			_flow_container.add_child(card)
-			_configure_card_size_flags(card)
-			if _card_has_set_focus_scale:
-				card.set_focus_scale(focus_scale)
 			if _card_has_refresh_settings:
 				card.refresh_settings()
 			item_created.emit(card, i)
 
 	_update_margin()
+	_update_visual_draw_order()
 	_request_data(0, card_count)
 
 func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
@@ -1442,8 +1496,6 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
 		_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 
-	print("[Grid] _on_scroll_value_changed end: active=%s first=%s last=%s flow_children=%s" % [_active_cards.size(), _virtual_start, _virtual_end, _flow_container.get_child_count() if _flow_container else 0])
-
 	_request_missing_data()
 
 	var should_update_margin = true
@@ -1459,6 +1511,8 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	# Scrolling may bring queued effect-rebuild cards into the visible zone;
 	# rebuild them immediately so the user doesn't see stale effects.
 	_flush_pending_effect_rebuilds_for_visible_zone()
+	_sync_card_visual_transforms()
+	_update_visual_draw_order()
 
 	visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
 
@@ -1530,6 +1584,11 @@ func _configure_card_size_flags(card: Control) -> void:
 			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
+	# Render cards one z-level above the grid's visual layer so the visual layer
+	# (drawn at the grid's z-index) sits behind the cards while still covering the
+	# scroll container background.
+	card.z_index = 1
+
 	# Apply content alignment for all modes (GRID also supports START/CENTER/END)
 	if _card_has_set_content_alignment:
 		var alignment = _get_content_alignment()
@@ -1543,6 +1602,35 @@ func _configure_card_size_flags(card: Control) -> void:
 	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
 
+func _configure_card_visual_layer(card: Control) -> void:
+	if card.has_method("set_visual_layer"):
+		card.set_visual_layer(_visual_layer)
+
+func _sync_card_visual_transforms() -> void:
+	for card in _active_cards:
+		if card.has_method("sync_visual_transform"):
+			card.sync_visual_transform()
+
+func _sync_and_mark_card_visual_transforms() -> void:
+	for card in _active_cards:
+		if not is_instance_valid(card):
+			continue
+		if card.has_method("sync_visual_transform"):
+			card.sync_visual_transform()
+		if card.has_method("_mark_visuals_position_synced"):
+			card._mark_visuals_position_synced()
+
+func _update_visual_draw_order() -> void:
+	var focused_idx = _get_focused_virtual_index()
+	for card in _active_cards:
+		if not card.has_method("set_visual_draw_index"):
+			continue
+		var idx = card.get_meta("virtual_index", 0)
+		var base_index = idx * 10
+		if idx == focused_idx:
+			base_index += 1000000
+		card.set_visual_draw_index(base_index)
+
 func _add_card_at_end(virtual_index: int):
 	var card = _acquire_card()
 	if not card:
@@ -1552,6 +1640,7 @@ func _add_card_at_end(virtual_index: int):
 	if _card_has_focus_scale_enabled:
 		card.focus_scale_enabled = true
 		card.focus_scale_inverted = _get_focus_scale_inverted()
+	_configure_card_visual_layer(card)
 	_configure_card_size_flags(card)
 	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
@@ -1582,6 +1671,7 @@ func _add_card_at_start(virtual_index: int):
 	if _card_has_focus_scale_enabled:
 		card.focus_scale_enabled = true
 		card.focus_scale_inverted = _get_focus_scale_inverted()
+	_configure_card_visual_layer(card)
 	_active_cards.insert(0, card)
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
@@ -1641,6 +1731,7 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		if _card_has_focus_scale_enabled:
 			card.focus_scale_enabled = true
 			card.focus_scale_inverted = _get_focus_scale_inverted()
+		_configure_card_visual_layer(card)
 		_flow_container.add_child(card)
 		_flow_container.move_child(card, i)
 		_configure_card_size_flags(card)
@@ -2156,6 +2247,7 @@ func _refresh_buffer(preserve_scroll: bool = false):
 		_initial_load()
 		# After populating cards the scrollbar state may change; converge again.
 		_recalculate_layout_until_stable()
+	_update_visual_draw_order()
 
 	# Restore focus to the card that owned it before recycle; fall back to the
 	# saved raw scroll offset if no focus target exists. scroll_to_index_and_focus
@@ -2488,6 +2580,7 @@ func _initial_load_from_increment():
 			if _card_has_focus_scale_enabled:
 				card.focus_scale_enabled = true
 				card.focus_scale_inverted = _get_focus_scale_inverted()
+			_configure_card_visual_layer(card)
 			_configure_card_size_flags(card)
 			_active_cards.append(card)
 			_active_cards_by_index[i] = card
@@ -2505,6 +2598,7 @@ func _initial_load_from_increment():
 			item_created.emit(card, i)
 
 	_update_margin()
+	_update_visual_draw_order()
 
 func cache_items_at_offset(items: Array[GameResource], offset: int):
 	for i in range(items.size()):

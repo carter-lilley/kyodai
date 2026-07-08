@@ -64,6 +64,7 @@ var _media_loader: CardMediaLoader = null
 # Status badge overlay (direct child of GameCard, positioned over media panel)
 var _status_badge_canvas_item: RID = RID()
 var _status_badge_style: StyleBoxFlat = null
+var _status_badge_rect: Rect2 = Rect2()
 var _badge_update_pending: bool = false
 const STATUS_BADGE_SIZE_RATIO: float = 0.04
 const STATUS_BADGE_MARGIN_RATIO: float = 0.05
@@ -145,10 +146,12 @@ func _enter_tree():
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 	if _focus_stack:
-		_focus_stack.set_parent_rid(get_canvas_item())
+		var focus_parent_rid := _focus_ring_canvas_item if _focus_ring_canvas_item.is_valid() else get_canvas_item()
+		_focus_stack.set_parent_rid(focus_parent_rid)
 		_update_effect_transforms()
 	if _status_badge_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, get_canvas_item())
+		var badge_parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
+		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, badge_parent_rid)
 	else:
 		_setup_status_badge()
 	_update_status_icon()
@@ -205,13 +208,21 @@ func _free_status_badge_canvas_item() -> void:
 		_status_badge_canvas_item = RID()
 	_status_badge_style = null
 
+func _update_visual_items_visibility() -> void:
+	super._update_visual_items_visibility()
+	if _status_badge_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, visible and is_inside_tree() and _visuals_position_synced and game != null)
+
 func _setup_status_badge():
 	_free_status_badge_canvas_item()
 	_status_badge_style = StyleBoxFlat.new()
 	_status_badge_style.anti_aliasing = true
 	_status_badge_style.anti_aliasing_size = 1.0
 	_status_badge_canvas_item = RenderingServer.canvas_item_create()
-	RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, get_canvas_item())
+	# Parent the badge to the visual layer if one is set; otherwise keep it under
+	# the card for standalone/preview mode.
+	var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
+	RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, parent_rid)
 	RenderingServer.canvas_item_set_draw_index(_status_badge_canvas_item, 50)
 	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 	_update_status_badge_style()
@@ -353,7 +364,10 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 		return
 
 	_focus_stack = EffectStack.new()
-	_focus_stack.set_parent_rid(get_canvas_item())
+	# Parent the focus stack to the focus ring canvas item so it moves and scales
+	# with the card's unclipped visual transform.
+	var focus_parent_rid := _focus_ring_canvas_item if _focus_ring_canvas_item.is_valid() else get_canvas_item()
+	_focus_stack.set_parent_rid(focus_parent_rid)
 	_focus_stack.set_clip_children(false)
 	_focus_stack.set_visible(false)
 
@@ -762,6 +776,7 @@ func _update_status_badge_layout():
 
 	var pos = Vector2(size.x - badge_size - margin, size.y - badge_size - margin)
 	var rect = Rect2(pos, Vector2(badge_size, badge_size))
+	_status_badge_rect = rect
 
 	RenderingServer.canvas_item_clear(_status_badge_canvas_item)
 	_update_status_badge_style()
@@ -789,7 +804,7 @@ func _update_status_icon():
 	if not game:
 		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 		return
-	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, true)
+	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, visible and is_inside_tree() and _visuals_position_synced)
 	_update_status_badge_layout()
 
 static func _resolve_platform_icon_name(slug: String) -> String:
@@ -1090,6 +1105,40 @@ func _find_home_view() -> Node:
 		current = current.get_parent()
 	return null
 
+func _reparent_visual_items() -> void:
+	super._reparent_visual_items()
+	if _status_badge_canvas_item.is_valid():
+		var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
+		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, parent_rid)
+
+func sync_visual_transform() -> void:
+	super.sync_visual_transform()
+	if not _visual_layer or not _visual_layer.is_inside_tree():
+		return
+	if not _status_badge_canvas_item.is_valid():
+		return
+
+	var layer_global := _visual_layer.global_position
+	var card_global := global_position
+	var base_offset := card_global - layer_global
+
+	var base_transform := Transform2D().translated(base_offset)
+	if not content_scale.is_equal_approx(Vector2.ONE):
+		var pivot := size * 0.5
+		base_transform = base_transform * Transform2D().translated(pivot) * Transform2D().scaled(content_scale) * Transform2D().translated(-pivot)
+
+	RenderingServer.canvas_item_set_transform(_status_badge_canvas_item, base_transform)
+
+func set_visual_draw_index(base_index: int) -> void:
+	super.set_visual_draw_index(base_index)
+
+func _apply_visual_draw_index() -> void:
+	super._apply_visual_draw_index()
+	if _status_badge_canvas_item.is_valid():
+		var boost := 1000000 if has_focus() else 0
+		var idx := _base_visual_draw_index + boost
+		RenderingServer.canvas_item_set_draw_index(_status_badge_canvas_item, idx + 3)
+
 func _apply_content_scale() -> void:
 	super._apply_content_scale()
 	_update_effect_transforms()
@@ -1151,7 +1200,7 @@ func _on_focus_entered():
 		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
 
 	_update_status_icon()
-	z_index = 1
+	z_index = 2
 	if _focus_tween:
 		_focus_tween.kill()
 	_focus_tween = create_tween()
@@ -1172,7 +1221,7 @@ func _on_focus_entered():
 func _on_focus_exited():
 	_is_focused = false
 	_update_status_icon()
-	z_index = 0
+	z_index = 1
 	_kill_focus_tweens()
 	if _focus_tween:
 		_focus_tween.kill()

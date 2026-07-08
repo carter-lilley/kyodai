@@ -128,10 +128,6 @@ var show_text_margin: bool = true:
 			return
 		show_text_margin = value
 		if _ready_called:
-			if _text_content:
-				_text_content.visible = value
-			if _text_row:
-				_text_row.visible = value
 			_update_media_panel_size(true)
 			queue_redraw()
 
@@ -151,14 +147,16 @@ var content_scale: Vector2 = Vector2.ONE:
 			return
 		content_scale = value
 		_apply_content_scale()
-		queue_redraw()
 
 var _text_content: VBoxContainer
 var _text_row: HBoxContainer
-var _headline_label: Label
-var _supporting_label: Label
+var _headline_label: Label = null
+var _supporting_label: Label = null
 var _actions_hbox: HBoxContainer
 var _media_content: Control = null
+
+var _headline_text_line: TextLine = null
+var _supporting_text_line: TextLine = null
 
 var _media_container: MediaContainer
 
@@ -179,12 +177,25 @@ var _media_canvas_item: RID = RID()
 var _focus_ring_canvas_item: RID = RID()
 var _focus_ring_style: StyleBoxFlat
 var _rounded_media_material: ShaderMaterial
+var _text_canvas_item: RID = RID()
+
+var _visual_layer: Control = null
+var _visual_layer_rid: RID = RID()
+var _base_visual_draw_index: int = 0
+var _visual_bg_canvas_item: RID = RID()
+var _visuals_position_synced: bool = false
 
 var _applied_headline_size_dp: float = -1.0
 var _applied_supporting_size_dp: float = -1.0
 var _applied_font_color: Color = Color(-1, -1, -1)
 var _applied_supporting_color: Color = Color(-1, -1, -1)
 var _applied_text_shadow_enabled: bool = false
+var _applied_headline_text: String = ""
+var _applied_supporting_text: String = ""
+var _applied_h_align: int = -1
+var _applied_text_bounds: Rect2 = Rect2()
+var _applied_show_background: bool = true
+var _applied_fonts: Dictionary = {}
 
 var _last_media_min_x: float = -1.0
 var _last_media_min_y: float = -1.0
@@ -226,12 +237,94 @@ func _update_focus_ring_radius(target_w: float, target_h: float) -> void:
 	var radius: float = card_rounding_ratio * max_radius
 	_focus_ring_style.set_corner_radius_all(int(round(radius)))
 
+func set_visual_layer(layer: Control) -> void:
+	"""Move this card's visual RS items to an unclipped visual layer.
+
+	The card Control remains inside the clipped scroll container for input; only
+	the rendering canvas items are reparented so they can draw outside the
+	scroll viewport.
+	"""
+	if _visual_layer == layer:
+		return
+	_visual_layer = layer
+	_visual_layer_rid = layer.get_canvas_item() if layer else RID()
+	set_notify_transform(layer != null)
+	set_process(false)
+	_visuals_position_synced = false
+	_reparent_visual_items()
+	if _visual_layer and _visual_layer.is_inside_tree() and is_inside_tree():
+		sync_visual_transform()
+		call_deferred("_mark_visuals_position_synced")
+
+func _reparent_visual_items() -> void:
+	var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
+	if _visual_bg_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_parent(_visual_bg_canvas_item, parent_rid)
+	if _media_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_parent(_media_canvas_item, parent_rid)
+	if _text_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_parent(_text_canvas_item, parent_rid)
+	if _focus_ring_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_parent(_focus_ring_canvas_item, parent_rid)
+
+func sync_visual_transform() -> void:
+	"""Sync visual RS item positions to the card's global transform and focus scale.
+
+	Called when the card moves, scrolls, or its focus scale changes. The card
+	Control itself stays clipped; only the visual canvas items are moved.
+	"""
+	if not _visual_layer or not _visual_layer.is_inside_tree() or not is_inside_tree():
+		return
+
+	var layer_global := _visual_layer.global_position
+	var card_global := global_position
+	var base_offset := card_global - layer_global
+
+	var base_transform := Transform2D().translated(base_offset)
+	if not content_scale.is_equal_approx(Vector2.ONE):
+		var pivot := size * 0.5
+		base_transform = base_transform * Transform2D().translated(pivot) * Transform2D().scaled(content_scale) * Transform2D().translated(-pivot)
+
+	if _visual_bg_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_transform(_visual_bg_canvas_item, base_transform)
+
+	if _media_canvas_item.is_valid():
+		var media_transform := base_transform * Transform2D().translated(_media_bounds.position)
+		RenderingServer.canvas_item_set_transform(_media_canvas_item, media_transform)
+
+	if _text_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_transform(_text_canvas_item, base_transform)
+
+	if _focus_ring_canvas_item.is_valid():
+		# The focus ring stylebox is drawn at ring_rect in local space, so its
+		# canvas item only needs the base card transform (position + scale).
+		RenderingServer.canvas_item_set_transform(_focus_ring_canvas_item, base_transform)
+
+func _mark_visuals_position_synced() -> void:
+	if _visuals_position_synced:
+		return
+	_visuals_position_synced = true
+	_update_visual_items_visibility()
+
+func set_visual_draw_index(base_index: int) -> void:
+	_base_visual_draw_index = base_index
+	_apply_visual_draw_index()
+
+func _apply_visual_draw_index() -> void:
+	var boost := 1000000 if has_focus() else 0
+	var idx := _base_visual_draw_index + boost
+	if _visual_bg_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_draw_index(_visual_bg_canvas_item, idx)
+	if _media_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_draw_index(_media_canvas_item, idx + 1)
+	if _text_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_draw_index(_text_canvas_item, idx + 2)
+	if _focus_ring_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_draw_index(_focus_ring_canvas_item, idx + 3)
+
 func _apply_content_scale() -> void:
-	offset_transform_visual_only = true
-	offset_transform_pivot_ratio = Vector2(0.5, 0.5)
-	offset_transform_position_ratio = Vector2.ZERO
-	offset_transform_scale = content_scale
-	offset_transform_enabled = not content_scale.is_equal_approx(Vector2.ONE)
+	sync_visual_transform()
+
 
 func _ready():
 	flat = true
@@ -264,29 +357,61 @@ func _exit_tree():
 	pass
 
 func _free_rs_items() -> void:
+	if _visual_bg_canvas_item.is_valid():
+		RenderingServer.free_rid(_visual_bg_canvas_item)
+		_visual_bg_canvas_item = RID()
 	if _media_canvas_item.is_valid():
 		RenderingServer.free_rid(_media_canvas_item)
 		_media_canvas_item = RID()
+	if _text_canvas_item.is_valid():
+		RenderingServer.free_rid(_text_canvas_item)
+		_text_canvas_item = RID()
 	if _focus_ring_canvas_item.is_valid():
 		RenderingServer.free_rid(_focus_ring_canvas_item)
 		_focus_ring_canvas_item = RID()
+	_headline_text_line = null
+	_supporting_text_line = null
+
+func _update_visual_items_visibility() -> void:
+	var v := visible and is_inside_tree() and _visuals_position_synced
+	var has_text := not headline.is_empty() or (not supporting_text.is_empty() and size.y >= M3Units.dp(100.0))
+	if _visual_bg_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_visual_bg_canvas_item, v and show_background)
+	if _media_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_media_canvas_item, v and _has_media_content())
+	if _text_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_text_canvas_item, v and has_text and show_text_margin)
+	if _focus_ring_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, v and has_focus())
 
 func _setup_rs_items() -> void:
 	_free_rs_items()
+	var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
+	_visual_bg_canvas_item = RenderingServer.canvas_item_create()
+	RenderingServer.canvas_item_set_parent(_visual_bg_canvas_item, parent_rid)
+	RenderingServer.canvas_item_set_draw_index(_visual_bg_canvas_item, 0)
+	RenderingServer.canvas_item_set_visible(_visual_bg_canvas_item, true)
 	_media_canvas_item = RenderingServer.canvas_item_create()
-	RenderingServer.canvas_item_set_parent(_media_canvas_item, get_canvas_item())
+	RenderingServer.canvas_item_set_parent(_media_canvas_item, parent_rid)
 	RenderingServer.canvas_item_set_draw_index(_media_canvas_item, 1)
-	RenderingServer.canvas_item_set_visible(_media_canvas_item, false)
-	
+	RenderingServer.canvas_item_set_visible(_media_canvas_item, true)
+	_text_canvas_item = RenderingServer.canvas_item_create()
+	RenderingServer.canvas_item_set_parent(_text_canvas_item, parent_rid)
+	RenderingServer.canvas_item_set_draw_index(_text_canvas_item, 2)
+	RenderingServer.canvas_item_set_visible(_text_canvas_item, true)
 	_focus_ring_canvas_item = RenderingServer.canvas_item_create()
-	RenderingServer.canvas_item_set_parent(_focus_ring_canvas_item, get_canvas_item())
-	RenderingServer.canvas_item_set_draw_index(_focus_ring_canvas_item, 100)
+	RenderingServer.canvas_item_set_parent(_focus_ring_canvas_item, parent_rid)
+	RenderingServer.canvas_item_set_draw_index(_focus_ring_canvas_item, 3)
 	RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, false)
+	_visuals_position_synced = false
+	_applied_text_bounds = Rect2()
+
 
 func _enter_tree():
 	if not _ready_called:
 		return
-	if not _media_canvas_item.is_valid() or not _focus_ring_canvas_item.is_valid():
+	_visuals_position_synced = false
+	if not _visual_bg_canvas_item.is_valid() or not _media_canvas_item.is_valid() or not _text_canvas_item.is_valid() or not _focus_ring_canvas_item.is_valid():
 		_setup_rs_items()
 		_update_media()
 		_update_focus_ring_bounds()
@@ -297,6 +422,7 @@ func _enter_tree():
 	# their node-less media content. Without this, _has_media_content() can
 	# return false for flattened cards and bounds end up zeroed/blank.
 	_update_media_panel_size(true)
+	_update_visual_items_visibility()
 
 func _on_rs_items_recreated() -> void:
 	pass
@@ -336,6 +462,12 @@ func _rebuild_layout():
 	_applied_font_color = Color(-1, -1, -1)
 	_applied_supporting_color = Color(-1, -1, -1)
 	_applied_text_shadow_enabled = false
+	_applied_headline_text = ""
+	_applied_supporting_text = ""
+	_applied_h_align = -1
+	_applied_text_bounds = Rect2()
+	_applied_show_background = true
+	_applied_fonts = {}
 	_last_media_min_x = -1.0
 	_last_media_min_y = -1.0
 	_last_media_pos_x = -1.0
@@ -346,14 +478,17 @@ func _rebuild_layout():
 		preserved_media_content = _media_content
 		remove_child(_media_content)
 	
-	var preserved_headline: Label = null
-	var preserved_supporting: Label = null
-	if _headline_label and is_instance_valid(_headline_label) and _headline_label.get_parent():
-		preserved_headline = _headline_label
-		_headline_label.get_parent().remove_child(_headline_label)
-	if _supporting_label and is_instance_valid(_supporting_label) and _supporting_label.get_parent():
-		preserved_supporting = _supporting_label
-		_supporting_label.get_parent().remove_child(_supporting_label)
+	if _headline_label and is_instance_valid(_headline_label):
+		if _headline_label.get_parent():
+			_headline_label.get_parent().remove_child(_headline_label)
+		_headline_label.queue_free()
+	_headline_label = null
+	
+	if _supporting_label and is_instance_valid(_supporting_label):
+		if _supporting_label.get_parent():
+			_supporting_label.get_parent().remove_child(_supporting_label)
+		_supporting_label.queue_free()
+	_supporting_label = null
 	
 	if _text_row and is_instance_valid(_text_row):
 		if _text_row.get_parent() == self:
@@ -377,7 +512,7 @@ func _rebuild_layout():
 		_text_row = HBoxContainer.new()
 		_text_row.name = "TextRow"
 		_text_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_text_row.visible = show_text_margin
+		_text_row.visible = false
 		add_child(_text_row)
 		
 		_text_content = VBoxContainer.new()
@@ -386,6 +521,7 @@ func _rebuild_layout():
 		_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_text_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_text_content.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_text_content.visible = false
 		_text_row.add_child(_text_content)
 		
 		_actions_hbox = HBoxContainer.new()
@@ -400,7 +536,7 @@ func _rebuild_layout():
 		_text_content.name = "TextContent"
 		_text_content.add_theme_constant_override("separation", M3Units.dp(LABEL_GAP))
 		_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_text_content.visible = show_text_margin
+		_text_content.visible = false
 		add_child(_text_content)
 		
 		_actions_hbox = HBoxContainer.new()
@@ -409,44 +545,24 @@ func _rebuild_layout():
 		_actions_hbox.visible = false
 		_text_content.add_child(_actions_hbox)
 	
-	if preserved_headline:
-		_headline_label = preserved_headline
-	else:
-		_headline_label = Label.new()
-		_headline_label.name = "Headline"
-		_headline_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_headline_label.max_lines_visible = 1
-		_headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		_headline_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_headline_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_text_content.add_child(_headline_label)
-	
-	if preserved_supporting:
-		_supporting_label = preserved_supporting
-	else:
-		_supporting_label = Label.new()
-		_supporting_label.name = "SupportingText"
-		_supporting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_supporting_label.max_lines_visible = 1
-		_supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		_supporting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_text_content.add_child(_supporting_label)
-	
 	_rebuild_actions()
-	_apply_content_scale()
 	call_deferred("_update_media_panel_size", true)
 
 func _draw():
-	if not _cached_stylebox:
+	if not _cached_stylebox or not show_background:
 		return
 	var rect = Rect2(Vector2.ZERO, size)
 	var max_radius = min(size.x, size.y) / 2.0
 	var radius = int(round(card_rounding_ratio * max_radius))
 	_configure_stylebox_for_state()
 	_cached_stylebox.set_corner_radius_all(radius)
-	if show_background:
-		draw_style_box(_cached_stylebox, rect)
+	_redraw_visual_background(rect)
+
+func _redraw_visual_background(rect: Rect2) -> void:
+	if not _visual_bg_canvas_item.is_valid():
+		return
+	RenderingServer.canvas_item_clear(_visual_bg_canvas_item)
+	_cached_stylebox.draw(_visual_bg_canvas_item, rect)
 
 func _configure_stylebox_for_state():
 	var bg: Color
@@ -488,8 +604,9 @@ func _has_media_content() -> bool:
 
 func _update_media():
 	var has_media := _has_media_content()
+	var card_visible := visible and is_inside_tree() and _visuals_position_synced
 	if _media_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_visible(_media_canvas_item, has_media)
+		RenderingServer.canvas_item_set_visible(_media_canvas_item, has_media and card_visible)
 	if _media_content and is_instance_valid(_media_content):
 		_media_content.visible = has_media
 	if not has_media or _media_content != null or media_texture == null:
@@ -568,67 +685,119 @@ func _get_horizontal_alignment() -> HorizontalAlignment:
 			return HORIZONTAL_ALIGNMENT_RIGHT
 	return HORIZONTAL_ALIGNMENT_LEFT
 
-func _update_text():
-	if not _headline_label or not _supporting_label:
+func _update_text() -> void:
+	if not _text_canvas_item.is_valid():
 		return
-	var height_dp = size.y / M3Units.get_scale()
+	_update_visual_items_visibility()
 	if _cached_fonts.is_empty():
 		_cached_fonts = M3Theme.load_fonts()
 	var fonts = _cached_fonts
-	var headline_spec = _pick_headline_spec(height_dp)
-	var supporting_spec = _pick_supporting_spec(height_dp)
 	
-	_headline_label.text = headline
-	_headline_label.visible = not headline.is_empty()
-	if headline_spec.size != _applied_headline_size_dp:
-		_applied_headline_size_dp = headline_spec.size
-		_headline_label.add_theme_font_override("font", fonts[headline_spec.weight])
-		_headline_label.add_theme_font_size_override("font_size", M3Units.dp(headline_spec.size))
-	var font_color = M3Theme.get_on_surface()
-	if font_color != _applied_font_color:
-		_applied_font_color = font_color
-		_headline_label.add_theme_color_override("font_color", font_color)
+	var height_dp := size.y / M3Units.get_scale()
+	var headline_spec := _pick_headline_spec(height_dp)
+	var supporting_spec := _pick_supporting_spec(height_dp)
+	var font_color := M3Theme.get_on_surface()
+	var supporting_color := M3Theme.get_on_surface_variant()
+	var h_align: int = _get_horizontal_alignment()
+	var needs_shadow := not show_background
+	var has_headline := not headline.is_empty()
+	var has_supporting := not supporting_text.is_empty() and size.y >= M3Units.dp(100.0)
+	var text_rect := _text_bounds
 	
-	var h_align = _get_horizontal_alignment()
-	if _headline_label.horizontal_alignment != h_align:
-		_headline_label.horizontal_alignment = h_align
+	var text_changed: bool = (
+		headline != _applied_headline_text
+		or supporting_text != _applied_supporting_text
+		or headline_spec.size != _applied_headline_size_dp
+		or supporting_spec.size != _applied_supporting_size_dp
+		or font_color != _applied_font_color
+		or supporting_color != _applied_supporting_color
+		or h_align != _applied_h_align
+		or needs_shadow != _applied_text_shadow_enabled
+		or show_background != _applied_show_background
+		or not text_rect.is_equal_approx(_applied_text_bounds)
+		or fonts != _applied_fonts
+	)
+	if not text_changed:
+		return
 	
-	_supporting_label.text = supporting_text
-	_supporting_label.visible = not supporting_text.is_empty() and size.y >= M3Units.dp(100.0)
-	if supporting_spec.size != _applied_supporting_size_dp:
-		_applied_supporting_size_dp = supporting_spec.size
-		_supporting_label.add_theme_font_override("font", fonts[supporting_spec.weight])
-		_supporting_label.add_theme_font_size_override("font_size", M3Units.dp(supporting_spec.size))
-	var supporting_color = M3Theme.get_on_surface_variant()
-	if supporting_color != _applied_supporting_color:
-		_applied_supporting_color = supporting_color
-		_supporting_label.add_theme_color_override("font_color", supporting_color)
+	_applied_headline_text = headline
+	_applied_supporting_text = supporting_text
+	_applied_headline_size_dp = headline_spec.size
+	_applied_supporting_size_dp = supporting_spec.size
+	_applied_font_color = font_color
+	_applied_supporting_color = supporting_color
+	_applied_h_align = h_align
+	_applied_text_shadow_enabled = needs_shadow
+	_applied_show_background = show_background
+	_applied_text_bounds = text_rect
+	_applied_fonts = fonts
 	
-	if _supporting_label.horizontal_alignment != h_align:
-		_supporting_label.horizontal_alignment = h_align
+	RenderingServer.canvas_item_clear(_text_canvas_item)
 	
-	var needs_shadow = not show_background
-	if needs_shadow and not _applied_text_shadow_enabled:
-		_applied_text_shadow_enabled = true
-		var shadow_color = Color(0.0, 0.0, 0.0, 0.10)
-		var shadow_offset_x = M3Units.dp(1.5)
-		var shadow_offset_y = M3Units.dp(2.5)
-		var shadow_outline = M3Units.dp(5.0)
-		_headline_label.add_theme_color_override("font_shadow_color", shadow_color)
-		_headline_label.add_theme_constant_override("shadow_offset_x", shadow_offset_x)
-		_headline_label.add_theme_constant_override("shadow_offset_y", shadow_offset_y)
-		_headline_label.add_theme_constant_override("shadow_outline_size", shadow_outline)
-		_supporting_label.remove_theme_color_override("font_shadow_color")
-		_supporting_label.remove_theme_constant_override("shadow_offset_x")
-		_supporting_label.remove_theme_constant_override("shadow_offset_y")
-		_supporting_label.remove_theme_constant_override("shadow_outline_size")
-	elif not needs_shadow and _applied_text_shadow_enabled:
-		_applied_text_shadow_enabled = false
-		for label in [_headline_label, _supporting_label]:
-			label.remove_theme_color_override("font_shadow_color")
-			label.remove_theme_constant_override("shadow_offset_x")
-			label.remove_theme_constant_override("shadow_offset_y")
-			label.remove_theme_constant_override("shadow_outline_size")
+	if not has_headline and not has_supporting:
+		return
+	if text_rect.size.x <= 0.0 or text_rect.size.y <= 0.0:
+		return
+	
+	var pad := M3Units.dp(PADDING)
+	var half_pad := M3Units.dp(PADDING / 2.0)
+	var inner_x := text_rect.position.x + pad
+	var inner_y := text_rect.position.y + half_pad
+	var inner_w := text_rect.size.x - pad * 2.0
+	var inner_h := text_rect.size.y - half_pad * 2.0
+	if inner_w <= 0.0 or inner_h <= 0.0:
+		return
+	
+	var label_gap := M3Units.dp(LABEL_GAP)
+	var shadow_offset := Vector2(M3Units.dp(1.5), M3Units.dp(2.5))
+	var shadow_color := Color(0.0, 0.0, 0.0, 0.5)
+	var use_text_line := ClassDB.class_exists("TextLine")
+	var headline_h := 0.0
+	
+	if has_headline:
+		var headline_font: Font = fonts[headline_spec.weight]
+		var headline_size := int(M3Units.dp(headline_spec.size))
+		var headline_y := inner_y
+		if use_text_line:
+			if _headline_text_line == null:
+				_headline_text_line = TextLine.new()
+			else:
+				_headline_text_line.clear()
+			_headline_text_line.add_string(headline, headline_font, headline_size)
+			_headline_text_line.set_width(inner_w)
+			_headline_text_line.set_horizontal_alignment(h_align)
+			_headline_text_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			if needs_shadow:
+				_headline_text_line.draw(_text_canvas_item, Vector2(inner_x, headline_y) + shadow_offset, shadow_color)
+			_headline_text_line.draw(_text_canvas_item, Vector2(inner_x, headline_y), font_color)
+			headline_h = _headline_text_line.get_size().y
+		else:
+			var baseline: float = headline_y + headline_font.get_ascent(headline_size)
+			if needs_shadow:
+				headline_font.draw_string(_text_canvas_item, Vector2(inner_x, baseline) + shadow_offset, headline, HORIZONTAL_ALIGNMENT_LEFT, -1, headline_size, shadow_color)
+			headline_font.draw_string(_text_canvas_item, Vector2(inner_x, baseline), headline, h_align, inner_w, headline_size, font_color)
+			headline_h = headline_font.get_height(headline_size)
+	
+	if has_supporting:
+		var supporting_font: Font = fonts[supporting_spec.weight]
+		var supporting_size := int(M3Units.dp(supporting_spec.size))
+		var gap := label_gap if has_headline else 0.0
+		var supporting_y := inner_y + headline_h + gap
+		if supporting_y + supporting_size > inner_y + inner_h:
+			return
+		if use_text_line:
+			if _supporting_text_line == null:
+				_supporting_text_line = TextLine.new()
+			else:
+				_supporting_text_line.clear()
+			_supporting_text_line.add_string(supporting_text, supporting_font, supporting_size)
+			_supporting_text_line.set_width(inner_w)
+			_supporting_text_line.set_horizontal_alignment(h_align)
+			_supporting_text_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			_supporting_text_line.draw(_text_canvas_item, Vector2(inner_x, supporting_y), supporting_color)
+		else:
+			var baseline: float = supporting_y + supporting_font.get_ascent(supporting_size)
+			supporting_font.draw_string(_text_canvas_item, Vector2(inner_x, baseline), supporting_text, h_align, inner_w, supporting_size, supporting_color)
 
 func _update_appearance():
 	var default_min_height = MIN_HEIGHT_VERTICAL_DP if card_layout_mode == LayoutMode.VERTICAL else MIN_HEIGHT_HORIZONTAL_DP
@@ -713,8 +882,14 @@ func _notification(what: int):
 				_hovered = false
 				_is_pressing = false
 				queue_redraw()
+		NOTIFICATION_VISIBILITY_CHANGED:
+			_update_visual_items_visibility()
 		NOTIFICATION_PREDELETE:
 			_free_rs_items()
+		NOTIFICATION_TRANSFORM_CHANGED:
+			if _visual_layer and _visual_layer.is_inside_tree() and is_inside_tree():
+				sync_visual_transform()
+				_mark_visuals_position_synced()
 
 func _gui_input(event: InputEvent):
 	if not clickable:
@@ -862,12 +1037,12 @@ func _update_media_panel_size(force: bool = false) -> void:
 		if _text_row:
 			_text_row.position = Vector2(text_x + pad, text_y + half_pad)
 			_text_row.size = Vector2(text_w - pad * 2.0, text_h - half_pad - pad)
-			_text_row.visible = show_text_margin
+			_text_row.visible = false
 	else:
 		if _text_content:
 			_text_content.position = Vector2(text_x + pad, text_y + half_pad)
 			_text_content.size = Vector2(text_w - pad * 2.0, text_h - half_pad - pad)
-			_text_content.visible = show_text_margin
+			_text_content.visible = false
 	
 	if _media_content and is_instance_valid(_media_content):
 		_media_content.position = _media_bounds.position
@@ -885,7 +1060,9 @@ func _update_media_panel_size(force: bool = false) -> void:
 	
 	_update_text_content_sizes()
 	_update_media()
+	sync_visual_transform()
 	_update_focus_ring_bounds()
+	_update_text()
 	if not _focus_ring_bounds_queued:
 		_focus_ring_bounds_queued = true
 		call_deferred("_update_focus_ring_bounds")
@@ -928,9 +1105,10 @@ func _update_text_content_sizes() -> void:
 
 func _on_focus_changed():
 	if _focus_ring_canvas_item.is_valid():
-		var should_show := has_focus() and not disabled
+		var should_show := has_focus() and not disabled and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, should_show)
 		if should_show:
 			_update_focus_ring_bounds()
+	_apply_visual_draw_index()
 	queue_redraw()
 
