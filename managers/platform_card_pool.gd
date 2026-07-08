@@ -4,13 +4,17 @@
 extends Node
 
 ## Maximum cards kept in each named pool. Kept conservative for Android.
-const MAX_POOL_SIZE := 30
+const MAX_SHUFFLER_POOL_SIZE := 40
+const MAX_PLATFORM_POOL_SIZE := 40
 
 ## Number of cards to pre-create for each pool at startup.
-const PREWARM_PER_POOL := 8
+const PREWARM_PER_POOL := 3
 
-## How many cards to create per process frame during warmup to avoid startup hitches.
+## How many cards to create per process frame during startup warmup.
 const PREWARM_BATCH_PER_FRAME := 2
+
+## How many cards to create per process frame during continuous background warmup.
+const BACKGROUND_WARM_BATCH_PER_FRAME := 2
 
 const POOL_SHUFFLER := "shuffler"
 const POOL_PLATFORM_SETTINGS := "platform_settings"
@@ -33,7 +37,10 @@ func _start_warmup() -> void:
 
 
 func _process(_delta: float) -> void:
-	_warmup_step()
+	if _warmup_remaining > 0:
+		_warmup_step()
+	else:
+		_background_warm_step()
 
 
 func _warmup_step() -> void:
@@ -48,8 +55,23 @@ func _warmup_step() -> void:
 		_warmup_pool_index += 1
 		frames_left -= 1
 
-	if _warmup_remaining <= 0:
-		set_process(false)
+
+func _background_warm_step() -> void:
+	# Warm platform cards first (they're the laggy screen), then shuffler cards.
+	# This runs continuously after the initial prewarm until both pools are full.
+	var frames_left := BACKGROUND_WARM_BATCH_PER_FRAME
+	while frames_left > 0:
+		var target_pool: String = ""
+		if _pools.get(POOL_PLATFORM_SETTINGS, []).size() < MAX_PLATFORM_POOL_SIZE:
+			target_pool = POOL_PLATFORM_SETTINGS
+		elif _pools.get(POOL_SHUFFLER, []).size() < MAX_SHUFFLER_POOL_SIZE:
+			target_pool = POOL_SHUFFLER
+		if target_pool == "":
+			return
+		var card := PlatformCard.new()
+		card.visible = false
+		_add_to_pool(target_pool, card)
+		frames_left -= 1
 
 
 func _get_pool_names() -> Array[String]:
@@ -91,7 +113,8 @@ func _add_to_pool(pool_name: String, card: PlatformCard) -> void:
 	if not _pools.has(pool_name):
 		_pools[pool_name] = []
 	var pool: Array = _pools[pool_name]
-	if pool.size() < MAX_POOL_SIZE:
+	var max_size := MAX_PLATFORM_POOL_SIZE if pool_name == POOL_PLATFORM_SETTINGS else MAX_SHUFFLER_POOL_SIZE
+	if pool.size() < max_size:
 		pool.append(card)
 	else:
 		card.queue_free()

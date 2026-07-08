@@ -53,6 +53,12 @@ var _available_emulators: Array[Dictionary] = []
 var _available_cores: Array[Dictionary] = []
 var _emulator_install_status: Dictionary = {}
 
+# When true, set_available_emulators() stores the list but does not rebuild the
+# dropdown. This lets views create many cards cheaply and populate dropdowns
+# in a second batch.
+var _defer_dropdown: bool = false
+var _pending_emulators: Array[Dictionary] = []
+
 # Reentrancy guard for dropdown rebuilds. Setting selected_emulator/selected_core_id
 # from _on_emulator_selected triggers _update_display() -> _update_emulator_dropdown(),
 # and without this guard the menu items can be rebuilt/appended while a selection is
@@ -149,6 +155,8 @@ func _build_ui():
 
 	_emulator_dropdown = M3OptionButton.new()
 	_emulator_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Placeholder text shown while dropdown population is deferred.
+	_emulator_dropdown.add_item("Loading...", 0)
 	emulator_row.add_child(_emulator_dropdown)
 	_connect_emulator_dropdown()
 
@@ -434,7 +442,22 @@ func _update_status_indicator():
 
 
 func set_available_emulators(emulators: Array[Dictionary]):
+	if _defer_dropdown:
+		_pending_emulators = emulators
+		return
 	_available_emulators = emulators
+	if is_node_ready():
+		_update_emulator_dropdown()
+
+## Populates the emulator dropdown after a deferred creation. Called by views
+## that create many cards in a batch and want to split dropdown population into
+## its own phase.
+func populate_dropdown() -> void:
+	if not _defer_dropdown:
+		return
+	_defer_dropdown = false
+	_available_emulators = _pending_emulators
+	_pending_emulators = []
 	if is_node_ready():
 		_update_emulator_dropdown()
 
@@ -526,6 +549,8 @@ func reset_for_borrow() -> void:
 	_available_emulators = []
 	_available_cores = []
 	_dropdown_entries = []
+	_defer_dropdown = false
+	_pending_emulators = []
 
 	if _emulator_dropdown:
 		_emulator_dropdown.clear()

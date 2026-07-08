@@ -3,7 +3,6 @@
 xemu save sync
 tst update flow on android
 settings ui too big on android?
-massive lag opening platform card screen
 settings menu should have 'X' to close
 hero in 'add to steam'
 clicking "outside" of card in list/carosel is annoying. 

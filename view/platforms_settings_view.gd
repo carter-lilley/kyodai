@@ -255,42 +255,58 @@ func _fetch_platforms():
 			3,
 			func(_processed: int, _total: int):
 				pass,
-			func(results: Array):
-				_active_batch_id = -1
-				if not is_inside_tree():
-					_return_all_cards()
-					return
-				
-				for card in results:
-					if not card is PlatformCard:
-						continue
-					var slug: String = card.platform_slug
-					card.visible = true
-					# Distribute cards: single column on narrow screens, two columns on wide
-					if _is_narrow_screen():
+		func(results: Array):
+			_active_batch_id = -1
+			if not is_inside_tree():
+				_return_all_cards()
+				return
+
+			var created_cards: Array[PlatformCard] = []
+			for card in results:
+				if not card is PlatformCard:
+					continue
+				var slug: String = card.platform_slug
+				card.visible = true
+				created_cards.append(card)
+				# Distribute cards: single column on narrow screens, two columns on wide
+				if _is_narrow_screen():
+					_cards_left.add_child(card)
+				else:
+					if _platform_cards.size() % 2 == 0:
 						_cards_left.add_child(card)
 					else:
-						if _platform_cards.size() % 2 == 0:
-							_cards_left.add_child(card)
-						else:
-							_cards_right.add_child(card)
-					_platform_cards[slug] = card
-				
-				_pending_cards.clear()
-				
-				# Remove loading label now that the first batch has rendered.
-				for child in _platforms_container.get_children():
-					if child.name == "LoadingLabel":
-						child.queue_free()
-						break
-				
-				# Remove platforms that no longer exist on RomM
-				_remove_deleted_platforms(fetched_slugs)
-				
-				# Update select all button text
-				_update_select_all_button_text()
-				
-				_is_fetching_platforms = false
+						_cards_right.add_child(card)
+				_platform_cards[slug] = card
+			
+			_pending_cards.clear()
+			
+			# Remove loading label now that the first batch has rendered.
+			for child in _platforms_container.get_children():
+				if child.name == "LoadingLabel":
+					child.queue_free()
+					break
+			
+			# Remove platforms that no longer exist on RomM
+			_remove_deleted_platforms(fetched_slugs)
+			
+			# Update select all button text
+			_update_select_all_button_text()
+			
+			_is_fetching_platforms = false
+			
+			# Populate emulator dropdowns in a second batch so the cards appear first
+			# and the heavy dropdown rebuild is spread across frames.
+			_active_batch_id = MemoryManager.start_batch(
+				created_cards,
+				_populate_card_dropdown,
+				MemoryManager.BatchMode.SYNC,
+				3,
+				func(_processed: int, _total: int):
+					pass,
+				func(_results: Array):
+					_active_batch_id = -1
+			)
+
 		)
 	, false)  # bypass cache for explicit user-driven fetches
 
@@ -331,6 +347,7 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		available_emulators = emulator_cache[slug]
 	else:
 		available_emulators = LaunchManager.get_emulators_for_platform(slug)
+	card._defer_dropdown = true
 	card.set_available_emulators(available_emulators)
 
 	# Set install status for each emulator (use precomputed status if available)
@@ -376,6 +393,9 @@ func _return_all_cards() -> void:
 		if is_instance_valid(card):
 			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
 	_pending_cards.clear()
+
+func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
+	card.populate_dropdown()
 
 func _exit_tree() -> void:
 	_return_all_cards()
@@ -446,10 +466,12 @@ func _load_platforms_from_database():
 				_return_all_cards()
 				return
 
+			var created_cards: Array[PlatformCard] = []
 			for card in results:
 				if not card is PlatformCard:
 					continue
 				var slug: String = card.platform_slug
+				created_cards.append(card)
 				if _is_narrow_screen():
 					_cards_left.add_child(card)
 				else:
@@ -466,6 +488,19 @@ func _load_platforms_from_database():
 				no_platforms_label.name = "NoPlatformsLabel"
 				no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
 				_cards_left.add_child(no_platforms_label)
+			
+			# Populate emulator dropdowns in a second batch so the cards appear first
+			# and the heavy dropdown rebuild is spread across frames.
+			_active_batch_id = MemoryManager.start_batch(
+				created_cards,
+				_populate_card_dropdown,
+				MemoryManager.BatchMode.SYNC,
+				5,
+				func(_processed: int, _total: int):
+					pass,
+				func(_results: Array):
+					_active_batch_id = -1
+			)
 	)
 
 func _remove_deleted_platforms(current_slugs: Array[String]):

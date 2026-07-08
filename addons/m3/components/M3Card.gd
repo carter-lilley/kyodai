@@ -252,6 +252,12 @@ func set_visual_layer(layer: Control) -> void:
 	set_notify_transform(layer != null)
 	set_process(false)
 	_visuals_position_synced = false
+	
+	# If we are promoting this card to a visual layer, make sure the visual-only
+	# RS items exist. Cards created for pools without a layer don't allocate them.
+	if _uses_visual_layer() and (not _visual_bg_canvas_item.is_valid() or not _text_canvas_item.is_valid()):
+		_create_visual_layer_rs_items()
+	
 	_reparent_visual_items()
 	if _visual_layer and _visual_layer.is_inside_tree() and is_inside_tree():
 		sync_visual_transform()
@@ -382,7 +388,7 @@ func _update_visual_items_visibility() -> void:
 	
 	# Background and text are only drawn through RS when a visual layer is active.
 	if _visual_bg_canvas_item.is_valid():
-		var bg_visible := base_visible and show_background
+		var bg_visible := base_visible and show_background and using_layer
 		if using_layer:
 			bg_visible = bg_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_visual_bg_canvas_item, bg_visible)
@@ -392,7 +398,7 @@ func _update_visual_items_visibility() -> void:
 			media_visible = media_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_media_canvas_item, media_visible)
 	if _text_canvas_item.is_valid():
-		var text_visible := base_visible and has_text and show_text_margin
+		var text_visible := base_visible and has_text and show_text_margin and using_layer
 		if using_layer:
 			text_visible = text_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_text_canvas_item, text_visible)
@@ -402,25 +408,42 @@ func _update_visual_items_visibility() -> void:
 			ring_visible = ring_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, ring_visible)
 
+func _create_visual_layer_rs_items(parent_rid: RID = RID()) -> void:
+	"""Create the RS items used only when a visual layer is active."""
+	var target_parent := parent_rid if parent_rid.is_valid() else _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
+	if not _visual_bg_canvas_item.is_valid():
+		_visual_bg_canvas_item = RenderingServer.canvas_item_create()
+		RenderingServer.canvas_item_set_parent(_visual_bg_canvas_item, target_parent)
+		RenderingServer.canvas_item_set_draw_index(_visual_bg_canvas_item, 0)
+		RenderingServer.canvas_item_set_visible(_visual_bg_canvas_item, true)
+	if not _text_canvas_item.is_valid():
+		_text_canvas_item = RenderingServer.canvas_item_create()
+		RenderingServer.canvas_item_set_parent(_text_canvas_item, target_parent)
+		RenderingServer.canvas_item_set_draw_index(_text_canvas_item, 2)
+		RenderingServer.canvas_item_set_visible(_text_canvas_item, true)
+
+
 func _setup_rs_items() -> void:
 	_free_rs_items()
 	var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
-	_visual_bg_canvas_item = RenderingServer.canvas_item_create()
-	RenderingServer.canvas_item_set_parent(_visual_bg_canvas_item, parent_rid)
-	RenderingServer.canvas_item_set_draw_index(_visual_bg_canvas_item, 0)
-	RenderingServer.canvas_item_set_visible(_visual_bg_canvas_item, true)
+	
+	# Media and focus ring are always needed.
 	_media_canvas_item = RenderingServer.canvas_item_create()
 	RenderingServer.canvas_item_set_parent(_media_canvas_item, parent_rid)
 	RenderingServer.canvas_item_set_draw_index(_media_canvas_item, 1)
 	RenderingServer.canvas_item_set_visible(_media_canvas_item, true)
-	_text_canvas_item = RenderingServer.canvas_item_create()
-	RenderingServer.canvas_item_set_parent(_text_canvas_item, parent_rid)
-	RenderingServer.canvas_item_set_draw_index(_text_canvas_item, 2)
-	RenderingServer.canvas_item_set_visible(_text_canvas_item, true)
+	
 	_focus_ring_canvas_item = RenderingServer.canvas_item_create()
 	RenderingServer.canvas_item_set_parent(_focus_ring_canvas_item, parent_rid)
 	RenderingServer.canvas_item_set_draw_index(_focus_ring_canvas_item, 3)
 	RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, false)
+	
+	# Visual-layer background and text are only used when a visual layer is active.
+	# This avoids creating RS items for cards that never use the overflow layer,
+	# such as PlatformCard, which dramatically reduces per-card cost.
+	if _uses_visual_layer():
+		_create_visual_layer_rs_items(parent_rid)
+	
 	_visuals_position_synced = false
 	_applied_text_bounds = Rect2()
 
@@ -429,7 +452,12 @@ func _enter_tree():
 	if not _ready_called:
 		return
 	_visuals_position_synced = false
-	if not _visual_bg_canvas_item.is_valid() or not _media_canvas_item.is_valid() or not _text_canvas_item.is_valid() or not _focus_ring_canvas_item.is_valid():
+	var missing := false
+	if not _media_canvas_item.is_valid() or not _focus_ring_canvas_item.is_valid():
+		missing = true
+	if _uses_visual_layer() and (not _visual_bg_canvas_item.is_valid() or not _text_canvas_item.is_valid()):
+		missing = true
+	if missing:
 		_setup_rs_items()
 		_update_media()
 		_update_focus_ring_bounds()

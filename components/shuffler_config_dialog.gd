@@ -223,9 +223,11 @@ func _load_platforms() -> void:
 				return
 
 			var column_index := 0
+			var created_cards: Array[PlatformCard] = []
 			for card in results:
 				if not card is PlatformCard:
 					continue
+				created_cards.append(card)
 				if column_index % 2 == 0:
 					_platform_grid.add_child(card)
 				else:
@@ -235,7 +237,23 @@ func _load_platforms() -> void:
 
 			_pending_cards.clear()
 			_update_toggle_all_button()
+			
+			# Populate emulator dropdowns in a second batch so the cards appear first
+			# and the heavy dropdown rebuild is spread across frames.
+			_active_batch_id = MemoryManager.start_batch(
+				created_cards,
+				_populate_card_dropdown,
+				MemoryManager.BatchMode.SYNC,
+				3,
+				func(_processed: int, _total: int):
+					pass,
+				func(_results: Array):
+					_active_batch_id = -1
+			)
 	)
+
+func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
+	card.populate_dropdown()
 
 func _create_platform_card(
 	slug: String,
@@ -251,6 +269,7 @@ func _create_platform_card(
 	card.platform_name = platform_name
 	card.registry_default_core_id = platform_default_core_cache.get(slug, "")
 	card.registry_default_emulator = LaunchManager.get_default_emulator_for_platform(slug)
+	card._defer_dropdown = true
 	card.set_available_emulators(platform_emulator_cache.get(slug, []))
 
 	var install_status = {}
