@@ -381,7 +381,7 @@ func is_item_disabled(idx: int) -> bool:
 func add_separator(text: String = ""):
 	_items.append(ItemData.new(text, NONE_SELECTED, "", true))
 
-func clear():
+func clear_items():
 	_items.clear()
 	_chosen_item_indices.clear()
 	_update_selected_text()

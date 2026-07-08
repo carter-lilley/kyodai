@@ -126,7 +126,7 @@ func _refresh_all_settings_ui() -> void:
 	
 	# Refresh background effect dropdown
 	if _library_effect_dropdown:
-		_library_effect_dropdown.clear()
+		_library_effect_dropdown.clear_items()
 		_effect_ids.clear()
 		var effects = LibraryBackground.get_available_effects()
 		for i in range(effects.size()):
@@ -255,7 +255,7 @@ func _refresh_preset_dropdown() -> void:
 	if not _preset_dropdown:
 		return
 	
-	_preset_dropdown.clear()
+	_preset_dropdown.clear_items()
 	_preset_dropdown.add_item("New Theme...", 0)
 	
 	_current_presets = SettingsManager.list_presets()

@@ -219,11 +219,8 @@ func _update_emulator_dropdown():
 	if _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
 		_emulator_dropdown.item_selected.disconnect(_on_emulator_selected)
 	
-	# Belt-and-suspenders: clear() should empty _items, but also remove any
-	# leftover items through the public API in case clear() is shadowed.
-	_emulator_dropdown.clear()
-	while _emulator_dropdown.get_item_count() > 0:
-		_emulator_dropdown.remove_item(_emulator_dropdown.get_item_count() - 1)
+	# clear() is shadowed by LineEdit.clear(), so use the M3OptionButton API.
+	_emulator_dropdown.clear_items()
 	_dropdown_entries.clear()
 
 	# Compute the available standalone emulators and RetroArch cores.
@@ -492,35 +489,79 @@ func _update_shuffler_mode() -> void:
 ## Resets transient state and disconnects view-specific signals so this card
 ## can be safely returned to a pool and reused by a different view.
 func reset_for_borrow() -> void:
+	# Hide the card while it's being rebound so stale content doesn't flash.
+	visible = false
+
 	if _sync_toggle_connected:
 		if _sync_toggle.toggled.is_connected(_on_sync_toggled):
 			_sync_toggle.toggled.disconnect(_on_sync_toggled)
 		_sync_toggle_connected = false
-	
+
 	if _emulator_dropdown_connected:
 		if _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
 			_emulator_dropdown.item_selected.disconnect(_on_emulator_selected)
 		_emulator_dropdown_connected = false
-	
+
 	if _download_button_connected:
 		if _download_button.pressed.is_connected(_on_download_pressed):
 			_download_button.pressed.disconnect(_on_download_pressed)
 		_download_button_connected = false
-	
+
 	# Disconnect any view-specific signal handlers so stale lambdas don't fire
 	# when this card is reused by a different consumer.
 	_disconnect_all("sync_toggled")
 	_disconnect_all("emulator_changed")
 	_disconnect_all("download_requested")
-	
+
 	# Clear per-view settings without triggering full display rebuilds
+	shuffler_mode = false
+	platform_slug = ""
+	platform_name = ""
+	registry_default_core_id = ""
+	registry_default_emulator = ""
 	selected_emulator = ""
 	selected_core_id = ""
 	is_sync_enabled = false
 	_emulator_install_status = {}
-	
+	_available_emulators = []
+	_available_cores = []
+	_dropdown_entries = []
+
+	if _emulator_dropdown:
+		_emulator_dropdown.clear()
+		while _emulator_dropdown.get_item_count() > 0:
+			_emulator_dropdown.remove_item(_emulator_dropdown.get_item_count() - 1)
+
+	if _name_label:
+		_name_label.text = ""
+
+	if _sync_toggle:
+		_sync_toggle.set_pressed_no_signal(false)
+
+	if _status_indicator:
+		_status_indicator.set_status(Indicator.Status.NEUTRAL, "", "")
+
+	if _version_label:
+		_version_label.text = ""
+		_version_label.visible = false
+
+	if _firmware_indicator:
+		_firmware_indicator.visible = false
+
+	if _download_button:
+		_download_button.visible = false
+		_download_button.disabled = false
+		_download_button.text = "Download"
+
 	if get_parent():
 		get_parent().remove_child(self)
+
+## Reconnects the card's internal control signals after a card has been
+## returned to the pool. Call this before reusing a pooled card.
+func prepare_for_borrow() -> void:
+	_connect_sync_toggle()
+	_connect_emulator_dropdown()
+	_connect_download_button()
 
 func _disconnect_all(signal_name: String) -> void:
 	var connections = get_signal_connection_list(signal_name)

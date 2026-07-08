@@ -7,6 +7,8 @@ var _platform_grid: VBoxContainer
 var _cards_right: VBoxContainer
 var _platform_cards: Dictionary[String, PlatformCard] = {}
 var _selected_platforms: Array[String] = []
+var _pending_cards: Array[PlatformCard] = []
+var _active_batch_id: int = -1
 var _toggle_all_button: M3Button
 
 var _bag_size_slider: M3Slider
@@ -191,69 +193,108 @@ func _load_platforms() -> void:
 		var progress = LaunchManager.get_install_progress(emu_id)
 		precomputed_status[emu_id] = progress["status"] == "complete"
 
-	var column_index := 0
+	var card_payloads: Array[Dictionary] = []
 	for platform in platforms:
 		var slug: String = platform["slug"]
 		var name: String = platform["name"]
 		if slug == "":
 			continue
+		card_payloads.append({"slug": slug, "name": name})
 
-		var card: PlatformCard = PlatformCard.new()
-		card.shuffler_mode = true
-		card.platform_slug = slug
-		card.platform_name = name
-		card.registry_default_core_id = platform_default_core_cache.get(slug, "")
-		card.registry_default_emulator = LaunchManager.get_default_emulator_for_platform(slug)
-		card.set_available_emulators(platform_emulator_cache.get(slug, []))
+	_active_batch_id = MemoryManager.start_batch(
+		card_payloads,
+		func(payload: Dictionary, _index: int) -> PlatformCard:
+			return _create_platform_card(
+				payload.slug,
+				payload.name,
+				enabled_platforms,
+				precomputed_status,
+				platform_emulator_cache,
+				platform_default_core_cache
+			),
+		MemoryManager.BatchMode.SYNC,
+		3,
+		func(_processed: int, _total: int):
+			pass,
+		func(results: Array):
+			_active_batch_id = -1
+			if not is_inside_tree():
+				_return_all_cards()
+				return
 
-		var install_status = {}
-		for emulator in platform_emulator_cache.get(slug, []):
-			var emu_id = emulator.get("id", "")
-			if emu_id != "":
-				install_status[emu_id] = precomputed_status.get(emu_id, false)
-		card.set_emulator_install_status(install_status)
+			var column_index := 0
+			for card in results:
+				if not card is PlatformCard:
+					continue
+				if column_index % 2 == 0:
+					_platform_grid.add_child(card)
+				else:
+					_cards_right.add_child(card)
+				column_index += 1
+				_platform_cards[card.platform_slug] = card
 
-		# In shuffler mode the sync toggle means "include in shuffle".
-		var platform_config = enabled_platforms.get(slug, {})
-		var is_enabled = false
-		if platform_config is bool:
-			is_enabled = platform_config
-		elif platform_config is Dictionary:
-			is_enabled = platform_config.get("enabled", false)
-		card.is_sync_enabled = is_enabled
-		if is_enabled and slug not in _selected_platforms:
-			_selected_platforms.append(slug)
-
-		var emulator_id = ""
-		var core_id = ""
-		if platform_config is Dictionary:
-			emulator_id = platform_config.get("emulator_id", "")
-			core_id = platform_config.get("core_id", "")
-		card.selected_emulator = emulator_id
-		card.selected_core_id = core_id
-
-		card.sync_toggled.connect(func(enabled: bool):
-			if enabled:
-				if slug not in _selected_platforms:
-					_selected_platforms.append(slug)
-			else:
-				_selected_platforms.erase(slug)
+			_pending_cards.clear()
 			_update_toggle_all_button()
-		)
+	)
 
-		card.emulator_changed.connect(func(emu_id: String, selected_core: String):
-			if ShufflerManager:
-				ShufflerManager.set_shuffle_override(slug, emu_id, selected_core)
-		)
+func _create_platform_card(
+	slug: String,
+	platform_name: String,
+	enabled_platforms: Dictionary,
+	precomputed_status: Dictionary,
+	platform_emulator_cache: Dictionary,
+	platform_default_core_cache: Dictionary
+) -> PlatformCard:
+	var card: PlatformCard = PlatformCardPool.get_card(PlatformCardPool.POOL_SHUFFLER)
+	card.shuffler_mode = true
+	card.platform_slug = slug
+	card.platform_name = platform_name
+	card.registry_default_core_id = platform_default_core_cache.get(slug, "")
+	card.registry_default_emulator = LaunchManager.get_default_emulator_for_platform(slug)
+	card.set_available_emulators(platform_emulator_cache.get(slug, []))
 
-		if column_index % 2 == 0:
-			_platform_grid.add_child(card)
+	var install_status = {}
+	for emulator in platform_emulator_cache.get(slug, []):
+		var emu_id = emulator.get("id", "")
+		if emu_id != "":
+			install_status[emu_id] = precomputed_status.get(emu_id, false)
+	card.set_emulator_install_status(install_status)
+
+	# In shuffler mode the sync toggle means "include in shuffle".
+	var platform_config = enabled_platforms.get(slug, {})
+	var is_enabled = false
+	if platform_config is bool:
+		is_enabled = platform_config
+	elif platform_config is Dictionary:
+		is_enabled = platform_config.get("enabled", false)
+	card.is_sync_enabled = is_enabled
+	if is_enabled and slug not in _selected_platforms:
+		_selected_platforms.append(slug)
+
+	var emulator_id = ""
+	var core_id = ""
+	if platform_config is Dictionary:
+		emulator_id = platform_config.get("emulator_id", "")
+		core_id = platform_config.get("core_id", "")
+	card.selected_emulator = emulator_id
+	card.selected_core_id = core_id
+
+	card.sync_toggled.connect(func(enabled: bool):
+		if enabled:
+			if slug not in _selected_platforms:
+				_selected_platforms.append(slug)
 		else:
-			_cards_right.add_child(card)
-		column_index += 1
-		_platform_cards[slug] = card
-	
-	_update_toggle_all_button()
+			_selected_platforms.erase(slug)
+		_update_toggle_all_button()
+	)
+
+	card.emulator_changed.connect(func(emu_id: String, selected_core: String):
+		if ShufflerManager:
+			ShufflerManager.set_shuffle_override(slug, emu_id, selected_core)
+	)
+
+	_pending_cards.append(card)
+	return card
 
 func _get_enabled_platforms() -> Dictionary:
 	var setting = SettingsManager.get_setting("enabled_platforms")
@@ -316,12 +357,21 @@ func _exit_tree() -> void:
 	_return_all_cards()
 
 func _return_all_cards() -> void:
+	if _active_batch_id != -1:
+		MemoryManager.cancel_batch(_active_batch_id)
+		_active_batch_id = -1
+
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
 		if card:
-			card.queue_free()
+			PlatformCardPool.return_card(PlatformCardPool.POOL_SHUFFLER, card)
 	_platform_cards.clear()
 	_selected_platforms.clear()
+
+	for card in _pending_cards:
+		if is_instance_valid(card):
+			PlatformCardPool.return_card(PlatformCardPool.POOL_SHUFFLER, card)
+	_pending_cards.clear()
 
 func _create_section_label(text: String) -> Label:
 	var label = M3Label.new()

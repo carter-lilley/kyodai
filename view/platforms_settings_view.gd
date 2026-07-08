@@ -10,6 +10,7 @@ extends View
 
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
+var _pending_cards: Array[PlatformCard] = []
 var _is_fetching_platforms: bool = false
 
 # Track platform selection state for lock-in behavior
@@ -275,6 +276,8 @@ func _fetch_platforms():
 							_cards_right.add_child(card)
 					_platform_cards[slug] = card
 				
+				_pending_cards.clear()
+				
 				# Remove loading label now that the first batch has rendered.
 				for child in _platforms_container.get_children():
 					if child.name == "LoadingLabel":
@@ -292,7 +295,7 @@ func _fetch_platforms():
 	, false)  # bypass cache for explicit user-driven fetches
 
 func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}) -> PlatformCard:
-	var card = PlatformCard.new()
+	var card = PlatformCardPool.get_card(PlatformCardPool.POOL_PLATFORM_SETTINGS)
 	card.shuffler_mode = false
 	card.platform_slug = slug
 	card.platform_name = platform_name
@@ -359,14 +362,20 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		_on_emulator_download_requested(emu_id, card)
 	)
 
+	_pending_cards.append(card)
 	return card
 
 func _return_all_cards() -> void:
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
 		if card:
-			card.queue_free()
+			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
 	_platform_cards.clear()
+
+	for card in _pending_cards:
+		if is_instance_valid(card):
+			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
+	_pending_cards.clear()
 
 func _exit_tree() -> void:
 	_return_all_cards()
@@ -449,6 +458,8 @@ func _load_platforms_from_database():
 					else:
 						_cards_right.add_child(card)
 				_platform_cards[slug] = card
+
+			_pending_cards.clear()
 
 			if platforms.size() == 0:
 				var no_platforms_label = M3Label.new()

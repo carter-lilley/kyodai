@@ -83,6 +83,7 @@ func _apply_zoom_ratio(p_ratio: float) -> bool:
 	var max_ratio = _calculate_max_ratio()
 	var clamped = clampf(p_ratio, 0.05, max_ratio)
 	var snapped_ratio = _calculate_snapped_ratio(clamped)
+	print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " current_target=", target_card_width_ratio)
 	if is_equal_approx(target_card_width_ratio, snapped_ratio):
 		return false
 	_batching_layout = true
@@ -120,11 +121,16 @@ func _batch_apply_layout_state() -> void:
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
+	print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio)
 	var zoom_changed: bool = _apply_zoom_ratio(state.card_zoom_ratio)
+	print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
 	var focus_changed: bool = _apply_focus_scale(1.0 + state.focus_scale_ratio)
 
 	if not structure_changed and not zoom_changed and not padding_changed and not focus_changed:
+		print("[Grid] _batch_apply_layout_state: no changes (structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, ")")
 		return
+
+	print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed)
 
 	if structure_changed:
 		# One rebuild path: configure flags then refresh buffer, which recalculates layout.
@@ -206,11 +212,15 @@ var target_card_width_ratio: float = 0.15:
 		if _batching_layout:
 			target_card_width_ratio = value
 			return
+		# Ensure cached display/ratio settings are fresh before snapping; direct
+		# assignments from views can otherwise use stale base dimensions.
+		_refresh_cached_settings()
 		# Calculate dynamic max zoom (one card fills available space)
 		var max_ratio = _calculate_max_ratio()
 		var clamped = clampf(value, 0.05, max_ratio)
 		# Calculate snapped ratio to ensure whole cards fit per row/column
 		var snapped_ratio = _calculate_snapped_ratio(clamped)
+		print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio)
 		# Always update ratio and recalculate - _recalculate_layout handles optimization
 		target_card_width_ratio = snapped_ratio
 		_recalculate_layout()
@@ -455,10 +465,14 @@ func _get_available_size() -> Vector2:
 			if scrollbar_y <= 0.0:
 				scrollbar_y = M3Units.dp(M3Theme.SCROLLBAR_THICKNESS)
 
+	var result: Vector2
 	if vertical:
-		return Vector2(maxf(size.x - scrollbar_x, 1.0), maxf(size.y, 1.0))
+		result = Vector2(maxf(size.x - scrollbar_x, 1.0), maxf(size.y, 1.0))
 	else:
-		return Vector2(maxf(size.x, 1.0), maxf(size.y - scrollbar_y, 1.0))
+		result = Vector2(maxf(size.x, 1.0), maxf(size.y - scrollbar_y, 1.0))
+	
+	print("[Grid] _get_available_size: vertical=", vertical, " size=", size, " scrollbar_x=", scrollbar_x, " scrollbar_y=", scrollbar_y, " result=", result)
+	return result
 
 func _get_normal_stride() -> float:
 	if _cached_normal_stride > 0:
@@ -630,14 +644,20 @@ func _on_card_settings_state_changed(mask: int) -> void:
 
 	var state = UIManager.card_settings_state
 
+	print("[Grid] settings changed mask=", mask, " display_mode=", state.display_mode, " media_ratio=", state.media_aspect_ratio, " cached_display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
+
 	# Refresh cached media/display settings before any layout work so that
 	# _batch_apply_layout_state() snaps target_card_width_ratio against the
 	# correct base dimensions.
 	_refresh_cached_settings()
 
+	print("[Grid] after refresh cached display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
+
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
+		print("[Grid] applying LAYOUT batch, target_ratio before=", target_card_width_ratio)
 		_batch_apply_layout_state()
+		print("[Grid] after LAYOUT batch, target_ratio=", target_card_width_ratio, " card_size=", card_size, " base_card_size=", base_card_size)
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
@@ -948,13 +968,15 @@ func _recalculate_layout():
 	var saved_focus_index: int = _get_focused_virtual_index()
 
 	var current_zoom = _calculate_zoom()
+	var base_dims = _get_base_dimensions_for_mode()
+
+	print("[Grid] _recalculate_layout: zoom=", current_zoom, " target_ratio=", target_card_width_ratio, " base_dims=", base_dims, " view_mode=", view_mode, " vertical=", vertical)
 
 	if current_zoom <= 0:
 		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
 		_is_recalculating_layout = false
 		return
 
-	var base_dims = _get_base_dimensions_for_mode()
 	base_card_size = base_dims
 
 	match view_mode:
@@ -992,6 +1014,8 @@ func _recalculate_layout():
 	var current_media_ratio = state.media_aspect_ratio if state else 0
 	var display_or_ratio_changed = current_display_mode != _last_layout_display_mode or current_media_ratio != _last_layout_media_aspect_ratio
 
+	print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed)
+
 	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed:
 		_is_recalculating_layout = false
 		return
@@ -1013,6 +1037,11 @@ func _recalculate_layout():
 	_cached_normal_stride = -1.0
 	_cached_items_per_line = _get_items_per_line()
 	_cached_normal_stride = _get_normal_stride()
+
+	print("[Grid] _recalculate_layout: available=", available, " card_size=", card_size, " item_width=", item_width, " item_height=", item_height, " items_per_line=", _cached_items_per_line, " normal_stride=", _cached_normal_stride)
+
+	if _cached_items_per_line == 1:
+		push_warning("[Grid] COLLAPSE DETECTED: items_per_line=1, available=%s, card_size=%s, item_width=%s, item_height=%s" % [available, card_size, item_width, item_height])
 
 	# Only override separation theme constants when the value actually changed
 	if grid_separation != _last_h_separation:
@@ -1093,10 +1122,14 @@ func _get_items_per_line() -> int:
 	var available = _get_available_size()
 	if vertical:
 		var effective_width = maxf(1.0, available.x + grid_separation)
-		return max(1, int(effective_width / item_width + 0.0001))
+		var result = max(1, int(effective_width / item_width + 0.0001))
+		print("[Grid] _get_items_per_line: vertical effective_width=", effective_width, " item_width=", item_width, " result=", result)
+		return result
 	else:
 		var effective_height = maxf(1.0, available.y + grid_separation)
-		return max(1, int(effective_height / item_height + 0.0001))
+		var result = max(1, int(effective_height / item_height + 0.0001))
+		print("[Grid] _get_items_per_line: horizontal effective_height=", effective_height, " item_height=", item_height, " result=", result)
+		return result
 
 func _get_media_aspect_ratio() -> float:
 	return _cached_media_aspect_ratio

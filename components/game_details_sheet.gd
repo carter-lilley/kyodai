@@ -180,7 +180,7 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 	if not sibling_dropdown:
 		return
 
-	sibling_dropdown.clear()
+	sibling_dropdown.clear_items()
 	_sibling_options = []
 
 	# Add the main game as the first option

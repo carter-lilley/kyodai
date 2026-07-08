@@ -265,7 +265,7 @@ func _rebuild_effects_ui():
 func _populate_option_button() -> void:
 	if not _add_effect_button:
 		return
-	_add_effect_button.clear()
+	_add_effect_button.clear_items()
 	for dropdown_id in _effect_id_map.keys():
 		var effect_id = _effect_id_map[dropdown_id]
 		var display_name = _available_effects.get(effect_id, effect_id.replace("_", " ").capitalize())
