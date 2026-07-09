@@ -5,14 +5,14 @@
 class_name AndroidBinaryExtractor
 extends RefCounted
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 const BIN_DIR := "user://bin/"
 
 ## Extracts a binary from res:// to user://bin/ if needed
 ## Returns the absolute path to the usable binary, or empty string on failure
 static func extract_binary(res_path: String, binary_name: String) -> String:
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		# On non-Android, return the res:// path directly (OS.execute can use it)
 		return ProjectSettings.globalize_path(res_path)
 	
@@ -60,7 +60,7 @@ static func extract_binary(res_path: String, binary_name: String) -> String:
 ## Extracts all utility binaries for Android
 ## Call this during app startup/OOBE
 static func extract_all_binaries() -> void:
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		return
 	
 	print("[AndroidBinaryExtractor] Extracting all utility binaries...")

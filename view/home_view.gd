@@ -54,8 +54,8 @@ func _ready():
 	_update_grid_orientation()
 	
 	# Connect to settings changes
-	if SettingsManager:
-		SettingsManager.setting_changed.connect(_on_setting_changed)
+	if DataManager:
+		DataManager.setting_changed.connect(_on_setting_changed)
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
@@ -68,13 +68,13 @@ func _ready():
 	
 	DataManager.game_updated.connect(_on_game_updated)
 	
-	# Connect to GameNativeManager signal to refresh when games are added/removed
-	GameNativeManager.games_updated.connect(_on_gamenative_games_updated)
+	# Connect to LaunchManager GameNative signal to refresh when games are added/removed
+	LaunchManager.gamenative_games_updated.connect(_on_gamenative_games_updated)
 	DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
 	DataManager.sync_completed.connect(_on_sync_completed)
 	
 	# Connect to download manager for download status updates
-	DownloadManager.download_completed.connect(_on_download_completed)
+	SystemManager.download.download_completed.connect(_on_download_completed)
 	
 	# Connect to LaunchManager for game launch events (to resort by last_played)
 	LaunchManager.game_launched.connect(_on_game_launched)
@@ -101,7 +101,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	_load_gamenative_games()
 	
 	# Query total count asynchronously
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_downloaded_games_count()
 			return count,
@@ -145,8 +145,8 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 
 func _load_gamenative_games() -> void:
 	"""Load and cache GameNative games for proper merging."""
-	if GameNativeManager.has_games():
-		_gamenative_games = GameNativeManager.create_game_resources()
+	if LaunchManager.gamenative_has_games():
+		_gamenative_games = LaunchManager.gamenative_create_game_resources()
 		# Sort by last_played descending (same as DB query)
 		_gamenative_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
 			return a.last_played > b.last_played
@@ -178,7 +178,7 @@ func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
 	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
-		NotificationManager.show_notification("Found %d downloaded games" % found_count, NotificationManager.Type.SUCCESS)
+		SystemManager.notifications.show_notification("Found %d downloaded games" % found_count, SystemManager.notifications.Type.SUCCESS)
 		_merged_games_cache.clear()
 		_merged_cache_start = 0
 		_merged_cache_end = 0
@@ -201,7 +201,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	Fetches only the requested window plus a small buffer to avoid loading
 	the entire library into memory.
 	"""
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var request_end = offset + limit
 			# The cache must FULLY contain the requested range, not just overlap.
@@ -399,7 +399,7 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	if reload_gamenative:
 		_load_gamenative_games()
 	
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_downloaded_games_count()
 			return count,
@@ -472,7 +472,7 @@ func _validate_cached_data() -> bool:
 	Returns true if cache is valid, false if it needs to be refreshed.
 	"""
 	# Quick validation: check if GameNative count matches
-	var current_gamenative_count = GameNativeManager.get_game_count()
+	var current_gamenative_count = LaunchManager.gamenative_get_game_count()
 	if current_gamenative_count != _gamenative_games_count:
 		push_warning("[HomeView] GameNative count mismatch: cached=%d, current=%d" % [_gamenative_games_count, current_gamenative_count])
 		return false
@@ -511,7 +511,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				# Show deleting notification
-				NotificationManager.show_notification("Deleting " + game.title + "...", NotificationManager.Type.INFO)
+				SystemManager.notifications.show_notification("Deleting " + game.title + "...", SystemManager.notifications.Type.INFO)
 				
 				# Lock the grid UI during deletion to prevent interaction with stale cards
 				if games_grid:
@@ -548,14 +548,14 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 						var main = get_tree().get_root().get_node_or_null("Main")
 						if main and main.has_method("reset_focus_to_home_button"):
 							main.reset_focus_to_home_button()
-						if AudioManager:
-							AudioManager.play_sfx("error")
+						if SystemManager.audio:
+							SystemManager.audio.play_sfx("error")
 					)
 				
 				# Delete the game
 				DataManager.delete_game_download(game, func(success: bool):
 					if success:
-						NotificationManager.show_notification(game.title + " deleted", NotificationManager.Type.SUCCESS)
+						SystemManager.notifications.show_notification(game.title + " deleted", SystemManager.notifications.Type.SUCCESS)
 						_refresh_after_delete.call()
 					else:
 						# File not found - ask user if they want to remove from DB anyway
@@ -563,10 +563,10 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 							M3Dialog.dismiss_current()
 							var on_force_delete = func(force_success: bool):
 								if force_success:
-									NotificationManager.show_notification(game.title + " removed from library", NotificationManager.Type.SUCCESS)
+									SystemManager.notifications.show_notification(game.title + " removed from library", SystemManager.notifications.Type.SUCCESS)
 									_refresh_after_delete.call()
 								else:
-									NotificationManager.show_notification("Failed to remove " + game.title, NotificationManager.Type.ERROR)
+									SystemManager.notifications.show_notification("Failed to remove " + game.title, SystemManager.notifications.Type.ERROR)
 									if games_grid:
 										games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
 							DataManager.delete_game_download(game, on_force_delete, true)
@@ -574,8 +574,8 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 						var on_cancel = func():
 							if games_grid:
 								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
-							if AudioManager:
-								AudioManager.play_sfx("error")
+							if SystemManager.audio:
+								SystemManager.audio.play_sfx("error")
 						
 						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 				)

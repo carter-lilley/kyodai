@@ -21,22 +21,11 @@ addons/icon_finder/preview_size=24
 
 [autoload]
 
-SettingsManager="*res://managers/settings_manager.gd"
 IconsFonts="*uid://b573s24lmntbd"
-DisplayManager="*res://managers/display_manager.gd"
-PlatformManager="*res://managers/platform_manager.gd"
-DataManager="*res://managers/data_manager.tscn"
-UIManager="*res://managers/ui_manager.tscn"
-NetworkManager="*res://managers/network_manager.gd"
-DownloadManager="*res://managers/download_manager.gd"
-NotificationManager="*uid://igtredd7pthk"
-LaunchManager="*res://managers/launch_manager.tscn"
-PlatformCardPool="*res://managers/platform_card_pool.gd"
-ShufflerManager="*res://managers/shuffler_manager.gd"
-SaveManager="*res://managers/save_manager.gd"
-AudioManager="*res://managers/audio_manager.gd"
-GameNativeManager="*res://managers/gamenative_manager.gd"
-FileSystemManager="*res://managers/filesystem_manager.gd"
+SystemManager="*res://managers/system_manager/system_manager.tscn"
+DataManager="*res://managers/data_manager/data_manager.tscn"
+UIManager="*res://managers/ui_manager/ui_manager.tscn"
+LaunchManager="*res://managers/launch_manager/launch_manager.tscn"
 
 [debug]
 

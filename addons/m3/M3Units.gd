@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Material 3 Density-Independent Pixel (DP) Utilities
 ## All M3 components use this for consistent DP-to-pixel scaling.
-## When a DisplayManager is available, the scale is owned by it (screen/monitor
+## When a SystemManager.display is available, the scale is owned by it (screen/monitor
 ## based). Otherwise this class falls back to a standalone computation.
 
 static var _cached_scale: float = -1.0
@@ -21,10 +21,13 @@ static func _get_display_manager() -> Node:
 	var root: Window = main_loop.root
 	if not root:
 		return null
-	return root.get_node_or_null("/root/DisplayManager")
+	var system_manager := root.get_node_or_null("/root/SystemManager")
+	if system_manager:
+		return system_manager.display
+	return null
 
 ## Get the DP-to-pixel scale factor.
-## Prefers DisplayManager's screen-based scale when available.
+## Prefers SystemManager.display's screen-based scale when available.
 static func get_scale() -> float:
 	if _cached_scale >= 0:
 		return _cached_scale
@@ -34,7 +37,7 @@ static func get_scale() -> float:
 		_cached_scale = dm.get_ui_scale()
 		return _cached_scale
 
-	# Fallback standalone computation (used when DisplayManager isn't ready yet).
+	# Fallback standalone computation (used when SystemManager.display isn't ready yet).
 	var screen := DisplayServer.window_get_current_screen()
 	var os_scale := DisplayServer.screen_get_scale(screen)
 	if os_scale <= 0:

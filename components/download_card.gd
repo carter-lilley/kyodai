@@ -7,17 +7,17 @@ extends PanelContainer
 @onready var status_label: M3Label = $MarginContainer/VBoxContainer/StatusLabel
 @onready var cancel_button: M3Button = $MarginContainer/VBoxContainer/HBoxContainer/CancelButton
 
-var download_item = null  # Will be set to DownloadManager.QueueItem
+var download_item = null  # Will be set to SystemManager.download.QueueItem
 
 func _ready():
 	cancel_button.pressed.connect(_on_cancel_pressed)
 	_update_display()
 	
 	# Connect to download manager signals
-	DownloadManager.download_progress.connect(_on_download_progress)
-	DownloadManager.download_completed.connect(_on_download_completed)
-	DownloadManager.extraction_progress.connect(_on_extraction_progress)
-	DownloadManager.extraction_completed.connect(_on_extraction_completed)
+	SystemManager.download.download_progress.connect(_on_download_progress)
+	SystemManager.download.download_completed.connect(_on_download_completed)
+	SystemManager.download.extraction_progress.connect(_on_extraction_progress)
+	SystemManager.download.extraction_completed.connect(_on_extraction_completed)
 
 func set_download_item(item):
 	download_item = item
@@ -94,5 +94,5 @@ func _on_cancel_pressed():
 		queue_free()
 	else:
 		# Cancel download
-		DownloadManager.cancel(download_item.id)
+		SystemManager.download.cancel(download_item.id)
 		queue_free()

@@ -9,7 +9,7 @@ var accent_color: Color = Color.TRANSPARENT
 
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
-const FSM = preload("res://managers/filesystem_manager.gd")
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 signal setting_changed(value: Variant, setting: SettingsVar)
 
 func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar]):
@@ -88,7 +88,7 @@ func clear_controls() -> void:
 
 func refresh_all_control_values() -> void:
 	for property_name in controls.keys():
-		var setting = SettingsManager.get_setting(property_name)
+		var setting = DataManager.get_setting(property_name)
 		if setting:
 			update_control_value(property_name, setting.value)
 
@@ -168,7 +168,7 @@ func match_var_type(settingsvar : SettingsVar):
 			switch.button_pressed = settingsvar.value
 			# For dual_screen_mode, disable the switch if no second display is available
 			var is_disabled = settingsvar.state != 0
-			if settingsvar.property_name == "dual_screen_mode" and DisplayManager and not DisplayManager.is_dual_screen_available():
+			if settingsvar.property_name == "dual_screen_mode" and SystemManager.display and not SystemManager.display.is_dual_screen_available():
 				is_disabled = true
 			switch.disabled = is_disabled
 			if is_disabled:
@@ -181,9 +181,9 @@ func match_var_type(settingsvar : SettingsVar):
 			_apply_accent(switch)
 			
 			# Connect to dual screen availability changes for dynamic enable/disable
-			if settingsvar.property_name == "dual_screen_mode" and DisplayManager:
-				if not DisplayManager.dual_screen_availability_changed.is_connected(_on_dual_screen_availability_changed):
-					DisplayManager.dual_screen_availability_changed.connect(_on_dual_screen_availability_changed)
+			if settingsvar.property_name == "dual_screen_mode" and SystemManager.display:
+				if not SystemManager.display.dual_screen_availability_changed.is_connected(_on_dual_screen_availability_changed):
+					SystemManager.display.dual_screen_availability_changed.connect(_on_dual_screen_availability_changed)
 			
 			switch.toggled.connect(func(pressed: bool):
 				emit_signal("setting_changed", pressed, settingsvar)
@@ -359,7 +359,7 @@ func _on_dual_screen_availability_changed(available: bool) -> void:
 	if not switch or not switch is M3Switch:
 		return
 	
-	var settingsvar = SettingsManager.get_setting("dual_screen_mode")
+	var settingsvar = DataManager.get_setting("dual_screen_mode")
 	var is_disabled = settingsvar.state != 0 if settingsvar else false
 	if not available:
 		is_disabled = true

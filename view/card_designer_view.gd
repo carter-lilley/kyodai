@@ -26,9 +26,9 @@ func _ready():
 	call_deferred("_setup_preview_card")
 	
 	# Connect to settings changes so we refresh when a preset is applied
-	if SettingsManager:
-		SettingsManager.settings_saved.connect(_on_settings_saved)
-		SettingsManager.setting_changed.connect(_on_setting_changed)
+	if DataManager:
+		DataManager.settings_saved.connect(_on_settings_saved)
+		DataManager.setting_changed.connect(_on_setting_changed)
 	
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
@@ -48,10 +48,10 @@ func _on_setting_changed(value: Variant, setting: SettingsVar) -> void:
 
 func _exit_tree():
 	# Disconnect signal to prevent callbacks on freed object
-	if SettingsManager and SettingsManager.settings_saved.is_connected(_on_settings_saved):
-		SettingsManager.settings_saved.disconnect(_on_settings_saved)
-	if SettingsManager and SettingsManager.setting_changed.is_connected(_on_setting_changed):
-		SettingsManager.setting_changed.disconnect(_on_setting_changed)
+	if DataManager and DataManager.settings_saved.is_connected(_on_settings_saved):
+		DataManager.settings_saved.disconnect(_on_settings_saved)
+	if DataManager and DataManager.setting_changed.is_connected(_on_setting_changed):
+		DataManager.setting_changed.disconnect(_on_setting_changed)
 
 func on_view_hide():
 	# Only save if we've actually loaded config. During initialization the
@@ -60,12 +60,12 @@ func on_view_hide():
 		_save_to_settings()
 
 func on_view_show():
-	# Reload config from SettingsManager to ensure we have latest (including preset changes)
+	# Reload config from DataManager to ensure we have latest (including preset changes)
 	_load_current_config()
 	_setup_preview_card()
 	# Sync preview background in case it changed while the view was hidden
-	if _preview_background and SettingsManager:
-		var bg_setting = SettingsManager.get_setting("library_background_config")
+	if _preview_background and DataManager:
+		var bg_setting = DataManager.get_setting("library_background_config")
 		if bg_setting and bg_setting.value is Dictionary:
 			_preview_background.set_background_config(bg_setting.value)
 
@@ -172,8 +172,8 @@ func _setup_ui():
 
 func _load_current_config():
 	_config_loaded = false
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
+	if DataManager:
+		var config_setting = DataManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_current_config = config_setting.value.duplicate(true)
 		else:
@@ -229,7 +229,7 @@ func _setup_preview_card():
 	
 	_preview_card.custom_minimum_size = _media_container.size
 	
-	# Save current config to SettingsManager so refresh_settings() picks it up
+	# Save current config to DataManager so refresh_settings() picks it up
 	_save_to_settings()
 	_preview_card.refresh_settings()
 	
@@ -262,18 +262,18 @@ func _update_preview():
 	if not _preview_card or not is_instance_valid(_preview_card):
 		return
 	
-	# Save current config to SettingsManager so refresh_settings() picks it up
+	# Save current config to DataManager so refresh_settings() picks it up
 	_save_to_settings()
 	_preview_card.refresh_settings()
 
 func _save_to_settings() -> void:
-	"""Save the current config to SettingsManager immediately."""
-	if not SettingsManager:
+	"""Save the current config to DataManager immediately."""
+	if not DataManager:
 		return
 	if not _config_loaded:
 		return
 	
-	var config_setting = SettingsManager.get_setting("card_effect_config")
+	var config_setting = DataManager.get_setting("card_effect_config")
 	if config_setting:
 		var effects_count := 0
 		var focus_effects_count := 0
@@ -282,7 +282,7 @@ func _save_to_settings() -> void:
 		if _current_config.get("focus_effects") is Array:
 			focus_effects_count = _current_config.focus_effects.size()
 		print("[CardDesignerView] _save_to_settings: effects=", effects_count, " focus_effects=", focus_effects_count, " config=", _current_config)
-		SettingsManager.set_setting(_current_config.duplicate(true), config_setting)
+		DataManager.set_setting(_current_config.duplicate(true), config_setting)
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.

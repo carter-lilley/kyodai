@@ -1,7 +1,7 @@
 class_name OobeWizard
 extends M3Dialog
 
-const FSM = preload("res://managers/filesystem_manager.gd")
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 signal wizard_completed
 
@@ -114,15 +114,15 @@ func _build_storage_paths_page() -> VBoxContainer:
 	vbox.add_child(sep)
 
 	# Games folder
-	var games_default = "" if PlatformManager.is_android() else "user://roms/"
+	var games_default = "" if SystemManager.platform.is_android() else "user://roms/"
 	_games_path_field = _add_path_row(vbox, "Games Folder", games_default)
 
 	# Emulators folder
-	var emu_default = "" if PlatformManager.is_android() else "user://emulators/"
+	var emu_default = "" if SystemManager.platform.is_android() else "user://emulators/"
 	_emulators_path_field = _add_path_row(vbox, "Emulators Folder", emu_default)
 
 	# Warning label for Android validation
-	if PlatformManager.is_android():
+	if SystemManager.platform.is_android():
 		_storage_warning_label = M3Label.new()
 		_storage_warning_label.text = "Please select both folders to continue"
 		_storage_warning_label.label_style = M3Label.Style.BODY_SMALL
@@ -130,7 +130,7 @@ func _build_storage_paths_page() -> VBoxContainer:
 		vbox.add_child(_storage_warning_label)
 
 	# Platform-specific paths
-	if PlatformManager.is_windows() or PlatformManager.is_linux():
+	if SystemManager.platform.is_windows() or SystemManager.platform.is_linux():
 		_steam_path_field = _add_path_row(vbox, "Steam Installation Folder (optional)", "")
 
 	return vbox
@@ -139,7 +139,7 @@ func _build_android_permissions_page() -> VBoxContainer:
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		var label = M3Label.new()
 		label.text = "Permission setup is only needed on Android."
 		label.label_style = M3Label.Style.BODY_LARGE
@@ -305,7 +305,7 @@ func _show_page(page_idx: int):
 	_update_actions()
 
 	# Refresh permission indicators when showing the permissions page
-	if page_idx == Page.ANDROID_PERMISSIONS and PlatformManager.is_android():
+	if page_idx == Page.ANDROID_PERMISSIONS and SystemManager.platform.is_android():
 		_update_permission_indicators()
 
 	# Move focus to first interactive element
@@ -323,7 +323,7 @@ func _update_actions():
 			add_action("Next", _on_next_pressed, true)
 
 		Page.ANDROID_PERMISSIONS:
-			if PlatformManager.is_android():
+			if SystemManager.platform.is_android():
 				add_action("Back", _on_back_pressed, false)
 				add_action("Next", _on_next_pressed, true)
 			else:
@@ -368,12 +368,12 @@ func _on_next_pressed():
 		# Save RomM settings if entered
 		if _romm_connection_panel:
 			_romm_connection_panel.save_to_settings(true)
-		SettingsManager.save_settings()
+		DataManager.save_settings()
 		_show_page(Page.DONE)
 	elif _current_page < Page.DONE:
 		# Validate storage paths on Android before progressing
 		if _current_page == Page.STORAGE_PATHS:
-			if PlatformManager.is_android():
+			if SystemManager.platform.is_android():
 				if not _validate_android_storage_paths():
 					if _storage_warning_label:
 						_storage_warning_label.visible = true
@@ -384,16 +384,16 @@ func _on_next_pressed():
 			# Persist storage paths and mark first run so a restart resumes
 			_save_storage_settings()
 			_mark_first_run_completed()
-			SettingsManager.save_settings()
+			DataManager.save_settings()
 
 		# Skip permissions page on non-Android
-		if _current_page == Page.STORAGE_PATHS and not PlatformManager.is_android():
+		if _current_page == Page.STORAGE_PATHS and not SystemManager.platform.is_android():
 			_show_page(Page.ROMM_CONNECTION)
 		else:
 			_show_page(_current_page + 1)
 
 func _validate_android_storage_paths() -> bool:
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		return true
 
 	var games_path = _games_path_field.text.strip_edges()
@@ -415,26 +415,26 @@ func _on_skip_pressed():
 	_is_romm_skipped = true
 	if _romm_connection_panel:
 		_romm_connection_panel.save_to_settings(true)
-	SettingsManager.save_settings()
+	DataManager.save_settings()
 	_show_page(Page.DONE)
 
 func _on_finish_pressed():
 	# Final flush in case anything changed on the done page (nothing to save there,
 	# but this guarantees the incremental saves from earlier are on disk).
-	SettingsManager.save_settings()
+	DataManager.save_settings()
 
 	# Mark first run as complete
 	_mark_first_run_completed()
-	SettingsManager.save_settings()
+	DataManager.save_settings()
 
 	# Dismiss and emit completed
 	dismiss()
 	wizard_completed.emit()
 
 func _mark_first_run_completed():
-	var first_run_setting = SettingsManager.get_setting("first_run_completed")
+	var first_run_setting = DataManager.get_setting("first_run_completed")
 	if first_run_setting:
-		SettingsManager.set_setting(true, first_run_setting)
+		DataManager.set_setting(true, first_run_setting)
 
 # Path browsing
 
@@ -447,33 +447,33 @@ func _on_browse_pressed(field: M3TextField):
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:
-		if _current_page == Page.ANDROID_PERMISSIONS and PlatformManager.is_android():
+		if _current_page == Page.ANDROID_PERMISSIONS and SystemManager.platform.is_android():
 			_update_permission_indicators()
 
 func _request_storage_permission():
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		return
 
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin and plugin.hasManageExternalStoragePermission():
 		return
 
-	PlatformManager.open_manage_storage_settings()
+	SystemManager.platform.open_manage_storage_settings()
 
 func _request_notifications_permission():
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		return
 
 	OS.request_permissions()
 
 func _open_install_settings():
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		return
 
-	PlatformManager.open_install_unknown_apps_settings()
+	SystemManager.platform.open_install_unknown_apps_settings()
 
 func _update_permission_indicators():
-	if not PlatformManager.is_android():
+	if not SystemManager.platform.is_android():
 		return
 
 	var granted = OS.get_granted_permissions()
@@ -509,21 +509,21 @@ func _save_storage_settings():
 	emulators_path = FSM.resolve_content_uri(emulators_path)
 
 	if not games_path.is_empty():
-		var games_setting = SettingsManager.get_setting("games_root_folder")
+		var games_setting = DataManager.get_setting("games_root_folder")
 		if games_setting:
-			SettingsManager.set_setting(games_path, games_setting)
+			DataManager.set_setting(games_path, games_setting)
 		FSM.make_dir_recursive(games_path)
 
 	if not emulators_path.is_empty():
-		var emulators_setting = SettingsManager.get_setting("emulators_folder")
+		var emulators_setting = DataManager.get_setting("emulators_folder")
 		if emulators_setting:
-			SettingsManager.set_setting(emulators_path, emulators_setting)
+			DataManager.set_setting(emulators_path, emulators_setting)
 		FSM.make_dir_recursive(emulators_path)
 
 	if _steam_path_field and not _steam_path_field.text.is_empty():
-		var steam_setting = SettingsManager.get_setting("steam_folder")
+		var steam_setting = DataManager.get_setting("steam_folder")
 		if steam_setting:
-			SettingsManager.set_setting(_steam_path_field.text, steam_setting)
+			DataManager.set_setting(_steam_path_field.text, steam_setting)
 
 
 # Public API

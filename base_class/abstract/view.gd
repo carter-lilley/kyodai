@@ -178,19 +178,19 @@ func _on_download_requested(game: GameResource):
 	var active_game_id = game.get_active_game_id()
 	var active_file_name = game.get_active_file_name()
 	
-	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
-	var root_folder = SettingsManager.get_setting("games_root_folder")
+	var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
+	var root_folder = DataManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
-		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
 		return
 	
 	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
-	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
+	var item_id = SystemManager.download.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
 	
 	if item_id != "":
-		pass  # Status updates removed; notifications handled by DownloadManager
+		pass  # Status updates removed; notifications handled by SystemManager.download
 	else:
-		NotificationManager.show_notification("Failed to queue download", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Failed to queue download", SystemManager.notifications.Type.ERROR)
 
 # Status bar removed — kept as no-op so subclasses don't need to override
 func _update_status(_text: String = "") -> void:
@@ -200,6 +200,6 @@ func _on_setting_changed(_value: Variant, _setting: SettingsVar) -> void:
 	"""Handle settings changes.
 	
 	Card config / layout / effect updates are now driven by the grid's own
-	SettingsManager handler and by ViewManager, so the base view no longer
+	DataManager handler and by ViewManager, so the base view no longer
 	needs to trigger its own rebuilds here."""
 	pass

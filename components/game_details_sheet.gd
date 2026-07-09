@@ -1,7 +1,7 @@
 class_name GameDetailsSheet
 extends M3BottomSheet
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Game details bottom sheet.
 ## Extends M3BottomSheet so the details UI is a native Material 3 overlay
@@ -67,7 +67,7 @@ func _connect_signals() -> void:
 		action_button.pressed.connect(_on_action_button_pressed)
 	if sync_button:
 		sync_button.pressed.connect(_on_sync_button_pressed)
-	DownloadManager.download_completed.connect(_on_download_completed)
+	SystemManager.download.download_completed.connect(_on_download_completed)
 
 func _set_sheet_height() -> void:
 	var viewport := get_viewport()
@@ -165,7 +165,7 @@ func prepare_for_game(romm_id: int) -> void:
 
 	# Decode the local cover on a background thread so it's ready if Details is selected.
 	if game.cover_path and FSM.file_exists(game.cover_path):
-		MemoryManager.queue_image_task(
+		SystemManager.memory.queue_image_task(
 			func() -> Image:
 				var img := Image.new()
 				if img.load(game.cover_path) == OK and not img.is_empty():
@@ -173,7 +173,7 @@ func prepare_for_game(romm_id: int) -> void:
 				return null,
 			func(img: Image):
 				if is_instance_valid(self) and img and not img.is_empty():
-					_prepared_cover = MemoryManager.create_texture_from_image(img)
+					_prepared_cover = SystemManager.memory.create_texture_from_image(img)
 		)
 
 func _setup_sibling_dropdown(game: GameResource) -> void:
@@ -239,7 +239,7 @@ func _on_sibling_selected(index: int) -> void:
 
 func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 	"""Fetch full game details for a sibling to get proper file name with extension."""
-	NetworkManager.fetch_game_details(sibling_id, func(data: Dictionary, error: String):
+	SystemManager.network.fetch_game_details(sibling_id, func(data: Dictionary, error: String):
 		if not is_instance_valid(self):
 			return
 		if error == "" and data.has("fs_name"):
@@ -311,7 +311,7 @@ func _load_cover(game: GameResource) -> void:
 
 	# Local file: decode on a background thread.
 	if game.cover_path and FSM.file_exists(game.cover_path):
-		MemoryManager.queue_image_task(
+		SystemManager.memory.queue_image_task(
 			func() -> Image:
 				var img := Image.new()
 				if img.load(game.cover_path) == OK and not img.is_empty():
@@ -319,7 +319,7 @@ func _load_cover(game: GameResource) -> void:
 				return null,
 			func(img: Image):
 				if is_instance_valid(cover_texture) and img and not img.is_empty():
-					cover_texture.texture = MemoryManager.create_texture_from_image(img)
+					cover_texture.texture = SystemManager.memory.create_texture_from_image(img)
 		)
 		return
 
@@ -363,7 +363,7 @@ func _update_sync_ui() -> void:
 		sync_status_label.visible = false
 		return
 
-	var extensions = SaveManager.get_save_extensions(emulator_id, _current_game.platform_slug)
+	var extensions = DataManager.get_save_extensions(emulator_id, _current_game.platform_slug)
 	if extensions.is_empty():
 		sync_button.visible = false
 		sync_status_label.visible = false
@@ -374,7 +374,7 @@ func _update_sync_ui() -> void:
 	sync_button.text = "Sync Saves"
 	sync_button.modulate = Color.WHITE
 	sync_button.disabled = false
-	sync_status_label.text = SaveManager.get_save_sync_status_text(_current_game, emulator_id)
+	sync_status_label.text = DataManager.get_save_sync_status_text(_current_game, emulator_id)
 
 func _on_sync_button_pressed() -> void:
 	if not _current_game:
@@ -387,7 +387,7 @@ func _on_sync_button_pressed() -> void:
 	sync_button.disabled = true
 	sync_button.text = "Syncing..."
 
-	SaveManager.sync_saves_for_game(_current_game, emulator_id, func(success: bool, message: String):
+	DataManager.sync_saves_for_game(_current_game, emulator_id, func(success: bool, message: String):
 		if not is_instance_valid(sync_button):
 			return
 		sync_button.disabled = false
@@ -395,9 +395,9 @@ func _on_sync_button_pressed() -> void:
 		_update_sync_ui()
 
 		if success:
-			NotificationManager.show_notification("Save sync complete", NotificationManager.Type.INFO)
+			SystemManager.notifications.show_notification("Save sync complete", SystemManager.notifications.Type.INFO)
 		else:
-			NotificationManager.show_notification("Save sync: " + message, NotificationManager.Type.ERROR)
+			SystemManager.notifications.show_notification("Save sync: " + message, SystemManager.notifications.Type.ERROR)
 	)
 
 func _on_action_button_pressed() -> void:
@@ -412,7 +412,7 @@ func _on_action_button_pressed() -> void:
 
 	if _current_game.is_active_variant_downloaded():
 		# Check if the file actually exists before launching
-		var root_folder = SettingsManager.get_setting("games_root_folder")
+		var root_folder = DataManager.get_setting("games_root_folder")
 		if root_folder and root_folder.value != "":
 			# Construct the full file path from known components (don't rely on file_path which may be relative)
 			var active_file_name = _current_game.get_active_file_name()
@@ -420,7 +420,7 @@ func _on_action_button_pressed() -> void:
 
 			if not FSM.file_exists(file_path):
 				# File is marked as downloaded but doesn't exist - redownload
-				NotificationManager.show_notification("File not found - redownloading", NotificationManager.Type.WARNING)
+				SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)
 				_queue_download()
 				return
 
@@ -444,31 +444,31 @@ func _queue_download() -> void:
 	var active_game_id = _current_game.get_active_game_id()
 	var active_file_name = _current_game.get_active_file_name()
 
-	var download_url = NetworkManager.get_romm_download_url(active_game_id, active_file_name)
-	var root_folder = SettingsManager.get_setting("games_root_folder")
+	var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
+	var root_folder = DataManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
-		NotificationManager.show_notification("Error: Games folder not set", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
 		return
 
 	var destination_path = root_folder.value + "/" + _current_game.platform_slug + "/" + active_file_name
-	var item_id = DownloadManager.queue_download(download_url, destination_path, "game", _current_game.get_display_name(), false, "", _current_game, {}, active_game_id)
+	var item_id = SystemManager.download.queue_download(download_url, destination_path, "game", _current_game.get_display_name(), false, "", _current_game, {}, active_game_id)
 
 	if item_id != "":
-		NotificationManager.show_notification("Queued: " + _current_game.get_display_name(), NotificationManager.Type.INFO)
+		SystemManager.notifications.show_notification("Queued: " + _current_game.get_display_name(), SystemManager.notifications.Type.INFO)
 	else:
-		NotificationManager.show_notification("Failed to queue download", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Failed to queue download", SystemManager.notifications.Type.ERROR)
 
 func _on_download_completed(item_id: String, success: bool, message: String) -> void:
 	# Check if this download is for our current game
 	if not _current_game:
 		return
 
-	var item = DownloadManager.get_item(item_id)
+	var item = SystemManager.download.get_item(item_id)
 	if item and item.game_resource and item.game_resource.romm_id == _current_game.romm_id:
 		if success:
-			NotificationManager.show_notification("Download completed", NotificationManager.Type.INFO)
+			SystemManager.notifications.show_notification("Download completed", SystemManager.notifications.Type.INFO)
 		else:
-			NotificationManager.show_notification("Download failed: " + message, NotificationManager.Type.ERROR)
+			SystemManager.notifications.show_notification("Download failed: " + message, SystemManager.notifications.Type.ERROR)
 
 		# Reload game data from DataManager to get updated downloaded_sibling_ids
 		var updated_game = DataManager.get_game_by_id(_current_game.romm_id)

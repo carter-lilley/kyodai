@@ -1,7 +1,7 @@
 class_name HeroImage
 extends Control
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
@@ -37,8 +37,8 @@ func _load_effect_config():
 		return
 
 	var config = {}
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("hero_effect_config")
+	if DataManager:
+		var config_setting = DataManager.get_setting("hero_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			config = config_setting.value
 
@@ -97,14 +97,14 @@ func set_game(game: GameResource):
 		return
 
 	# Check texture cache first
-	var cached_tex = MemoryManager.get_cached_texture(cache_path)
+	var cached_tex = SystemManager.memory.get_cached_texture(cache_path)
 	if cached_tex:
 		_set_texture(cached_tex)
 		return
 
 	# Cancel any pending image load
 	if _current_image_task_id > 0:
-		MemoryManager.cancel_image_task(_current_image_task_id)
+		SystemManager.memory.cancel_image_task(_current_image_task_id)
 
 	_loading_game_id = game.id if game else ""
 
@@ -146,15 +146,15 @@ func set_game(game: GameResource):
 			return
 
 		if image and not image.is_empty():
-			var tex = MemoryManager.create_texture_from_image(image)
+			var tex = SystemManager.memory.create_texture_from_image(image)
 			if tex:
-				MemoryManager.cache_texture(cache_path, tex)
+				SystemManager.memory.cache_texture(cache_path, tex)
 				_set_texture(tex)
 				return
 
 		clear()
 
-	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, true)
+	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, true)
 
 func _set_texture(tex: Texture2D):
 	if _effect_stack:
@@ -162,8 +162,8 @@ func _set_texture(tex: Texture2D):
 
 func clear():
 	_current_game = null
-	if _current_image_task_id > 0 and MemoryManager:
-		MemoryManager.cancel_image_task(_current_image_task_id)
+	if _current_image_task_id > 0 and SystemManager.memory:
+		SystemManager.memory.cancel_image_task(_current_image_task_id)
 		_current_image_task_id = -1
 	if _gray_texture:
 		_set_texture(_gray_texture)

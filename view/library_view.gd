@@ -21,9 +21,9 @@ var _pre_search_platform_index: int = -1  # Remember platform before search
 
 func _exit_tree() -> void:
 	# Disconnect from autoload signals so the view can be freed when the tree tears down.
-	if SettingsManager:
-		if SettingsManager.setting_changed.is_connected(_on_setting_changed):
-			SettingsManager.setting_changed.disconnect(_on_setting_changed)
+	if DataManager:
+		if DataManager.setting_changed.is_connected(_on_setting_changed):
+			DataManager.setting_changed.disconnect(_on_setting_changed)
 	if DataManager:
 		if DataManager.database_ready.is_connected(_on_database_ready):
 			DataManager.database_ready.disconnect(_on_database_ready)
@@ -49,6 +49,36 @@ func _exit_tree() -> void:
 			_search_overlay.free()
 		_search_overlay = null
 
+func _enter_tree() -> void:
+	_setup_search_overlay()
+	_connect_signals()
+
+func _connect_signals() -> void:
+	if not DataManager:
+		return
+	if not DataManager.setting_changed.is_connected(_on_setting_changed):
+		DataManager.setting_changed.connect(_on_setting_changed)
+	if not DataManager.database_ready.is_connected(_on_database_ready):
+		DataManager.database_ready.connect(_on_database_ready)
+		if DataManager.is_database_ready():
+			_on_database_ready()
+	if not DataManager.game_added.is_connected(_on_game_added):
+		DataManager.game_added.connect(_on_game_added)
+	if not DataManager.game_updated.is_connected(_on_game_updated):
+		DataManager.game_updated.connect(_on_game_updated)
+	if not DataManager.games_removed.is_connected(_on_games_removed):
+		DataManager.games_removed.connect(_on_games_removed)
+	if not DataManager.sync_completed.is_connected(_on_sync_completed):
+		DataManager.sync_completed.connect(_on_sync_completed)
+	if not DataManager.sync_progress.is_connected(_on_sync_progress):
+		DataManager.sync_progress.connect(_on_sync_progress)
+	if not DataManager.games_batch_added.is_connected(_on_games_batch_added):
+		DataManager.games_batch_added.connect(_on_games_batch_added)
+	if not DataManager.sync_started.is_connected(_on_sync_started):
+		DataManager.sync_started.connect(_on_sync_started)
+	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
+		UIManager.modal_item_selected.connect(_on_modal_item_selected)
+
 func _ready():
 	view_name = "Library"
 	
@@ -69,30 +99,6 @@ func _ready():
 	# Setup vertical layout from settings
 	_update_grid_orientation()
 	
-	# Connect to settings changes
-	if SettingsManager:
-		SettingsManager.setting_changed.connect(_on_setting_changed)
-	
-	# Connect to DataManager signals
-	DataManager.database_ready.connect(_on_database_ready)
-	# If database is already ready, trigger the callback manually
-	if DataManager.is_database_ready():
-		_on_database_ready()
-	DataManager.game_added.connect(_on_game_added)
-	DataManager.game_updated.connect(_on_game_updated)
-	DataManager.games_removed.connect(_on_games_removed)
-	DataManager.sync_completed.connect(_on_sync_completed)
-	DataManager.sync_progress.connect(_on_sync_progress)
-	
-	# NEW: Connect to batch updates for efficient UI during sync
-	DataManager.games_batch_added.connect(_on_games_batch_added)
-	
-	# Connect to sync_started to clear cache before new sync begins
-	DataManager.sync_started.connect(_on_sync_started)
-	
-	# Connect to UIManager modal signals
-	UIManager.modal_item_selected.connect(_on_modal_item_selected)
-	
 	# Load platforms list for indicator
 	_load_platforms_list()
 	
@@ -107,14 +113,13 @@ func _ready():
 	# Filter sheet is created lazily on first open so it doesn't hold resources
 	# for the entire session.
 	
-	# Create search overlay
-	_setup_search_overlay()
-	
 	# Let the base View class own the focus signal connection.
 	reconnect_viewport()
 
 func _setup_search_overlay():
-	"""Create and setup the search overlay."""
+	"""Create and setup the search overlay. Idempotent so it survives reparenting."""
+	if _search_overlay and is_instance_valid(_search_overlay):
+		return
 	_search_overlay = SearchOverlay.new()
 	_search_overlay.name = "SearchOverlay"
 	_search_overlay.search_submitted.connect(_on_search_submitted)
@@ -141,8 +146,8 @@ func _show_search_overlay():
 	
 	# Load last search from settings
 	var last_search = ""
-	if SettingsManager:
-		var last_search_setting = SettingsManager.get_setting("library_last_search")
+	if DataManager:
+		var last_search_setting = DataManager.get_setting("library_last_search")
 		if last_search_setting:
 			last_search = last_search_setting.value
 	_search_overlay.set_last_search(last_search)
@@ -155,11 +160,11 @@ func _on_search_submitted(query: String):
 	_is_search_active = true
 	
 	# Save last search to settings
-	if SettingsManager:
-		var last_search_setting = SettingsManager.get_setting("library_last_search")
+	if DataManager:
+		var last_search_setting = DataManager.get_setting("library_last_search")
 		if last_search_setting:
-			SettingsManager.set_setting(query, last_search_setting)
-			SettingsManager.save_settings()
+			DataManager.set_setting(query, last_search_setting)
+			DataManager.save_settings()
 	
 	_search_overlay.dismiss()
 	
@@ -219,7 +224,7 @@ func _load_total_count_with_search():
 	"""Load total count for search results."""
 	_is_loading = true
 	
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_search_results_count(_search_query)
 			return count,
@@ -316,8 +321,8 @@ func _cycle_platform(direction: int) -> void:
 		return
 	
 	# Play platform switch sound effect
-	if AudioManager:
-		AudioManager.play_sfx("snap")
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx("snap")
 	
 	# Ensure platforms are loaded
 	if _platforms.is_empty():
@@ -356,7 +361,7 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 	"""Get total game count for current platform filter."""
 	_is_loading = true
 	
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
 			return count,
@@ -386,8 +391,8 @@ func _on_platform_selected(platform_index: int) -> void:
 		return
 	
 	# Play platform switch sound effect
-	if AudioManager:
-		AudioManager.play_sfx("snap")
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx("snap")
 	
 	# Ensure platforms are loaded
 	if _platforms.is_empty():
@@ -432,7 +437,7 @@ func _load_total_count(preserve_cache: bool = false):
 	_update_status("Loading library...")
 	
 	# Query total count asynchronously
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
 			return count,
@@ -450,7 +455,7 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	"""Get total game count for current platform filter and call callback when complete."""
 	if _is_search_active:
 		_is_loading = true
-		MemoryManager.queue_db_task(
+		SystemManager.memory.queue_db_task(
 			func():
 				var count = DataManager.get_search_results_count(_search_query)
 				return count,
@@ -471,7 +476,7 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 	_is_loading = true
 	_update_status("Loading library...")
 	
-	MemoryManager.queue_db_task(
+	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
 			return count,
@@ -492,7 +497,7 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
 	if _is_search_active:
-		MemoryManager.queue_db_task(
+		SystemManager.memory.queue_db_task(
 			func():
 				var games = DataManager.search_games_paginated(_search_query, offset, limit)
 				return games,
@@ -500,7 +505,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				games_grid.on_items_loaded(games, offset, is_preload)
 		)
 	else:
-		MemoryManager.queue_db_task(
+		SystemManager.memory.queue_db_task(
 			func():
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
 				return games,
@@ -589,7 +594,7 @@ func _on_games_batch_added(_platform_slug: String, _start_index: int, games: Arr
 	"""Handle batch game additions during sync without full grid rebuild."""
 	# Filter out games without cover art based on setting
 	var hide_no_covers = true
-	var setting = SettingsManager.get_setting("hide_games_without_covers")
+	var setting = DataManager.get_setting("hide_games_without_covers")
 	if setting:
 		hide_no_covers = setting.value
 	
@@ -700,7 +705,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"delete":
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
-				NotificationManager.show_notification("Deleting " + game.title + "...", NotificationManager.Type.INFO)
+				SystemManager.notifications.show_notification("Deleting " + game.title + "...", SystemManager.notifications.Type.INFO)
 
 				if games_grid:
 					games_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -709,22 +714,22 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 					_load_total_count_with_platform(false)
 					if games_grid:
 						games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
-					if AudioManager:
-						AudioManager.play_sfx("error")
+					if SystemManager.audio:
+						SystemManager.audio.play_sfx("error")
 
 				DataManager.delete_game_download(game, func(success: bool):
 					if success:
-						NotificationManager.show_notification(game.title + " deleted", NotificationManager.Type.SUCCESS)
+						SystemManager.notifications.show_notification(game.title + " deleted", SystemManager.notifications.Type.SUCCESS)
 						_refresh_after_delete.call()
 					else:
 						var on_confirm = func():
 							M3Dialog.dismiss_current()
 							var on_force_delete = func(force_success: bool):
 								if force_success:
-									NotificationManager.show_notification(game.title + " removed from library", NotificationManager.Type.SUCCESS)
+									SystemManager.notifications.show_notification(game.title + " removed from library", SystemManager.notifications.Type.SUCCESS)
 									_refresh_after_delete.call()
 								else:
-									NotificationManager.show_notification("Failed to remove " + game.title, NotificationManager.Type.ERROR)
+									SystemManager.notifications.show_notification("Failed to remove " + game.title, SystemManager.notifications.Type.ERROR)
 									if games_grid:
 										games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
 							DataManager.delete_game_download(game, on_force_delete, true)
@@ -732,8 +737,8 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 						var on_cancel = func():
 							if games_grid:
 								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
-							if AudioManager:
-								AudioManager.play_sfx("error")
+							if SystemManager.audio:
+								SystemManager.audio.play_sfx("error")
 
 						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 				)

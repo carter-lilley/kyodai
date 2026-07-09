@@ -25,8 +25,7 @@ func _ready():
 	super._ready()
 	
 	# Reset any leftover temporary overrides from a previous session.
-	if ShufflerManager:
-		ShufflerManager.clear_shuffle_overrides()
+	LaunchManager.clear_shuffle_overrides()
 	
 	# Hide default title/body
 	if _title_label:
@@ -201,7 +200,7 @@ func _load_platforms() -> void:
 			continue
 		card_payloads.append({"slug": slug, "name": name})
 
-	_active_batch_id = MemoryManager.start_batch(
+	_active_batch_id = SystemManager.memory.start_batch(
 		card_payloads,
 		func(payload: Dictionary, _index: int) -> PlatformCard:
 			return _create_platform_card(
@@ -212,7 +211,7 @@ func _load_platforms() -> void:
 				platform_emulator_cache,
 				platform_default_core_cache
 			),
-		MemoryManager.BatchMode.SYNC,
+		SystemManager.memory.BatchMode.SYNC,
 		3,
 		func(_processed: int, _total: int):
 			pass,
@@ -240,10 +239,10 @@ func _load_platforms() -> void:
 			
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = MemoryManager.start_batch(
+			_active_batch_id = SystemManager.memory.start_batch(
 				created_cards,
 				_populate_card_dropdown,
-				MemoryManager.BatchMode.SYNC,
+				SystemManager.memory.BatchMode.SYNC,
 				3,
 				func(_processed: int, _total: int):
 					pass,
@@ -308,15 +307,14 @@ func _create_platform_card(
 	)
 
 	card.emulator_changed.connect(func(emu_id: String, selected_core: String):
-		if ShufflerManager:
-			ShufflerManager.set_shuffle_override(slug, emu_id, selected_core)
+		LaunchManager.set_shuffle_override(slug, emu_id, selected_core)
 	)
 
 	_pending_cards.append(card)
 	return card
 
 func _get_enabled_platforms() -> Dictionary:
-	var setting = SettingsManager.get_setting("enabled_platforms")
+	var setting = DataManager.get_setting("enabled_platforms")
 	if setting and setting.value is Dictionary:
 		return setting.value
 	return {}
@@ -348,14 +346,14 @@ func _update_toggle_all_button() -> void:
 
 func _on_start_pressed() -> void:
 	if _selected_platforms.is_empty():
-		NotificationManager.show_notification("Please select at least one platform", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Please select at least one platform", SystemManager.notifications.Type.ERROR)
 		return
 	
 	var min_time = _round_time_min_slider.value
 	var max_time = _round_time_max_slider.value
 	
 	if min_time > max_time:
-		NotificationManager.show_notification("Minimum round time must be less than maximum", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Minimum round time must be less than maximum", SystemManager.notifications.Type.ERROR)
 		return
 	
 	var config = {
@@ -377,7 +375,7 @@ func _exit_tree() -> void:
 
 func _return_all_cards() -> void:
 	if _active_batch_id != -1:
-		MemoryManager.cancel_batch(_active_batch_id)
+		SystemManager.memory.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 
 	for slug in _platform_cards.keys():

@@ -72,7 +72,7 @@ func _update_shader_params() -> void:
 		margin_ratio * card_size.y
 	)
 
-	var screen_height = DisplayManager.get_viewport_size().y
+	var screen_height = SystemManager.display.get_viewport_size().y
 	var quality_scale = clamp(1080.0 / screen_height, 0.4, 1.0)
 
 	_set_shader_param("card_size", card_size)

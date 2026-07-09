@@ -1,0 +1,38 @@
+[gd_scene format=3 uid="uid://blmro4m11e2xy"]
+
+[ext_resource type="Script" path="res://managers/system_manager/system_manager.gd" id="1_sys"]
+[ext_resource type="Script" path="res://managers/system_manager/filesystem_sub_manager.gd" id="2_fs"]
+[ext_resource type="Script" path="res://managers/system_manager/network_sub_manager.gd" id="3_net"]
+[ext_resource type="Script" path="res://managers/system_manager/download_sub_manager.gd" id="4_dl"]
+[ext_resource type="Script" path="res://managers/system_manager/notification_sub_manager.gd" id="5_not"]
+[ext_resource type="Script" path="res://managers/system_manager/memory_sub_manager.gd" id="6_mem"]
+[ext_resource type="Script" path="res://managers/system_manager/display_sub_manager.gd" id="7_disp"]
+[ext_resource type="Script" path="res://managers/system_manager/audio_sub_manager.gd" id="8_audio"]
+[ext_resource type="Script" path="res://managers/system_manager/platform_sub_manager.gd" id="9_plat"]
+
+[node name="SystemManager" type="Node"]
+script = ExtResource("1_sys")
+
+[node name="FileSystemSubManager" type="Node" parent="."]
+script = ExtResource("2_fs")
+
+[node name="NetworkSubManager" type="Node" parent="."]
+script = ExtResource("3_net")
+
+[node name="DownloadSubManager" type="Node" parent="."]
+script = ExtResource("4_dl")
+
+[node name="NotificationSubManager" type="Node" parent="."]
+script = ExtResource("5_not")
+
+[node name="MemorySubManager" type="Node" parent="."]
+script = ExtResource("6_mem")
+
+[node name="DisplaySubManager" type="Node" parent="."]
+script = ExtResource("7_disp")
+
+[node name="AudioSubManager" type="Node" parent="."]
+script = ExtResource("8_audio")
+
+[node name="PlatformSubManager" type="Node" parent="."]
+script = ExtResource("9_plat")

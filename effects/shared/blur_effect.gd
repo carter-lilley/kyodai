@@ -21,7 +21,7 @@ func _update_shader_params() -> void:
 
 	var uv = media_container.get_uv_transforms()
 
-	var screen_height = DisplayManager.get_viewport_size().y
+	var screen_height = SystemManager.display.get_viewport_size().y
 	var quality_scale = clamp(1080.0 / screen_height, 0.4, 1.0)
 
 	_set_shader_param("card_size", media_container.size)

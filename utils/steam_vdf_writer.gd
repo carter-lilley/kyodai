@@ -3,7 +3,7 @@
 
 class_name SteamVDFWriter
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 # VDF Type markers
 const TYPE_NONE := 0x00
@@ -391,38 +391,38 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 ## Shared helper: add a downloaded game to Steam as a non-Steam game.
 ## This method is used by HomeView and LibraryView so the logic lives in one place.
 static func add_game(game: GameResource) -> void:
-	var steam_folder_setting = SettingsManager.get_setting("steam_folder")
+	var steam_folder_setting = DataManager.get_setting("steam_folder")
 	if not steam_folder_setting or steam_folder_setting.value.is_empty():
-		NotificationManager.show_notification("Steam folder not configured", NotificationManager.Type.WARNING)
-		if AudioManager:
-			AudioManager.play_sfx("error")
+		SystemManager.notifications.show_notification("Steam folder not configured", SystemManager.notifications.Type.WARNING)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")
 		return
 	
 	var steam_path = steam_folder_setting.value
 	if not is_valid_steam_path(steam_path):
-		NotificationManager.show_notification("Invalid Steam installation folder", NotificationManager.Type.WARNING)
-		if AudioManager:
-			AudioManager.play_sfx("error")
+		SystemManager.notifications.show_notification("Invalid Steam installation folder", SystemManager.notifications.Type.WARNING)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")
 		return
 	
-	NotificationManager.show_notification("Adding " + game.title + " to Steam...", NotificationManager.Type.INFO)
+	SystemManager.notifications.show_notification("Adding " + game.title + " to Steam...", SystemManager.notifications.Type.INFO)
 	
 	var launch_intent = LaunchManager.create_launch_intent(game)
 	if not launch_intent:
-		NotificationManager.show_notification("Failed to create launch intent for " + game.title, NotificationManager.Type.ERROR)
-		if AudioManager:
-			AudioManager.play_sfx("error")
+		SystemManager.notifications.show_notification("Failed to create launch intent for " + game.title, SystemManager.notifications.Type.ERROR)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")
 		return
 	
 	var exe_path = LaunchManager.get_emulator_install_path(launch_intent.emulator_id)
 	if exe_path.is_empty():
-		NotificationManager.show_notification("Could not find emulator executable for " + game.title, NotificationManager.Type.ERROR)
-		if AudioManager:
-			AudioManager.play_sfx("error")
+		SystemManager.notifications.show_notification("Could not find emulator executable for " + game.title, SystemManager.notifications.Type.ERROR)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")
 		return
 	
-	exe_path = FileSystemManager.resolve_native_path(exe_path)
-	var rom_path: String = FileSystemManager.resolve_native_path(launch_intent.rom_path)
+	exe_path = SystemManager.filesystem.resolve_native_path(exe_path)
+	var rom_path: String = SystemManager.filesystem.resolve_native_path(launch_intent.rom_path)
 	
 	var full_command: String = "\"" + exe_path + "\""
 	
@@ -438,20 +438,20 @@ static func add_game(game: GameResource) -> void:
 	var working_dir: String = launch_intent.working_directory
 	if working_dir.is_empty():
 		working_dir = exe_path.get_base_dir()
-	working_dir = FileSystemManager.resolve_native_path(working_dir)
+	working_dir = SystemManager.filesystem.resolve_native_path(working_dir)
 	
 	var cover_art_path: String = ""
 	const CACHE_FOLDER = "user://cache/covers/"
 	
 	if not game.cover_url.is_empty() and game.cover_url.begins_with("http"):
-		cover_art_path = FileSystemManager.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
-		cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+		cover_art_path = SystemManager.filesystem.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
+		cover_art_path = SystemManager.filesystem.resolve_path(cover_art_path, {"format": SystemManager.filesystem.PathFormat.ABSOLUTE})
 	elif not game.cover_path.is_empty():
 		cover_art_path = game.cover_path
 		if cover_art_path.find("?") != -1:
 			cover_art_path = cover_art_path.substr(0, cover_art_path.find("?"))
 		if FSM.file_exists(cover_art_path):
-			cover_art_path = FileSystemManager.resolve_path(cover_art_path, {"format": FileSystemManager.PathFormat.ABSOLUTE})
+			cover_art_path = SystemManager.filesystem.resolve_path(cover_art_path, {"format": SystemManager.filesystem.PathFormat.ABSOLUTE})
 	
 	var game_data := {
 		"name": game.title,
@@ -465,9 +465,9 @@ static func add_game(game: GameResource) -> void:
 	
 	var shortcuts_path = get_shortcuts_vdf_path(steam_path)
 	if shortcuts_path.is_empty():
-		NotificationManager.show_notification("Could not find Steam shortcuts file", NotificationManager.Type.ERROR)
-		if AudioManager:
-			AudioManager.play_sfx("error")
+		SystemManager.notifications.show_notification("Could not find Steam shortcuts file", SystemManager.notifications.Type.ERROR)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")
 		return
 	
 	var shortcuts := {}
@@ -481,9 +481,9 @@ static func add_game(game: GameResource) -> void:
 	for key in shortcuts_list.keys():
 		var entry = shortcuts_list[key]
 		if entry is Dictionary and entry.get("AppName", "") == game.title:
-			NotificationManager.show_notification(game.title + " is already in Steam", NotificationManager.Type.WARNING)
-			if AudioManager:
-				AudioManager.play_sfx("error")
+			SystemManager.notifications.show_notification(game.title + " is already in Steam", SystemManager.notifications.Type.WARNING)
+			if SystemManager.audio:
+				SystemManager.audio.play_sfx("error")
 			return
 	
 	debug_calculate_app_ids(game_data.exe, game.title)
@@ -497,10 +497,10 @@ static func add_game(game: GameResource) -> void:
 		if not cover_path.is_empty():
 			copy_artwork_to_steam(steam_path, app_id, cover_path)
 		
-		NotificationManager.show_notification(game.title + " added to Steam! Restart Steam to see it.", NotificationManager.Type.SUCCESS)
-		if AudioManager:
-			AudioManager.play_sfx("success")
+		SystemManager.notifications.show_notification(game.title + " added to Steam! Restart Steam to see it.", SystemManager.notifications.Type.SUCCESS)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("success")
 	else:
-		NotificationManager.show_notification("Failed to add " + game.title + " to Steam", NotificationManager.Type.ERROR)
-		if AudioManager:
-			AudioManager.play_sfx("error")
+		SystemManager.notifications.show_notification("Failed to add " + game.title + " to Steam", SystemManager.notifications.Type.ERROR)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")

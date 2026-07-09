@@ -1,7 +1,7 @@
 class_name GameResource
 extends Resource
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 @export var id: String
 @export var romm_id: int
@@ -145,7 +145,7 @@ func get_cover_image() -> Texture2D:
 		var img = Image.new()
 		var error = img.load(cover_path)
 		if error == OK and not img.is_empty():
-			return MemoryManager.create_texture_from_image(img)
+			return SystemManager.memory.create_texture_from_image(img)
 	return null
 
 ## Returns the IGDB multiplayer_modes list if present

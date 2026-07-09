@@ -2,7 +2,7 @@
 class_name GameCard
 extends M3Card
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 signal download_requested(game: GameResource)
 
@@ -272,9 +272,9 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	var effect_settings := []
 	if UIManager and UIManager.card_settings_state:
 		effect_settings = UIManager.card_settings_state.get_base_effects()
-	elif SettingsManager:
+	elif DataManager:
 		# Fallback if UIManager state is not yet available
-		var config_setting = SettingsManager.get_setting("card_effect_config")
+		var config_setting = DataManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			effect_settings = config_setting.value.get("effects", [])
 
@@ -308,8 +308,8 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	var has_focus_effects := false
 	if UIManager and UIManager.card_settings_state:
 		has_focus_effects = not UIManager.card_settings_state.get_focus_effects().is_empty()
-	elif SettingsManager:
-		var config_setting = SettingsManager.get_setting("card_effect_config")
+	elif DataManager:
+		var config_setting = DataManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			has_focus_effects = not config_setting.value.get("focus_effects", []).is_empty()
 	if preview_mode or _is_focused or has_focus_effects:
@@ -324,9 +324,9 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	var focus_effect_settings := []
 	if UIManager and UIManager.card_settings_state:
 		focus_effect_settings = UIManager.card_settings_state.get_focus_effects()
-	elif SettingsManager:
+	elif DataManager:
 		# Fallback if UIManager state is not yet available
-		var config_setting = SettingsManager.get_setting("card_effect_config")
+		var config_setting = DataManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			focus_effect_settings = config_setting.value.get("focus_effects", [])
 
@@ -550,9 +550,9 @@ func _update_card_state_from_settings():
 		_apply_effect_insets_to_media_container(_media_container.effect_settings)
 
 		_display_mode = state.display_mode
-	elif SettingsManager:
+	elif DataManager:
 		# Fallback if UIManager state is not yet available
-		var config_setting = SettingsManager.get_setting("card_effect_config")
+		var config_setting = DataManager.get_setting("card_effect_config")
 		if config_setting and config_setting.value is Dictionary:
 			_media_container.effect_settings = config_setting.value.get("effects", [])
 			_media_container.focus_effect_settings = config_setting.value.get("focus_effects", [])
@@ -571,7 +571,7 @@ func _update_card_state_from_settings():
 			card_rounding_ratio = _media_container.corner_radius_ratio
 			_apply_effect_insets_to_media_container(_media_container.effect_settings)
 
-		var display_setting = SettingsManager.get_setting("library_card_display_mode")
+		var display_setting = DataManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
 			_display_mode = display_setting.value
 
@@ -987,13 +987,13 @@ func _on_card_pressed():
 		return
 
 	if game.is_active_variant_downloaded():
-		var root_folder = SettingsManager.get_setting("games_root_folder") if SettingsManager else null
+		var root_folder = DataManager.get_setting("games_root_folder") if DataManager else null
 		if root_folder and root_folder.value != "":
 			var active_file_name = game.get_active_file_name()
 			var file_path = FSM.join_paths(root_folder.value, game.platform_slug, active_file_name)
 			if not FSM.file_exists(file_path):
-				if NotificationManager:
-					NotificationManager.show_notification("File not found - redownloading", NotificationManager.Type.WARNING)
+				if SystemManager.notifications:
+					SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)
 				download_requested.emit(game)
 				return
 
@@ -1035,7 +1035,7 @@ func _input(event: InputEvent) -> void:
 	# Early-out for non-Android touch events — avoids _can_accept_focus() cost
 	# for the vast majority of input events on desktop/console.
 	var is_touch_event = (event is InputEventScreenTouch or event is InputEventScreenDrag)
-	if is_touch_event and not PlatformManager.is_android():
+	if is_touch_event and not SystemManager.platform.is_android():
 		return
 
 	if not _can_accept_focus():
@@ -1044,12 +1044,12 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_select"):
 		var focused = get_viewport().gui_get_focus_owner()
 		if focused == self and game and UIManager:
-			if AudioManager:
-				AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
+			if SystemManager.audio:
+				SystemManager.audio.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 			UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 			get_viewport().set_input_as_handled()
 
-	if PlatformManager.is_android() and event is InputEventScreenTouch:
+	if SystemManager.platform.is_android() and event is InputEventScreenTouch:
 		if event.pressed:
 			var touch_pos = event.position
 			if get_global_rect().has_point(touch_pos):
@@ -1063,7 +1063,7 @@ func _input(event: InputEvent) -> void:
 					_trigger_long_press()
 				_touch_is_holding = false
 
-	if PlatformManager.is_android() and event is InputEventScreenDrag:
+	if SystemManager.platform.is_android() and event is InputEventScreenDrag:
 		if _touch_is_holding:
 			var current_pos = event.position
 			var distance = _touch_start_pos.distance_to(current_pos)
@@ -1084,8 +1084,8 @@ func _trigger_long_press() -> void:
 	if not _touch_is_holding or not game or not UIManager:
 		return
 	_touch_is_holding = false
-	if AudioManager:
-		AudioManager.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 
 func _can_accept_focus() -> bool:
@@ -1189,10 +1189,10 @@ func _on_focus_entered():
 		_build_focus_stack(true)
 		_update_platform_badge()
 
-	if AudioManager:
-		AudioManager.play_sfx_modulate("click_02", 0.98, 1.02)
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx_modulate("click_02", 0.98, 1.02)
 
-	if PlatformManager.is_android():
+	if SystemManager.platform.is_android():
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin:
 			plugin.call("vibrateDevice", 50)

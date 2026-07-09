@@ -3,7 +3,7 @@ extends Control
 
 ## Library Appearance settings page.
 ## Replaces the Library Appearance tab extracted from SettingsView.
-## Builds controls directly from SettingsManager and owns background effect + preset UI.
+## Builds controls directly from DataManager and owns background effect + preset UI.
 
 var _library_appearance_config: Dictionary = {}
 var _library_effect_menu: SettingsMenu = null
@@ -114,7 +114,7 @@ func _refresh_all_settings_ui() -> void:
 	if _library_general_menu:
 		_library_general_menu.clear_controls()
 		var general_settings: Array[SettingsVar] = []
-		var subgroups = SettingsManager.get_settings_by_subgroup()
+		var subgroups = DataManager.get_settings_by_subgroup()
 		if subgroups.has("Library Appearance"):
 			for sv in subgroups["Library Appearance"]:
 				if sv.state != SettingsVar.SettingState.INTERNAL:
@@ -148,10 +148,10 @@ func _refresh_all_settings_ui() -> void:
 func _on_setting_changed(value: Variant, setting: SettingsVar) -> void:
 	if _is_initializing:
 		return
-	SettingsManager.set_setting(value, setting)
+	DataManager.set_setting(value, setting)
 
 func _load_library_background_config() -> void:
-	var config_setting = SettingsManager.get_setting("library_background_config")
+	var config_setting = DataManager.get_setting("library_background_config")
 	if config_setting and config_setting.value is Dictionary:
 		_library_appearance_config = config_setting.value.duplicate(true)
 	else:
@@ -220,9 +220,9 @@ func _on_library_effect_selected(index: int) -> void:
 				"background_color": Color(0.05, 0.08, 0.18, 1.0)
 			}
 	
-	var config_setting = SettingsManager.get_setting("library_background_config")
+	var config_setting = DataManager.get_setting("library_background_config")
 	if config_setting:
-		SettingsManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
+		DataManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
 	
 	_rebuild_library_effect_controls(effect_id)
 
@@ -247,9 +247,9 @@ func _on_library_effect_setting_changed(value: Variant, setting: SettingsVar) ->
 	if _is_initializing:
 		return
 	_library_appearance_config["settings"][setting.property_name] = value
-	var config_setting = SettingsManager.get_setting("library_background_config")
+	var config_setting = DataManager.get_setting("library_background_config")
 	if config_setting:
-		SettingsManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
+		DataManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
 
 func _refresh_preset_dropdown() -> void:
 	if not _preset_dropdown:
@@ -258,7 +258,7 @@ func _refresh_preset_dropdown() -> void:
 	_preset_dropdown.clear_items()
 	_preset_dropdown.add_item("New Theme...", 0)
 	
-	_current_presets = SettingsManager.list_presets()
+	_current_presets = DataManager.list_presets()
 	for i in range(_current_presets.size()):
 		var preset = _current_presets[i]
 		_preset_dropdown.add_item(preset.get_display_name(), i + 1)
@@ -283,14 +283,14 @@ func _on_preset_selected(index: int) -> void:
 func _apply_preset(preset: ThemePreset) -> void:
 	_is_applying_preset = true
 	
-	var success = SettingsManager.apply_preset(preset)
+	var success = DataManager.apply_preset(preset)
 	if success:
 		_loaded_preset = preset
-		NotificationManager.show_notification("Applied preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
+		SystemManager.notifications.show_notification("Applied preset: %s" % preset.name, SystemManager.notifications.Type.SUCCESS)
 		_refresh_all_settings_ui()
 		_update_preset_dropdown_for_loaded_preset()
 	else:
-		NotificationManager.show_notification("Failed to apply preset", NotificationManager.Type.ERROR)
+		SystemManager.notifications.show_notification("Failed to apply preset", SystemManager.notifications.Type.ERROR)
 		_preset_dropdown.selected = 0
 	
 	_is_applying_preset = false
@@ -316,7 +316,7 @@ func _check_preset_match() -> void:
 			_preset_dropdown.selected = 0
 		return
 	
-	var current_preset = SettingsManager.create_preset_from_current()
+	var current_preset = DataManager.create_preset_from_current()
 	var is_match = _presets_equal(current_preset, _loaded_preset)
 	
 	if is_match:
@@ -365,9 +365,9 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 
 func _on_load_preset_pressed() -> void:
 	UIManager.show_file_dialog("Import Theme Preset", PackedStringArray(["*.tres ; Theme Preset Files"]), "", func(path: String):
-		var imported = SettingsManager.import_preset(path)
+		var imported = DataManager.import_preset(path)
 		if imported:
-			NotificationManager.show_notification("Imported preset: %s" % imported.name, NotificationManager.Type.SUCCESS)
+			SystemManager.notifications.show_notification("Imported preset: %s" % imported.name, SystemManager.notifications.Type.SUCCESS)
 			_refresh_preset_dropdown()
 			UIManager.show_confirm("Apply Imported Preset", "Apply the imported preset '%s' now?" % imported.name,
 				func(): _apply_preset(imported),
@@ -376,14 +376,14 @@ func _on_load_preset_pressed() -> void:
 				{"cancel_text": "Cancel", "accept_text": "Apply"}
 			)
 		else:
-			NotificationManager.show_notification("Failed to import preset", NotificationManager.Type.ERROR)
+			SystemManager.notifications.show_notification("Failed to import preset", SystemManager.notifications.Type.ERROR)
 	, false)
 
 func _on_export_preset_pressed() -> void:
-	if not SettingsManager.settings:
+	if not DataManager.is_settings_loaded():
 		return
 	
-	var preset = SettingsManager.create_preset_from_current()
+	var preset = DataManager.create_preset_from_current()
 	
 	UIManager.show_custom_dialog(func(dialog: M3Dialog):
 		dialog.title_text = "Export Theme Preset"
@@ -399,18 +399,18 @@ func _on_export_preset_pressed() -> void:
 		dialog.add_action("Cancel", Callable(), false)
 		dialog.add_action("Save", func():
 			if line_edit.text.is_empty():
-				NotificationManager.show_notification("Preset name cannot be empty", NotificationManager.Type.WARNING)
+				SystemManager.notifications.show_notification("Preset name cannot be empty", SystemManager.notifications.Type.WARNING)
 				return
 			
 			preset.name = line_edit.text
 			preset.created_at = Time.get_datetime_string_from_system()
 			
-			var success = SettingsManager.save_preset(preset)
+			var success = DataManager.save_preset(preset)
 			if success:
-				NotificationManager.show_notification("Saved preset: %s" % preset.name, NotificationManager.Type.SUCCESS)
+				SystemManager.notifications.show_notification("Saved preset: %s" % preset.name, SystemManager.notifications.Type.SUCCESS)
 				_refresh_preset_dropdown()
 			else:
-				NotificationManager.show_notification("Failed to save preset", NotificationManager.Type.ERROR)
+				SystemManager.notifications.show_notification("Failed to save preset", SystemManager.notifications.Type.ERROR)
 		, true)
 	, func(): _preset_dropdown.selected = 0)
 

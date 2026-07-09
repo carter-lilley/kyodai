@@ -1,0 +1,30 @@
+[gd_scene format=3 uid="uid://b2qxqmhdqcox0"]
+
+[ext_resource type="Script" path="res://managers/data_manager/data_manager.gd" id="1_8k3jr"]
+[ext_resource type="Script" path="res://managers/data_manager/database_sub_manager.gd" id="2_4n5ps"]
+[ext_resource type="Script" path="res://managers/data_manager/sync_sub_manager.gd" id="3_7q8rt"]
+[ext_resource type="Script" path="res://managers/data_manager/cover_sub_manager.gd" id="4_2s6uv"]
+[ext_resource type="Script" path="res://managers/data_manager/save_sync_sub_manager.gd" id="5_9w1xy"]
+[ext_resource type="Script" path="res://managers/data_manager/settings_sub_manager.gd" id="6_settings"]
+[ext_resource type="Script" path="res://managers/data_manager/game_save_sub_manager.gd" id="7_save"]
+
+[node name="DataManager" type="Node"]
+script = ExtResource("1_8k3jr")
+
+[node name="DatabaseSubManager" type="Node" parent="."]
+script = ExtResource("2_4n5ps")
+
+[node name="SyncSubManager" type="Node" parent="."]
+script = ExtResource("3_7q8rt")
+
+[node name="CoverSubManager" type="Node" parent="."]
+script = ExtResource("4_2s6uv")
+
+[node name="SaveSyncSubManager" type="Node" parent="."]
+script = ExtResource("5_9w1xy")
+
+[node name="SettingsSubManager" type="Node" parent="."]
+script = ExtResource("6_settings")
+
+[node name="GameSaveSubManager" type="Node" parent="."]
+script = ExtResource("7_save")

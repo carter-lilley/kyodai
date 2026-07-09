@@ -1,0 +1,42 @@
+[gd_scene format=3 uid="uid://d47isjaddue8"]
+
+[ext_resource type="Script" path="res://managers/launch_manager/launch_manager.gd" id="1_8h4fk"]
+[ext_resource type="Script" path="res://managers/launch_manager/registry_sub_manager.gd" id="2_3j9xa"]
+[ext_resource type="Script" path="res://managers/launch_manager/emulator_sub_manager.gd" id="3_7k2pb"]
+[ext_resource type="Script" path="res://managers/launch_manager/game_sub_manager.gd" id="4_9m1qd"]
+[ext_resource type="Script" path="res://managers/launch_manager/firmware_sub_manager.gd" id="5_2n8rc"]
+[ext_resource type="Script" path="res://managers/launch_manager/launch_intent_sub_manager.gd" id="6_4s7tw"]
+[ext_resource type="Script" path="res://managers/launch_manager/process_sub_manager.gd" id="7_1v5yz"]
+[ext_resource type="Script" path="res://managers/launch_manager/core_sub_manager.gd" id="8_core"]
+[ext_resource type="Script" path="res://managers/launch_manager/shuffler_sub_manager.gd" id="9_shuffler"]
+[ext_resource type="Script" path="res://managers/launch_manager/gamenative_sub_manager.gd" id="10_gamenative"]
+
+[node name="LaunchManager" type="Node"]
+script = ExtResource("1_8h4fk")
+
+[node name="RegistrySubManager" type="Node" parent="."]
+script = ExtResource("2_3j9xa")
+
+[node name="EmulatorSubManager" type="Node" parent="."]
+script = ExtResource("3_7k2pb")
+
+[node name="GameSubManager" type="Node" parent="."]
+script = ExtResource("4_9m1qd")
+
+[node name="FirmwareSubManager" type="Node" parent="."]
+script = ExtResource("5_2n8rc")
+
+[node name="LaunchIntentSubManager" type="Node" parent="."]
+script = ExtResource("6_4s7tw")
+
+[node name="ProcessSubManager" type="Node" parent="."]
+script = ExtResource("7_1v5yz")
+
+[node name="CoreSubManager" type="Node" parent="."]
+script = ExtResource("8_core")
+
+[node name="ShufflerSubManager" type="Node" parent="."]
+script = ExtResource("9_shuffler")
+
+[node name="GameNativeSubManager" type="Node" parent="."]
+script = ExtResource("10_gamenative")

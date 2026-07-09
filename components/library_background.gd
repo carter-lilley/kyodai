@@ -29,8 +29,8 @@ func _initialize_background() -> void:
 	_apply_background_state()
 
 func _get_initial_config() -> Dictionary:
-	if SettingsManager:
-		var config_setting = SettingsManager.get_setting("library_background_config")
+	if DataManager:
+		var config_setting = DataManager.get_setting("library_background_config")
 		if config_setting and config_setting.value is Dictionary:
 			return config_setting.value.duplicate()
 	

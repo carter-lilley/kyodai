@@ -64,13 +64,13 @@ func _build_ui() -> void:
 	test_row.add_child(_test_button)
 
 func load_from_settings() -> void:
-	var url_setting = SettingsManager.get_setting("romm_url")
+	var url_setting = DataManager.get_setting("romm_url")
 	_url_field.text = url_setting.value if url_setting else ""
 
-	var user_setting = SettingsManager.get_setting("romm_username")
+	var user_setting = DataManager.get_setting("romm_username")
 	_username_field.text = user_setting.value if user_setting else ""
 
-	var pass_setting = SettingsManager.get_setting("romm_password")
+	var pass_setting = DataManager.get_setting("romm_password")
 	_password_field.text = pass_setting.value if pass_setting else ""
 
 func save_to_settings(only_if_complete: bool = false) -> void:
@@ -81,16 +81,16 @@ func save_to_settings(only_if_complete: bool = false) -> void:
 	if only_if_complete and (url.is_empty() or username.is_empty() or password.is_empty()):
 		return
 
-	var url_setting = SettingsManager.get_setting("romm_url")
-	var user_setting = SettingsManager.get_setting("romm_username")
-	var pass_setting = SettingsManager.get_setting("romm_password")
+	var url_setting = DataManager.get_setting("romm_url")
+	var user_setting = DataManager.get_setting("romm_username")
+	var pass_setting = DataManager.get_setting("romm_password")
 
 	if url_setting:
-		SettingsManager.set_setting(url, url_setting)
+		DataManager.set_setting(url, url_setting)
 	if user_setting:
-		SettingsManager.set_setting(username, user_setting)
+		DataManager.set_setting(username, user_setting)
 	if pass_setting:
-		SettingsManager.set_setting(password, pass_setting)
+		DataManager.set_setting(password, pass_setting)
 
 func test_connection() -> void:
 	var url := _url_field.text.strip_edges()
@@ -108,24 +108,24 @@ func test_connection() -> void:
 	_indicator.set_status(Indicator.Status.WARNING, "Testing connection...")
 
 	save_to_settings()
-	SettingsManager.save_settings()
+	DataManager.save_settings()
 
-	NetworkManager.test_connection(func(online: bool):
+	SystemManager.network.test_connection(func(online: bool):
 		if _test_button:
 			_test_button.disabled = false
 
 		if online:
 			_indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-			NotificationManager.show_notification("Connected to RomM successfully", NotificationManager.Type.SUCCESS)
+			SystemManager.notifications.show_notification("Connected to RomM successfully", SystemManager.notifications.Type.SUCCESS)
 			connection_tested.emit(true)
 			connection_succeeded.emit()
 		else:
-			if not NetworkManager.is_configured():
+			if not SystemManager.network.is_configured():
 				_indicator.set_status(Indicator.Status.NEUTRAL, "Not configured (check URL, username, password)")
-				NotificationManager.show_notification("RomM not configured - check URL, username, password", NotificationManager.Type.ERROR)
+				SystemManager.notifications.show_notification("RomM not configured - check URL, username, password", SystemManager.notifications.Type.ERROR)
 			else:
 				_indicator.set_status(Indicator.Status.ERROR, "Connection failed - check credentials")
-				NotificationManager.show_notification("Connection failed - check credentials", NotificationManager.Type.ERROR)
+				SystemManager.notifications.show_notification("Connection failed - check credentials", SystemManager.notifications.Type.ERROR)
 			connection_tested.emit(false)
 			connection_failed.emit()
 	)
@@ -134,9 +134,9 @@ func refresh_indicator() -> void:
 	if not _indicator:
 		return
 
-	if NetworkManager.is_online():
+	if SystemManager.network.is_online():
 		_indicator.set_status(Indicator.Status.SUCCESS, "Connected and authenticated")
-	elif not NetworkManager.is_configured():
+	elif not SystemManager.network.is_configured():
 		_indicator.set_status(Indicator.Status.NEUTRAL, "Not configured")
 	else:
 		_indicator.set_status(Indicator.Status.ERROR, "Disconnected")

@@ -2,7 +2,7 @@
 ## Extracts game identifiers from ROM files for save sync purposes
 class_name TitleIDParser
 
-const FSM = preload("res://managers/filesystem_manager.gd")
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 # Preload AndroidBinaryExtractor to ensure it's available when referenced
 const _AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd")
@@ -156,7 +156,7 @@ static func extract_wiiu_title_id(rom_path: String) -> String:
 static func _read_prod_keys_header_key(emulator_dir: String) -> String:
 	var keys_path = ""
 	
-	if PlatformManager.is_android():
+	if SystemManager.platform.is_android():
 		keys_path = "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/keys/prod.keys"
 	else:
 		keys_path = emulator_dir.rstrip("/") + "/user/keys/prod.keys"
@@ -941,13 +941,13 @@ static func _iso_extract_ps2_serial(rom_path: String) -> String:
 
 static func _get_chd_reader_path() -> String:
 	var base_path = "res://bin/libchdr/"
-	if PlatformManager.is_windows():
+	if SystemManager.platform.is_windows():
 		return base_path + "win/chd_reader.exe"
-	elif PlatformManager.is_linux():
+	elif SystemManager.platform.is_linux():
 		return base_path + "linux/chd_reader"
-	elif PlatformManager.is_macos():
+	elif SystemManager.platform.is_macos():
 		return base_path + "macos/chd_reader"
-	elif PlatformManager.is_android():
+	elif SystemManager.platform.is_android():
 		# Extract binary to internal storage on first use
 		return _AndroidBinaryExtractor.extract_binary(base_path + "android/chd_reader-arm64.bin", "chd_reader")
 	else:
@@ -1587,13 +1587,13 @@ static func _iso_extract_psp_game_id(rom_path: String) -> String:
 
 static func _get_cso_reader_path() -> String:
 	var base_path = "res://bin/cso_reader/"
-	if PlatformManager.is_windows():
+	if SystemManager.platform.is_windows():
 		return base_path + "win/cso_reader.exe"
-	elif PlatformManager.is_linux():
+	elif SystemManager.platform.is_linux():
 		return base_path + "linux/cso_reader"
-	elif PlatformManager.is_macos():
+	elif SystemManager.platform.is_macos():
 		return base_path + "macos/cso_reader"
-	elif PlatformManager.is_android():
+	elif SystemManager.platform.is_android():
 		# Extract binary to internal storage on first use
 		return _AndroidBinaryExtractor.extract_binary(base_path + "android/cso_reader-arm64.bin", "cso_reader")
 	else:

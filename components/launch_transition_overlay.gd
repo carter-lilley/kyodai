@@ -399,7 +399,7 @@ func _on_background_state_exited(_exited_game: GameResource, _exit_code: int) ->
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:
-		if visible and PlatformManager.is_android():
+		if visible and SystemManager.platform.is_android():
 			visible = false
 			if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
 				LaunchManager.background_state_exited.disconnect(_on_background_state_exited)

@@ -1,7 +1,7 @@
 class_name PlatformResource
 extends Resource
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 @export var id: String
 @export var slug: String
@@ -17,5 +17,5 @@ func get_icon() -> Texture2D:
 		var img = Image.new()
 		var error = img.load(icon_path)
 		if error == OK and not img.is_empty():
-			return MemoryManager.create_texture_from_image(img)
+			return SystemManager.memory.create_texture_from_image(img)
 	return null

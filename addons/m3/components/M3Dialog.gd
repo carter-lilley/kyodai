@@ -62,6 +62,7 @@ const FULLSCREEN_ACTIONS_HEIGHT := 64.0
 			_update_hero_icon()
 
 @export var dismissible: bool = true
+@export var disable_default_action: bool = false
 @export var dialog_max_width: float = BASIC_MAX_WIDTH
 
 # ============================================
@@ -163,7 +164,8 @@ func _ready():
 		if btn.get_parent() == null and _actions_container:
 			_actions_container.add_child(btn)
 	
-	_add_default_action()
+	if not disable_default_action:
+		_add_default_action()
 	_ready_called = true
 
 func _focus_first() -> void:

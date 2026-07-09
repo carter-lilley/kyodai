@@ -10,14 +10,14 @@ var _download_items: Dictionary = {}  # item_id -> DownloadCard
 func _ready():
 	clear_completed_button.pressed.connect(_on_clear_completed)
 	
-	# Connect to new DownloadManager signals
-	DownloadManager.queue_changed.connect(_refresh_list)
-	DownloadManager.download_started.connect(_on_download_started)
-	DownloadManager.download_progress.connect(_on_download_progress)
-	DownloadManager.download_completed.connect(_on_download_completed)
-	DownloadManager.extraction_started.connect(_on_extraction_started)
-	DownloadManager.extraction_progress.connect(_on_extraction_progress)
-	DownloadManager.extraction_completed.connect(_on_extraction_completed)
+	# Connect to new SystemManager.download signals
+	SystemManager.download.queue_changed.connect(_refresh_list)
+	SystemManager.download.download_started.connect(_on_download_started)
+	SystemManager.download.download_progress.connect(_on_download_progress)
+	SystemManager.download.download_completed.connect(_on_download_completed)
+	SystemManager.download.extraction_started.connect(_on_extraction_started)
+	SystemManager.download.extraction_progress.connect(_on_extraction_progress)
+	SystemManager.download.extraction_completed.connect(_on_extraction_completed)
 	
 	_refresh_list()
 	
@@ -31,12 +31,12 @@ func _refresh_list():
 			item.queue_free()
 	_download_items.clear()
 	
-	# Get all queued and active items from DownloadManager
-	for item in DownloadManager.get_queued():
+	# Get all queued and active items from SystemManager.download
+	for item in SystemManager.download.get_queued():
 		if item.game_resource != null:  # Only show game downloads in this view
 			_add_download_item(item)
 	
-	for item in DownloadManager.get_active():
+	for item in SystemManager.download.get_active():
 		if item.game_resource != null:  # Only show game downloads in this view
 			_add_download_item(item)
 	

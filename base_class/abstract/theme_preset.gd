@@ -55,7 +55,7 @@ class_name ThemePreset
 }
 
 ## Creates a ThemePreset from current settings.
-## DEPRECATED: Use SettingsManager.create_preset_from_current() instead.
+## DEPRECATED: Use DataManager.create_preset_from_current() instead.
 ## Kept for backwards compatibility with existing saved resources/tests.
 static func from_current_settings(settings: Settings) -> ThemePreset:
 	if settings == null:

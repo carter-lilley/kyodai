@@ -16,7 +16,7 @@ func _ready():
 	_is_initializing = false
 	
 	# Connect to manager signals
-	GameNativeManager.games_updated.connect(_on_games_updated)
+	LaunchManager.gamenative_games_updated.connect(_on_games_updated)
 	
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
@@ -68,7 +68,7 @@ func _build_view():
 	vbox.add_child(spacer)
 	
 	# Check GameNative status
-	if not GameNativeManager.is_game_native_installed():
+	if not LaunchManager.gamenative_is_installed():
 		var warning = M3Label.new()
 		warning.text = "GameNative app is not installed. Games cannot be launched."
 		warning.label_style = M3Label.Style.BODY_MEDIUM
@@ -151,7 +151,7 @@ func _on_add_pressed():
 	_status_label.use_on_surface_variant = false
 	_status_label.modulate = M3Theme.get_primary()
 	
-	GameNativeManager.add_game(app_id, func(success: bool, message: String):
+	LaunchManager.gamenative_add_game(app_id, func(success: bool, message: String):
 		if success:
 			_status_label.text = "Added: %s" % message
 			_status_label.use_on_surface_variant = false
@@ -176,7 +176,7 @@ func _refresh_games_list():
 	for child in _games_container.get_children():
 		child.queue_free()
 	
-	var games = GameNativeManager.get_games()
+	var games = LaunchManager.gamenative_get_games()
 	
 	if games.is_empty():
 		var empty_label = M3Label.new()
@@ -228,7 +228,7 @@ func _refresh_games_list():
 		delete_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
 		delete_btn.tooltip_text = "Remove game"
 		delete_btn.pressed.connect(func():
-			GameNativeManager.remove_game(app_id)
+			LaunchManager.gamenative_remove_game(app_id)
 		)
 		row.add_child(delete_btn)
 
@@ -241,7 +241,7 @@ func _load_cover_async(url: String, texture_rect: TextureRect) -> void:
 			var image = Image.new()
 			var err = image.load_jpg_from_buffer(body)
 			if err == OK and not image.is_empty():
-				var texture = MemoryManager.create_texture_from_image(image)
+				var texture = SystemManager.memory.create_texture_from_image(image)
 				if texture:
 					texture_rect.texture = texture
 		http.queue_free()

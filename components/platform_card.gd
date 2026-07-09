@@ -337,9 +337,9 @@ func _get_available_retroarch_cores() -> Array[Dictionary]:
 	var all_cores = LaunchManager.get_cores_for_platform("retroarch", platform_slug)
 	var filtered: Array[Dictionary] = []
 	for core in all_cores:
-		if core.get("desktop_only", false) and PlatformManager.is_android():
+		if core.get("desktop_only", false) and SystemManager.platform.is_android():
 			continue
-		if core.get("android_only", false) and not PlatformManager.is_android():
+		if core.get("android_only", false) and not SystemManager.platform.is_android():
 			continue
 		filtered.append(core)
 	return filtered
@@ -371,7 +371,7 @@ func _update_status_indicator():
 	var progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started", "completed_steps": 0, "total_steps": 0, "next_step_display": ""}
 	var progress_text = LaunchManager.get_emulator_install_progress(effective_emulator) if LaunchManager else ""
 
-	# Check for active download/extraction via DownloadManager
+	# Check for active download/extraction via SystemManager.download
 	var is_downloading = false
 	var is_extracting = false
 	var download_progress = -1.0
@@ -389,8 +389,8 @@ func _update_status_indicator():
 
 	# Update version label
 	if _version_label:
-		if progress["status"] == "complete" and SettingsManager:
-			var version_setting = SettingsManager.get_setting("installed_emulator_versions")
+		if progress["status"] == "complete" and DataManager:
+			var version_setting = DataManager.get_setting("installed_emulator_versions")
 			if version_setting:
 				var versions = version_setting.value as Dictionary
 				if versions and versions.has(effective_emulator):

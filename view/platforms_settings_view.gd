@@ -33,8 +33,8 @@ var _active_batch_id: int = -1
 const NARROW_BREAKPOINT_DP := 850.0
 
 func _is_narrow_screen() -> bool:
-	if DisplayManager:
-		return DisplayManager.is_narrow_viewport(NARROW_BREAKPOINT_DP)
+	if SystemManager.display:
+		return SystemManager.display.is_narrow_viewport(NARROW_BREAKPOINT_DP)
 	var viewport = get_viewport()
 	if viewport == null:
 		return true
@@ -47,21 +47,21 @@ func _ready():
 
 	# Connect M3 checkbox signals and set initial values from settings
 	var m3_dup_covers: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_DuplicateCovers")
-	var fold_covers_setting = SettingsManager.get_setting("fold_duplicate_covers")
+	var fold_covers_setting = DataManager.get_setting("fold_duplicate_covers")
 	m3_dup_covers.set_block_signals(true)
 	m3_dup_covers.button_pressed = fold_covers_setting.value if fold_covers_setting else false
 	m3_dup_covers.set_block_signals(false)
 	m3_dup_covers.toggled.connect(_on_fold_covers_toggled)
 
 	var m3_hide: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Hide")
-	var hide_no_covers_setting = SettingsManager.get_setting("hide_games_without_covers")
+	var hide_no_covers_setting = DataManager.get_setting("hide_games_without_covers")
 	m3_hide.set_block_signals(true)
 	m3_hide.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
 	m3_hide.set_block_signals(false)
 	m3_hide.toggled.connect(_on_hide_no_covers_toggled)
 
 	var m3_siblings: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Siblings")
-	var fold_romm_setting = SettingsManager.get_setting("fold_romm_siblings")
+	var fold_romm_setting = DataManager.get_setting("fold_romm_siblings")
 	m3_siblings.set_block_signals(true)
 	m3_siblings.button_pressed = fold_romm_setting.value if fold_romm_setting else true
 	m3_siblings.set_block_signals(false)
@@ -91,7 +91,7 @@ func _ready():
 	full_sync_button.pressed.connect(_on_full_sync_pressed)
 
 	# Listen for connection coming online so we can auto-refresh platforms
-	NetworkManager.network_status_changed.connect(_on_network_status_changed)
+	SystemManager.network.network_status_changed.connect(_on_network_status_changed)
 
 	# Connect to launch manager signals for extraction
 	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
@@ -101,9 +101,9 @@ func _ready():
 	# Connect to viewport focus changes to ensure focused items are visible
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
 
-	# Connect to viewport resize to update card layout (debounced by DisplayManager)
-	if DisplayManager:
-		DisplayManager.viewport_size_changed.connect(_on_viewport_size_changed)
+	# Connect to viewport resize to update card layout (debounced by SystemManager.display)
+	if SystemManager.display:
+		SystemManager.display.viewport_size_changed.connect(_on_viewport_size_changed)
 
 	# Set initial column visibility
 	_was_narrow = _is_narrow_screen()
@@ -133,7 +133,7 @@ func _fetch_platforms():
 			child.queue_free()
 	_return_all_cards()
 	if _active_batch_id != -1:
-		MemoryManager.cancel_batch(_active_batch_id)
+		SystemManager.memory.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 
 	# Show loading indicator
@@ -146,7 +146,7 @@ func _fetch_platforms():
 	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
 	_platforms_container.move_child(loading_label, cards_index)
 
-	NetworkManager.fetch_platforms(func(data, error):
+	SystemManager.network.fetch_platforms(func(data, error):
 		# Remove loading label
 		for child in _platforms_container.get_children():
 			if child.name == "LoadingLabel":
@@ -155,7 +155,7 @@ func _fetch_platforms():
 
 		if error != "":
 			push_error("[PlatformsSettingsView] Failed to fetch platforms: " + error)
-			NotificationManager.show_notification("Failed to fetch platforms: " + error, NotificationManager.Type.ERROR)
+			SystemManager.notifications.show_notification("Failed to fetch platforms: " + error, SystemManager.notifications.Type.ERROR)
 
 			var error_label = M3Label.new()
 			error_label.name = "ErrorLabel"
@@ -237,8 +237,8 @@ func _fetch_platforms():
 			})
 		
 		# Spread card creation across frames to avoid stuttering the UI.
-		# Use MemoryManager's batch worker for smooth per-frame processing.
-		_active_batch_id = MemoryManager.start_batch(
+		# Use SystemManager.memory's batch worker for smooth per-frame processing.
+		_active_batch_id = SystemManager.memory.start_batch(
 			card_payloads,
 			func(payload: Dictionary, _index: int) -> PlatformCard:
 				return _create_platform_card(
@@ -251,7 +251,7 @@ func _fetch_platforms():
 					platform_emulator_cache,
 					platform_default_core_cache
 				),
-			MemoryManager.BatchMode.SYNC,
+			SystemManager.memory.BatchMode.SYNC,
 			3,
 			func(_processed: int, _total: int):
 				pass,
@@ -296,10 +296,10 @@ func _fetch_platforms():
 			
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = MemoryManager.start_batch(
+			_active_batch_id = SystemManager.memory.start_batch(
 				created_cards,
 				_populate_card_dropdown,
-				MemoryManager.BatchMode.SYNC,
+				SystemManager.memory.BatchMode.SYNC,
 				3,
 				func(_processed: int, _total: int):
 					pass,
@@ -400,7 +400,7 @@ func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
 func _exit_tree() -> void:
 	_return_all_cards()
 	if _active_batch_id != -1:
-		MemoryManager.cancel_batch(_active_batch_id)
+		SystemManager.memory.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 	if _status_poll_timer:
 		_status_poll_timer.stop()
@@ -422,7 +422,7 @@ func _load_platforms_from_database():
 	# Clear existing cards
 	_return_all_cards()
 	if _active_batch_id != -1:
-		MemoryManager.cancel_batch(_active_batch_id)
+		SystemManager.memory.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 
 	# Cache emulator lists to avoid duplicate registry queries during batch creation
@@ -449,14 +449,14 @@ func _load_platforms_from_database():
 		})
 
 	# Spread offline card creation across frames
-	_active_batch_id = MemoryManager.start_batch(
+	_active_batch_id = SystemManager.memory.start_batch(
 		platform_payloads,
 		func(payload: Dictionary, _index: int) -> PlatformCard:
 			var card = _create_platform_card(payload.slug, payload.platform_name, 0, payload.icon_url, enabled_platforms, {}, emulator_cache)
 			card.disabled = true
 			card.tooltip_text = "Connect to RomM to configure this platform"
 			return card,
-		MemoryManager.BatchMode.SYNC,
+		SystemManager.memory.BatchMode.SYNC,
 		5,
 		func(_processed: int, _total: int):
 			pass,
@@ -491,10 +491,10 @@ func _load_platforms_from_database():
 			
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = MemoryManager.start_batch(
+			_active_batch_id = SystemManager.memory.start_batch(
 				created_cards,
 				_populate_card_dropdown,
-				MemoryManager.BatchMode.SYNC,
+				SystemManager.memory.BatchMode.SYNC,
 				5,
 				func(_processed: int, _total: int):
 					pass,
@@ -517,12 +517,12 @@ func _remove_deleted_platforms(current_slugs: Array[String]):
 		enabled_platforms.erase(slug)
 
 	# Save updated enabled_platforms
-	var setting = SettingsManager.get_setting("enabled_platforms")
+	var setting = DataManager.get_setting("enabled_platforms")
 	if setting:
-		SettingsManager.set_setting(enabled_platforms, setting)
+		DataManager.set_setting(enabled_platforms, setting)
 
 func _get_enabled_platforms() -> Dictionary:
-	var setting = SettingsManager.get_setting("enabled_platforms")
+	var setting = DataManager.get_setting("enabled_platforms")
 	if setting and setting.value is Dictionary:
 		return setting.value
 	return {}
@@ -562,9 +562,9 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 
 	enabled_platforms[slug] = config
 
-	var setting = SettingsManager.get_setting("enabled_platforms")
+	var setting = DataManager.get_setting("enabled_platforms")
 	if setting:
-		SettingsManager.set_setting(enabled_platforms, setting)
+		DataManager.set_setting(enabled_platforms, setting)
 
 func _set_platform_emulator(slug: String, emulator_id: String, core_id: String = ""):
 	var enabled_platforms = _get_enabled_platforms()
@@ -601,12 +601,12 @@ func _set_platform_emulator(slug: String, emulator_id: String, core_id: String =
 
 	enabled_platforms[slug] = config
 
-	var setting = SettingsManager.get_setting("enabled_platforms")
+	var setting = DataManager.get_setting("enabled_platforms")
 	if setting:
-		SettingsManager.set_setting(enabled_platforms, setting)
+		DataManager.set_setting(enabled_platforms, setting)
 
 func _save_settings():
-	SettingsManager.save_settings()
+	DataManager.save_settings()
 
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	# Track which platform initiated the download for focus restoration later
@@ -660,20 +660,20 @@ func _on_check_updates_pressed():
 	if check_button:
 		check_button.disabled = true
 
-	var checking_notification = NotificationManager.show_notification(
-		"Checking emulator updates...", NotificationManager.Type.INFO,
+	var checking_notification = SystemManager.notifications.show_notification(
+		"Checking emulator updates...", SystemManager.notifications.Type.INFO,
 		null, 999999.0,
 		Callable(), Callable(), false, true
 	)
 
 	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array, _failed_details: Dictionary):
-		NotificationManager.dismiss_notification(checking_notification)
+		SystemManager.notifications.dismiss_notification(checking_notification)
 
 		if check_button:
 			check_button.disabled = false
 
 		if _updated.size() > 0:
-			NotificationManager.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), NotificationManager.Type.SUCCESS)
+			SystemManager.notifications.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), SystemManager.notifications.Type.SUCCESS)
 
 		if _failed.size() > 0:
 			var failure_parts: Array[String] = []
@@ -681,12 +681,12 @@ func _on_check_updates_pressed():
 				var reason = _failed_details.get(emu_id, "Unknown error")
 				failure_parts.append(emu_id + " (" + reason + ")")
 			var failure_msg = "Failed to check: " + ", ".join(failure_parts)
-			NotificationManager.show_notification(failure_msg, NotificationManager.Type.WARNING)
+			SystemManager.notifications.show_notification(failure_msg, SystemManager.notifications.Type.WARNING)
 		elif _updated.is_empty():
-			NotificationManager.show_notification("All emulators are up to date", NotificationManager.Type.INFO)
+			SystemManager.notifications.show_notification("All emulators are up to date", SystemManager.notifications.Type.INFO)
 	,
 	func(completed: int, total: int):
-		NotificationManager.update_notification_text(
+		SystemManager.notifications.update_notification_text(
 			checking_notification,
 			"Checking emulator updates... (%d/%d)" % [completed, total]
 		)
@@ -696,8 +696,8 @@ func _on_sync_pressed():
 	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
 	_sync_triggered = true
 
-	if not NetworkManager.is_online():
-		NotificationManager.show_notification("Not connected to RomM - check settings", NotificationManager.Type.ERROR)
+	if not SystemManager.network.is_online():
+		SystemManager.notifications.show_notification("Not connected to RomM - check settings", SystemManager.notifications.Type.ERROR)
 		return
 
 	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
@@ -710,17 +710,17 @@ func _on_sync_pressed():
 			sync_button.disabled = false
 
 		if _success:
-			NotificationManager.show_notification("Sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
+			SystemManager.notifications.show_notification("Sync complete! %s" % _message, SystemManager.notifications.Type.SUCCESS)
 		else:
-			NotificationManager.show_notification("Sync failed: %s" % _message, NotificationManager.Type.ERROR)
+			SystemManager.notifications.show_notification("Sync failed: %s" % _message, SystemManager.notifications.Type.ERROR)
 	)
 
 func _on_full_sync_pressed():
 	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
 	_sync_triggered = true
 
-	if not NetworkManager.is_online():
-		NotificationManager.show_notification("Not connected to RomM - check settings", NotificationManager.Type.ERROR)
+	if not SystemManager.network.is_online():
+		SystemManager.notifications.show_notification("Not connected to RomM - check settings", SystemManager.notifications.Type.ERROR)
 		return
 
 	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
@@ -741,9 +741,9 @@ func _on_full_sync_pressed():
 			sync_button.disabled = false
 
 		if _success:
-			NotificationManager.show_notification("Full sync complete! %s" % _message, NotificationManager.Type.SUCCESS)
+			SystemManager.notifications.show_notification("Full sync complete! %s" % _message, SystemManager.notifications.Type.SUCCESS)
 		else:
-			NotificationManager.show_notification("Full sync failed: %s" % _message, NotificationManager.Type.ERROR)
+			SystemManager.notifications.show_notification("Full sync failed: %s" % _message, SystemManager.notifications.Type.ERROR)
 	, true)  # true = force_full_sync
 
 func _update_select_all_button_text():
@@ -820,7 +820,7 @@ func _update_column_visibility() -> void:
 
 func _on_viewport_size_changed(_new_size: Vector2) -> void:
 	"""Re-layout cards when viewport size crosses the narrow breakpoint.
-	DisplayManager debounces this signal, so this only runs after the user
+	SystemManager.display debounces this signal, so this only runs after the user
 	stops resizing."""
 	_update_column_visibility()
 	_update_settings_row_layout()
@@ -884,23 +884,23 @@ func on_view_hide():
 func _on_fold_covers_toggled(enabled: bool) -> void:
 	if _is_initializing:
 		return
-	var setting = SettingsManager.get_setting("fold_duplicate_covers")
+	var setting = DataManager.get_setting("fold_duplicate_covers")
 	if setting:
-		SettingsManager.set_setting(enabled, setting)
+		DataManager.set_setting(enabled, setting)
 
 func _on_hide_no_covers_toggled(enabled: bool) -> void:
 	if _is_initializing:
 		return
-	var setting = SettingsManager.get_setting("hide_games_without_covers")
+	var setting = DataManager.get_setting("hide_games_without_covers")
 	if setting:
-		SettingsManager.set_setting(enabled, setting)
+		DataManager.set_setting(enabled, setting)
 
 func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 	if _is_initializing:
 		return
-	var setting = SettingsManager.get_setting("fold_romm_siblings")
+	var setting = DataManager.get_setting("fold_romm_siblings")
 	if setting:
-		SettingsManager.set_setting(enabled, setting)
+		DataManager.set_setting(enabled, setting)
 
 func _on_network_status_changed(online: bool) -> void:
 	if online and not _is_fetching_platforms:

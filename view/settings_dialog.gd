@@ -2,7 +2,7 @@ class_name SettingsDialog
 extends M3Dialog
 
 ## Popup settings dialog with two-pane layout.
-## Creates category content directly from SettingsManager subgroups.
+## Creates category content directly from DataManager subgroups.
 
 const SUBGROUP_ICONS: Dictionary[String, String] = {
 	"Audio": "volume-high",
@@ -106,9 +106,9 @@ func _build_two_pane_layout() -> void:
 	hbox.add_child(_right_pane)
 
 func _build_categories() -> void:
-	"""Create category buttons and content directly from SettingsManager + scenes."""
+	"""Create category buttons and content directly from DataManager + scenes."""
 
-	var subgroups = SettingsManager.get_settings_by_subgroup()
+	var subgroups = DataManager.get_settings_by_subgroup()
 
 	# Regular subgroups — build SettingsMenu content directly
 	for subgroup_name in subgroups.keys():
@@ -121,12 +121,12 @@ func _build_categories() -> void:
 
 		# Filter out platform-specific settings
 		if subgroup_name == "Storage":
-			if not (PlatformManager.is_windows() or PlatformManager.is_linux()):
+			if not (SystemManager.platform.is_windows() or SystemManager.platform.is_linux()):
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name != "Steam Installation Folder")
 			# Move Download Speed to the end so storage paths appear first.
 			settings_vars.sort_custom(func(a, b): return int(b.display_name == "Download Speed") - int(a.display_name == "Download Speed"))
 		elif subgroup_name == "Display":
-			if PlatformManager.is_android():
+			if SystemManager.platform.is_android():
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
 		_add_category_button(id, subgroup_name, icon)
 
@@ -150,7 +150,7 @@ func _build_categories() -> void:
 	_category_contents["card_designer"] = card_designer
 
 	# GameNative (Android only)
-	if PlatformManager.is_android():
+	if SystemManager.platform.is_android():
 		_add_category_button("gamenative", "GameNative", "android")
 		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
 		_category_contents["gamenative"] = gamenative
@@ -203,7 +203,7 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 
 	var menu = SettingsMenu.new()
 	menu.initialize_settings_menu(setting_name, settings_vars)
-	menu.setting_changed.connect(func(value, setting): SettingsManager.set_setting(value, setting))
+	menu.setting_changed.connect(func(value, setting): DataManager.set_setting(value, setting))
 	vbox.add_child(menu)
 
 	margin.add_child(vbox)
@@ -273,8 +273,8 @@ func dismiss() -> void:
 		M3Overlay._suppress_focus_pullback = true
 		_apply_settings()
 
-	if SettingsManager:
-		SettingsManager.save_settings()
+	if DataManager:
+		DataManager.save_settings()
 
 	super.dismiss()
 	M3Overlay._suppress_focus_pullback = false
@@ -288,21 +288,21 @@ func _on_cancel_pressed() -> void:
 
 func _take_snapshot() -> void:
 	_snapshot.clear()
-	if not SettingsManager or not SettingsManager.settings:
+	if not DataManager.is_settings_loaded():
 		return
-	for property_name in SettingsManager.get_settings().keys():
-		_snapshot[property_name] = _copy_value(SettingsManager.get_setting(property_name).value)
+	for property_name in DataManager.get_settings().keys():
+		_snapshot[property_name] = _copy_value(DataManager.get_setting(property_name).value)
 
 func _restore_snapshot() -> void:
-	if _snapshot.is_empty() or not SettingsManager or not SettingsManager.settings:
+	if _snapshot.is_empty() or not DataManager.is_settings_loaded():
 		return
 	for property_name in _snapshot.keys():
-		var setting = SettingsManager.get_setting(property_name)
+		var setting = DataManager.get_setting(property_name)
 		if not setting:
 			continue
 		var snapshot_value = _snapshot[property_name]
 		if not _values_equal(snapshot_value, setting.value):
-			SettingsManager.set_setting(_copy_value(snapshot_value), setting)
+			DataManager.set_setting(_copy_value(snapshot_value), setting)
 	refresh_all_category_values()
 
 func _values_equal(a: Variant, b: Variant) -> bool:

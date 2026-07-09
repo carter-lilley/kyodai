@@ -1,7 +1,7 @@
 class_name CardMediaLoader
 extends RefCounted
 
-const FSM := preload("res://managers/filesystem_manager.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Loads and caches cover art for a GameCard.
 ##
@@ -55,7 +55,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		return
 
 	# Memory cache hit: apply immediately without queueing a worker task.
-	var cached_tex = MemoryManager.get_cached_texture(cache_path)
+	var cached_tex = SystemManager.memory.get_cached_texture(cache_path)
 	if cached_tex:
 		_emit_texture(cached_tex)
 		return
@@ -70,13 +70,13 @@ func cancel() -> void:
 	_image_retry_count = 0
 	_download_retry_count = 0
 	_current_download_id += 1
-	if _current_image_task_id > 0 and MemoryManager:
-		MemoryManager.cancel_image_task(_current_image_task_id)
+	if _current_image_task_id > 0 and SystemManager.memory:
+		SystemManager.memory.cancel_image_task(_current_image_task_id)
 		_current_image_task_id = -1
 
 func set_priority(high_priority: bool, current_game: GameResource = null) -> void:
-	if _current_image_task_id > 0 and MemoryManager:
-		MemoryManager.update_image_priority(_current_image_task_id, high_priority)
+	if _current_image_task_id > 0 and SystemManager.memory:
+		SystemManager.memory.update_image_priority(_current_image_task_id, high_priority)
 	elif high_priority:
 		# No task in flight and no texture - retry load with high priority
 		load_cover(current_game, true)
@@ -110,12 +110,12 @@ func _get_cached_cover_path(url: String) -> String:
 func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void:
 	var target_game_id = _loading_game_id
 
-	if not MemoryManager:
+	if not SystemManager.memory:
 		_set_loading_texture()
 		return
 
 	if _current_image_task_id > 0:
-		MemoryManager.cancel_image_task(_current_image_task_id)
+		SystemManager.memory.cancel_image_task(_current_image_task_id)
 
 	var load_callable = func():
 		return _load_image_from_buffer(FSM.read_file_bytes(cache_path))
@@ -128,9 +128,9 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 			return
 
 		if image and not image.is_empty():
-			var texture = MemoryManager.create_texture_from_image(image)
+			var texture = SystemManager.memory.create_texture_from_image(image)
 			if texture:
-				MemoryManager.cache_texture(cache_path, texture)
+				SystemManager.memory.cache_texture(cache_path, texture)
 				_emit_texture(texture)
 		else:
 			_image_retry_count += 1
@@ -139,7 +139,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 				if is_instance_valid(_card) and _card.game and _card.game.id == target_game_id:
 					_load_cached_cover(cache_path, high_priority)
 
-	_current_image_task_id = MemoryManager.queue_image_task(load_callable, callback_callable, high_priority, cache_path)
+	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, cache_path)
 
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
 	var target_game_id = _loading_game_id
@@ -162,7 +162,7 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		if not _card.game or _card.game.id != target_game_id:
 			return
 		if loaded_texture:
-			MemoryManager.cache_texture(cache_path, loaded_texture)
+			SystemManager.memory.cache_texture(cache_path, loaded_texture)
 			_emit_texture(loaded_texture)
 		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)

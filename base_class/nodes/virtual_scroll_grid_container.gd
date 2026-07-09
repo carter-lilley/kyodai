@@ -507,16 +507,16 @@ func set_focused_card(virtual_index: int) -> void:
 func _ready():
 	_setup_ui()
 
-	# Use DisplayManager as the single source of resize truth when available.
+	# Use SystemManager.display as the single source of resize truth when available.
 	# It debounces viewport changes so we don't recalculate layout on every pixel.
-	if DisplayManager:
-		DisplayManager.viewport_size_changed.connect(_on_display_size_changed)
+	if SystemManager.display:
+		SystemManager.display.viewport_size_changed.connect(_on_display_size_changed)
 	else:
 		resized.connect(_on_resized)
 		_setup_internal_resize_debounce()
 
 	# Load initial grid separation and focus scale from settings
-	# Use call_deferred to ensure SettingsManager is fully initialized
+	# Use call_deferred to ensure DataManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
 	call_deferred("_update_focus_lock_from_settings")
@@ -555,7 +555,7 @@ func _on_resized():
 		_resize_debounce_timer.start()
 
 func _on_display_size_changed(_new_size: Vector2):
-	"""Handler for DisplayManager's debounced viewport_size_changed signal."""
+	"""Handler for SystemManager.display's debounced viewport_size_changed signal."""
 	# Keep the top-level visual layer pinned to the viewport.
 	if _visual_layer and _visual_layer.top_level:
 		_visual_layer.position = Vector2.ZERO
@@ -590,8 +590,8 @@ func _enter_tree():
 	# Reset cached size so the next display resize check will recalculate layout
 	# (the current parent may give us a different size than before reparenting).
 	_last_resized_size = Vector2.ZERO
-	if DisplayManager:
-		_on_display_size_changed(DisplayManager.get_viewport_size())
+	if SystemManager.display:
+		_on_display_size_changed(SystemManager.display.get_viewport_size())
 	# Ensure focus-lock viewport signal is active after reparenting.
 	_reconnect_focus_lock_viewport()
 

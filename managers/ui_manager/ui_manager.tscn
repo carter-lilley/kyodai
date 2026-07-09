@@ -1,0 +1,26 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://managers/ui_manager/ui_manager.gd" id="1_ui"]
+[ext_resource type="Script" path="res://managers/ui_manager/view_sub_manager.gd" id="2_view"]
+[ext_resource type="Script" path="res://managers/ui_manager/navigation_sub_manager.gd" id="3_nav"]
+[ext_resource type="Script" path="res://managers/ui_manager/overlay_sub_manager.gd" id="5_overlay"]
+[ext_resource type="Script" path="res://managers/ui_manager/theme_sub_manager.gd" id="6_theme"]
+[ext_resource type="Script" path="res://managers/ui_manager/dual_screen_sub_manager.gd" id="7_dual"]
+
+[node name="UIManager" type="Node"]
+script = ExtResource("1_ui")
+
+[node name="ViewSubManager" type="Node" parent="."]
+script = ExtResource("2_view")
+
+[node name="NavigationSubManager" type="Node" parent="."]
+script = ExtResource("3_nav")
+
+[node name="OverlaySubManager" type="Node" parent="."]
+script = ExtResource("5_overlay")
+
+[node name="ThemeSubManager" type="Node" parent="."]
+script = ExtResource("6_theme")
+
+[node name="DualScreenSubManager" type="Node" parent="."]
+script = ExtResource("7_dual")

@@ -123,12 +123,12 @@ func _ready():
 	# Re-sync zoom slider when viewport size changes (e.g. window resize).
 	# The grid re-snaps its zoom in _on_resize_debounced(), but the slider
 	# stops and position need to be updated from main.gd since it owns the UI.
-	if DisplayManager:
-		DisplayManager.viewport_size_changed.connect(_on_viewport_resized)
+	if SystemManager.display:
+		SystemManager.display.viewport_size_changed.connect(_on_viewport_resized)
 
-	# Connect to SettingsManager to sync UI when presets are applied
-	if SettingsManager:
-		SettingsManager.apply_preset_end.connect(_on_preset_applied)
+	# Connect to DataManager to sync UI when presets are applied
+	if DataManager:
+		DataManager.apply_preset_end.connect(_on_preset_applied)
 
 	# Connect to LaunchManager to save focus before game launch
 	if LaunchManager:
@@ -150,7 +150,7 @@ func _ready():
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
 
 	# Extract native binaries on Android (non-blocking, happens in background)
-	if PlatformManager.is_android():
+	if SystemManager.platform.is_android():
 		AndroidBinaryExtractor.extract_all_binaries()
 
 	# Check if first-run wizard needs to be shown
@@ -168,7 +168,7 @@ func refresh_theme() -> void:
 	_apply_m3_theme()
 
 func _show_oobe_wizard_if_needed():
-	var first_run_setting = SettingsManager.get_setting("first_run_completed")
+	var first_run_setting = DataManager.get_setting("first_run_completed")
 	var is_first_run = true
 	if first_run_setting:
 		is_first_run = not first_run_setting.value
@@ -185,8 +185,8 @@ func _show_oobe_wizard_if_needed():
 func _resume_oobe_if_needed(wizard: OobeWizard):
 	if not wizard:
 		return
-	var games_setting = SettingsManager.get_setting("games_root_folder")
-	var emulators_setting = SettingsManager.get_setting("emulators_folder")
+	var games_setting = DataManager.get_setting("games_root_folder")
+	var emulators_setting = DataManager.get_setting("emulators_folder")
 	var has_storage_paths = games_setting and not str(games_setting.value).is_empty() \
 		and emulators_setting and not str(emulators_setting.value).is_empty()
 	if has_storage_paths:
@@ -231,8 +231,8 @@ func _on_more_button_pressed() -> void:
 
 	# Card Display Mode submenu
 	var display_mode = 0
-	if SettingsManager:
-		var display_setting = SettingsManager.get_setting("library_card_display_mode")
+	if DataManager:
+		var display_setting = DataManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
 			display_mode = display_setting.value
 
@@ -246,8 +246,8 @@ func _on_more_button_pressed() -> void:
 
 	# Card Media Ratio submenu
 	var media_ratio = 0
-	if SettingsManager:
-		var ratio_setting = SettingsManager.get_setting("card_media_aspect_ratio")
+	if DataManager:
+		var ratio_setting = DataManager.get_setting("card_media_aspect_ratio")
 		if ratio_setting and ratio_setting.value is int:
 			media_ratio = ratio_setting.value
 
@@ -263,8 +263,8 @@ func _on_more_button_pressed() -> void:
 
 	# Content Alignment submenu
 	var content_alignment = 0
-	if SettingsManager:
-		var align_setting = SettingsManager.get_setting("library_card_content_alignment")
+	if DataManager:
+		var align_setting = DataManager.get_setting("library_card_content_alignment")
 		if align_setting and align_setting.value is int:
 			content_alignment = align_setting.value
 
@@ -281,25 +281,25 @@ func _on_more_button_pressed() -> void:
 		menu.popup(more_button)
 
 func _set_card_display_mode(mode: int) -> void:
-	if SettingsManager:
-		var setting = SettingsManager.get_setting("library_card_display_mode")
+	if DataManager:
+		var setting = DataManager.get_setting("library_card_display_mode")
 		if setting:
-			SettingsManager.set_setting(mode, setting)
-			SettingsManager.save_settings()
+			DataManager.set_setting(mode, setting)
+			DataManager.save_settings()
 
 func _set_card_media_ratio(ratio: int) -> void:
-	if SettingsManager:
-		var setting = SettingsManager.get_setting("card_media_aspect_ratio")
+	if DataManager:
+		var setting = DataManager.get_setting("card_media_aspect_ratio")
 		if setting:
-			SettingsManager.set_setting(ratio, setting)
-			SettingsManager.save_settings()
+			DataManager.set_setting(ratio, setting)
+			DataManager.save_settings()
 
 func _set_content_alignment(alignment: int) -> void:
-	if SettingsManager:
-		var setting = SettingsManager.get_setting("library_card_content_alignment")
+	if DataManager:
+		var setting = DataManager.get_setting("library_card_content_alignment")
 		if setting:
-			SettingsManager.set_setting(alignment, setting)
-			SettingsManager.save_settings()
+			DataManager.set_setting(alignment, setting)
+			DataManager.save_settings()
 
 func _toggle_horizontal_grid() -> void:
 	var target_vertical = true
@@ -321,11 +321,11 @@ func _toggle_horizontal_grid() -> void:
 				grid.grid_vertical = target_vertical
 
 	# Persist
-	if SettingsManager:
-		var setting = SettingsManager.get_setting("library_grid_vertical")
+	if DataManager:
+		var setting = DataManager.get_setting("library_grid_vertical")
 		if setting:
-			SettingsManager.set_setting(target_vertical, setting)
-			SettingsManager.save_settings()
+			DataManager.set_setting(target_vertical, setting)
+			DataManager.save_settings()
 
 	# Refresh zoom slider so it uses snap ratios for the new orientation
 	if current_view:
@@ -348,10 +348,10 @@ func _apply_zoom_to_view_deferred(view_name: String) -> void:
 		return
 
 	var grid = _get_view_grid(view)
-	if not grid or not SettingsManager:
+	if not grid or not DataManager:
 		return
 
-	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+	var zoom_setting = DataManager.get_setting("library_card_zoom")
 	if not zoom_setting:
 		return
 
@@ -518,11 +518,11 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 			push_error("[Main] View not found: " + view_name)
 
 	# Save to settings
-	if SettingsManager:
-		var mode_setting = SettingsManager.get_setting("library_layout_mode")
+	if DataManager:
+		var mode_setting = DataManager.get_setting("library_layout_mode")
 		if mode_setting:
-			SettingsManager.set_setting(setting_value, mode_setting)
-			SettingsManager.save_settings()
+			DataManager.set_setting(setting_value, mode_setting)
+			DataManager.save_settings()
 
 	# Update zoom slider stops/range since max zoom and snap levels differ per mode
 	var current_view = UIManager.get_current_view()
@@ -549,10 +549,10 @@ func _on_preset_applied() -> void:
 	call_deferred("_load_and_apply_saved_zoom")
 
 func _sync_view_mode_button_to_setting() -> void:
-	if not view_mode_group or not SettingsManager:
+	if not view_mode_group or not DataManager:
 		return
 
-	var mode_setting = SettingsManager.get_setting("library_layout_mode")
+	var mode_setting = DataManager.get_setting("library_layout_mode")
 	var layout_mode_val = mode_setting.value if mode_setting else 0
 
 	var button_index: int
@@ -600,16 +600,16 @@ func _on_zoom_changed_finished(value_changed: bool):
 			saved_value = zoom_slider.value
 
 	# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
-	if SettingsManager:
-		var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+	if DataManager:
+		var zoom_setting = DataManager.get_setting("library_card_zoom")
 		if zoom_setting:
-			SettingsManager.set_setting(saved_value, zoom_setting)
+			DataManager.set_setting(saved_value, zoom_setting)
 			if _zoom_save_timer:
 				_zoom_save_timer.start()
 
 func _on_zoom_save_timer_timeout() -> void:
-	if SettingsManager:
-		SettingsManager.save_settings()
+	if DataManager:
+		DataManager.save_settings()
 
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Standard structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer
@@ -624,10 +624,10 @@ func _load_and_apply_saved_zoom() -> void:
 	(_update_grid_orientation), so we only need to update the slider here to
 	avoid a late zoom write that causes visible settling.
 	"""
-	if not SettingsManager:
+	if not DataManager:
 		return
 
-	var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+	var zoom_setting = DataManager.get_setting("library_card_zoom")
 	if not zoom_setting:
 		return
 
@@ -727,22 +727,22 @@ func _handle_ui_cancel() -> void:
 				UIManager.exit_focus_lock(grid)
 			var nav_dest = UIManager.get_active_nav_destination()
 			if nav_dest and nav_dest is Control and nav_dest.focus_mode != Control.FOCUS_NONE:
-				if AudioManager:
-					AudioManager.play_sfx("return")
+				if SystemManager.audio:
+					SystemManager.audio.play_sfx("return")
 				nav_dest.grab_focus()
 				print("[Main] _handle_ui_cancel: escaped locked grid to nav destination: ", nav_dest.name)
 			else:
 				var home_button = UIManager.find_home_button()
 				if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-					if AudioManager:
-						AudioManager.play_sfx("return")
+					if SystemManager.audio:
+						SystemManager.audio.play_sfx("return")
 					home_button.grab_focus()
 					print("[Main] _handle_ui_cancel: escaped locked grid to home button")
 			return
 
 	# Play return sound
-	if AudioManager:
-		AudioManager.play_sfx("return")
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx("return")
 	# Switch to Home view
 	push_warning("[Main] ui_cancel: switching to Home")
 	UIManager.switch_to_tab("Home")
@@ -769,8 +769,8 @@ func _input(event: InputEvent):
 	# Handle zoom in/out with triggers - only on press, not hold
 	if event.is_action_pressed("zoom_in"):
 		if not _zoom_in_pressed:
-			if AudioManager:
-				AudioManager.play_sfx("click_04")
+			if SystemManager.audio:
+				SystemManager.audio.play_sfx("click_04")
 			_zoom_in_pressed = true
 			_adjust_zoom(1.0)
 		return
@@ -780,8 +780,8 @@ func _input(event: InputEvent):
 
 	if event.is_action_pressed("zoom_out"):
 		if not _zoom_out_pressed:
-			if AudioManager:
-				AudioManager.play_sfx("click_04")
+			if SystemManager.audio:
+				SystemManager.audio.play_sfx("click_04")
 			_zoom_out_pressed = true
 			_adjust_zoom(-1.0)
 		return
@@ -822,10 +822,10 @@ func _adjust_zoom(delta: float) -> void:
 			if focused_index >= 0:
 				call_deferred("_restore_focus_to_card", focused_index)
 			# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
-			if SettingsManager:
-				var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+			if DataManager:
+				var zoom_setting = DataManager.get_setting("library_card_zoom")
 				if zoom_setting:
-					SettingsManager.set_setting(_current_snap_ratios[new_index], zoom_setting)
+					DataManager.set_setting(_current_snap_ratios[new_index], zoom_setting)
 					if _zoom_save_timer:
 						_zoom_save_timer.start()
 		return
@@ -844,10 +844,10 @@ func _adjust_zoom(delta: float) -> void:
 		if focused_index >= 0:
 			call_deferred("_restore_focus_to_card", focused_index)
 		# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
-		if SettingsManager:
-			var zoom_setting = SettingsManager.get_setting("library_card_zoom")
+		if DataManager:
+			var zoom_setting = DataManager.get_setting("library_card_zoom")
 			if zoom_setting:
-				SettingsManager.set_setting(actual_zoom, zoom_setting)
+				DataManager.set_setting(actual_zoom, zoom_setting)
 				if _zoom_save_timer:
 					_zoom_save_timer.start()
 
@@ -903,12 +903,12 @@ func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		# Remember the current windowed size before shutdown.
-		if DisplayManager:
-			DisplayManager.save_last_window_size()
+		if SystemManager.display:
+			SystemManager.display.save_last_window_size()
 
 		# Flush any pending settings changes before shutdown
-		if SettingsManager:
-			SettingsManager.save_settings()
+		if DataManager:
+			DataManager.save_settings()
 
 		# The OS asked us to close. Free the entire scene tree now so all node
 		# RIDs are released before the rendering server finalizes, then quit.
@@ -949,8 +949,8 @@ func _notification(what: int) -> void:
 				call_deferred("_restore_platform_focus")
 
 		# Dismiss any stale notifications (e.g., extraction notifications that completed while backgrounded)
-		if NotificationManager:
-			NotificationManager.dismiss_all_notifications()
+		if SystemManager.notifications:
+			SystemManager.notifications.dismiss_all_notifications()
 			print("[Main] Dismissed all notifications after resume")
 
 func _deferred_quit() -> void:
@@ -986,13 +986,13 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	# UIManager.set_dimmed(false)
 
 	# Auto-upload saves after playing (skip during shuffler sessions)
-	if ShufflerManager.is_session_active():
+	if LaunchManager.is_session_active():
 		print("[Main] Auto-upload skipped: shuffler session active")
 	elif _game:
 		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
 		print("[Main] Auto-upload check - emulator_id: " + emulator_id)
 		if emulator_id != "":
-			SaveManager.auto_upload_saves_for_game(_game, emulator_id)
+			DataManager.auto_upload_saves_for_game(_game, emulator_id)
 		else:
 			print("[Main] Auto-upload skipped: no emulator resolved")
 	else:
@@ -1021,8 +1021,8 @@ func _exit_tree() -> void:
 		UIManager.tab_changed.disconnect(_on_tab_changed)
 	if UIManager.is_connected("settings_dialog_dismissed", _on_settings_dialog_dismissed):
 		UIManager.settings_dialog_dismissed.disconnect(_on_settings_dialog_dismissed)
-	if SettingsManager and SettingsManager.is_connected("apply_preset_end", _on_preset_applied):
-		SettingsManager.apply_preset_end.disconnect(_on_preset_applied)
+	if DataManager and DataManager.is_connected("apply_preset_end", _on_preset_applied):
+		DataManager.apply_preset_end.disconnect(_on_preset_applied)
 	if LaunchManager:
 		if LaunchManager.is_connected("game_launch_initiated", _on_game_launch_initiated):
 			LaunchManager.game_launch_initiated.disconnect(_on_game_launch_initiated)
