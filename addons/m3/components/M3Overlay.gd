@@ -65,6 +65,9 @@ func _on_overlay_focus_changed(control: Control) -> void:
 		return
 	if not is_instance_valid(control):
 		return
+	# Don't pull focus away from the on-screen keyboard while it's visible.
+	if UIManager and UIManager.is_focus_in_onscreen_keyboard(control):
+		return
 	# If focus moved outside this overlay's subtree, pull it back to the first
 	# focusable child. This prevents controller/gamepad focus from escaping to
 	# controls behind the overlay.

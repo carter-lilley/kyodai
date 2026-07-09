@@ -177,20 +177,7 @@ func _show_oobe_wizard_if_needed():
 		print("[Main] First run detected, showing OOBE wizard")
 		var wizard = OobeWizard.new()
 		wizard.wizard_completed.connect(_on_oobe_wizard_completed)
-		# If storage paths were already set in a previous incomplete run, resume
-		# at the RomM connection page instead of making the user re-enter them.
 		wizard.start_wizard()
-		_resume_oobe_if_needed.call_deferred(wizard)
-
-func _resume_oobe_if_needed(wizard: OobeWizard):
-	if not wizard:
-		return
-	var games_setting = DataManager.get_setting("games_root_folder")
-	var emulators_setting = DataManager.get_setting("emulators_folder")
-	var has_storage_paths = games_setting and not str(games_setting.value).is_empty() \
-		and emulators_setting and not str(emulators_setting.value).is_empty()
-	if has_storage_paths:
-		wizard.show_page.call_deferred(OobeWizard.Page.ROMM_CONNECTION)
 
 func _on_oobe_wizard_completed():
 	print("[Main] OOBE wizard completed")
@@ -761,10 +748,19 @@ func _input(event: InputEvent):
 			if child.has_method("start_wizard") and child.visible:
 				return
 
+	# If the on-screen keyboard is on the second (dual) screen, controller input
+	# does not reach that viewport automatically. Forward relevant actions so
+	# the keyboard can be navigated and dismissed.
+	if _keyboard and _keyboard.visible and UIManager and UIManager._keyboard_is_in_second_viewport:
+		if _forward_input_to_second_viewport(event):
+			return
+
 	# Delegate directional input to NavigationManager for unified delay/repeat handling.
-	if UIManager and UIManager.handle_directional_input(event):
-		get_viewport().set_input_as_handled()
-		return
+	# Skip when the on-screen keyboard is visible so keyboard keys can be navigated.
+	if not (_keyboard and _keyboard.visible):
+		if UIManager and UIManager.handle_directional_input(event):
+			get_viewport().set_input_as_handled()
+			return
 
 	# Handle zoom in/out with triggers - only on press, not hold
 	if event.is_action_pressed("zoom_in"):
@@ -798,6 +794,21 @@ func _get_focus_owner() -> Control:
 	if root_layout and root_layout.is_inside_tree():
 		return root_layout.get_viewport().gui_get_focus_owner()
 	return get_viewport().gui_get_focus_owner()
+
+func _forward_input_to_second_viewport(event: InputEvent) -> bool:
+	"""Forward controller actions to the second viewport while the keyboard is displayed there."""
+	if not UIManager or not UIManager.dual_screen:
+		return false
+	var second_vp = UIManager.dual_screen.get_second_viewport()
+	if not second_vp:
+		return false
+	var actions := ["ui_left", "ui_right", "ui_up", "ui_down", "ui_accept", "ui_cancel", "ui_start"]
+	for action in actions:
+		if event.is_action_pressed(action):
+			second_vp.push_input(event)
+			get_viewport().set_input_as_handled()
+			return true
+	return false
 
 func _adjust_zoom(delta: float) -> void:
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")

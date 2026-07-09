@@ -147,6 +147,10 @@ func _input(event: InputEvent):
 	
 	var focus_owner = get_viewport().gui_get_focus_owner()
 	
+	# Don't consume input while the on-screen keyboard has focus.
+	if UIManager and UIManager.is_focus_in_onscreen_keyboard(focus_owner):
+		return
+	
 	# Consume controller navigation events so they don't leak to the grid
 	if event.is_action_pressed("ui_up") or event.is_action_pressed("ui_down") or \
 	   event.is_action_pressed("ui_left") or event.is_action_pressed("ui_right"):

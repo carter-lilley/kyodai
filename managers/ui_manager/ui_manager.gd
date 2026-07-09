@@ -28,6 +28,9 @@ var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orienta
 var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 var _content_wrapper: Control = null
 
+# Cached on-screen keyboard reference (survives reparenting in dual-screen mode)
+var _onscreen_keyboard: PanelContainer = null
+
 # Focus lock state: when a locked grid owns focus, all other focusable controls
 # in the scene are temporarily set to FOCUS_NONE so directional input cannot leak.
 var _focus_lock_active: bool = false
@@ -179,6 +182,20 @@ func rebuild_game_grid() -> void:
 
 func show_settings_dialog() -> void:
 	overlay.show_settings_dialog()
+
+func get_onscreen_keyboard() -> PanelContainer:
+	if _onscreen_keyboard and is_instance_valid(_onscreen_keyboard):
+		return _onscreen_keyboard
+	_onscreen_keyboard = get_tree().root.find_child("OnscreenKeyboard", true, false)
+	return _onscreen_keyboard
+
+func is_onscreen_keyboard_visible() -> bool:
+	var kb = get_onscreen_keyboard()
+	return kb != null and kb.visible
+
+func is_focus_in_onscreen_keyboard(control: Control) -> bool:
+	var kb = get_onscreen_keyboard()
+	return kb != null and kb.is_focus_within_keyboard(control)
 
 func pre_create_settings_dialog(force: bool = false) -> void:
 	overlay.pre_create_settings_dialog(force)

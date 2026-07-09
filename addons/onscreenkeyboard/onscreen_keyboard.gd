@@ -140,6 +140,12 @@ func _on_viewport_focus_changed(control: Control) -> void:
 			_show_keyboard()
 			return
 
+	# Focus containment: if the keyboard is visible and focus escaped to a control
+	# that is neither inside the keyboard nor a text field we're editing, pull it
+	# back so controller/mouse focus cannot leak behind the keyboard.
+	if visible and control != null and not is_focus_within_keyboard(control) and not is_keyboard_focus_object(control):
+		call_deferred("_pull_focus_back_to_keyboard")
+
 func reconnect_viewport() -> void:
 	"""Reconnect the keyboard to the current viewport's focus system.
 	Call this after reparenting the keyboard to a different viewport."""
@@ -430,6 +436,15 @@ func _deferred_focus_grab(control: Control):
 	# stuck on a hidden keyboard key (not a real UI element)
 	if current_focus == null or is_focus_within_keyboard(current_focus):
 		control.grab_focus()
+
+
+func _pull_focus_back_to_keyboard() -> void:
+	"""Pull focus back to the keyboard if it leaked while the keyboard is open."""
+	if not visible or _is_hiding or keys.size() == 0:
+		return
+	var current_focus = get_viewport().gui_get_focus_owner()
+	if current_focus == null or (not is_focus_within_keyboard(current_focus) and not is_keyboard_focus_object(current_focus)):
+		keys[0].grab_focus()
 
 
 func _deferred_show_keyboard_check():

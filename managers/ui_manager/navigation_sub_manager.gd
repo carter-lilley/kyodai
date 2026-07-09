@@ -63,6 +63,17 @@ func _setup_timers() -> void:
 	add_child(_repeat_timer)
 
 func _process(delta: float) -> void:
+	# Let the on-screen keyboard handle its own controller navigation.
+	if UIManager and UIManager.is_onscreen_keyboard_visible():
+		# Safety trap: a held analog direction from before the keyboard opened may
+		# still have an active repeat timer. Clear it so focus doesn't drift.
+		if _held_dir != "":
+			_held_dir = ""
+			_held_source = InputSource.NONE
+			_delay_timer.stop()
+			_repeat_timer.stop()
+		return
+	
 	# Analog thumbstick is polled every frame and treated as a discrete held
 	# direction. It uses the same delay/repeat timer as keyboard/D-pad so all
 	# directional inputs feel identical.
@@ -626,6 +637,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func handle_directional_input(event: InputEvent) -> bool:
 	"""Handle directional input events. Returns true if the event was consumed."""
+	# Let the on-screen keyboard handle its own controller navigation.
+	if UIManager and UIManager.is_onscreen_keyboard_visible():
+		return false
+	
 	# Directional input counts as controller input, so keep mouse-hover suppression alive.
 	if event is InputEventKey or event is InputEventJoypadButton or event is InputEventJoypadMotion:
 		_last_controller_input_time = Time.get_ticks_msec()
@@ -721,12 +736,25 @@ func _send_synthetic(dir: String) -> void:
 
 func _on_delay_timeout() -> void:
 	print("[NavTimer] delay timeout fired, held_dir=", _held_dir, ", source=", _held_source)
+	# Safety trap: stop dispatching if the keyboard became visible since the timer started.
+	if UIManager and UIManager.is_onscreen_keyboard_visible():
+		_held_dir = ""
+		_held_source = InputSource.NONE
+		_delay_timer.stop()
+		_repeat_timer.stop()
+		return
 	if _held_dir != "":
 		_repeat_timer.start()
 		_dispatch_direction(_held_dir)
 
 func _on_repeat() -> void:
 	print("[NavTimer] repeat timeout fired, held_dir=", _held_dir, ", source=", _held_source)
+	# Safety trap: stop dispatching if the keyboard became visible since the timer started.
+	if UIManager and UIManager.is_onscreen_keyboard_visible():
+		_held_dir = ""
+		_held_source = InputSource.NONE
+		_repeat_timer.stop()
+		return
 	if _held_dir != "":
 		_dispatch_direction(_held_dir)
 

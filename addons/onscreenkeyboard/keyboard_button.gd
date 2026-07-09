@@ -59,7 +59,11 @@ func _on_item_rect_changed():
 var _is_pressed: bool = false
 
 func _gui_input(event):
-	if event is InputEventMouseButton:
+	if event.is_action_pressed("ui_accept"):
+		_on_button_down()
+		_on_button_up()
+		accept_event()
+	elif event is InputEventMouseButton:
 		if event.pressed and not _is_pressed:
 			_is_pressed = true
 			_on_button_down()
