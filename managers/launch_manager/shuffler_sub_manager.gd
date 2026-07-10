@@ -12,10 +12,10 @@ signal session_stopped()
 signal game_switched(game_title: String, platform_name: String)
 signal timer_updated(time_left: float)
 signal download_progress(current: int, total: int)
+signal game_ready(index: int)
 
 var _state: State = State.IDLE
-var _bag: Array[Dictionary] = []
-var _shuffler_vita_apps: Array[Dictionary] = []  # Tracks Vita3K app folders extracted for this session
+var _bag: ShufflerBag = ShufflerBag.new()
 var _current_game_index: int = -1
 var _round_timer: Timer = null
 var _countdown_timer: Timer = null
@@ -23,31 +23,24 @@ var _config: Dictionary = {}
 var _controls_window: Node = null
 var _controls_topmost_timer: Timer = null
 var _main_window: Window = null
-var _pending_downloads: int = 0
 var _total_downloads: int = 0
+var _pending_downloads: int = 0
+var _pending_preparations: int = 0
 var _tools_dir: String = ""
 var _ahk_path: String = ""
 var _pssuspend_path: String = ""
-var _notification_id: int = -1
 var _reroll_in_progress: bool = false
 var _reroll_download_id: String = ""
-var _reroll_notification_id: int = -1
-
-# Temporary per-session emulator/core overrides selected in the shuffler config
-# dialog. These are in-memory only and do not modify persistent settings.
 var _shuffle_overrides: Dictionary = {}  # platform_slug -> {"emulator_id": String, "core_id": String}
 var _shuffle_session_active: bool = false
-
-# Session log capture
 var _session_log_path: String = "user://logs/session.log"
 var _session_log_start_offset: int = -1
-
-# Download progress tracking
 var _download_item_ids: Array[String] = []
 var _download_progresses: Dictionary = {}  # item_id -> float
 var _download_sizes: Dictionary = {}       # item_id -> int (bytes)
 var _total_download_bytes: int = 0
-var _active_download_item_id: String = ""  # item currently downloading
+var _active_download_item_id: String = ""
+var _shuffler_vita_apps: Array[Dictionary] = []
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -147,16 +140,27 @@ func get_state() -> State:
 func is_shuffle_session_active() -> bool:
 	return _shuffle_session_active
 
-## Sets a temporary emulator/core override for a platform during shuffler config.
-## This does not modify persistent settings.
+func can_pause() -> bool:
+	return _state == State.ACTIVE
+
+func can_resume() -> bool:
+	return _state == State.PAUSED
+
+func can_skip() -> bool:
+	return _state == State.ACTIVE or _state == State.PAUSED
+
+func can_restart() -> bool:
+	return _state == State.ACTIVE or _state == State.PAUSED
+
+func can_reroll() -> bool:
+	return _state == State.ACTIVE or _state == State.PAUSED
+
 func set_shuffle_override(platform_slug: String, emulator_id: String, core_id: String) -> void:
 	_shuffle_overrides[platform_slug] = {"emulator_id": emulator_id, "core_id": core_id}
 
-## Returns the temporary override for a platform, or an empty dict if none.
 func get_shuffle_override(platform_slug: String) -> Dictionary:
 	return _shuffle_overrides.get(platform_slug, {})
 
-## Clears all temporary shuffler overrides. Called when the config dialog opens.
 func clear_shuffle_overrides() -> void:
 	_shuffle_overrides.clear()
 	_shuffle_session_active = false
@@ -167,74 +171,62 @@ func start_session(config: Dictionary) -> void:
 		return
 
 	if not SystemManager.platform.is_windows():
-		SystemManager.notifications.show_notification("Shuffler is only available on Windows", SystemManager.notifications.Type.ERROR)
+		push_error("[ShufflerSubManager] Shuffler is only available on Windows")
 		return
-
-	_state = State.DOWNLOADING
-	_config = config
-
-	# Reset download progress tracking
-	_download_item_ids.clear()
-	_download_progresses.clear()
-	_download_sizes.clear()
-	_total_download_bytes = 0
-	_active_download_item_id = ""
-	_shuffler_vita_apps.clear()
 
 	var platforms = config.get("platforms", [])
 	var bag_size = config.get("bag_size", 4)
 
 	if platforms.is_empty():
-		SystemManager.notifications.show_notification("No platforms selected for shuffler", SystemManager.notifications.Type.ERROR)
-		_state = State.IDLE
+		push_error("[ShufflerSubManager] No platforms selected for shuffler")
 		return
 
-	_build_bag(platforms, bag_size)
+	_bag = ShufflerBag.new()
+	_bag.build(platforms, bag_size)
+	_bag.build_candidates(platforms)
 
 	if _bag.is_empty():
-		SystemManager.notifications.show_notification("No games found for selected platforms", SystemManager.notifications.Type.ERROR)
-		_state = State.IDLE
+		push_error("[ShufflerSubManager] No games found for selected platforms")
 		return
 
-	_download_bag_games()
+	_state = State.DOWNLOADING
+	_config = config
+	_current_game_index = -1
+	_reset_download_tracking()
+	_shuffler_vita_apps.clear()
 
-	if _pending_downloads == 0:
-		_enter_shuffler_mode()
+	print("[ShufflerSubManager] Starting session with bag size " + str(_bag.size()) + ": " + _format_bag())
+	_start_bag_preparation()
+	_await_first_ready()
 
 func stop_session() -> void:
-	if _state == State.IDLE:
+	if _state == State.IDLE or _state == State.STOPPING:
+		print("[ShufflerSubManager] stop_session called but state=" + str(_state) + ", ignoring")
 		return
 
+	print("[ShufflerSubManager] stop_session: state=" + str(_state) + " " + _format_bag())
 	_state = State.STOPPING
 
-	# Cancel any in-progress reroll so its completion callback bails out cleanly.
 	_reroll_in_progress = false
-	if _reroll_notification_id != -1:
-		SystemManager.notifications.dismiss_notification(_reroll_notification_id)
-		_reroll_notification_id = -1
 	_reroll_download_id = ""
 
 	_kill_round_timer()
 
-	# Disconnect from SystemManager.download progress signal
 	if SystemManager.download.download_progress.is_connected(_on_download_progress):
 		SystemManager.download.download_progress.disconnect(_on_download_progress)
 
-	# Kill all running processes. Don't wait for confirmation; cleanup must always
-	# proceed when the user clicks stop, even if a process is slow to die or a
-	# process-check would otherwise hang.
-	for entry in _bag:
-		if entry["pid"] != -1:
-			_force_kill_process(entry["pid"])
+	for item_id in _download_item_ids:
+		SystemManager.download.cancel(item_id)
 
-	# Give processes a brief moment to release file locks, but do not block cleanup.
+	for entry in _bag.entries:
+		if entry.pid != -1:
+			_force_kill_process(entry.pid)
+
 	await get_tree().create_timer(0.5).timeout
 
-	# Restore emulator configs edited for the shuffler session.
-	LaunchManager.restore_emulator_file("retroarch", "{emulator_dir}/retroarch.cfg")
-	LaunchManager.restore_emulator_file("pcsx2", PCSX2_SHUFFLER_INI_PATH)
+	_restore_emulator_file_if_backed_up("retroarch", "{emulator_dir}/retroarch.cfg")
+	_restore_emulator_file_if_backed_up("pcsx2", PCSX2_SHUFFLER_INI_PATH)
 
-	# Clean up any Vita3K app folders that were extracted for this session.
 	_cleanup_vita3k_shuffler_apps()
 
 	_stop_controls_topmost_timer()
@@ -242,29 +234,24 @@ func stop_session() -> void:
 		_controls_window.queue_free()
 		_controls_window = null
 
-	# Re-enable input to the main window now that the shuffler session is over.
 	get_tree().root.gui_disable_input = false
 
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	# Restore the last known windowed size, falling back to the resolution preset if none.
 	if SystemManager.display:
 		var last_size: Vector2i = SystemManager.display.restore_last_window_size()
 		if last_size == Vector2i.ZERO:
-			# No saved size — fall back to the resolution preset (mirrors windowed_toggle).
 			var resolution_setting = SystemManager.display.settings_man.get_setting("resolution")
 			if resolution_setting:
 				var resolution_value = resolution_setting.value
 				if resolution_value is int and resolution_setting.options.size() > resolution_value:
 					resolution_value = resolution_setting.options[resolution_value]
 				SystemManager.display.set_resolution(resolution_value)
-			# Center the window on screen as a final fallback.
 			DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(DisplayServer.window_get_size()) / 2.0))
-	# Force window to front after restoring
 	DisplayServer.window_move_to_foreground()
 
 	_cleanup_temp_files()
 
-	_bag.clear()
+	_bag = ShufflerBag.new()
 	_current_game_index = -1
 	_config.clear()
 	_state = State.IDLE
@@ -274,505 +261,505 @@ func stop_session() -> void:
 	session_stopped.emit()
 
 func pause_session() -> void:
-	if _state != State.ACTIVE:
+	if not can_pause():
+		print("[ShufflerSubManager] pause_session ignored: state=" + str(_state))
 		return
 	if _reroll_in_progress:
+		print("[ShufflerSubManager] pause_session ignored: reroll in progress")
 		return
+	print("[ShufflerSubManager] pause_session")
 	_state = State.PAUSED
 	if _round_timer:
 		_round_timer.paused = true
 
 func resume_session() -> void:
-	if _state != State.PAUSED:
+	if not can_resume():
+		print("[ShufflerSubManager] resume_session ignored: state=" + str(_state))
 		return
 	if _reroll_in_progress:
+		print("[ShufflerSubManager] resume_session ignored: reroll in progress")
 		return
+	print("[ShufflerSubManager] resume_session")
 	_state = State.ACTIVE
 	if _round_timer and is_instance_valid(_round_timer):
 		_round_timer.paused = false
 	else:
-		# If skip was used while paused, no timer exists yet. Start a fresh one.
-		var round_time = randf_range(
-			_config.get("round_time_min", 30.0),
-			_config.get("round_time_max", 120.0)
-		)
+		var round_time = _random_round_time()
 		_start_round_timer(round_time)
 
 func skip_game() -> void:
-	if _state != State.ACTIVE and _state != State.PAUSED:
+	if not can_skip():
+		print("[ShufflerSubManager] skip_game ignored: state=" + str(_state))
 		return
 	if _reroll_in_progress:
+		print("[ShufflerSubManager] skip_game ignored: reroll in progress")
 		return
+	print("[ShufflerSubManager] skip_game: current=" + str(_current_game_index) + " " + _format_bag())
 	_kill_round_timer()
 	_switch_to_next_game()
 
 func restart_game() -> void:
-	if _state != State.ACTIVE and _state != State.PAUSED:
+	if not can_restart():
+		print("[ShufflerSubManager] restart_game ignored: state=" + str(_state))
 		return
 	if _reroll_in_progress:
+		print("[ShufflerSubManager] restart_game ignored: reroll in progress")
 		return
+	print("[ShufflerSubManager] restart_game: current=" + str(_current_game_index))
 	if _current_game_index >= 0:
-		var entry = _bag[_current_game_index]
+		var entry = _bag.entries[_current_game_index]
 		await _stop_game(entry)
-		entry["started"] = false
-		entry["pid"] = -1
+		entry.started = false
+		entry.pid = -1
 		_launch_game(entry)
 
 func remove_game() -> void:
-	if _state != State.ACTIVE and _state != State.PAUSED:
+	if not can_reroll():
+		print("[ShufflerSubManager] remove_game ignored: state=" + str(_state))
 		return
 	if _current_game_index < 0:
+		print("[ShufflerSubManager] remove_game ignored: no current game")
 		return
 	if _reroll_in_progress:
+		print("[ShufflerSubManager] remove_game ignored: reroll in progress")
 		return
 
 	_reroll_in_progress = true
 	_set_controls_reroll_enabled(false)
-	_state = State.ACTIVE
-	_kill_round_timer()
 
 	var index = _current_game_index
-	var entry = _bag[index]
-	print("[ShufflerSubManager] Rerolling slot " + str(index) + " (" + entry["game"].title + ")")
+	var entry = _bag.entries[index]
+	print("[ShufflerSubManager] Rerolling slot " + str(index) + " (" + entry.game.title + ")")
 
 	await _stop_game(entry)
 
-	# Bail out if the session was stopped while we were waiting.
-	if _state != State.ACTIVE and _state != State.PAUSED:
-		_reroll_in_progress = false
-		_set_controls_reroll_enabled(true)
+	if not can_reroll():
+		_reset_reroll_state()
 		return
 
-	# Fully terminate the outgoing process so it doesn't linger as a suspended zombie.
-	if entry["pid"] != -1:
-		_force_kill_process(entry["pid"])
-		await _confirm_process_dead(entry["pid"])
-	entry["pid"] = -1
-	entry["started"] = false
-	entry["active"] = false
+	if entry.pid != -1:
+		_force_kill_process(entry.pid)
+		await _confirm_process_dead(entry.pid)
+	entry.pid = -1
+	entry.started = false
+	entry.active = false
 
-	var candidate = _pick_reroll_candidate(index)
+	var candidate = _bag.pick_reroll_candidate(_bag.get_bag_ids())
 	if candidate == null:
-		_reroll_in_progress = false
-		_set_controls_reroll_enabled(true)
-		SystemManager.notifications.show_notification("No alternative game found for reroll", SystemManager.notifications.Type.ERROR)
+		_reset_reroll_state()
+		push_warning("[ShufflerSubManager] No alternative game found for reroll")
 		_switch_to_game(index)
 		return
+
+	_bag.replace_entry(index, candidate, "")
+	var new_entry = _bag.entries[index]
 
 	if candidate.is_active_variant_downloaded() and FileAccess.file_exists(candidate.file_path):
-		print("[ShufflerSubManager] Candidate already downloaded: " + candidate.title)
-		_replace_bag_entry(index, candidate, candidate.file_path)
-		_reroll_in_progress = false
-		_set_controls_reroll_enabled(true)
+		new_entry.temp_path = candidate.file_path
+		_prepare_entry(index, new_entry)
+	else:
+		var download_url = SystemManager.network.get_romm_download_url(candidate.get_active_game_id(), candidate.get_active_file_name())
+		var temp_dir = TEMP_DIR + str(candidate.romm_id)
+		var temp_path = FSM.join_paths(temp_dir, candidate.get_active_file_name())
+		FSM.make_dir_recursive(temp_dir)
+		new_entry.temp_path = temp_path
+		var file_size = candidate.get_active_file_size()
+
+		if not SystemManager.download.download_progress.is_connected(_on_download_progress):
+			SystemManager.download.download_progress.connect(_on_download_progress)
+
+		_reroll_download_id = SystemManager.download.queue_download(
+			download_url,
+			temp_path,
+			"game",
+			"",
+			false,
+			"",
+			candidate,
+			{"on_complete": _on_reroll_download_complete.bind(index, candidate)},
+			candidate.romm_id,
+			true,
+			true,
+			file_size,
+			false
+		)
+
+		if _reroll_download_id == "":
+			_reset_reroll_state()
+			push_error("[ShufflerSubManager] Failed to queue reroll download")
+			_switch_to_game(index)
+			return
+
+	if new_entry.status == ShufflerBag.EntryStatus.READY:
+		_reset_reroll_state()
 		_switch_to_game(index)
-		return
+	else:
+		var cb = func(ready_index: int):
+			if ready_index == index:
+				_reset_reroll_state()
+				_switch_to_game(index)
+		game_ready.connect(cb, CONNECT_ONE_SHOT)
 
-	print("[ShufflerSubManager] Downloading reroll candidate: " + candidate.title)
-	var temp_dir = TEMP_DIR + str(candidate.romm_id)
-	var temp_path = FSM.join_paths(temp_dir, candidate.get_active_file_name())
-	FSM.make_dir_recursive(temp_dir)
+# ============================================================================
+# LOGGING HELPERS
+# ============================================================================
 
-	var download_url = SystemManager.network.get_romm_download_url(candidate.get_active_game_id(), candidate.get_active_file_name())
-	var file_size = candidate.get_active_file_size()
+func _status_name(status: int) -> String:
+	match status:
+		ShufflerBag.EntryStatus.QUEUED:
+			return "QUEUED"
+		ShufflerBag.EntryStatus.DOWNLOADING:
+			return "DOWNLOADING"
+		ShufflerBag.EntryStatus.PREPARING:
+			return "PREPARING"
+		ShufflerBag.EntryStatus.READY:
+			return "READY"
+		ShufflerBag.EntryStatus.FAILED:
+			return "FAILED"
+	return "UNKNOWN"
 
-	if not SystemManager.download.download_progress.is_connected(_on_download_progress):
-		SystemManager.download.download_progress.connect(_on_download_progress)
 
-	var progress_callable = func() -> float:
-		return _download_progresses.get(_reroll_download_id, 0.0)
+func _format_entry(entry: Dictionary) -> String:
+	if entry == null or entry.is_empty():
+		return "null"
+	return "%s [%s] status=%s pid=%d started=%s" % [
+		entry.game.title,
+		entry.game.platform_slug,
+		_status_name(entry.status),
+		entry.pid,
+		entry.started
+	]
 
-	var text_formatter = func(progress: float) -> String:
-		return "Rerolling to %s... %d%%" % [candidate.title, int(progress * 100.0)]
 
-	_reroll_notification_id = SystemManager.notifications.show_notification(
-		"Rerolling to " + candidate.title + "...",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		progress_callable,
-		text_formatter,
-		false,
-		true
-	)
+func _format_bag() -> String:
+	var parts: Array[String] = []
+	for i in range(_bag.entries.size()):
+		var entry = _bag.entries[i]
+		var marker = " <-" if i == _current_game_index else ""
+		parts.append(str(i) + ":" + _format_entry(entry) + marker)
+	return "bag=[" + ", ".join(parts) + "]"
 
-	var callbacks = {
-		"on_complete": _on_reroll_download_complete.bind(index, candidate)
-	}
-
-	_reroll_download_id = SystemManager.download.queue_download(
-		download_url,
-		temp_path,
-		"game",
-		candidate.title,
-		false,
-		"",
-		candidate,
-		callbacks,
-		candidate.romm_id,
-		true,
-		false,
-		file_size,
-		false
-	)
-
-	if _reroll_download_id == "":
-		_reroll_in_progress = false
-		_set_controls_reroll_enabled(true)
-		SystemManager.notifications.dismiss_notification(_reroll_notification_id)
-		_reroll_notification_id = -1
-		SystemManager.notifications.show_notification("Failed to queue reroll download", SystemManager.notifications.Type.ERROR)
-		_switch_to_game(index)
 
 # ============================================================================
 # BAG MANAGEMENT
 # ============================================================================
 
-func _build_bag(platforms: Array, bag_size: int) -> void:
-	_bag.clear()
+func _start_bag_preparation() -> void:
+	_reset_download_tracking()
+	print("[ShufflerSubManager] _start_bag_preparation: " + _format_bag())
 
-	var all_candidates: Array[GameResource] = []
-	for platform_slug in platforms:
-		var games = DataManager.get_games_by_platform(platform_slug)
-		all_candidates.append_array(games)
+	if not SystemManager.download.download_progress.is_connected(_on_download_progress):
+		SystemManager.download.download_progress.connect(_on_download_progress)
 
-	if all_candidates.is_empty():
-		return
+	for i in range(_bag.entries.size()):
+		var entry = _bag.entries[i]
+		var game = entry.game
+		print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(entry))
+		if game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
+			entry.temp_path = game.file_path
+			_prepare_entry(i, entry)
+		else:
+			_total_downloads += 1
+			_pending_downloads += 1
+			_total_download_bytes += game.get_active_file_size()
+			_download_entry(i, entry)
 
-	all_candidates.shuffle()
+func _download_entry(index: int, entry: Dictionary) -> void:
+	entry.status = ShufflerBag.EntryStatus.DOWNLOADING
+	var game = entry.game
+	var active_game_id = game.get_active_game_id()
+	var active_file_name = game.get_active_file_name()
 
-	var added_ids: Array[int] = []
-	for game in all_candidates:
-		if game.romm_id in added_ids:
-			continue
-		added_ids.append(game.romm_id)
-		_bag.append({
-			"game": game,
-			"temp_path": "",
-			"pid": -1,
-			"started": false,
-			"active": false,
-			"emulator_id": "",
-			"suspend_method": "",
-		})
-		if _bag.size() >= bag_size:
-			break
+	var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
+	var temp_dir = TEMP_DIR + str(game.romm_id)
+	var temp_path = FSM.join_paths(temp_dir, active_file_name)
+	FSM.make_dir_recursive(temp_dir)
+	entry.temp_path = temp_path
 
-func _pick_reroll_candidate(index: int) -> GameResource:
-	if index < 0 or index >= _bag.size():
-		return null
+	var file_size = game.get_active_file_size()
+	var captured_item_id: String = ""
 
-	var current_platforms: Array[String] = []
-	for entry in _bag:
-		var slug: String = entry["game"].platform_slug
-		if slug not in current_platforms:
-			current_platforms.append(slug)
-
-	var candidates: Array[GameResource] = []
-	for slug in current_platforms:
-		candidates.append_array(DataManager.get_games_by_platform(slug))
-
-	candidates.shuffle()
-
-	var existing_ids: Array[int] = []
-	for i in range(_bag.size()):
-		if i != index:
-			existing_ids.append(_bag[i]["game"].romm_id)
-
-	for game in candidates:
-		if game.romm_id in existing_ids:
-			continue
-		return game
-
-	return null
-
-
-func _replace_bag_entry(index: int, game: GameResource, temp_path: String) -> void:
-	_bag[index] = {
-		"game": game,
-		"temp_path": temp_path,
-		"pid": -1,
-		"started": false,
-		"active": false,
-		"emulator_id": "",
-		"suspend_method": "",
+	var callbacks = {
+		"on_complete": func(success: bool, _path: String):
+			_download_progresses[captured_item_id] = 1.0
+			var completed = _total_downloads - _pending_downloads
+			download_progress.emit(completed, _total_downloads)
+			_pending_downloads -= 1
+			print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
+			_check_all_preparations_complete()
+			if success:
+				_prepare_entry(index, entry)
+			else:
+				entry.status = ShufflerBag.EntryStatus.FAILED
+				push_error("[ShufflerSubManager] Download failed for " + game.title)
 	}
 
+	print("[ShufflerSubManager] Queueing download for " + game.title + " to " + temp_path)
+
+	var item_id = SystemManager.download.queue_download(
+		download_url,
+		temp_path,
+		"game",
+		"",
+		false,
+		"",
+		game,
+		callbacks,
+		game.romm_id,
+		true,
+		true,
+		file_size,
+		false
+	)
+
+	if item_id != "":
+		captured_item_id = item_id
+		_active_download_item_id = item_id
+		_download_item_ids.append(item_id)
+		_download_sizes[item_id] = file_size
+		_download_progresses[item_id] = 0.0
+		entry.download_id = item_id
+	else:
+		entry.status = ShufflerBag.EntryStatus.FAILED
+		_pending_downloads -= 1
+		_check_all_preparations_complete()
+		push_error("[ShufflerSubManager] Failed to queue download for " + game.title)
+
+func _prepare_entry(index: int, entry: Dictionary) -> void:
+	if entry.status == ShufflerBag.EntryStatus.READY or entry.status == ShufflerBag.EntryStatus.FAILED:
+		return
+
+	_pending_preparations += 1
+	entry.status = ShufflerBag.EntryStatus.PREPARING
+	var game = entry.game
+	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
+	print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
+
+	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")):
+		entry.status = ShufflerBag.EntryStatus.READY
+		_pending_preparations -= 1
+		print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
+		game_ready.emit(index)
+		return
+
+	if entry.temp_path == "":
+		push_warning("[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
+		entry.status = ShufflerBag.EntryStatus.FAILED
+		_pending_preparations -= 1
+		return
+
+	var prep_success = await LaunchManager.prepare_game_for_shuffler(game, emulator_id, entry.temp_path)
+	if prep_success:
+		var prepared_path = LaunchManager.get_last_prepared_rom_path(game)
+		if prepared_path != "":
+			entry.temp_path = prepared_path
+		entry.status = ShufflerBag.EntryStatus.READY
+		_pending_preparations -= 1
+		print("[ShufflerSubManager] Ready after prep: " + game.title)
+		game_ready.emit(index)
+	else:
+		push_error("[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
+		entry.status = ShufflerBag.EntryStatus.FAILED
+		_pending_preparations -= 1
+
+	print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
+	_check_all_preparations_complete()
+
+func _check_all_preparations_complete() -> void:
+	print("[ShufflerSubManager] _check_all_preparations_complete: state=" + str(_state) + " pending_downloads=" + str(_pending_downloads) + " pending_preparations=" + str(_pending_preparations) + " has_ready=" + str(_bag.has_any_ready()) + " " + _format_bag())
+	if _state != State.DOWNLOADING:
+		return
+	if _pending_downloads == 0 and _pending_preparations == 0 and not _bag.has_any_ready():
+		push_error("[ShufflerSubManager] No games could be prepared; aborting session")
+		stop_session()
+
+func _await_first_ready() -> void:
+	print("[ShufflerSubManager] _await_first_ready: has_ready=" + str(_bag.has_any_ready()) + " pending_downloads=" + str(_pending_downloads) + " pending_preparations=" + str(_pending_preparations))
+	if _bag.has_any_ready():
+		_enter_shuffler_mode()
+		return
+	if _pending_downloads == 0 and _pending_preparations == 0:
+		push_error("[ShufflerSubManager] No games could be prepared; aborting session")
+		stop_session()
+		return
+	var cb = func(index: int):
+		print("[ShufflerSubManager] game_ready signal received for index " + str(index) + " while state=" + str(_state))
+		if _state == State.DOWNLOADING:
+			_enter_shuffler_mode()
+	game_ready.connect(cb, CONNECT_ONE_SHOT)
+
+func _random_round_time() -> float:
+	return randf_range(
+		_config.get("round_time_min", 30.0),
+		_config.get("round_time_max", 120.0)
+	)
 
 func _on_reroll_download_complete(success: bool, path: String, index: int, game: GameResource) -> void:
-	_reroll_in_progress = false
-	_set_controls_reroll_enabled(true)
-
-	if _reroll_notification_id != -1:
-		SystemManager.notifications.dismiss_notification(_reroll_notification_id)
-		_reroll_notification_id = -1
-
+	print("[ShufflerSubManager] _on_reroll_download_complete: index=" + str(index) + " game=" + game.title + " success=" + str(success) + " path=" + path)
 	_reroll_download_id = ""
 
 	if _state != State.ACTIVE and _state != State.PAUSED:
 		print("[ShufflerSubManager] Reroll download finished but session is no longer active; discarding result")
+		_reset_reroll_state()
 		return
 
 	if index < 0 or index >= _bag.size():
 		push_error("[ShufflerSubManager] Reroll completion called with invalid index " + str(index))
+		_reset_reroll_state()
 		return
 
 	if success and FileAccess.file_exists(path):
 		print("[ShufflerSubManager] Reroll download complete: " + game.title)
-		_replace_bag_entry(index, game, path)
-		_switch_to_game(index)
-		SystemManager.notifications.show_notification("Rerolled to " + game.title, SystemManager.notifications.Type.SUCCESS, null, 2.0)
+		_bag.entries[index].temp_path = path
+		_prepare_entry(index, _bag.entries[index])
+		if _bag.entries[index].status == ShufflerBag.EntryStatus.READY:
+			_reset_reroll_state()
+			_switch_to_game(index)
+		else:
+			var cb = func(ready_index: int):
+				if ready_index == index:
+					_reset_reroll_state()
+					_switch_to_game(index)
+			game_ready.connect(cb, CONNECT_ONE_SHOT)
 	else:
 		push_warning("[ShufflerSubManager] Reroll download failed for " + game.title + "; relaunching previous game")
-		SystemManager.notifications.show_notification("Reroll failed; relaunching previous game", SystemManager.notifications.Type.ERROR, null, 3.0)
+		_reset_reroll_state()
 		_switch_to_game(index)
+
+func _reset_reroll_state() -> void:
+	print("[ShufflerSubManager] _reset_reroll_state")
+	_reroll_in_progress = false
+	_reroll_download_id = ""
+	_set_controls_reroll_enabled(true)
 
 func _set_controls_reroll_enabled(enabled: bool) -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.set_reroll_enabled(enabled)
 
 # ============================================================================
-# DOWNLOADS (sequential — one at a time)
+# DOWNLOAD PROGRESS
 # ============================================================================
-
-func _download_bag_games() -> void:
-	_pending_downloads = 0
-	_total_downloads = 0
-	var need_download: Array[Dictionary] = []
-
-	# Connect to SystemManager.download progress signal
-	if not SystemManager.download.download_progress.is_connected(_on_download_progress):
-		SystemManager.download.download_progress.connect(_on_download_progress)
-
-	for entry in _bag:
-		var game = entry["game"]
-		if game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
-			entry["temp_path"] = game.file_path
-		else:
-			_pending_downloads += 1
-			_total_downloads += 1
-			need_download.append(entry)
-			_total_download_bytes += game.get_active_file_size()
-
-	if need_download.is_empty():
-		if await _prepare_downloaded_bag_games():
-			_call_enter_shuffler_mode()
-		return
-
-	# Show progress notification now that we know the total size
-	var progress_callable = func() -> float:
-		if _total_download_bytes == 0:
-			return 0.0
-		var downloaded = 0.0
-		# Sum progress across all queued shuffler downloads so the notification
-		# stays smooth even when multiple games download in parallel.
-		for item_id in _download_item_ids:
-			downloaded += _download_progresses.get(item_id, 0.0) * float(_download_sizes.get(item_id, 0))
-		return downloaded / float(_total_download_bytes)
-
-	var text_formatter = func(progress: float) -> String:
-		var total_mb = _total_download_bytes / (1024.0 * 1024.0)
-		var downloaded_mb = total_mb * progress
-		return "Preparing shuffle... %d/%d MB (%d%%)" % [int(downloaded_mb), int(total_mb), int(progress * 100)]
-
-	_notification_id = SystemManager.notifications.show_notification(
-		"Preparing shuffle...",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		progress_callable,
-		text_formatter,
-		false,
-		true
-	)
-
-	download_progress.emit(0, _total_downloads)
-	_download_next(need_download, 0)
-
-func _download_next(entries: Array[Dictionary], index: int) -> void:
-	if index >= entries.size():
-		return
-
-	# Enqueue downloads in parallel up to the active profile's concurrent limit,
-	# rather than waiting for each one to finish before queueing the next.
-	var batch_size := _get_preload_count()
-	var end_index := mini(index + batch_size, entries.size())
-
-	for i in range(index, end_index):
-		var entry = entries[i]
-		var game = entry["game"]
-		var active_game_id = game.get_active_game_id()
-		var active_file_name = game.get_active_file_name()
-
-		var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
-		var temp_dir = TEMP_DIR + str(game.romm_id)
-		var temp_path = FSM.join_paths(temp_dir, active_file_name)
-
-		FSM.make_dir_recursive(temp_dir)
-		entry["temp_path"] = temp_path
-
-		var file_size = game.get_active_file_size()
-
-		var captured_item_id: String = ""
-
-		var callbacks = {
-			"on_complete": func(success: bool, _path: String):
-				_pending_downloads -= 1
-				# Mark this specific download as fully counted.
-				_download_progresses[captured_item_id] = 1.0
-				var completed = _total_downloads - _pending_downloads
-				download_progress.emit(completed, _total_downloads)
-				if _pending_downloads == 0 and _state == State.DOWNLOADING:
-					if await _prepare_downloaded_bag_games():
-						_call_enter_shuffler_mode()
-				else:
-					_download_next(entries, end_index)
-		}
-
-		var item_id = SystemManager.download.queue_download(download_url, temp_path, "game", "", false, "", game, callbacks, game.romm_id, true, true, file_size, false)
-
-		if item_id != "":
-			captured_item_id = item_id
-			_active_download_item_id = item_id
-			_download_item_ids.append(item_id)
-			_download_sizes[item_id] = file_size
-			_download_progresses[item_id] = 0.0
-
-func _get_preload_count() -> int:
-	if DataManager.is_settings_loaded():
-		var setting = DataManager.get_setting("download_speed_profile")
-		if setting and setting.value is int:
-			# Conservative: keep sequential behavior; higher profiles preload more.
-			match clampi(setting.value, 0, 3):
-				0: return 1
-				1: return 2
-				2: return 4
-				3: return 6
-	return 2
-
-
-## For emulators that require pre-launch extraction (Vita3K, RPCS3), prepare all
-## already-downloaded bag entries before the shuffler session starts so that
-## switching rounds is fast and doesn't risk the round timer expiring mid-prep.
-func _prepare_downloaded_bag_games() -> bool:
-	var any_failed := false
-	for entry in _bag:
-		var game = entry["game"]
-		var emulator_id = LaunchManager.resolve_emulator_for_game(game)
-		if emulator_id == "" or not (emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")):
-			continue
-		if entry["temp_path"] == "":
-			push_warning("[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
-			continue
-		var prep_success = await LaunchManager.prepare_game_for_shuffler(game, emulator_id, entry["temp_path"])
-		if not prep_success:
-			push_error("[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
-			any_failed = true
-			continue
-		# Update the bag entry with the prepared ROM path (e.g. extracted folder)
-		var prepared_path = LaunchManager.get_last_prepared_rom_path(game)
-		if prepared_path != "":
-			entry["temp_path"] = prepared_path
-	return not any_failed
-
-
-func _call_enter_shuffler_mode() -> void:
-	# Defer to avoid thread issues from download callbacks
-	call_deferred("_enter_shuffler_mode")
 
 func _on_download_progress(item_id: String, progress: float) -> void:
 	if item_id in _download_item_ids:
 		_download_progresses[item_id] = progress
+
+func _reset_download_tracking() -> void:
+	_pending_downloads = 0
+	_total_downloads = 0
+	_pending_preparations = 0
+	_download_item_ids.clear()
+	_download_progresses.clear()
+	_download_sizes.clear()
+	_total_download_bytes = 0
+	_active_download_item_id = ""
 
 # ============================================================================
 # SHUFFLER MODE
 # ============================================================================
 
 func _enter_shuffler_mode() -> void:
+	if _state != State.DOWNLOADING:
+		print("[ShufflerSubManager] _enter_shuffler_mode ignored: state=" + str(_state))
+		return
 	_state = State.ACTIVE
 	_shuffle_session_active = true
 	_start_session_log_capture()
+	print("[ShufflerSubManager] _enter_shuffler_mode: " + _format_bag())
 
-	# Disconnect from SystemManager.download progress signal
 	if SystemManager.download.download_progress.is_connected(_on_download_progress):
 		SystemManager.download.download_progress.disconnect(_on_download_progress)
 
-	if _notification_id != -1:
-		SystemManager.notifications.dismiss_notification(_notification_id)
-		_notification_id = -1
-
-	# Save the current windowed size before minimizing — the continuous save in
-	# SystemManager.display stops firing once the window leaves WINDOWED mode.
 	if SystemManager.display:
 		SystemManager.display.save_last_window_size()
 
 	_create_controls_window()
 
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
-
-	# Block input to the main window while the shuffler is active.
-	# The controls window is its own viewport and still receives input.
 	get_tree().root.gui_disable_input = true
 
-	# Only apply emulator-specific shuffler tweaks if the bag actually uses those emulators.
+	_apply_emulator_configs()
+
+	session_started.emit()
+
+	var first_index = _bag.pick_random_ready()
+	print("[ShufflerSubManager] _enter_shuffler_mode first game index=" + str(first_index))
+	if first_index == -1:
+		push_error("[ShufflerSubManager] No ready game available at session start")
+		stop_session()
+		return
+	_switch_to_game(first_index)
+
+func _apply_emulator_configs() -> void:
 	var needs_retroarch := false
 	var needs_pcsx2 := false
-	for entry in _bag:
-		var emulator_id := LaunchManager.resolve_emulator_for_game(entry["game"]) as String
+	for entry in _bag.entries:
+		var emulator_id := LaunchManager.resolve_emulator_for_game(entry.game) as String
 		if emulator_id == "retroarch":
 			needs_retroarch = true
 		elif emulator_id == "pcsx2":
 			needs_pcsx2 = true
-
-	# Ensure RetroArch is configured for shuffler UDP savestate behavior.
+	print("[ShufflerSubManager] _apply_emulator_configs: needs_retroarch=" + str(needs_retroarch) + " needs_pcsx2=" + str(needs_pcsx2))
 	if needs_retroarch:
 		_ensure_retroarch_shuffler_config()
-
-	# Disable PCSX2 memory cards so multiple suspended instances don't fight over the same memcard file.
 	if needs_pcsx2:
 		_ensure_pcsx2_shuffler_config()
 
-	session_started.emit()
-	_switch_to_game(0)
-
 func _switch_to_next_game() -> void:
+	print("[ShufflerSubManager] _switch_to_next_game: current=" + str(_current_game_index) + " state=" + str(_state) + " " + _format_bag())
 	if _bag.is_empty():
+		print("[ShufflerSubManager] _switch_to_next_game: bag is empty")
 		return
-	var next_index = (_current_game_index + 1) % _bag.size()
+	var ready_indices = _bag.get_ready_indices(_current_game_index)
+	print("[ShufflerSubManager] _switch_to_next_game ready indices excluding current=" + str(ready_indices))
+	var next_index = _bag.pick_random_ready(_current_game_index)
+	if next_index == -1:
+		print("[ShufflerSubManager] No other ready game; extending current round")
+		_start_round_timer(_random_round_time())
+		return
 	_switch_to_game(next_index)
 
 func _switch_to_game(index: int) -> void:
+	print("[ShufflerSubManager] _switch_to_game: index=" + str(index) + " current=" + str(_current_game_index) + " state=" + str(_state) + " " + _format_bag())
+	if index < 0 or index >= _bag.size():
+		print("[ShufflerSubManager] _switch_to_game: invalid index " + str(index))
+		return
 	if _current_game_index >= 0 and _current_game_index < _bag.size():
-		var prev = _bag[_current_game_index]
-		prev["active"] = false
+		var prev = _bag.entries[_current_game_index]
+		prev.active = false
+		print("[ShufflerSubManager] _switch_to_game stopping previous: " + _format_entry(prev))
 		await _stop_game(prev)
 
 	_current_game_index = index
-	var entry = _bag[index]
-	entry["active"] = true
+	var entry = _bag.entries[index]
+	entry.active = true
 
-	var method := entry.get("suspend_method", "suspend") as String
-	if method == "suspend" and entry["started"] and entry["pid"] != -1 and await _is_process_running_async(entry["pid"]):
+	var method := entry.suspend_method as String
+	print("[ShufflerSubManager] _switch_to_game: target=" + _format_entry(entry) + " method=" + method)
+	if method == "suspend" and entry.started and entry.pid != -1 and await _is_process_running_async(entry.pid):
+		print("[ShufflerSubManager] _switch_to_game: resuming existing process")
 		await _resume_game(entry)
-	elif entry["started"] and entry["pid"] != -1 and await _is_process_running_async(entry["pid"]):
-		# UDP/TCP emulators should have exited by now. Kill any lingering
-		# process before re-launching so we don't end up with two instances.
-		_force_kill_process(entry["pid"])
-		entry["started"] = false
-		entry["pid"] = -1
+	elif entry.started and entry.pid != -1 and await _is_process_running_async(entry.pid):
+		print("[ShufflerSubManager] _switch_to_game: killing lingering process and relaunching")
+		_force_kill_process(entry.pid)
+		entry.started = false
+		entry.pid = -1
 		_launch_game(entry)
 	else:
-		entry["started"] = false
-		entry["pid"] = -1
+		print("[ShufflerSubManager] _switch_to_game: launching fresh")
+		entry.started = false
+		entry.pid = -1
 		_launch_game(entry)
 
-	var round_time = randf_range(
-		_config.get("round_time_min", 30.0),
-		_config.get("round_time_max", 120.0)
-	)
+	print("[ShufflerSubManager] _switch_to_game: launched index=" + str(index) + " state=" + str(_state))
 	if _state == State.ACTIVE:
+		var round_time = _random_round_time()
+		print("[ShufflerSubManager] _switch_to_game: starting round timer " + str(round_time) + "s")
 		_start_round_timer(round_time)
+	else:
+		print("[ShufflerSubManager] _switch_to_game: not starting timer because state=" + str(_state))
 
-	var game = entry["game"]
+	var game = entry.game
 	game_switched.emit(game.title, game.platform_slug)
 
 # ============================================================================
@@ -780,31 +767,31 @@ func _switch_to_game(index: int) -> void:
 # ============================================================================
 
 func _launch_game(entry: Dictionary) -> void:
-	var game = entry["game"]
+	var game = entry.game
 	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
-	entry["emulator_id"] = emulator_id
+	entry.emulator_id = emulator_id
 
 	var emulator = LaunchManager.get_emulator(emulator_id)
-	entry["suspend_method"] = emulator.get("suspend_method", "suspend")
+	entry.suspend_method = emulator.get("suspend_method", "suspend")
+	print("[ShufflerSubManager] _launch_game: " + _format_entry(entry) + " emulator=" + emulator_id + " method=" + entry.suspend_method + " temp_path=" + entry.temp_path)
 
 	var on_pid_ready = func(pid: int):
+		print("[ShufflerSubManager] on_pid_ready for " + game.title + ": pid=" + str(pid))
 		if pid != -1:
-			entry["pid"] = pid
-			entry["started"] = true
+			entry.pid = pid
+			entry.started = true
 			_maximize_with_retry(pid)
 		else:
 			push_error("[ShufflerSubManager] Failed to launch game: " + game.title)
 
-		# Track any Vita3K app folder that was extracted for this session so it can
-		# be cleaned up safely when the session ends.
 		if emulator_id.begins_with("vita3k"):
 			var title_id = game.get_active_title_id()
 			if title_id != "":
 				var install_path = LaunchManager.get_emulator_install_path(emulator_id)
 				if install_path != "":
 					var ux0_app_path = install_path.get_base_dir() + "/ux0/app/" + title_id
-					entry["vita_title_id"] = title_id
-					entry["vita_app_path"] = ux0_app_path
+					entry.vita_title_id = title_id
+					entry.vita_app_path = ux0_app_path
 					_shuffler_vita_apps.append({
 						"title_id": title_id,
 						"ux0_app_path": ux0_app_path
@@ -813,71 +800,72 @@ func _launch_game(entry: Dictionary) -> void:
 			else:
 				push_warning("[ShufflerSubManager] Vita3K game launched but no TitleID was extracted: " + game.title)
 
-	LaunchManager.launch_shuffler_game(game, entry["temp_path"], on_pid_ready)
+	LaunchManager.launch_shuffler_game(game, entry.temp_path, on_pid_ready)
 
 # ============================================================================
 # GAME STOP / SUSPEND / RESUME
 # ============================================================================
 
 func _stop_game(entry: Dictionary) -> void:
-	if entry["pid"] == -1:
+	if entry.pid == -1:
+		print("[ShufflerSubManager] _stop_game: no pid for " + _format_entry(entry))
 		return
 
-	var method = entry.get("suspend_method", "suspend")
+	var method = entry.suspend_method
+	print("[ShufflerSubManager] _stop_game: " + _format_entry(entry) + " method=" + method)
 	match method:
 		"udp":
 			_send_udp_command("localhost", 55355, "QUIT")
 			await get_tree().create_timer(0.5).timeout
 			_send_udp_command("localhost", 55355, "QUIT")
 		"tcp":
-			# Xemu: savevm then quit
-			var hash = str(entry["game"].romm_id)
+			var hash = str(entry.game.romm_id)
 			await _send_tcp_command("localhost", 4444, "savevm " + hash)
 			await _send_tcp_command("localhost", 4444, "quit")
 		"suspend", _:
 			_suspend_game(entry)
 
 func _suspend_game(entry: Dictionary) -> void:
-	if entry["pid"] == -1:
+	if entry.pid == -1:
+		print("[ShufflerSubManager] _suspend_game: no pid for " + _format_entry(entry))
 		return
 
-	var emulator = LaunchManager.get_emulator(entry["emulator_id"])
+	var emulator = LaunchManager.get_emulator(entry.emulator_id)
 	var exe_name = ""
 	var launch_config = emulator.get("launch", {})
 	var platforms = launch_config.get("platforms", {})
 	var pc = platforms.get("windows", {})
 	exe_name = pc.get("executable", "")
 
-	# Hide window
-	_hide_window_async(entry["pid"], exe_name)
+	print("[ShufflerSubManager] _suspend_game: " + _format_entry(entry) + " exe=" + exe_name)
+	_hide_window_async(entry.pid, exe_name)
 
-	# Freeze threads with pssuspend
 	var output: Array[String] = []
-	OS.execute(_pssuspend_path, [str(entry["pid"])], output, true)
+	OS.execute(_pssuspend_path, [str(entry.pid)], output, true)
 
-	entry["active"] = false
+	entry.active = false
 
 func _resume_game(entry: Dictionary) -> void:
-	if entry["pid"] == -1:
+	if entry.pid == -1:
+		print("[ShufflerSubManager] _resume_game: no pid for " + _format_entry(entry))
 		return
 
-	# Thaw with pssuspend
+	print("[ShufflerSubManager] _resume_game: " + _format_entry(entry))
 	var output: Array[String] = []
-	OS.execute(_pssuspend_path, ["-r", str(entry["pid"])], output, true)
+	OS.execute(_pssuspend_path, ["-r", str(entry.pid)], output, true)
 
-	# Give the thawed process a moment before forcing focus.
 	await get_tree().create_timer(0.2).timeout
 
-	# Maximize window with retries
-	await _maximize_with_retry(entry["pid"])
+	await _maximize_with_retry(entry.pid)
 
-	entry["active"] = true
+	entry.active = true
 
 # ============================================================================
 # TIMER
 # ============================================================================
 
 func _start_round_timer(duration: float) -> void:
+	print("[ShufflerSubManager] _start_round_timer: duration=" + str(duration) + "s state=" + str(_state))
 	_kill_round_timer()
 	_round_timer = Timer.new()
 	_round_timer.one_shot = true
@@ -895,6 +883,7 @@ func _start_round_timer(duration: float) -> void:
 	_emit_timer_updated()
 
 func _kill_round_timer() -> void:
+	print("[ShufflerSubManager] _kill_round_timer")
 	if _round_timer and is_instance_valid(_round_timer):
 		_round_timer.stop()
 		_round_timer.queue_free()
@@ -905,6 +894,7 @@ func _kill_round_timer() -> void:
 		_countdown_timer = null
 
 func _on_round_timer_timeout() -> void:
+	print("[ShufflerSubManager] _on_round_timer_timeout: state=" + str(_state) + " " + _format_bag())
 	if _countdown_timer and is_instance_valid(_countdown_timer):
 		_countdown_timer.stop()
 	_switch_to_next_game()
@@ -937,6 +927,7 @@ func _hide_window(pid: int, exe_name: String) -> void:
 	_hide_window_async(pid, exe_name)
 
 func _maximize_with_retry(pid: int) -> void:
+	print("[ShufflerSubManager] _maximize_with_retry START pid=" + str(pid))
 	var maximized := false
 	for i in range(3):
 		print("[ShufflerSubManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
@@ -945,6 +936,7 @@ func _maximize_with_retry(pid: int) -> void:
 			maximized = true
 			break
 		await get_tree().create_timer(0.5).timeout
+	print("[ShufflerSubManager] _maximize_with_retry END pid=" + str(pid) + " maximized=" + str(maximized))
 	if not maximized:
 		push_error("[ShufflerSubManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
 	_raise_controls_window()
@@ -952,6 +944,7 @@ func _maximize_with_retry(pid: int) -> void:
 func _maximize_window_async(pid: int) -> bool:
 	var ahk_script = _tools_dir + "maximize_process.ahk"
 	if not FileAccess.file_exists(ahk_script) or not FileAccess.file_exists(_ahk_path):
+		print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
 		return false
 
 	var completed := false
@@ -963,8 +956,7 @@ func _maximize_window_async(pid: int) -> bool:
 		success = (result.get("exit_code", -1) == 0)
 		var output: Array = result.get("output", [])
 		output_text = "".join(output)
-		if not success:
-			print("[ShufflerSubManager] maximize_process.ahk failed for pid " + str(pid) + " (exit=" + str(result.get("exit_code", -1)) + "): " + output_text)
+		print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + output_text.strip_edges() + "\"")
 	)
 
 	while not completed:
@@ -973,7 +965,6 @@ func _maximize_window_async(pid: int) -> bool:
 	return success
 
 func _maximize_window(pid: int) -> bool:
-	# Kept for compatibility; runs async under the hood.
 	return await _maximize_window_async(pid)
 
 func _force_kill_process(pid: int) -> void:
@@ -1016,7 +1007,6 @@ func _confirm_process_dead(pid: int) -> void:
 		elapsed += 0.2
 
 func _send_udp_command(host: String, port: int, command: String) -> void:
-	# PacketPeerUDP.connect_to_host requires an IP address, not a hostname.
 	var address := IP.resolve_hostname(host, IP.TYPE_IPV4)
 	if address.is_empty():
 		push_error("[ShufflerSubManager] Failed to resolve host: " + host)
@@ -1038,7 +1028,6 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 		push_error("[ShufflerSubManager] Failed to connect TCP to " + address + ":" + str(port))
 		return
 
-	# Wait for connection with timeout
 	var attempts = 0
 	while tcp.get_status() == StreamPeerTCP.STATUS_CONNECTING and attempts < 50:
 		await get_tree().process_frame
@@ -1050,7 +1039,6 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 
 	tcp.put_data((command + "\n").to_utf8_buffer())
 
-	# Brief delay to ensure command is sent before disconnect
 	await get_tree().create_timer(0.1).timeout
 	tcp.disconnect_from_host()
 
@@ -1059,7 +1047,9 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 # ============================================================================
 
 func _create_controls_window() -> void:
+	print("[ShufflerSubManager] _create_controls_window")
 	if _controls_window and is_instance_valid(_controls_window):
+		print("[ShufflerSubManager] _create_controls_window: freeing existing controls window")
 		_controls_window.queue_free()
 
 	var scene = load("res://components/shuffler_controls_window.tscn")
@@ -1086,13 +1076,16 @@ func _raise_controls_window() -> void:
 		return
 	var window_id: int = _controls_window.get_window_id()
 	if window_id == DisplayServer.INVALID_WINDOW_ID:
+		print("[ShufflerSubManager] _raise_controls_window: invalid window id")
 		return
 	DisplayServer.window_move_to_foreground(window_id)
 
 func _start_controls_topmost_timer() -> void:
 	_stop_controls_topmost_timer()
 	if not _controls_window or not is_instance_valid(_controls_window):
+		print("[ShufflerSubManager] _start_controls_topmost_timer: no controls window")
 		return
+	print("[ShufflerSubManager] _start_controls_topmost_timer")
 	_controls_topmost_timer = Timer.new()
 	_controls_topmost_timer.wait_time = 0.5
 	_controls_topmost_timer.one_shot = false
@@ -1102,6 +1095,7 @@ func _start_controls_topmost_timer() -> void:
 
 func _stop_controls_topmost_timer() -> void:
 	if _controls_topmost_timer and is_instance_valid(_controls_topmost_timer):
+		print("[ShufflerSubManager] _stop_controls_topmost_timer")
 		_controls_topmost_timer.stop()
 		_controls_topmost_timer.queue_free()
 		_controls_topmost_timer = null
@@ -1128,9 +1122,6 @@ func _ensure_retroarch_shuffler_config() -> void:
 # ============================================================================
 
 func _ensure_pcsx2_shuffler_config() -> void:
-	# Ensure portable mode is active so PCSX2 reads/writes INI files from the
-	# emulator directory rather than %APPDATA%.  Without this the shuffler's
-	# INI edits target a file PCSX2 never opens.
 	var emu_dir := FSM.resolve_emulator_path("{emulator_dir}", "pcsx2")
 	if emu_dir != "":
 		var portable_path := FSM.join_paths(emu_dir, "portable.txt")
@@ -1150,7 +1141,6 @@ func _ensure_pcsx2_shuffler_config() -> void:
 		push_error("[ShufflerSubManager] Failed to apply PCSX2.ini memory-card edits")
 		return
 
-	# Log the MemoryCards section for debugging.
 	var cfg_path := FSM.resolve_emulator_path(PCSX2_SHUFFLER_INI_PATH, "pcsx2")
 	if cfg_path == "":
 		return
@@ -1186,3 +1176,9 @@ func _cleanup_vita3k_shuffler_apps() -> void:
 func _cleanup_temp_files() -> void:
 	if DirAccess.dir_exists_absolute(TEMP_DIR):
 		FSM.delete_dir_recursive(TEMP_DIR)
+
+func _restore_emulator_file_if_backed_up(emulator_id: String, file_path: String) -> void:
+	if LaunchManager.has_emulator_file_backup(emulator_id, file_path):
+		LaunchManager.restore_emulator_file(emulator_id, file_path)
+	else:
+		print("[ShufflerSubManager] Skipping restore for " + emulator_id + " " + file_path + " (no backup)")

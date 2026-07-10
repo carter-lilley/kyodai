@@ -176,6 +176,9 @@ func edit_emulator_file_with_backup(
 func restore_emulator_file(emulator_id: String, file_path: String) -> bool:
 	return emulator.restore_emulator_file(emulator_id, file_path)
 
+func has_emulator_file_backup(emulator_id: String, file_path: String) -> bool:
+	return emulator.has_emulator_file_backup(emulator_id, file_path)
+
 func scan_emulator_install_state(emulator_id: String):
 	emulator.scan_emulator_install_state(emulator_id)
 

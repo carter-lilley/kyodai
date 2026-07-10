@@ -1264,6 +1264,13 @@ func restore_emulator_file(emulator_id: String, file_path: String) -> bool:
 	
 	return success
 
+## Returns true if a backup exists for the given emulator file.
+func has_emulator_file_backup(emulator_id: String, file_path: String) -> bool:
+	var full_path := FSM.resolve_emulator_path(file_path, emulator_id)
+	if full_path == "":
+		return false
+	return _emulator_file_backups.has(full_path)
+
 ## Helper function for edit_file action
 func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var file_path = platform_config.get("file", "")

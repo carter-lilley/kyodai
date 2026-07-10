@@ -45,14 +45,7 @@ func show_overlay():
 	super.show_overlay()
 	# Load platforms once the dialog is actually visible and laid out.
 	if _platform_cards.is_empty():
-		_load_after_layout()
-
-func _load_after_layout() -> void:
-	# Wait a couple of frames so the dialog and content containers have
-	# authoritative sizes before inserting cards.
-	await get_tree().process_frame
-	await get_tree().process_frame
-	_load_platforms()
+		_load_platforms()
 
 func _build_content() -> void:
 	# M3Dialog (FULL_SCREEN) already provides a ScrollContainer via _scroll.
