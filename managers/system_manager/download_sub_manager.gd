@@ -185,6 +185,7 @@ class ChunkedDownloadInfo:
 	var watchdog_timer: Timer = null
 	var watchdog_last_total_bytes: int = 0
 	var watchdog_last_progress_time_ms: int = 0
+	var batch_id: int = -1  # DownloadBatch ID for cancelling queued chunk tasks
 
 class ChunkInfo:
 	var index: int
@@ -1167,7 +1168,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	_start_chunked_watchdog_timer(item.id, headers)
 
 	# Use SystemManager.memory's download thread pool
-	await SystemManager.memory.queue_parallel_downloads(
+	chunked_info.batch_id = await SystemManager.memory.queue_parallel_downloads(
 		chunk_items,
 		func(chunk_data, _index):
 			chunk_sem.wait()
@@ -1283,9 +1284,9 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			result.error = "Thread index out of bounds"
 			return result
 	else:
-		push_error("[SystemManager.download] No connection pool found for item: " + item_id)
+		# Pool was cleaned up by cancel/fallback; this task is a no-op.
 		_connection_pool_mutex.unlock()
-		result.error = "No connection pool"
+		result.error = "aborted"
 		return result
 
 	if http == null:
@@ -1429,6 +1430,12 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 		push_error("[SystemManager.download] Failed to create chunk file: " + temp_path)
 		result.error = "Failed to create chunk file"
 		return result
+
+	# Mark chunk as in-progress for watchdog visibility
+	if _chunked_downloads.has(item_id):
+		var chunked_info = _chunked_downloads[item_id]
+		if chunk_index >= 0 and chunk_index < chunked_info.chunks.size():
+			chunked_info.chunks[chunk_index].in_progress = true
 
 	# Make the request
 	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " making request, connection status: " + str(http.get_status()))
@@ -1848,6 +1855,11 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 		# Wait before retry using non-blocking timer
 		await get_tree().create_timer(max_delay).timeout
 
+		# The download may have been cancelled while we were waiting
+		if not _chunked_downloads.has(item_id):
+			print("[SystemManager.download] Retry aborted for " + item_id + " (chunked download cleaned up)")
+			return
+
 		# Prepare retry items (include expected hash so corrupt partials are detected)
 		var retry_items = []
 		for chunk in failed_chunks:
@@ -1869,7 +1881,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			})
 
 		# Queue retry via thread pool
-		await SystemManager.memory.queue_parallel_downloads(
+		chunked_info.batch_id = await SystemManager.memory.queue_parallel_downloads(
 			retry_items,
 			func(chunk_data, _index):
 				if chunk_sem != null:
@@ -1887,7 +1899,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 	else:
 		# No more retries available
 		if CHUNK_FALLBACK_TO_SINGLE_STREAM:
-			print("[SystemManager.download] Chunked download failed after retries; falling back to single-stream for: " + item.name)
+			print("[SystemManager.download] Chunked download failed after " + str(MAX_CHUNK_RETRIES) + " retries (" + str(failed_chunks.size()) + " chunks still failing); falling back to single-stream for: " + item.name)
 			_start_single_stream_fallback(item_id, headers)
 		else:
 			push_error("[SystemManager.download] Chunks failed with no retries remaining for: " + item.name)
@@ -2106,14 +2118,15 @@ func _on_chunked_watchdog(item_id: String):
 		chunked_info.watchdog_last_total_bytes = total_bytes
 		chunked_info.watchdog_last_progress_time_ms = now
 	elif now - chunked_info.watchdog_last_progress_time_ms > CHUNK_STALL_TIMEOUT_MS * 2:
-		push_error("[SystemManager.download] [Watchdog] Chunked download stalled for: " + item.name + ". Falling back to single-stream.")
+		var elapsed_since_progress: int = now - chunked_info.watchdog_last_progress_time_ms
+		print("[SystemManager.download] [Watchdog] Chunked download stalled for: " + item.name + " (no progress for " + str(elapsed_since_progress) + "ms, total_bytes=" + str(total_bytes) + ", in_progress=" + str(in_progress_count) + "). Falling back to single-stream.")
 		stalled = true
 
 	if not stalled:
 		var elapsed: int = now - chunked_info.start_time_ms
 		var max_total_time := maxi(30 * 60 * 1000, item.expected_file_size / 2048)
 		if elapsed > max_total_time:
-			push_error("[SystemManager.download] [Watchdog] Chunked download exceeded max total time for: " + item.name + " (elapsed=" + str(elapsed) + "ms). Falling back to single-stream.")
+			print("[SystemManager.download] [Watchdog] Chunked download exceeded max total time for: " + item.name + " (elapsed=" + str(elapsed) + "ms, max_total_time=" + str(max_total_time) + "ms). Falling back to single-stream.")
 			stalled = true
 
 	if stalled:
@@ -2608,6 +2621,11 @@ func _cleanup_chunked_download(item_id: String):
 		chunked_info.watchdog_timer.stop()
 		chunked_info.watchdog_timer.queue_free()
 		chunked_info.watchdog_timer = null
+
+	# Cancel any queued chunk tasks in the thread pool
+	if chunked_info.batch_id != -1:
+		SystemManager.memory.cancel_download_batch(chunked_info.batch_id)
+		chunked_info.batch_id = -1
 
 	# Clean up temp chunk files
 	for chunk in chunked_info.chunks:

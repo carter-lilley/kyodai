@@ -259,8 +259,8 @@ func _create_platform_card(
 	card.shuffler_mode = true
 	card.platform_slug = slug
 	card.platform_name = platform_name
-	card.registry_default_core_id = platform_default_core_cache.get(slug, "")
-	card.registry_default_emulator = LaunchManager.get_default_emulator_for_platform(slug)
+	card.registry_default_core_id = LaunchManager.get_shuffler_default_core_for_platform(slug)
+	card.registry_default_emulator = LaunchManager.get_shuffler_default_emulator_for_platform(slug)
 	card._defer_dropdown = true
 	card.set_available_emulators(platform_emulator_cache.get(slug, []))
 
@@ -282,13 +282,9 @@ func _create_platform_card(
 	if is_enabled and slug not in _selected_platforms:
 		_selected_platforms.append(slug)
 
-	var emulator_id = ""
-	var core_id = ""
-	if platform_config is Dictionary:
-		emulator_id = platform_config.get("emulator_id", "")
-		core_id = platform_config.get("core_id", "")
-	card.selected_emulator = emulator_id
-	card.selected_core_id = core_id
+	# Default to the shuffler-specific emulator selection; the user can still override per session.
+	card.selected_emulator = ""
+	card.selected_core_id = ""
 
 	card.sync_toggled.connect(func(enabled: bool):
 		if enabled:

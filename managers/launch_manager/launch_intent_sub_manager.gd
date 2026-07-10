@@ -23,6 +23,11 @@ func resolve_emulator_for_game(game: GameResource) -> String:
 		if override.get("emulator_id", "") != "":
 			return override["emulator_id"]
 	
+	# 2b. Use shuffler-specific defaults if the platform has one configured
+	if LaunchManager.is_shuffle_session_active():
+		if LaunchManager.SHUFFLER_DEFAULT_EMULATORS.has(game.platform_slug):
+			return LaunchManager.SHUFFLER_DEFAULT_EMULATORS[game.platform_slug].emulator_id
+	
 	# 3. Check user platform settings (empty = use registry default)
 	var enabled_platforms = _get_enabled_platforms()
 	var platform_config = enabled_platforms.get(game.platform_slug, {})
@@ -46,6 +51,11 @@ func resolve_core_for_game(game: GameResource) -> String:
 		var override = LaunchManager.get_shuffle_override(game.platform_slug)
 		if override.get("core_id", "") != "":
 			return override["core_id"]
+	
+	# 2b. Use shuffler-specific default core if the platform has one configured
+	if LaunchManager.is_shuffle_session_active():
+		if LaunchManager.SHUFFLER_DEFAULT_EMULATORS.has(game.platform_slug):
+			return LaunchManager.SHUFFLER_DEFAULT_EMULATORS[game.platform_slug].core_id
 	
 	# 3. Check user platform settings
 	var enabled_platforms = _get_enabled_platforms()

@@ -54,6 +54,14 @@ signal gamenative_games_updated()
 var shuffler: ShufflerManager
 var gamenative: GameNativeManager
 
+# Shuffler uses different default emulators than the standard launcher for these platforms.
+const SHUFFLER_DEFAULT_EMULATORS: Dictionary = {
+	"ngc": {"emulator_id": "retroarch", "core_id": "dolphin_ngc"},
+	"wii": {"emulator_id": "retroarch", "core_id": "dolphin_wii"},
+	"psp": {"emulator_id": "retroarch", "core_id": "ppsspp"},
+	"ps2": {"emulator_id": "retroarch", "core_id": "pcsx2"},
+}
+
 func _enter_tree() -> void:
 	shuffler = $ShufflerSubManager
 	gamenative = $GameNativeSubManager
@@ -112,6 +120,18 @@ func get_cores_for_platform(emulator_id: String, platform_slug: String) -> Array
 
 func get_default_core_id_for_platform(emulator_id: String, platform_slug: String) -> String:
 	return registry.get_default_core_id_for_platform(emulator_id, platform_slug)
+
+## Returns the shuffler-specific default emulator for a platform, falling back to the registry default.
+func get_shuffler_default_emulator_for_platform(platform_slug: String) -> String:
+	if SHUFFLER_DEFAULT_EMULATORS.has(platform_slug):
+		return SHUFFLER_DEFAULT_EMULATORS[platform_slug].emulator_id
+	return registry.get_default_emulator_for_platform(platform_slug)
+
+## Returns the shuffler-specific default RetroArch core for a platform, falling back to the registry default.
+func get_shuffler_default_core_for_platform(platform_slug: String) -> String:
+	if SHUFFLER_DEFAULT_EMULATORS.has(platform_slug):
+		return SHUFFLER_DEFAULT_EMULATORS[platform_slug].core_id
+	return registry.get_default_core_id_for_platform("retroarch", platform_slug)
 
 func get_core_config(emulator_id: String, platform_slug: String, core_id: String) -> Dictionary:
 	return registry.get_core_config(emulator_id, platform_slug, core_id)
