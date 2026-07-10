@@ -27,6 +27,9 @@ const Type = SettingsVar.SettingType
 @export var resolution := SettingsVar.new(Type.ARRAY,resolutions[0],State.ENABLED, "Windowed Resolution:", "", 0.0, 1.0, 0.1, resolutions)
 @export var dual_screen_mode := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
 
+# Internal DS screen swap state (managed by AynThorManager)
+@export var dual_screen_swapped := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Dual Screen Swapped")
+
 # Internal last windowed size (managed by SystemManager.display). 200x150 min, 16K max.
 @export var last_window_size := SettingsVar.new(Type.VECTOR2I, Vector2i.ZERO, State.INTERNAL, "Last Window Size", "", 200.0, 16384.0, 1.0, [], false, {})
 

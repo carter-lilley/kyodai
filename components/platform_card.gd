@@ -702,4 +702,3 @@ func _format_version_for_display(version: String) -> String:
 	
 	# Not a date - strip v/V prefix
 	return version.trim_prefix("v").trim_prefix("V")
-

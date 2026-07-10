@@ -142,14 +142,18 @@ func validate_core_manifest(emulator_id: String = "retroarch") -> bool:
 	var manifest: Dictionary = read_manifest(emulator_id)
 	var cores: Dictionary = manifest.get("cores", {}) as Dictionary
 	if cores.is_empty():
+		push_error("[CoreManager] validate_core_manifest: no manifest found for " + emulator_id)
 		return false
 	
 	for platform_slug in cores.keys():
 		var platform_data: Dictionary = cores[platform_slug] as Dictionary
 		if platform_data.is_empty():
+			push_error("[CoreManager] validate_core_manifest: empty platform data for " + platform_slug)
 			return false
 		for core_id in platform_data.keys():
 			if not is_core_ready(emulator_id, platform_slug, core_id):
+				var expected_path := get_core_expected_path(emulator_id, platform_slug, core_id)
+				push_error("[CoreManager] validate_core_manifest: missing core %s / %s (expected: %s)" % [platform_slug, core_id, expected_path])
 				return false
 	return true
 

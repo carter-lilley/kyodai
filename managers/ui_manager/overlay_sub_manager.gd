@@ -106,6 +106,27 @@ func show_settings_dialog_with_category(category_id: String) -> void:
 func is_settings_dialog_open() -> bool:
 	return _settings_dialog and is_instance_valid(_settings_dialog) and _settings_dialog.visible
 
+func get_settings_dialog_category() -> String:
+	if _settings_dialog and is_instance_valid(_settings_dialog):
+		return _settings_dialog.get_current_category()
+	return ""
+
+func reopen_settings_dialog() -> void:
+	"""Cancel, close, and reopen the settings dialog at the same category."""
+	if not _settings_dialog or not is_instance_valid(_settings_dialog) or not _settings_dialog.visible:
+		return
+
+	var category := get_settings_dialog_category()
+	_settings_dialog.cancel_and_dismiss()
+	_reopen_settings_dialog_async.call_deferred(category)
+
+func _reopen_settings_dialog_async(category: String) -> void:
+	# Wait two frames so the display sub-manager's swap scale update has applied.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if is_instance_valid(_settings_dialog) and not _settings_dialog.visible:
+		show_settings_dialog_with_category(category)
+
 func set_card_designer_preview_game(romm_id: int) -> void:
 	"""Tell the Card Designer preview which game's cover to display."""
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):

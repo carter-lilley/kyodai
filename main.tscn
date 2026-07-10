@@ -466,6 +466,7 @@ layer = 1000
 [node name="OnscreenKeyboard" type="PanelContainer" parent="UILayer" unique_id=123456789]
 visible = false
 z_index = 4096
+use_m3_theme = true
 anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0

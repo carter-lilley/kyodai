@@ -204,6 +204,8 @@ func _build_layout():
 func _build_basic_layout():
 	_vbox = VBoxContainer.new()
 	_vbox.alignment = BoxContainer.ALIGNMENT_BEGIN
+	_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_dialog_container.add_child(_vbox)
 	
 	_vbox.add_theme_constant_override("separation", 0)

@@ -188,10 +188,7 @@
 		  "dynamic_cores": true,
 		  "base_url": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/",
 		  "url_pattern": "{name}_libretro_android.so.zip",
-		  "extract_to": "{emulator_dir}/cores",
-		  "validate": {
-			"action_type": "core_manifest"
-		  }
+		  "extract_to": "{emulator_dir}/cores"
 		}
 	  }
 	},

@@ -275,6 +275,13 @@ func select_category(id: String) -> void:
 		if _right_content.has_method("on_view_show"):
 			_right_content.on_view_show()
 
+func get_current_category() -> String:
+	return _current_category
+
+func cancel_and_dismiss() -> void:
+	_cancelled = true
+	dismiss()
+
 func show_overlay() -> void:
 	_cancelled = false
 	_take_snapshot()

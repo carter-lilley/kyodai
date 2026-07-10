@@ -206,6 +206,9 @@ func is_settings_dialog_open() -> bool:
 func show_settings_dialog_with_category(category_id: String) -> void:
 	overlay.show_settings_dialog_with_category(category_id)
 
+func reopen_settings_dialog() -> void:
+	overlay.reopen_settings_dialog()
+
 func show_shuffler_dialog() -> void:
 	overlay.show_shuffler_dialog()
 

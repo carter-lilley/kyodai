@@ -7,6 +7,7 @@ extends PanelContainer
 
 @export var auto_show:bool = true
 @export var animate:bool = true
+@export var use_m3_theme:bool = false
 
 # Track controller connection state - keyboard only auto-shows when controller is connected
 var _controller_connected: bool = false
@@ -50,12 +51,20 @@ var style_special_keys:StyleBoxFlat = null
 		special_keys = new_val
 	get:
 		return style_special_keys
+var style_focus:StyleBoxFlat = null
+@export var focus:StyleBoxFlat = null:
+	set(new_val):
+		style_focus = new_val
+		focus = new_val
+	get:
+		return style_focus
 @export_group("Font")
 @export var font:FontFile
 @export var font_size:int = 20
 @export var font_color_normal:Color = Color(1,1,1)
 @export var font_color_hover:Color = Color(1,1,1)
 @export var font_color_pressed:Color = Color(1,1,1)
+@export var font_color_focus:Color = Color(1,1,1)
 
 ###########################
 ## SIGNALS
@@ -629,10 +638,42 @@ func _set_key_style(style_name:String, key: Control, style:StyleBoxFlat):
 		key.add_theme_stylebox_override(style_name, style)
 
 
+func _build_m3_styles() -> void:
+	if not use_m3_theme:
+		return
+	if not ResourceLoader.exists("res://addons/m3/m3_theme.gd"):
+		push_warning("M3Theme not found; cannot apply M3 styles to keyboard")
+		return
+
+	var surf = M3Theme.get_surface()
+	var surf_var = M3Theme.get_surface_variant()
+	var on_surf = M3Theme.get_on_surface()
+	var prim = M3Theme.get_primary()
+	var on_prim = M3Theme.get_on_primary()
+	var prim_cont = M3Theme.get_primary_container()
+	var on_prim_cont = M3Theme.get_on_primary_container()
+	var outl = M3Theme.get_outline()
+	var radius = M3Theme.RADIUS_SMALL
+
+	style_background = M3Theme.make_flat(surf, radius)
+	style_normal = M3Theme.make_flat(surf_var, radius, 1, outl)
+	style_hover = M3Theme.make_flat(M3Theme.state_overlay(surf_var, on_surf, M3Theme.OPACITY_HOVER), radius, 1, outl)
+	style_focus = M3Theme.make_flat(prim_cont, radius, 2, prim)
+	style_pressed = M3Theme.make_flat(prim, radius, 0, Color.TRANSPARENT)
+	style_special_keys = M3Theme.make_flat(M3Theme.state_overlay(surf_var, on_surf, M3Theme.OPACITY_HOVER), radius, 1, outl)
+
+	font_color_normal = on_surf
+	font_color_hover = on_surf
+	font_color_pressed = on_prim
+	font_color_focus = on_prim_cont
+
+
 func _create_keyboard(layout_data):
 	if layout_data == null:
 		push_error("ERROR. No layout file found")
 		return
+
+	_build_m3_styles()
 
 	KeyListHandler = preload("keylist.gd").new()
 	KeyboardButton = preload("keyboard_button.gd")
@@ -689,6 +730,7 @@ func _create_keyboard(layout_data):
 				_set_key_style("normal",new_key, style_normal)
 				_set_key_style("hover",new_key, style_hover)
 				_set_key_style("pressed",new_key, style_pressed)
+				_set_key_style("focus",new_key, style_focus)
 
 				new_key.set('theme_override_font_sizes/font_size', font_size)
 				if font != null:
@@ -697,6 +739,7 @@ func _create_keyboard(layout_data):
 					new_key.set('theme_override_colors/font_color', font_color_normal)
 					new_key.set('theme_override_colors/font_hover_color', font_color_hover)
 					new_key.set('theme_override_colors/font_pressed_color', font_color_pressed)
+					new_key.set('theme_override_colors/font_focus_color', font_color_focus)
 					new_key.set('theme_override_colors/font_disabled_color', font_color_normal)
 
 				new_key.released.connect(_key_released)

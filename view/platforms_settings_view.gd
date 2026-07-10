@@ -125,12 +125,13 @@ func _fetch_platforms():
 		return
 	_is_fetching_platforms = true
 
-	# Clear existing platform cards (keep UI controls)
+	# Clear existing platform cards and any transient error UI (keep UI controls)
+	_clear_error_ui()
 	for child in _platforms_container.get_children():
 		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "CardsHBox"]:
 			continue
-		if child.name == "LoadingLabel" or child.name == "ErrorLabel" or child.name == "NoPlatformsLabel":
-			child.queue_free()
+		# Remove any other dynamically added widgets that didn't get cleaned up
+		child.queue_free()
 	_return_all_cards()
 	if _active_batch_id != -1:
 		SystemManager.memory.cancel_batch(_active_batch_id)
@@ -164,6 +165,7 @@ func _fetch_platforms():
 			_platforms_container.add_child(error_label)
 
 			var retry_button = M3Button.new()
+			retry_button.name = "RetryButton"
 			retry_button.text = "Retry"
 			retry_button.button_size = M3Button.Size.MEDIUM
 			retry_button.pressed.connect(_fetch_platforms)
@@ -398,17 +400,57 @@ func _exit_tree() -> void:
 		_active_batch_id = -1
 	if _status_poll_timer:
 		_status_poll_timer.stop()
+	
+	# Disconnect global signals so a pooled/reused view doesn't fire handlers while off-screen
+	if SystemManager.network.network_status_changed.is_connected(_on_network_status_changed):
+		SystemManager.network.network_status_changed.disconnect(_on_network_status_changed)
+	if LaunchManager.emulator_extraction_started.is_connected(_on_emulator_extraction_started):
+		LaunchManager.emulator_extraction_started.disconnect(_on_emulator_extraction_started)
+	if LaunchManager.emulator_extraction_completed.is_connected(_on_emulator_extraction_completed):
+		LaunchManager.emulator_extraction_completed.disconnect(_on_emulator_extraction_completed)
+	if LaunchManager.firmware_download_completed.is_connected(_on_firmware_download_completed):
+		LaunchManager.firmware_download_completed.disconnect(_on_firmware_download_completed)
+	if get_viewport().gui_focus_changed.is_connected(_on_focus_changed):
+		get_viewport().gui_focus_changed.disconnect(_on_focus_changed)
+	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
+		SystemManager.display.viewport_size_changed.disconnect(_on_viewport_size_changed)
 
 func _enter_tree() -> void:
 	if _status_poll_timer:
 		_status_poll_timer.start()
+	
+	# Reconnect global signals if this view instance was repooled/reparented
+	if not SystemManager.network.network_status_changed.is_connected(_on_network_status_changed):
+		SystemManager.network.network_status_changed.connect(_on_network_status_changed)
+	if not LaunchManager.emulator_extraction_started.is_connected(_on_emulator_extraction_started):
+		LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
+	if not LaunchManager.emulator_extraction_completed.is_connected(_on_emulator_extraction_completed):
+		LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
+	if not LaunchManager.firmware_download_completed.is_connected(_on_firmware_download_completed):
+		LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
+	
+	var viewport = get_viewport()
+	if viewport and not viewport.gui_focus_changed.is_connected(_on_focus_changed):
+		viewport.gui_focus_changed.connect(_on_focus_changed)
+	
+	if SystemManager.display and not SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
+		SystemManager.display.viewport_size_changed.connect(_on_viewport_size_changed)
+
+func _clear_error_ui():
+	"""Remove transient platform-fetch UI (loading, error, retry, no-platforms) so they don't accumulate."""
+	for child in _platforms_container.get_children():
+		if child.name in ["LoadingLabel", "ErrorLabel", "RetryButton"]:
+			child.queue_free()
+	
+	# NoPlatformsLabel is added to the card columns, not the platforms container
+	for column in [_cards_left, _cards_right]:
+		for child in column.get_children():
+			if child.name == "NoPlatformsLabel":
+				child.queue_free()
 
 func _load_platforms_from_database():
-	# Remove loading label if exists
-	for child in _platforms_container.get_children():
-		if child.name == "LoadingLabel":
-			child.queue_free()
-			break
+	# Remove transient UI that may have been shown by a previous failed fetch
+	_clear_error_ui()
 
 	var platforms = DataManager.get_all_platforms()
 	var enabled_platforms = _get_enabled_platforms()

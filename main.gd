@@ -148,6 +148,14 @@ func _ready():
 	var ayn_thor_manager = get_node_or_null("AynThorManager")
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
+		# Restore saved screen swap state
+		var swap_setting = DataManager.get_setting("dual_screen_swapped")
+		print("[Main] Startup dual_screen_swapped setting: ", swap_setting.value if swap_setting else "NULL")
+		if swap_setting and swap_setting.value and not ayn_thor_manager.is_swapped:
+			print("[Main] Restoring saved screen swap state")
+			ayn_thor_manager.swap_screens()
+		else:
+			print("[Main] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn_thor_manager.is_swapped, ")")
 
 	# Extract native binaries on Android (non-blocking, happens in background)
 	if SystemManager.platform.is_android():
@@ -158,6 +166,11 @@ func _ready():
 
 	# Apply M3 theme to root for fallback native control styling (scrollbars, etc.)
 	_apply_m3_theme()
+
+	# Focus the first Home card on startup once data is loaded
+	var first_run_setting = DataManager.get_setting("first_run_completed")
+	if first_run_setting and first_run_setting.value:
+		call_deferred("_focus_first_home_card_on_startup")
 
 func _apply_m3_theme() -> void:
 	_m3_theme = M3Theme.generate_theme()
@@ -605,11 +618,10 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	return null
 
 func _load_and_apply_saved_zoom() -> void:
-	"""Sync the zoom slider to the saved zoom setting.
+	"""Apply the saved zoom setting to both grids and sync the slider.
 
-	The grid itself now reads the saved zoom ratio during view setup
-	(_update_grid_orientation), so we only need to update the slider here to
-	avoid a late zoom write that causes visible settling.
+	Explicitly applies the saved ratio here so startup is robust even when
+	view _ready() ran before the grid had valid dimensions.
 	"""
 	if not DataManager:
 		return
@@ -620,7 +632,16 @@ func _load_and_apply_saved_zoom() -> void:
 
 	var saved_zoom = zoom_setting.value
 
-	# Set zoom slider to saved value and refresh stops
+	# Apply saved zoom to both Home and Library grids
+	if UIManager:
+		for view_name in ["Home", "Library"]:
+			var view = UIManager.get_view(view_name)
+			if view:
+				var games_grid = _get_view_grid(view)
+				if games_grid:
+					games_grid.target_card_width_ratio = saved_zoom
+
+	# Set zoom slider to the actual grid ratio
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
 		var current_view = UIManager.get_current_view()
@@ -635,6 +656,35 @@ func _load_and_apply_saved_zoom() -> void:
 		else:
 			zoom_slider.set_value_no_signal(actual_zoom)
 		zoom_slider.set_block_signals(false)
+
+func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
+	"""Focus the first game card in the Home grid once it has data."""
+	if attempts > 60:
+		print("[Main] Startup focus: grid did not populate, falling back to Home button")
+		reset_focus_to_home_button()
+		return
+
+	if not UIManager or not UIManager.is_current_view("Home"):
+		print("[Main] Startup focus: Home is not current view, aborting")
+		return
+
+	var home_view = UIManager.get_view("Home") as HomeView
+	if not home_view or not home_view.games_grid:
+		print("[Main] Startup focus: Home grid not ready, retrying...")
+		await get_tree().process_frame
+		_focus_first_home_card_on_startup(attempts + 1)
+		return
+
+	var grid = home_view.games_grid
+	var range_info = grid.get_visible_range()
+	if range_info.total <= 0:
+		print("[Main] Startup focus: waiting for Home grid data (total=", range_info.total, ")")
+		await get_tree().process_frame
+		_focus_first_home_card_on_startup(attempts + 1)
+		return
+
+	print("[Main] Startup focus: focusing first Home card")
+	grid.scroll_to_index_and_focus(0, false)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
@@ -907,8 +957,23 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 
 func _on_screens_swapped(_is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""
-	# Update any UI state that depends on which screen is primary
-	# Note: No reparenting needed - AynThorManager handles rendering swap
+	print("[Main] _on_screens_swapped called with _is_swapped=", _is_swapped)
+	# Persist the new swapped state so it survives restarts
+	if DataManager:
+		var swap_setting = DataManager.get_setting("dual_screen_swapped")
+		print("[Main] _on_screens_swapped: swap_setting=", swap_setting.value if swap_setting else "NULL")
+		if swap_setting:
+			DataManager.set_setting(_is_swapped, swap_setting)
+			print("[Main] _on_screens_swapped: set value to ", _is_swapped, ", calling save_settings()")
+			DataManager.save_settings()
+			print("[Main] _on_screens_swapped: save_settings() returned")
+		else:
+			push_warning("[Main] _on_screens_swapped: dual_screen_swapped setting not found!")
+
+	# Rebuild the settings dialog if it is open so it sizes to the new
+	# viewport and is reparented to the correct overlay parent.
+	if UIManager and UIManager.is_settings_dialog_open():
+		UIManager.reopen_settings_dialog()
 
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""

@@ -5,20 +5,10 @@ tst update flow on android
 hero in 'add to steam'
 clicking "outside" of card in list/carosel is annoying. 
 better extraction notifications
-batch download cores failed and hung
-E 0:05:39:911   emulator_sub_manager.gd:574 @ <anonymous lambda>(): [EmulatorManager] Batch download failed: 1/26 cores failed
-  <C++ Source>  core/variant/variant_utility.cpp:1023 @ push_error()
-  <Stack Trace> emulator_sub_manager.gd:574 @ <anonymous lambda>()
-				emulator_sub_manager.gd:1620 @ _on_unified_download_completed()
-				download_sub_manager.gd:2889 @ _finish_download_completion()
-				download_sub_manager.gd:2729 @ _on_file_download_complete()
-				download_sub_manager.gd:820 @ <anonymous lambda>()
-				network_sub_manager.gd:654 @ <anonymous lambda>()
-doesn't remember zoom or screen swap. should start focused on first item in grid
-single screen by default on thor
-feedback on kb press
-settings dialogue during screen swap
-failed to fetch platforms leaking and adding multiple times when starting without connection
+single screen is not single screen
+platform indicator offscreen in small screen
+sync notif wasnt dismissed
+swapping platforms breaks second screen
 
 romm;
 - mark 'played' if played

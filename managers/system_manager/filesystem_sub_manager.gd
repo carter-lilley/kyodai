@@ -922,19 +922,26 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	if display_name == "":
 		display_name = zip_path.get_file().get_basename()
 	
-	# Use a completion marker file for 100% reliable completion detection
-	# The service writes this file when done, so we don't depend on signals/broadcasts
-	var completion_marker = abs_extract_dir + "/.extraction_complete"
-	var success_marker = abs_extract_dir + "/.extraction_success"
-	var progress_marker = abs_extract_dir + "/.extraction_progress"
+	# Derive a unique marker base from the ZIP filename so concurrent extractions
+	# into the same directory (e.g. RetroArch cores) don't overwrite each other's
+	# completion markers.
+	var marker_base = zip_path.get_file().get_basename()
+	if marker_base == "":
+		marker_base = "archive"
 	
-	# Clean up any old markers
-	if FileAccess.file_exists(completion_marker):
-		DirAccess.remove_absolute(completion_marker)
-	if FileAccess.file_exists(success_marker):
-		DirAccess.remove_absolute(success_marker)
-	if FileAccess.file_exists(progress_marker):
-		DirAccess.remove_absolute(progress_marker)
+	# Use unique completion marker files for 100% reliable completion detection
+	# The service writes this file when done, so we don't depend on signals/broadcasts
+	var completion_marker = abs_extract_dir + "/.extraction_complete_" + marker_base
+	var success_marker = abs_extract_dir + "/.extraction_success_" + marker_base
+	var progress_marker = abs_extract_dir + "/.extraction_progress_" + marker_base
+	
+	# Clean up any old markers (both legacy shared markers and this archive's markers)
+	var legacy_completion_marker = abs_extract_dir + "/.extraction_complete"
+	var legacy_success_marker = abs_extract_dir + "/.extraction_success"
+	var legacy_progress_marker = abs_extract_dir + "/.extraction_progress"
+	for marker in [completion_marker, success_marker, progress_marker, legacy_completion_marker, legacy_success_marker, legacy_progress_marker]:
+		if FileAccess.file_exists(marker):
+			DirAccess.remove_absolute(marker)
 	
 	# Start the extraction service
 	var started = plugin.startExtractorService(abs_zip, abs_extract_dir, display_name)
@@ -942,7 +949,7 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 		push_error("[SystemManager.filesystem] Failed to start ExtractorService")
 		return false
 	
-	print("[SystemManager.filesystem] ExtractorService started, waiting for completion...")
+	print("[SystemManager.filesystem] ExtractorService started, waiting for completion marker: " + completion_marker)
 	
 	# Wait for completion marker with timeout (30 minutes max for very large games)
 	var timeout = 1800.0
@@ -985,18 +992,15 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 		elapsed += 0.1
 	
 	# Clean up markers
-	if FileAccess.file_exists(completion_marker):
-		DirAccess.remove_absolute(completion_marker)
-	if FileAccess.file_exists(success_marker):
-		DirAccess.remove_absolute(success_marker)
-	if FileAccess.file_exists(progress_marker):
-		DirAccess.remove_absolute(progress_marker)
+	for marker in [completion_marker, success_marker, progress_marker]:
+		if FileAccess.file_exists(marker):
+			DirAccess.remove_absolute(marker)
 	
 	if not completed:
 		push_error("[SystemManager.filesystem] Extraction service timed out")
 		return false
 	
-	print("[SystemManager.filesystem] ExtractorService result: " + str(success))
+	print("[SystemManager.filesystem] ExtractorService result for " + marker_base + ": " + str(success))
 	return success
 
 ## Extracts an archive using the bundled 7-Zip binary.

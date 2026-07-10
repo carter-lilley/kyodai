@@ -116,13 +116,18 @@ public class ExtractorService extends Service {
             Log.e(TAG, "Failed to start foreground: " + e.getMessage());
         }
         
+        // Derive a unique marker base from the zip filename so concurrent extractions
+        // into the same directory don't overwrite each other's completion markers.
+        String markerBase = deriveMarkerBase(zipPath);
+        
         // Run extraction on a background thread
+        final String finalMarkerBase = markerBase;
         new Thread(() -> {
-            boolean success = extractZipStreaming(zipPath, extractDir, gameName);
+            boolean success = extractZipStreaming(zipPath, extractDir, gameName, finalMarkerBase);
             
             // Write completion marker files for 100% reliable completion detection
             // The Godot side polls for these files, so we don't depend on broadcasts
-            writeCompletionMarkers(extractDir, success);
+            writeCompletionMarkers(extractDir, success, finalMarkerBase);
             
             // Also send broadcast as a fallback/notification mechanism
             Log.d(TAG, "Sending extraction completion broadcast, success=" + success);
@@ -130,6 +135,7 @@ public class ExtractorService extends Service {
             broadcast.putExtra("success", success);
             broadcast.putExtra("zip_path", zipPath);
             broadcast.putExtra("extract_dir", extractDir);
+            broadcast.putExtra("marker_base", finalMarkerBase);
             if (!success) {
                 broadcast.putExtra("error", "Extraction failed");
             }
@@ -140,6 +146,28 @@ public class ExtractorService extends Service {
             stopForeground(true);
             stopSelf();
         }).start();
+    }
+    
+    /**
+     * Derives a unique marker base name from the ZIP filename. This ensures that
+     * concurrent extractions into the same output directory (e.g. RetroArch cores)
+     * each use their own completion/progress markers instead of overwriting shared
+     * marker files.
+     */
+    private String deriveMarkerBase(String zipPath) {
+        if (zipPath == null || zipPath.isEmpty()) {
+            return "archive";
+        }
+        File zipFile = new File(zipPath);
+        String name = zipFile.getName();
+        // Strip .zip extension if present
+        if (name.toLowerCase().endsWith(".zip")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        if (name.isEmpty()) {
+            return "archive";
+        }
+        return name;
     }
     
     private Notification buildNotification(String gameName, int progress) {
@@ -196,8 +224,8 @@ public class ExtractorService extends Service {
      * Extracts ZIP using streaming with memory pressure relief.
      * Runs in this service's own process with separate memory budget.
      */
-    private boolean extractZipStreaming(String zipPath, String extractDir, String gameName) {
-        Log.d(TAG, "Starting streaming extraction: " + zipPath + " -> " + extractDir);
+    private boolean extractZipStreaming(String zipPath, String extractDir, String gameName, String markerBase) {
+        Log.d(TAG, "Starting streaming extraction: " + zipPath + " -> " + extractDir + " (markerBase=" + markerBase + ")");
         
         ZipInputStream zis = null;
         InputStream fis = null;
@@ -287,7 +315,7 @@ public class ExtractorService extends Service {
                 // Write progress file every 2 seconds
                 long now = System.currentTimeMillis();
                 if (now - lastProgressWrite > 2000) {
-                    writeProgressMarker(extractDir, extractedCount, totalFiles);
+                    writeProgressMarker(extractDir, extractedCount, totalFiles, markerBase);
                     updateNotification(gameName, extractedCount, totalBytes);
                     lastProgressWrite = now;
                 }
@@ -305,7 +333,7 @@ public class ExtractorService extends Service {
             }
             
             // Write final progress
-            writeProgressMarker(extractDir, extractedCount, totalFiles);
+            writeProgressMarker(extractDir, extractedCount, totalFiles, markerBase);
             Log.d(TAG, "Extraction complete: " + extractedCount + "/" + totalFiles + " files, " + (totalBytes / 1048576) + " MB");
             return true;
             
@@ -327,13 +355,13 @@ public class ExtractorService extends Service {
         }
     }
     
-    private void writeProgressMarker(String extractDir, int extractedCount, int totalFiles) {
+    private void writeProgressMarker(String extractDir, int extractedCount, int totalFiles, String markerBase) {
         try {
             java.io.File dir = new java.io.File(extractDir);
             if (!dir.exists()) {
                 dir.mkdirs();
             }
-            java.io.File progressMarker = new java.io.File(dir, ".extraction_progress");
+            java.io.File progressMarker = new java.io.File(dir, ".extraction_progress_" + markerBase);
             java.io.FileWriter writer = new java.io.FileWriter(progressMarker);
             writer.write("{\"extracted\":" + extractedCount + ",\"total\":" + totalFiles + "}");
             writer.close();
@@ -342,7 +370,7 @@ public class ExtractorService extends Service {
         }
     }
     
-    private void writeCompletionMarkers(String extractDir, boolean success) {
+    private void writeCompletionMarkers(String extractDir, boolean success, String markerBase) {
         try {
             java.io.File dir = new java.io.File(extractDir);
             if (!dir.exists()) {
@@ -350,14 +378,14 @@ public class ExtractorService extends Service {
             }
             
             // Write completion marker
-            java.io.File completeMarker = new java.io.File(dir, ".extraction_complete");
+            java.io.File completeMarker = new java.io.File(dir, ".extraction_complete_" + markerBase);
             java.io.FileWriter writer = new java.io.FileWriter(completeMarker);
             writer.write("complete");
             writer.close();
             Log.d(TAG, "Wrote completion marker: " + completeMarker.getAbsolutePath());
             
             // Write success/failure marker
-            java.io.File successMarker = new java.io.File(dir, ".extraction_success");
+            java.io.File successMarker = new java.io.File(dir, ".extraction_success_" + markerBase);
             writer = new java.io.FileWriter(successMarker);
             writer.write(success ? "true" : "false");
             writer.close();
