@@ -12,12 +12,19 @@ signal filter_clicked()
 @onready var _platform_group: M3ButtonGroup
 @onready var _platform_buttons: Array[M3Button] = []
 
-const PLATFORM_COUNT: int = 5
-const TOTAL_GROUP_BUTTONS: int = PLATFORM_COUNT + 2
-const CENTER_PLATFORM_INDEX: int = 2
+const MAX_PLATFORM_COUNT: int = 5
+const MIN_PLATFORM_COUNT: int = 1
+var _platform_count: int = MAX_PLATFORM_COUNT
+
+const WIDTH_THRESHOLD_5_SMALL: float = 720.0
+const WIDTH_THRESHOLD_3_XSMALL: float = 480.0
+const RESIZE_DEBOUNCE_TIME: float = 0.1
 
 const MIN_HEIGHT_DP: float = 50.0
 const VERTICAL_PADDING_DP: float = 8.0
+
+var _current_button_size: M3Button.Size = M3Button.Size.SMALL
+var _resize_debounce_timer: Timer
 
 var _platforms: Array[Dictionary] = []
 var _current_index: int = -1
@@ -37,40 +44,6 @@ func _setup_ui():
 	hbox.add_theme_constant_override("separation", M3Units.dp(8))
 	add_child(hbox)
 	
-	# Previous chevron (index 0)
-	var prev_btn = M3Button.new()
-	prev_btn.name = "PrevButton"
-	prev_btn.icon_name = "chevron-left-circle"
-	prev_btn.text = ""
-	prev_btn.button_size = M3Button.Size.SMALL
-	prev_btn.button_variant = M3Button.Variant.OUTLINED
-	prev_btn.focus_mode = Control.FOCUS_NONE
-	prev_btn.pressed.connect(_on_prev_clicked)
-	
-	# Platform buttons (indices 1-5)
-	var platform_btns: Array[M3Button] = []
-	for i in range(PLATFORM_COUNT):
-		var btn = M3Button.new()
-		btn.name = "PlatformButton" + str(i)
-		btn.button_size = M3Button.Size.SMALL
-		if i == CENTER_PLATFORM_INDEX:
-			btn.button_variant = M3Button.Variant.FILLED
-		else:
-			btn.button_variant = M3Button.Variant.ELEVATED
-		btn.focus_mode = Control.FOCUS_NONE
-		btn.pressed.connect(_on_platform_button_clicked.bind(i))
-		platform_btns.append(btn)
-	
-	# Next chevron (index 6)
-	var next_btn = M3Button.new()
-	next_btn.name = "NextButton"
-	next_btn.icon_name = "chevron-right-circle"
-	next_btn.text = ""
-	next_btn.button_size = M3Button.Size.SMALL
-	next_btn.button_variant = M3Button.Variant.OUTLINED
-	next_btn.focus_mode = Control.FOCUS_NONE
-	next_btn.pressed.connect(_on_next_clicked)
-	
 	# Filter button (outside the group, on the left)
 	_filter_button = M3IconButton.new()
 	_filter_button.name = "FilterButton"
@@ -80,20 +53,6 @@ func _setup_ui():
 	_filter_button.focus_mode = Control.FOCUS_NONE
 	_filter_button.pressed.connect(_on_filter_clicked)
 	hbox.add_child(_filter_button)
-	
-	# Build the group with all children BEFORE adding to tree so _ready() runs once
-	# with fully-initialized buttons and computes connected corners correctly.
-	_platform_group = M3ButtonGroup.new()
-	_platform_group.name = "PlatformGroup"
-	_platform_group.select_mode = M3ButtonGroup.SelectMode.NONE
-	_platform_group.mode = M3ButtonGroup.Mode.CONNECTED
-	_platform_group.shape = M3ButtonGroup.Shape.ROUND
-	_platform_group.add_child(prev_btn)
-	for btn in platform_btns:
-		_platform_group.add_child(btn)
-		_platform_buttons.append(btn)
-	_platform_group.add_child(next_btn)
-	hbox.add_child(_platform_group)
 	
 	# Search button (outside the group)
 	_search_button = M3IconButton.new()
@@ -105,9 +64,123 @@ func _setup_ui():
 	_search_button.pressed.connect(_on_search_clicked)
 	hbox.add_child(_search_button)
 	
+	# Resize debounce timer
+	_resize_debounce_timer = Timer.new()
+	_resize_debounce_timer.name = "ResizeDebounceTimer"
+	_resize_debounce_timer.one_shot = true
+	_resize_debounce_timer.wait_time = RESIZE_DEBOUNCE_TIME
+	_resize_debounce_timer.timeout.connect(_apply_responsive_layout)
+	add_child(_resize_debounce_timer)
+	
+	# Build initial platform group once size is known
+	call_deferred("_apply_responsive_layout")
+
+func _notification(what: int):
+	if what == NOTIFICATION_RESIZED:
+		if _resize_debounce_timer != null:
+			_resize_debounce_timer.start()
+
+func _apply_responsive_layout() -> void:
+	var available_width := size.x
+	if available_width <= 0:
+		available_width = get_viewport_rect().size.x
+	
+	var new_count: int
+	var new_size: M3Button.Size
+	
+	if available_width >= M3Units.dp(WIDTH_THRESHOLD_5_SMALL):
+		new_count = 5
+		new_size = M3Button.Size.SMALL
+	elif available_width >= M3Units.dp(WIDTH_THRESHOLD_3_XSMALL):
+		new_count = 3
+		new_size = M3Button.Size.EXTRA_SMALL
+	else:
+		new_count = 1
+		new_size = M3Button.Size.EXTRA_SMALL
+	
+	if new_count == _platform_count and new_size == _current_button_size and _platform_group != null:
+		return
+	
+	_platform_count = new_count
+	_current_button_size = new_size
+	_update_icon_button_sizes()
+	_rebuild_platform_group()
 	_update_minimum_height()
-	# Child _ready() callbacks may run after setup; recalculate once the tree is stable.
 	call_deferred("_update_minimum_height")
+	_refresh_labels()
+
+func _update_icon_button_sizes() -> void:
+	var icon_size_int: int = int(_current_button_size)
+	if _filter_button != null:
+		_filter_button.icon_button_size = icon_size_int
+	if _search_button != null:
+		_search_button.icon_button_size = icon_size_int
+
+func _get_center_platform_index() -> int:
+	return _platform_count / 2
+
+func _rebuild_platform_group() -> void:
+	var hbox = get_node_or_null("MainContainer")
+	if hbox == null:
+		return
+	
+	# Remove old group
+	if _platform_group != null:
+		hbox.remove_child(_platform_group)
+		_platform_group.queue_free()
+		_platform_group = null
+	_platform_buttons.clear()
+	
+	var center = _get_center_platform_index()
+	
+	# Previous chevron
+	var prev_btn = M3Button.new()
+	prev_btn.name = "PrevButton"
+	prev_btn.icon_name = "chevron-left-circle"
+	prev_btn.text = ""
+	prev_btn.button_size = _current_button_size
+	prev_btn.button_variant = M3Button.Variant.OUTLINED
+	prev_btn.focus_mode = Control.FOCUS_NONE
+	prev_btn.pressed.connect(_on_prev_clicked)
+	
+	# Platform buttons
+	var platform_btns: Array[M3Button] = []
+	for i in range(_platform_count):
+		var btn = M3Button.new()
+		btn.name = "PlatformButton" + str(i)
+		btn.button_size = _current_button_size
+		if i == center:
+			btn.button_variant = M3Button.Variant.FILLED
+		else:
+			btn.button_variant = M3Button.Variant.ELEVATED
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(_on_platform_button_clicked.bind(i))
+		platform_btns.append(btn)
+		_platform_buttons.append(btn)
+	
+	# Next chevron
+	var next_btn = M3Button.new()
+	next_btn.name = "NextButton"
+	next_btn.icon_name = "chevron-right-circle"
+	next_btn.text = ""
+	next_btn.button_size = _current_button_size
+	next_btn.button_variant = M3Button.Variant.OUTLINED
+	next_btn.focus_mode = Control.FOCUS_NONE
+	next_btn.pressed.connect(_on_next_clicked)
+	
+	# Build the group with all children BEFORE adding to tree so _ready() runs once
+	# with fully-initialized buttons and computes connected corners correctly.
+	_platform_group = M3ButtonGroup.new()
+	_platform_group.name = "PlatformGroup"
+	_platform_group.select_mode = M3ButtonGroup.SelectMode.NONE
+	_platform_group.mode = M3ButtonGroup.Mode.CONNECTED
+	_platform_group.shape = M3ButtonGroup.Shape.ROUND
+	_platform_group.add_child(prev_btn)
+	for btn in platform_btns:
+		_platform_group.add_child(btn)
+	_platform_group.add_child(next_btn)
+	hbox.add_child(_platform_group)
+	hbox.move_child(_platform_group, 1)
 
 func _update_minimum_height() -> void:
 	var hbox = get_node_or_null("MainContainer")
@@ -134,15 +207,16 @@ func _refresh_labels():
 	
 	var total_items = _platforms.size() + 1
 	if total_items <= 1:
-		for i in range(PLATFORM_COUNT):
+		for i in range(_platform_count):
 			_platform_buttons[i].text = ""
 			_platform_buttons[i].disabled = true
 		return
 	
 	_visible_indices.clear()
+	var center = _get_center_platform_index()
 	
-	for i in range(PLATFORM_COUNT):
-		var offset = i - 2
+	for i in range(_platform_count):
+		var offset = i - center
 		var current_0_based = _current_index + 1
 		var target_0_based = current_0_based + offset
 		target_0_based = ((target_0_based % total_items) + total_items) % total_items
@@ -160,7 +234,7 @@ func _refresh_labels():
 		btn.disabled = false
 		
 		# Update variant based on position
-		if i == CENTER_PLATFORM_INDEX:
+		if i == center:
 			btn.button_variant = M3Button.Variant.FILLED
 		else:
 			btn.button_variant = M3Button.Variant.ELEVATED
@@ -199,15 +273,17 @@ func show_search_mode(query: String):
 	if _platform_buttons.is_empty():
 		return
 	
-	for i in range(PLATFORM_COUNT):
+	var center = _get_center_platform_index()
+	
+	for i in range(_platform_count):
 		var btn = _platform_buttons[i]
 		
-		if i == CENTER_PLATFORM_INDEX:
+		if i == center:
 			btn.text = "SEARCH"
 			btn.disabled = false
 			btn.button_variant = M3Button.Variant.FILLED
 		else:
-			if i == 1 or i == 3:
+			if abs(i - center) == 1:
 				var display_query = query
 				if display_query.length() > 12:
 					display_query = display_query.substr(0, 9) + "..."

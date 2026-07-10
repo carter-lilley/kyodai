@@ -197,7 +197,7 @@
 	"n64": {
 		"name": "N64",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mupen64plus_next_gles3",
+		"retroarch_core": "mupen64plus_next",
 		"firmware": {
 
 		}

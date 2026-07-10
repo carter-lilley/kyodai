@@ -98,6 +98,7 @@ func _enter_tree():
 	z_index = 4096
 	
 	_init_keyboard()
+	call_deferred("refresh_theme")
 
 
 func _on_joy_connection_changed(device_id: int, connected: bool) -> void:
@@ -477,6 +478,7 @@ func _show_keyboard(key_data=null):
 	var was_hidden = not visible
 	# Ensure keyboard renders on top of other UI elements
 	move_to_front()
+	refresh_theme()
 	change_visibility(true)
 	# Emit signal BEFORE grabbing focus on keys so listeners can prepare
 	if _active_line_edit != null:
@@ -640,6 +642,7 @@ func _set_key_style(style_name:String, key: Control, style:StyleBoxFlat):
 
 func _build_m3_styles() -> void:
 	if not use_m3_theme:
+		print("[OnscreenKeyboard] _build_m3_styles skipped: use_m3_theme is false")
 		return
 	if not ResourceLoader.exists("res://addons/m3/m3_theme.gd"):
 		push_warning("M3Theme not found; cannot apply M3 styles to keyboard")
@@ -654,18 +657,48 @@ func _build_m3_styles() -> void:
 	var on_prim_cont = M3Theme.get_on_primary_container()
 	var outl = M3Theme.get_outline()
 	var radius = M3Theme.RADIUS_SMALL
+	var hover_opacity := 0.24
 
 	style_background = M3Theme.make_flat(surf, radius)
 	style_normal = M3Theme.make_flat(surf_var, radius, 1, outl)
-	style_hover = M3Theme.make_flat(M3Theme.state_overlay(surf_var, on_surf, M3Theme.OPACITY_HOVER), radius, 1, outl)
-	style_focus = M3Theme.make_flat(prim_cont, radius, 2, prim)
+	style_hover = M3Theme.make_flat(M3Theme.state_overlay(surf_var, on_surf, hover_opacity), radius, 1, outl)
+	style_focus = M3Theme.make_flat(prim_cont, radius, 4, prim)
 	style_pressed = M3Theme.make_flat(prim, radius, 0, Color.TRANSPARENT)
-	style_special_keys = M3Theme.make_flat(M3Theme.state_overlay(surf_var, on_surf, M3Theme.OPACITY_HOVER), radius, 1, outl)
+	style_special_keys = M3Theme.make_flat(M3Theme.state_overlay(surf_var, on_surf, hover_opacity), radius, 1, outl)
 
 	font_color_normal = on_surf
 	font_color_hover = on_surf
 	font_color_pressed = on_prim
 	font_color_focus = on_prim_cont
+
+	print("[OnscreenKeyboard] M3 styles rebuilt. dark_mode=", M3Theme.is_dark_mode, " primary=", prim, " focus_border=4")
+
+
+func refresh_theme() -> void:
+	_build_m3_styles()
+
+	if style_background != null:
+		add_theme_stylebox_override('panel', style_background)
+		for layout in layouts:
+			if is_instance_valid(layout):
+				layout.add_theme_stylebox_override('panel', style_background)
+
+	for key in keys:
+		if not is_instance_valid(key):
+			continue
+		var key_type = key.key_data.get("type", "")
+		var is_special: bool = key_type in ["switch-layout", "special", "special-shift", "special-hide-keyboard"]
+		var normal_style = style_special_keys if is_special else style_normal
+		_set_key_style("normal", key, normal_style)
+		_set_key_style("hover", key, style_hover)
+		_set_key_style("pressed", key, style_pressed)
+		_set_key_style("focus", key, style_focus)
+		if font_color_normal != null:
+			key.set('theme_override_colors/font_color', font_color_normal)
+			key.set('theme_override_colors/font_hover_color', font_color_hover)
+			key.set('theme_override_colors/font_pressed_color', font_color_pressed)
+			key.set('theme_override_colors/font_focus_color', font_color_focus)
+			key.set('theme_override_colors/font_disabled_color', font_color_normal)
 
 
 func _create_keyboard(layout_data):

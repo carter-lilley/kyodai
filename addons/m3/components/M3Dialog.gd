@@ -22,6 +22,7 @@ const PADDING_TOP_NO_ICON := 16.0
 const ICON_SIZE := 24.0
 const ICON_TITLE_GAP := 16.0
 const ACTIONS_GAP := 8.0
+const BASIC_ACTIONS_HEIGHT := 48.0
 const FULLSCREEN_TOP_BAR_HEIGHT := 64.0
 const FULLSCREEN_ACTIONS_HEIGHT := 64.0
 
@@ -258,20 +259,16 @@ func _build_basic_layout():
 	content_slot = VBoxContainer.new()
 	content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content_slot.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	content_slot.clip_contents = true
 	_vbox.add_child(content_slot)
 	
 	_divider = HSeparator.new()
 	_divider.visible = false
 	_vbox.add_child(_divider)
 	
-	var divider_actions_spacer = Control.new()
-	divider_actions_spacer.custom_minimum_size = Vector2(0, M3Units.dp(24))
-	divider_actions_spacer.visible = false
-	divider_actions_spacer.name = "DividerActionsSpacer"
-	_vbox.add_child(divider_actions_spacer)
-	
 	_actions_container = HBoxContainer.new()
 	_actions_container.alignment = BoxContainer.ALIGNMENT_END
+	_actions_container.custom_minimum_size = Vector2(0, M3Units.dp(BASIC_ACTIONS_HEIGHT))
 	_actions_container.add_theme_constant_override("separation", M3Units.dp(ACTIONS_GAP))
 	_vbox.add_child(_actions_container)
 

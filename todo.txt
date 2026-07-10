@@ -9,6 +9,10 @@ single screen is not single screen
 platform indicator offscreen in small screen
 sync notif wasnt dismissed
 swapping platforms breaks second screen
+platform cards take longer on android
+some screens not scrollable?
+startup layout settling
+startup grid wrong if DS mode is swapped. 
 
 romm;
 - mark 'played' if played

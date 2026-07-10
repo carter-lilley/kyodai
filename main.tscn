@@ -466,7 +466,6 @@ layer = 1000
 [node name="OnscreenKeyboard" type="PanelContainer" parent="UILayer" unique_id=123456789]
 visible = false
 z_index = 4096
-use_m3_theme = true
 anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
@@ -475,6 +474,7 @@ offset_top = -300.0
 grow_horizontal = 2
 grow_vertical = 0
 script = ExtResource("6_onscreenkeyboard")
+use_m3_theme = true
 
 [node name="LaunchTransitionOverlay" type="Control" parent="UILayer" unique_id=123456790]
 layout_mode = 3

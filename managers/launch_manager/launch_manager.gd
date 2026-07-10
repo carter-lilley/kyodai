@@ -627,7 +627,8 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 			var pending = _pending_core_launches[i]
 			var pending_callback = pending.callback
 			if pending_callback.is_valid():
-				pending_callback.call(false)
+				pending_callback.call()
+
 		for i in range(matching_indices.size() - 1, -1, -1):
 			_pending_core_launches.remove_at(matching_indices[i])
 		core_download_completed.emit(platform_slug, core_id, false)
