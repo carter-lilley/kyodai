@@ -62,6 +62,7 @@ const FULLSCREEN_ACTIONS_HEIGHT := 64.0
 			_update_hero_icon()
 
 @export var dismissible: bool = true
+@export var fill_viewport_height: bool = false
 @export var disable_default_action: bool = false
 @export var dialog_max_width: float = BASIC_MAX_WIDTH
 
@@ -83,6 +84,8 @@ var _vbox: VBoxContainer
 var _hero_icon: FontIcon
 var _title_label: Label
 var _body_label: Label
+var _title_body_spacer: Control
+var _body_content_spacer: Control
 ## The content slot for adding custom controls (VBoxContainer).
 var content_slot: VBoxContainer
 var _divider: HSeparator
@@ -180,10 +183,10 @@ func _build_layout():
 	_scrim.gui_input.connect(_on_scrim_input)
 	add_child(_scrim)
 	
-	# Wrapper enforces the dialog's fixed size and clips any content that tries
-	# to expand past it (e.g. async-built children inflating PanelContainer).
+	# Wrapper enforces the dialog's fixed size and position. Content clipping is
+	# handled by the dialog container's clip_children, so the wrapper does not
+	# clip the rounded panel corners or its shadow.
 	_dialog_wrapper = Control.new()
-	_dialog_wrapper.clip_contents = true
 	add_child(_dialog_wrapper)
 	
 	# Dialog container (PanelContainer)
@@ -205,6 +208,25 @@ func _build_basic_layout():
 	
 	_vbox.add_theme_constant_override("separation", 0)
 	
+	# Top bar with title and close button for basic variant.
+	var top_bar_hbox = HBoxContainer.new()
+	top_bar_hbox.name = "TopBar"
+	top_bar_hbox.custom_minimum_size = Vector2(0, M3Units.dp(FULLSCREEN_TOP_BAR_HEIGHT))
+	top_bar_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_vbox.add_child(top_bar_hbox)
+	
+	_top_bar_title = Label.new()
+	_top_bar_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_top_bar_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_top_bar_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	top_bar_hbox.add_child(_top_bar_title)
+	
+	_close_button = M3IconButton.new()
+	_close_button.icon_name = "close"
+	_close_button.pressed.connect(_on_close_button_pressed)
+	_close_button.visible = dismissible
+	top_bar_hbox.add_child(_close_button)
+	
 	_hero_icon = FontIcon.new()
 	_hero_icon.icon_settings = _get_font_icon_settings()
 	_hero_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -214,21 +236,22 @@ func _build_basic_layout():
 	_title_label = Label.new()
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_title_label.visible = false
 	_vbox.add_child(_title_label)
 	
-	var title_body_spacer = Control.new()
-	title_body_spacer.custom_minimum_size = Vector2(0, M3Units.dp(16))
-	_vbox.add_child(title_body_spacer)
+	_title_body_spacer = Control.new()
+	_title_body_spacer.custom_minimum_size = Vector2(0, M3Units.dp(16))
+	_vbox.add_child(_title_body_spacer)
 	
 	_body_label = Label.new()
 	_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_vbox.add_child(_body_label)
 	
-	var body_content_spacer = Control.new()
-	body_content_spacer.custom_minimum_size = Vector2(0, M3Units.dp(24))
-	body_content_spacer.name = "BodyContentSpacer"
-	_vbox.add_child(body_content_spacer)
+	_body_content_spacer = Control.new()
+	_body_content_spacer.custom_minimum_size = Vector2(0, M3Units.dp(24))
+	_body_content_spacer.name = "BodyContentSpacer"
+	_vbox.add_child(_body_content_spacer)
 	
 	content_slot = VBoxContainer.new()
 	content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -271,13 +294,15 @@ func _build_fullscreen_layout():
 	
 	_close_button = M3IconButton.new()
 	_close_button.icon_name = "close"
-	_close_button.pressed.connect(dismiss)
-	top_hbox.add_child(_close_button)
+	_close_button.pressed.connect(_on_close_button_pressed)
+	_close_button.visible = dismissible
 	
 	_top_bar_title = Label.new()
 	_top_bar_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_top_bar_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	top_hbox.add_child(_top_bar_title)
+	
+	top_hbox.add_child(_close_button)
 	
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -349,6 +374,8 @@ func _rebuild_layout():
 	_scroll = null
 	_scroll_content = null
 	_bottom_actions = null
+	_title_body_spacer = null
+	_body_content_spacer = null
 	
 	if dialog_variant == Variant.BASIC:
 		_build_basic_layout()
@@ -371,6 +398,16 @@ func _on_scrim_input(event: InputEvent):
 		if dismissible:
 			dismiss()
 
+func _on_close_button_pressed() -> void:
+	"""Default close-button behavior; subclasses can override to customize."""
+	dismiss()
+
+func _is_small_screen() -> bool:
+	if not get_viewport():
+		return false
+	var viewport_size = get_viewport().get_visible_rect().size
+	return viewport_size.x < M3Units.dp(600) or viewport_size.y < M3Units.dp(700)
+
 func _focus_first_action() -> void:
 	for btn in _actions:
 		if btn is Control and btn.focus_mode != Control.FOCUS_NONE:
@@ -379,34 +416,74 @@ func _focus_first_action() -> void:
 			btn.grab_focus()
 			return
 
+func _get_usable_rect() -> Rect2:
+	var viewport = get_viewport()
+	if not viewport:
+		return Rect2(Vector2.ZERO, Vector2(1920, 1080))
+	var viewport_rect = viewport.get_visible_rect()
+	
+	# For SubViewports (dual-screen mode), the viewport rect is the authoritative
+	# usable area; the screen safe-area is in root-window coordinates and may not
+	# match the SubViewport coordinate space.
+	if viewport is SubViewport:
+		return viewport_rect
+	
+	# For the root window, intersect the viewport with the display safe area so
+	# we don't position dialogs under system cutouts/taskbars. On desktop the safe
+	# area can be the entire monitor while the window is smaller, so this falls
+	# back to the viewport rect when it is smaller than the safe area.
+	var safe_area = DisplayServer.get_display_safe_area()
+	if safe_area.has_area():
+		var window_pos = DisplayServer.window_get_position()
+		var local_safe = Rect2(safe_area.position - window_pos, safe_area.size)
+		var intersection = viewport_rect.intersection(local_safe)
+		if intersection.has_area():
+			return intersection
+	return viewport_rect
+
 func _position_dialog():
-	var viewport_size = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1920, 1080)
+	var usable_rect = _get_usable_rect()
+	var viewport_pos = usable_rect.position
+	var viewport_size = usable_rect.size
 	
 	if dialog_variant == Variant.BASIC:
-		var margin = M3Units.dp(48)
+		var margin_per_side = M3Units.dp(24)
 		var max_w = M3Units.dp(dialog_max_width)
 		var max_h = M3Units.dp(BASIC_MAX_HEIGHT)
 		var min_h = M3Units.dp(BASIC_MIN_HEIGHT)
-		var dialog_width = min(max_w, viewport_size.x - margin)
+		var dialog_width = min(max_w, viewport_size.x - margin_per_side * 2)
 		
 		_dialog_container.set_anchors_preset(Control.PRESET_TOP_WIDE, false)
 		_dialog_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		_dialog_container.custom_minimum_size = Vector2(dialog_width, 0)
 		await get_tree().process_frame
-		var content_height := _dialog_container.get_combined_minimum_size().y
-		content_height += M3Units.dp(PADDING * 2)
-		var dialog_height = clamp(content_height, min_h, max_h)
-		dialog_height = min(dialog_height, viewport_size.y - margin)
+		var dialog_min_size := _dialog_container.get_combined_minimum_size()
+		var content_height := dialog_min_size.y
+		var max_available_height := (viewport_size.y - margin_per_side * 2) as float
+		var dialog_height: float
+		if fill_viewport_height:
+			dialog_height = clamp(max_available_height, min_h, max_h)
+		else:
+			dialog_height = clamp(content_height, min_h, max_h)
+			dialog_height = min(dialog_height, max_available_height)
 		
-		_dialog_container.set_deferred("custom_minimum_size", Vector2(dialog_width, dialog_height))
-		_dialog_wrapper.set_anchors_preset(Control.PRESET_CENTER, false)
-		_dialog_wrapper.set_deferred("size", Vector2(dialog_width, dialog_height))
-		_dialog_wrapper.set_deferred("position", (viewport_size - Vector2(dialog_width, dialog_height)) / 2.0)
+		# Fix the container to the measured dialog size and center it in the wrapper.
+		# The wrapper is left un-clipped so the rounded panel corners and shadow are
+		# not cut off. The stylebox's content margin already keeps children inside
+		# the rounded shape, so shape clipping is unnecessary.
+		_dialog_container.set_anchors_preset(Control.PRESET_TOP_LEFT, false)
+		_dialog_container.position = Vector2.ZERO
+		_dialog_container.custom_minimum_size = Vector2(dialog_width, dialog_height)
+		_dialog_container.size = Vector2(dialog_width, dialog_height)
+		_dialog_wrapper.set_anchors_preset(Control.PRESET_TOP_LEFT, false)
+		_dialog_wrapper.size = Vector2(dialog_width, dialog_height)
+		_dialog_wrapper.position = viewport_pos + (viewport_size - Vector2(dialog_width, dialog_height)) / 2.0
 	else:
-		# Fullscreen: wrapper fills the viewport.
+		# Fullscreen: wrapper fills the full viewport (including any cutout areas).
+		var full_viewport_size = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1920, 1080)
 		_dialog_wrapper.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_dialog_wrapper.position = Vector2.ZERO
-		_dialog_wrapper.size = viewport_size
+		_dialog_wrapper.size = full_viewport_size
 
 
 # ============================================
@@ -430,12 +507,20 @@ func _update_appearance():
 		var sb = M3Theme.make_shadow(bg, M3Units.dpi(BASIC_RADIUS),
 			M3Theme.ELEVATION_3["size"], M3Theme.ELEVATION_3["offset"], M3Theme.ELEVATION_3["color"])
 		var pad = M3Units.dp(PADDING)
+		if _is_small_screen():
+			pad = M3Units.dp(16)
 		sb.content_margin_left = pad
 		sb.content_margin_right = pad
 		sb.content_margin_top = pad
 		sb.content_margin_bottom = pad
 		_dialog_container.add_theme_stylebox_override("panel", sb)
+		# Don't use clip_children here. The BASIC stylebox already insets content by
+		# the full padding (24 dp, 16 dp on very small screens), which keeps the
+		# content rectangle well inside the 28 dp rounded panel shape. Using
+		# clip_children would nest with M3Card's own clip_children and cause
+		# M3Card children to render behind the card background.
 		
+		_style_label(_top_bar_title, fonts["regular"], M3Units.dp(22), M3Theme.get_on_surface())
 		_style_label(_title_label, fonts["regular"], M3Units.dp(24), M3Theme.get_on_surface())
 		_style_label(_body_label, fonts["regular"], M3Units.dp(14), M3Theme.get_on_surface_variant())
 		
@@ -482,12 +567,18 @@ func _style_label(label: Label, font: Font, font_size: int, color: Color):
 func _update_text():
 	if _title_label:
 		_title_label.text = title_text
-		_title_label.visible = not title_text.is_empty()
+		if dialog_variant == Variant.BASIC:
+			_title_label.visible = false
+		else:
+			_title_label.visible = not title_text.is_empty()
 	if _body_label:
 		_body_label.text = body_text
 		_body_label.visible = not body_text.is_empty()
+	if _body_content_spacer:
+		_body_content_spacer.visible = _body_label.visible
 	if _top_bar_title:
 		_top_bar_title.text = title_text
+		_top_bar_title.visible = not title_text.is_empty()
 
 func _update_hero_icon():
 	if not _hero_icon:

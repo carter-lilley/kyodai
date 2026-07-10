@@ -84,21 +84,33 @@ var _sync_toggle_connected: bool = false
 var _emulator_dropdown_connected: bool = false
 var _download_button_connected: bool = false
 
+func _init():
+	# Cards are created from PlatformCard.new() both directly and from the pool.
+	# Set the minimum size early so the first layout pass uses the correct
+	# width instead of the default Button width (which yields an 8 px card).
+	custom_minimum_size = Vector2(M3Units.dp(320), M3Units.dp(140))
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+func refresh_basic_ui() -> void:
+	if not is_node_ready():
+		return
+	if _name_label:
+		_name_label.text = platform_name if platform_name else platform_slug
+	if _sync_toggle:
+		_sync_toggle.set_pressed_no_signal(is_sync_enabled)
+	_update_shuffler_mode()
+	_update_status_indicator()
+
 func _ready():
 	card_layout_mode = LayoutMode.HORIZONTAL
 	card_variant = Variant.ELEVATED
 	clickable = false
 
 	super._ready()
-	# Allow card to grow to fit content; set a sane minimum for horizontal mode.
-	# custom_minimum_size.x must be set because pooled cards are created from
-	# PlatformCard.new() and won't inherit the value from the .tscn file.
-	custom_minimum_size = Vector2(M3Units.dp(320), M3Units.dp(140))
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	print("[PlatformCard] _ready set custom_minimum_size=%s scale=%s" % [custom_minimum_size, M3Units.get_scale()])
+	set_visual_layer(null)
 
 	_build_ui()
-	_update_display()
+	refresh_basic_ui()
 
 	# If install status wasn't pre-set by parent, scan on ready.
 	# Parent passes precomputed status, so this fallback should rarely run.
@@ -110,6 +122,13 @@ func _ready():
 	
 	# Defer the first firmware check so creating many cards doesn't block the UI.
 	call_deferred("refresh_firmware_indicator")
+	_update_media_panel_size(true)
+
+func _enter_tree():
+	set_visual_layer(null)
+	super._enter_tree()
+	if _ready_called:
+		refresh_basic_ui()
 
 func _build_ui():
 	# Platform cards have no media
@@ -191,11 +210,20 @@ func _has_media_content() -> bool:
 
 func _update_media_panel_size(force: bool = false) -> void:
 	super._update_media_panel_size(force)
-	# When media panel is hidden, reset text margin to fill entire card width
-	# instead of leaving a gap where the media panel would be.
-	if _text_content:
-		_text_content.position.x = M3Units.dp(PADDING)
-		_text_content.size.x = size.x - M3Units.dp(PADDING) * 2.0
+	if not is_node_ready():
+		return
+	# Size the text area to the card's actual rect, not the requested minimum,
+	# so cards that are narrower than their custom_minimum_size still clip their
+	# content correctly.
+	var pad := M3Units.dp(PADDING)
+	if card_layout_mode == LayoutMode.HORIZONTAL:
+		if _text_row:
+			_text_row.position = Vector2(pad, M3Units.dp(PADDING / 2.0))
+			_text_row.size = Vector2(maxf(0.0, size.x - pad * 2.0), maxf(0.0, size.y - pad * 1.5))
+	else:
+		if _text_content:
+			_text_content.position = Vector2(pad, M3Units.dp(PADDING / 2.0))
+			_text_content.size = Vector2(maxf(0.0, size.x - pad * 2.0), maxf(0.0, size.y - pad * 1.5))
 
 func _apply_m3_text_styles():
 	if _name_label:
@@ -674,3 +702,4 @@ func _format_version_for_display(version: String) -> String:
 	
 	# Not a date - strip v/V prefix
 	return version.trim_prefix("v").trim_prefix("V")
+

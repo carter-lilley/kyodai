@@ -28,6 +28,7 @@ func _init():
 	dialog_max_width = 900.0
 	title_text = "Settings"
 	persistent = true
+	fill_viewport_height = true
 	super._init()
 
 func _ready():
@@ -71,17 +72,35 @@ func _build_two_pane_layout() -> void:
 	var hbox = HBoxContainer.new()
 	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content_slot.add_child(hbox)
+
+	# Wrap the content in a plain Control so the right-pane ScrollContainer's
+	# natural content height does not propagate to the dialog's minimum size.
+	# The HBox fills the wrapper via anchors; the wrapper fills the dialog via
+	# size flags, and the dialog clamps its own height to the viewport.
+	var content_wrapper = Control.new()
+	content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content_wrapper.custom_minimum_size = Vector2(0, 0)
+	content_slot.add_child(content_wrapper)
+	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hbox.offset_left = 0
+	hbox.offset_top = 0
+	hbox.offset_right = 0
+	hbox.offset_bottom = 0
+	content_wrapper.add_child(hbox)
+
+	var compact := _is_compact_sidebar()
 
 	# Left sidebar
 	_left_pane = VBoxContainer.new()
-	_left_pane.custom_minimum_size = Vector2(M3Units.dp(160), 0)
+	_left_pane.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(160), 0)
 	_left_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_left_pane.alignment = BoxContainer.ALIGNMENT_CENTER if compact else BoxContainer.ALIGNMENT_BEGIN
 	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
 
 	var left_margin = MarginContainer.new()
-	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
-	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
+	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(4) if compact else M3Units.dp(8)))
+	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(4) if compact else M3Units.dp(8)))
 	left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
 	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 	left_margin.add_child(_left_pane)
@@ -104,6 +123,10 @@ func _build_two_pane_layout() -> void:
 	_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
 	_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 	hbox.add_child(_right_pane)
+
+func _is_compact_sidebar() -> bool:
+	"""Use icon-only category buttons on small screens."""
+	return _is_small_screen()
 
 func _build_categories() -> void:
 	"""Create category buttons and content directly from DataManager + scenes."""
@@ -167,15 +190,27 @@ func _build_categories() -> void:
 			break
 
 func _add_category_button(id: String, label: String, icon: String) -> void:
-	var btn = M3Button.new()
-	btn.text = label
-	btn.icon_name = icon
-	btn.button_variant = M3Button.Variant.TEXT
-	btn.button_size = M3Button.Size.SMALL
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.pressed.connect(_on_category_selected.bind(id))
-	_left_pane.add_child(btn)
+	var btn: M3Button
+	if _is_compact_sidebar():
+		var icon_btn = M3IconButton.new()
+		icon_btn.icon_name = icon
+		icon_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
+		icon_btn.icon_button_size = M3IconButton.IconSize.SMALL
+		icon_btn.tooltip_text = label
+		icon_btn.pressed.connect(_on_category_selected.bind(id))
+		_left_pane.add_child(icon_btn)
+		btn = icon_btn
+	else:
+		var text_btn = M3Button.new()
+		text_btn.text = label
+		text_btn.icon_name = icon
+		text_btn.button_variant = M3Button.Variant.TEXT
+		text_btn.button_size = M3Button.Size.SMALL
+		text_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		text_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		text_btn.pressed.connect(_on_category_selected.bind(id))
+		_left_pane.add_child(text_btn)
+		btn = text_btn
 	_category_buttons[id] = btn
 
 func _create_settings_menu_content(setting_name: String, settings_vars: Array) -> Control:
@@ -228,10 +263,10 @@ func select_category(id: String) -> void:
 	# Update button visuals
 	for btn_id in _category_buttons.keys():
 		var btn = _category_buttons[btn_id]
-		if btn_id == id:
-			btn.button_variant = M3Button.Variant.TONAL
+		if btn is M3IconButton:
+			btn.icon_button_variant = M3IconButton.IconVariant.TONAL if btn_id == id else M3IconButton.IconVariant.STANDARD
 		else:
-			btn.button_variant = M3Button.Variant.TEXT
+			btn.button_variant = M3Button.Variant.TONAL if btn_id == id else M3Button.Variant.TEXT
 
 	# Show new content
 	if _category_contents.has(id):
@@ -285,6 +320,10 @@ func _on_ok_pressed() -> void:
 func _on_cancel_pressed() -> void:
 	_cancelled = true
 	dismiss()
+
+func _on_close_button_pressed() -> void:
+	"""Top-right X behaves like Cancel."""
+	_on_cancel_pressed()
 
 func _take_snapshot() -> void:
 	_snapshot.clear()

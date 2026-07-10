@@ -255,57 +255,40 @@ func _fetch_platforms():
 			3,
 			func(_processed: int, _total: int):
 				pass,
-		func(results: Array):
-			_active_batch_id = -1
-			if not is_inside_tree():
-				_return_all_cards()
-				return
+			func(results: Array):
+				_active_batch_id = -1
+				if not is_inside_tree():
+					_return_all_cards()
+					return
 
-			var created_cards: Array[PlatformCard] = []
-			for card in results:
-				if not card is PlatformCard:
-					continue
-				var slug: String = card.platform_slug
-				card.visible = true
-				created_cards.append(card)
-				# Distribute cards: single column on narrow screens, two columns on wide
-				if _is_narrow_screen():
-					_cards_left.add_child(card)
-				else:
-					if _platform_cards.size() % 2 == 0:
-						_cards_left.add_child(card)
-					else:
-						_cards_right.add_child(card)
-				_platform_cards[slug] = card
-			
-			_pending_cards.clear()
-			
-			# Remove loading label now that the first batch has rendered.
-			for child in _platforms_container.get_children():
-				if child.name == "LoadingLabel":
-					child.queue_free()
-					break
-			
-			# Remove platforms that no longer exist on RomM
-			_remove_deleted_platforms(fetched_slugs)
-			
-			# Update select all button text
-			_update_select_all_button_text()
-			
-			_is_fetching_platforms = false
-			
-			# Populate emulator dropdowns in a second batch so the cards appear first
-			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = SystemManager.memory.start_batch(
-				created_cards,
-				_populate_card_dropdown,
-				SystemManager.memory.BatchMode.SYNC,
-				3,
-				func(_processed: int, _total: int):
-					pass,
-				func(_results: Array):
-					_active_batch_id = -1
-			)
+				_pending_cards.clear()
+				
+				# Remove loading label now that the first batch has rendered.
+				for child in _platforms_container.get_children():
+					if child.name == "LoadingLabel":
+						child.queue_free()
+						break
+				
+				# Remove platforms that no longer exist on RomM
+				_remove_deleted_platforms(fetched_slugs)
+				
+				# Update select all button text
+				_update_select_all_button_text()
+				
+				_is_fetching_platforms = false
+				
+				# Populate emulator dropdowns in a second batch so the cards appear first
+				# and the heavy dropdown rebuild is spread across frames.
+				_active_batch_id = SystemManager.memory.start_batch(
+					_platform_cards.values(),
+					_populate_card_dropdown,
+					SystemManager.memory.BatchMode.SYNC,
+					3,
+					func(_processed: int, _total: int):
+						pass,
+					func(_results: Array):
+						_active_batch_id = -1
+				)
 
 		)
 	, false)  # bypass cache for explicit user-driven fetches
@@ -379,7 +362,18 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		_on_emulator_download_requested(emu_id, card)
 	)
 
+	# Add to the tree immediately so cards appear progressively as they're created.
+	card.visible = true
+	if _is_narrow_screen():
+		_cards_left.add_child(card)
+	else:
+		if _platform_cards.size() % 2 == 0:
+			_cards_left.add_child(card)
+		else:
+			_cards_right.add_child(card)
+	_platform_cards[slug] = card
 	_pending_cards.append(card)
+
 	return card
 
 func _return_all_cards() -> void:
@@ -466,21 +460,6 @@ func _load_platforms_from_database():
 				_return_all_cards()
 				return
 
-			var created_cards: Array[PlatformCard] = []
-			for card in results:
-				if not card is PlatformCard:
-					continue
-				var slug: String = card.platform_slug
-				created_cards.append(card)
-				if _is_narrow_screen():
-					_cards_left.add_child(card)
-				else:
-					if _platform_cards.size() % 2 == 0:
-						_cards_left.add_child(card)
-					else:
-						_cards_right.add_child(card)
-				_platform_cards[slug] = card
-
 			_pending_cards.clear()
 
 			if platforms.size() == 0:
@@ -492,7 +471,7 @@ func _load_platforms_from_database():
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
 			_active_batch_id = SystemManager.memory.start_batch(
-				created_cards,
+				_platform_cards.values(),
 				_populate_card_dropdown,
 				SystemManager.memory.BatchMode.SYNC,
 				5,

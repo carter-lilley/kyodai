@@ -659,9 +659,8 @@
 	  {
 		"id": "pico8",
 		"name": "PICO-8",
-		"mapping": "pico8",
-		"android_mapping": "pico8",
-		"android_only": true,
+		"mapping": "retro8",
+		"android_mapping": "retro8",
 		"save_name": "PICO-8",
 		"default": true
 	  }

@@ -506,6 +506,7 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	# Track batch progress using Dictionary for proper reference semantics in closures
 	var total_cores = cores.size()
 	var progress = {"completed": 0, "failed": 0}
+	var failed_cores: Array[String] = []
 	var download_ids = []
 	
 	# Set progress text
@@ -559,31 +560,33 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		else:
 			download_ids.append(item_id)
 			
-			# Create a callback that captures by reference (Dictionary is a reference type)
-			var callback = func(success: bool, _message: String):
-				progress.completed += 1
-				if not success:
-					progress.failed += 1
-				# Update progress
-				_emulator_install_progress[emulator_id] = step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
-				# Check if all downloads are complete
-				if progress.completed >= total_cores:
-					# Dismiss the batch notification
-					SystemManager.notifications.dismiss_notification(batch_notification_id)
-					if progress.failed > 0:
-						push_error("[EmulatorManager] Batch download failed: " + str(progress.failed) + "/" + str(total_cores) + " cores failed")
-						_emulator_install_progress[emulator_id] = "Batch download failed"
-					else:
-						_execute_install_step(emulator_id, step_index + 1)
+		# Create a callback that captures by reference (Dictionary is a reference type)
+		var callback = func(success: bool, _message: String):
+			progress.completed += 1
+			if not success:
+				progress.failed += 1
+				failed_cores.append(core_name)
+				push_warning("[EmulatorManager] Core download failed: " + core_name)
+			# Update progress
+			_emulator_install_progress[emulator_id] = step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
+			# Check if all downloads are complete
+			if progress.completed >= total_cores:
+				# Dismiss the batch notification
+				SystemManager.notifications.dismiss_notification(batch_notification_id)
+				if progress.failed > 0:
+					push_error("[EmulatorManager] Batch download failed: " + str(progress.failed) + "/" + str(total_cores) + " cores failed: " + ", ".join(failed_cores))
+					_emulator_install_progress[emulator_id] = "Batch download failed"
+				else:
+					_execute_install_step(emulator_id, step_index + 1)
 			
-			# Track completion
-			_pending_emulator_downloads[item_id] = {
-				"emulator_id": emulator_id,
-				"context": "batch_download",
-				"step_index": step_index,
-				"core_name": core_name,
-				"callback": callback
-			}
+		# Track completion
+		_pending_emulator_downloads[item_id] = {
+			"emulator_id": emulator_id,
+			"context": "batch_download",
+			"step_index": step_index,
+			"core_name": core_name,
+			"callback": callback
+		}
 	
 	if download_ids.is_empty():
 		push_error("[EmulatorManager] No downloads could be queued for batch_url_download")
