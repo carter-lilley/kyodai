@@ -14,7 +14,6 @@ enum ChangeMask {
 	DISPLAY = 4,      ## display_mode, show_title_mode, content_alignment
 	MEDIA_SHAPE = 8,  ## media_aspect_ratio
 	THEME = 16,       ## dark_mode, primary_color
-	FOCUS_LOCK = 32,  ## focus_lock_enabled
 }
 
 # ---------------------------------------------------------------------------
@@ -32,7 +31,6 @@ var show_title_mode: int = 0
 var card_effect_config: Dictionary = {}
 var dark_mode: bool = true
 var primary_color: Color = Color.WHITE
-var focus_lock_enabled: bool = false
 
 # ---------------------------------------------------------------------------
 # Batch / change coalescing
@@ -146,13 +144,6 @@ func set_primary_color(value: Color) -> bool:
 	_mark(ChangeMask.THEME)
 	return true
 
-func set_focus_lock_enabled(value: bool) -> bool:
-	if focus_lock_enabled == value:
-		return false
-	focus_lock_enabled = value
-	_mark(ChangeMask.FOCUS_LOCK)
-	return true
-
 # ---------------------------------------------------------------------------
 # Derived helpers
 # ---------------------------------------------------------------------------
@@ -200,7 +191,6 @@ func sync_from_settings_manager() -> int:
 	set_card_effect_config(_get_dict_setting("card_effect_config", {}))
 	set_dark_mode(_get_bool_setting("dark_mode", true))
 	set_primary_color(_get_color_setting("library_primary_color", Color.WHITE))
-	set_focus_lock_enabled(_get_bool_setting("focus_lock_enabled", false))
 	var emitted_mask := pending_mask
 	end_batch()
 
@@ -232,8 +222,6 @@ func apply_setting(property_name: String, value: Variant) -> int:
 			return ChangeMask.THEME if set_dark_mode(_coerce_bool(value, true)) else ChangeMask.NONE
 		"library_primary_color":
 			return ChangeMask.THEME if set_primary_color(_coerce_color(value, Color.WHITE)) else ChangeMask.NONE
-		"focus_lock_enabled":
-			return ChangeMask.FOCUS_LOCK if set_focus_lock_enabled(_coerce_bool(value, false)) else ChangeMask.NONE
 	return ChangeMask.NONE
 
 # ---------------------------------------------------------------------------
@@ -254,7 +242,6 @@ func assert_in_sync_with_settings_manager() -> bool:
 	_check(mismatches, "card_media_aspect_ratio", media_aspect_ratio, _get_int_setting("card_media_aspect_ratio", 0))
 	_check(mismatches, "library_show_title_mode", show_title_mode, _get_int_setting("library_show_title_mode", 0))
 	_check(mismatches, "dark_mode", dark_mode, _get_bool_setting("dark_mode", true))
-	_check(mismatches, "focus_lock_enabled", focus_lock_enabled, _get_bool_setting("focus_lock_enabled", false))
 
 	if mismatches.size() > 0:
 		push_warning("[CardSettingsState] Out of sync with DataManager:\n" + "\n".join(mismatches))

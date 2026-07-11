@@ -245,7 +245,7 @@
 		"name": "FinalBurn Neo",
 		"mapping": "fbneo",
 		"android_mapping": "fbneo",
-		"save_name": "FinalBurn Neo",
+		"save_name": "FinalBurn-Neo",
 		"default": true
 	  },
 	  {
@@ -253,7 +253,7 @@
 		"name": "MAME 2003-Plus",
 		"mapping": "mame2003_plus",
 		"android_mapping": "mame2003_plus",
-		"save_name": "MAME 2003-Plus"
+		"save_name": "MAME-2003-Plus"
 	  },
 	  {
 		"id": "mame",
@@ -267,7 +267,7 @@
 		"name": "MAME 2010",
 		"mapping": "mame2010",
 		"android_mapping": "mame2010",
-		"save_name": "MAME 2010"
+		"save_name": "MAME-2010"
 	  }
 	],
 	"atari2600": [
@@ -284,7 +284,7 @@
 		"name": "Stella 2023",
 		"mapping": "stella2023",
 		"android_mapping": "stella2023",
-		"save_name": "Stella 2023"
+		"save_name": "Stella-2023"
 	  }
 	],
 	"lynx": [
@@ -308,7 +308,7 @@
 		"name": "Beetle Lynx",
 		"mapping": "mednafen_lynx",
 		"android_mapping": "mednafen_lynx",
-		"save_name": "Beetle Lynx"
+		"save_name": "Beetle-Lynx"
 	  }
 	],
 	"atomiswave": [
@@ -327,7 +327,7 @@
 		"name": "VICE x64",
 		"mapping": "vice_x64",
 		"android_mapping": "vice_x64",
-		"save_name": "VICE x64"
+		"save_name": "VICE-x64"
 	  },
 	  {
 		"id": "puae",
@@ -359,7 +359,7 @@
 		"name": "DOSBox SVN",
 		"mapping": "dosbox_svn",
 		"android_mapping": "dosbox_svn",
-		"save_name": "DOSBox SVN"
+		"save_name": "DOSBox-SVN"
 	  }
 	],
 	"dc": [
@@ -388,7 +388,7 @@
 		"name": "Game & Watch",
 		"mapping": "gw",
 		"android_mapping": "gw",
-		"save_name": "Game & Watch",
+		"save_name": "Game-&-Watch",
 		"default": true
 	  }
 	],
@@ -444,14 +444,14 @@
 		"name": "VBA Next",
 		"mapping": "vba_next",
 		"android_mapping": "vba_next",
-		"save_name": "VBA Next"
+		"save_name": "VBA-Next"
 	  },
 	  {
 		"id": "mednafen_gba",
 		"name": "Beetle GBA",
 		"mapping": "mednafen_gba",
 		"android_mapping": "mednafen_gba",
-		"save_name": "Beetle GBA"
+		"save_name": "Beetle-GBA"
 	  }
 	],
 	"gbc": [
@@ -528,7 +528,7 @@
 		"name": "FinalBurn Neo",
 		"mapping": "fbneo",
 		"android_mapping": "fbneo",
-		"save_name": "FinalBurn Neo",
+		"save_name": "FinalBurn-Neo",
 		"default": true
 	  }
 	],
@@ -538,7 +538,7 @@
 		"name": "Beetle NeoPop",
 		"mapping": "mednafen_ngp",
 		"android_mapping": "mednafen_ngp",
-		"save_name": "Beetle NeoPop",
+		"save_name": "Beetle-NeoPop",
 		"default": true
 	  }
 	],
@@ -556,7 +556,7 @@
 		"name": "ParaLLEl N64",
 		"mapping": "parallel_n64",
 		"android_mapping": "parallel_n64",
-		"save_name": "ParaLLEl N64"
+		"save_name": "ParaLLEl-N64"
 	  }
 	],
 	"nds": [
@@ -573,7 +573,7 @@
 		"name": "melonDS DS",
 		"mapping": "melondsds",
 		"android_mapping": "melondsds",
-		"save_name": "melonDS DS"
+		"save_name": "melonDS-DS"
 	  },
 	  {
 		"id": "desmume",
@@ -587,7 +587,7 @@
 		"name": "DeSmuME 2015",
 		"mapping": "desmume2015",
 		"android_mapping": "desmume2015",
-		"save_name": "DeSmuME 2015"
+		"save_name": "DeSmuME-2015"
 	  }
 	],
 	"nes": [
@@ -675,7 +675,7 @@
 		"name": "PCSX ReARMed",
 		"mapping": "pcsx_rearmed",
 		"android_mapping": "pcsx_rearmed",
-		"save_name": "PCSX ReARMed",
+		"save_name": "PCSX-ReARMed",
 		"default": true
 	  },
 	  {
@@ -683,14 +683,14 @@
 		"name": "Beetle PSX",
 		"mapping": "mednafen_psx",
 		"android_mapping": "mednafen_psx",
-		"save_name": "Beetle PSX"
+		"save_name": "Beetle-PSX"
 	  },
 	  {
 		"id": "mednafen_psx_hw",
 		"name": "Beetle PSX HW",
 		"mapping": "mednafen_psx_hw",
 		"android_mapping": "mednafen_psx_hw",
-		"save_name": "Beetle PSX HW"
+		"save_name": "Beetle-PSX-HW"
 	  }
 	],
 	"ps2": [
@@ -756,7 +756,7 @@
 		"name": "Genesis Plus GX",
 		"mapping": "genesis_plus_gx",
 		"android_mapping": "genesis_plus_gx",
-		"save_name": "Genesis Plus GX",
+		"save_name": "Genesis-Plus-GX",
 		"default": true
 	  }
 	],
@@ -766,7 +766,7 @@
 		"name": "Genesis Plus GX",
 		"mapping": "genesis_plus_gx",
 		"android_mapping": "genesis_plus_gx",
-		"save_name": "Genesis Plus GX",
+		"save_name": "Genesis-Plus-GX",
 		"default": true
 	  }
 	],
@@ -776,7 +776,7 @@
 		"name": "Genesis Plus GX",
 		"mapping": "genesis_plus_gx",
 		"android_mapping": "genesis_plus_gx",
-		"save_name": "Genesis Plus GX",
+		"save_name": "Genesis-Plus-GX",
 		"default": true
 	  }
 	],
@@ -786,7 +786,7 @@
 		"name": "Genesis Plus GX",
 		"mapping": "genesis_plus_gx",
 		"android_mapping": "genesis_plus_gx",
-		"save_name": "Genesis Plus GX",
+		"save_name": "Genesis-Plus-GX",
 		"default": true
 	  },
 	  {
@@ -803,7 +803,7 @@
 		"name": "Beetle Saturn",
 		"mapping": "mednafen_saturn",
 		"android_mapping": "mednafen_saturn",
-		"save_name": "Beetle Saturn",
+		"save_name": "Beetle-Saturn",
 		"default": true
 	  },
 	  {
@@ -827,7 +827,7 @@
 		"name": "Genesis Plus GX",
 		"mapping": "genesis_plus_gx",
 		"android_mapping": "genesis_plus_gx",
-		"save_name": "Genesis Plus GX",
+		"save_name": "Genesis-Plus-GX",
 		"default": true
 	  }
 	],
@@ -845,7 +845,7 @@
 		"name": "Snes9x 2010",
 		"mapping": "snes9x2010",
 		"android_mapping": "snes9x2010",
-		"save_name": "Snes9x 2010"
+		"save_name": "Snes9x-2010"
 	  },
 	  {
 		"id": "bsnes",
@@ -873,7 +873,7 @@
 		"name": "Beetle bsnes",
 		"mapping": "mednafen_snes",
 		"android_mapping": "mednafen_snes",
-		"save_name": "Beetle bsnes"
+		"save_name": "Beetle-bsnes"
 	  }
 	],
 	"tg16": [
@@ -882,7 +882,7 @@
 		"name": "Beetle PCE",
 		"mapping": "mednafen_pce",
 		"android_mapping": "mednafen_pce",
-		"save_name": "Beetle PCE",
+		"save_name": "Beetle-PCE",
 		"default": true
 	  },
 	  {
@@ -890,7 +890,7 @@
 		"name": "Beetle PCE FAST",
 		"mapping": "mednafen_pce_fast",
 		"android_mapping": "mednafen_pce_fast",
-		"save_name": "Beetle PCE FAST"
+		"save_name": "Beetle-PCE-FAST"
 	  }
 	],
 	"turbografx-cd": [
@@ -899,7 +899,7 @@
 		"name": "Beetle PCE",
 		"mapping": "mednafen_pce",
 		"android_mapping": "mednafen_pce",
-		"save_name": "Beetle PCE",
+		"save_name": "Beetle-PCE",
 		"default": true
 	  },
 	  {
@@ -907,7 +907,7 @@
 		"name": "Beetle PCE FAST",
 		"mapping": "mednafen_pce_fast",
 		"android_mapping": "mednafen_pce_fast",
-		"save_name": "Beetle PCE FAST"
+		"save_name": "Beetle-PCE-FAST"
 	  }
 	],
 	"virtualboy": [
@@ -916,7 +916,7 @@
 		"name": "Beetle VB",
 		"mapping": "mednafen_vb",
 		"android_mapping": "mednafen_vb",
-		"save_name": "Beetle VB",
+		"save_name": "Beetle-VB",
 		"default": true
 	  }
 	],
@@ -973,7 +973,7 @@
 		"name": "Citra 2018",
 		"mapping": "citra2018",
 		"android_mapping": "citra2018",
-		"save_name": "Citra 2018",
+		"save_name": "Citra-2018",
 		"paths": {
 		  "saves": {
 			"directories": {

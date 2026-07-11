@@ -721,10 +721,12 @@ func _update_last_played(game: GameResource) -> void:
 	# GameNative games are not stored in the database, so persist in settings instead.
 	if game.source == "gamenative":
 		gamenative.update_last_played(game.steam_app_id, timestamp)
+		game_launched.emit(game)
 		return
 	
 	# Update in database
 	DataManager.update_game_last_played(game.romm_id, timestamp)
+	game_launched.emit(game)
 
 
 # ============================================================================
@@ -783,6 +785,3 @@ func gamenative_get_games() -> Array[Dictionary]:
 
 func gamenative_remove_game(app_id: int) -> void:
 	gamenative.remove_game(app_id)
-	
-	# Notify views that game was launched (so they can re-sort)
-	game_launched.emit(game)

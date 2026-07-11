@@ -6,16 +6,14 @@ hero in 'add to steam'
 clicking "outside" of card in list/carosel is annoying. 
 better extraction notifications
 single screen is not single screen
-platform indicator offscreen in small screen
 sync notif wasnt dismissed
 swapping platforms breaks second screen
 platform cards take longer on android
-some screens not scrollable?
+some settings screens not scrollable?
 startup layout settling
 startup grid wrong if DS mode is swapped. 
-confirmation before quick or full sync
+confirmation diag before quick or full sync
 most snackbars should be non dismissable. especially pinned ones
-core saves using wrong core path (pcsx rearmed using swanstation path)
 
 romm;
 - mark 'played' if played

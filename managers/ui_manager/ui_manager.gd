@@ -52,7 +52,6 @@ signal modal_item_selected(item_id: String, context: Dictionary)
 signal tab_changed(view_name: String)
 signal layout_changed(position: String)
 signal settings_dialog_dismissed()
-signal focus_lock_changed(active: bool)
 
 func initialize(
 	tab_container: TabContainer,
@@ -288,11 +287,10 @@ func enter_focus_lock(grid: VirtualScrollGridContainer) -> void:
 		return
 	# If we were already locked to a different grid, restore first.
 	if _focus_lock_active:
-		_exit_focus_lock(false)
+		_exit_focus_lock()
 	_focus_locked_grid = grid
 	_focus_lock_active = true
 	_apply_focus_lock()
-	focus_lock_changed.emit(true)
 
 func exit_focus_lock(grid: VirtualScrollGridContainer) -> void:
 	"""Exit focus lock if it is currently held by the given grid."""
@@ -300,32 +298,30 @@ func exit_focus_lock(grid: VirtualScrollGridContainer) -> void:
 		return
 	if _focus_locked_grid != grid:
 		return
-	_exit_focus_lock(true)
+	_exit_focus_lock()
 
-func _exit_focus_lock(emit: bool) -> void:
+func _exit_focus_lock() -> void:
 	if not _focus_lock_active:
 		return
 	_focus_lock_active = false
 	_focus_locked_grid = null
 	_restore_focus_modes()
-	if emit:
-		focus_lock_changed.emit(false)
 
 func refresh_focus_lock_state() -> void:
 	"""Re-apply the current focus lock after layout/theme changes."""
 	if not _focus_lock_active or not _focus_locked_grid:
 		return
 	if not is_instance_valid(_focus_locked_grid) or not _focus_locked_grid.is_inside_tree():
-		_exit_focus_lock(true)
+		_exit_focus_lock()
 		return
 	# Only remain locked if the grid still has focus.
 	var viewport := get_viewport()
 	if not is_instance_valid(viewport):
-		_exit_focus_lock(true)
+		_exit_focus_lock()
 		return
 	var focused := viewport.gui_get_focus_owner()
 	if not focused or not _focus_locked_grid.is_ancestor_of(focused):
-		_exit_focus_lock(true)
+		_exit_focus_lock()
 		return
 	# Re-apply in case new focusable controls were created.
 	_apply_focus_lock()
@@ -504,7 +500,7 @@ func _exit_tree() -> void:
 	Nodes still in the tree are left for the tree to free; orphaned overlays are
 	freed immediately because queue_free() may not flush during process exit."""
 
-	_exit_focus_lock(false)
+	_exit_focus_lock()
 
 	# Drop all cached node references so the tree can free them.
 	_root_control = null

@@ -174,9 +174,6 @@ const _RATIO_LOOKUP: Array[float] = [
 # Grid separation (padding) - loaded from settings, defaults to 10 DP
 var grid_separation: int = int(M3Units.dp(10))
 
-# When true, controller focus is prevented from escaping the grid at edges
-var focus_lock_enabled: bool = false
-
 # Track the last focused card's virtual index so we can restore it after layout recalculations.
 var _last_focused_virtual_index: int = -1
 var _viewport_focus_connection: Viewport = null
@@ -189,8 +186,8 @@ var _focus_request_id: int = 0
 var _pending_focus_index: int = -1
 
 func is_focus_locked_and_active() -> bool:
-	"""Returns true if focus lock is enabled and UIManager has locked focus to this grid."""
-	return focus_lock_enabled and UIManager and UIManager.is_focus_lock_active()
+	"""Returns true if UIManager has locked focus to this grid."""
+	return UIManager and UIManager.is_focus_lock_active()
 
 # Scale factor applied when a card is focused. Cards scale UP from their normal size
 # by this amount. Edge overflow is prevented by focus-safe container margins.
@@ -519,7 +516,6 @@ func _ready():
 	# Use call_deferred to ensure DataManager is fully initialized
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
-	call_deferred("_update_focus_lock_from_settings")
 	call_deferred("_refresh_cached_settings")
 	call_deferred("_recalculate_layout_until_stable")
 	call_deferred("_connect_focus_lock_viewport")
@@ -675,10 +671,6 @@ func _on_card_settings_state_changed(mask: int) -> void:
 		_pending_effects_refresh_force_full = true
 		_schedule_layout_recalc()
 
-	# Focus lock toggle (always re-sync from state in case a LAYOUT/EFFECTS rebuild
-	# was batched and the FOCUS_LOCK mask was not emitted independently).
-	focus_lock_enabled = state.focus_lock_enabled
-
 func _schedule_layout_recalc() -> void:
 	"""Queue a single deferred layout recalc. Multiple calls in one frame collapse."""
 	if _layout_recalc_scheduled:
@@ -695,12 +687,6 @@ func _do_scheduled_layout_recalc() -> void:
 	if _pending_effects_refresh_after_layout:
 		_pending_effects_refresh_after_layout = false
 		refresh_all_card_effects(_pending_effects_refresh_force_full)
-
-func _update_focus_lock_from_settings() -> void:
-	if UIManager and UIManager.card_settings_state:
-		focus_lock_enabled = UIManager.card_settings_state.focus_lock_enabled
-	else:
-		focus_lock_enabled = false
 
 func _refresh_cached_settings() -> void:
 	if not UIManager or not UIManager.card_settings_state:
@@ -2014,10 +2000,9 @@ func _reconnect_focus_lock_viewport() -> void:
 	_connect_focus_lock_viewport()
 
 func refresh_focus_lock() -> void:
-	"""Re-sync focus-lock state from CardSettingsState and ensure the viewport
-	signal is connected. Call after reparenting or when the setting may have
-	changed outside the normal change event flow."""
-	_update_focus_lock_from_settings()
+	"""Re-sync focus-lock state and ensure the viewport signal is connected.
+	Call after reparenting or when the setting may have changed outside the
+	normal change event flow."""
 	_reconnect_focus_lock_viewport()
 
 func _on_viewport_focus_changed(control: Control) -> void:
@@ -2032,19 +2017,17 @@ func _on_viewport_focus_changed(control: Control) -> void:
 				_last_focused_virtual_index = node.get_meta("virtual_index", -1)
 				break
 			node = node.get_parent()
-		# Tell UIManager to lock focus to this grid when focus lock is enabled.
-		if focus_lock_enabled and UIManager:
+		# Tell UIManager to lock focus to this grid.
+		if UIManager:
 			UIManager.enter_focus_lock(self)
 		return
 
 	# Focus is outside this grid.
-	if focus_lock_enabled and UIManager:
+	if UIManager:
 		UIManager.exit_focus_lock(self)
 
 func navigate_direction(dir: String, from_index: int = -1) -> bool:
 	"""Move focus one step in the given direction. Returns true if the event was consumed."""
-	if not focus_lock_enabled:
-		return false
 	if not visible or not is_inside_tree():
 		return false
 	if not UIManager or not UIManager.controller_has_priority():

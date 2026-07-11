@@ -235,6 +235,68 @@ border_width_bottom = 3
 border_color = Color(0, 0, 0, 1)
 shadow_color = Color(1, 1, 1, 0)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jq2sk"]
+bg_color = Color(1, 0.9843137, 0.99607843, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4k2k6"]
+bg_color = Color(0.90588236, 0.8784314, 0.9254902, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.4745098, 0.45490196, 0.49411765, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0rl1p"]
+bg_color = Color(0.71482354, 0.6930196, 0.732549, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.4745098, 0.45490196, 0.49411765, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ok6jj"]
+bg_color = Color(0, 0, 0, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_facbu"]
+bg_color = Color(0.71482354, 0.6930196, 0.732549, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.4745098, 0.45490196, 0.49411765, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_b1qrp"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 4
+border_width_top = 4
+border_width_right = 4
+border_width_bottom = 4
+border_color = Color(0, 0, 0, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
 [node name="Main" type="Control" unique_id=527286469]
 layout_mode = 3
 anchors_preset = 15
@@ -473,8 +535,19 @@ anchor_bottom = 1.0
 offset_top = -300.0
 grow_horizontal = 2
 grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_jq2sk")
 script = ExtResource("6_onscreenkeyboard")
 use_m3_theme = true
+background = SubResource("StyleBoxFlat_jq2sk")
+normal = SubResource("StyleBoxFlat_4k2k6")
+hover = SubResource("StyleBoxFlat_0rl1p")
+pressed = SubResource("StyleBoxFlat_ok6jj")
+special_keys = SubResource("StyleBoxFlat_facbu")
+focus = SubResource("StyleBoxFlat_b1qrp")
+font_color_normal = Color(0.10980392, 0.105882354, 0.12156863, 1)
+font_color_hover = Color(0.10980392, 0.105882354, 0.12156863, 1)
+font_color_pressed = Color(0, 0, 0, 1)
+font_color_focus = Color(0, 0, 0, 1)
 
 [node name="LaunchTransitionOverlay" type="Control" parent="UILayer" unique_id=123456790]
 layout_mode = 3
