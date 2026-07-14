@@ -13,6 +13,7 @@ signal dual_screen_detected(second_screen_index: int)
 signal dual_screen_lost()
 signal dual_screen_mode_changed(enabled: bool, second_screen_index: int)
 signal dual_screen_availability_changed(available: bool)
+signal initial_window_size_settled()
 
 const RESIZE_DEBOUNCE_SECONDS := 0.25
 const BASE_HEIGHT := 1080.0
@@ -166,6 +167,7 @@ func _calculate_ui_scale() -> float:
 	return _ui_scale
 
 func _apply_initial_window_size() -> void:
+	var viewport_before := get_viewport_size()
 	var windowed_setting = settings_man.get_setting("windowed")
 	if windowed_setting and not windowed_setting.value:
 		# Fullscreen (windowed = false): restore exclusive fullscreen.
@@ -182,6 +184,18 @@ func _apply_initial_window_size() -> void:
 	else:
 		# Setting missing; leave default window mode alone.
 		pass
+
+	# Wait for the OS to actually apply the new window size. The OS may need
+	# more than one frame, so poll until the viewport size changes or a safe
+	# timeout is reached (covers headless/first-run cases where it never changes).
+	var frame_wait := 0
+	await get_tree().process_frame
+	while get_viewport_size() == viewport_before and frame_wait < 10:
+		await get_tree().process_frame
+		frame_wait += 1
+
+	print("[SystemManager.display] _apply_initial_window_size: viewport before=", viewport_before, " after=", get_viewport_size(), " frames=", frame_wait)
+	initial_window_size_settled.emit()
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):
 	match setting.property_name:
@@ -260,6 +274,15 @@ func _on_screens_swapped(_swapped: bool) -> void:
 	if _subviewport_dual_screen_active:
 		# Re-apply scale after screen swap since viewport sizes change
 		_apply_subviewport_scale(_saved_ui_scale)
+		# Defer resize notification so SubViewport size changes propagate to
+		# controls (e.g. VirtualScrollGridContainer) before they recalculate.
+		call_deferred("_emit_swap_resize_notification")
+
+func _emit_swap_resize_notification() -> void:
+	var viewport = get_viewport()
+	if viewport:
+		_viewport_size = viewport.size
+		viewport_size_changed.emit(_viewport_size)
 
 func enter_subviewport_dual_screen_mode() -> void:
 	if _subviewport_dual_screen_active:

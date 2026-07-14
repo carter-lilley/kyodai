@@ -2,18 +2,21 @@
 
 xemu save sync
 tst update flow on android
-hero in 'add to steam'
 clicking "outside" of card in list/carosel is annoying. 
 better extraction notifications
 single screen is not single screen
 sync notif wasnt dismissed
-swapping platforms breaks second screen
+swapping platforms breaks second screen hero
 platform cards take longer on android
 some settings screens not scrollable?
-startup layout settling
-startup grid wrong if DS mode is swapped. 
 confirmation diag before quick or full sync
 most snackbars should be non dismissable. especially pinned ones
+
+x hero in 'add to steam'
+x add to steam removes other vdfs?
+
+x startup layout settling
+x startup grid wrong if DS mode is swapped. 
 
 romm;
 - mark 'played' if played

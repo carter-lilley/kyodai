@@ -95,6 +95,7 @@ func rebuild_grid(_refresh_effects: bool = false) -> void:
 func _update_grid_orientation() -> void:
 	var state = UIManager.card_settings_state if UIManager else null
 	if not state:
+		print("[View._update_grid_orientation] no card_settings_state for ", view_name)
 		return
 
 	var layout_mode_val = state.layout_mode
@@ -115,8 +116,12 @@ func _update_grid_orientation() -> void:
 
 	# Apply the saved zoom ratio before any cards are created so the first
 	# visible layout uses the user's saved zoom instead of the default 0.15.
-	if games_grid and not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_ratio):
-		games_grid.target_card_width_ratio = state.card_zoom_ratio
+	if games_grid:
+		print("[View._update_grid_orientation] view_name=", view_name, " saved_zoom=", state.card_zoom_ratio, " grid_target_before=", games_grid.target_card_width_ratio)
+		if not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_ratio):
+			games_grid.target_card_width_ratio = state.card_zoom_ratio
+	else:
+		print("[View._update_grid_orientation] no games_grid for ", view_name)
 
 	# Batch-apply to avoid redundant rebuilds from individual setters
 	games_grid.set_grid_orientation(new_mode, new_grid_vertical, new_focus_scale)

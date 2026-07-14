@@ -1,6 +1,11 @@
 class_name VirtualScrollGridContainer
 extends Control
 
+# Global startup guard: suppresses all layout work until Main is ready for the
+# single final settle. This prevents visible "jank" from layout passes before
+# the saved window size and saved zoom are stable.
+static var startup_layout_suppressed: bool = false
+
 signal items_requested(offset, limit)
 signal visible_range_changed(start, end, total)
 signal item_created(item, index)
@@ -217,7 +222,7 @@ var target_card_width_ratio: float = 0.15:
 		var clamped = clampf(value, 0.05, max_ratio)
 		# Calculate snapped ratio to ensure whole cards fit per row/column
 		var snapped_ratio = _calculate_snapped_ratio(clamped)
-		print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio)
+		print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
 		# Always update ratio and recalculate - _recalculate_layout handles optimization
 		target_card_width_ratio = snapped_ratio
 		_recalculate_layout()
@@ -552,6 +557,9 @@ func _on_resized():
 
 func _on_display_size_changed(_new_size: Vector2):
 	"""Handler for SystemManager.display's debounced viewport_size_changed signal."""
+	if startup_layout_suppressed:
+		return
+
 	# Keep the top-level visual layer pinned to the viewport.
 	if _visual_layer and _visual_layer.top_level:
 		_visual_layer.position = Vector2.ZERO
@@ -741,10 +749,17 @@ func _recalculate_layout_until_stable(max_passes: int = 3) -> void:
 			break
 
 func _on_resize_debounced():
+	print("[Grid] _on_resize_debounced: size=", size, " target_ratio=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
+	if startup_layout_suppressed:
+		return
 	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
 	# during a zoom-driven layout pass can fire _on_resized() mid-flight).
 	if _is_recalculating_layout:
 		return
+
+	# Update the cached size so later viewport_size_changed events can de-duplicate.
+	_last_resized_size = Vector2(size.x, size.y)
+
 	# Re-snap zoom ratio to a valid stop for the new available size. Without
 	# this, target_card_width_ratio holds the old snap point which may no
 	# longer correspond to a whole number of cards at the new viewport size.
@@ -923,6 +938,8 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	return _compute_ratio_for_items_per_line(desired_items_per_line, base_dims, available, viewport_area)
 
 func _recalculate_layout():
+	if startup_layout_suppressed:
+		return
 	if _is_recalculating_layout:
 		return
 	if not _flow_container or not _scroll_container:
@@ -1294,6 +1311,12 @@ func setup(card_scene_resource: PackedScene, total_items: int):
 	# Wait for container sizing before initial load
 	await get_tree().process_frame
 	await get_tree().process_frame
+
+	# If startup is being orchestrated by Main, skip the automatic layout
+	# so we can perform a single explicit settle after the window size is stable.
+	if startup_layout_suppressed:
+		return
+
 	if size.x > 0 and size.y > 0:
 		_recalculate_layout()
 	if _active_cards.size() == 0:

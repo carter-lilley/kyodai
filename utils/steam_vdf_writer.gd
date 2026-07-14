@@ -20,20 +20,19 @@ static func read_vdf(path: String) -> Dictionary:
 	if data.is_empty():
 		return result
 	
-	var pos := 0
-	result = _parse_object(data, pos)
+	# Use a mutable position wrapper so recursive calls can advance the index.
+	var pos_ref := {"pos": 0}
+	result = _parse_object(data, pos_ref)
 	return result
 
-## Parses a VDF object starting at position
-static func _parse_object(data: PackedByteArray, pos: int) -> Dictionary:
+## Parses a VDF object starting at the current position in pos_ref.
+## pos_ref is a Dictionary {"pos": int} so nested objects advance the same index.
+static func _parse_object(data: PackedByteArray, pos_ref: Dictionary) -> Dictionary:
 	var obj := {}
 	
-	while pos < data.size():
-		if pos >= data.size():
-			break
-			
-		var type_byte := data[pos]
-		pos += 1
+	while pos_ref.pos < data.size():
+		var type_byte := data[pos_ref.pos]
+		pos_ref.pos += 1
 		
 		# End of object markers
 		if type_byte == TYPE_ENDOFOBJECT or type_byte == TYPE_ENDOFOBJECT_ALT:
@@ -41,44 +40,38 @@ static func _parse_object(data: PackedByteArray, pos: int) -> Dictionary:
 		
 		# Read key name (null-terminated string)
 		var key := ""
-		while pos < data.size() and data[pos] != 0:
-			key += char(data[pos])
-			pos += 1
-		pos += 1  # Skip null terminator
+		while pos_ref.pos < data.size() and data[pos_ref.pos] != 0:
+			key += char(data[pos_ref.pos])
+			pos_ref.pos += 1
+		pos_ref.pos += 1  # Skip null terminator
 		
 		match type_byte:
 			TYPE_STRING:
 				# Read string value (null-terminated)
 				var value := ""
-				while pos < data.size() and data[pos] != 0:
-					value += char(data[pos])
-					pos += 1
-				pos += 1  # Skip null terminator
+				while pos_ref.pos < data.size() and data[pos_ref.pos] != 0:
+					value += char(data[pos_ref.pos])
+					pos_ref.pos += 1
+				pos_ref.pos += 1  # Skip null terminator
 				obj[key] = value
 			
 			TYPE_INT32:
 				# Read 4-byte little-endian integer
-				if pos + 4 <= data.size():
-					var value := data.decode_s32(pos)
-					pos += 4
+				if pos_ref.pos + 4 <= data.size():
+					var value := data.decode_s32(pos_ref.pos)
+					pos_ref.pos += 4
 					obj[key] = value
 			
 			TYPE_UINT64:
 				# Read 8-byte little-endian unsigned integer
-				if pos + 8 <= data.size():
-					var value := data.decode_u64(pos)
-					pos += 8
+				if pos_ref.pos + 8 <= data.size():
+					var value := data.decode_u64(pos_ref.pos)
+					pos_ref.pos += 8
 					obj[key] = value
 			
-			TYPE_NONE:
-				# This is actually the start of a nested object in shortcuts.vdf
-				# The key has already been read, now parse the nested object
-				obj[key] = _parse_object(data, pos)
-			
 			_:
-				# For any other type (including TYPE_ENDOFOBJECT), treat as nested object
-				# This handles the Steam shortcuts.vdf format
-				obj[key] = _parse_object(data, pos)
+				# TYPE_NONE and any unknown type mark the start of a nested object
+				obj[key] = _parse_object(data, pos_ref)
 	
 	return obj
 
@@ -386,6 +379,39 @@ static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: S
 		push_warning("[SteamVDF] Failed to save grid cover: " + grid_cover_path)
 		return false
 	
+	# Save horizontal library banner using the same source image.
+	# Steam expects {appid}.png at 460x215. Center-crop to avoid stretching.
+	var banner_image := image.duplicate()
+	var banner_size := Vector2i(460, 215)
+	var target_aspect := float(banner_size.x) / float(banner_size.y)
+	var src_aspect := float(banner_image.get_width()) / float(banner_image.get_height())
+
+	var crop_width: int
+	var crop_height: int
+	if src_aspect > target_aspect:
+		# Source is wider than target; crop left/right to match target aspect
+		crop_height = banner_image.get_height()
+		crop_width = int(round(float(crop_height) * target_aspect))
+	else:
+		# Source is taller than target; crop top/bottom to match target aspect
+		crop_width = banner_image.get_width()
+		crop_height = int(round(float(crop_width) / target_aspect))
+
+	var crop_x: int = (banner_image.get_width() - crop_width) / 2
+	var crop_y: int = (banner_image.get_height() - crop_height) / 2
+
+	# Center-crop by blitting the region to a new image (Image.crop only crops from top-left).
+	var cropped := Image.create(crop_width, crop_height, false, banner_image.get_format())
+	var src_rect := Rect2i(Vector2i(crop_x, crop_y), Vector2i(crop_width, crop_height))
+	cropped.blit_rect(banner_image, src_rect, Vector2i.ZERO)
+
+	cropped.resize(banner_size.x, banner_size.y, Image.INTERPOLATE_LANCZOS)
+	var banner_path := grid_path.path_join(app_id_str + ".png")
+	error = cropped.save_png(banner_path)
+	if error != OK:
+		push_warning("[SteamVDF] Failed to save banner: " + banner_path)
+		return false
+	
 	return true
 
 ## Shared helper: add a downloaded game to Steam as a non-Steam game.
@@ -471,8 +497,12 @@ static func add_game(game: GameResource) -> void:
 		return
 	
 	var shortcuts := {}
+	var existing_count := 0
 	if FSM.file_exists(shortcuts_path):
 		shortcuts = read_vdf(shortcuts_path)
+		if shortcuts.has("shortcuts"):
+			existing_count = shortcuts["shortcuts"].size()
+	print("[SteamVDF] Existing shortcuts found: ", existing_count)
 	
 	if not shortcuts.has("shortcuts"):
 		shortcuts["shortcuts"] = {}

@@ -41,6 +41,13 @@ func _ready():
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 
+	# Suppress grid layout until the saved window size is restored. The grid will
+	# be created with the correct saved zoom/orientation already loaded, so it
+	# can settle into exactly one layout pass once the window size is stable.
+	VirtualScrollGridContainer.startup_layout_suppressed = true
+	if SystemManager.display:
+		await SystemManager.display.initial_window_size_settled
+
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
 	library_background = get_node("RootLayout/ContentWrapper/LibraryBackground")
@@ -140,9 +147,28 @@ func _ready():
 	# Set initial view
 	_update_ui_for_view("Home")
 
-	# Load and apply saved zoom setting (wait for views to be ready)
+	# Wait for grid setup() to finish its two-frame wait
 	await get_tree().process_frame
-	_load_and_apply_saved_zoom()
+	await get_tree().process_frame
+
+	# Apply M3 theme to root for fallback native control styling before grid is visible
+	_apply_m3_theme()
+
+	# Single final layout: unsuppress and settle both grids once.
+	# The saved zoom and orientation are already applied via CardSettingsState;
+	# this is the only layout pass the grid does at startup.
+	print("[Main] Unsuppressing grid layout and settling once...")
+	VirtualScrollGridContainer.startup_layout_suppressed = false
+	for view_name in ["Home", "Library"]:
+		var view = UIManager.get_view(view_name)
+		if view:
+			var grid = _get_view_grid(view)
+			if grid:
+				print("[Main] Settling grid for ", view_name, " target_ratio=", grid.target_card_width_ratio)
+				grid._on_resize_debounced()
+
+	# Sync zoom slider to the final grid ratio without reapplying zoom to the grids
+	_sync_zoom_slider_to_current_view()
 
 	# Connect to screen swap signal for dual screen handling
 	var ayn_thor_manager = get_node_or_null("AynThorManager")
@@ -163,9 +189,6 @@ func _ready():
 
 	# Check if first-run wizard needs to be shown
 	_show_oobe_wizard_if_needed()
-
-	# Apply M3 theme to root for fallback native control styling (scrollbars, etc.)
-	_apply_m3_theme()
 
 	# Focus the first Home card on startup once data is loaded
 	var first_run_setting = DataManager.get_setting("first_run_completed")
@@ -620,8 +643,9 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 func _load_and_apply_saved_zoom() -> void:
 	"""Apply the saved zoom setting to both grids and sync the slider.
 
-	Explicitly applies the saved ratio here so startup is robust even when
-	view _ready() ran before the grid had valid dimensions.
+	Used at runtime (e.g. after a preset is applied) when the grid may already
+	be visible with a different zoom. Startup layout now applies the saved zoom
+	via CardSettingsState before the grid is laid out.
 	"""
 	if not DataManager:
 		return
@@ -656,6 +680,29 @@ func _load_and_apply_saved_zoom() -> void:
 		else:
 			zoom_slider.set_value_no_signal(actual_zoom)
 		zoom_slider.set_block_signals(false)
+
+func _sync_zoom_slider_to_current_view() -> void:
+	"""Sync the zoom slider to the current grid's actual zoom ratio.
+
+	Does not modify the grid's target_card_width_ratio; use this at startup
+	after the grid has settled.
+	"""
+	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
+	if not zoom_slider:
+		return
+
+	var current_view = UIManager.get_current_view()
+	var games_grid = _get_view_grid(current_view) if current_view else null
+	if not games_grid:
+		return
+
+	_update_zoom_slider_stops(zoom_slider, games_grid)
+	zoom_slider.set_block_signals(true)
+	if _current_snap_ratios.size() > 0:
+		zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+	else:
+		zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
+	zoom_slider.set_block_signals(false)
 
 func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 	"""Focus the first game card in the Home grid once it has data."""
