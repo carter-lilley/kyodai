@@ -62,6 +62,7 @@ func initialize(
 ) -> void:
 	"""Initialize UIManager with all the pre-built nodes from main.tscn."""
 
+	var init_start_us := Time.get_ticks_usec()
 	_root_control = root_layout
 	_content_wrapper = content_wrapper
 	_main_content_vbox = main_content_vbox
@@ -75,10 +76,13 @@ func initialize(
 			nav_type = type_setting.value
 
 	# Create InnerLayout and add it to the root control
+	var phase_start_us := Time.get_ticks_usec()
 	_inner_layout = _create_inner_layout(nav_type == 0)
 	_root_control.add_child(_inner_layout)
+	print("[UIManager] inner layout create elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Wrap MainContentVBox in a MarginContainer to keep content away from screen edges
+	phase_start_us = Time.get_ticks_usec()
 	var content_margin = MarginContainer.new()
 	content_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	content_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -94,6 +98,7 @@ func initialize(
 	content_margin.add_child(_main_content_vbox)
 	_content_wrapper.add_child(content_margin)
 	_content_wrapper.move_child(content_margin, mcv_index)
+	print("[UIManager] content margin reparent elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Ensure MainContentVBox fills the MarginContainer
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -102,22 +107,35 @@ func initialize(
 	# Create and sync the centralized card/grid settings state BEFORE views are
 	# instantiated so that HomeView/LibraryView and their grids can read the
 	# saved layout/orientation during _ready()/_enter_tree().
+	phase_start_us = Time.get_ticks_usec()
 	card_settings_state = CardSettingsState.new()
 	card_settings_state.sync_from_settings_manager()
 	card_settings_state.changed.connect(_on_card_settings_state_changed)
+	print("[UIManager] card settings state sync elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Configure child managers
+	phase_start_us = Time.get_ticks_usec()
 	navigation.setup(_root_control, _content_wrapper, _inner_layout, nav_type)
+	print("[UIManager] navigation.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	view.setup(tab_container)
+	print("[UIManager] view.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	overlay.setup(_root_control)
+	print("[UIManager] overlay.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	theme.setup(tab_container)
+	print("[UIManager] theme.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	dual_screen.setup(_root_control)
+	print("[UIManager] dual_screen.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Reconnect dual-screen detection signal and re-evaluate current state.
 	if SystemManager.display:
 		SystemManager.display.dual_screen_mode_changed.connect(dual_screen._on_dual_screen_mode_changed)
 		if SystemManager.display.is_dual_screen_enabled():
 			dual_screen._on_dual_screen_mode_changed(true, SystemManager.display.get_second_screen_index())
+	print("[UIManager] initialize total elapsed_us=", Time.get_ticks_usec() - init_start_us)
 
 	# Apply library background configuration now and when settings change
 	if _library_background and DataManager:

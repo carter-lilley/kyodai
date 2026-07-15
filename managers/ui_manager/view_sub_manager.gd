@@ -10,6 +10,9 @@ var _current_view: View
 var _library_tab: Control = null
 var _library_scene_path: String = "res://view/library_view.tscn"
 
+var _downloads_tab: Control = null
+var _downloads_scene_path: String = "res://view/downloads_view.tscn"
+
 func _ready():
 	ui_manager = get_parent()
 
@@ -21,16 +24,26 @@ var _skip_next_dialog_dismiss_flush: bool = false
 var _effects_refresh_was_deferred: bool = false
 
 func setup(tab_container: TabContainer) -> void:
+	var setup_start_us := Time.get_ticks_usec()
 	_tab_container = tab_container
 	_tab_container.tab_changed.connect(_on_tab_changed)
 	ui_manager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
 
+	var phase_start_us := Time.get_ticks_usec()
 	_setup_home_tab()
+	print("[ViewSubManager] _setup_home_tab elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	_setup_library_tab()
+	print("[ViewSubManager] _setup_library_tab elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	_setup_downloads_tab()
+	print("[ViewSubManager] _setup_downloads_tab elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	_sync_current_view_from_tab()
+	print("[ViewSubManager] setup total elapsed_us=", Time.get_ticks_usec() - setup_start_us)
 
 func _setup_home_tab():
+	var setup_start_us := Time.get_ticks_usec()
+
 	var home_idx = _get_tab_index("Home")
 	if home_idx == -1:
 		push_warning("[ViewManager]: Home tab not found")
@@ -43,15 +56,21 @@ func _setup_home_tab():
 		child.queue_free()
 
 	# Add HomeView (load scene to get UI nodes)
+	var phase_start_us := Time.get_ticks_usec()
 	var home_scene = load("res://view/home_view.tscn")
 	var home_view = home_scene.instantiate()
+	print("[ViewSubManager] Home scene load/instantiate elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	home_view.view_name = "Home"
 	home_tab.add_child(home_view)
+	print("[ViewSubManager] Home add_child/_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	_views["Home"] = home_view
 
 	# Connect hero image signal
 	if home_view.has_signal("hero_game_changed"):
 		home_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
+
+	print("[ViewSubManager] _setup_home_tab total elapsed_us=", Time.get_ticks_usec() - setup_start_us)
 
 func _setup_library_tab():
 	var library_idx = _get_tab_index("Library")
@@ -88,6 +107,8 @@ func _ensure_library_setup() -> bool:
 	return true
 
 func _setup_downloads_tab():
+	var setup_start_us := Time.get_ticks_usec()
+
 	var downloads_idx = _get_tab_index("Downloads")
 	if downloads_idx == -1:
 		push_warning("[ViewManager]: Downloads tab not found")
@@ -99,18 +120,37 @@ func _setup_downloads_tab():
 	for child in downloads_tab.get_children():
 		child.queue_free()
 
-	# Add DownloadsView (load scene to get UI nodes)
-	var downloads_scene = load("res://view/downloads_view.tscn")
+	# Defer DownloadsView instantiation until the user first selects the Downloads tab.
+	# This avoids paying the scene-load cost on startup when Home is shown first.
+	_downloads_tab = downloads_tab
+
+	print("[ViewSubManager] _setup_downloads_tab total elapsed_us=", Time.get_ticks_usec() - setup_start_us)
+
+func _ensure_downloads_setup() -> bool:
+	if _views.has("Downloads"):
+		return true
+	if _downloads_tab == null:
+		return false
+
+	var phase_start_us := Time.get_ticks_usec()
+	var downloads_scene = load(_downloads_scene_path)
 	var downloads_view = downloads_scene.instantiate()
+	print("[ViewSubManager] Downloads scene load/instantiate elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	downloads_view.view_name = "Downloads"
-	downloads_tab.add_child(downloads_view)
+	_downloads_tab.add_child(downloads_view)
+	print("[ViewSubManager] Downloads add_child/_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	_views["Downloads"] = downloads_view
+
+	return true
 
 func _sync_current_view_from_tab() -> void:
 	var current_tab_idx = _tab_container.current_tab
 	var current_tab_title = _tab_container.get_tab_title(current_tab_idx)
 	if current_tab_title == "Library":
 		_ensure_library_setup()
+	if current_tab_title == "Downloads":
+		_ensure_downloads_setup()
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
@@ -126,9 +166,11 @@ func _on_tab_changed(tab_idx: int):
 	if _current_view:
 		_current_view.on_view_hide()
 
-	# Show new view (create Library lazily on first visit)
+	# Show new view (create Library or Downloads lazily on first visit)
 	if tab_title == "Library":
 		_ensure_library_setup()
+	if tab_title == "Downloads":
+		_ensure_downloads_setup()
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
 		_current_view.on_view_show()

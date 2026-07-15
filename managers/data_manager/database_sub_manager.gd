@@ -105,6 +105,13 @@ func initialize_database():
 		_is_db_ready = true
 		print("[DatabaseManager] Database ready - emitting signal")
 		data_manager.database_ready.emit()
+		# Warm the downloaded-games count cache on the DB thread so the first
+		# HomeView call can return the cached value instead of blocking the main
+		# thread with a COUNT(*) query.
+		if SystemManager.memory:
+			SystemManager.memory.queue_db_task(func():
+				get_downloaded_games_count()
+			)
 	else:
 		var err_msg = "Failed to open database at " + DB_PATH
 		push_error("[DatabaseManager] " + err_msg)

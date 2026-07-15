@@ -53,6 +53,8 @@ func _ready():
 	if SystemManager.display:
 		await SystemManager.display.initial_window_size_settled
 
+	print("[Main] initial_window_size_settled elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
+
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
 	library_background = get_node("RootLayout/ContentWrapper/LibraryBackground")
@@ -65,6 +67,7 @@ func _ready():
 	_keyboard = get_node_or_null("UILayer/OnscreenKeyboard")
 
 	# Initialize UIManager with all the pre-built nodes
+	var phase_start_us := Time.get_ticks_usec()
 	UIManager.initialize(
 		tab_container,
 		library_background,
@@ -72,6 +75,7 @@ func _ready():
 		main_content_vbox,
 		root_layout
 	)
+	print("[Main] UIManager.initialize elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Create debounced zoom save timer (replaces _process polling)
 	_zoom_save_timer = Timer.new()
@@ -132,13 +136,18 @@ func _ready():
 		LaunchManager.background_state_exited.connect(_on_background_state_exited)
 
 	# Set initial view controls
+	phase_start_us = Time.get_ticks_usec()
 	_sync_view_mode_button_to_setting()
 	_update_ui_for_view("Home")
+	print("[Main] view mode setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Apply M3 theme to root for fallback native control styling before grid is shown.
+	phase_start_us = Time.get_ticks_usec()
 	_apply_m3_theme()
+	print("[Main] _apply_m3_theme elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Connect to screen swap signal for dual screen handling
+	phase_start_us = Time.get_ticks_usec()
 	var ayn_thor_manager = get_node_or_null("AynThorManager")
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
@@ -151,6 +160,7 @@ func _ready():
 			ayn_thor_manager.swap_screens()
 		else:
 			print("[Main] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn_thor_manager.is_swapped, ")")
+	print("[Main] screen swap setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Single final layout: settle the visible grid(s) now that the window size and
 	# screen swap state are final. This is the one layout pass that should happen
@@ -179,7 +189,9 @@ func _ready():
 	# Sync zoom slider to the final grid ratio without reapplying zoom to the grids.
 	# Keep the deterministic startup size active so get_snap_ratios() works even
 	# though Godot hasn't propagated grid.size yet.
+	phase_start_us = Time.get_ticks_usec()
 	_sync_zoom_slider_to_current_view()
+	print("[Main] _sync_zoom_slider_to_current_view elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	# Save the snapped grid ratio so the setting stays in sync with the slider and
 	# doesn't hold a stale raw value from a previous viewport size.
 	if current_view:
@@ -196,6 +208,7 @@ func _ready():
 	# Note: UIManager wraps MainContentVBox in a MarginContainer (dp(16) margins),
 	# so the toolbar is offset from ContentWrapper's top-left. We must compute the
 	# toolbar's bottom edge in ContentWrapper coordinates, not just use size.y.
+	phase_start_us = Time.get_ticks_usec()
 	var mask = content_wrapper.get_node_or_null("controlbar_mask")
 	if mask and toolbar:
 		var _update_mask_height := func():
@@ -204,17 +217,19 @@ func _ready():
 			mask.offset_top = 0
 			mask.offset_bottom = toolbar_bottom
 		toolbar.resized.connect(_update_mask_height)
-		# Deferred sync: toolbar size may not be final on first signal.
-		await get_tree().process_frame
-		await get_tree().process_frame
-		_update_mask_height.call()
+		# Defer a single update so the toolbar has a chance to size itself; this
+		# avoids blocking _ready() while waiting for process frames.
+		_update_mask_height.call_deferred()
+	print("[Main] mask setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Extract native binaries on Android (non-blocking, happens in background)
 	if SystemManager.platform.is_android():
 		AndroidBinaryExtractor.extract_all_binaries()
 
 	# Check if first-run wizard needs to be shown
+	phase_start_us = Time.get_ticks_usec()
 	_show_oobe_wizard_if_needed()
+	print("[Main] _show_oobe_wizard_if_needed elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Focus the first Home card on startup once data is loaded
 	var first_run_setting = DataManager.get_setting("first_run_completed")
@@ -713,6 +728,11 @@ func _on_zoom_save_timer_timeout() -> void:
 func _save_zoom_ratio(ratio: float) -> void:
 	"""Persist the given zoom ratio to the library_card_zoom setting."""
 	if not DataManager:
+		return
+	# Don't save a zoom derived from a headless / zero-size window; it would
+	# clamp to the maximum and corrupt the user's saved zoom.
+	var win_size = DisplayServer.window_get_size()
+	if win_size == Vector2i.ZERO or OS.get_cmdline_args().has("--benchmark-startup"):
 		return
 	var zoom_setting = DataManager.get_setting("library_card_zoom")
 	if not zoom_setting:
@@ -1223,10 +1243,10 @@ func _notification(what: int) -> void:
 		var close_start_us := Time.get_ticks_usec()
 		print("[Main] NOTIFICATION_WM_CLOSE_REQUEST: shutdown started")
 
-		# Hide the window immediately so the app feels closed, even if cleanup
-		# continues for a few more frames. We minimize instead of setting visible=false
-		# because Godot does not allow hiding the main window.
-		if not OS.has_feature("headless"):
+		# Hide/minimize the window immediately on desktop so the app feels closed,
+		# even if cleanup continues for a few more frames. Skip on Android because mobile
+		# has no minimize-to-taskbar concept, and skip in headless mode.
+		if not OS.has_feature("headless") and SystemManager.platform and not SystemManager.platform.is_android():
 			get_window().mode = Window.MODE_MINIMIZED
 		print("[Main] Window hidden/minimized, running cleanup...")
 

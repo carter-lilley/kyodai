@@ -34,6 +34,8 @@ var _merged_cache_end: int = 0
 
 
 func _ready():
+	var ready_start_us := Time.get_ticks_usec()
+
 	view_name = "Home"
 	
 	# Initialize grid reference (declared in base View class)
@@ -44,15 +46,19 @@ func _ready():
 		push_error("[HomeView] games_grid is null! Cannot initialize.")
 		return
 	
+	var phase_start_us := Time.get_ticks_usec()
 	var card_scene = load("res://components/game_card.tscn") as PackedScene
 	var initial_zoom: float = UIManager.card_settings_state.card_zoom_ratio if UIManager and UIManager.card_settings_state else 0.25
 	games_grid.setup(card_scene, 0, initial_zoom)
+	print("[HomeView] games_grid.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
 	
 	# Setup vertical layout from settings
+	phase_start_us = Time.get_ticks_usec()
 	_update_grid_orientation()
+	print("[HomeView] _update_grid_orientation elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	# Connect to settings changes
 	if DataManager:
@@ -63,9 +69,11 @@ func _ready():
 	print("[DEBUG] Connected to database_ready signal")
 	
 	# If database is already ready, trigger the callback manually (happens when DataManager loads first)
+	phase_start_us = Time.get_ticks_usec()
 	if DataManager.is_database_ready():
 		print("[DEBUG] Database already ready, calling _on_database_ready manually")
 		_on_database_ready()
+	print("[HomeView] _on_database_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	DataManager.game_updated.connect(_on_game_updated)
 	
@@ -88,12 +96,11 @@ func _ready():
 	# Let the base View class own the focus signal connection.
 	reconnect_viewport()
 
+	print("[HomeView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
+
 func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
-	"""Get total downloaded game count for virtual scrolling setup.
-	
-	Loads both DB games count and GameNative games, storing GameNative games
-	for proper merging by last_played during pagination.
-	"""
+	var load_start_us := Time.get_ticks_usec()
+
 	_is_loading = true
 	_total_count_load_pending = true
 	_update_status("Loading recent games...")
@@ -104,13 +111,17 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	var should_reload_gamenative = not _gamenative_loaded or not preserve_cache
 	print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _gamenative_loaded=", _gamenative_loaded, " should_reload_gamenative=", should_reload_gamenative, " _merged_cache_dirty=", _merged_cache_dirty)
 	if should_reload_gamenative:
+		var phase_start_us := Time.get_ticks_usec()
 		_load_gamenative_games()
+		print("[HomeView] _load_gamenative_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	# If the database is already ready, set the count synchronously so the grid
 	# can settle with the correct total on the first frame instead of waiting for
 	# a background task to return.
 	if DataManager and DataManager.is_database_ready():
+		var phase_start_us := Time.get_ticks_usec()
 		var count = DataManager.get_downloaded_games_count()
+		print("[HomeView] get_downloaded_games_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 		_total_count_load_pending = false
 		if not is_instance_valid(games_grid):
 			_is_loading = false
@@ -128,7 +139,9 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			_merged_cache_end = 0
 			_merged_cache_dirty = true
 		
+		phase_start_us = Time.get_ticks_usec()
 		games_grid.set_total_count(_total_games, preserve_cache)
+		print("[HomeView] games_grid.set_total_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 		
 		# Only log when the count actually changes to avoid startup noise.
 		if _total_games != _last_logged_total_games:
@@ -146,6 +159,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		else:
 			_update_status("Showing 0-0 of %d games" % _total_games)
 		_is_loading = false
+		print("[HomeView] _load_total_count total elapsed_us=", Time.get_ticks_usec() - load_start_us)
 		return
 	
 	# Fallback: DB not ready yet, query total count asynchronously.
@@ -190,6 +204,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 				_update_status("Showing 0-0 of %d games" % _total_games)
 			_is_loading = false
 	)
+	print("[HomeView] _load_total_count async queued elapsed_us=", Time.get_ticks_usec() - load_start_us)
 
 func _load_gamenative_games() -> void:
 	"""Load and cache GameNative games for proper merging."""

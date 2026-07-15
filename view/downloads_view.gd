@@ -8,6 +8,8 @@ extends View
 var _download_items: Dictionary = {}  # item_id -> DownloadCard
 
 func _ready():
+	var ready_start_us := Time.get_ticks_usec()
+	
 	clear_completed_button.pressed.connect(_on_clear_completed)
 	
 	# Connect to new SystemManager.download signals
@@ -19,10 +21,14 @@ func _ready():
 	SystemManager.download.extraction_progress.connect(_on_extraction_progress)
 	SystemManager.download.extraction_completed.connect(_on_extraction_completed)
 	
+	var phase_start_us := Time.get_ticks_usec()
 	_refresh_list()
+	print("[DownloadsView] _refresh_list elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	# Let the base View class own the focus signal connection.
 	reconnect_viewport()
+
+	print("[DownloadsView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
 
 func _refresh_list():
 	# Clear existing
