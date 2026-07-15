@@ -5,16 +5,21 @@ extends M3Card
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 signal download_requested(game: GameResource)
+signal game_changed(game: GameResource)
 
 @export var game: GameResource:
 	set(value):
 		if game == value:
 			return
 		game = value
+		game_changed.emit(game)
 		_update_display()
 
 func set_game_with_priority(value: GameResource, high_priority: bool):
+	if game == value:
+		return
 	game = value
+	game_changed.emit(game)
 	_update_display_with_priority(high_priority)
 
 @export var preview_mode: bool = false

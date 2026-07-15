@@ -24,6 +24,10 @@ const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
 # Track last connected viewport to prevent signal leaks on reparent
 var _last_connected_viewport: Viewport = null
 
+# Track a focused GameCard that hasn't loaded its game data yet, so we can
+# re-emit hero_game_changed once the data arrives.
+var _pending_hero_card: GameCard = null
+
 func _ready():
 	view_ready.emit()
 
@@ -131,11 +135,32 @@ func _on_focus_changed(control: Control):
 	var card = control
 	while card != null:
 		if card is GameCard:
-			hero_game_changed.emit(card.game)
+			if card.game:
+				hero_game_changed.emit(card.game)
+				_clear_pending_hero_card()
+			else:
+				# Data hasn't loaded yet; wait for the card's game_changed signal.
+				_clear_pending_hero_card()
+				_pending_hero_card = card
+				if not card.game_changed.is_connected(_on_pending_card_game_changed):
+					card.game_changed.connect(_on_pending_card_game_changed)
 			return
 		card = card.get_parent()
 	
+	# Focus is not on a card; stop waiting for a pending card.
+	_clear_pending_hero_card()
 	# Don't clear hero - keep the last focused game image
+
+func _on_pending_card_game_changed(game: GameResource) -> void:
+	if _pending_hero_card and is_instance_valid(_pending_hero_card):
+		hero_game_changed.emit(game)
+	_clear_pending_hero_card()
+
+func _clear_pending_hero_card() -> void:
+	if _pending_hero_card and is_instance_valid(_pending_hero_card):
+		if _pending_hero_card.game_changed.is_connected(_on_pending_card_game_changed):
+			_pending_hero_card.game_changed.disconnect(_on_pending_card_game_changed)
+	_pending_hero_card = null
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.

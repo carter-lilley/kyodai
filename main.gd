@@ -829,22 +829,6 @@ func _compute_grid_available_size(grid: VirtualScrollGridContainer) -> Vector2:
 				platform_indicator._apply_responsive_layout()
 			available_height -= platform_indicator.get_combined_minimum_size().y
 
-	# The grid's ScrollContainer will subtract the scrollbar thickness from its own
-	# available size once content exceeds the viewport. Account for it now so the
-	# startup settle matches the grid's internal layout and avoids a re-snap.
-	if grid and grid._scroll_container:
-		var scroll_container = grid._scroll_container
-		if grid.vertical:
-			var v_scroll = scroll_container.get_v_scroll_bar()
-			if v_scroll:
-				var scrollbar_thickness = v_scroll.get_combined_minimum_size().x
-				available_width -= scrollbar_thickness
-		else:
-			var h_scroll = scroll_container.get_h_scroll_bar()
-			if h_scroll:
-				var scrollbar_thickness = h_scroll.get_combined_minimum_size().y
-				available_height -= scrollbar_thickness
-
 	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
 	print("[Main] _compute_grid_available_size: view=", view.view_name if view is View else "unknown", " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
 	return result

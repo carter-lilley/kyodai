@@ -6,7 +6,6 @@ clicking "outside" of card in list/carosel is annoying.
 better extraction notifications
 single screen is not single screen
 sync notif wasnt dismissed
-swapping platforms breaks second screen hero
 platform cards take longer on android
 some settings screens not scrollable?
 confirmation diag before quick or full sync

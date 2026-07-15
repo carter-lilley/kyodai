@@ -488,30 +488,9 @@ func _get_available_size() -> Vector2:
 			print("[Grid] _get_available_size: using startup available size=", _startup_available_size)
 		return _startup_available_size
 
-	var scrollbar_x = 0.0
-	var scrollbar_y = 0.0
-	if _scroll_container:
-		var v_scroll = _scroll_container.get_v_scroll_bar()
-		if v_scroll:
-			scrollbar_x = v_scroll.get_combined_minimum_size().x
-			# Always reserve the scrollbar width so the layout doesn't snap to a
-			# different cards-per-line stop when the scrollbar appears/disappears.
-			if scrollbar_x <= 0.0:
-				scrollbar_x = M3Units.dp(M3Theme.SCROLLBAR_THICKNESS)
-		var h_scroll = _scroll_container.get_h_scroll_bar()
-		if h_scroll:
-			scrollbar_y = h_scroll.get_combined_minimum_size().y
-			if scrollbar_y <= 0.0:
-				scrollbar_y = M3Units.dp(M3Theme.SCROLLBAR_THICKNESS)
-
-	var result: Vector2
-	if vertical:
-		result = Vector2(maxf(size.x - scrollbar_x, 1.0), maxf(size.y, 1.0))
-	else:
-		result = Vector2(maxf(size.x, 1.0), maxf(size.y - scrollbar_y, 1.0))
-	
+	var result = Vector2(maxf(size.x, 1.0), maxf(size.y, 1.0))
 	if debug_mode:
-		print("[Grid] _get_available_size: vertical=", vertical, " size=", size, " scrollbar_x=", scrollbar_x, " scrollbar_y=", scrollbar_y, " result=", result)
+		print("[Grid] _get_available_size: vertical=", vertical, " size=", size, " result=", result)
 	return result
 
 func _get_normal_stride() -> float:
@@ -794,51 +773,26 @@ func _process(_delta: float):
 	# Drain any queued off-screen effect rebuilds a few cards per frame.
 	_drain_pending_effect_rebuilds()
 
-func _recalculate_layout_until_stable(max_passes: int = 3) -> void:
-	"""Run _recalculate_layout() repeatedly until the available size stabilizes.
-
-	Scrollbar visibility toggles can change the usable viewport width between
-	passes. Converging before the frame renders prevents visible zoom snapping.
-	"""
-	var start_us := Time.get_ticks_usec()
-	var passes := 0
-	for i in range(max_passes):
-		passes += 1
-		var before = _get_available_size()
-		_recalculate_layout()
-		var after = _get_available_size()
-		if before.is_equal_approx(after):
-			break
-	print("[Grid] _recalculate_layout_until_stable: passes=", passes, " elapsed_us=", Time.get_ticks_usec() - start_us)
-
 func _on_resize_debounced():
 	print("[Grid] _on_resize_debounced: size=", size, " target_ratio=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
 	if size.y > 0:
 		_log_parent_chain_sizes()
 	if startup_layout_suppressed:
 		return
-	# Prevent re-entrant layout recalculations (e.g. scrollbar visibility toggles
-	# during a zoom-driven layout pass can fire _on_resized() mid-flight).
+	# Prevent re-entrant layout recalculations.
 	if _is_recalculating_layout:
 		return
 
 	# Update the cached size so later viewport_size_changed events can de-duplicate.
 	_last_resized_size = Vector2(size.x, size.y)
 
-	# Re-snap zoom ratio to a valid stop for the new available size. Without
-	# this, target_card_width_ratio holds the old snap point which may no
-	# longer correspond to a whole number of cards at the new viewport size.
-	var snapped = _calculate_snapped_ratio(target_card_width_ratio)
-	if not is_equal_approx(target_card_width_ratio, snapped):
-		_batching_layout = true
-		target_card_width_ratio = snapped
-		_batching_layout = false
-	_recalculate_layout_until_stable()
+	# Re-snap zoom ratio to a valid stop for the new available size and recalculate once.
+	target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
+
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
 		_initial_load()
-		# After populating cards the scrollbar state may change; converge again.
-		_recalculate_layout_until_stable()
+		_recalculate_layout()
 
 func _log_parent_chain_sizes() -> void:
 	var labels = ["grid", "vbox", "margin", "view", "tab_page", "tab_container", "main_vbox", "outer_margin", "content_wrapper"]
@@ -862,21 +816,14 @@ func settle_startup() -> void:
 	# Update the cached size so later viewport_size_changed events can de-duplicate.
 	_last_resized_size = Vector2(size.x, size.y)
 
-	# Snap the saved zoom to a valid stop for the final available size. The zoom
-	# is snapped internally, so the grid must start at a stop that matches the
-	# slider and the saved setting.
-	var snapped = _calculate_snapped_ratio(target_card_width_ratio)
-	if not is_equal_approx(target_card_width_ratio, snapped):
-		_batching_layout = true
-		target_card_width_ratio = snapped
-		_batching_layout = false
-		print("[Grid] settle_startup snapped target_ratio to=", snapped)
+	# Snap the saved zoom to a valid stop for the final available size. The setter
+	# handles the single recalculation pass.
+	target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
 
-	_recalculate_layout_until_stable()
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now.
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
 		_initial_load()
-		_recalculate_layout_until_stable()
+		_recalculate_layout()
 
 func settle_startup_with_buffer(startup_buffer_lines: int) -> void:
 	"""Run the startup layout with a smaller buffer, then expand asynchronously.
@@ -1439,6 +1386,10 @@ func _setup_ui():
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.scroll_vertical = 0
 	_scroll_container.clip_contents = true
+	# Scrollbar is not needed; navigation uses mouse wheel, keyboard, or controller.
+	# Hiding it removes the scrollbar-width feedback loop from the layout math.
+	_scroll_container.vertical_scroll_mode = ScrollContainer.ScrollMode.SCROLL_MODE_SHOW_NEVER
+	_scroll_container.horizontal_scroll_mode = ScrollContainer.ScrollMode.SCROLL_MODE_SHOW_NEVER
 
 	_visual_layer = Control.new()
 	_visual_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -2630,11 +2581,10 @@ func _refresh_buffer(preserve_scroll: bool = false):
 		_scroll_container.scroll_horizontal = 0
 		_scroll_container._target_scroll = 0.0
 
-	_recalculate_layout_until_stable()
+	_recalculate_layout()
 	if _active_cards.size() == 0:
 		_initial_load()
-		# After populating cards the scrollbar state may change; converge again.
-		_recalculate_layout_until_stable()
+		_recalculate_layout()
 	_update_visual_draw_order()
 
 	# Restore focus to the card that owned it before recycle; fall back to the
