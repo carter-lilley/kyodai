@@ -315,6 +315,10 @@ var _card_has_set_content_alignment: bool = false
 var _card_has_set_media_aspect_ratio: bool = false
 var _card_has_refresh_effects: bool = false
 var _card_has_update_card_state_from_settings: bool = false
+var _card_has_sync_visual_transform: bool = false
+var _card_has_mark_visuals_position_synced: bool = false
+var _card_has_begin_bulk_layout: bool = false
+var _card_has_end_bulk_layout: bool = false
 
 var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
 
@@ -890,6 +894,7 @@ func _process_buffer_expansion() -> void:
 		_check_preload_needed()
 		_update_card_priorities(_visible_start_idx, _visible_end_idx)
 		_update_visual_draw_order()
+		_flush_pending_visual_setup_for_visible_zone()
 		# Newly added off-screen cards need their visual-layer positions synced
 		# after the FlowContainer sort runs, otherwise the visual layer stays at
 		# the origin until a scroll/recycle forces a sync.
@@ -1560,6 +1565,10 @@ func _instantiate_card_pool():
 	_card_has_set_media_aspect_ratio = probe.has_method("set_media_aspect_ratio")
 	_card_has_refresh_effects = probe.has_method("refresh_effects")
 	_card_has_update_card_state_from_settings = probe.has_method("_update_card_state_from_settings")
+	_card_has_sync_visual_transform = probe.has_method("sync_visual_transform")
+	_card_has_mark_visuals_position_synced = probe.has_method("_mark_visuals_position_synced")
+	_card_has_begin_bulk_layout = probe.has_method("begin_bulk_layout")
+	_card_has_end_bulk_layout = probe.has_method("end_bulk_layout")
 	print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _compute_pool_size(available: Vector2) -> int:
@@ -1683,7 +1692,8 @@ func _initial_load():
 
 	_update_margin()
 	_update_visual_draw_order()
-	_request_data(_buffer_target_start, _buffer_target_end - _buffer_target_start)
+	_request_missing_data()
+	_flush_pending_visual_setup_for_visible_zone()
 	print("[Grid] _initial_load: card_count=", _buffer_target_end - _buffer_target_start, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
@@ -1865,6 +1875,9 @@ func _configure_card_size_flags(card: Control) -> void:
 	if not card is M3Card:
 		return
 
+	if _card_has_begin_bulk_layout:
+		card.begin_bulk_layout()
+
 	match view_mode:
 		ViewMode.GRID:
 			card.card_layout_mode = M3Card.LayoutMode.VERTICAL
@@ -1900,14 +1913,18 @@ func _configure_card_size_flags(card: Control) -> void:
 	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
 
+	if _card_has_end_bulk_layout:
+		card.end_bulk_layout()
+
 func _configure_card_visual_layer(card: Control) -> void:
 	if card.has_method("set_visual_layer"):
 		card.set_visual_layer(_visual_layer)
 
 func _sync_card_visual_transforms() -> void:
+	if not _card_has_sync_visual_transform:
+		return
 	for card in _active_cards:
-		if card.has_method("sync_visual_transform"):
-			card.sync_visual_transform()
+		card.sync_visual_transform()
 
 func _sync_and_mark_card_visual_transforms() -> void:
 	var marked: int = 0
@@ -1918,9 +1935,9 @@ func _sync_and_mark_card_visual_transforms() -> void:
 		# synced flag, so marking earlier would be silently undone.
 		if not card.is_node_ready():
 			continue
-		if card.has_method("sync_visual_transform"):
+		if _card_has_sync_visual_transform:
 			card.sync_visual_transform()
-		if card.has_method("_mark_visuals_position_synced"):
+		if _card_has_mark_visuals_position_synced:
 			card._mark_visuals_position_synced()
 			marked += 1
 	print("[Grid] _sync_and_mark_card_visual_transforms: marked=", marked, " active=", _active_cards.size())
@@ -1953,12 +1970,8 @@ func _add_card_at_end(virtual_index: int):
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
 
-	# Cards are added to the tree before _ready runs, so mark them as needing
-	# visual setup and let _apply_card_visual_setup finish them once both the
-	# card is ready and its data is available.
 	card.set_meta("needs_visual_setup", true)
-	if not _apply_card_visual_setup(card, virtual_index):
-		_pending_visual_setup[virtual_index] = card
+	_pending_visual_setup[virtual_index] = card
 
 	item_created.emit(card, virtual_index)
 
@@ -1981,8 +1994,7 @@ func _add_card_at_start(virtual_index: int):
 		card.set_focus_scale(focus_scale)
 
 	card.set_meta("needs_visual_setup", true)
-	if not _apply_card_visual_setup(card, virtual_index):
-		_pending_visual_setup[virtual_index] = card
+	_pending_visual_setup[virtual_index] = card
 
 	item_created.emit(card, virtual_index)
 
@@ -2026,9 +2038,9 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	# data is applied. In some paths (async startup, scroll recycling) the
 	# global sync runs before the card is ready or before data is available,
 	# leaving the card invisible until it is recycled.
-	if card.has_method("sync_visual_transform"):
+	if _card_has_sync_visual_transform:
 		card.sync_visual_transform()
-	if card.has_method("_mark_visuals_position_synced"):
+	if _card_has_mark_visuals_position_synced:
 		card._mark_visuals_position_synced()
 	print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " applied")
 	return true
@@ -2036,13 +2048,24 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 func _batch_recycle_from_start(count: int) -> void:
 	if count <= 0 or count > _active_cards.size():
 		return
+
+	# Release focus once if any card being recycled (or a descendant) owns it.
+	var viewport := get_viewport()
+	var focused = viewport.gui_get_focus_owner() if is_instance_valid(viewport) else null
+	if focused:
+		for i in range(count):
+			var card = _active_cards[i]
+			if is_instance_valid(card) and card.is_ancestor_of(focused):
+				viewport.gui_release_focus()
+				break
+
 	# Recycle in-place to avoid array allocation from slice().
 	for i in range(count - 1, -1, -1):
 		var card = _active_cards[i]
-		_release_focus_if_inside(card)
 		var vidx = card.get_meta("virtual_index", -1)
 		if vidx >= 0:
 			_active_cards_by_index.erase(vidx)
+			_pending_visual_setup.erase(vidx)
 		if is_instance_valid(card):
 			_disconnect_card_signals(card)
 			card.visible = false
@@ -2052,8 +2075,6 @@ func _batch_recycle_from_start(count: int) -> void:
 				card.reset(true)
 			elif _card_has_game_prop:
 				card.game = null
-			if vidx >= 0:
-				_pending_visual_setup.erase(vidx)
 			card.remove_meta("needs_visual_setup")
 			if card.get_parent() == _flow_container:
 				_flow_container.remove_child(card)
@@ -2080,8 +2101,7 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		if _card_has_set_focus_scale:
 			card.set_focus_scale(focus_scale)
 		card.set_meta("needs_visual_setup", true)
-		if not _apply_card_visual_setup(card, virtual_index):
-			_pending_visual_setup[virtual_index] = card
+		_pending_visual_setup[virtual_index] = card
 		item_created.emit(card, virtual_index)
 		_active_cards_by_index[virtual_index] = card
 		new_cards.append(card)
@@ -2113,8 +2133,6 @@ func _acquire_card() -> Control:
 		var card = _card_pool.pop_back()
 		if is_instance_valid(card):
 			card.set_meta("pooled", false)
-			if _card_has_reset:
-				card.reset(true)
 			# Ensure a recycled card can always receive focus; some paths (preview,
 			# manual disabling) may leave these in a non-focusable state.
 			card.disabled = false
@@ -2541,6 +2559,7 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 				assigned_count += 1
 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
+	_flush_pending_visual_setup_for_visible_zone()
 
 func _refresh_buffer(preserve_scroll: bool = false):
 	# Capture live focus state before recycling so we can restore it after rebuild.

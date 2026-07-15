@@ -307,18 +307,13 @@ func _build_media_stack(force_full_rebuild: bool = true):
 
 	_update_media()
 
-	# Focus stack is built lazily when this card becomes focused (or in preview mode),
-	# but pre-building it for all cards when focus effects are configured avoids
-	# creating nodes inside _on_focus_entered, which can disrupt native focus.
-	var has_focus_effects := false
-	if UIManager and UIManager.card_settings_state:
-		has_focus_effects = not UIManager.card_settings_state.get_focus_effects().is_empty()
-	elif DataManager:
-		var config_setting = DataManager.get_setting("card_effect_config")
-		if config_setting and config_setting.value is Dictionary:
-			has_focus_effects = not config_setting.value.get("focus_effects", []).is_empty()
-	if preview_mode or _is_focused or has_focus_effects:
+	# Focus stack is built lazily when this card becomes focused (or in preview mode).
+	# Only one card is focused at a time, so building the stack for every card is
+	# wasted work. The focused card builds its stack immediately in _on_focus_entered
+	# or _sync_focus_state_from_viewport.
+	if preview_mode or _is_focused:
 		_build_focus_stack(force_full_rebuild)
+
 
 func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	if not _focus_media_container:

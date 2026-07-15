@@ -41,24 +41,40 @@ const MIN_HEIGHT_HORIZONTAL_DP := 80.0
 		if value == card_layout_mode:
 			return
 		card_layout_mode = value
-		if _ready_called:
-			_rebuild_layout()
-			_update_media()
-			_update_text()
-			_update_appearance()
-			_rebuild_actions()
+		if not _ready_called:
+			return
+		if _bulk_layout_active:
+			_bulk_layout_needs_rebuild = true
+			_bulk_layout_needs_media = true
+			_bulk_layout_needs_text = true
+			_bulk_layout_needs_appearance = true
+			_bulk_layout_needs_actions = true
+			return
+		_rebuild_layout()
+		_update_media()
+		_update_text()
+		_update_appearance()
+		_rebuild_actions()
 
 @export var content_alignment: ContentAlignment = ContentAlignment.START:
 	set(value):
 		if value == content_alignment:
 			return
 		content_alignment = value
-		if _ready_called:
-			_rebuild_layout()
-			_update_media()
-			_update_text()
-			_update_appearance()
-			_rebuild_actions()
+		if not _ready_called:
+			return
+		if _bulk_layout_active:
+			_bulk_layout_needs_rebuild = true
+			_bulk_layout_needs_media = true
+			_bulk_layout_needs_text = true
+			_bulk_layout_needs_appearance = true
+			_bulk_layout_needs_actions = true
+			return
+		_rebuild_layout()
+		_update_media()
+		_update_text()
+		_update_appearance()
+		_rebuild_actions()
 
 var media_aspect_ratio: float = -1.0:
 	set(value):
@@ -68,17 +84,55 @@ var media_aspect_ratio: float = -1.0:
 			push_warning("M3Card: media_aspect_ratio must be > 0 or -1.0 (fill). Got %f, ignoring." % value)
 			return
 		media_aspect_ratio = value
-		if _ready_called:
-			_rebuild_layout()
-			_update_text()
-			_update_appearance()
-			queue_redraw()
+		if not _ready_called:
+			return
+		if _bulk_layout_active:
+			_bulk_layout_needs_rebuild = true
+			_bulk_layout_needs_text = true
+			_bulk_layout_needs_appearance = true
+			return
+		_rebuild_layout()
+		_update_text()
+		_update_appearance()
+		queue_redraw()
 
 func set_media_aspect_ratio(ratio: float) -> void:
 	media_aspect_ratio = ratio
 
 func set_content_alignment(alignment: ContentAlignment) -> void:
 	content_alignment = alignment
+
+func begin_bulk_layout() -> void:
+	_bulk_layout_active = true
+	_bulk_layout_needs_rebuild = false
+	_bulk_layout_needs_media = false
+	_bulk_layout_needs_text = false
+	_bulk_layout_needs_appearance = false
+	_bulk_layout_needs_actions = false
+
+func end_bulk_layout() -> void:
+	if not _bulk_layout_active:
+		return
+	_bulk_layout_active = false
+
+	if _bulk_layout_needs_rebuild:
+		_rebuild_layout()
+	else:
+		if _bulk_layout_needs_actions:
+			_rebuild_actions()
+		if _bulk_layout_needs_media:
+			_update_media()
+		if _bulk_layout_needs_text:
+			_update_text()
+
+	if _bulk_layout_needs_appearance:
+		_update_appearance()
+
+	_bulk_layout_needs_rebuild = false
+	_bulk_layout_needs_media = false
+	_bulk_layout_needs_text = false
+	_bulk_layout_needs_appearance = false
+	_bulk_layout_needs_actions = false
 
 @export var media_texture: Texture2D:
 	set(value):
@@ -166,6 +220,13 @@ var _action_labels: Array[String] = []
 
 var _focus_ring_bounds_queued: bool = false
 var _ready_called: bool = false
+
+var _bulk_layout_active: bool = false
+var _bulk_layout_needs_rebuild: bool = false
+var _bulk_layout_needs_media: bool = false
+var _bulk_layout_needs_text: bool = false
+var _bulk_layout_needs_appearance: bool = false
+var _bulk_layout_needs_actions: bool = false
 
 var _focus_target_w: float = 0.0
 var _focus_target_h: float = 0.0
