@@ -167,7 +167,10 @@ func _calculate_ui_scale() -> float:
 	return _ui_scale
 
 func _apply_initial_window_size() -> void:
-	var viewport_before := get_viewport_size()
+	var window_before := DisplayServer.window_get_size()
+	var viewport: Viewport = get_viewport()
+	var viewport_before: Vector2i = viewport.size
+	var viewport_size_before := get_viewport_size()
 	var windowed_setting = settings_man.get_setting("windowed")
 	if windowed_setting and not windowed_setting.value:
 		# Fullscreen (windowed = false): restore exclusive fullscreen.
@@ -185,16 +188,39 @@ func _apply_initial_window_size() -> void:
 		# Setting missing; leave default window mode alone.
 		pass
 
-	# Wait for the OS to actually apply the new window size. The OS may need
-	# more than one frame, so poll until the viewport size changes or a safe
-	# timeout is reached (covers headless/first-run cases where it never changes).
+	# Wait for the OS window size and viewport size to stabilize. The OS may need
+	# a few frames to apply the new window size, and the Godot viewport can lag
+	# behind. Instead of waiting for an arbitrary timeout, we wait until both
+	# sizes have stopped changing for several consecutive frames. If the sizes
+	# never changed (no resize needed), we exit after one stable frame.
+	const STABLE_FRAMES_REQUIRED: int = 3
+	const MAX_WAIT_FRAMES: int = 60
 	var frame_wait := 0
+	var stable_frames := 0
+	var last_window_size: Vector2i = DisplayServer.window_get_size()
+	var last_viewport_size: Vector2i = viewport.size
+
 	await get_tree().process_frame
-	while get_viewport_size() == viewport_before and frame_wait < 10:
+	while frame_wait < MAX_WAIT_FRAMES:
 		await get_tree().process_frame
 		frame_wait += 1
 
-	print("[SystemManager.display] _apply_initial_window_size: viewport before=", viewport_before, " after=", get_viewport_size(), " frames=", frame_wait)
+		var current_window_size: Vector2i = DisplayServer.window_get_size()
+		var current_viewport_size: Vector2i = viewport.size
+
+		if current_window_size == last_window_size and current_viewport_size == last_viewport_size:
+			stable_frames += 1
+			# No resize needed: exit as soon as we see the original size stable.
+			# Resize needed: wait for several stable frames so the OS is done.
+			if (current_window_size == window_before and current_viewport_size == viewport_before) or stable_frames >= STABLE_FRAMES_REQUIRED:
+				break
+		else:
+			stable_frames = 0
+
+		last_window_size = current_window_size
+		last_viewport_size = current_viewport_size
+
+	print("[SystemManager.display] _apply_initial_window_size: window before=", window_before, " after=", DisplayServer.window_get_size(), " viewport before=", viewport_size_before, " direct=", viewport_before, " after=", viewport.size, " frames=", frame_wait)
 	initial_window_size_settled.emit()
 
 func _on_setting_changed(value: Variant, setting: SettingsVar):

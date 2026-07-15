@@ -44,8 +44,9 @@ func _ready():
 		push_error("[HomeView] games_grid is null! Cannot initialize.")
 		return
 	
-	var card_scene = preload("res://components/game_card.tscn")
-	games_grid.setup(card_scene, 0)
+	var card_scene = load("res://components/game_card.tscn") as PackedScene
+	var initial_zoom: float = UIManager.card_settings_state.card_zoom_ratio if UIManager and UIManager.card_settings_state else 0.25
+	games_grid.setup(card_scene, 0, initial_zoom)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
@@ -97,10 +98,57 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	_total_count_load_pending = true
 	_update_status("Loading recent games...")
 	
-	# Load GameNative games first (they're small and cached)
-	_load_gamenative_games()
+	# Load GameNative games first (they're small and cached). When preserving the
+	# cache and GameNative games are already loaded, skip this so we don't mark
+	# the merged DB cache dirty and defeat the prefetch warm-up.
+	var should_reload_gamenative = not _gamenative_loaded or not preserve_cache
+	print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _gamenative_loaded=", _gamenative_loaded, " should_reload_gamenative=", should_reload_gamenative, " _merged_cache_dirty=", _merged_cache_dirty)
+	if should_reload_gamenative:
+		_load_gamenative_games()
 	
-	# Query total count asynchronously
+	# If the database is already ready, set the count synchronously so the grid
+	# can settle with the correct total on the first frame instead of waiting for
+	# a background task to return.
+	if DataManager and DataManager.is_database_ready():
+		var count = DataManager.get_downloaded_games_count()
+		_total_count_load_pending = false
+		if not is_instance_valid(games_grid):
+			_is_loading = false
+			return
+		
+		_db_games_count = count
+		_gamenative_games_count = _gamenative_games.size()
+		_total_games = _db_games_count + _gamenative_games_count
+		
+		# Clear the index tracking when total changes significantly
+		if not preserve_cache:
+			_gamenative_indices.clear()
+			_merged_games_cache.clear()
+			_merged_cache_start = 0
+			_merged_cache_end = 0
+			_merged_cache_dirty = true
+		
+		games_grid.set_total_count(_total_games, preserve_cache)
+		
+		# Only log when the count actually changes to avoid startup noise.
+		if _total_games != _last_logged_total_games:
+			_last_logged_total_games = _total_games
+			print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+		
+		if _db_games_count == 0:
+			_update_status("No downloaded games found")
+			# Trigger scan if no DB games found (may have been wiped from DB but files exist)
+			if trigger_scan_if_empty:
+				print("[DEBUG] Triggering scan because _db_games_count == 0")
+				_scan_for_downloaded_games()
+			else:
+				print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
+		else:
+			_update_status("Showing 0-0 of %d games" % _total_games)
+		_is_loading = false
+		return
+	
+	# Fallback: DB not ready yet, query total count asynchronously.
 	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_downloaded_games_count()
@@ -128,7 +176,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			# Only log when the count actually changes to avoid startup noise.
 			if _total_games != _last_logged_total_games:
 				_last_logged_total_games = _total_games
-				print("[DEBUG] _load_total_count: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+				print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
 			
 			if _db_games_count == 0:
 				_update_status("No downloaded games found")
@@ -155,6 +203,38 @@ func _load_gamenative_games() -> void:
 		_gamenative_games.clear()
 	_gamenative_loaded = true
 	_merged_cache_dirty = true
+
+func _prefetch_first_page() -> void:
+	"""Warm the merged-games cache for the first page before the grid asks for it.
+
+	This runs on the DB thread so the initial items_requested callback can hit the
+	cache instead of blocking the main thread while the grid is settling."""
+	var offset := 0
+	var limit := 25
+	SystemManager.memory.queue_db_task(
+		func():
+			var db_start_us := Time.get_ticks_usec()
+			var request_end = offset + limit
+			var cache_fully_covers = not _merged_games_cache.is_empty() and \
+				offset >= _merged_cache_start and \
+				request_end <= _merged_cache_end
+
+			if not cache_fully_covers:
+				var buffer = limit * 2
+				var fetch_offset = max(0, offset - buffer)
+				var fetch_limit = max(limit + buffer * 2, 50)
+				var db_games = DataManager.get_downloaded_games_paginated(fetch_offset, fetch_limit)
+				_merged_games_cache = _merge_all_games_by_last_played(db_games, _gamenative_games)
+				_merged_cache_start = fetch_offset
+				_merged_cache_end = fetch_offset + _merged_games_cache.size()
+				_merged_cache_dirty = false
+				print("[HomeView] prefetch first page: fetch_offset=", fetch_offset, " fetch_limit=", fetch_limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us)
+			else:
+				print("[HomeView] prefetch first page: cache already warm")
+			return null,
+		func(_result):
+			pass
+	)
 
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
@@ -201,8 +281,10 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	Fetches only the requested window plus a small buffer to avoid loading
 	the entire library into memory.
 	"""
+	var request_start_us := Time.get_ticks_usec()
 	SystemManager.memory.queue_db_task(
 		func():
+			var db_start_us := Time.get_ticks_usec()
 			var request_end = offset + limit
 			# The cache must FULLY contain the requested range, not just overlap.
 			# A partial overlap (e.g. cache=[55,98) vs request=[0,98)) still
@@ -212,6 +294,8 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				request_end <= _merged_cache_end
 			
 			var cache_hit = not (_merged_cache_dirty or _merged_games_cache.is_empty() or not cache_fully_covers)
+			
+			print("[HomeView] _on_items_requested cache check: offset=", offset, " limit=", limit, " cache_fully_covers=", cache_fully_covers, " cache_hit=", cache_hit, " dirty=", _merged_cache_dirty, " cache_start=", _merged_cache_start, " cache_end=", _merged_cache_end, " cache_size=", _merged_games_cache.size())
 			
 			# Rebuild cache if dirty, empty, or the requested range is not fully
 			# covered by the current cached window.
@@ -242,12 +326,14 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 					if game.source == "gamenative":
 						result_gamenative_indices[i] = true
 			
+			print("[HomeView] DB task: offset=", offset, " limit=", limit, " cache_hit=", cache_hit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 			return {
 				"games": result,
 				"offset": offset,
 				"gamenative_indices": result_gamenative_indices
 			},
 		func(result: Dictionary):
+			var callback_start_us := Time.get_ticks_usec()
 			var games = result["games"] as Array[GameResource]
 			var response_offset = result["offset"] as int
 			var gamenative_indices = result["gamenative_indices"] as Dictionary
@@ -256,6 +342,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				_gamenative_indices[response_offset + idx] = true
 			
 			games_grid.on_items_loaded(games, response_offset, is_preload)
+			print("[HomeView] on_items_loaded callback: offset=", response_offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 	)
 
 func _merge_all_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource]) -> Array[GameResource]:
@@ -357,6 +444,10 @@ func _on_download_completed(_item_id: String, success: bool, _message: String):
 func _on_database_ready():
 	print("[DEBUG] _on_database_ready called")
 	_load_total_count()
+	# Warm the merged-games cache for the first page in the background so the
+	# grid's initial items_request can hit the cache instead of waiting on the DB.
+	if _total_games > 0 and _db_games_count > 0:
+		_prefetch_first_page()
 
 func _on_game_launched(game: GameResource):
 	"""Called when a game is launched - refresh grid to resort by last_played."""

@@ -1427,3 +1427,27 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 		if callback.is_valid():
 			callback.call(json.data, "")
 	)
+
+func _exit_tree() -> void:
+	shutdown()
+
+func shutdown() -> void:
+	"""Cancel all active HTTP requests and free the request pool.
+
+	Called during app shutdown so pending requests don't stall tree teardown.
+	"""
+	# Cancel and release any HTTPRequest nodes currently in flight.
+	for child in get_children():
+		if child is HTTPRequest:
+			child.cancel_request()
+			child.queue_free()
+
+	# Free pooled requests.
+	for http in _request_pool:
+		if is_instance_valid(http):
+			http.queue_free()
+	_request_pool.clear()
+
+	_active_request_count = 0
+	_response_cache.clear()
+	_response_cache_order.clear()

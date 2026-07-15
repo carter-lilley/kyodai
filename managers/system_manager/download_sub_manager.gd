@@ -2977,3 +2977,39 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 ## Helper function to recursively clean up a temp directory
 func _cleanup_temp_dir(dir_path: String) -> void:
 	FSM.delete_dir_recursive(dir_path)
+
+
+func _exit_tree() -> void:
+	shutdown()
+
+func shutdown() -> void:
+	"""Cancel all active and queued downloads.
+
+	Called during app shutdown so in-progress downloads don't stall tree teardown.
+	"""
+	# Cancel all active downloads first; this stops their timers and cleans up
+	# chunked-download state.
+	var active_ids := _active_items.keys()
+	for item_id in active_ids:
+		cancel(item_id)
+
+	# Clear any queued items without starting them.
+	for item in _queue:
+		_cleanup_item(item)
+	_queue.clear()
+
+	# Close any leftover connection pools.
+	_connection_pool_mutex.lock()
+	for item_id in _download_connection_pools.keys():
+		var pool = _download_connection_pools[item_id]
+		for http in pool:
+			if http != null:
+				http.close()
+	_download_connection_pools.clear()
+	_connection_pool_mutex.unlock()
+
+	_chunk_concurrency_semaphores.clear()
+	_chunked_downloads.clear()
+	_final_copy_progress.clear()
+	_state_file_dirty.clear()
+	_state_file_last_save_ms.clear()

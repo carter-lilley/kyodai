@@ -7,6 +7,7 @@ var content_wrapper: Control
 var main_content_vbox: VBoxContainer
 var root_layout: Control
 var view_mode_group: M3ButtonGroup
+var toolbar: PanelContainer = null
 
 # Cached reference to the on-screen keyboard (survives reparenting in dual-screen mode)
 var _keyboard: PanelContainer = null
@@ -18,6 +19,7 @@ var _ui_layer: CanvasLayer = null
 # Zoom state tracking for analog triggers
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
+var _startup_zoom_sync_active: bool = true
 
 # Current grid snap ratios ( populated when in GRID mode, empty for LIST/CAROUSEL )
 var _current_snap_ratios: Array[float] = []
@@ -32,7 +34,14 @@ const ZOOM_SAVE_DELAY_MS: int = 1500
 # M3 Theme resource (applied to root for fallback native control styling)
 var _m3_theme: Theme = null
 
+func _enter_tree():
+	# Set the global startup suppression flag as early as possible so that every
+	# VirtualScrollGridContainer (including HomeView created during scene load)
+	# defers its expensive pool creation and layout until Main settles it once.
+	VirtualScrollGridContainer.startup_layout_suppressed = true
+
 func _ready():
+	var main_ready_start_us := Time.get_ticks_usec()
 	# Disable automatic quit so we can free the scene tree before the rendering
 	# server shuts down. Without this, get_tree().quit() exits without destroying
 	# nodes, which causes CanvasItem/Texture RID leaks.
@@ -41,10 +50,6 @@ func _ready():
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 
-	# Suppress grid layout until the saved window size is restored. The grid will
-	# be created with the correct saved zoom/orientation already loaded, so it
-	# can settle into exactly one layout pass once the window size is stable.
-	VirtualScrollGridContainer.startup_layout_suppressed = true
 	if SystemManager.display:
 		await SystemManager.display.initial_window_size_settled
 
@@ -77,41 +82,23 @@ func _ready():
 
 	# Raise toolbar above the card grid (grid has z_index=-1 to let card focus
 	# overflow render behind sibling UI; toolbar must sit above that).
-	var toolbar = main_content_vbox.get_node_or_null("controlbar_background")
+	toolbar = main_content_vbox.get_node_or_null("controlbar_background")
 	if toolbar:
 		toolbar.z_index = 10
 
-	# Sync the top background mask height to match the control bar.
-	# The mask covers the area behind the toolbar so cards scrolling up
-	# don't peek through. It sits between the grid (z=-1) and toolbar (z=10).
-	# Note: UIManager wraps MainContentVBox in a MarginContainer (dp(16) margins),
-	# so the toolbar is offset from ContentWrapper's top-left. We must compute the
-	# toolbar's bottom edge in ContentWrapper coordinates, not just use size.y.
-	var mask = content_wrapper.get_node_or_null("controlbar_mask")
-	if mask and toolbar:
-		var _update_mask_height := func():
-			var toolbar_bottom: float = toolbar.global_position.y - content_wrapper.global_position.y + toolbar.size.y
-			mask.custom_minimum_size.y = toolbar_bottom
-			mask.offset_top = 0
-			mask.offset_bottom = toolbar_bottom
-		toolbar.resized.connect(_update_mask_height)
-		# Deferred sync: toolbar size may not be final on first signal.
-		await get_tree().process_frame
-		await get_tree().process_frame
-		_update_mask_height.call()
-
-	# Connect zoom slider signals
+	# Get UI references early so we can connect signals and block the slider during startup settle.
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
+	view_mode_group = main_content_vbox.get_node("controlbar_background/controlbar_hbox/M3ButtonGroup")
+
+	# Connect zoom slider signals. value_changed is deferred until after startup
+	# so the slider cannot override the saved zoom during initial layout.
 	if zoom_slider:
-		zoom_slider.value_changed.connect(_on_zoom_changed)
 		zoom_slider.drag_ended.connect(_on_zoom_changed_finished)
 
 	# Connect view mode buttons
 	# Note: UIManager.initialize() reparents ContentWrapper, so we must use the
 	# cached main_content_vbox reference instead of a root-relative path.
-	view_mode_group = main_content_vbox.get_node("controlbar_background/controlbar_hbox/M3ButtonGroup")
 	view_mode_group.selection_changed.connect(_on_view_mode_changed)
-	_sync_view_mode_button_to_setting()
 
 	# Connect settings gear button (if present in scene; nav footer button is primary)
 	var settings_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/SettingsButton")
@@ -144,37 +131,19 @@ func _ready():
 		LaunchManager.background_state_entered.connect(_on_background_state_entered)
 		LaunchManager.background_state_exited.connect(_on_background_state_exited)
 
-	# Set initial view
+	# Set initial view controls
+	_sync_view_mode_button_to_setting()
 	_update_ui_for_view("Home")
 
-	# Wait for grid setup() to finish its two-frame wait
-	await get_tree().process_frame
-	await get_tree().process_frame
-
-	# Apply M3 theme to root for fallback native control styling before grid is visible
+	# Apply M3 theme to root for fallback native control styling before grid is shown.
 	_apply_m3_theme()
-
-	# Single final layout: unsuppress and settle both grids once.
-	# The saved zoom and orientation are already applied via CardSettingsState;
-	# this is the only layout pass the grid does at startup.
-	print("[Main] Unsuppressing grid layout and settling once...")
-	VirtualScrollGridContainer.startup_layout_suppressed = false
-	for view_name in ["Home", "Library"]:
-		var view = UIManager.get_view(view_name)
-		if view:
-			var grid = _get_view_grid(view)
-			if grid:
-				print("[Main] Settling grid for ", view_name, " target_ratio=", grid.target_card_width_ratio)
-				grid._on_resize_debounced()
-
-	# Sync zoom slider to the final grid ratio without reapplying zoom to the grids
-	_sync_zoom_slider_to_current_view()
 
 	# Connect to screen swap signal for dual screen handling
 	var ayn_thor_manager = get_node_or_null("AynThorManager")
 	if ayn_thor_manager:
 		ayn_thor_manager.screens_swapped.connect(_on_screens_swapped)
-		# Restore saved screen swap state
+		# Restore saved screen swap state while layout is still suppressed so the
+		# viewport resize does not re-snap the grid away from the saved zoom.
 		var swap_setting = DataManager.get_setting("dual_screen_swapped")
 		print("[Main] Startup dual_screen_swapped setting: ", swap_setting.value if swap_setting else "NULL")
 		if swap_setting and swap_setting.value and not ayn_thor_manager.is_swapped:
@@ -182,6 +151,63 @@ func _ready():
 			ayn_thor_manager.swap_screens()
 		else:
 			print("[Main] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn_thor_manager.is_swapped, ")")
+
+	# Single final layout: settle the visible grid(s) now that the window size and
+	# screen swap state are final. This is the one layout pass that should happen
+	# during startup; any resize events triggered before this point are suppressed.
+	# Grids in hidden tabs have no valid size yet and will settle naturally when shown.
+	var settle_start_us := Time.get_ticks_usec()
+	print("[Main] Unsuppressing grid layout and settling once...")
+	VirtualScrollGridContainer.startup_layout_suppressed = false
+	var grids_to_clear: Array[VirtualScrollGridContainer] = []
+	var current_view = UIManager.get_current_view()
+	if current_view:
+		var grid = _get_view_grid(current_view)
+		if grid:
+			# Use a deterministic computed size rather than relying on grid.size, which
+			# may not have caught up to the post-swap viewport yet.
+			var grid_settle_start_us := Time.get_ticks_usec()
+			var available_size := _compute_grid_available_size(grid)
+			grid.set_startup_available_size(available_size)
+			grid._instantiate_card_pool()
+			grid.settle_startup_with_buffer(0)
+			grids_to_clear.append(grid)
+			print("[Main] Settled grid for ", current_view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - grid_settle_start_us)
+	else:
+		print("[Main] No current view to settle")
+
+	# Sync zoom slider to the final grid ratio without reapplying zoom to the grids.
+	# Keep the deterministic startup size active so get_snap_ratios() works even
+	# though Godot hasn't propagated grid.size yet.
+	_sync_zoom_slider_to_current_view()
+	# Save the snapped grid ratio so the setting stays in sync with the slider and
+	# doesn't hold a stale raw value from a previous viewport size.
+	if current_view:
+		var grid = _get_view_grid(current_view)
+		if grid:
+			_save_zoom_ratio(grid.target_card_width_ratio)
+	for grid in grids_to_clear:
+		grid.clear_startup_available_size()
+	print("[Main] Settle block total elapsed_us=", Time.get_ticks_usec() - settle_start_us)
+
+	# Sync the top background mask height to match the control bar.
+	# The mask covers the area behind the toolbar so cards scrolling up
+	# don't peek through. It sits between the grid (z=-1) and toolbar (z=10).
+	# Note: UIManager wraps MainContentVBox in a MarginContainer (dp(16) margins),
+	# so the toolbar is offset from ContentWrapper's top-left. We must compute the
+	# toolbar's bottom edge in ContentWrapper coordinates, not just use size.y.
+	var mask = content_wrapper.get_node_or_null("controlbar_mask")
+	if mask and toolbar:
+		var _update_mask_height := func():
+			var toolbar_bottom: float = toolbar.global_position.y - content_wrapper.global_position.y + toolbar.size.y
+			mask.custom_minimum_size.y = toolbar_bottom
+			mask.offset_top = 0
+			mask.offset_bottom = toolbar_bottom
+		toolbar.resized.connect(_update_mask_height)
+		# Deferred sync: toolbar size may not be final on first signal.
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_update_mask_height.call()
 
 	# Extract native binaries on Android (non-blocking, happens in background)
 	if SystemManager.platform.is_android():
@@ -194,6 +220,40 @@ func _ready():
 	var first_run_setting = DataManager.get_setting("first_run_completed")
 	if first_run_setting and first_run_setting.value:
 		call_deferred("_focus_first_home_card_on_startup")
+
+	# Connect the slider's value_changed now that startup sync is complete; this
+	# prevents any slider-initiated zoom change from overriding the saved zoom.
+	if zoom_slider and not zoom_slider.value_changed.is_connected(_on_zoom_changed):
+		zoom_slider.value_changed.connect(_on_zoom_changed)
+
+	# Startup zoom sync is complete; clear the guard after the current frame so
+	# any deferred slider emissions that fire during this frame are ignored.
+	call_deferred("_set_startup_zoom_sync_active", false)
+	print("[Main] _ready() completed, elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
+
+	var args := OS.get_cmdline_args()
+	var startup_benchmark := args.has("--benchmark-startup")
+	var shutdown_benchmark := args.has("--benchmark-shutdown")
+
+	# If the startup benchmark flag is set, log startup and exit through the close
+	# handler so we get a clean shutdown and no leaked background threads.
+	if startup_benchmark:
+		print("[Main] --benchmark-startup: startup complete, triggering shutdown")
+		call_deferred("_benchmark_shutdown")
+		return
+
+	# If the shutdown benchmark flag is set, trigger the close notification after
+	# startup so we can measure shutdown time in an automated way.
+	if shutdown_benchmark:
+		call_deferred("_benchmark_shutdown")
+
+func _benchmark_shutdown() -> void:
+	"""Trigger the close notification so we can measure shutdown time automatically."""
+	print("[Main] --benchmark-shutdown: triggering close notification")
+	get_tree().root.propagate_notification(NOTIFICATION_WM_CLOSE_REQUEST)
+
+func _set_startup_zoom_sync_active(value: bool) -> void:
+	_startup_zoom_sync_active = value
 
 func _apply_m3_theme() -> void:
 	_m3_theme = M3Theme.generate_theme()
@@ -390,6 +450,8 @@ func _on_viewport_resized(_new_size: Vector2) -> void:
 	"""Re-sync zoom slider after viewport resize. The grid re-snaps its zoom
 	in _on_resize_debounced(), but the slider stops and position are owned
 	by main.gd and must be updated to match."""
+	if VirtualScrollGridContainer.startup_layout_suppressed:
+		return
 	var current_view = UIManager.get_current_view()
 	if not current_view:
 		return
@@ -421,12 +483,20 @@ func _update_ui_for_view(view_name: String):
 	if view_mode_group:
 		view_mode_group.visible = view_name in ["Home", "Library"]
 
-	# Update zoom slider to match current view's grid
+	# Show/hide zoom slider only on Home and Library
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
 		zoom_slider.visible = view_name in ["Home", "Library"]
+
+	# Skip zoom slider value/stops sync during startup; final slider sync is handled
+	# explicitly after the grid has settled so the stops are based on the real window size.
+	if VirtualScrollGridContainer.startup_layout_suppressed:
+		return
+
+	# Update zoom slider to match current view's grid
+	if zoom_slider and view_name in ["Home", "Library"]:
 		var view = UIManager.get_view(view_name)
-		if view and view_name in ["Home", "Library"]:
+		if view:
 			var games_grid = _get_view_grid(view)
 			if games_grid:
 				# Defer if grid hasn't been laid out yet — get_snap_ratios() needs valid size
@@ -592,6 +662,12 @@ func _sync_view_mode_button_to_setting() -> void:
 
 func _on_zoom_changed(value: float):
 	"""Called continuously while dragging - updates both views for parity."""
+	if VirtualScrollGridContainer.startup_layout_suppressed:
+		return
+	if _startup_zoom_sync_active:
+		print("[Main] _on_zoom_changed ignored during startup sync: value=", value)
+		return
+	print("[Main] _on_zoom_changed: value=", value, " snap_ratios=", _current_snap_ratios)
 	var actual_zoom = value
 	if _current_snap_ratios.size() > 0:
 		# Grid mode: value is an integer index — map to actual ratio
@@ -610,7 +686,7 @@ func _on_zoom_changed(value: float):
 
 func _on_zoom_changed_finished(value_changed: bool):
 	"""Called when drag ends - saves the current slider value to settings."""
-	if not value_changed:
+	if not value_changed or VirtualScrollGridContainer.startup_layout_suppressed:
 		return
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	var saved_value = 0.15
@@ -634,11 +710,124 @@ func _on_zoom_save_timer_timeout() -> void:
 	if DataManager:
 		DataManager.save_settings()
 
+func _save_zoom_ratio(ratio: float) -> void:
+	"""Persist the given zoom ratio to the library_card_zoom setting."""
+	if not DataManager:
+		return
+	var zoom_setting = DataManager.get_setting("library_card_zoom")
+	if not zoom_setting:
+		return
+	var clamped_ratio = clampf(ratio, 0.05, 0.5)
+	if is_equal_approx(zoom_setting.value, clamped_ratio):
+		return
+	DataManager.set_setting(clamped_ratio, zoom_setting)
+	if _zoom_save_timer:
+		_zoom_save_timer.start()
+
 func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 	# Standard structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer
 	if view.has_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer"):
 		return view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
 	return null
+
+func _compute_grid_available_size(grid: VirtualScrollGridContainer) -> Vector2:
+	"""Compute the expected available rect for a grid from the active viewport.
+
+	This mirrors the container layout that Godot will apply once sizes propagate
+	through MarginContainer/VBoxContainer/TabContainer, so the grid can be settled
+	synchronously without waiting for grid.size to update.
+	"""
+	var start_us := Time.get_ticks_usec()
+	# Resolve the active viewport: SubViewport in dual-screen mode, root viewport otherwise.
+	var active_viewport: Viewport = get_viewport()
+	if UIManager.dual_screen:
+		var sub: Viewport = UIManager.dual_screen.get_main_viewport()
+		if sub:
+			active_viewport = sub
+
+	# In SubViewport dual-screen mode, controls see the 2D override size, not the physical size.
+	var viewport_size: Vector2i
+	if active_viewport is SubViewport:
+		var sub: SubViewport = active_viewport as SubViewport
+		viewport_size = sub.size_2d_override if sub.size_2d_override != Vector2i.ZERO else sub.size
+	else:
+		viewport_size = active_viewport.size
+
+	# Compute the grid area from the viewport, subtracting the UI chrome that
+	# occupies space around the grid: outer margins, the navigation bar/rail,
+	# the toolbar, and the VBox separation.
+	var margin: int = int(M3Units.dp(16))
+	var available_width := maxf(1.0, viewport_size.x - margin * 2)
+	var available_height := maxf(1.0, viewport_size.y - margin * 2)
+
+	var nav_bar_h: float = 0.0
+	var nav_bar_w: float = 0.0
+	if UIManager and UIManager.navigation:
+		var nav_node = UIManager.navigation._nav_node
+		if is_instance_valid(nav_node):
+			if nav_node is M3NavigationBar:
+				nav_bar_h = maxf(nav_node.size.y, nav_node.custom_minimum_size.y)
+				if nav_bar_h <= 0:
+					nav_bar_h = M3Units.dp(M3NavigationBar.HEIGHT_COMPACT)
+				available_height -= nav_bar_h
+			elif nav_node is M3NavigationRail:
+				nav_bar_w = maxf(nav_node.size.x, nav_node.custom_minimum_size.x)
+				if nav_bar_w <= 0:
+					nav_bar_w = M3Units.dp(M3NavigationRail.WIDTH_COLLAPSED)
+				available_width -= nav_bar_w
+
+	# The controlbar takes its minimum height from the top of the VBoxContainer.
+	# Use the larger of the toolbar's minimum size and its current size, because
+	# get_combined_minimum_size() may not yet include final theme/margin heights
+	# during the first layout pass.
+	var toolbar_effective_h: float = 0.0
+	if toolbar:
+		var toolbar_min_h = toolbar.get_combined_minimum_size().y
+		var toolbar_size_h = toolbar.size.y
+		toolbar_effective_h = maxf(toolbar_min_h, toolbar_size_h)
+		available_height -= toolbar_effective_h
+
+	# The toolbar sits inside a VBoxContainer; subtract the separation between it
+	# and the TabContainer below so the grid size matches the TabContainer area.
+	if main_content_vbox:
+		var vbox_separation = main_content_vbox.get_theme_constant("separation")
+		available_height -= vbox_separation
+
+	# The grid lives inside a TabContainer. Even when tabs are hidden, the
+	# panel stylebox may reserve content margins, but the current theme does not
+	# reserve any (margins are -1), so no extra subtraction is needed here.
+
+	# LibraryView has a platform indicator above the grid. It defers its own
+	# responsive layout, so trigger it with the computed width so its minimum
+	# height is known before we subtract it.
+	var view: Node = grid.get_parent().get_parent().get_parent()
+	if view is LibraryView:
+		var platform_indicator: Control = view.get_node_or_null("MarginContainer/VBoxContainer/PlatformIndicator")
+		if platform_indicator:
+			platform_indicator.size.x = available_width
+			if platform_indicator.has_method("_apply_responsive_layout"):
+				platform_indicator._apply_responsive_layout()
+			available_height -= platform_indicator.get_combined_minimum_size().y
+
+	# The grid's ScrollContainer will subtract the scrollbar thickness from its own
+	# available size once content exceeds the viewport. Account for it now so the
+	# startup settle matches the grid's internal layout and avoids a re-snap.
+	if grid and grid._scroll_container:
+		var scroll_container = grid._scroll_container
+		if grid.vertical:
+			var v_scroll = scroll_container.get_v_scroll_bar()
+			if v_scroll:
+				var scrollbar_thickness = v_scroll.get_combined_minimum_size().x
+				available_width -= scrollbar_thickness
+		else:
+			var h_scroll = scroll_container.get_h_scroll_bar()
+			if h_scroll:
+				var scrollbar_thickness = h_scroll.get_combined_minimum_size().y
+				available_height -= scrollbar_thickness
+
+	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
+	print("[Main] _compute_grid_available_size: view=", view.view_name if view is View else "unknown", " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
+	return result
 
 func _load_and_apply_saved_zoom() -> void:
 	"""Apply the saved zoom setting to both grids and sync the slider.
@@ -647,6 +836,8 @@ func _load_and_apply_saved_zoom() -> void:
 	be visible with a different zoom. Startup layout now applies the saved zoom
 	via CardSettingsState before the grid is laid out.
 	"""
+	if VirtualScrollGridContainer.startup_layout_suppressed:
+		return
 	if not DataManager:
 		return
 
@@ -685,7 +876,8 @@ func _sync_zoom_slider_to_current_view() -> void:
 	"""Sync the zoom slider to the current grid's actual zoom ratio.
 
 	Does not modify the grid's target_card_width_ratio; use this at startup
-	after the grid has settled.
+	after the grid has settled. The caller is responsible for blocking the
+	slider's value_changed signal around this call.
 	"""
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if not zoom_slider:
@@ -696,13 +888,14 @@ func _sync_zoom_slider_to_current_view() -> void:
 	if not games_grid:
 		return
 
+	print("[Main] _sync_zoom_slider_to_current_view: view=", current_view.view_name if current_view else "null", " grid_ratio=", games_grid.target_card_width_ratio)
 	_update_zoom_slider_stops(zoom_slider, games_grid)
-	zoom_slider.set_block_signals(true)
 	if _current_snap_ratios.size() > 0:
-		zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+		var idx = _find_nearest_snap_index(games_grid.target_card_width_ratio)
+		print("[Main] syncing slider to index=", idx, " ratio=", _current_snap_ratios[idx])
+		zoom_slider.set_value_no_signal(idx)
 	else:
 		zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
-	zoom_slider.set_block_signals(false)
 
 func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 	"""Focus the first game card in the Home grid once it has data."""
@@ -908,6 +1101,8 @@ func _forward_input_to_second_viewport(event: InputEvent) -> bool:
 	return false
 
 func _adjust_zoom(delta: float) -> void:
+	if _startup_zoom_sync_active:
+		return
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if not zoom_slider:
 		return
@@ -1025,13 +1220,32 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		var close_start_us := Time.get_ticks_usec()
+		print("[Main] NOTIFICATION_WM_CLOSE_REQUEST: shutdown started")
+
+		# Hide the window immediately so the app feels closed, even if cleanup
+		# continues for a few more frames. We minimize instead of setting visible=false
+		# because Godot does not allow hiding the main window.
+		if not OS.has_feature("headless"):
+			get_window().mode = Window.MODE_MINIMIZED
+		print("[Main] Window hidden/minimized, running cleanup...")
+
 		# Remember the current windowed size before shutdown.
+		var window_save_start_us := Time.get_ticks_usec()
 		if SystemManager.display:
 			SystemManager.display.save_last_window_size()
+		print("[Main] save_last_window_size elapsed_us=", Time.get_ticks_usec() - window_save_start_us)
 
 		# Flush any pending settings changes before shutdown
+		var settings_save_start_us := Time.get_ticks_usec()
 		if DataManager:
 			DataManager.save_settings()
+		print("[Main] save_settings elapsed_us=", Time.get_ticks_usec() - settings_save_start_us)
+
+		# Pre-clean heavy resources and background work before freeing the tree.
+		# This reduces the number of synchronous RenderingServer.free_rid() calls
+		# and thread-join waits during root teardown.
+		_pre_shutdown_cleanup()
 
 		# The OS asked us to close. Free the entire scene tree now so all node
 		# RIDs are released before the rendering server finalizes, then quit.
@@ -1041,6 +1255,8 @@ func _notification(what: int) -> void:
 		if tree:
 			tree.root.queue_free()
 			call_deferred("_deferred_quit")
+
+		print("[Main] NOTIFICATION_WM_CLOSE_REQUEST total elapsed_us=", Time.get_ticks_usec() - close_start_us)
 		return
 
 	if what == NOTIFICATION_APPLICATION_RESUMED:
@@ -1075,6 +1291,66 @@ func _notification(what: int) -> void:
 		if SystemManager.notifications:
 			SystemManager.notifications.dismiss_all_notifications()
 			print("[Main] Dismissed all notifications after resume")
+
+func _pre_shutdown_cleanup() -> void:
+	"""Release heavy resources and stop background work before the tree is freed.
+
+	Doing this before tree.root.queue_free() reduces the synchronous work done
+	during node teardown, which is the main source of slow app shutdown.
+	"""
+	var cleanup_start_us := Time.get_ticks_usec()
+	print("[Main] Pre-shutdown cleanup starting")
+
+	# Stop any pending debounced settings save.
+	if _zoom_save_timer:
+		_zoom_save_timer.stop()
+
+	# Cancel active downloads and clear the download queue.
+	# This stops HTTPRequest nodes and chunked-download timers.
+	var download_start_us := Time.get_ticks_usec()
+	if SystemManager and SystemManager.download:
+		SystemManager.download.shutdown()
+	print("[Main] download shutdown elapsed_us=", Time.get_ticks_usec() - download_start_us)
+
+	# Cancel active HTTP requests and free the request pool.
+	var network_start_us := Time.get_ticks_usec()
+	if SystemManager and SystemManager.network:
+		SystemManager.network.shutdown()
+	print("[Main] network shutdown elapsed_us=", Time.get_ticks_usec() - network_start_us)
+
+	# Clear card pools in the visible grids so their pooled cards (and their
+	# RenderingServer items) are freed before the root is queue_freed.
+	var pool_start_us := Time.get_ticks_usec()
+	if UIManager:
+		for view_name in ["Home", "Library"]:
+			var view = UIManager.get_view(view_name)
+			if view:
+				var grid = _get_view_grid(view)
+				if grid:
+					grid.clear_pool()
+	print("[Main] grid pool clear elapsed_us=", Time.get_ticks_usec() - pool_start_us)
+
+	# Release static caches held by UI components.
+	var cache_start_us := Time.get_ticks_usec()
+	SystemManager.memory.clear_texture_cache()
+	M3Theme.clear_theme_cache()
+	EffectStack.clear_script_cache()
+	GameCard.clear_platform_icon_cache()
+	LaunchTransitionOverlay._clear_source_override()
+	M3NavigationDestination.clear_shared_stylebox()
+	M3MenuRenderer.clear_shared_stylebox()
+	LibraryFilterSheet.cleanup_instance()
+	PlatformCardPool.clear()
+	print("[Main] static cache clear elapsed_us=", Time.get_ticks_usec() - cache_start_us)
+
+	# Stop all background worker threads (DB, image, download, extraction, OS execute).
+	# After this point SystemManager.memory static methods will safely no-op.
+	var memory_start_us := Time.get_ticks_usec()
+	if SystemManager and SystemManager.memory:
+		SystemManager.memory.shutdown()
+	print("[Main] memory shutdown elapsed_us=", Time.get_ticks_usec() - memory_start_us)
+
+	print("[Main] Pre-shutdown cleanup elapsed_us=", Time.get_ticks_usec() - cleanup_start_us)
 
 func _deferred_quit() -> void:
 	var tree = get_tree()

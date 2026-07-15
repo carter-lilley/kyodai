@@ -12,12 +12,6 @@ some settings screens not scrollable?
 confirmation diag before quick or full sync
 most snackbars should be non dismissable. especially pinned ones
 
-x hero in 'add to steam'
-x add to steam removes other vdfs?
-
-x startup layout settling
-x startup grid wrong if DS mode is swapped. 
-
 romm;
 - mark 'played' if played
 - 'add to collection'

@@ -7,6 +7,9 @@ var _tab_container: TabContainer
 var _views: Dictionary[String, View] = {}
 var _current_view: View
 
+var _library_tab: Control = null
+var _library_scene_path: String = "res://view/library_view.tscn"
+
 func _ready():
 	ui_manager = get_parent()
 
@@ -40,7 +43,7 @@ func _setup_home_tab():
 		child.queue_free()
 
 	# Add HomeView (load scene to get UI nodes)
-	var home_scene = preload("res://view/home_view.tscn")
+	var home_scene = load("res://view/home_view.tscn")
 	var home_view = home_scene.instantiate()
 	home_view.view_name = "Home"
 	home_tab.add_child(home_view)
@@ -62,16 +65,27 @@ func _setup_library_tab():
 	for child in library_tab.get_children():
 		child.queue_free()
 
-	# Add LibraryView (load scene to get UI nodes)
-	var library_scene = preload("res://view/library_view.tscn")
+	# Defer LibraryView instantiation until the user first selects the Library tab.
+	# This avoids paying the setup/data cost on startup when Home is shown first.
+	_library_tab = library_tab
+
+func _ensure_library_setup() -> bool:
+	if _views.has("Library"):
+		return true
+	if _library_tab == null:
+		return false
+
+	var library_scene = load(_library_scene_path)
 	var library_view = library_scene.instantiate()
 	library_view.view_name = "Library"
-	library_tab.add_child(library_view)
+	_library_tab.add_child(library_view)
 	_views["Library"] = library_view
 
 	# Connect hero image signal
 	if library_view.has_signal("hero_game_changed"):
 		library_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
+
+	return true
 
 func _setup_downloads_tab():
 	var downloads_idx = _get_tab_index("Downloads")
@@ -86,7 +100,7 @@ func _setup_downloads_tab():
 		child.queue_free()
 
 	# Add DownloadsView (load scene to get UI nodes)
-	var downloads_scene = preload("res://view/downloads_view.tscn")
+	var downloads_scene = load("res://view/downloads_view.tscn")
 	var downloads_view = downloads_scene.instantiate()
 	downloads_view.view_name = "Downloads"
 	downloads_tab.add_child(downloads_view)
@@ -95,6 +109,8 @@ func _setup_downloads_tab():
 func _sync_current_view_from_tab() -> void:
 	var current_tab_idx = _tab_container.current_tab
 	var current_tab_title = _tab_container.get_tab_title(current_tab_idx)
+	if current_tab_title == "Library":
+		_ensure_library_setup()
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
@@ -110,7 +126,9 @@ func _on_tab_changed(tab_idx: int):
 	if _current_view:
 		_current_view.on_view_hide()
 
-	# Show new view
+	# Show new view (create Library lazily on first visit)
+	if tab_title == "Library":
+		_ensure_library_setup()
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
 		_current_view.on_view_show()
@@ -158,14 +176,11 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	_apply_effects_refresh(force_full_rebuild)
 
 func _apply_structure_refresh() -> void:
-	for view_name in ["Home", "Library"]:
-		if _views.has(view_name):
-			_views[view_name]._update_grid_orientation()
+	for view_name in _views.keys():
+		_views[view_name]._update_grid_orientation()
 
 func _apply_effects_refresh(force_full_rebuild: bool = false) -> void:
-	for view_name in ["Home", "Library"]:
-		if not _views.has(view_name):
-			continue
+	for view_name in _views.keys():
 		var view = _views[view_name]
 		if view.games_grid:
 			view.games_grid.refresh_all_card_effects(force_full_rebuild)
@@ -228,6 +243,7 @@ func _rebuild_views(reason: String, use_true: bool = false) -> void:
 			library_view.rebuild_grid(use_true)
 		else:
 			library_view.mark_for_rebuild(reason, use_true)
+	# If Library has never been instantiated, it will be built fresh when first shown.
 
 func mark_view_for_rebuild(view_name: String, reason: String) -> void:
 	if _views.has(view_name):
@@ -257,7 +273,7 @@ func is_node_in_current_view(node: Node) -> bool:
 	return false
 
 func rebuild_game_grid() -> void:
-	"""Rebuild the library view to reflect card size changes."""
+	"""Rebuild the library view to reflect card size changes (only if set up)."""
 	if _views.has("Library"):
 		var library_view = _views["Library"]
 		if library_view.has_method("rebuild_grid"):

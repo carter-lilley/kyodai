@@ -495,6 +495,21 @@ func _on_hero_game_changed(game: GameResource) -> void:
 # Cleanup
 # ============================================================================
 
+func pre_shutdown_cleanup() -> void:
+	"""Release static UI caches before the tree is freed.
+
+	Can be called safely while the UI tree is still alive.
+	"""
+	SystemManager.memory.clear_texture_cache()
+	M3Theme.clear_theme_cache()
+	EffectStack.clear_script_cache()
+	GameCard.clear_platform_icon_cache()
+	LaunchTransitionOverlay._clear_source_override()
+	M3NavigationDestination.clear_shared_stylebox()
+	M3MenuRenderer.clear_shared_stylebox()
+	LibraryFilterSheet.cleanup_instance()
+	PlatformCardPool.clear()
+
 func _exit_tree() -> void:
 	"""Release the UIManager's cached references so the engine can free the UI tree.
 	Nodes still in the tree are left for the tree to free; orphaned overlays are
@@ -509,12 +524,4 @@ func _exit_tree() -> void:
 	_content_wrapper = null
 
 	# Release static caches that hold resources.
-	SystemManager.memory.clear_texture_cache()
-	M3Theme.clear_theme_cache()
-	EffectStack.clear_script_cache()
-	GameCard.clear_platform_icon_cache()
-	LaunchTransitionOverlay._clear_source_override()
-	M3NavigationDestination.clear_shared_stylebox()
-	M3MenuRenderer.clear_shared_stylebox()
-	LibraryFilterSheet.cleanup_instance()
-	PlatformCardPool.clear()
+	pre_shutdown_cleanup()

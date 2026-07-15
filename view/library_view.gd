@@ -90,8 +90,9 @@ func _ready():
 		push_error("[LibraryView] games_grid is null! Cannot initialize.")
 		return
 	
-	var card_scene = preload("res://components/game_card.tscn")
-	games_grid.setup(card_scene, 0)
+	var card_scene = load("res://components/game_card.tscn") as PackedScene
+	var initial_zoom: float = UIManager.card_settings_state.card_zoom_ratio if UIManager and UIManager.card_settings_state else 0.25
+	games_grid.setup(card_scene, 0, initial_zoom)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
@@ -496,21 +497,30 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer."""
+	var request_start_us := Time.get_ticks_usec()
 	if _is_search_active:
 		SystemManager.memory.queue_db_task(
 			func():
+				var db_start_us := Time.get_ticks_usec()
 				var games = DataManager.search_games_paginated(_search_query, offset, limit)
+				print("[LibraryView] DB task (search): offset=", offset, " limit=", limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
 			func(games: Array[GameResource]):
+				var callback_start_us := Time.get_ticks_usec()
 				games_grid.on_items_loaded(games, offset, is_preload)
+				print("[LibraryView] on_items_loaded callback (search): offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 		)
 	else:
 		SystemManager.memory.queue_db_task(
 			func():
+				var db_start_us := Time.get_ticks_usec()
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
+				print("[LibraryView] DB task: offset=", offset, " limit=", limit, " platform=", _current_platform_slug, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
 			func(games: Array[GameResource]):
+				var callback_start_us := Time.get_ticks_usec()
 				games_grid.on_items_loaded(games, offset, is_preload)
+				print("[LibraryView] on_items_loaded callback: offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 		)
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
