@@ -613,70 +613,78 @@ func _rebuild_layout():
 	
 	if preserved_media_content:
 		add_child(preserved_media_content)
-	
-	if card_layout_mode == LayoutMode.HORIZONTAL:
-		_text_row = HBoxContainer.new()
-		_text_row.name = "TextRow"
-		_text_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_text_row.visible = false
-		add_child(_text_row)
-		
-		_text_content = VBoxContainer.new()
-		_text_content.name = "TextContent"
-		_text_content.add_theme_constant_override("separation", M3Units.dp(LABEL_GAP))
-		_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_text_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_text_content.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		_text_content.visible = false
-		_text_row.add_child(_text_content)
-		
-		_actions_hbox = HBoxContainer.new()
-		_actions_hbox.name = "Actions"
-		_actions_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_actions_hbox.visible = false
-		_actions_hbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		_actions_hbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		_text_row.add_child(_actions_hbox)
+
+	if not _uses_visual_layer():
+		if card_layout_mode == LayoutMode.HORIZONTAL:
+			_text_row = HBoxContainer.new()
+			_text_row.name = "TextRow"
+			_text_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_text_row.visible = false
+			add_child(_text_row)
+
+			_text_content = VBoxContainer.new()
+			_text_content.name = "TextContent"
+			_text_content.add_theme_constant_override("separation", M3Units.dp(LABEL_GAP))
+			_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_text_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_text_content.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			_text_content.visible = false
+			_text_row.add_child(_text_content)
+
+			_actions_hbox = HBoxContainer.new()
+			_actions_hbox.name = "Actions"
+			_actions_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_actions_hbox.visible = false
+			_actions_hbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			_actions_hbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			_text_row.add_child(_actions_hbox)
+		else:
+			_text_content = VBoxContainer.new()
+			_text_content.name = "TextContent"
+			_text_content.add_theme_constant_override("separation", M3Units.dp(LABEL_GAP))
+			_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_text_content.visible = false
+			add_child(_text_content)
+
+			_actions_hbox = HBoxContainer.new()
+			_actions_hbox.name = "Actions"
+			_actions_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_actions_hbox.visible = false
+			_text_content.add_child(_actions_hbox)
+
+		if preserved_headline:
+			_headline_label = preserved_headline
+		else:
+			_headline_label = Label.new()
+			_headline_label.name = "Headline"
+			_headline_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_headline_label.max_lines_visible = 1
+			_headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			_headline_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_headline_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_text_content.add_child(_headline_label)
+
+		if preserved_supporting:
+			_supporting_label = preserved_supporting
+		else:
+			_supporting_label = Label.new()
+			_supporting_label.name = "SupportingText"
+			_supporting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_supporting_label.max_lines_visible = 1
+			_supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			_supporting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_text_content.add_child(_supporting_label)
 	else:
-		_text_content = VBoxContainer.new()
-		_text_content.name = "TextContent"
-		_text_content.add_theme_constant_override("separation", M3Units.dp(LABEL_GAP))
-		_text_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_text_content.visible = false
-		add_child(_text_content)
-		
-		_actions_hbox = HBoxContainer.new()
-		_actions_hbox.name = "Actions"
-		_actions_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_actions_hbox.visible = false
-		_text_content.add_child(_actions_hbox)
-	
-	if preserved_headline:
-		_headline_label = preserved_headline
-	else:
-		_headline_label = Label.new()
-		_headline_label.name = "Headline"
-		_headline_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_headline_label.max_lines_visible = 1
-		_headline_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		_headline_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_headline_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_text_content.add_child(_headline_label)
-	
-	if preserved_supporting:
-		_supporting_label = preserved_supporting
-	else:
-		_supporting_label = Label.new()
-		_supporting_label.name = "SupportingText"
-		_supporting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_supporting_label.max_lines_visible = 1
-		_supporting_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		_supporting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_supporting_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_text_content.add_child(_supporting_label)
-	
+		_text_row = null
+		_text_content = null
+		_headline_label = null
+		_supporting_label = null
+		_actions_hbox = null
+
 	_rebuild_actions()
 	call_deferred("_update_media_panel_size", true)
+
 
 func _draw():
 	if not _cached_stylebox or not show_background:
@@ -1098,9 +1106,6 @@ func _gui_input(event: InputEvent):
 					pressed.emit()
 
 func _update_media_panel_size(force: bool = false) -> void:
-	if not _text_content:
-		return
-	
 	var card_w := custom_minimum_size.x
 	var card_h := custom_minimum_size.y
 	if card_w <= 0.0:

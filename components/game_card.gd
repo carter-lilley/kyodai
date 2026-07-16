@@ -120,7 +120,7 @@ func _sync_focus_state_from_viewport() -> void:
 	# If this card is focused but has no focus stack yet, build it now so the
 	# subsequent media-stack rebuild can see the correct focus state.
 	if _is_focused and not _focus_stack:
-		_build_focus_stack(true)
+		_build_focus_stack(false)
 		_update_platform_badge()
 
 # Android touch-and-hold
@@ -136,9 +136,9 @@ func _on_rs_items_recreated() -> void:
 	# Without this, _has_media_content() returns false during bounds calculation
 	# and the card renders with zero-sized media.
 	if not _media_stack:
-		_build_media_stack()
+		_build_media_stack(false)
 	if _focus_stack:
-		_build_focus_stack(true)
+		_build_focus_stack(false)
 
 func _enter_tree():
 	super._enter_tree()
@@ -251,7 +251,7 @@ func set_image_priority(high_priority: bool) -> void:
 
 func _setup_preview_mode():
 	_update_card_state_from_settings()
-	_build_media_stack()
+	_build_media_stack(false)
 
 	if DataManager:
 		var random_game = DataManager.get_random_game()
@@ -959,7 +959,7 @@ func _set_texture(tex: Texture2D) -> void:
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
 	# rebuild it now so the texture actually has somewhere to render.
 	if not _media_stack:
-		_build_media_stack()
+		_build_media_stack(false)
 	if _media_stack:
 		_media_stack.set_game_texture(resolved_tex)
 		# Only pay for a full force_refresh when the media geometry changed.
@@ -1186,7 +1186,7 @@ func _on_focus_entered():
 
 	# Build the focus stack lazily the first time this card is focused.
 	if not _focus_stack:
-		_build_focus_stack(true)
+		_build_focus_stack(false)
 		_update_platform_badge()
 
 	if SystemManager.audio:

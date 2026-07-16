@@ -3,13 +3,14 @@
 xemu save sync
 tst update flow on android
 clicking "outside" of card in list/carosel is annoying. 
-better extraction notifications
 single screen is not single screen
-sync notif wasnt dismissed
 platform cards take longer on android
 some settings screens not scrollable?
-confirmation diag before quick or full sync
+
+better extraction notifications
+sync notif wasnt dismissed
 most snackbars should be non dismissable. especially pinned ones
+
 
 romm;
 - mark 'played' if played
@@ -27,6 +28,7 @@ romm;
 	check if save is modified
 
 ## general UI
+	case mode
 	pagination view?
 	instead of auto-center scroll, just scroll 'onscreen' like switch ui
 	remove platform from game title option

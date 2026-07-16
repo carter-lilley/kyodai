@@ -721,19 +721,11 @@ func _on_sync_pressed():
 		SystemManager.notifications.show_notification("Not connected to RomM - check settings", SystemManager.notifications.Type.ERROR)
 		return
 
-	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
-
-	if sync_button:
-		sync_button.disabled = true
-
-	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
-		if sync_button:
-			sync_button.disabled = false
-
-		if _success:
-			SystemManager.notifications.show_notification("Sync complete! %s" % _message, SystemManager.notifications.Type.SUCCESS)
-		else:
-			SystemManager.notifications.show_notification("Sync failed: %s" % _message, SystemManager.notifications.Type.ERROR)
+	UIManager.show_confirm(
+		"Sync Library?",
+		"Sync enabled platforms and remove non-enabled entries. Only changed games will be updated.",
+		func(): _run_sync(false),
+		func(): pass
 	)
 
 func _on_full_sync_pressed():
@@ -744,28 +736,39 @@ func _on_full_sync_pressed():
 		SystemManager.notifications.show_notification("Not connected to RomM - check settings", SystemManager.notifications.Type.ERROR)
 		return
 
-	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
-	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
+	UIManager.show_confirm(
+		"Full Sync Library?",
+		"Sync enabled platforms and remove non-enabled entries. All platforms will be fully refreshed.",
+		func(): _run_sync(true),
+		func(): pass
+	)
 
-	if full_sync_button:
-		full_sync_button.disabled = true
+func _run_sync(force_full_sync: bool) -> void:
+	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
+	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
 
 	if sync_button:
 		sync_button.disabled = true
+	if full_sync_button:
+		full_sync_button.disabled = true
 
-	# Call sync with force_full_sync = true
 	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
+		if sync_button:
+			sync_button.disabled = false
 		if full_sync_button:
 			full_sync_button.disabled = false
 
-		if sync_button:
-			sync_button.disabled = false
-
 		if _success:
-			SystemManager.notifications.show_notification("Full sync complete! %s" % _message, SystemManager.notifications.Type.SUCCESS)
+			if force_full_sync:
+				SystemManager.notifications.show_notification("Full sync complete! %s" % _message, SystemManager.notifications.Type.SUCCESS)
+			else:
+				SystemManager.notifications.show_notification("Sync complete! %s" % _message, SystemManager.notifications.Type.SUCCESS)
 		else:
-			SystemManager.notifications.show_notification("Full sync failed: %s" % _message, SystemManager.notifications.Type.ERROR)
-	, true)  # true = force_full_sync
+			if force_full_sync:
+				SystemManager.notifications.show_notification("Full sync failed: %s" % _message, SystemManager.notifications.Type.ERROR)
+			else:
+				SystemManager.notifications.show_notification("Sync failed: %s" % _message, SystemManager.notifications.Type.ERROR)
+	, force_full_sync)
 
 func _update_select_all_button_text():
 	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
