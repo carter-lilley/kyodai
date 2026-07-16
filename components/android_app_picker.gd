@@ -120,7 +120,7 @@ func _on_all_icons_decoded(results: Array) -> void:
 		MemorySubManager.BatchMode.SYNC,
 		4,
 		Callable(),
-		Callable()
+		_on_all_buttons_created
 	)
 
 func _create_app_button(result: Dictionary, _index: int) -> void:
@@ -129,7 +129,7 @@ func _create_app_button(result: Dictionary, _index: int) -> void:
 	if image is Image and not image.is_empty():
 		texture = SystemManager.memory.create_texture_from_image(image)
 
-	var btn = Button.new()
+	var btn = AppPickerButton.new()
 	btn.flat = true
 	btn.icon = texture
 	btn.expand_icon = true
@@ -137,9 +137,15 @@ func _create_app_button(result: Dictionary, _index: int) -> void:
 	btn.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	btn.custom_minimum_size = Vector2(_cell_size, _cell_size)
 	btn.focus_mode = Control.FOCUS_ALL
-	btn.mouse_filter = Control.MOUSE_FILTER_PASS
 	btn.pressed.connect(_on_app_pressed.bind(result.get("package", ""), result.get("name", ""), result.get("icon_base64", "")))
 	_grid.add_child(btn)
+
+func _on_all_buttons_created(_results: Array) -> void:
+	"""Grab focus on the first app button so controller/keyboard users can navigate."""
+	if _grid and _grid.get_child_count() > 0:
+		var first_btn = _grid.get_child(0)
+		if first_btn is Control and first_btn.focus_mode != Control.FOCUS_NONE:
+			first_btn.grab_focus()
 
 func _on_app_pressed(package_name: String, app_name: String, icon_base64: String) -> void:
 	app_selected.emit(package_name, app_name, icon_base64)

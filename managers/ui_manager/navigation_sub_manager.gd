@@ -171,10 +171,12 @@ func _set_nav_selected_index_no_signal(index: int) -> void:
 		_nav_node.selected_index = index
 
 func _rebuild_nav_and_layout() -> void:
-	"""Rebuild nav node and layout when type changes."""
+	"""Rebuild nav node and layout when type changes or pins mutate."""
 
 	var is_bar = _nav_type == 0
 	var is_horizontal = is_bar
+
+	print("[NavigationManager] rebuilding nav layout: type=%s" % ["bar" if is_bar else "rail"])
 
 	# Remove existing nav and content from current layout
 	if _inner_layout:
@@ -216,6 +218,9 @@ func _rebuild_nav_and_layout() -> void:
 	call_deferred("_refresh_current_view_grid")
 	# Layout rebuild may create/reparent focusable controls; re-apply focus lock.
 	ui_manager.call_deferred("refresh_focus_lock_state")
+	# The nav node may have been sized before its parent assigned a real width;
+	# force a deferred sizing pass once the layout has settled.
+	call_deferred("_refresh_nav_layout")
 
 func _refresh_current_view_grid() -> void:
 	"""Refresh the current view's grid after a nav layout change.
@@ -252,6 +257,36 @@ func _refresh_current_view_grid() -> void:
 		if view_name == current_view.view_name:
 			continue
 		ui_manager.view.mark_view_for_rebuild(view_name, "Navigation layout changed")
+
+func _refresh_nav_layout() -> void:
+	"""Recompute nav sizing once the parent layout has assigned a real size."""
+	if not _nav_node or not is_instance_valid(_nav_node):
+		return
+
+	print("[NavigationManager] _refresh_nav_layout type=%s node_size=%s viewport=%s" % [
+		"bar" if _nav_type == 0 else "rail",
+		_nav_node.size,
+		_nav_node.get_viewport_rect().size if _nav_node.is_inside_tree() else Vector2.ZERO
+	])
+
+	if _nav_node is M3NavigationBar:
+		_nav_node._update_item_sizes()
+	elif _nav_node is M3NavigationRail:
+		_nav_node._apply_compact_level()
+
+	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
+		_inner_layout.queue_sort()
+
+func refresh_for_screen_swap() -> void:
+	"""Public entry point called from main.gd after a dual-screen swap.
+
+	Recomputes the nav layout and forces the current grid to refresh so the UI
+	matches the new SubViewport size after the swap has settled."""
+	print("[NavigationManager] refresh_for_screen_swap")
+	_refresh_nav_layout()
+	_refresh_current_view_grid()
+	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
+		_inner_layout.queue_sort()
 
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	"""Create the inner layout container (VBox or HBox)."""
@@ -410,6 +445,7 @@ func _on_nav_node_ready() -> void:
 		var item = _nav_node._destination_items[i]
 		var dest = nav_dests[i]
 		if _is_pinned_destination(dest):
+			item.context_menu_enabled = true
 			if not item.context_menu_requested.is_connected(_on_pinned_context_menu_requested):
 				item.context_menu_requested.connect(_on_pinned_context_menu_requested.bind(item, dest))
 
@@ -442,7 +478,9 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 		_launch_pinned_shortcut(dest)
 		return
 
-	_last_nav_index = index
+	if index < static_count:
+		# Only remember selection for the static tabs (not shuffle/add/pins).
+		_last_nav_index = index
 	ui_manager.switch_to_tab(dest.view)
 
 func _show_add_menu(anchor: Control) -> void:
@@ -509,6 +547,7 @@ func _add_pinned_shortcut(pin: Dictionary) -> void:
 	current.append(pin)
 	DataManager.set_setting(current, setting)
 	DataManager.save_settings()
+	print("[NavigationManager] added pin id=%s type=%s total_pins=%d" % [pin.get("id", ""), pin.get("type", ""), current.size()])
 	_rebuild_nav_and_layout()
 
 func _generate_shortcut_id() -> String:
@@ -538,6 +577,7 @@ func _on_remove_pin_selected(dest: Dictionary) -> void:
 			filtered.append(pin)
 	DataManager.set_setting(filtered, setting)
 	DataManager.save_settings()
+	print("[NavigationManager] removed pin id=%s remaining_pins=%d" % [target_id, filtered.size()])
 	_rebuild_nav_and_layout()
 
 func _launch_pinned_shortcut(dest: Dictionary) -> void:
@@ -571,38 +611,40 @@ func _launch_pinned_shortcut(dest: Dictionary) -> void:
 			LaunchManager.process.enter_background_state_android(null)
 		return
 
+func _get_all_nav_destinations() -> Array[M3NavigationDestination]:
+	"""Return all destination items from the current nav node."""
+	if not _nav_node:
+		return []
+	return _nav_node._destination_items
+
 func _setup_nav_focus_neighbors() -> void:
-	"""Block the one direction that leaks from nav into the game grid.
-	Nav-to-nav and nav-to-settings navigation is left to Godot's spatial
-	search so we don't store stale NodePaths across nav rebuilds."""
+	"""Block the one direction that leaks from nav into the game grid and
+	wire the last destination directly to the settings button so controller
+	navigation always ends at settings rather than escaping to the grid."""
 	if not _nav_node:
 		return
 
-	# Find all M3NavigationDestination children
-	var destinations: Array[M3NavigationDestination] = []
-	for child in _nav_node.get_children():
-		if child is M3NavigationDestination:
-			destinations.append(child)
-		else:
-			for sub in child.get_children():
-				if sub is M3NavigationDestination:
-					destinations.append(sub)
-				else:
-					for subsub in sub.get_children():
-						if subsub is M3NavigationDestination:
-							destinations.append(subsub)
+	var destinations := _get_all_nav_destinations()
+	var settings_btn := find_nav_settings_button()
 
-	# Only block the grid-leak direction. Don't wire nav-to-nav neighbors
-	# because nodes get rebuilt (dual-screen, orientation changes) and
-	# NodePaths become stale, causing "Neighbor focus node path is invalid".
+	# Block the grid-leak direction for every destination (including pins and add button).
 	for dest in destinations:
 		if _nav_type == 0:  # Bar — grid is above
 			dest.focus_neighbor_top = NodePath("")
 		else:  # Rail — grid is to the right
 			dest.focus_neighbor_right = NodePath("")
 
-	# Block settings button from leaking to the grid
-	var settings_btn = find_nav_settings_button()
+	# Wire the last destination to the settings button and back.
+	if destinations.size() > 0 and settings_btn:
+		var last_dest = destinations[destinations.size() - 1]
+		if _nav_type == 0:  # Bar — settings is to the right of the last destination
+			last_dest.focus_neighbor_right = settings_btn.get_path()
+			settings_btn.focus_neighbor_left = last_dest.get_path()
+		else:  # Rail — settings is below the last destination
+			last_dest.focus_neighbor_bottom = settings_btn.get_path()
+			settings_btn.focus_neighbor_top = last_dest.get_path()
+
+	# Block settings button from leaking to the grid.
 	if settings_btn:
 		if _nav_type == 0:
 			settings_btn.focus_neighbor_top = NodePath("")
@@ -615,19 +657,9 @@ func find_home_button() -> Control:
 		print("[NavigationManager] find_home_button: _nav_node is null")
 		return null
 
-	# M3NavigationDestination items are children of the nav's content container
-	# Search recursively for the first destination node (index 0 = Home)
-	for child in _nav_node.get_children():
-		if child is M3NavigationDestination:
-			# The first M3NavigationDestination is Home
-			return child
-		# Also search deeper in case they're inside containers
-		for sub in child.get_children():
-			if sub is M3NavigationDestination:
-				return sub
-			for subsub in sub.get_children():
-				if subsub is M3NavigationDestination:
-					return subsub
+	var destinations := _get_all_nav_destinations()
+	if destinations.size() > 0:
+		return destinations[0]
 	return null
 
 func find_nav_settings_button() -> Control:
@@ -645,19 +677,7 @@ func get_last_nav_destination() -> Control:
 	if not _nav_node:
 		return null
 
-	var destinations: Array[M3NavigationDestination] = []
-	for child in _nav_node.get_children():
-		if child is M3NavigationDestination:
-			destinations.append(child)
-		else:
-			for sub in child.get_children():
-				if sub is M3NavigationDestination:
-					destinations.append(sub)
-				else:
-					for subsub in sub.get_children():
-						if subsub is M3NavigationDestination:
-							destinations.append(subsub)
-
+	var destinations := _get_all_nav_destinations()
 	if destinations.size() > 0:
 		return destinations[destinations.size() - 1]
 	return null
@@ -671,20 +691,7 @@ func get_active_nav_destination() -> Control:
 	if selected_idx < 0:
 		return null
 
-	# Find all M3NavigationDestination children
-	var destinations: Array[M3NavigationDestination] = []
-	for child in _nav_node.get_children():
-		if child is M3NavigationDestination:
-			destinations.append(child)
-		else:
-			for sub in child.get_children():
-				if sub is M3NavigationDestination:
-					destinations.append(sub)
-				else:
-					for subsub in sub.get_children():
-						if subsub is M3NavigationDestination:
-							destinations.append(subsub)
-
+	var destinations := _get_all_nav_destinations()
 	if selected_idx < destinations.size():
 		return destinations[selected_idx]
 	return null

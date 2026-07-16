@@ -125,6 +125,11 @@ var _long_press_active: bool = false
 var _draw_sb: StyleBoxFlat
 var _cached_variant_colors: Dictionary = {}
 
+## If true, pressing the ui_select action while focused will emit
+## context_menu_requested. The navigation manager enables this only for
+## pinned shortcuts so controller users can open the remove-shortcut menu.
+var context_menu_enabled: bool = false
+
 # ============================================
 # LIFECYCLE
 # ============================================
@@ -492,6 +497,12 @@ func _update_label_position():
 # ============================================
 
 func _gui_input(event: InputEvent) -> void:
+	# Controller/keyboard context menu (mirrors game card behavior).
+	if context_menu_enabled and event.is_action_pressed("ui_select"):
+		accept_event()
+		context_menu_requested.emit()
+		return
+
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			accept_event()

@@ -1221,6 +1221,12 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 	if UIManager and UIManager.is_settings_dialog_open():
 		UIManager.reopen_settings_dialog()
 
+	# The navigation bar sizes its items from the parent width, which can be
+	# stale after a screen swap. Force a deferred nav/grid refresh once the new
+	# SubViewport size has propagated.
+	if UIManager and UIManager.navigation:
+		UIManager.navigation.call_deferred("refresh_for_screen_swap")
+
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:

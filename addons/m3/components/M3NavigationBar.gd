@@ -68,8 +68,10 @@ func _ready():
 	super._ready()
 
 func _create_layout():
-	# Set initial height
+	# Set initial height; keep horizontal minimum at 0 so the bar can never force
+	# the parent layout wider than the viewport.
 	custom_minimum_size = Vector2(0, M3Units.dp(HEIGHT_COMPACT))
+	clip_contents = false
 	
 	# Create horizontal content container
 	_content_container = HBoxContainer.new()
@@ -101,6 +103,7 @@ func _create_layout():
 	_items_container.alignment = BoxContainer.ALIGNMENT_CENTER
 	_items_container.add_theme_constant_override("separation", 0)
 	_items_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_items_container.clip_contents = true
 	_content_container.add_child(_items_container)
 	
 	# Footer wrapper (for footer_content slot)
@@ -126,7 +129,8 @@ func _update_dimensions():
 		height_px = M3Units.dp(HEIGHT_EXPANDED) if expanded else M3Units.dp(HEIGHT_COMPACT)
 	else:
 		height_px = M3Units.dp(COMPACT_HEIGHTS[_current_compact_level])
-	custom_minimum_size.y = height_px
+	# Keep horizontal minimum at 0 so the bar never forces the parent layout wider.
+	custom_minimum_size = Vector2(0, height_px)
 	offset_top = -height_px
 	height_changed.emit(height_px)
 	
@@ -306,9 +310,17 @@ func _update_item_sizes():
 	if _destination_items.is_empty() or not _items_container:
 		return
 	
+	# Use the node width if it has been laid out; otherwise fall back to the
+	# viewport width so sizing is based on the actual screen real estate.
+	var viewport_width := get_viewport_rect().size.x
+	var bar_width := size.x if size.x > 0 else viewport_width
+	# Clamp to the viewport so we never size from a stale parent width that is
+	# larger than the current screen.
+	bar_width = minf(bar_width, viewport_width)
+	
 	var menu_width = M3Units.dp(MENU_BUTTON_WIDTH) if show_menu_button else 0
 	var footer_width = M3Units.dp(MENU_BUTTON_WIDTH) if footer_content else 0
-	var available_width = size.x - menu_width - footer_width
+	var available_width = maxf(0.0, bar_width - menu_width - footer_width)
 	var count = _destination_items.size()
 	var ideal_width = available_width / count
 	
@@ -329,6 +341,13 @@ func _update_item_sizes():
 				chosen_level = level
 				item_width = level_min
 				break
+	
+	# Safety clamp: never let items collectively exceed the available width,
+	# and keep a tiny floor so items don't collapse to zero during transitions.
+	if count > 0:
+		item_width = clampf(item_width, 1.0, available_width / float(count))
+	
+	print("[M3NavigationBar] sizing bar_width=%.1f available=%.1f count=%d level=%d item_width=%.1f" % [bar_width, available_width, count, chosen_level, item_width])
 	
 	if chosen_level != _current_compact_level:
 		_current_compact_level = chosen_level

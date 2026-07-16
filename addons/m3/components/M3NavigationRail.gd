@@ -103,6 +103,7 @@ func _create_layout():
 	_content_container = VBoxContainer.new()
 	_content_container.name = "ContentContainer"
 	_content_container.add_theme_constant_override("separation", 0)
+	_content_container.clip_contents = true
 	add_child(_content_container)
 	
 	# Top spacer for padding
@@ -323,11 +324,15 @@ func _calculate_items_height() -> float:
 func _get_available_items_height() -> float:
 	if not _content_container:
 		return 0.0
+	# Use the rail height if laid out; otherwise fall back to the viewport height
+	# so compact-level decisions are based on real screen space.
+	var viewport_height := get_viewport_rect().size.y
+	var rail_height := size.y if size.y > 0 else viewport_height
 	var top_spacer_h = _top_spacer.custom_minimum_size.y if _top_spacer else M3Units.dp(12)
 	var menu_h = M3Units.dp(48) if _menu_button else 0.0
 	var footer_h = M3Units.dp(72) if footer_content else 0.0
 	var bottom_spacer_h = M3Units.dp(12) if _bottom_spacer and _bottom_spacer.visible else 0.0
-	return maxf(0.0, size.y - top_spacer_h - menu_h - footer_h - bottom_spacer_h)
+	return maxf(0.0, rail_height - top_spacer_h - menu_h - footer_h - bottom_spacer_h)
 
 func _get_default_item_height() -> float:
 	return M3Units.dp(ITEM_HEIGHT_EXPANDED) if expanded else M3Units.dp(ITEM_HEIGHT_COLLAPSED)
@@ -360,21 +365,29 @@ func _apply_compact_level():
 		_current_compact_level = level
 		_update_dimensions()
 	
+	var count = _destination_items.size()
+	var available_height = _get_available_items_height()
 	var height_px: float
 	if level == M3NavigationDestination.CompactLevel.NONE:
 		height_px = _get_default_item_height()
 	elif level == M3NavigationDestination.CompactLevel.BEST_FIT:
-		var count = _destination_items.size()
-		var available_height = _get_available_items_height()
-		height_px = maxf(M3Units.dp(32), available_height / float(count)) if count > 0 else _get_default_item_height()
+		var computed_height = available_height / float(count) if count > 0 else _get_default_item_height()
+		height_px = clampf(computed_height, M3Units.dp(32), M3Units.dp(ITEM_HEIGHT_COLLAPSED))
 	else:
 		height_px = M3Units.dp(COMPACT_HEIGHTS[level])
+	
+	# Safety clamp: never let items collectively exceed the available rail height,
+	# and keep a tiny floor so items don't collapse to zero during transitions.
+	if count > 0:
+		height_px = clampf(height_px, 1.0, available_height / float(count))
 	
 	var width_px: float
 	if expanded:
 		width_px = M3Units.dp(WIDTH_EXPANDED)
 	else:
 		width_px = M3Units.dp(COMPACT_WIDTHS[level])
+	
+	print("[M3NavigationRail] sizing rail_height=%.1f available=%.1f count=%d level=%d item_height=%.1f width=%.1f" % [size.y if size.y > 0 else get_viewport_rect().size.y, available_height, count, level, height_px, width_px])
 	
 	for item in _destination_items:
 		item.compact_level = level

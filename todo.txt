@@ -5,8 +5,14 @@ tst update flow on android
 single screen is not single screen
 platform cards take longer on android
 some settings screens not scrollable?
-No scroll bar for small M3 menus.
 ui_select for nav desition menus
+focus after applying theme (or other dialogues)
+gradient too dark in light themes
+
+applying theme wrong size in grid
+swapping screens wrong size in grid
+
+grid scroll 'centering'  weird
 
 better extraction notifications
 sync notif wasnt dismissed

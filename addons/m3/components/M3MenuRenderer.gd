@@ -660,6 +660,9 @@ func _calculate_size_and_position():
 	_scroll.position = Vector2(pad_h, pad_v)
 	_scroll.size = Vector2(width - pad_h * 2, visible_height - pad_v * 2)
 	
+	# Only show the vertical scrollbar when content actually overflows.
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if total_height > visible_height else ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	
 	# Update vbox (total content size for scrolling)
 	_vbox.custom_minimum_size = Vector2(width - pad_h * 2, total_height - pad_v * 2)
 
