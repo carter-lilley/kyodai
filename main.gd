@@ -34,6 +34,8 @@ const ZOOM_SAVE_DELAY_MS: int = 1500
 # M3 Theme resource (applied to root for fallback native control styling)
 var _m3_theme: Theme = null
 
+const CollectionView = preload("res://view/collection_view.gd")
+
 func _enter_tree():
 	# Set the global startup suppression flag as early as possible so that every
 	# VirtualScrollGridContainer (including HomeView created during scene load)
@@ -410,13 +412,16 @@ func _toggle_horizontal_grid() -> void:
 	# Remember which card had focus so we can restore it after re-layout
 	var focused_index = _get_focused_card_index()
 
-	# Apply to both Home and Library grids
-	for view_name in ["Home", "Library"]:
-		var view = UIManager.get_view(view_name)
-		if view:
-			var grid = _get_view_grid(view)
-			if grid:
-				grid.grid_vertical = target_vertical
+	# Apply to all grid views
+	if UIManager:
+		for view_name in UIManager.view._views.keys():
+			if not _is_grid_view(view_name):
+				continue
+			var view = UIManager.get_view(view_name)
+			if view:
+				var grid = _get_view_grid(view)
+				if grid:
+					grid.grid_vertical = target_vertical
 
 	# Persist
 	if DataManager:
@@ -433,9 +438,12 @@ func _toggle_horizontal_grid() -> void:
 	if focused_index >= 0:
 		call_deferred("_restore_focus_to_card", focused_index, true)
 
+func _is_grid_view(view_name: String) -> bool:
+	return view_name == "Home" or view_name == "Library" or view_name.begins_with("Collection_")
+
 func _on_tab_changed(view_name: String):
 	# Apply saved zoom first, then sync slider so UI reflects the applied value
-	if view_name in ["Home", "Library"]:
+	if _is_grid_view(view_name):
 		await _apply_zoom_to_view_deferred(view_name)
 	_update_ui_for_view(view_name)
 
@@ -471,7 +479,7 @@ func _on_viewport_resized(_new_size: Vector2) -> void:
 	if not current_view:
 		return
 	var view_name = current_view.view_name
-	if view_name not in ["Home", "Library"]:
+	if not _is_grid_view(view_name):
 		return
 
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
@@ -494,14 +502,15 @@ func _on_viewport_resized(_new_size: Vector2) -> void:
 	zoom_slider.set_block_signals(false)
 
 func _update_ui_for_view(view_name: String):
-	# Show/hide view mode buttons only on Home and Library
+	var is_grid = _is_grid_view(view_name)
+	# Show/hide view mode buttons only on grid views
 	if view_mode_group:
-		view_mode_group.visible = view_name in ["Home", "Library"]
+		view_mode_group.visible = is_grid
 
-	# Show/hide zoom slider only on Home and Library
+	# Show/hide zoom slider only on grid views
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
-		zoom_slider.visible = view_name in ["Home", "Library"]
+		zoom_slider.visible = is_grid
 
 	# Skip zoom slider value/stops sync during startup; final slider sync is handled
 	# explicitly after the grid has settled so the stops are based on the real window size.
@@ -509,7 +518,7 @@ func _update_ui_for_view(view_name: String):
 		return
 
 	# Update zoom slider to match current view's grid
-	if zoom_slider and view_name in ["Home", "Library"]:
+	if zoom_slider and is_grid:
 		var view = UIManager.get_view(view_name)
 		if view:
 			var games_grid = _get_view_grid(view)
@@ -613,17 +622,20 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 		_:
 			return
 
-	# Apply to both Home and Library grids
-	for view_name in ["Home", "Library"]:
-		var view = UIManager.get_view(view_name)
-		if view:
-			var grid = _get_view_grid(view)
-			if grid:
-				grid.view_mode = new_mode
+	# Apply to all grid views
+	if UIManager:
+		for view_name in UIManager.view._views.keys():
+			if not _is_grid_view(view_name):
+				continue
+			var view = UIManager.get_view(view_name)
+			if view:
+				var grid = _get_view_grid(view)
+				if grid:
+					grid.view_mode = new_mode
+				else:
+					push_error("[Main] No grid found for view: " + view_name)
 			else:
-				push_error("[Main] No grid found for view: " + view_name)
-		else:
-			push_error("[Main] View not found: " + view_name)
+				push_error("[Main] View not found: " + view_name)
 
 	# Save to settings
 	if DataManager:
@@ -689,15 +701,18 @@ func _on_zoom_changed(value: float):
 		var index = clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
 		actual_zoom = _current_snap_ratios[index]
 
-	# Apply zoom to BOTH Home and Library grids for consistent zoom across views
-	for view_name in ["Home", "Library"]:
-		var view = UIManager.get_view(view_name)
-		if view:
-			var games_grid = _get_view_grid(view)
-			if games_grid:
-				# Only update if the zoom actually changed
-				if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
-					games_grid.target_card_width_ratio = actual_zoom
+	# Apply zoom to ALL grid views for consistent zoom across views
+	if UIManager:
+		for view_name in UIManager.view._views.keys():
+			if not _is_grid_view(view_name):
+				continue
+			var view = UIManager.get_view(view_name)
+			if view:
+				var games_grid = _get_view_grid(view)
+				if games_grid:
+					# Only update if the zoom actually changed
+					if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
+						games_grid.target_card_width_ratio = actual_zoom
 
 func _on_zoom_changed_finished(value_changed: bool):
 	"""Called when drag ends - saves the current slider value to settings."""
@@ -828,6 +843,11 @@ func _compute_grid_available_size(grid: VirtualScrollGridContainer) -> Vector2:
 			if platform_indicator.has_method("_apply_responsive_layout"):
 				platform_indicator._apply_responsive_layout()
 			available_height -= platform_indicator.get_combined_minimum_size().y
+	elif view is CollectionView:
+		var title_label: Control = view.get_node_or_null("MarginContainer/VBoxContainer/CollectionTitle")
+		if title_label:
+			title_label.size.x = available_width
+			available_height -= title_label.get_combined_minimum_size().y
 
 	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
 	print("[Main] _compute_grid_available_size: view=", view.view_name if view is View else "unknown", " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
@@ -851,9 +871,11 @@ func _load_and_apply_saved_zoom() -> void:
 
 	var saved_zoom = zoom_setting.value
 
-	# Apply saved zoom to both Home and Library grids
+	# Apply saved zoom to all grid views
 	if UIManager:
-		for view_name in ["Home", "Library"]:
+		for view_name in UIManager.view._views.keys():
+			if not _is_grid_view(view_name):
+				continue
 			var view = UIManager.get_view(view_name)
 			if view:
 				var games_grid = _get_view_grid(view)

@@ -490,6 +490,20 @@ func fetch_platforms(callback: Callable, use_cache: bool = true):
 		callback.call(data, error)
 	, true, use_cache)  # authenticated=true, use_cache=parameter
 
+func fetch_collections(callback: Callable, use_cache: bool = true):
+	if not _is_configured:
+		callback.call({}, "Not configured")
+		return
+
+	make_request("/collections", func(data, error):
+		var success = error == ""
+		api_request_completed.emit("collections", success, data if success else error)
+		if success:
+			callback.call({"collections": data if data is Array else []}, "")
+		else:
+			callback.call({}, error)
+	, true, use_cache)
+
 func get_and_reset_cache_stats() -> Dictionary:
 	"""Get cache statistics and reset counters."""
 	var stats = {

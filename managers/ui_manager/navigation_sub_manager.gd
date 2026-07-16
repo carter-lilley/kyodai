@@ -13,6 +13,7 @@ const NAV_DESTINATIONS = [
 ]
 
 const ADD_DESTINATION = {"id": "add", "label": "", "icon": "plus", "view": ""}
+const CollectionPicker = preload("res://components/collection_picker.gd")
 
 var _last_nav_index: int = 0
 
@@ -155,7 +156,7 @@ func _sync_nav_selection(view_name: String) -> void:
 		return
 	var nav_dests = _get_nav_destinations()
 	for i in range(nav_dests.size()):
-		if nav_dests[i].view == view_name:
+		if nav_dests[i].get("view", "") == view_name:
 			_set_nav_selected_index_no_signal(i)
 			break
 
@@ -382,6 +383,7 @@ func _create_nav_node() -> void:
 	settings_btn.icon_name = "cog"
 	settings_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
 	settings_btn.icon_button_size = M3IconButton.IconSize.MEDIUM
+	settings_btn.focus_mode = Control.FOCUS_ALL
 	settings_btn.pressed.connect(ui_manager.overlay.show_settings_dialog)
 
 	_nav_node.set_meta("_deferred_show_menu_button", false)
@@ -399,7 +401,9 @@ func _get_static_destinations() -> Array[Dictionary]:
 	return result
 
 func _get_pinned_shortcuts() -> Array[Dictionary]:
-	"""Return the pinned shortcuts that should be visible on this platform."""
+	"""Return the pinned shortcuts that should be visible on this platform.
+
+	Includes platform-specific app/program pins and cross-platform collection pins."""
 	if not DataManager:
 		return []
 	var setting = DataManager.get_setting("nav_pinned_shortcuts")
@@ -408,8 +412,10 @@ func _get_pinned_shortcuts() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var current_type := "app" if SystemManager.platform.is_android() else "program"
 	for item in setting.value:
-		if item is Dictionary and item.get("type") == current_type:
-			result.append(item)
+		if item is Dictionary:
+			var type = item.get("type", "")
+			if type == current_type or type == "collection":
+				result.append(item)
 	return result
 
 func _get_nav_destinations() -> Array[Dictionary]:
@@ -421,7 +427,7 @@ func _get_nav_destinations() -> Array[Dictionary]:
 	return result
 
 func _is_pinned_destination(dest: Dictionary) -> bool:
-	return dest.get("type") in ["app", "program"]
+	return dest.get("type") in ["app", "program", "collection"]
 
 func _on_nav_node_ready() -> void:
 	"""Apply deferred nav node config now that _ready() has created internal UI."""
@@ -473,9 +479,12 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 		return
 
 	if index >= static_count and index < static_count + pin_count:
-		# Pinned shortcut selected; keep static selection highlighted and launch.
+		# Pinned shortcut selected; keep static selection highlighted.
 		_set_nav_selected_index_no_signal(_last_nav_index)
-		_launch_pinned_shortcut(dest)
+		if dest.get("type") == "collection":
+			ui_manager.switch_to_tab(dest.view)
+		else:
+			_launch_pinned_shortcut(dest)
 		return
 
 	if index < static_count:
@@ -491,6 +500,7 @@ func _show_add_menu(anchor: Control) -> void:
 		_add_menu.queue_free()
 	_add_menu = M3Menu.new()
 	_add_menu.add_item("Shortcut", _on_add_menu_item_selected, "expand-all")
+	_add_menu.add_item("Collection", _on_add_collection_selected, "star")
 	_add_menu.popup(anchor)
 
 func _on_add_menu_item_selected() -> void:
@@ -499,6 +509,48 @@ func _on_add_menu_item_selected() -> void:
 		_show_android_app_picker()
 	else:
 		_show_desktop_file_picker()
+
+func _on_add_collection_selected() -> void:
+	"""Open the collection picker to pin a RomM collection."""
+	var picker := CollectionPicker.new()
+	picker.set_pinned_ids(_get_pinned_collection_ids())
+	picker.collection_selected.connect(_on_collection_pin_selected)
+	picker.show_overlay()
+
+func _get_pinned_collection_ids() -> Array[int]:
+	var ids: Array[int] = []
+	if not DataManager:
+		return ids
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting or not (setting.value is Array):
+		return ids
+	for item in setting.value:
+		if item is Dictionary and item.get("type", "") == "collection":
+			var id = item.get("data", {}).get("collection_id", 0)
+			if id is int and id > 0 and not ids.has(id):
+				ids.append(id)
+	return ids
+
+func _on_collection_pin_selected(collection_id: int, collection_name: String) -> void:
+	"""Persist a new collection pin and rebuild the navigation."""
+	if collection_id == 0:
+		return
+	if _get_pinned_collection_ids().has(collection_id):
+		return
+	
+	if ui_manager and ui_manager.view:
+		ui_manager.view._add_collection_tab(collection_id, collection_name)
+	
+	var pin := {
+		"id": "collection_%d" % collection_id,
+		"type": "collection",
+		"label": collection_name,
+		"icon": "star",
+		"view": "Collection_%d" % collection_id,
+		"data": {"collection_id": collection_id, "collection_name": collection_name}
+	}
+	_add_pinned_shortcut(pin)
+	ui_manager.switch_to_tab(pin.view)
 
 func _show_desktop_file_picker() -> void:
 	UIManager.show_file_dialog(
@@ -543,7 +595,7 @@ func _add_pinned_shortcut(pin: Dictionary) -> void:
 	var setting = DataManager.get_setting("nav_pinned_shortcuts")
 	if not setting:
 		return
-	var current: Array = setting.value if setting.value is Array else []
+	var current: Array = setting.value.duplicate() if setting.value is Array else []
 	current.append(pin)
 	DataManager.set_setting(current, setting)
 	DataManager.save_settings()
@@ -569,7 +621,7 @@ func _on_remove_pin_selected(dest: Dictionary) -> void:
 	var setting = DataManager.get_setting("nav_pinned_shortcuts")
 	if not setting:
 		return
-	var current: Array = setting.value if setting.value is Array else []
+	var current: Array = setting.value.duplicate() if setting.value is Array else []
 	var filtered: Array = []
 	var target_id = dest.get("id", "")
 	for pin in current:
@@ -578,6 +630,12 @@ func _on_remove_pin_selected(dest: Dictionary) -> void:
 	DataManager.set_setting(filtered, setting)
 	DataManager.save_settings()
 	print("[NavigationManager] removed pin id=%s remaining_pins=%d" % [target_id, filtered.size()])
+	
+	if dest.get("type") == "collection":
+		var collection_id = dest.get("data", {}).get("collection_id", 0)
+		if collection_id != 0 and ui_manager and ui_manager.view:
+			ui_manager.view._remove_collection_tab(collection_id)
+	
 	_rebuild_nav_and_layout()
 
 func _launch_pinned_shortcut(dest: Dictionary) -> void:
@@ -637,12 +695,16 @@ func _setup_nav_focus_neighbors() -> void:
 	# Wire the last destination to the settings button and back.
 	if destinations.size() > 0 and settings_btn:
 		var last_dest = destinations[destinations.size() - 1]
-		if _nav_type == 0:  # Bar — settings is to the right of the last destination
-			last_dest.focus_neighbor_right = settings_btn.get_path()
-			settings_btn.focus_neighbor_left = last_dest.get_path()
-		else:  # Rail — settings is below the last destination
-			last_dest.focus_neighbor_bottom = settings_btn.get_path()
-			settings_btn.focus_neighbor_top = last_dest.get_path()
+		if last_dest.is_inside_tree() and settings_btn.is_inside_tree():
+			if _nav_type == 0:  # Bar — settings is to the right of the last destination
+				last_dest.focus_neighbor_right = settings_btn.get_path()
+				settings_btn.focus_neighbor_left = last_dest.get_path()
+			else:  # Rail — settings is below the last destination
+				last_dest.focus_neighbor_bottom = settings_btn.get_path()
+				settings_btn.focus_neighbor_top = last_dest.get_path()
+		else:
+			# Internal UI may not be fully in the tree yet; retry after a frame.
+			call_deferred("_setup_nav_focus_neighbors")
 
 	# Block settings button from leaking to the grid.
 	if settings_btn:
@@ -995,8 +1057,13 @@ func _try_nav_to_grid(dir: String) -> bool:
 		else:  # Rail
 			if dir == "ui_right":
 				return _enter_grid()
-			if dir == "ui_down" and focused == last_dest:
+			if dir == "ui_down" and (focused == last_dest or last_dest.is_ancestor_of(focused)):
 				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
+					settings_btn.grab_focus()
+					return true
+				# Fallback: force focus onto settings if neighbor wiring is missing.
+				elif settings_btn:
+					settings_btn.focus_mode = Control.FOCUS_ALL
 					settings_btn.grab_focus()
 					return true
 		return false

@@ -35,6 +35,7 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 @onready var sync: SyncSubManager = $SyncSubManager
 @onready var cover: CoverSubManager = $CoverSubManager
 @onready var save: SaveSyncSubManager = $SaveSyncSubManager
+@onready var collections: CollectionSubManager = $CollectionSubManager
 var settings: SettingsSubManager
 var game_save: GameSaveSubManager
 
@@ -46,6 +47,7 @@ func _ready():
 	_ensure_memory_manager()
 	database.initialize_database()
 	cover._ensure_cache_folder()
+	database_ready.connect(_on_database_ready_for_collections)
 
 	# Wire settings sub-manager signals through the DataManager facade
 	settings.setting_changed.connect(func(value: Variant, setting: SettingsVar): setting_changed.emit(value, setting))
@@ -147,6 +149,38 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 
 func get_random_game() -> GameResource:
 	return database.get_random_game()
+
+
+# ==================== COLLECTIONS ====================
+
+func _on_database_ready_for_collections() -> void:
+	"""Sync collections from RomM once the database is ready and RomM is configured."""
+	if SystemManager.network and SystemManager.network.is_configured():
+		print("[DataManager] Syncing collections at startup...")
+		sync_collections()
+
+func sync_collections(callback: Callable = Callable()) -> void:
+	collections.sync_collections(callback)
+
+
+func get_collections() -> Array[Dictionary]:
+	return collections.get_collections()
+
+
+func get_collection(romm_id: int) -> Dictionary:
+	return collections.get_collection(romm_id)
+
+
+func get_romm_ids_for_collection(romm_id: int) -> Array[int]:
+	return collections.get_romm_ids_for_collection(romm_id)
+
+
+func get_games_for_collection_count(romm_id: int) -> int:
+	return collections.get_games_for_collection_count(romm_id)
+
+
+func get_games_for_collection_paginated(romm_id: int, offset: int, limit: int, sort_field: String = "title", ascending: bool = true) -> Array[GameResource]:
+	return collections.get_games_for_collection_paginated(romm_id, offset, limit, sort_field, ascending)
 
 
 # ==================== GAME WRITES ====================

@@ -191,6 +191,31 @@ func _create_tables():
 	""")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
 
+	# Collections synced from RomM
+	query_bool("""
+		CREATE TABLE IF NOT EXISTS collections (
+			romm_id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			is_public INTEGER DEFAULT 0,
+			is_favorite INTEGER DEFAULT 0,
+			rom_count INTEGER DEFAULT 0,
+			updated_at TEXT DEFAULT ''
+		)
+	""")
+
+	# Many-to-many link between collections and ROMs
+	query_bool("""
+		CREATE TABLE IF NOT EXISTS collection_roms (
+			collection_id INTEGER NOT NULL,
+			romm_id INTEGER NOT NULL,
+			PRIMARY KEY (collection_id, romm_id),
+			FOREIGN KEY (collection_id) REFERENCES collections(romm_id) ON DELETE CASCADE
+		)
+	""")
+	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_collection ON collection_roms(collection_id)")
+	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_romm ON collection_roms(romm_id)")
+
 
 func is_database_ready() -> bool:
 	return _is_db_ready
@@ -1059,6 +1084,141 @@ func get_random_game() -> GameResource:
 	if query_result.size() > 0:
 		return _row_to_game(query_result[0])
 	return null
+
+
+# ==================== COLLECTIONS ====================
+
+func save_collection(collection: Dictionary) -> void:
+	"""Insert or update a collection synced from RomM."""
+	if not _is_db_ready:
+		return
+	query_bool("""
+		INSERT OR REPLACE INTO collections (romm_id, name, description, is_public, is_favorite, rom_count, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	""", [
+		collection.get("id", 0),
+		collection.get("name", ""),
+		collection.get("description", ""),
+		1 if collection.get("is_public", false) else 0,
+		1 if collection.get("is_favorite", false) else 0,
+		collection.get("rom_count", 0),
+		collection.get("updated_at", "")
+	])
+
+
+func clear_collection_roms(collection_id: int) -> void:
+	"""Remove all ROM links for a collection."""
+	if not _is_db_ready:
+		return
+	query_bool("DELETE FROM collection_roms WHERE collection_id = ?", [collection_id])
+
+
+func add_collection_roms(collection_id: int, rom_ids: Array) -> void:
+	"""Link ROMs to a collection."""
+	if not _is_db_ready:
+		return
+	if rom_ids.is_empty():
+		return
+	_db_lock()
+	for rom_id in rom_ids:
+		query_bool_unlocked("INSERT OR IGNORE INTO collection_roms (collection_id, romm_id) VALUES (?, ?)", [collection_id, rom_id])
+	_db_unlock()
+
+
+func clear_all_collections() -> void:
+	"""Delete all collections and their ROM links (used before a full re-sync)."""
+	if not _is_db_ready:
+		return
+	query_bool("DELETE FROM collection_roms")
+	query_bool("DELETE FROM collections")
+
+
+func delete_collection(romm_id: int) -> void:
+	"""Delete a collection and its ROM links."""
+	if not _is_db_ready:
+		return
+	query_bool("DELETE FROM collection_roms WHERE collection_id = ?", [romm_id])
+	query_bool("DELETE FROM collections WHERE romm_id = ?", [romm_id])
+
+
+func get_collections() -> Array[Dictionary]:
+	var collections: Array[Dictionary] = []
+	if not _is_db_ready:
+		return collections
+	var query_result = query_array("SELECT * FROM collections ORDER BY name COLLATE NOCASE")
+	for row in query_result:
+		collections.append({
+			"id": row.get("romm_id", 0),
+			"name": row.get("name", ""),
+			"description": row.get("description", ""),
+			"is_public": row.get("is_public", 0) == 1,
+			"is_favorite": row.get("is_favorite", 0) == 1,
+			"rom_count": row.get("rom_count", 0),
+			"updated_at": row.get("updated_at", "")
+		})
+	return collections
+
+
+func get_collection(romm_id: int) -> Dictionary:
+	if not _is_db_ready:
+		return {}
+	var query_result = query_array("SELECT * FROM collections WHERE romm_id = ?", [romm_id])
+	if query_result.size() > 0:
+		var row = query_result[0]
+		return {
+			"id": row.get("romm_id", 0),
+			"name": row.get("name", ""),
+			"description": row.get("description", ""),
+			"is_public": row.get("is_public", 0) == 1,
+			"is_favorite": row.get("is_favorite", 0) == 1,
+			"rom_count": row.get("rom_count", 0),
+			"updated_at": row.get("updated_at", "")
+		}
+	return {}
+
+
+func get_romm_ids_for_collection(romm_id: int) -> Array[int]:
+	var rom_ids: Array[int] = []
+	if not _is_db_ready:
+		return rom_ids
+	var query_result = query_array("SELECT romm_id FROM collection_roms WHERE collection_id = ?", [romm_id])
+	for row in query_result:
+		rom_ids.append(int(row.get("romm_id", 0)))
+	return rom_ids
+
+
+func get_games_for_collection_count(romm_id: int) -> int:
+	"""Count how many synced games are in this collection."""
+	if not _is_db_ready:
+		return 0
+	var query = """
+		SELECT COUNT(*) as count FROM games g
+		INNER JOIN collection_roms cr ON g.romm_id = cr.romm_id
+		WHERE cr.collection_id = ?
+	""" + _get_is_master_entry_clause().replace("games", "g") + _get_has_cover_art_clause().replace("games", "g") + " AND g.cover_group_master = 1"
+	var query_result = query_array(query, [romm_id])
+	if query_result.size() > 0 and query_result[0].has("count"):
+		return int(query_result[0]["count"])
+	return 0
+
+
+func get_games_for_collection_paginated(romm_id: int, offset: int, limit: int, sort_field: String = "title", ascending: bool = true) -> Array[GameResource]:
+	var games: Array[GameResource] = []
+	if not _is_db_ready:
+		return games
+
+	var allowed_sort_fields = {"title": true, "romm_id": true, "rating": true, "last_played": true, "platform": true}
+	var safe_sort_field = sort_field if allowed_sort_fields.has(sort_field) else "title"
+	var order = "ASC" if ascending else "DESC"
+	var query = """
+		SELECT g.* FROM games g
+		INNER JOIN collection_roms cr ON g.romm_id = cr.romm_id
+		WHERE cr.collection_id = ?
+	""" + _get_is_master_entry_clause().replace("games", "g") + _get_has_cover_art_clause().replace("games", "g") + " AND g.cover_group_master = 1 ORDER BY g.%s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
+	var query_result = query_array(query, [romm_id, limit, offset])
+	for row in query_result:
+		games.append(_row_to_game(row))
+	return games
 
 
 # ==================== SYNC TIMESTAMPS / DEVICE ID ====================

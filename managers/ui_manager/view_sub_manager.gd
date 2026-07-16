@@ -13,6 +13,9 @@ var _library_scene_path: String = "res://view/library_view.tscn"
 var _downloads_tab: Control = null
 var _downloads_scene_path: String = "res://view/downloads_view.tscn"
 
+var _collection_scene_path: String = "res://view/collection_view.tscn"
+var _collection_tabs: Dictionary[int, Control] = {}
+
 func _ready():
 	ui_manager = get_parent()
 
@@ -38,6 +41,9 @@ func setup(tab_container: TabContainer) -> void:
 	phase_start_us = Time.get_ticks_usec()
 	_setup_downloads_tab()
 	print("[ViewSubManager] _setup_downloads_tab elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
+	_setup_collection_tabs()
+	print("[ViewSubManager] _setup_collection_tabs elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	_sync_current_view_from_tab()
 	print("[ViewSubManager] setup total elapsed_us=", Time.get_ticks_usec() - setup_start_us)
 
@@ -144,6 +150,92 @@ func _ensure_downloads_setup() -> bool:
 
 	return true
 
+func _setup_collection_tabs() -> void:
+	if not DataManager:
+		return
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting or not (setting.value is Array):
+		return
+	
+	for item in setting.value:
+		if not (item is Dictionary):
+			continue
+		if item.get("type", "") != "collection":
+			continue
+		var collection_id = item.get("data", {}).get("collection_id", 0)
+		if collection_id == 0:
+			continue
+		var collection_name = item.get("data", {}).get("collection_name", "")
+		_add_collection_tab(collection_id, collection_name)
+
+func _add_collection_tab(collection_id: int, collection_name: String = "") -> void:
+	if collection_id == 0:
+		return
+	if _collection_tabs.has(collection_id):
+		return
+	
+	var tab_title = _collection_tab_title(collection_id)
+	var tab = Control.new()
+	tab.name = tab_title
+	tab.visible = false
+	_tab_container.add_child(tab)
+	_collection_tabs[collection_id] = tab
+
+func _ensure_collection_setup(collection_id: int) -> bool:
+	var tab_title = _collection_tab_title(collection_id)
+	if _views.has(tab_title):
+		return true
+	if not _collection_tabs.has(collection_id):
+		return false
+	
+	var tab = _collection_tabs[collection_id]
+	var collection = DataManager.get_collection(collection_id)
+	var collection_name = collection.get("name", "") if collection else ""
+	
+	var scene = load(_collection_scene_path)
+	var collection_view = scene.instantiate()
+	collection_view.collection_id = collection_id
+	collection_view.collection_name = collection_name
+	collection_view.view_name = tab_title
+	tab.add_child(collection_view)
+	_views[tab_title] = collection_view
+	
+	if collection_view.has_signal("hero_game_changed"):
+		collection_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
+	
+	return true
+
+func _remove_collection_tab(collection_id: int) -> void:
+	var tab_title = _collection_tab_title(collection_id)
+	
+	if _current_view and _current_view.view_name == tab_title:
+		switch_to_tab("Home")
+	
+	if _views.has(tab_title):
+		var view = _views[tab_title]
+		_views.erase(tab_title)
+		if view and is_instance_valid(view):
+			view.queue_free()
+	
+	if _collection_tabs.has(collection_id):
+		var tab = _collection_tabs[collection_id]
+		_collection_tabs.erase(collection_id)
+		if tab and is_instance_valid(tab) and tab.get_parent() == _tab_container:
+			_tab_container.remove_child(tab)
+			tab.queue_free()
+
+func _collection_tab_title(collection_id: int) -> String:
+	return "Collection_%d" % collection_id
+
+func _is_collection_tab_title(tab_title: String) -> bool:
+	return tab_title.begins_with("Collection_")
+
+func _get_collection_id_from_tab_title(tab_title: String) -> int:
+	if not _is_collection_tab_title(tab_title):
+		return 0
+	var suffix = tab_title.substr("Collection_".length())
+	return suffix.to_int()
+
 func _sync_current_view_from_tab() -> void:
 	var current_tab_idx = _tab_container.current_tab
 	var current_tab_title = _tab_container.get_tab_title(current_tab_idx)
@@ -151,6 +243,8 @@ func _sync_current_view_from_tab() -> void:
 		_ensure_library_setup()
 	if current_tab_title == "Downloads":
 		_ensure_downloads_setup()
+	if _is_collection_tab_title(current_tab_title):
+		_ensure_collection_setup(_get_collection_id_from_tab_title(current_tab_title))
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_current_view.on_view_show()
@@ -166,11 +260,13 @@ func _on_tab_changed(tab_idx: int):
 	if _current_view:
 		_current_view.on_view_hide()
 
-	# Show new view (create Library or Downloads lazily on first visit)
+	# Show new view (create Library, Downloads, or collection tabs lazily on first visit)
 	if tab_title == "Library":
 		_ensure_library_setup()
 	if tab_title == "Downloads":
 		_ensure_downloads_setup()
+	if _is_collection_tab_title(tab_title):
+		_ensure_collection_setup(_get_collection_id_from_tab_title(tab_title))
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
 		_current_view.on_view_show()

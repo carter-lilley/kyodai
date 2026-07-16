@@ -3,23 +3,21 @@
 xemu save sync
 tst update flow on android
 single screen is not single screen
-platform cards take longer on android
-some settings screens not scrollable?
-ui_select for nav desition menus
 focus after applying theme (or other dialogues)
 gradient too dark in light themes
 
+platform cards take longer on android
+some settings screens not scrollable?
+
 applying theme wrong size in grid
 swapping screens wrong size in grid
-
+grid collapse after sync
 grid scroll 'centering'  weird
+grid collpase when adding/removing pinned collection
 
 better extraction notifications
-sync notif wasnt dismissed
-most snackbars should be non dismissable. especially pinned ones
 
 romm;
-- pin collections
 - mark 'played' if played
 - 'add to collection'
 - sort by played

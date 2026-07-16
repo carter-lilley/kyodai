@@ -1,0 +1,46 @@
+[gd_scene format=3 uid="uid://clyt5rbkjkhpu"]
+
+[ext_resource type="Script" path="res://view/collection_view.gd" id="1_collview"]
+[ext_resource type="Script" uid="uid://c6n20pn08r6jn" path="res://base_class/nodes/virtual_scroll_grid_container.gd" id="2_vscroll"]
+[ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="3_m3label"]
+
+[node name="CollectionView" type="Control" unique_id=575533097]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_collview")
+collection_id = 0
+collection_name = ""
+
+[node name="MarginContainer" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="CollectionTitle" type="Label" parent="MarginContainer/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+horizontal_alignment = 0
+vertical_alignment = 1
+script = ExtResource("3_m3label")
+label_style = 5
+
+[node name="VirtualScrollGridContainer" type="Control" parent="MarginContainer/VBoxContainer" unique_id=806442114]
+layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("2_vscroll")
+card_scene = null

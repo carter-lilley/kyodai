@@ -1,0 +1,252 @@
+class_name CollectionView
+extends View
+
+@onready var margin_container: MarginContainer = $MarginContainer
+@onready var title_label: M3Label = $MarginContainer/VBoxContainer/CollectionTitle
+
+@export var collection_id: int = 0
+@export var collection_name: String = ""
+
+var _total_games: int = 0
+var _is_loading: bool = false
+
+func _exit_tree() -> void:
+	_disconnect_signals()
+
+func _enter_tree() -> void:
+	_connect_signals()
+
+func _connect_signals() -> void:
+	if not DataManager:
+		return
+	if not DataManager.setting_changed.is_connected(_on_setting_changed):
+		DataManager.setting_changed.connect(_on_setting_changed)
+	if not DataManager.database_ready.is_connected(_on_database_ready):
+		DataManager.database_ready.connect(_on_database_ready)
+		if DataManager.is_database_ready():
+			_on_database_ready()
+	if not DataManager.game_added.is_connected(_on_game_added):
+		DataManager.game_added.connect(_on_game_added)
+	if not DataManager.game_updated.is_connected(_on_game_updated):
+		DataManager.game_updated.connect(_on_game_updated)
+	if not DataManager.games_removed.is_connected(_on_games_removed):
+		DataManager.games_removed.connect(_on_games_removed)
+	if not DataManager.sync_completed.is_connected(_on_sync_completed):
+		DataManager.sync_completed.connect(_on_sync_completed)
+	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
+		UIManager.modal_item_selected.connect(_on_modal_item_selected)
+
+func _disconnect_signals() -> void:
+	if not DataManager:
+		return
+	if DataManager.setting_changed.is_connected(_on_setting_changed):
+		DataManager.setting_changed.disconnect(_on_setting_changed)
+	if DataManager.database_ready.is_connected(_on_database_ready):
+		DataManager.database_ready.disconnect(_on_database_ready)
+	if DataManager.game_added.is_connected(_on_game_added):
+		DataManager.game_added.disconnect(_on_game_added)
+	if DataManager.game_updated.is_connected(_on_game_updated):
+		DataManager.game_updated.disconnect(_on_game_updated)
+	if DataManager.games_removed.is_connected(_on_games_removed):
+		DataManager.games_removed.disconnect(_on_games_removed)
+	if DataManager.sync_completed.is_connected(_on_sync_completed):
+		DataManager.sync_completed.disconnect(_on_sync_completed)
+	if UIManager and UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
+		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
+
+func _ready():
+	if collection_name.is_empty() and collection_id != 0:
+		var collection = DataManager.get_collection(collection_id)
+		if collection:
+			collection_name = collection.get("name", "")
+	view_name = _collection_view_name(collection_id)
+	
+	if title_label:
+		title_label.text = collection_name
+	
+	games_grid = $MarginContainer/VBoxContainer/VirtualScrollGridContainer as VirtualScrollGridContainer
+	if not games_grid:
+		push_error("[CollectionView] games_grid is null! Cannot initialize.")
+		return
+	
+	var card_scene = load("res://components/game_card.tscn") as PackedScene
+	var initial_zoom: float = UIManager.card_settings_state.card_zoom_ratio if UIManager and UIManager.card_settings_state else 0.25
+	games_grid.setup(card_scene, 0, initial_zoom)
+	games_grid.items_requested.connect(_on_items_requested)
+	games_grid.visible_range_changed.connect(_on_visible_range_changed)
+	games_grid.item_created.connect(_on_card_created)
+	
+	_update_grid_orientation()
+	reconnect_viewport()
+
+static func _collection_view_name(id: int) -> String:
+	return "Collection_%d" % id
+
+func _on_database_ready() -> void:
+	_load_total_count()
+
+func _on_game_added(_game: GameResource) -> void:
+	_load_total_count()
+
+func _on_games_removed(_platform_slug: String) -> void:
+	_load_total_count()
+
+func _on_sync_completed(success: bool, _message: String) -> void:
+	if success:
+		_load_total_count(false)
+
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	if setting.property_name in ["hide_games_without_covers", "fold_romm_siblings"]:
+		_load_total_count(false)
+
+func _load_total_count(preserve_cache: bool = false) -> void:
+	if collection_id == 0:
+		return
+	_is_loading = true
+	_update_status("Loading collection...")
+	
+	SystemManager.memory.queue_db_task(
+		func():
+			var count = DataManager.get_games_for_collection_count(collection_id)
+			return count,
+		func(count: int):
+			if not is_instance_valid(games_grid):
+				_is_loading = false
+				return
+			_total_games = count
+			games_grid.set_total_count(count, preserve_cache)
+			if count == 0:
+				_update_status("No games in this collection")
+			else:
+				_update_status("Showing 0-0 of %d games" % count)
+			_is_loading = false
+	)
+
+func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> void:
+	if collection_id == 0:
+		return
+	SystemManager.memory.queue_db_task(
+		func():
+			var games = DataManager.get_games_for_collection_paginated(collection_id, offset, limit)
+			return games,
+		func(games: Array[GameResource]):
+			if not is_instance_valid(games_grid):
+				return
+			games_grid.on_items_loaded(games, offset, is_preload)
+	)
+
+func _on_visible_range_changed(start_index: int, end_index: int, total_count: int) -> void:
+	if total_count == 0:
+		_update_status("No games in this collection")
+	else:
+		var start_num = start_index + 1
+		var end_num = mini(end_index, total_count)
+		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
+
+func _input(event: InputEvent) -> void:
+	if not UIManager.is_current_view(view_name):
+		return
+	if event.is_action_pressed("random_game"):
+		_focus_random_card()
+		accept_event()
+
+func _focus_random_card() -> void:
+	if _total_games == 0:
+		return
+	var random_index := randi() % _total_games
+	games_grid.scroll_to_index_and_focus(random_index, false)
+
+func on_view_show() -> void:
+	super.on_view_show()
+	if title_label:
+		title_label.text = collection_name
+	if games_grid:
+		if games_grid._active_cards.size() == 0 and games_grid._total_items > 0 and games_grid.size.x > 0 and games_grid.size.y > 0:
+			games_grid._initial_load()
+		games_grid._request_missing_data()
+
+func on_view_hide() -> void:
+	view_hidden.emit()
+
+func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> void:
+	_update_grid_orientation()
+	
+	if UIManager and UIManager.card_settings_state and games_grid:
+		games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
+	
+	if refresh_effects:
+		if preserve_data:
+			games_grid.refresh_dimensions()
+			games_grid.refresh_all_card_effects(true)
+		else:
+			_load_total_count(false)
+	else:
+		games_grid.refresh_dimensions()
+		if preserve_data:
+			games_grid._request_missing_data()
+		else:
+			_load_total_count(true)
+
+func _on_modal_item_selected(item_id: String, context: Dictionary) -> void:
+	if not UIManager.is_current_view(view_name):
+		return
+	
+	var romm_id = context.get("romm_id", 0)
+	
+	match item_id:
+		"details":
+			UIManager.show_game_details(romm_id)
+		"launch":
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				LaunchManager.launch_game(game)
+		"card_designer":
+			var card_designer_game = DataManager.get_game_by_id(romm_id)
+			if card_designer_game:
+				UIManager.set_card_designer_preview_game(card_designer_game.romm_id)
+			UIManager.show_settings_dialog_with_category("card_designer")
+		"add_to_steam":
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				SteamVDFWriter.add_game(game)
+		"delete":
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				SystemManager.notifications.show_notification("Deleting " + game.title + "...", SystemManager.notifications.Type.INFO)
+				if games_grid:
+					games_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				
+				var _refresh_after_delete = func():
+					_load_total_count(false)
+					if games_grid:
+						games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+					if SystemManager.audio:
+						SystemManager.audio.play_sfx("error")
+				
+				DataManager.delete_game_download(game, func(success: bool):
+					if success:
+						SystemManager.notifications.show_notification(game.title + " deleted", SystemManager.notifications.Type.SUCCESS)
+						_refresh_after_delete.call()
+					else:
+						var on_confirm = func():
+							M3Dialog.dismiss_current()
+							var on_force_delete = func(force_success: bool):
+								if force_success:
+									SystemManager.notifications.show_notification(game.title + " removed from library", SystemManager.notifications.Type.SUCCESS)
+									_refresh_after_delete.call()
+								else:
+									SystemManager.notifications.show_notification("Failed to remove " + game.title, SystemManager.notifications.Type.ERROR)
+									if games_grid:
+										games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							DataManager.delete_game_download(game, on_force_delete, true)
+						
+						var on_cancel = func():
+							if games_grid:
+								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							if SystemManager.audio:
+								SystemManager.audio.play_sfx("error")
+						
+						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
+			)
+		"hide":
+			pass
