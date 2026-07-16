@@ -118,3 +118,6 @@ const Type = SettingsVar.SettingType
 	"effect_id": "none",
 	"settings": {}
 }, State.INTERNAL, "Background Effect Configuration")
+
+# Internal pinned navigation shortcuts (managed by NavigationSubManager)
+@export var nav_pinned_shortcuts := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "Pinned Navigation Shortcuts")

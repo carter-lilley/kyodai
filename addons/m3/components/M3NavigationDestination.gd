@@ -7,11 +7,14 @@ static var _shared_empty_stylebox: StyleBoxEmpty = StyleBoxEmpty.new()
 static func clear_shared_stylebox() -> void:
 	_shared_empty_stylebox = null
 
+signal context_menu_requested()
+
 ## Material 3 Navigation Destination
 ## Extends M3Button with navigation-specific layout.
 ## Draws pill-shaped active and hover indicators via _draw().
 
 enum LayoutMode { VERTICAL, HORIZONTAL }
+enum CompactLevel { NONE, ICON_ONLY, SMALL, EXTRA_SMALL, BEST_FIT }
 
 # ============================================
 # NAV SIZE SPECS (all values in dp)
@@ -36,6 +39,15 @@ const NAV_SIZE_SPECS = {
 	},
 }
 
+# Icon sizes for each compact level (dp)
+const COMPACT_ICON_SIZES = {
+	CompactLevel.NONE: 24,
+	CompactLevel.ICON_ONLY: 24,
+	CompactLevel.SMALL: 20,
+	CompactLevel.EXTRA_SMALL: 18,
+	CompactLevel.BEST_FIT: 16,
+}
+
 # ============================================
 # EXPORTS
 # ============================================
@@ -46,6 +58,26 @@ const NAV_SIZE_SPECS = {
 			return
 		destination_icon = value
 		icon_name = value
+
+@export var destination_icon_texture: Texture2D = null:
+	set(value):
+		if value == destination_icon_texture:
+			return
+		destination_icon_texture = value
+		_update_icon()
+		queue_redraw()
+
+@export var compact_level: CompactLevel = CompactLevel.NONE:
+	set(value):
+		if value == compact_level:
+			return
+		compact_level = value
+		_update_icon()
+		_update_label()
+		_update_size()
+		_update_theme()
+		_update_icon_position()
+		queue_redraw()
 
 @export var destination_label: String = "":
 	set(value):
@@ -86,7 +118,10 @@ const NAV_SIZE_SPECS = {
 # ============================================
 
 var _label_node: Label
+var _icon_texture_node: TextureRect
 var _hovered: bool = false
+var _long_press_timer: Timer = null
+var _long_press_active: bool = false
 var _draw_sb: StyleBoxFlat
 var _cached_variant_colors: Dictionary = {}
 
@@ -103,6 +138,14 @@ func _ready():
 	
 	super._ready()
 	
+	# Create texture icon overlay for custom shortcut/app icons
+	_icon_texture_node = TextureRect.new()
+	_icon_texture_node.name = "IconTexture"
+	_icon_texture_node.visible = false
+	_icon_texture_node.expand_mode = TextureRect.EXPAND_FIT_WIDTH
+	_icon_texture_node.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	add_child(_icon_texture_node)
+	
 	# Create label (M3Button doesn't have one)
 	_label_node = Label.new()
 	_label_node.name = "Label"
@@ -110,12 +153,21 @@ func _ready():
 	_label_node.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	add_child(_label_node)
 	
+	_update_icon()
 	_update_label()
 	_update_layout()
 	
 	# Track hover state via notifications (more reliable than signals)
 	focus_entered.connect(queue_redraw)
 	focus_exited.connect(queue_redraw)
+	
+	# Long-press timer for pinned shortcut removal menus
+	_long_press_timer = Timer.new()
+	_long_press_timer.name = "LongPressTimer"
+	_long_press_timer.wait_time = 0.6
+	_long_press_timer.one_shot = true
+	_long_press_timer.timeout.connect(_on_long_press_timeout)
+	add_child(_long_press_timer)
 	
 	# Clear native focus stylebox so focus ring is drawn only around the pill
 	add_theme_stylebox_override("focus", _shared_empty_stylebox)
@@ -125,7 +177,15 @@ func _ready():
 # ============================================
 
 func _get_size_spec() -> Dictionary:
-	return NAV_SIZE_SPECS[destination_layout]
+	var base = NAV_SIZE_SPECS[destination_layout]
+	return {
+		"height": base["height"],
+		"icon_size": COMPACT_ICON_SIZES[compact_level],
+		"radius": base["radius"],
+		"font_size": base["font_size"],
+		"padding_h": base["padding_h"],
+		"icon_gap": base["icon_gap"],
+	}
 
 func _update_theme():
 	super._update_theme()
@@ -167,11 +227,14 @@ func _get_variant_colors(selected: bool) -> Dictionary:
 func _invalidate_color_cache():
 	_cached_variant_colors.clear()
 
+func _get_icon_size_px() -> float:
+	return M3Units.dp(_get_size_spec()["icon_size"])
+
 func _update_icon_position():
-	if not _icon_node or not _icon_node.visible:
+	if not _icon_node:
 		return
 	
-	var icon_size_px = M3Units.dp(24)
+	var icon_size_px = _get_icon_size_px()
 	
 	if destination_layout == LayoutMode.VERTICAL:
 		# Check if label is visible
@@ -197,6 +260,37 @@ func _update_icon_position():
 			M3Units.dp(36),
 			size.y / 2.0 - icon_size_px / 2.0
 		)
+	
+	if _icon_texture_node:
+		_icon_texture_node.position = _icon_node.position
+		_icon_texture_node.size = Vector2(icon_size_px, icon_size_px)
+		_icon_texture_node.custom_minimum_size = Vector2(icon_size_px, icon_size_px)
+
+func _update_icon():
+	if not _icon_node or not _icon_texture_node:
+		return
+	
+	var had_icon = _icon_node.visible or _icon_texture_node.visible
+	
+	if destination_icon_texture:
+		# Keep icon node visible for layout/content-margin calculations, but blank
+		_icon_node.icon_settings.icon_name = ""
+		_icon_node.visible = true
+		_icon_texture_node.texture = destination_icon_texture
+		_icon_texture_node.visible = true
+	else:
+		_icon_texture_node.visible = false
+		_icon_texture_node.texture = null
+		if destination_icon:
+			_icon_node.icon_settings.icon_name = destination_icon
+			_icon_node.visible = true
+		else:
+			_icon_node.icon_settings.icon_name = ""
+			_icon_node.visible = false
+	
+	var has_icon = _icon_node.visible or _icon_texture_node.visible
+	if had_icon != has_icon:
+		_update_theme()
 
 func _get_text_alignment() -> HorizontalAlignment:
 	if destination_layout == LayoutMode.VERTICAL:
@@ -215,21 +309,22 @@ func _has_visible_label() -> bool:
 
 func _get_pill_rect() -> Rect2:
 	var has_label = _has_visible_label()
+	var icon_size_px = _get_icon_size_px()
 	
 	if destination_layout == LayoutMode.VERTICAL:
 		if has_label:
 			# Collapsed with label: 32×56dp pill centered behind icon
 			var pill_width = M3Units.dp(56)
 			var pill_height = M3Units.dp(32)
-			var icon_center_y = _icon_node.position.y + M3Units.dp(24) / 2.0
+			var icon_center_y = _icon_node.position.y + icon_size_px / 2.0
 			return Rect2(
 				Vector2((size.x - pill_width) / 2.0, icon_center_y - pill_height / 2.0),
 				Vector2(pill_width, pill_height)
 			)
 		else:
-			# Icon-only: 48×48dp circle centered behind icon
-			var indicator_size = M3Units.dp(48)
-			var icon_center = _icon_node.position + Vector2(M3Units.dp(24) / 2.0, M3Units.dp(24) / 2.0)
+			# Icon-only: circle sized to fit the (possibly compact) icon
+			var indicator_size = maxf(M3Units.dp(32), icon_size_px + M3Units.dp(16))
+			var icon_center = _icon_node.position + Vector2(icon_size_px / 2.0, icon_size_px / 2.0)
 			return Rect2(
 				Vector2(icon_center.x - indicator_size / 2.0, icon_center.y - indicator_size / 2.0),
 				Vector2(indicator_size, indicator_size)
@@ -241,7 +336,7 @@ func _get_pill_rect() -> Rect2:
 			var label_text_width = _label_node.get_minimum_size().x
 			if label_text_width <= 0:
 				label_text_width = _label_node.text.length() * M3Units.dp(8)
-			var content_width = M3Units.dp(24) + M3Units.dp(12) + label_text_width
+			var content_width = icon_size_px + M3Units.dp(12) + label_text_width
 			var pill_width = content_width + M3Units.dp(24)  # 12dp padding each side
 			var pill_start = M3Units.dp(24)  # Start 24dp from left
 			return Rect2(
@@ -249,10 +344,10 @@ func _get_pill_rect() -> Rect2:
 				Vector2(pill_width, pill_height)
 			)
 		else:
-			# Expanded icon-only: 48×48dp circle centered vertically at icon position
-			var indicator_size = M3Units.dp(48)
+			# Expanded icon-only: circle sized to fit the (possibly compact) icon
+			var indicator_size = maxf(M3Units.dp(32), icon_size_px + M3Units.dp(16))
 			var icon_center_y = size.y / 2.0
-			var icon_center_x = _icon_node.position.x + M3Units.dp(24) / 2.0
+			var icon_center_x = _icon_node.position.x + icon_size_px / 2.0
 			return Rect2(
 				Vector2(icon_center_x - indicator_size / 2.0, icon_center_y - indicator_size / 2.0),
 				Vector2(indicator_size, indicator_size)
@@ -264,8 +359,9 @@ func _get_pill_radius() -> float:
 		# Pill shape
 		return M3Units.dp(16) if destination_layout == LayoutMode.VERTICAL else M3Units.dp(24)
 	else:
-		# Circular (48×48 with 24dp radius)
-		return M3Units.dp(24)
+		# Circular (radius half of the scaled indicator)
+		var indicator_size = maxf(M3Units.dp(32), _get_icon_size_px() + M3Units.dp(16))
+		return indicator_size / 2.0
 
 func _draw_pill():
 	var rect = _get_pill_rect()
@@ -345,13 +441,14 @@ func _update_label():
 		return
 	
 	var show_label = false
-	match label_visibility:
-		M3Navigation.LabelVisibility.LABELED:
-			show_label = true
-		M3Navigation.LabelVisibility.SELECTED:
-			show_label = active
-		_:
-			show_label = false
+	if compact_level == CompactLevel.NONE:
+		match label_visibility:
+			M3Navigation.LabelVisibility.LABELED:
+				show_label = true
+			M3Navigation.LabelVisibility.SELECTED:
+				show_label = active
+			_:
+				show_label = false
 	
 	if destination_label and show_label:
 		_label_node.visible = true
@@ -393,6 +490,30 @@ func _update_label_position():
 # ============================================
 # NOTIFICATIONS
 # ============================================
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			accept_event()
+			context_menu_requested.emit()
+			return
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_long_press_active = false
+				_long_press_timer.start()
+			else:
+				_long_press_timer.stop()
+				if _long_press_active:
+					_long_press_active = false
+					accept_event()
+					return
+				_long_press_active = false
+		# Let M3Button handle left clicks / SubViewport workaround
+		super._gui_input(event)
+
+func _on_long_press_timeout() -> void:
+	_long_press_active = true
+	context_menu_requested.emit()
 
 func _notification(what: int):
 	match what:

@@ -2,25 +2,22 @@
 
 xemu save sync
 tst update flow on android
-clicking "outside" of card in list/carosel is annoying. 
 single screen is not single screen
 platform cards take longer on android
 some settings screens not scrollable?
+No scroll bar for small M3 menus.
+ui_select for nav desition menus
 
 better extraction notifications
 sync notif wasnt dismissed
 most snackbars should be non dismissable. especially pinned ones
 
-
 romm;
+- pin collections
 - mark 'played' if played
 - 'add to collection'
 - sort by played
 - sort by favorite? wishlist?
-
-## android
-	"app bar"
-	- ability to pin things to bar
 
 ## saves
 	implement argosy sigil

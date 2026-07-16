@@ -16,6 +16,32 @@ const MIN_ITEM_WIDTH := 80
 const MAX_ITEM_WIDTH := 168
 const MENU_BUTTON_WIDTH := 80  # 16 + 48 + 16
 
+# M3-aligned compact levels for crowded destinations.
+# Widths are the minimum per-item width needed at each level.
+const COMPACT_WIDTHS = {
+	M3NavigationDestination.CompactLevel.NONE: 80,
+	M3NavigationDestination.CompactLevel.ICON_ONLY: 56,
+	M3NavigationDestination.CompactLevel.SMALL: 48,
+	M3NavigationDestination.CompactLevel.EXTRA_SMALL: 40,
+	M3NavigationDestination.CompactLevel.BEST_FIT: 32,
+}
+
+const COMPACT_HEIGHTS = {
+	M3NavigationDestination.CompactLevel.NONE: 80,
+	M3NavigationDestination.CompactLevel.ICON_ONLY: 64,
+	M3NavigationDestination.CompactLevel.SMALL: 56,
+	M3NavigationDestination.CompactLevel.EXTRA_SMALL: 48,
+	M3NavigationDestination.CompactLevel.BEST_FIT: 48,
+}
+
+const COMPACT_ORDER = [
+	M3NavigationDestination.CompactLevel.NONE,
+	M3NavigationDestination.CompactLevel.ICON_ONLY,
+	M3NavigationDestination.CompactLevel.SMALL,
+	M3NavigationDestination.CompactLevel.EXTRA_SMALL,
+	M3NavigationDestination.CompactLevel.BEST_FIT,
+]
+
 # ============================================
 # EXPORTS
 # ============================================
@@ -31,6 +57,7 @@ var _items_container: HBoxContainer
 var _menu_wrapper: MarginContainer
 var _menu_button: M3IconButton
 var _footer_wrapper: MarginContainer
+var _current_compact_level: int = M3NavigationDestination.CompactLevel.NONE
 
 # ============================================
 # LIFECYCLE
@@ -94,7 +121,11 @@ func _update_dimensions():
 	if not _content_container:
 		return
 	
-	var height_px = M3Units.dp(HEIGHT_EXPANDED) if expanded else M3Units.dp(HEIGHT_COMPACT)
+	var height_px: int
+	if _current_compact_level == M3NavigationDestination.CompactLevel.NONE:
+		height_px = M3Units.dp(HEIGHT_EXPANDED) if expanded else M3Units.dp(HEIGHT_COMPACT)
+	else:
+		height_px = M3Units.dp(COMPACT_HEIGHTS[_current_compact_level])
 	custom_minimum_size.y = height_px
 	offset_top = -height_px
 	height_changed.emit(height_px)
@@ -208,6 +239,7 @@ func _rebuild_destinations():
 		# Create destination item
 		var item = M3NavigationDestination.new()
 		item.destination_icon = data.icon_name
+		item.destination_icon_texture = data.icon_texture
 		item.destination_label = data.label
 		item.destination_layout = target_layout
 		item.active = (i == selected_index)
@@ -238,6 +270,8 @@ func _update_destinations_in_place():
 		# Only update properties that changed
 		if item.destination_icon != data.icon_name:
 			item.destination_icon = data.icon_name
+		if item.destination_icon_texture != data.icon_texture:
+			item.destination_icon_texture = data.icon_texture
 		if item.destination_label != data.label:
 			item.destination_label = data.label
 		if item.disabled != data.disabled:
@@ -275,10 +309,40 @@ func _update_item_sizes():
 	var menu_width = M3Units.dp(MENU_BUTTON_WIDTH) if show_menu_button else 0
 	var footer_width = M3Units.dp(MENU_BUTTON_WIDTH) if footer_content else 0
 	var available_width = size.x - menu_width - footer_width
-	var ideal_width = available_width / _destination_items.size()
-	var item_width = clamp(ideal_width, M3Units.dp(MIN_ITEM_WIDTH), M3Units.dp(MAX_ITEM_WIDTH))
+	var count = _destination_items.size()
+	var ideal_width = available_width / count
+	
+	var chosen_level: int = M3NavigationDestination.CompactLevel.BEST_FIT
+	var item_width: float = ideal_width
+	
+	for level in COMPACT_ORDER:
+		var level_min = M3Units.dp(COMPACT_WIDTHS[level])
+		if level == M3NavigationDestination.CompactLevel.NONE:
+			# At full size, allow the bar to distribute extra space up to the M3 max.
+			if ideal_width >= level_min:
+				chosen_level = level
+				item_width = clampf(ideal_width, level_min, M3Units.dp(MAX_ITEM_WIDTH))
+				break
+		else:
+			# For compact levels, use the M3-aligned width if it fits exactly.
+			if available_width >= level_min * count:
+				chosen_level = level
+				item_width = level_min
+				break
+	
+	if chosen_level != _current_compact_level:
+		_current_compact_level = chosen_level
+		_update_dimensions()
+	
+	var height_px: int
+	if chosen_level == M3NavigationDestination.CompactLevel.NONE:
+		height_px = M3Units.dp(HEIGHT_EXPANDED) if expanded else M3Units.dp(HEIGHT_COMPACT)
+	else:
+		height_px = M3Units.dp(COMPACT_HEIGHTS[chosen_level])
 	
 	for item in _destination_items:
+		item.compact_level = chosen_level
+		item.custom_minimum_size.y = height_px
 		item.custom_minimum_size.x = item_width
 
 # ============================================

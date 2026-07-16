@@ -11,10 +11,39 @@ enum MenuGravity { TOP, CENTER, BOTTOM }
 # SIZE SPECS (all values in dp)
 # ============================================
 
-const WIDTH_COLLAPSED := 96
+const WIDTH_COLLAPSED := 80
 const WIDTH_EXPANDED := 220
+const WIDTH_ICON_ONLY := 56
+const WIDTH_SMALL := 48
+const WIDTH_EXTRA_SMALL := 40
+
 const ITEM_HEIGHT_COLLAPSED := 60
 const ITEM_HEIGHT_EXPANDED := 56
+
+# M3-aligned compact widths (collapsed mode) and heights for crowded rails.
+const COMPACT_WIDTHS = {
+	M3NavigationDestination.CompactLevel.NONE: 80,
+	M3NavigationDestination.CompactLevel.ICON_ONLY: 56,
+	M3NavigationDestination.CompactLevel.SMALL: 48,
+	M3NavigationDestination.CompactLevel.EXTRA_SMALL: 40,
+	M3NavigationDestination.CompactLevel.BEST_FIT: 32,
+}
+
+const COMPACT_HEIGHTS = {
+	M3NavigationDestination.CompactLevel.NONE: 0,
+	M3NavigationDestination.CompactLevel.ICON_ONLY: 56,
+	M3NavigationDestination.CompactLevel.SMALL: 48,
+	M3NavigationDestination.CompactLevel.EXTRA_SMALL: 40,
+	M3NavigationDestination.CompactLevel.BEST_FIT: 0,
+}
+
+const COMPACT_ORDER = [
+	M3NavigationDestination.CompactLevel.NONE,
+	M3NavigationDestination.CompactLevel.ICON_ONLY,
+	M3NavigationDestination.CompactLevel.SMALL,
+	M3NavigationDestination.CompactLevel.EXTRA_SMALL,
+	M3NavigationDestination.CompactLevel.BEST_FIT,
+]
 
 # ============================================
 # EXPORTS
@@ -59,6 +88,7 @@ var _header_nodes: Array[Node] = []
 var _header_labels: Array[Label] = []
 var _sectioned_items: Array[M3NavigationDestination] = []
 var _cached_items_height: float = 0.0
+var _current_compact_level: int = M3NavigationDestination.CompactLevel.NONE
 
 # ============================================
 # LIFECYCLE
@@ -123,7 +153,11 @@ func _update_dimensions():
 	if not _content_container or not _menu_wrapper:
 		return
 	
-	var width_px = M3Units.dp(WIDTH_EXPANDED) if expanded else M3Units.dp(WIDTH_COLLAPSED)
+	var width_px: int
+	if expanded:
+		width_px = M3Units.dp(WIDTH_EXPANDED)
+	else:
+		width_px = M3Units.dp(COMPACT_WIDTHS[_current_compact_level])
 	custom_minimum_size = Vector2(width_px, 0)
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	width_changed.emit(width_px)
@@ -143,6 +177,19 @@ func _update_dimensions():
 	
 	# Update content position in integrated mode
 	_update_content_position()
+	
+	# Update footer margins if footer content is present (width may have changed)
+	if footer_content and _footer_wrapper:
+		var footer_width_px = M3Units.dp(WIDTH_EXPANDED) if expanded else M3Units.dp(COMPACT_WIDTHS[_current_compact_level])
+		var footer_btn_size = M3Units.dp(48)
+		if expanded:
+			var footer_margin_left = M3Units.dp(24)
+			_footer_wrapper.add_theme_constant_override("margin_left", footer_margin_left)
+			_footer_wrapper.add_theme_constant_override("margin_right", footer_width_px - footer_margin_left - footer_btn_size)
+		else:
+			var footer_side_margin = (footer_width_px - footer_btn_size) / 2.0
+			_footer_wrapper.add_theme_constant_override("margin_left", footer_side_margin)
+			_footer_wrapper.add_theme_constant_override("margin_right", footer_side_margin)
 
 func _update_menu_button_state():
 	"""Update menu button visibility and position in the rail."""
@@ -165,6 +212,7 @@ func _update_menu_button_state():
 				_content_container.move_child(_menu_wrapper, _content_container.get_child_count() - 2)
 	
 	_update_menu_gravity()
+	_apply_compact_level()
 
 func _add_footer_content():
 	"""Add footer content to the rail's footer wrapper."""
@@ -179,7 +227,7 @@ func _add_footer_content():
 	_footer_wrapper.visible = true
 	
 	# Center horizontally in collapsed mode
-	var width_px = M3Units.dp(WIDTH_EXPANDED) if expanded else M3Units.dp(WIDTH_COLLAPSED)
+	var width_px = M3Units.dp(WIDTH_EXPANDED) if expanded else M3Units.dp(COMPACT_WIDTHS[_current_compact_level])
 	var btn_size = M3Units.dp(48)
 	if expanded:
 		var margin_left = M3Units.dp(24)
@@ -190,6 +238,7 @@ func _add_footer_content():
 		_footer_wrapper.add_theme_constant_override("margin_left", side_margin)
 		_footer_wrapper.add_theme_constant_override("margin_right", side_margin)
 	
+	_apply_compact_level()
 	_update_menu_gravity()
 
 func _apply_content_margins():
@@ -271,10 +320,79 @@ func _calculate_items_height() -> float:
 	_cached_items_height = total
 	return total
 
+func _get_available_items_height() -> float:
+	if not _content_container:
+		return 0.0
+	var top_spacer_h = _top_spacer.custom_minimum_size.y if _top_spacer else M3Units.dp(12)
+	var menu_h = M3Units.dp(48) if _menu_button else 0.0
+	var footer_h = M3Units.dp(72) if footer_content else 0.0
+	var bottom_spacer_h = M3Units.dp(12) if _bottom_spacer and _bottom_spacer.visible else 0.0
+	return maxf(0.0, size.y - top_spacer_h - menu_h - footer_h - bottom_spacer_h)
+
+func _get_default_item_height() -> float:
+	return M3Units.dp(ITEM_HEIGHT_EXPANDED) if expanded else M3Units.dp(ITEM_HEIGHT_COLLAPSED)
+
+func _compute_compact_level() -> int:
+	var count = _destination_items.size()
+	if count <= 0:
+		return M3NavigationDestination.CompactLevel.NONE
+	var available_height = _get_available_items_height()
+	if available_height <= 0:
+		return M3NavigationDestination.CompactLevel.BEST_FIT
+	
+	for level in COMPACT_ORDER:
+		if level == M3NavigationDestination.CompactLevel.NONE:
+			var default_height = _get_default_item_height()
+			if available_height >= default_height * count:
+				return level
+		elif level == M3NavigationDestination.CompactLevel.BEST_FIT:
+			return level
+		else:
+			var level_height = M3Units.dp(COMPACT_HEIGHTS[level])
+			if available_height >= level_height * count:
+				return level
+	
+	return M3NavigationDestination.CompactLevel.BEST_FIT
+
+func _apply_compact_level():
+	var level = _compute_compact_level()
+	if level != _current_compact_level:
+		_current_compact_level = level
+		_update_dimensions()
+	
+	var height_px: float
+	if level == M3NavigationDestination.CompactLevel.NONE:
+		height_px = _get_default_item_height()
+	elif level == M3NavigationDestination.CompactLevel.BEST_FIT:
+		var count = _destination_items.size()
+		var available_height = _get_available_items_height()
+		height_px = maxf(M3Units.dp(32), available_height / float(count)) if count > 0 else _get_default_item_height()
+	else:
+		height_px = M3Units.dp(COMPACT_HEIGHTS[level])
+	
+	var width_px: float
+	if expanded:
+		width_px = M3Units.dp(WIDTH_EXPANDED)
+	else:
+		width_px = M3Units.dp(COMPACT_WIDTHS[level])
+	
+	for item in _destination_items:
+		item.compact_level = level
+		item.custom_minimum_size.y = height_px
+		if expanded:
+			item.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		else:
+			item.custom_minimum_size.x = width_px
+			item.size_flags_horizontal = Control.SIZE_FILL
+	
+	_cached_items_height = 0.0
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		if menu_gravity == MenuGravity.CENTER:
 			_update_menu_gravity()
+		# Re-evaluate compact level when the rail resizes so the footer stays visible.
+		_apply_compact_level()
 
 # ============================================
 # DESTINATION MANAGEMENT (override)
@@ -349,18 +467,13 @@ func _rebuild_destinations():
 		
 		var item = M3NavigationDestination.new()
 		item.destination_icon = data.icon_name
+		item.destination_icon_texture = data.icon_texture
 		item.destination_label = data.label
 		item.destination_layout = M3NavigationDestination.LayoutMode.HORIZONTAL if expanded else M3NavigationDestination.LayoutMode.VERTICAL
 		item.active = (item_idx == selected_index)
 		item.disabled = data.disabled
 		item.label_visibility = _get_effective_label_visibility()
-		var height_px = M3Units.dp(ITEM_HEIGHT_EXPANDED) if expanded else M3Units.dp(ITEM_HEIGHT_COLLAPSED)
-		item.custom_minimum_size.y = height_px
-		if expanded:
-			item.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		else:
-			item.custom_minimum_size.x = M3Units.dp(WIDTH_COLLAPSED)
-			item.size_flags_horizontal = Control.SIZE_FILL
+		# Sizing is applied by _apply_compact_level below.
 		
 		if in_section:
 			_sectioned_items.append(item)
@@ -375,6 +488,8 @@ func _rebuild_destinations():
 	_bottom_flex_spacer = Control.new()
 	_bottom_flex_spacer.name = "BottomFlexSpacer"
 	_items_area.add_child(_bottom_flex_spacer)
+	
+	_apply_compact_level()
 	
 	if header_content and header_content.get_parent() == _content_container:
 		# Place header_content at end, but before BottomSpacer if menu is at END
@@ -419,6 +534,8 @@ func _update_destinations_in_place():
 			# Only update properties that changed
 			if item.destination_icon != data.icon_name:
 				item.destination_icon = data.icon_name
+			if item.destination_icon_texture != data.icon_texture:
+				item.destination_icon_texture = data.icon_texture
 			if item.destination_label != data.label:
 				item.destination_label = data.label
 			if item.disabled != data.disabled:
@@ -436,6 +553,8 @@ func _update_destinations_in_place():
 		
 		item_idx += 1
 	
+	_apply_compact_level()
+	
 	_cached_destinations = destinations.duplicate()
 	_cached_items_height = 0.0
 	_update_menu_gravity()
@@ -452,14 +571,9 @@ func _update_destinations_layout():
 	for item in _destination_items:
 		item.destination_layout = M3NavigationDestination.LayoutMode.HORIZONTAL if expanded else M3NavigationDestination.LayoutMode.VERTICAL
 		item.label_visibility = _get_effective_label_visibility()
-		# Size: collapsed fills width, expanded shrinks to content width
-		var height_px = M3Units.dp(ITEM_HEIGHT_EXPANDED) if expanded else M3Units.dp(ITEM_HEIGHT_COLLAPSED)
-		item.custom_minimum_size.y = height_px
-		if expanded:
-			item.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		else:
-			item.custom_minimum_size.x = M3Units.dp(WIDTH_COLLAPSED)
-			item.size_flags_horizontal = Control.SIZE_FILL
+		# Sizing is applied by _apply_compact_level below.
+	
+	_apply_compact_level()
 	
 	_cached_items_height = 0.0
 	_update_menu_gravity()

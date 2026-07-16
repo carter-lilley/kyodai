@@ -1031,6 +1031,16 @@ func _on_card_mouse_entered() -> void:
 			set_meta("mouse_hover_focus", true)
 			grab_focus()
 
+func _has_point(point: Vector2) -> bool:
+	# In Transparent and Media Only modes the visible card is only the media
+	# panel, so restrict the input hitbox to that region. This avoids launching
+	# when clicking in the empty text/background area surrounding the media.
+	if _display_mode != 1 and _display_mode != 2:
+		return Rect2(Vector2.ZERO, size).has_point(point)
+	if _media_bounds.size.x <= 0.0 or _media_bounds.size.y <= 0.0:
+		return Rect2(Vector2.ZERO, size).has_point(point)
+	return _media_bounds.has_point(point)
+
 func _input(event: InputEvent) -> void:
 	# Early-out for non-Android touch events — avoids _can_accept_focus() cost
 	# for the vast majority of input events on desktop/console.
@@ -1052,7 +1062,14 @@ func _input(event: InputEvent) -> void:
 	if SystemManager.platform.is_android() and event is InputEventScreenTouch:
 		if event.pressed:
 			var touch_pos = event.position
-			if get_global_rect().has_point(touch_pos):
+			var inside := false
+			if _display_mode == 1 or _display_mode == 2:
+				if _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
+					var local_pos: Vector2 = get_global_transform().affine_inverse() * touch_pos
+					inside = _media_bounds.has_point(local_pos)
+			else:
+				inside = get_global_rect().has_point(touch_pos)
+			if inside:
 				_touch_start_time = Time.get_ticks_msec() / 1000.0
 				_touch_start_pos = touch_pos
 				_touch_is_holding = true

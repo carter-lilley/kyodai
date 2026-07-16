@@ -482,6 +482,11 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 	"""Complete sync on main thread - safe for UI operations."""
 	print("[Sync] Completing on main thread...")
 
+	# Ensure the progress notification reaches 100% so it auto-dismisses.
+	if _sync_total == 0:
+		_sync_total = 1
+	_sync_current = _sync_total
+
 	# Flush any remaining batch notifications
 	_flush_batch_notifications()
 

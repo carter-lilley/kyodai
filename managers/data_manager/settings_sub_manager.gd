@@ -421,6 +421,8 @@ func apply_preset(preset: ThemePreset) -> bool:
 		"library_primary_color": preset.library_primary_color,
 		"dark_mode": preset.dark_mode,
 		"card_effect_config": preset.card_effect_config.duplicate(true),
+		# NOTE: nav_pinned_shortcuts is intentionally excluded from presets so
+		# theme changes never wipe the user’s pinned navigation items.
 	}
 	
 	for key in mapping:

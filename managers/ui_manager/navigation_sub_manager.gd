@@ -8,16 +8,19 @@ var _nav_type: int = 0  # 0 = Bar, 1 = Rail
 
 const NAV_DESTINATIONS = [
 	{"id": "home",      "label": "Home",      "icon": "home",     "view": "Home"},
-	{"id": "library",   "label": "Library",   "icon": "library",  "view": "Library"},
-	{"id": "downloads", "label": "Downloads", "icon": "download", "view": "Downloads"},
-	{"id": "shuffle",   "label": "Shuffle",   "icon": "shuffle",  "view": ""},
+	{"id": "library",   "label": "Library",   "icon": "shopping", "view": "Library"},
+	{"id": "shuffle",   "label": "Shuffle",   "icon": "dice-6",   "view": ""},
 ]
+
+const ADD_DESTINATION = {"id": "add", "label": "", "icon": "plus", "view": ""}
 
 var _last_nav_index: int = 0
 
 var _root_control: Control = null
 var _content_wrapper: Control = null
 var _inner_layout: BoxContainer = null
+
+var _add_menu: M3Menu = null
 
 # Feedback tracking for navigation sounds
 var _feedback_connected_viewport: Viewport = null
@@ -153,8 +156,19 @@ func _sync_nav_selection(view_name: String) -> void:
 	var nav_dests = _get_nav_destinations()
 	for i in range(nav_dests.size()):
 		if nav_dests[i].view == view_name:
-			_nav_node.selected_index = i
+			_set_nav_selected_index_no_signal(i)
 			break
+
+func _set_nav_selected_index_no_signal(index: int) -> void:
+	"""Set the nav selected index without re-firing destination_selected."""
+	if not _nav_node:
+		return
+	if _nav_node.destination_selected.is_connected(_on_nav_destination_selected):
+		_nav_node.destination_selected.disconnect(_on_nav_destination_selected)
+		_nav_node.selected_index = index
+		_nav_node.destination_selected.connect(_on_nav_destination_selected)
+	else:
+		_nav_node.selected_index = index
 
 func _rebuild_nav_and_layout() -> void:
 	"""Rebuild nav node and layout when type changes."""
@@ -311,7 +325,14 @@ func _create_nav_node() -> void:
 		d.id = dest.id
 		d.label = dest.label
 		d.icon_name = dest.icon
+		if dest.has("icon_data") and not dest.icon_data.is_empty():
+			var bytes = Marshalls.base64_to_raw(dest.icon_data)
+			if bytes.size() > 0:
+				var img = Image.new()
+				if img.load_png_from_buffer(bytes) == OK:
+					d.icon_texture = ImageTexture.create_from_image(img)
 		dest_data.append(d)
+
 	_nav_node.destinations = dest_data
 
 	# Connect selection signal
@@ -333,14 +354,39 @@ func _create_nav_node() -> void:
 	if not _nav_node.ready.is_connected(_on_nav_node_ready):
 		_nav_node.ready.connect(_on_nav_node_ready)
 
-func _get_nav_destinations() -> Array[Dictionary]:
-	"""Return the nav destinations that should be visible on this platform."""
+func _get_static_destinations() -> Array[Dictionary]:
+	"""Return the static nav destinations for this platform."""
 	var result: Array[Dictionary] = []
 	for dest in NAV_DESTINATIONS:
 		if dest.id == "shuffle" and SystemManager.platform.is_android():
 			continue
 		result.append(dest)
 	return result
+
+func _get_pinned_shortcuts() -> Array[Dictionary]:
+	"""Return the pinned shortcuts that should be visible on this platform."""
+	if not DataManager:
+		return []
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting or not (setting.value is Array):
+		return []
+	var result: Array[Dictionary] = []
+	var current_type := "app" if SystemManager.platform.is_android() else "program"
+	for item in setting.value:
+		if item is Dictionary and item.get("type") == current_type:
+			result.append(item)
+	return result
+
+func _get_nav_destinations() -> Array[Dictionary]:
+	"""Return the nav destinations that should be visible on this platform."""
+	var result: Array[Dictionary] = []
+	result.append_array(_get_static_destinations())
+	result.append_array(_get_pinned_shortcuts())
+	result.append(ADD_DESTINATION.duplicate())
+	return result
+
+func _is_pinned_destination(dest: Dictionary) -> bool:
+	return dest.get("type") in ["app", "program"]
 
 func _on_nav_node_ready() -> void:
 	"""Apply deferred nav node config now that _ready() has created internal UI."""
@@ -354,6 +400,19 @@ func _on_nav_node_ready() -> void:
 		_nav_node.remove_meta("_deferred_footer_content")
 	# If a theme refresh was queued while nav was rebuilding, apply it now
 	ui_manager.theme._trigger_refresh_if_pending()
+
+	# Restore the active static selection so the nav highlights the current tab.
+	_set_nav_selected_index_no_signal(clampi(_last_nav_index, 0, maxi(_get_static_destinations().size() - 1, 0)))
+
+	# Connect context menus for pinned shortcuts (right-click / long-press)
+	var nav_dests = _get_nav_destinations()
+	for i in range(min(_nav_node._destination_items.size(), nav_dests.size())):
+		var item = _nav_node._destination_items[i]
+		var dest = nav_dests[i]
+		if _is_pinned_destination(dest):
+			if not item.context_menu_requested.is_connected(_on_pinned_context_menu_requested):
+				item.context_menu_requested.connect(_on_pinned_context_menu_requested.bind(item, dest))
+
 	_setup_nav_focus_neighbors()
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
@@ -362,16 +421,155 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	if index < 0 or index >= nav_dests.size():
 		return
 
+	var static_count := _get_static_destinations().size()
+	var pin_count := _get_pinned_shortcuts().size()
 	var dest = nav_dests[index]
 	if dest.id == "shuffle":
 		# Restore previous nav selection so shuffle doesn't stay highlighted
-		if _nav_node:
-			_nav_node.selected_index = _last_nav_index
+		_set_nav_selected_index_no_signal(_last_nav_index)
 		ui_manager.show_shuffler_dialog()
+		return
+
+	if dest.id == "add":
+		var add_control := get_active_nav_destination()
+		_set_nav_selected_index_no_signal(_last_nav_index)
+		_show_add_menu(add_control)
+		return
+
+	if index >= static_count and index < static_count + pin_count:
+		# Pinned shortcut selected; keep static selection highlighted and launch.
+		_set_nav_selected_index_no_signal(_last_nav_index)
+		_launch_pinned_shortcut(dest)
 		return
 
 	_last_nav_index = index
 	ui_manager.switch_to_tab(dest.view)
+
+func _show_add_menu(anchor: Control) -> void:
+	"""Open the add-shortcut context menu anchored to the plus destination."""
+	if not anchor:
+		return
+	if _add_menu and is_instance_valid(_add_menu):
+		_add_menu.queue_free()
+	_add_menu = M3Menu.new()
+	_add_menu.add_item("Shortcut", _on_add_menu_item_selected, "expand-all")
+	_add_menu.popup(anchor)
+
+func _on_add_menu_item_selected() -> void:
+	"""Open the platform-appropriate shortcut picker."""
+	if SystemManager.platform.is_android():
+		_show_android_app_picker()
+	else:
+		_show_desktop_file_picker()
+
+func _show_desktop_file_picker() -> void:
+	UIManager.show_file_dialog(
+		"Select Shortcut",
+		PackedStringArray(["*.exe"]),
+		"",
+		_on_shortcut_file_selected
+	)
+
+func _on_shortcut_file_selected(path: String) -> void:
+	if path.is_empty():
+		return
+	var pin := {
+		"id": _generate_shortcut_id(),
+		"type": "program",
+		"label": path.get_file().get_basename(),
+		"icon": "application",
+		"data": {"path": path}
+	}
+	_add_pinned_shortcut(pin)
+
+func _show_android_app_picker() -> void:
+	var picker := AndroidAppPicker.new()
+	picker.app_selected.connect(_on_android_app_selected)
+	picker.show_overlay()
+
+func _on_android_app_selected(package_name: String, app_name: String, icon_base64: String) -> void:
+	var pin := {
+		"id": package_name,
+		"type": "app",
+		"label": app_name,
+		"icon": "application",
+		"icon_data": icon_base64,
+		"data": {"package": package_name}
+	}
+	_add_pinned_shortcut(pin)
+
+func _add_pinned_shortcut(pin: Dictionary) -> void:
+	"""Persist a new pinned shortcut and rebuild the navigation."""
+	if not DataManager:
+		return
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting:
+		return
+	var current: Array = setting.value if setting.value is Array else []
+	current.append(pin)
+	DataManager.set_setting(current, setting)
+	DataManager.save_settings()
+	_rebuild_nav_and_layout()
+
+func _generate_shortcut_id() -> String:
+	return "pin_%d_%d" % [Time.get_ticks_msec(), randi() % 100000]
+
+func _on_pinned_context_menu_requested(item: Control, dest: Dictionary) -> void:
+	_show_pin_context_menu(dest, item)
+
+func _show_pin_context_menu(dest: Dictionary, anchor: Control) -> void:
+	if _add_menu and is_instance_valid(_add_menu):
+		_add_menu.queue_free()
+	_add_menu = M3Menu.new()
+	_add_menu.add_item("Remove shortcut", _on_remove_pin_selected.bind(dest), "delete")
+	_add_menu.popup(anchor)
+
+func _on_remove_pin_selected(dest: Dictionary) -> void:
+	if not DataManager:
+		return
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting:
+		return
+	var current: Array = setting.value if setting.value is Array else []
+	var filtered: Array = []
+	var target_id = dest.get("id", "")
+	for pin in current:
+		if pin is Dictionary and pin.get("id", "") != target_id:
+			filtered.append(pin)
+	DataManager.set_setting(filtered, setting)
+	DataManager.save_settings()
+	_rebuild_nav_and_layout()
+
+func _launch_pinned_shortcut(dest: Dictionary) -> void:
+	if not dest.has("type") or not dest.has("data"):
+		return
+	
+	var type: String = dest.type
+	var data: Dictionary = dest.data
+	
+	if type == "program":
+		var path: String = data.get("path", "")
+		if path.is_empty():
+			return
+		var resolved := SystemManager.filesystem.resolve_native_path(path)
+		if resolved.to_lower().ends_with(".exe") or resolved.to_lower().ends_with(".bat") or resolved.to_lower().ends_with(".cmd"):
+			OS.create_process(resolved, [])
+		else:
+			OS.shell_open(resolved)
+		return
+	
+	if type == "app":
+		var package_name: String = data.get("package", "")
+		if package_name.is_empty():
+			return
+		if not Engine.has_singleton("PackageChecker"):
+			push_error("[NavigationManager] PackageChecker plugin not available")
+			return
+		var plugin = Engine.get_singleton("PackageChecker")
+		var success: bool = plugin.call("launchAppByPackageName", package_name)
+		if success and LaunchManager and LaunchManager.process:
+			LaunchManager.process.enter_background_state_android(null)
+		return
 
 func _setup_nav_focus_neighbors() -> void:
 	"""Block the one direction that leaks from nav into the game grid.
@@ -443,7 +641,7 @@ func find_nav_settings_button() -> Control:
 	return null
 
 func get_last_nav_destination() -> Control:
-	"""Find the last nav destination (e.g. Downloads)."""
+	"""Find the last nav destination (e.g. Library or the plus button)."""
 	if not _nav_node:
 		return null
 

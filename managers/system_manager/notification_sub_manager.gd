@@ -260,6 +260,10 @@ func _check_notifications() -> void:
 	var progress = _progress_entry.progress_callable.call()
 	if progress is float or progress is int:
 		var progress_f = float(progress)
+		if progress_f >= 1.0 and not _progress_entry.is_pinned:
+			dismiss_notification(_current_progress_id)
+			return
+
 		_current_progress_snackbar.set_progress_fraction(progress_f)
 
 		if _progress_entry.text_formatter.is_valid():

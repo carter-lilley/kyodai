@@ -10,14 +10,19 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
+import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Display;
@@ -32,12 +37,14 @@ import org.godotengine.godot.plugin.GodotPlugin;
 import org.godotengine.godot.plugin.SignalInfo;
 import org.godotengine.godot.plugin.UsedByGodot;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -139,6 +146,81 @@ public class PackageCheckerPlugin extends GodotPlugin {
             Log.d(TAG, "==========================================");
             return false;
         }
+    }
+    
+    @UsedByGodot
+    public String getInstalledLaunchableApps() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "getInstalledLaunchableApps() called");
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return "[]";
+        }
+        
+        try {
+            PackageManager pm = activity.getPackageManager();
+            Intent intent = new Intent(Intent.ACTION_MAIN);
+            intent.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> apps = pm.queryIntentActivities(intent, 0);
+            
+            org.json.JSONArray result = new org.json.JSONArray();
+            float density = activity.getResources().getDisplayMetrics().density;
+            int iconSize = Math.round(48 * density);
+            
+            for (ResolveInfo info : apps) {
+                String packageName = info.activityInfo.applicationInfo.packageName;
+                String name = info.loadLabel(pm).toString();
+                String iconBase64 = "";
+                
+                try {
+                    Drawable icon = info.loadIcon(pm);
+                    if (icon != null) {
+                        Bitmap bitmap = drawableToBitmap(icon);
+                        bitmap = Bitmap.createScaledBitmap(bitmap, iconSize, iconSize, true);
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos);
+                        byte[] bytes = baos.toByteArray();
+                        iconBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to load icon for " + packageName + ": " + e.getMessage());
+                }
+                
+                org.json.JSONObject app = new org.json.JSONObject();
+                app.put("name", name);
+                app.put("package", packageName);
+                app.put("icon", iconBase64);
+                result.put(app);
+            }
+            
+            Log.d(TAG, "Found " + result.length() + " launchable apps");
+            Log.d(TAG, "==========================================");
+            return result.toString();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR getting installed apps: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+            Log.e(TAG, "Stack trace: ");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            Log.d(TAG, "==========================================");
+            return "[]";
+        }
+    }
+    
+    private Bitmap drawableToBitmap(Drawable drawable) {
+        if (drawable instanceof BitmapDrawable) {
+            return ((BitmapDrawable) drawable).getBitmap();
+        }
+        int width = Math.max(1, drawable.getIntrinsicWidth());
+        int height = Math.max(1, drawable.getIntrinsicHeight());
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+        drawable.draw(canvas);
+        return bitmap;
     }
     
     /**
@@ -1604,6 +1686,42 @@ public class PackageCheckerPlugin extends GodotPlugin {
             
         } catch (Exception e) {
             Log.e(TAG, "ERROR launching intent: " + e.getMessage());
+            Log.e(TAG, "Stack trace: ");
+            for (StackTraceElement element : e.getStackTrace()) {
+                Log.e(TAG, "  at " + element.toString());
+            }
+            Log.d(TAG, "==========================================");
+            return false;
+        }
+    }
+    
+    @UsedByGodot
+    public boolean launchAppByPackageName(String packageName) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "launchAppByPackageName() called");
+        Log.d(TAG, "Package: " + packageName);
+        
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+        
+        try {
+            PackageManager pm = activity.getPackageManager();
+            Intent intent = pm.getLaunchIntentForPackage(packageName);
+            if (intent == null) {
+                Log.e(TAG, "No launch intent for package: " + packageName);
+                return false;
+            }
+            
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity.startActivity(intent);
+            
+            Log.d(TAG, "SUCCESS: App launched");
+            Log.d(TAG, "==========================================");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR launching app: " + e.getMessage());
             Log.e(TAG, "Stack trace: ");
             for (StackTraceElement element : e.getStackTrace()) {
                 Log.e(TAG, "  at " + element.toString());
