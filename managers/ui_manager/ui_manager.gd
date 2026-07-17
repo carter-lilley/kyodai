@@ -485,8 +485,7 @@ func _on_hero_game_changed(game: GameResource) -> void:
 		return
 
 	var current_view = view.get_current_view()
-	var current_view_name = current_view.view_name if current_view else ""
-	if current_view_name not in ["Home", "Library"]:
+	if not current_view or not current_view.supports_hero:
 		return
 
 	# Check if hero height is set to 0% (hidden)

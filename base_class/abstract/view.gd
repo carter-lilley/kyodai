@@ -8,6 +8,9 @@ signal hero_game_changed(game: GameResource)
 
 var view_name: String = ""
 
+# Whether focusing a game card in this view should update the hero image.
+var supports_hero: bool = true
+
 # Shared grid reference — subclasses set this via @onready
 var games_grid: VirtualScrollGridContainer = null
 

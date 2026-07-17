@@ -390,18 +390,8 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	if keyboard and keyboard.has_method("reconnect_viewport"):
 		keyboard.reconnect_viewport()
 
-	# Reconnect HomeView and LibraryView to new viewport after reparenting
-	var home_view = ui_manager.view.get_view("Home")
-	if home_view and home_view.has_method("reconnect_viewport"):
-		home_view.reconnect_viewport()
-
-	var library_view = ui_manager.view.get_view("Library")
-	if library_view and library_view.has_method("reconnect_viewport"):
-		library_view.reconnect_viewport()
-
-	# Reconnect all other views that support viewport reconnection
-	for view_name in ["Downloads", "Platforms"]:
-		var view = ui_manager.view.get_view(view_name)
+	# Reconnect all known views to the new viewport after reparenting
+	for view in ui_manager.view.get_all_views():
 		if view and view.has_method("reconnect_viewport"):
 			view.reconnect_viewport()
 
@@ -459,14 +449,10 @@ func _restore_ui_to_original_parents() -> void:
 	if keyboard and keyboard.has_method("reconnect_viewport"):
 		keyboard.reconnect_viewport()
 
-	# Reconnect HomeView and LibraryView to original viewport after restoring
-	var home_view = ui_manager.view.get_view("Home")
-	if home_view and home_view.has_method("reconnect_viewport"):
-		home_view.reconnect_viewport()
-
-	var library_view = ui_manager.view.get_view("Library")
-	if library_view and library_view.has_method("reconnect_viewport"):
-		library_view.reconnect_viewport()
+	# Reconnect all known views to the original viewport after restoring
+	for view in ui_manager.view.get_all_views():
+		if view and view.has_method("reconnect_viewport"):
+			view.reconnect_viewport()
 
 	# Reconnect feedback handlers to original viewport
 	ui_manager.navigation._reconnect_feedback_viewport()

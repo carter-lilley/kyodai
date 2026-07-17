@@ -422,6 +422,9 @@ func get_view(view_name: String) -> View:
 		return _views[view_name]
 	return null
 
+func get_all_views() -> Array[View]:
+	return _views.values()
+
 func switch_to_tab(tab_name: String):
 	var idx = _get_tab_index(tab_name)
 	if idx != -1:
