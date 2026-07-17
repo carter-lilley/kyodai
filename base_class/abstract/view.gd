@@ -36,7 +36,13 @@ func _ready():
 
 func on_view_show():
 	view_shown.emit()
-	# Check if view needs to be rebuilt before showing
+	# Hidden views can have a stale or zero grid size when shown. Run a single
+	# deterministic layout recalc now so the grid is settled against the real
+	# available rect, unless a full rebuild is already pending.
+	if not needs_rebuild and games_grid and UIManager:
+		var available_size = UIManager.compute_grid_available_size(games_grid, self)
+		games_grid.recalculate_layout_with_size(available_size)
+	# Check if view needs to be rebuilt before showing (e.g. data/effect refresh).
 	check_and_rebuild_if_needed()
 
 func on_view_hide():

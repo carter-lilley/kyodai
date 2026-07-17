@@ -214,9 +214,9 @@ func _rebuild_nav_and_layout() -> void:
 	ui_manager.layout_changed.emit("bar" if is_bar else "rail")
 
 	# Reparenting ContentWrapper changes the grid's available size without a
-	# viewport resize, so SystemManager.display won't fire its resize signal. Refresh
-	# the current view's grid once the new layout has settled.
-	call_deferred("_refresh_current_view_grid")
+	# viewport resize, so SystemManager.display won't fire its resize signal.
+	# The actual grid refresh is deferred to _refresh_nav_layout() so it runs
+	# after the nav node has finalized its dimensions and compact level.
 	# Layout rebuild may create/reparent focusable controls; re-apply focus lock.
 	ui_manager.call_deferred("refresh_focus_lock_state")
 	# The nav node may have been sized before its parent assigned a real width;
@@ -228,6 +228,7 @@ func _refresh_current_view_grid() -> void:
 
 	Reparenting ContentWrapper changes the grid's available size without a
 	viewport resize, so the grid's SystemManager.display-driven recalc won't fire.
+	We compute the expected available size deterministically and recalc once.
 	The hidden Home/Library view is marked for rebuild so it also recalculates
 	when next shown."""
 	if not ui_manager or not ui_manager.view:
@@ -238,22 +239,10 @@ func _refresh_current_view_grid() -> void:
 		return
 
 	var grid = current_view.games_grid
-	if grid.size.x <= 0 or grid.size.y <= 0:
-		# Layout hasn't settled yet; retry a few times.
-		if not has_meta("_nav_rebuild_retry_count"):
-			set_meta("_nav_rebuild_retry_count", 0)
-		var retry_count = get_meta("_nav_rebuild_retry_count")
-		if retry_count < 5:
-			set_meta("_nav_rebuild_retry_count", retry_count + 1)
-			call_deferred("_refresh_current_view_grid")
-		else:
-			set_meta("_nav_rebuild_retry_count", 0)
-		return
+	var available_size = ui_manager.compute_grid_available_size(grid, current_view)
+	grid.recalculate_layout_with_size(available_size)
 
-	set_meta("_nav_rebuild_retry_count", 0)
-	grid.refresh_dimensions()
-
-	# Mark the other grid-bearing view for rebuild so it recalculates when shown.
+	# Mark the other grid-bearing views for rebuild so they recalculate when shown.
 	for view_name in ["Home", "Library"]:
 		if view_name == current_view.view_name:
 			continue
@@ -278,14 +267,19 @@ func _refresh_nav_layout() -> void:
 	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
 		_inner_layout.queue_sort()
 
+	# Refresh the current grid now that the nav node has finalized its size and
+	# the layout has been queued to sort. This ensures the grid computes its
+	# available size from the final nav dimensions rather than a transient value.
+	_refresh_current_view_grid()
+
 func refresh_for_screen_swap() -> void:
 	"""Public entry point called from main.gd after a dual-screen swap.
 
 	Recomputes the nav layout and forces the current grid to refresh so the UI
-	matches the new SubViewport size after the swap has settled."""
+	matches the new SubViewport size after the swap has settled. The grid refresh
+	is handled inside _refresh_nav_layout()."""
 	print("[NavigationManager] refresh_for_screen_swap")
 	_refresh_nav_layout()
-	_refresh_current_view_grid()
 	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
 		_inner_layout.queue_sort()
 

@@ -99,6 +99,16 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name in ["hide_games_without_covers", "fold_romm_siblings"]:
 		_load_total_count(false)
 
+func _refresh_grid_dimensions() -> void:
+	"""Recalculate grid layout using the deterministic available size."""
+	if not games_grid:
+		return
+	if UIManager:
+		var available_size = UIManager.compute_grid_available_size(games_grid, self)
+		games_grid.recalculate_layout_with_size(available_size)
+	else:
+		games_grid.refresh_dimensions()
+
 func _load_total_count(preserve_cache: bool = false) -> void:
 	if collection_id == 0:
 		return
@@ -114,7 +124,8 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 				_is_loading = false
 				return
 			_total_games = count
-			games_grid.set_total_count(count, preserve_cache)
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 			if count == 0:
 				_update_status("No games in this collection")
 			else:
@@ -176,12 +187,12 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 	
 	if refresh_effects:
 		if preserve_data:
-			games_grid.refresh_dimensions()
+			_refresh_grid_dimensions()
 			games_grid.refresh_all_card_effects(true)
 		else:
 			_load_total_count(false)
 	else:
-		games_grid.refresh_dimensions()
+		_refresh_grid_dimensions()
 		if preserve_data:
 			games_grid._request_missing_data()
 		else:

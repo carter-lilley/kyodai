@@ -4,17 +4,17 @@ xemu save sync
 tst update flow on android
 single screen is not single screen
 focus after applying theme (or other dialogues)
-gradient too dark in light themes
 
+are platforms off by default?
 platform cards take longer on android
 some settings screens not scrollable?
 
 applying theme wrong size in grid
 swapping screens wrong size in grid
 grid collapse after sync
-grid scroll 'centering'  weird
 grid collpase when adding/removing pinned collection
 
+grid scroll 'centering'  weird
 better extraction notifications
 
 romm;

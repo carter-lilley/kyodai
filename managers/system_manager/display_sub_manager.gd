@@ -305,7 +305,14 @@ func _on_screens_swapped(_swapped: bool) -> void:
 		call_deferred("_emit_swap_resize_notification")
 
 func _emit_swap_resize_notification() -> void:
+	# In dual-screen SubViewport mode, emit the active MainViewport size, not the
+	# root viewport size, so consumers that read the signal parameter see the
+	# rectangle the grid actually occupies.
 	var viewport = get_viewport()
+	if UIManager and UIManager.dual_screen:
+		var sub = UIManager.dual_screen.get_main_viewport()
+		if sub:
+			viewport = sub
 	if viewport:
 		_viewport_size = viewport.size
 		viewport_size_changed.emit(_viewport_size)

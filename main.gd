@@ -34,7 +34,6 @@ const ZOOM_SAVE_DELAY_MS: int = 1500
 # M3 Theme resource (applied to root for fallback native control styling)
 var _m3_theme: Theme = null
 
-const CollectionView = preload("res://view/collection_view.gd")
 
 func _enter_tree():
 	# Set the global startup suppression flag as early as possible so that every
@@ -179,8 +178,8 @@ func _ready():
 			# Use a deterministic computed size rather than relying on grid.size, which
 			# may not have caught up to the post-swap viewport yet.
 			var grid_settle_start_us := Time.get_ticks_usec()
-			var available_size := _compute_grid_available_size(grid)
-			grid.set_startup_available_size(available_size)
+			var available_size := UIManager.compute_grid_available_size(grid, current_view)
+			grid.set_deterministic_available_size(available_size)
 			grid._instantiate_card_pool()
 			grid.settle_startup_with_buffer(0)
 			grids_to_clear.append(grid)
@@ -201,7 +200,7 @@ func _ready():
 		if grid:
 			_save_zoom_ratio(grid.target_card_width_ratio)
 	for grid in grids_to_clear:
-		grid.clear_startup_available_size()
+		grid.clear_deterministic_available_size()
 	print("[Main] Settle block total elapsed_us=", Time.get_ticks_usec() - settle_start_us)
 
 	# Sync the top background mask height to match the control bar.
@@ -222,6 +221,7 @@ func _ready():
 		# Defer a single update so the toolbar has a chance to size itself; this
 		# avoids blocking _ready() while waiting for process frames.
 		_update_mask_height.call_deferred()
+		_update_controlbar_mask_color()
 	print("[Main] mask setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Extract native binaries on Android (non-blocking, happens in background)
@@ -272,6 +272,19 @@ func _benchmark_shutdown() -> void:
 func _set_startup_zoom_sync_active(value: bool) -> void:
 	_startup_zoom_sync_active = value
 
+func _update_controlbar_mask_color() -> void:
+	var mask = content_wrapper.get_node_or_null("controlbar_mask")
+	if mask and mask.material:
+		var surface := M3Theme.get_surface()
+		var accent := M3Theme.get_primary()
+		# Use accent hue, but keep the surface's value and only borrow a small
+		# amount of accent saturation so the fade stays subtle in light modes.
+		var h := accent.h
+		var s: float = lerp(surface.s, accent.s, 0.08)
+		var v := surface.v * 0.85
+		var fade_color := Color.from_hsv(h, s, v)
+		mask.material.set_shader_parameter("fade_color", fade_color)
+
 func _apply_m3_theme() -> void:
 	_m3_theme = M3Theme.generate_theme()
 	self.theme = _m3_theme
@@ -279,6 +292,7 @@ func _apply_m3_theme() -> void:
 func refresh_theme() -> void:
 	# Called by UIManager when theme colors change (dark mode, primary color, etc.)
 	_apply_m3_theme()
+	_update_controlbar_mask_color()
 
 func _show_oobe_wizard_if_needed():
 	var first_run_setting = DataManager.get_setting("first_run_completed")
@@ -765,93 +779,8 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 		return view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
 	return null
 
-func _compute_grid_available_size(grid: VirtualScrollGridContainer) -> Vector2:
-	"""Compute the expected available rect for a grid from the active viewport.
-
-	This mirrors the container layout that Godot will apply once sizes propagate
-	through MarginContainer/VBoxContainer/TabContainer, so the grid can be settled
-	synchronously without waiting for grid.size to update.
-	"""
-	var start_us := Time.get_ticks_usec()
-	# Resolve the active viewport: SubViewport in dual-screen mode, root viewport otherwise.
-	var active_viewport: Viewport = get_viewport()
-	if UIManager.dual_screen:
-		var sub: Viewport = UIManager.dual_screen.get_main_viewport()
-		if sub:
-			active_viewport = sub
-
-	# In SubViewport dual-screen mode, controls see the 2D override size, not the physical size.
-	var viewport_size: Vector2i
-	if active_viewport is SubViewport:
-		var sub: SubViewport = active_viewport as SubViewport
-		viewport_size = sub.size_2d_override if sub.size_2d_override != Vector2i.ZERO else sub.size
-	else:
-		viewport_size = active_viewport.size
-
-	# Compute the grid area from the viewport, subtracting the UI chrome that
-	# occupies space around the grid: outer margins, the navigation bar/rail,
-	# the toolbar, and the VBox separation.
-	var margin: int = int(M3Units.dp(16))
-	var available_width := maxf(1.0, viewport_size.x - margin * 2)
-	var available_height := maxf(1.0, viewport_size.y - margin * 2)
-
-	var nav_bar_h: float = 0.0
-	var nav_bar_w: float = 0.0
-	if UIManager and UIManager.navigation:
-		var nav_node = UIManager.navigation._nav_node
-		if is_instance_valid(nav_node):
-			if nav_node is M3NavigationBar:
-				nav_bar_h = maxf(nav_node.size.y, nav_node.custom_minimum_size.y)
-				if nav_bar_h <= 0:
-					nav_bar_h = M3Units.dp(M3NavigationBar.HEIGHT_COMPACT)
-				available_height -= nav_bar_h
-			elif nav_node is M3NavigationRail:
-				nav_bar_w = maxf(nav_node.size.x, nav_node.custom_minimum_size.x)
-				if nav_bar_w <= 0:
-					nav_bar_w = M3Units.dp(M3NavigationRail.WIDTH_COLLAPSED)
-				available_width -= nav_bar_w
-
-	# The controlbar takes its minimum height from the top of the VBoxContainer.
-	# Use the larger of the toolbar's minimum size and its current size, because
-	# get_combined_minimum_size() may not yet include final theme/margin heights
-	# during the first layout pass.
-	var toolbar_effective_h: float = 0.0
-	if toolbar:
-		var toolbar_min_h = toolbar.get_combined_minimum_size().y
-		var toolbar_size_h = toolbar.size.y
-		toolbar_effective_h = maxf(toolbar_min_h, toolbar_size_h)
-		available_height -= toolbar_effective_h
-
-	# The toolbar sits inside a VBoxContainer; subtract the separation between it
-	# and the TabContainer below so the grid size matches the TabContainer area.
-	if main_content_vbox:
-		var vbox_separation = main_content_vbox.get_theme_constant("separation")
-		available_height -= vbox_separation
-
-	# The grid lives inside a TabContainer. Even when tabs are hidden, the
-	# panel stylebox may reserve content margins, but the current theme does not
-	# reserve any (margins are -1), so no extra subtraction is needed here.
-
-	# LibraryView has a platform indicator above the grid. It defers its own
-	# responsive layout, so trigger it with the computed width so its minimum
-	# height is known before we subtract it.
-	var view: Node = grid.get_parent().get_parent().get_parent()
-	if view is LibraryView:
-		var platform_indicator: Control = view.get_node_or_null("MarginContainer/VBoxContainer/PlatformIndicator")
-		if platform_indicator:
-			platform_indicator.size.x = available_width
-			if platform_indicator.has_method("_apply_responsive_layout"):
-				platform_indicator._apply_responsive_layout()
-			available_height -= platform_indicator.get_combined_minimum_size().y
-	elif view is CollectionView:
-		var title_label: Control = view.get_node_or_null("MarginContainer/VBoxContainer/CollectionTitle")
-		if title_label:
-			title_label.size.x = available_width
-			available_height -= title_label.get_combined_minimum_size().y
-
-	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
-	print("[Main] _compute_grid_available_size: view=", view.view_name if view is View else "unknown", " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
-	return result
+# Grid available-size computation now lives in UIManager so it can be reused at
+# startup, on tab changes, after nav rebuilds, after sync, and after screen swaps.
 
 func _load_and_apply_saved_zoom() -> void:
 	"""Apply the saved zoom setting to both grids and sync the slider.

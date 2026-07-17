@@ -140,7 +140,8 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			_merged_cache_dirty = true
 		
 		phase_start_us = Time.get_ticks_usec()
-		games_grid.set_total_count(_total_games, preserve_cache)
+		var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+		games_grid.set_total_count_with_available_size(_total_games, available_size, preserve_cache)
 		print("[HomeView] games_grid.set_total_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 		
 		# Only log when the count actually changes to avoid startup noise.
@@ -185,7 +186,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 				_merged_cache_end = 0
 				_merged_cache_dirty = true
 			
-			games_grid.set_total_count(_total_games, preserve_cache)
+			games_grid.set_total_count_with_available_size(_total_games, UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO, preserve_cache)
 			
 			# Only log when the count actually changes to avoid startup noise.
 			if _total_games != _last_logged_total_games:
@@ -421,23 +422,21 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 	if refresh_effects:
 		# Effect configuration changed.
 		if preserve_data:
-			games_grid.refresh_dimensions()
+			_refresh_grid_dimensions()
 			games_grid.refresh_all_card_effects(true)
 		elif _total_count_load_pending:
 			# A count load is already in flight; just refresh dimensions for now.
-			games_grid.refresh_dimensions()
+			_refresh_grid_dimensions()
 		else:
 			# Use callback version to ensure dimensions refresh BEFORE rebuilding
 			# effects, so cards are rebuilt against final bounds.
 			_load_total_count_with_callback(false, func():
-				# Refresh dimensions first to establish final card bounds.
-				games_grid.refresh_dimensions()
-				# Then refresh existing cards.
+				_refresh_grid_dimensions()
 				games_grid.refresh_all_card_effects(true)
 			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
-		games_grid.refresh_dimensions()
+		_refresh_grid_dimensions()
 		if preserve_data:
 			if not _total_count_load_pending:
 				_load_total_count(true, true)
@@ -487,7 +486,7 @@ func _on_game_launched(game: GameResource):
 	# Reload data to get new sort order (don't preserve cache), then refresh dimensions
 	# Don't reload GameNative games - we just updated the cache with new timestamps
 	_load_total_count_with_callback(false, func():
-		games_grid.refresh_dimensions()
+		_refresh_grid_dimensions()
 	, false)
 
 func _on_gamenative_games_updated():
@@ -528,7 +527,8 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 				_merged_cache_end = 0
 				_merged_cache_dirty = true
 			
-			games_grid.set_total_count(_total_games, preserve_cache)
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(_total_games, available_size, preserve_cache)
 			
 			if _total_games == 0:
 				_update_status("No downloaded games found")
@@ -542,6 +542,16 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 			if on_complete.is_valid():
 				on_complete.call()
 	)
+
+func _refresh_grid_dimensions() -> void:
+	"""Recalculate grid layout using the deterministic available size."""
+	if not games_grid:
+		return
+	if UIManager:
+		var available_size = UIManager.compute_grid_available_size(games_grid, self)
+		games_grid.recalculate_layout_with_size(available_size)
+	else:
+		games_grid.refresh_dimensions()
 
 func _input(event: InputEvent) -> void:
 	"""Handle random-game input when this view is active."""
@@ -642,7 +652,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 					
 					# Force refresh the grid (don't preserve cache to remove the deleted game)
 					_load_total_count_with_callback(false, func():
-						games_grid.refresh_dimensions()
+						_refresh_grid_dimensions()
 						
 						# Re-enable grid interaction
 						if games_grid:

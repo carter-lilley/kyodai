@@ -331,13 +331,14 @@ var _last_layout_focused_card_size: Vector2 = Vector2.ZERO
 var _last_layout_grid_separation: int = -1
 var _last_layout_available_size: Vector2 = Vector2.ZERO
 
-# Deterministic startup size: when set, _get_available_size() returns this value
-# instead of grid.size so the first layout can happen before Godot propagates
-# container sizes to the grid.
-var _startup_available_size: Vector2 = Vector2.ZERO
+# Deterministic available size: when set, _get_available_size() returns this value
+# instead of grid.size so layout can be computed before Godot propagates
+# container sizes through the scene tree. Main, UIManager, and views set this
+# explicitly at startup and at every layout-affecting transition.
+var _deterministic_available_size: Vector2 = Vector2.ZERO
 
 func _has_valid_available_size() -> bool:
-	return (_startup_available_size.x > 0.0 and _startup_available_size.y > 0.0) or (size.x > 0 and size.y > 0)
+	return (_deterministic_available_size.x > 0.0 and _deterministic_available_size.y > 0.0) or (size.x > 0 and size.y > 0)
 
 var _last_layout_display_mode: int = -1
 var _last_layout_media_aspect_ratio: int = -1
@@ -485,12 +486,12 @@ func _get_focus_scale_inverted() -> bool:
 	return view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL
 
 func _get_available_size() -> Vector2:
-	# During deterministic startup, use the size supplied by Main rather than the
-	# grid's own size, which may not reflect the final container size yet.
-	if _startup_available_size.x > 0.0 and _startup_available_size.y > 0.0:
+	# During deterministic sizing, use the size supplied by Main/UIManager rather
+	# than the grid's own size, which may not reflect the final container size yet.
+	if _deterministic_available_size.x > 0.0 and _deterministic_available_size.y > 0.0:
 		if debug_mode:
-			print("[Grid] _get_available_size: using startup available size=", _startup_available_size)
-		return _startup_available_size
+			print("[Grid] _get_available_size: using deterministic available size=", _deterministic_available_size)
+		return _deterministic_available_size
 
 	var result = Vector2(maxf(size.x, 1.0), maxf(size.y, 1.0))
 	if debug_mode:
@@ -791,7 +792,14 @@ func _on_resize_debounced():
 	_last_resized_size = Vector2(size.x, size.y)
 
 	# Re-snap zoom ratio to a valid stop for the new available size and recalculate once.
+	# Use the deterministic available size when possible so the snap is based on
+	# the viewport and chrome, not on the grid's possibly-stale local size.
+	var available := Vector2.ZERO
+	if UIManager:
+		available = UIManager.compute_grid_available_size(self, null)
+	set_deterministic_available_size(available if available.x > 0 and available.y > 0 else _get_available_size())
 	target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
+	clear_deterministic_available_size()
 
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
@@ -1619,15 +1627,31 @@ func _compute_expected_card_size(available: Vector2) -> Vector2:
 			return Vector2(base_dims.x * current_zoom, available.y / focus_scale)
 	return base_dims
 
-# Deterministic startup sizing: Main computes the final available rect from the
-# viewport and container constants, then passes it here so the first layout can
-# run before Godot finishes propagating sizes through the scene tree.
-func set_startup_available_size(available: Vector2) -> void:
-	_startup_available_size = Vector2(maxf(available.x, 1.0), maxf(available.y, 1.0))
-	print("[Grid] set_startup_available_size: ", _startup_available_size)
+# Deterministic sizing: callers (Main, UIManager, views) compute the expected
+# available rect from the viewport and container constants, then pass it here so
+# layout can run in a single pass without waiting for Godot's deferred size
+# propagation.
+func set_deterministic_available_size(available: Vector2) -> void:
+	_deterministic_available_size = Vector2(maxf(available.x, 1.0), maxf(available.y, 1.0))
+	print("[Grid] set_deterministic_available_size: ", _deterministic_available_size)
 
-func clear_startup_available_size() -> void:
-	_startup_available_size = Vector2.ZERO
+func clear_deterministic_available_size() -> void:
+	_deterministic_available_size = Vector2.ZERO
+
+func recalculate_layout_with_size(available: Vector2) -> void:
+	"""Run a single deterministic layout pass using the supplied available size."""
+	set_deterministic_available_size(available)
+	refresh_dimensions()
+	clear_deterministic_available_size()
+
+func set_total_count_with_available_size(count: int, available: Vector2, preserve_cache: bool = false) -> void:
+	"""Set the total item count using a deterministic available size.
+
+	Use this instead of set_total_count() when the grid's own size may not yet
+	reflect the final container rect (e.g. after a tab change or data reload)."""
+	set_deterministic_available_size(available)
+	set_total_count(count, preserve_cache)
+	clear_deterministic_available_size()
 
 func set_total_count(count: int, preserve_cache: bool = false):
 	var count_changed = _total_items != count
@@ -2590,6 +2614,15 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	_margin_container.add_theme_constant_override("margin_left", 0)
 	_margin_container.add_theme_constant_override("margin_right", 0)
 	_flow_container.custom_minimum_size = Vector2(0, 0)
+	# Invalidate the layout input cache so the following _recalculate_layout()
+	# cannot early-exit and leave the FlowContainer at zero size. This matters
+	# when a buffer refresh happens while total count and geometry are unchanged
+	# (e.g. after sync completes), because the cache check would otherwise skip
+	# the pass that restores custom_minimum_size.
+	_last_layout_available_size = Vector2.ZERO
+	_last_layout_total_items = -1
+	_last_layout_card_size = Vector2.ZERO
+	_last_layout_focused_card_size = Vector2.ZERO
 	_virtual_start = 0
 	_virtual_end = 0
 

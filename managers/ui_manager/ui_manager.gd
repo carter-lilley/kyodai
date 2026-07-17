@@ -3,6 +3,9 @@ extends Manager
 # UIManager - Facade for UI orchestration.
 # Child managers own views, navigation, hero/background, overlays, theme, and dual-screen logic.
 
+const LibraryView = preload("res://view/library_view.gd")
+const CollectionView = preload("res://view/collection_view.gd")
+
 @onready var view = $ViewSubManager
 @onready var navigation = $NavigationSubManager
 @onready var overlay = $OverlaySubManager
@@ -177,6 +180,94 @@ func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	layout.add_theme_constant_override("separation", 0)
 
 	return layout
+
+func compute_grid_available_size(grid: VirtualScrollGridContainer, view: Control = null) -> Vector2:
+	"""Compute the expected available rect for a grid from the active viewport.
+
+	This mirrors the container layout that Godot will apply once sizes propagate
+	through MarginContainer/VBoxContainer/TabContainer, so the grid can be settled
+	synchronously without waiting for grid.size to update.
+	"""
+	var start_us := Time.get_ticks_usec()
+
+	# Resolve the active viewport: SubViewport in dual-screen mode, root viewport otherwise.
+	var active_viewport: Viewport = get_viewport()
+	if dual_screen:
+		var sub: Viewport = dual_screen.get_main_viewport()
+		if sub:
+			active_viewport = sub
+
+	# In SubViewport dual-screen mode, controls see the 2D override size, not the physical size.
+	var viewport_size: Vector2i
+	if active_viewport is SubViewport:
+		var sub: SubViewport = active_viewport as SubViewport
+		viewport_size = sub.size_2d_override if sub.size_2d_override != Vector2i.ZERO else sub.size
+	else:
+		viewport_size = active_viewport.size
+
+	# Subtract the outer margins that wrap MainContentVBox.
+	var margin: int = int(M3Units.dp(16))
+	var available_width := maxf(1.0, viewport_size.x - margin * 2)
+	var available_height := maxf(1.0, viewport_size.y - margin * 2)
+
+	# Subtract navigation bar/rail dimensions.
+	# Use the node's intended minimum size rather than its actual size, because
+	# during nav rebuilds the actual size can be transiently inflated (e.g.
+	# when a pinned collection is removed and the bar is recreated).
+	if navigation:
+		var nav_node = navigation._nav_node
+		if is_instance_valid(nav_node):
+			if nav_node is M3NavigationBar:
+				var nav_bar_h = nav_node.custom_minimum_size.y
+				if nav_bar_h <= 0:
+					nav_bar_h = M3Units.dp(M3NavigationBar.HEIGHT_COMPACT)
+				available_height -= nav_bar_h
+			elif nav_node is M3NavigationRail:
+				var nav_bar_w = nav_node.custom_minimum_size.x
+				if nav_bar_w <= 0:
+					nav_bar_w = M3Units.dp(M3NavigationRail.WIDTH_COLLAPSED)
+				available_width -= nav_bar_w
+
+	# Subtract the toolbar/controlbar height.
+	var toolbar_effective_h: float = 0.0
+	if _main_content_vbox:
+		var toolbar = _main_content_vbox.get_node_or_null("controlbar_background")
+		if toolbar:
+			var toolbar_min_h = toolbar.get_combined_minimum_size().y
+			var toolbar_size_h = toolbar.size.y
+			toolbar_effective_h = maxf(toolbar_min_h, toolbar_size_h)
+			available_height -= toolbar_effective_h
+
+	# Subtract VBox separation between toolbar and TabContainer.
+	if _main_content_vbox:
+		var vbox_separation = _main_content_vbox.get_theme_constant("separation")
+		available_height -= vbox_separation
+
+	# View-specific chrome above the grid.
+	if view == null and grid != null:
+		var current: Node = grid
+		for i in range(3):
+			if current == null:
+				break
+			current = current.get_parent()
+		view = current as Control
+
+	if view is LibraryView:
+		var platform_indicator: Control = view.get_node_or_null("MarginContainer/VBoxContainer/PlatformIndicator")
+		if platform_indicator:
+			platform_indicator.size.x = available_width
+			if platform_indicator.has_method("_apply_responsive_layout"):
+				platform_indicator._apply_responsive_layout()
+			available_height -= platform_indicator.get_combined_minimum_size().y
+	elif view is CollectionView:
+		var title_label: Control = view.get_node_or_null("MarginContainer/VBoxContainer/CollectionTitle")
+		if title_label:
+			title_label.size.x = available_width
+			available_height -= title_label.get_combined_minimum_size().y
+
+	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
+	print("[UIManager] compute_grid_available_size: view=", view.view_name if view is View else (view.name if view else "unknown"), " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
+	return result
 
 # ============================================================================
 # Public shell API (thin wrappers around child managers)

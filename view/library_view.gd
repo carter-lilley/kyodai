@@ -126,6 +126,16 @@ func _setup_search_overlay():
 	_search_overlay.search_submitted.connect(_on_search_submitted)
 	_search_overlay.search_cancelled.connect(_on_search_cancelled)
 
+func _refresh_grid_dimensions() -> void:
+	"""Recalculate grid layout using the deterministic available size."""
+	if not games_grid:
+		return
+	if UIManager:
+		var available_size = UIManager.compute_grid_available_size(games_grid, self)
+		games_grid.recalculate_layout_with_size(available_size)
+	else:
+		games_grid.refresh_dimensions()
+
 func _on_filter_button_clicked() -> void:
 	"""Handle filter button click — open the library filter side sheet."""
 	LibraryFilterSheet.show_sheet()
@@ -234,13 +244,14 @@ func _load_total_count_with_search():
 				_is_loading = false
 				return
 			_total_games = count
-			games_grid.set_total_count(count, false)
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(count, available_size, false)
 			
 			# Reset scroll to top
 			games_grid.scroll_to_index(0, false)
 			
 			# Refresh dimensions
-			games_grid.refresh_dimensions()
+			_refresh_grid_dimensions()
 			
 			# Focus first card
 			call_deferred("_focus_first_card")
@@ -371,13 +382,14 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 				_is_loading = false
 				return
 			_total_games = count
-			games_grid.set_total_count(count, preserve_cache)
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 			
 			# Reset scroll to top when switching platforms
 			games_grid.scroll_to_index(0, false)
 			
 			# Recalculate grid dimensions to fix layout after platform filter change
-			games_grid.refresh_dimensions()
+			_refresh_grid_dimensions()
 			
 			# Focus the first card after platform switch
 			# Use call_deferred to ensure cards are created and ready
@@ -447,7 +459,8 @@ func _load_total_count(preserve_cache: bool = false):
 				_is_loading = false
 				return
 			_total_games = count
-			games_grid.set_total_count(count, preserve_cache)
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 	)
@@ -467,7 +480,8 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 						on_complete.call()
 					return
 				_total_games = count
-				games_grid.set_total_count(count, preserve_cache)
+				var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+				games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 				_is_loading = false
 				if on_complete.is_valid():
 					on_complete.call()
@@ -488,7 +502,8 @@ func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: 
 					on_complete.call()
 				return
 			_total_games = count
-			games_grid.set_total_count(count, preserve_cache)
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 			if on_complete.is_valid():
@@ -570,20 +585,20 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 		# Effect configuration changed: reload data if we're also clearing the cache,
 		# then refresh dimensions and effects.
 		if preserve_data:
-			games_grid.refresh_dimensions()
+			_refresh_grid_dimensions()
 			games_grid.refresh_all_card_effects(true)
 		else:
 			# Use callback version to ensure dimensions refresh BEFORE rebuilding
 			# effects, so cards are rebuilt against final bounds.
 			_load_total_count_with_callback(false, func():
 				# Refresh dimensions first to establish final card bounds.
-				games_grid.refresh_dimensions()
+				_refresh_grid_dimensions()
 				# Then refresh existing cards.
 				games_grid.refresh_all_card_effects(true)
 			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
-		games_grid.refresh_dimensions()
+		_refresh_grid_dimensions()
 		if preserve_data:
 			# Data is unchanged; just make sure visible cards have their data.
 			games_grid._request_missing_data()
