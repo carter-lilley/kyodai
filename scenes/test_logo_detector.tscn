@@ -1,0 +1,23 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/test_logo_detector.gd" id="1_test_logo_detector"]
+
+[node name="TestLogoDetector" type="Node2D"]
+script = ExtResource("1_test_logo_detector")
+
+[node name="CoverImage" type="TextureRect" parent="."]
+anchors_preset = 0
+offset_right = 100.0
+offset_bottom = 100.0
+expand_mode = 0
+
+[node name="StatusLabel" type="Label" parent="."]
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 400.0
+offset_bottom = 40.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+text = "Loading..."
