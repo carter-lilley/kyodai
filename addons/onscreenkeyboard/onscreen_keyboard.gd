@@ -98,6 +98,7 @@ func _enter_tree():
 	z_index = 4096
 	
 	_init_keyboard()
+	_apply_keyboard_size()
 	call_deferred("refresh_theme")
 
 
@@ -268,6 +269,13 @@ func _init_keyboard():
 	elif visible:
 		_show_keyboard()
 	animate = tmp_anim
+
+
+func _apply_keyboard_size() -> void:
+	"""Scale keyboard height to DP units so it matches the rest of the UI."""
+	var keyboard_height := M3Units.dp(300.0)
+	offset_top = -keyboard_height
+	offset_bottom = 0
 
 
 ###########################
@@ -699,6 +707,7 @@ func refresh_theme() -> void:
 			key.set('theme_override_colors/font_pressed_color', font_color_pressed)
 			key.set('theme_override_colors/font_focus_color', font_color_focus)
 			key.set('theme_override_colors/font_disabled_color', font_color_normal)
+		key.set('theme_override_font_sizes/font_size', M3Units.dpi(font_size))
 
 
 func _create_keyboard(layout_data):
@@ -765,7 +774,7 @@ func _create_keyboard(layout_data):
 				_set_key_style("pressed",new_key, style_pressed)
 				_set_key_style("focus",new_key, style_focus)
 
-				new_key.set('theme_override_font_sizes/font_size', font_size)
+				new_key.set('theme_override_font_sizes/font_size', M3Units.dpi(font_size))
 				if font != null:
 					new_key.set('theme_override_fonts/font', font)
 				if font_color_normal != null:
@@ -882,6 +891,14 @@ func is_focus_within_keyboard(focus_object):
 			return true
 		parent = parent.get_parent()
 	return false
+
+## Public getter for the LineEdit this keyboard is currently editing.
+func get_active_line_edit() -> LineEdit:
+	return _active_line_edit
+
+## Public getter for the control that had focus before this keyboard opened.
+func get_previous_focus_object() -> Control:
+	return _previous_focus_object
 
 func _find_line_edit_at_position(pos: Vector2) -> LineEdit:
 	"""Find a LineEdit at the given screen position."""

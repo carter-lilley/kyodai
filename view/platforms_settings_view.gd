@@ -10,8 +10,8 @@ extends View
 
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
-var _pending_cards: Array[PlatformCard] = []
 var _is_fetching_platforms: bool = false
+var _fetch_generation: int = 0  # incremented each fetch to discard stale async callbacks
 
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
@@ -124,6 +124,8 @@ func _fetch_platforms():
 	if _is_fetching_platforms:
 		return
 	_is_fetching_platforms = true
+	_fetch_generation += 1
+	var current_generation = _fetch_generation
 
 	# Clear existing platform cards and any transient error UI (keep UI controls)
 	_clear_error_ui()
@@ -148,6 +150,16 @@ func _fetch_platforms():
 	_platforms_container.move_child(loading_label, cards_index)
 
 	SystemManager.network.fetch_platforms(func(data, error):
+		# Guard against callbacks from a fetch that was started before the view
+		# was removed from the tree (e.g. user closed settings quickly).
+		if current_generation != _fetch_generation or not is_inside_tree():
+			_is_fetching_platforms = false
+			for child in _platforms_container.get_children():
+				if child.name == "LoadingLabel":
+					child.queue_free()
+					break
+			return
+
 		# Remove loading label
 		for child in _platforms_container.get_children():
 			if child.name == "LoadingLabel":
@@ -260,11 +272,10 @@ func _fetch_platforms():
 			func(results: Array):
 				_active_batch_id = -1
 				if not is_inside_tree():
+					_is_fetching_platforms = false
 					_return_all_cards()
 					return
 
-				_pending_cards.clear()
-				
 				# Remove loading label now that the first batch has rendered.
 				for child in _platforms_container.get_children():
 					if child.name == "LoadingLabel":
@@ -374,7 +385,6 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		else:
 			_cards_right.add_child(card)
 	_platform_cards[slug] = card
-	_pending_cards.append(card)
 
 	return card
 
@@ -384,11 +394,6 @@ func _return_all_cards() -> void:
 		if card:
 			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
 	_platform_cards.clear()
-
-	for card in _pending_cards:
-		if is_instance_valid(card):
-			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
-	_pending_cards.clear()
 
 func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
 	card.populate_dropdown()
@@ -400,6 +405,11 @@ func _exit_tree() -> void:
 		_active_batch_id = -1
 	if _status_poll_timer:
 		_status_poll_timer.stop()
+	
+	# Invalidate any in-flight fetch from this view session so stale network or
+	# batch callbacks don't resurrect cards after we're removed from the tree.
+	_is_fetching_platforms = false
+	_fetch_generation += 1
 	
 	# Disconnect global signals so a pooled/reused view doesn't fire handlers while off-screen
 	if SystemManager.network.network_status_changed.is_connected(_on_network_status_changed):
@@ -501,8 +511,6 @@ func _load_platforms_from_database():
 			if not is_inside_tree():
 				_return_all_cards()
 				return
-
-			_pending_cards.clear()
 
 			if platforms.size() == 0:
 				var no_platforms_label = M3Label.new()

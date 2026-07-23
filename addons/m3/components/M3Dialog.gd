@@ -13,8 +13,8 @@ enum Variant { BASIC, FULL_SCREEN }
 # SIZE SPECS (all values in dp)
 # ============================================
 
-const BASIC_MAX_WIDTH := 560.0
-const BASIC_MAX_HEIGHT := 640.0
+const BASIC_MAX_WIDTH := 720.0
+const BASIC_MAX_HEIGHT := 760.0
 const BASIC_MIN_HEIGHT := 200.0
 const BASIC_RADIUS := 28.0
 const PADDING := 24.0
@@ -155,6 +155,7 @@ func _init():
 	super._init()
 	overlay_type = "dialog"
 	overlay_layer = 90
+	_restore_focus_on_dismiss = true
 	_build_layout()
 
 func _ready():

@@ -60,6 +60,7 @@ var _back_callback: Callable = Callable()
 func _init():
 	super._init()
 	overlay_layer = 85
+	_restore_focus_on_dismiss = true
 
 func _ready():
 	super._ready()

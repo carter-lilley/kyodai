@@ -8,7 +8,7 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## instead of a full-screen tab.
 
 const CONTENT_MARGIN_PATH := ^"MarginContainer"
-const MAX_HEIGHT_DP := 640.0
+const MAX_HEIGHT_DP := 760.0
 
 
 # NOTE: The scene root is a CanvasLayer (M3BottomSheet base). The MarginContainer
@@ -87,7 +87,7 @@ func _reduce_top_padding() -> void:
 
 func _get_sheet_width(screen_width: float) -> float:
 	# Make the details sheet wider than the default 640 dp bottom sheet.
-	var max_width_px := M3Units.dp(1024.0)
+	var max_width_px := M3Units.dp(1200.0)
 	return min(screen_width - M3Units.dp(32.0), max_width_px)
 
 func set_game(game: GameResource) -> void:

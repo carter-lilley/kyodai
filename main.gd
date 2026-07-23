@@ -319,11 +319,9 @@ func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
 
 func _on_settings_dialog_dismissed() -> void:
-	# Restore focus to the Home button so controller users land in a known
-	# location after closing settings with ui_cancel or the OK button.
-	if UIManager:
-		UIManager.suppress_next_focus_sound()
-	call_deferred("reset_focus_to_home_button")
+	# Focus restoration is now handled by M3Overlay (settings dialog falls back
+	# to the Home button on cancel; otherwise it restores the previous focus).
+	pass
 
 func _on_more_button_pressed() -> void:
 	var menu = M3Menu.new()

@@ -35,7 +35,10 @@ func _apply_dark_mode(enabled: bool) -> void:
 
 func _do_refresh_theme() -> void:
 	_theme_refresh_pending = false
+	var saved_focus: WeakRef = ui_manager.capture_focus() if ui_manager else null
 	_refresh_theme_on_all_nodes(get_tree().root)
+	if ui_manager:
+		ui_manager.restore_focus(saved_focus, ui_manager.get_focus_restore_fallback_to_home())
 
 func _refresh_theme_on_all_nodes(node: Node) -> void:
 	if node == self:

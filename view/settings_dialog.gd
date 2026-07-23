@@ -25,11 +25,13 @@ var _cancelled: bool = false
 
 func _init():
 	dialog_variant = Variant.BASIC
-	dialog_max_width = 900.0
+	dialog_max_width = 1100.0
 	title_text = "Settings"
 	persistent = true
 	fill_viewport_height = true
 	super._init()
+	if UIManager:
+		set_focus_restore_fallback(UIManager.get_focus_restore_fallback_to_home())
 
 func _ready():
 	super._ready()
@@ -307,6 +309,9 @@ func dismiss() -> void:
 	# (OK, outside-click, ui_cancel, default close) apply pending settings.
 	if _cancelled:
 		_restore_snapshot()
+		# On cancel, return focus to the Home button rather than the summoner.
+		if UIManager:
+			set_focus_restore_target(UIManager.find_home_button())
 
 	if not _cancelled:
 		# Suppress overlay focus pull-back while applying settings and dismissing.
@@ -320,6 +325,14 @@ func dismiss() -> void:
 
 	super.dismiss()
 	M3Overlay._suppress_focus_pullback = false
+
+func _input(event: InputEvent) -> void:
+	# Treat ui_cancel as Cancel so focus returns to the Home button.
+	if visible and event.is_action_pressed("ui_cancel"):
+		get_viewport().set_input_as_handled()
+		_on_cancel_pressed()
+		return
+	super._input(event)
 
 func _on_ok_pressed() -> void:
 	dismiss()

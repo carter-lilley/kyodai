@@ -156,6 +156,8 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	_set_summoner_active(true)
 	_start_movement_timer()
 	
+	_summoner_focus = UIManager.capture_focus() if UIManager else null
+	
 	# Reset item selection tracking for fresh popup
 	_item_selected = false
 	_parent_menu = null
@@ -256,10 +258,8 @@ func dismiss():
 	# e.g. an M3OptionButton, regains focus. Suppress overlay pull-back while we
 	# do this to prevent infinite recursion with the underlying overlay.
 	M3Overlay._suppress_focus_pullback = true
-	if _parent_menu == null and _summoner != null and is_instance_valid(_summoner):
-		if UIManager:
-			UIManager.suppress_next_focus_sound()
-		_summoner.grab_focus()
+	if _parent_menu == null and UIManager:
+		UIManager.restore_focus(_summoner_focus)
 	M3Overlay._suppress_focus_pullback = false
 
 	_release_summoner()

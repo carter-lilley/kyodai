@@ -387,6 +387,69 @@ func handle_directional_input(event: InputEvent) -> bool:
 	return navigation.handle_directional_input(event)
 
 # ============================================================================
+# Focus save/restore helpers
+# ============================================================================
+
+## Capture the current focus owner as a WeakRef.
+## If focus is inside the on-screen keyboard, resolves to the active LineEdit.
+func capture_focus() -> WeakRef:
+	var focus := get_current_focus_owner()
+	if focus != null and is_instance_valid(focus):
+		return weakref(focus)
+	return null
+
+## Restore focus from a captured WeakRef. If the captured control is no longer
+## valid or visible, the optional fallback callable is invoked.
+func restore_focus(saved_focus: WeakRef, fallback: Callable = Callable()) -> void:
+	if saved_focus == null:
+		_run_focus_fallback(fallback)
+		return
+	var focus: Control = saved_focus.get_ref()
+	if not is_instance_valid(focus) or not focus.is_visible_in_tree():
+		_run_focus_fallback(fallback)
+		return
+	grab_focus_silent(focus)
+
+## Deferred, sound-suppressed grab_focus.
+func grab_focus_silent(control: Control) -> void:
+	if not is_instance_valid(control) or not control.is_visible_in_tree():
+		return
+	suppress_next_focus_sound()
+	control.grab_focus.call_deferred()
+
+## Returns the current focus owner, resolving through the on-screen keyboard.
+func get_current_focus_owner() -> Control:
+	var viewport := get_viewport()
+	if not viewport:
+		return null
+	var focus := viewport.gui_get_focus_owner()
+	if not is_instance_valid(focus):
+		return null
+	# If focus is inside the on-screen keyboard, resolve to the active LineEdit
+	# (or the previous focus object if the keyboard is mid-dismissal).
+	if is_focus_in_onscreen_keyboard(focus):
+		var keyboard := get_onscreen_keyboard()
+		if keyboard != null and is_instance_valid(keyboard):
+			var active_edit: LineEdit = keyboard.get_active_line_edit()
+			if active_edit != null and is_instance_valid(active_edit):
+				return active_edit
+			var previous: Control = keyboard.get_previous_focus_object()
+			if previous != null and is_instance_valid(previous):
+				return previous
+	return focus
+
+## Returns a callable that restores focus to the Home button.
+func get_focus_restore_fallback_to_home() -> Callable:
+	return func():
+		var home := find_home_button()
+		if home != null and is_instance_valid(home):
+			grab_focus_silent(home)
+
+func _run_focus_fallback(fallback: Callable) -> void:
+	if fallback.is_valid():
+		fallback.call()
+
+# ============================================================================
 # Focus lock: disable focus on all non-grid controls while a locked grid owns focus
 # ============================================================================
 

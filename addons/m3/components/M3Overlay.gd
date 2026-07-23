@@ -37,6 +37,12 @@ static func get_overlay_parent() -> Node:
 @export var overlay_layer: int = 80
 @export var persistent: bool = false
 
+# When true, capture the current focus owner when the overlay is shown and
+# restore it when the overlay is dismissed.
+var _restore_focus_on_dismiss: bool = false
+var _summoner_focus: WeakRef = null
+var _focus_restore_fallback: Callable = Callable()
+
 # ============================================
 # SIGNALS
 # ============================================
@@ -136,6 +142,8 @@ func show_overlay():
 	_set_active_node(overlay_type, self)
 	if overlay_layer > _max_layer:
 		_max_layer = overlay_layer
+	if _restore_focus_on_dismiss:
+		_summoner_focus = UIManager.capture_focus() if UIManager else null
 	visible = true
 
 ## Dismiss this overlay and clean up.
@@ -155,8 +163,21 @@ func dismiss():
 	# into this overlay while it's still marked visible.
 	visible = false
 	dismissed.emit()
+	if _restore_focus_on_dismiss:
+		if UIManager:
+			UIManager.restore_focus(_summoner_focus, _focus_restore_fallback)
 	if not persistent:
 		queue_free()
+
+## Set an explicit control to restore focus to on dismiss, overriding the
+## automatically captured focus owner.
+func set_focus_restore_target(control: Control) -> void:
+	_summoner_focus = weakref(control) if control != null else null
+
+## Set a fallback callable invoked when the captured focus owner can no longer
+## receive focus (freed or hidden).
+func set_focus_restore_fallback(fallback: Callable) -> void:
+	_focus_restore_fallback = fallback
 
 ## Check if this overlay type is currently showing.
 static func is_showing(type: String) -> bool:

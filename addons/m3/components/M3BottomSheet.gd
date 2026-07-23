@@ -5,7 +5,7 @@ extends M3Sheet
 ## Slides up from the bottom edge with optional modal scrim and drag handle.
 
 const CORNER_RADIUS := 28.0
-const MAX_WIDTH := 640.0
+const MAX_WIDTH := 760.0
 const CONTENT_MARGIN_TOP := 16.0
 const CONTENT_MARGIN_LEFT := 16.0
 const CONTENT_MARGIN_RIGHT := 24.0
