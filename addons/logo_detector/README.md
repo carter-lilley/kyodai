@@ -6,8 +6,7 @@ This addon provides a `LogoDetector` class that runs a YOLOv8-seg ONNX model to 
 
 - `logo_detector.gdextension` — Godot extension manifest
 - `src/` — C++ source code
-- `CMakeLists.txt` — CMake build configuration
-- `build_scripts/build_windows.bat` — Windows local build helper
+- `CMakeLists.txt` — CMake build configuration (used by CI)
 - `models/` — ONNX models (Git LFS)
   - `logo_detector.onnx` — YOLOv8-seg title/logo detector
   - `ch_PP-OCRv4_rec_infer.onnx` — RapidOCR text recognition (CRNN)
@@ -19,27 +18,11 @@ This addon provides a `LogoDetector` class that runs a YOLOv8-seg ONNX model to 
 - Linux x86_64
 - Android ARM64
 
-## Building locally (Windows)
+## Getting binaries
 
-1. Clone `godot-cpp` into the project root:
-   ```sh
-   git clone --recursive --branch 4.3 --depth 1 https://github.com/godotengine/godot-cpp.git
-   ```
+Binaries are built by GitHub Actions. The workflow produces a draft release (`logo-detector-latest`) with a `logo_detector-binaries.zip` artifact containing all three platforms plus the ONNX models.
 
-2. Run the build script from the project root:
-   ```sh
-   addons\logo_detector\build_scripts\build_windows.bat
-   ```
-
-   The script downloads ONNX Runtime automatically if it is not already in `addons/logo_detector/thirdparty/onnxruntime`.
-
-   By default it builds a **Release** library so the extension loads in the Godot editor without requiring Debug CRT redistributables.
-
-3. Built binaries are copied to `addons/logo_detector/bin/windows.x86_64/`.
-
-## Using CI artifacts
-
-If you use the GitHub Actions artifacts instead of building locally, place the files so the paths match the `.gdextension` manifest:
+Place the files so the paths match the `.gdextension` manifest:
 
 ```
 addons/logo_detector/
@@ -90,4 +73,4 @@ if result["detected"]:
 - The YOLO output is decoded in 640x640 letterbox space and mapped back to the original image coordinates.
 - The extension builds a **Release** binary and uses the Release CRT (`/MD`) on Windows.
 - `reloadable` is set to `false` in the `.gdextension` manifest because the binary is built with `GODOT_USE_HOT_RELOAD OFF`.
-- ONNX Runtime binaries are **not** committed to git. They are downloaded by the build script or by CI.
+- ONNX Runtime binaries are **not** committed to git. They are downloaded and linked by the GitHub Actions workflow.

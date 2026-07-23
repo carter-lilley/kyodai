@@ -1,17 +1,15 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://i0mftyfunxav"]
 
-[ext_resource type="Script" path="res://scenes/test_logo_detector.gd" id="1_test_logo_detector"]
+[ext_resource type="Script" uid="uid://brk8s4vhjsq6v" path="res://scenes/test_logo_detector.gd" id="1_test_logo_detector"]
 
-[node name="TestLogoDetector" type="Node2D"]
+[node name="TestLogoDetector" type="Node2D" unique_id=1157740348]
 script = ExtResource("1_test_logo_detector")
 
-[node name="CoverImage" type="TextureRect" parent="."]
-anchors_preset = 0
+[node name="CoverImage" type="TextureRect" parent="." unique_id=1128311264]
 offset_right = 100.0
 offset_bottom = 100.0
-expand_mode = 0
 
-[node name="StatusLabel" type="Label" parent="."]
+[node name="StatusLabel" type="Label" parent="." unique_id=339075396]
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 400.0
