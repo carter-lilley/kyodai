@@ -17,8 +17,10 @@ namespace godot {
 class LogoDetector : public RefCounted {
     GDCLASS(LogoDetector, RefCounted)
 
-private:
+public:
     struct Impl;
+
+private:
     Impl *impl;
 
 protected:

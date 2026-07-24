@@ -15,6 +15,7 @@
 #include <sstream>
 #include <map>
 #include <unordered_map>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -467,7 +468,7 @@ static bool classify_rotation_180(
     LogoDetector::Impl *p_impl,
     const Ref<Image> &p_crop
 ) {
-    if (!p_impl || !p_impl->ocr_cls_loaded || p_impl->ocr_cls_input_names.empty()) return false;
+    if (!p_impl || !p_impl->ocr_cls_loaded || p_impl->ocr_cls_input_name_strings.empty()) return false;
 
     Ref<Image> img = p_crop->duplicate();
     if (img->get_format() != Image::FORMAT_RGB8) {
@@ -538,7 +539,7 @@ static std::pair<String, float> recognize_text(
     LogoDetector::Impl *p_impl,
     const Ref<Image> &p_crop
 ) {
-    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_names.empty()) {
+    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_name_strings.empty()) {
         return {String(), 0.0f};
     }
 
@@ -984,7 +985,7 @@ static std::pair<String, float> recognize_text_raw(
     LogoDetector::Impl *p_impl,
     const Ref<Image> &p_crop
 ) {
-    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_names.empty() || p_impl->ocr_rec_output_names.empty()) {
+    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_name_strings.empty() || p_impl->ocr_rec_output_name_strings.empty()) {
         return {String(), 0.0f};
     }
 
