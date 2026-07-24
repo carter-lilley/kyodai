@@ -882,20 +882,51 @@ Array LogoDetector::detect_candidates(
 // ---------------------------------------------------------------------------
 
 static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float x2, float y2) {
+    if (p_image.is_null()) return Ref<Image>();
     int src_w = p_image->get_width();
     int src_h = p_image->get_height();
+    if (src_w <= 0 || src_h <= 0) return Ref<Image>();
 
-    int ix1 = std::max(0, (int)x1);
-    int iy1 = std::max(0, (int)y1);
+    int ix1 = std::max(0, (int)std::floor(x1));
+    int iy1 = std::max(0, (int)std::floor(y1));
     int ix2 = std::min(src_w, (int)std::ceil(x2));
     int iy2 = std::min(src_h, (int)std::ceil(y2));
+    if (ix1 >= ix2 || iy1 >= iy2) return Ref<Image>();
 
-    int crop_w = std::max(1, ix2 - ix1);
-    int crop_h = std::max(1, iy2 - iy1);
+    int crop_w = ix2 - ix1;
+    int crop_h = iy2 - iy1;
 
-    Ref<Image> cropped = Image::create(crop_w, crop_h, false, Image::FORMAT_RGB8);
-    cropped->blit_rect(p_image, Rect2(ix1, iy1, crop_w, crop_h), Vector2(0, 0));
-    return cropped;
+    Ref<Image> tmp = Image::create(crop_w, crop_h, false, p_image->get_format());
+    if (tmp.is_null()) return Ref<Image>();
+    tmp->blit_rect(p_image, Rect2(ix1, iy1, crop_w, crop_h), Vector2(0, 0));
+    if (tmp->get_format() != Image::FORMAT_RGB8) {
+        tmp->convert(Image::FORMAT_RGB8);
+    }
+    return tmp;
+}
+
+static Ref<Image> prepare_input_image(const Ref<Image> &p_image, int p_max_size = 4096) {
+    if (p_image.is_null()) return Ref<Image>();
+    int w = p_image->get_width();
+    int h = p_image->get_height();
+    if (w <= 0 || h <= 0) return Ref<Image>();
+
+    int max_dim = std::max(w, h);
+    if (max_dim <= p_max_size && p_image->get_format() == Image::FORMAT_RGB8) {
+        return p_image;
+    }
+
+    Ref<Image> img = p_image->duplicate();
+    if (max_dim > p_max_size) {
+        float scale = (float)p_max_size / (float)max_dim;
+        int new_w = std::max(1, (int)std::round((float)w * scale));
+        int new_h = std::max(1, (int)std::round((float)h * scale));
+        img->resize(new_w, new_h, Image::INTERPOLATE_LANCZOS);
+    }
+    if (img->get_format() != Image::FORMAT_RGB8) {
+        img->convert(Image::FORMAT_RGB8);
+    }
+    return img;
 }
 
 static Ref<Image> rotate_180(const Ref<Image> &p_image) {
@@ -1176,37 +1207,14 @@ Dictionary LogoDetector::detect_title_box(
 		return result;
 	}
 
-	Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 5);
+	Ref<Image> img = prepare_input_image(p_image, 4096);
+	if (img.is_null()) return result;
 
-	// Region-first: if a high-confidence YOLO crop contains a title word, use it immediately.
-	const float REGION_MATCH_THRESHOLD = 0.7f;
-	for (int i = 0; i < candidates.size(); i++) {
-		Dictionary cand = candidates[i];
-		float cx1 = (float)cand["x1"];
-		float cy1 = (float)cand["y1"];
-		float cx2 = (float)cand["x2"];
-		float cy2 = (float)cand["y2"];
+	Array candidates = detect_candidates(img, p_conf_threshold, p_nms_threshold, 5);
+	std::vector<OcrWord> words = detect_text_words(impl, img, impl->charset);
 
-		Ref<Image> crop = crop_box(p_image, cx1, cy1, cx2, cy2);
-		std::vector<OcrWord> crop_words = detect_text_words(impl, crop, impl->charset);
-		for (const OcrWord &word : crop_words) {
-			float title_score = token_similarity_score(word.text, p_title);
-			if (title_score >= REGION_MATCH_THRESHOLD) {
-				Dictionary match = cand;
-				match["detected"] = true;
-				match["matched_text"] = word.text;
-				match["title_score"] = title_score;
-				match["combined_score"] = (float)cand["confidence"] * 0.3f + title_score * 0.7f;
-				return match;
-			}
-		}
-	}
-
-	// Fallback: run OCR on the full image and score all YOLO candidates.
-	std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
-
-	int img_w = p_image->get_width();
-	int img_h = p_image->get_height();
+	int img_w = img->get_width();
+	int img_h = img->get_height();
 	float diag = std::sqrt((float)img_w * (float)img_w + (float)img_h * (float)img_h);
 
 	float best_score = -1.0f;

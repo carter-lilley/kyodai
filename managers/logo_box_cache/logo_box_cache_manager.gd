@@ -15,6 +15,8 @@ var _pending_tasks: int = 0
 var _pending_mutex: Mutex = Mutex.new()
 var _completed_semaphore: Semaphore = Semaphore.new()
 
+var _load_image_mutex: Mutex = Mutex.new()
+
 var _worker_count: int = 1
 
 func _ready():
@@ -26,11 +28,9 @@ func _exit_tree():
 	stop_worker()
 
 func _get_intra_op_threads() -> int:
-	# Each worker also loads its own sessions; keep ONNX intra-op threads modest
-	# to avoid oversubscribing with multiple workers.
-	if SystemManager.platform.is_android():
-		return 1
-	return 2
+	# Keep intra-op threads minimal to avoid oversubscription across workers and
+	# reduce CPU contention on the main thread.
+	return 1
 
 func set_worker_count(p_count: int) -> void:
 	var count := clampi(p_count, 1, 16)
@@ -188,8 +188,7 @@ func _create_detector() -> Variant:
 		print("[LogoBoxCache] Failed to load OCR rec model")
 		return null
 	# Classifier is optional: it improves rotation handling but detection works without it.
-	if detector.load_ocr_cls_model("res://addons/logo_detector/models/ch_ppocr_mobile_v2.0_cls_infer.onnx") != OK:
-		print("[LogoBoxCache] OCR classifier model failed to load; continuing without rotation correction")
+	detector.load_ocr_cls_model("res://addons/logo_detector/models/ch_ppocr_mobile_v2.0_cls_infer.onnx")
 	return detector
 
 func _process_detect_task(task: Dictionary, detector: Variant) -> void:
@@ -211,11 +210,6 @@ func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 	var result: Variant = detector.detect_title_box(image, title)
 	var logo_box := _logo_box_dict_from_result(result, image)
 	_write_logo_box_to_games(logo_box, game_ids)
-	if logo_box.get("detected", false):
-		print("[LogoBoxCache] Cached logo box for cover %s (%d games)" % [cover_url, game_ids.size()])
-	else:
-		print("[LogoBoxCache] No logo detected for cover %s (%d games)" % [cover_url, game_ids.size()])
-
 	_finish_task(on_complete)
 
 func _finish_task(on_complete: Callable) -> void:
@@ -315,7 +309,9 @@ func _load_image(cache_path: String) -> Image:
 	if not FSM.file_exists(cache_path):
 		return null
 	var img := Image.new()
+	_load_image_mutex.lock()
 	var err = img.load(cache_path)
+	_load_image_mutex.unlock()
 	if err == OK and not img.is_empty():
 		return img
 	return null
