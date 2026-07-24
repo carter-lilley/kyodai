@@ -38,6 +38,7 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 @onready var collections: CollectionSubManager = $CollectionSubManager
 var settings: SettingsSubManager
 var game_save: GameSaveSubManager
+var logo_box: LogoBoxCacheManager
 
 func _enter_tree() -> void:
 	settings = $SettingsSubManager
@@ -45,8 +46,14 @@ func _enter_tree() -> void:
 
 func _ready():
 	_ensure_memory_manager()
+
+	logo_box = LogoBoxCacheManager.new()
+	logo_box.name = "LogoBoxCacheManager"
+	add_child(logo_box)
+
 	database.initialize_database()
 	cover._ensure_cache_folder()
+	logo_box.start_worker()
 	database_ready.connect(_on_database_ready_for_collections)
 
 	# Wire settings sub-manager signals through the DataManager facade

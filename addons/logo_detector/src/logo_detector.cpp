@@ -14,6 +14,7 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -35,7 +36,8 @@ struct Candidate {
 
 struct OcrWord {
     float x1, y1, x2, y2;
-    float confidence;
+    float confidence;  // DBNet box score
+    float text_score;  // mean CRNN softmax probability for the decoded text
     String text;
 };
 
@@ -44,6 +46,7 @@ struct LogoDetector::Impl {
     std::unique_ptr<Ort::Session> yolo_session;
     std::unique_ptr<Ort::Session> ocr_det_session;
     std::unique_ptr<Ort::Session> ocr_rec_session;
+    std::unique_ptr<Ort::Session> ocr_cls_session;
 
     // Store name strings and expose const char* views for Run().
     std::vector<std::string> yolo_input_name_strings;
@@ -52,6 +55,8 @@ struct LogoDetector::Impl {
     std::vector<std::string> ocr_det_output_name_strings;
     std::vector<std::string> ocr_rec_input_name_strings;
     std::vector<std::string> ocr_rec_output_name_strings;
+    std::vector<std::string> ocr_cls_input_name_strings;
+    std::vector<std::string> ocr_cls_output_name_strings;
 
     Ort::MemoryInfo memory_info;
     std::vector<std::string> charset;
@@ -59,6 +64,7 @@ struct LogoDetector::Impl {
     bool yolo_loaded = false;
     bool ocr_det_loaded = false;
     bool ocr_rec_loaded = false;
+    bool ocr_cls_loaded = false;
     bool charset_loaded = false;
 
     Impl() : env(ORT_LOGGING_LEVEL_WARNING, "LogoDetector"),
@@ -216,6 +222,13 @@ Error LogoDetector::load_ocr_rec_model(const String &p_model_path) {
     return err;
 }
 
+Error LogoDetector::load_ocr_cls_model(const String &p_model_path) {
+    Error err = load_onnx_session(p_model_path, impl->env, impl->ocr_cls_session,
+                                  impl->ocr_cls_input_name_strings, impl->ocr_cls_output_name_strings);
+    impl->ocr_cls_loaded = (err == OK);
+    return err;
+}
+
 Error LogoDetector::load_ocr_charset(const String &p_charset_path) {
     String global_path = ProjectSettings::get_singleton()->globalize_path(p_charset_path);
     std::string path = global_path.utf8().get_data();
@@ -239,6 +252,7 @@ Error LogoDetector::load_ocr_charset(const String &p_charset_path) {
 bool LogoDetector::is_yolo_model_loaded() const { return impl->yolo_loaded; }
 bool LogoDetector::is_ocr_det_model_loaded() const { return impl->ocr_det_loaded; }
 bool LogoDetector::is_ocr_rec_model_loaded() const { return impl->ocr_rec_loaded; }
+bool LogoDetector::is_ocr_cls_model_loaded() const { return impl->ocr_cls_loaded; }
 
 // ---------------------------------------------------------------------------
 // YOLO preprocessing
@@ -278,15 +292,487 @@ static void preprocess_yolo(
             for (int w = 0; w < TARGET_SIZE; w++) {
                 int src_idx = (h * TARGET_SIZE + w) * 3 + c;
                 int dst_idx = c * TARGET_SIZE * TARGET_SIZE + h * TARGET_SIZE + w;
-                r_data[dst_idx] = pixels[src_idx] / 255.0f;
-            }
-        }
-    }
+				r_data[dst_idx] = pixels[src_idx] / 255.0f;
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
-// YOLO postprocessing
+// Text similarity helpers (mirrors the Python pipeline)
 // ---------------------------------------------------------------------------
+
+static int levenshtein_distance(const String &p_a, const String &p_b) {
+	int len_a = p_a.length();
+	int len_b = p_b.length();
+	if (len_a == 0) return len_b;
+	if (len_b == 0) return len_a;
+
+	std::vector<int> prev(len_b + 1);
+	std::vector<int> curr(len_b + 1);
+	for (int j = 0; j <= len_b; j++) {
+		prev[j] = j;
+	}
+
+	for (int i = 1; i <= len_a; i++) {
+		curr[0] = i;
+		char32_t ca = p_a[i - 1];
+		for (int j = 1; j <= len_b; j++) {
+			int cost = (ca == p_b[j - 1]) ? 0 : 1;
+			curr[j] = std::min({ prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost });
+		}
+		std::swap(prev, curr);
+	}
+	return prev[len_b];
+}
+
+static float string_similarity(const String &p_a, const String &p_b) {
+	String a = p_a.to_lower().strip_edges();
+	String b = p_b.to_lower().strip_edges();
+	if (a.is_empty() || b.is_empty()) return 0.0f;
+	int max_len = std::max(a.length(), b.length());
+	if (max_len == 0) return 1.0f;
+	int dist = levenshtein_distance(a, b);
+	return 1.0f - (float)dist / (float)max_len;
+}
+
+static std::vector<String> extract_alpha_numeric_tokens(const String &p_text) {
+	std::vector<String> tokens;
+	String current;
+	for (int i = 0; i < p_text.length(); i++) {
+		char32_t ch = p_text[i];
+		bool is_alnum = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+		if (is_alnum) {
+			current += String::chr(ch);
+		} else if (!current.is_empty()) {
+			if (current.length() > 2) {
+				tokens.push_back(current);
+			}
+			current = "";
+		}
+	}
+	if (!current.is_empty() && current.length() > 2) {
+		tokens.push_back(current);
+	}
+	return tokens;
+}
+
+static float token_similarity_score(const String &p_ocr_text, const String &p_title) {
+	String ocr = p_ocr_text.to_lower().strip_edges();
+	String title = p_title.to_lower().strip_edges();
+	if (ocr.is_empty() || title.is_empty()) return 0.0f;
+
+	float full_sim = string_similarity(ocr, title);
+	std::vector<String> title_tokens = extract_alpha_numeric_tokens(title);
+	if (title_tokens.empty()) return full_sim;
+
+	float best_token_sim = 0.0f;
+	for (const String &token : title_tokens) {
+		float sim = string_similarity(ocr, token);
+		if (sim > best_token_sim) best_token_sim = sim;
+	}
+	return std::max(full_sim, best_token_sim * 0.95f);
+}
+
+// ---------------------------------------------------------------------------
+// DBNet text detection (full-image OCR text boxes)
+// ---------------------------------------------------------------------------
+
+struct Pt {
+    int x, y;
+    bool operator==(const Pt &p_other) const { return x == p_other.x && y == p_other.y; }
+};
+
+static const int8_t NB_DX[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+static const int8_t NB_DY[8] = {-1, -1, 0, 1, 1, 1, 0, -1};
+
+static int neighbor_index(int p_dx, int p_dy) {
+    for (int i = 0; i < 8; i++) {
+        if (NB_DX[i] == p_dx && NB_DY[i] == p_dy) return i;
+    }
+    return 0;
+}
+
+// Moore-neighbor tracing: returns the outer boundary of every foreground blob
+// in the binary mask. Blobs are 8-connected and boundaries are ordered clockwise.
+static std::vector<std::vector<Pt>> find_outer_contours(
+    const std::vector<uint8_t> &p_mask,
+    int p_w,
+    int p_h
+) {
+    std::vector<std::vector<Pt>> contours;
+    std::vector<uint8_t> visited((size_t)p_w * p_h, 0);
+
+    for (int y = 0; y < p_h; y++) {
+        for (int x = 0; x < p_w; x++) {
+            int idx = y * p_w + x;
+            if (!p_mask[idx]) continue;
+            if (visited[idx]) continue;
+            // Only start a contour at the leftmost pixel of a blob.
+            if (x > 0 && p_mask[idx - 1]) continue;
+
+            std::vector<Pt> contour;
+            Pt start{x, y};
+            Pt cur = start;
+            Pt back{x - 1, y}; // background pixel to the west
+            int steps = 0;
+            const int MAX_STEPS = (p_w + p_h) * 4;
+
+            do {
+                visited[cur.y * p_w + cur.x] = 1;
+                contour.push_back(cur);
+
+                int bi = neighbor_index(back.x - cur.x, back.y - cur.y);
+                Pt next{-1, -1};
+                int ni = -1;
+                for (int k = 1; k <= 8; k++) {
+                    int i = (bi + k) & 7;
+                    int nx = cur.x + NB_DX[i];
+                    int ny = cur.y + NB_DY[i];
+                    if (nx < 0 || nx >= p_w || ny < 0 || ny >= p_h) continue;
+                    if (!p_mask[ny * p_w + nx]) continue;
+                    next = {nx, ny};
+                    ni = i;
+                    break;
+                }
+
+                if (next.x == -1) break; // isolated pixel/line
+                if (next == start) break;
+
+                // The background pixel that precedes the chosen neighbor in
+                // clockwise order becomes the new backtrack point.
+                int prev_i = (ni + 7) & 7;
+                back = {cur.x + NB_DX[prev_i], cur.y + NB_DY[prev_i]};
+                cur = next;
+            } while (cur != start && ++steps < MAX_STEPS);
+
+            if (contour.size() >= 4) {
+                contours.push_back(std::move(contour));
+            }
+        }
+    }
+
+    return contours;
+}
+
+static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float x2, float y2);
+static Ref<Image> rotate_180(const Ref<Image> &p_image);
+
+static std::pair<String, float> recognize_text_raw(
+    LogoDetector::Impl *p_impl,
+    const Ref<Image> &p_crop
+);
+
+static bool classify_rotation_180(
+    LogoDetector::Impl *p_impl,
+    const Ref<Image> &p_crop
+) {
+    if (!p_impl || !p_impl->ocr_cls_loaded || p_impl->ocr_cls_input_names.empty()) return false;
+
+    Ref<Image> img = p_crop->duplicate();
+    if (img->get_format() != Image::FORMAT_RGB8) {
+        img->convert(Image::FORMAT_RGB8);
+    }
+
+    const int CLS_W = 192;
+    const int CLS_H = 48;
+    img->resize(CLS_W, CLS_H, Image::INTERPOLATE_BILINEAR);
+
+    const float MEAN[3] = {0.5f, 0.5f, 0.5f};
+    const float STD[3] = {0.5f, 0.5f, 0.5f};
+    const uint8_t *pixels = img->get_data().ptr();
+
+    std::vector<float> input_data(3 * CLS_H * CLS_W);
+    for (int c = 0; c < 3; c++) {
+        for (int y = 0; y < CLS_H; y++) {
+            for (int x = 0; x < CLS_W; x++) {
+                int src_idx = (y * CLS_W + x) * 3 + c;
+                int dst_idx = c * CLS_H * CLS_W + y * CLS_W + x;
+                input_data[dst_idx] = (pixels[src_idx] / 255.0f - MEAN[c]) / STD[c];
+            }
+        }
+    }
+
+    const int64_t input_shape[] = {1, 3, CLS_H, CLS_W};
+    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+        p_impl->memory_info,
+        input_data.data(),
+        input_data.size(),
+        input_shape,
+        4
+    );
+
+    std::vector<Ort::Value> output_tensors;
+    try {
+        std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_cls_input_name_strings);
+        std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_cls_output_name_strings);
+        output_tensors = p_impl->ocr_cls_session->Run(
+            Ort::RunOptions{nullptr},
+            input_names.data(),
+            &input_tensor,
+            1,
+            output_names.data(),
+            output_names.size()
+        );
+    } catch (const std::exception &e) {
+        UtilityFunctions::print("OCR classifier inference failed: ", e.what());
+        return false;
+    }
+
+    auto out_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
+    if (out_shape.size() < 2) return false;
+    int num_classes = (int)out_shape[out_shape.size() - 1];
+    const float *logits = output_tensors[0].GetTensorData<float>();
+
+    // Softmax over the two orientation classes.
+    float max_val = -1e30f;
+    for (int i = 0; i < num_classes; i++) max_val = std::max(max_val, logits[i]);
+    double sum = 0.0;
+    for (int i = 0; i < num_classes; i++) sum += std::exp((double)(logits[i] - max_val));
+    float prob_180 = (float)(std::exp((double)(logits[1] - max_val)) / sum);
+
+    return prob_180 > 0.9f;
+}
+
+static std::pair<String, float> recognize_text(
+    LogoDetector::Impl *p_impl,
+    const Ref<Image> &p_crop
+) {
+    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_names.empty()) {
+        return {String(), 0.0f};
+    }
+
+    Ref<Image> crop = p_crop;
+    if (p_impl->ocr_cls_loaded && classify_rotation_180(p_impl, crop)) {
+        crop = rotate_180(crop);
+    }
+
+    auto result = recognize_text_raw(p_impl, crop);
+
+    // Fallback: if no classifier is available and the first pass is uncertain,
+    // try the rotated crop and keep the more confident reading.
+    if (!p_impl->ocr_cls_loaded && result.second < 0.85f) {
+        auto rotated_result = recognize_text_raw(p_impl, rotate_180(crop));
+        if (rotated_result.second > result.second) {
+            return rotated_result;
+        }
+    }
+
+    return result;
+}
+
+static float mean_box_score(
+    const float *p_pred,
+    int p_w,
+    int p_h,
+    int p_min_x,
+    int p_min_y,
+    int p_max_x,
+    int p_max_y
+) {
+    double sum = 0.0;
+    int count = 0;
+    p_min_x = std::max(0, p_min_x);
+    p_min_y = std::max(0, p_min_y);
+    p_max_x = std::min(p_w - 1, p_max_x);
+    p_max_y = std::min(p_h - 1, p_max_y);
+    for (int y = p_min_y; y <= p_max_y; y++) {
+        for (int x = p_min_x; x <= p_max_x; x++) {
+            sum += p_pred[y * p_w + x];
+            count++;
+        }
+    }
+    return count > 0 ? (float)(sum / count) : 0.0f;
+}
+
+static std::vector<OcrWord> detect_text_words(
+    LogoDetector::Impl *p_impl,
+    const Ref<Image> &p_image,
+    const std::vector<std::string> &p_charset
+) {
+    std::vector<OcrWord> result;
+    if (!p_impl->ocr_det_loaded || !p_impl->ocr_rec_loaded || !p_impl->charset_loaded || p_image.is_null()) {
+        return result;
+    }
+
+    Ref<Image> img = p_image->duplicate();
+    if (img->get_format() != Image::FORMAT_RGB8) {
+        img->convert(Image::FORMAT_RGB8);
+    }
+
+    int src_w = img->get_width();
+    int src_h = img->get_height();
+    if (src_w <= 0 || src_h <= 0) return result;
+
+    // PP-OCRv4 det preprocessing: keep min side >= 736, round to multiple of 32.
+    const int LIMIT_SIDE_LEN = 736;
+    float ratio = 1.0f;
+    int min_side = std::min(src_w, src_h);
+    if (min_side < LIMIT_SIDE_LEN) {
+        ratio = (float)LIMIT_SIDE_LEN / (float)min_side;
+    }
+    int resize_w = (int)std::round((float)src_w * ratio / 32.0f) * 32;
+    int resize_h = (int)std::round((float)src_h * ratio / 32.0f) * 32;
+    if (resize_w <= 0 || resize_h <= 0) return result;
+
+    img->resize(resize_w, resize_h, Image::INTERPOLATE_BILINEAR);
+
+    std::vector<float> input_data((size_t)resize_w * resize_h * 3);
+    const float MEAN[3] = {0.5f, 0.5f, 0.5f};
+    const float STD[3] = {0.5f, 0.5f, 0.5f};
+    const uint8_t *pixels = img->get_data().ptr();
+
+    for (int c = 0; c < 3; c++) {
+        for (int y = 0; y < resize_h; y++) {
+            for (int x = 0; x < resize_w; x++) {
+                int src_idx = (y * resize_w + x) * 3 + c;
+                int dst_idx = c * resize_h * resize_w + y * resize_w + x;
+                input_data[dst_idx] = (pixels[src_idx] / 255.0f - MEAN[c]) / STD[c];
+            }
+        }
+    }
+
+    const int64_t input_shape[] = {1, 3, resize_h, resize_w};
+    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+        p_impl->memory_info,
+        input_data.data(),
+        input_data.size(),
+        input_shape,
+        4
+    );
+
+    std::vector<Ort::Value> output_tensors;
+    try {
+        std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_det_input_name_strings);
+        std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_det_output_name_strings);
+        output_tensors = p_impl->ocr_det_session->Run(
+            Ort::RunOptions{nullptr},
+            input_names.data(),
+            &input_tensor,
+            1,
+            output_names.data(),
+            output_names.size()
+        );
+    } catch (const std::exception &e) {
+        UtilityFunctions::print("OCR detection inference failed: ", e.what());
+        return result;
+    }
+
+    auto out_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
+    if (out_shape.size() < 4) return result;
+    int out_h = (int)out_shape[2];
+    int out_w = (int)out_shape[3];
+    const float *pred = output_tensors[0].GetTensorData<float>();
+
+    const float THRESH = 0.3f;
+    const float BOX_THRESH = 0.5f;
+    const float TEXT_SCORE_THRESH = 0.5f;
+    const float UNCLIP_RATIO = 1.6f;
+    const int MIN_HEIGHT = 30;
+    const float MAX_ASPECT_RATIO = 8.0f;
+    const int MAX_CANDIDATES = 1000;
+
+    std::vector<uint8_t> mask((size_t)out_w * out_h, 0);
+    for (int i = 0; i < out_w * out_h; i++) {
+        if (pred[i] > THRESH) mask[i] = 1;
+    }
+
+    // Dilate with a 2x2 kernel to match Python use_dilation=true.
+    std::vector<uint8_t> dilated = mask;
+    for (int y = 0; y < out_h; y++) {
+        for (int x = 0; x < out_w; x++) {
+            if (mask[y * out_w + x]) continue;
+            bool set = false;
+            for (int dy = 0; dy <= 1 && y + dy < out_h; dy++) {
+                for (int dx = 0; dx <= 1 && x + dx < out_w; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    if (mask[(y + dy) * out_w + (x + dx)]) {
+                        set = true;
+                        break;
+                    }
+                }
+                if (set) break;
+            }
+            if (set) dilated[y * out_w + x] = 1;
+        }
+    }
+
+    std::vector<std::vector<Pt>> contours = find_outer_contours(dilated, out_w, out_h);
+
+    float scale_x = (float)src_w / (float)out_w;
+    float scale_y = (float)src_h / (float)out_h;
+
+    struct ScoredBox {
+        float x1, y1, x2, y2;
+        float box_score;
+    };
+    std::vector<ScoredBox> candidate_boxes;
+
+    for (const std::vector<Pt> &contour : contours) {
+        if (contour.empty()) continue;
+        int min_x = out_w, min_y = out_h, max_x = 0, max_y = 0;
+        for (const Pt &pt : contour) {
+            min_x = std::min(min_x, pt.x);
+            min_y = std::min(min_y, pt.y);
+            max_x = std::max(max_x, pt.x);
+            max_y = std::max(max_y, pt.y);
+        }
+
+        float x1 = (float)min_x * scale_x;
+        float y1 = (float)min_y * scale_y;
+        float x2 = (float)(max_x + 1) * scale_x;
+        float y2 = (float)(max_y + 1) * scale_y;
+
+        float bw = x2 - x1;
+        float bh = y2 - y1;
+        if (bh < MIN_HEIGHT) continue;
+        if (bw / std::max(1.0f, bh) > MAX_ASPECT_RATIO) continue;
+
+        float box_score = mean_box_score(pred, out_w, out_h, min_x, min_y, max_x, max_y);
+        if (box_score < BOX_THRESH) continue;
+
+        candidate_boxes.push_back({x1, y1, x2, y2, box_score});
+    }
+
+    std::sort(candidate_boxes.begin(), candidate_boxes.end(), [](const ScoredBox &a, const ScoredBox &b) {
+        return a.box_score > b.box_score;
+    });
+
+    int count = std::min((int)candidate_boxes.size(), MAX_CANDIDATES);
+    for (int i = 0; i < count; i++) {
+        const ScoredBox &box = candidate_boxes[i];
+
+        // Unclip/padding to give the recognizer a bit of margin.
+        float cx = (box.x1 + box.x2) * 0.5f;
+        float cy = (box.y1 + box.y2) * 0.5f;
+        float half_w = (box.x2 - box.x1) * 0.5f * UNCLIP_RATIO;
+        float half_h = (box.y2 - box.y1) * 0.5f * UNCLIP_RATIO;
+        float x1 = std::max(0.0f, cx - half_w);
+        float y1 = std::max(0.0f, cy - half_h);
+        float x2 = std::min((float)src_w, cx + half_w);
+        float y2 = std::min((float)src_h, cy + half_h);
+
+        Ref<Image> crop = crop_box(p_image, x1, y1, x2, y2);
+        auto [text, text_score] = recognize_text(p_impl, crop);
+
+        if (!text.is_empty() && text_score >= TEXT_SCORE_THRESH) {
+            OcrWord word;
+            word.x1 = x1;
+            word.y1 = y1;
+            word.x2 = x2;
+            word.y2 = y2;
+            word.confidence = box.box_score;
+            word.text_score = text_score;
+            word.text = text;
+            result.push_back(word);
+        }
+    }
+
+    return result;
+}
+
+
+
 
 static inline float compute_iou(const Candidate &a, const Candidate &b) {
     float x1 = std::max(a.x1, b.x1);
@@ -437,15 +923,6 @@ Array LogoDetector::detect_candidates(
 // OCR helpers
 // ---------------------------------------------------------------------------
 
-static String recognize_text(
-    Ort::Session *p_session,
-    Ort::MemoryInfo &p_memory_info,
-    const std::vector<std::string> &p_input_names,
-    const std::vector<std::string> &p_output_names,
-    const std::vector<std::string> &p_charset,
-    const Ref<Image> &p_crop
-);
-
 static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float x2, float y2) {
     int src_w = p_image->get_width();
     int src_h = p_image->get_height();
@@ -463,97 +940,91 @@ static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float 
     return cropped;
 }
 
-static std::vector<float> image_to_chw(
-    const Ref<Image> &p_image,
-    int target_w,
-    int target_h,
-    float norm_mean[3],
-    float norm_std[3]
-) {
-    Ref<Image> img = p_image->duplicate();
-    if (img->get_format() != Image::FORMAT_RGB8) {
-        img->convert(Image::FORMAT_RGB8);
-    }
-    img->resize(target_w, target_h, Image::INTERPOLATE_BILINEAR);
-
-    std::vector<float> data(target_w * target_h * 3);
-    const uint8_t *pixels = img->get_data().ptr();
-
-    for (int c = 0; c < 3; c++) {
-        for (int h = 0; h < target_h; h++) {
-            for (int w = 0; w < target_w; w++) {
-                int src_idx = (h * target_w + w) * 3 + c;
-                int dst_idx = c * target_h * target_w + h * target_w + w;
-                float val = pixels[src_idx] / 255.0f;
-                data[dst_idx] = (val - norm_mean[c]) / norm_std[c];
-            }
+static Ref<Image> rotate_180(const Ref<Image> &p_image) {
+    if (p_image.is_null()) return Ref<Image>();
+    int w = p_image->get_width();
+    int h = p_image->get_height();
+    Ref<Image> dst = Image::create(w, h, false, p_image->get_format());
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            dst->set_pixel(x, y, p_image->get_pixel(w - 1 - x, h - 1 - y));
         }
     }
-
-    return data;
-}
-
-// ---------------------------------------------------------------------------
-// OCR crop recognition
-// ---------------------------------------------------------------------------
-
-static String recognize_crop(
-    Ort::Session *p_rec_session,
-    Ort::MemoryInfo &p_memory_info,
-    const std::vector<std::string> &p_input_names,
-    const std::vector<std::string> &p_output_names,
-    const std::vector<std::string> &p_charset,
-    const Ref<Image> &p_image,
-    float x1, float y1, float x2, float y2
-) {
-    Ref<Image> crop = crop_box(p_image, x1, y1, x2, y2);
-    return recognize_text(p_rec_session, p_memory_info, p_input_names, p_output_names, p_charset, crop);
+    return dst;
 }
 
 // ---------------------------------------------------------------------------
 // OCR recognition (CRNN with CTC)
 // ---------------------------------------------------------------------------
 
-static String ctc_decode(const std::vector<int> &p_indices, const std::vector<std::string> &p_charset) {
+static std::pair<String, float> ctc_decode(
+    const std::vector<int> &p_indices,
+    const std::vector<float> &p_probs,
+    const std::vector<std::string> &p_charset
+) {
     std::string text;
+    float prob_sum = 0.0f;
+    int count = 0;
     int prev = -1;
-    for (int idx : p_indices) {
+    for (size_t i = 0; i < p_indices.size(); i++) {
+        int idx = p_indices[i];
         if (idx == 0 || idx == prev) continue; // blank or repeat
         if (idx >= 0 && (size_t)idx < p_charset.size()) {
             text += p_charset[idx];
+            prob_sum += p_probs[i];
+            count++;
         }
         prev = idx;
     }
-    return String(text.c_str());
+    float score = count > 0 ? prob_sum / count : 0.0f;
+    return {String(text.c_str()), score};
 }
 
-static String recognize_text(
-    Ort::Session *p_session,
-    Ort::MemoryInfo &p_memory_info,
-    const std::vector<std::string> &p_input_names,
-    const std::vector<std::string> &p_output_names,
-    const std::vector<std::string> &p_charset,
+static std::pair<String, float> recognize_text_raw(
+    LogoDetector::Impl *p_impl,
     const Ref<Image> &p_crop
 ) {
-    if (!p_session || p_input_names.empty() || p_output_names.empty()) return String();
+    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_names.empty() || p_impl->ocr_rec_output_names.empty()) {
+        return {String(), 0.0f};
+    }
 
-    // Recognition model expects height 48 and a dynamic width
-    // that is a multiple of 8 (clamp to a reasonable max).
-    const int target_h = 48;
-    int src_w = p_crop->get_width();
-    int src_h = p_crop->get_height();
+    Ref<Image> img = p_crop->duplicate();
+    if (img->get_format() != Image::FORMAT_RGB8) {
+        img->convert(Image::FORMAT_RGB8);
+    }
+
+    // Match Python rapidocr: height 48, dynamic width up to 320, padded to 320.
+    const int TARGET_H = 48;
+    const int FIXED_W = 320;
+    int src_w = img->get_width();
+    int src_h = img->get_height();
     float aspect = (float)src_w / std::max(1, src_h);
-    int target_w = (int)(target_h * aspect);
-    target_w = std::max(32, (target_w + 7) / 8 * 8);
-    target_w = std::min(target_w, 640);
+    int target_w = (int)std::round((float)TARGET_H * aspect);
+    target_w = std::max(32, target_w);
+    target_w = (target_w + 7) / 8 * 8; // keep ONNX happy
+    target_w = std::min(target_w, FIXED_W);
 
-    float rec_mean[3] = {0.5f, 0.5f, 0.5f};
-    float rec_std[3] = {0.5f, 0.5f, 0.5f};
-    std::vector<float> input_data = image_to_chw(p_crop, target_w, target_h, rec_mean, rec_std);
+    img->resize(target_w, TARGET_H, Image::INTERPOLATE_BILINEAR);
 
-    const int64_t input_shape[] = {1, 3, target_h, target_w};
+    const float MEAN[3] = {0.5f, 0.5f, 0.5f};
+    const float STD[3] = {0.5f, 0.5f, 0.5f};
+    const uint8_t *pixels = img->get_data().ptr();
+
+    // Pad to FIXED_W; padding value is the normalized mean (0.0).
+    std::vector<float> input_data(3 * TARGET_H * FIXED_W, 0.0f);
+    for (int c = 0; c < 3; c++) {
+        for (int y = 0; y < TARGET_H; y++) {
+            for (int x = 0; x < target_w; x++) {
+                int src_idx = (y * target_w + x) * 3 + c;
+                int dst_idx = c * TARGET_H * FIXED_W + y * FIXED_W + x;
+                input_data[dst_idx] = (pixels[src_idx] / 255.0f - MEAN[c]) / STD[c];
+            }
+        }
+    }
+
+    const int64_t input_shape[] = {1, 3, TARGET_H, FIXED_W};
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-        p_memory_info,
+        p_impl->memory_info,
         input_data.data(),
         input_data.size(),
         input_shape,
@@ -562,9 +1033,9 @@ static String recognize_text(
 
     std::vector<Ort::Value> output_tensors;
     try {
-        std::vector<const char*> input_names = to_cstr_array(p_input_names);
-        std::vector<const char*> output_names = to_cstr_array(p_output_names);
-        output_tensors = p_session->Run(
+        std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_rec_input_name_strings);
+        std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_rec_output_name_strings);
+        output_tensors = p_impl->ocr_rec_session->Run(
             Ort::RunOptions{nullptr},
             input_names.data(),
             &input_tensor,
@@ -574,16 +1045,19 @@ static String recognize_text(
         );
     } catch (const std::exception &e) {
         UtilityFunctions::print("OCR recognition inference failed: ", e.what());
-        return String();
+        return {String(), 0.0f};
     }
 
     auto out_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
-    // RapidOCR CRNN output shape: [batch, seq_len, num_classes] (batch-major).
     int seq_len = (int)out_shape[1];
     int num_classes = (int)out_shape[2];
     const float *logits = output_tensors[0].GetTensorData<float>();
 
     std::vector<int> indices;
+    std::vector<float> probs;
+    indices.reserve(seq_len);
+    probs.reserve(seq_len);
+
     for (int t = 0; t < seq_len; t++) {
         int best_idx = 0;
         float best_val = -1e30f;
@@ -595,151 +1069,149 @@ static String recognize_text(
             }
         }
         indices.push_back(best_idx);
+
+        // Softmax probability of the selected class.
+        double sum = 0.0;
+        for (int c = 0; c < num_classes; c++) {
+            sum += std::exp((double)(logits[t * num_classes + c] - best_val));
+        }
+        probs.push_back((float)(1.0 / sum));
     }
 
-    return ctc_decode(indices, p_charset);
+    return ctc_decode(indices, probs, p_impl->charset);
 }
+
 
 // ---------------------------------------------------------------------------
 // Public OCR methods
 // ---------------------------------------------------------------------------
 
 Array LogoDetector::ocr_full_image(const Ref<Image> &p_image) {
-    Array result;
+	Array result;
 
-    // NOTE: This implementation uses YOLO candidate crops as the text regions
-    // and runs CRNN recognition on each crop. It does not run a full DBNet
-    // text detector. This is a pragmatic trade-off for the title/logo use case.
-    if (!impl->yolo_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
-        return result;
-    }
+	if (!impl->ocr_det_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
+		return result;
+	}
 
-    Ref<Image> img = p_image->duplicate();
-    if (img->get_format() != Image::FORMAT_RGB8) {
-        img->convert(Image::FORMAT_RGB8);
-    }
+	std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
+	for (const OcrWord &word : words) {
+		Dictionary dict;
+		dict["x1"] = word.x1;
+		dict["y1"] = word.y1;
+		dict["x2"] = word.x2;
+		dict["y2"] = word.y2;
+		dict["text"] = word.text;
+		dict["confidence"] = word.confidence;
+		dict["text_score"] = word.text_score;
+		result.append(dict);
+	}
 
-    Array candidates = detect_candidates(p_image, 0.15f, 0.45f, 10);
-
-    for (int i = 0; i < candidates.size(); i++) {
-        Dictionary cand = candidates[i];
-        String text = recognize_crop(
-            impl->ocr_rec_session.get(),
-            impl->memory_info,
-            impl->ocr_rec_input_name_strings,
-            impl->ocr_rec_output_name_strings,
-            impl->charset,
-            img,
-            (float)cand["x1"],
-            (float)cand["y1"],
-            (float)cand["x2"],
-            (float)cand["y2"]
-        );
-
-        if (!text.is_empty()) {
-            Dictionary dict;
-            dict["x1"] = cand["x1"];
-            dict["y1"] = cand["y1"];
-            dict["x2"] = cand["x2"];
-            dict["y2"] = cand["y2"];
-            dict["text"] = text;
-            dict["confidence"] = cand["confidence"];
-            result.append(dict);
-        }
-    }
-
-    return result;
+	return result;
 }
 
 Dictionary LogoDetector::detect_title_box(
-    const Ref<Image> &p_image,
-    const String &p_title,
-    float p_conf_threshold,
-    float p_nms_threshold
+	const Ref<Image> &p_image,
+	const String &p_title,
+	float p_conf_threshold,
+	float p_nms_threshold
 ) {
-    Dictionary result;
-    result["detected"] = false;
+	Dictionary result;
+	result["detected"] = false;
 
-    if (!impl->yolo_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
-        return result;
-    }
+	if (!impl->yolo_loaded || !impl->ocr_det_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
+		return result;
+	}
 
-    Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 5);
-    Array ocr_words = ocr_full_image(p_image);
+	Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 5);
+	std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
 
-    if (candidates.size() == 0) {
-        return result;
-    }
+	int img_w = p_image->get_width();
+	int img_h = p_image->get_height();
+	float diag = std::sqrt((float)img_w * (float)img_w + (float)img_h * (float)img_h);
 
-    // Score each candidate by its nearest OCR word's similarity to the title.
-    // This mirrors the Python v4 token-based approach at a basic level.
-    String title_lower = p_title.to_lower();
-    float best_score = -1.0f;
-    Dictionary best_candidate;
+	float best_score = -1.0f;
+	Dictionary best_candidate;
 
-    for (int i = 0; i < candidates.size(); i++) {
-        Dictionary cand = candidates[i];
-        float cx = ((float)cand["x1"] + (float)cand["x2"]) / 2.0f;
-        float cy = ((float)cand["y1"] + (float)cand["y2"]) / 2.0f;
+	for (int i = 0; i < candidates.size(); i++) {
+		Dictionary cand = candidates[i];
+		float cx = ((float)cand["x1"] + (float)cand["x2"]) / 2.0f;
+		float cy = ((float)cand["y1"] + (float)cand["y2"]) / 2.0f;
 
-        float best_word_score = 0.0f;
-        String matched_text;
+		float best_word_score = 0.0f;
+		String matched_text;
 
-        for (int j = 0; j < ocr_words.size(); j++) {
-            Dictionary word = ocr_words[j];
-            float wcx = ((float)word["x1"] + (float)word["x2"]) / 2.0f;
-            float wcy = ((float)word["y1"] + (float)word["y2"]) / 2.0f;
-            String text = word["text"];
+		for (const OcrWord &word : words) {
+			float sim = token_similarity_score(word.text, p_title);
+			if (sim < 0.05f) continue;
 
-            float dx = cx - wcx;
-            float dy = cy - wcy;
-            float dist = std::sqrt(dx * dx + dy * dy);
+			float wcx = (word.x1 + word.x2) / 2.0f;
+			float wcy = (word.y1 + word.y2) / 2.0f;
+			float dx = cx - wcx;
+			float dy = cy - wcy;
+			float dist = std::sqrt(dx * dx + dy * dy);
 
-            String text_lower = text.to_lower();
-            float full_sim = 0.0f;
-            if (!text_lower.is_empty() && !title_lower.is_empty()) {
-                // Simple Levenshtein-like similarity via Godot's built-in
-                // String methods is not available, so we use a crude containment check.
-                if (title_lower.contains(text_lower) || text_lower.contains(title_lower)) {
-                    full_sim = 1.0f;
-                }
-            }
+			float proximity = std::max(0.0f, 1.0f - dist / (diag * 0.3f));
+			float score = sim * proximity;
+			if (score > best_word_score) {
+				best_word_score = score;
+				matched_text = word.text;
+			}
+		}
 
-            float score = full_sim * std::max(0.0f, 1.0f - dist / 300.0f);
-            if (score > best_word_score) {
-                best_word_score = score;
-                matched_text = text;
-            }
-        }
+		float cand_conf = (float)cand["confidence"];
+		float combined = cand_conf * 0.3f + best_word_score * 0.7f;
 
-        float cand_conf = (float)cand["confidence"];
-        float combined = cand_conf * 0.3f + best_word_score * 0.7f;
+		if (combined > best_score) {
+			best_score = combined;
+			best_candidate = cand;
+			best_candidate["matched_text"] = matched_text;
+			best_candidate["title_score"] = token_similarity_score(matched_text, p_title);
+			best_candidate["combined_score"] = combined;
+		}
+	}
 
-        if (combined > best_score) {
-            best_score = combined;
-            best_candidate = cand;
-            best_candidate["matched_text"] = matched_text;
-            best_candidate["title_score"] = best_word_score;
-            best_candidate["combined_score"] = combined;
-        }
-    }
+	if (best_score > 0.0f) {
+		best_candidate["detected"] = true;
+		return best_candidate;
+	}
 
-    if (best_score > 0.0f) {
-        best_candidate["detected"] = true;
-        return best_candidate;
-    }
+	// Fallback: top YOLO candidate.
+	if (candidates.size() > 0) {
+		best_candidate = candidates[0];
+		best_candidate["detected"] = true;
+		best_candidate["matched_text"] = "";
+		best_candidate["title_score"] = 0.0f;
+		best_candidate["combined_score"] = (float)best_candidate["confidence"];
+		return best_candidate;
+	}
 
-    // Fallback: top YOLO candidate.
-    if (candidates.size() > 0) {
-        best_candidate = candidates[0];
-        best_candidate["detected"] = true;
-        best_candidate["matched_text"] = "";
-        best_candidate["title_score"] = 0.0f;
-        best_candidate["combined_score"] = (float)best_candidate["confidence"];
-        return best_candidate;
-    }
+	// No YOLO candidates: fall back to the best OCR word box if any matches the title.
+	if (!words.empty()) {
+		float best_sim = 0.0f;
+		const OcrWord *best_word = nullptr;
+		for (const OcrWord &word : words) {
+			float sim = token_similarity_score(word.text, p_title);
+			if (sim > best_sim) {
+				best_sim = sim;
+				best_word = &word;
+			}
+		}
+		if (best_word != nullptr && best_sim >= 0.2f) {
+			Dictionary fb;
+			fb["detected"] = true;
+			fb["x1"] = best_word->x1;
+			fb["y1"] = best_word->y1;
+			fb["x2"] = best_word->x2;
+			fb["y2"] = best_word->y2;
+			fb["confidence"] = 0.0f;
+			fb["matched_text"] = best_word->text;
+			fb["title_score"] = best_sim;
+			fb["combined_score"] = best_sim;
+			return fb;
+		}
+	}
 
-    return result;
+	return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -750,11 +1222,13 @@ void LogoDetector::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_yolo_model", "model_path"), &LogoDetector::load_yolo_model);
     ClassDB::bind_method(D_METHOD("load_ocr_det_model", "model_path"), &LogoDetector::load_ocr_det_model);
     ClassDB::bind_method(D_METHOD("load_ocr_rec_model", "model_path"), &LogoDetector::load_ocr_rec_model);
+    ClassDB::bind_method(D_METHOD("load_ocr_cls_model", "model_path"), &LogoDetector::load_ocr_cls_model);
     ClassDB::bind_method(D_METHOD("load_ocr_charset", "charset_path"), &LogoDetector::load_ocr_charset);
 
     ClassDB::bind_method(D_METHOD("is_yolo_model_loaded"), &LogoDetector::is_yolo_model_loaded);
     ClassDB::bind_method(D_METHOD("is_ocr_det_model_loaded"), &LogoDetector::is_ocr_det_model_loaded);
     ClassDB::bind_method(D_METHOD("is_ocr_rec_model_loaded"), &LogoDetector::is_ocr_rec_model_loaded);
+    ClassDB::bind_method(D_METHOD("is_ocr_cls_model_loaded"), &LogoDetector::is_ocr_cls_model_loaded);
 
     ClassDB::bind_method(D_METHOD("detect_candidates", "image", "conf_threshold", "nms_threshold", "top_k"),
                          &LogoDetector::detect_candidates, DEFVAL(0.15f), DEFVAL(0.45f), DEFVAL(5));

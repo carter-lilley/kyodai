@@ -90,21 +90,6 @@ func _ready():
 	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
 	full_sync_button.pressed.connect(_on_full_sync_pressed)
 
-	# Listen for connection coming online so we can auto-refresh platforms
-	SystemManager.network.network_status_changed.connect(_on_network_status_changed)
-
-	# Connect to launch manager signals for extraction
-	LaunchManager.emulator_extraction_started.connect(_on_emulator_extraction_started)
-	LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
-	LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
-
-	# Connect to viewport focus changes to ensure focused items are visible
-	get_viewport().gui_focus_changed.connect(_on_focus_changed)
-
-	# Connect to viewport resize to update card layout (debounced by SystemManager.display)
-	if SystemManager.display:
-		SystemManager.display.viewport_size_changed.connect(_on_viewport_size_changed)
-
 	# Set initial column visibility
 	_was_narrow = _is_narrow_screen()
 	_update_column_visibility()

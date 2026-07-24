@@ -292,12 +292,14 @@ func _build_media_stack(force_full_rebuild: bool = true):
 			_media_stack.set_parent_rid(_media_canvas_item)
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
+		_media_stack.set_logo_rect(_get_logo_rect_from_game())
 		_media_stack.update_draw_rects()
 	else:
 		_media_stack = EffectStack.new()
 		_media_stack.initialize(_media_container, effect_settings, "base_card")
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
+		_media_stack.set_logo_rect(_get_logo_rect_from_game())
 		if _media_canvas_item.is_valid():
 			_media_stack.set_parent_rid(_media_canvas_item)
 		# The base card shader handles rounded corners; don't clip on the
@@ -360,6 +362,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
+			_focus_stack.set_logo_rect(_get_logo_rect_from_game())
 		_link_overlapping_effects()
 		return
 
@@ -377,6 +380,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	_update_focus_stack_bounds()
 	if _current_texture:
 		_focus_stack.set_game_texture(_current_texture)
+		_focus_stack.set_logo_rect(_get_logo_rect_from_game())
 
 	# Hide base effect in focus stack — focus effects are overlays only
 	var focus_base = _focus_stack.get_effect("base")
@@ -956,6 +960,13 @@ func _set_texture(tex: Texture2D) -> void:
 	_current_texture = resolved_tex
 	if game:
 		_current_texture_game_id = game.id
+
+	var logo_rect := _get_logo_rect_from_game()
+	if _media_stack:
+		_media_stack.set_logo_rect(logo_rect)
+	if _focus_stack:
+		_focus_stack.set_logo_rect(logo_rect)
+
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
 	# rebuild it now so the texture actually has somewhere to render.
 	if not _media_stack:
@@ -974,6 +985,22 @@ func _set_texture(tex: Texture2D) -> void:
 	_update_media()
 	# Ensure the card redraws so the RS canvas items are submitted to the render tree.
 	queue_redraw()
+
+func _get_logo_rect_from_game() -> Vector4:
+	if not game or not game.logo_box is Dictionary:
+		return Vector4.ZERO
+	var logo_box: Dictionary = game.logo_box
+	if not logo_box.get("detected", false):
+		return Vector4.ZERO
+	var x1 := float(logo_box.get("x1", 0.0))
+	var y1 := float(logo_box.get("y1", 0.0))
+	var x2 := float(logo_box.get("x2", 0.0))
+	var y2 := float(logo_box.get("y2", 0.0))
+	var w := x2 - x1
+	var h := y2 - y1
+	if w <= 0.0 or h <= 0.0:
+		return Vector4.ZERO
+	return Vector4(x1, y1, w, h)
 
 func _on_card_pressed():
 	if not game:

@@ -127,12 +127,41 @@ func _update_grid_orientation() -> void:
 	var new_grid_vertical = state.grid_vertical
 	var new_focus_scale = 1.0 + state.focus_scale_ratio
 
-	# Apply the saved zoom ratio before any cards are created so the first
-	# visible layout uses the user's saved zoom instead of the default 0.15.
+	# Apply the saved zoom level (grid) or ratio (list/carousel) before any cards
+	# are created so the first visible layout uses the user's setting instead of
+	# the default 0.15.
 	if games_grid:
-		print("[View._update_grid_orientation] view_name=", view_name, " saved_zoom=", state.card_zoom_ratio, " grid_target_before=", games_grid.target_card_width_ratio)
-		if not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_ratio):
-			games_grid.target_card_width_ratio = state.card_zoom_ratio
+		print("[View._update_grid_orientation] view_name=", view_name, " level=", state.card_zoom_level, " ratio=", state.card_zoom_ratio, " grid_target_before=", games_grid.target_card_width_ratio)
+		if new_mode == VirtualScrollGridContainer.ViewMode.GRID:
+			var level: int = state.card_zoom_level
+			if level < 0:
+				# Derive level from the legacy saved ratio for migration.
+				var snap_ratios = games_grid.get_snap_ratios()
+				if snap_ratios.size() > 0:
+					snap_ratios.reverse()
+					var nearest_idx := 0
+					var nearest_dist := INF
+					for i in range(snap_ratios.size()):
+						var dist := absf(state.card_zoom_ratio - snap_ratios[i])
+						if dist < nearest_dist:
+							nearest_dist = dist
+							nearest_idx = i
+					level = nearest_idx
+					state.card_zoom_level = level
+				else:
+					level = 0
+			var snap_ratios = games_grid.get_snap_ratios()
+			if snap_ratios.size() > 0:
+				snap_ratios.reverse()
+				level = clampi(level, 0, snap_ratios.size() - 1)
+				var new_ratio: float = snap_ratios[level]
+				state.card_zoom_ratio = new_ratio
+				if not is_equal_approx(games_grid.target_card_width_ratio, new_ratio):
+					games_grid.target_card_width_ratio = new_ratio
+		else:
+			# LIST/CAROUSEL: use the saved ratio directly.
+			if not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_ratio):
+				games_grid.target_card_width_ratio = state.card_zoom_ratio
 	else:
 		print("[View._update_grid_orientation] no games_grid for ", view_name)
 

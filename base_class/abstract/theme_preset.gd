@@ -13,6 +13,7 @@ class_name ThemePreset
 @export var library_navigation_type: int = 1
 @export var library_grid_padding: int = 22
 @export var library_card_zoom: float = 0.25
+@export var library_card_zoom_level: int = -1
 @export var library_show_title_mode: int = 0
 @export var library_card_display_mode: int = 0
 @export var library_focus_scale: float = 0.09
@@ -73,6 +74,7 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_navigation_type = settings.library_navigation_type.value if settings.library_navigation_type else 1
 	preset.library_grid_padding = settings.library_grid_padding.value if settings.library_grid_padding else 22
 	preset.library_card_zoom = settings.library_card_zoom.value if settings.library_card_zoom else 0.25
+	preset.library_card_zoom_level = settings.library_card_zoom_level.value if settings.library_card_zoom_level else -1
 	preset.library_show_title_mode = settings.library_show_title_mode.value if settings.library_show_title_mode else 0
 	preset.library_card_display_mode = settings.library_card_display_mode.value if settings.library_card_display_mode else 0
 	preset.library_focus_scale = settings.library_focus_scale.value if settings.library_focus_scale else 0.09

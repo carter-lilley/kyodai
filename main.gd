@@ -170,19 +170,18 @@ func _ready():
 	var settle_start_us := Time.get_ticks_usec()
 	print("[Main] Unsuppressing grid layout and settling once...")
 	VirtualScrollGridContainer.startup_layout_suppressed = false
-	var grids_to_clear: Array[VirtualScrollGridContainer] = []
 	var current_view = UIManager.get_current_view()
 	if current_view:
 		var grid = _get_view_grid(current_view)
 		if grid:
 			# Use a deterministic computed size rather than relying on grid.size, which
-			# may not have caught up to the post-swap viewport yet.
+			# may not have caught up to the post-swap viewport yet. Keep it set so
+			# later layout passes keep using the expected viewport rect.
 			var grid_settle_start_us := Time.get_ticks_usec()
 			var available_size := UIManager.compute_grid_available_size(grid, current_view)
 			grid.set_deterministic_available_size(available_size)
 			grid._instantiate_card_pool()
 			grid.settle_startup_with_buffer(0)
-			grids_to_clear.append(grid)
 			print("[Main] Settled grid for ", current_view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - grid_settle_start_us)
 	else:
 		print("[Main] No current view to settle")
@@ -193,14 +192,31 @@ func _ready():
 	phase_start_us = Time.get_ticks_usec()
 	_sync_zoom_slider_to_current_view()
 	print("[Main] _sync_zoom_slider_to_current_view elapsed_us=", Time.get_ticks_usec() - phase_start_us)
-	# Save the snapped grid ratio so the setting stays in sync with the slider and
-	# doesn't hold a stale raw value from a previous viewport size.
+	# Save the current level and snapped ratio so the settings stay in sync with
+	# the slider and don't hold stale values from a previous viewport size.
 	if current_view:
 		var grid = _get_view_grid(current_view)
 		if grid:
-			_save_zoom_ratio(grid.target_card_width_ratio)
-	for grid in grids_to_clear:
-		grid.clear_deterministic_available_size()
+			if UIManager and UIManager.card_settings_state:
+				var level = UIManager.card_settings_state.card_zoom_level
+				if level < 0 and _current_snap_ratios.size() > 0:
+					level = _find_nearest_snap_index(grid.target_card_width_ratio)
+					UIManager.card_settings_state.card_zoom_level = level
+				if level >= 0 and DataManager:
+					var level_setting = DataManager.get_setting("library_card_zoom_level")
+					if level_setting:
+						DataManager.set_setting(level, level_setting)
+						if _zoom_save_timer:
+							_zoom_save_timer.start()
+					var ratio_setting = DataManager.get_setting("library_card_zoom")
+					if ratio_setting:
+						DataManager.set_setting(grid.target_card_width_ratio, ratio_setting)
+						if _zoom_save_timer:
+							_zoom_save_timer.start()
+					if UIManager and UIManager.card_settings_state:
+						UIManager.card_settings_state.card_zoom_ratio = grid.target_card_width_ratio
+				else:
+					_save_zoom_ratio(grid.target_card_width_ratio)
 	print("[Main] Settle block total elapsed_us=", Time.get_ticks_usec() - settle_start_us)
 
 	# Sync the top background mask height to match the control bar.
@@ -454,32 +470,10 @@ func _is_grid_view(view_name: String) -> bool:
 	return view_name == "Home" or view_name == "Library" or view_name.begins_with("Collection_")
 
 func _on_tab_changed(view_name: String):
-	# Apply saved zoom first, then sync slider so UI reflects the applied value
-	if _is_grid_view(view_name):
-		await _apply_zoom_to_view_deferred(view_name)
+	# Sync slider to the current view's grid; do not re-apply saved zoom here,
+	# because that overrides the live zoom whenever tabs are switched (e.g. when
+	# adding/removing a collection pin).
 	_update_ui_for_view(view_name)
-
-func _apply_zoom_to_view_deferred(view_name: String) -> void:
-	"""Apply saved zoom to the specified view when it becomes visible."""
-	var view = UIManager.get_view(view_name)
-	if not view:
-		return
-
-	var grid = _get_view_grid(view)
-	if not grid or not DataManager:
-		return
-
-	var zoom_setting = DataManager.get_setting("library_card_zoom")
-	if not zoom_setting:
-		return
-
-	# Keep checking until grid has valid dimensions
-	if grid.size.x <= 0 or grid.size.y <= 0:
-		await get_tree().process_frame
-		_apply_zoom_to_view_deferred(view_name)
-		return
-
-	grid.target_card_width_ratio = zoom_setting.value
 
 func _on_viewport_resized(_new_size: Vector2) -> void:
 	"""Re-sync zoom slider after viewport resize. The grid re-snaps its zoom
@@ -508,7 +502,11 @@ func _on_viewport_resized(_new_size: Vector2) -> void:
 	_update_zoom_slider_stops(zoom_slider, games_grid)
 	zoom_slider.set_block_signals(true)
 	if _current_snap_ratios.size() > 0:
-		zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+		var level = UIManager.card_settings_state.card_zoom_level if UIManager and UIManager.card_settings_state else -1
+		if level < 0:
+			level = _find_nearest_snap_index(games_grid.target_card_width_ratio)
+		level = clampi(level, 0, _current_snap_ratios.size() - 1)
+		zoom_slider.set_value_no_signal(level)
 	else:
 		zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
 	zoom_slider.set_block_signals(false)
@@ -552,7 +550,11 @@ func _update_ui_for_view(view_name: String):
 				_update_zoom_slider_stops(zoom_slider, games_grid)
 				zoom_slider.set_block_signals(true)
 				if _current_snap_ratios.size() > 0:
-					zoom_slider.set_value_no_signal(_find_nearest_snap_index(games_grid.target_card_width_ratio))
+					var level = UIManager.card_settings_state.card_zoom_level if UIManager and UIManager.card_settings_state else -1
+					if level < 0:
+						level = _find_nearest_snap_index(games_grid.target_card_width_ratio)
+					level = clampi(level, 0, _current_snap_ratios.size() - 1)
+					zoom_slider.set_value_no_signal(level)
 				else:
 					zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
 				zoom_slider.set_block_signals(false)
@@ -707,13 +709,41 @@ func _on_zoom_changed(value: float):
 		print("[Main] _on_zoom_changed ignored during startup sync: value=", value)
 		return
 	print("[Main] _on_zoom_changed: value=", value, " snap_ratios=", _current_snap_ratios)
-	var actual_zoom = value
-	if _current_snap_ratios.size() > 0:
-		# Grid mode: value is an integer index — map to actual ratio
-		var index = clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
-		actual_zoom = _current_snap_ratios[index]
 
-	# Apply zoom to ALL grid views for consistent zoom across views
+	if _current_snap_ratios.size() > 0:
+		# Grid mode: value is an integer level. Keep CardSettingsState in sync
+		# so lazily created views inherit the current level.
+		var level := clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
+		if UIManager and UIManager.card_settings_state:
+			UIManager.card_settings_state.card_zoom_level = level
+			UIManager.card_settings_state.card_zoom_ratio = _current_snap_ratios[level]
+
+		# Apply the same level to ALL grid views. Each grid resolves the level
+		# to its own snap ratio so the zoom level stays consistent.
+		if UIManager:
+			for view_name in UIManager.view._views.keys():
+				if not _is_grid_view(view_name):
+					continue
+				var view = UIManager.get_view(view_name)
+				if view:
+					var games_grid = _get_view_grid(view)
+					if games_grid:
+						var snap_ratios = games_grid.get_snap_ratios()
+						if snap_ratios.size() > 0:
+							snap_ratios.reverse()
+							var clamped_level = clampi(level, 0, snap_ratios.size() - 1)
+							var actual_zoom = snap_ratios[clamped_level]
+							if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
+								games_grid.target_card_width_ratio = actual_zoom
+		else:
+			return
+		return
+
+	# List/Carousel mode: value is the actual ratio.
+	var actual_zoom = clampf(value, 0.05, 0.5)
+	if UIManager and UIManager.card_settings_state:
+		UIManager.card_settings_state.card_zoom_ratio = actual_zoom
+
 	if UIManager:
 		for view_name in UIManager.view._views.keys():
 			if not _is_grid_view(view_name):
@@ -722,7 +752,6 @@ func _on_zoom_changed(value: float):
 			if view:
 				var games_grid = _get_view_grid(view)
 				if games_grid:
-					# Only update if the zoom actually changed
 					if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
 						games_grid.target_card_width_ratio = actual_zoom
 
@@ -731,22 +760,32 @@ func _on_zoom_changed_finished(value_changed: bool):
 	if not value_changed or VirtualScrollGridContainer.startup_layout_suppressed:
 		return
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
-	var saved_value = 0.15
-	if zoom_slider:
-		if _current_snap_ratios.size() > 0:
-			# Grid mode: map integer index back to actual ratio
-			var index = clampi(int(round(zoom_slider.value)), 0, _current_snap_ratios.size() - 1)
-			saved_value = _current_snap_ratios[index]
-		else:
-			saved_value = zoom_slider.value
+	if not zoom_slider:
+		return
 
-	# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
-	if DataManager:
-		var zoom_setting = DataManager.get_setting("library_card_zoom")
-		if zoom_setting:
-			DataManager.set_setting(saved_value, zoom_setting)
-			if _zoom_save_timer:
-				_zoom_save_timer.start()
+	if _current_snap_ratios.size() > 0:
+		# Grid mode: save the integer level.
+		var level = clampi(int(round(zoom_slider.value)), 0, _current_snap_ratios.size() - 1)
+		if DataManager:
+			var zoom_level_setting = DataManager.get_setting("library_card_zoom_level")
+			if zoom_level_setting:
+				DataManager.set_setting(level, zoom_level_setting)
+				if _zoom_save_timer:
+					_zoom_save_timer.start()
+			var zoom_setting = DataManager.get_setting("library_card_zoom")
+			if zoom_setting:
+				DataManager.set_setting(_current_snap_ratios[level], zoom_setting)
+				if _zoom_save_timer:
+					_zoom_save_timer.start()
+	else:
+		# List/Carousel mode: save the actual ratio.
+		var saved_value = zoom_slider.value
+		if DataManager:
+			var zoom_setting = DataManager.get_setting("library_card_zoom")
+			if zoom_setting:
+				DataManager.set_setting(saved_value, zoom_setting)
+				if _zoom_save_timer:
+					_zoom_save_timer.start()
 
 func _on_zoom_save_timer_timeout() -> void:
 	if DataManager:
@@ -781,7 +820,7 @@ func _get_view_grid(view: View) -> VirtualScrollGridContainer:
 # startup, on tab changes, after nav rebuilds, after sync, and after screen swaps.
 
 func _load_and_apply_saved_zoom() -> void:
-	"""Apply the saved zoom setting to both grids and sync the slider.
+	"""Apply the saved zoom level/ratio to all grids and sync the slider.
 
 	Used at runtime (e.g. after a preset is applied) when the grid may already
 	be visible with a different zoom. Startup layout now applies the saved zoom
@@ -792,41 +831,69 @@ func _load_and_apply_saved_zoom() -> void:
 	if not DataManager:
 		return
 
+	var zoom_level_setting = DataManager.get_setting("library_card_zoom_level")
 	var zoom_setting = DataManager.get_setting("library_card_zoom")
-	if not zoom_setting:
-		return
+	var layout_mode_setting = DataManager.get_setting("library_layout_mode")
+	var is_grid: bool = layout_mode_setting.value == 0 if layout_mode_setting else true
 
-	var saved_zoom = zoom_setting.value
+	if is_grid and zoom_level_setting and zoom_level_setting.value is int and zoom_level_setting.value >= 0:
+		var level: int = zoom_level_setting.value
+		if UIManager and UIManager.card_settings_state:
+			UIManager.card_settings_state.card_zoom_level = level
 
-	# Apply saved zoom to all grid views
-	if UIManager:
-		for view_name in UIManager.view._views.keys():
-			if not _is_grid_view(view_name):
-				continue
-			var view = UIManager.get_view(view_name)
-			if view:
-				var games_grid = _get_view_grid(view)
-				if games_grid:
-					games_grid.target_card_width_ratio = saved_zoom
+		# Apply the same level to all grid views.
+		if UIManager:
+			for view_name in UIManager.view._views.keys():
+				if not _is_grid_view(view_name):
+					continue
+				var view = UIManager.get_view(view_name)
+				if view:
+					var games_grid = _get_view_grid(view)
+					if games_grid:
+						var snap_ratios = games_grid.get_snap_ratios()
+						if snap_ratios.size() > 0:
+							snap_ratios.reverse()
+							var clamped_level = clampi(level, 0, snap_ratios.size() - 1)
+							var actual_zoom = snap_ratios[clamped_level]
+							if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
+								games_grid.target_card_width_ratio = actual_zoom
 
-	# Set zoom slider to the actual grid ratio
+	elif zoom_setting:
+		var saved_zoom = zoom_setting.value
+
+		# Apply saved zoom to all grid views
+		if UIManager:
+			for view_name in UIManager.view._views.keys():
+				if not _is_grid_view(view_name):
+					continue
+				var view = UIManager.get_view(view_name)
+				if view:
+					var games_grid = _get_view_grid(view)
+					if games_grid:
+						games_grid.target_card_width_ratio = saved_zoom
+
+	# Set zoom slider to the current level (grid) or actual grid ratio (list/carousel)
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
 	if zoom_slider:
 		var current_view = UIManager.get_current_view()
 		var games_grid = _get_view_grid(current_view) if current_view else null
 		if games_grid:
 			_update_zoom_slider_stops(zoom_slider, games_grid)
-		# Use the grid's actual snapped ratio (not the raw saved value) so slider matches reality
-		var actual_zoom = games_grid.target_card_width_ratio if games_grid else saved_zoom
+		# Use the current level in grid mode so the slider reflects the saved level.
+		var actual_zoom = games_grid.target_card_width_ratio if games_grid else (zoom_setting.value if zoom_setting else 0.25)
 		zoom_slider.set_block_signals(true)
 		if _current_snap_ratios.size() > 0:
-			zoom_slider.set_value_no_signal(_find_nearest_snap_index(actual_zoom))
+			var level = UIManager.card_settings_state.card_zoom_level if UIManager and UIManager.card_settings_state else -1
+			if level < 0:
+				level = _find_nearest_snap_index(actual_zoom)
+			level = clampi(level, 0, _current_snap_ratios.size() - 1)
+			zoom_slider.set_value_no_signal(level)
 		else:
 			zoom_slider.set_value_no_signal(actual_zoom)
 		zoom_slider.set_block_signals(false)
 
 func _sync_zoom_slider_to_current_view() -> void:
-	"""Sync the zoom slider to the current grid's actual zoom ratio.
+	"""Sync the zoom slider to the current grid's zoom level.
 
 	Does not modify the grid's target_card_width_ratio; use this at startup
 	after the grid has settled. The caller is responsible for blocking the
@@ -844,9 +911,12 @@ func _sync_zoom_slider_to_current_view() -> void:
 	print("[Main] _sync_zoom_slider_to_current_view: view=", current_view.view_name if current_view else "null", " grid_ratio=", games_grid.target_card_width_ratio)
 	_update_zoom_slider_stops(zoom_slider, games_grid)
 	if _current_snap_ratios.size() > 0:
-		var idx = _find_nearest_snap_index(games_grid.target_card_width_ratio)
-		print("[Main] syncing slider to index=", idx, " ratio=", _current_snap_ratios[idx])
-		zoom_slider.set_value_no_signal(idx)
+		var level = UIManager.card_settings_state.card_zoom_level if UIManager and UIManager.card_settings_state else -1
+		if level < 0:
+			level = _find_nearest_snap_index(games_grid.target_card_width_ratio)
+		level = clampi(level, 0, _current_snap_ratios.size() - 1)
+		print("[Main] syncing slider to level=", level, " ratio=", _current_snap_ratios[level])
+		zoom_slider.set_value_no_signal(level)
 	else:
 		zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
 
@@ -1077,8 +1147,13 @@ func _adjust_zoom(delta: float) -> void:
 			_on_zoom_changed(new_index)
 			if focused_index >= 0:
 				call_deferred("_restore_focus_to_card", focused_index)
-			# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
+			# Save the integer level for grid mode.
 			if DataManager:
+				var zoom_level_setting = DataManager.get_setting("library_card_zoom_level")
+				if zoom_level_setting:
+					DataManager.set_setting(new_index, zoom_level_setting)
+					if _zoom_save_timer:
+						_zoom_save_timer.start()
 				var zoom_setting = DataManager.get_setting("library_card_zoom")
 				if zoom_setting:
 					DataManager.set_setting(_current_snap_ratios[new_index], zoom_setting)

@@ -96,6 +96,7 @@ const Type = SettingsVar.SettingType
 @export var library_navigation_type := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 22, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
 @export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.25, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
+@export var library_card_zoom_level := SettingsVar.new(Type.INT, -1, State.INTERNAL, "Card Zoom Level", "Discrete zoom level for grid mode (index into snap ratios)", -1.0, 10.0, 1.0)
 @export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
 @export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.09, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
 @export var library_card_content_alignment := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Content Alignment", "How card content is positioned within the card cell", 0.0, 2.0, 1.0, ["Left/Top", "Center/Middle", "Right/Bottom"])

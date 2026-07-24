@@ -2913,12 +2913,18 @@ func _cleanup_item(item: QueueItem):
 		# Let notification auto-dismiss on completion/failure
 		pass
 
-# ==================== IMAGE DOWNLOADS (NO QUEUE) ====================
+# ==================== IMAGE DOWNLOADS (THROTTLED) ====================
 
 # Track active image downloads for deduplication
 var _active_image_downloads: Dictionary = {}  # url -> {callbacks: [], completed: bool, success: bool}
 
-## Downloads an image immediately (no queue) with caching and deduplication
+# Cap concurrent image HTTP requests to avoid exhausting the OS DNS resolver.
+const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 8
+var _active_image_download_count: int = 0
+var _pending_image_downloads: Array = []
+var _pending_image_downloads_mutex: Mutex = Mutex.new()
+
+## Downloads an image with caching, deduplication, and limited concurrency.
 ## callback(success: bool)
 func download_image(url: String, cache_path: String, callback: Callable) -> bool:
 	# Check if already cached
@@ -2935,6 +2941,36 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 			state.callbacks.append(callback)
 		return true
 
+	# Throttle: queue if too many downloads are in flight.
+	_pending_image_downloads_mutex.lock()
+	if _active_image_download_count >= MAX_CONCURRENT_IMAGE_DOWNLOADS:
+		_pending_image_downloads.append({
+			"url": url,
+			"cache_path": cache_path,
+			"callback": callback
+		})
+		_pending_image_downloads_mutex.unlock()
+		return true
+
+	_active_image_download_count += 1
+	_pending_image_downloads_mutex.unlock()
+	_start_image_download(url, cache_path, callback)
+	return true
+
+
+func _process_image_download_queue() -> void:
+	while true:
+		_pending_image_downloads_mutex.lock()
+		if _active_image_download_count >= MAX_CONCURRENT_IMAGE_DOWNLOADS or _pending_image_downloads.is_empty():
+			_pending_image_downloads_mutex.unlock()
+			break
+		var item = _pending_image_downloads.pop_front()
+		_active_image_download_count += 1
+		_pending_image_downloads_mutex.unlock()
+		_start_image_download(item.url, item.cache_path, item.callback)
+
+
+func _start_image_download(url: String, cache_path: String, callback: Callable) -> void:
 	# Start new download
 	_active_image_downloads[url] = {
 		"callbacks": [callback],
@@ -2951,6 +2987,12 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 			state.success = false
 			for cb in state.callbacks:
 				cb.call(false)
+
+			_pending_image_downloads_mutex.lock()
+			_active_image_download_count -= 1
+			_pending_image_downloads_mutex.unlock()
+			_process_image_download_queue()
+
 			# Clean up after delay (guard against node destruction during await)
 			await get_tree().create_timer(5.0).timeout
 			if is_instance_valid(self):
@@ -2966,13 +3008,16 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 		for cb in state.callbacks:
 			cb.call(true)
 
+		_pending_image_downloads_mutex.lock()
+		_active_image_download_count -= 1
+		_pending_image_downloads_mutex.unlock()
+		_process_image_download_queue()
+
 		# Clean up after delay (guard against node destruction during await)
 		await get_tree().create_timer(5.0).timeout
 		if is_instance_valid(self):
 			_active_image_downloads.erase(url)
 	)
-
-	return true
 
 ## Helper function to recursively clean up a temp directory
 func _cleanup_temp_dir(dir_path: String) -> void:

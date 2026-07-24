@@ -147,9 +147,11 @@ func _create_tables():
 			title_id TEXT DEFAULT '',
 			cover_group_id TEXT DEFAULT '',
 			cover_group_master INTEGER DEFAULT 1,
-			igdb_metadata TEXT DEFAULT '{}'
+			igdb_metadata TEXT DEFAULT '{}',
+			logo_box TEXT DEFAULT '{}'
 		)
 	""")
+	_ensure_logo_box_column()
 
 	query_bool("""
 		CREATE TABLE IF NOT EXISTS platforms (
@@ -215,6 +217,15 @@ func _create_tables():
 	""")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_collection ON collection_roms(collection_id)")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_romm ON collection_roms(romm_id)")
+
+
+func _ensure_logo_box_column() -> void:
+	"""Add logo_box column to existing databases that predate the feature."""
+	var info = query_array("PRAGMA table_info(games)")
+	for row in info:
+		if row.get("name", "") == "logo_box":
+			return
+	query_bool("ALTER TABLE games ADD COLUMN logo_box TEXT DEFAULT '{}'")
 
 
 func is_database_ready() -> bool:
@@ -351,6 +362,17 @@ func _row_to_game(row: Dictionary) -> GameResource:
 			game.igdb_metadata = {}
 	else:
 		game.igdb_metadata = {}
+
+	# Restore cached logo box data
+	if row.has("logo_box") and row["logo_box"] != "" and row["logo_box"] != "{}":
+		var json_logo = JSON.new()
+		var err_logo = json_logo.parse(row["logo_box"])
+		if err_logo == OK and json_logo.data is Dictionary:
+			game.logo_box = json_logo.data
+		else:
+			game.logo_box = {}
+	else:
+		game.logo_box = {}
 
 	return game
 
@@ -707,8 +729,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				INSERT OR REPLACE INTO games
 				(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 				 file_name, file_path, file_size, has_local_copy, last_updated,
-				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, logo_box)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			"""
 			var bindings = [
 				game.id,
@@ -735,7 +757,8 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.title_id,
 				game.cover_group_id,
 				1 if game.cover_group_master else 0,
-				JSON.stringify(game.igdb_metadata)
+				JSON.stringify(game.igdb_metadata),
+				JSON.stringify(game.logo_box)
 			]
 			var success = query_bool_unlocked(query, bindings)
 			_db_unlock()
@@ -791,7 +814,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					title_id = ?,
 					cover_group_id = ?,
 					cover_group_master = ?,
-					igdb_metadata = ?
+					igdb_metadata = ?,
+					logo_box = ?
 				WHERE romm_id = ?
 			"""
 			var bindings = [
@@ -818,6 +842,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.cover_group_id,
 				1 if game.cover_group_master else 0,
 				JSON.stringify(game.igdb_metadata),
+				JSON.stringify(game.logo_box),
 				game.romm_id
 			]
 			var success = query_bool_unlocked(query, bindings)
@@ -879,6 +904,50 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 		return false
 
 	return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
+
+
+func update_game_logo_box(romm_id: int, logo_box_json: String, callback: Callable = Callable()) -> bool:
+	"""Update the cached logo_box JSON for a single game."""
+	if not _is_db_ready:
+		return false
+
+	SystemManager.memory.queue_db_task(
+		func():
+			_db_lock()
+			var success = query_bool_unlocked("UPDATE games SET logo_box = ? WHERE romm_id = ?", [logo_box_json, romm_id])
+			_db_unlock()
+			return success,
+
+		func(success: bool):
+			if callback.is_valid():
+				callback.call(success)
+	)
+	return true
+
+
+func update_games_logo_box(romm_ids: Array[int], logo_box_json: String, callback: Callable = Callable()) -> bool:
+	"""Update the cached logo_box JSON for many games in one query."""
+	if not _is_db_ready or romm_ids.is_empty():
+		return false
+
+	SystemManager.memory.queue_db_task(
+		func():
+			_db_lock()
+			var placeholders: Array[String] = []
+			for i in range(romm_ids.size()):
+				placeholders.append("?")
+			var query = "UPDATE games SET logo_box = ? WHERE romm_id IN (" + ",".join(placeholders) + ")"
+			var bindings: Array = [logo_box_json]
+			bindings.append_array(romm_ids)
+			var success = query_bool_unlocked(query, bindings)
+			_db_unlock()
+			return success,
+
+		func(success: bool):
+			if callback.is_valid():
+				callback.call(success)
+	)
+	return true
 
 
 func get_game_by_id(romm_id: int) -> GameResource:

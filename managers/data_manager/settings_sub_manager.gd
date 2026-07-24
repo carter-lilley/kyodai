@@ -102,6 +102,7 @@ func create_preset_from_settings(source_settings: Settings) -> ThemePreset:
 	preset.library_navigation_type = _preset_value_from(source_settings, "library_navigation_type", 1)
 	preset.library_grid_padding = _preset_value_from(source_settings, "library_grid_padding", 22)
 	preset.library_card_zoom = _preset_value_from(source_settings, "library_card_zoom", 0.25)
+	preset.library_card_zoom_level = _preset_value_from(source_settings, "library_card_zoom_level", -1)
 	preset.library_show_title_mode = _preset_value_from(source_settings, "library_show_title_mode", 0)
 	preset.library_card_display_mode = _preset_value_from(source_settings, "library_card_display_mode", 0)
 	preset.library_focus_scale = _preset_value_from(source_settings, "library_focus_scale", 0.09)
@@ -411,6 +412,7 @@ func apply_preset(preset: ThemePreset) -> bool:
 		"library_navigation_type": preset.library_navigation_type,
 		"library_grid_padding": preset.library_grid_padding,
 		"library_card_zoom": preset.library_card_zoom,
+		"library_card_zoom_level": preset.library_card_zoom_level,
 		"library_show_title_mode": preset.library_show_title_mode,
 		"library_card_display_mode": preset.library_card_display_mode,
 		"library_focus_scale": preset.library_focus_scale,

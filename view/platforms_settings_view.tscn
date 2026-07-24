@@ -350,7 +350,6 @@ size_flags_horizontal = 0
 size_flags_vertical = 4
 text = "Fold duplicate covers"
 flat = true
-script = ExtResource("3_lo3qa")
 metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
 [node name="M3Checkbox_Hide" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1162553171]
@@ -360,7 +359,6 @@ size_flags_horizontal = 0
 size_flags_vertical = 4
 text = "Hide games with cover"
 flat = true
-script = ExtResource("3_lo3qa")
 metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
 [node name="M3Checkbox_Siblings" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=333737005]
@@ -370,7 +368,6 @@ size_flags_horizontal = 0
 size_flags_vertical = 4
 text = "Fold Romm siblings"
 flat = true
-script = ExtResource("3_lo3qa")
 metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
 [node name="HboxButtonRow" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=890940306]
@@ -382,7 +379,6 @@ layout_mode = 2
 size_flags_vertical = 0
 text = "Update"
 alignment = 0
-script = ExtResource("4_cuggk")
 button_variant = 0
 button_size = 1
 button_shape = 1
@@ -397,7 +393,6 @@ script = ExtResource("4_cuggk")
 layout_mode = 2
 size_flags_vertical = 0
 text = "Select All"
-script = ExtResource("4_cuggk")
 button_size = 1
 m3_tooltip_text = "Bulk select platforms."
 metadata/_custom_type_script = "uid://dv82iypo8etp8"
@@ -413,7 +408,6 @@ script = ExtResource("3_cuggk")
 layout_mode = 2
 text = "Sync:"
 vertical_alignment = 1
-script = ExtResource("3_cuggk")
 label_style = 12
 
 [node name="M3ButtonGroup" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=332985959]
@@ -430,7 +424,6 @@ layout_mode = 2
 size_flags_vertical = 0
 text = "Quick"
 alignment = 0
-script = ExtResource("4_cuggk")
 button_size = 1
 icon_name = "sync"
 m3_tooltip_text = "Fetch new games and updates since last sync"
@@ -443,7 +436,6 @@ script = ExtResource("4_cuggk")
 layout_mode = 2
 size_flags_vertical = 0
 text = "Full"
-script = ExtResource("4_cuggk")
 button_size = 1
 m3_tooltip_text = "Clear library for full metadata refresh."
 metadata/_custom_type_script = "uid://dv82iypo8etp8"

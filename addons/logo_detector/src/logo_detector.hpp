@@ -37,12 +37,16 @@ public:
     // Load the RapidOCR text-recognition ONNX model.
     Error load_ocr_rec_model(const String &p_model_path);
 
+    // Load the RapidOCR text-classifier ONNX model (0°/180° rotation).
+    Error load_ocr_cls_model(const String &p_model_path);
+
     // Load the character dictionary used by the recognition model.
     Error load_ocr_charset(const String &p_charset_path);
 
     bool is_yolo_model_loaded() const;
     bool is_ocr_det_model_loaded() const;
     bool is_ocr_rec_model_loaded() const;
+    bool is_ocr_cls_model_loaded() const;
 
     // Run YOLO and return up to top_k candidate boxes after NMS.
     Array detect_candidates(

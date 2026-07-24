@@ -134,8 +134,12 @@ func _batch_apply_layout_state() -> void:
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
-	print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio)
-	var zoom_changed: bool = _apply_zoom_ratio(state.card_zoom_ratio)
+	print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio, " state.level=", state.card_zoom_level)
+	var zoom_changed: bool
+	if new_mode == ViewMode.GRID and state.card_zoom_level >= 0:
+		zoom_changed = _apply_zoom_level(state.card_zoom_level)
+	else:
+		zoom_changed = _apply_zoom_ratio(state.card_zoom_ratio)
 	print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
 	var focus_changed: bool = _apply_focus_scale(1.0 + state.focus_scale_ratio)
 
@@ -794,12 +798,15 @@ func _on_resize_debounced():
 	# Re-snap zoom ratio to a valid stop for the new available size and recalculate once.
 	# Use the deterministic available size when possible so the snap is based on
 	# the viewport and chrome, not on the grid's possibly-stale local size.
+	# Keep it set so later layout passes do not fall back to a transient size.
 	var available := Vector2.ZERO
 	if UIManager:
 		available = UIManager.compute_grid_available_size(self, null)
 	set_deterministic_available_size(available if available.x > 0 and available.y > 0 else _get_available_size())
-	target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
-	clear_deterministic_available_size()
+	if view_mode == ViewMode.GRID and UIManager and UIManager.card_settings_state and UIManager.card_settings_state.card_zoom_level >= 0:
+		target_card_width_ratio = _get_snap_ratio_for_level(UIManager.card_settings_state.card_zoom_level)
+	else:
+		target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
 
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
@@ -828,9 +835,12 @@ func settle_startup() -> void:
 	# Update the cached size so later viewport_size_changed events can de-duplicate.
 	_last_resized_size = Vector2(size.x, size.y)
 
-	# Snap the saved zoom to a valid stop for the final available size. The setter
-	# handles the single recalculation pass.
-	target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
+	# Snap the saved zoom to a valid stop for the final available size. In grid
+	# mode use the current level so all views settle at the same zoom level.
+	if view_mode == ViewMode.GRID and UIManager and UIManager.card_settings_state and UIManager.card_settings_state.card_zoom_level >= 0:
+		target_card_width_ratio = _get_snap_ratio_for_level(UIManager.card_settings_state.card_zoom_level)
+	else:
+		target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
 
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now.
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
@@ -1058,6 +1068,36 @@ func get_snap_ratios() -> Array[float]:
 		push_warning("[VirtualScrollGridContainer] Only %d snap ratio(s) for view_mode=%s, size=%s, base_dims=%s, available=%s" % [ratios.size(), view_mode, size, base_dims, available])
 
 	return ratios
+
+## Returns snap ratios sorted ascending (index 0 = most items per line).
+## get_snap_ratios() returns descending ratios; this helper reverses them so
+## the slider index maps directly to a zoom level.
+func _get_snap_ratios_ascending() -> Array[float]:
+	var snap_ratios := get_snap_ratios()
+	snap_ratios.reverse()
+	return snap_ratios
+
+## Returns the snap ratio for the given zoom level using the current grid's
+## available size. Used to apply the shared zoom level across views.
+func _get_snap_ratio_for_level(level: int) -> float:
+	var snap_ratios := _get_snap_ratios_ascending()
+	if snap_ratios.is_empty():
+		return target_card_width_ratio
+	return snap_ratios[clampi(level, 0, snap_ratios.size() - 1)]
+
+## Applies the given zoom level by setting target_card_width_ratio to the
+## corresponding snap ratio. Returns true if the ratio changed.
+func _apply_zoom_level(p_level: int) -> bool:
+	var snap_ratios := _get_snap_ratios_ascending()
+	if snap_ratios.is_empty():
+		return false
+	var new_ratio := snap_ratios[clampi(p_level, 0, snap_ratios.size() - 1)]
+	if is_equal_approx(target_card_width_ratio, new_ratio):
+		return false
+	_batching_layout = true
+	target_card_width_ratio = new_ratio
+	_batching_layout = false
+	return true
 
 ## Compute the exact snap ratio for a given number of items per line.
 func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, available: Vector2, viewport_area: float) -> float:
@@ -1632,6 +1672,12 @@ func _compute_expected_card_size(available: Vector2) -> Vector2:
 # layout can run in a single pass without waiting for Godot's deferred size
 # propagation.
 func set_deterministic_available_size(available: Vector2) -> void:
+	# Degenerate sizes (e.g. headless 0x0 window) should not be kept; otherwise
+	# every layout pass would collapse to one item per line. Fall back to the
+	# grid's own size in those cases.
+	if available.x < 2.0 or available.y < 2.0:
+		clear_deterministic_available_size()
+		return
 	_deterministic_available_size = Vector2(maxf(available.x, 1.0), maxf(available.y, 1.0))
 	print("[Grid] set_deterministic_available_size: ", _deterministic_available_size)
 
@@ -1639,19 +1685,30 @@ func clear_deterministic_available_size() -> void:
 	_deterministic_available_size = Vector2.ZERO
 
 func recalculate_layout_with_size(available: Vector2) -> void:
-	"""Run a single deterministic layout pass using the supplied available size."""
+	"""Run a single deterministic layout pass using the supplied available size.
+
+	The deterministic size is kept set so later layout passes (e.g. from
+	set_total_count or resize) continue to use the expected viewport rect instead
+	of the grid's transient local size. A minimum-size guard prevents degenerate
+	headless / tiny-window cases from locking the grid at a 1x1 rect."""
 	set_deterministic_available_size(available)
+	# Hidden/lazy views can arrive here with a stale target ratio (e.g. the
+	# Home-settled ratio) while their own grid size is still zero. Resolve the
+	# shared zoom level to this view's snap ratio for the computed available
+	# size before snapping, so the final items-per-line matches Home.
+	if view_mode == ViewMode.GRID and UIManager and UIManager.card_settings_state and UIManager.card_settings_state.card_zoom_level >= 0:
+		_apply_zoom_level(UIManager.card_settings_state.card_zoom_level)
 	refresh_dimensions()
-	clear_deterministic_available_size()
 
 func set_total_count_with_available_size(count: int, available: Vector2, preserve_cache: bool = false) -> void:
 	"""Set the total item count using a deterministic available size.
 
 	Use this instead of set_total_count() when the grid's own size may not yet
-	reflect the final container rect (e.g. after a tab change or data reload)."""
+	reflect the final container rect (e.g. after a tab change or data reload). The
+	deterministic size stays active so subsequent layout recalculations keep
+	using the expected viewport rect."""
 	set_deterministic_available_size(available)
 	set_total_count(count, preserve_cache)
-	clear_deterministic_available_size()
 
 func set_total_count(count: int, preserve_cache: bool = false):
 	var count_changed = _total_items != count

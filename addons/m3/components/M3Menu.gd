@@ -156,8 +156,6 @@ func popup(anchor: Control, alignment: int = 0, auto_focus_first: bool = true, m
 	_set_summoner_active(true)
 	_start_movement_timer()
 	
-	_summoner_focus = UIManager.capture_focus() if UIManager else null
-	
 	# Reset item selection tracking for fresh popup
 	_item_selected = false
 	_parent_menu = null
@@ -258,8 +256,10 @@ func dismiss():
 	# e.g. an M3OptionButton, regains focus. Suppress overlay pull-back while we
 	# do this to prevent infinite recursion with the underlying overlay.
 	M3Overlay._suppress_focus_pullback = true
-	if _parent_menu == null and UIManager:
-		UIManager.restore_focus(_summoner_focus)
+	if _parent_menu == null and _summoner != null and is_instance_valid(_summoner):
+		if UIManager:
+			UIManager.suppress_next_focus_sound()
+		_summoner.grab_focus()
 	M3Overlay._suppress_focus_pullback = false
 
 	_release_summoner()
@@ -361,6 +361,14 @@ func _on_focus_changed(index: int):
 func _on_navigated_off_edge(direction: String):
 	# Always close the menu when navigating off an edge
 	dismiss()
+
+func _on_overlay_focus_changed(control: Control) -> void:
+	# If a submenu is open, its focus is outside this menu's subtree, so the
+	# base M3Overlay pull-back would fight it. Skip pull-back while a submenu
+	# is open; the submenu handles its own focus containment.
+	if _submenu and _submenu.is_open():
+		return
+	super._on_overlay_focus_changed(control)
 
 func get_menu_rect() -> Rect2:
 	if _renderer:

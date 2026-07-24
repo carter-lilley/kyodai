@@ -53,6 +53,9 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var cover_group_id: String = ""  # Empty if no duplicate covers, otherwise hash of cover_url
 @export var cover_group_master: bool = true  # Is this the master of its cover group?
 
+## Cached logo box detection result (normalized texture-space coords + metadata)
+@export var logo_box: Dictionary = {}
+
 ## Game source type: "romm" (default), "gamenative", etc.
 @export var source: String = "romm"
 
