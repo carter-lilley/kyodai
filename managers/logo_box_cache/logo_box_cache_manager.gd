@@ -5,7 +5,7 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 var data_manager: Node = null
 
-var _thread: Thread = null
+var _threads: Array[Thread] = []
 var _queue_mutex: Mutex = Mutex.new()
 var _queue_semaphore: Semaphore = Semaphore.new()
 var _running: bool = false
@@ -15,33 +15,56 @@ var _pending_tasks: int = 0
 var _pending_mutex: Mutex = Mutex.new()
 var _completed_semaphore: Semaphore = Semaphore.new()
 
-var _detector: Variant = null
-var _detector_mutex: Mutex = Mutex.new()
+var _worker_count: int = 1
 
 func _ready():
 	data_manager = get_parent()
+	# Default worker count is platform-dependent; may be updated before start_worker().
+	_worker_count = SystemManager.memory.get_logo_box_thread_count()
 
 func _exit_tree():
 	stop_worker()
 
+func _get_intra_op_threads() -> int:
+	# Each worker also loads its own sessions; keep ONNX intra-op threads modest
+	# to avoid oversubscribing with multiple workers.
+	if SystemManager.platform.is_android():
+		return 1
+	return 2
+
+func set_worker_count(p_count: int) -> void:
+	var count := clampi(p_count, 1, 16)
+	if count == _worker_count and not _threads.is_empty():
+		return
+	_worker_count = count
+	# Restart the pool if it is already running.
+	if not _threads.is_empty():
+		stop_worker()
+		start_worker()
+
 func start_worker() -> void:
-	if _thread != null and _thread.is_alive():
+	if not _threads.is_empty():
 		return
 	_running = true
-	_thread = Thread.new()
-	_thread.start(_worker_loop)
+	for i in range(_worker_count):
+		var thread := Thread.new()
+		thread.start(_worker_loop)
+		_threads.append(thread)
 
 func stop_worker() -> void:
 	_queue_mutex.lock()
 	_running = false
 	_queue_mutex.unlock()
-	_queue_semaphore.post()
-	if _thread != null and _thread.is_alive():
-		_thread.wait_to_finish()
-	_thread = null
+	# Wake every worker so they can exit cleanly.
+	for i in range(_threads.size()):
+		_queue_semaphore.post()
+	for thread in _threads:
+		if thread.is_alive():
+			thread.wait_to_finish()
+	_threads.clear()
 
 ## Called from the main thread when a cover download completes or is already cached.
-## Queues detection on the worker thread and writes the resulting logo_box to each
+## Queues detection on a worker thread and writes the resulting logo_box to each
 ## game in the list. Duplicate covers are not shared; each game gets its own row.
 func process_cover_url(cover_url: String, games: Array[GameResource], on_complete: Callable = Callable()) -> void:
 	if cover_url == "" or not cover_url.begins_with("http"):
@@ -68,6 +91,11 @@ func process_cover_url(cover_url: String, games: Array[GameResource], on_complet
 		return
 
 	_queue_mutex.lock()
+	if not _running:
+		_queue_mutex.unlock()
+		if on_complete.is_valid():
+			on_complete.call()
+		return
 	_queue.append({
 		"type": "detect",
 		"cache_path": cache_path,
@@ -84,7 +112,7 @@ func process_cover_url(cover_url: String, games: Array[GameResource], on_complet
 	start_worker()
 
 ## Queues a backfill pass for all games that already have cached covers but no
-## logo_box. The work happens on the worker thread.
+## logo_box. The work happens on a worker thread.
 func backfill_missing() -> void:
 	if not data_manager or not data_manager.database:
 		return
@@ -92,6 +120,9 @@ func backfill_missing() -> void:
 		return
 
 	_queue_mutex.lock()
+	if not _running:
+		_queue_mutex.unlock()
+		return
 	_queue.append({"type": "backfill"})
 	_queue_mutex.unlock()
 	_pending_mutex.lock()
@@ -111,6 +142,10 @@ func wait_for_all() -> void:
 		_completed_semaphore.wait()
 
 func _worker_loop() -> void:
+	# Each worker owns its own detector and ONNX sessions. This avoids thread-safety
+	# issues when running multiple inferences in parallel.
+	var detector: Variant = null
+
 	while true:
 		_queue_semaphore.wait()
 
@@ -124,13 +159,40 @@ func _worker_loop() -> void:
 		var task = _queue.pop_front()
 		_queue_mutex.unlock()
 
+		if detector == null:
+			detector = _create_detector()
+			if detector == null:
+				print("[LogoBoxCache] Worker failed to create detector; skipping task")
+				_finish_task(task.get("on_complete", Callable()))
+				continue
+
 		match task.get("type", ""):
 			"detect":
-				_process_detect_task(task)
+				_process_detect_task(task, detector)
 			"backfill":
 				_process_backfill_task()
 
-func _process_detect_task(task: Dictionary) -> void:
+func _create_detector() -> Variant:
+	if not ClassDB.class_exists("LogoDetector"):
+		print("[LogoBoxCache] LogoDetector class not available")
+		return null
+	var detector: Variant = ClassDB.instantiate("LogoDetector")
+	detector.set_intra_op_num_threads(_get_intra_op_threads())
+	if detector.load_yolo_model("res://addons/logo_detector/models/logo_detector.onnx") != OK:
+		print("[LogoBoxCache] Failed to load YOLO model")
+		return null
+	if detector.load_ocr_det_model("res://addons/logo_detector/models/ch_PP-OCRv4_det_infer.onnx") != OK:
+		print("[LogoBoxCache] Failed to load OCR det model")
+		return null
+	if detector.load_ocr_rec_model("res://addons/logo_detector/models/ch_PP-OCRv4_rec_infer.onnx") != OK:
+		print("[LogoBoxCache] Failed to load OCR rec model")
+		return null
+	# Classifier is optional: it improves rotation handling but detection works without it.
+	if detector.load_ocr_cls_model("res://addons/logo_detector/models/ch_ppocr_mobile_v2.0_cls_infer.onnx") != OK:
+		print("[LogoBoxCache] OCR classifier model failed to load; continuing without rotation correction")
+	return detector
+
+func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 	var cache_path = task.get("cache_path", "")
 	var title = task.get("title", "")
 	var game_ids: Array[int] = task.get("game_ids", [])
@@ -143,11 +205,6 @@ func _process_detect_task(task: Dictionary) -> void:
 
 	var image := _load_image(cache_path)
 	if image == null or image.is_empty():
-		_finish_task(on_complete)
-		return
-
-	var detector: Variant = _ensure_detector()
-	if detector == null:
 		_finish_task(on_complete)
 		return
 
@@ -262,31 +319,6 @@ func _load_image(cache_path: String) -> Image:
 	if err == OK and not img.is_empty():
 		return img
 	return null
-
-func _ensure_detector() -> Variant:
-	_detector_mutex.lock()
-	if _detector != null:
-		_detector_mutex.unlock()
-		return _detector
-	if not ClassDB.class_exists("LogoDetector"):
-		_detector_mutex.unlock()
-		return null
-	var detector: Variant = ClassDB.instantiate("LogoDetector")
-	if detector.load_yolo_model("res://addons/logo_detector/models/logo_detector.onnx") != OK:
-		_detector_mutex.unlock()
-		return null
-	if detector.load_ocr_det_model("res://addons/logo_detector/models/ch_PP-OCRv4_det_infer.onnx") != OK:
-		_detector_mutex.unlock()
-		return null
-	if detector.load_ocr_rec_model("res://addons/logo_detector/models/ch_PP-OCRv4_rec_infer.onnx") != OK:
-		_detector_mutex.unlock()
-		return null
-	# Classifier is optional: it improves rotation handling but detection works without it.
-	if detector.load_ocr_cls_model("res://addons/logo_detector/models/ch_ppocr_mobile_v2.0_cls_infer.onnx") != OK:
-		print("[LogoBoxCache] OCR classifier model failed to load; continuing without rotation correction")
-	_detector = detector
-	_detector_mutex.unlock()
-	return _detector
 
 func _logo_box_dict_from_result(result: Variant, image: Image) -> Dictionary:
 	var failed := {

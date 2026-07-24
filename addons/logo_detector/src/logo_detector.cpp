@@ -102,6 +102,8 @@ static std::vector<const char*> to_cstr_array(const std::vector<std::string> &p_
 // Loading / session setup
 // ---------------------------------------------------------------------------
 
+static int g_logo_detector_intra_op_threads = 1;
+
 static Error load_onnx_session(
     const String &p_model_path,
     Ort::Env &p_env,
@@ -124,7 +126,7 @@ static Error load_onnx_session(
     ort_path_string ort_path = to_ort_path(model_path);
 
     Ort::SessionOptions session_options;
-    session_options.SetIntraOpNumThreads(1);
+    session_options.SetIntraOpNumThreads(g_logo_detector_intra_op_threads);
     session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     try {
@@ -158,6 +160,10 @@ LogoDetector::LogoDetector() {
 
 LogoDetector::~LogoDetector() {
     delete impl;
+}
+
+void LogoDetector::set_intra_op_num_threads(int p_threads) {
+    g_logo_detector_intra_op_threads = std::max(1, p_threads);
 }
 
 Error LogoDetector::load_yolo_model(const String &p_model_path) {
@@ -459,107 +465,30 @@ static std::vector<std::vector<Pt>> find_outer_contours(
 static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float x2, float y2);
 static Ref<Image> rotate_180(const Ref<Image> &p_image);
 
-static std::pair<String, float> recognize_text_raw(
+static std::vector<bool> classify_rotations_180(
     LogoDetector::Impl *p_impl,
-    const Ref<Image> &p_crop
+    const std::vector<Ref<Image>> &p_crops
+);
+
+static std::vector<std::pair<String, float>> recognize_texts_batch(
+    LogoDetector::Impl *p_impl,
+    const std::vector<Ref<Image>> &p_crops
 );
 
 static bool classify_rotation_180(
     LogoDetector::Impl *p_impl,
     const Ref<Image> &p_crop
 ) {
-    if (!p_impl || !p_impl->ocr_cls_loaded || p_impl->ocr_cls_input_name_strings.empty()) return false;
-
-    Ref<Image> img = p_crop->duplicate();
-    if (img->get_format() != Image::FORMAT_RGB8) {
-        img->convert(Image::FORMAT_RGB8);
-    }
-
-    const int CLS_W = 192;
-    const int CLS_H = 48;
-    img->resize(CLS_W, CLS_H, Image::INTERPOLATE_BILINEAR);
-
-    const float MEAN[3] = {0.5f, 0.5f, 0.5f};
-    const float STD[3] = {0.5f, 0.5f, 0.5f};
-    const uint8_t *pixels = img->get_data().ptr();
-
-    std::vector<float> input_data(3 * CLS_H * CLS_W);
-    for (int c = 0; c < 3; c++) {
-        for (int y = 0; y < CLS_H; y++) {
-            for (int x = 0; x < CLS_W; x++) {
-                int src_idx = (y * CLS_W + x) * 3 + c;
-                int dst_idx = c * CLS_H * CLS_W + y * CLS_W + x;
-                input_data[dst_idx] = (pixels[src_idx] / 255.0f - MEAN[c]) / STD[c];
-            }
-        }
-    }
-
-    const int64_t input_shape[] = {1, 3, CLS_H, CLS_W};
-    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-        p_impl->memory_info,
-        input_data.data(),
-        input_data.size(),
-        input_shape,
-        4
-    );
-
-    std::vector<Ort::Value> output_tensors;
-    try {
-        std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_cls_input_name_strings);
-        std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_cls_output_name_strings);
-        output_tensors = p_impl->ocr_cls_session->Run(
-            Ort::RunOptions{nullptr},
-            input_names.data(),
-            &input_tensor,
-            1,
-            output_names.data(),
-            output_names.size()
-        );
-    } catch (const std::exception &e) {
-        UtilityFunctions::print("OCR classifier inference failed: ", e.what());
-        return false;
-    }
-
-    auto out_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
-    if (out_shape.size() < 2) return false;
-    int num_classes = (int)out_shape[out_shape.size() - 1];
-    const float *logits = output_tensors[0].GetTensorData<float>();
-
-    // Softmax over the two orientation classes.
-    float max_val = -1e30f;
-    for (int i = 0; i < num_classes; i++) max_val = std::max(max_val, logits[i]);
-    double sum = 0.0;
-    for (int i = 0; i < num_classes; i++) sum += std::exp((double)(logits[i] - max_val));
-    float prob_180 = (float)(std::exp((double)(logits[1] - max_val)) / sum);
-
-    return prob_180 > 0.9f;
+    auto results = classify_rotations_180(p_impl, {p_crop});
+    return !results.empty() && results[0];
 }
 
 static std::pair<String, float> recognize_text(
     LogoDetector::Impl *p_impl,
     const Ref<Image> &p_crop
 ) {
-    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_name_strings.empty()) {
-        return {String(), 0.0f};
-    }
-
-    Ref<Image> crop = p_crop;
-    if (p_impl->ocr_cls_loaded && classify_rotation_180(p_impl, crop)) {
-        crop = rotate_180(crop);
-    }
-
-    auto result = recognize_text_raw(p_impl, crop);
-
-    // Fallback: if no classifier is available and the first pass is uncertain,
-    // try the rotated crop and keep the more confident reading.
-    if (!p_impl->ocr_cls_loaded && result.second < 0.85f) {
-        auto rotated_result = recognize_text_raw(p_impl, rotate_180(crop));
-        if (rotated_result.second > result.second) {
-            return rotated_result;
-        }
-    }
-
-    return result;
+    auto results = recognize_texts_batch(p_impl, {p_crop});
+    return results.empty() ? std::make_pair(String(), 0.0f) : results[0];
 }
 
 static float mean_box_score(
@@ -671,7 +600,7 @@ static std::vector<OcrWord> detect_text_words(
     const float UNCLIP_RATIO = 1.6f;
     const int MIN_HEIGHT = 30;
     const float MAX_ASPECT_RATIO = 8.0f;
-    const int MAX_CANDIDATES = 1000;
+    const int MAX_CANDIDATES = 200;
 
     std::vector<uint8_t> mask((size_t)out_w * out_h, 0);
     for (int i = 0; i < out_w * out_h; i++) {
@@ -739,33 +668,61 @@ static std::vector<OcrWord> detect_text_words(
         return a.box_score > b.box_score;
     });
 
+    const int REC_BATCH_SIZE = 32;
+
     int count = std::min((int)candidate_boxes.size(), MAX_CANDIDATES);
-    for (int i = 0; i < count; i++) {
-        const ScoredBox &box = candidate_boxes[i];
 
-        // Unclip/padding to give the recognizer a bit of margin.
-        float cx = (box.x1 + box.x2) * 0.5f;
-        float cy = (box.y1 + box.y2) * 0.5f;
-        float half_w = (box.x2 - box.x1) * 0.5f * UNCLIP_RATIO;
-        float half_h = (box.y2 - box.y1) * 0.5f * UNCLIP_RATIO;
-        float x1 = std::max(0.0f, cx - half_w);
-        float y1 = std::max(0.0f, cy - half_h);
-        float x2 = std::min((float)src_w, cx + half_w);
-        float y2 = std::min((float)src_h, cy + half_h);
+    // Prepare all crops and run CRNN in batches instead of one crop at a time.
+    for (int batch_start = 0; batch_start < count; batch_start += REC_BATCH_SIZE) {
+        int batch_end = std::min(batch_start + REC_BATCH_SIZE, count);
+        std::vector<Ref<Image>> crops;
+        crops.reserve(batch_end - batch_start);
 
-        Ref<Image> crop = crop_box(p_image, x1, y1, x2, y2);
-        auto [text, text_score] = recognize_text(p_impl, crop);
+        for (int i = batch_start; i < batch_end; i++) {
+            const ScoredBox &box = candidate_boxes[i];
 
-        if (!text.is_empty() && text_score >= TEXT_SCORE_THRESH) {
-            OcrWord word;
-            word.x1 = x1;
-            word.y1 = y1;
-            word.x2 = x2;
-            word.y2 = y2;
-            word.confidence = box.box_score;
-            word.text_score = text_score;
-            word.text = text;
-            result.push_back(word);
+            // Unclip/padding to give the recognizer a bit of margin.
+            float cx = (box.x1 + box.x2) * 0.5f;
+            float cy = (box.y1 + box.y2) * 0.5f;
+            float half_w = (box.x2 - box.x1) * 0.5f * UNCLIP_RATIO;
+            float half_h = (box.y2 - box.y1) * 0.5f * UNCLIP_RATIO;
+            float x1 = std::max(0.0f, cx - half_w);
+            float y1 = std::max(0.0f, cy - half_h);
+            float x2 = std::min((float)src_w, cx + half_w);
+            float y2 = std::min((float)src_h, cy + half_h);
+
+            crops.push_back(crop_box(p_image, x1, y1, x2, y2));
+        }
+
+        std::vector<std::pair<String, float>> rec_results = recognize_texts_batch(p_impl, crops);
+
+        for (int i = batch_start; i < batch_end; i++) {
+            const ScoredBox &box = candidate_boxes[i];
+            const auto &rec = rec_results[i - batch_start];
+            const String &text = rec.first;
+            float text_score = rec.second;
+
+            if (!text.is_empty() && text_score >= TEXT_SCORE_THRESH) {
+                // Unclip/padding to give the recognizer a bit of margin.
+                float cx = (box.x1 + box.x2) * 0.5f;
+                float cy = (box.y1 + box.y2) * 0.5f;
+                float half_w = (box.x2 - box.x1) * 0.5f * UNCLIP_RATIO;
+                float half_h = (box.y2 - box.y1) * 0.5f * UNCLIP_RATIO;
+                float x1 = std::max(0.0f, cx - half_w);
+                float y1 = std::max(0.0f, cy - half_h);
+                float x2 = std::min((float)src_w, cx + half_w);
+                float y2 = std::min((float)src_h, cy + half_h);
+
+                OcrWord word;
+                word.x1 = x1;
+                word.y1 = y1;
+                word.x2 = x2;
+                word.y2 = y2;
+                word.confidence = box.box_score;
+                word.text_score = text_score;
+                word.text = text;
+                result.push_back(word);
+            }
         }
     }
 
@@ -981,49 +938,140 @@ static std::pair<String, float> ctc_decode(
     return {String(text.c_str()), score};
 }
 
-static std::pair<String, float> recognize_text_raw(
+static std::vector<bool> classify_rotations_180(
     LogoDetector::Impl *p_impl,
-    const Ref<Image> &p_crop
+    const std::vector<Ref<Image>> &p_crops
 ) {
-    if (!p_impl || !p_impl->ocr_rec_loaded || p_impl->ocr_rec_input_name_strings.empty() || p_impl->ocr_rec_output_name_strings.empty()) {
-        return {String(), 0.0f};
-    }
+    std::vector<bool> result(p_crops.size(), false);
+    if (!p_impl || !p_impl->ocr_cls_loaded || p_crops.empty()) return result;
 
-    Ref<Image> img = p_crop->duplicate();
-    if (img->get_format() != Image::FORMAT_RGB8) {
-        img->convert(Image::FORMAT_RGB8);
-    }
+    const int CLS_W = 192;
+    const int CLS_H = 48;
+    int n = (int)p_crops.size();
+    std::vector<float> input_data((size_t)n * 3 * CLS_H * CLS_W, 0.0f);
 
-    // Match Python rapidocr: height 48, dynamic width up to 320, padded to 320.
-    const int TARGET_H = 48;
-    const int FIXED_W = 320;
-    int src_w = img->get_width();
-    int src_h = img->get_height();
-    float aspect = (float)src_w / std::max(1, src_h);
-    int target_w = (int)std::round((float)TARGET_H * aspect);
-    target_w = std::max(32, target_w);
-    target_w = (target_w + 7) / 8 * 8; // keep ONNX happy
-    target_w = std::min(target_w, FIXED_W);
+    for (int idx = 0; idx < n; idx++) {
+        Ref<Image> img = p_crops[idx]->duplicate();
+        if (img->get_format() != Image::FORMAT_RGB8) {
+            img->convert(Image::FORMAT_RGB8);
+        }
+        img->resize(CLS_W, CLS_H, Image::INTERPOLATE_BILINEAR);
+        const uint8_t *pixels = img->get_data().ptr();
 
-    img->resize(target_w, TARGET_H, Image::INTERPOLATE_BILINEAR);
-
-    const float MEAN[3] = {0.5f, 0.5f, 0.5f};
-    const float STD[3] = {0.5f, 0.5f, 0.5f};
-    const uint8_t *pixels = img->get_data().ptr();
-
-    // Pad to FIXED_W; padding value is the normalized mean (0.0).
-    std::vector<float> input_data(3 * TARGET_H * FIXED_W, 0.0f);
-    for (int c = 0; c < 3; c++) {
-        for (int y = 0; y < TARGET_H; y++) {
-            for (int x = 0; x < target_w; x++) {
-                int src_idx = (y * target_w + x) * 3 + c;
-                int dst_idx = c * TARGET_H * FIXED_W + y * FIXED_W + x;
-                input_data[dst_idx] = (pixels[src_idx] / 255.0f - MEAN[c]) / STD[c];
+        for (int c = 0; c < 3; c++) {
+            for (int y = 0; y < CLS_H; y++) {
+                for (int x = 0; x < CLS_W; x++) {
+                    int src_idx = (y * CLS_W + x) * 3 + c;
+                    int dst_idx = ((idx * 3 + c) * CLS_H + y) * CLS_W + x;
+                    input_data[dst_idx] = (pixels[src_idx] / 255.0f - 0.5f) / 0.5f;
+                }
             }
         }
     }
 
-    const int64_t input_shape[] = {1, 3, TARGET_H, FIXED_W};
+    const int64_t input_shape[] = {n, 3, CLS_H, CLS_W};
+    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+        p_impl->memory_info,
+        input_data.data(),
+        input_data.size(),
+        input_shape,
+        4
+    );
+
+    std::vector<Ort::Value> output_tensors;
+    try {
+        std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_cls_input_name_strings);
+        std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_cls_output_name_strings);
+        output_tensors = p_impl->ocr_cls_session->Run(
+            Ort::RunOptions{nullptr},
+            input_names.data(),
+            &input_tensor,
+            1,
+            output_names.data(),
+            output_names.size()
+        );
+    } catch (const std::exception &e) {
+        UtilityFunctions::print("OCR classifier batch inference failed: ", e.what());
+        return result;
+    }
+
+    auto out_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
+    int rank = (int)out_shape.size();
+    if (rank < 2) return result;
+
+    int num_classes = (int)out_shape[rank - 1];
+    int inner = 1;
+    for (int i = 1; i < rank - 1; i++) inner *= (int)out_shape[i];
+    const float *logits = output_tensors[0].GetTensorData<float>();
+
+    for (int idx = 0; idx < n; idx++) {
+        int base = idx * inner * num_classes + (inner - 1) * num_classes;
+        float max_val = -1e30f;
+        for (int c = 0; c < num_classes; c++) {
+            max_val = std::max(max_val, logits[base + c]);
+        }
+        double sum = 0.0;
+        for (int c = 0; c < num_classes; c++) {
+            sum += std::exp((double)(logits[base + c] - max_val));
+        }
+        float prob_180 = (float)(std::exp((double)(logits[base + 1] - max_val)) / sum);
+        result[idx] = prob_180 > 0.9f;
+    }
+
+    return result;
+}
+
+static std::vector<std::pair<String, float>> recognize_texts_batch(
+    LogoDetector::Impl *p_impl,
+    const std::vector<Ref<Image>> &p_crops
+) {
+    std::vector<std::pair<String, float>> results(p_crops.size(), {String(), 0.0f});
+    if (!p_impl || !p_impl->ocr_rec_loaded || p_crops.empty()) return results;
+
+    const int TARGET_H = 48;
+    const int FIXED_W = 320;
+    int n = (int)p_crops.size();
+
+    // Apply rotation correction if a classifier is available.
+    std::vector<Ref<Image>> crops = p_crops;
+    if (p_impl->ocr_cls_loaded) {
+        std::vector<bool> rotate = classify_rotations_180(p_impl, crops);
+        for (int i = 0; i < n; i++) {
+            if (rotate[i]) {
+                crops[i] = rotate_180(crops[i]);
+            }
+        }
+    }
+
+    std::vector<float> input_data((size_t)n * 3 * TARGET_H * FIXED_W, 0.0f);
+    for (int idx = 0; idx < n; idx++) {
+        Ref<Image> img = crops[idx]->duplicate();
+        if (img->get_format() != Image::FORMAT_RGB8) {
+            img->convert(Image::FORMAT_RGB8);
+        }
+        int src_w = img->get_width();
+        int src_h = img->get_height();
+        float aspect = (float)src_w / std::max(1, src_h);
+        int target_w = (int)std::round((float)TARGET_H * aspect);
+        target_w = std::max(32, target_w);
+        target_w = (target_w + 7) / 8 * 8;
+        target_w = std::min(target_w, FIXED_W);
+
+        img->resize(target_w, TARGET_H, Image::INTERPOLATE_BILINEAR);
+        const uint8_t *pixels = img->get_data().ptr();
+
+        for (int c = 0; c < 3; c++) {
+            for (int y = 0; y < TARGET_H; y++) {
+                for (int x = 0; x < target_w; x++) {
+                    int src_idx = (y * target_w + x) * 3 + c;
+                    int dst_idx = ((idx * 3 + c) * TARGET_H + y) * FIXED_W + x;
+                    input_data[dst_idx] = (pixels[src_idx] / 255.0f - 0.5f) / 0.5f;
+                }
+            }
+        }
+    }
+
+    const int64_t input_shape[] = {n, 3, TARGET_H, FIXED_W};
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
         p_impl->memory_info,
         input_data.data(),
@@ -1045,41 +1093,46 @@ static std::pair<String, float> recognize_text_raw(
             output_names.size()
         );
     } catch (const std::exception &e) {
-        UtilityFunctions::print("OCR recognition inference failed: ", e.what());
-        return {String(), 0.0f};
+        UtilityFunctions::print("OCR recognition batch inference failed: ", e.what());
+        return results;
     }
 
     auto out_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
+    if (out_shape.size() < 3) return results;
     int seq_len = (int)out_shape[1];
     int num_classes = (int)out_shape[2];
     const float *logits = output_tensors[0].GetTensorData<float>();
 
-    std::vector<int> indices;
-    std::vector<float> probs;
-    indices.reserve(seq_len);
-    probs.reserve(seq_len);
+    for (int idx = 0; idx < n; idx++) {
+        const float *sample_logits = logits + (size_t)idx * seq_len * num_classes;
+        std::vector<int> indices;
+        std::vector<float> probs;
+        indices.reserve(seq_len);
+        probs.reserve(seq_len);
 
-    for (int t = 0; t < seq_len; t++) {
-        int best_idx = 0;
-        float best_val = -1e30f;
-        for (int c = 0; c < num_classes; c++) {
-            float val = logits[t * num_classes + c];
-            if (val > best_val) {
-                best_val = val;
-                best_idx = c;
+        for (int t = 0; t < seq_len; t++) {
+            int best_idx = 0;
+            float best_val = -1e30f;
+            for (int c = 0; c < num_classes; c++) {
+                float val = sample_logits[t * num_classes + c];
+                if (val > best_val) {
+                    best_val = val;
+                    best_idx = c;
+                }
             }
-        }
-        indices.push_back(best_idx);
+            indices.push_back(best_idx);
 
-        // Softmax probability of the selected class.
-        double sum = 0.0;
-        for (int c = 0; c < num_classes; c++) {
-            sum += std::exp((double)(logits[t * num_classes + c] - best_val));
+            double sum = 0.0;
+            for (int c = 0; c < num_classes; c++) {
+                sum += std::exp((double)(sample_logits[t * num_classes + c] - best_val));
+            }
+            probs.push_back((float)(1.0 / sum));
         }
-        probs.push_back((float)(1.0 / sum));
+
+        results[idx] = ctc_decode(indices, probs, p_impl->charset);
     }
 
-    return ctc_decode(indices, probs, p_impl->charset);
+    return results;
 }
 
 
@@ -1124,6 +1177,32 @@ Dictionary LogoDetector::detect_title_box(
 	}
 
 	Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 5);
+
+	// Region-first: if a high-confidence YOLO crop contains a title word, use it immediately.
+	const float REGION_MATCH_THRESHOLD = 0.7f;
+	for (int i = 0; i < candidates.size(); i++) {
+		Dictionary cand = candidates[i];
+		float cx1 = (float)cand["x1"];
+		float cy1 = (float)cand["y1"];
+		float cx2 = (float)cand["x2"];
+		float cy2 = (float)cand["y2"];
+
+		Ref<Image> crop = crop_box(p_image, cx1, cy1, cx2, cy2);
+		std::vector<OcrWord> crop_words = detect_text_words(impl, crop, impl->charset);
+		for (const OcrWord &word : crop_words) {
+			float title_score = token_similarity_score(word.text, p_title);
+			if (title_score >= REGION_MATCH_THRESHOLD) {
+				Dictionary match = cand;
+				match["detected"] = true;
+				match["matched_text"] = word.text;
+				match["title_score"] = title_score;
+				match["combined_score"] = (float)cand["confidence"] * 0.3f + title_score * 0.7f;
+				return match;
+			}
+		}
+	}
+
+	// Fallback: run OCR on the full image and score all YOLO candidates.
 	std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
 
 	int img_w = p_image->get_width();
@@ -1225,6 +1304,8 @@ void LogoDetector::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_ocr_rec_model", "model_path"), &LogoDetector::load_ocr_rec_model);
     ClassDB::bind_method(D_METHOD("load_ocr_cls_model", "model_path"), &LogoDetector::load_ocr_cls_model);
     ClassDB::bind_method(D_METHOD("load_ocr_charset", "charset_path"), &LogoDetector::load_ocr_charset);
+
+    ClassDB::bind_method(D_METHOD("set_intra_op_num_threads", "threads"), &LogoDetector::set_intra_op_num_threads);
 
     ClassDB::bind_method(D_METHOD("is_yolo_model_loaded"), &LogoDetector::is_yolo_model_loaded);
     ClassDB::bind_method(D_METHOD("is_ocr_det_model_loaded"), &LogoDetector::is_ocr_det_model_loaded);

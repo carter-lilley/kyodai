@@ -78,6 +78,13 @@ static func get_download_thread_count() -> int:
 		return 2  # Android: conservative for battery/heat
 	return 12  # Desktop: more threads for speed
 
+## Returns the number of logo-box detection worker threads for the current platform.
+## Each worker loads its own ONNX sessions, so keep this conservative on memory.
+static func get_logo_box_thread_count() -> int:
+	if OS.get_name() == "Android":
+		return 2
+	return 4
+
 static var _instance: MemorySubManager = null
 
 # ============================================================================

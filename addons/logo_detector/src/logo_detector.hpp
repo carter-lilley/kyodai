@@ -30,6 +30,10 @@ public:
     LogoDetector();
     ~LogoDetector();
 
+    // Set the number of ONNX Runtime intra-op threads for subsequent model loads.
+    // Default is 1. Increase on desktop; keep low on Android to avoid oversubscription.
+    void set_intra_op_num_threads(int p_threads);
+
     // Load the YOLOv8-seg ONNX model used for logo/title region proposals.
     Error load_yolo_model(const String &p_model_path);
 
