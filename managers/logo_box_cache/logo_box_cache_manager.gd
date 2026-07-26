@@ -15,7 +15,9 @@ var _pending_tasks: int = 0
 var _pending_mutex: Mutex = Mutex.new()
 var _completed_semaphore: Semaphore = Semaphore.new()
 
-var _load_image_mutex: Mutex = Mutex.new()
+var _detect_time_total_ms: float = 0.0
+var _detect_count: int = 0
+var _detect_time_mutex: Mutex = Mutex.new()
 
 var _worker_count: int = 1
 
@@ -23,6 +25,8 @@ func _ready():
 	data_manager = get_parent()
 	# Default worker count is platform-dependent; may be updated before start_worker().
 	_worker_count = SystemManager.memory.get_logo_box_thread_count()
+	Performance.add_custom_monitor("logo_box/pending_tasks", _get_pending_task_count)
+	Performance.add_custom_monitor("logo_box/avg_detect_time_ms", _get_avg_detect_time_ms)
 
 func _exit_tree():
 	stop_worker()
@@ -187,8 +191,6 @@ func _create_detector() -> Variant:
 	if detector.load_ocr_rec_model("res://addons/logo_detector/models/ch_PP-OCRv4_rec_infer.onnx") != OK:
 		print("[LogoBoxCache] Failed to load OCR rec model")
 		return null
-	# Classifier is optional: it improves rotation handling but detection works without it.
-	detector.load_ocr_cls_model("res://addons/logo_detector/models/ch_ppocr_mobile_v2.0_cls_infer.onnx")
 	return detector
 
 func _process_detect_task(task: Dictionary, detector: Variant) -> void:
@@ -207,7 +209,13 @@ func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 		_finish_task(on_complete)
 		return
 
+	var start_ms := Time.get_ticks_msec()
 	var result: Variant = detector.detect_title_box(image, title)
+	var elapsed_ms := Time.get_ticks_msec() - start_ms
+	_detect_time_mutex.lock()
+	_detect_time_total_ms += elapsed_ms
+	_detect_count += 1
+	_detect_time_mutex.unlock()
 	var logo_box := _logo_box_dict_from_result(result, image)
 	_write_logo_box_to_games(logo_box, game_ids)
 	_finish_task(on_complete)
@@ -308,12 +316,24 @@ func _write_logo_box_to_games(logo_box: Dictionary, game_ids: Array[int]) -> voi
 func _load_image(cache_path: String) -> Image:
 	if not FSM.file_exists(cache_path):
 		return null
-	var img := Image.new()
-	_load_image_mutex.lock()
-	var err = img.load(cache_path)
-	_load_image_mutex.unlock()
-	if err == OK and not img.is_empty():
-		return img
+	var buffer := FSM.read_file_bytes(cache_path)
+	if buffer.size() < 64:
+		return null
+
+	var image := Image.new()
+	var err = FAILED
+	if buffer[0] == 0xFF and buffer[1] == 0xD8:
+		err = image.load_jpg_from_buffer(buffer)
+	elif buffer[0] == 0x89 and buffer[1] == 0x50:
+		err = image.load_png_from_buffer(buffer)
+	elif buffer[0] == 0x52 and buffer[1] == 0x49 and buffer[2] == 0x46 and buffer[3] == 0x46:
+		err = image.load_webp_from_buffer(buffer)
+	else:
+		# Unknown magic bytes: skip rather than spam every codec loader.
+		return null
+
+	if err == OK and not image.is_empty():
+		return image
 	return null
 
 func _logo_box_dict_from_result(result: Variant, image: Image) -> Dictionary:
@@ -351,3 +371,17 @@ func _logo_box_dict_from_result(result: Variant, image: Image) -> Dictionary:
 		"title_score": title_score,
 		"source": source,
 	}
+
+func _get_pending_task_count() -> Variant:
+	_pending_mutex.lock()
+	var count = _pending_tasks
+	_pending_mutex.unlock()
+	return count
+
+func _get_avg_detect_time_ms() -> Variant:
+	_detect_time_mutex.lock()
+	var avg := 0.0
+	if _detect_count > 0:
+		avg = _detect_time_total_ms / float(_detect_count)
+	_detect_time_mutex.unlock()
+	return avg

@@ -534,8 +534,8 @@ static std::vector<OcrWord> detect_text_words(
     int src_h = img->get_height();
     if (src_w <= 0 || src_h <= 0) return result;
 
-    // PP-OCRv4 det preprocessing: keep min side >= 736, round to multiple of 32.
-    const int LIMIT_SIDE_LEN = 736;
+    // PP-OCRv4 det preprocessing: keep min side >= 640, round to multiple of 32.
+    const int LIMIT_SIDE_LEN = 640;
     float ratio = 1.0f;
     int min_side = std::min(src_w, src_h);
     if (min_side < LIMIT_SIDE_LEN) {
@@ -600,7 +600,7 @@ static std::vector<OcrWord> detect_text_words(
     const float UNCLIP_RATIO = 1.6f;
     const int MIN_HEIGHT = 30;
     const float MAX_ASPECT_RATIO = 8.0f;
-    const int MAX_CANDIDATES = 200;
+    const int MAX_CANDIDATES = 100;
 
     std::vector<uint8_t> mask((size_t)out_w * out_h, 0);
     for (int i = 0; i < out_w * out_h; i++) {
@@ -905,7 +905,7 @@ static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float 
     return tmp;
 }
 
-static Ref<Image> prepare_input_image(const Ref<Image> &p_image, int p_max_size = 4096) {
+static Ref<Image> prepare_input_image(const Ref<Image> &p_image, int p_max_size = 2048) {
     if (p_image.is_null()) return Ref<Image>();
     int w = p_image->get_width();
     int h = p_image->get_height();
@@ -921,7 +921,7 @@ static Ref<Image> prepare_input_image(const Ref<Image> &p_image, int p_max_size 
         float scale = (float)p_max_size / (float)max_dim;
         int new_w = std::max(1, (int)std::round((float)w * scale));
         int new_h = std::max(1, (int)std::round((float)h * scale));
-        img->resize(new_w, new_h, Image::INTERPOLATE_LANCZOS);
+        img->resize(new_w, new_h, Image::INTERPOLATE_BILINEAR);
     }
     if (img->get_format() != Image::FORMAT_RGB8) {
         img->convert(Image::FORMAT_RGB8);
@@ -1207,7 +1207,7 @@ Dictionary LogoDetector::detect_title_box(
 		return result;
 	}
 
-	Ref<Image> img = prepare_input_image(p_image, 4096);
+	Ref<Image> img = prepare_input_image(p_image, 2048);
 	if (img.is_null()) return result;
 
 	Array candidates = detect_candidates(img, p_conf_threshold, p_nms_threshold, 5);
