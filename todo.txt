@@ -3,8 +3,13 @@
 xemu save sync
 tst update flow on android
 single screen is not single screen
+x focus after applying theme (or other dialogues)
 gamenative out of view on android
+
+are platforms off by default?
+platform cards take longer on android
 some settings screens not scrollable?
+
 grid scroll 'centering'  weird
 better extraction notifications
 
