@@ -180,6 +180,29 @@ Error LogoDetector::load_ocr_det_model(const String &p_model_path) {
     return err;
 }
 
+static void finalize_charset(std::vector<std::string> &r_charset) {
+    // PaddleOCR CRNN models output indices as:
+    //   0       : CTC blank
+    //   1..N    : characters from the dictionary
+    //   N+1     : space
+    // The raw dictionary file / metadata does not include blank or space,
+    // so prepend blank and append space to align indices with the model.
+    std::vector<std::string> cleaned;
+    cleaned.reserve(r_charset.size());
+    for (std::string &line : r_charset) {
+        if (line.empty()) continue;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) cleaned.push_back(line);
+    }
+
+    std::vector<std::string> out;
+    out.reserve(cleaned.size() + 2);
+    out.push_back("blank");
+    out.insert(out.end(), cleaned.begin(), cleaned.end());
+    out.push_back(" ");
+    r_charset = std::move(out);
+}
+
 static Error extract_charset_from_model(
     Ort::Session *p_session,
     std::vector<std::string> &r_charset
@@ -201,10 +224,9 @@ static Error extract_charset_from_model(
         std::string line;
         r_charset.clear();
         while (std::getline(iss, line)) {
-            if (!line.empty()) {
-                r_charset.push_back(line);
-            }
+            r_charset.push_back(line);
         }
+        finalize_charset(r_charset);
     } catch (const std::exception &e) {
         UtilityFunctions::print("Failed to extract charset from OCR rec model: ", e.what());
         return ERR_CANT_OPEN;
@@ -247,10 +269,9 @@ Error LogoDetector::load_ocr_charset(const String &p_charset_path) {
     impl->charset.clear();
     std::string line;
     while (std::getline(file, line)) {
-        if (!line.empty()) {
-            impl->charset.push_back(line);
-        }
+        impl->charset.push_back(line);
     }
+    finalize_charset(impl->charset);
 
     impl->charset_loaded = !impl->charset.empty();
     return impl->charset_loaded ? OK : ERR_FILE_CANT_READ;
@@ -379,6 +400,41 @@ static float token_similarity_score(const String &p_ocr_text, const String &p_ti
 		if (sim > best_token_sim) best_token_sim = sim;
 	}
 	return std::max(full_sim, best_token_sim * 0.95f);
+}
+
+// Words that commonly appear on box art but are not the game title.
+static bool is_blacklisted_text(const String &p_text) {
+	static const std::vector<String> keywords = {
+		"dreamcast", "playstation", "playstation2", "ps2", "ps1", "psx", "psp",
+		"nintendo", "gamecube", "wii", "wiiu", "switch", "gameboy", "gba", "gbc",
+		"xbox", "xbox360", "sega", "saturn", "genesis", "megadrive", "mastersystem",
+		"ea", "easports", "electronicarts", "ubisoft", "activision",
+		"konami", "capcom", "namco", "bandai", "atari", "midway", "acclaim",
+		"titus", "virgin", "maxis", "codemasters", "thq", "lucasarts", "sierra",
+		"infogrames", "ocean", "usgold", "core", "idsoftware", "blizzard", "interplay",
+		"spectrumholobyte", "microprose", "origin", "accolade", "gtinteractive",
+		"wizardworks", "arcade", "arcadearchives", "nes", "snes", "n64", "3do",
+		"jaguar", "colecovision", "intellivision", "atari2600", "atari5200",
+		"atari7800", "commodore", "amiga", "amstrad", "msx", "pcengine",
+		"turbografx", "neogeo", "mame", "hudson", "irem", "technos", "taito",
+		"snk", "dataeast", "kaneko", "toaplan", "universal", "sony", "microsoft",
+		"pal", "ntsc", "onlyfor", "licensedby", "nintendo",
+	};
+
+	String cleaned;
+	String lower = p_text.to_lower();
+	for (int i = 0; i < lower.length(); i++) {
+		char32_t c = lower[i];
+		if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+			cleaned += String::chr(c);
+		}
+	}
+	for (const String &kw : keywords) {
+		if (cleaned.find(kw) != -1) {
+			return true;
+		}
+	}
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -905,30 +961,6 @@ static Ref<Image> crop_box(const Ref<Image> &p_image, float x1, float y1, float 
     return tmp;
 }
 
-static Ref<Image> prepare_input_image(const Ref<Image> &p_image, int p_max_size = 2048) {
-    if (p_image.is_null()) return Ref<Image>();
-    int w = p_image->get_width();
-    int h = p_image->get_height();
-    if (w <= 0 || h <= 0) return Ref<Image>();
-
-    int max_dim = std::max(w, h);
-    if (max_dim <= p_max_size && p_image->get_format() == Image::FORMAT_RGB8) {
-        return p_image;
-    }
-
-    Ref<Image> img = p_image->duplicate();
-    if (max_dim > p_max_size) {
-        float scale = (float)p_max_size / (float)max_dim;
-        int new_w = std::max(1, (int)std::round((float)w * scale));
-        int new_h = std::max(1, (int)std::round((float)h * scale));
-        img->resize(new_w, new_h, Image::INTERPOLATE_BILINEAR);
-    }
-    if (img->get_format() != Image::FORMAT_RGB8) {
-        img->convert(Image::FORMAT_RGB8);
-    }
-    return img;
-}
-
 static Ref<Image> rotate_180(const Ref<Image> &p_image) {
     if (p_image.is_null()) return Ref<Image>();
     int w = p_image->get_width();
@@ -1094,7 +1126,9 @@ static std::vector<std::pair<String, float>> recognize_texts_batch(
         for (int c = 0; c < 3; c++) {
             for (int y = 0; y < TARGET_H; y++) {
                 for (int x = 0; x < target_w; x++) {
-                    int src_idx = (y * target_w + x) * 3 + c;
+                    // PP-OCR CRNN models were trained on OpenCV BGR images.
+                    int src_c = 2 - c;
+                    int src_idx = (y * target_w + x) * 3 + src_c;
                     int dst_idx = ((idx * 3 + c) * TARGET_H + y) * FIXED_W + x;
                     input_data[dst_idx] = (pixels[src_idx] / 255.0f - 0.5f) / 0.5f;
                 }
@@ -1203,58 +1237,108 @@ Dictionary LogoDetector::detect_title_box(
 	Dictionary result;
 	result["detected"] = false;
 
-	if (!impl->yolo_loaded || !impl->ocr_det_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
+	if (!impl->yolo_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
 		return result;
 	}
 
-	Ref<Image> img = prepare_input_image(p_image, 2048);
-	if (img.is_null()) return result;
+	Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 3);
 
-	Array candidates = detect_candidates(img, p_conf_threshold, p_nms_threshold, 5);
-	std::vector<OcrWord> words = detect_text_words(impl, img, impl->charset);
+	// No YOLO candidates at all: run full-image OCR fallback.
+	if (candidates.size() == 0) {
+		if (impl->ocr_det_loaded) {
+			std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
+			float best_sim = 0.0f;
+			const OcrWord *best_word = nullptr;
+			for (const OcrWord &word : words) {
+				if (is_blacklisted_text(word.text)) continue;
+				float sim = token_similarity_score(word.text, p_title);
+				if (sim > best_sim) {
+					best_sim = sim;
+					best_word = &word;
+				}
+			}
+			if (best_word != nullptr && best_sim >= 0.2f) {
+				result["detected"] = true;
+				result["x1"] = best_word->x1;
+				result["y1"] = best_word->y1;
+				result["x2"] = best_word->x2;
+				result["y2"] = best_word->y2;
+				result["confidence"] = 0.0f;
+				result["matched_text"] = best_word->text;
+				result["title_score"] = best_sim;
+				result["combined_score"] = best_sim;
+				result["from_fallback"] = true;
+				return result;
+			}
+		}
+		return result;
+	}
 
-	int img_w = img->get_width();
-	int img_h = img->get_height();
-	float diag = std::sqrt((float)img_w * (float)img_w + (float)img_h * (float)img_h);
+	// Crop each YOLO candidate and recognize its text in one batch.
+	std::vector<Ref<Image>> crops;
+	crops.reserve(candidates.size());
+	for (int i = 0; i < candidates.size(); i++) {
+		Dictionary cand = candidates[i];
+		float x1 = cand["x1"];
+		float y1 = cand["y1"];
+		float x2 = cand["x2"];
+		float y2 = cand["y2"];
+		crops.push_back(crop_box(p_image, x1, y1, x2, y2));
+	}
+
+	std::vector<std::pair<String, float>> rec_results = recognize_texts_batch(impl, crops);
 
 	float best_score = -1.0f;
 	Dictionary best_candidate;
+	float best_title_sim = 0.0f;
 
 	for (int i = 0; i < candidates.size(); i++) {
 		Dictionary cand = candidates[i];
-		float cx = ((float)cand["x1"] + (float)cand["x2"]) / 2.0f;
-		float cy = ((float)cand["y1"] + (float)cand["y2"]) / 2.0f;
-
-		float best_word_score = 0.0f;
-		String matched_text;
-
-		for (const OcrWord &word : words) {
-			float sim = token_similarity_score(word.text, p_title);
-			if (sim < 0.05f) continue;
-
-			float wcx = (word.x1 + word.x2) / 2.0f;
-			float wcy = (word.y1 + word.y2) / 2.0f;
-			float dx = cx - wcx;
-			float dy = cy - wcy;
-			float dist = std::sqrt(dx * dx + dy * dy);
-
-			float proximity = std::max(0.0f, 1.0f - dist / (diag * 0.3f));
-			float score = sim * proximity;
-			if (score > best_word_score) {
-				best_word_score = score;
-				matched_text = word.text;
-			}
+		String text = rec_results[i].first;
+		float title_sim = token_similarity_score(text, p_title);
+		if (is_blacklisted_text(text)) {
+			title_sim *= 0.1f;
 		}
-
-		float cand_conf = (float)cand["confidence"];
-		float combined = cand_conf * 0.3f + best_word_score * 0.7f;
+		float cand_conf = cand["confidence"];
+		float combined = cand_conf * 0.3f + title_sim * 0.7f;
 
 		if (combined > best_score) {
 			best_score = combined;
 			best_candidate = cand;
-			best_candidate["matched_text"] = matched_text;
-			best_candidate["title_score"] = token_similarity_score(matched_text, p_title);
+			best_candidate["matched_text"] = text;
+			best_candidate["title_score"] = title_sim;
 			best_candidate["combined_score"] = combined;
+			best_candidate["from_fallback"] = false;
+			best_title_sim = title_sim;
+		}
+	}
+
+	// If crop OCR didn't find a confident title, fall back to full-image OCR.
+	if (best_title_sim < 0.3f && impl->ocr_det_loaded) {
+		std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
+		float best_sim = 0.0f;
+		const OcrWord *best_word = nullptr;
+		for (const OcrWord &word : words) {
+			if (is_blacklisted_text(word.text)) continue;
+			float sim = token_similarity_score(word.text, p_title);
+			if (sim > best_sim) {
+				best_sim = sim;
+				best_word = &word;
+			}
+		}
+		if (best_word != nullptr && best_sim > best_title_sim) {
+			best_candidate = Dictionary();
+			best_candidate["detected"] = true;
+			best_candidate["x1"] = best_word->x1;
+			best_candidate["y1"] = best_word->y1;
+			best_candidate["x2"] = best_word->x2;
+			best_candidate["y2"] = best_word->y2;
+			best_candidate["confidence"] = 0.0f;
+			best_candidate["matched_text"] = best_word->text;
+			best_candidate["title_score"] = best_sim;
+			best_candidate["combined_score"] = best_sim;
+			best_candidate["from_fallback"] = true;
+			return best_candidate;
 		}
 	}
 
@@ -1263,43 +1347,14 @@ Dictionary LogoDetector::detect_title_box(
 		return best_candidate;
 	}
 
-	// Fallback: top YOLO candidate.
-	if (candidates.size() > 0) {
-		best_candidate = candidates[0];
-		best_candidate["detected"] = true;
-		best_candidate["matched_text"] = "";
-		best_candidate["title_score"] = 0.0f;
-		best_candidate["combined_score"] = (float)best_candidate["confidence"];
-		return best_candidate;
-	}
-
-	// No YOLO candidates: fall back to the best OCR word box if any matches the title.
-	if (!words.empty()) {
-		float best_sim = 0.0f;
-		const OcrWord *best_word = nullptr;
-		for (const OcrWord &word : words) {
-			float sim = token_similarity_score(word.text, p_title);
-			if (sim > best_sim) {
-				best_sim = sim;
-				best_word = &word;
-			}
-		}
-		if (best_word != nullptr && best_sim >= 0.2f) {
-			Dictionary fb;
-			fb["detected"] = true;
-			fb["x1"] = best_word->x1;
-			fb["y1"] = best_word->y1;
-			fb["x2"] = best_word->x2;
-			fb["y2"] = best_word->y2;
-			fb["confidence"] = 0.0f;
-			fb["matched_text"] = best_word->text;
-			fb["title_score"] = best_sim;
-			fb["combined_score"] = best_sim;
-			return fb;
-		}
-	}
-
-	return result;
+	// Final fallback: trust the top YOLO candidate even without a good OCR match.
+	best_candidate = candidates[0];
+	best_candidate["detected"] = true;
+	best_candidate["matched_text"] = "";
+	best_candidate["title_score"] = 0.0f;
+	best_candidate["combined_score"] = (float)best_candidate["confidence"];
+	best_candidate["from_fallback"] = false;
+	return best_candidate;
 }
 
 // ---------------------------------------------------------------------------
