@@ -26,24 +26,14 @@ func _update_shader_params() -> void:
 
 	var card_size := media_container.size
 	var total_inset := media_container.get_total_inset_pixels()
-	var inner_size := card_size - Vector2(total_inset * 2.0, total_inset * 2.0)
 
-	# Inverse aspect-cover transform for the inner media area. The base card
-	# shader maps inner_uv -> texture_uv as texture_uv = inner_uv * scale + offset.
-	# We need the inverse so we can turn the detected texture-space logo rect
-	# back into inner media coordinates and then into card pixels.
-	var scale := Vector2.ONE
-	var offset := Vector2.ZERO
-	if media_container.texture and inner_size.x > 0.0 and inner_size.y > 0.0:
-		var tex_size := Vector2(media_container.texture.get_width(), media_container.texture.get_height())
-		if tex_size.x > 0.0 and tex_size.y > 0.0:
-			var inner_aspect := inner_size.x / inner_size.y
-			var tex_aspect := tex_size.x / tex_size.y
-			if inner_aspect > tex_aspect:
-				scale.y = tex_aspect / inner_aspect
-			else:
-				scale.x = inner_aspect / tex_aspect
-			offset = (Vector2.ONE - scale) * 0.5
+	# Use the exact UV transform the base card shader is using. The base shader
+	# maps inner_uv -> texture_uv as texture_uv = inner_uv * scale + offset, so
+	# we invert that to turn the detected texture-space logo rect into inner
+	# media coordinates for the outline.
+	var uv := media_container.get_uv_transforms()
+	var scale: Vector2 = uv["uv_transform_scale"]
+	var offset: Vector2 = uv["uv_transform_offset"]
 
 	_set_shader_param("card_size", card_size)
 	_set_shader_param("total_inset_pixels", total_inset)

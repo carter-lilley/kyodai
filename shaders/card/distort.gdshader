@@ -78,8 +78,9 @@ void fragment() {
 	// Get distorted/warped UVs
 	vec2 warped_uv = spherical_distort(zoomed_uv, distortion, card_size);
 	
-	// Apply precomputed UV transforms from base_card instead of re-deriving aspect math
-	warped_uv = (warped_uv - 0.5) * uv_transform_scale + 0.5 + uv_transform_offset;
+	// Apply precomputed UV transforms from MediaContainer so the distorted texture
+	// aligns with the base image even when the logo mode shifts the visible crop.
+	warped_uv = warped_uv * uv_transform_scale + uv_transform_offset;
 	warped_uv.y -= vertical_offset;
 	
 	// Sample the distorted texture

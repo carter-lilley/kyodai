@@ -41,7 +41,7 @@ void fragment() {
 		discard;
 	}
 	
-	vec2 tex_uv = (inner_uv - 0.5) * uv_transform_scale + 0.5 + uv_transform_offset;
+	vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;
 	tex_uv.y -= vertical_offset;
 	
 	vec4 tex_color = texture(game_texture, tex_uv);

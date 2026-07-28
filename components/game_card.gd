@@ -293,6 +293,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.set_logo_rect(_get_logo_rect_from_game())
+		_sync_logo_mode()
 		_media_stack.update_draw_rects()
 	else:
 		_media_stack = EffectStack.new()
@@ -300,6 +301,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.set_logo_rect(_get_logo_rect_from_game())
+		_sync_logo_mode()
 		if _media_canvas_item.is_valid():
 			_media_stack.set_parent_rid(_media_canvas_item)
 		# The base card shader handles rounded corners; don't clip on the
@@ -363,6 +365,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
 			_focus_stack.set_logo_rect(_get_logo_rect_from_game())
+		_sync_logo_mode()
 		_link_overlapping_effects()
 		return
 
@@ -397,6 +400,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	if preview_mode:
 		_focus_stack.set_visible(preview_show_focus)
 
+	_sync_logo_mode()
 	_link_overlapping_effects()
 
 func _link_overlapping_effects() -> void:
@@ -581,6 +585,16 @@ func _update_card_state_from_settings():
 
 	_apply_display_mode()
 	_sync_focus_container_properties()
+	_sync_logo_mode()
+
+func _sync_logo_mode() -> void:
+	var mode := 0
+	if UIManager and UIManager.card_settings_state:
+		mode = UIManager.card_settings_state.logo_mode
+	if _media_stack:
+		_media_stack.set_logo_mode(mode)
+	if _focus_stack:
+		_focus_stack.set_logo_mode(mode)
 
 func _apply_effect_insets_to_media_container(effects: Array) -> void:
 	"""Scan base effects and set media-container insets from their settings."""

@@ -56,9 +56,14 @@ void fragment() {
 	// Convert to normalized UV (0-1 within card bounds)
 	vec2 card_uv = card_local_pos / card_size;
 	
-	// Apply aspect-ratio preserving transform to sample texture correctly
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
-	vec2 tex_uv = aspect_covered_uv(card_uv, card_size, tex_size);
+	
+	// The base card image lives in the inner media area (after insets). Match it
+	// so the glow comes from the same visible texture crop, including logo
+	// include/exclude shifts.
+	vec2 inner_size = card_size - vec2(total_inset_pixels * 2.0);
+	vec2 inner_uv = (card_uv * card_size - vec2(total_inset_pixels)) / max(inner_size, vec2(1.0));
+	vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;
 	
 	// Get blurred, thresholded texture
 	vec3 blurred = sample_box_blur(tex_uv, tex_size);

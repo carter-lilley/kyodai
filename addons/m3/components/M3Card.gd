@@ -1312,4 +1312,3 @@ func _on_focus_changed():
 			_update_focus_ring_bounds()
 	_apply_visual_draw_index()
 	queue_redraw()
-

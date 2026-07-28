@@ -40,7 +40,7 @@ window/per_pixel_transparency/allowed=true
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/PackageChecker/plugin.cfg", "res://addons/godot-sqlite/plugin.cfg", "res://addons/icons-fonts/plugin.cfg", "res://addons/m3/plugin.cfg", "res://addons/rakugo-nodes/plugin.cfg")
+enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/PackageChecker/plugin.cfg", "res://addons/copy-full-stack-trace/plugin.cfg", "res://addons/godot-copy-all-errors-5ab5055222311666b16982270e1fac051cdd17aa/addons/copy_all_errors/plugin.cfg", "res://addons/godot-sqlite/plugin.cfg", "res://addons/icons-fonts/plugin.cfg", "res://addons/m3/plugin.cfg", "res://addons/rakugo-nodes/plugin.cfg")
 
 [file_customization]
 

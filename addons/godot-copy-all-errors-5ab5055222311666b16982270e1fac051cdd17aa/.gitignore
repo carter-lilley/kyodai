@@ -1,0 +1,10 @@
+# Godot
+.godot/
+*.uid
+*.import
+*.translation
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

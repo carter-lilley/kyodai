@@ -60,9 +60,9 @@ void fragment() {
 	
 	vec2 inner_uv = inner_pixel_pos / inner_size;
 	
-	vec2 tex_size = vec2(textureSize(game_texture, 0));
-	
-	vec2 tex_uv = aspect_covered_uv(inner_uv, inner_size, tex_size);
+	// Use the precomputed UV transform from MediaContainer so logo include/exclude
+	// shifts are respected. The transform maps inner media UV -> texture UV.
+	vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;
 	vec4 tex_color = texture(game_texture, tex_uv);
 	
 	// Combine outer edge alpha with inner inset alpha

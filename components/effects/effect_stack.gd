@@ -114,10 +114,16 @@ func set_game_texture(texture: Texture2D) -> void:
 			effect._mark_shader_params_dirty()
 
 func set_logo_rect(rect: Vector4) -> void:
+	if media_container:
+		media_container.logo_rect = rect
 	for effect_id in _effects:
 		var effect = _effects[effect_id]
 		if effect:
 			effect.set_logo_rect(rect)
+
+func set_logo_mode(mode: int) -> void:
+	if media_container:
+		media_container.logo_mode = mode
 
 func _rebuild_effects():
 	var active_effect_ids: Array[String] = []
