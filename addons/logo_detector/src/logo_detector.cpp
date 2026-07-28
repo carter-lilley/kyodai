@@ -632,7 +632,7 @@ static std::vector<OcrWord> detect_text_words(
         std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_det_input_name_strings);
         std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_det_output_name_strings);
         output_tensors = p_impl->ocr_det_session->Run(
-            Ort::RunOptions{nullptr},
+            Ort::RunOptions(),
             input_names.data(),
             &input_tensor,
             1,
@@ -865,7 +865,7 @@ Array LogoDetector::detect_candidates(
         std::vector<const char*> input_names = to_cstr_array(impl->yolo_input_name_strings);
         std::vector<const char*> output_names = to_cstr_array(impl->yolo_output_name_strings);
         output_tensors = impl->yolo_session->Run(
-            Ort::RunOptions{nullptr},
+            Ort::RunOptions(),
             input_names.data(),
             &input_tensor,
             1,
@@ -1046,7 +1046,7 @@ static std::vector<bool> classify_rotations_180(
         std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_cls_input_name_strings);
         std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_cls_output_name_strings);
         output_tensors = p_impl->ocr_cls_session->Run(
-            Ort::RunOptions{nullptr},
+            Ort::RunOptions(),
             input_names.data(),
             &input_tensor,
             1,
@@ -1095,25 +1095,41 @@ static std::vector<std::pair<String, float>> recognize_texts_batch(
     const int FIXED_W = 320;
     int n = (int)p_crops.size();
 
+    // Filter out any null/empty crops so the recognizer never dereferences them.
+    std::vector<int> valid_indices;
+    valid_indices.reserve(n);
+    for (int i = 0; i < n; i++) {
+        if (p_crops[i].is_valid() && p_crops[i]->get_width() > 0 && p_crops[i]->get_height() > 0) {
+            valid_indices.push_back(i);
+        }
+    }
+    int valid_n = (int)valid_indices.size();
+    if (valid_n == 0) return results;
+
     // Apply rotation correction if a classifier is available.
     std::vector<Ref<Image>> crops = p_crops;
     if (p_impl->ocr_cls_loaded) {
         std::vector<bool> rotate = classify_rotations_180(p_impl, crops);
         for (int i = 0; i < n; i++) {
-            if (rotate[i]) {
+            if (rotate[i] && crops[i].is_valid()) {
                 crops[i] = rotate_180(crops[i]);
             }
         }
     }
 
-    std::vector<float> input_data((size_t)n * 3 * TARGET_H * FIXED_W, 0.0f);
-    for (int idx = 0; idx < n; idx++) {
+    std::vector<float> input_data((size_t)valid_n * 3 * TARGET_H * FIXED_W, 0.0f);
+    for (int j = 0; j < valid_n; j++) {
+        int idx = valid_indices[j];
         Ref<Image> img = crops[idx]->duplicate();
+        if (img.is_null()) continue;
         if (img->get_format() != Image::FORMAT_RGB8) {
             img->convert(Image::FORMAT_RGB8);
         }
+        if (img.is_null()) continue;
         int src_w = img->get_width();
         int src_h = img->get_height();
+        if (src_w <= 0 || src_h <= 0) continue;
+
         float aspect = (float)src_w / std::max(1, src_h);
         int target_w = (int)std::round((float)TARGET_H * aspect);
         target_w = std::max(32, target_w);
@@ -1122,6 +1138,7 @@ static std::vector<std::pair<String, float>> recognize_texts_batch(
 
         img->resize(target_w, TARGET_H, Image::INTERPOLATE_BILINEAR);
         const uint8_t *pixels = img->get_data().ptr();
+        if (pixels == nullptr) continue;
 
         for (int c = 0; c < 3; c++) {
             for (int y = 0; y < TARGET_H; y++) {
@@ -1129,14 +1146,14 @@ static std::vector<std::pair<String, float>> recognize_texts_batch(
                     // PP-OCR CRNN models were trained on OpenCV BGR images.
                     int src_c = 2 - c;
                     int src_idx = (y * target_w + x) * 3 + src_c;
-                    int dst_idx = ((idx * 3 + c) * TARGET_H + y) * FIXED_W + x;
+                    int dst_idx = ((j * 3 + c) * TARGET_H + y) * FIXED_W + x;
                     input_data[dst_idx] = (pixels[src_idx] / 255.0f - 0.5f) / 0.5f;
                 }
             }
         }
     }
 
-    const int64_t input_shape[] = {n, 3, TARGET_H, FIXED_W};
+    const int64_t input_shape[] = {valid_n, 3, TARGET_H, FIXED_W};
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
         p_impl->memory_info,
         input_data.data(),
@@ -1150,7 +1167,7 @@ static std::vector<std::pair<String, float>> recognize_texts_batch(
         std::vector<const char*> input_names = to_cstr_array(p_impl->ocr_rec_input_name_strings);
         std::vector<const char*> output_names = to_cstr_array(p_impl->ocr_rec_output_name_strings);
         output_tensors = p_impl->ocr_rec_session->Run(
-            Ort::RunOptions{nullptr},
+            Ort::RunOptions(),
             input_names.data(),
             &input_tensor,
             1,
@@ -1168,8 +1185,9 @@ static std::vector<std::pair<String, float>> recognize_texts_batch(
     int num_classes = (int)out_shape[2];
     const float *logits = output_tensors[0].GetTensorData<float>();
 
-    for (int idx = 0; idx < n; idx++) {
-        const float *sample_logits = logits + (size_t)idx * seq_len * num_classes;
+    for (int j = 0; j < valid_n; j++) {
+        int idx = valid_indices[j];
+        const float *sample_logits = logits + (size_t)j * seq_len * num_classes;
         std::vector<int> indices;
         std::vector<float> probs;
         indices.reserve(seq_len);
@@ -1237,15 +1255,85 @@ Dictionary LogoDetector::detect_title_box(
 	Dictionary result;
 	result["detected"] = false;
 
-	if (!impl->yolo_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
-		return result;
-	}
+	try {
+		if (!impl->yolo_loaded || !impl->ocr_rec_loaded || !impl->charset_loaded || p_image.is_null()) {
+			return result;
+		}
 
-	Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 3);
+		Array candidates = detect_candidates(p_image, p_conf_threshold, p_nms_threshold, 3);
 
-	// No YOLO candidates at all: run full-image OCR fallback.
-	if (candidates.size() == 0) {
-		if (impl->ocr_det_loaded) {
+		// No YOLO candidates at all: run full-image OCR fallback.
+		if (candidates.size() == 0) {
+			if (impl->ocr_det_loaded) {
+				std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
+				float best_sim = 0.0f;
+				const OcrWord *best_word = nullptr;
+				for (const OcrWord &word : words) {
+					if (is_blacklisted_text(word.text)) continue;
+					float sim = token_similarity_score(word.text, p_title);
+					if (sim > best_sim) {
+						best_sim = sim;
+						best_word = &word;
+					}
+				}
+				if (best_word != nullptr && best_sim >= 0.2f) {
+					result["detected"] = true;
+					result["x1"] = best_word->x1;
+					result["y1"] = best_word->y1;
+					result["x2"] = best_word->x2;
+					result["y2"] = best_word->y2;
+					result["confidence"] = 0.0f;
+					result["matched_text"] = best_word->text;
+					result["title_score"] = best_sim;
+					result["combined_score"] = best_sim;
+					result["from_fallback"] = true;
+					return result;
+				}
+			}
+			return result;
+		}
+
+		// Crop each YOLO candidate and recognize its text in one batch.
+		std::vector<Ref<Image>> crops;
+		crops.reserve(candidates.size());
+		for (int i = 0; i < candidates.size(); i++) {
+			Dictionary cand = candidates[i];
+			float x1 = cand["x1"];
+			float y1 = cand["y1"];
+			float x2 = cand["x2"];
+			float y2 = cand["y2"];
+			crops.push_back(crop_box(p_image, x1, y1, x2, y2));
+		}
+
+		std::vector<std::pair<String, float>> rec_results = recognize_texts_batch(impl, crops);
+
+		float best_score = -1.0f;
+		Dictionary best_candidate;
+		float best_title_sim = 0.0f;
+
+		for (int i = 0; i < candidates.size(); i++) {
+			Dictionary cand = candidates[i];
+			String text = rec_results[i].first;
+			float title_sim = token_similarity_score(text, p_title);
+			if (is_blacklisted_text(text)) {
+				title_sim *= 0.1f;
+			}
+			float cand_conf = cand["confidence"];
+			float combined = cand_conf * 0.3f + title_sim * 0.7f;
+
+			if (combined > best_score) {
+				best_score = combined;
+				best_candidate = cand;
+				best_candidate["matched_text"] = text;
+				best_candidate["title_score"] = title_sim;
+				best_candidate["combined_score"] = combined;
+				best_candidate["from_fallback"] = false;
+				best_title_sim = title_sim;
+			}
+		}
+
+		// If crop OCR didn't find a confident title, fall back to full-image OCR.
+		if (best_title_sim < 0.3f && impl->ocr_det_loaded) {
 			std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
 			float best_sim = 0.0f;
 			const OcrWord *best_word = nullptr;
@@ -1257,104 +1345,40 @@ Dictionary LogoDetector::detect_title_box(
 					best_word = &word;
 				}
 			}
-			if (best_word != nullptr && best_sim >= 0.2f) {
-				result["detected"] = true;
-				result["x1"] = best_word->x1;
-				result["y1"] = best_word->y1;
-				result["x2"] = best_word->x2;
-				result["y2"] = best_word->y2;
-				result["confidence"] = 0.0f;
-				result["matched_text"] = best_word->text;
-				result["title_score"] = best_sim;
-				result["combined_score"] = best_sim;
-				result["from_fallback"] = true;
-				return result;
+			if (best_word != nullptr && best_sim > best_title_sim) {
+				best_candidate = Dictionary();
+				best_candidate["detected"] = true;
+				best_candidate["x1"] = best_word->x1;
+				best_candidate["y1"] = best_word->y1;
+				best_candidate["x2"] = best_word->x2;
+				best_candidate["y2"] = best_word->y2;
+				best_candidate["confidence"] = 0.0f;
+				best_candidate["matched_text"] = best_word->text;
+				best_candidate["title_score"] = best_sim;
+				best_candidate["combined_score"] = best_sim;
+				best_candidate["from_fallback"] = true;
+				return best_candidate;
 			}
 		}
-		return result;
-	}
 
-	// Crop each YOLO candidate and recognize its text in one batch.
-	std::vector<Ref<Image>> crops;
-	crops.reserve(candidates.size());
-	for (int i = 0; i < candidates.size(); i++) {
-		Dictionary cand = candidates[i];
-		float x1 = cand["x1"];
-		float y1 = cand["y1"];
-		float x2 = cand["x2"];
-		float y2 = cand["y2"];
-		crops.push_back(crop_box(p_image, x1, y1, x2, y2));
-	}
-
-	std::vector<std::pair<String, float>> rec_results = recognize_texts_batch(impl, crops);
-
-	float best_score = -1.0f;
-	Dictionary best_candidate;
-	float best_title_sim = 0.0f;
-
-	for (int i = 0; i < candidates.size(); i++) {
-		Dictionary cand = candidates[i];
-		String text = rec_results[i].first;
-		float title_sim = token_similarity_score(text, p_title);
-		if (is_blacklisted_text(text)) {
-			title_sim *= 0.1f;
-		}
-		float cand_conf = cand["confidence"];
-		float combined = cand_conf * 0.3f + title_sim * 0.7f;
-
-		if (combined > best_score) {
-			best_score = combined;
-			best_candidate = cand;
-			best_candidate["matched_text"] = text;
-			best_candidate["title_score"] = title_sim;
-			best_candidate["combined_score"] = combined;
-			best_candidate["from_fallback"] = false;
-			best_title_sim = title_sim;
-		}
-	}
-
-	// If crop OCR didn't find a confident title, fall back to full-image OCR.
-	if (best_title_sim < 0.3f && impl->ocr_det_loaded) {
-		std::vector<OcrWord> words = detect_text_words(impl, p_image, impl->charset);
-		float best_sim = 0.0f;
-		const OcrWord *best_word = nullptr;
-		for (const OcrWord &word : words) {
-			if (is_blacklisted_text(word.text)) continue;
-			float sim = token_similarity_score(word.text, p_title);
-			if (sim > best_sim) {
-				best_sim = sim;
-				best_word = &word;
-			}
-		}
-		if (best_word != nullptr && best_sim > best_title_sim) {
-			best_candidate = Dictionary();
+		if (best_score > 0.0f) {
 			best_candidate["detected"] = true;
-			best_candidate["x1"] = best_word->x1;
-			best_candidate["y1"] = best_word->y1;
-			best_candidate["x2"] = best_word->x2;
-			best_candidate["y2"] = best_word->y2;
-			best_candidate["confidence"] = 0.0f;
-			best_candidate["matched_text"] = best_word->text;
-			best_candidate["title_score"] = best_sim;
-			best_candidate["combined_score"] = best_sim;
-			best_candidate["from_fallback"] = true;
 			return best_candidate;
 		}
-	}
 
-	if (best_score > 0.0f) {
+		// Final fallback: trust the top YOLO candidate even without a good OCR match.
+		best_candidate = candidates[0];
 		best_candidate["detected"] = true;
+		best_candidate["matched_text"] = "";
+		best_candidate["title_score"] = 0.0f;
+		best_candidate["combined_score"] = (float)best_candidate["confidence"];
+		best_candidate["from_fallback"] = false;
 		return best_candidate;
+	} catch (const std::exception &e) {
+		UtilityFunctions::print("detect_title_box failed: ", e.what());
+		result["detected"] = false;
+		return result;
 	}
-
-	// Final fallback: trust the top YOLO candidate even without a good OCR match.
-	best_candidate = candidates[0];
-	best_candidate["detected"] = true;
-	best_candidate["matched_text"] = "";
-	best_candidate["title_score"] = 0.0f;
-	best_candidate["combined_score"] = (float)best_candidate["confidence"];
-	best_candidate["from_fallback"] = false;
-	return best_candidate;
 }
 
 // ---------------------------------------------------------------------------
