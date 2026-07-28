@@ -41,8 +41,8 @@ func _build_content() -> void:
 
 	_grid = GridContainer.new()
 	_grid.columns = COLUMNS
-	_grid.add_theme_constant_override("hseparation", M3Units.dp(CELL_SEPARATION_DP))
-	_grid.add_theme_constant_override("vseparation", M3Units.dp(CELL_SEPARATION_DP))
+	_grid.add_theme_constant_override("hseparation", int(M3Units.dp(CELL_SEPARATION_DP)))
+	_grid.add_theme_constant_override("vseparation", int(M3Units.dp(CELL_SEPARATION_DP)))
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.add_child(_grid)
@@ -83,7 +83,7 @@ func _load_apps() -> void:
 	_loading_label.visible = false
 	_scroll.visible = true
 
-	_texture_batch_id = SystemManager.memory.start_batch(
+	_texture_batch_id = MemorySubManager.start_batch(
 		_apps,
 		_decode_app_icon,
 		MemorySubManager.BatchMode.IMAGE_THREAD,
@@ -114,7 +114,7 @@ func _on_all_icons_decoded(results: Array) -> void:
 		return str(a.get("name", "")).to_lower() < str(b.get("name", "")).to_lower()
 	)
 
-	_button_batch_id = SystemManager.memory.start_batch(
+	_button_batch_id = MemorySubManager.start_batch(
 		results,
 		_create_app_button,
 		MemorySubManager.BatchMode.SYNC,
@@ -127,7 +127,7 @@ func _create_app_button(result: Dictionary, _index: int) -> void:
 	var image = result.get("image")
 	var texture: Texture2D = null
 	if image is Image and not image.is_empty():
-		texture = SystemManager.memory.create_texture_from_image(image)
+		texture = MemorySubManager.create_texture_from_image(image)
 
 	var btn = AppPickerButton.new()
 	btn.flat = true
@@ -153,8 +153,8 @@ func _on_app_pressed(package_name: String, app_name: String, icon_base64: String
 
 func _exit_tree() -> void:
 	if _texture_batch_id >= 0:
-		SystemManager.memory.cancel_batch(_texture_batch_id)
+		MemorySubManager.cancel_batch(_texture_batch_id)
 		_texture_batch_id = -1
 	if _button_batch_id >= 0:
-		SystemManager.memory.cancel_batch(_button_batch_id)
+		MemorySubManager.cancel_batch(_button_batch_id)
 		_button_batch_id = -1

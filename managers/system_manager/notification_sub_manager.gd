@@ -65,7 +65,7 @@ func show_notification_safe(
 	_show_notification_deferred.bind(id, text, type, _icon, min_duration, progress_callable, text_formatter, pulsing, pinned).call_deferred()
 	return id
 
-func _show_notification_deferred(id: int, text: String, type: Type, icon: Texture2D, min_duration: float, progress_callable: Callable, text_formatter: Callable, pulsing: bool, pinned: bool) -> void:
+func _show_notification_deferred(id: int, text: String, type: Type, _icon: Texture2D, min_duration: float, progress_callable: Callable, text_formatter: Callable, pulsing: bool, pinned: bool) -> void:
 	print("[SystemManager.notifications] _show_notification_deferred id=" + str(id))
 	if not progress_callable.is_null() or pulsing:
 		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing, pinned)

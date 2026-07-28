@@ -1,3 +1,4 @@
+@tool
 class_name SearchBar
 extends M3TextField
 

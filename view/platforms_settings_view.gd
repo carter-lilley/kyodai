@@ -121,7 +121,7 @@ func _fetch_platforms():
 		child.queue_free()
 	_return_all_cards()
 	if _active_batch_id != -1:
-		SystemManager.memory.cancel_batch(_active_batch_id)
+		MemorySubManager.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 
 	# Show loading indicator
@@ -237,7 +237,7 @@ func _fetch_platforms():
 		
 		# Spread card creation across frames to avoid stuttering the UI.
 		# Use SystemManager.memory's batch worker for smooth per-frame processing.
-		_active_batch_id = SystemManager.memory.start_batch(
+		_active_batch_id = MemorySubManager.start_batch(
 			card_payloads,
 			func(payload: Dictionary, _index: int) -> PlatformCard:
 				return _create_platform_card(
@@ -254,7 +254,7 @@ func _fetch_platforms():
 			3,
 			func(_processed: int, _total: int):
 				pass,
-			func(results: Array):
+			func(_results: Array):
 				_active_batch_id = -1
 				if not is_inside_tree():
 					_is_fetching_platforms = false
@@ -277,19 +277,19 @@ func _fetch_platforms():
 				
 				# Populate emulator dropdowns in a second batch so the cards appear first
 				# and the heavy dropdown rebuild is spread across frames.
-				_active_batch_id = SystemManager.memory.start_batch(
+				_active_batch_id = MemorySubManager.start_batch(
 					_platform_cards.values(),
 					_populate_card_dropdown,
 					SystemManager.memory.BatchMode.SYNC,
 					3,
 					func(_processed: int, _total: int):
 						pass,
-					func(_results: Array):
+					func(_dropdown_results: Array):
 						_active_batch_id = -1
 				)
 
-		)
-	, false)  # bypass cache for explicit user-driven fetches
+	)
+, false)  # bypass cache for explicit user-driven fetches
 
 func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCardPool.get_card(PlatformCardPool.POOL_PLATFORM_SETTINGS)
@@ -351,8 +351,8 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		_update_select_all_button_text()
 	)
 
-	card.emulator_changed.connect(func(emu_id: String, core_id: String):
-		_set_platform_emulator(slug, emu_id, core_id)
+	card.emulator_changed.connect(func(emu_id: String, new_core_id: String):
+		_set_platform_emulator(slug, emu_id, new_core_id)
 	)
 
 	# Connect download button
@@ -386,7 +386,7 @@ func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
 func _exit_tree() -> void:
 	_return_all_cards()
 	if _active_batch_id != -1:
-		SystemManager.memory.cancel_batch(_active_batch_id)
+		MemorySubManager.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 	if _status_poll_timer:
 		_status_poll_timer.stop()
@@ -453,7 +453,7 @@ func _load_platforms_from_database():
 	# Clear existing cards
 	_return_all_cards()
 	if _active_batch_id != -1:
-		SystemManager.memory.cancel_batch(_active_batch_id)
+		MemorySubManager.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 
 	# Cache emulator lists to avoid duplicate registry queries during batch creation
@@ -480,7 +480,7 @@ func _load_platforms_from_database():
 		})
 
 	# Spread offline card creation across frames
-	_active_batch_id = SystemManager.memory.start_batch(
+	_active_batch_id = MemorySubManager.start_batch(
 		platform_payloads,
 		func(payload: Dictionary, _index: int) -> PlatformCard:
 			var card = _create_platform_card(payload.slug, payload.platform_name, 0, payload.icon_url, enabled_platforms, {}, emulator_cache)
@@ -491,7 +491,7 @@ func _load_platforms_from_database():
 		5,
 		func(_processed: int, _total: int):
 			pass,
-		func(results: Array):
+		func(_results: Array):
 			_active_batch_id = -1
 			if not is_inside_tree():
 				_return_all_cards()
@@ -505,14 +505,14 @@ func _load_platforms_from_database():
 			
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = SystemManager.memory.start_batch(
+			_active_batch_id = MemorySubManager.start_batch(
 				_platform_cards.values(),
 				_populate_card_dropdown,
 				SystemManager.memory.BatchMode.SYNC,
 				5,
 				func(_processed: int, _total: int):
 					pass,
-				func(_results: Array):
+				func(_dropdown_results: Array):
 					_active_batch_id = -1
 			)
 	)

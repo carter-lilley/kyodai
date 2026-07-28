@@ -40,9 +40,9 @@ func _update_shader_params() -> void:
 	_set_shader_param("gradient_direction", gradient_direction)
 
 	if inner_stroke_gradient is Gradient:
-		var hash = _gradient_hash(inner_stroke_gradient)
-		if hash != _inner_stroke_hash:
-			_inner_stroke_hash = hash
+		var inner_hash = _gradient_hash(inner_stroke_gradient)
+		if inner_hash != _inner_stroke_hash:
+			_inner_stroke_hash = inner_hash
 			_inner_stroke_gradient_texture = _gradient_to_texture(inner_stroke_gradient)
 		_set_shader_param("inner_stroke_gradient_texture", _inner_stroke_gradient_texture)
 		_set_shader_param("use_inner_stroke_gradient", true)
@@ -51,9 +51,9 @@ func _update_shader_params() -> void:
 	_set_shader_param("inner_stroke_width_ratio", inner_stroke_width)
 
 	if outer_stroke_gradient is Gradient:
-		var hash = _gradient_hash(outer_stroke_gradient)
-		if hash != _outer_stroke_hash:
-			_outer_stroke_hash = hash
+		var outer_hash = _gradient_hash(outer_stroke_gradient)
+		if outer_hash != _outer_stroke_hash:
+			_outer_stroke_hash = outer_hash
 			_outer_stroke_gradient_texture = _gradient_to_texture(outer_stroke_gradient)
 		_set_shader_param("outer_stroke_gradient_texture", _outer_stroke_gradient_texture)
 		_set_shader_param("use_outer_stroke_gradient", true)
@@ -62,9 +62,9 @@ func _update_shader_params() -> void:
 	_set_shader_param("outer_stroke_width_ratio", outer_stroke_width)
 
 	if border_gradient is Gradient:
-		var hash = _gradient_hash(border_gradient)
-		if hash != _gradient_hash_cache:
-			_gradient_hash_cache = hash
+		var border_hash = _gradient_hash(border_gradient)
+		if border_hash != _gradient_hash_cache:
+			_gradient_hash_cache = border_hash
 			_gradient_texture = _gradient_to_texture(border_gradient)
 		_set_shader_param("gradient_texture", _gradient_texture)
 		_set_shader_param("use_gradient", true)

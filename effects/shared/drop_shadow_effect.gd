@@ -16,7 +16,7 @@ func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/drop_shadow.gdshader")
 
-func compute_pipeline(cache: Dictionary) -> void:
+func compute_pipeline(_cache: Dictionary) -> void:
 	_update_shadow_offsets()
 
 func _update_shadow_offsets():

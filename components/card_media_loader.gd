@@ -174,32 +174,28 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
 		return null
 
-	var err = FAILED
 	var image = Image.new()
+	var err = FAILED
+	var format = FSM.detect_image_format(buffer)
 
-	if buffer[0] == 0xFF and buffer[1] == 0xD8:
-		err = image.load_jpg_from_buffer(buffer)
-	elif buffer[0] == 0x89 and buffer[1] == 0x50:
-		err = image.load_png_from_buffer(buffer)
-	elif buffer[0] == 0x52 and buffer[1] == 0x49:
-		err = image.load_webp_from_buffer(buffer)
-	else:
-		err = image.load_jpg_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
+	match format:
+		FSM.ImageFormat.JPEG:
+			err = image.load_jpg_from_buffer(buffer)
+		FSM.ImageFormat.PNG:
 			err = image.load_png_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
+		FSM.ImageFormat.WEBP:
 			err = image.load_webp_from_buffer(buffer)
-
-	if err == OK:
-		if image.is_empty():
+		_:
+			# Unknown magic bytes: not a supported image.
 			return null
-		var max_dim = max(image.get_width(), image.get_height())
-		if max_dim > MAX_COVER_TEXTURE_SIZE:
-			var resize_scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
-			var new_width = max(1, int(image.get_width() * resize_scale))
-			var new_height = max(1, int(image.get_height() * resize_scale))
-			image.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
-		return image
-	return null
+
+	if err != OK or image.is_empty():
+		return null
+
+	var max_dim = max(image.get_width(), image.get_height())
+	if max_dim > MAX_COVER_TEXTURE_SIZE:
+		var resize_scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
+		var new_width = max(1, int(image.get_width() * resize_scale))
+		var new_height = max(1, int(image.get_height() * resize_scale))
+		image.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
+	return image

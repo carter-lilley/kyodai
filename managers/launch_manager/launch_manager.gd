@@ -34,21 +34,27 @@ var _pending_core_launches: Array[Dictionary] = []
 # Signals
 signal game_launched(game: GameResource)
 signal game_launch_initiated(game: GameResource, focus_index: int)
+@warning_ignore("unused_signal")
 signal launch_completed(success: bool, message: String)
+@warning_ignore("unused_signal")
 signal background_state_entered(pid: int, game: GameResource)
+@warning_ignore("unused_signal")
 signal background_state_exited(game: GameResource, exit_code: int)
+@warning_ignore("unused_signal")
 signal emulator_registry_loaded(success: bool)
+@warning_ignore("unused_signal")
 signal emulator_extraction_started(emulator_id: String)
 signal emulator_extraction_completed(emulator_id: String, success: bool)
+@warning_ignore("unused_signal")
 signal firmware_download_completed(platform_slug: String, success: bool)
 signal core_download_completed(platform_slug: String, core_id: String, success: bool)
 signal gamenative_games_updated()
 
 @onready var registry: RegistryManager = $RegistrySubManager
 @onready var emulator: EmulatorManager = $EmulatorSubManager
-@onready var game: GameManager = $GameSubManager
+@onready var game_manager: GameManager = $GameSubManager
 @onready var firmware: FirmwareManager = $FirmwareSubManager
-@onready var intent: LaunchIntentManager = $LaunchIntentSubManager
+@onready var intent_manager: LaunchIntentManager = $LaunchIntentSubManager
 @onready var process: ProcessManager = $ProcessSubManager
 @onready var core: CoreManager = $CoreSubManager
 var shuffler: ShufflerManager
@@ -113,7 +119,7 @@ func get_core_for_platform(emulator_id: String, platform_slug: String, core_id: 
 	return registry.get_core_for_platform(emulator_id, platform_slug, core_id)
 
 func resolve_core_for_game(game: GameResource) -> String:
-	return intent.resolve_core_for_game(game)
+	return intent_manager.resolve_core_for_game(game)
 
 func get_cores_for_platform(emulator_id: String, platform_slug: String) -> Array[Dictionary]:
 	return registry.get_cores_for_platform(emulator_id, platform_slug)
@@ -248,10 +254,10 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 # ============================================================================
 
 func resolve_emulator_for_game(game: GameResource) -> String:
-	return intent.resolve_emulator_for_game(game)
+	return intent_manager.resolve_emulator_for_game(game)
 
 func create_launch_intent(game: GameResource, rom_path_override: String = "") -> LaunchIntent:
-	return intent.create_launch_intent(game, rom_path_override)
+	return intent_manager.create_launch_intent(game, rom_path_override)
 
 # ============================================================================
 # Background state wrappers
@@ -296,7 +302,7 @@ var _last_prepared_rom_paths: Dictionary = {}  # game romm_id -> prepared path
 func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_ready: Callable = Callable()) -> void:
 	print("[LaunchManager] launch_shuffler_game() called for: ", game.get_display_name())
 	
-	var emulator_id = intent.resolve_emulator_for_game(game)
+	var emulator_id = intent_manager.resolve_emulator_for_game(game)
 	if emulator_id == "":
 		push_error("[LaunchManager] No emulator configured for platform: " + game.platform_slug)
 		if on_pid_ready.is_valid():
@@ -305,7 +311,7 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 	
 	var on_ready = func():
 		var prepared_rom_path = _last_prepared_rom_paths.get(game.romm_id, rom_path_override) as String
-		var launch_intent = intent.create_launch_intent(game, prepared_rom_path)
+		var launch_intent = intent_manager.create_launch_intent(game, prepared_rom_path)
 		if not launch_intent:
 			push_error("[LaunchManager] Failed to create launch intent")
 			if on_pid_ready.is_valid():
@@ -327,8 +333,8 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 	# Vita3K and RPCS3 need TitleID extraction and ZIP extraction even in shuffler mode.
 	# Other emulators skip the normal preparation step.
 	var should_prepare = emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")
-	var ready = await _ensure_prerequisites(game, emulator_id, on_ready, should_prepare, true, rom_path_override)
-	if not ready:
+	var is_ready = await _ensure_prerequisites(game, emulator_id, on_ready, should_prepare, true, rom_path_override)
+	if not is_ready:
 		return  # Download pending, callback will handle it
 	# If ready, on_ready was already called
 
@@ -475,7 +481,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	
 	# Emulator is installed - check if the selected RetroArch core is ready (Android only)
 	if SystemManager.platform.is_android() and emulator_id == "retroarch":
-		var core_id_for_launch: String = intent.resolve_core_for_game(game)
+		var core_id_for_launch: String = intent_manager.resolve_core_for_game(game)
 		if not core.is_core_ready(emulator_id, game.platform_slug, core_id_for_launch):
 			var core_key: String = game.platform_slug + ":" + core_id_for_launch
 			if _pending_core_downloads.has(core_key):
@@ -500,7 +506,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	# Emulator is installed - check firmware
 	var core_id_for_firmware = ""
 	if emulator_id == "retroarch":
-		core_id_for_firmware = intent.resolve_core_for_game(game)
+		core_id_for_firmware = intent_manager.resolve_core_for_game(game)
 	
 	if not firmware.is_platform_firmware_ready(game.platform_slug, emulator_id, core_id_for_firmware):
 		if _pending_firmware_downloads.has(game.platform_slug):
@@ -530,11 +536,8 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			if not success:
 				push_error("[LaunchManager] Firmware download failed for " + game.platform_slug + ": " + message)
 				SystemManager.notifications.show_notification("Failed to download firmware for " + game.platform_slug, SystemManager.notifications.Type.ERROR)
-				for i in matching_indices:
-					var pending = _pending_firmware_launches[i]
-					var pending_callback = pending.callback
-					if pending_callback.is_valid():
-						pending_callback.call(false)
+				# Abort the pending launches: on_ready callbacks take no arguments
+				# and would perform the launch, so they must not be invoked here.
 				for i in range(matching_indices.size() - 1, -1, -1):
 					_pending_firmware_launches.remove_at(matching_indices[i])
 				return
@@ -573,7 +576,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 func _launch_with_emulator_check(game: GameResource) -> void:
 	print("[LaunchManager] _launch_with_emulator_check: ENTER for " + game.get_display_name())
 	
-	var emulator_id = intent.resolve_emulator_for_game(game)
+	var emulator_id = intent_manager.resolve_emulator_for_game(game)
 	
 	if emulator_id == "":
 		SystemManager.notifications.show_notification("No emulator configured for platform: " + game.platform_slug, SystemManager.notifications.Type.ERROR)
@@ -591,8 +594,8 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 			_launch_game_internal(game, emulator_id)
 		print("[LaunchManager] _launch_with_emulator_check: EXIT")
 	
-	var ready = await _ensure_prerequisites(game, emulator_id, on_ready)
-	if not ready:
+	var is_ready = await _ensure_prerequisites(game, emulator_id, on_ready)
+	if not is_ready:
 		return  # Download pending, callback will handle it
 	# If ready, on_ready was already called
 
@@ -646,12 +649,8 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 	if not success:
 		push_error("[LaunchManager] Core download failed for " + core_key)
 		SystemManager.notifications.show_notification("Failed to download core for " + platform_slug, SystemManager.notifications.Type.ERROR)
-		for i in matching_indices:
-			var pending = _pending_core_launches[i]
-			var pending_callback = pending.callback
-			if pending_callback.is_valid():
-				pending_callback.call()
-
+		# Abort the pending launches: on_ready callbacks perform the launch
+		# and must not run when the required core failed to download.
 		for i in range(matching_indices.size() - 1, -1, -1):
 			_pending_core_launches.remove_at(matching_indices[i])
 		core_download_completed.emit(platform_slug, core_id, false)
@@ -663,7 +662,7 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 		var pending = _pending_core_launches[i]
 		var game: GameResource = pending.game as GameResource
 		var pending_callback = pending.callback
-		var pending_emulator_id: String = intent.resolve_emulator_for_game(game)
+		var pending_emulator_id: String = intent_manager.resolve_emulator_for_game(game)
 		await _ensure_prerequisites(game, pending_emulator_id, pending_callback)
 	for i in range(matching_indices.size() - 1, -1, -1):
 		_pending_core_launches.remove_at(matching_indices[i])
@@ -672,7 +671,7 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	print("[LaunchManager] _launch_game_internal: ENTER for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
 	
-	var launch_intent = intent.create_launch_intent(game)
+	var launch_intent = intent_manager.create_launch_intent(game)
 	
 	if not launch_intent:
 		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")

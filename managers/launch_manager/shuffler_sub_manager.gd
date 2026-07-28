@@ -819,8 +819,8 @@ func _stop_game(entry: Dictionary) -> void:
 			await get_tree().create_timer(0.5).timeout
 			_send_udp_command("localhost", 55355, "QUIT")
 		"tcp":
-			var hash = str(entry.game.romm_id)
-			await _send_tcp_command("localhost", 4444, "savevm " + hash)
+			var save_hash = str(entry.game.romm_id)
+			await _send_tcp_command("localhost", 4444, "savevm " + save_hash)
 			await _send_tcp_command("localhost", 4444, "quit")
 		"suspend", _:
 			_suspend_game(entry)
@@ -921,7 +921,7 @@ func _input(event: InputEvent) -> void:
 func _hide_window_async(pid: int, exe_name: String) -> void:
 	var ahk_script = _tools_dir + "minimize_window.ahk"
 	if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
-		SystemManager.memory.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name])
+		MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name])
 
 func _hide_window(pid: int, exe_name: String) -> void:
 	_hide_window_async(pid, exe_name)
@@ -947,22 +947,20 @@ func _maximize_window_async(pid: int) -> bool:
 		print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
 		return false
 
-	var completed := false
-	var success := false
-	var output_text := ""
+	var os_state := {"completed": false, "success": false, "output_text": ""}
 
-	SystemManager.memory.queue_os_execute(_ahk_path, [ahk_script, str(pid)], func(result: Dictionary):
-		completed = true
-		success = (result.get("exit_code", -1) == 0)
+	MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid)], func(result: Dictionary):
+		os_state["completed"] = true
+		os_state["success"] = (result.get("exit_code", -1) == 0)
 		var output: Array = result.get("output", [])
-		output_text = "".join(output)
-		print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + output_text.strip_edges() + "\"")
+		os_state["output_text"] = "".join(output)
+		print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + os_state["output_text"].strip_edges() + "\"")
 	)
 
-	while not completed:
+	while not os_state["completed"]:
 		await get_tree().process_frame
 
-	return success
+	return os_state["success"]
 
 func _maximize_window(pid: int) -> bool:
 	return await _maximize_window_async(pid)
@@ -975,22 +973,21 @@ func _force_kill_process(pid: int) -> void:
 		OS.execute("kill", ["-9", str(pid)], [], true)
 
 func _is_process_running_async(pid: int) -> bool:
-	var completed := false
-	var running := false
+	var proc_state := {"completed": false, "running": false}
 	if SystemManager.platform.is_windows():
-		SystemManager.memory.queue_os_execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], func(result: Dictionary):
-			completed = true
+		MemorySubManager.queue_os_execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], func(result: Dictionary):
+			proc_state["completed"] = true
 			var output: Array = result.get("output", [])
-			running = result.get("exit_code", -1) == 0 and output.size() > 0 and str(pid) in str(output[0])
+			proc_state["running"] = result.get("exit_code", -1) == 0 and output.size() > 0 and str(pid) in str(output[0])
 		)
 	else:
-		SystemManager.memory.queue_os_execute("ps", ["-p", str(pid)], func(result: Dictionary):
-			completed = true
-			running = result.get("exit_code", -1) == 0
+		MemorySubManager.queue_os_execute("ps", ["-p", str(pid)], func(result: Dictionary):
+			proc_state["completed"] = true
+			proc_state["running"] = result.get("exit_code", -1) == 0
 		)
-	while not completed:
+	while not proc_state["completed"]:
 		await get_tree().process_frame
-	return running
+	return proc_state["running"]
 
 func _is_process_running(pid: int) -> bool:
 	var output: Array[String] = []

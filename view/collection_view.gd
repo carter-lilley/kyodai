@@ -115,7 +115,7 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 	_is_loading = true
 	_update_status("Loading collection...")
 	
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			var count = DataManager.get_games_for_collection_count(collection_id)
 			return count,
@@ -136,7 +136,7 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> void:
 	if collection_id == 0:
 		return
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			var games = DataManager.get_games_for_collection_paginated(collection_id, offset, limit)
 			return games,

@@ -13,7 +13,6 @@ const NAV_DESTINATIONS = [
 ]
 
 const ADD_DESTINATION = {"id": "add", "label": "", "icon": "plus", "view": ""}
-const CollectionPicker = preload("res://components/collection_picker.gd")
 
 var _last_nav_index: int = 0
 
@@ -66,7 +65,7 @@ func _setup_timers() -> void:
 	_repeat_timer.timeout.connect(_on_repeat)
 	add_child(_repeat_timer)
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	# Let the on-screen keyboard handle its own controller navigation.
 	if UIManager and UIManager.is_onscreen_keyboard_visible():
 		# Safety trap: a held analog direction from before the keyboard opened may
@@ -643,7 +642,7 @@ func _launch_pinned_shortcut(dest: Dictionary) -> void:
 		var path: String = data.get("path", "")
 		if path.is_empty():
 			return
-		var resolved := SystemManager.filesystem.resolve_native_path(path)
+		var resolved := FileSystemSubManager.resolve_native_path(path)
 		if resolved.to_lower().ends_with(".exe") or resolved.to_lower().ends_with(".bat") or resolved.to_lower().ends_with(".cmd"):
 			OS.create_process(resolved, [])
 		else:

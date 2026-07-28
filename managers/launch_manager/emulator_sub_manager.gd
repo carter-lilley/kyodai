@@ -1424,7 +1424,7 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 	if platform_config.is_empty():
 		return false
 	
-	var action_type = platform_config.get("action_type", "")
+	var _action_type = platform_config.get("action_type", "")
 	var validate_config = platform_config.get("validate", {})
 	
 	# If no validation config, consider step complete (just move on)
@@ -1482,7 +1482,7 @@ func _compute_install_progress(emulator_id: String) -> Dictionary:
 	for i in range(install_steps.size()):
 		var step = install_steps[i]
 		var step_name = step.get("step", "")
-		var step_display_name = _get_step_display_name(step_name, emulator_name)
+		var _step_display_name = _get_step_display_name(step_name, emulator_name)
 		if _validate_install_step(emulator_id, i, install_steps):
 			result["completed_steps"] += 1
 		else:

@@ -160,7 +160,7 @@ func _calculate_ui_scale() -> float:
 
 	var dpi := DisplayServer.screen_get_dpi()
 	if dpi <= 0:
-		dpi = DEFAULT_DPI
+		dpi = int(DEFAULT_DPI)
 	var dpi_scale := dpi / BASE_DPI
 
 	_ui_scale = clamp(max(os_scale, resolution_scale, dpi_scale), MIN_UI_SCALE, MAX_UI_SCALE)

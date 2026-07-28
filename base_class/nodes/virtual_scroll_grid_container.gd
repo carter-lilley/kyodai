@@ -51,7 +51,7 @@ var grid_vertical: bool = true:
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
 func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_scale: float) -> void:
-	var old_focused: int = _last_focused_virtual_index
+	var _old_focused: int = _last_focused_virtual_index
 	var needs_refresh: bool = _apply_view_mode_and_vertical(p_view_mode, p_grid_vertical)
 	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
 
@@ -130,7 +130,7 @@ func _batch_apply_layout_state() -> void:
 
 	# Apply structure first so zoom/padding math uses the correct geometry.
 	# Then apply padding before zoom because separation affects available space.
-	var old_focused: int = _last_focused_virtual_index
+	var _old_focused: int = _last_focused_virtual_index
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
@@ -660,11 +660,11 @@ func _free_card_pool() -> void:
 	Pooled nodes are not in the tree, so they must be freed explicitly.
 	Use free() because these nodes are not displayed and queue_free() may not
 	process before the rendering server shuts down at engine exit."""
-	var freed_count: int = 0
+	var _freed_count: int = 0
 	for card in _card_pool:
 		if is_instance_valid(card):
 			card.free()
-			freed_count += 1
+			_freed_count += 1
 	_card_pool.clear()
 
 func clear_pool() -> void:
@@ -761,7 +761,6 @@ var _is_processing_scroll: bool = false
 
 # Throttle window resize: ignore tiny size jitters and avoid duplicate back-to-back
 # recalculations caused by scrollbar visibility toggling.
-var _pending_resize_size: Vector2 = Vector2.ZERO
 var _resize_debounce_frames: int = 0
 const RESIZE_IGNORE_DELTA: float = 2.0
 const RESIZE_FRAME_DELAY: int = 1
@@ -1173,8 +1172,8 @@ func _recalculate_layout():
 	# Defensive: if display mode or media aspect ratio changed, re-snap the target
 	# ratio so layout uses a valid stop for the new base dimensions.
 	if UIManager and UIManager.card_settings_state:
-		var state = UIManager.card_settings_state
-		if state.display_mode != _last_layout_display_mode or state.media_aspect_ratio != _last_layout_media_aspect_ratio:
+		var layout_state = UIManager.card_settings_state
+		if layout_state.display_mode != _last_layout_display_mode or layout_state.media_aspect_ratio != _last_layout_media_aspect_ratio:
 			var max_ratio = _calculate_max_ratio()
 			var clamped = clampf(target_card_width_ratio, 0.05, max_ratio)
 			var snapped_ratio = _calculate_snapped_ratio(clamped)
@@ -1279,12 +1278,12 @@ func _recalculate_layout():
 	_update_layout()
 	_update_margin()
 	_flow_container.queue_sort()
-	var active_before: int = _active_cards.size()
-	var first_before: int = -1
-	var last_before: int = -1
+	var _active_before: int = _active_cards.size()
+	var _first_before: int = -1
+	var _last_before: int = -1
 	if _active_cards.size() > 0:
-		first_before = _active_cards[0].get_meta("virtual_index", -1)
-		last_before = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+		_first_before = _active_cards[0].get_meta("virtual_index", -1)
+		_last_before = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
 	# Always recycle cards that fall outside the new buffer target during a layout
 	# recalculation. A preset can reset the scroll position while the active cards
 	# still hold indices from the previous scroll offset; without recycling, the
@@ -1296,12 +1295,12 @@ func _recalculate_layout():
 		_on_scroll_value_changed(_scroll_container.scroll_vertical, true)
 	else:
 		_on_scroll_value_changed(_scroll_container.scroll_horizontal, true)
-	var active_after: int = _active_cards.size()
-	var first_after: int = -1
-	var last_after: int = -1
+	var _active_after: int = _active_cards.size()
+	var _first_after: int = -1
+	var _last_after: int = -1
 	if _active_cards.size() > 0:
-		first_after = _active_cards[0].get_meta("virtual_index", -1)
-		last_after = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+		_first_after = _active_cards[0].get_meta("virtual_index", -1)
+		_last_after = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
 
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
@@ -1445,7 +1444,7 @@ func _setup_ui():
 	_scroll_container.horizontal_scroll_mode = ScrollContainer.ScrollMode.SCROLL_MODE_SHOW_NEVER
 
 	_visual_layer = Control.new()
-	_visual_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_visual_layer.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_visual_layer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_visual_layer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_visual_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1801,7 +1800,7 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	# Align target_start to items_per_line so the first buffered card always starts
 	# at the beginning of a row/column. Without this, FlowContainer misaligns cards
 	# when the buffer starts mid-row after incremental recycling or zoom changes.
-	_buffer_target_start = (_buffer_target_start / items_per_line) * items_per_line
+	_buffer_target_start = int(_buffer_target_start / float(items_per_line)) * items_per_line
 
 	# Recompute target_end after alignment so the buffer size stays consistent
 	_buffer_target_end = min(_total_items, _buffer_target_start + total_card_count)
@@ -2224,6 +2223,7 @@ func _acquire_card() -> Control:
 	if _card_scene:
 		var card = _card_scene.instantiate()
 		card.set_meta("pooled", false)
+		card.focus_mode = Control.FOCUS_ALL
 		return card
 
 	return null
@@ -2525,7 +2525,7 @@ func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> 
 		var target := current_idx + row_delta + col_delta
 		return clamp(target, 0, _total_items - 1)
 
-	var line := current_idx / items_per_line
+	var line := int(current_idx / float(items_per_line))
 	var col := current_idx % items_per_line
 	var total_lines := ceili(float(_total_items) / items_per_line)
 
@@ -2621,7 +2621,7 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	var visible_start_idx: int = _visible_start_idx
 	var visible_end_idx: int = _visible_end_idx
 
-	var assigned_count = 0
+	var _assigned_count = 0
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx >= offset and idx < offset + items.size():
@@ -2637,7 +2637,7 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 				else:
 					card.game = items[data_idx]
 				_update_cache_access_order(idx)
-				assigned_count += 1
+				_assigned_count += 1
 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 	_flush_pending_visual_setup_for_visible_zone()
@@ -2705,7 +2705,7 @@ func _refresh_buffer(preserve_scroll: bool = false):
 			call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 		elif _scroll_container:
 			# Clamp to valid range after the new layout is known.
-			var scrollbar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+			var scrollbar = (_scroll_container.get_v_scroll_bar() as ScrollBar) if vertical else (_scroll_container.get_h_scroll_bar() as ScrollBar)
 			var max_scroll: float = scrollbar.max_value - scrollbar.page if scrollbar else 0.0
 			var clamped_offset: int = int(clampf(saved_scroll_offset, 0.0, max_scroll))
 			if vertical:

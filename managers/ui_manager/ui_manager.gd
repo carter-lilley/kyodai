@@ -3,9 +3,6 @@ extends Manager
 # UIManager - Facade for UI orchestration.
 # Child managers own views, navigation, hero/background, overlays, theme, and dual-screen logic.
 
-const LibraryView = preload("res://view/library_view.gd")
-const CollectionView = preload("res://view/collection_view.gd")
-
 @onready var view = $ViewSubManager
 @onready var navigation = $NavigationSubManager
 @onready var overlay = $OverlaySubManager
@@ -41,6 +38,7 @@ var _focus_locked_grid: VirtualScrollGridContainer = null
 var _saved_focus_modes: Dictionary[NodePath, int] = {}
 
 # Proxy for legacy external access to dual-screen keyboard state.
+@warning_ignore("unused_private_class_variable")
 var _keyboard_is_in_second_viewport: bool:
 	get:
 		if dual_screen:
@@ -48,12 +46,17 @@ var _keyboard_is_in_second_viewport: bool:
 		return false
 
 # Signals
+@warning_ignore("unused_signal")
 signal modal_shown(modal_id: String)
+@warning_ignore("unused_signal")
 signal modal_dismissed(modal_id: String)
+@warning_ignore("unused_signal")
 signal modal_item_selected(item_id: String, context: Dictionary)
 @warning_ignore("unused_signal")
 signal tab_changed(view_name: String)
+@warning_ignore("unused_signal")
 signal layout_changed(position: String)
+@warning_ignore("unused_signal")
 signal settings_dialog_dismissed()
 
 func initialize(
@@ -181,7 +184,7 @@ func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 
 	return layout
 
-func compute_grid_available_size(grid: VirtualScrollGridContainer, view: Control = null) -> Vector2:
+func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: Control = null) -> Vector2:
 	"""Compute the expected available rect for a grid from the active viewport.
 
 	This mirrors the container layout that Godot will apply once sizes propagate
@@ -244,29 +247,29 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, view: Control
 		available_height -= vbox_separation
 
 	# View-specific chrome above the grid.
-	if view == null and grid != null:
+	if target_view == null and grid != null:
 		var current: Node = grid
 		for i in range(3):
 			if current == null:
 				break
 			current = current.get_parent()
-		view = current as Control
+		target_view = current as Control
 
-	if view is LibraryView:
-		var platform_indicator: Control = view.get_node_or_null("MarginContainer/VBoxContainer/PlatformIndicator")
+	if target_view is LibraryView:
+		var platform_indicator: Control = target_view.get_node_or_null("MarginContainer/VBoxContainer/PlatformIndicator")
 		if platform_indicator:
 			platform_indicator.size.x = available_width
 			if platform_indicator.has_method("_apply_responsive_layout"):
 				platform_indicator._apply_responsive_layout()
 			available_height -= platform_indicator.get_combined_minimum_size().y
-	elif view is CollectionView:
-		var title_label: Control = view.get_node_or_null("MarginContainer/VBoxContainer/CollectionTitle")
+	elif target_view is CollectionView:
+		var title_label: Control = target_view.get_node_or_null("MarginContainer/VBoxContainer/CollectionTitle")
 		if title_label:
 			title_label.size.x = available_width
 			available_height -= title_label.get_combined_minimum_size().y
 
 	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
-	print("[UIManager] compute_grid_available_size: view=", view.view_name if view is View else (view.name if view else "unknown"), " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
+	print("[UIManager] compute_grid_available_size: view=", target_view.view_name if target_view is View else (String(target_view.name) if target_view else "unknown"), " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
 	return result
 
 # ============================================================================
@@ -671,7 +674,7 @@ func pre_shutdown_cleanup() -> void:
 
 	Can be called safely while the UI tree is still alive.
 	"""
-	SystemManager.memory.clear_texture_cache()
+	MemorySubManager.clear_texture_cache()
 	M3Theme.clear_theme_cache()
 	EffectStack.clear_script_cache()
 	GameCard.clear_platform_icon_cache()

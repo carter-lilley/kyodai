@@ -1,3 +1,4 @@
+@tool
 class_name CollectionPicker
 extends M3Dialog
 
@@ -71,10 +72,10 @@ func _on_pin() -> void:
 		return
 	var collection = _collections[selected_idx]
 	var id = collection.get("id", 0)
-	var name = collection.get("name", "")
+	var collection_name = collection.get("name", "")
 	if id == 0:
 		return
-	collection_selected.emit(id, name)
+	collection_selected.emit(id, collection_name)
 	dismiss()
 
 func _on_collection_selected(_index: int) -> void:
@@ -84,8 +85,8 @@ func _load_collections() -> void:
 	var raw = DataManager.get_collections()
 	_collections = []
 	for c in raw:
-		var name = c.get("name", "")
-		if name is String and name.strip_edges() != "":
+		var collection_name = c.get("name", "")
+		if collection_name is String and collection_name.strip_edges() != "":
 			_collections.append(c)
 	_update_option_items()
 
@@ -97,9 +98,9 @@ func _update_option_items() -> void:
 	for i in range(_collections.size()):
 		var collection = _collections[i]
 		var id = collection.get("id", 0)
-		var name = collection.get("name", "")
+		var collection_name = collection.get("name", "")
 		var disabled = id == 0 or _pinned_ids.has(id)
-		_option_button.add_item(name, id)
+		_option_button.add_item(collection_name, id)
 		if disabled:
 			_option_button.set_item_disabled(i, true)
 		else:
@@ -126,10 +127,10 @@ func _refresh_collections() -> void:
 			_load_collections()
 	)
 
-func _set_refresh_hint(visible: bool) -> void:
+func _set_refresh_hint(p_visible: bool) -> void:
 	if _refresh_hint == null:
 		return
-	_refresh_hint.visible = visible
+	_refresh_hint.visible = p_visible
 
 func _on_action_pressed(label: String) -> void:
 	action_pressed.emit(label)

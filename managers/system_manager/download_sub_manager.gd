@@ -276,7 +276,7 @@ func _create_sparse_file(path: String, size: int) -> bool:
 				# logical size, assume sparse files are not supported.
 				# Use a floor of 64 KiB so that normal single-block allocation on
 				# sparse filesystems does not trigger the fallback.
-				var threshold = maxi(64 * 1024, size / 2)
+				var threshold = maxi(64 * 1024, int(size / float(2)))
 				if block_size > 0 and allocated > threshold:
 					push_error("[SystemManager.download] Filesystem does not appear to support sparse files: " + path + " (allocated " + str(allocated) + " bytes for " + str(size) + " byte file)")
 					FSM.delete_file(path)
@@ -482,7 +482,7 @@ func _ready():
 	if DataManager:
 		DataManager.setting_changed.connect(_on_setting_changed)
 
-func _on_setting_changed(value: Variant, setting: SettingsVar) -> void:
+func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name == "download_speed_profile":
 		_update_concurrency_from_settings()
 
@@ -766,10 +766,10 @@ func _start_download(item: QueueItem):
 				0.0,
 				func() -> float:
 					return item.progress,
-				func(progress: float) -> String:
-					var mb_downloaded = int(item.expected_file_size * progress / (1024.0 * 1024.0))
+				func(progress_frac: float) -> String:
+					var mb_downloaded = int(item.expected_file_size * progress_frac / (1024.0 * 1024.0))
 					var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
-					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress * 100)]
+					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress_frac * 100)]
 			)
 		else:
 			# No expected file size - use pulsing notification
@@ -1190,7 +1190,7 @@ func _start_chunked_progress_timer(item_id: String):
 		return
 
 	var chunked_info = _chunked_downloads[item_id]
-	var item = chunked_info.item
+	var _item = chunked_info.item
 
 	# Create timer to poll progress - more frequent for smoother UI updates
 	# Desktop: 0.5s (faster for real-time feel), Android: 2s (for battery/heat)
@@ -1245,7 +1245,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 	# Get or create connection from pool (thread-safe access)
 	var http: HTTPClient
-	var was_reused = false
+	var _was_reused = false
 
 	_connection_pool_mutex.lock()
 	if _download_connection_pools.has(item_id):
@@ -1265,7 +1265,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			# Check if connection is still valid WITHOUT creating a new one under lock
 			var needs_new_connection = not _is_connection_valid(http)
 			if not needs_new_connection:
-				was_reused = true
+				_was_reused = true
 				print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
 			_connection_pool_mutex.unlock()
 
@@ -1358,11 +1358,11 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 						hasher.update(buf)
 						remaining -= buf.size()
 					hash_file.close()
-				var actual_hash = hasher.finish().hex_encode()
-				result.actual_hash = actual_hash
+				var existing_hash = hasher.finish().hex_encode()
+				result.actual_hash = existing_hash
 				result.bytes_downloaded = partial_size
 
-				if not expected_hash.is_empty() and actual_hash != expected_hash:
+				if not expected_hash.is_empty() and existing_hash != expected_hash:
 					# Existing file is corrupt; force a re-download
 					result.success = false
 					result.should_delete_partial = true
@@ -1371,10 +1371,10 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 					return result
 
 				result.success = true
-				result.expected_hash = expected_hash if not expected_hash.is_empty() else actual_hash
-				var thread_key = item_id + "_" + str(thread_index)
+				result.expected_hash = expected_hash if not expected_hash.is_empty() else existing_hash
+				var verified_thread_key = item_id + "_" + str(thread_index)
 				_connection_pool_mutex.lock()
-				_thread_chunk_finish_times[thread_key] = Time.get_ticks_msec()
+				_thread_chunk_finish_times[verified_thread_key] = Time.get_ticks_msec()
 				_connection_pool_mutex.unlock()
 				print("[SystemManager.download] Chunk " + str(chunk_index) + " already complete on disk, verified " + str(partial_size) + " bytes")
 				return result
@@ -1668,14 +1668,14 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 	var actual_hash = ""
 	var expected_hash = ""
 	var should_delete_partial = false
-	var bytes_downloaded = 0
+	var _bytes_downloaded = 0
 
 	if result is Dictionary:
 		success = result.get("success", false)
 		actual_hash = result.get("actual_hash", "")
 		expected_hash = result.get("expected_hash", "")
 		should_delete_partial = result.get("should_delete_partial", false)
-		bytes_downloaded = result.get("bytes_downloaded", 0)
+		_bytes_downloaded = result.get("bytes_downloaded", 0)
 	elif result is bool:
 		success = result
 	else:
@@ -2134,7 +2134,7 @@ func _on_chunked_watchdog(item_id: String):
 		_start_single_stream_fallback(item_id, chunked_info.headers)
 
 ## Helper to show reassembly notification on main thread (called via call_deferred)
-func _show_reassembly_notification(item_id: String, item_name: String) -> void:
+func _show_reassembly_notification(item_id: String, _item_name: String) -> void:
 	if not _chunked_downloads.has(item_id):
 		return
 	var item = _chunked_downloads[item_id].item
@@ -2994,6 +2994,24 @@ func _start_image_download(url: String, cache_path: String, callback: Callable) 
 			_process_image_download_queue()
 
 			# Clean up after delay (guard against node destruction during await)
+			await get_tree().create_timer(5.0).timeout
+			if is_instance_valid(self):
+				_active_image_downloads.erase(url)
+			return
+
+		# Only cache the body if it actually decodes as a supported image.
+		# Some APIs return HTML/text error pages with a 200 status.
+		if not FSM.is_image_buffer(body):
+			state.completed = true
+			state.success = false
+			for cb in state.callbacks:
+				cb.call(false)
+
+			_pending_image_downloads_mutex.lock()
+			_active_image_download_count -= 1
+			_pending_image_downloads_mutex.unlock()
+			_process_image_download_queue()
+
 			await get_tree().create_timer(5.0).timeout
 			if is_instance_valid(self):
 				_active_image_downloads.erase(url)

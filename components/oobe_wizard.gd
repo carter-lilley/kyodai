@@ -1,3 +1,4 @@
+@tool
 class_name OobeWizard
 extends M3Dialog
 

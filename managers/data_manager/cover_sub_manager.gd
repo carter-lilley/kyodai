@@ -10,10 +10,32 @@ const CACHE_FOLDER = "user://cache/covers/"
 
 func _ready():
 	data_manager = get_parent()
+	_ensure_cache_folder()
+	_clean_invalid_cover_cache.call_deferred()
 
 
 func _ensure_cache_folder():
 	FSM.make_dir_recursive(CACHE_FOLDER)
+
+
+func _clean_invalid_cover_cache():
+	"""Remove cached covers that are not valid images (e.g. HTML error pages)."""
+	if not FSM.dir_exists(CACHE_FOLDER):
+		return
+
+	for file_name in FSM.list_dir(CACHE_FOLDER):
+		var path = FSM.join_paths(CACHE_FOLDER, file_name)
+		if not FSM.file_exists(path):
+			continue
+
+		var size = FSM.get_file_size(path)
+		if size < 64:
+			FSM.delete_file(path)
+			continue
+
+		var buffer = FSM.read_file_bytes(path)
+		if buffer.size() < 16 or FSM.detect_image_format(buffer) == FSM.ImageFormat.UNKNOWN:
+			FSM.delete_file(path)
 
 
 func get_cached_image_path(url: String) -> String:
@@ -55,33 +77,22 @@ func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") 
 	if buffer.size() < 16:
 		return null
 
-	var err = FAILED
 	var image = Image.new()
+	var err = FAILED
+	var format = FSM.detect_image_format(buffer)
 
-	# Always use magic bytes to detect actual format, regardless of file extension
-	# This handles cases where the extension doesn't match the actual content
-	if buffer[0] == 0xFF and buffer[1] == 0xD8:
-		# JPEG magic bytes
-		err = image.load_jpg_from_buffer(buffer)
-	elif buffer[0] == 0x89 and buffer[1] == 0x50:
-		# PNG magic bytes (0x89 0x50 0x4E 0x47)
-		err = image.load_png_from_buffer(buffer)
-	elif buffer[0] == 0x52 and buffer[1] == 0x49:
-		# WebP magic bytes (RIFF header)
-		err = image.load_webp_from_buffer(buffer)
-	else:
-		# Try all formats as fallback
-		err = image.load_jpg_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
+	match format:
+		FSM.ImageFormat.JPEG:
+			err = image.load_jpg_from_buffer(buffer)
+		FSM.ImageFormat.PNG:
 			err = image.load_png_from_buffer(buffer)
-		if err != OK:
-			image = Image.new()
+		FSM.ImageFormat.WEBP:
 			err = image.load_webp_from_buffer(buffer)
-
-	if err == OK:
-		if image.is_empty():
+		_:
+			# Unknown magic bytes: not a supported image.
 			return null
+
+	if err == OK and not image.is_empty():
 		return image
 	return null
 
@@ -96,12 +107,12 @@ func load_image(url: String, callback: Callable = Callable()):
 
 	# Try cache first - using background thread
 	if FSM.file_exists(cache_path):
-		SystemManager.memory.queue_image_task(
+		MemorySubManager.queue_image_task(
 			func():
 				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
 		func(image):
 			if image and not image.is_empty():
-				var texture = SystemManager.memory.create_texture_from_image(image)
+				var texture = MemorySubManager.create_texture_from_image(image)
 				if texture:
 					if callback.is_valid():
 						callback.call(texture)
@@ -128,12 +139,12 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				callback.call(null)
 			return
 
-		SystemManager.memory.queue_image_task(
+		MemorySubManager.queue_image_task(
 			func():
 				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
 		func(image):
 			if image and not image.is_empty():
-				var texture = SystemManager.memory.create_texture_from_image(image)
+				var texture = MemorySubManager.create_texture_from_image(image)
 				if callback.is_valid():
 					callback.call(texture)
 				data_manager.image_loaded.emit(url, texture)
@@ -208,7 +219,7 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 		true  # pulsing
 	)
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			# Query all games with cover URLs that don't have RomM siblings
 			# We exclude games that already have siblings in the RomM system
@@ -330,7 +341,7 @@ func _remove_cover_based_siblings():
 	# Unfolding changes cover_group_master, which affects the count query.
 	data_manager.database.invalidate_downloaded_games_count_cache()
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			# Simple: set cover_group_master = 1 for all games in any cover group
 			var query = "UPDATE games SET cover_group_master = 1 WHERE cover_group_id != ''"

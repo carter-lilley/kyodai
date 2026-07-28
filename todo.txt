@@ -1,8 +1,8 @@
 #TODO.TXT
 
 xemu save sync
-tst update flow on android
-single screen is not single screen
+tst emulator app update flow on android
+single screen is not single screen (second surface still covers other screen)
 x focus after applying theme (or other dialogues)
 gamenative out of view on android
 

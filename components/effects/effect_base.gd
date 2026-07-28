@@ -169,7 +169,7 @@ func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> 
 	else:
 		return to_val if progress >= 0.5 else from_val
 
-func compute_pipeline(cache: Dictionary) -> void:
+func compute_pipeline(_cache: Dictionary) -> void:
 	pass
 
 func _setup_shader() -> void:
@@ -240,10 +240,10 @@ func _flush_shader_params() -> void:
 	_shader_params_dirty = false
 	_update_shader_params()
 
-func set_game_texture(texture: Texture2D) -> void:
+func set_game_texture(_texture: Texture2D) -> void:
 	pass
 
-func set_logo_rect(rect: Vector4) -> void:
+func set_logo_rect(_rect: Vector4) -> void:
 	pass
 
 func set_alpha(value: float) -> void:

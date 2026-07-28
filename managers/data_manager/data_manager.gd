@@ -6,20 +6,30 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 # Delegates all work to child managers in the data_manager.tscn scene.
 
 signal database_ready()
+@warning_ignore("unused_signal")
 signal database_failed(error_message: String)
 signal sync_completed(success: bool, message: String)
+@warning_ignore("unused_signal")
 signal sync_progress(percent: float, current: int, total: int)
+@warning_ignore("unused_signal")
 signal game_added(game: GameResource)
+@warning_ignore("unused_signal")
 signal game_updated(game: GameResource)
+@warning_ignore("unused_signal")
 signal games_removed(platform_slug: String)
+@warning_ignore("unused_signal")
 signal image_loaded(url: String, texture: Texture2D)
+@warning_ignore("unused_signal")
 signal cache_cleared()
 
 # NEW: Batch notification signals for efficient UI updates
+@warning_ignore("unused_signal")
 signal games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource])
+@warning_ignore("unused_signal")
 signal sync_started()  # Emitted when a sync begins - allows UI to clear cache
 
 # NEW: Emitted when the downloaded-games scan finishes.
+@warning_ignore("unused_signal")
 signal scan_for_downloaded_games_completed(found_count: int)
 
 # Settings facade signals
@@ -36,9 +46,9 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 @onready var cover: CoverSubManager = $CoverSubManager
 @onready var save: SaveSyncSubManager = $SaveSyncSubManager
 @onready var collections: CollectionSubManager = $CollectionSubManager
+@onready var logo_box: LogoBoxSubManager = $LogoBoxSubManager
 var settings: SettingsSubManager
 var game_save: GameSaveSubManager
-var logo_box: LogoBoxCacheManager
 
 func _enter_tree() -> void:
 	settings = $SettingsSubManager
@@ -46,10 +56,6 @@ func _enter_tree() -> void:
 
 func _ready():
 	_ensure_memory_manager()
-
-	logo_box = LogoBoxCacheManager.new()
-	logo_box.name = "LogoBoxCacheManager"
-	add_child(logo_box)
 
 	database.initialize_database()
 	cover._ensure_cache_folder()

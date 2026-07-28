@@ -144,10 +144,10 @@ func create_preset_from_settings(source_settings: Settings) -> ThemePreset:
 	
 	return preset
 
-func _preset_value_from(source_settings: Settings, name: String, default: Variant) -> Variant:
+func _preset_value_from(source_settings: Settings, setting_name: String, default: Variant) -> Variant:
 	if source_settings == null:
 		return default
-	var setting: SettingsVar = source_settings.get(name)
+	var setting: SettingsVar = source_settings.get(setting_name)
 	if setting == null:
 		return default
 	var value = setting.value

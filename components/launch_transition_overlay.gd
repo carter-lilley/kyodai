@@ -10,11 +10,6 @@ signal animation_completed
 # Static variable to track if any launch transition is animating (accessible globally)
 static var is_transition_active: bool = false
 
-const EffectStack = preload("res://components/effects/effect_stack.gd")
-const BaseCardEffect = preload("res://effects/shared/base_card_effect.gd")
-const HSLEffect = preload("res://effects/shared/hsl_effect.gd")
-const GradientOverlayEffect = preload("res://effects/shared/gradient_overlay_effect.gd")
-
 var _effect_stack: EffectStack = null
 @onready var _margin_container: MarginContainer = $MarginContainer
 @onready var _game_title_label: Label = $MarginContainer/GameTitleLabel
@@ -63,7 +58,7 @@ func _ready():
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
 
-func _input(event: InputEvent) -> void:
+func _input(_event: InputEvent) -> void:
 	if _is_animating and visible:
 		get_viewport().set_input_as_handled()
 
@@ -100,7 +95,7 @@ func _start_transition():
 
 	var texture = card_info.texture
 	var card_rect = card_info.rect
-	var card = card_info.card
+	var _card = card_info.card
 	var start_corner_radius = card_info.corner_radius
 
 	if not texture:
@@ -302,7 +297,7 @@ func _animate_transition():
 		var tex_aspect = tex_size.x / tex_size.y
 
 		tween.tween_method(
-			func(t: float):
+			func(_t: float):
 				var current_size = media_container.bounds.size
 				# Calculate vertical offset to keep image centered during aspect ratio change
 				var card_aspect = current_size.x / current_size.y

@@ -150,8 +150,8 @@ func _start_sync_fg_service(platform_name: String = "Game Library", current: int
 func _update_sync_fg_service(platform_name: String = "", current: int = 0, total: int = 0) -> void:
 	if not _sync_fg_service_active:
 		return
-	var name = platform_name if platform_name != "" else _sync_platform
-	SystemManager.platform.update_sync_foreground_service(name, current, total)
+	var service_name = platform_name if platform_name != "" else _sync_platform
+	SystemManager.platform.update_sync_foreground_service(service_name, current, total)
 
 
 func _stop_sync_fg_service() -> void:
@@ -262,7 +262,7 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	# Queue the entire sync to the background sync thread
 	# This allows sync to continue even when the app is backgrounded on Android
 	print("[Sync] Queuing sync to background thread...")
-	SystemManager.memory.queue_sync_task(
+	MemorySubManager.queue_sync_task(
 		func():
 			_run_sync_threaded(enabled, disabled_platforms, force_full_sync)
 			return true,
@@ -414,9 +414,9 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				fetch_time = Time.get_ticks_msec() - fetch_start
 
 			if not result.success:
-				print("[SyncThread] Error fetching platform '%s': %s (fetch took %dms)" % [platform.name, result.error, fetch_time])
-				var current_time = Time.get_datetime_string_from_system(true)
-				_set_last_sync_time_sync(platform.slug, current_time)
+				# Do NOT update last_sync here: the failed window must be retried
+				# by the next sync instead of being permanently skipped.
+				print("[SyncThread] Error fetching platform '%s': %s (fetch took %dms) - last_sync NOT updated" % [platform.name, result.error, fetch_time])
 				platform_complete = true
 				continue
 
@@ -424,12 +424,20 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 			var items = result.data.get("items", [])
 
 			if total == 0 or items.size() == 0:
-				if _sync_current_offset == 0 and _sync_current_updated_after != "":
-					_sync_current += _sync_precalc_platform_total
-					call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+				if _sync_current_offset == 0:
+					# Nothing changed (incremental) or platform is genuinely empty:
+					# safe to advance the sync window.
+					if _sync_current_updated_after != "":
+						_sync_current += _sync_precalc_platform_total
+						call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
 
-				var current_time = Time.get_datetime_string_from_system(true)
-				_set_last_sync_time_sync(platform.slug, current_time)
+					var current_time = Time.get_datetime_string_from_system(true)
+					_set_last_sync_time_sync(platform.slug, current_time)
+				else:
+					# Paged past the end with games still unprocessed (a batch
+					# failed or the server total drifted): leave last_sync alone
+					# so the next sync retries the full window.
+					print("[SyncThread] Platform '%s' ended early at offset %d (%d/%d synced) - last_sync NOT updated" % [platform.name, _sync_current_offset, _sync_current_synced, _sync_current_total])
 				platform_complete = true
 				continue
 
@@ -555,7 +563,7 @@ func _process_cover_work_phase() -> void:
 	# 1. Query existing games with covers but no cached logo box and merge them
 	#    into the cover URL map. This is the backfill portion of the phase.
 	var rows = _wait_for_async(func(callback: Callable):
-		SystemManager.memory.queue_db_task(
+		MemorySubManager.queue_db_task(
 			func():
 				return data_manager.database.query_array(
 					"SELECT romm_id, cover_url, title FROM games WHERE cover_url != '' AND cover_url IS NOT NULL AND (logo_box = '' OR logo_box = '{}')"
@@ -610,7 +618,7 @@ func _process_cover_work_phase() -> void:
 
 	# 2. Process already-cached covers immediately and queue missing covers for
 	#    download on the main thread. Each cover calls back as it finishes.
-	var missing_urls: Array[String] = []
+	var _missing_urls: Array[String] = []
 	for url in url_to_games.keys():
 		var games: Array[GameResource] = url_to_games[url]
 		var cache_path = data_manager.cover.get_cached_image_path(url)
@@ -733,9 +741,9 @@ func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictiona
 
 			_sync_pending_downloads_mutex.lock()
 			_sync_pending_downloads -= 1
-			var downloads_done = _sync_pending_downloads == 0
+			var download_batch_done = _sync_pending_downloads == 0
 			_sync_pending_downloads_mutex.unlock()
-			if downloads_done:
+			if download_batch_done:
 				_sync_pending_downloads_semaphore.post()
 		)
 
@@ -773,7 +781,7 @@ func _lookup_platform_id_sync(platform_slug: String) -> int:
 		return 0
 
 	var result = _wait_for_async(func(callback: Callable):
-		SystemManager.memory.queue_db_task(
+		MemorySubManager.queue_db_task(
 			func():
 				var query_result = data_manager.database.query_array("SELECT romm_id FROM platforms WHERE slug = ?", [platform_slug])
 				if query_result.size() > 0:
@@ -797,7 +805,7 @@ func _get_last_sync_time_sync(platform_slug: String) -> String:
 
 	var key = "last_sync_" + platform_slug
 	var result = _wait_for_async(func(callback: Callable):
-		SystemManager.memory.queue_db_task(
+		MemorySubManager.queue_db_task(
 			func():
 				var query_result = data_manager.database.query_array("SELECT value FROM cache_metadata WHERE key = ?", [key])
 				if query_result.size() > 0:
@@ -821,7 +829,7 @@ func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
 
 	var key = "last_sync_" + platform_slug
 	var result = _wait_for_async(func(callback: Callable):
-		SystemManager.memory.queue_db_task(
+		MemorySubManager.queue_db_task(
 			func():
 				return data_manager.database.query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp]),
 			func(success: bool):
@@ -891,7 +899,7 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	# Phase 2: Sibling checks + DB inserts in ONE combined DB task
 	var db_start = Time.get_ticks_msec()
 	var inserted = _check_and_insert_games_sync(games)
-	var db_time = Time.get_ticks_msec() - db_start
+	var _db_time = Time.get_ticks_msec() - db_start
 
 	# Phase 3: Collect unique cover URLs for later logo box caching.
 	var cover_start = Time.get_ticks_msec()
@@ -903,9 +911,9 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 				_sync_total += 1  # Each unique cover is a logo box work unit
 			_sync_cover_url_to_games[game.cover_url].append(game)
 	_sync_cover_url_to_games_mutex.unlock()
-	var cover_time = Time.get_ticks_msec() - cover_start
+	var _cover_time = Time.get_ticks_msec() - cover_start
 
-	var total_time = Time.get_ticks_msec() - batch_start
+	var _total_time = Time.get_ticks_msec() - batch_start
 	# Batch timing logging removed for cleaner sync output
 
 	return inserted
@@ -921,7 +929,7 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 		return 0
 
 	var result = _wait_for_async(func(callback: Callable):
-		SystemManager.memory.queue_db_task(
+		MemorySubManager.queue_db_task(
 			func():
 				# Step 1: Check siblings for all games
 				for game in games:
@@ -930,10 +938,10 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 						game.is_master_entry = not has_sibling
 
 				# Step 2: Insert all games in one transaction
-				var success = _insert_games_transaction(games)
-				return success,
-			func(success: bool):
-				callback.call(success)
+				var insert_success = _insert_games_transaction(games)
+				return insert_success,
+			func(db_success: bool):
+				callback.call(db_success)
 		)
 	, 120000)
 
@@ -1267,9 +1275,12 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 	var has_local_copy = 1 if game.has_local_copy else 0
 	var downloaded_sibling_ids = JSON.stringify(game.downloaded_sibling_ids)
 	var file_path = game.file_path
+	var last_played = game.last_played
+	var title_id = game.title_id
+	var logo_box_json = JSON.stringify(game.logo_box)
 
 	if data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			var existing = query_result[0]
@@ -1289,13 +1300,23 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 			if existing_cover_group_id != "":
 				game.cover_group_id = existing_cover_group_id
 				game.cover_group_master = existing.get("cover_group_master", 1) == 1
+			# Preserve locally-managed fields the server payload never provides
+			var existing_last_played = existing.get("last_played", "")
+			if existing_last_played != "":
+				last_played = existing_last_played
+			var existing_title_id = existing.get("title_id", "")
+			if existing_title_id != "":
+				title_id = existing_title_id
+			var existing_logo_box = existing.get("logo_box", "{}")
+			if existing_logo_box != "" and existing_logo_box != "{}":
+				logo_box_json = existing_logo_box
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, logo_box)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1319,11 +1340,12 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 		1 if game.is_master_entry else 0,
 		downloaded_sibling_ids,
 		1 if game.has_cover_art else 0,
-		game.last_played,
-		game.title_id,
+		last_played,
+		title_id,
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
-		JSON.stringify(game.igdb_metadata)
+		JSON.stringify(game.igdb_metadata),
+		logo_box_json
 	]
 
 	return {"query": query, "bindings": bindings}

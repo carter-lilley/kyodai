@@ -106,10 +106,10 @@ func _has_real_focus() -> bool:
 	var viewport = get_viewport()
 	if not viewport:
 		return false
-	var owner = viewport.gui_get_focus_owner()
-	if not owner:
+	var focus_owner = viewport.gui_get_focus_owner()
+	if not focus_owner:
 		return false
-	return owner == self or is_ancestor_of(owner)
+	return focus_owner == self or is_ancestor_of(focus_owner)
 
 func _sync_focus_state_from_viewport() -> void:
 	var real_focus = _has_real_focus()
@@ -423,9 +423,9 @@ func _link_overlapping_effects() -> void:
 
 var preview_show_focus: bool = false
 
-func set_preview_focus(show: bool) -> void:
-	preview_show_focus = show
-	_show_focus_effects(show)
+func set_preview_focus(p_show: bool) -> void:
+	preview_show_focus = p_show
+	_show_focus_effects(p_show)
 
 func _show_focus_effects(p_show: bool) -> void:
 	_kill_focus_tweens()

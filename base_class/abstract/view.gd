@@ -136,13 +136,13 @@ func _update_grid_orientation() -> void:
 			var level: int = state.card_zoom_level
 			if level < 0:
 				# Derive level from the legacy saved ratio for migration.
-				var snap_ratios = games_grid.get_snap_ratios()
-				if snap_ratios.size() > 0:
-					snap_ratios.reverse()
+				var migration_snap_ratios = games_grid.get_snap_ratios()
+				if migration_snap_ratios.size() > 0:
+					migration_snap_ratios.reverse()
 					var nearest_idx := 0
 					var nearest_dist := INF
-					for i in range(snap_ratios.size()):
-						var dist := absf(state.card_zoom_ratio - snap_ratios[i])
+					for i in range(migration_snap_ratios.size()):
+						var dist := absf(state.card_zoom_ratio - migration_snap_ratios[i])
 						if dist < nearest_dist:
 							nearest_dist = dist
 							nearest_idx = i

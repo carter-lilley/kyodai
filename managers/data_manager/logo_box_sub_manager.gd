@@ -1,5 +1,5 @@
-class_name LogoBoxCacheManager
-extends Node
+class_name LogoBoxSubManager
+extends Manager
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
@@ -24,7 +24,7 @@ var _worker_count: int = 1
 func _ready():
 	data_manager = get_parent()
 	# Default worker count is platform-dependent; may be updated before start_worker().
-	_worker_count = SystemManager.memory.get_logo_box_thread_count()
+	_worker_count = MemorySubManager.get_logo_box_thread_count()
 	Performance.add_custom_monitor("logo_box/pending_tasks", _get_pending_task_count)
 	Performance.add_custom_monitor("logo_box/avg_detect_time_ms", _get_avg_detect_time_ms)
 
@@ -271,23 +271,22 @@ func _process_backfill_task() -> void:
 
 func _query_db_blocking(query: String, bindings: Array = []) -> Array:
 	"""Run a read query on the DB thread and block until the result is ready."""
-	var result: Array = []
-	var done = false
+	var task_state := {"result": [], "done": false}
 	var mutex = Mutex.new()
 	var semaphore = Semaphore.new()
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			return data_manager.database.query_array_unlocked(query, bindings),
 		func(rows: Array):
 			mutex.lock()
-			result = rows
-			done = true
+			task_state["result"] = rows
+			task_state["done"] = true
 			mutex.unlock()
 			semaphore.post()
 	)
 	semaphore.wait()
 	mutex.lock()
-	var final_result = result
+	var final_result: Array = task_state["result"]
 	mutex.unlock()
 	return final_result
 

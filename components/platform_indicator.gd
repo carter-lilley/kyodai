@@ -41,7 +41,7 @@ func _setup_ui():
 	hbox.name = "MainContainer"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hbox.add_theme_constant_override("separation", M3Units.dp(8))
+	hbox.add_theme_constant_override("separation", int(M3Units.dp(8)))
 	add_child(hbox)
 	
 	# Filter button (outside the group, on the left)
@@ -112,12 +112,12 @@ func _apply_responsive_layout() -> void:
 func _update_icon_button_sizes() -> void:
 	var icon_size_int: int = int(_current_button_size)
 	if _filter_button != null:
-		_filter_button.icon_button_size = icon_size_int
+		_filter_button.icon_button_size = icon_size_int as M3IconButton.IconSize
 	if _search_button != null:
-		_search_button.icon_button_size = icon_size_int
+		_search_button.icon_button_size = icon_size_int as M3IconButton.IconSize
 
 func _get_center_platform_index() -> int:
-	return _platform_count / 2
+	return int(_platform_count / 2.0)
 
 func _rebuild_platform_group() -> void:
 	var hbox = get_node_or_null("MainContainer")

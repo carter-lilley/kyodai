@@ -168,7 +168,7 @@ func _setup_collection_tabs() -> void:
 		var collection_name = item.get("data", {}).get("collection_name", "")
 		_add_collection_tab(collection_id, collection_name)
 
-func _add_collection_tab(collection_id: int, collection_name: String = "") -> void:
+func _add_collection_tab(collection_id: int, _collection_name: String = "") -> void:
 	if collection_id == 0:
 		return
 	if _collection_tabs.has(collection_id):

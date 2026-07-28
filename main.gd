@@ -753,9 +753,9 @@ func _on_zoom_changed(value: float):
 						if snap_ratios.size() > 0:
 							snap_ratios.reverse()
 							var clamped_level = clampi(level, 0, snap_ratios.size() - 1)
-							var actual_zoom = snap_ratios[clamped_level]
-							if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
-								games_grid.target_card_width_ratio = actual_zoom
+							var grid_zoom = snap_ratios[clamped_level]
+							if not is_equal_approx(grid_zoom, games_grid.target_card_width_ratio):
+								games_grid.target_card_width_ratio = grid_zoom
 		else:
 			return
 		return
@@ -1003,7 +1003,7 @@ func _handle_ui_cancel() -> void:
 				return
 
 	# Check if keyboard is visible - let keyboard handle it
-	print("[Main] _handle_ui_cancel: _keyboard=", _keyboard, " visible=", _keyboard.visible if _keyboard else "N/A", " in_second_viewport=", UIManager._keyboard_is_in_second_viewport if UIManager else "N/A")
+	print("[Main] _handle_ui_cancel: _keyboard=", _keyboard, " visible=", str(_keyboard.visible) if _keyboard else "N/A", " in_second_viewport=", str(UIManager._keyboard_is_in_second_viewport) if UIManager else "N/A")
 	if _keyboard and _keyboard.visible:
 		# If keyboard is in SecondViewport, it won't receive ui_cancel (controller input goes to MainViewport)
 		# So we need to manually dismiss it here
@@ -1387,7 +1387,7 @@ func _pre_shutdown_cleanup() -> void:
 
 	# Release static caches held by UI components.
 	var cache_start_us := Time.get_ticks_usec()
-	SystemManager.memory.clear_texture_cache()
+	MemorySubManager.clear_texture_cache()
 	M3Theme.clear_theme_cache()
 	EffectStack.clear_script_cache()
 	GameCard.clear_platform_icon_cache()
@@ -1402,7 +1402,7 @@ func _pre_shutdown_cleanup() -> void:
 	# After this point SystemManager.memory static methods will safely no-op.
 	var memory_start_us := Time.get_ticks_usec()
 	if SystemManager and SystemManager.memory:
-		SystemManager.memory.shutdown()
+		MemorySubManager.shutdown()
 	print("[Main] memory shutdown elapsed_us=", Time.get_ticks_usec() - memory_start_us)
 
 	print("[Main] Pre-shutdown cleanup elapsed_us=", Time.get_ticks_usec() - cleanup_start_us)

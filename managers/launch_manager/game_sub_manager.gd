@@ -710,9 +710,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			
 			# First, try to get TitleID from existing PARAM.SFO in the extracted folder
 			# This is more reliable than searching for ZIPs when multiple games share a folder
-			var sfo_path = _find_param_sfo_recursive(rom_path)
-			if sfo_path != "":
-				var sfo_bytes = FSM.read_file_bytes(sfo_path)
+			var existing_sfo_path = _find_param_sfo_recursive(rom_path)
+			if existing_sfo_path != "":
+				var sfo_bytes = FSM.read_file_bytes(existing_sfo_path)
 				if not sfo_bytes.is_empty():
 					var title_id_from_sfo = TitleIDParser.get_title_id_from_sfo_bytes(sfo_bytes)
 					if title_id_from_sfo != "":

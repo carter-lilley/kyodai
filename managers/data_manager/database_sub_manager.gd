@@ -109,7 +109,7 @@ func initialize_database():
 		# HomeView call can return the cached value instead of blocking the main
 		# thread with a COUNT(*) query.
 		if SystemManager.memory:
-			SystemManager.memory.queue_db_task(func():
+			MemorySubManager.queue_db_task(func():
 				get_downloaded_games_count()
 			)
 	else:
@@ -574,7 +574,7 @@ func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) 
 	print("[DEBUG] _update_matched_games_in_db called with %d matched games" % matched_games.size())
 	# Scan results change has_local_copy / downloaded_sibling_ids.
 	invalidate_downloaded_games_count_cache()
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var updated_count: int = 0
@@ -668,7 +668,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 	invalidate_downloaded_games_count_cache()
 
 	# Queue all database operations on the DB thread to avoid race conditions
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			# First, get all games for this platform to delete their covers
@@ -722,7 +722,7 @@ func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
 
 	invalidate_downloaded_games_count_cache()
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var query = """
@@ -787,7 +787,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 
 	invalidate_downloaded_games_count_cache()
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var query = """
@@ -862,7 +862,7 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 	if not _is_db_ready:
 		return false
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var success = query_bool_unlocked("UPDATE games SET title_id = ? WHERE romm_id = ?", [title_id, romm_id])
@@ -882,7 +882,7 @@ func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: C
 	if not _is_db_ready:
 		return false
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var success = query_bool_unlocked("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(siblings), romm_id])
@@ -911,7 +911,7 @@ func update_game_logo_box(romm_id: int, logo_box_json: String, callback: Callabl
 	if not _is_db_ready:
 		return false
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var success = query_bool_unlocked("UPDATE games SET logo_box = ? WHERE romm_id = ?", [logo_box_json, romm_id])
@@ -930,7 +930,7 @@ func update_games_logo_box(romm_ids: Array[int], logo_box_json: String, callback
 	if not _is_db_ready or romm_ids.is_empty():
 		return false
 
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
 			var placeholders: Array[String] = []

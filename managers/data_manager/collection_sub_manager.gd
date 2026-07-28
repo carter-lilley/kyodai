@@ -60,8 +60,8 @@ func _save_collection(collection: Dictionary) -> void:
 	if id == 0:
 		return
 
-	var name: String = collection.get("name", "")
-	if name.strip_edges() == "":
+	var collection_name: String = collection.get("name", "")
+	if collection_name.strip_edges() == "":
 		return
 
 	data_manager.database.save_collection({

@@ -1,3 +1,4 @@
+@tool
 class_name ShufflerConfigDialog
 extends M3Dialog
 
@@ -188,12 +189,12 @@ func _load_platforms() -> void:
 	var card_payloads: Array[Dictionary] = []
 	for platform in platforms:
 		var slug: String = platform["slug"]
-		var name: String = platform["name"]
+		var platform_name: String = platform["name"]
 		if slug == "":
 			continue
-		card_payloads.append({"slug": slug, "name": name})
+		card_payloads.append({"slug": slug, "name": platform_name})
 
-	_active_batch_id = SystemManager.memory.start_batch(
+	_active_batch_id = MemorySubManager.start_batch(
 		card_payloads,
 		func(payload: Dictionary, _index: int) -> PlatformCard:
 			return _create_platform_card(
@@ -232,7 +233,7 @@ func _load_platforms() -> void:
 			
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = SystemManager.memory.start_batch(
+			_active_batch_id = MemorySubManager.start_batch(
 				created_cards,
 				_populate_card_dropdown,
 				SystemManager.memory.BatchMode.SYNC,
@@ -253,7 +254,7 @@ func _create_platform_card(
 	enabled_platforms: Dictionary,
 	precomputed_status: Dictionary,
 	platform_emulator_cache: Dictionary,
-	platform_default_core_cache: Dictionary
+	_platform_default_core_cache: Dictionary
 ) -> PlatformCard:
 	var card: PlatformCard = PlatformCardPool.get_card(PlatformCardPool.POOL_SHUFFLER)
 	card.shuffler_mode = true
@@ -364,7 +365,7 @@ func _exit_tree() -> void:
 
 func _return_all_cards() -> void:
 	if _active_batch_id != -1:
-		SystemManager.memory.cancel_batch(_active_batch_id)
+		MemorySubManager.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 
 	for slug in _platform_cards.keys():
@@ -382,18 +383,18 @@ func _return_all_cards() -> void:
 func _create_section_label(text: String) -> Label:
 	var label = M3Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", M3Units.dp(20))
+	label.add_theme_font_size_override("font_size", int(M3Units.dp(20)))
 	return label
 
 func _create_sub_label(text: String) -> Label:
 	var label = M3Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", M3Units.dp(14))
+	label.add_theme_font_size_override("font_size", int(M3Units.dp(14)))
 	return label
 
 func _create_value_label(text: String) -> Label:
 	var label = M3Label.new()
 	label.text = text
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", M3Units.dp(14))
+	label.add_theme_font_size_override("font_size", int(M3Units.dp(14)))
 	return label

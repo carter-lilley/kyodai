@@ -83,7 +83,7 @@ func _reduce_top_padding() -> void:
 	show_drag_handle = false
 	var margin := _sheet_container.get_child(0) as MarginContainer
 	if margin:
-		margin.add_theme_constant_override("margin_top", M3Units.dp(4.0))
+		margin.add_theme_constant_override("margin_top", int(M3Units.dp(4.0)))
 
 func _get_sheet_width(screen_width: float) -> float:
 	# Make the details sheet wider than the default 640 dp bottom sheet.
@@ -165,7 +165,7 @@ func prepare_for_game(romm_id: int) -> void:
 
 	# Decode the local cover on a background thread so it's ready if Details is selected.
 	if game.cover_path and FSM.file_exists(game.cover_path):
-		SystemManager.memory.queue_image_task(
+		MemorySubManager.queue_image_task(
 			func() -> Image:
 				var img := Image.new()
 				if img.load(game.cover_path) == OK and not img.is_empty():
@@ -173,7 +173,7 @@ func prepare_for_game(romm_id: int) -> void:
 				return null,
 			func(img: Image):
 				if is_instance_valid(self) and img and not img.is_empty():
-					_prepared_cover = SystemManager.memory.create_texture_from_image(img)
+					_prepared_cover = MemorySubManager.create_texture_from_image(img)
 		)
 
 func _setup_sibling_dropdown(game: GameResource) -> void:
@@ -311,7 +311,7 @@ func _load_cover(game: GameResource) -> void:
 
 	# Local file: decode on a background thread.
 	if game.cover_path and FSM.file_exists(game.cover_path):
-		SystemManager.memory.queue_image_task(
+		MemorySubManager.queue_image_task(
 			func() -> Image:
 				var img := Image.new()
 				if img.load(game.cover_path) == OK and not img.is_empty():
@@ -319,7 +319,7 @@ func _load_cover(game: GameResource) -> void:
 				return null,
 			func(img: Image):
 				if is_instance_valid(cover_texture) and img and not img.is_empty():
-					cover_texture.texture = SystemManager.memory.create_texture_from_image(img)
+					cover_texture.texture = MemorySubManager.create_texture_from_image(img)
 		)
 		return
 

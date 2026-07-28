@@ -1,3 +1,4 @@
+@tool
 class_name PlatformCard
 extends M3Card
 

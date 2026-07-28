@@ -22,7 +22,7 @@ func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dict
 
 
 func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
-	"""Insert or update a save sync record."""
+	"""Insert or update a save sync record (atomic DELETE+INSERT in one transaction)."""
 	if not data_manager.database.is_database_ready():
 		return false
 
@@ -33,7 +33,6 @@ func update_save_sync_record(romm_id: int, emulator_id: String, file_name: Strin
 		delete_bindings.append(slot)
 	else:
 		delete_query += " AND (slot IS NULL OR slot = '')"
-	data_manager.database.query_bool(delete_query, delete_bindings)
 
 	var insert_bindings: Array = [romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id]
 	var insert_query = """
@@ -42,7 +41,22 @@ func update_save_sync_record(romm_id: int, emulator_id: String, file_name: Strin
 	""" % ("?" if slot != "" else "NULL")
 	if slot != "":
 		insert_bindings.append(slot)
-	return data_manager.database.query_bool(insert_query, insert_bindings)
+
+	data_manager.database.lock()
+	if not data_manager.database.query_bool_unlocked("BEGIN IMMEDIATE TRANSACTION"):
+		data_manager.database.unlock()
+		return false
+	var delete_ok = data_manager.database.query_bool_unlocked(delete_query, delete_bindings)
+	var insert_ok = delete_ok and data_manager.database.query_bool_unlocked(insert_query, insert_bindings)
+	if insert_ok:
+		var commit_ok = data_manager.database.query_bool_unlocked("COMMIT")
+		if not commit_ok:
+			data_manager.database.query_bool_unlocked("ROLLBACK")
+		data_manager.database.unlock()
+		return commit_ok
+	data_manager.database.query_bool_unlocked("ROLLBACK")
+	data_manager.database.unlock()
+	return false
 
 
 func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: String, slot: String = "") -> bool:

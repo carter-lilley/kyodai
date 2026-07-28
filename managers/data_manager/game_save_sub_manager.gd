@@ -256,7 +256,7 @@ func resolve_default_save_directory(emulator_id: String, platform_slug: String =
 		return ""
 	
 	var paths = emulator.get("paths", {})
-	var saves = paths.get("saves", {})
+	var _saves = paths.get("saves", {})
 	
 	# Check core-specific config first (for RetroArch multi-core saves)
 	var config: Dictionary = _get_save_config(emulator_id, platform_slug, core_id)
@@ -1287,11 +1287,11 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 	var on_local := func(): result["choice"] = "local"
 	var on_cancel := func(): result["choice"] = "cancel"
 
-	var dialog = UIManager.show_custom_dialog(func(dialog: M3Dialog):
-		dialog.title_text = "Save Conflict"
-		dialog.body_text = "Your local save data for %s conflicts with what is stored on the server.\n\nWhichever save data you choose to keep will be synced to this device and the cloud. The option you choose not to keep will be overwritten." % game.get_display_name()
-		dialog.dismissible = false
-		dialog.disable_default_action = true
+	var dialog = UIManager.show_custom_dialog(func(conflict_dialog: M3Dialog):
+		conflict_dialog.title_text = "Save Conflict"
+		conflict_dialog.body_text = "Your local save data for %s conflicts with what is stored on the server.\n\nWhichever save data you choose to keep will be synced to this device and the cloud. The option you choose not to keep will be overwritten." % game.get_display_name()
+		conflict_dialog.dismissible = false
+		conflict_dialog.disable_default_action = true
 
 		var content = VBoxContainer.new()
 		content.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -1301,43 +1301,43 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 		content.add_child(spacer)
 
 		result["server_btn"] = M3Button.new()
-		var server_btn: M3Button = result["server_btn"]
-		server_btn.custom_minimum_size = Vector2(0, M3Units.dp(80))
-		server_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		server_btn.button_size = M3Button.Size.LARGE
-		server_btn.text = "Server Save\nModified: " + _format_conflict_timestamp(server_time)
-		server_btn.pressed.connect(func():
+		var dlg_server_btn: M3Button = result["server_btn"]
+		dlg_server_btn.custom_minimum_size = Vector2(0, M3Units.dp(80))
+		dlg_server_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		dlg_server_btn.button_size = M3Button.Size.LARGE
+		dlg_server_btn.text = "Server Save\nModified: " + _format_conflict_timestamp(server_time)
+		dlg_server_btn.pressed.connect(func():
 			on_server.call()
-			dialog.dismiss()
+			conflict_dialog.dismiss()
 		)
-		content.add_child(server_btn)
+		content.add_child(dlg_server_btn)
 
 		result["local_btn"] = M3Button.new()
-		var local_btn: M3Button = result["local_btn"]
-		local_btn.custom_minimum_size = Vector2(0, M3Units.dp(80))
-		local_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		local_btn.button_size = M3Button.Size.LARGE
-		local_btn.text = "Local Save\nModified: " + _format_conflict_timestamp(local_time)
-		local_btn.pressed.connect(func():
+		var dlg_local_btn: M3Button = result["local_btn"]
+		dlg_local_btn.custom_minimum_size = Vector2(0, M3Units.dp(80))
+		dlg_local_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		dlg_local_btn.button_size = M3Button.Size.LARGE
+		dlg_local_btn.text = "Local Save\nModified: " + _format_conflict_timestamp(local_time)
+		dlg_local_btn.pressed.connect(func():
 			on_local.call()
-			dialog.dismiss()
+			conflict_dialog.dismiss()
 		)
-		content.add_child(local_btn)
+		content.add_child(dlg_local_btn)
 
 		result["cancel_btn"] = M3Button.new()
-		var cancel_btn: M3Button = result["cancel_btn"]
-		cancel_btn.custom_minimum_size = Vector2(0, M3Units.dp(56))
-		cancel_btn.alignment = HORIZONTAL_ALIGNMENT_CENTER
-		cancel_btn.button_size = M3Button.Size.MEDIUM
-		cancel_btn.button_variant = M3Button.Variant.TEXT
-		cancel_btn.text = "Cancel"
-		cancel_btn.pressed.connect(func():
+		var dlg_cancel_btn: M3Button = result["cancel_btn"]
+		dlg_cancel_btn.custom_minimum_size = Vector2(0, M3Units.dp(56))
+		dlg_cancel_btn.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		dlg_cancel_btn.button_size = M3Button.Size.MEDIUM
+		dlg_cancel_btn.button_variant = M3Button.Variant.TEXT
+		dlg_cancel_btn.text = "Cancel"
+		dlg_cancel_btn.pressed.connect(func():
 			on_cancel.call()
-			dialog.dismiss()
+			conflict_dialog.dismiss()
 		)
-		content.add_child(cancel_btn)
+		content.add_child(dlg_cancel_btn)
 
-		dialog.content_slot.add_child(content)
+		conflict_dialog.content_slot.add_child(content)
 	)
 
 	# Wait for the dialog to be laid out and then focus the first choice.
@@ -1704,10 +1704,10 @@ func parse_iso_timestamp(iso_string: String) -> int:
 		tz_regex.compile("([+-])(\\d{2}):?(\\d{2})")
 		var tz_match = tz_regex.search(tz_str)
 		if tz_match:
-			var sign = 1 if tz_match.get_string(1) == "+" else -1
+			var tz_sign = 1 if tz_match.get_string(1) == "+" else -1
 			var tz_hours = int(tz_match.get_string(2))
 			var tz_minutes = int(tz_match.get_string(3))
-			var offset_seconds = sign * (tz_hours * 3600 + tz_minutes * 60)
+			var offset_seconds = tz_sign * (tz_hours * 3600 + tz_minutes * 60)
 			unix -= offset_seconds
 	
 	return unix

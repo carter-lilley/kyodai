@@ -13,6 +13,35 @@ enum PathFormat {
 	PLATFORM      ## Platform-appropriate separators (\ on Windows, / elsewhere)
 }
 
+## Image format identifiers for detect_image_format()
+enum ImageFormat {
+	UNKNOWN,
+	JPEG,
+	PNG,
+	WEBP,
+}
+
+## Detects the image format of a byte buffer using magic bytes.
+## Returns one of the ImageFormat constants.
+static func detect_image_format(buffer: PackedByteArray) -> int:
+	if buffer.size() < 2:
+		return ImageFormat.UNKNOWN
+
+	if buffer[0] == 0xFF and buffer[1] == 0xD8:
+		return ImageFormat.JPEG
+
+	if buffer.size() >= 8 and buffer[0] == 0x89 and buffer[1] == 0x50 and buffer[2] == 0x4E and buffer[3] == 0x47:
+		return ImageFormat.PNG
+
+	if buffer.size() >= 12 and buffer[0] == 0x52 and buffer[1] == 0x49 and buffer[2] == 0x46 and buffer[3] == 0x46 and buffer[8] == 0x57 and buffer[9] == 0x45 and buffer[10] == 0x42 and buffer[11] == 0x50:
+		return ImageFormat.WEBP
+
+	return ImageFormat.UNKNOWN
+
+## Returns true if the buffer starts with a supported image format's magic bytes.
+static func is_image_buffer(buffer: PackedByteArray) -> bool:
+	return detect_image_format(buffer) != ImageFormat.UNKNOWN
+
 ## Normalizes a path by removing redundant components like "." and ".."
 ## and ensuring consistent separators.
 ## Also converts content:// URIs to real paths.
@@ -447,20 +476,20 @@ static func _delete_dir_recursive_internal(path: String) -> bool:
 				if not _delete_dir_recursive_internal(item_path):
 					failed_count += 1
 			else:
-				var result = DirAccess.remove_absolute(item_path)
-				if result == OK:
+				var remove_result = DirAccess.remove_absolute(item_path)
+				if remove_result == OK:
 					deleted_count += 1
 				else:
 					if OS.get_name() == "Windows":
 						OS.execute("cmd", ["/c", "attrib", "-r", item_path], [], true)
-						result = DirAccess.remove_absolute(item_path)
-						if result == OK:
+						remove_result = DirAccess.remove_absolute(item_path)
+						if remove_result == OK:
 							deleted_count += 1
 						else:
-							print("[SystemManager.filesystem] FAILED to delete file after clearing read-only: " + item_path + " (error: " + str(result) + ")")
+							print("[SystemManager.filesystem] FAILED to delete file after clearing read-only: " + item_path + " (error: " + str(remove_result) + ")")
 							failed_count += 1
 					else:
-						print("[SystemManager.filesystem] FAILED to delete file: " + item_path + " (error: " + str(result) + ")")
+						print("[SystemManager.filesystem] FAILED to delete file: " + item_path + " (error: " + str(remove_result) + ")")
 						failed_count += 1
 		file_name = dir.get_next()
 	dir.list_dir_end()
@@ -843,12 +872,12 @@ static func extract_archive(archive_path: String, extract_dir: String, progress_
 static func extract_archive_async(
 	archive_path: String,
 	extract_dir: String,
-	name: String = "",
+	archive_name: String = "",
 	delete_after: bool = false,
 	on_progress: Callable = Callable(),
 	on_complete: Callable = Callable()
 ) -> void:
-	var display_name = name if name != "" else archive_path.get_file().get_basename()
+	var display_name = archive_name if archive_name != "" else archive_path.get_file().get_basename()
 	
 	# Use Dictionary so closures capture by reference (not by value)
 	var counts = {"extracted": 0, "total": 0}
