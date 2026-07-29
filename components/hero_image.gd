@@ -5,6 +5,7 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
+var _current_texture: Texture2D = null
 var _effect_stack: EffectStack = null
 var _media_container: MediaContainer = null
 
@@ -57,7 +58,16 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_PARENTED:
 		# When the hero is reparented (e.g., desktop dual screen moves it into a
 		# secondary Window), the EffectStack must be reattached to the new CanvasItem.
-		if _effect_stack:
+		if _effect_stack == null and _gray_texture:
+			# _exit_tree() freed the stack; rebuild it for the new parent and
+			# re-apply the texture that was showing.
+			_setup_effect_stack()
+			if _media_container and size.x > 0 and size.y > 0:
+				_media_container.bounds = Rect2(Vector2.ZERO, size)
+				_effect_stack.update_draw_rects()
+			if _current_texture:
+				_effect_stack.set_game_texture(_current_texture)
+		elif _effect_stack:
 			_effect_stack.set_parent_rid(get_canvas_item())
 			_effect_stack.update_draw_rects()
 
@@ -135,7 +145,7 @@ func set_game(game: GameResource):
 				var new_width = max(1, int(img.get_width() * tex_scale))
 				var new_height = max(1, int(img.get_height() * tex_scale))
 				img.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
-			return img
+			return MemorySubManager.prepare_image_for_texture(img)
 		return null
 
 	var callback_callable = func(image: Image):
@@ -157,6 +167,7 @@ func set_game(game: GameResource):
 	_current_image_task_id = MemorySubManager.queue_image_task(load_callable, callback_callable, true)
 
 func _set_texture(tex: Texture2D):
+	_current_texture = tex
 	if _effect_stack:
 		_effect_stack.set_game_texture(tex)
 

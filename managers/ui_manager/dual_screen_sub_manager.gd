@@ -106,10 +106,6 @@ func _disable_dual_screen_setup_node(ds: Node) -> void:
 			child.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			child.focus_mode = Control.FOCUS_NONE
 
-func _initialize_dual_screen() -> void:
-	"""Initialize dual screen mode (called deferred to allow plugin initialization)."""
-	_on_dual_screen_mode_changed(true, SystemManager.display.get_second_screen_index())
-
 func _on_dual_screen_mode_changed(enabled: bool, second_screen_index: int) -> void:
 	"""Handle dual screen mode changes from SystemManager.display."""
 	if enabled:

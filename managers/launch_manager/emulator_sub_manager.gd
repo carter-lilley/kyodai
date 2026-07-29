@@ -106,10 +106,13 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 				_emulator_install_progress[emulator_id] = "Extraction failed"
 				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 			
-			# Fallback: dismiss any lingering extraction notifications for this emulator
-			# This handles cases where the notification dismissal failed while backgrounded
+			# Fallback: dismiss any lingering extraction notification for this emulator.
+			# This handles cases where the notification dismissal failed while backgrounded.
+			# Extraction notifications are progress snackbars whose text starts with
+			# the emulator name (see _get_step_display_name); dismiss only that one.
 			if SystemManager.notifications:
-				SystemManager.notifications.dismiss_all_notifications()
+				var emulator_name: String = launch_manager.registry.get_emulator(emulator_id).get("name", emulator_id)
+				SystemManager.notifications.dismiss_progress_notification_by_prefix(emulator_name + " - ")
 			
 			return
 

@@ -1376,10 +1376,3 @@ func _notification(what: int):
 			_focus_stack.free_rids()
 			_focus_stack = null
 
-func _deferred_refresh_media_stack() -> void:
-	if _media_stack:
-		var bounds_changed := not _media_bounds.is_equal_approx(_last_refreshed_media_bounds)
-		if bounds_changed:
-			_media_stack.update_draw_rects()
-			_media_stack.force_refresh()
-			_last_refreshed_media_bounds = _media_bounds

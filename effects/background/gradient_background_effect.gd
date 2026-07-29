@@ -21,12 +21,7 @@ func _apply_settings() -> void:
 		mat.set_shader_parameter("gradient_direction", _settings.get("gradient_direction", 0))
 
 func _update_gradient_texture(gradient: Gradient) -> void:
-	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
-	for i in range(256):
-		var t = i / 255.0
-		var color_value = gradient.sample(t)
-		image.set_pixel(i, 0, color_value)
-	_gradient_texture = ImageTexture.create_from_image(image)
+	_gradient_texture = EffectBase.get_shared_gradient_texture(gradient)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

@@ -223,7 +223,26 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		# Download to temp location first
 		var temp_path = "user://temp_firmware/" + file_name
 		FSM.make_dir_recursive("user://temp_firmware")
-		
+
+		# Pre-flight disk space check (10% margin) when RomM reports the file size
+		var firmware_size: int = firmware.get("file_size_bytes", 0)
+		if firmware_size > 0:
+			var required_bytes := int(firmware_size * 1.1)
+			var space_left := FSM.get_space_left("user://temp_firmware")
+			if space_left >= 0 and space_left < required_bytes:
+				var needed_mb := required_bytes / (1024 * 1024)
+				var free_mb := space_left / (1024 * 1024)
+				push_error("[FirmwareManager] Insufficient disk space for firmware: need ~" + str(needed_mb) + " MB, have " + str(free_mb) + " MB")
+				SystemManager.notifications.show_notification(
+					"Not enough disk space to download firmware for " + platform_slug + " (need ~" + str(needed_mb) + " MB, " + str(free_mb) + " MB free)",
+					SystemManager.notifications.Type.ERROR,
+					null,
+					10.0
+				)
+				if callback.is_valid():
+					callback.call(false, "Insufficient disk space")
+				return
+
 		print("[FirmwareManager] Downloading firmware: " + file_name)
 		
 		# Show progress notification

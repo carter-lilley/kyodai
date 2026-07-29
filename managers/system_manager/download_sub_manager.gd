@@ -7,6 +7,8 @@ class_name DownloadSubManager
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
+const DEBUG_LOG: bool = false
+
 signal download_started(item_id: String)
 signal download_progress(item_id: String, progress: float)
 signal download_completed(item_id: String, success: bool, message: String)
@@ -585,6 +587,22 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	item.expected_file_size = expected_file_size
 	if game:
 		item.expected_file_size = game.get_active_file_size()
+
+	# Pre-flight disk space check (10% margin) when the expected size is known
+	if item.expected_file_size > 0:
+		var required_bytes := int(item.expected_file_size * 1.1)
+		var space_left := FSM.get_space_left(destination.get_base_dir())
+		if space_left >= 0 and space_left < required_bytes:
+			var needed_mb := required_bytes / (1024 * 1024)
+			var free_mb := space_left / (1024 * 1024)
+			push_error("[SystemManager.download] Insufficient disk space for " + item.name + ": need ~" + str(needed_mb) + " MB, have " + str(free_mb) + " MB")
+			SystemManager.notifications.show_notification(
+				"Not enough disk space for " + item.name + " (need ~" + str(needed_mb) + " MB, " + str(free_mb) + " MB free)",
+				SystemManager.notifications.Type.ERROR,
+				null,
+				10.0
+			)
+			return ""
 
 	# Set extract_dir and ensure destination directory exists
 	item.extract_dir = extract_dir if extract_dir != "" else destination.get_base_dir()
@@ -1184,31 +1202,16 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 
 	# Progress updates now come from worker threads only (no polling timer to avoid race conditions)
 
-func _start_chunked_progress_timer(item_id: String):
-	"""Start a timer to poll chunk file sizes for smooth progress updates"""
-	if not _chunked_downloads.has(item_id):
-		return
-
-	var chunked_info = _chunked_downloads[item_id]
-	var _item = chunked_info.item
-
-	# Create timer to poll progress - more frequent for smoother UI updates
-	# Desktop: 0.5s (faster for real-time feel), Android: 2s (for battery/heat)
-	chunked_info.progress_timer = Timer.new()
-	chunked_info.progress_timer.wait_time = 2.0 if SystemManager.platform.is_android() else 0.5
-	chunked_info.progress_timer.autostart = true
-	add_child(chunked_info.progress_timer)
-
-	chunked_info.progress_timer.timeout.connect(func():
-		_update_chunked_progress(item_id)
-	)
-
 ## Downloads a single chunk on a worker thread using HTTPClient
 ## Called by the thread pool - runs on a background thread
 ## Uses connection pooling to reuse TLS connections across chunks
 ## Downloads a single chunk on a worker thread using HTTPClient.
 ## Returns a result dictionary with success, hashes, and retry hints.
 ## Called by the thread pool - runs on a background thread.
+func _is_chunk_work_cancelled(item_id: String) -> bool:
+	"""True when the app is shutting down or the chunked download was cleaned up (cancelled)."""
+	return MemorySubManager.is_shutting_down() or not _chunked_downloads.has(item_id)
+
 func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	var url = chunk_data.url
 	var temp_path = chunk_data.temp_path
@@ -1238,7 +1241,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	var expected_chunk_size = end_byte - original_start_byte + 1
 	var chunk_start_time = Time.get_ticks_msec()
 	var chunk_deadline_ms = chunk_start_time + CHUNK_MAX_TOTAL_TIME_MS
-	print("[SystemManager.download] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
 
 	# Parse URL to get components
 	var url_parts = SystemManager.network.parse_url(url)
@@ -1253,31 +1256,31 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 		if thread_index < connection_pool.size():
 			http = connection_pool[thread_index]
 			var status_before = http.get_status() if http != null else -1
-			print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " connection status before check: " + str(status_before) + " (CONNECTED=" + str(HTTPClient.STATUS_CONNECTED) + ")")
+			if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " connection status before check: " + str(status_before) + " (CONNECTED=" + str(HTTPClient.STATUS_CONNECTED) + ")")
 
 			# Check for previous chunk finish time to calculate idle time
 			var idle_thread_key = item_id + "_" + str(thread_index)
 			var prev_finish_time = _thread_chunk_finish_times.get(idle_thread_key, 0)
 			if prev_finish_time > 0:
 				var idle_time = chunk_start_time - prev_finish_time
-				print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " idle time between chunks: " + str(idle_time) + "ms")
+				if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " idle time between chunks: " + str(idle_time) + "ms")
 
 			# Check if connection is still valid WITHOUT creating a new one under lock
 			var needs_new_connection = not _is_connection_valid(http)
 			if not needs_new_connection:
 				_was_reused = true
-				print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
+				if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
 			_connection_pool_mutex.unlock()
 
 			# Create connection OUTSIDE the mutex to avoid blocking other threads during TCP/TLS handshake
 			if needs_new_connection:
-				print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " connection invalid, creating new for chunk " + str(chunk_index))
+				if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " connection invalid, creating new for chunk " + str(chunk_index))
 				http = _create_connection(url_parts)
 				if http != null:
 					_connection_pool_mutex.lock()
 					connection_pool[thread_index] = http
 					_connection_pool_mutex.unlock()
-					print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " created new connection (status=" + str(http.get_status()) + ")")
+					if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " created new connection (status=" + str(http.get_status()) + ")")
 		else:
 			push_error("[SystemManager.download] Thread index out of bounds: " + str(thread_index))
 			_connection_pool_mutex.unlock()
@@ -1438,7 +1441,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			chunked_info.chunks[chunk_index].in_progress = true
 
 	# Make the request
-	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " making request, connection status: " + str(http.get_status()))
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " making request, connection status: " + str(http.get_status()))
 
 	var err = http.request(HTTPClient.METHOD_GET, url_parts.path + url_parts.query, request_headers)
 	if err != OK:
@@ -1454,7 +1457,13 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 		http.poll()
 		poll_count += 1
 		if poll_count % 100 == 0:
-			print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " still requesting... (poll " + str(poll_count) + ")")
+			if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " still requesting... (poll " + str(poll_count) + ")")
+
+		if _is_chunk_work_cancelled(item_id):
+			file.close()
+			http.close()
+			result.error = "cancelled"
+			return result
 
 		if Time.get_ticks_msec() - request_start_time > CHUNK_REQUEST_TIMEOUT_MS:
 			push_error("[SystemManager.download] Chunk " + str(chunk_index) + " request phase timed out after " + str(CHUNK_REQUEST_TIMEOUT_MS) + "ms")
@@ -1465,15 +1474,15 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 		OS.delay_msec(10)
 
-	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " finished requesting after " + str(poll_count) + " polls, status: " + str(http.get_status()))
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " finished requesting after " + str(poll_count) + " polls, status: " + str(http.get_status()))
 
 	# Get and log response headers
 	var response_headers = http.get_response_headers()
-	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " response headers: " + str(response_headers))
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " response headers: " + str(response_headers))
 
 	# Check response code
 	var response_code = http.get_response_code()
-	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " response code: " + str(response_code))
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " response code: " + str(response_code))
 
 	if response_code != 200 and response_code != 206:
 		# Read error response body
@@ -1513,7 +1522,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 					if range_start == start_byte and range_end == end_byte:
 						content_range_valid = true
-						print("[SystemManager.download] Chunk " + str(chunk_index) + " Content-Range validated: " + content_range_header)
+						if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " Content-Range validated: " + content_range_header)
 					else:
 						push_error("[SystemManager.download] Chunk " + str(chunk_index) + " Content-Range mismatch. Expected: bytes=" + str(start_byte) + "-" + str(end_byte) + ", Got: " + content_range_header)
 				else:
@@ -1538,6 +1547,12 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		var current_time = Time.get_ticks_msec()
+
+		if _is_chunk_work_cancelled(item_id):
+			file.close()
+			http.close()
+			result.error = "cancelled"
+			return result
 
 		if current_time > chunk_deadline_ms:
 			push_error("[SystemManager.download] Chunk " + str(chunk_index) + " exceeded max total time of " + str(CHUNK_MAX_TOTAL_TIME_MS) + "ms")
@@ -1576,7 +1591,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			if bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
 				call_deferred("_update_chunk_progress", chunk_data.item_id, chunk_index, bytes_downloaded)
 				last_progress_emit = bytes_downloaded
-				print("[SystemManager.download] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
+				if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
 		else:
 			# No data available, wait a bit before checking again
 			OS.delay_usec(1000)  # 1ms micro-sleep to prevent busy-waiting
@@ -1631,8 +1646,8 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 	var chunk_end_time = Time.get_ticks_msec()
 	var download_duration = chunk_end_time - chunk_start_time
-	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " finished body after " + str(body_poll_count) + " polls, status: " + str(http.get_status()))
-	print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " download duration: " + str(download_duration) + "ms")
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " finished body after " + str(body_poll_count) + " polls, status: " + str(http.get_status()))
+	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Chunk " + str(chunk_index) + " download duration: " + str(download_duration) + "ms")
 
 	# Track finish time for this thread for debugging connection reuse (mutex-protected)
 	var thread_key = item_id + "_" + str(thread_index)
@@ -1970,38 +1985,6 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 		_update_download_progress(item)
 		_check_download_timeout(item.id)
 	)
-
-func _update_chunked_progress(item_id: String):
-	"""Update progress by summing bytes from all chunks"""
-	if not _chunked_downloads.has(item_id):
-		return
-
-	var chunked_info = _chunked_downloads[item_id]
-	var item = chunked_info.item
-
-	# Calculate total bytes downloaded across all chunks
-	var total_downloaded_bytes = 0
-
-	for chunk in chunked_info.chunks:
-		if chunk.completed:
-			# Full chunk size
-			total_downloaded_bytes += (chunk.end_byte - chunk.start_byte + 1)
-		elif chunk.in_progress:
-			# Use temp_bytes_downloaded for real-time progress during download
-			total_downloaded_bytes += chunk.temp_bytes_downloaded
-
-	# Calculate progress
-	var total_size = float(item.expected_file_size)
-	if total_size > 0:
-		var progress = float(total_downloaded_bytes) / total_size
-		# Cap at 0.99 until fully complete
-		progress = min(progress, 0.99)
-
-		# Only emit if progress changed significantly
-		if abs(progress - chunked_info.last_progress_update) >= _get_progress_threshold():
-			chunked_info.last_progress_update = progress
-			item.progress = progress
-			download_progress.emit(item_id, progress)
 
 ## Called from worker thread to update chunk progress in real-time
 func _update_chunk_progress(item_id: String, chunk_index: int, bytes_downloaded: int):
@@ -2932,17 +2915,20 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 		callback.call(true)
 		return true
 
+	_pending_image_downloads_mutex.lock()
+
 	# Check if already downloading (deduplication)
 	if _active_image_downloads.has(url):
 		var state = _active_image_downloads[url]
 		if state.completed:
+			_pending_image_downloads_mutex.unlock()
 			callback.call(state.success)
 		else:
 			state.callbacks.append(callback)
+			_pending_image_downloads_mutex.unlock()
 		return true
 
 	# Throttle: queue if too many downloads are in flight.
-	_pending_image_downloads_mutex.lock()
 	if _active_image_download_count >= MAX_CONCURRENT_IMAGE_DOWNLOADS:
 		_pending_image_downloads.append({
 			"url": url,
@@ -2953,8 +2939,13 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 		return true
 
 	_active_image_download_count += 1
+	_active_image_downloads[url] = {
+		"callbacks": [callback],
+		"completed": false,
+		"success": false
+	}
 	_pending_image_downloads_mutex.unlock()
-	_start_image_download(url, cache_path, callback)
+	_start_image_download(url, cache_path)
 	return true
 
 
@@ -2965,76 +2956,62 @@ func _process_image_download_queue() -> void:
 			_pending_image_downloads_mutex.unlock()
 			break
 		var item = _pending_image_downloads.pop_front()
+
+		# A download for this URL may have started or finished while the item was queued.
+		if _active_image_downloads.has(item.url):
+			var state = _active_image_downloads[item.url]
+			if state.completed:
+				var queued_success = state.success
+				_pending_image_downloads_mutex.unlock()
+				item.callback.call(queued_success)
+			else:
+				state.callbacks.append(item.callback)
+				_pending_image_downloads_mutex.unlock()
+			continue
+
 		_active_image_download_count += 1
+		_active_image_downloads[item.url] = {
+			"callbacks": [item.callback],
+			"completed": false,
+			"success": false
+		}
 		_pending_image_downloads_mutex.unlock()
-		_start_image_download(item.url, item.cache_path, item.callback)
+		_start_image_download(item.url, item.cache_path)
 
 
-func _start_image_download(url: String, cache_path: String, callback: Callable) -> void:
-	# Start new download
-	_active_image_downloads[url] = {
-		"callbacks": [callback],
-		"completed": false,
-		"success": false
-	}
-
-	# Make HTTP request
+func _start_image_download(url: String, cache_path: String) -> void:
+	# Start new HTTP request
 	SystemManager.network.http_get(url, [], func(success: bool, body: PackedByteArray, _status_code: int, _error_msg: String):
-		var state = _active_image_downloads[url]
-		if not success or body.is_empty():
-			# Download failed
-			state.completed = true
-			state.success = false
-			for cb in state.callbacks:
-				cb.call(false)
-
-			_pending_image_downloads_mutex.lock()
-			_active_image_download_count -= 1
-			_pending_image_downloads_mutex.unlock()
-			_process_image_download_queue()
-
-			# Clean up after delay (guard against node destruction during await)
-			await get_tree().create_timer(5.0).timeout
-			if is_instance_valid(self):
-				_active_image_downloads.erase(url)
+		if not is_instance_valid(self):
 			return
-
-		# Only cache the body if it actually decodes as a supported image.
-		# Some APIs return HTML/text error pages with a 200 status.
-		if not FSM.is_image_buffer(body):
-			state.completed = true
-			state.success = false
-			for cb in state.callbacks:
-				cb.call(false)
-
-			_pending_image_downloads_mutex.lock()
-			_active_image_download_count -= 1
-			_pending_image_downloads_mutex.unlock()
-			_process_image_download_queue()
-
-			await get_tree().create_timer(5.0).timeout
-			if is_instance_valid(self):
-				_active_image_downloads.erase(url)
-			return
-
-		# Save to cache
-		FSM.write_file_bytes(cache_path, body)
-
-		# Notify callbacks
-		state.completed = true
-		state.success = true
-		for cb in state.callbacks:
-			cb.call(true)
 
 		_pending_image_downloads_mutex.lock()
-		_active_image_download_count -= 1
-		_pending_image_downloads_mutex.unlock()
-		_process_image_download_queue()
 
-		# Clean up after delay (guard against node destruction during await)
-		await get_tree().create_timer(5.0).timeout
-		if is_instance_valid(self):
-			_active_image_downloads.erase(url)
+		# The entry may have been cleaned up or overwritten by a concurrent/follow-up request.
+		if not _active_image_downloads.has(url):
+			_active_image_download_count = maxi(0, _active_image_download_count - 1)
+			_pending_image_downloads_mutex.unlock()
+			_process_image_download_queue()
+			return
+
+		var state = _active_image_downloads[url]
+		var image_ok: bool = success and not body.is_empty() and FSM.is_image_buffer(body)
+		state.completed = true
+		state.success = image_ok
+
+		var callbacks = state.callbacks.duplicate()
+		_active_image_download_count = maxi(0, _active_image_download_count - 1)
+		_active_image_downloads.erase(url)
+		_pending_image_downloads_mutex.unlock()
+
+		if image_ok:
+			FSM.write_file_bytes(cache_path, body)
+
+		for cb in callbacks:
+			if cb.is_valid():
+				cb.call(image_ok)
+
+		_process_image_download_queue()
 	)
 
 ## Helper function to recursively clean up a temp directory

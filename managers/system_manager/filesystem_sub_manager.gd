@@ -278,6 +278,35 @@ static func get_file_size(path: String) -> int:
 	
 	return -1
 
+## Returns free disk space in bytes for the filesystem containing path.
+## Returns -1 if it cannot be determined (e.g. content:// URIs).
+static func get_space_left(path: String) -> int:
+	if path.is_empty():
+		return -1
+
+	var resolved := path
+	if resolved.begins_with("content://"):
+		return -1
+	if resolved.begins_with("user://") or resolved.begins_with("res://"):
+		resolved = ProjectSettings.globalize_path(resolved)
+
+	# Walk up to the nearest existing ancestor so non-existent destinations work
+	var dir_path := resolved
+	if file_exists(dir_path):
+		dir_path = dir_path.get_base_dir()
+	while dir_path != "" and not DirAccess.dir_exists_absolute(dir_path):
+		var parent := dir_path.get_base_dir()
+		if parent == dir_path:
+			break
+		dir_path = parent
+	if dir_path == "":
+		return -1
+
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return -1
+	return dir.get_space_left()
+
 ## Converts a content:// URI (from Android file picker) to a real filesystem path.
 ## Uses the plugin to resolve the URI. Returns the original path if not a content URI.
 static func resolve_content_uri(path: String) -> String:
@@ -988,6 +1017,9 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	var last_progress_read = 0.0
 	
 	while elapsed < timeout:
+		if MemorySubManager.is_shutting_down():
+			print("[SystemManager.filesystem] Extraction wait aborted: shutting down")
+			return false
 		# Check for completion marker (most reliable method)
 		if FileAccess.file_exists(completion_marker):
 			completed = true
@@ -1192,15 +1224,6 @@ static func _get_7z_binary_path() -> String:
 	
 	var binary_name = "7za.exe" if OS.get_name() == "Windows" else "7z"
 	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
-
-## Gets available storage space in bytes for a given path
-static func get_available_space(path: String) -> int:
-	# Use OS.get_user_data_dir() as a proxy for available space
-	# This is platform-dependent and may not be accurate for all paths
-	var dir = DirAccess.open(path.get_base_dir())
-	if dir:
-		return dir.get_space_left()
-	return -1
 
 ## Gets the directory portion of a path
 static func get_dir(path: String) -> String:

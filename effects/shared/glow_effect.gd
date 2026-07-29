@@ -5,6 +5,7 @@ static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
 const GLOW_MARGIN_RATIO = 0.08
+const MAX_QUALITY_SCALE = 0.6
 
 var _draw_rect: Rect2 = Rect2()
 
@@ -16,7 +17,7 @@ func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/glow.gdshader")
 
-func compute_pipeline(cache: Dictionary) -> void:
+func compute_pipeline() -> void:
 	_update_glow_offsets()
 
 func _update_glow_offsets():
@@ -73,14 +74,17 @@ func _update_shader_params() -> void:
 	)
 
 	var screen_height = SystemManager.display.get_viewport_size().y
-	var quality_scale = clamp(1080.0 / screen_height, 0.4, 1.0)
+	# Cap kernel quality (radius = int(12 * quality_scale) in-shader) so the
+	# worst case is 15x15=225 taps/px instead of 25x25=625; widen the step
+	# inversely so the blur footprint stays the same.
+	var quality_scale = clamp(1080.0 / screen_height, 0.4, MAX_QUALITY_SCALE)
 
 	_set_shader_param("card_size", card_size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("glow_radius", radius_pixels)
 	_set_shader_param("glow_intensity", glow_intensity)
-	_set_shader_param("blur_amount", blur_amount)
+	_set_shader_param("blur_amount", blur_amount / quality_scale)
 	_set_shader_param("threshold", threshold)
 	_set_shader_param("glow_spread", glow_spread)
 	_set_shader_param("glow_margin", margin_pixels)

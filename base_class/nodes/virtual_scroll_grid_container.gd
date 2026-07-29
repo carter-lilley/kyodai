@@ -96,7 +96,8 @@ func _apply_zoom_ratio(p_ratio: float) -> bool:
 	# and would snap to the wrong stop. The final snap happens once when the
 	# grid is explicitly settled after the window size is stable.
 	var new_ratio = clamped if startup_layout_suppressed else _calculate_snapped_ratio(clamped)
-	print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " max_ratio=", max_ratio, " clamped=", clamped, " new_ratio=", new_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
+	if debug_mode:
+		print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " max_ratio=", max_ratio, " clamped=", clamped, " new_ratio=", new_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
 	if is_equal_approx(target_card_width_ratio, new_ratio):
 		return false
 	_batching_layout = true
@@ -134,20 +135,23 @@ func _batch_apply_layout_state() -> void:
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
-	print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio, " state.level=", state.card_zoom_level)
+	if debug_mode:
+		print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio, " state.level=", state.card_zoom_level)
 	var zoom_changed: bool
 	if new_mode == ViewMode.GRID and state.card_zoom_level >= 0:
 		zoom_changed = _apply_zoom_level(state.card_zoom_level)
 	else:
 		zoom_changed = _apply_zoom_ratio(state.card_zoom_ratio)
-	print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
+	if debug_mode:
+		print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
 	var focus_changed: bool = _apply_focus_scale(1.0 + state.focus_scale_ratio)
 
 	if not structure_changed and not zoom_changed and not padding_changed and not focus_changed:
-		print("[Grid] _batch_apply_layout_state: no changes (structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, ")")
+		if debug_mode: print("[Grid] _batch_apply_layout_state: no changes (structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, ")")
 		return
 
-	print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed)
+	if debug_mode:
+		print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed)
 
 	if structure_changed:
 		# One rebuild path: configure flags then refresh buffer, which recalculates layout.
@@ -234,7 +238,8 @@ var target_card_width_ratio: float = 0.15:
 		var clamped = clampf(value, 0.05, max_ratio)
 		# Calculate snapped ratio to ensure whole cards fit per row/column
 		var snapped_ratio = _calculate_snapped_ratio(clamped)
-		print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
+		if debug_mode:
+			print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
 		# Always update ratio and recalculate - _recalculate_layout handles optimization
 		target_card_width_ratio = snapped_ratio
 		_recalculate_layout()
@@ -680,20 +685,23 @@ func _on_card_settings_state_changed(mask: int) -> void:
 
 	var state = UIManager.card_settings_state
 
-	print("[Grid] settings changed mask=", mask, " display_mode=", state.display_mode, " media_ratio=", state.media_aspect_ratio, " cached_display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
+	if debug_mode:
+		print("[Grid] settings changed mask=", mask, " display_mode=", state.display_mode, " media_ratio=", state.media_aspect_ratio, " cached_display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
 
 	# Refresh cached media/display settings before any layout work so that
 	# _batch_apply_layout_state() snaps target_card_width_ratio against the
 	# correct base dimensions.
 	_refresh_cached_settings()
 
-	print("[Grid] after refresh cached display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
+	if debug_mode:
+		print("[Grid] after refresh cached display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
 
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
-		print("[Grid] applying LAYOUT batch, target_ratio before=", target_card_width_ratio)
+		if debug_mode: print("[Grid] applying LAYOUT batch, target_ratio before=", target_card_width_ratio)
 		_batch_apply_layout_state()
-		print("[Grid] after LAYOUT batch, target_ratio=", target_card_width_ratio, " card_size=", card_size, " base_card_size=", base_card_size)
+		if debug_mode:
+			print("[Grid] after LAYOUT batch, target_ratio=", target_card_width_ratio, " card_size=", card_size, " base_card_size=", base_card_size)
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
@@ -775,6 +783,9 @@ func _process(_delta: float):
 	# creating the entire visual buffer in one frame.
 	_process_buffer_expansion()
 
+	# Top up the card pool a few per frame after zoom-out/resize grew the layout.
+	_process_pool_growth()
+
 	# Finish deferred visual setup for off-screen buffer cards.
 	_process_pending_visual_setup()
 
@@ -782,9 +793,11 @@ func _process(_delta: float):
 	_drain_pending_effect_rebuilds()
 
 func _on_resize_debounced():
-	print("[Grid] _on_resize_debounced: size=", size, " target_ratio=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
+	if debug_mode:
+		print("[Grid] _on_resize_debounced: size=", size, " target_ratio=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
 	if size.y > 0:
-		_log_parent_chain_sizes()
+		if debug_mode:
+			_log_parent_chain_sizes()
 	if startup_layout_suppressed:
 		return
 	# Prevent re-entrant layout recalculations.
@@ -883,7 +896,8 @@ func _process_buffer_expansion() -> void:
 	var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	var current_first = _active_cards[0].get_meta("virtual_index", 0)
 
-	print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
+	if debug_mode:
+		print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
 
 	var added: int = 0
 	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME:
@@ -897,7 +911,8 @@ func _process_buffer_expansion() -> void:
 		current_first = _active_cards[0].get_meta("virtual_index", 0)
 		added += 1
 
-	print("[Grid] _process_buffer_expansion: added=", added, " current_first=", current_first, " current_last=", current_last)
+	if debug_mode:
+		print("[Grid] _process_buffer_expansion: added=", added, " current_first=", current_first, " current_last=", current_last)
 
 	# Keep the internal virtual range consistent with the active card list so
 	# later scroll/recycle math and preload checks don't use stale bounds.
@@ -925,7 +940,8 @@ func _process_pending_visual_setup() -> void:
 	if _pending_visual_setup.is_empty():
 		return
 
-	print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
+	if debug_mode:
+		print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
 	var processed: int = 0
 	var keys := _pending_visual_setup.keys()
 	while processed < ASYNC_SETUP_CARDS_PER_FRAME and not keys.is_empty():
@@ -936,11 +952,12 @@ func _process_pending_visual_setup() -> void:
 			_pending_visual_setup.erase(idx)
 			continue
 		var setup_ok = _apply_card_visual_setup(card, idx)
-		print("[Grid] _process_pending_visual_setup: idx=", idx, " setup_ok=", setup_ok)
+		if debug_mode: print("[Grid] _process_pending_visual_setup: idx=", idx, " setup_ok=", setup_ok)
 		if setup_ok:
 			_pending_visual_setup.erase(idx)
 			processed += 1
-	print("[Grid] _process_pending_visual_setup: processed=", processed, " remaining=", _pending_visual_setup.size())
+	if debug_mode:
+		print("[Grid] _process_pending_visual_setup: processed=", processed, " remaining=", _pending_visual_setup.size())
 
 func _flush_pending_visual_setup_for_visible_zone() -> void:
 	if _pending_visual_setup.is_empty():
@@ -1262,7 +1279,8 @@ func _recalculate_layout():
 	_cached_items_per_line = _get_items_per_line()
 	_cached_normal_stride = _get_normal_stride()
 
-	print("[Grid] _recalculate_layout: available=", available, " card_size=", card_size, " item_width=", item_width, " item_height=", item_height, " items_per_line=", _cached_items_per_line, " normal_stride=", _cached_normal_stride)
+	if debug_mode:
+		print("[Grid] _recalculate_layout: available=", available, " card_size=", card_size, " item_width=", item_width, " item_height=", item_height, " items_per_line=", _cached_items_per_line, " normal_stride=", _cached_normal_stride)
 
 	if _cached_items_per_line == 1:
 		push_warning("[Grid] COLLAPSE DETECTED: items_per_line=1, available=%s, card_size=%s, item_width=%s, item_height=%s" % [available, card_size, item_width, item_height])
@@ -1325,6 +1343,7 @@ func _recalculate_layout():
 
 	_is_recalculating_layout = false
 	_update_visual_draw_order()
+	_ensure_pool_capacity()
 	# Sync and reveal visual items after the deferred FlowContainer sort has run.
 	# Relying only on NOTIFICATION_TRANSFORM_CHANGED misses some rebuild paths.
 	call_deferred("_sync_and_mark_card_visual_transforms")
@@ -1618,6 +1637,37 @@ func _instantiate_card_pool():
 	_card_has_end_bulk_layout = probe.has_method("end_bulk_layout")
 	print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
+var _pending_pool_growth: int = 0
+const POOL_GROWTH_PER_FRAME: int = 4
+
+## Recomputes the required pool size for the current layout. Grows _max_pool_size
+## immediately (so buffer math sees the new cap) and queues frame-spread card
+## instantiation; shrinking is handled passively by _add_to_pool overflow.
+func _ensure_pool_capacity() -> void:
+	if not _card_scene or _total_items <= 0 or not _scroll_container:
+		return
+	if not _has_valid_available_size():
+		return
+	var required = _compute_pool_size(_get_available_size())
+	if required <= 0:
+		return
+	if required > _max_pool_size:
+		var live_cards = _card_pool.size() + _active_cards.size()
+		_pending_pool_growth = max(_pending_pool_growth, required - live_cards)
+	_max_pool_size = required
+
+func _process_pool_growth() -> void:
+	if _pending_pool_growth <= 0 or not _card_scene:
+		return
+	var count = mini(POOL_GROWTH_PER_FRAME, _pending_pool_growth)
+	for i in range(count):
+		var card = _card_scene.instantiate()
+		card.visible = false
+		card.set_meta("pooled", true)
+		card.set_meta("virtual_index", -1)
+		_card_pool.append(card)
+	_pending_pool_growth -= count
+
 func _compute_pool_size(available: Vector2) -> int:
 	if _total_items <= 0 or not _scroll_container:
 		return 0
@@ -1678,7 +1728,7 @@ func set_deterministic_available_size(available: Vector2) -> void:
 		clear_deterministic_available_size()
 		return
 	_deterministic_available_size = Vector2(maxf(available.x, 1.0), maxf(available.y, 1.0))
-	print("[Grid] set_deterministic_available_size: ", _deterministic_available_size)
+	if debug_mode: print("[Grid] set_deterministic_available_size: ", _deterministic_available_size)
 
 func clear_deterministic_available_size() -> void:
 	_deterministic_available_size = Vector2.ZERO
@@ -1916,6 +1966,7 @@ func _recycle_card_at_index(index: int):
 	var vidx = card.get_meta("virtual_index", -1)
 	if vidx >= 0:
 		_active_cards_by_index.erase(vidx)
+		_pending_visual_setup.erase(vidx)
 
 	if is_instance_valid(card):
 		_disconnect_card_signals(card)
@@ -1929,10 +1980,6 @@ func _recycle_card_at_index(index: int):
 			_pending_effect_rebuilds.erase(card)
 			_pending_effect_rebuild_set.erase(card)
 
-		# Remove from pending visual setup so recycled cards don't keep stale data.
-		vidx = card.get_meta("virtual_index", -1)
-		if vidx >= 0:
-			_pending_visual_setup.erase(vidx)
 		card.remove_meta("needs_visual_setup")
 
 		if _card_has_reset:
@@ -2020,7 +2067,8 @@ func _sync_and_mark_card_visual_transforms() -> void:
 		if _card_has_mark_visuals_position_synced:
 			card._mark_visuals_position_synced()
 			marked += 1
-	print("[Grid] _sync_and_mark_card_visual_transforms: marked=", marked, " active=", _active_cards.size())
+	if debug_mode:
+		print("[Grid] _sync_and_mark_card_visual_transforms: marked=", marked, " active=", _active_cards.size())
 
 func _update_visual_draw_order() -> void:
 	var focused_idx = _get_focused_virtual_index()
@@ -2080,15 +2128,15 @@ func _add_card_at_start(virtual_index: int):
 
 func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	if not card.has_meta("needs_visual_setup"):
-		print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " no meta, skipping")
+		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " no meta, skipping")
 		return true
 	if not card.is_node_ready():
-		print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " not ready, keeping pending")
+		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " not ready, keeping pending")
 		return false
 	if not _data_cache.has(virtual_index):
 		# Data not loaded yet; keep the card pending so it gets finished once
 		# the items_requested callback populates the cache.
-		print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data missing, keeping pending")
+		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data missing, keeping pending")
 		return false
 	card.remove_meta("needs_visual_setup")
 
@@ -2099,7 +2147,8 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	# FlowContainer has sized them can have zero text/media bounds from _ready(),
 	# which causes _update_text() and _update_media() to draw nothing.
 	if _card_has_update_media_panel_size:
-		print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " updating media panel size, size=", card.size, " min=", card.custom_minimum_size)
+		if debug_mode:
+			print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " updating media panel size, size=", card.size, " min=", card.custom_minimum_size)
 		card._update_media_panel_size(true)
 
 	var card_visible = _is_index_visible(virtual_index)
@@ -2108,7 +2157,8 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	else:
 		card.game = _data_cache[virtual_index]
 	_update_cache_access_order(virtual_index)
-	print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data applied, size=", card.size, " min=", card.custom_minimum_size)
+	if debug_mode:
+		print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data applied, size=", card.size, " min=", card.custom_minimum_size)
 	# The card may have been marked as position-synced before its data was
 	# applied, in which case its visual items were hidden because headline was
 	# empty. Re-evaluate visibility now that the game/title is set.
@@ -2122,7 +2172,7 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 		card.sync_visual_transform()
 	if _card_has_mark_visuals_position_synced:
 		card._mark_visuals_position_synced()
-	print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " applied")
+	if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " applied")
 	return true
 
 func _batch_recycle_from_start(count: int) -> void:
@@ -2578,7 +2628,8 @@ func _request_data(offset: int, limit: int):
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
-	print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
+	if debug_mode:
+		print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
 	_pending_loads.erase(offset)
 
 	if items.is_empty():
@@ -2810,16 +2861,6 @@ func _apply_focus_to_card(card: Control) -> void:
 	card.set_meta("_suppress_smooth_scroll", true)
 	card.grab_focus()
 	_pending_focus_index = -1
-
-func _restore_focus_after_layout(index: int) -> void:
-	"""Restore focus to a card by virtual index after layout recalculation.
-	Skips if focus already belongs to another control so we don't steal focus."""
-	var viewport := get_viewport()
-	if is_instance_valid(viewport) and viewport.gui_get_focus_owner() != null:
-		return
-	var card = get_card_at_index(index)
-	if card and is_instance_valid(card) and card.is_inside_tree():
-		card.grab_focus()
 
 func focus_last_or_first_card() -> void:
 	"""Focus the last focused card, or the first card if none was focused."""

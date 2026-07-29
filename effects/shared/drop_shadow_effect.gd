@@ -1,6 +1,9 @@
 class_name DropShadowEffect
 extends EffectBase
 
+static func is_material_shareable() -> bool:
+	return true
+
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
@@ -16,7 +19,7 @@ func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/drop_shadow.gdshader")
 
-func compute_pipeline(_cache: Dictionary) -> void:
+func compute_pipeline() -> void:
 	_update_shadow_offsets()
 
 func _update_shadow_offsets():
@@ -56,6 +59,8 @@ func _apply_settings() -> void:
 func _update_shader_params() -> void:
 	if not media_container:
 		return
+
+	_ensure_shared_material()
 
 	var shadow_color = _settings.get("shadow_color", Color(0, 0, 0, 0.5))
 	var shadow_offset_x = _settings.get("shadow_offset_x", 0.0)

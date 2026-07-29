@@ -77,23 +77,6 @@ func _show_notification_deferred(id: int, text: String, type: Type, _icon: Textu
 func dismiss_notification_safe(id: int) -> void:
 	dismiss_notification.bind(id).call_deferred()
 
-## Thread-safe wrapper for update_notification_text()
-func update_notification_text_safe(id: int, text: String) -> void:
-	_update_notification_text_deferred.bind(id, text).call_deferred()
-
-func _update_notification_text_deferred(id: int, text: String) -> void:
-	print("[SystemManager.notifications] _update_notification_text_deferred id=" + str(id) + " text=" + text)
-	var index = _active_ids.find(id)
-	if index != -1:
-		var snackbar = _active_snackbars[index]
-		if is_instance_valid(snackbar):
-			snackbar.setup(text)
-
-	if id == _current_progress_id and _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
-		_current_progress_snackbar.setup(text)
-		if _progress_entry:
-			_progress_entry.base_text = text
-
 func show_notification(
 	text: String,
 	type: Type = Type.INFO,
@@ -219,6 +202,14 @@ func dismiss_notification(id: int) -> void:
 
 	_pinned_ids.erase(id)
 
+## Dismisses the active progress notification if its base text starts with the
+## given prefix. Returns true if a notification was dismissed.
+func dismiss_progress_notification_by_prefix(prefix: String) -> bool:
+	if _progress_entry and _current_progress_id != -1 and _progress_entry.base_text.begins_with(prefix):
+		dismiss_notification(_current_progress_id)
+		return true
+	return false
+
 func dismiss_all_notifications() -> void:
 	# Iterate backwards so removal doesn't shift indices
 	for i in range(_active_snackbars.size() - 1, -1, -1):
@@ -271,15 +262,3 @@ func _check_notifications() -> void:
 		else:
 			var percent = int(progress_f * 100)
 			_current_progress_snackbar.setup(_progress_entry.base_text + " (" + str(percent) + "%)" )
-
-func get_active_notification_count() -> int:
-	var count = 0
-	for snackbar in _active_snackbars:
-		if is_instance_valid(snackbar):
-			count += 1
-	if _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
-		count += 1
-	return count
-
-func clear_all_notifications() -> void:
-	dismiss_all_notifications()

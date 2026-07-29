@@ -1,5 +1,7 @@
 extends Control
 
+const DEBUG_LOG: bool = false
+
 # UI Nodes - initialized in _ready()
 var tab_container: TabContainer
 var library_background: LibraryBackground
@@ -117,7 +119,6 @@ func _ready():
 
 	# Connect to UIManager for tab changes and settings dialog
 	UIManager.tab_changed.connect(_on_tab_changed)
-	UIManager.settings_dialog_dismissed.connect(_on_settings_dialog_dismissed)
 
 	# Re-sync zoom slider when viewport size changes (e.g. window resize).
 	# The grid re-snaps its zoom in _on_resize_debounced(), but the slider
@@ -333,11 +334,6 @@ func _on_oobe_wizard_completed():
 
 func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
-
-func _on_settings_dialog_dismissed() -> void:
-	# Focus restoration is now handled by M3Overlay (settings dialog falls back
-	# to the Home button on cancel; otherwise it restores the previous focus).
-	pass
 
 func _on_more_button_pressed() -> void:
 	var menu = M3Menu.new()
@@ -973,12 +969,12 @@ func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
 	var home_button = UIManager.find_home_button()
-	print("[Main] find_home_button returned: ", home_button)
+	if DEBUG_LOG: print("[Main] find_home_button returned: ", home_button)
 	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-		print("[Main] Grabbing focus on: ", home_button.name)
+		if DEBUG_LOG: print("[Main] Grabbing focus on: ", home_button.name)
 		home_button.grab_focus()
 	else:
-		print("[Main] Could not grab focus — home_button invalid or focus disabled")
+		if DEBUG_LOG: print("[Main] Could not grab focus — home_button invalid or focus disabled")
 
 func _is_home_button_focused() -> bool:
 	var home_button = UIManager.find_home_button()
@@ -1003,12 +999,12 @@ func _handle_ui_cancel() -> void:
 				return
 
 	# Check if keyboard is visible - let keyboard handle it
-	print("[Main] _handle_ui_cancel: _keyboard=", _keyboard, " visible=", str(_keyboard.visible) if _keyboard else "N/A", " in_second_viewport=", str(UIManager._keyboard_is_in_second_viewport) if UIManager else "N/A")
+	if DEBUG_LOG: print("[Main] _handle_ui_cancel: _keyboard=", _keyboard, " visible=", str(_keyboard.visible) if _keyboard else "N/A", " in_second_viewport=", str(UIManager._keyboard_is_in_second_viewport) if UIManager else "N/A")
 	if _keyboard and _keyboard.visible:
 		# If keyboard is in SecondViewport, it won't receive ui_cancel (controller input goes to MainViewport)
 		# So we need to manually dismiss it here
 		if UIManager and UIManager._keyboard_is_in_second_viewport:
-			print("[Main] Manually dismissing keyboard in SecondViewport")
+			if DEBUG_LOG: print("[Main] Manually dismissing keyboard in SecondViewport")
 			if _keyboard.has_method("_hide_keyboard"):
 				_keyboard._hide_keyboard()
 				# Return focus to the active LineEdit in MainViewport
@@ -1051,14 +1047,14 @@ func _handle_ui_cancel() -> void:
 				if SystemManager.audio:
 					SystemManager.audio.play_sfx("return")
 				nav_dest.grab_focus()
-				print("[Main] _handle_ui_cancel: escaped locked grid to nav destination: ", nav_dest.name)
+				if DEBUG_LOG: print("[Main] _handle_ui_cancel: escaped locked grid to nav destination: ", nav_dest.name)
 			else:
 				var home_button = UIManager.find_home_button()
 				if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
 					if SystemManager.audio:
 						SystemManager.audio.play_sfx("return")
 					home_button.grab_focus()
-					print("[Main] _handle_ui_cancel: escaped locked grid to home button")
+					if DEBUG_LOG: print("[Main] _handle_ui_cancel: escaped locked grid to home button")
 			return
 
 	# Play return sound
@@ -1473,8 +1469,6 @@ func _exit_tree() -> void:
 	# Disconnect signals we own.
 	if UIManager.is_connected("tab_changed", _on_tab_changed):
 		UIManager.tab_changed.disconnect(_on_tab_changed)
-	if UIManager.is_connected("settings_dialog_dismissed", _on_settings_dialog_dismissed):
-		UIManager.settings_dialog_dismissed.disconnect(_on_settings_dialog_dismissed)
 	if DataManager and DataManager.is_connected("apply_preset_end", _on_preset_applied):
 		DataManager.apply_preset_end.disconnect(_on_preset_applied)
 	if LaunchManager:

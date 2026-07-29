@@ -15,6 +15,20 @@ var _emulator_profile_cache: Dictionary = {}
 # Strategy pattern lookup table for emulator-specific save operations
 var _emulator_strategies: Dictionary = {}
 
+# Re-entrancy guards: one save-sync flow per game+emulator, one conflict dialog at a time
+var _save_sync_in_flight: Dictionary = {}  # "romm_id:emulator_id" -> true
+var _conflict_dialog_open: bool = false
+signal _conflict_dialog_closed
+
+func _save_sync_key(game: GameResource, emulator_id: String) -> String:
+	return str(game.romm_id) + ":" + emulator_id
+
+func _begin_save_sync(key: String) -> void:
+	_save_sync_in_flight[key] = true
+
+func _end_save_sync(key: String) -> void:
+	_save_sync_in_flight.erase(key)
+
 func _ready() -> void:
 	_init_strategies()
 	_cleanup_all_temp_dirs()
@@ -1276,6 +1290,11 @@ func _ensure_device_registered(callback: Callable) -> void:
 ## Shows the save conflict dialog and waits for user choice
 ## Returns: "local", "server", "cancel", or "" (on error)
 func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int) -> String:
+	# Serialize conflict dialogs: a second flow waits for the first dialog to close
+	while _conflict_dialog_open:
+		await _conflict_dialog_closed
+	_conflict_dialog_open = true
+
 	var result := {
 		"choice": "",
 		"server_btn": null,
@@ -1355,6 +1374,9 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 	# Wait until the user picks one of the three choices.
 	await dialog.dismissed
 
+	_conflict_dialog_open = false
+	_conflict_dialog_closed.emit()
+
 	print("[GameSaveSubManager] Conflict dialog resolved with choice: " + result["choice"])
 	return result["choice"]
 
@@ -1388,6 +1410,19 @@ func _format_conflict_timestamp(unix_time: int) -> String:
 
 ## Main sync entry point for manual and auto sync
 func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Callable = Callable()) -> void:
+	var sync_key = _save_sync_key(game, emulator_id)
+	if _save_sync_in_flight.has(sync_key):
+		SystemManager.notifications.show_notification("Save sync already in progress for " + game.get_display_name(), SystemManager.notifications.Type.WARNING)
+		if callback.is_valid():
+			callback.call(false, "Save sync already in progress")
+		return
+	_begin_save_sync(sync_key)
+	var user_callback = callback
+	callback = func(success: bool, message: String):
+		_end_save_sync(sync_key)
+		if user_callback.is_valid():
+			user_callback.call(success, message)
+
 	if not SystemManager.network.is_romm_connected():
 		if callback.is_valid():
 			callback.call(false, "Not connected to RomM")
@@ -1722,6 +1757,11 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if not SystemManager.network.is_romm_connected():
 		print("[GameSaveSubManager] Auto-upload aborted: not connected to RomM")
 		return
+
+	var sync_key = _save_sync_key(game, emulator_id)
+	if _save_sync_in_flight.has(sync_key):
+		print("[GameSaveSubManager] Auto-upload aborted: save sync already in progress for this game")
+		return
 	
 	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	var extensions = get_save_extensions(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
@@ -1750,10 +1790,12 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if local_saves.is_empty():
 		print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
 		return
-	
+
+	_begin_save_sync(sync_key)
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
 			push_error("[GameSaveSubManager] Auto-upload aborted: " + error)
+			_end_save_sync(sync_key)
 			return
 		
 		var device_id = DataManager.get_romm_device_id()
@@ -1799,7 +1841,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				# Show conflict dialog
 				print("[GameSaveSubManager] Auto-upload detected conflict, showing dialog")
 				var choice = await _show_conflict_dialog(game, conflict_local_time, conflict_server_time)
-				
+
 				match choice:
 					"local":
 						# User chose to keep local, proceed with upload
@@ -1809,10 +1851,12 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 						# User chose to keep server, skip upload (will download on next launch)
 						print("[GameSaveSubManager] User chose to keep server save, skipping upload")
 						SystemManager.notifications.show_notification("Save sync: keeping server version", SystemManager.notifications.Type.INFO)
+						_end_save_sync(sync_key)
 					"cancel", "":
 						# User cancelled
 						print("[GameSaveSubManager] User cancelled auto-upload")
 						SystemManager.notifications.show_notification("Save sync cancelled", SystemManager.notifications.Type.INFO)
+						_end_save_sync(sync_key)
 			else:
 				# No conflict, proceed with upload
 				_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
@@ -1843,6 +1887,7 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 						SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
 					else:
 						SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
+					_end_save_sync(_save_sync_key(game, emulator_id))
 				continue
 			
 			SystemManager.network.upload_save(
@@ -1870,6 +1915,7 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 							SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
 						else:
 							SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
+						_end_save_sync(_save_sync_key(game, emulator_id))
 			)
 		else:
 			SystemManager.network.upload_save(
@@ -1893,6 +1939,7 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 						SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
 					else:
 						SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
+					_end_save_sync(_save_sync_key(game, emulator_id))
 			)
 
 ## Auto-download saves before launch (pre-launch hook)
@@ -1921,7 +1968,20 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 		return
 	
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-	
+
+	var sync_key = _save_sync_key(game, emulator_id)
+	if _save_sync_in_flight.has(sync_key):
+		print("[GameSaveSubManager] auto_download: ABORT - save sync already in progress for this game")
+		if on_complete.is_valid():
+			on_complete.call()
+		return
+	_begin_save_sync(sync_key)
+	var user_on_complete = on_complete
+	on_complete = func():
+		_end_save_sync(sync_key)
+		if user_on_complete.is_valid():
+			user_on_complete.call()
+
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
 			push_error("[GameSaveSubManager] Auto-download aborted: " + error)

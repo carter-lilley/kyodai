@@ -9,14 +9,11 @@ const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 enum SyncState {
 	IDLE,
 	PRECHECK_DISABLED,      # Remove games from disabled platforms
-	CALCULATING_TOTALS,     # Pre-calculate game counts
 	PLATFORM_ITERATING,     # Iterate through platforms
 	PLATFORM_FETCHING,      # Fetch batch from current platform
 	PLATFORM_PROCESSING,    # Process fetched batch
 	PLATFORM_BATCHING,      # Fetch more batches if needed
-	COVER_FOLDING,          # Apply cover folding
-	COMPLETING,             # Final cleanup
-	ERROR                   # Error state
+	COMPLETING              # Final cleanup
 }
 
 var _sync_state: SyncState = SyncState.IDLE
@@ -133,6 +130,8 @@ func _wait_for_async(task_func: Callable, timeout_ms: int = 60000):
 	var elapsed = 0
 	var check_interval = 10  # 10ms
 	while not state.completed and elapsed < timeout_ms:
+		if MemorySubManager.is_shutting_down():
+			return null
 		OS.delay_msec(check_interval)
 		elapsed += check_interval
 
@@ -330,9 +329,6 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
 
 	for platform_idx in range(enabled_platforms.size()):
-		if _sync_state == SyncState.ERROR:
-			break
-
 		_sync_current_platform_idx = platform_idx
 		var platform = enabled_platforms[platform_idx]
 		_sync_platform = platform.name
@@ -392,7 +388,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 			"offset": 0
 		}
 
-		while not platform_complete and _sync_state != SyncState.ERROR:
+		while not platform_complete:
 
 			# Fetch batch (or wait for parallel fetch)
 			var fetch_start = Time.get_ticks_msec()
@@ -843,26 +839,6 @@ func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
 		print("[SyncThread] ERROR: Failed to set last sync time for %s" % platform_slug)
 
 
-func _precalculate_totals_sync(platforms: Array) -> int:
-	"""Pre-calculate total games for all platforms - sync thread version."""
-	_precalc_platform_totals.clear()
-	var grand_total = 0
-
-	for platform in platforms:
-		var platform_id = str(platform.id)
-		var fetch_start = Time.get_ticks_msec()
-		var result = SystemManager.network.fetch_games_sync(platform_id, 0, 1)
-		var fetch_time = Time.get_ticks_msec() - fetch_start
-		if result.success and result.data is Dictionary:
-			var platform_total = int(result.data.get("total", 0))
-			grand_total += platform_total
-			_precalc_platform_totals[platform_id] = platform_total
-			print("[SyncThread] Pre-calc: %s = %d games (%dms)" % [platform.name, platform_total, fetch_time])
-		OS.delay_usec(1000)
-
-	return grand_total
-
-
 func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_progress: bool = false) -> int:
 	"""Process a batch of games on the sync thread.
 
@@ -969,6 +945,22 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 		return false
 	data_manager.database.lock()
 
+	# Prefetch existing rows for the whole batch in ONE query so
+	# _build_insert_query doesn't do a per-game SELECT (N+1).
+	var romm_ids: Array = []
+	for game in games:
+		if game != null and game.romm_id > 0:
+			romm_ids.append(game.romm_id)
+	var existing_rows: Dictionary = {}
+	if romm_ids.size() > 0:
+		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
+		var existing_result = data_manager.database.query_array_unlocked(
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box FROM games WHERE romm_id IN (%s)" % placeholders,
+			romm_ids
+		)
+		for row in existing_result:
+			existing_rows[row.get("romm_id", 0)] = row
+
 	# Start transaction
 	var begin_result = data_manager.database.query_bool_unlocked("BEGIN TRANSACTION")
 	if not begin_result:
@@ -984,7 +976,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 		if game == null:
 			continue
 
-		var insert_data = _build_insert_query(game)
+		var insert_data = _build_insert_query(game, existing_rows.get(game.romm_id, {}))
 		var insert_result = data_manager.database.query_bool_unlocked(insert_data.query, insert_data.bindings)
 		if not insert_result:
 			success = false
@@ -1055,116 +1047,6 @@ func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
 	return false
 
 
-func _ensure_consistent_masters_in_batch(games: Array[GameResource]):
-	"""Ensure that only the game with the lowest ID in each sibling group is marked as master.
-
-	This handles the race condition where multiple siblings from the same group are processed
-	in the same batch and all pass the database sibling check."""
-
-	# Build a map of sibling group IDs to the lowest ID in that group within this batch
-	var sibling_group_lowest: Dictionary = {}
-
-	for game in games:
-		# Build list of all IDs in this sibling group (including the game itself)
-		var all_ids_in_group = [game.romm_id]
-		for sibling in game.siblings:
-			var sid = sibling.get("id", 0)
-			if sid != 0:
-				all_ids_in_group.append(sid)
-
-		# Find the lowest ID in this group
-		var lowest_id = all_ids_in_group.min()
-
-		# Use a unique key for this sibling group (sorted IDs to ensure consistency)
-		all_ids_in_group.sort()
-		var group_key = ",".join(all_ids_in_group.map(func(id): return str(id)))
-
-		# Track the lowest ID for this group
-		if not sibling_group_lowest.has(group_key):
-			sibling_group_lowest[group_key] = lowest_id
-		else:
-			sibling_group_lowest[group_key] = min(sibling_group_lowest[group_key], lowest_id)
-
-	# Now apply consistent master selection
-	for game in games:
-		# Skip if already marked as non-master due to DB check
-		if not game.is_master_entry:
-			continue
-
-		# Build the same group key
-		var all_ids_in_group = [game.romm_id]
-		for sibling in game.siblings:
-			var sid = sibling.get("id", 0)
-			if sid != 0:
-				all_ids_in_group.append(sid)
-
-		all_ids_in_group.sort()
-		var group_key = ",".join(all_ids_in_group.map(func(id): return str(id)))
-
-		# Only keep as master if this game has the lowest ID in its group
-		var lowest_id = sibling_group_lowest.get(group_key, game.romm_id)
-		if game.romm_id != lowest_id:
-			game.is_master_entry = false
-
-
-func _group_games_by_cover_url(games: Array[GameResource]):
-	"""Group games with identical cover URLs as siblings.
-
-	This function identifies games that share the same cover URL and adds them
-	to each other's sibling lists. RomM siblings take precedence, so we only
-	add cover-based siblings that aren't already romm siblings."""
-
-	if games.size() < 2:
-		return
-
-	# Build a map of cover URL -> Array of game indices
-	var cover_groups: Dictionary = {}
-
-	for i in range(games.size()):
-		var game = games[i]
-		if game.cover_url == "":
-			continue
-
-		if not cover_groups.has(game.cover_url):
-			cover_groups[game.cover_url] = []
-		cover_groups[game.cover_url].append(i)
-
-	# For each cover group with 2+ games, cross-reference them as siblings
-	for cover_url in cover_groups.keys():
-		var indices = cover_groups[cover_url]
-		if indices.size() < 2:
-			continue
-
-		# Pre-build sibling entries once per group (shared references, no inner-loop alloc)
-		var all_entries: Array[Dictionary] = []
-		for idx in indices:
-			var g = games[idx]
-			all_entries.append({
-				"id": g.romm_id,
-				"name": g.title,
-				"file_name": g.file_name,
-				"file_size": g.file_size
-			})
-
-		# For each game, add all group entries except self and existing romm siblings
-		for i in range(indices.size()):
-			var current_game = games[indices[i]]
-			var current_id = current_game.romm_id
-
-			# Fast lookup of existing sibling IDs
-			var existing: Dictionary = {}
-			for sibling in current_game.siblings:
-				existing[sibling.get("id", 0)] = true
-
-			# Append pre-built entries (skips self + existing romm siblings)
-			for entry in all_entries:
-				var other_id = entry.get("id", 0)
-				if other_id == current_id or existing.has(other_id):
-					continue
-				current_game.siblings.append(entry)
-				existing[other_id] = true
-
-
 func _create_game_from_data(data: Dictionary, platform_slug: String, check_siblings: bool = true) -> GameResource:
 	var game = GameResource.new()
 	game.id = str(data.get("id", ""))
@@ -1224,7 +1106,7 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	# A game is a master if none of its siblings already exist in our database
 	# This will be checked in batch during sync, or set to true for individual adds
 	if check_siblings:
-		game.is_master_entry = not _has_sibling_in_database(game.romm_id, siblings)
+		game.is_master_entry = not _check_siblings_in_db(game.romm_id, siblings)
 	else:
 		# During batch sync, we'll check siblings separately
 		game.is_master_entry = true  # Default, will be updated by batch check
@@ -1236,40 +1118,14 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	return game
 
 
-func _has_sibling_in_database(romm_id: int, siblings: Array[Dictionary]) -> bool:
-	"""Check if any sibling (NOT including self) already exists as a master entry in the database"""
-	if not data_manager.database.is_database_ready():
-		return false
-
-	# Build list of sibling IDs to check (excluding self - we only want to check siblings)
-	var ids_to_check = []
-	for sibling in siblings:
-		var sid = sibling.get("id", 0)
-		if sid != 0 and sid != romm_id:  # Exclude self
-			ids_to_check.append(sid)
-
-	# If no siblings to check, return false
-	if ids_to_check.size() == 0:
-		return false
-
-	# Check if any siblings already exist as master entries
-	var placeholders = ", ".join(ids_to_check.map(func(_id): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % placeholders
-	var query_result = data_manager.database.query_array(query, ids_to_check)
-
-	if query_result.size() > 0:
-		var count = query_result[0]["count"]
-		return count > 0
-
-	return false
-
-
-func _build_insert_query(game: GameResource) -> Dictionary:
+func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> Dictionary:
 	"""Build SQL INSERT query and bindings for a game - used for batch processing.
 
-	PRESERVES existing has_local_copy, downloaded_sibling_ids, and file_path
-	if the game already exists in the database. This prevents downloaded games
-	from disappearing after a re-sync."""
+	PRESERVES existing has_local_copy, downloaded_sibling_ids, file_path,
+	last_played, title_id, and logo_box if the game already exists in the
+	database. This prevents downloaded games and local progress from
+	disappearing after a re-sync. Pass existing_row (batch-prefetched) to
+	avoid a per-game SELECT; direct callers fall back to fetching on demand."""
 
 	# Check if game already exists and preserve download status
 	var has_local_copy = 1 if game.has_local_copy else 0
@@ -1279,37 +1135,40 @@ func _build_insert_query(game: GameResource) -> Dictionary:
 	var title_id = game.title_id
 	var logo_box_json = JSON.stringify(game.logo_box)
 
-	if data_manager.database.is_database_ready() and game.romm_id > 0:
+	var existing = existing_row
+	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
 		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
-			var existing = query_result[0]
-			# Preserve download status from existing record
-			if existing.get("has_local_copy", 0) == 1:
-				has_local_copy = 1
-			# Preserve downloaded siblings
-			var existing_siblings = existing.get("downloaded_sibling_ids", "[]")
-			if existing_siblings != "[]" and existing_siblings != "":
-				downloaded_sibling_ids = existing_siblings
-			# Preserve file path
-			var existing_path = existing.get("file_path", "")
-			if existing_path != "":
-				file_path = existing_path
-			# Preserve cover group fields (they're managed separately from sync)
-			var existing_cover_group_id = existing.get("cover_group_id", "")
-			if existing_cover_group_id != "":
-				game.cover_group_id = existing_cover_group_id
-				game.cover_group_master = existing.get("cover_group_master", 1) == 1
-			# Preserve locally-managed fields the server payload never provides
-			var existing_last_played = existing.get("last_played", "")
-			if existing_last_played != "":
-				last_played = existing_last_played
-			var existing_title_id = existing.get("title_id", "")
-			if existing_title_id != "":
-				title_id = existing_title_id
-			var existing_logo_box = existing.get("logo_box", "{}")
-			if existing_logo_box != "" and existing_logo_box != "{}":
-				logo_box_json = existing_logo_box
+			existing = query_result[0]
+
+	if not existing.is_empty():
+		# Preserve download status from existing record
+		if existing.get("has_local_copy", 0) == 1:
+			has_local_copy = 1
+		# Preserve downloaded siblings
+		var existing_siblings = existing.get("downloaded_sibling_ids", "[]")
+		if existing_siblings != "[]" and existing_siblings != "":
+			downloaded_sibling_ids = existing_siblings
+		# Preserve file path
+		var existing_path = existing.get("file_path", "")
+		if existing_path != "":
+			file_path = existing_path
+		# Preserve cover group fields (they're managed separately from sync)
+		var existing_cover_group_id = existing.get("cover_group_id", "")
+		if existing_cover_group_id != "":
+			game.cover_group_id = existing_cover_group_id
+			game.cover_group_master = existing.get("cover_group_master", 1) == 1
+		# Preserve locally-managed fields the server payload never provides
+		var existing_last_played = existing.get("last_played", "")
+		if existing_last_played != "":
+			last_played = existing_last_played
+		var existing_title_id = existing.get("title_id", "")
+		if existing_title_id != "":
+			title_id = existing_title_id
+		var existing_logo_box = existing.get("logo_box", "{}")
+		if existing_logo_box != "" and existing_logo_box != "{}":
+			logo_box_json = existing_logo_box
 
 	var query = """
 		INSERT OR REPLACE INTO games
@@ -1471,8 +1330,6 @@ func get_sync_state_name() -> String:
 			return "IDLE"
 		SyncState.PRECHECK_DISABLED:
 			return "PRECHECK_DISABLED"
-		SyncState.CALCULATING_TOTALS:
-			return "CALCULATING_TOTALS"
 		SyncState.PLATFORM_ITERATING:
 			return "PLATFORM_ITERATING"
 		SyncState.PLATFORM_FETCHING:
@@ -1481,12 +1338,8 @@ func get_sync_state_name() -> String:
 			return "PLATFORM_PROCESSING"
 		SyncState.PLATFORM_BATCHING:
 			return "PLATFORM_BATCHING"
-		SyncState.COVER_FOLDING:
-			return "COVER_FOLDING"
 		SyncState.COMPLETING:
 			return "COMPLETING"
-		SyncState.ERROR:
-			return "ERROR"
 		_:
 			return "UNKNOWN"
 

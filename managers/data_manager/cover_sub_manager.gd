@@ -109,7 +109,7 @@ func load_image(url: String, callback: Callable = Callable()):
 	if FSM.file_exists(cache_path):
 		MemorySubManager.queue_image_task(
 			func():
-				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
+				return MemorySubManager.prepare_image_for_texture(_load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path)),
 		func(image):
 			if image and not image.is_empty():
 				var texture = MemorySubManager.create_texture_from_image(image)
@@ -141,7 +141,7 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 
 		MemorySubManager.queue_image_task(
 			func():
-				return _load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path),
+				return MemorySubManager.prepare_image_for_texture(_load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path)),
 		func(image):
 			if image and not image.is_empty():
 				var texture = MemorySubManager.create_texture_from_image(image)
@@ -156,6 +156,8 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 func clear_cache():
 	for file_name in FSM.list_dir(CACHE_FOLDER):
 		FSM.delete_file(FSM.join_paths(CACHE_FOLDER, file_name))
+	# Wipe the in-memory texture cache too, or stale textures survive the disk wipe
+	MemorySubManager.clear_texture_cache()
 	data_manager.cache_cleared.emit()
 
 
@@ -221,6 +223,8 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 
 	MemorySubManager.queue_db_task(
 		func():
+			data_manager.database.lock()
+
 			# Query all games with cover URLs that don't have RomM siblings
 			# We exclude games that already have siblings in the RomM system
 			var query = """
@@ -229,10 +233,16 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 				WHERE cover_url != '' AND cover_url IS NOT NULL
 			"""
 
-			var query_result = data_manager.database.query_array(query)
-			if query_result.is_empty():
+			var rows = data_manager.database.query_array_unlocked(query)
+			if rows.is_empty():
+				data_manager.database.unlock()
 				return 0
-			var rows = query_result
+
+			# Prefetch all master-entry romm_ids once (avoids a per-sibling COUNT query)
+			var master_ids: Dictionary = {}
+			var master_rows = data_manager.database.query_array_unlocked("SELECT romm_id FROM games WHERE is_master_entry = 1")
+			for r in master_rows:
+				master_ids[r.get("romm_id", 0)] = true
 
 			# Build cover groups from games WITHOUT RomM siblings
 			var cover_groups: Dictionary = {}
@@ -255,12 +265,9 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 						if sibling is Dictionary:
 							var sibling_id = sibling.get("id", 0)
 							# Check if this sibling exists in DB as master (RomM sibling)
-							if sibling_id != 0 and sibling_id != romm_id:
-								var sibling_result = data_manager.database.query_array("SELECT COUNT(*) as count FROM games WHERE romm_id = ? AND is_master_entry = 1", [sibling_id])
-								if sibling_result.size() > 0:
-									if sibling_result[0].get("count", 0) > 0:
-										has_romm_siblings = true
-										break
+							if sibling_id != 0 and sibling_id != romm_id and master_ids.has(sibling_id):
+								has_romm_siblings = true
+								break
 
 				if has_romm_siblings:
 					# Don't process games with RomM siblings
@@ -277,6 +284,13 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 
 			var groups_processed = 0
 			var games_folded = 0
+
+			# Apply all group updates in a single transaction
+			if not data_manager.database.query_bool_unlocked("BEGIN IMMEDIATE TRANSACTION"):
+				data_manager.database.unlock()
+				return 0
+
+			var tx_ok = true
 
 			# Process each cover group with 2+ games
 			for cover_url in cover_groups.keys():
@@ -305,11 +319,19 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 						WHERE romm_id = ?
 					"""
 
-					data_manager.database.query_bool(update_query, [group_id, is_master, game.romm_id])
+					if not data_manager.database.query_bool_unlocked(update_query, [group_id, is_master, game.romm_id]):
+						tx_ok = false
 
 					# Count non-master games as folded
 					if game.romm_id != lowest_id:
 						games_folded += 1
+
+			if tx_ok:
+				data_manager.database.query_bool_unlocked("COMMIT")
+			else:
+				data_manager.database.query_bool_unlocked("ROLLBACK")
+				games_folded = 0
+			data_manager.database.unlock()
 
 			print("[CoverFolding] Processed %d cover groups, folded %d games" % [groups_processed, games_folded])
 			return games_folded,
@@ -343,14 +365,15 @@ func _remove_cover_based_siblings():
 
 	MemorySubManager.queue_db_task(
 		func():
-			# Simple: set cover_group_master = 1 for all games in any cover group
+			# Lock across UPDATE + changes() so another thread's query can't
+			# interleave and corrupt the count.
+			data_manager.database.lock()
 			var query = "UPDATE games SET cover_group_master = 1 WHERE cover_group_id != ''"
-			var success = data_manager.database.query_bool(query)
+			var success = data_manager.database.query_bool_unlocked(query)
 
-			# Get count of affected games
-			var count_query = "SELECT changes() as count"
 			var unfolded_count = 0
-			var query_result = data_manager.database.query_array(count_query)
+			var query_result = data_manager.database.query_array_unlocked("SELECT changes() as count")
+			data_manager.database.unlock()
 			if success and query_result.size() > 0:
 				unfolded_count = query_result[0].get("count", 0)
 

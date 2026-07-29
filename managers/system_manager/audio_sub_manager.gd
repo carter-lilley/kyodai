@@ -11,7 +11,6 @@ const SFX_BUS := "SFX"
 
 # SFX Assets - Preloaded for instant playback
 var _sfx_library: Dictionary[String, AudioStream] = {}
-var _sfx_paths: Dictionary[String, String] = {}
 
 # Audio Players
 var _sfx_pool: Array[AudioStreamPlayer] = []
@@ -90,7 +89,6 @@ func _load_sfx_library() -> void:
 		var stream = load(sfx_files[sfx_name])
 		if stream:
 			_sfx_library[sfx_name] = stream
-			_sfx_paths[sfx_name] = sfx_files[sfx_name]
 		else:
 			push_warning("[SystemManager.audio]: Failed to load SFX: ", sfx_files[sfx_name])
 

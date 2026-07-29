@@ -10,6 +10,7 @@ var _background_active_pid: int = -1
 var _background_active_game: GameResource = null
 var _is_in_background_state: bool = false
 var _background_poll_timer: Timer = null
+var _poll_in_flight: bool = false
 const BACKGROUND_POLL_INTERVAL: float = 1.0
 
 var launch_manager: Node
@@ -59,6 +60,11 @@ func _escape_args_for_shell(args: Array) -> Array:
 		for arg in args:
 			result.append(_escape_sh_arg(arg))
 	return result
+
+## Escapes a string for safe use as a single-quoted PowerShell argument.
+## In PS single quotes only the single quote itself needs escaping (doubled).
+func _escape_ps_arg(s: String) -> String:
+	return "'" + s.replace("'", "''") + "'"
 
 # ==================== BACKGROUND STATE (DESKTOP ONLY) ====================
 
@@ -127,20 +133,101 @@ func exit_background_state(exit_code: int = 0) -> void:
 
 	launch_manager.background_state_exited.emit(game, exit_code)
 
-## Poll callback - check if process is still running
+## Poll callback - check if process is still running (async: never blocks the main thread)
 func _on_background_poll_timeout() -> void:
 	if not _is_in_background_state or _background_active_pid <= 0:
 		return
-	
-	print("[ProcessManager] Polling PID ", _background_active_pid, "...")
-	
-	if not _is_process_running(_background_active_pid):
-		print("[ProcessManager] Process ", _background_active_pid, " no longer running")
-		exit_background_state(0)
-	else:
-		print("[ProcessManager] Process ", _background_active_pid, " still running")
+	if _poll_in_flight:
+		return
+	_poll_in_flight = true
+	var pid = _background_active_pid
+	_is_process_running_async(pid, func(running: bool):
+		_poll_in_flight = false
+		# Background state may have changed while the check was in flight
+		if not _is_in_background_state or _background_active_pid != pid:
+			return
+		if not running:
+			print("[ProcessManager] Process ", pid, " no longer running")
+			exit_background_state(0)
+	)
 
-## Check if a process is running by PID (platform-specific)
+## Async process liveness check; callback receives `running: bool` on the main thread.
+func _is_process_running_async(pid: int, callback: Callable) -> void:
+	if pid <= 0:
+		callback.call(false)
+		return
+
+	# Linux fast path: /proc check is effectively free, no process spawn needed
+	if SystemManager.platform.is_linux():
+		var dir = DirAccess.open("/proc/" + str(pid))
+		if dir:
+			callback.call(true)
+			return
+
+	if SystemManager.platform.is_windows():
+		MemorySubManager.queue_os_execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], func(result: Dictionary):
+			var output: Array = result.get("output", [])
+			var running = false
+			if result.get("exit_code", -1) == 0 and output.size() > 0:
+				var text = str(output[0]).strip_edges()
+				running = text != "" and not text.begins_with("INFO:")
+			callback.call(running)
+		)
+	else:
+		MemorySubManager.queue_os_execute("ps", ["-p", str(pid)], func(result: Dictionary):
+			callback.call(result.get("exit_code", -1) == 0)
+		)
+
+## Awaitable variant of _is_process_running_async. Returns true if running.
+func is_running_async(pid: int) -> bool:
+	var state := {"completed": false, "running": false}
+	_is_process_running_async(pid, func(running: bool):
+		state["completed"] = true
+		state["running"] = running
+	)
+	while not state["completed"]:
+		await get_tree().process_frame
+	return state["running"]
+
+## Kills a process by PID without blocking the main thread.
+func kill_process_async(pid: int) -> void:
+	if pid <= 0:
+		return
+	if SystemManager.platform.is_windows():
+		MemorySubManager.queue_os_execute("taskkill", ["/F", "/PID", str(pid)])
+	else:
+		MemorySubManager.queue_os_execute("kill", ["-9", str(pid)])
+
+## Waits until the process exits (or timeout). Returns true if confirmed dead.
+func confirm_process_dead_async(pid: int, timeout_sec: float = 5.0) -> bool:
+	var elapsed := 0.0
+	while elapsed < timeout_sec:
+		var running = await is_running_async(pid)
+		if not running:
+			return true
+		await get_tree().create_timer(0.2).timeout
+		elapsed += 0.2
+	return false
+
+## Suspends a process via pssuspend (Windows only; path supplied by caller).
+func suspend_process_async(pid: int, pssuspend_path: String) -> void:
+	if pid <= 0 or pssuspend_path == "":
+		return
+	if not SystemManager.platform.is_windows():
+		push_warning("[ProcessManager] suspend_process_async is only supported on Windows")
+		return
+	MemorySubManager.queue_os_execute(pssuspend_path, [str(pid)])
+
+## Resumes a suspended process via pssuspend (Windows only; path supplied by caller).
+func resume_process_async(pid: int, pssuspend_path: String) -> void:
+	if pid <= 0 or pssuspend_path == "":
+		return
+	if not SystemManager.platform.is_windows():
+		push_warning("[ProcessManager] resume_process_async is only supported on Windows")
+		return
+	MemorySubManager.queue_os_execute(pssuspend_path, ["-r", str(pid)])
+
+## Check if a process is running by PID (platform-specific, BLOCKS the calling thread)
 func _is_process_running(pid: int) -> bool:
 	if pid <= 0:
 		return false
@@ -180,21 +267,6 @@ func force_exit_background_state() -> void:
 	print("[ProcessManager] Force exiting background state")
 	exit_background_state(-1)
 
-## Kill the active process (emergency use only)
-func kill_background_process() -> bool:
-	if not _is_in_background_state or _background_active_pid <= 0:
-		return false
-	
-	print("[ProcessManager] Killing background process: ", _background_active_pid)
-	
-	if SystemManager.platform.is_windows():
-		OS.execute("taskkill", ["/F", "/PID", str(_background_active_pid)], [], true)
-	else:
-		OS.execute("kill", ["-9", str(_background_active_pid)], [], true)
-	
-	exit_background_state(-1)
-	return true
-
 ## Executes a launch intent
 func execute_launch(intent: LaunchIntent) -> bool:
 	if not intent or not intent.is_valid():
@@ -219,42 +291,15 @@ func execute_launch(intent: LaunchIntent) -> bool:
 	if SystemManager.platform.is_android():
 		return _execute_android(intent)
 	else:
-		return _execute_desktop(intent)
+		return await _execute_desktop(intent)
 
 func _execute_desktop(intent: LaunchIntent) -> bool:
 	if intent.launch_args.is_empty():
 		push_error("[ProcessManager] No launch arguments for desktop")
 		return false
 
-	var exe_path = intent.launch_args[0]
-	var arguments = intent.launch_args.slice(1)
-
-	var pid: int
-
-	# If working directory is specified, use shell wrapper to change directory first
-	if intent.working_directory != "":
-		# Properly escape all arguments for shell safety
-		var safe_args = _escape_args_for_shell(arguments)
-
-		if SystemManager.platform.is_windows():
-			# Windows: use cmd /c with properly escaped paths
-			var safe_working_dir = _escape_cmd_meta(intent.working_directory)
-			var safe_exe = _escape_cmd_meta(exe_path)
-			var inner_cmd = 'cd /d "%s" && "%s" %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
-			print("[ProcessManager] Executing command: cmd /c ", inner_cmd)
-			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
-		else:
-			# Linux/macOS: use sh -c with single-quoted arguments
-			var safe_working_dir = _escape_sh_arg(intent.working_directory)
-			var safe_exe = _escape_sh_arg(exe_path)
-			var inner_cmd = 'cd %s && %s %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
-			pid = OS.create_process("sh", ["-c", inner_cmd], false)
-	else:
-		# No working directory needed: call executable directly (no shell, no injection risk)
-		pid = OS.create_process(exe_path, arguments, false)
-
+	var pid = await _create_desktop_process(intent)
 	if pid == -1:
-		push_error("[ProcessManager] Failed to launch process: " + exe_path)
 		launch_manager.launch_completed.emit(false, "Failed to start emulator")
 		return false
 
@@ -265,30 +310,68 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	return true
 
 ## Creates a process from a launch intent without entering background state.
-## Returns the PID or -1 on failure.
+## Coroutine: returns the PID or -1 on failure.
 func _create_process_from_intent(intent: LaunchIntent) -> int:
+	return await _create_desktop_process(intent)
+
+## Shared desktop process creation. Coroutine: returns the REAL emulator PID
+## (never a shell-wrapper PID) or -1 on failure.
+func _create_desktop_process(intent: LaunchIntent) -> int:
 	if intent.launch_args.is_empty():
 		push_error("[ProcessManager] No launch arguments for desktop")
 		return -1
 
 	var exe_path = intent.launch_args[0]
 	var arguments = intent.launch_args.slice(1)
-	var pid: int
+	var pid: int = -1
 
-	if intent.working_directory != "":
+	if intent.working_directory == "":
+		# No working directory needed: call executable directly (no shell, no injection risk)
+		pid = OS.create_process(exe_path, arguments, false)
+	elif not SystemManager.platform.is_windows():
+		# Linux/macOS: sh -c with exec, so the shell REPLACES itself with the
+		# emulator and the returned PID is the emulator's own PID
 		var safe_args = _escape_args_for_shell(arguments)
-		if SystemManager.platform.is_windows():
+		var safe_working_dir = _escape_sh_arg(intent.working_directory)
+		var safe_exe = _escape_sh_arg(exe_path)
+		var inner_cmd = 'cd %s && exec %s %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
+		pid = OS.create_process("sh", ["-c", inner_cmd], false)
+	else:
+		# Windows: Start-Process sets the working directory AND reports the real
+		# child PID via -PassThru (a cmd /c wrapper would return cmd.exe's PID)
+		var ps_arg_list: Array[String] = []
+		for arg in arguments:
+			ps_arg_list.append(_escape_ps_arg(arg))
+		var ps_command = "Start-Process -FilePath %s -WorkingDirectory %s" % [_escape_ps_arg(exe_path), _escape_ps_arg(intent.working_directory)]
+		if not ps_arg_list.is_empty():
+			ps_command += " -ArgumentList " + ",".join(ps_arg_list)
+		ps_command += " -PassThru | Select-Object -ExpandProperty Id"
+
+		var spawn_state := {"completed": false, "pid": -1}
+		MemorySubManager.queue_os_execute("powershell", ["-NoProfile", "-Command", ps_command], func(result: Dictionary):
+			spawn_state["completed"] = true
+			if result.get("exit_code", -1) == 0:
+				var output: Array = result.get("output", [])
+				# Take the last non-empty output line as the PID
+				for i in range(output.size() - 1, -1, -1):
+					var line = str(output[i]).strip_edges()
+					if line != "":
+						spawn_state["pid"] = line.to_int()
+						break
+		)
+		while not spawn_state["completed"]:
+			await get_tree().process_frame
+		pid = spawn_state["pid"]
+
+		if pid <= 0:
+			# Fallback: cmd /c wrapper (tracks the wrapper PID, not the emulator)
+			push_warning("[ProcessManager] PowerShell launch failed, falling back to cmd wrapper (PID tracking will follow cmd.exe)")
+			var safe_args = _escape_args_for_shell(arguments)
 			var safe_working_dir = _escape_cmd_meta(intent.working_directory)
 			var safe_exe = _escape_cmd_meta(exe_path)
 			var inner_cmd = 'cd /d "%s" && "%s" %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
+			print("[ProcessManager] Executing command: cmd /c ", inner_cmd)
 			pid = OS.create_process("cmd", ["/c", inner_cmd], false)
-		else:
-			var safe_working_dir = _escape_sh_arg(intent.working_directory)
-			var safe_exe = _escape_sh_arg(exe_path)
-			var inner_cmd = 'cd %s && %s %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
-			pid = OS.create_process("sh", ["-c", inner_cmd], false)
-	else:
-		pid = OS.create_process(exe_path, arguments, false)
 
 	if pid == -1:
 		push_error("[ProcessManager] Failed to launch process: " + exe_path)

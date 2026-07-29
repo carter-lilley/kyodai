@@ -71,10 +71,6 @@ func check_and_rebuild_if_needed() -> void:
 	else:
 		_rebuild_attempts = 0
 
-func perform_rebuild() -> void:
-	"""Override in subclasses to perform the actual rebuild."""
-	pass
-
 func _do_rebuild(reason: String = "", refresh_effects: bool = false) -> void:
 	# Ensure we have valid dimensions before rebuilding
 	if size.x <= 0 or size.y <= 0:

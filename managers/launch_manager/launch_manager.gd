@@ -15,7 +15,8 @@ const GameNativeManager := preload("res://managers/launch_manager/gamenative_sub
 
 # Pending-launch orchestration state
 # emulator_id -> {game: GameResource, callback: Callable}
-var _pending_launches: Dictionary = {}
+var _pending_launches: Dictionary = {}  # emulator_id -> Array of {game, callback}
+var _in_flight_launches: Dictionary = {}  # romm_id -> true
 
 # platform_slug -> bool
 var _pending_firmware_downloads: Dictionary = {}
@@ -275,18 +276,15 @@ func get_background_game() -> GameResource:
 func force_exit_background_state() -> void:
 	process.force_exit_background_state()
 
-func kill_background_process() -> bool:
-	return process.kill_background_process()
-
 # ============================================================================
 # Process execution wrappers
 # ============================================================================
 
 func execute_launch(intent: LaunchIntent) -> bool:
-	return process.execute_launch(intent)
+	return await process.execute_launch(intent)
 
 func _create_process_from_intent(intent: LaunchIntent) -> int:
-	return process._create_process_from_intent(intent)
+	return await process._create_process_from_intent(intent)
 
 # ============================================================================
 # Launch orchestration
@@ -301,12 +299,18 @@ var _last_prepared_rom_paths: Dictionary = {}  # game romm_id -> prepared path
 ## If a download is pending, the function returns immediately and on_pid_ready will be called later.
 func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_ready: Callable = Callable()) -> void:
 	print("[LaunchManager] launch_shuffler_game() called for: ", game.get_display_name())
-	
+
+	if not _try_begin_launch(game):
+		if on_pid_ready.is_valid():
+			on_pid_ready.call(-1)
+		return
+
 	var emulator_id = intent_manager.resolve_emulator_for_game(game)
 	if emulator_id == "":
 		push_error("[LaunchManager] No emulator configured for platform: " + game.platform_slug)
 		if on_pid_ready.is_valid():
 			on_pid_ready.call(-1)
+		_end_launch(game.romm_id)
 		return
 	
 	var on_ready = func():
@@ -316,19 +320,22 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 			push_error("[LaunchManager] Failed to create launch intent")
 			if on_pid_ready.is_valid():
 				on_pid_ready.call(-1)
+			_end_launch(game.romm_id)
 			return
-		
+
 		if SystemManager.platform.is_android():
 			push_error("[LaunchManager] Shuffler not supported on Android")
 			if on_pid_ready.is_valid():
 				on_pid_ready.call(-1)
+			_end_launch(game.romm_id)
 			return
-		
-		var pid = process._create_process_from_intent(launch_intent)
+
+		var pid = await process._create_process_from_intent(launch_intent)
 		if pid != -1:
 			print("[LaunchManager] Shuffler launch successful, PID: ", pid)
 		if on_pid_ready.is_valid():
 			on_pid_ready.call(pid)
+		_end_launch(game.romm_id)
 	
 	# Vita3K and RPCS3 need TitleID extraction and ZIP extraction even in shuffler mode.
 	# Other emulators skip the normal preparation step.
@@ -353,10 +360,25 @@ func get_last_prepared_rom_path(game: GameResource) -> String:
 	return _last_prepared_rom_paths.get(game.romm_id, "") as String
 
 
+## Guards against concurrent launches of the same game (double-tap, signal storms).
+func _try_begin_launch(game: GameResource) -> bool:
+	if _in_flight_launches.has(game.romm_id):
+		SystemManager.notifications.show_notification("Launch already in progress for " + game.get_display_name(), SystemManager.notifications.Type.WARNING)
+		return false
+	_in_flight_launches[game.romm_id] = true
+	return true
+
+func _end_launch(romm_id: int) -> void:
+	_in_flight_launches.erase(romm_id)
+
+
 ## Main entry point for launching a game
 func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	print("[LaunchManager] launch_game() called for: ", game.get_display_name() if game else "null", " with focus_index: ", focus_index)
-	
+
+	if not _try_begin_launch(game):
+		return
+
 	# Emit signal immediately so focus can be saved before any suspension happens
 	print("[LaunchManager] Emitting game_launch_initiated signal")
 	game_launch_initiated.emit(game, focus_index)
@@ -383,14 +405,16 @@ func _launch_gamenative_game(game: GameResource) -> void:
 	if not SystemManager.platform.is_android():
 		push_error("[LaunchManager] Cannot launch GameNative game on non-Android platform")
 		SystemManager.notifications.show_notification("GameNative games only available on Android", SystemManager.notifications.Type.ERROR)
+		_end_launch(game.romm_id)
 		return
-	
+
 	var success = gamenative.launch_game(game.steam_app_id)
 	if success:
 		_update_last_played(game)
 	else:
 		push_error("[LaunchManager] Failed to launch GameNative game")
 		SystemManager.notifications.show_notification("Failed to launch GameNative. Is the app installed?", SystemManager.notifications.Type.ERROR)
+	_end_launch(game.romm_id)
 
 ## If game is not downloaded, queue the download first then proceed
 func _queue_game_download_then_launch(game: GameResource) -> void:
@@ -401,6 +425,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 	var root_folder = DataManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
 		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
+		_end_launch(game.romm_id)
 		return
 	
 	var destination_path = FSM.join_paths(root_folder.value, game.platform_slug, active_file_name)
@@ -412,11 +437,12 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 		if success:
 			var updated_game = DataManager.get_game_by_id(game.romm_id)
 			var game_to_launch = updated_game if updated_game else game
-			
+
 			# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
 			_launch_with_emulator_check(game_to_launch)
 		else:
 			SystemManager.notifications.show_notification("Download failed for " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
+			_end_launch(game.romm_id)
 	
 	# Queue download with callback to continue launch flow
 	var item_id = SystemManager.download.queue_download(
@@ -433,6 +459,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 	
 	if item_id == "":
 		SystemManager.notifications.show_notification("Failed to queue download", SystemManager.notifications.Type.ERROR)
+		_end_launch(game.romm_id)
 
 ## Ensures emulator is installed, firmware is ready, and game is prepared.
 ## Returns true if everything is ready and on_ready was called.
@@ -453,30 +480,36 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	if is_actually_installed and _pending_launches.has(emulator_id):
 		print("[LaunchManager] Emulator " + emulator_id + " is installed, clearing stale pending launch")
 		_pending_launches.erase(emulator_id)
-	
+
 	# Check if this game is already pending launch
 	if _pending_launches.has(emulator_id):
-		var pending_data = _pending_launches[emulator_id]
-		var pending_game: GameResource = pending_data.game
-		if pending_game.romm_id == game.romm_id:
-			SystemManager.notifications.show_notification("Game already pending launch! Waiting for emulator installation...", SystemManager.notifications.Type.WARNING)
-			return false
-	
+		for pending_data in _pending_launches[emulator_id]:
+			var pending_game: GameResource = pending_data.game
+			if pending_game.romm_id == game.romm_id:
+				SystemManager.notifications.show_notification("Game already pending launch! Waiting for emulator installation...", SystemManager.notifications.Type.WARNING)
+				return false
+
 	if not is_actually_installed:
 		SystemManager.notifications.show_notification("Setting up " + emulator_name + "...", SystemManager.notifications.Type.INFO)
-		
+
 		if not emulator_extraction_completed.is_connected(_on_emulator_installed_for_launch):
 			emulator_extraction_completed.connect(_on_emulator_installed_for_launch)
-		
-		_pending_launches[emulator_id] = {game = game, callback = on_ready}
-		
+
+		if _pending_launches.has(emulator_id):
+			# Install already in progress: queue this launch alongside the pending one(s)
+			_pending_launches[emulator_id].append({game = game, callback = on_ready})
+			return false
+
+		_pending_launches[emulator_id] = [{game = game, callback = on_ready}]
+
 		var download_success = emulator.download_emulator(emulator_id)
-		
+
 		if download_success:
 			SystemManager.notifications.show_notification(emulator_name + " downloading... Will auto-launch when ready.", SystemManager.notifications.Type.INFO)
 		else:
 			SystemManager.notifications.show_notification("Failed to queue " + emulator_name + " download", SystemManager.notifications.Type.ERROR)
 			_pending_launches.erase(emulator_id)
+			_end_launch(game.romm_id)
 		return false
 	
 	# Emulator is installed - check if the selected RetroArch core is ready (Android only)
@@ -538,6 +571,8 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 				SystemManager.notifications.show_notification("Failed to download firmware for " + game.platform_slug, SystemManager.notifications.Type.ERROR)
 				# Abort the pending launches: on_ready callbacks take no arguments
 				# and would perform the launch, so they must not be invoked here.
+				for i in matching_indices:
+					_end_launch((_pending_firmware_launches[i].game as GameResource).romm_id)
 				for i in range(matching_indices.size() - 1, -1, -1):
 					_pending_firmware_launches.remove_at(matching_indices[i])
 				return
@@ -561,6 +596,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		if not prep_success:
 			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
 			SystemManager.notifications.show_notification("Failed to prepare game for launch", SystemManager.notifications.Type.ERROR)
+			_end_launch(game.romm_id)
 			return false
 		# Cache the prepared ROM path for shuffler launches so callers can update bag entries.
 		if is_shuffler:
@@ -580,6 +616,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	
 	if emulator_id == "":
 		SystemManager.notifications.show_notification("No emulator configured for platform: " + game.platform_slug, SystemManager.notifications.Type.ERROR)
+		_end_launch(game.romm_id)
 		return
 	
 	var on_ready = func():
@@ -617,20 +654,24 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 			# Post-install is still running, wait for it to complete
 			return
 	
-	# Check if we have a pending launch for this emulator
+	# Check if we have pending launches for this emulator
 	if _pending_launches.has(emulator_id):
-		var pending = _pending_launches[emulator_id]
-		var game: GameResource = pending.game
-		var callback: Callable = pending.callback
+		var pending_list: Array = _pending_launches[emulator_id]
 		_pending_launches.erase(emulator_id)
-		SystemManager.notifications.show_notification("Launching " + game.get_display_name() + "...", SystemManager.notifications.Type.INFO)
-		
+
 		# Give a small delay for file system to settle
 		await get_tree().create_timer(0.5).timeout
-		
-		print("[LaunchManager] _on_emulator_installed_for_launch: Calling ready callback for emulator: " + emulator_id)
-		if callback.is_valid():
-			callback.call()
+
+		for pending in pending_list:
+			var pending_game: GameResource = pending.game
+			var pending_callback: Callable = pending.callback
+			SystemManager.notifications.show_notification("Launching " + pending_game.get_display_name() + "...", SystemManager.notifications.Type.INFO)
+
+			print("[LaunchManager] _on_emulator_installed_for_launch: Calling ready callback for emulator: " + emulator_id)
+			if pending_callback.is_valid():
+				pending_callback.call()
+			else:
+				_end_launch(pending_game.romm_id)
 
 ## Handler for on-demand core downloads - resumes pending launches
 func _on_core_download_completed(platform_slug: String, core_id: String, success: bool):
@@ -651,6 +692,8 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 		SystemManager.notifications.show_notification("Failed to download core for " + platform_slug, SystemManager.notifications.Type.ERROR)
 		# Abort the pending launches: on_ready callbacks perform the launch
 		# and must not run when the required core failed to download.
+		for i in matching_indices:
+			_end_launch((_pending_core_launches[i].game as GameResource).romm_id)
 		for i in range(matching_indices.size() - 1, -1, -1):
 			_pending_core_launches.remove_at(matching_indices[i])
 		core_download_completed.emit(platform_slug, core_id, false)
@@ -676,6 +719,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	if not launch_intent:
 		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")
 		SystemManager.notifications.show_notification("Failed to create launch intent", SystemManager.notifications.Type.ERROR)
+		_end_launch(game.romm_id)
 		print("[LaunchManager] _launch_game_internal: EXIT (null intent)")
 		return
 	
@@ -698,18 +742,20 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 			await get_tree().create_timer(0.5).timeout
 	
 	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
-	var success = process.execute_launch(launch_intent)
+	var success = await process.execute_launch(launch_intent)
 	
 	if not success:
 		push_error("[LaunchManager] _launch_game_internal: execute_launch returned false")
 		SystemManager.notifications.show_notification("Failed to launch " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
+		_end_launch(game.romm_id)
 		print("[LaunchManager] _launch_game_internal: EXIT (launch failed)")
 		return
-	
+
 	print("[LaunchManager] _launch_game_internal: Launch successful")
-	
+
 	# Update last_played timestamp on successful launch
 	_update_last_played(game)
+	_end_launch(game.romm_id)
 	print("[LaunchManager] _launch_game_internal: EXIT (success)")
 
 ## Update the last_played timestamp for a game

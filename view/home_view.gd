@@ -1,6 +1,8 @@
 class_name HomeView
 extends View
 
+const DEBUG_LOG: bool = false
+
 @onready var margin_container: MarginContainer = $MarginContainer
 
 var _total_games: int = 0
@@ -311,7 +313,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			
 			var cache_hit = not (_merged_cache_dirty or _merged_games_cache.is_empty() or not cache_fully_covers)
 			
-			print("[HomeView] _on_items_requested cache check: offset=", offset, " limit=", limit, " cache_fully_covers=", cache_fully_covers, " cache_hit=", cache_hit, " dirty=", _merged_cache_dirty, " cache_start=", _merged_cache_start, " cache_end=", _merged_cache_end, " cache_size=", _merged_games_cache.size())
+			if DEBUG_LOG: print("[HomeView] _on_items_requested cache check: offset=", offset, " limit=", limit, " cache_fully_covers=", cache_fully_covers, " cache_hit=", cache_hit, " dirty=", _merged_cache_dirty, " cache_start=", _merged_cache_start, " cache_end=", _merged_cache_end, " cache_size=", _merged_games_cache.size())
 			
 			# Rebuild cache if dirty, empty, or the requested range is not fully
 			# covered by the current cached window.
@@ -342,7 +344,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 					if game.source == "gamenative":
 						result_gamenative_indices[i] = true
 			
-			print("[HomeView] DB task: offset=", offset, " limit=", limit, " cache_hit=", cache_hit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
+			if DEBUG_LOG: print("[HomeView] DB task: offset=", offset, " limit=", limit, " cache_hit=", cache_hit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 			return {
 				"games": result,
 				"offset": offset,
@@ -358,7 +360,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				_gamenative_indices[response_offset + idx] = true
 			
 			games_grid.on_items_loaded(games, response_offset, is_preload)
-			print("[HomeView] on_items_loaded callback: offset=", response_offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
+			if DEBUG_LOG: print("[HomeView] on_items_loaded callback: offset=", response_offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 	)
 
 func _merge_all_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource]) -> Array[GameResource]:

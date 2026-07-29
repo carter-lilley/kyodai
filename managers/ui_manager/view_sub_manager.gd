@@ -281,19 +281,6 @@ func _get_tab_index(tab_title: String) -> int:
 			return i
 	return -1
 
-func _update_zoom_range_for_current_view() -> void:
-	var current_view_name = _current_view.view_name if _current_view else ""
-	if not current_view_name in ["Home", "Library"]:
-		return
-	if not _views.has(current_view_name):
-		return
-	var view = _views[current_view_name]
-	var grid = view.games_grid if "games_grid" in view else null
-	if grid:
-		var _max_zoom = 1.0 if grid.view_mode != VirtualScrollGridContainer.ViewMode.GRID else 0.5
-		# Zoom overlay is managed by main.gd; ViewManager just knows the range
-		pass
-
 func update_structure() -> void:
 	"""Apply orientation/mode changes to both views without full rebuilds.
 	Deferred while the settings dialog is open."""
@@ -395,20 +382,6 @@ func is_current_view(view_name: String) -> bool:
 	if _current_view == null:
 		return false
 	return _current_view.view_name == view_name
-
-func is_node_in_current_view(node: Node) -> bool:
-	"""Check if a node belongs to the currently active view."""
-	if _current_view == null or node == null:
-		return false
-
-	# Traverse up the tree to find if this node is a child of the current view
-	var current = node
-	while current != null:
-		if current == _current_view:
-			return true
-		current = current.get_parent()
-
-	return false
 
 func rebuild_game_grid() -> void:
 	"""Rebuild the library view to reflect card size changes (only if set up)."""

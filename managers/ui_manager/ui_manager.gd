@@ -1,5 +1,7 @@
 extends Manager
 
+const DEBUG_LOG: bool = false
+
 # UIManager - Facade for UI orchestration.
 # Child managers own views, navigation, hero/background, overlays, theme, and dual-screen logic.
 
@@ -13,7 +15,8 @@ func _ready() -> void:
 	PlatformCardPool.process(0.0)
 
 func _process(delta: float) -> void:
-	PlatformCardPool.process(delta)
+	if not PlatformCardPool.is_warm():
+		PlatformCardPool.process(delta)
 
 # Cached references passed during initialization
 var _library_background: LibraryBackground = null
@@ -116,7 +119,6 @@ func initialize(
 	phase_start_us = Time.get_ticks_usec()
 	card_settings_state = CardSettingsState.new()
 	card_settings_state.sync_from_settings_manager()
-	card_settings_state.changed.connect(_on_card_settings_state_changed)
 	print("[UIManager] card settings state sync elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Configure child managers
@@ -269,7 +271,7 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 			available_height -= title_label.get_combined_minimum_size().y
 
 	var result := Vector2(maxf(1.0, available_width), maxf(1.0, available_height))
-	print("[UIManager] compute_grid_available_size: view=", target_view.view_name if target_view is View else (String(target_view.name) if target_view else "unknown"), " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
+	if DEBUG_LOG: print("[UIManager] compute_grid_available_size: view=", target_view.view_name if target_view is View else (String(target_view.name) if target_view else "unknown"), " result=", result, " elapsed_us=", Time.get_ticks_usec() - start_us)
 	return result
 
 # ============================================================================
@@ -580,7 +582,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# During preset application ThemeManager handles the final rebuild.
 		return
 
-	print("[UIManager] _on_setting_changed: %s" % setting.property_name)
+	if DEBUG_LOG: print("[UIManager] _on_setting_changed: %s" % setting.property_name)
 	match setting.property_name:
 		"library_background_config":
 			if _library_background and _value is Dictionary:
@@ -608,14 +610,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		# typed change events directly.
 		_:
 			pass
-
-func _on_card_settings_state_changed(_mask: int) -> void:
-	"""React to batched card/grid settings changes.
-
-	Currently this is a hook for future centralized handling. Grid and card
-	consumers connect to CardSettingsState.changed directly.
-	"""
-	pass
 
 # ============================================================================
 # Hero / library background helpers (moved from removed HeroBackgroundManager)

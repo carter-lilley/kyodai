@@ -15,6 +15,8 @@ signal download_progress(current: int, total: int)
 signal game_ready(index: int)
 
 var _state: State = State.IDLE
+var _switch_in_progress: bool = false
+var _pending_switch_index: int = -1  # latest requested target while a switch is in flight
 var _bag: ShufflerBag = ShufflerBag.new()
 var _current_game_index: int = -1
 var _round_timer: Timer = null
@@ -220,7 +222,7 @@ func stop_session() -> void:
 
 	for entry in _bag.entries:
 		if entry.pid != -1:
-			_force_kill_process(entry.pid)
+			LaunchManager.process.kill_process_async(entry.pid)
 
 	await get_tree().create_timer(0.5).timeout
 
@@ -307,11 +309,22 @@ func restart_game() -> void:
 		return
 	print("[ShufflerSubManager] restart_game: current=" + str(_current_game_index))
 	if _current_game_index >= 0:
+		# Wait for any in-flight switch, then hold the guard so skip/timer
+		# requests queue behind the restart instead of interleaving with it.
+		while _switch_in_progress:
+			await get_tree().process_frame
+		_switch_in_progress = true
 		var entry = _bag.entries[_current_game_index]
 		await _stop_game(entry)
 		entry.started = false
 		entry.pid = -1
-		_launch_game(entry)
+		if _state != State.STOPPING and _state != State.IDLE:
+			_launch_game(entry)
+		_switch_in_progress = false
+		if _pending_switch_index != -1:
+			var next = _pending_switch_index
+			_pending_switch_index = -1
+			_request_switch(next)
 
 func remove_game() -> void:
 	if not can_reroll():
@@ -327,6 +340,10 @@ func remove_game() -> void:
 	_reroll_in_progress = true
 	_set_controls_reroll_enabled(false)
 
+	# Wait for any in-flight switch before mutating bag entries
+	while _switch_in_progress:
+		await get_tree().process_frame
+
 	var index = _current_game_index
 	var entry = _bag.entries[index]
 	print("[ShufflerSubManager] Rerolling slot " + str(index) + " (" + entry.game.title + ")")
@@ -338,8 +355,8 @@ func remove_game() -> void:
 		return
 
 	if entry.pid != -1:
-		_force_kill_process(entry.pid)
-		await _confirm_process_dead(entry.pid)
+		LaunchManager.process.kill_process_async(entry.pid)
+		await LaunchManager.process.confirm_process_dead_async(entry.pid)
 	entry.pid = -1
 	entry.started = false
 	entry.active = false
@@ -717,7 +734,23 @@ func _switch_to_next_game() -> void:
 		print("[ShufflerSubManager] No other ready game; extending current round")
 		_start_round_timer(_random_round_time())
 		return
-	_switch_to_game(next_index)
+	_request_switch(next_index)
+
+## Serializes game switches: while a switch coroutine is in flight, only the
+## latest requested target is kept (skip-mashing degenerates to "last wins").
+func _request_switch(index: int) -> void:
+	if _state == State.STOPPING or _state == State.IDLE:
+		return
+	if _switch_in_progress:
+		_pending_switch_index = index
+		return
+	_switch_in_progress = true
+	await _switch_to_game(index)
+	_switch_in_progress = false
+	if _pending_switch_index != -1:
+		var next = _pending_switch_index
+		_pending_switch_index = -1
+		_request_switch(next)
 
 func _switch_to_game(index: int) -> void:
 	print("[ShufflerSubManager] _switch_to_game: index=" + str(index) + " current=" + str(_current_game_index) + " state=" + str(_state) + " " + _format_bag())
@@ -730,6 +763,11 @@ func _switch_to_game(index: int) -> void:
 		print("[ShufflerSubManager] _switch_to_game stopping previous: " + _format_entry(prev))
 		await _stop_game(prev)
 
+	# stop_session may have raced the stop await: never launch during teardown
+	if _state == State.STOPPING or _state == State.IDLE:
+		print("[ShufflerSubManager] _switch_to_game aborted: state=" + str(_state))
+		return
+
 	_current_game_index = index
 	var entry = _bag.entries[index]
 	entry.active = true
@@ -741,7 +779,7 @@ func _switch_to_game(index: int) -> void:
 		await _resume_game(entry)
 	elif entry.started and entry.pid != -1 and await _is_process_running_async(entry.pid):
 		print("[ShufflerSubManager] _switch_to_game: killing lingering process and relaunching")
-		_force_kill_process(entry.pid)
+		LaunchManager.process.kill_process_async(entry.pid)
 		entry.started = false
 		entry.pid = -1
 		_launch_game(entry)
@@ -840,8 +878,7 @@ func _suspend_game(entry: Dictionary) -> void:
 	print("[ShufflerSubManager] _suspend_game: " + _format_entry(entry) + " exe=" + exe_name)
 	_hide_window_async(entry.pid, exe_name)
 
-	var output: Array[String] = []
-	OS.execute(_pssuspend_path, [str(entry.pid)], output, true)
+	LaunchManager.process.suspend_process_async(entry.pid, _pssuspend_path)
 
 	entry.active = false
 
@@ -851,8 +888,7 @@ func _resume_game(entry: Dictionary) -> void:
 		return
 
 	print("[ShufflerSubManager] _resume_game: " + _format_entry(entry))
-	var output: Array[String] = []
-	OS.execute(_pssuspend_path, ["-r", str(entry.pid)], output, true)
+	LaunchManager.process.resume_process_async(entry.pid, _pssuspend_path)
 
 	await get_tree().create_timer(0.2).timeout
 
@@ -895,6 +931,10 @@ func _kill_round_timer() -> void:
 
 func _on_round_timer_timeout() -> void:
 	print("[ShufflerSubManager] _on_round_timer_timeout: state=" + str(_state) + " " + _format_bag())
+	if _reroll_in_progress:
+		# The reroll flow owns the current switch; its completion re-arms the timer.
+		print("[ShufflerSubManager] _on_round_timer_timeout ignored: reroll in progress")
+		return
 	if _countdown_timer and is_instance_valid(_countdown_timer):
 		_countdown_timer.stop()
 	_switch_to_next_game()
@@ -965,43 +1005,8 @@ func _maximize_window_async(pid: int) -> bool:
 func _maximize_window(pid: int) -> bool:
 	return await _maximize_window_async(pid)
 
-func _force_kill_process(pid: int) -> void:
-	if SystemManager.platform.is_windows():
-		var output: Array[String] = []
-		OS.execute("taskkill", ["/F", "/PID", str(pid)], output, true)
-	else:
-		OS.execute("kill", ["-9", str(pid)], [], true)
-
 func _is_process_running_async(pid: int) -> bool:
-	var proc_state := {"completed": false, "running": false}
-	if SystemManager.platform.is_windows():
-		MemorySubManager.queue_os_execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], func(result: Dictionary):
-			proc_state["completed"] = true
-			var output: Array = result.get("output", [])
-			proc_state["running"] = result.get("exit_code", -1) == 0 and output.size() > 0 and str(pid) in str(output[0])
-		)
-	else:
-		MemorySubManager.queue_os_execute("ps", ["-p", str(pid)], func(result: Dictionary):
-			proc_state["completed"] = true
-			proc_state["running"] = result.get("exit_code", -1) == 0
-		)
-	while not proc_state["completed"]:
-		await get_tree().process_frame
-	return proc_state["running"]
-
-func _is_process_running(pid: int) -> bool:
-	var output: Array[String] = []
-	var exit_code = OS.execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], output, true)
-	return exit_code == 0 and output.size() > 0 and str(pid) in output[0]
-
-func _confirm_process_dead(pid: int) -> void:
-	var elapsed = 0.0
-	while elapsed < 5.0:
-		var running = await _is_process_running_async(pid)
-		if not running:
-			return
-		await get_tree().create_timer(0.2).timeout
-		elapsed += 0.2
+	return await LaunchManager.process.is_running_async(pid)
 
 func _send_udp_command(host: String, port: int, command: String) -> void:
 	var address := IP.resolve_hostname(host, IP.TYPE_IPV4)

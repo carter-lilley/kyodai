@@ -42,6 +42,16 @@ static func _get_pool_names() -> Array[String]:
 	return [POOL_SHUFFLER, POOL_PLATFORM_SETTINGS]
 
 
+## True once the initial prewarm is done and both pools are at target size.
+static func is_warm() -> bool:
+	if not _initialized:
+		return false
+	if _warmup_remaining > 0:
+		return false
+	return _pools.get(POOL_PLATFORM_SETTINGS, []).size() >= MAX_PLATFORM_POOL_SIZE \
+		and _pools.get(POOL_SHUFFLER, []).size() >= MAX_SHUFFLER_POOL_SIZE
+
+
 ## Drive background warmup and card creation. Call from a node's _process.
 static func process(_delta: float = 0.0) -> void:
 	_initialize()

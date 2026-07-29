@@ -224,10 +224,11 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 
 	# Setup minimal effect stack with base + HSL + gradient overlay
 	# Disable smart crop for launch transition (scale from center, not bottom)
-	# Gradient overlay: vertical, 2 black stops, both initially transparent
+	# Gradient overlay: vertical black alpha-ramp; faded in via the effect_alpha
+	# uniform so the gradient texture is generated once, not per tween frame.
 	var initial_gradient = Gradient.new()
 	initial_gradient.offsets = [0.0, 1.0]
-	initial_gradient.colors = [Color(0, 0, 0, 0), Color(0, 0, 0, 0)]  # Both transparent
+	initial_gradient.colors = [Color(0, 0, 0, 0), Color(0, 0, 0, 1)]
 
 	var effect_configs = [
 		{"effect_id": "base", "settings": {}},
@@ -242,6 +243,11 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	var base_effect = _effect_stack.get_effect("base") as BaseCardEffect
 	if base_effect and texture:
 		base_effect.set_game_texture(texture)
+
+	# Gradient starts fully faded out (phase 2 fades effect_alpha 0 -> 1)
+	var gradient_effect = _effect_stack.get_effect("gradient_overlay") as GradientOverlayEffect
+	if gradient_effect:
+		gradient_effect._set_shader_param("effect_alpha", 0.0)
 
 	# Position the RS canvas item in global/overlay space. The overlay is a
 	# fullscreen control, so card_rect is already in global coordinates.
@@ -277,8 +283,16 @@ func _animate_transition():
 	tween.set_ease(Tween.EASE_OUT)
 	tween.set_parallel(true)
 
-	# Animate EffectStack position and size to fullscreen via RS transform
+	# Animate position, size, UV vertical offset, and corner radius in ONE tween
+	# callback so the whole stack only force-refreshes once per frame.
 	var ci = _effect_stack._stack_canvas_item
+	var has_texture = media_container and media_container.texture
+	var tex_aspect = 0.0
+	if has_texture:
+		var tex_size = media_container.texture.get_size()
+		tex_aspect = tex_size.x / tex_size.y
+	var start_corner_radius = media_container.corner_radius_ratio
+
 	tween.tween_method(
 		func(t: float):
 			var current_pos = start_rect_position.lerp(target_pos, t)
@@ -286,19 +300,7 @@ func _animate_transition():
 			media_container.bounds = Rect2(Vector2.ZERO, current_size)
 			if ci.is_valid():
 				RenderingServer.canvas_item_set_transform(ci, Transform2D(0.0, current_pos))
-			_effect_stack.update_draw_rects()
-			_effect_stack.force_refresh(),
-		0.0, 1.0, PHASE1_DURATION
-	)
-
-	# Animate UV transforms, vertical offset, and corner radius during scale
-	if media_container and media_container.texture:
-		var tex_size = media_container.texture.get_size()
-		var tex_aspect = tex_size.x / tex_size.y
-
-		tween.tween_method(
-			func(_t: float):
-				var current_size = media_container.bounds.size
+			if has_texture:
 				# Calculate vertical offset to keep image centered during aspect ratio change
 				var card_aspect = current_size.x / current_size.y
 				if card_aspect > tex_aspect:
@@ -307,17 +309,11 @@ func _animate_transition():
 					media_container.vertical_offset = (1.0 - scale_y) / 2.0
 				else:
 					media_container.vertical_offset = 0.0
-				_effect_stack.force_refresh(),
-			0.0, 1.0, PHASE1_DURATION
-		)
-
-		var start_corner_radius = media_container.corner_radius_ratio
-		tween.tween_method(
-			func(t: float):
-				media_container.corner_radius_ratio = lerpf(start_corner_radius, 0.0, t)
-				_effect_stack.force_refresh(),
-			0.0, 1.0, PHASE1_DURATION
-		)
+			media_container.corner_radius_ratio = lerpf(start_corner_radius, 0.0, t)
+			_effect_stack.update_draw_rects()
+			_effect_stack.force_refresh(),
+		0.0, 1.0, PHASE1_DURATION
+	)
 
 	# After phase 1 completes, emit signal so LaunchManager can proceed with game launch
 	tween.chain().tween_callback(func():
@@ -350,16 +346,12 @@ func _animate_transition():
 		)
 
 	if gradient_effect:
-		var start_color = Color(0, 0, 0, 0)
-		var end_color = Color(0, 0, 0, 1.0)
-
+		# Fade via the effect_alpha uniform: for a 0->1 alpha ramp this is
+		# mathematically identical to lerping the gradient stop, but avoids
+		# regenerating + re-uploading the gradient texture every frame.
 		tween.tween_method(
 			func(t: float):
-				var current_color = start_color.lerp(end_color, t)
-				var gradient = gradient_effect._settings.get("gradient")
-				if gradient and gradient is Gradient:
-					gradient.colors[1] = current_color
-					gradient_effect._update_shader_params(),
+				gradient_effect._set_shader_param("effect_alpha", t),
 			0.0, 1.0, PHASE2_DURATION
 		)
 

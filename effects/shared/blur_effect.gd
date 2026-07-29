@@ -1,6 +1,8 @@
 class_name BlurEffect
 extends EffectBase
 
+const MAX_EFFECTIVE_SAMPLES: int = 12
+
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
@@ -19,6 +21,11 @@ func _update_shader_params() -> void:
 	var blur_strength = _settings.get("blur_strength", 4.0)
 	var blur_samples = _settings.get("blur_samples", 8)
 
+	# Hard-cap effective sample count (taps = (2n+1)^2 per pixel) and widen the
+	# step to keep the same blur footprint: 24 samples = 2401 taps -> 12 = 625.
+	var effective_samples = mini(int(blur_samples), MAX_EFFECTIVE_SAMPLES)
+	var strength_compensation = float(blur_samples) / float(effective_samples)
+
 	var uv = media_container.get_uv_transforms()
 
 	var screen_height = SystemManager.display.get_viewport_size().y
@@ -29,8 +36,8 @@ func _update_shader_params() -> void:
 	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
 	_set_shader_param("uv_transform_scale", uv["uv_transform_scale"])
 	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])
-	_set_shader_param("blur_strength", blur_strength)
-	_set_shader_param("blur_samples", float(blur_samples))
+	_set_shader_param("blur_strength", blur_strength * strength_compensation)
+	_set_shader_param("blur_samples", float(effective_samples))
 	_set_shader_param("game_texture", media_container.texture)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	_set_shader_param("vertical_offset", media_container.vertical_offset)

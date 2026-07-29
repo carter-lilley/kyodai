@@ -4,12 +4,15 @@ extends EffectBase
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
+static func is_material_shareable() -> bool:
+	return true
+
 var _gradient_texture: ImageTexture = null
-var _gradient_hash_cache: Array = []
+var _gradient_hash_cache: String = ""
 var _inner_stroke_gradient_texture: ImageTexture = null
-var _inner_stroke_hash: Array = []
+var _inner_stroke_hash: String = ""
 var _outer_stroke_gradient_texture: ImageTexture = null
-var _outer_stroke_hash: Array = []
+var _outer_stroke_hash: String = ""
 
 func _init():
 	super._init()
@@ -22,6 +25,8 @@ func _setup_shader() -> void:
 func _update_shader_params() -> void:
 	if not media_container:
 		return
+
+	_ensure_shared_material()
 
 	var border_size = _settings.get("border_size", 0.0)
 	var border_fade_in = _settings.get("border_fade_in", 0.0)
@@ -40,10 +45,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("gradient_direction", gradient_direction)
 
 	if inner_stroke_gradient is Gradient:
-		var inner_hash = _gradient_hash(inner_stroke_gradient)
-		if inner_hash != _inner_stroke_hash:
-			_inner_stroke_hash = inner_hash
-			_inner_stroke_gradient_texture = _gradient_to_texture(inner_stroke_gradient)
+		var inner_key = gradient_content_hash(inner_stroke_gradient)
+		if inner_key != _inner_stroke_hash:
+			_inner_stroke_hash = inner_key
+			_inner_stroke_gradient_texture = get_shared_gradient_texture(inner_stroke_gradient)
 		_set_shader_param("inner_stroke_gradient_texture", _inner_stroke_gradient_texture)
 		_set_shader_param("use_inner_stroke_gradient", true)
 	else:
@@ -51,10 +56,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("inner_stroke_width_ratio", inner_stroke_width)
 
 	if outer_stroke_gradient is Gradient:
-		var outer_hash = _gradient_hash(outer_stroke_gradient)
-		if outer_hash != _outer_stroke_hash:
-			_outer_stroke_hash = outer_hash
-			_outer_stroke_gradient_texture = _gradient_to_texture(outer_stroke_gradient)
+		var outer_key = gradient_content_hash(outer_stroke_gradient)
+		if outer_key != _outer_stroke_hash:
+			_outer_stroke_hash = outer_key
+			_outer_stroke_gradient_texture = get_shared_gradient_texture(outer_stroke_gradient)
 		_set_shader_param("outer_stroke_gradient_texture", _outer_stroke_gradient_texture)
 		_set_shader_param("use_outer_stroke_gradient", true)
 	else:
@@ -62,10 +67,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("outer_stroke_width_ratio", outer_stroke_width)
 
 	if border_gradient is Gradient:
-		var border_hash = _gradient_hash(border_gradient)
-		if border_hash != _gradient_hash_cache:
-			_gradient_hash_cache = border_hash
-			_gradient_texture = _gradient_to_texture(border_gradient)
+		var border_key = gradient_content_hash(border_gradient)
+		if border_key != _gradient_hash_cache:
+			_gradient_hash_cache = border_key
+			_gradient_texture = get_shared_gradient_texture(border_gradient)
 		_set_shader_param("gradient_texture", _gradient_texture)
 		_set_shader_param("use_gradient", true)
 	else:
@@ -74,20 +79,6 @@ func _update_shader_params() -> void:
 		_set_shader_param("use_gradient", false)
 
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
-
-func _gradient_to_texture(gradient: Gradient) -> ImageTexture:
-	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
-	for i in range(256):
-		var t = i / 255.0
-		image.set_pixel(i, 0, gradient.sample(t))
-	return ImageTexture.create_from_image(image)
-
-func _gradient_hash(gradient: Gradient) -> Array:
-	var h: Array = []
-	for i in range(gradient.get_point_count()):
-		h.append(gradient.get_offset(i))
-		h.append(gradient.get_color(i))
-	return h
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

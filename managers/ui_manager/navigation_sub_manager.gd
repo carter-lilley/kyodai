@@ -1,6 +1,8 @@
 class_name NavigationSubManager
 extends Manager
 
+const DEBUG_LOG: bool = false
+
 var ui_manager: Node
 
 var _nav_node: M3Navigation = null
@@ -104,7 +106,7 @@ func _process(_delta: float) -> void:
 
 	_held_dir = dir
 	_held_source = InputSource.ANALOG
-	print("[NavAnalog] new analog direction: ", dir, " strength=", raw_strength)
+	if DEBUG_LOG: print("[NavAnalog] new analog direction: ", dir, " strength=", raw_strength)
 	_delay_timer.start()
 	_dispatch_direction(dir)
 
@@ -142,6 +144,7 @@ func setup(root_control: Control, content_wrapper: Control, inner_layout: BoxCon
 	_inner_layout = inner_layout
 	_nav_type = nav_type
 	_rebuild_nav_and_layout()
+	_setup_feedback_handlers()
 
 func set_nav_type(value: int) -> void:
 	_nav_type = value
@@ -751,35 +754,6 @@ func get_active_nav_destination() -> Control:
 		return destinations[selected_idx]
 	return null
 
-func _set_initial_focus() -> void:
-	"""Set initial focus to the Home button in the navigation bar."""
-	# Wait a frame for the UI to be fully ready
-	await get_tree().process_frame
-
-	# Try to find the home button in the navigation bar (search recursively since buttons are in dynamic containers)
-	var home_button = find_home_button()
-	if home_button and home_button is Control and home_button.focus_mode != Control.FOCUS_NONE:
-		home_button.grab_focus()
-		return
-
-	# Fallback: try to focus the first focusable element in the root control
-	if _root_control:
-		var first_focusable = _find_first_focusable(_root_control)
-		if first_focusable:
-			first_focusable.grab_focus()
-
-func _find_first_focusable(node: Node) -> Control:
-	"""Find the first focusable Control in the node tree."""
-	if node is Control and node.focus_mode != Control.FOCUS_NONE:
-		return node
-
-	for child in node.get_children():
-		var result = _find_first_focusable(child)
-		if result:
-			return result
-
-	return null
-
 ## Input tracking for mouse hover focus
 func _input(event: InputEvent) -> void:
 	# Track mouse movement
@@ -922,7 +896,7 @@ func handle_directional_input(event: InputEvent) -> bool:
 			# restarting the delay timer). Otherwise an analog flick can get stuck in
 			# DISCRETE mode and repeat forever.
 			if event.has_meta("kyodai_synthetic"):
-				print("[NavInput] synthetic press state-guarded, allowed for ", dir)
+				if DEBUG_LOG: print("[NavInput] synthetic press state-guarded, allowed for ", dir)
 				return false
 
 			if event is InputEventKey:
@@ -932,24 +906,24 @@ func handle_directional_input(event: InputEvent) -> bool:
 				_last_press = now
 
 			if _held_dir == dir and _held_source == InputSource.DISCRETE:
-				print("[NavInput] engine echo swallowed for ", dir)
+				if DEBUG_LOG: print("[NavInput] engine echo swallowed for ", dir)
 				return true
 
 			if _held_source == InputSource.ANALOG:
-				print("[NavInput] switching from analog to discrete ", dir)
+				if DEBUG_LOG: print("[NavInput] switching from analog to discrete ", dir)
 				_held_source = InputSource.DISCRETE
 
 			_held_dir = dir
 			_held_source = InputSource.DISCRETE
-			print("[NavInput] first press ", dir)
+			if DEBUG_LOG: print("[NavInput] first press ", dir)
 			_delay_timer.start()
 			return _dispatch_direction(dir)
 
 		if event.is_action_released(dir) and _held_dir == dir and _held_source == InputSource.DISCRETE:
 			if event.has_meta("kyodai_synthetic"):
-				print("[NavInput] synthetic release allowed for ", dir)
+				if DEBUG_LOG: print("[NavInput] synthetic release allowed for ", dir)
 				return false
-			print("[NavInput] discrete release for ", dir)
+			if DEBUG_LOG: print("[NavInput] discrete release for ", dir)
 			_held_dir = ""
 			_held_source = InputSource.NONE
 			_delay_timer.stop()
@@ -964,20 +938,20 @@ func _dispatch_direction(dir: String) -> bool:
 	# alive for the full duration of a held input. Without this, the 2-second controller
 	# priority window can expire between timer repeats and stop grid navigation.
 	_last_controller_input_time = Time.get_ticks_msec()
-	print("[NavDispatch] dispatching ", dir)
+	if DEBUG_LOG: print("[NavDispatch] dispatching ", dir)
 
 	if _try_nav_to_grid(dir):
-		print("[NavDispatch] nav-to-grid consumed ", dir)
+		if DEBUG_LOG: print("[NavDispatch] nav-to-grid consumed ", dir)
 		return true
 
 	var grid := _get_current_grid()
 	if grid and grid.is_focus_locked_and_active():
 		var result := grid.navigate_direction(dir)
-		print("[NavDispatch] grid.navigate_direction(", dir, ") = ", result)
+		if DEBUG_LOG: print("[NavDispatch] grid.navigate_direction(", dir, ") = ", result)
 		return result
 
 	_send_synthetic(dir)
-	print("[NavDispatch] synthetic event sent for ", dir)
+	if DEBUG_LOG: print("[NavDispatch] synthetic event sent for ", dir)
 	return true
 
 func _send_synthetic(dir: String) -> void:
@@ -995,7 +969,7 @@ func _send_synthetic(dir: String) -> void:
 	Input.parse_input_event(release)
 
 func _on_delay_timeout() -> void:
-	print("[NavTimer] delay timeout fired, held_dir=", _held_dir, ", source=", _held_source)
+	if DEBUG_LOG: print("[NavTimer] delay timeout fired, held_dir=", _held_dir, ", source=", _held_source)
 	# Safety trap: stop dispatching if the keyboard became visible since the timer started.
 	if UIManager and UIManager.is_onscreen_keyboard_visible():
 		_held_dir = ""
@@ -1008,7 +982,7 @@ func _on_delay_timeout() -> void:
 		_dispatch_direction(_held_dir)
 
 func _on_repeat() -> void:
-	print("[NavTimer] repeat timeout fired, held_dir=", _held_dir, ", source=", _held_source)
+	if DEBUG_LOG: print("[NavTimer] repeat timeout fired, held_dir=", _held_dir, ", source=", _held_source)
 	# Safety trap: stop dispatching if the keyboard became visible since the timer started.
 	if UIManager and UIManager.is_onscreen_keyboard_visible():
 		_held_dir = ""

@@ -58,6 +58,10 @@ var _emulator_install_status: Dictionary = {}
 # dropdown. This lets views create many cards cheaply and populate dropdowns
 # in a second batch.
 var _defer_dropdown: bool = false
+
+# When true, property setters skip _update_display() so pooled-card resets
+# don't trigger repeated emulator dropdown rebuilds.
+var _bulk_reset: bool = false
 var _pending_emulators: Array[Dictionary] = []
 
 # Reentrancy guard for dropdown rebuilds. Setting selected_emulator/selected_core_id
@@ -236,6 +240,8 @@ func _apply_m3_text_styles():
 
 func _update_display():
 	if not is_node_ready():
+		return
+	if _bulk_reset:
 		return
 
 	_name_label.text = platform_name if platform_name else platform_slug
@@ -566,6 +572,7 @@ func reset_for_borrow() -> void:
 	_disconnect_all("download_requested")
 
 	# Clear per-view settings without triggering full display rebuilds
+	_bulk_reset = true
 	shuffler_mode = false
 	platform_slug = ""
 	platform_name = ""
@@ -574,12 +581,15 @@ func reset_for_borrow() -> void:
 	selected_emulator = ""
 	selected_core_id = ""
 	is_sync_enabled = false
+	_bulk_reset = false
 	_emulator_install_status = {}
 	_available_emulators = []
 	_available_cores = []
 	_dropdown_entries = []
 	_defer_dropdown = false
 	_pending_emulators = []
+
+	_update_display()
 
 	if _emulator_dropdown:
 		_emulator_dropdown.clear()

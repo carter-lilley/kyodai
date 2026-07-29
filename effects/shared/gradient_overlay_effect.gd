@@ -4,8 +4,11 @@ extends EffectBase
 static func get_allowed_contexts() -> Array[String]:
 	return ["base_card", "focus_card"]
 
+static func is_material_shareable() -> bool:
+	return true
+
 var _gradient_texture: ImageTexture = null
-var _gradient_hash_cache: Array = []
+var _gradient_hash_cache: String = ""
 
 func _init():
 	super._init()
@@ -19,6 +22,8 @@ func _update_shader_params() -> void:
 	if not media_container:
 		return
 
+	_ensure_shared_material()
+
 	var gradient = _settings.get("gradient")
 	var gradient_direction = _settings.get("gradient_direction", 0)
 
@@ -28,16 +33,10 @@ func _update_shader_params() -> void:
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 	if gradient is Gradient:
-		var h: Array = []
-		for i in range(gradient.get_point_count()):
-			h.append(gradient.get_offset(i))
-			h.append(gradient.get_color(i))
-		if h != _gradient_hash_cache:
-			_gradient_hash_cache = h
-			var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
-			for i in range(256):
-				image.set_pixel(i, 0, gradient.sample(i / 255.0))
-			_gradient_texture = ImageTexture.create_from_image(image)
+		var key := gradient_content_hash(gradient)
+		if key != _gradient_hash_cache:
+			_gradient_hash_cache = key
+			_gradient_texture = get_shared_gradient_texture(gradient)
 		_set_shader_param("gradient_texture", _gradient_texture)
 
 func get_settings_schema() -> Array[SettingsVar]:

@@ -129,6 +129,10 @@ func _cleanup_http_request(http: HTTPRequest) -> void:
 	"""Deprecated: Use _return_request() instead."""
 	_return_request(http)
 
+func _finish_pooled_request(http: HTTPRequest) -> void:
+	_active_request_count -= 1
+	_cleanup_http_request(http)
+
 func _get_auth_header() -> String:
 	var credentials = _username + ":" + _password
 	var encoded = Marshalls.utf8_to_base64(credentials)
@@ -228,13 +232,11 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 
 	if error != OK:
 		callback.call({}, "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -540,13 +542,11 @@ func http_get(url: String, headers: Array = [], callback: Callable = Callable())
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, PackedByteArray(), 0, "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return null
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if not callback.is_valid():
 			return
@@ -713,8 +713,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, "Failed to start HEAD request: " + str(error), 0)
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, _response_code, response_headers, _body):
@@ -766,16 +765,6 @@ func test_connection(callback: Callable = Callable()):
 			callback.call(success)
 	, true, false)  # authenticated=true, use_cache=false
 
-func format_bytes(bytes: int) -> String:
-	if bytes < 1024:
-		return str(bytes) + " B"
-	elif bytes < 1024 * 1024:
-		return str(bytes / 1024.0) + " KB"
-	elif bytes < 1024 * 1024 * 1024:
-		return str(bytes / (1024.0 * 1024.0)) + " MB"
-	else:
-		return str(bytes / (1024.0 * 1024.0 * 1024.0)) + " GB"
-
 ## Fetches the latest release from a GitHub-compatible repository API
 ## Supports GitHub, Gitea, Forgejo, and other platforms with GitHub-compatible API
 ## @param repo: Repository path (e.g., "owner/repo")
@@ -802,13 +791,11 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error), 0, "", "")
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-			_active_request_count -= 1
-			_cleanup_http_request(http)
+			_finish_pooled_request(http)
 
 			if result == HTTPRequest.RESULT_TIMEOUT:
 				callback.call("", "", "Request timed out", 0, "", "")
@@ -860,13 +847,11 @@ func fetch_scraped_release(scrape_url: String, version_pattern: String, url_temp
 
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if result == HTTPRequest.RESULT_TIMEOUT:
 			callback.call("", "", "Request timed out")
@@ -1083,13 +1068,11 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start upload: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1195,13 +1178,11 @@ func register_device(_device_name: String, platform: String, client: String, cli
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, _response_body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1253,13 +1234,11 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1349,8 +1328,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 			progress_timer.queue_free()
 		if callback.is_valid():
 			callback.call(false, "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, _response_body):
@@ -1358,8 +1336,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 			progress_timer.stop()
 			progress_timer.queue_free()
 
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1403,13 +1380,11 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_active_request_count -= 1
-		_cleanup_http_request(http)
+		_finish_pooled_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()

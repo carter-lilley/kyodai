@@ -21,7 +21,9 @@ var _current_download_id: int = 0
 const MAX_IMAGE_RETRIES: int = 3
 const MAX_DOWNLOAD_RETRIES: int = 2
 const MAX_COVER_TEXTURE_SIZE: int = 512
-const CACHE_FOLDER: String = "user://cache/covers/"
+const FAILURE_RETRY_TTL_SEC: int = 300
+
+static var _failed_downloads: Dictionary = {}
 
 func _init(card: GameCard) -> void:
 	_card = card
@@ -41,12 +43,16 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		cache_path = game.cover_path
 	elif game.cover_url != "" and game.cover_url.begins_with("http"):
 		cover_url = game.cover_url
-		cache_path = _get_cached_cover_path(cover_url)
+		cache_path = DataManager.get_cached_image_path(cover_url)
 		if not FSM.file_exists(cache_path):
 			if DataManager.is_sync_in_progress():
 				_set_loading_texture()
 				return
 			else:
+				var fail_time: float = _failed_downloads.get(cover_url, 0.0)
+				if Time.get_unix_time_from_system() - fail_time < FAILURE_RETRY_TTL_SEC:
+					_set_loading_texture()
+					return
 				_download_cover_and_retry(cover_url, cache_path, high_priority)
 				return
 
@@ -90,23 +96,6 @@ func _emit_texture(texture: Texture2D) -> void:
 		return
 	emit_signal("texture_loaded", texture)
 
-func _get_cached_cover_path(url: String) -> String:
-	var extension = "jpg"
-	var query_start = url.find("?")
-	var url_without_query = url
-	if query_start != -1:
-		url_without_query = url.substr(0, query_start)
-
-	var last_dot = url_without_query.rfind(".")
-	if last_dot != -1 and last_dot < url_without_query.length() - 1:
-		var ext = url_without_query.substr(last_dot + 1).to_lower()
-		if ext in ["jpg", "jpeg", "png", "webp"]:
-			extension = ext
-			if extension == "jpeg":
-				extension = "jpg"
-
-	return CACHE_FOLDER + url.md5_text() + "." + extension
-
 func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void:
 	var target_game_id = _loading_game_id
 
@@ -118,7 +107,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 		SystemManager.memory.cancel_image_task(_current_image_task_id)
 
 	var load_callable = func():
-		return _load_image_from_buffer(FSM.read_file_bytes(cache_path))
+		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
 
 	var callback_callable = func(image):
 		_current_image_task_id = -1
@@ -162,11 +151,13 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		if not _card.game or _card.game.id != target_game_id:
 			return
 		if loaded_texture:
+			_failed_downloads.erase(cover_url)
 			SystemManager.memory.cache_texture(cache_path, loaded_texture)
 			_emit_texture(loaded_texture)
 		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)
 		else:
+			_failed_downloads[cover_url] = Time.get_unix_time_from_system()
 			_set_loading_texture()
 	)
 

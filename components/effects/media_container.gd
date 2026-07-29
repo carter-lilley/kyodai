@@ -75,7 +75,7 @@ func run_pipeline(layers: Array) -> void:
 	"""Execute compute_pipeline() on all registered layers in order."""
 	for layer in layers:
 		if layer is EffectBase and layer.enabled:
-			layer.compute_pipeline({})
+			layer.compute_pipeline()
 
 # --- Convenience accessors ---
 var size: Vector2:

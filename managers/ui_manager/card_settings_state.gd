@@ -247,42 +247,6 @@ func apply_setting(property_name: String, value: Variant) -> int:
 	return ChangeMask.NONE
 
 # ---------------------------------------------------------------------------
-# Debug assertion
-# ---------------------------------------------------------------------------
-func assert_in_sync_with_settings_manager() -> bool:
-	if not DataManager.is_settings_loaded():
-		return true
-
-	var mismatches: Array[String] = []
-	_check(mismatches, "library_layout_mode", layout_mode, _get_int_setting("library_layout_mode", 0))
-	_check(mismatches, "library_grid_vertical", grid_vertical, _get_bool_setting("library_grid_vertical", true))
-	_check(mismatches, "library_card_zoom", card_zoom_ratio, _get_float_setting("library_card_zoom", 0.25))
-	_check(mismatches, "library_card_zoom_level", card_zoom_level, _get_int_setting("library_card_zoom_level", -1))
-	_check(mismatches, "library_grid_padding", grid_padding, _get_int_setting("library_grid_padding", 22))
-	_check(mismatches, "library_focus_scale", focus_scale_ratio, _get_float_setting("library_focus_scale", 0.09))
-	_check(mismatches, "library_card_display_mode", display_mode, _get_int_setting("library_card_display_mode", 0))
-	_check(mismatches, "library_card_content_alignment", content_alignment, _get_int_setting("library_card_content_alignment", 0))
-	_check(mismatches, "card_media_aspect_ratio", media_aspect_ratio, _get_int_setting("card_media_aspect_ratio", 0))
-	_check(mismatches, "library_card_logo_mode", logo_mode, _get_int_setting("library_card_logo_mode", 0))
-	_check(mismatches, "library_show_title_mode", show_title_mode, _get_int_setting("library_show_title_mode", 0))
-	_check(mismatches, "dark_mode", dark_mode, _get_bool_setting("dark_mode", true))
-
-	if mismatches.size() > 0:
-		push_warning("[CardSettingsState] Out of sync with DataManager:\n" + "\n".join(mismatches))
-		return false
-	return true
-
-func _check(out: Array[String], name: String, a: Variant, b: Variant) -> void:
-	if a is float and b is float:
-		if not is_equal_approx(a, b):
-			out.append("%s: state=%s settings=%s" % [name, a, b])
-	elif a is Color and b is Color:
-		if not a.is_equal_approx(b):
-			out.append("%s: state=%s settings=%s" % [name, a, b])
-	elif a != b:
-		out.append("%s: state=%s settings=%s" % [name, a, b])
-
-# ---------------------------------------------------------------------------
 # Private coercion helpers
 # ---------------------------------------------------------------------------
 func _get_int_setting(name: String, default: int) -> int:

@@ -36,8 +36,7 @@ var _image_task_counter: int = 0
 var _image_tasks: Dictionary = {}
 var _inflight_image_callbacks: Dictionary[String, Array] = {}
 
-var _texture_cache: Dictionary = {}
-var _texture_cache_order: Array[String] = []
+var _texture_cache: Dictionary = {}  # Insertion-ordered: front = LRU, back = MRU
 var _texture_cache_mutex: Mutex
 const MAX_TEXTURE_CACHE_SIZE: int = 400
 const MAX_TEXTURE_CACHE_MEMORY_MB: int = 300
@@ -65,7 +64,7 @@ const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
 const IMAGE_THREAD_COUNT: int = 6
 const MAX_IMAGE_QUEUE_SIZE = 600
-const MAX_DB_QUEUE_SIZE = 50
+const MAX_DB_QUEUE_SIZE = 500
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 const MAX_DOWNLOAD_QUEUE_SIZE = 500
 const MAX_SYNC_QUEUE_SIZE = 10
@@ -131,6 +130,7 @@ class BatchProcess:
 	var on_progress: Callable  # func(processed_count, total_count)
 	var on_complete: Callable  # func(results: Array)
 	var is_complete: bool = false
+	var cancelled: bool = false
 	var results: Array = []
 	var pending_callbacks: int = 0  # Track async callbacks in flight
 	var id: int
@@ -355,6 +355,9 @@ static func _extraction_worker():
 				_instance._lp_callbacks.append({"callback": task.callback, "result": result})
 				_instance._lp_callback_mutex.unlock()
 
+static func is_shutting_down() -> bool:
+	return _instance == null or _instance._exit_flag
+
 static func _download_worker():
 	while not _instance._exit_flag:
 		_instance._download_semaphore.wait()
@@ -367,6 +370,8 @@ static func _download_worker():
 		_instance._download_mutex.unlock()
 
 		if task:
+			if task.get("cancelled", false):
+				continue
 			var result = task.callable.call()
 
 			if task.callback.is_valid():
@@ -431,14 +436,25 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 		push_error("[SystemManager.memory] Not initialized - cannot queue DB task")
 		return
 
-	var current_size = _instance._db_queue.size()
+	var is_main_thread = OS.get_thread_caller_id() == OS.get_main_thread_id()
 
-	# If queue is full, wait with thread-safe sleep (background threads cannot access SceneTree)
-	while current_size >= MAX_DB_QUEUE_SIZE:
-		OS.delay_msec(10)
-		_instance._db_mutex.lock()
-		current_size = _instance._db_queue.size()
-		_instance._db_mutex.unlock()
+	_instance._db_mutex.lock()
+	var current_size = _instance._db_queue.size()
+	_instance._db_mutex.unlock()
+
+	# If queue is full, wait with thread-safe sleep (background threads cannot access SceneTree).
+	# Main-thread callers bypass the cap: freezing the UI on backpressure is worse
+	# than letting the queue grow, and queued task dicts are tiny.
+	if not is_main_thread:
+		if current_size >= MAX_DB_QUEUE_SIZE:
+			print("[SystemManager.memory] WARNING: DB queue saturated (%d), throttling background producer" % current_size)
+		while current_size >= MAX_DB_QUEUE_SIZE:
+			OS.delay_msec(10)
+			_instance._db_mutex.lock()
+			current_size = _instance._db_queue.size()
+			_instance._db_mutex.unlock()
+	elif current_size >= MAX_DB_QUEUE_SIZE and current_size % 100 == 0:
+		print("[SystemManager.memory] WARNING: DB queue at %d tasks (main-thread producer bypasses cap)" % current_size)
 
 	_instance._db_mutex.lock()
 	_instance._db_queue.append({"callable": callable, "callback": callback})
@@ -512,8 +528,10 @@ static func cancel_image_task(task_id: int) -> bool:
 		var task = _instance._image_tasks[task_id]
 		task.cancelled = true
 		_instance._image_tasks.erase(task_id)
-		# Clean up coalesced callbacks for this dedup_key
+		# Drain coalesced callbacks for this dedup_key so waiters aren't dropped silently
+		var coalesced = []
 		if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
+			coalesced = _instance._inflight_image_callbacks[task.dedup_key]
 			_instance._inflight_image_callbacks.erase(task.dedup_key)
 
 		var queue = _instance._image_high_priority_queue if task.high_priority else _instance._image_low_priority_queue
@@ -523,6 +541,10 @@ static func cancel_image_task(task_id: int) -> bool:
 				break
 
 		_instance._image_mutex.unlock()
+
+		for waiting in coalesced:
+			if waiting.callback.is_valid():
+				_instance.call_deferred("_execute_callback", waiting.callback, null)
 		return true
 
 	_instance._image_mutex.unlock()
@@ -568,11 +590,11 @@ static func get_cached_texture(cache_key: String) -> Texture2D:
 
 	_instance._texture_cache_mutex.lock()
 	if _instance._texture_cache.has(cache_key):
+		# Move to back (most recently used). Dictionary preserves insertion
+		# order, so erase+re-set is an O(1) LRU refresh.
 		var tex = _instance._texture_cache[cache_key]
-		var idx = _instance._texture_cache_order.find(cache_key)
-		if idx != -1:
-			_instance._texture_cache_order.remove_at(idx)
-			_instance._texture_cache_order.append(cache_key)
+		_instance._texture_cache.erase(cache_key)
+		_instance._texture_cache[cache_key] = tex
 		_instance._texture_cache_mutex.unlock()
 		return tex
 	_instance._texture_cache_mutex.unlock()
@@ -584,31 +606,26 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 
 	_instance._texture_cache_mutex.lock()
 
+	# Replace existing entry: refresh recency and keep memory accounting exact
 	if _instance._texture_cache.has(cache_key):
-		# Refresh LRU order even for existing textures
-		var idx = _instance._texture_cache_order.find(cache_key)
-		if idx != -1:
-			_instance._texture_cache_order.remove_at(idx)
-			_instance._texture_cache_order.append(cache_key)
-		_instance._texture_cache_mutex.unlock()
-		return
+		var old_tex = _instance._texture_cache[cache_key]
+		_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory - _estimate_texture_memory(old_tex))
+		_instance._texture_cache.erase(cache_key)
 
 	var cache_limit = get_max_texture_cache_size()
 	var memory_limit = get_max_texture_cache_memory_bytes()
 	var tex_memory = _estimate_texture_memory(texture)
 
-	# Evict by count and/or memory limits
-	while (_instance._texture_cache.size() >= cache_limit or 
-		   (_instance._texture_cache_memory + tex_memory) > memory_limit) and _instance._texture_cache_order.size() > 0:
-		var oldest_key = _instance._texture_cache_order.pop_front()
+	# Evict oldest (front of the insertion-ordered Dictionary) by count/memory limits
+	while (_instance._texture_cache.size() >= cache_limit or
+		   (_instance._texture_cache_memory + tex_memory) > memory_limit) and not _instance._texture_cache.is_empty():
+		var oldest_key = _instance._texture_cache.keys()[0]
 		var oldest_tex = _instance._texture_cache.get(oldest_key, null)
 		if oldest_tex:
-			_instance._texture_cache_memory -= _estimate_texture_memory(oldest_tex)
-			_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory)
+			_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory - _estimate_texture_memory(oldest_tex))
 		_instance._texture_cache.erase(oldest_key)
 
 	_instance._texture_cache[cache_key] = texture
-	_instance._texture_cache_order.append(cache_key)
 	_instance._texture_cache_memory += tex_memory
 	_instance._texture_cache_mutex.unlock()
 
@@ -617,10 +634,21 @@ static func clear_texture_cache() -> void:
 		return
 	_instance._texture_cache_mutex.lock()
 	_instance._texture_cache.clear()
-	_instance._texture_cache_order.clear()
 	_instance._texture_cache_memory = 0
 	_instance._texture_cache_mutex.unlock()
 
+
+static func prepare_image_for_texture(image: Image) -> Image:
+	"""Worker-thread helper: duplicate + convert an Image to RGBA8 so the main
+	thread only pays for the ImageTexture upload in create_texture_from_image."""
+	if image == null or image.is_empty():
+		return null
+	var img := image.duplicate()
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+	if img.is_empty():
+		return null
+	return img
 
 static func create_texture_from_image(image: Image) -> Texture2D:
 	"""Create an ImageTexture from an Image, converting unsupported formats first.
@@ -628,12 +656,14 @@ static func create_texture_from_image(image: Image) -> Texture2D:
 	Godot's internal format conversion during ImageTexture.create_from_image
 	can trigger _texture_2d_update with an empty image on some hardware/drivers.
 	This helper converts every image to RGBA8 up-front and guards empty/null images.
+	Images already prepared by prepare_image_for_texture skip the duplicate+convert.
 	"""
 	if image == null or image.is_empty():
 		return null
 
-	var img := image.duplicate()
+	var img := image
 	if img.get_format() != Image.FORMAT_RGBA8:
+		img = image.duplicate()
 		img.convert(Image.FORMAT_RGBA8)
 
 	if img.is_empty():
@@ -757,13 +787,17 @@ static func queue_parallel_downloads(
 		while _instance._download_queue.size() >= MAX_DOWNLOAD_QUEUE_SIZE:
 			_instance._download_mutex.unlock()
 			await _instance.get_tree().create_timer(0.01).timeout
+			if _instance == null or _instance._exit_flag:
+				return -1
 			_instance._download_mutex.lock()
 
 		_instance._download_queue.append({
 			"callable": func():
 				return process_item.call(item, index),
 			"callback": func(result):
-				SystemManager.memory._on_download_chunk_complete(batch.id, index, result)
+				SystemManager.memory._on_download_chunk_complete(batch.id, index, result),
+			"batch_id": batch.id,
+			"cancelled": false
 		})
 		_instance._download_mutex.unlock()
 		_instance._download_semaphore.post()
@@ -781,37 +815,27 @@ static func _on_download_chunk_complete(batch_id: int, index: int, result):
 	batch.completed_count += 1
 	batch.results[index] = result
 
-	# Report progress (include index and result for per-item tracking)
-	if batch.on_progress.is_valid():
-		batch.on_progress.call(batch.completed_count, batch.total_count, index, result)
-
-	# Check if all items complete
-	if batch.completed_count >= batch.total_count and not batch.is_complete:
+	# Copy callback state; callbacks are invoked AFTER unlocking so they can
+	# safely call cancel_download_batch (non-recursive mutex).
+	var on_progress = batch.on_progress
+	var completed_count = batch.completed_count
+	var total_count = batch.total_count
+	var is_now_complete = batch.completed_count >= batch.total_count and not batch.is_complete
+	var on_complete = Callable()
+	var final_results = null
+	if is_now_complete:
 		batch.is_complete = true
-		_instance._download_batch_mutex.unlock()
-
-		if batch.on_complete.is_valid():
-			batch.on_complete.call(batch.results)
-
-		# Remove batch
-		_instance._download_batch_mutex.lock()
+		on_complete = batch.on_complete
+		final_results = batch.results
 		_instance._download_batches.erase(batch_id)
-		_instance._download_batch_mutex.unlock()
-	else:
-		_instance._download_batch_mutex.unlock()
-
-static func get_download_batch_progress(batch_id: int) -> float:
-	if _instance == null:
-		return 0.0
-
-	_instance._download_batch_mutex.lock()
-	if _instance._download_batches.has(batch_id):
-		var batch = _instance._download_batches[batch_id]
-		var progress = float(batch.completed_count) / float(batch.total_count)
-		_instance._download_batch_mutex.unlock()
-		return progress
 	_instance._download_batch_mutex.unlock()
-	return 1.0
+
+	# Report progress (include index and result for per-item tracking)
+	if on_progress.is_valid():
+		on_progress.call(completed_count, total_count, index, result)
+
+	if is_now_complete and on_complete.is_valid():
+		on_complete.call(final_results)
 
 static func cancel_download_batch(batch_id: int) -> bool:
 	if _instance == null:
@@ -820,41 +844,15 @@ static func cancel_download_batch(batch_id: int) -> bool:
 	_instance._download_batch_mutex.lock()
 	var cancelled = _instance._download_batches.erase(batch_id)
 	_instance._download_batch_mutex.unlock()
+
+	# Mark queued (not yet started) tasks for this batch so workers skip them
+	if cancelled:
+		_instance._download_mutex.lock()
+		for task in _instance._download_queue:
+			if task.get("batch_id", -1) == batch_id:
+				task.cancelled = true
+		_instance._download_mutex.unlock()
 	return cancelled
-
-static func get_db_queue_size() -> int:
-	if _instance == null:
-		return 0
-	_instance._db_mutex.lock()
-	var size = _instance._db_queue.size()
-	_instance._db_mutex.unlock()
-	return size
-
-static func get_image_queue_size() -> int:
-	if _instance == null:
-		return 0
-	_instance._image_mutex.lock()
-	var size = _instance._image_high_priority_queue.size() + _instance._image_low_priority_queue.size()
-	_instance._image_mutex.unlock()
-	return size
-
-static func get_extraction_queue_size() -> int:
-	if _instance == null:
-		return 0
-	_instance._extraction_mutex.lock()
-	var size = _instance._extraction_queue.size()
-	_instance._extraction_mutex.unlock()
-	return size
-
-static func has_pending_tasks() -> bool:
-	if _instance == null:
-		return false
-
-	var db_pending = get_db_queue_size()
-	var image_pending = get_image_queue_size()
-	var extraction_pending = get_extraction_queue_size()
-
-	return db_pending > 0 or image_pending > 0 or extraction_pending > 0
 
 static func shutdown():
 	if _instance == null:
@@ -964,25 +962,13 @@ static func cancel_batch(batch_id: int) -> bool:
 	_instance._batch_mutex.lock()
 	for i in range(_instance._batch_processes.size()):
 		if _instance._batch_processes[i].id == batch_id:
+			# Mark cancelled so in-flight async callbacks don't fire on_complete.
+			_instance._batch_processes[i].cancelled = true
 			_instance._batch_processes.remove_at(i)
 			_instance._batch_mutex.unlock()
 			return true
 	_instance._batch_mutex.unlock()
 	return false
-
-## Returns the current progress of a batch (0.0 to 1.0)
-static func get_batch_progress(batch_id: int) -> float:
-	if _instance == null:
-		return 0.0
-
-	_instance._batch_mutex.lock()
-	for batch in _instance._batch_processes:
-		if batch.id == batch_id:
-			var progress = float(batch.current_index) / float(batch.items.size())
-			_instance._batch_mutex.unlock()
-			return progress
-	_instance._batch_mutex.unlock()
-	return 1.0  # Batch not found = complete
 
 func _process_batches():
 	_batch_mutex.lock()
@@ -990,7 +976,7 @@ func _process_batches():
 	_batch_mutex.unlock()
 
 	for batch in processes_copy:
-		if batch.is_complete:
+		if batch.is_complete or batch.cancelled:
 			continue
 
 		# Check if previous async operations are complete
@@ -1052,11 +1038,13 @@ func _process_batch_item(batch: BatchProcess, index: int):
 
 func _check_batch_completion(batch: BatchProcess):
 	# Check if batch is complete (called from callbacks)
+	if batch.cancelled:
+		return
 	if batch.current_index >= batch.items.size() and batch.pending_callbacks == 0:
 		_complete_batch(batch)
 
 func _complete_batch(batch: BatchProcess):
-	if batch.is_complete:
+	if batch.is_complete or batch.cancelled:
 		return
 
 	batch.is_complete = true

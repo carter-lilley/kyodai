@@ -1,8 +1,6 @@
 class_name EffectStack
 extends RefCounted
 
-signal effects_changed
-
 var media_container: MediaContainer
 var _effects: Dictionary = {}  # effect_id -> EffectBase instance
 var _effect_configs: Array = []
@@ -191,8 +189,6 @@ func _rebuild_effects():
 	_update_effect_draw_rects()
 	_run_pipeline()
 
-	effects_changed.emit()
-
 func _update_effect_settings_only() -> void:
 	if media_container and _context != "focus_card":
 		media_container.border_inset_ratio = 0.0
@@ -229,7 +225,6 @@ func _update_effect_settings_only() -> void:
 
 	_update_effect_draw_rects()
 	_run_pipeline()
-	effects_changed.emit()
 
 func update_draw_rects() -> void:
 	_update_effect_draw_rects()
@@ -307,6 +302,7 @@ func has_effect(effect_id: String) -> bool:
 
 static func clear_script_cache() -> void:
 	_script_cache.clear()
+	EffectBase.clear_shared_caches()
 
 func force_refresh() -> void:
 	_update_effect_draw_rects()

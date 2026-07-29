@@ -1,6 +1,8 @@
 class_name LibraryView
 extends View
 
+const DEBUG_LOG: bool = false
+
 # games_grid is declared in base View class; initialize here
 @onready var margin_container: MarginContainer = $MarginContainer
 @onready var platform_indicator: PlatformIndicator = $MarginContainer/VBoxContainer/PlatformIndicator
@@ -307,16 +309,6 @@ func _focus_random_card() -> void:
 	# Jump directly to the random index and focus once the window is rebuilt.
 	games_grid.scroll_to_index_and_focus(random_index, false)
 
-func _focus_card_at_index(index: int) -> void:
-	"""Focus the game card at the specified index."""
-	if not visible:
-		return
-	if not UIManager.is_current_view(view_name):
-		return
-	var card = games_grid.get_card_at_index(index)
-	if card and card is GameCard:
-		card.grab_focus()
-
 func _focus_first_card() -> void:
 	"""Focus the first game card in the grid."""
 	if not visible:  # Don't try to focus if view is hidden
@@ -518,24 +510,24 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			func():
 				var db_start_us := Time.get_ticks_usec()
 				var games = DataManager.search_games_paginated(_search_query, offset, limit)
-				print("[LibraryView] DB task (search): offset=", offset, " limit=", limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
+				if DEBUG_LOG: print("[LibraryView] DB task (search): offset=", offset, " limit=", limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
 			func(games: Array[GameResource]):
 				var callback_start_us := Time.get_ticks_usec()
 				games_grid.on_items_loaded(games, offset, is_preload)
-				print("[LibraryView] on_items_loaded callback (search): offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
+				if DEBUG_LOG: print("[LibraryView] on_items_loaded callback (search): offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 		)
 	else:
 		SystemManager.memory.queue_db_task(
 			func():
 				var db_start_us := Time.get_ticks_usec()
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
-				print("[LibraryView] DB task: offset=", offset, " limit=", limit, " platform=", _current_platform_slug, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
+				if DEBUG_LOG: print("[LibraryView] DB task: offset=", offset, " limit=", limit, " platform=", _current_platform_slug, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
 			func(games: Array[GameResource]):
 				var callback_start_us := Time.get_ticks_usec()
 				games_grid.on_items_loaded(games, offset, is_preload)
-				print("[LibraryView] on_items_loaded callback: offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
+				if DEBUG_LOG: print("[LibraryView] on_items_loaded callback: offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 		)
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
