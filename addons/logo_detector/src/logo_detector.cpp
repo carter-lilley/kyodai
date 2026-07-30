@@ -42,8 +42,16 @@ struct OcrWord {
     String text;
 };
 
+// ONNX Runtime only permits ONE default LoggingManager per process, so all
+// LogoDetector instances must share a single Ort::Env. Intentionally leaked:
+// destruction ordering against ORT teardown at process exit is fragile.
+static Ort::Env &shared_ort_env() {
+    static Ort::Env *env = new Ort::Env(ORT_LOGGING_LEVEL_WARNING, "LogoDetector");
+    return *env;
+}
+
 struct LogoDetector::Impl {
-    Ort::Env env;
+    Ort::Env &env;
     std::unique_ptr<Ort::Session> yolo_session;
     std::unique_ptr<Ort::Session> ocr_det_session;
     std::unique_ptr<Ort::Session> ocr_rec_session;
@@ -68,7 +76,7 @@ struct LogoDetector::Impl {
     bool ocr_cls_loaded = false;
     bool charset_loaded = false;
 
-    Impl() : env(ORT_LOGGING_LEVEL_WARNING, "LogoDetector"),
+    Impl() : env(shared_ort_env()),
              memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {}
 };
 

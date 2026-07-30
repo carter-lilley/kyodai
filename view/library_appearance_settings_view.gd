@@ -219,6 +219,46 @@ func _on_library_effect_selected(index: int) -> void:
 				"num_icons": 21,
 				"background_color": Color(0.05, 0.08, 0.18, 1.0)
 			}
+		"isolines":
+			_library_appearance_config["settings"] = {
+				"time_scale": 1.0,
+				"zoom": 0.3,
+				"line_width": 0.6,
+				"lighting_strength": 0.35,
+				"background_color": Color(0.07, 0.07, 0.129, 1.0),
+				"line_color": Color(1.0, 1.0, 1.0, 1.0)
+			}
+		"dotgrid":
+			_library_appearance_config["settings"] = {
+				"time_scale": 1.0,
+				"dot_spacing": 30.0,
+				"dot_size": 0.15,
+				"noise_scale": 1.0,
+				"size_modulation": 0.35,
+				"opacity_modulation": 0.9,
+				"color_a": Color(1.0, 0.082, 0.621, 1.0),
+				"color_b": Color(1.0, 0.152, 0.009, 1.0),
+				"background_color": Color(0.05, 0.05, 0.08, 1.0)
+			}
+		"horizon3d":
+			_library_appearance_config["settings"] = {
+				"time_scale": 0.1,
+				"rotation_speed": 0.35,
+				"axis_tilt": 0.0,
+				"diagonal_ratio": 0.4,
+				"curvature": 0.25,
+				"rows_visible": 4.0,
+				"tile_scale": 0.8,
+				"corner_radius": 0.18,
+				"tile_opacity": 0.45,
+				"border_opacity": 0.25,
+				"parallax_factor": 0.15,
+				"back_layer_dim": 0.1,
+				"tile_color_top": Color(1.0, 1.0, 1.0, 1.0),
+				"tile_color_bottom": Color(0.88, 0.88, 0.93, 1.0),
+				"bg_color_top": Color(0.93, 0.93, 0.96, 1.0),
+				"bg_color_bottom": Color(0.8, 0.8, 0.87, 1.0)
+			}
 	
 	var config_setting = DataManager.get_setting("library_background_config")
 	if config_setting:

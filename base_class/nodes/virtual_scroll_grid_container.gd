@@ -1607,12 +1607,20 @@ func _instantiate_card_pool():
 			card.queue_free()
 	_card_pool.clear()
 
-	for i in range(_max_pool_size):
+	# Instantiate only the first visible screen synchronously so startup paints
+	# sooner; the rest of the pool is topped up a few per frame by
+	# _process_pool_growth (off-screen buffer cards don't need to exist yet).
+	# If the pool size wasn't computed from a valid layout, build the full pool.
+	var sync_count = _max_pool_size
+	if _last_computed_visible_count > 0:
+		sync_count = mini(_max_pool_size, _last_computed_visible_count)
+	for i in range(sync_count):
 		var card = _card_scene.instantiate()
 		card.visible = false
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
 		_card_pool.append(card)
+	_pending_pool_growth = _max_pool_size - sync_count
 
 	# Cache card capability flags from the first instantiated card so we can
 	# skip has_method() / string lookups in hot loops.
@@ -1638,6 +1646,7 @@ func _instantiate_card_pool():
 	print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 var _pending_pool_growth: int = 0
+var _last_computed_visible_count: int = 0
 const POOL_GROWTH_PER_FRAME: int = 4
 
 ## Recomputes the required pool size for the current layout. Grows _max_pool_size
@@ -1695,6 +1704,8 @@ func _compute_pool_size(available: Vector2) -> int:
 
 	var visible_lines = max(1, ceili(viewport_size / stride)) if stride > 0 else 1
 	var visible_count = visible_lines * items_per_line
+	_last_computed_visible_count = visible_count
+
 	var buffer_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 
 	if _total_items <= SMALL_LIBRARY_THRESHOLD:

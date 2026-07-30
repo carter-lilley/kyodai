@@ -68,6 +68,7 @@ func _ready():
 	
 	# Connect to DataManager signals
 	DataManager.database_ready.connect(_on_database_ready)
+	DataManager.database_failed.connect(_on_database_failed)
 	print("[DEBUG] Connected to database_ready signal")
 	
 	# If database is already ready, trigger the callback manually (happens when DataManager loads first)
@@ -464,6 +465,11 @@ func _on_database_ready():
 	# grid's initial items_request can hit the cache instead of waiting on the DB.
 	if _total_games > 0 and _db_games_count > 0:
 		_prefetch_first_page()
+
+func _on_database_failed(_error: String):
+	_is_loading = false
+	_total_count_load_pending = false
+	_update_status("Database unavailable - check storage permissions, then restart the app")
 
 func _on_game_launched(game: GameResource):
 	"""Called when a game is launched - refresh grid to resort by last_played."""

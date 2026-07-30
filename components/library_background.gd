@@ -93,6 +93,12 @@ func _create_effect(effect_id: String) -> BackgroundEffect:
 			return OsdSysBackgroundEffect.new()
 		"cafeos":
 			return CafeOSBackgroundEffect.new()
+		"isolines":
+			return IsolinesBackgroundEffect.new()
+		"dotgrid":
+			return DotGridBackgroundEffect.new()
+		"horizon3d":
+			return Horizon3DBackgroundEffect.new()
 		_:
 			return GradientBackgroundEffect.new()
 
@@ -130,7 +136,7 @@ func set_background_color(color: Color) -> void:
 
 # Get available effect IDs for dropdown
 static func get_available_effects() -> Array[String]:
-	return ["none", "gradient", "xmb", "xmb_classic", "motes", "osdsys", "cafeos"]
+	return ["none", "gradient", "xmb", "xmb_classic", "motes", "osdsys", "cafeos", "isolines", "dotgrid", "horizon3d"]
 
 # Get effect display name
 static func get_effect_display_name(effect_id: String) -> String:
@@ -142,6 +148,9 @@ static func get_effect_display_name(effect_id: String) -> String:
 		"motes": return "Motes"
 		"osdsys": return "OSDSYS"
 		"cafeos": return "CafeOS"
+		"isolines": return "Isolines"
+		"dotgrid": return "Dot Grid"
+		"horizon3d": return "Horizon3D"
 		_: return "Unknown"
 
 # Get settings schema for an effect
@@ -163,6 +172,12 @@ static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 			effect = OsdSysBackgroundEffect.new()
 		"cafeos":
 			effect = CafeOSBackgroundEffect.new()
+		"isolines":
+			effect = IsolinesBackgroundEffect.new()
+		"dotgrid":
+			effect = DotGridBackgroundEffect.new()
+		"horizon3d":
+			effect = Horizon3DBackgroundEffect.new()
 		_:
 			effect = GradientBackgroundEffect.new()
 	

@@ -23,8 +23,12 @@ var _worker_count: int = 1
 
 func _ready():
 	data_manager = get_parent()
-	# Default worker count is platform-dependent; may be updated before start_worker().
-	_worker_count = MemorySubManager.get_logo_box_thread_count()
+	# HARD CLAMP: exactly one worker. Each worker constructs its own LogoDetector,
+	# and the native Impl creates a per-instance Ort::Env - but ONNX Runtime only
+	# allows ONE default LoggingManager per process, so a second detector aborts
+	# the process (SIGABRT on Android). Keep at 1 until the native lib shares a
+	# single Ort::Env across instances.
+	_worker_count = 1
 	Performance.add_custom_monitor("logo_box/pending_tasks", _get_pending_task_count)
 	Performance.add_custom_monitor("logo_box/avg_detect_time_ms", _get_avg_detect_time_ms)
 
@@ -37,7 +41,9 @@ func _get_intra_op_threads() -> int:
 	return 1
 
 func set_worker_count(p_count: int) -> void:
-	var count := clampi(p_count, 1, 16)
+	# See _ready: a second LogoDetector instance aborts the process (Ort::Env
+	# single-instance limitation), so the pool is pinned to one worker.
+	var count := 1
 	if count == _worker_count and not _threads.is_empty():
 		return
 	_worker_count = count

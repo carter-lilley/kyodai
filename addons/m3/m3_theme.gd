@@ -404,12 +404,23 @@ static func load_fonts() -> Dictionary:
 static func clear_theme_cache() -> void:
 	_cached_fonts.clear()
 	_empty_texture = null
+	_generated_theme_cache.clear()
 
 # ============================================
 # MAIN THEME
 # ============================================
 
+# Generated Theme cache: inputs are only is_dark_mode and the seed-derived
+# color tokens, so a (dark, primary-light, primary-dark) signature fully
+# describes the output. Fonts are cached separately in _cached_fonts.
+static var _generated_theme_cache: Dictionary = {}
+const MAX_GENERATED_THEMES: int = 4
+
 static func generate_theme() -> Theme:
+	var signature := str(is_dark_mode) + "|" + PRIMARY_LIGHT.to_html() + "|" + PRIMARY_DARK.to_html()
+	if _generated_theme_cache.has(signature):
+		return _generated_theme_cache[signature]
+
 	var t = Theme.new()
 	var f = load_fonts()
 	t.default_font = f["regular"]
@@ -796,4 +807,7 @@ static func generate_theme() -> Theme:
 	t.set_stylebox("separator", "HSeparator", hsep)
 	t.set_stylebox("separator", "VSeparator", vsep)
 	
+	_generated_theme_cache[signature] = t
+	while _generated_theme_cache.size() > MAX_GENERATED_THEMES:
+		_generated_theme_cache.erase(_generated_theme_cache.keys()[0])
 	return t

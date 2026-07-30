@@ -166,6 +166,11 @@ func get_setting(_name:String) -> SettingsVar:
 func load_settings() -> void:
 	if FSM.file_exists(SAVE_PATH):
 		settings = ResourceLoader.load(SAVE_PATH) as Settings
+		if settings == null:
+			# Corrupt or wrong-type file: preserve a copy for inspection, start fresh
+			push_error("[SettingsManager] Failed to load settings from %s - resetting to defaults (backup saved)" % SAVE_PATH)
+			if FSM.copy_file(SAVE_PATH, SAVE_PATH + ".corrupt.bak"):
+				FSM.delete_file(SAVE_PATH)
 	if settings:
 		_refresh_setting_metadata(settings)
 		store_property_names(settings)

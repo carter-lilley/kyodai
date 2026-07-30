@@ -84,17 +84,17 @@ func query_bool_unlocked(query: String, bindings: Array = []) -> bool:
 	return success
 
 
-func initialize_database():
+## Opens the database and creates tables. Runs on the DB worker thread (queued
+## by DataManager._ready); returns true on success. Signal emission and UI
+## notifications happen in the main-thread callback, not here.
+func initialize_database() -> bool:
 	print("[DatabaseManager] initialize_database() starting...")
 	# Database is being (re)opened; any previous count cache is no longer valid.
 	invalidate_downloaded_games_count_cache()
 	if not FSM.make_dir_recursive("user://database"):
-		var err_msg = "Failed to create database directory: user://database/"
-		push_error("[DatabaseManager] " + err_msg)
+		push_error("[DatabaseManager] Failed to create database directory: user://database/")
 		_db_init_failed = true
-		data_manager.database_failed.emit(err_msg)
-		SystemManager.notifications.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", SystemManager.notifications.Type.ERROR)
-		return
+		return false
 
 	_db = SQLite.new()
 	_db.path = DB_PATH
@@ -103,21 +103,11 @@ func initialize_database():
 	if _db.open_db():
 		_create_tables()
 		_is_db_ready = true
-		print("[DatabaseManager] Database ready - emitting signal")
-		data_manager.database_ready.emit()
-		# Warm the downloaded-games count cache on the DB thread so the first
-		# HomeView call can return the cached value instead of blocking the main
-		# thread with a COUNT(*) query.
-		if SystemManager.memory:
-			MemorySubManager.queue_db_task(func():
-				get_downloaded_games_count()
-			)
-	else:
-		var err_msg = "Failed to open database at " + DB_PATH
-		push_error("[DatabaseManager] " + err_msg)
-		_db_init_failed = true
-		data_manager.database_failed.emit(err_msg)
-		SystemManager.notifications.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", SystemManager.notifications.Type.ERROR)
+		return true
+
+	push_error("[DatabaseManager] Failed to open database at " + DB_PATH)
+	_db_init_failed = true
+	return false
 
 
 func _create_tables():

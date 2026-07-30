@@ -64,6 +64,8 @@ func _connect_signals() -> void:
 		DataManager.database_ready.connect(_on_database_ready)
 		if DataManager.is_database_ready():
 			_on_database_ready()
+	if not DataManager.database_failed.is_connected(_on_database_failed):
+		DataManager.database_failed.connect(_on_database_failed)
 	if not DataManager.game_added.is_connected(_on_game_added):
 		DataManager.game_added.connect(_on_game_added)
 	if not DataManager.game_updated.is_connected(_on_game_updated):
@@ -602,6 +604,10 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 
 func _on_database_ready():
 	_load_total_count()
+
+func _on_database_failed(_error: String):
+	_is_loading = false
+	_update_status("Database unavailable - check storage permissions, then restart the app")
 
 func _on_game_added(_game: GameResource):
 	# Refresh total count and grid (for individual additions outside sync)

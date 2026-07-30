@@ -57,7 +57,25 @@ func _enter_tree() -> void:
 func _ready():
 	_ensure_memory_manager()
 
-	database.initialize_database()
+	# Open the database on the DB worker thread so the autoload chain isn't
+	# blocked by disk I/O. Views gate on database_ready / is_database_ready().
+	MemorySubManager.queue_db_task(
+		func():
+			return database.initialize_database(),
+		func(success: bool):
+			if success:
+				print("[DatabaseManager] Database ready - emitting signal")
+				database_ready.emit()
+				# Warm the downloaded-games count cache so the first HomeView
+				# call returns the cached value instead of running COUNT(*).
+				MemorySubManager.queue_db_task(func():
+					database.get_downloaded_games_count()
+				)
+			else:
+				var err_msg = "Failed to initialize database at " + database.DB_PATH
+				database_failed.emit(err_msg)
+				SystemManager.notifications.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", SystemManager.notifications.Type.ERROR)
+	)
 	cover._ensure_cache_folder()
 	logo_box.start_worker()
 	database_ready.connect(_on_database_ready_for_collections)

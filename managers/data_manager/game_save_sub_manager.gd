@@ -29,6 +29,23 @@ func _begin_save_sync(key: String) -> void:
 func _end_save_sync(key: String) -> void:
 	_save_sync_in_flight.erase(key)
 
+## Runs save-discovery/zip work off the main thread when safe. Android restricted
+## paths (/Android/data, /Android/obb) go through the PackageChecker plugin whose
+## worker-thread behavior is unverified - a false empty scan could trigger a
+## remote-over-local download, so those run inline on the calling thread.
+func _should_thread_io(path: String) -> bool:
+	if SystemManager.platform.is_android():
+		var normalized = path.replace("\\", "/")
+		if normalized.contains("/Android/data/") or normalized.contains("/Android/obb/"):
+			return false
+	return true
+
+func _run_io_task(path: String, work: Callable, callback: Callable) -> void:
+	if _should_thread_io(path):
+		MemorySubManager.queue_extraction_task(work, callback)
+	else:
+		callback.call(work.call())
+
 func _ready() -> void:
 	_init_strategies()
 	_cleanup_all_temp_dirs()
@@ -1436,8 +1453,8 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			callback.call(false, "No save configuration for emulator: " + emulator_id)
 		return
 	
-	var local_saves: Array[Dictionary]
-	if uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game)) or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
+	var is_folder_save_flow = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game)) or (emulator_id == "dolphin" and game.platform_slug == "ngc")
+	if is_folder_save_flow:
 		if game.get_active_title_id() == "":
 			if callback.is_valid():
 				callback.call(false, "No Title ID available for this game. Launch it once to extract the Title ID.")
@@ -1447,25 +1464,29 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 			if callback.is_valid():
 				callback.call(false, validation_error)
 			return
-		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
-	else:
+
+	# Discovery walks the save directory tree; run it off the main thread when safe
+	var scan_work := func() -> Array[Dictionary]:
+		if is_folder_save_flow:
+			return _discover_emulator_saves(emulator_id, save_dir, game)
 		var rom_name_no_ext = game.get_active_file_name().get_basename()
-		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
-	
-	_ensure_device_registered(func(success: bool, error: String):
-		if not success:
-			if callback.is_valid():
-				callback.call(false, error)
-			return
-		
-		var device_id = DataManager.get_romm_device_id()
-		SystemManager.network.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
-			if fetch_error != "":
+		return discover_local_saves(save_dir, rom_name_no_ext, extensions)
+	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
+		_ensure_device_registered(func(success: bool, error: String):
+			if not success:
 				if callback.is_valid():
-					callback.call(false, "Failed to fetch remote saves: " + fetch_error)
+					callback.call(false, error)
 				return
-			
-			_run_sync(game, emulator_id, local_saves, remote_saves, device_id, callback)
+
+			var device_id = DataManager.get_romm_device_id()
+			SystemManager.network.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+				if fetch_error != "":
+					if callback.is_valid():
+						callback.call(false, "Failed to fetch remote saves: " + fetch_error)
+					return
+
+				_run_sync(game, emulator_id, local_saves, remote_saves, device_id, callback)
+			)
 		)
 	)
 
@@ -1566,13 +1587,23 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 			print("[GameSaveSubManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
 			FSM.make_dir_recursive(zip_path.get_base_dir())
-			var zip_success = _zip_emulator_save(emulator_id, original_path, zip_path, game)
-			if not zip_success:
+			# Zip off the main thread when the source path allows it
+			var zip_state := {"done": false, "success": false}
+			_run_io_task(original_path,
+				func():
+					return _zip_emulator_save(emulator_id, original_path, zip_path, game),
+				func(zip_success: bool):
+					zip_state["success"] = zip_success
+					zip_state["done"] = true
+			)
+			while not zip_state["done"]:
+				await get_tree().process_frame
+			if not zip_state["success"]:
 				state.failed += 1
 				push_error("[GameSaveSubManager] Failed to zip folder for upload: " + original_path)
 				check_complete.call()
 				continue
-			
+
 			SystemManager.network.upload_save(
 				game.romm_id,
 				zip_path,
@@ -1770,7 +1801,6 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		return
 	
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-	var local_saves: Array[Dictionary]
 	if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 		if game.get_active_title_id() == "":
 			return
@@ -1782,22 +1812,29 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 				print("[GameSaveSubManager] Auto-upload aborted: Eden profile not resolved (first launch?)")
 				SystemManager.notifications.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", SystemManager.notifications.Type.WARNING)
 				return
-		local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
-	else:
-		var rom_name_no_ext = game.get_active_file_name().get_basename()
-		local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
-	
-	if local_saves.is_empty():
-		print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
-		return
 
-	_begin_save_sync(sync_key)
+	# Discovery walks the save directory tree; run it off the main thread when safe
+	var scan_work := func() -> Array[Dictionary]:
+		if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
+			return _discover_emulator_saves(emulator_id, save_dir, game)
+		var rom_name_no_ext = game.get_active_file_name().get_basename()
+		return discover_local_saves(save_dir, rom_name_no_ext, extensions)
+	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
+		if local_saves.is_empty():
+			print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
+			return
+
+		_begin_save_sync(sync_key)
+		_auto_upload_after_scan(game, emulator_id, local_saves, is_folder_save, sync_key)
+	)
+
+func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_saves: Array[Dictionary], is_folder_save: bool, sync_key: String) -> void:
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
 			push_error("[GameSaveSubManager] Auto-upload aborted: " + error)
 			_end_save_sync(sync_key)
 			return
-		
+
 		var device_id = DataManager.get_romm_device_id()
 		
 		# Check for conflicts with remote saves before uploading
@@ -1877,8 +1914,18 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 			var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
 			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 			FSM.make_dir_recursive(zip_path.get_base_dir())
-			var zip_success = _zip_emulator_save(emulator_id, local_file_path, zip_path, game)
-			if not zip_success:
+			# Zip off the main thread when the source path allows it
+			var zip_state := {"done": false, "success": false}
+			_run_io_task(local_file_path,
+				func():
+					return _zip_emulator_save(emulator_id, local_file_path, zip_path, game),
+				func(zip_success: bool):
+					zip_state["success"] = zip_success
+					zip_state["done"] = true
+			)
+			while not zip_state["done"]:
+				await get_tree().process_frame
+			if not zip_state["success"]:
 				state.failed += 1
 				push_error("[GameSaveSubManager] Failed to zip folder for auto-upload: " + local_file_path)
 				state.pending -= 1
@@ -1971,7 +2018,15 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 
 	var sync_key = _save_sync_key(game, emulator_id)
 	if _save_sync_in_flight.has(sync_key):
-		print("[GameSaveSubManager] auto_download: ABORT - save sync already in progress for this game")
+		# Pre-launch must not skip a needed download: wait for the in-flight
+		# sync (e.g. a manual sync started moments ago) to finish, bounded.
+		print("[GameSaveSubManager] auto_download: save sync already in progress, waiting for it to finish")
+		var wait_ms = 0
+		while _save_sync_in_flight.has(sync_key) and wait_ms < 15000:
+			await get_tree().create_timer(0.1).timeout
+			wait_ms += 100
+		if _save_sync_in_flight.has(sync_key):
+			push_warning("[GameSaveSubManager] auto_download: timed out waiting for in-flight save sync")
 		if on_complete.is_valid():
 			on_complete.call()
 		return
@@ -2026,10 +2081,21 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 						if on_complete.is_valid():
 							on_complete.call()
 						return
-				local_saves = _discover_emulator_saves(emulator_id, save_dir, game)
-			else:
+
+			# Discovery walks the save directory tree; run it off the main thread when safe
+			var scan_work := func() -> Array[Dictionary]:
+				if is_folder_save:
+					return _discover_emulator_saves(emulator_id, save_dir, game)
 				var rom_name_no_ext = game.get_active_file_name().get_basename()
-				local_saves = discover_local_saves(save_dir, rom_name_no_ext, extensions)
+				return discover_local_saves(save_dir, rom_name_no_ext, extensions)
+			var scan_state := {"done": false, "result": []}
+			_run_io_task(save_dir, scan_work, func(scan_result: Array[Dictionary]):
+				scan_state["result"] = scan_result
+				scan_state["done"] = true
+			)
+			while not scan_state["done"]:
+				await get_tree().process_frame
+			local_saves = scan_state["result"]
 			
 			print("[GameSaveSubManager] auto_download: found " + str(local_saves.size()) + " local saves in " + save_dir)
 			
@@ -2137,7 +2203,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 									var memcard_path = save_dir
 									ensure_pcsx2_superblock(memcard_path)
 								# Small delay to let filesystem settle before emulator launch
-								OS.delay_msec(100)
+								await get_tree().create_timer(0.1).timeout
 								DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 								state.pending -= 1
 								if state.pending <= 0 and state.failed == 0:

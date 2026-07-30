@@ -47,6 +47,9 @@ func setup(tab_container: TabContainer) -> void:
 	_sync_current_view_from_tab()
 	print("[ViewSubManager] setup total elapsed_us=", Time.get_ticks_usec() - setup_start_us)
 
+	# Background-load the Library scene so the first tab switch is instant
+	ResourceLoader.load_threaded_request(_library_scene_path)
+
 func _setup_home_tab():
 	var setup_start_us := Time.get_ticks_usec()
 
@@ -63,7 +66,14 @@ func _setup_home_tab():
 
 	# Add HomeView (load scene to get UI nodes)
 	var phase_start_us := Time.get_ticks_usec()
-	var home_scene = load("res://view/home_view.tscn")
+	var home_scene: PackedScene = null
+	const HOME_SCENE_PATH := "res://view/home_view.tscn"
+	# Main kicks a threaded load of this scene before the window-settle await;
+	# consume it here (load_threaded_get blocks briefly if still in flight).
+	if ResourceLoader.load_threaded_get_status(HOME_SCENE_PATH) != ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
+		home_scene = ResourceLoader.load_threaded_get(HOME_SCENE_PATH)
+	if home_scene == null:
+		home_scene = load(HOME_SCENE_PATH)
 	var home_view = home_scene.instantiate()
 	print("[ViewSubManager] Home scene load/instantiate elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	phase_start_us = Time.get_ticks_usec()
@@ -100,7 +110,13 @@ func _ensure_library_setup() -> bool:
 	if _library_tab == null:
 		return false
 
-	var library_scene = load(_library_scene_path)
+	var library_scene: PackedScene = null
+	# setup() kicks a background threaded load of the Library scene after the
+	# Home tab is up; consume it here, or load synchronously as fallback.
+	if ResourceLoader.load_threaded_get_status(_library_scene_path) != ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
+		library_scene = ResourceLoader.load_threaded_get(_library_scene_path)
+	if library_scene == null:
+		library_scene = load(_library_scene_path)
 	var library_view = library_scene.instantiate()
 	library_view.view_name = "Library"
 	_library_tab.add_child(library_view)

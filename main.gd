@@ -53,6 +53,9 @@ func _ready():
 	# Set window title
 	DisplayServer.window_set_title("Kyodai - Game Launcher")
 
+	# Preload the Home view scene on a worker thread while the window settles
+	ResourceLoader.load_threaded_request("res://view/home_view.tscn")
+
 	if SystemManager.display:
 		await SystemManager.display.initial_window_size_settled
 
