@@ -7,7 +7,6 @@ gamenative out of view on android
 downloading core android notif stuck
 platform cards take longer on android
 some settings screens not scrollable?
-grid scroll 'centering'  weird
 better extraction notifications
 
 romm;
@@ -23,8 +22,6 @@ romm;
 
 ## general UI
 	"case wrap" card effect (spine + label, maybe varying by platform?)
-	pagination view toggle instead of scrolling grid (vertical or horizontal)
-	instead of auto-center scroll, just scroll 'onscreen' like switch ui
 	remove platform from game title option
 	option for text centering 
 	option for scrolling trunaction in game title?

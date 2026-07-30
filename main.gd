@@ -354,6 +354,20 @@ func _on_more_button_pressed() -> void:
 	if not is_grid:
 		menu.get_item(menu.get_item_count() - 1).disabled = true
 
+	# Focus Centering submenu
+	var focus_centering = 0
+	if DataManager:
+		var centering_setting = DataManager.get_setting("library_focus_centering")
+		if centering_setting and centering_setting.value is int:
+			focus_centering = centering_setting.value
+
+	var centering_submenu = M3Menu.new()
+	centering_submenu.auto_free = false
+	centering_submenu.radio_group = true
+	centering_submenu.add_check_item("Margin", focus_centering == 0, func(): _set_focus_centering(0))
+	centering_submenu.add_check_item("Center", focus_centering == 1, func(): _set_focus_centering(1))
+	menu.add_submenu_item("Focus Centering", centering_submenu, "crosshairs")
+
 	menu.add_separator()
 
 	# Card Display Mode submenu
@@ -445,6 +459,13 @@ func _set_content_alignment(alignment: int) -> void:
 func _set_card_logo_mode(mode: int) -> void:
 	if DataManager:
 		var setting = DataManager.get_setting("library_card_logo_mode")
+		if setting:
+			DataManager.set_setting(mode, setting)
+			DataManager.save_settings()
+
+func _set_focus_centering(mode: int) -> void:
+	if DataManager:
+		var setting = DataManager.get_setting("library_focus_centering")
 		if setting:
 			DataManager.set_setting(mode, setting)
 			DataManager.save_settings()

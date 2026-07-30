@@ -24,6 +24,7 @@ signal item_created(item, index)
 			debug_mode = value
 			_update_debug_mode()
 enum ViewMode { GRID, LIST, CAROUSEL }
+enum FocusCentering { MARGIN, CENTER }
 
 @export var view_mode: ViewMode = ViewMode.GRID:
 	set(value):
@@ -258,6 +259,14 @@ var focused_card_size: Vector2 = Vector2(228.96, 302.4)
 
 # Currently focused virtual index for dynamic stride math
 var _focused_virtual_index: int = -1
+
+# Cached focus-centering mode (synced from CardSettingsState)
+var _focus_centering_mode: int = FocusCentering.MARGIN
+
+# Focus target for an in-flight programmatic scroll-and-focus sequence.
+# Cleared (and the scroll container's follow-focus suppression lifted) once the
+# scroll settles; polled in _process().
+var _programmatic_focus_index: int = -1
 
 # When true, public setters suppress their side effects so _batch_apply_layout_state()
 # can apply multiple inputs and recalculate exactly once.
@@ -745,6 +754,7 @@ func _refresh_cached_settings() -> void:
 	_cached_media_aspect_ratio = _RATIO_LOOKUP[idx]
 	_cached_card_display_mode = clampi(state.display_mode, 0, 2)
 	_cached_content_alignment = clampi(state.content_alignment, 0, 2) as M3Card.ContentAlignment
+	_focus_centering_mode = clampi(state.focus_centering_mode, 0, 1)
 
 	# Initialize last-layout tracking on the first cache so the first real
 	# layout doesn't treat the initial state as a "change" and re-snap the
@@ -778,6 +788,24 @@ func _process(_delta: float):
 		_resize_debounce_frames -= 1
 		if _resize_debounce_frames == 0:
 			_on_resize_debounced()
+
+	# A programmatic scroll-and-focus sequence has settled (completed or was
+	# interrupted): lift follow-focus suppression and focus the target card if
+	# nothing inside the grid ended up focused (e.g. the card only entered the
+	# buffer near the end of a long scroll).
+	if _programmatic_focus_index >= 0 and _scroll_container and not _scroll_container.is_scrolling():
+		var idx := _programmatic_focus_index
+		_programmatic_focus_index = -1
+		_scroll_container.follow_focus_suppressed = false
+		_pending_focus_index = -1
+		var focused_owner: Control = null
+		var viewport := get_viewport()
+		if viewport:
+			focused_owner = viewport.gui_get_focus_owner()
+		if not focused_owner or not is_ancestor_of(focused_owner):
+			var card := get_card_at_index(idx)
+			if card and is_instance_valid(card) and card.is_inside_tree():
+				_apply_focus_to_card(card)
 
 	# Add off-screen buffer cards a few at a time so startup isn't blocked by
 	# creating the entire visual buffer in one frame.
@@ -1480,6 +1508,7 @@ func _setup_ui():
 	_scroll_container.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
+	_scroll_container.scroll_target_provider = _on_follow_focus_target_request
 
 	_margin_container = MarginContainer.new()
 	_margin_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2541,16 +2570,10 @@ func navigate_direction(dir: String, from_index: int = -1) -> bool:
 		# Boundary: consume the event so focus cannot leave the grid.
 		return true
 
-	# If the target is already visible, move focus directly to it instead of
-	# falling through to spatial navigation, which can leak focus out of the grid.
-	if target_idx >= _visible_start_idx and target_idx < _visible_end_idx:
-		var card = get_card_at_index(target_idx)
-		if card and is_instance_valid(card) and card.is_inside_tree():
-			card.grab_focus()
-			return true
-
-	# The target is offscreen. Scroll to it and focus it.
-	scroll_to_index_and_focus(target_idx, true, 0.6)
+	# Route visible and offscreen targets through the same scroll-and-focus path
+	# so behavior is consistent; the centering mode decides whether a visible
+	# target triggers any scroll at all.
+	scroll_to_index_and_focus(target_idx, true)
 	return true
 
 func _get_focused_virtual_index() -> int:
@@ -2818,25 +2841,100 @@ func get_visible_range() -> Dictionary:
 func get_card_at_index(index: int) -> Control:
 	return _active_cards_by_index.get(index, null)
 
+func _clamp_scroll_to_range(offset: float) -> float:
+	if not _scroll_container:
+		return offset
+	var scrollbar: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+	if not scrollbar:
+		return offset
+	return clampf(offset, scrollbar.min_value, maxf(scrollbar.min_value, scrollbar.max_value - scrollbar.page))
+
+func _get_current_scroll_pos() -> float:
+	if not _scroll_container:
+		return 0.0
+	return float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
+
+func get_centered_scroll_for_index(idx: int) -> float:
+	"""Scroll position that places the center of slot `idx` at the viewport
+	center (clamped to the scrollable range). Cards grow around their center
+	when focused, so the unfocused card_size is the correct centering basis."""
+	var slot_pos := _get_slot_position_for_index(idx)
+	var focus_overflow := _get_focus_overflow()
+	var available := _get_available_size()
+	var offset: float
+	if vertical:
+		offset = slot_pos + focus_overflow.y + card_size.y / 2.0 - available.y / 2.0
+	else:
+		offset = slot_pos + focus_overflow.x + card_size.x / 2.0 - available.x / 2.0
+	return _clamp_scroll_to_range(offset)
+
+func get_follow_focus_scroll_target(idx: int) -> float:
+	"""Where to scroll when card `idx` gains focus, honoring the centering mode.
+	Both modes are edge-triggered: no scroll happens until the focused card's
+	visual bounds (including its focus scale-up) cross a thin margin at a
+	viewport edge. Returns the current scroll position when no scroll is needed."""
+	var current := _get_current_scroll_pos()
+	var slot_pos := _get_slot_position_for_index(idx)
+	var focus_overflow := _get_focus_overflow()
+	var available := _get_available_size()
+
+	var card_start: float
+	var card_end: float
+	var viewport_axis: float
+	var overflow_axis: float
+	if vertical:
+		card_start = slot_pos + focus_overflow.y
+		card_end = card_start + card_size.y
+		viewport_axis = available.y
+		overflow_axis = focus_overflow.y
+	else:
+		card_start = slot_pos + focus_overflow.x
+		card_end = card_start + card_size.x
+		viewport_axis = available.x
+		overflow_axis = focus_overflow.x
+
+	# Visual bounds of the focused card (it grows around its center).
+	var visual_start := card_start - overflow_axis
+	var visual_end := card_end + overflow_axis
+
+	# Thin trigger margin: flush-plus-grid_separation from each viewport edge.
+	var margin := float(grid_separation)
+	var view_start := current + margin
+	var view_end := current + viewport_axis - margin
+
+	if visual_start >= view_start and visual_end <= view_end:
+		return current
+
+	if _focus_centering_mode == FocusCentering.CENTER:
+		return get_centered_scroll_for_index(idx)
+
+	# MARGIN: minimal scroll — slide the card just back inside the margin.
+	var target := current
+	if visual_start < view_start:
+		target = visual_start - margin
+	elif visual_end > view_end:
+		target = visual_end + margin - viewport_axis
+	return _clamp_scroll_to_range(target)
+
+func _on_follow_focus_target_request(control: Control) -> float:
+	"""Provider callback for SmoothScrollContainer follow-focus scrolling.
+	Maps the focused control to its virtual index and uses layout math rather
+	than measuring global rects (which can be stale right after recycling)."""
+	var node := control
+	while node and node != self:
+		if node.has_meta("virtual_index"):
+			return get_follow_focus_scroll_target(node.get_meta("virtual_index", -1))
+		node = node.get_parent()
+	return _get_current_scroll_pos()
+
 func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	if _scroll_container:
-		var _items_per_line = _get_items_per_line()
-		var target_pos = _get_slot_position_for_index(index)
-		var focus_overflow = _get_focus_overflow()
-		var available := _get_available_size()
-
-		if vertical:
-			var viewport_height = available.y
-			# The card's content coordinate is target_pos + top overflow; center it in viewport.
-			var card_offset = target_pos + focus_overflow.y + (card_size.y / 2.0) - (viewport_height / 2.0)
-			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
-		else:
-			var viewport_width = available.x
-			var card_offset = target_pos + focus_overflow.x + (card_size.x / 2.0) - (viewport_width / 2.0)
-			_scroll_container.scroll_to(int(card_offset), animate, duration_multiplier, focus_callback)
+		_scroll_container.scroll_to(int(get_centered_scroll_for_index(index)), animate, duration_multiplier, focus_callback)
 
 func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multiplier: float = 1.0) -> void:
-	"""Scroll to an item and focus it once the virtual grid has rebuilt the window."""
+	"""Scroll to an item and focus it, honoring the focus-centering mode."""
+	if not _scroll_container:
+		return
 	_focus_request_id += 1
 	var request_id := _focus_request_id
 	# Defocus the grid before scrolling so the currently focused card is not
@@ -2844,7 +2942,30 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 	# a competing smooth-scroll back toward the top.
 	_release_focus_inside_grid()
 	_pending_focus_index = index
-	scroll_to_index(index, animate, duration_multiplier)
+	_programmatic_focus_index = -1
+	_scroll_container.follow_focus_suppressed = false
+
+	var target := get_follow_focus_scroll_target(index)
+	var current := _get_current_scroll_pos()
+	var needs_scroll := not is_equal_approx(target, current)
+
+	if not needs_scroll or not animate:
+		# Inside the trigger margin (or instant jump): no animation, focus immediately.
+		if needs_scroll:
+			_scroll_container.scroll_to(int(target), false)
+		var card := get_card_at_index(index)
+		if card and is_instance_valid(card) and card.is_inside_tree():
+			_apply_focus_to_card(card)
+		else:
+			_deferred_focus_index(index, request_id, 0)
+		return
+
+	# Animated: suppress follow-focus for the duration of the scroll so no
+	# competing tween starts; the suppression is lifted in _process() once the
+	# scroll settles (_programmatic_focus_index poll).
+	_programmatic_focus_index = index
+	_scroll_container.follow_focus_suppressed = true
+	_scroll_container.scroll_to(int(target), true, duration_multiplier)
 	_deferred_focus_index(index, request_id, 0)
 
 func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:

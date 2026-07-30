@@ -14,6 +14,7 @@ enum ChangeMask {
 	DISPLAY = 4,      ## display_mode, show_title_mode, content_alignment
 	MEDIA_SHAPE = 8,  ## media_aspect_ratio
 	THEME = 16,       ## dark_mode, primary_color
+	NAVIGATION = 32,  ## focus_centering_mode (scroll behavior only, no layout recalc)
 }
 
 # ---------------------------------------------------------------------------
@@ -33,6 +34,9 @@ var show_title_mode: int = 0
 var card_effect_config: Dictionary = {}
 var dark_mode: bool = true
 var primary_color: Color = Color.WHITE
+## 0 = Margin (edge-triggered: slide the card just back on screen)
+## 1 = Center (edge-triggered: bring the card to the screen center)
+var focus_centering_mode: int = 0
 
 # ---------------------------------------------------------------------------
 # Batch / change coalescing
@@ -160,6 +164,13 @@ func set_primary_color(value: Color) -> bool:
 	_mark(ChangeMask.THEME)
 	return true
 
+func set_focus_centering_mode(value: int) -> bool:
+	if focus_centering_mode == value:
+		return false
+	focus_centering_mode = value
+	_mark(ChangeMask.NAVIGATION)
+	return true
+
 # ---------------------------------------------------------------------------
 # Derived helpers
 # ---------------------------------------------------------------------------
@@ -209,6 +220,7 @@ func sync_from_settings_manager() -> int:
 	set_card_effect_config(_get_dict_setting("card_effect_config", {}))
 	set_dark_mode(_get_bool_setting("dark_mode", true))
 	set_primary_color(_get_color_setting("library_primary_color", Color.WHITE))
+	set_focus_centering_mode(_get_int_setting("library_focus_centering", 0))
 	var emitted_mask := pending_mask
 	end_batch()
 
@@ -244,6 +256,8 @@ func apply_setting(property_name: String, value: Variant) -> int:
 			return ChangeMask.THEME if set_dark_mode(_coerce_bool(value, true)) else ChangeMask.NONE
 		"library_primary_color":
 			return ChangeMask.THEME if set_primary_color(_coerce_color(value, Color.WHITE)) else ChangeMask.NONE
+		"library_focus_centering":
+			return ChangeMask.NAVIGATION if set_focus_centering_mode(_coerce_int(value, 0)) else ChangeMask.NONE
 	return ChangeMask.NONE
 
 # ---------------------------------------------------------------------------

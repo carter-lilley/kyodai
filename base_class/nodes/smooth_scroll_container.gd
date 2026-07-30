@@ -5,10 +5,17 @@ signal scroll_value_changed(value: float)
 signal scroll_completed()
 
 @export var smooth_scrolling: bool = true
-@export var smooth_scroll_duration: float = 1.0
-@export var smooth_scroll_big_jump_threshold: float = 3500.0
-@export var smooth_scroll_big_jump_multiplier: float = 4.0
+## Duration (seconds) of a scroll covering `smooth_scroll_reference_distance` pixels.
+## Actual duration scales proportionally with distance, clamped to [min, max].
+## Used for focus/programmatic scrolls; wheel scrolling uses wheel_scroll_duration.
+@export var smooth_scroll_duration: float = 0.5
+@export var smooth_scroll_reference_distance: float = 1000.0
+@export var smooth_scroll_min_duration: float = 0.15
 @export var smooth_scroll_max_duration: float = 2.5
+## Fixed tween duration for mouse-wheel scrolling. Wheel ticks accumulate into
+## the target and restart the tween, so a longer fixed duration keeps repeated
+## ticks chasing the target smoothly instead of stuttering.
+@export var wheel_scroll_duration: float = 1.0
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:
@@ -24,6 +31,16 @@ var _is_dragging_scrollbar: bool = false
 var _scrollbar_drag_start_mouse_pos: float = 0.0
 var _scrollbar_drag_start_value: float = 0.0
 var _focus_timer: Timer = null
+
+## Optional delegate for follow-focus scroll targets. Signature: (Control) -> float.
+## When set, the provider decides where to scroll when a control inside this
+## container gains focus (returning the current scroll value means "no scroll").
+## This lets the owning grid use layout math instead of measuring global rects.
+var scroll_target_provider: Callable = Callable()
+
+## When true, follow-focus scrolling is ignored (used while the owning grid
+## runs a programmatic scroll-and-focus sequence).
+var follow_focus_suppressed: bool = false
 
 ## When true, all scroll input (wheel, scrollbar drag, focus-driven) is blocked.
 var scroll_paused: bool = false:
@@ -74,21 +91,34 @@ func _on_focus_changed(control: Control) -> void:
 		return
 	if not control:
 		return
-	
+
 	# Only scroll if the focused control is inside this container
 	if not is_ancestor_of(control):
 		return
-	
-	# Skip smooth scroll for mouse hover-initiated focus changes
+
+	# Consume one-shot metas even while suppressed so a stale meta can't leak
+	# into a later, legitimate focus change.
 	if control.has_meta("mouse_hover_focus"):
 		control.remove_meta("mouse_hover_focus")
 		return
-	
-	# Skip smooth scroll for programmatic focus changes (e.g., random-game selection).
 	if control.has_meta("_suppress_smooth_scroll"):
 		control.remove_meta("_suppress_smooth_scroll")
 		return
-	
+
+	if follow_focus_suppressed:
+		return
+
+	# When a target provider is set, the owning grid decides the scroll target
+	# from its layout math (including deadzone / centering policy). Returning
+	# the current scroll means no scroll is needed.
+	if scroll_target_provider.is_valid():
+		var provided_target: float = scroll_target_provider.call(control)
+		if is_equal_approx(provided_target, _get_current_scroll()):
+			return
+		_target_scroll = provided_target
+		_start_smooth_scroll()
+		return
+
 	# If the control is already fully visible, don't re-center it. This prevents
 	# subtle vertical/horizontal drift when moving across a row/column that is
 	# already inside the viewport.
@@ -222,7 +252,7 @@ func _on_gui_input(event: InputEvent):
 				_target_scroll += step
 			
 			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
-			_start_smooth_scroll()
+			_start_smooth_scroll(1.0, wheel_scroll_duration)
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):
@@ -264,33 +294,40 @@ func _on_scrollbar_input(event: InputEvent):
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
-func _start_smooth_scroll(duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
+func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, _focus_callback: Callable = Callable()):
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
-	
+
 	# Cancel any pending focus timer from previous scroll
 	if _focus_timer:
 		_focus_timer.stop()
 		_focus_timer.queue_free()
 		_focus_timer = null
-	
+
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
-	
+
 	var start_value = _get_current_scroll()
 	var target_value = _target_scroll
-	
-	var distance = abs(target_value - start_value)
-	var duration = smooth_scroll_duration
-	
-	if distance > smooth_scroll_big_jump_threshold:
-		var extra_distance = distance - smooth_scroll_big_jump_threshold
-		var extra_duration = (extra_distance / smooth_scroll_big_jump_threshold) * (smooth_scroll_duration * (smooth_scroll_big_jump_multiplier - 1.0))
-		duration = smooth_scroll_duration + extra_duration
-	
+
+	var duration: float
+	if fixed_duration >= 0.0:
+		# Caller-requested fixed duration (e.g. mouse-wheel chasing).
+		duration = fixed_duration
+	else:
+		# Duration scales with distance so short hops feel snappy and long jumps
+		# don't teleport, with hard bounds on both ends.
+		var distance = abs(target_value - start_value)
+		duration = smooth_scroll_min_duration
+		if distance > 0.0 and smooth_scroll_reference_distance > 0.0:
+			duration = clampf(
+				smooth_scroll_duration * (distance / smooth_scroll_reference_distance),
+				smooth_scroll_min_duration,
+				smooth_scroll_max_duration)
+
 	# Apply duration multiplier for faster/slower animations
-	duration *= duration_multiplier
+	duration = clampf(duration * duration_multiplier, 0.0, smooth_scroll_max_duration)
 	
 	_is_smooth_scrolling = true
 	
@@ -329,10 +366,14 @@ func get_target_scroll() -> float:
 		return _target_scroll
 	return _get_current_scroll()
 
+func is_scrolling() -> bool:
+	return _is_smooth_scrolling
+
 func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
+	_is_smooth_scrolling = false
 	
 	if animate and smooth_scrolling:
 		_target_scroll = target
