@@ -599,6 +599,8 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			view.mark_view_for_rebuild("Home", "Hero effect config changed")
 			view.mark_view_for_rebuild("Library", "Hero effect config changed")
 		"dark_mode":
+			if _value is bool:
+				EffectThemeAdapter.on_dark_mode_changed(_value)
 			theme._apply_dark_mode(_value)
 		"library_primary_color":
 			M3Theme.set_primary_seed(_value)

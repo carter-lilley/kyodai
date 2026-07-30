@@ -3,13 +3,10 @@
 xemu save sync
 tst emulator app update flow on android
 single screen is not single screen (second surface still covers other screen)
-x focus after applying theme (or other dialogues)
 gamenative out of view on android
-
-are platforms off by default?
+downloading core android notif stuck
 platform cards take longer on android
 some settings screens not scrollable?
-
 grid scroll 'centering'  weird
 better extraction notifications
 
@@ -25,20 +22,20 @@ romm;
 	check if save is modified
 
 ## general UI
-	case mode
-	pagination view?
+	"case wrap" card effect (spine + label, maybe varying by platform?)
+	pagination view toggle instead of scrolling grid (vertical or horizontal)
 	instead of auto-center scroll, just scroll 'onscreen' like switch ui
 	remove platform from game title option
 	option for text centering 
 	option for scrolling trunaction in game title?
-	m3 master color sync with game
+	m3 master color sync with game/platform?
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)
 	'controls/info bar'
 	focus indicator effects (glow, mirror, chase, etc)
 	add letters to library navigation?
 	badge effect placement opts
-	placeholders
+	placeholder card slots for uneven grids
 	game title "speech bubble option"
 	
 ## hero <- currently depreciated

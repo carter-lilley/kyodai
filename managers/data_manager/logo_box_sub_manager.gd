@@ -182,19 +182,48 @@ func _worker_loop() -> void:
 			"backfill":
 				_process_backfill_task()
 
+const MODEL_EXTRACT_DIR := "user://onnx_models"
+
+## Copies a model out of the PCK onto the real filesystem. In exported builds,
+## res:// is not a real path and ONNX Runtime opens models via fopen, so the
+## file must exist on disk. Returns the user:// path ("" on failure).
+func _ensure_model_extracted(res_path: String) -> String:
+	var dest = MODEL_EXTRACT_DIR + "/" + res_path.get_file()
+	if FSM.file_exists(dest) and FSM.get_file_size(dest) == FSM.get_file_size(res_path):
+		return dest
+	var bytes = FSM.read_file_bytes(res_path)
+	if bytes.is_empty():
+		push_error("[LogoBoxCache] Model not found in PCK: " + res_path)
+		return ""
+	if not FSM.make_dir_recursive(MODEL_EXTRACT_DIR):
+		push_error("[LogoBoxCache] Failed to create model extract dir")
+		return ""
+	var f = FileAccess.open(dest, FileAccess.WRITE)
+	if f == null:
+		push_error("[LogoBoxCache] Failed to write extracted model: " + dest)
+		return ""
+	f.store_buffer(bytes)
+	f.close()
+	return dest
+
 func _create_detector() -> Variant:
 	if not ClassDB.class_exists("LogoDetector"):
 		print("[LogoBoxCache] LogoDetector class not available")
 		return null
 	var detector: Variant = ClassDB.instantiate("LogoDetector")
 	detector.set_intra_op_num_threads(_get_intra_op_threads())
-	if detector.load_yolo_model("res://addons/logo_detector/models/logo_detector.onnx") != OK:
+	var yolo_path = _ensure_model_extracted("res://addons/logo_detector/models/logo_detector.onnx")
+	var det_path = _ensure_model_extracted("res://addons/logo_detector/models/ch_PP-OCRv4_det_infer.onnx")
+	var rec_path = _ensure_model_extracted("res://addons/logo_detector/models/ch_PP-OCRv4_rec_infer.onnx")
+	if yolo_path == "" or det_path == "" or rec_path == "":
+		return null
+	if detector.load_yolo_model(yolo_path) != OK:
 		print("[LogoBoxCache] Failed to load YOLO model")
 		return null
-	if detector.load_ocr_det_model("res://addons/logo_detector/models/ch_PP-OCRv4_det_infer.onnx") != OK:
+	if detector.load_ocr_det_model(det_path) != OK:
 		print("[LogoBoxCache] Failed to load OCR det model")
 		return null
-	if detector.load_ocr_rec_model("res://addons/logo_detector/models/ch_PP-OCRv4_rec_infer.onnx") != OK:
+	if detector.load_ocr_rec_model(rec_path) != OK:
 		print("[LogoBoxCache] Failed to load OCR rec model")
 		return null
 	return detector

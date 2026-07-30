@@ -315,7 +315,9 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	# Only one card is focused at a time, so building the stack for every card is
 	# wasted work. The focused card builds its stack immediately in _on_focus_entered
 	# or _sync_focus_state_from_viewport.
-	if preview_mode or _is_focused:
+	# Cards that already have a focus stack (previously focused) still need their
+	# configs hot-reloaded so stale settings don't resurface on the next focus.
+	if preview_mode or _is_focused or _focus_stack:
 		_build_focus_stack(force_full_rebuild)
 
 

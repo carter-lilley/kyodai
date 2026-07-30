@@ -20,11 +20,49 @@ var _loaded_preset: ThemePreset = null
 # Init guard: block feedback signals while building the initial UI.
 var _is_initializing: bool = true
 
+# Suppress guard: skip reacting to DataManager signals that originated here.
+var _suppress_config_signal: bool = false
+
 func _ready():
 	_setup_ui()
 	_load_library_background_config()
 	_refresh_all_settings_ui()
 	_is_initializing = false
+
+func _enter_tree():
+	if DataManager and not DataManager.setting_changed.is_connected(_on_data_manager_setting_changed):
+		DataManager.setting_changed.connect(_on_data_manager_setting_changed)
+
+func _exit_tree():
+	if DataManager and DataManager.setting_changed.is_connected(_on_data_manager_setting_changed):
+		DataManager.setting_changed.disconnect(_on_data_manager_setting_changed)
+
+func on_view_show():
+	# The dialog calls this every time the category is shown (category switch or
+	# dialog reopen). The view is disconnected from DataManager while removed from
+	# the tree, so reload in case settings changed while hidden.
+	if _is_initializing:
+		return
+	_refresh_background_config_ui()
+
+func _refresh_background_config_ui() -> void:
+	_load_library_background_config()
+	var current_effect_id = _library_appearance_config.get("effect_id", "gradient")
+	if _library_effect_dropdown:
+		for i in range(_effect_ids.size()):
+			if _effect_ids[i] == current_effect_id:
+				_library_effect_dropdown.selected = i
+				break
+	_suppress_config_signal = true
+	_rebuild_library_effect_controls(current_effect_id)
+	_suppress_config_signal = false
+
+func _on_data_manager_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	if _suppress_config_signal or _is_initializing:
+		return
+	if setting.property_name != "library_background_config":
+		return
+	_refresh_background_config_ui()
 
 func _setup_ui() -> void:
 	var scroll = ScrollContainer.new()
@@ -262,8 +300,10 @@ func _on_library_effect_selected(index: int) -> void:
 	
 	var config_setting = DataManager.get_setting("library_background_config")
 	if config_setting:
+		_suppress_config_signal = true
 		DataManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
-	
+		_suppress_config_signal = false
+
 	_rebuild_library_effect_controls(effect_id)
 
 func _rebuild_library_effect_controls(effect_id: String) -> void:
@@ -284,12 +324,14 @@ func _rebuild_library_effect_controls(effect_id: String) -> void:
 		_library_effect_menu.setting_changed.connect(_on_library_effect_setting_changed)
 
 func _on_library_effect_setting_changed(value: Variant, setting: SettingsVar) -> void:
-	if _is_initializing:
+	if _is_initializing or _suppress_config_signal:
 		return
 	_library_appearance_config["settings"][setting.property_name] = value
 	var config_setting = DataManager.get_setting("library_background_config")
 	if config_setting:
+		_suppress_config_signal = true
 		DataManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
+		_suppress_config_signal = false
 
 func _refresh_preset_dropdown() -> void:
 	if not _preset_dropdown:
