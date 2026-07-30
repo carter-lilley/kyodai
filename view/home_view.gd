@@ -50,7 +50,10 @@ func _ready():
 	
 	var phase_start_us := Time.get_ticks_usec()
 	var card_scene = load("res://components/game_card.tscn") as PackedScene
-	var initial_zoom: float = UIManager.card_settings_state.card_zoom_ratio if UIManager and UIManager.card_settings_state else 0.25
+	var initial_zoom: float = 0.25
+	if UIManager and UIManager.card_settings_state:
+		var zoom_state = UIManager.card_settings_state
+		initial_zoom = zoom_state.card_zoom_ratio if zoom_state.layout_mode == 0 else zoom_state.card_zoom_list_ratio
 	games_grid.setup(card_scene, 0, initial_zoom)
 	print("[HomeView] games_grid.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	games_grid.items_requested.connect(_on_items_requested)
@@ -418,9 +421,12 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 	data model changed (filter, search, game add/remove)."""
 	_update_grid_orientation()
 	
-	# Apply zoom from centralized card settings state
+	# Apply zoom from centralized card settings state (per-mode).
 	if UIManager and UIManager.card_settings_state and games_grid:
-		games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
+		if games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID:
+			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
+		else:
+			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_list_ratio
 	
 	if refresh_effects:
 		# Effect configuration changed.

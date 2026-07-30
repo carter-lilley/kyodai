@@ -24,6 +24,8 @@ var layout_mode: int = 0
 var grid_vertical: bool = true
 var card_zoom_ratio: float = 0.25
 var card_zoom_level: int = -1
+## Card size ratio for LIST/CAROUSEL modes (per-mode zoom memory).
+var card_zoom_list_ratio: float = 0.25
 var grid_padding: int = 22
 var focus_scale_ratio: float = 0.09
 var display_mode: int = 0
@@ -90,6 +92,13 @@ func set_card_zoom_level(value: int) -> bool:
 	if card_zoom_level == value:
 		return false
 	card_zoom_level = value
+	_mark(ChangeMask.LAYOUT)
+	return true
+
+func set_card_zoom_list_ratio(value: float) -> bool:
+	if is_equal_approx(card_zoom_list_ratio, value):
+		return false
+	card_zoom_list_ratio = value
 	_mark(ChangeMask.LAYOUT)
 	return true
 
@@ -210,6 +219,7 @@ func sync_from_settings_manager() -> int:
 	set_grid_vertical(_get_bool_setting("library_grid_vertical", true))
 	set_card_zoom_ratio(_get_float_setting("library_card_zoom", 0.25))
 	set_card_zoom_level(_get_int_setting("library_card_zoom_level", -1))
+	set_card_zoom_list_ratio(_get_float_setting("library_card_zoom_list", 0.25))
 	set_grid_padding(_get_int_setting("library_grid_padding", 22))
 	set_focus_scale_ratio(_get_float_setting("library_focus_scale", 0.09))
 	set_display_mode(_get_int_setting("library_card_display_mode", 0))
@@ -236,6 +246,8 @@ func apply_setting(property_name: String, value: Variant) -> int:
 			return ChangeMask.LAYOUT if set_card_zoom_ratio(_coerce_float(value, 0.25)) else ChangeMask.NONE
 		"library_card_zoom_level":
 			return ChangeMask.LAYOUT if set_card_zoom_level(_coerce_int(value, -1)) else ChangeMask.NONE
+		"library_card_zoom_list":
+			return ChangeMask.LAYOUT if set_card_zoom_list_ratio(_coerce_float(value, 0.25)) else ChangeMask.NONE
 		"library_grid_padding":
 			return ChangeMask.LAYOUT if set_grid_padding(_coerce_int(value, 22)) else ChangeMask.NONE
 		"library_focus_scale":

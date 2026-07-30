@@ -131,33 +131,20 @@ func _update_grid_orientation() -> void:
 		if new_mode == VirtualScrollGridContainer.ViewMode.GRID:
 			var level: int = state.card_zoom_level
 			if level < 0:
-				# Derive level from the legacy saved ratio for migration.
-				var migration_snap_ratios = games_grid.get_snap_ratios()
-				if migration_snap_ratios.size() > 0:
-					migration_snap_ratios.reverse()
-					var nearest_idx := 0
-					var nearest_dist := INF
-					for i in range(migration_snap_ratios.size()):
-						var dist := absf(state.card_zoom_ratio - migration_snap_ratios[i])
-						if dist < nearest_dist:
-							nearest_dist = dist
-							nearest_idx = i
-					level = nearest_idx
+				# Derive level from the legacy saved ratio for migration. If the
+				# grid has no valid size yet, leave the level unset — the settle
+				# paths derive N from the ratio once the size is final.
+				var derived: int = games_grid.get_zoom_level(state.card_zoom_ratio)
+				if derived >= 0:
+					level = derived
 					state.card_zoom_level = level
-				else:
-					level = 0
-			var snap_ratios = games_grid.get_snap_ratios()
-			if snap_ratios.size() > 0:
-				snap_ratios.reverse()
-				level = clampi(level, 0, snap_ratios.size() - 1)
-				var new_ratio: float = snap_ratios[level]
-				state.card_zoom_ratio = new_ratio
-				if not is_equal_approx(games_grid.target_card_width_ratio, new_ratio):
-					games_grid.target_card_width_ratio = new_ratio
+			if level >= 0:
+				games_grid.set_zoom_level(level)
+				state.card_zoom_ratio = games_grid.target_card_width_ratio
 		else:
-			# LIST/CAROUSEL: use the saved ratio directly.
-			if not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_ratio):
-				games_grid.target_card_width_ratio = state.card_zoom_ratio
+			# LIST/CAROUSEL: use the per-mode saved ratio.
+			if not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_list_ratio):
+				games_grid.target_card_width_ratio = state.card_zoom_list_ratio
 	else:
 		print("[View._update_grid_orientation] no games_grid for ", view_name)
 
