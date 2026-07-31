@@ -483,6 +483,20 @@ var _thread_chunk_finish_times: Dictionary = {}  # "item_id_thread_index" -> fin
 func _ready():
 	if DataManager:
 		DataManager.setting_changed.connect(_on_setting_changed)
+	Performance.add_custom_monitor("download/image_active", _get_image_active_count)
+	Performance.add_custom_monitor("download/image_pending", _get_image_pending_count)
+
+func _get_image_active_count() -> int:
+	_pending_image_downloads_mutex.lock()
+	var count = _active_image_download_count
+	_pending_image_downloads_mutex.unlock()
+	return count
+
+func _get_image_pending_count() -> int:
+	_pending_image_downloads_mutex.lock()
+	var count = _pending_image_downloads.size()
+	_pending_image_downloads_mutex.unlock()
+	return count
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name == "download_speed_profile":
@@ -787,7 +801,9 @@ func _start_download(item: QueueItem):
 				func(progress_frac: float) -> String:
 					var mb_downloaded = int(item.expected_file_size * progress_frac / (1024.0 * 1024.0))
 					var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
-					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress_frac * 100)]
+					return "%s: %d/%d MB (%d%%)" % [item.name, mb_downloaded, mb_total, int(progress_frac * 100)],
+				false,  # pulsing
+				true  # pinned
 			)
 		else:
 			# No expected file size - use pulsing notification
@@ -798,7 +814,8 @@ func _start_download(item: QueueItem):
 				0.0,
 				Callable(),
 				Callable(),
-				true  # pulsing
+				true,  # pulsing
+				true  # pinned
 			)
 
 	download_started.emit(item.id)
@@ -2128,7 +2145,8 @@ func _show_reassembly_notification(item_id: String, _item_name: String) -> void:
 		0.0,
 		Callable(),  # No progress callable - using pulsing
 		Callable(),  # No text formatter
-		true  # pulsing = true
+		true,  # pulsing
+		true  # pinned
 	)
 
 func _reassemble_chunks(item_id: String):
@@ -2391,7 +2409,9 @@ func _copy_partial_to_final(item_id: String, partial_path: String, final_path: S
 		func(progress: float) -> String:
 			var mb_copied = int(item.expected_file_size * progress / (1024.0 * 1024.0))
 			var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
-			return "Copying %s: %d/%d MB (%d%%)" % [item.name, mb_copied, mb_total, int(progress * 100)]
+			return "Copying %s: %d/%d MB (%d%%)" % [item.name, mb_copied, mb_total, int(progress * 100)],
+		false,  # pulsing
+		true  # pinned
 	)
 
 	_final_copy_progress[item_id] = 0.0
@@ -2902,14 +2922,15 @@ func _cleanup_item(item: QueueItem):
 var _active_image_downloads: Dictionary = {}  # url -> {callbacks: [], completed: bool, success: bool}
 
 # Cap concurrent image HTTP requests to avoid exhausting the OS DNS resolver.
-const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 8
+const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 16
 var _active_image_download_count: int = 0
 var _pending_image_downloads: Array = []
 var _pending_image_downloads_mutex: Mutex = Mutex.new()
 
 ## Downloads an image with caching, deduplication, and limited concurrency.
-## callback(success: bool)
-func download_image(url: String, cache_path: String, callback: Callable) -> bool:
+## callback(success: bool). High-priority downloads jump ahead of queued
+## low-priority downloads (FIFO order is kept within each tier).
+func download_image(url: String, cache_path: String, callback: Callable, high_priority: bool = false) -> bool:
 	# Check if already cached
 	if FSM.file_exists(cache_path):
 		callback.call(true)
@@ -2930,11 +2951,21 @@ func download_image(url: String, cache_path: String, callback: Callable) -> bool
 
 	# Throttle: queue if too many downloads are in flight.
 	if _active_image_download_count >= MAX_CONCURRENT_IMAGE_DOWNLOADS:
-		_pending_image_downloads.append({
+		var item = {
 			"url": url,
 			"cache_path": cache_path,
-			"callback": callback
-		})
+			"callback": callback,
+			"high_priority": high_priority
+		}
+		if high_priority:
+			# Insert after the last queued high-priority item
+			var insert_idx = 0
+			for i in range(_pending_image_downloads.size()):
+				if _pending_image_downloads[i].get("high_priority", false):
+					insert_idx = i + 1
+			_pending_image_downloads.insert(insert_idx, item)
+		else:
+			_pending_image_downloads.append(item)
 		_pending_image_downloads_mutex.unlock()
 		return true
 
@@ -3045,6 +3076,8 @@ func _cleanup_temp_dir(dir_path: String) -> void:
 
 
 func _exit_tree() -> void:
+	Performance.remove_custom_monitor("download/image_active")
+	Performance.remove_custom_monitor("download/image_pending")
 	shutdown()
 
 func shutdown() -> void:

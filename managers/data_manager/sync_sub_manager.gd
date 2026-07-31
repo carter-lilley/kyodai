@@ -39,13 +39,8 @@ var _sync_platform_index: int = 0  # Current platform number (1-based)
 var _sync_platform_count: int = 0  # Total platforms
 var _sync_platform_total: int = 0  # Games in current platform
 
-# Batch notification system for incremental UI updates
+# Tracks whether a sync is running (used to suppress per-card cover downloads)
 var _sync_batch_mode: bool = false
-var _sync_batch_pending: Array[GameResource] = []
-var _sync_batch_pending_mutex: Mutex = Mutex.new()  # Thread-safe access
-var _sync_batch_timer: Timer = null
-var _sync_batch_last_emit_time: int = 0
-const BATCH_EMIT_INTERVAL_MS: int = 800  # Emit every 800ms during sync
 
 # Cover URLs collected during sync for batch downloading on main thread
 var _sync_covers_pending: Array[String] = []
@@ -95,24 +90,12 @@ func _ready():
 # ==================== SYNC THREAD SIGNAL WRAPPERS ====================
 # These are called via call_deferred from the sync thread to safely emit signals on the main thread
 
-func _emit_sync_started():
-	data_manager.sync_started.emit()
-
-
 func _emit_sync_progress(percent: float, current: int, total: int):
 	data_manager.sync_progress.emit(percent, current, total)
 
 
 func _emit_sync_completed(success: bool, message: String):
 	data_manager.sync_completed.emit(success, message)
-
-
-func _emit_game_added(game: GameResource):
-	data_manager.game_added.emit(game)
-
-
-func _emit_games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource]):
-	data_manager.games_batch_added.emit(platform_slug, start_index, games)
 
 
 # Wrapper for calling _sync_final_callback via call_deferred
@@ -181,7 +164,8 @@ func _show_removal_notification(total: int) -> void:
 		0.0,
 		Callable(),
 		Callable(),
-		true  # pulsing
+		true,  # pulsing
+		true  # pinned
 	)
 
 
@@ -536,9 +520,6 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 		_sync_total = 1
 	_sync_current = _sync_total
 
-	# Flush any remaining batch notifications
-	_flush_batch_notifications()
-
 	# Clean up
 	_stop_sync_batch_mode()
 	_stop_sync_fg_service()
@@ -573,13 +554,14 @@ func _process_cover_work_phase() -> void:
 	if not data_manager.database.is_database_ready():
 		return
 
-	# 1. Query existing games with covers but no cached logo box and merge them
-	#    into the cover URL map. This is the backfill portion of the phase.
+	# 1. Query existing games with covers but no cached logo box. This is the
+	#    backfill portion of the phase; covers collected during the sync were
+	#    already dispatched incrementally by _process_batch_sync.
 	var rows = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
 				return data_manager.database.query_array(
-					"SELECT romm_id, cover_url, title FROM games WHERE cover_url != '' AND cover_url IS NOT NULL AND (logo_box = '' OR logo_box = '{}')"
+					"SELECT romm_id, cover_url, title FROM games WHERE cover_url != '' AND cover_url IS NOT NULL AND (logo_box = '' OR logo_box = '{}' OR crop_transforms = '' OR crop_transforms = '{}')"
 				),
 			func(result: Array):
 				callback.call(result)
@@ -589,6 +571,10 @@ func _process_cover_work_phase() -> void:
 	if rows == null:
 		rows = []
 
+	# Group backfill rows by cover URL. Only count URLs not already collected
+	# during the sync toward the progress total. Games are merged into the
+	# shared map so mid-sync dispatch snapshots stay complete.
+	var backfill_url_to_games: Dictionary = {}  # cover_url -> Array[GameResource]
 	_sync_cover_url_to_games_mutex.lock()
 	for row in rows:
 		var url = row.get("cover_url", "")
@@ -596,33 +582,30 @@ func _process_cover_work_phase() -> void:
 		var romm_id = row.get("romm_id", 0)
 		if url == "" or romm_id <= 0:
 			continue
-		if not _sync_cover_url_to_games.has(url):
-			_sync_cover_url_to_games[url] = [] as Array[GameResource]
-			_sync_total += 1  # Each unique backfill cover is also a work unit
+		if not backfill_url_to_games.has(url):
+			backfill_url_to_games[url] = [] as Array[GameResource]
+			if not _sync_cover_url_to_games.has(url):
+				_sync_cover_url_to_games[url] = [] as Array[GameResource]
+				_sync_total += 1  # Each unique backfill cover is also a work unit
 		var already_present = false
 		for g in _sync_cover_url_to_games[url]:
 			if g.romm_id == romm_id:
 				already_present = true
 				break
+		var game = GameResource.new()
+		game.romm_id = romm_id
+		game.title = title
+		game.cover_url = url
+		backfill_url_to_games[url].append(game)
 		if not already_present:
-			var game = GameResource.new()
-			game.romm_id = romm_id
-			game.title = title
-			game.cover_url = url
 			_sync_cover_url_to_games[url].append(game)
-
-	var cover_total = _sync_cover_url_to_games.size()
-	var url_to_games: Dictionary = {}
-	for url in _sync_cover_url_to_games.keys():
-		url_to_games[url] = _sync_cover_url_to_games[url].duplicate()
 	_sync_cover_url_to_games_mutex.unlock()
 
-	if cover_total == 0:
-		return
+	var cover_total = backfill_url_to_games.size()
 
 	_sync_platform = "Logo boxes"
 	_sync_platform_index = _sync_platform_count + 1
-	print("[SyncThread] Logo box phase: %d unique covers to process" % cover_total)
+	print("[SyncThread] Logo box phase: %d backfill covers to process" % cover_total)
 
 	# Emit progress so the total includes the new cover work.
 	var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
@@ -631,9 +614,8 @@ func _process_cover_work_phase() -> void:
 
 	# 2. Process already-cached covers immediately and queue missing covers for
 	#    download on the main thread. Each cover calls back as it finishes.
-	var _missing_urls: Array[String] = []
-	for url in url_to_games.keys():
-		var games: Array[GameResource] = url_to_games[url]
+	for url in backfill_url_to_games.keys():
+		var games: Array[GameResource] = backfill_url_to_games[url]
 		var cache_path = data_manager.cover.get_cached_image_path(url)
 		if FSM.file_exists(cache_path):
 			data_manager.logo_box.process_cover_url(url, games, _make_cover_counted_callback(url, _on_cover_processed))
@@ -697,7 +679,7 @@ func _wait_for_all_cover_processing() -> void:
 	if data_manager.logo_box:
 		data_manager.logo_box.wait_for_all()
 
-	print("[SyncThread] Cover processing complete: %d cached, %d downloaded, %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count])
+	print("[SyncThread] Cover processing complete: %d cached, %d downloaded, %d FAILED, %d detect tasks remaining" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, data_manager.logo_box._get_pending_task_count() if data_manager.logo_box else -1])
 
 
 func _dispatch_covers_to_main_thread():
@@ -723,6 +705,7 @@ func _dispatch_covers_to_main_thread():
 	_sync_cover_url_to_games_mutex.unlock()
 
 	call_deferred("_download_covers_on_main_thread", urls, url_to_games, _on_cover_processed)
+	print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d detect_queue=%s)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads, str(data_manager.logo_box._get_pending_task_count() if data_manager.logo_box else "?")])
 
 
 func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictionary = {}, on_complete: Callable = Callable()):
@@ -749,7 +732,8 @@ func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictiona
 		_sync_pending_downloads += 1
 		_sync_pending_downloads_mutex.unlock()
 
-		# Use existing async download path
+		# Use existing async download path. Sync covers outrank card-visible
+		# cover loads (high priority) so the grid doesn't starve the pipeline.
 		data_manager.cover.download_cover(url, func(ok):
 			if ok:
 				_sync_covers_downloaded_count += 1
@@ -766,7 +750,10 @@ func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictiona
 			_sync_pending_downloads_mutex.unlock()
 			if download_batch_done:
 				_sync_pending_downloads_semaphore.post()
-		)
+				# Also wake the dispatch wait path; without this a wait that
+				# started while downloads were in flight never gets re-signaled.
+				_sync_covers_dispatch_semaphore.post()
+		, true)
 
 	# Mark this dispatch batch as processed and signal waiters if everything is done.
 	_sync_covers_mutex.lock()
@@ -902,17 +889,27 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var inserted = _check_and_insert_games_sync(games)
 	var _db_time = Time.get_ticks_msec() - db_start
 
-	# Phase 3: Collect unique cover URLs for later logo box caching.
+	# Phase 3: Collect unique cover URLs for logo box caching and queue them
+	# for interleaved dispatch during the sync.
 	if _is_logo_detection_enabled():
 		var cover_start = Time.get_ticks_msec()
 		_sync_cover_url_to_games_mutex.lock()
+		var new_urls: Array[String] = []
 		for game in games:
 			if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
 				if not _sync_cover_url_to_games.has(game.cover_url):
 					_sync_cover_url_to_games[game.cover_url] = [] as Array[GameResource]
 					_sync_total += 1  # Each unique cover is a logo box work unit
+					new_urls.append(game.cover_url)
 				_sync_cover_url_to_games[game.cover_url].append(game)
 		_sync_cover_url_to_games_mutex.unlock()
+		if new_urls.size() > 0:
+			_sync_covers_mutex.lock()
+			for url in new_urls:
+				if not _sync_covers_pending_set.has(url):
+					_sync_covers_pending.append(url)
+					_sync_covers_pending_set[url] = true
+			_sync_covers_mutex.unlock()
 		var _cover_time = Time.get_ticks_msec() - cover_start
 
 		# Interleave cover downloads/detection with the sync instead of doing it
@@ -1005,7 +1002,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if romm_ids.size() > 0:
 		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box FROM games WHERE romm_id IN (%s)" % placeholders,
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box, crop_transforms FROM games WHERE romm_id IN (%s)" % placeholders,
 			romm_ids
 		)
 		for row in existing_result:
@@ -1062,12 +1059,19 @@ func _show_sync_notification():
 		func() -> float:
 			if _sync_total == 0:
 				return 0.0
-			return float(_sync_current) / float(_sync_total),
+			var frac = float(_sync_current) / float(_sync_total)
+			# Cap below 1.0 until the sync is actually completing so the pinned
+			# notification isn't auto-dismissed by transient catch-up mid-sync.
+			if _sync_state != SyncState.COMPLETING and _sync_state != SyncState.IDLE:
+				return minf(frac, 0.99)
+			return frac,
 		func(progress: float) -> String:
 			var pct = int(progress * 100)
 			if _sync_platform != "":
 				return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
-			return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct]
+			return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct],
+		false,  # pulsing
+		true  # pinned
 	)
 
 
@@ -1191,10 +1195,11 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	var last_played = game.last_played
 	var title_id = game.title_id
 	var logo_box_json = JSON.stringify(game.logo_box)
+	var crop_transforms_json = JSON.stringify(game.crop_transforms)
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box, crop_transforms FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -1226,13 +1231,16 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		var existing_logo_box = existing.get("logo_box", "{}")
 		if existing_logo_box != "" and existing_logo_box != "{}":
 			logo_box_json = existing_logo_box
+		var existing_crop_transforms = existing.get("crop_transforms", "{}")
+		if existing_crop_transforms != "" and existing_crop_transforms != "{}":
+			crop_transforms_json = existing_crop_transforms
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, logo_box)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, logo_box, crop_transforms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1261,7 +1269,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
 		JSON.stringify(game.igdb_metadata),
-		logo_box_json
+		logo_box_json,
+		crop_transforms_json
 	]
 
 	return {"query": query, "bindings": bindings}
@@ -1299,80 +1308,19 @@ func sync_platforms_from_romm(callback: Callable = Callable()):
 	)
 
 
-# ==================== BATCH NOTIFICATION SYSTEM ====================
-
 func _start_sync_batch_mode():
-	"""Start batching game_added signals for efficient UI updates."""
+	"""Mark sync as in progress (suppresses per-card cover downloads)."""
 	_sync_batch_mode = true
-	_sync_batch_pending.clear()
-	_sync_batch_last_emit_time = Time.get_ticks_msec()
-
-	# Notify listeners that sync is starting - allows UI to clear cache before new data arrives
-	data_manager.sync_started.emit()
-
-	# Create timer to periodically flush notifications
-	if _sync_batch_timer:
-		_sync_batch_timer.queue_free()
-	_sync_batch_timer = Timer.new()
-	_sync_batch_timer.wait_time = BATCH_EMIT_INTERVAL_MS / 1000.0  # Convert ms to seconds
-	_sync_batch_timer.one_shot = false
-	_sync_batch_timer.timeout.connect(_flush_batch_notifications)
-	add_child(_sync_batch_timer)
-	_sync_batch_timer.start()
 
 
 func _stop_sync_batch_mode():
-	"""Stop batch mode and flush any remaining notifications."""
+	"""Mark sync as finished."""
 	_sync_batch_mode = false
-
-	# Stop the timer first
-	if _sync_batch_timer:
-		_sync_batch_timer.stop()
-		_sync_batch_timer.queue_free()
-		_sync_batch_timer = null
-
-	# Flush any remaining notifications
-	_sync_batch_pending_mutex.lock()
-	var has_pending = _sync_batch_pending.size() > 0
-	_sync_batch_pending_mutex.unlock()
-
-	if has_pending:
-		_flush_batch_notifications()
 
 
 func is_sync_in_progress() -> bool:
 	"""Check if a sync is currently in progress."""
 	return _sync_batch_mode
-
-
-func queue_batch_notification(game: GameResource):
-	"""Public entry point to queue a game notification during batch mode."""
-	_queue_batch_notification(game)
-
-
-func _queue_batch_notification(game: GameResource):
-	"""Queue a game notification during batch mode. Called via call_deferred from DB thread."""
-	_sync_batch_pending_mutex.lock()
-	_sync_batch_pending.append(game)
-	_sync_batch_pending_mutex.unlock()
-
-
-func _flush_batch_notifications():
-	"""Emit batched games and clear the pending list."""
-	_sync_batch_pending_mutex.lock()
-	if _sync_batch_pending.size() == 0:
-		_sync_batch_pending_mutex.unlock()
-		return
-
-	var games = _sync_batch_pending.duplicate()
-	_sync_batch_pending.clear()
-	_sync_batch_pending_mutex.unlock()
-
-	var start_index = _sync_current - games.size()
-
-	data_manager.games_batch_added.emit(_sync_platform, start_index, games)
-
-	_sync_batch_last_emit_time = Time.get_ticks_msec()
 
 
 func get_sync_state() -> int:

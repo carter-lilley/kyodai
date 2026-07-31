@@ -37,6 +37,8 @@ func sync_collections(callback: Callable = Callable()) -> void:
 		if not error.is_empty():
 			push_error("[CollectionSubManager] Failed to sync collections: " + error)
 			_is_syncing = false
+			if SystemManager.notifications:
+				SystemManager.notifications.show_notification("Failed to sync collections: " + error, SystemManager.notifications.Type.ERROR)
 			if callback.is_valid():
 				callback.call(false, error)
 			collections_synced.emit(false, error)

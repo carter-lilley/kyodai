@@ -25,8 +25,6 @@ func _connect_signals() -> void:
 		DataManager.database_ready.connect(_on_database_ready)
 		if DataManager.is_database_ready():
 			_on_database_ready()
-	if not DataManager.game_added.is_connected(_on_game_added):
-		DataManager.game_added.connect(_on_game_added)
 	if not DataManager.game_updated.is_connected(_on_game_updated):
 		DataManager.game_updated.connect(_on_game_updated)
 	if not DataManager.games_removed.is_connected(_on_games_removed):
@@ -43,8 +41,6 @@ func _disconnect_signals() -> void:
 		DataManager.setting_changed.disconnect(_on_setting_changed)
 	if DataManager.database_ready.is_connected(_on_database_ready):
 		DataManager.database_ready.disconnect(_on_database_ready)
-	if DataManager.game_added.is_connected(_on_game_added):
-		DataManager.game_added.disconnect(_on_game_added)
 	if DataManager.game_updated.is_connected(_on_game_updated):
 		DataManager.game_updated.disconnect(_on_game_updated)
 	if DataManager.games_removed.is_connected(_on_games_removed):
@@ -86,9 +82,6 @@ static func _collection_view_name(id: int) -> String:
 	return "Collection_%d" % id
 
 func _on_database_ready() -> void:
-	_load_total_count()
-
-func _on_game_added(_game: GameResource) -> void:
 	_load_total_count()
 
 func _on_games_removed(_platform_slug: String) -> void:

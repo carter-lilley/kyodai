@@ -1707,9 +1707,18 @@ func _recalculate_layout():
 
 	var available = _get_available_size()
 
+	# Invalidate scroll-math caches BEFORE the re-pad: card_size changed above,
+	# and _pad_total_items/get_lines_per_page must compute against the fresh
+	# stride rather than the stale cached one from the previous composition.
+	_cached_items_per_line = -1
+	_cached_normal_stride = -1.0
+
 	# Re-pad the geometry item count for the current N/page composition
 	# (placeholder slots fill the last page/row evenly).
+	var old_total_items = _total_items
 	_total_items = _pad_total_items(_source_total_items)
+	if debug_mode and old_total_items != _total_items:
+		print("[Grid] re-pad: source=", _source_total_items, " total ", old_total_items, " -> ", _total_items)
 
 	# Determine which parts of the layout actually changed
 	var structure_changed = view_mode != _last_layout_view_mode or grid_vertical != _last_layout_grid_vertical
@@ -1748,9 +1757,8 @@ func _recalculate_layout():
 	_last_layout_total_items = _total_items
 	_last_layout_pagination = pagination_enabled
 
-	# Invalidate then pre-compute scroll math before downstream consumers read it
-	_cached_items_per_line = -1
-	_cached_normal_stride = -1.0
+	# Pre-compute scroll math before downstream consumers read it (caches were
+	# invalidated earlier, before the re-pad)
 	_cached_items_per_line = _get_items_per_line()
 	_cached_normal_stride = _get_normal_stride()
 
@@ -2289,7 +2297,10 @@ func _pad_total_items(count: int) -> int:
 	var unit = items_per_line
 	if _is_pagination_active():
 		unit = items_per_line * get_lines_per_page()
-	return int(ceil(float(count) / unit) * unit)
+	var padded = int(ceil(float(count) / unit) * unit)
+	if debug_mode and padded != count:
+		print("[Grid] _pad_total_items: source=", count, " ipl=", items_per_line, " lpp=", get_lines_per_page(), " unit=", unit, " padded=", padded)
+	return padded
 
 func _update_layout():
 	var items_per_line = _get_items_per_line()
@@ -3675,157 +3686,6 @@ func _update_debug_flow_panel_position():
 	var parent_pos = _margin_container.global_position
 	_debug_flow_panel.position = flow_pos - parent_pos
 	_debug_flow_panel.size = _flow_container.size
-
-func increment_total_count(amount: int = 1) -> int:
-	if amount <= 0:
-		return _total_items
-
-	var start_index = _total_items
-	_total_items += amount
-
-	_update_layout()
-
-	if start_index == 0 and _active_cards.size() == 0 and _total_items > 0:
-		_initial_load_from_increment()
-		return start_index
-
-	var items_per_line = _get_items_per_line()
-	var eff = _get_normal_stride()
-
-	if vertical:
-		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
-		var viewport_height = size.y
-		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
-		var visible_end = min(visible_start + (visible_rows * items_per_line), _total_items)
-
-		visible_range_changed.emit(visible_start, visible_end, _total_items)
-	else:
-		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
-		var viewport_width = size.x
-		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
-		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
-
-		visible_range_changed.emit(visible_start, visible_end, _total_items)
-
-	return start_index
-
-func _initial_load_from_increment():
-	var items_per_line = _get_items_per_line()
-	var visible_count: int
-	var eff = _get_normal_stride()
-	var available := _get_available_size()
-
-	if vertical:
-		var viewport_height = available.y
-		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		visible_count = visible_rows * items_per_line
-	else:
-		var viewport_width = available.x
-		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		visible_count = visible_cols * items_per_line
-
-	var total_card_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
-	# Cap card count to pool size to prevent creating too many cards
-	var card_count = min(total_card_count, _total_items, _max_pool_size)
-
-	_virtual_start = 0
-	_virtual_end = card_count - 1
-
-	for i in range(card_count):
-		var card = _acquire_card()
-		if card:
-			card.set_meta("virtual_index", i)
-			if _card_has_focus_scale_enabled:
-				card.focus_scale_enabled = true
-				card.focus_scale_inverted = _get_focus_scale_inverted()
-			_configure_card_visual_layer(card)
-			_configure_card_size_flags(card)
-			_active_cards.append(card)
-			_active_cards_by_index[i] = card
-			_flow_container.add_child(card)
-
-			if _data_cache.has(i):
-				var card_visible = i < visible_count
-				if _card_has_set_game_with_priority:
-					card.set_game_with_priority(_data_cache[i], card_visible)
-				else:
-					card.game = _data_cache[i]
-				if _card_has_update_display:
-					card.update_display()
-
-			item_created.emit(card, i)
-
-	_update_margin()
-	_update_visual_draw_order()
-
-func cache_items_at_offset(items: Array[GameResource], offset: int):
-	for i in range(items.size()):
-		if offset + i < _total_items:
-			var cache_key = offset + i
-			var game = items[i]
-
-			# Deduplication check
-			if game and game.romm_id != 0:
-				if _cached_game_ids.has(game.romm_id):
-					var existing_key = _cached_game_ids[game.romm_id]
-					# Stale mapping check: evicted or replaced game at existing_key
-					if not _data_cache.has(existing_key) or _data_cache[existing_key] != game:
-						_cached_game_ids.erase(game.romm_id)
-					elif existing_key != cache_key:
-						continue
-
-				_cached_game_ids[game.romm_id] = cache_key
-
-			# Actually cache the game so it can be assigned to cards.
-			_data_cache[cache_key] = game
-			_update_cache_access_order(cache_key)
-
-	if items.size() > 0:
-		_get_visible_range()
-		var visible_start_idx: int = _visible_start_idx
-		var visible_end_idx: int = _visible_end_idx
-
-		for card in _active_cards:
-			var idx = card.get_meta("virtual_index", -1)
-			if idx >= offset and idx < offset + items.size():
-				if _data_cache.has(idx):
-					var card_visible = idx >= visible_start_idx and idx < visible_end_idx
-					if _card_has_set_game_with_priority:
-						card.set_game_with_priority(_data_cache[idx], card_visible)
-					else:
-						card.game = _data_cache[idx]
-					_update_cache_access_order(idx)
-					if _card_has_update_display:
-						card.update_display()
-
-func refresh_if_visible(start_index: int, end_index: int):
-	if _active_cards.size() == 0:
-		return
-
-	var current_first = _active_cards[0].get_meta("virtual_index", 0)
-	var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-
-	var overlap_start = max(start_index, current_first)
-	var overlap_end = min(end_index, current_last)
-
-	if overlap_start <= overlap_end:
-		_get_visible_range()
-		var visible_start_idx: int = _visible_start_idx
-		var visible_end_idx: int = _visible_end_idx
-
-		for card in _active_cards:
-			var idx = card.get_meta("virtual_index", -1)
-			if idx >= overlap_start and idx <= overlap_end and _data_cache.has(idx):
-				var card_visible = idx >= visible_start_idx and idx < visible_end_idx
-				if _card_has_set_game_with_priority:
-					card.set_game_with_priority(_data_cache[idx], card_visible)
-				else:
-					card.game = _data_cache[idx]
-				_update_cache_access_order(idx)
-				if _card_has_update_display:
-					card.update_display()
 
 func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 	"""Refresh effects on active cards. Cards in the visible zone plus a small

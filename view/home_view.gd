@@ -104,23 +104,23 @@ func _ready():
 
 	print("[HomeView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
 
-func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true):
+func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true, on_complete: Callable = Callable(), reload_gamenative: bool = true):
 	var load_start_us := Time.get_ticks_usec()
 
 	_is_loading = true
 	_total_count_load_pending = true
 	_update_status("Loading recent games...")
-	
+
 	# Load GameNative games first (they're small and cached). When preserving the
 	# cache and GameNative games are already loaded, skip this so we don't mark
 	# the merged DB cache dirty and defeat the prefetch warm-up.
-	var should_reload_gamenative = not _gamenative_loaded or not preserve_cache
+	var should_reload_gamenative = reload_gamenative and (not _gamenative_loaded or not preserve_cache)
 	print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _gamenative_loaded=", _gamenative_loaded, " should_reload_gamenative=", should_reload_gamenative, " _merged_cache_dirty=", _merged_cache_dirty)
 	if should_reload_gamenative:
 		var phase_start_us := Time.get_ticks_usec()
 		_load_gamenative_games()
 		print("[HomeView] _load_gamenative_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
-	
+
 	# If the database is already ready, set the count synchronously so the grid
 	# can settle with the correct total on the first frame instead of waiting for
 	# a background task to return.
@@ -131,12 +131,14 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		_total_count_load_pending = false
 		if not is_instance_valid(games_grid):
 			_is_loading = false
+			if on_complete.is_valid():
+				on_complete.call()
 			return
-		
+
 		_db_games_count = count
 		_gamenative_games_count = _gamenative_games.size()
 		_total_games = _db_games_count + _gamenative_games_count
-		
+
 		# Clear the index tracking when total changes significantly
 		if not preserve_cache:
 			_gamenative_indices.clear()
@@ -144,17 +146,17 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			_merged_cache_start = 0
 			_merged_cache_end = 0
 			_merged_cache_dirty = true
-		
+
 		phase_start_us = Time.get_ticks_usec()
 		var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 		games_grid.set_total_count_with_available_size(_total_games, available_size, preserve_cache)
 		print("[HomeView] games_grid.set_total_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
-		
+
 		# Only log when the count actually changes to avoid startup noise.
 		if _total_games != _last_logged_total_games:
 			_last_logged_total_games = _total_games
 			print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
-		
+
 		if _db_games_count == 0:
 			_update_status("No downloaded games found")
 			# Trigger scan if no DB games found (may have been wiped from DB but files exist)
@@ -167,8 +169,10 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			_update_status("Showing 0-0 of %d games" % _total_games)
 		_is_loading = false
 		print("[HomeView] _load_total_count total elapsed_us=", Time.get_ticks_usec() - load_start_us)
+		if on_complete.is_valid():
+			on_complete.call()
 		return
-	
+
 	# Fallback: DB not ready yet, query total count asynchronously.
 	SystemManager.memory.queue_db_task(
 		func():
@@ -178,12 +182,14 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			_total_count_load_pending = false
 			if not is_instance_valid(games_grid):
 				_is_loading = false
+				if on_complete.is_valid():
+					on_complete.call()
 				return
-			
+
 			_db_games_count = count
 			_gamenative_games_count = _gamenative_games.size()
 			_total_games = _db_games_count + _gamenative_games_count
-			
+
 			# Clear the index tracking when total changes significantly
 			if not preserve_cache:
 				_gamenative_indices.clear()
@@ -191,14 +197,14 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 				_merged_cache_start = 0
 				_merged_cache_end = 0
 				_merged_cache_dirty = true
-			
+
 			games_grid.set_total_count_with_available_size(_total_games, UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO, preserve_cache)
-			
+
 			# Only log when the count actually changes to avoid startup noise.
 			if _total_games != _last_logged_total_games:
 				_last_logged_total_games = _total_games
 				print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
-			
+
 			if _db_games_count == 0:
 				_update_status("No downloaded games found")
 				# Trigger scan if no DB games found (may have been wiped from DB but files exist)
@@ -210,6 +216,8 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			else:
 				_update_status("Showing 0-0 of %d games" % _total_games)
 			_is_loading = false
+			if on_complete.is_valid():
+				on_complete.call()
 	)
 	print("[HomeView] _load_total_count async queued elapsed_us=", Time.get_ticks_usec() - load_start_us)
 
@@ -439,7 +447,7 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 		else:
 			# Use callback version to ensure dimensions refresh BEFORE rebuilding
 			# effects, so cards are rebuilt against final bounds.
-			_load_total_count_with_callback(false, func():
+			_load_total_count(false, false, func():
 				_refresh_grid_dimensions()
 				games_grid.refresh_all_card_effects(true)
 			)
@@ -499,7 +507,7 @@ func _on_game_launched(game: GameResource):
 	
 	# Reload data to get new sort order (don't preserve cache), then refresh dimensions
 	# Don't reload GameNative games - we just updated the cache with new timestamps
-	_load_total_count_with_callback(false, func():
+	_load_total_count(false, false, func():
 		_refresh_grid_dimensions()
 	, false)
 
@@ -507,55 +515,6 @@ func _on_gamenative_games_updated():
 	"""Called when GameNative games are added or removed - refresh grid."""
 	# Reload total count and refresh grid (don't preserve cache)
 	_load_total_count(false)
-
-func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable(), reload_gamenative: bool = true):
-	"""Get total downloaded game count and call callback when complete."""
-	_is_loading = true
-	_total_count_load_pending = true
-	_update_status("Refreshing...")
-	
-	# Reload GameNative games first (unless we're preserving our updated cache)
-	if reload_gamenative:
-		_load_gamenative_games()
-	
-	SystemManager.memory.queue_db_task(
-		func():
-			var count = DataManager.get_downloaded_games_count()
-			return count,
-		func(count: int):
-			_total_count_load_pending = false
-			if not is_instance_valid(games_grid):
-				_is_loading = false
-				if on_complete.is_valid():
-					on_complete.call()
-				return
-			
-			_db_games_count = count
-			_gamenative_games_count = _gamenative_games.size()
-			_total_games = _db_games_count + _gamenative_games_count
-			
-			if not preserve_cache:
-				_gamenative_indices.clear()
-				_merged_games_cache.clear()
-				_merged_cache_start = 0
-				_merged_cache_end = 0
-				_merged_cache_dirty = true
-			
-			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
-			games_grid.set_total_count_with_available_size(_total_games, available_size, preserve_cache)
-			
-			if _total_games == 0:
-				_update_status("No downloaded games found")
-			else:
-				var range_info = games_grid.get_visible_range()
-				var start_num = range_info.start + 1
-				var end_num = mini(range_info.end, _total_games)
-				_update_status("Showing %d-%d of %d games" % [start_num, end_num, _total_games])
-			_is_loading = false
-			
-			if on_complete.is_valid():
-				on_complete.call()
-	)
 
 func _refresh_grid_dimensions() -> void:
 	"""Recalculate grid layout using the deterministic available size."""
@@ -665,7 +624,7 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 					_gamenative_indices.clear()
 					
 					# Force refresh the grid (don't preserve cache to remove the deleted game)
-					_load_total_count_with_callback(false, func():
+					_load_total_count(false, false, func():
 						_refresh_grid_dimensions()
 						
 						# Re-enable grid interaction

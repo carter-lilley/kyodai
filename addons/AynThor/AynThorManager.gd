@@ -24,6 +24,29 @@ var _second_container: SubViewportContainer
 var ayn_thor_plugin = null
 var renderer = null
 
+## True while the Android Presentation is shown on the second display.
+var _screen_active: bool = false
+
+## Shows the Android Presentation on the second display (no-op if already up).
+func acquire_second_screen() -> void:
+	if not ayn_thor_plugin:
+		return
+	if _screen_active:
+		return
+	if ayn_thor_plugin.has_method("isScreenActive") and ayn_thor_plugin.isScreenActive():
+		_screen_active = true
+		return
+	ayn_thor_plugin.init_screen()
+	_screen_active = true
+
+## Dismisses the Android Presentation so the second display is released
+## instead of sitting on a blank viewport when dual-screen mode is off.
+func release_second_screen() -> void:
+	if not ayn_thor_plugin:
+		return
+	_screen_active = false
+	ayn_thor_plugin.destroy_screen()
+
 var is_swapped: bool = false
 var original_main_size: Vector2i
 var original_second_size: Vector2i
@@ -74,7 +97,15 @@ func _ready():
 		ayn_thor_plugin = Engine.get_singleton("AynThor")
 		ayn_thor_plugin.connect("second_screen_connected", _on_screen_connected)
 		ayn_thor_plugin.connect("second_screen_input", _on_second_screen_input)
-		ayn_thor_plugin.init_screen()
+		# Only show the second-screen presentation at boot when dual-screen mode
+		# is enabled; otherwise it sits on the second display as a blank viewport.
+		var ds_enabled := false
+		if DataManager and DataManager.is_settings_loaded():
+			var ds_setting = DataManager.get_setting("dual_screen_mode")
+			if ds_setting and ds_setting.value is bool:
+				ds_enabled = ds_setting.value
+		if ds_enabled:
+			acquire_second_screen()
 	
 	if ClassDB.class_exists("AynThorRenderer"):
 		renderer = get_node_or_null("AynThorRenderer")
@@ -98,6 +129,10 @@ var skip_frames: int = 0
 func _process(_delta):
 	if skip_frames > 0:
 		skip_frames -= 1
+		return
+
+	# Don't blit while the presentation is released (dual-screen mode off).
+	if not _screen_active:
 		return
 
 	if not renderer or not renderer.is_window_available():
@@ -230,8 +265,7 @@ func _on_screen_connected():
 
 func _notification(what):
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		if ayn_thor_plugin:
-			ayn_thor_plugin.destroy_screen()
+		release_second_screen()
 
 enum ScreenRotation {
 	DEG_0 = 0,

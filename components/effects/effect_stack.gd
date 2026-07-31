@@ -119,6 +119,12 @@ func set_logo_rect(rect: Vector4) -> void:
 		if effect:
 			effect.set_logo_rect(rect)
 
+## Passes precomputed crop transforms (for the current ratio) through to the
+## media container. Empty dict = runtime crop math.
+func set_crop_transforms(transforms: Dictionary) -> void:
+	if media_container:
+		media_container.crop_transforms = transforms
+
 func set_logo_mode(mode: int) -> void:
 	if media_container:
 		media_container.logo_mode = mode

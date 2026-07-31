@@ -2,16 +2,12 @@
 
 xemu save sync
 tst emulator app update flow on android
-single screen is not single screen (second surface still covers other screen)
 gamenative out of view on android
 downloading core android notif stuck
 platform cards take longer on android
 some settings screens not scrollable?
 better extraction notifications
 need to 'click' on text fields to open keyboard. 
-'failed to connect' (E 0:01:19:213   platforms_settings_view.gd:155 @ <anonymous lambda>(): [PlatformsSettingsView] Failed to fetch platforms: Request failed with result: 2 )
-	^needs snackbar notif
-
 
 romm;
 - mark 'played' if played
@@ -20,7 +16,7 @@ romm;
 - sort by favorite? wishlist?
 
 ## saves
-	implement argosy sigil
+	x implement argosy sigil
 	check emulator config for save/user folder(s) at synctime
 	check if save is modified
 
@@ -46,11 +42,7 @@ romm;
 	hero fx (screenshots/cropping/shadows/etc)
 	
 ## performance & sync:
-	further test/check image priority management
-	performance.add_custom_monitor for anything sketchy or big performance drains?
-	check: are sync db actions and load db actions the same?
-	move max_cache_size to memory manager?
-	how to split important siblings
+	x Options: flip fold_romm_siblings default to false (matches RomM exactly, near-zero effort), add per-group unfold, or use RomM's is_main_sibling for representative selection + fix the batch bug.
 	cache image colors on sync
 	
 ## launch:

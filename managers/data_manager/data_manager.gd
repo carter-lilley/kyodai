@@ -12,8 +12,6 @@ signal sync_completed(success: bool, message: String)
 @warning_ignore("unused_signal")
 signal sync_progress(percent: float, current: int, total: int)
 @warning_ignore("unused_signal")
-signal game_added(game: GameResource)
-@warning_ignore("unused_signal")
 signal game_updated(game: GameResource)
 @warning_ignore("unused_signal")
 signal games_removed(platform_slug: String)
@@ -21,12 +19,6 @@ signal games_removed(platform_slug: String)
 signal image_loaded(url: String, texture: Texture2D)
 @warning_ignore("unused_signal")
 signal cache_cleared()
-
-# NEW: Batch notification signals for efficient UI updates
-@warning_ignore("unused_signal")
-signal games_batch_added(platform_slug: String, start_index: int, games: Array[GameResource])
-@warning_ignore("unused_signal")
-signal sync_started()  # Emitted when a sync begins - allows UI to clear cache
 
 # NEW: Emitted when the downloaded-games scan finishes.
 @warning_ignore("unused_signal")
@@ -221,10 +213,6 @@ func get_games_for_collection_paginated(romm_id: int, offset: int, limit: int, s
 
 # ==================== GAME WRITES ====================
 
-func add_game(game: GameResource, callback: Callable = Callable()) -> bool:
-	return database.add_game(game, callback)
-
-
 func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	return database.update_game(game, callback)
 
@@ -390,8 +378,8 @@ func get_current_platform_progress() -> Dictionary:
 
 # ==================== COVERS / CACHE ====================
 
-func load_image(url: String, callback: Callable = Callable()):
-	cover.load_image(url, callback)
+func load_image(url: String, callback: Callable = Callable(), high_priority: bool = false):
+	cover.load_image(url, callback, high_priority)
 
 
 func get_cached_image_path(url: String) -> String:

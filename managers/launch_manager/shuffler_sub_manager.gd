@@ -194,6 +194,8 @@ func start_session(config: Dictionary) -> void:
 	_state = State.DOWNLOADING
 	_config = config
 	_current_game_index = -1
+	_switch_in_progress = false
+	_pending_switch_index = -1
 	_reset_download_tracking()
 	_shuffler_vita_apps.clear()
 
@@ -211,6 +213,7 @@ func stop_session() -> void:
 
 	_reroll_in_progress = false
 	_reroll_download_id = ""
+	_pending_switch_index = -1
 
 	_kill_round_timer()
 
@@ -373,49 +376,57 @@ func remove_game() -> void:
 
 	if candidate.is_active_variant_downloaded() and FileAccess.file_exists(candidate.file_path):
 		new_entry.temp_path = candidate.file_path
-		_prepare_entry(index, new_entry)
-	else:
-		var download_url = SystemManager.network.get_romm_download_url(candidate.get_active_game_id(), candidate.get_active_file_name())
-		var temp_dir = TEMP_DIR + str(candidate.romm_id)
-		var temp_path = FSM.join_paths(temp_dir, candidate.get_active_file_name())
-		FSM.make_dir_recursive(temp_dir)
-		new_entry.temp_path = temp_path
-		var file_size = candidate.get_active_file_size()
+		await _prepare_entry(index, new_entry)
+		_finish_reroll(index)
+		return
 
-		if not SystemManager.download.download_progress.is_connected(_on_download_progress):
-			SystemManager.download.download_progress.connect(_on_download_progress)
+	var download_url = SystemManager.network.get_romm_download_url(candidate.get_active_game_id(), candidate.get_active_file_name())
+	var temp_dir = TEMP_DIR + str(candidate.romm_id)
+	var temp_path = FSM.join_paths(temp_dir, candidate.get_active_file_name())
+	FSM.make_dir_recursive(temp_dir)
+	new_entry.temp_path = temp_path
+	var file_size = candidate.get_active_file_size()
 
-		_reroll_download_id = SystemManager.download.queue_download(
-			download_url,
-			temp_path,
-			"game",
-			"",
-			false,
-			"",
-			candidate,
-			{"on_complete": _on_reroll_download_complete.bind(index, candidate)},
-			candidate.romm_id,
-			true,
-			true,
-			file_size,
-			false
-		)
+	if not SystemManager.download.download_progress.is_connected(_on_download_progress):
+		SystemManager.download.download_progress.connect(_on_download_progress)
 
-		if _reroll_download_id == "":
-			_reset_reroll_state()
-			push_error("[ShufflerSubManager] Failed to queue reroll download")
-			_switch_to_game(index)
-			return
+	_reroll_download_id = SystemManager.download.queue_download(
+		download_url,
+		temp_path,
+		"game",
+		"",
+		false,
+		"",
+		candidate,
+		{"on_complete": _on_reroll_download_complete.bind(index, candidate)},
+		candidate.romm_id,
+		true,
+		true,
+		file_size,
+		false
+	)
 
-	if new_entry.status == ShufflerBag.EntryStatus.READY:
+	if _reroll_download_id == "":
 		_reset_reroll_state()
+		push_error("[ShufflerSubManager] Failed to queue reroll download")
 		_switch_to_game(index)
-	else:
-		var cb = func(ready_index: int):
-			if ready_index == index:
-				_reset_reroll_state()
-				_switch_to_game(index)
-		game_ready.connect(cb, CONNECT_ONE_SHOT)
+		return
+
+func _finish_reroll(index: int) -> void:
+	if not can_reroll():
+		print("[ShufflerSubManager] _finish_reroll: session no longer active; abandoning reroll")
+		_reset_reroll_state()
+		return
+	if index < 0 or index >= _bag.size():
+		push_error("[ShufflerSubManager] _finish_reroll: invalid index " + str(index))
+		_reset_reroll_state()
+		return
+	if _bag.entries[index].status != ShufflerBag.EntryStatus.READY:
+		# Launch anyway: launch_shuffler_game re-runs preparation for
+		# vita3k/rpcs3, so a failed pre-prep can still recover at launch time.
+		push_warning("[ShufflerSubManager] Rerolled entry not READY (status=" + _status_name(_bag.entries[index].status) + "); attempting launch anyway")
+	_reset_reroll_state()
+	_switch_to_game(index)
 
 # ============================================================================
 # LOGGING HELPERS
@@ -628,16 +639,8 @@ func _on_reroll_download_complete(success: bool, path: String, index: int, game:
 	if success and FileAccess.file_exists(path):
 		print("[ShufflerSubManager] Reroll download complete: " + game.title)
 		_bag.entries[index].temp_path = path
-		_prepare_entry(index, _bag.entries[index])
-		if _bag.entries[index].status == ShufflerBag.EntryStatus.READY:
-			_reset_reroll_state()
-			_switch_to_game(index)
-		else:
-			var cb = func(ready_index: int):
-				if ready_index == index:
-					_reset_reroll_state()
-					_switch_to_game(index)
-			game_ready.connect(cb, CONNECT_ONE_SHOT)
+		await _prepare_entry(index, _bag.entries[index])
+		_finish_reroll(index)
 	else:
 		push_warning("[ShufflerSubManager] Reroll download failed for " + game.title + "; relaunching previous game")
 		_reset_reroll_state()
@@ -816,6 +819,17 @@ func _launch_game(entry: Dictionary) -> void:
 	var on_pid_ready = func(pid: int):
 		print("[ShufflerSubManager] on_pid_ready for " + game.title + ": pid=" + str(pid))
 		if pid != -1:
+			# Prerequisites (downloads, prep) can delay this callback past a
+			# switch or stop; a process that arrives late must not take focus
+			# or linger untracked.
+			var is_stale: bool = (_state != State.ACTIVE and _state != State.PAUSED) \
+				or _current_game_index < 0 or _current_game_index >= _bag.size() \
+				or _bag.entries[_current_game_index].game != game \
+				or entry.pid != -1
+			if is_stale:
+				push_warning("[ShufflerSubManager] Late pid " + str(pid) + " for " + game.title + " arrived after switch/stop; killing it")
+				LaunchManager.process.kill_process_async(pid)
+				return
 			entry.pid = pid
 			entry.started = true
 			_maximize_with_retry(pid)

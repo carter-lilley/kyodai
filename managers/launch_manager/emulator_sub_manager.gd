@@ -524,7 +524,9 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		func() -> float:
 			return float(progress.completed) / float(total_cores),
 		func(_p: float) -> String:
-			return step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")"
+			return step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")",
+		false,  # pulsing
+		true  # pinned
 	)
 	
 	# Queue all downloads
@@ -792,7 +794,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 		func() -> float:
 			return float(progress.completed) / float(total_archives),
 		func(_p: float) -> String:
-			return step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")"
+			return step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")",
+		false,  # pulsing
+		true  # pinned
 	)
 	
 	# Queue extraction for all archives

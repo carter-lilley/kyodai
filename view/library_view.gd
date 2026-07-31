@@ -29,8 +29,6 @@ func _exit_tree() -> void:
 	if DataManager:
 		if DataManager.database_ready.is_connected(_on_database_ready):
 			DataManager.database_ready.disconnect(_on_database_ready)
-		if DataManager.game_added.is_connected(_on_game_added):
-			DataManager.game_added.disconnect(_on_game_added)
 		if DataManager.game_updated.is_connected(_on_game_updated):
 			DataManager.game_updated.disconnect(_on_game_updated)
 		if DataManager.games_removed.is_connected(_on_games_removed):
@@ -39,10 +37,6 @@ func _exit_tree() -> void:
 			DataManager.sync_completed.disconnect(_on_sync_completed)
 		if DataManager.sync_progress.is_connected(_on_sync_progress):
 			DataManager.sync_progress.disconnect(_on_sync_progress)
-		if DataManager.games_batch_added.is_connected(_on_games_batch_added):
-			DataManager.games_batch_added.disconnect(_on_games_batch_added)
-		if DataManager.sync_started.is_connected(_on_sync_started):
-			DataManager.sync_started.disconnect(_on_sync_started)
 	if UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
 	# The search overlay is created as an orphan; free it explicitly.
@@ -66,8 +60,6 @@ func _connect_signals() -> void:
 			_on_database_ready()
 	if not DataManager.database_failed.is_connected(_on_database_failed):
 		DataManager.database_failed.connect(_on_database_failed)
-	if not DataManager.game_added.is_connected(_on_game_added):
-		DataManager.game_added.connect(_on_game_added)
 	if not DataManager.game_updated.is_connected(_on_game_updated):
 		DataManager.game_updated.connect(_on_game_updated)
 	if not DataManager.games_removed.is_connected(_on_games_removed):
@@ -76,10 +68,6 @@ func _connect_signals() -> void:
 		DataManager.sync_completed.connect(_on_sync_completed)
 	if not DataManager.sync_progress.is_connected(_on_sync_progress):
 		DataManager.sync_progress.connect(_on_sync_progress)
-	if not DataManager.games_batch_added.is_connected(_on_games_batch_added):
-		DataManager.games_batch_added.connect(_on_games_batch_added)
-	if not DataManager.sync_started.is_connected(_on_sync_started):
-		DataManager.sync_started.connect(_on_sync_started)
 	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
@@ -238,10 +226,10 @@ func _clear_search():
 		# Reload grid
 		_load_total_count_with_platform(false)
 
-func _load_total_count_with_search():
+func _load_total_count_with_search(on_complete: Callable = Callable()):
 	"""Load total count for search results."""
 	_is_loading = true
-	
+
 	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_search_results_count(_search_query)
@@ -249,21 +237,25 @@ func _load_total_count_with_search():
 		func(count: int):
 			if not is_instance_valid(games_grid):
 				_is_loading = false
+				if on_complete.is_valid():
+					on_complete.call()
 				return
 			_total_games = count
 			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 			games_grid.set_total_count_with_available_size(count, available_size, false)
-			
+
 			# Reset scroll to top
 			games_grid.scroll_to_index(0, false)
-			
+
 			# Refresh dimensions
 			_refresh_grid_dimensions()
-			
+
 			# Focus first card
 			call_deferred("_focus_first_card")
-			
+
 			_is_loading = false
+			if on_complete.is_valid():
+				on_complete.call()
 	)
 
 func _load_platforms_list() -> void:
@@ -437,57 +429,16 @@ func _on_cycle_next_clicked() -> void:
 	"""Handle click on next arrow in platform indicator."""
 	_cycle_platform(1)
 
-func _load_total_count(preserve_cache: bool = false):
+func _load_total_count(preserve_cache: bool = false, on_complete: Callable = Callable()):
 	"""Get total game count for virtual scrolling setup."""
 	if _is_search_active:
-		_load_total_count_with_search()
+		_load_total_count_with_search(on_complete)
 		return
-	
-	_is_loading = true
-	_update_status("Loading library...")
-	
-	# Query total count asynchronously
-	SystemManager.memory.queue_db_task(
-		func():
-			var count = DataManager.get_total_games_count(_current_platform_slug)
-			return count,
-		func(count: int):
-			if not is_instance_valid(games_grid):
-				_is_loading = false
-				return
-			_total_games = count
-			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
-			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
-			_update_status("Showing 0-0 of %d games" % count)
-			_is_loading = false
-	)
 
-func _load_total_count_with_callback(preserve_cache: bool = false, on_complete: Callable = Callable()):
-	"""Get total game count for current platform filter and call callback when complete."""
-	if _is_search_active:
-		_is_loading = true
-		SystemManager.memory.queue_db_task(
-			func():
-				var count = DataManager.get_search_results_count(_search_query)
-				return count,
-			func(count: int):
-				if not is_instance_valid(games_grid):
-					_is_loading = false
-					if on_complete.is_valid():
-						on_complete.call()
-					return
-				_total_games = count
-				var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
-				games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
-				_is_loading = false
-				if on_complete.is_valid():
-					on_complete.call()
-		)
-		return
-	
 	_is_loading = true
 	_update_status("Loading library...")
-	
+
+	# Query total count asynchronously
 	SystemManager.memory.queue_db_task(
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug)
@@ -590,7 +541,7 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 		else:
 			# Use callback version to ensure dimensions refresh BEFORE rebuilding
 			# effects, so cards are rebuilt against final bounds.
-			_load_total_count_with_callback(false, func():
+			_load_total_count(false, func():
 				# Refresh dimensions first to establish final card bounds.
 				_refresh_grid_dimensions()
 				# Then refresh existing cards.
@@ -614,42 +565,6 @@ func _on_database_ready():
 func _on_database_failed(_error: String):
 	_is_loading = false
 	_update_status("Database unavailable - check storage permissions, then restart the app")
-
-func _on_game_added(_game: GameResource):
-	# Refresh total count and grid (for individual additions outside sync)
-	_load_total_count()
-
-func _on_games_batch_added(_platform_slug: String, _start_index: int, games: Array[GameResource]):
-	"""Handle batch game additions during sync without full grid rebuild."""
-	# Filter out games without cover art based on setting
-	var hide_no_covers = true
-	var setting = DataManager.get_setting("hide_games_without_covers")
-	if setting:
-		hide_no_covers = setting.value
-	
-	var filtered_games: Array[GameResource] = []
-	for game in games:
-		if not hide_no_covers or game.has_cover_art:
-			filtered_games.append(game)
-	
-	if filtered_games.size() == 0:
-		return
-	
-	# Increment total count without rebuilding buffer
-	var actual_start = games_grid.increment_total_count(filtered_games.size())
-	
-	# Cache games for when user scrolls to them
-	games_grid.cache_items_at_offset(filtered_games, actual_start)
-	
-	# Only refresh visible cards if they fall within current viewport
-	games_grid.refresh_if_visible(actual_start, actual_start + filtered_games.size() - 1)
-	
-	# Update status label with current counts
-	var range_info = games_grid.get_visible_range()
-	if range_info.total > 0:
-		var start_num = range_info.start + 1
-		var end_num = mini(range_info.end, range_info.total)
-		_update_status("Showing %d-%d of %d games" % [start_num, end_num, range_info.total])
 
 func _on_games_removed(_platform_slug: String):
 	_reload_after_change()
@@ -682,17 +597,6 @@ func _on_sync_completed(success: bool, message: String):
 func _deferred_reload_after_sync():
 	_load_total_count(false)
 	_update_status("Library reloaded after sync")
-
-func _on_sync_started():
-	"""Clear grid cache when sync starts to prevent position mismatches.
-	
-	During a resync, games are added in API order but the database returns them
-	sorted by title. Clearing the cache at sync start prevents duplicate warnings
-	and ensures games appear at correct positions."""
-	if games_grid:
-		# Reset total to 0 with preserve_cache=false to clear everything
-		games_grid.set_total_count(0, false)
-		_update_status("Sync starting...")
 
 func on_view_show():
 	super.on_view_show()

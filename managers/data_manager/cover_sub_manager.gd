@@ -72,7 +72,7 @@ func get_cached_image_path(url: String) -> String:
 	return CACHE_FOLDER + url.md5_text() + "." + extension
 
 
-func _download_cover(url: String, callback: Callable):
+func _download_cover(url: String, callback: Callable, high_priority: bool = false):
 	var cache_path = get_cached_image_path(url)
 
 	# Check if already cached
@@ -81,11 +81,11 @@ func _download_cover(url: String, callback: Callable):
 		return
 
 	# Direct download - SystemManager.download handles deduplication
-	SystemManager.download.download_image(url, cache_path, callback)
+	SystemManager.download.download_image(url, cache_path, callback, high_priority)
 
 
-func download_cover(url: String, callback: Callable) -> void:
-	_download_cover(url, callback)
+func download_cover(url: String, callback: Callable, high_priority: bool = false) -> void:
+	_download_cover(url, callback, high_priority)
 
 
 func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") -> Image:
@@ -115,7 +115,7 @@ func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") 
 	return null
 
 
-func load_image(url: String, callback: Callable = Callable()):
+func load_image(url: String, callback: Callable = Callable(), high_priority: bool = false):
 	if url == "" or not url.begins_with("http"):
 		if callback.is_valid():
 			callback.call(null)
@@ -137,18 +137,18 @@ func load_image(url: String, callback: Callable = Callable()):
 					data_manager.image_loaded.emit(url, texture)
 				else:
 					# Cache file exists but failed to load, try downloading fresh
-					_load_image_from_network(url, cache_path, callback)
+					_load_image_from_network(url, cache_path, callback, high_priority)
 			else:
 				# Cache file exists but failed to load, try downloading fresh
-				_load_image_from_network(url, cache_path, callback)
-		)
+				_load_image_from_network(url, cache_path, callback, high_priority)
+		, high_priority)
 		return
 
 	# Download if not cached
-	_load_image_from_network(url, cache_path, callback)
+	_load_image_from_network(url, cache_path, callback, high_priority)
 
 
-func _load_image_from_network(url: String, cache_path: String, callback: Callable):
+func _load_image_from_network(url: String, cache_path: String, callback: Callable, high_priority: bool = false):
 	"""Download and load image from network using background thread."""
 	_download_cover(url, func(_ok):
 		# Check if file was downloaded successfully
@@ -166,9 +166,8 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				if callback.is_valid():
 					callback.call(texture)
 				data_manager.image_loaded.emit(url, texture)
-	)
-
-	)
+		, high_priority)
+	, high_priority)
 
 
 func clear_cache():

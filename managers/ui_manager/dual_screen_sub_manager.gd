@@ -135,6 +135,14 @@ func _enable_dual_screen_mode(second_screen_index: int) -> void:
 		# Desktop: use Godot Window approach
 		_enable_dual_screen_mode_desktop.call_deferred(second_screen_index)
 
+func _get_ayn_thor_manager() -> Node:
+	"""Returns the AynThorManager node (owns the Android second-screen
+	Presentation), or null when not on an AynThor device."""
+	if not Engine.has_singleton("AynThor"):
+		return null
+	var main = get_node_or_null("/root/Main")
+	return main.get_node_or_null("AynThorManager") if main else null
+
 func _enable_dual_screen_viewport_mode() -> void:
 	"""Enable dual screen using viewport plugin (generic dual screen support)."""
 
@@ -145,6 +153,11 @@ func _enable_dual_screen_viewport_mode() -> void:
 	if not dual_screen_setup or not second_viewport or not _hero_image:
 		push_warning("[DualScreenManager] Dual screen setup nodes not found")
 		return
+
+	# Re-acquire the physical second display (it is released when DS mode is off)
+	var ayn = _get_ayn_thor_manager()
+	if ayn:
+		ayn.acquire_second_screen()
 
 	# Dismiss any active M3 overlays before reparenting so they don't get stranded
 	M3Overlay.dismiss_type("menu")
@@ -217,6 +230,11 @@ func _disable_dual_screen_mode() -> void:
 			second_vp.handle_input_locally = false
 
 		remove_dual_screen_setup()
+
+		# Release the physical second display so it doesn't sit on a blank viewport.
+		var ayn = _get_ayn_thor_manager()
+		if ayn:
+			ayn.release_second_screen()
 
 		_dual_screen_viewport_mode = false
 	else:

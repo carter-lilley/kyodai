@@ -135,6 +135,7 @@ func _on_rs_items_recreated() -> void:
 	# are recreated (called from M3Card._enter_tree before _update_media_panel_size).
 	# Without this, _has_media_content() returns false during bounds calculation
 	# and the card renders with zero-sized media.
+	_last_refreshed_media_bounds = Rect2()
 	if not _media_stack:
 		_build_media_stack(false)
 	if _focus_stack:
@@ -293,6 +294,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.set_logo_rect(_get_logo_rect_from_game())
+		_media_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
 		_sync_logo_mode()
 		_media_stack.update_draw_rects()
 	else:
@@ -301,6 +303,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
 		_media_stack.set_logo_rect(_get_logo_rect_from_game())
+		_media_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
 		_sync_logo_mode()
 		if _media_canvas_item.is_valid():
 			_media_stack.set_parent_rid(_media_canvas_item)
@@ -367,6 +370,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
 			_focus_stack.set_logo_rect(_get_logo_rect_from_game())
+			_focus_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
 		_sync_logo_mode()
 		_link_overlapping_effects()
 		return
@@ -386,6 +390,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	if _current_texture:
 		_focus_stack.set_game_texture(_current_texture)
 		_focus_stack.set_logo_rect(_get_logo_rect_from_game())
+		_focus_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
 
 	# Hide base effect in focus stack — focus effects are overlays only
 	var focus_base = _focus_stack.get_effect("base")
@@ -708,6 +713,8 @@ func reset(for_pooling: bool = false) -> void:
 	game = null
 	_is_focused = false
 	set_placeholder(false)
+	# Reset the refresh gate so the next texture load always re-pushes crop UVs.
+	_last_refreshed_media_bounds = Rect2()
 	set_meta("_cached_show_delete", null)
 	if _focus_tween:
 		_focus_tween.kill()
@@ -986,10 +993,13 @@ func _set_texture(tex: Texture2D) -> void:
 		_current_texture_game_id = game.id
 
 	var logo_rect := _get_logo_rect_from_game()
+	var crop_transforms := _get_crop_transforms_for_current_ratio()
 	if _media_stack:
 		_media_stack.set_logo_rect(logo_rect)
+		_media_stack.set_crop_transforms(crop_transforms)
 	if _focus_stack:
 		_focus_stack.set_logo_rect(logo_rect)
+		_focus_stack.set_crop_transforms(crop_transforms)
 
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
 	# rebuild it now so the texture actually has somewhere to render.
@@ -1009,6 +1019,37 @@ func _set_texture(tex: Texture2D) -> void:
 	_update_media()
 	# Ensure the card redraws so the RS canvas items are submitted to the render tree.
 	queue_redraw()
+
+func _get_crop_transforms_for_current_ratio() -> Dictionary:
+	"""Precomputed crop transforms for the current media ratio, normalized from
+	the game's DB metadata into the MediaContainer entry format. Empty when
+	unavailable (Fill mode, no cache entry) — runtime math is the fallback."""
+	if not game or game.crop_transforms.is_empty():
+		return {}
+	var ratio_idx := CropTransform.index_for_ratio(media_aspect_ratio)
+	if ratio_idx <= 0:
+		return {}
+	var per_ratio: Dictionary = game.crop_transforms.get(str(ratio_idx), {})
+	if per_ratio.is_empty():
+		return {}
+	return {
+		"include": _normalize_crop_entry(per_ratio.get("include", {})),
+		"exclude": _normalize_crop_entry(per_ratio.get("exclude", {})),
+	}
+
+func _normalize_crop_entry(entry: Dictionary) -> Dictionary:
+	if entry.is_empty():
+		return {}
+	var lr: Array = entry.get("logo_rect", [0.0, 0.0, 0.0, 0.0])
+	var sc: Array = entry.get("scale", [1.0, 1.0])
+	var of: Array = entry.get("offset", [0.0, 0.0])
+	return {
+		"aspect": float(entry.get("aspect", 0.0)),
+		"tex_aspect": float(entry.get("tex_aspect", 0.0)),
+		"logo_rect": Vector4(float(lr[0]), float(lr[1]), float(lr[2]), float(lr[3])),
+		"scale": Vector2(float(sc[0]), float(sc[1])),
+		"offset": Vector2(float(of[0]), float(of[1])),
+	}
 
 func _get_logo_rect_from_game() -> Vector4:
 	# Logo detection disabled: always use the plain center-crop default.
@@ -1344,6 +1385,13 @@ func _update_media_panel_size(force: bool = false) -> void:
 		# The media stack is parented to _media_canvas_item, so its bounds are
 		# expressed in media-local coordinates rather than card coords.
 		_media_container.bounds = Rect2(Vector2.ZERO, _media_bounds.size)
+
+	# Refresh the cached crop transforms whenever geometry/ratio may have changed.
+	var crop_transforms := _get_crop_transforms_for_current_ratio()
+	if _media_stack:
+		_media_stack.set_crop_transforms(crop_transforms)
+	if _focus_stack:
+		_focus_stack.set_crop_transforms(crop_transforms)
 
 	# _media_canvas_item is recreated by M3Card._rebuild_layout() when layout mode,
 	# content alignment, or media aspect ratio changed. The node-less effect stack

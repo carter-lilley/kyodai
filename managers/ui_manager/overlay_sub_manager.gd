@@ -17,6 +17,9 @@ var _game_details_sheet: GameDetailsSheet = null
 # Modal management (now uses M3Menu)
 var _active_menu: M3Menu = null
 var _modal_context: Dictionary = {}
+# Anchor of the most recent context menu, used to restore focus to the
+# summoning card when the details sheet is dismissed.
+var _last_menu_anchor: WeakRef = null
 
 # Active generic dialogs tracked so we can flush deferred rebuilds only when
 # the last dialog has closed.
@@ -353,6 +356,7 @@ func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
 func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dictionary = {}) -> String:
 	"""Show a context menu modal anchored to the given control. Returns modal ID."""
 	dismiss_modal()
+	_last_menu_anchor = weakref(anchor) if anchor != null else null
 
 	var menu = M3Menu.new()
 
@@ -455,6 +459,14 @@ func show_game_details(romm_id: int) -> void:
 
 	_ensure_game_details_sheet()
 	_game_details_sheet.show_for_game(game)
+	# show_overlay() captured focus while the context menu was still open, so
+	# the auto-captured owner is a menu item that gets freed on menu dismissal.
+	# Override it with the menu's anchor (the summoning card) so ui_cancel
+	# returns focus to the card.
+	var anchor: Control = _last_menu_anchor.get_ref() if _last_menu_anchor != null else null
+	if anchor != null and is_instance_valid(anchor):
+		_game_details_sheet.set_focus_restore_target(anchor)
+	_game_details_sheet.set_focus_restore_fallback(ui_manager.get_focus_restore_fallback_to_home())
 
 func _ensure_game_details_sheet() -> void:
 	if _game_details_sheet and is_instance_valid(_game_details_sheet):

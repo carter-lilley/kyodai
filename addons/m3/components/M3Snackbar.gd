@@ -356,6 +356,13 @@ func setup(msg: String, act_text: String = "", action_callback: Callable = Calla
 func set_overlay_type(type: String):
 	overlay_type = type
 
+## Text-only update for live notifications. Unlike setup(), this preserves the
+## dismiss button and action configuration set at creation.
+func set_message(msg: String):
+	message = msg
+	_message_label.text = msg
+	_fit_text()
+
 func set_auto_dismiss(enabled: bool):
 	_auto_dismiss = enabled
 

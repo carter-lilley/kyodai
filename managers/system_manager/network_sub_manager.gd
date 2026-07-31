@@ -40,7 +40,21 @@ func _use_pooling() -> bool:
 
 func _ready():
 	DataManager.setting_changed.connect(_on_setting_changed)
+	authentication_failed.connect(_on_authentication_failed)
 	_load_credentials()
+
+## Show one auth-failure snackbar per cooldown window rather than one per
+## failing endpoint (authentication_failed fires from many call sites).
+const AUTH_NOTIFICATION_COOLDOWN_MSEC := 60000
+var _last_auth_notification_msec: int = -AUTH_NOTIFICATION_COOLDOWN_MSEC
+
+func _on_authentication_failed() -> void:
+	var now = Time.get_ticks_msec()
+	if now - _last_auth_notification_msec < AUTH_NOTIFICATION_COOLDOWN_MSEC:
+		return
+	_last_auth_notification_msec = now
+	if SystemManager.notifications:
+		SystemManager.notifications.show_notification("RomM authentication failed - check your credentials", SystemManager.notifications.Type.ERROR)
 
 func _on_setting_changed(value, setting):
 	match setting.property_name:
@@ -76,7 +90,16 @@ func _load_credentials():
 func _check_configuration():
 	_is_configured = _base_url != "" and _username != "" and _password != ""
 	if _is_configured:
-		_check_connection()
+		# Warm up the host first (wakes sleeping servers, establishes CSRF
+		# cache, and orders the startup request burst), then verify as before.
+		fetch_heartbeat(func(_data, _error):
+			_check_connection()
+		)
+
+## Lightweight readiness probe using RomM's canonical config/CSRF endpoint.
+## Used to warm up the host at startup before real API calls.
+func fetch_heartbeat(callback: Callable) -> void:
+	make_request("/heartbeat", callback, true, false)
 
 # ==================== HTTP REQUEST POOLING ====================
 # Pooling is enabled on desktop for better performance (connection reuse)
@@ -238,7 +261,19 @@ func _check_connection():
 
 # ==================== CORE HTTP METHOD ====================
 
-func make_request(endpoint: String, callback: Callable, authenticated: bool = true, use_cache: bool = false):
+## Delay before the single automatic retry of a transient connect-level failure.
+const API_RETRY_DELAY_SECONDS := 0.75
+
+## Result codes that are usually transient (server/network still waking up).
+const RETRYABLE_RESULTS := [
+	HTTPRequest.RESULT_CHUNKED_BODY_SIZE_MISMATCH,
+	HTTPRequest.RESULT_CANT_CONNECT,
+	HTTPRequest.RESULT_CONNECTION_ERROR,
+	HTTPRequest.RESULT_TIMEOUT,
+	HTTPRequest.RESULT_CANT_RESOLVE,
+]
+
+func make_request(endpoint: String, callback: Callable, authenticated: bool = true, use_cache: bool = false, _retries_left: int = 1):
 	var http = _create_http_request()
 	_active_request_count += 1
 
@@ -268,6 +303,14 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 			return
 
 		if result != HTTPRequest.RESULT_SUCCESS:
+			# Transient connect-level failures (sleeping server, network still
+			# coming up): retry once silently before surfacing the error.
+			if result in RETRYABLE_RESULTS and _retries_left > 0:
+				await get_tree().create_timer(API_RETRY_DELAY_SECONDS).timeout
+				if not is_instance_valid(self):
+					return
+				make_request(endpoint, callback, authenticated, use_cache, _retries_left - 1)
+				return
 			callback.call({}, "Request failed with result: " + str(result))
 			return
 

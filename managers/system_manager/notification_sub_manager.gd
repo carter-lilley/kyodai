@@ -190,11 +190,6 @@ func _on_progress_snackbar_dismissed() -> void:
 	notification_dismissed.emit(dismissed_id)
 
 func dismiss_notification(id: int) -> void:
-	if _pinned_ids.has(id):
-		return
-	if id == _current_progress_id and _progress_entry and _progress_entry.is_pinned:
-		return
-
 	var index = _active_ids.find(id)
 	if index != -1:
 		var snackbar = _active_snackbars[index]
@@ -238,10 +233,10 @@ func update_notification_text(id: int, text: String) -> void:
 	if index != -1:
 		var snackbar = _active_snackbars[index]
 		if is_instance_valid(snackbar):
-			snackbar.setup(text)
+			snackbar.set_message(text)
 
 	if id == _current_progress_id and _current_progress_snackbar and is_instance_valid(_current_progress_snackbar):
-		_current_progress_snackbar.setup(text)
+		_current_progress_snackbar.set_message(text)
 		if _progress_entry:
 			_progress_entry.base_text = text
 
@@ -256,14 +251,14 @@ func _check_notifications() -> void:
 	var progress = _progress_entry.progress_callable.call()
 	if progress is float or progress is int:
 		var progress_f = float(progress)
-		if progress_f >= 1.0 and not _progress_entry.is_pinned:
+		if progress_f >= 1.0:
 			dismiss_notification(_current_progress_id)
 			return
 
 		_current_progress_snackbar.set_progress_fraction(progress_f)
 
 		if _progress_entry.text_formatter.is_valid():
-			_current_progress_snackbar.setup(_progress_entry.text_formatter.call(progress_f))
+			_current_progress_snackbar.set_message(_progress_entry.text_formatter.call(progress_f))
 		else:
 			var percent = int(progress_f * 100)
-			_current_progress_snackbar.setup(_progress_entry.base_text + " (" + str(percent) + "%)" )
+			_current_progress_snackbar.set_message(_progress_entry.base_text + " (" + str(percent) + "%)" )

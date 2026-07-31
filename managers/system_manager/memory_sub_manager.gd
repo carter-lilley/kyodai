@@ -35,6 +35,7 @@ var _exit_flag: bool = false
 var _image_task_counter: int = 0
 var _image_tasks: Dictionary = {}
 var _inflight_image_callbacks: Dictionary[String, Array] = {}
+var _dedup_task_ids: Dictionary = {}  # dedup_key -> task_id of the in-flight task
 
 var _texture_cache: Dictionary = {}  # Insertion-ordered: front = LRU, back = MRU
 var _texture_cache_mutex: Mutex
@@ -82,7 +83,7 @@ static func get_download_thread_count() -> int:
 static func get_logo_box_thread_count() -> int:
 	if OS.get_name() == "Android":
 		return 2
-	return 4
+	return clampi(OS.get_processor_count() / 2, 2, 8)
 
 static var _instance: MemorySubManager = null
 
@@ -218,8 +219,64 @@ func _initialize_threads():
 
 func _ready():
 	set_process(true)
+	Performance.add_custom_monitor("memory/image_queue_high", _get_image_queue_high_size)
+	Performance.add_custom_monitor("memory/image_queue_low", _get_image_queue_low_size)
+	Performance.add_custom_monitor("memory/image_tasks_inflight", _get_image_tasks_inflight)
+	Performance.add_custom_monitor("memory/db_queue_size", _get_db_queue_size)
+	Performance.add_custom_monitor("memory/lp_callback_backlog", _get_lp_callback_backlog)
+	Performance.add_custom_monitor("memory/texture_cache_count", _get_texture_cache_count)
+	Performance.add_custom_monitor("memory/texture_cache_mb", _get_texture_cache_mb)
+
+func _get_image_queue_high_size() -> int:
+	_image_mutex.lock()
+	var size = _image_high_priority_queue.size()
+	_image_mutex.unlock()
+	return size
+
+func _get_image_queue_low_size() -> int:
+	_image_mutex.lock()
+	var size = _image_low_priority_queue.size()
+	_image_mutex.unlock()
+	return size
+
+func _get_image_tasks_inflight() -> int:
+	_image_mutex.lock()
+	var size = _image_tasks.size()
+	_image_mutex.unlock()
+	return size
+
+func _get_db_queue_size() -> int:
+	_db_mutex.lock()
+	var size = _db_queue.size()
+	_db_mutex.unlock()
+	return size
+
+func _get_lp_callback_backlog() -> int:
+	_lp_callback_mutex.lock()
+	var size = _lp_callbacks.size()
+	_lp_callback_mutex.unlock()
+	return size
+
+func _get_texture_cache_count() -> int:
+	_texture_cache_mutex.lock()
+	var size = _texture_cache.size()
+	_texture_cache_mutex.unlock()
+	return size
+
+func _get_texture_cache_mb() -> float:
+	_texture_cache_mutex.lock()
+	var mb = _texture_cache_memory / 1048576.0
+	_texture_cache_mutex.unlock()
+	return mb
 
 func _exit_tree():
+	Performance.remove_custom_monitor("memory/image_queue_high")
+	Performance.remove_custom_monitor("memory/image_queue_low")
+	Performance.remove_custom_monitor("memory/image_tasks_inflight")
+	Performance.remove_custom_monitor("memory/db_queue_size")
+	Performance.remove_custom_monitor("memory/lp_callback_backlog")
+	Performance.remove_custom_monitor("memory/texture_cache_count")
+	Performance.remove_custom_monitor("memory/texture_cache_mb")
 	shutdown()
 
 func _process(_delta):
@@ -311,6 +368,7 @@ static func _image_worker():
 			if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
 				coalesced = _instance._inflight_image_callbacks[task.dedup_key].duplicate()
 				_instance._inflight_image_callbacks.erase(task.dedup_key)
+				_instance._dedup_task_ids.erase(task.dedup_key)
 			_instance._image_mutex.unlock()
 
 			if task.callback.is_valid() and not task.cancelled:
@@ -471,6 +529,13 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 	# If dedup_key provided and an identical task is already in flight, queue callback for coalescing
 	if dedup_key != "" and _instance._inflight_image_callbacks.has(dedup_key):
 		_instance._inflight_image_callbacks[dedup_key].append({"callback": callback, "high_priority": high_priority})
+		# Promote the underlying task if a high-priority waiter arrived for low-priority work
+		if high_priority and _instance._dedup_task_ids.has(dedup_key):
+			var existing_id: int = _instance._dedup_task_ids[dedup_key]
+			if _instance._image_tasks.has(existing_id):
+				var existing_task = _instance._image_tasks[existing_id]
+				if not existing_task.cancelled and not existing_task.high_priority:
+					_move_task_between_queues_locked(existing_task, true)
 		_instance._image_mutex.unlock()
 		return -1
 
@@ -507,6 +572,7 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 
 	if dedup_key != "":
 		_instance._inflight_image_callbacks[dedup_key] = []
+		_instance._dedup_task_ids[dedup_key] = task_id
 
 	if high_priority:
 		_instance._image_high_priority_queue.append(task)
@@ -533,6 +599,7 @@ static func cancel_image_task(task_id: int) -> bool:
 		if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
 			coalesced = _instance._inflight_image_callbacks[task.dedup_key]
 			_instance._inflight_image_callbacks.erase(task.dedup_key)
+			_instance._dedup_task_ids.erase(task.dedup_key)
 
 		var queue = _instance._image_high_priority_queue if task.high_priority else _instance._image_low_priority_queue
 		for i in range(queue.size()):
@@ -570,19 +637,24 @@ static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 		_instance._image_mutex.unlock()
 		return true
 
-	task.high_priority = high_priority
-
-	var from_queue = _instance._image_high_priority_queue if not high_priority else _instance._image_low_priority_queue
-	var to_queue = _instance._image_high_priority_queue if high_priority else _instance._image_low_priority_queue
-
-	for i in range(from_queue.size()):
-		if from_queue[i].id == task_id:
-			from_queue.remove_at(i)
-			to_queue.append(task)
-			break
+	_move_task_between_queues_locked(task, high_priority)
 
 	_instance._image_mutex.unlock()
 	return true
+
+# Moves a task between the high/low priority queues.
+# Assumes _instance._image_mutex is already held by the caller.
+static func _move_task_between_queues_locked(task: Dictionary, to_high_priority: bool) -> void:
+	task.high_priority = to_high_priority
+
+	var from_queue = _instance._image_high_priority_queue if not to_high_priority else _instance._image_low_priority_queue
+	var to_queue = _instance._image_high_priority_queue if to_high_priority else _instance._image_low_priority_queue
+
+	for i in range(from_queue.size()):
+		if from_queue[i].id == task.id:
+			from_queue.remove_at(i)
+			to_queue.append(task)
+			break
 
 static func get_cached_texture(cache_key: String) -> Texture2D:
 	if _instance == null or cache_key == "":

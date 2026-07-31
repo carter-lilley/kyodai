@@ -208,6 +208,10 @@ func _worker_loop() -> void:
 
 const MODEL_EXTRACT_DIR := "user://onnx_models"
 
+## Cap detection input size: the OCR det model upscales small images to 640px
+## but never downscales large ones, so full-res covers are needlessly slow.
+const MAX_DETECT_IMAGE_SIZE: int = 768
+
 ## Copies a model out of the PCK onto the real filesystem. In exported builds,
 ## res:// is not a real path and ONNX Runtime opens models via fopen, so the
 ## file must exist on disk. Returns the user:// path ("" on failure).
@@ -268,6 +272,11 @@ func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 		_finish_task(on_completes)
 		return
 
+	var max_dim = max(image.get_width(), image.get_height())
+	if max_dim > MAX_DETECT_IMAGE_SIZE:
+		var scale = float(MAX_DETECT_IMAGE_SIZE) / max_dim
+		image.resize(maxi(1, int(image.get_width() * scale)), maxi(1, int(image.get_height() * scale)), Image.INTERPOLATE_BILINEAR)
+
 	var start_ms := Time.get_ticks_msec()
 	var result: Variant = detector.detect_title_box(image, title)
 	var elapsed_ms := Time.get_ticks_msec() - start_ms
@@ -277,7 +286,47 @@ func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 	_detect_time_mutex.unlock()
 	var logo_box := _logo_box_dict_from_result(result, image)
 	_write_logo_box_to_games(logo_box, game_ids)
+	_write_crop_transforms_to_games(logo_box, image, game_ids)
 	_finish_task(on_completes)
+
+## Precomputes the per-(ratio, logo mode) crop UV transforms for a cover and
+## stores them in the DB, so MediaContainer doesn't compute them on the fly.
+## tex_aspect is exact even after the detect downscale (aspect is preserved).
+func _write_crop_transforms_to_games(logo_box: Dictionary, image: Image, game_ids: Array[int]) -> void:
+	var ids: Array[int] = []
+	for romm_id in game_ids:
+		if romm_id > 0:
+			ids.append(romm_id)
+	if ids.is_empty():
+		return
+
+	var tex_aspect = float(image.get_width()) / float(image.get_height())
+	var logo_rect := Vector4.ZERO
+	if logo_box.get("detected", false):
+		var x1 = float(logo_box.get("x1", 0.0))
+		var y1 = float(logo_box.get("y1", 0.0))
+		logo_rect = Vector4(x1, y1, float(logo_box.get("x2", 0.0)) - x1, float(logo_box.get("y2", 0.0)) - y1)
+
+	var transforms := {}
+	for idx in CropTransform.RATIO_BY_INDEX:
+		var panel_aspect: float = CropTransform.RATIO_BY_INDEX[idx]
+		transforms[str(idx)] = {
+			"include": _make_crop_entry(panel_aspect, tex_aspect, logo_rect, CropTransform.LOGO_MODE_INCLUDE),
+			"exclude": _make_crop_entry(panel_aspect, tex_aspect, logo_rect, CropTransform.LOGO_MODE_EXCLUDE),
+		}
+	data_manager.database.update_games_crop_transforms(ids, JSON.stringify(transforms))
+
+func _make_crop_entry(panel_aspect: float, tex_aspect: float, logo_rect: Vector4, mode: int) -> Dictionary:
+	var result := CropTransform.compute(tex_aspect, panel_aspect, logo_rect, mode)
+	var scale: Vector2 = result.scale
+	var offset: Vector2 = result.offset
+	return {
+		"aspect": panel_aspect,
+		"tex_aspect": tex_aspect,
+		"logo_rect": [logo_rect.x, logo_rect.y, logo_rect.z, logo_rect.w],
+		"scale": [scale.x, scale.y],
+		"offset": [offset.x, offset.y],
+	}
 
 func _finish_task(on_completes: Array) -> void:
 	for cb in on_completes:
@@ -297,7 +346,7 @@ func _process_backfill_task() -> void:
 		return
 
 	var rows = _query_db_blocking(
-		"SELECT romm_id, cover_url, title FROM games WHERE cover_url != '' AND cover_url IS NOT NULL AND (logo_box = '' OR logo_box = '{}')",
+		"SELECT romm_id, cover_url, title FROM games WHERE cover_url != '' AND cover_url IS NOT NULL AND (logo_box = '' OR logo_box = '{}' OR crop_transforms = '' OR crop_transforms = '{}')",
 		[]
 	)
 	if rows.is_empty():

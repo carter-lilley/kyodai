@@ -160,11 +160,14 @@ func _ready():
 		# viewport resize does not re-snap the grid away from the saved zoom.
 		var swap_setting = DataManager.get_setting("dual_screen_swapped")
 		print("[Main] Startup dual_screen_swapped setting: ", swap_setting.value if swap_setting else "NULL")
-		if swap_setting and swap_setting.value and not ayn_thor_manager.is_swapped:
+		# Only restore the swap when dual-screen mode is actually enabled —
+		# otherwise the main viewport would be drawn to a released screen.
+		var ds_enabled = SystemManager.display.is_dual_screen_enabled() if SystemManager and SystemManager.display else false
+		if ds_enabled and swap_setting and swap_setting.value and not ayn_thor_manager.is_swapped:
 			print("[Main] Restoring saved screen swap state")
 			ayn_thor_manager.swap_screens()
 		else:
-			print("[Main] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn_thor_manager.is_swapped, ")")
+			print("[Main] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn_thor_manager.is_swapped, ", ds_enabled=", ds_enabled, ")")
 	print("[Main] screen swap setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Single final layout: settle the visible grid(s) now that the window size and

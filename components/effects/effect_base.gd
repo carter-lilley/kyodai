@@ -205,6 +205,7 @@ func tween_settings(from_settings: Dictionary, to_settings: Dictionary, progress
 		_apply_settings()
 		_update_shader_params()
 		_is_tweening = false
+		_complete_tween_if_pending()
 
 func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> Variant:
 	var from_type = typeof(from_val)
@@ -324,8 +325,19 @@ func _compute_material_share_key() -> String:
 
 func _on_media_changed() -> void:
 	if _is_tweening:
+		# Defer rather than drop: re-mark when the tween finishes so media
+		# changes that land mid-tween are not lost.
+		if not _media_changed_pending:
+			_media_changed_pending = true
 		return
 	_mark_shader_params_dirty()
+
+var _media_changed_pending: bool = false
+
+func _complete_tween_if_pending() -> void:
+	if _media_changed_pending:
+		_media_changed_pending = false
+		_mark_shader_params_dirty()
 
 func _mark_shader_params_dirty() -> void:
 	if _shader_params_dirty:

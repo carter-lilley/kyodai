@@ -253,7 +253,8 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			0.0,
 			Callable(),
 			Callable(),
-			true  # pulsing
+			true,  # pulsing
+			true  # pinned
 		)
 		
 		var _last_progress_mb = [-1]

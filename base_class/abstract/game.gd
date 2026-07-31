@@ -56,6 +56,10 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Cached logo box detection result (normalized texture-space coords + metadata)
 @export var logo_box: Dictionary = {}
 
+## Precomputed cover-crop UV transforms per ratio index ("1"-"4") x logo mode
+## ("include"/"exclude"), with aspect/tex_aspect/logo_rect provenance.
+@export var crop_transforms: Dictionary = {}
+
 ## Game source type: "romm" (default), "gamenative", etc.
 @export var source: String = "romm"
 

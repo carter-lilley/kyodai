@@ -165,7 +165,7 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		else:
 			_failed_downloads[cover_url] = Time.get_unix_time_from_system()
 			_set_loading_texture()
-	)
+	, high_priority)
 
 func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
