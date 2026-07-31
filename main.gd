@@ -343,6 +343,7 @@ func _on_more_button_pressed() -> void:
 	var current_view = UIManager.get_current_view()
 	var is_grid = false
 	var is_horizontal = false
+	var pagination_enabled = false
 
 	if current_view:
 		var grid = _get_view_grid(current_view)
@@ -350,7 +351,18 @@ func _on_more_button_pressed() -> void:
 			is_grid = grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
 			is_horizontal = not grid.grid_vertical
 
+	# Read the check state from the persisted setting (the shared source of
+	# truth across all views), not from a single grid's applied state.
+	if DataManager:
+		var pagination_setting = DataManager.get_setting("library_pagination_view")
+		if pagination_setting and pagination_setting.value is bool:
+			pagination_enabled = pagination_setting.value
+
 	menu.add_check_item("Horizontal Grid", is_horizontal, _toggle_horizontal_grid)
+	if not is_grid:
+		menu.get_item(menu.get_item_count() - 1).disabled = true
+
+	menu.add_check_item("Pagination View", pagination_enabled, _toggle_pagination_view)
 	if not is_grid:
 		menu.get_item(menu.get_item_count() - 1).disabled = true
 
@@ -419,16 +431,23 @@ func _on_more_button_pressed() -> void:
 
 	# Logo Mode submenu
 	var logo_mode = 0
+	var logo_detection_off = false
 	if DataManager:
 		var logo_setting = DataManager.get_setting("library_card_logo_mode")
 		if logo_setting and logo_setting.value is int:
 			logo_mode = logo_setting.value
+		var detection_setting = DataManager.get_setting("logo_detection_enabled")
+		logo_detection_off = detection_setting == null or detection_setting.value != true
 
 	var logo_submenu = M3Menu.new()
 	logo_submenu.auto_free = false
 	logo_submenu.radio_group = true
 	logo_submenu.add_check_item("Include Logo", logo_mode == 0, func(): _set_card_logo_mode(0))
 	logo_submenu.add_check_item("Exclude Logo", logo_mode == 1, func(): _set_card_logo_mode(1))
+	if logo_detection_off:
+		# Logo detection is disabled: cards center-crop, so gray out the options.
+		logo_submenu.get_item(0).disabled = true
+		logo_submenu.get_item(1).disabled = true
 	menu.add_submenu_item("Logo", logo_submenu, "image-area")
 
 	var more_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3IconButton_More")
@@ -469,6 +488,27 @@ func _set_focus_centering(mode: int) -> void:
 		if setting:
 			DataManager.set_setting(mode, setting)
 			DataManager.save_settings()
+
+func _toggle_pagination_view() -> void:
+	var target_enabled = true
+	if DataManager:
+		var setting = DataManager.get_setting("library_pagination_view")
+		if setting and setting.value is bool:
+			target_enabled = not setting.value
+
+	# Remember which card had focus so we can restore it after re-layout
+	var focused_index = _get_focused_card_index()
+
+	# Persist; CardSettingsState propagates the change to all grid views.
+	if DataManager:
+		var setting = DataManager.get_setting("library_pagination_view")
+		if setting:
+			DataManager.set_setting(target_enabled, setting)
+			DataManager.save_settings()
+
+	# Restore focus after the grid has re-laid out
+	if focused_index >= 0:
+		call_deferred("_restore_focus_to_card", focused_index, true)
 
 func _toggle_horizontal_grid() -> void:
 	var target_vertical = true

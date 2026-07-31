@@ -163,7 +163,7 @@ func _show_progress_snackbar(id: int, text: String, type: Type, progress_callabl
 	var snackbar = M3Snackbar.new()
 	snackbar.set_overlay_type("snackbar_progress")
 	snackbar.set_auto_dismiss(false)
-	snackbar.setup(text, "", Callable(), true)
+	snackbar.setup(text, "", Callable(), not pinned)
 	snackbar.set_leading_icon(TYPE_ICONS.get(type, "info"))
 	snackbar.show_progress(true)
 	if pulsing:
@@ -190,6 +190,11 @@ func _on_progress_snackbar_dismissed() -> void:
 	notification_dismissed.emit(dismissed_id)
 
 func dismiss_notification(id: int) -> void:
+	if _pinned_ids.has(id):
+		return
+	if id == _current_progress_id and _progress_entry and _progress_entry.is_pinned:
+		return
+
 	var index = _active_ids.find(id)
 	if index != -1:
 		var snackbar = _active_snackbars[index]

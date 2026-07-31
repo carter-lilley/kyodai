@@ -298,6 +298,57 @@ func _update_focus_ring_radius(target_w: float, target_h: float) -> void:
 	var radius: float = card_rounding_ratio * max_radius
 	_focus_ring_style.set_corner_radius_all(int(round(radius)))
 
+## When true, the card renders as a dimmed blank placeholder (background shape
+## plus an empty media panel) and is non-interactive. Used by the grid to fill
+## out the last page/row so layouts stay even.
+var _is_placeholder: bool = false
+var _placeholder_style: StyleBoxFlat = null
+const PLACEHOLDER_MODULATE := Color(1, 1, 1, 0.2)
+## Uniform scale of the blank placeholder panel within its cell (aspect preserved).
+const PLACEHOLDER_SCALE := 0.85
+
+func set_placeholder(value: bool) -> void:
+	if _is_placeholder == value:
+		return
+	_is_placeholder = value
+	disabled = value
+	focus_mode = Control.FOCUS_NONE if value else Control.FOCUS_ALL
+	mouse_filter = Control.MOUSE_FILTER_IGNORE if value else Control.MOUSE_FILTER_STOP
+	# Placeholders render only the blank media panel; background and text items
+	# are hidden via _update_visual_items_visibility() and always stay white.
+	if _media_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_modulate(_media_canvas_item, PLACEHOLDER_MODULATE if value else Color.WHITE)
+	if _visual_bg_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_modulate(_visual_bg_canvas_item, Color.WHITE)
+	if _text_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_modulate(_text_canvas_item, Color.WHITE)
+	if value and _focus_ring_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, false)
+	_update_media()
+	_update_visual_items_visibility()
+
+func _get_placeholder_media_color() -> Color:
+	var bg = _cached_stylebox.bg_color if _cached_stylebox else Color(0.15, 0.15, 0.15)
+	return bg.lightened(0.12) if bg.get_luminance() < 0.5 else bg.darkened(0.08)
+
+## Draws a blank rounded media panel for placeholder cards, scaled down
+## uniformly and centered within the media bounds.
+func _draw_placeholder_media() -> void:
+	if not _media_canvas_item.is_valid():
+		return
+	var media_size := _media_bounds.size
+	if media_size.x <= 0.0 or media_size.y <= 0.0:
+		return
+	var panel_size := media_size * PLACEHOLDER_SCALE
+	var panel_offset := (media_size - panel_size) / 2.0
+	if not _placeholder_style:
+		_placeholder_style = StyleBoxFlat.new()
+		_placeholder_style.anti_aliasing = true
+	_placeholder_style.bg_color = _get_placeholder_media_color()
+	_placeholder_style.set_corner_radius_all(int(round(card_rounding_ratio * min(panel_size.x, panel_size.y) / 2.0)))
+	RenderingServer.canvas_item_clear(_media_canvas_item)
+	_placeholder_style.draw(_media_canvas_item, Rect2(panel_offset, panel_size))
+
 func set_visual_layer(layer: Control) -> void:
 	"""Move this card's visual RS items to an unclipped visual layer.
 
@@ -448,18 +499,19 @@ func _update_visual_items_visibility() -> void:
 	var using_layer := _uses_visual_layer()
 	
 	# Background and text are only drawn through RS when a visual layer is active.
+	# Placeholders hide both; they render only the blank media panel.
 	if _visual_bg_canvas_item.is_valid():
-		var bg_visible := base_visible and show_background and using_layer
+		var bg_visible := base_visible and show_background and using_layer and not _is_placeholder
 		if using_layer:
 			bg_visible = bg_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_visual_bg_canvas_item, bg_visible)
 	if _media_canvas_item.is_valid():
-		var media_visible := base_visible and _has_media_content()
+		var media_visible := base_visible and (_has_media_content() or _is_placeholder)
 		if using_layer:
 			media_visible = media_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_media_canvas_item, media_visible)
 	if _text_canvas_item.is_valid():
-		var text_visible := base_visible and has_text and show_text_margin and using_layer
+		var text_visible := base_visible and has_text and show_text_margin and using_layer and not _is_placeholder
 		if using_layer:
 			text_visible = text_visible and _visuals_position_synced
 		RenderingServer.canvas_item_set_visible(_text_canvas_item, text_visible)
@@ -744,6 +796,18 @@ func _has_media_content() -> bool:
 	return _media_content != null or media_texture != null
 
 func _update_media():
+	if _is_placeholder:
+		# Placeholder: blank media panel, no art or content.
+		var placeholder_visible := visible and is_inside_tree()
+		if _uses_visual_layer():
+			placeholder_visible = placeholder_visible and _visuals_position_synced
+		_draw_placeholder_media()
+		if _media_canvas_item.is_valid():
+			RenderingServer.canvas_item_set_visible(_media_canvas_item, placeholder_visible)
+		if _media_content and is_instance_valid(_media_content):
+			_media_content.visible = false
+		queue_redraw()
+		return
 	var has_media := _has_media_content()
 	var card_visible := visible and is_inside_tree()
 	if _uses_visual_layer():

@@ -154,13 +154,18 @@ func _batch_apply_layout_state() -> void:
 	if debug_mode:
 		print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
 	var focus_changed: bool = _apply_focus_scale(1.0 + state.focus_scale_ratio)
+	# Apply the flag (also converged in _refresh_cached_settings), but detect
+	# changes against the layout-applied cache: it reflects what is actually
+	# built (spacers, snap state), not what flag is set.
+	_apply_pagination_enabled(state.pagination_enabled)
+	var pagination_changed: bool = pagination_enabled != _last_layout_pagination
 
-	if not structure_changed and not zoom_changed and not padding_changed and not focus_changed:
-		if debug_mode: print("[Grid] _batch_apply_layout_state: no changes (structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, ")")
+	if not structure_changed and not zoom_changed and not padding_changed and not focus_changed and not pagination_changed:
+		if debug_mode: print("[Grid] _batch_apply_layout_state: no changes (structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, " pagination=", pagination_changed, ")")
 		return
 
 	if debug_mode:
-		print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed)
+		print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, " pagination=", pagination_changed)
 
 	if structure_changed:
 		# One rebuild path: configure flags then refresh buffer, which recalculates layout.
@@ -168,7 +173,7 @@ func _batch_apply_layout_state() -> void:
 		queue_redraw()
 	else:
 		# Non-structure changes share the same rebuild path to guarantee a single recalc.
-		if focus_changed or padding_changed:
+		if focus_changed or padding_changed or pagination_changed:
 			_refresh_buffer(true)
 		elif zoom_changed:
 			_recalculate_layout()
@@ -203,6 +208,15 @@ const _RATIO_LOOKUP: Array[float] = [
 
 # Grid separation (padding) - loaded from settings, defaults to 10 DP
 var grid_separation: int = int(M3Units.dp(10))
+
+# Universal outer margin: insets the scroll container (and the effective
+# viewport for all layout math) on all four sides. Internal for now.
+const GRID_OUTER_MARGIN_DP := 22.0
+var grid_outer_margin: int = 0
+
+## When true (GRID mode only), the grid is split into viewport-sized pages
+## separated by spacer lines in the flow; scrolling snaps between pages.
+var pagination_enabled: bool = false
 
 # Track the last focused card's virtual index so we can restore it after layout recalculations.
 var _last_focused_virtual_index: int = -1
@@ -329,6 +343,9 @@ var _debug_style_buffer_data: StyleBoxFlat
 var _debug_style_buffer_loading: StyleBoxFlat
 
 var _total_items: int = 0
+# Real item count from the data source. _total_items is the geometry count:
+# padded with placeholder slots (trailing) so pages/rows always fill evenly.
+var _source_total_items: int = 0
 var _virtual_start: int = 0
 var _virtual_end: int = 0
 var _card_scene: PackedScene
@@ -381,6 +398,7 @@ var _last_layout_focus_scale: float = 1.08
 var _last_layout_card_size: Vector2 = Vector2.ZERO
 var _last_layout_focused_card_size: Vector2 = Vector2.ZERO
 var _last_layout_grid_separation: int = -1
+var _last_layout_pagination: bool = false
 var _last_layout_available_size: Vector2 = Vector2.ZERO
 
 # Deterministic available size: when set, _get_available_size() returns this value
@@ -538,14 +556,18 @@ func _get_focus_scale_inverted() -> bool:
 	return view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL
 
 func _get_available_size() -> Vector2:
+	# The outer margin insets the effective viewport on all sides; every layout
+	# consumer (zoom stops, exact-fill, centering, visible ranges, page groups)
+	# computes against this inset size.
+	var inset := Vector2(grid_outer_margin * 2.0, grid_outer_margin * 2.0)
 	# During deterministic sizing, use the size supplied by Main/UIManager rather
 	# than the grid's own size, which may not reflect the final container size yet.
 	if _deterministic_available_size.x > 0.0 and _deterministic_available_size.y > 0.0:
 		if debug_mode:
 			print("[Grid] _get_available_size: using deterministic available size=", _deterministic_available_size)
-		return _deterministic_available_size
+		return Vector2(maxf(_deterministic_available_size.x - inset.x, 1.0), maxf(_deterministic_available_size.y - inset.y, 1.0))
 
-	var result = Vector2(maxf(size.x, 1.0), maxf(size.y, 1.0))
+	var result = Vector2(maxf(size.x - inset.x, 1.0), maxf(size.y - inset.y, 1.0))
 	if debug_mode:
 		print("[Grid] _get_available_size: vertical=", vertical, " size=", size, " result=", result)
 	return result
@@ -571,7 +593,12 @@ func _get_slot_position_for_index(idx: int, items_per_line: int = -1, stride: fl
 	if stride < 0.0:
 		stride = _get_normal_stride()
 	var line = int(float(idx) / items_per_line)
-	return line * stride
+	var pos = line * stride
+	if _is_pagination_active():
+		# Page groups are separated by a spacer gap in the scroll direction;
+		# the leading pad lets page 0 sit centered at scroll 0.
+		pos += _get_page_leading_pad() + int(line / get_lines_per_page()) * _get_page_gap()
+	return pos
 
 func set_focused_card(virtual_index: int) -> void:
 	if _focused_virtual_index == virtual_index:
@@ -789,6 +816,11 @@ func _refresh_cached_settings() -> void:
 	_cached_card_display_mode = clampi(state.display_mode, 0, 2)
 	_cached_content_alignment = clampi(state.content_alignment, 0, 2) as M3Card.ContentAlignment
 	_focus_centering_mode = clampi(state.focus_centering_mode, 0, 1)
+	# Converge the pagination flag with the shared state. Grids otherwise only
+	# learn it via the changed() signal, which fires before grids connect at
+	# startup and never reaches lazily created views — leaving the member out
+	# of sync with the persisted setting (double-click menu bug).
+	_apply_pagination_enabled(state.pagination_enabled)
 
 	# Initialize last-layout tracking on the first cache so the first real
 	# layout doesn't treat the initial state as a "change" and re-snap the
@@ -1271,6 +1303,275 @@ func get_lines_per_page() -> int:
 	var axis = available.y if vertical else available.x
 	return maxi(1, int((axis + grid_separation) / stride))
 
+# ---------------------------------------------------------------------------
+# Pagination (GRID mode only)
+# ---------------------------------------------------------------------------
+
+func _is_pagination_active() -> bool:
+	return pagination_enabled and view_mode == ViewMode.GRID
+
+func _apply_pagination_enabled(p_enabled: bool) -> bool:
+	if pagination_enabled == p_enabled:
+		return false
+	pagination_enabled = p_enabled
+	return true
+
+## Scroll-axis extent of one page's cards (no trailing separation).
+func _get_page_content_size() -> float:
+	return get_lines_per_page() * _get_normal_stride() - grid_separation
+
+## Blank space between page groups in the scroll direction: the leftover slack
+## plus one full stride, so the next page always starts beyond the viewport's
+## far edge and neighbors are never visible at rest (no culling needed).
+func _get_page_gap() -> float:
+	if not _is_pagination_active():
+		return 0.0
+	var available = _get_available_size()
+	var axis = available.y if vertical else available.x
+	return (axis - _get_page_content_size()) + _get_normal_stride()
+
+## Scroll-axis distance from one page start to the next (page + gap).
+func _get_page_period() -> float:
+	if not _is_pagination_active():
+		return 0.0
+	return get_lines_per_page() * _get_normal_stride() + _get_page_gap()
+
+## Scroll offset subtracted from page-start targets so each page sits centered
+## in the viewport (blank slack split into balanced gutters on both sides).
+func _get_page_center_offset() -> float:
+	if not _is_pagination_active():
+		return 0.0
+	var available = _get_available_size()
+	var axis = available.y if vertical else available.x
+	return maxf(0.0, (axis - _get_page_content_size()) / 2.0)
+
+## Total line count (rows/columns) across all items.
+func _get_total_lines() -> int:
+	var items_per_line = _get_items_per_line()
+	if items_per_line <= 0 or _total_items <= 0:
+		return 0
+	return ceili(float(_total_items) / items_per_line)
+
+func _get_page_count() -> int:
+	var lpp = get_lines_per_page()
+	var total_lines = _get_total_lines()
+	if lpp <= 0 or total_lines <= 0:
+		return 1
+	return int((total_lines - 1) / lpp) + 1
+
+## Leading blank pad before slot 0: equals the center offset so page 0's
+## centered target lands exactly at scroll 0 instead of clamping flush-left.
+func _get_page_leading_pad() -> float:
+	return _get_page_center_offset()
+
+## Trailing blank pad after the last line: enough for even a PARTIAL last page
+## to reach its centered scroll target (its content plus this pad spans the
+## same centered extent as a full page).
+func _get_page_trailing_pad() -> float:
+	if not _is_pagination_active():
+		return 0.0
+	var stride = _get_normal_stride()
+	var lpp = get_lines_per_page()
+	var total_lines = _get_total_lines()
+	if stride <= 0.0 or lpp <= 0 or total_lines <= 0:
+		return 0.0
+	var last_page = int((total_lines - 1) / lpp)
+	var lines_in_last = total_lines - last_page * lpp
+	var last_content = lines_in_last * stride - grid_separation
+	return (_get_page_content_size() - last_content) + _get_page_center_offset()
+
+## Snapped scroll position for page `page` (centered, clamped to range).
+## With the leading pad in the slot transform, targets are simply k * period.
+func _get_page_scroll_target(page: int) -> float:
+	page = clampi(page, 0, _get_page_count() - 1)
+	return _clamp_scroll_to_range(page * _get_page_period())
+
+## Page index containing slot `idx`.
+func _get_page_for_index(idx: int) -> int:
+	var items_per_line = _get_items_per_line()
+	if items_per_line <= 0:
+		return 0
+	return int(float(idx) / items_per_line / get_lines_per_page())
+
+## Inverse of the (page-gapped) slot position transform.
+func _get_line_for_scroll_pos(pos: float) -> int:
+	var stride = _get_normal_stride()
+	if stride <= 0.0:
+		return 0
+	if not _is_pagination_active():
+		return int(pos / stride)
+	var lpp = get_lines_per_page()
+	var period = _get_page_period()
+	if period <= 0.0:
+		return int(pos / stride)
+	var rel = pos - _get_page_leading_pad()
+	if rel <= 0.0:
+		return 0
+	var page = int(rel / period)
+	var rem = rel - page * period
+	# A position inside the gap clamps to the last line of that page.
+	var line_in_page = mini(int(rem / stride), lpp - 1)
+	return page * lpp + maxi(0, line_in_page)
+
+## Scroll-axis position of the end of the last line, including the trailing
+## pad that lets partial last pages center (no trailing page gap).
+func _get_content_end_position() -> float:
+	if _total_items <= 0:
+		return 0.0
+	return _get_slot_position_for_index(_total_items - 1) + _get_normal_stride() + _get_page_trailing_pad()
+
+## Nearest snapped page target to `pos`.
+func _snap_to_page_target(pos: float) -> float:
+	var period = _get_page_period()
+	if period <= 0.0:
+		return pos
+	var page = clampi(int(round(pos / period)), 0, _get_page_count() - 1)
+	return page * period
+
+## Pushes the snap period/offset to the scroll container and re-aligns the
+## current scroll to a page target. Called after layout recalcs so the view
+## never rests mid-gap after zoom/resize/orientation changes.
+func _update_page_snap_state() -> void:
+	if not _scroll_container:
+		return
+	if not _is_pagination_active():
+		if _scroll_container.page_snap_period != 0.0:
+			_scroll_container.page_snap_period = 0.0
+			_scroll_container.page_snap_offset = 0.0
+			_scroll_container.page_snap_max_target = -1.0
+		return
+	_scroll_container.page_snap_period = _get_page_period()
+	_scroll_container.page_snap_offset = 0.0
+	_scroll_container.page_snap_max_target = (_get_page_count() - 1) * _get_page_period()
+	if debug_mode:
+		print("[Grid] _update_page_snap_state: period=", _get_page_period(), " max_target=", _scroll_container.page_snap_max_target, " pages=", _get_page_count(), " lpp=", get_lines_per_page(), " stride=", _get_normal_stride(), " axis=", (_get_available_size().y if vertical else _get_available_size().x))
+	var current := _get_current_scroll_pos()
+	var snapped := _clamp_scroll_to_range(_snap_to_page_target(current))
+	if not is_equal_approx(snapped, current):
+		_scroll_container.scroll_to(int(snapped), false)
+	# Re-apply the snap after the ScrollContainer's end-of-frame sort, whose
+	# clamp can otherwise undo it and leave the view between pages. The
+	# generation guard coalesces zoom drags so only the last recalc applies.
+	_page_snap_generation += 1
+	call_deferred("_deferred_page_snap", _page_snap_generation)
+
+var _page_snap_generation: int = 0
+
+func _deferred_page_snap(generation: int) -> void:
+	if generation != _page_snap_generation:
+		return
+	if not _scroll_container or not _is_pagination_active():
+		return
+	var current := _get_current_scroll_pos()
+	var snapped := _clamp_scroll_to_range(_snap_to_page_target(current))
+	if not is_equal_approx(snapped, current):
+		_scroll_container.scroll_to(int(snapped), false)
+
+## Wheel page-step target, resolved through the same target math as
+## keyboard/controller navigation (single source of truth for page targets).
+func _on_page_step_request(direction: int) -> float:
+	if not _is_pagination_active() or not _scroll_container:
+		return 0.0
+	var period := _get_page_period()
+	if period <= 0.0:
+		return 0.0
+	# Queue from the tween's destination so rapid ticks chain multiple pages.
+	var base := _scroll_container.get_target_scroll()
+	var page := int(round(base / period))
+	var target := _get_page_scroll_target(page + direction)
+	if debug_mode:
+		print("[Grid] page step: base=", base, " period=", period, " page=", page, " dir=", direction, " target=", target)
+	return target
+
+# --- Page spacers -----------------------------------------------------------
+# Spacers are real (visible, but non-rendering) Controls inside the flow that
+# each own one whole line, forcing the FlowContainer wrap that creates the
+# visual gap between pages. They never carry a virtual_index and are not part
+# of _active_cards; the invariant is:
+#   "a spacer sits between two consecutive card children iff their lines are
+#    on different pages; no leading or trailing spacers."
+
+func _make_page_spacer() -> Control:
+	var spacer := Control.new()
+	spacer.set_meta("page_spacer", true)
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	spacer.focus_mode = Control.FOCUS_NONE
+	spacer.custom_minimum_size = _get_page_spacer_size()
+	return spacer
+
+## Spacer dimensions: full line on the cross axis (forces the wrap). The
+## scroll-axis extent is gap - separation because the FlowContainer adds its
+## own line separation after the spacer line.
+func _get_page_spacer_size() -> Vector2:
+	var extent = maxf(1.0, _get_page_gap() - grid_separation)
+	var items_per_line = maxi(1, _get_items_per_line())
+	if vertical:
+		var row_width = items_per_line * card_size.x + max(0, items_per_line - 1) * grid_separation
+		return Vector2(row_width, extent)
+	var col_height = items_per_line * card_size.y + max(0, items_per_line - 1) * grid_separation
+	return Vector2(extent, col_height)
+
+func _add_page_spacer(flow_index: int = -1) -> void:
+	if not _flow_container:
+		return
+	var spacer = _make_page_spacer()
+	_flow_container.add_child(spacer)
+	if flow_index >= 0:
+		_flow_container.move_child(spacer, flow_index)
+
+func _free_page_spacer(spacer: Control) -> void:
+	_flow_container.remove_child(spacer)
+	spacer.queue_free()
+
+## Removes any leading/trailing spacers (recycling is contiguous from the
+## ends, so orphaned spacers can only ever appear at the edges).
+func _prune_edge_spacers() -> void:
+	if not _flow_container:
+		return
+	while _flow_container.get_child_count() > 0:
+		var first = _flow_container.get_child(0)
+		if first.has_meta("page_spacer"):
+			_free_page_spacer(first)
+		else:
+			break
+	while _flow_container.get_child_count() > 0:
+		var last = _flow_container.get_child(_flow_container.get_child_count() - 1)
+		if last.has_meta("page_spacer"):
+			_free_page_spacer(last)
+		else:
+			break
+
+func _clear_page_spacers() -> void:
+	if not _flow_container:
+		return
+	for child in _flow_container.get_children():
+		if child.has_meta("page_spacer"):
+			_flow_container.remove_child(child)
+			child.queue_free()
+
+## Rebuilds spacer placement from scratch after a layout recalc. Zoom, resize,
+## and orientation changes move every page boundary at once, so incremental
+## spacer maintenance cannot keep up; this clears all spacers and re-inserts
+## them wherever consecutive cards cross a boundary under the CURRENT page
+## composition. Cheap (a handful of plain Controls) and idempotent.
+func _reconcile_page_spacers() -> void:
+	if not _flow_container:
+		return
+	_clear_page_spacers()
+	if not _is_pagination_active() or _active_cards.size() < 2:
+		return
+	# Flow children are now exactly _active_cards in order; walk the run and
+	# insert a spacer wherever consecutive cards cross a page boundary.
+	var flow_pos := 0
+	for i in range(_active_cards.size()):
+		if i > 0:
+			var prev_idx: int = _active_cards[i - 1].get_meta("virtual_index", -1)
+			var idx: int = _active_cards[i].get_meta("virtual_index", -1)
+			if prev_idx >= 0 and idx >= 0 and _get_page_for_index(idx) != _get_page_for_index(prev_idx):
+				_add_page_spacer(flow_pos)
+				flow_pos += 1
+		flow_pos += 1
+
 ## Compute the exact snap ratio for a given number of items per line.
 func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, available: Vector2, viewport_area: float) -> float:
 	# Compute card dimensions that exactly fill the available space for the
@@ -1406,6 +1707,10 @@ func _recalculate_layout():
 
 	var available = _get_available_size()
 
+	# Re-pad the geometry item count for the current N/page composition
+	# (placeholder slots fill the last page/row evenly).
+	_total_items = _pad_total_items(_source_total_items)
+
 	# Determine which parts of the layout actually changed
 	var structure_changed = view_mode != _last_layout_view_mode or grid_vertical != _last_layout_grid_vertical
 	var focus_changed = not is_equal_approx(focus_scale, _last_layout_focus_scale)
@@ -1413,6 +1718,7 @@ func _recalculate_layout():
 	var separation_changed = grid_separation != _last_layout_grid_separation
 	var available_changed = not available.is_equal_approx(_last_layout_available_size)
 	var total_items_changed = _total_items != _last_layout_total_items
+	var pagination_changed = pagination_enabled != _last_layout_pagination
 
 	# Display mode and media aspect ratio affect base card dimensions, which
 	# feed into card_geometry_changed. Cache them explicitly so a recalc that
@@ -1423,9 +1729,9 @@ func _recalculate_layout():
 	var display_or_ratio_changed = current_display_mode != _last_layout_display_mode or current_media_ratio != _last_layout_media_aspect_ratio
 
 	if debug_mode:
-		print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed)
+		print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed, " pagination=", pagination_changed)
 
-	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed:
+	if not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed and not pagination_changed:
 		_is_recalculating_layout = false
 		return
 
@@ -1440,6 +1746,7 @@ func _recalculate_layout():
 	_last_layout_display_mode = current_display_mode
 	_last_layout_media_aspect_ratio = current_media_ratio
 	_last_layout_total_items = _total_items
+	_last_layout_pagination = pagination_enabled
 
 	# Invalidate then pre-compute scroll math before downstream consumers read it
 	_cached_items_per_line = -1
@@ -1512,6 +1819,11 @@ func _recalculate_layout():
 	_is_recalculating_layout = false
 	_update_visual_draw_order()
 	_ensure_pool_capacity()
+	# Rebuild spacer placement for the new page composition, then push the snap
+	# period/offset to the scroll container and re-align the scroll to a page
+	# target so the view never rests mid-gap after zoom/resize/orientation changes.
+	_reconcile_page_spacers()
+	_update_page_snap_state()
 	# Sync and reveal visual items after the deferred FlowContainer sort has run.
 	# Relying only on NOTIFICATION_TRANSFORM_CHANGED misses some rebuild paths.
 	call_deferred("_sync_and_mark_card_visual_transforms")
@@ -1628,6 +1940,13 @@ func _setup_ui():
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.scroll_vertical = 0
 	_scroll_container.clip_contents = true
+	# Universal outer margin: inset the scroll container on all sides. The
+	# effective viewport for layout math is inset in _get_available_size().
+	grid_outer_margin = int(M3Units.dp(GRID_OUTER_MARGIN_DP))
+	_scroll_container.offset_left = grid_outer_margin
+	_scroll_container.offset_top = grid_outer_margin
+	_scroll_container.offset_right = -grid_outer_margin
+	_scroll_container.offset_bottom = -grid_outer_margin
 	# Scrollbar is not needed; navigation uses mouse wheel, keyboard, or controller.
 	# Hiding it removes the scrollbar-width feedback loop from the layout math.
 	_scroll_container.vertical_scroll_mode = ScrollContainer.ScrollMode.SCROLL_MODE_SHOW_NEVER
@@ -1652,6 +1971,7 @@ func _setup_ui():
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
 	_scroll_container.scroll_target_provider = _on_follow_focus_target_request
+	_scroll_container.page_step_provider = _on_page_step_request
 
 	_margin_container = MarginContainer.new()
 	_margin_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1723,7 +2043,8 @@ func refresh_dimensions() -> void:
 
 func setup(card_scene_resource: PackedScene, total_items: int, initial_target_ratio: float = -1.0):
 	_card_scene = card_scene_resource
-	_total_items = total_items
+	_source_total_items = total_items
+	_total_items = _pad_total_items(total_items)
 
 	# If a caller supplies an initial zoom ratio, apply it directly without
 	# snapping so the grid starts at the saved user zoom. The final snap to a
@@ -1880,7 +2201,7 @@ func _compute_pool_size(available: Vector2) -> int:
 
 	var buffer_count = visible_count + (visual_buffer_lines * 2 * items_per_line)
 
-	if _total_items <= SMALL_LIBRARY_THRESHOLD:
+	if _source_total_items <= SMALL_LIBRARY_THRESHOLD:
 		return max(_total_items, buffer_count)
 	return buffer_count
 
@@ -1943,14 +2264,32 @@ func set_total_count_with_available_size(count: int, available: Vector2, preserv
 	set_total_count(count, preserve_cache)
 
 func set_total_count(count: int, preserve_cache: bool = false):
-	var count_changed = _total_items != count
-	_total_items = count
+	var padded = _pad_total_items(count)
+	# Compare the SOURCE count as well: padding can mask a real add/remove
+	# (N-1 pads back up to the same total), which would skip the rebuild and
+	# leave a stale, index-shifted data cache.
+	var count_changed = _source_total_items != count or _total_items != padded
+	_source_total_items = count
+	_total_items = padded
 	_update_layout()
 
 	# Clear cache if count changed (index-to-data mapping is now stale)
 	# or if preserve_cache is explicitly false
 	if count_changed or not preserve_cache:
 		_refresh_buffer()
+
+## Geometry item count: pads the source count with trailing placeholder slots
+## so the last page (paginated) or last row/column (plain grid) fills evenly.
+func _pad_total_items(count: int) -> int:
+	if count <= 0 or view_mode != ViewMode.GRID:
+		return count
+	var items_per_line = _get_items_per_line()
+	if items_per_line <= 1:
+		return count
+	var unit = items_per_line
+	if _is_pagination_active():
+		unit = items_per_line * get_lines_per_page()
+	return int(ceil(float(count) / unit) * unit)
 
 func _update_layout():
 	var items_per_line = _get_items_per_line()
@@ -2012,16 +2351,20 @@ func _initial_load():
 func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
 	"""Compute visible range and buffer target range for the current scroll position.
 	Writes directly to member variables to avoid Dictionary allocation."""
-	var line = int(scroll_pos / stride) if stride > 0 else 0
+	var line = _get_line_for_scroll_pos(scroll_pos) if _is_pagination_active() else (int(scroll_pos / stride) if stride > 0 else 0)
 	var visible_lines = ceili(viewport_size / stride) if stride > 0 else 1
 	_visible_start_idx = line * items_per_line
 	_visible_end_idx = min(_visible_start_idx + visible_lines * items_per_line, _total_items)
 
 	var visible_count = _visible_end_idx - _visible_start_idx
-	var total_card_count = visible_count + (_current_buffer_lines * 2 * items_per_line)
+	# When paginated, a page jump moves the visible window by a whole page;
+	# keep the buffer at least one page deep in each direction.
+	var buffer_lines = maxi(_current_buffer_lines, get_lines_per_page()) if _is_pagination_active() else _current_buffer_lines
+	var total_card_count = visible_count + (buffer_lines * 2 * items_per_line)
 	# For small libraries, just load everything to avoid edge-case recycling bugs
-	# that can clip the last partial row in grid mode.
-	if _total_items <= SMALL_LIBRARY_THRESHOLD:
+	# that can clip the last partial row in grid mode. (Compares the source
+	# count so placeholder padding never flips a small library into recycling.)
+	if _source_total_items <= SMALL_LIBRARY_THRESHOLD:
 		total_card_count = _total_items
 	var half_buffer = int((total_card_count - visible_count) / 2.0)
 	_buffer_target_start = max(0, _visible_start_idx - half_buffer)
@@ -2174,6 +2517,8 @@ func _recycle_card_at_index(index: int):
 			_flow_container.remove_child(card)
 
 		_add_to_pool(card)
+		_prune_edge_spacers()
+
 func _add_to_pool(card: Control) -> void:
 	if _card_pool.size() >= _max_pool_size:
 		card.queue_free()
@@ -2277,6 +2622,12 @@ func _add_card_at_end(virtual_index: int):
 	_configure_card_size_flags(card)
 	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
+	if _is_pagination_active() and _active_cards.size() > 0:
+		# Page boundary between the last buffered card and this one: the spacer
+		# owns a whole flow line, creating the visual gap between pages.
+		var last_idx: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+		if last_idx >= 0 and _get_page_for_index(virtual_index) != _get_page_for_index(last_idx):
+			_add_page_spacer()
 	_active_cards.append(card)
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
@@ -2300,6 +2651,11 @@ func _add_card_at_start(virtual_index: int):
 	_active_cards_by_index[virtual_index] = card
 	_flow_container.add_child(card)
 	_flow_container.move_child(card, 0)
+	if _is_pagination_active() and _active_cards.size() > 1:
+		# Page boundary between the new first card and the previous first card.
+		var next_idx: int = _active_cards[1].get_meta("virtual_index", -1)
+		if next_idx >= 0 and _get_page_for_index(virtual_index) != _get_page_for_index(next_idx):
+			_add_page_spacer(1)
 	_configure_card_size_flags(card)
 	if _card_has_set_focus_scale:
 		card.set_focus_scale(focus_scale)
@@ -2316,6 +2672,13 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	if not card.is_node_ready():
 		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " not ready, keeping pending")
 		return false
+	# Placeholder slots (index beyond the source count): no data to apply;
+	# render as a blank, non-interactive card shape.
+	if virtual_index >= _source_total_items:
+		card.remove_meta("needs_visual_setup")
+		if card.has_method("set_placeholder"):
+			card.set_placeholder(true)
+		return true
 	if not _data_cache.has(virtual_index):
 		# Data not loaded yet; keep the card pending so it gets finished once
 		# the items_requested callback populates the cache.
@@ -2393,11 +2756,13 @@ func _batch_recycle_from_start(count: int) -> void:
 				_flow_container.remove_child(card)
 			_add_to_pool(card)
 	_active_cards = _active_cards.slice(count)
+	_prune_edge_spacers()
 
 func _batch_add_at_start(target_start: int, count: int) -> void:
 	if count <= 0:
 		return
 	var new_cards: Array[Control] = []
+	var flow_pos := 0
 	for i in range(count):
 		var virtual_index = target_start + i
 		var card = _acquire_card()
@@ -2408,8 +2773,14 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 			card.focus_scale_enabled = true
 			card.focus_scale_inverted = _get_focus_scale_inverted()
 		_configure_card_visual_layer(card)
+		if _is_pagination_active() and i > 0:
+			# Page boundary within the prepended range.
+			if _get_page_for_index(virtual_index) != _get_page_for_index(virtual_index - 1):
+				_add_page_spacer(flow_pos)
+				flow_pos += 1
 		_flow_container.add_child(card)
-		_flow_container.move_child(card, i)
+		_flow_container.move_child(card, flow_pos)
+		flow_pos += 1
 		_configure_card_size_flags(card)
 		if _card_has_set_focus_scale:
 			card.set_focus_scale(focus_scale)
@@ -2418,6 +2789,12 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 		item_created.emit(card, virtual_index)
 		_active_cards_by_index[virtual_index] = card
 		new_cards.append(card)
+	if _is_pagination_active() and new_cards.size() > 0 and _active_cards.size() > 0:
+		# Page boundary between the last prepended card and the previous first card.
+		var last_new_idx: int = new_cards[new_cards.size() - 1].get_meta("virtual_index", -1)
+		var old_first_idx: int = _active_cards[0].get_meta("virtual_index", -1)
+		if last_new_idx >= 0 and old_first_idx >= 0 and _get_page_for_index(last_new_idx) != _get_page_for_index(old_first_idx):
+			_add_page_spacer(flow_pos)
 	_active_cards = new_cards + _active_cards
 
 func _get_visible_range() -> void:
@@ -2506,8 +2883,8 @@ func _update_margin():
 		# _get_slot_position_for_index uses floor division, returning the START of a row.
 		# For the total content end, we need the END of the last (possibly partial) row,
 		# otherwise the last row gets clipped in grid mode where items_per_line > 1.
-		var total_lines = ceili(float(_total_items) / items_per_line)
-		var total_end = total_lines * stride
+		# When paginated this also excludes any trailing page gap.
+		var total_end = _get_content_end_position()
 		var margin_top = first_pos + focus_overflow.y
 		var margin_bottom = total_end - after_last_pos + focus_overflow.y
 		var flow_height = after_last_pos - first_pos
@@ -2536,7 +2913,8 @@ func _update_margin():
 	else:
 		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
 		var after_last_pos = _get_slot_position_for_index(last_idx + 1, items_per_line, stride)
-		var total_end = _get_slot_position_for_index(_total_items, items_per_line, stride)
+		# END of the last (possibly partial) column; excludes any trailing page gap.
+		var total_end = _get_content_end_position()
 		var margin_left = first_pos + focus_overflow.x
 		var margin_right = total_end - after_last_pos + focus_overflow.x
 		var flow_width = after_last_pos - first_pos
@@ -2577,7 +2955,8 @@ func _request_missing_data():
 	var missing_indices: Array[int] = []
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
-		if idx >= 0 and not _data_cache.has(idx) and not _is_index_pending(idx):
+		# Placeholder slots (idx >= source count) need no data.
+		if idx >= 0 and idx < _source_total_items and not _data_cache.has(idx) and not _is_index_pending(idx):
 			missing_indices.append(idx)
 
 	if missing_indices.size() == 0:
@@ -2605,12 +2984,12 @@ func _check_preload_needed():
 	var preload_distance = visible_count * data_preload_multiplier
 	var buffer_size = visible_count * data_buffer_multiplier
 
-	if _virtual_end < _total_items - 1:
-		var distance_to_end = _total_items - 1 - _virtual_end
+	if _virtual_end < _source_total_items - 1:
+		var distance_to_end = _source_total_items - 1 - _virtual_end
 		if distance_to_end > 0 and distance_to_end <= preload_distance:
 			var next_batch_start = _virtual_end + 1
 			if not _pending_loads.has(next_batch_start) and not _data_cache.has(next_batch_start):
-				_request_data(next_batch_start, min(buffer_size, _total_items - next_batch_start))
+				_request_data(next_batch_start, min(buffer_size, _source_total_items - next_batch_start))
 
 	if _virtual_start > 0:
 		var distance_to_start = _virtual_start
@@ -2740,7 +3119,7 @@ func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> 
 	intra-line index. For horizontal grids a "row" is a vertical line and the
 	column is the intra-line index. This lets left/right navigate within a
 	line and up/down navigate between lines regardless of orientation."""
-	if _total_items <= 0 or current_idx < 0 or current_idx >= _total_items:
+	if _source_total_items <= 0 or current_idx < 0 or current_idx >= _source_total_items:
 		return -1
 
 	var items_per_line := _get_items_per_line()
@@ -2750,11 +3129,11 @@ func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> 
 	# LIST/CAROUSEL: simple linear movement.
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL or items_per_line == 1:
 		var target := current_idx + row_delta + col_delta
-		return clamp(target, 0, _total_items - 1)
+		return clamp(target, 0, _source_total_items - 1)
 
 	var line := int(current_idx / float(items_per_line))
 	var col := current_idx % items_per_line
-	var total_lines := ceili(float(_total_items) / items_per_line)
+	var total_lines := ceili(float(_source_total_items) / items_per_line)
 
 	var target_line := line + row_delta
 	var target_col := col + col_delta
@@ -2765,7 +3144,8 @@ func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> 
 		return -1
 
 	var target_idx := target_line * items_per_line + target_col
-	if target_idx >= _total_items:
+	# Placeholder slots (idx >= source count) are not navigation targets.
+	if target_idx >= _source_total_items:
 		return -1
 	return target_idx
 
@@ -2885,6 +3265,7 @@ func _refresh_buffer(preserve_scroll: bool = false):
 
 	while _active_cards.size() > 0:
 		_recycle_card_at_index(0)
+	_clear_page_spacers()
 
 	_data_cache.clear()
 	_cached_game_ids.clear()
@@ -2987,6 +3368,12 @@ func get_card_at_index(index: int) -> Control:
 func _clamp_scroll_to_range(offset: float) -> float:
 	if not _scroll_container:
 		return offset
+	if _is_pagination_active():
+		# Clamp against the page composition instead of the live scrollbar range:
+		# the scrollbar's max is stale while a layout recalc's margin changes are
+		# still propagating, which let zoom snaps clamp to (or get undone to)
+		# positions between pages.
+		return clampf(offset, 0.0, (_get_page_count() - 1) * _get_page_period())
 	var scrollbar: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
 	if not scrollbar:
 		return offset
@@ -3001,6 +3388,9 @@ func get_centered_scroll_for_index(idx: int) -> float:
 	"""Scroll position that places the center of slot `idx` at the viewport
 	center (clamped to the scrollable range). Cards grow around their center
 	when focused, so the unfocused card_size is the correct centering basis."""
+	if _is_pagination_active():
+		# Page alignment wins over centering when paginated.
+		return _get_page_scroll_target(_get_page_for_index(idx))
 	var slot_pos := _get_slot_position_for_index(idx)
 	var focus_overflow := _get_focus_overflow()
 	var available := _get_available_size()
@@ -3016,6 +3406,10 @@ func get_follow_focus_scroll_target(idx: int) -> float:
 	Both modes are edge-triggered: no scroll happens until the focused card's
 	visual bounds (including its focus scale-up) cross a thin margin at a
 	viewport edge. Returns the current scroll position when no scroll is needed."""
+	if _is_pagination_active():
+		# Page alignment wins over centering: focus moves within the current
+		# page need no scroll; crossing a boundary jumps to the new page.
+		return _get_page_scroll_target(_get_page_for_index(idx))
 	var current := _get_current_scroll_pos()
 	var slot_pos := _get_slot_position_for_index(idx)
 	var focus_overflow := _get_focus_overflow()

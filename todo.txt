@@ -8,6 +8,10 @@ downloading core android notif stuck
 platform cards take longer on android
 some settings screens not scrollable?
 better extraction notifications
+need to 'click' on text fields to open keyboard. 
+'failed to connect' (E 0:01:19:213   platforms_settings_view.gd:155 @ <anonymous lambda>(): [PlatformsSettingsView] Failed to fetch platforms: Request failed with result: 2 )
+	^needs snackbar notif
+
 
 romm;
 - mark 'played' if played
@@ -32,7 +36,6 @@ romm;
 	focus indicator effects (glow, mirror, chase, etc)
 	add letters to library navigation?
 	badge effect placement opts
-	placeholder card slots for uneven grids
 	game title "speech bubble option"
 	
 ## hero <- currently depreciated

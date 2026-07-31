@@ -945,10 +945,18 @@ func _dispatch_direction(dir: String) -> bool:
 		return true
 
 	var grid := _get_current_grid()
-	if grid and grid.is_focus_locked_and_active():
-		var result := grid.navigate_direction(dir)
-		if DEBUG_LOG: print("[NavDispatch] grid.navigate_direction(", dir, ") = ", result)
-		return result
+	if grid:
+		var focused := get_viewport().gui_get_focus_owner()
+		var focus_in_grid := focused != null and grid.is_ancestor_of(focused)
+		if grid.is_focus_locked_and_active() or focus_in_grid:
+			# The lock can be dropped while focus is still inside the grid (e.g. a
+			# deferred refresh ran during a programmatic focus handoff). Re-establish
+			# it so the first directional press navigates instead of no-oping.
+			if focus_in_grid and not grid.is_focus_locked_and_active():
+				UIManager.enter_focus_lock(grid)
+			var result := grid.navigate_direction(dir)
+			if DEBUG_LOG: print("[NavDispatch] grid.navigate_direction(", dir, ") = ", result)
+			return result
 
 	_send_synthetic(dir)
 	if DEBUG_LOG: print("[NavDispatch] synthetic event sent for ", dir)

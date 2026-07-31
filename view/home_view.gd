@@ -451,7 +451,7 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 				_load_total_count(true, true)
 		else:
 			if not _total_count_load_pending:
-				_load_total_count(true, false)
+				_load_total_count(false, false)
 
 ## Returns true when intro animations are complete and cards can accept focus
 ## Note: Intro animations have been removed, so this always returns true

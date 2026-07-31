@@ -42,6 +42,25 @@ var scroll_target_provider: Callable = Callable()
 ## runs a programmatic scroll-and-focus sequence).
 var follow_focus_suppressed: bool = false
 
+## True while a wheel-initiated page turn is animating. Suppresses follow-focus
+## for the duration so auto-reassigned focus (e.g. after the focused card is
+## recycled mid-turn) cannot retarget the tween to a different page.
+var _page_scroll_in_flight: bool = false
+
+## When > 0, scrolling snaps to positions k * page_snap_period + page_snap_offset.
+## Wheel ticks jump one whole page; drag/touch free-scrolls then snaps on release.
+var page_snap_period: float = 0.0
+var page_snap_offset: float = 0.0
+## When >= 0, page snap/wheel targets never exceed this value (the last page's
+## target), even if the scrollbar range extends slightly past it.
+var page_snap_max_target: float = -1.0
+
+## Optional delegate for paged wheel scrolling. Signature: (direction: int) -> float.
+## Returns the absolute scroll target for one page forward (+1) or back (-1),
+## letting the owning grid define page targets with the same math used for
+## keyboard/controller navigation (single source of truth).
+var page_step_provider: Callable = Callable()
+
 ## When true, all scroll input (wheel, scrollbar drag, focus-driven) is blocked.
 var scroll_paused: bool = false:
 	set(value):
@@ -50,19 +69,24 @@ var scroll_paused: bool = false:
 			if _scroll_tween and _scroll_tween.is_valid():
 				_scroll_tween.kill()
 			_is_smooth_scrolling = false
+			_page_scroll_in_flight = false
 
 func _ready():
 	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
 	follow_focus = false
 	
 	await get_tree().process_frame
-	
+
 	_connect_scrollbar()
-	
+
 	if smooth_scrolling:
 		gui_input.connect(_on_gui_input)
 		_connect_scrollbar_input()
-	
+
+	# Snap to a page target after native touch-drag scrolling settles.
+	if not scroll_ended.is_connected(_on_native_scroll_ended):
+		scroll_ended.connect(_on_native_scroll_ended)
+
 	# Connect to viewport's focus changed signal
 	_connect_focus_signal()
 
@@ -105,7 +129,7 @@ func _on_focus_changed(control: Control) -> void:
 		control.remove_meta("_suppress_smooth_scroll")
 		return
 
-	if follow_focus_suppressed:
+	if follow_focus_suppressed or _page_scroll_in_flight:
 		return
 
 	# When a target provider is set, the owning grid decides the scroll target
@@ -236,21 +260,51 @@ func _on_gui_input(event: InputEvent):
 	if not smooth_scrolling or scroll_paused:
 		return
 	
-	if event is InputEventMouseButton:
+	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			var scrollbar = _get_scrollbar()
 			if not scrollbar:
 				return
-			
+
+			if page_snap_period > 0.0 and page_step_provider.is_valid():
+				# Paged mode via provider: the owning grid resolves the target
+				# with the same math as keyboard/controller navigation.
+				var max_target = scrollbar.max_value - scrollbar.page
+				if page_snap_max_target >= 0.0:
+					max_target = minf(max_target, page_snap_max_target)
+				var target: float = page_step_provider.call(1 if event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1)
+				_target_scroll = clampf(target, scrollbar.min_value, max_target)
+				_page_scroll_in_flight = true
+				_start_smooth_scroll(1.0, wheel_scroll_duration)
+				accept_event()
+				return
+
+			if page_snap_period > 0.0:
+				# Paged mode: one tick = one page. Derive the current page with
+				# round() (nearest) rather than floor/ceil on the float ratio —
+				# at exact page targets the ratio lands a hair above or below k,
+				# which made ticks stick in place or skip a page depending on
+				# float rounding.
+				var max_target = scrollbar.max_value - scrollbar.page
+				if page_snap_max_target >= 0.0:
+					max_target = minf(max_target, page_snap_max_target)
+				var page := int(round((_target_scroll - page_snap_offset) / page_snap_period))
+				page += -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1
+				_target_scroll = clampf(page * page_snap_period + page_snap_offset, scrollbar.min_value, max_target)
+				_page_scroll_in_flight = true
+				_start_smooth_scroll(1.0, wheel_scroll_duration)
+				accept_event()
+				return
+
 			var step = scrollbar.custom_step
 			if step <= 0:
 				step = scrollbar.page / 10.0
-			
+
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_target_scroll -= step
 			else:
 				_target_scroll += step
-			
+
 			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
 			_start_smooth_scroll(1.0, wheel_scroll_duration)
 			accept_event()
@@ -272,11 +326,13 @@ func _on_scrollbar_input(event: InputEvent):
 				if _scroll_tween and _scroll_tween.is_valid():
 					_scroll_tween.kill()
 				_is_smooth_scrolling = false
-				
+				_page_scroll_in_flight = false
+
 				_target_scroll = _get_current_scroll()
 				_scrollbar_drag_start_value = _target_scroll
 			else:
 				_is_dragging_scrollbar = false
+				snap_to_page()
 	
 	elif event is InputEventMouseMotion and _is_dragging_scrollbar:
 		var mouse_delta = (event.global_position.y if vertical else event.global_position.x) - _scrollbar_drag_start_mouse_pos
@@ -356,8 +412,9 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 		duration
 	)
 	
-	_scroll_tween.finished.connect(func(): 
+	_scroll_tween.finished.connect(func():
 		_is_smooth_scrolling = false
+		_page_scroll_in_flight = false
 		scroll_completed.emit()
 	)
 
@@ -369,11 +426,36 @@ func get_target_scroll() -> float:
 func is_scrolling() -> bool:
 	return _is_smooth_scrolling
 
+## Snaps the current scroll position to the nearest page target (no-op when
+## page snapping is disabled or already aligned). Called on drag/touch release.
+func snap_to_page() -> void:
+	if page_snap_period <= 0.0 or scroll_paused:
+		return
+	var scrollbar = _get_scrollbar()
+	if not scrollbar:
+		return
+	var current = _get_current_scroll()
+	var snapped = round((current - page_snap_offset) / page_snap_period) * page_snap_period + page_snap_offset
+	var max_target = maxf(scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+	if page_snap_max_target >= 0.0:
+		max_target = minf(max_target, page_snap_max_target)
+	snapped = clampf(snapped, scrollbar.min_value, max_target)
+	if is_equal_approx(snapped, current):
+		return
+	_target_scroll = snapped
+	_start_smooth_scroll()
+
+func _on_native_scroll_ended() -> void:
+	if _is_dragging_scrollbar or _is_smooth_scrolling:
+		return
+	snap_to_page()
+
 func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
 	_is_smooth_scrolling = false
+	_page_scroll_in_flight = false
 	
 	if animate and smooth_scrolling:
 		_target_scroll = target

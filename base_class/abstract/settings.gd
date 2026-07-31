@@ -7,8 +7,8 @@ const Type = SettingsVar.SettingType
 
 @export_group("Settings")
 @export_subgroup("Audio")
-@export var dblevel_music := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "Music Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "MEDIUM", "display_unit": "%"})
-@export var dblevel_sfx := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "SFX Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "MEDIUM", "display_unit": "%"})
+@export var dblevel_music := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "Music Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "SMALL", "display_unit": "%"})
+@export var dblevel_sfx := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "SFX Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "SMALL", "display_unit": "%"})
 
 @export_subgroup("Display")
 @export var windowed := SettingsVar.new(Type.BOOL,true,State.ENABLED,"Windowed")
@@ -40,6 +40,7 @@ const Type = SettingsVar.SettingType
 @export var fold_duplicate_covers := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fold duplicate covers into siblings", "During sync, games with identical cover art will be grouped together like RomM siblings")
 @export var hide_games_without_covers := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Hide games without cover art", "Games without cover art will be hidden from the library view")
 @export var fold_romm_siblings := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Fold RomM siblings", "RomM-designated regional variants (siblings) will be grouped under a single library entry")
+@export var logo_detection_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Logo detection", "Detect title logos on cover art during sync (CPU-intensive) and use them for smart card cropping. When off, cards use a plain center crop")
 @export_subgroup("Storage")
 @export var games_root_folder := SettingsVar.new(Type.PATH, "user://roms/", State.ENABLED, "Games Folder", "Directory where game ROMs are stored")
 @export var emulators_folder := SettingsVar.new(Type.PATH, "user://emulators/", State.ENABLED, "Emulators Folder", "Directory where emulators are installed")
@@ -93,6 +94,7 @@ const Type = SettingsVar.SettingType
 @export var dark_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface")
 @export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"])
 @export var library_grid_vertical := SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)")
+@export var library_pagination_view := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Pagination View", "Split the grid into viewport-sized pages with a gap in the scroll direction instead of a continuous scrolling list")
 @export var library_focus_centering := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Focus Centering", "How the view scrolls when focus nears a screen edge: Margin slides the card just back on screen, Center brings it to the center of the screen", 0.0, 1.0, 1.0, ["Margin", "Center"])
 @export var library_navigation_type := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
 @export var library_grid_padding := SettingsVar.new(Type.INT, 22, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)

@@ -128,6 +128,11 @@ func _on_setting_changed(value, setting):
 		# here because PlatformsSettingsView updates this setting for each platform
 		# during initialization and emitting sync_completed would spam scans.
 		database.invalidate_downloaded_games_count_cache()
+	elif setting.property_name == "logo_detection_enabled":
+		print("[DataManager] Logo detection %s" % ("enabled" if value else "disabled"))
+		# Cards must re-resolve logo rects (logo-aware crop vs plain center crop)
+		if UIManager and UIManager.card_settings_state:
+			UIManager.card_settings_state.force_display_refresh()
 
 
 # ==================== DATABASE READY ====================

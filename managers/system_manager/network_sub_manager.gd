@@ -138,6 +138,30 @@ func _get_auth_header() -> String:
 	var encoded = Marshalls.utf8_to_base64(credentials)
 	return "Basic " + encoded
 
+func get_base_url() -> String:
+	if _base_url.is_empty():
+		_load_credentials()
+	return _base_url
+
+## Builds a fully-qualified media URL from a RomM-provided path.
+## Absolute URLs are returned as-is; server-relative paths are prefixed with
+## the configured RomM base URL. Mirrors argosy-launcher's buildMediaUrl().
+## Spaces are percent-encoded: RomM appends cache-busters like ?ts=2026-02-19 22:28:09
+## which otherwise produce malformed request lines (HTTP 400).
+func build_media_url(path: String) -> String:
+	var url := path
+	if not url.begins_with("http"):
+		url = get_base_url().rstrip("/") + path
+	return url.replace(" ", "%20")
+
+## Returns Authorization headers for URLs hosted on the configured RomM server,
+## or an empty array for external hosts.
+func get_auth_headers_for_url(url: String) -> Array:
+	var base := get_base_url().rstrip("/")
+	if base != "" and url.begins_with(base):
+		return ["Authorization: " + _get_auth_header()]
+	return []
+
 # ==================== CACHE HELPERS ====================
 
 func _get_cache_key(endpoint: String) -> String:
@@ -536,6 +560,10 @@ func fetch_game_details(game_id: int, callback: Callable):
 func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
 	var http = _create_http_request()
 	_active_request_count += 1
+
+	# Raw spaces are never valid in a request line; tolerate unencoded URLs
+	# from any source (e.g. DB rows synced before build_media_url encoding).
+	url = url.replace(" ", "%20")
 
 	var error = http.request(url, headers)
 

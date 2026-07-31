@@ -22,6 +22,7 @@ const MAX_IMAGE_RETRIES: int = 3
 const MAX_DOWNLOAD_RETRIES: int = 2
 const MAX_COVER_TEXTURE_SIZE: int = 512
 const FAILURE_RETRY_TTL_SEC: int = 300
+const DEBUG_LOG: bool = true
 
 static var _failed_downloads: Dictionary = {}
 
@@ -46,17 +47,20 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		cache_path = DataManager.get_cached_image_path(cover_url)
 		if not FSM.file_exists(cache_path):
 			if DataManager.is_sync_in_progress():
+				if DEBUG_LOG: print("[CardMediaLoader] No cached cover, waiting for sync: %s" % cover_url)
 				_set_loading_texture()
 				return
 			else:
 				var fail_time: float = _failed_downloads.get(cover_url, 0.0)
 				if Time.get_unix_time_from_system() - fail_time < FAILURE_RETRY_TTL_SEC:
+					if DEBUG_LOG: print("[CardMediaLoader] Skipping cover (failed recently, TTL active): %s" % cover_url)
 					_set_loading_texture()
 					return
 				_download_cover_and_retry(cover_url, cache_path, high_priority)
 				return
 
 	if cache_path == "":
+		if DEBUG_LOG: print("[CardMediaLoader] No cover path or URL for game id=%s" % game.id)
 		_set_loading_texture()
 		return
 
@@ -127,6 +131,8 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 				await _card.get_tree().create_timer(0.1 * _image_retry_count).timeout
 				if is_instance_valid(_card) and _card.game and _card.game.id == target_game_id:
 					_load_cached_cover(cache_path, high_priority)
+			else:
+				push_error("[CardMediaLoader] Cache file undecodable after %d retries: %s" % [MAX_IMAGE_RETRIES, cache_path])
 
 	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, cache_path)
 
@@ -178,9 +184,11 @@ func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 			err = image.load_webp_from_buffer(buffer)
 		_:
 			# Unknown magic bytes: not a supported image.
+			if DEBUG_LOG: print("[CardMediaLoader] Unknown magic bytes (%d bytes, first16=%s)" % [buffer.size(), buffer.slice(0, 16).hex_encode()])
 			return null
 
 	if err != OK or image.is_empty():
+		if DEBUG_LOG: print("[CardMediaLoader] Decode error: format=%d err=%d (%d bytes)" % [format, err, buffer.size()])
 		return null
 
 	var max_dim = max(image.get_width(), image.get_height())

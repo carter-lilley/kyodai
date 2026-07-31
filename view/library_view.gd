@@ -606,7 +606,7 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 			if _is_search_active:
 				_load_total_count_with_search()
 			else:
-				_load_total_count(true)
+				_load_total_count(false)
 
 func _on_database_ready():
 	_load_total_count()

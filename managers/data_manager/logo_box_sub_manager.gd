@@ -23,12 +23,10 @@ var _worker_count: int = 1
 
 func _ready():
 	data_manager = get_parent()
-	# HARD CLAMP: exactly one worker. Each worker constructs its own LogoDetector,
-	# and the native Impl creates a per-instance Ort::Env - but ONNX Runtime only
-	# allows ONE default LoggingManager per process, so a second detector aborts
-	# the process (SIGABRT on Android). Keep at 1 until the native lib shares a
-	# single Ort::Env across instances.
-	_worker_count = 1
+	# Workers share a single Ort::Env in the native lib (ONNX Runtime allows only
+	# one default LoggingManager per process). If the native binary predates the
+	# shared-env fix, a second detector aborts the process (SIGABRT on Android).
+	_worker_count = MemorySubManager.get_logo_box_thread_count()
 	Performance.add_custom_monitor("logo_box/pending_tasks", _get_pending_task_count)
 	Performance.add_custom_monitor("logo_box/avg_detect_time_ms", _get_avg_detect_time_ms)
 
@@ -41,9 +39,9 @@ func _get_intra_op_threads() -> int:
 	return 1
 
 func set_worker_count(p_count: int) -> void:
-	# See _ready: a second LogoDetector instance aborts the process (Ort::Env
-	# single-instance limitation), so the pool is pinned to one worker.
-	var count := 1
+	# See _ready: workers require the shared-Ort::Env native build or the
+	# process aborts when a second detector is constructed.
+	var count := clampi(p_count, 1, 16)
 	if count == _worker_count and not _threads.is_empty():
 		return
 	_worker_count = count
@@ -76,8 +74,13 @@ func stop_worker() -> void:
 ## Called from the main thread when a cover download completes or is already cached.
 ## Queues detection on a worker thread and writes the resulting logo_box to each
 ## game in the list. Duplicate covers are not shared; each game gets its own row.
+## If the same cover is already queued, the games merge into the existing task.
 func process_cover_url(cover_url: String, games: Array[GameResource], on_complete: Callable = Callable()) -> void:
 	if cover_url == "" or not cover_url.begins_with("http"):
+		if on_complete.is_valid():
+			on_complete.call()
+		return
+	if not _is_detection_enabled():
 		if on_complete.is_valid():
 			on_complete.call()
 		return
@@ -106,13 +109,28 @@ func process_cover_url(cover_url: String, games: Array[GameResource], on_complet
 		if on_complete.is_valid():
 			on_complete.call()
 		return
+	# Merge into an existing queued task for the same cover (a URL can reappear
+	# when sync dispatches cover work incrementally across batches).
+	for task in _queue:
+		if task.get("type") == "detect" and task.get("cover_url") == cover_url:
+			var existing_ids: Array[int] = task["game_ids"]
+			for id in game_ids:
+				if not existing_ids.has(id):
+					existing_ids.append(id)
+			if on_complete.is_valid():
+				task["on_completes"].append(on_complete)
+			_queue_mutex.unlock()
+			return
+	var completes: Array[Callable] = []
+	if on_complete.is_valid():
+		completes.append(on_complete)
 	_queue.append({
 		"type": "detect",
 		"cache_path": cache_path,
 		"title": title,
 		"game_ids": game_ids,
 		"cover_url": cover_url,
-		"on_complete": on_complete,
+		"on_completes": completes,
 	})
 	_queue_mutex.unlock()
 	_pending_mutex.lock()
@@ -121,9 +139,15 @@ func process_cover_url(cover_url: String, games: Array[GameResource], on_complet
 	_queue_semaphore.post()
 	start_worker()
 
+func _is_detection_enabled() -> bool:
+	var setting = DataManager.get_setting("logo_detection_enabled")
+	return setting != null and setting.value == true
+
 ## Queues a backfill pass for all games that already have cached covers but no
 ## logo_box. The work happens on a worker thread.
 func backfill_missing() -> void:
+	if not _is_detection_enabled():
+		return
 	if not data_manager or not data_manager.database:
 		return
 	if not data_manager.database.is_database_ready():
@@ -173,7 +197,7 @@ func _worker_loop() -> void:
 			detector = _create_detector()
 			if detector == null:
 				print("[LogoBoxCache] Worker failed to create detector; skipping task")
-				_finish_task(task.get("on_complete", Callable()))
+				_finish_task(task.get("on_completes", []))
 				continue
 
 		match task.get("type", ""):
@@ -233,15 +257,15 @@ func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 	var title = task.get("title", "")
 	var game_ids: Array[int] = task.get("game_ids", [])
 	var cover_url = task.get("cover_url", "")
-	var on_complete: Callable = task.get("on_complete", Callable())
+	var on_completes: Array = task.get("on_completes", [])
 
 	if cache_path == "" or title == "" or game_ids.is_empty() or cover_url == "":
-		_finish_task(on_complete)
+		_finish_task(on_completes)
 		return
 
 	var image := _load_image(cache_path)
 	if image == null or image.is_empty():
-		_finish_task(on_complete)
+		_finish_task(on_completes)
 		return
 
 	var start_ms := Time.get_ticks_msec()
@@ -253,14 +277,18 @@ func _process_detect_task(task: Dictionary, detector: Variant) -> void:
 	_detect_time_mutex.unlock()
 	var logo_box := _logo_box_dict_from_result(result, image)
 	_write_logo_box_to_games(logo_box, game_ids)
-	_finish_task(on_complete)
+	_finish_task(on_completes)
 
-func _finish_task(on_complete: Callable) -> void:
-	if on_complete.is_valid():
-		on_complete.call_deferred()
+func _finish_task(on_completes: Array) -> void:
+	for cb in on_completes:
+		if cb is Callable and cb.is_valid():
+			cb.call_deferred()
 	_task_done()
 
 func _process_backfill_task() -> void:
+	if not _is_detection_enabled():
+		_task_done()
+		return
 	if not data_manager or not data_manager.database:
 		_task_done()
 		return
@@ -341,11 +369,14 @@ func _get_cache_path(cover_url: String) -> String:
 	return data_manager.cover.get_cached_image_path(cover_url)
 
 func _write_logo_box_to_games(logo_box: Dictionary, game_ids: Array[int]) -> void:
-	var json := JSON.stringify(logo_box)
+	var ids: Array[int] = []
 	for romm_id in game_ids:
-		if romm_id <= 0:
-			continue
-		data_manager.database.update_game_logo_box(romm_id, json)
+		if romm_id > 0:
+			ids.append(romm_id)
+	if ids.is_empty():
+		return
+	# One batched DB task per cover instead of one per game.
+	data_manager.database.update_games_logo_box(ids, JSON.stringify(logo_box))
 
 func _load_image(cache_path: String) -> Image:
 	if not FSM.file_exists(cache_path):

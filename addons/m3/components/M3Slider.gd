@@ -47,7 +47,7 @@ enum SliderOrientation { HORIZONTAL, VERTICAL }
 		_request_redraw()
 		_invalidate_stop_cache()
 
-@export var slider_size: Size = Size.MEDIUM:
+@export var slider_size: Size = Size.SMALL:
 	set(value):
 		if value == slider_size:
 			return

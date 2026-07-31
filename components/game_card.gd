@@ -707,6 +707,7 @@ func reset(for_pooling: bool = false) -> void:
 	avoids the empty-card flash when the grid recycles during zoom/resize."""
 	game = null
 	_is_focused = false
+	set_placeholder(false)
 	set_meta("_cached_show_delete", null)
 	if _focus_tween:
 		_focus_tween.kill()
@@ -751,9 +752,16 @@ func reset(for_pooling: bool = false) -> void:
 			_focus_stack.free_rids()
 			_focus_stack = null
 
-func set_placeholder(_enabled: bool) -> void:
-	# No-op for M3Card-based GameCard
-	pass
+func set_placeholder(enabled: bool) -> void:
+	super.set_placeholder(enabled)
+	# Placeholders render only the blank media panel: no badge, no effect stacks.
+	if enabled and _status_badge_canvas_item.is_valid():
+		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
+	if _media_stack:
+		_media_stack.set_visible(not enabled)
+	# The focus stack is only ever re-shown by focus logic; never restore it here.
+	if enabled and _focus_stack:
+		_focus_stack.set_visible(false)
 
 func _update_display():
 	if not game or not is_node_ready():
@@ -1003,6 +1011,10 @@ func _set_texture(tex: Texture2D) -> void:
 	queue_redraw()
 
 func _get_logo_rect_from_game() -> Vector4:
+	# Logo detection disabled: always use the plain center-crop default.
+	var detection_setting = DataManager.get_setting("logo_detection_enabled")
+	if detection_setting == null or detection_setting.value != true:
+		return Vector4.ZERO
 	if not game or not game.logo_box is Dictionary:
 		return Vector4.ZERO
 	var logo_box: Dictionary = game.logo_box

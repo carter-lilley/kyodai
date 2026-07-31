@@ -6,7 +6,7 @@ class_name ThemePreset
 @export var name: String = ""
 @export var description: String = ""
 @export var created_at: String = ""
-@export var version: int = 2  # For backwards compatibility
+@export var version: int = 3  # For backwards compatibility
 
 # Library Appearance Settings
 @export var library_layout_mode: int = 0
@@ -20,6 +20,9 @@ class_name ThemePreset
 @export var library_card_content_alignment: int = 0
 @export var library_grid_vertical: bool = true
 @export var card_media_aspect_ratio: int = 0
+@export var library_card_logo_mode: int = 0
+@export var library_focus_centering: int = 0
+@export var library_pagination_view: bool = false
 @export var library_background_config: Dictionary = {
 	"effect_id": "none",
 	"settings": {}
@@ -81,6 +84,9 @@ static func from_current_settings(settings: Settings) -> ThemePreset:
 	preset.library_card_content_alignment = settings.library_card_content_alignment.value if settings.library_card_content_alignment else 0
 	preset.library_grid_vertical = settings.library_grid_vertical.value if settings.library_grid_vertical else true
 	preset.card_media_aspect_ratio = settings.card_media_aspect_ratio.value if settings.card_media_aspect_ratio else 0
+	preset.library_card_logo_mode = settings.library_card_logo_mode.value if settings.library_card_logo_mode else 0
+	preset.library_focus_centering = settings.library_focus_centering.value if settings.library_focus_centering else 0
+	preset.library_pagination_view = settings.library_pagination_view.value if settings.library_pagination_view else false
 	preset.library_background_config = settings.library_background_config.value.duplicate(true) if settings.library_background_config else {
 		"effect_id": "none",
 		"settings": {}
@@ -136,6 +142,13 @@ func merge_with_defaults(default_preset: ThemePreset) -> void:
 		library_grid_vertical = default_preset.library_grid_vertical
 		card_media_aspect_ratio = default_preset.card_media_aspect_ratio
 		version = 2
+
+	# Version 3 fields: merge from defaults if this is an old preset
+	if version < 3:
+		library_card_logo_mode = default_preset.library_card_logo_mode
+		library_focus_centering = default_preset.library_focus_centering
+		library_pagination_view = default_preset.library_pagination_view
+		version = 3
 	
 	# Card settings
 	# Only merge if the entire config dict is empty, not if effects array is empty

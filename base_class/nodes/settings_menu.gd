@@ -223,7 +223,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var display_unit = settingsvar.metadata.get("display_unit", "")
 			
 			var slider = M3Slider.new()
-			slider.slider_size = M3Slider.Size.SMALL
+			slider.slider_size = M3Slider.Size.EXTRA_SMALL
 			# Set cached properties before add_child so _ready() picks them up
 			slider.min_value = settingsvar.min_value * display_scale
 			slider.max_value = settingsvar.max_value * display_scale

@@ -2979,9 +2979,18 @@ func _process_image_download_queue() -> void:
 		_start_image_download(item.url, item.cache_path)
 
 
+static var _redact_regex: RegEx = null
+
+## Redacts credential query params (scraper URLs embed them in plaintext).
+static func _redact_url(url: String) -> String:
+	if _redact_regex == null:
+		_redact_regex = RegEx.new()
+		_redact_regex.compile("(devid|devpassword|ssid|sspassword)=[^&]*")
+	return _redact_regex.sub(url, "$1=***", true)
+
 func _start_image_download(url: String, cache_path: String) -> void:
-	# Start new HTTP request
-	SystemManager.network.http_get(url, [], func(success: bool, body: PackedByteArray, _status_code: int, _error_msg: String):
+	# Start new HTTP request (auth headers only for URLs on the RomM host)
+	SystemManager.network.http_get(url, SystemManager.network.get_auth_headers_for_url(url), func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
 		if not is_instance_valid(self):
 			return
 
@@ -3006,6 +3015,22 @@ func _start_image_download(url: String, cache_path: String) -> void:
 
 		if image_ok:
 			FSM.write_file_bytes(cache_path, body)
+		elif not success:
+			push_error("[SystemManager.download] Image download FAILED: %s (HTTP %d, %s)" % [_redact_url(url), status_code, error_msg])
+		elif body.is_empty():
+			push_error("[SystemManager.download] Image download FAILED: %s (HTTP %d, empty body)" % [_redact_url(url), status_code])
+		else:
+			var body_preview := ""
+			if body.size() < 256:
+				body_preview = body.get_string_from_utf8()
+			else:
+				var preview_len := mini(64, body.size())
+				var ascii_preview := ""
+				for i in range(preview_len):
+					var b := body[i]
+					ascii_preview += char(b) if b >= 0x20 and b < 0x7F else "."
+				body_preview = "hex=" + body.slice(0, preview_len).hex_encode() + " ascii=\"" + ascii_preview + "\""
+			push_error("[SystemManager.download] Image download REJECTED (not an image): %s (HTTP %d, %d bytes) body: %s" % [_redact_url(url), status_code, body.size(), body_preview])
 
 		for cb in callbacks:
 			if cb.is_valid():

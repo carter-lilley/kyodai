@@ -58,6 +58,16 @@ var _sync_covers_dispatched_count: int = 0
 var _sync_covers_processed_count: int = 0
 var _sync_covers_dispatch_semaphore: Semaphore = Semaphore.new()
 
+# Cover download outcome counters for end-of-phase diagnostics
+var _sync_covers_cached_count: int = 0
+var _sync_covers_downloaded_count: int = 0
+var _sync_covers_failed_count: int = 0
+
+# Interleaved cover dispatch: throttle and once-per-URL progress counting
+const COVER_DISPATCH_INTERVAL_MS: int = 2000
+var _sync_last_cover_dispatch_ms: int = 0
+var _sync_covers_counted_set: Dictionary = {}
+
 # Map of cover URL to games that share it, used for logo box caching during sync
 var _sync_cover_url_to_games: Dictionary = {}  # String -> Array[GameResource]
 var _sync_cover_url_to_games_mutex: Mutex = Mutex.new()
@@ -233,6 +243,11 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_covers_pending_set.clear()
 	_sync_covers_dispatched_count = 0
 	_sync_covers_processed_count = 0
+	_sync_covers_cached_count = 0
+	_sync_covers_downloaded_count = 0
+	_sync_covers_failed_count = 0
+	_sync_last_cover_dispatch_ms = 0
+	_sync_covers_counted_set.clear()
 	_sync_covers_mutex.unlock()
 	_sync_cover_url_to_games_mutex.lock()
 	_sync_cover_url_to_games.clear()
@@ -551,6 +566,8 @@ func _process_cover_work_phase() -> void:
 	Runs on the sync thread. Downloads happen on the main thread, detection on the
 	background worker thread, and progress is updated as each cover completes.
 	"""
+	if not _is_logo_detection_enabled():
+		return
 	if not data_manager.logo_box:
 		return
 	if not data_manager.database.is_database_ready():
@@ -619,7 +636,7 @@ func _process_cover_work_phase() -> void:
 		var games: Array[GameResource] = url_to_games[url]
 		var cache_path = data_manager.cover.get_cached_image_path(url)
 		if FSM.file_exists(cache_path):
-			data_manager.logo_box.process_cover_url(url, games, _on_cover_processed)
+			data_manager.logo_box.process_cover_url(url, games, _make_cover_counted_callback(url, _on_cover_processed))
 		else:
 			_sync_covers_mutex.lock()
 			if not _sync_covers_pending_set.has(url):
@@ -680,7 +697,7 @@ func _wait_for_all_cover_processing() -> void:
 	if data_manager.logo_box:
 		data_manager.logo_box.wait_for_all()
 
-	print("[SyncThread] Cover processing complete")
+	print("[SyncThread] Cover processing complete: %d cached, %d downloaded, %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count])
 
 
 func _dispatch_covers_to_main_thread():
@@ -694,6 +711,7 @@ func _dispatch_covers_to_main_thread():
 	_sync_covers_pending.clear()
 	_sync_covers_pending_set.clear()
 	_sync_covers_dispatched_count += 1
+	_sync_last_cover_dispatch_ms = Time.get_ticks_msec()
 	_sync_covers_mutex.unlock()
 
 	# Capture the game mapping for these URLs while we hold the mutex
@@ -716,12 +734,14 @@ func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictiona
 	"""
 
 	for url in urls:
+		var counted_cb := _make_cover_counted_callback(url, on_complete)
 		var cache_path = data_manager.cover.get_cached_image_path(url)
 		if FSM.file_exists(cache_path):
 			# Already cached: send directly to logo box worker; no network wait.
+			_sync_covers_cached_count += 1
 			var cached_games: Array[GameResource] = url_to_games.get(url, [] as Array[GameResource])
 			if cached_games:
-				data_manager.logo_box.process_cover_url(url, cached_games, on_complete)
+				data_manager.logo_box.process_cover_url(url, cached_games, counted_cb)
 			continue
 
 		# Track pending download
@@ -730,10 +750,15 @@ func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictiona
 		_sync_pending_downloads_mutex.unlock()
 
 		# Use existing async download path
-		data_manager.cover.download_cover(url, func(_ok):
+		data_manager.cover.download_cover(url, func(ok):
+			if ok:
+				_sync_covers_downloaded_count += 1
+			else:
+				_sync_covers_failed_count += 1
+				push_error("[SyncThread] Cover download FAILED: %s" % DownloadSubManager._redact_url(url))
 			var downloaded_games: Array[GameResource] = url_to_games.get(url, [] as Array[GameResource])
 			if downloaded_games:
-				data_manager.logo_box.process_cover_url(url, downloaded_games, on_complete)
+				data_manager.logo_box.process_cover_url(url, downloaded_games, counted_cb)
 
 			_sync_pending_downloads_mutex.lock()
 			_sync_pending_downloads -= 1
@@ -878,21 +903,46 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var _db_time = Time.get_ticks_msec() - db_start
 
 	# Phase 3: Collect unique cover URLs for later logo box caching.
-	var cover_start = Time.get_ticks_msec()
-	_sync_cover_url_to_games_mutex.lock()
-	for game in games:
-		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
-			if not _sync_cover_url_to_games.has(game.cover_url):
-				_sync_cover_url_to_games[game.cover_url] = [] as Array[GameResource]
-				_sync_total += 1  # Each unique cover is a logo box work unit
-			_sync_cover_url_to_games[game.cover_url].append(game)
-	_sync_cover_url_to_games_mutex.unlock()
-	var _cover_time = Time.get_ticks_msec() - cover_start
+	if _is_logo_detection_enabled():
+		var cover_start = Time.get_ticks_msec()
+		_sync_cover_url_to_games_mutex.lock()
+		for game in games:
+			if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
+				if not _sync_cover_url_to_games.has(game.cover_url):
+					_sync_cover_url_to_games[game.cover_url] = [] as Array[GameResource]
+					_sync_total += 1  # Each unique cover is a logo box work unit
+				_sync_cover_url_to_games[game.cover_url].append(game)
+		_sync_cover_url_to_games_mutex.unlock()
+		var _cover_time = Time.get_ticks_msec() - cover_start
+
+		# Interleave cover downloads/detection with the sync instead of doing it
+		# all at the end: dispatch pending covers every few seconds so network
+		# and detection work overlap the sync's network waits.
+		if Time.get_ticks_msec() - _sync_last_cover_dispatch_ms > COVER_DISPATCH_INTERVAL_MS:
+			_dispatch_covers_to_main_thread()
 
 	var _total_time = Time.get_ticks_msec() - batch_start
 	# Batch timing logging removed for cleaner sync output
 
 	return inserted
+
+
+func _is_logo_detection_enabled() -> bool:
+	var setting = DataManager.get_setting("logo_detection_enabled")
+	return setting != null and setting.value == true
+
+## Wraps the per-cover completion callback so sync progress is counted at most
+## once per unique cover URL, even if a cover is processed more than once
+## (e.g. dispatched in an early batch, then re-queued for late-added games).
+func _make_cover_counted_callback(url: String, on_complete: Callable) -> Callable:
+	return func():
+		_sync_covers_mutex.lock()
+		var already := _sync_covers_counted_set.has(url)
+		if not already:
+			_sync_covers_counted_set[url] = true
+		_sync_covers_mutex.unlock()
+		if not already and on_complete.is_valid():
+			on_complete.call()
 
 
 func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
@@ -1054,8 +1104,15 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	game.title = str(data.get("name", ""))
 	game.platform = str(data.get("platform_display_name", ""))
 	game.platform_slug = platform_slug if platform_slug != "" else str(data.get("platform_slug", ""))
-	game.cover_url = str(data.get("url_cover", ""))
-	game.cover_path = str(data.get("path_cover_large", ""))
+	# Always use RomM-proxied cover media (path_cover_large), never the external
+	# scraper URL (url_cover) - the proxy works with the app's RomM credentials
+	# and avoids scraper rate limits/logins. Mirrors argosy-launcher.
+	var path_cover_large := str(data.get("path_cover_large", ""))
+	if path_cover_large != "" and path_cover_large != "null" and path_cover_large != "<null>" and path_cover_large != "None":
+		game.cover_url = SystemManager.network.build_media_url(path_cover_large)
+	else:
+		game.cover_url = ""
+	game.cover_path = path_cover_large
 	game.file_name = str(data.get("fs_name", ""))
 	game.file_path = str(data.get("full_path", ""))
 	game.file_size = data.get("fs_size_bytes", 0)

@@ -370,6 +370,15 @@ text = "Fold Romm siblings"
 flat = true
 metadata/_custom_type_script = "uid://fmt3itosrqu4"
 
+[node name="M3Checkbox_LogoDetection" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings"]
+script = ExtResource("3_lo3qa")
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 4
+text = "Logo detection (slow)"
+flat = true
+metadata/_custom_type_script = "uid://fmt3itosrqu4"
+
 [node name="HboxButtonRow" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=890940306]
 layout_mode = 2
 

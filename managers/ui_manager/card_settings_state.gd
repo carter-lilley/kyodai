@@ -22,6 +22,8 @@ enum ChangeMask {
 # ---------------------------------------------------------------------------
 var layout_mode: int = 0
 var grid_vertical: bool = true
+## Split the grid into viewport-sized pages instead of continuous scrolling.
+var pagination_enabled: bool = false
 var card_zoom_ratio: float = 0.25
 var card_zoom_level: int = -1
 ## Card size ratio for LIST/CAROUSEL modes (per-mode zoom memory).
@@ -64,6 +66,11 @@ func _mark(mask: int) -> void:
 	else:
 		changed.emit(mask)
 
+## Forces a DISPLAY refresh from outside card settings (e.g. the global
+## logo_detection_enabled toggle changed how cards resolve logo rects).
+func force_display_refresh() -> void:
+	_mark(ChangeMask.DISPLAY)
+
 # ---------------------------------------------------------------------------
 # Setters (return true when value changed)
 # ---------------------------------------------------------------------------
@@ -78,6 +85,13 @@ func set_grid_vertical(value: bool) -> bool:
 	if grid_vertical == value:
 		return false
 	grid_vertical = value
+	_mark(ChangeMask.LAYOUT)
+	return true
+
+func set_pagination_enabled(value: bool) -> bool:
+	if pagination_enabled == value:
+		return false
+	pagination_enabled = value
 	_mark(ChangeMask.LAYOUT)
 	return true
 
@@ -217,6 +231,7 @@ func sync_from_settings_manager() -> int:
 	begin_batch()
 	set_layout_mode(_get_int_setting("library_layout_mode", 0))
 	set_grid_vertical(_get_bool_setting("library_grid_vertical", true))
+	set_pagination_enabled(_get_bool_setting("library_pagination_view", false))
 	set_card_zoom_ratio(_get_float_setting("library_card_zoom", 0.25))
 	set_card_zoom_level(_get_int_setting("library_card_zoom_level", -1))
 	set_card_zoom_list_ratio(_get_float_setting("library_card_zoom_list", 0.25))
@@ -242,6 +257,8 @@ func apply_setting(property_name: String, value: Variant) -> int:
 			return ChangeMask.LAYOUT if set_layout_mode(_coerce_int(value, 0)) else ChangeMask.NONE
 		"library_grid_vertical":
 			return ChangeMask.LAYOUT if set_grid_vertical(_coerce_bool(value, true)) else ChangeMask.NONE
+		"library_pagination_view":
+			return ChangeMask.LAYOUT if set_pagination_enabled(_coerce_bool(value, false)) else ChangeMask.NONE
 		"library_card_zoom":
 			return ChangeMask.LAYOUT if set_card_zoom_ratio(_coerce_float(value, 0.25)) else ChangeMask.NONE
 		"library_card_zoom_level":

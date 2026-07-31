@@ -23,19 +23,34 @@ func _clean_invalid_cover_cache():
 	if not FSM.dir_exists(CACHE_FOLDER):
 		return
 
+	var total := 0
+	var deleted := 0
 	for file_name in FSM.list_dir(CACHE_FOLDER):
 		var path = FSM.join_paths(CACHE_FOLDER, file_name)
 		if not FSM.file_exists(path):
 			continue
+		total += 1
 
 		var size = FSM.get_file_size(path)
 		if size < 64:
+			deleted += 1
+			print("[CoverCache] Deleting %s: too small (%d bytes)" % [file_name, size])
 			FSM.delete_file(path)
 			continue
 
 		var buffer = FSM.read_file_bytes(path)
-		if buffer.size() < 16 or FSM.detect_image_format(buffer) == FSM.ImageFormat.UNKNOWN:
+		if buffer.size() < 16:
+			deleted += 1
+			print("[CoverCache] Deleting %s: unreadable/empty (%d bytes read of %d)" % [file_name, buffer.size(), size])
 			FSM.delete_file(path)
+			continue
+		if FSM.detect_image_format(buffer) == FSM.ImageFormat.UNKNOWN:
+			deleted += 1
+			var preview = buffer.slice(0, 16).hex_encode()
+			print("[CoverCache] Deleting %s: unknown magic bytes (%d bytes, first16=%s)" % [file_name, size, preview])
+			FSM.delete_file(path)
+
+	print("[CoverCache] Startup cache check: %d files, %d deleted as invalid" % [total, deleted])
 
 
 func get_cached_image_path(url: String) -> String:
@@ -75,6 +90,7 @@ func download_cover(url: String, callback: Callable) -> void:
 
 func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") -> Image:
 	if buffer.size() < 16:
+		push_error("[CoverCache] Decode failed for %s: buffer too small (%d bytes)" % [_cache_path, buffer.size()])
 		return null
 
 	var image = Image.new()
@@ -90,10 +106,12 @@ func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") 
 			err = image.load_webp_from_buffer(buffer)
 		_:
 			# Unknown magic bytes: not a supported image.
+			push_error("[CoverCache] Decode failed for %s: unknown magic bytes (%d bytes, first16=%s)" % [_cache_path, buffer.size(), buffer.slice(0, 16).hex_encode()])
 			return null
 
 	if err == OK and not image.is_empty():
 		return image
+	push_error("[CoverCache] Decode failed for %s: format=%d loader error=%d (%d bytes)" % [_cache_path, format, err, buffer.size()])
 	return null
 
 
