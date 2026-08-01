@@ -71,6 +71,7 @@ var _submenu_rect: Rect2 = Rect2()
 var _suppress_submenu: bool = false
 var _forced_focus_index: int = -1
 var _focused_item_index: int = -1
+var _touch_active: bool = false
 var _font_icon_template: FontIconSettings = null
 var _cached_fonts: Dictionary = {}
 
@@ -106,7 +107,7 @@ func _create_visuals():
 	_scroll.mouse_filter = Control.MOUSE_FILTER_PASS
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	_scroll.follow_focus = true
+	_scroll.follow_focus = false
 	add_child(_scroll)
 	
 	# Vertical container for items
@@ -741,6 +742,11 @@ func _input(event: InputEvent):
 	if not visible:
 		return
 	
+	if event is InputEventScreenTouch:
+		_touch_active = event.pressed
+	elif event is InputEventScreenDrag:
+		_touch_active = true
+	
 	# Outside-click dismissal only; ui_cancel is handled by M3Overlay base class
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not get_global_rect().has_point(event.global_position):
@@ -801,6 +807,10 @@ func _get_last_focusable_index() -> int:
 	return -1
 
 func _on_item_mouse_entered(index: int):
+	# Ignore emulated mouse hover during touch drags so hover-focus doesn't
+	# fight the ScrollContainer's drag scrolling.
+	if _touch_active:
+		return
 	# Mouse hover grabs focus so there's only ever one focused item
 	if index >= 0 and index < _item_nodes.size():
 		var node = _item_nodes[index]
@@ -821,6 +831,11 @@ func _on_item_focus_exited(index: int):
 func _on_item_focus_entered(index: int):
 	_update_item_visual(index, true)
 	_focused_item_index = index
+	
+	# follow_focus is disabled (it fights touch drag scrolling), so scroll
+	# keyboard/gamepad focus into view manually.
+	if _scroll and index >= 0 and index < _item_nodes.size():
+		_scroll.ensure_control_visible(_item_nodes[index])
 	
 	focus_changed.emit(index)
 	if not _suppress_submenu and index >= 0 and index < _menu_items.size():

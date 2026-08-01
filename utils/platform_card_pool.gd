@@ -4,18 +4,21 @@ extends RefCounted
 # Object pool for PlatformCard instances to reduce lag spikes when opening
 # screens that create many cards.
 
-## Maximum cards kept in each named pool. Kept conservative for Android.
+## Maximum cards kept in each named pool. Kept conservative for Android, but the
+## platform settings screen may need 50-100 cards, so give it more headroom.
 const MAX_SHUFFLER_POOL_SIZE := 40
-const MAX_PLATFORM_POOL_SIZE := 40
+const MAX_PLATFORM_POOL_SIZE := 100
 
-## Number of cards to pre-create for each pool at startup.
-const PREWARM_PER_POOL := 3
+## Number of cards to pre-create for each pool at startup. Bumped for platform
+## cards so the RomM settings screen has a warm pool waiting.
+const PREWARM_PER_POOL := 16
 
-## How many cards to create per process frame during startup warmup.
-const PREWARM_BATCH_PER_FRAME := 2
+## How many cards to create per process frame during startup warmup. Card _init
+## is cheap (no _ready until parented), so higher rates are safe.
+const PREWARM_BATCH_PER_FRAME := 8
 
 ## How many cards to create per process frame during continuous background warmup.
-const BACKGROUND_WARM_BATCH_PER_FRAME := 2
+const BACKGROUND_WARM_BATCH_PER_FRAME := 8
 
 const POOL_SHUFFLER := "shuffler"
 const POOL_PLATFORM_SETTINGS := "platform_settings"

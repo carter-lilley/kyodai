@@ -43,6 +43,7 @@ var _download_sizes: Dictionary = {}       # item_id -> int (bytes)
 var _total_download_bytes: int = 0
 var _active_download_item_id: String = ""
 var _shuffler_vita_apps: Array[Dictionary] = []
+var _maximize_token: int = 0  # incremented whenever the foreground game changes; in-flight maximize coroutines check it and bail
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -50,6 +51,10 @@ const RETROARCH_SHUFFLER_CFG := {
 	"network_cmd_enable": "true",
 	"savestate_auto_load": "true",
 	"savestate_auto_save": "true",
+	"pause_nonactive": "false",
+	"menu_enable_widgets": "false",
+	"input_auto_game_focus": "1",
+	"video_font_enable": "false",
 }
 
 const PCSX2_SHUFFLER_INI_PATH := "{emulator_dir}/inis/PCSX2.ini"
@@ -214,6 +219,7 @@ func stop_session() -> void:
 	_reroll_in_progress = false
 	_reroll_download_id = ""
 	_pending_switch_index = -1
+	_maximize_token += 1
 
 	_kill_round_timer()
 
@@ -223,11 +229,29 @@ func stop_session() -> void:
 	for item_id in _download_item_ids:
 		SystemManager.download.cancel(item_id)
 
+	var kill_pids: Array[int] = []
 	for entry in _bag.entries:
 		if entry.pid != -1:
 			LaunchManager.process.kill_process_async(entry.pid)
+			kill_pids.append(entry.pid)
 
-	await get_tree().create_timer(0.5).timeout
+	# Wait until the killed processes are actually gone (bounded) before
+	# restoring configs and deleting temp files they may still be writing.
+	if not kill_pids.is_empty():
+		var deadline := 3.0
+		var elapsed := 0.0
+		while elapsed < deadline:
+			var alive: Array[int] = []
+			for pid in kill_pids:
+				if await LaunchManager.process.is_running_async(pid):
+					alive.append(pid)
+			if alive.is_empty():
+				break
+			await get_tree().create_timer(0.2).timeout
+			elapsed += 0.2
+			if elapsed >= deadline:
+				push_warning("[ShufflerSubManager] Processes still alive after kill timeout: " + str(alive))
+		print("[ShufflerSubManager] stop_session: process teardown took " + str(elapsed) + "s")
 
 	_restore_emulator_file_if_backed_up("retroarch", "{emulator_dir}/retroarch.cfg")
 	_restore_emulator_file_if_backed_up("pcsx2", PCSX2_SHUFFLER_INI_PATH)
@@ -286,7 +310,7 @@ func resume_session() -> void:
 		return
 	print("[ShufflerSubManager] resume_session")
 	_state = State.ACTIVE
-	if _round_timer and is_instance_valid(_round_timer):
+	if _round_timer and is_instance_valid(_round_timer) and not _round_timer.is_stopped():
 		_round_timer.paused = false
 	else:
 		var round_time = _random_round_time()
@@ -319,6 +343,12 @@ func restart_game() -> void:
 		_switch_in_progress = true
 		var entry = _bag.entries[_current_game_index]
 		await _stop_game(entry)
+		if entry.pid != -1:
+			# Restart boots a fresh instance; the old process (suspended for
+			# suspend-method emulators, possibly still exiting for udp/tcp)
+			# would otherwise be orphaned and untracked forever.
+			LaunchManager.process.kill_process_async(entry.pid)
+			await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
 		entry.started = false
 		entry.pid = -1
 		if _state != State.STOPPING and _state != State.IDLE:
@@ -772,6 +802,7 @@ func _switch_to_game(index: int) -> void:
 		return
 
 	_current_game_index = index
+	_maximize_token += 1
 	var entry = _bag.entries[index]
 	entry.active = true
 
@@ -793,7 +824,7 @@ func _switch_to_game(index: int) -> void:
 		_launch_game(entry)
 
 	print("[ShufflerSubManager] _switch_to_game: launched index=" + str(index) + " state=" + str(_state))
-	if _state == State.ACTIVE:
+	if _state == State.ACTIVE or _state == State.PAUSED:
 		var round_time = _random_round_time()
 		print("[ShufflerSubManager] _switch_to_game: starting round timer " + str(round_time) + "s")
 		_start_round_timer(round_time)
@@ -844,11 +875,17 @@ func _launch_game(entry: Dictionary) -> void:
 					var ux0_app_path = install_path.get_base_dir() + "/ux0/app/" + title_id
 					entry.vita_title_id = title_id
 					entry.vita_app_path = ux0_app_path
-					_shuffler_vita_apps.append({
-						"title_id": title_id,
-						"ux0_app_path": ux0_app_path
-					})
-					print("[ShufflerSubManager] Tracked Vita3K shuffler app for cleanup: " + ux0_app_path)
+					var already_tracked := false
+					for tracked in _shuffler_vita_apps:
+						if tracked.get("title_id", "") == title_id:
+							already_tracked = true
+							break
+					if not already_tracked:
+						_shuffler_vita_apps.append({
+							"title_id": title_id,
+							"ux0_app_path": ux0_app_path
+						})
+						print("[ShufflerSubManager] Tracked Vita3K shuffler app for cleanup: " + ux0_app_path)
 			else:
 				push_warning("[ShufflerSubManager] Vita3K game launched but no TitleID was extracted: " + game.title)
 
@@ -859,6 +896,7 @@ func _launch_game(entry: Dictionary) -> void:
 # ============================================================================
 
 func _stop_game(entry: Dictionary) -> void:
+	_maximize_token += 1  # cancel any maximize retries still targeting this entry
 	if entry.pid == -1:
 		print("[ShufflerSubManager] _stop_game: no pid for " + _format_entry(entry))
 		return
@@ -920,6 +958,7 @@ func _start_round_timer(duration: float) -> void:
 	_round_timer = Timer.new()
 	_round_timer.one_shot = true
 	_round_timer.wait_time = duration
+	_round_timer.paused = (_state == State.PAUSED)
 	_round_timer.timeout.connect(_on_round_timer_timeout)
 	add_child(_round_timer)
 	_round_timer.start()
@@ -945,6 +984,9 @@ func _kill_round_timer() -> void:
 
 func _on_round_timer_timeout() -> void:
 	print("[ShufflerSubManager] _on_round_timer_timeout: state=" + str(_state) + " " + _format_bag())
+	if _state != State.ACTIVE:
+		print("[ShufflerSubManager] _on_round_timer_timeout ignored: state=" + str(_state))
+		return
 	if _reroll_in_progress:
 		# The reroll flow owns the current switch; its completion re-arms the timer.
 		print("[ShufflerSubManager] _on_round_timer_timeout ignored: reroll in progress")
@@ -980,22 +1022,35 @@ func _hide_window_async(pid: int, exe_name: String) -> void:
 func _hide_window(pid: int, exe_name: String) -> void:
 	_hide_window_async(pid, exe_name)
 
+func _is_current_game_pid(pid: int) -> bool:
+	if _state != State.ACTIVE and _state != State.PAUSED:
+		return false
+	if _current_game_index < 0 or _current_game_index >= _bag.size():
+		return false
+	return _bag.entries[_current_game_index].pid == pid
+
 func _maximize_with_retry(pid: int) -> void:
 	print("[ShufflerSubManager] _maximize_with_retry START pid=" + str(pid))
+	var token := _maximize_token
 	var maximized := false
 	for i in range(3):
+		if token != _maximize_token or not _is_current_game_pid(pid):
+			print("[ShufflerSubManager] _maximize_with_retry aborted: pid " + str(pid) + " is no longer the foreground game")
+			return
 		print("[ShufflerSubManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
-		if await _maximize_window_async(pid):
+		if await _maximize_window_async(pid, token):
 			print("[ShufflerSubManager] pid " + str(pid) + " maximized successfully")
 			maximized = true
 			break
 		await get_tree().create_timer(0.5).timeout
 	print("[ShufflerSubManager] _maximize_with_retry END pid=" + str(pid) + " maximized=" + str(maximized))
+	if token != _maximize_token or not _is_current_game_pid(pid):
+		return
 	if not maximized:
 		push_error("[ShufflerSubManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
 	_raise_controls_window()
 
-func _maximize_window_async(pid: int) -> bool:
+func _maximize_window_async(pid: int, token: int = -1) -> bool:
 	var ahk_script = _tools_dir + "maximize_process.ahk"
 	if not FileAccess.file_exists(ahk_script) or not FileAccess.file_exists(_ahk_path):
 		print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
@@ -1012,6 +1067,10 @@ func _maximize_window_async(pid: int) -> bool:
 	)
 
 	while not os_state["completed"]:
+		if token != -1 and token != _maximize_token:
+			# Switched away mid-attempt; the AHK process finishes in the
+			# background and its result is discarded.
+			return false
 		await get_tree().process_frame
 
 	return os_state["success"]

@@ -34,10 +34,10 @@ if bestHwnd != 0 and WinExist("ahk_id " . bestHwnd) and DllCall("IsWindowVisible
 	FileAppend("using saved hwnd`n", logFile)
 }
 
-; If no saved hwnd, poll for up to 15 seconds until the process owns a suitable window.
+; If no saved hwnd, poll for up to 8 seconds until the process owns a suitable window.
 ; Some emulators (e.g. PCSX2) take several seconds to create their main game window.
 if winTitle = "" {
-	deadline := A_TickCount + 15000
+	deadline := A_TickCount + 8000
 	candidateCount := 0
 	Loop {
 		bestHwnd := 0
@@ -75,7 +75,7 @@ if winTitle = "" {
 		}
 
 		if A_TickCount > deadline {
-			FileAppend(Format("no window found after 15s (candidates seen={1})`n", candidateCount), logFile)
+			FileAppend(Format("no window found after 8s (candidates seen={1})`n", candidateCount), logFile)
 			ExitApp(1)
 		}
 

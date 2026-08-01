@@ -5,6 +5,9 @@ func _ready():
 	super._ready()
 	effect_name = "CafeOS"
 	effect_id = "cafeos"
+	# The raymarched 3D effect is GPU-heavy; render at half resolution and let
+	# the host upscale (the effect is soft by design, so the loss is invisible).
+	render_scale = 0.5
 
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
@@ -29,7 +32,7 @@ func _apply_settings() -> void:
 	
 	# 3D Extrusion & Raymarching Settings
 	_set_shader_param("extrusion_depth", _settings.get("extrusion_depth", 0.03))
-	_set_shader_param("max_ray_steps", _settings.get("max_ray_steps", 128))
+	_set_shader_param("max_ray_steps", _settings.get("max_ray_steps", 16))
 	_set_shader_param("ray_step_size", _settings.get("ray_step_size", 0.002))
 	_set_shader_param("alpha_threshold", _settings.get("alpha_threshold", 0.9))
 	_set_shader_param("edge_softness", _settings.get("edge_softness", 1.0))

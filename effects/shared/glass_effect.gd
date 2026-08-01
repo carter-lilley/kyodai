@@ -44,6 +44,9 @@ func _update_shader_params() -> void:
 	var swoop_height = _settings.get("swoop_height", 0.25)
 	var swoop_curve = _settings.get("swoop_curve", 0.5)
 	var swoop_tilt = _settings.get("swoop_tilt", 0.0)
+	# Default derives from the glass color (x0.3) so existing themes keep their
+	# exact look; an explicit swoop_color overrides it.
+	var swoop_color: Color = _settings.get("swoop_color", Color(glass_color.r * 0.3, glass_color.g * 0.3, glass_color.b * 0.3, 1.0))
 
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
@@ -68,6 +71,7 @@ func _update_shader_params() -> void:
 		swoop_mat.set_shader_parameter("corner_radius_pixels", media_container.get_corner_radius_pixels())
 		swoop_mat.set_shader_parameter("border_inset_ratio", media_container.border_inset_ratio)
 		swoop_mat.set_shader_parameter("glass_color", glass_color)
+		swoop_mat.set_shader_parameter("swoop_color", swoop_color)
 		swoop_mat.set_shader_parameter("swoop_intensity", swoop_intensity)
 		swoop_mat.set_shader_parameter("swoop_height", swoop_height)
 		swoop_mat.set_shader_parameter("swoop_curve", swoop_curve)
@@ -86,8 +90,20 @@ func set_offset_rect(rect: Rect2) -> void:
 
 func set_z_index(value: int) -> void:
 	super.set_z_index(value)
-	if _swoop_renderer:
-		_swoop_renderer.set_z_index(value + 1)
+	_apply_swoop_z(value)
+
+func update_settings(settings: Dictionary) -> void:
+	super.update_settings(settings)
+	_apply_swoop_z(_z_index)
+
+## Places the swoop below the base card effect (z=-1) when "Swoop Behind
+## Media" is on, so the cover paints over it and it only shows in the
+## border/inset ring; otherwise it rides above the glass as before.
+func _apply_swoop_z(glass_z: int) -> void:
+	if not _swoop_renderer:
+		return
+	var behind: bool = _settings.get("swoop_behind_media", true)
+	_swoop_renderer.set_z_index(-1 if behind else glass_z + 1)
 
 func set_visible(value: bool) -> void:
 	super.set_visible(value)
@@ -107,6 +123,10 @@ func get_settings_schema() -> Array[SettingsVar]:
 	additional_inset_var.property_name = "additional_inset_ratio"
 	schema.append(additional_inset_var)
 
+	var swoop_color_var = SettingsVar.new(Type.COLOR, Color(0.06, 0.12, 0.3, 1.0), State.ENABLED, "Swoop Color", "Color of the curved swoop band")
+	swoop_color_var.property_name = "swoop_color"
+	schema.append(swoop_color_var)
+
 	var swoop_intensity_var = SettingsVar.new(Type.FLOAT, 0.3, State.ENABLED, "Swoop Intensity", "Darkness of the curved swoop", 0.0, 1.0, 0.01)
 	swoop_intensity_var.property_name = "swoop_intensity"
 	schema.append(swoop_intensity_var)
@@ -122,6 +142,10 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var swoop_tilt_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Swoop Tilt", "Tilt the curve to raise one side", -1.0, 1.0, 0.01)
 	swoop_tilt_var.property_name = "swoop_tilt"
 	schema.append(swoop_tilt_var)
+
+	var swoop_behind_media_var = SettingsVar.new(Type.BOOL, true, State.ENABLED, "Swoop Behind Media", "Render the swoop behind the cover art so it only shows over the border and inset areas")
+	swoop_behind_media_var.property_name = "swoop_behind_media"
+	schema.append(swoop_behind_media_var)
 
 	var specular_power_var = SettingsVar.new(Type.FLOAT, 32.0, State.ENABLED, "Specular Power", "", 1.0, 128.0, 1.0)
 	specular_power_var.property_name = "specular_power"

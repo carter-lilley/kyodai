@@ -233,6 +233,10 @@ public class ExtractorService extends Service {
         int extractedCount = 0;
         int totalFiles = 0;
         long totalBytes = 0;
+        long extractedBytes = 0;
+        long totalUncompressedBytes = 0;
+        boolean totalEstimated = true;
+        String currentFile = "";
         long lastLogTime = System.currentTimeMillis();
         long lastProgressWrite = System.currentTimeMillis();
         
@@ -242,7 +246,7 @@ public class ExtractorService extends Service {
                 destDir.mkdirs();
             }
             
-            // Count total files first using ZipFile (random access, doesn't stream)
+            // Count total files and uncompressed size first using ZipFile (random access, doesn't stream)
             try {
                 ZipFile zipFile = new ZipFile(zipPath);
                 Enumeration<? extends ZipEntry> entries = zipFile.entries();
@@ -250,13 +254,24 @@ public class ExtractorService extends Service {
                     ZipEntry entry = entries.nextElement();
                     if (!entry.isDirectory()) {
                         totalFiles++;
+                        long size = entry.getSize();
+                        if (size > 0) {
+                            totalUncompressedBytes += size;
+                        }
                     }
                 }
                 zipFile.close();
-                Log.d(TAG, "Total files to extract: " + totalFiles);
+                totalEstimated = false;
+                Log.d(TAG, "Total files to extract: " + totalFiles + ", uncompressed bytes: " + totalUncompressedBytes);
             } catch (Exception e) {
                 Log.w(TAG, "Could not count total files: " + e.getMessage());
+                // Fall back to the compressed zip size as a rough upper bound for progress.
+                totalUncompressedBytes = new java.io.File(zipPath).length();
+                totalEstimated = true;
             }
+            
+            // Write an initial progress marker so the host app immediately sees totals.
+            writeProgressMarker(extractDir, extractedCount, totalFiles, extractedBytes, totalUncompressedBytes, totalEstimated, currentFile, markerBase);
             
             fis = new FileInputStream(zipPath);
             zis = new ZipInputStream(fis);
@@ -279,6 +294,7 @@ public class ExtractorService extends Service {
                     continue;
                 }
                 
+                currentFile = entryName;
                 File parentDir = outputFile.getParentFile();
                 if (parentDir != null && !parentDir.exists()) {
                     parentDir.mkdirs();
@@ -291,6 +307,16 @@ public class ExtractorService extends Service {
                     int count;
                     while ((count = zis.read(buffer)) != -1) {
                         fos.write(buffer, 0, count);
+                        extractedBytes += count;
+                        
+                        // Report byte-level progress mid-entry so archives with a few
+                        // very large files still show movement (~1s throttle).
+                        long midNow = System.currentTimeMillis();
+                        if (midNow - lastProgressWrite > 1000) {
+                            writeProgressMarker(extractDir, extractedCount, totalFiles, extractedBytes, totalUncompressedBytes, totalEstimated, currentFile, markerBase);
+                            updateNotification(gameName, extractedCount, extractedBytes);
+                            lastProgressWrite = midNow;
+                        }
                     }
                     fos.flush();
                     
@@ -315,14 +341,14 @@ public class ExtractorService extends Service {
                 // Write progress file every 2 seconds
                 long now = System.currentTimeMillis();
                 if (now - lastProgressWrite > 2000) {
-                    writeProgressMarker(extractDir, extractedCount, totalFiles, markerBase);
-                    updateNotification(gameName, extractedCount, totalBytes);
+                    writeProgressMarker(extractDir, extractedCount, totalFiles, extractedBytes, totalUncompressedBytes, totalEstimated, currentFile, markerBase);
+                    updateNotification(gameName, extractedCount, extractedBytes);
                     lastProgressWrite = now;
                 }
                 
                 // Log progress every 30 seconds
                 if (now - lastLogTime > 30000) {
-                    Log.d(TAG, "Extraction progress: " + extractedCount + "/" + totalFiles + " files, " + (totalBytes / 1048576) + " MB");
+                    Log.d(TAG, "Extraction progress: " + extractedCount + "/" + totalFiles + " files, " + (extractedBytes / 1048576) + " MB");
                     lastLogTime = now;
                 }
                 
@@ -332,9 +358,9 @@ public class ExtractorService extends Service {
                 }
             }
             
-            // Write final progress
-            writeProgressMarker(extractDir, extractedCount, totalFiles, markerBase);
-            Log.d(TAG, "Extraction complete: " + extractedCount + "/" + totalFiles + " files, " + (totalBytes / 1048576) + " MB");
+            // Write final progress with the actual extracted total (no longer an estimate).
+            writeProgressMarker(extractDir, extractedCount, totalFiles, extractedBytes, extractedBytes, false, currentFile, markerBase);
+            Log.d(TAG, "Extraction complete: " + extractedCount + "/" + totalFiles + " files, " + (extractedBytes / 1048576) + " MB");
             return true;
             
         } catch (Exception e) {
@@ -355,7 +381,7 @@ public class ExtractorService extends Service {
         }
     }
     
-    private void writeProgressMarker(String extractDir, int extractedCount, int totalFiles, String markerBase) {
+    private void writeProgressMarker(String extractDir, int extractedCount, int totalFiles, long extractedBytes, long totalBytes, boolean totalEstimated, String currentFile, String markerBase) {
         try {
             java.io.File dir = new java.io.File(extractDir);
             if (!dir.exists()) {
@@ -363,11 +389,23 @@ public class ExtractorService extends Service {
             }
             java.io.File progressMarker = new java.io.File(dir, ".extraction_progress_" + markerBase);
             java.io.FileWriter writer = new java.io.FileWriter(progressMarker);
-            writer.write("{\"extracted\":" + extractedCount + ",\"total\":" + totalFiles + "}");
+            writer.write("{\"extracted\":" + extractedCount
+                + ",\"total\":" + totalFiles
+                + ",\"extracted_bytes\":" + extractedBytes
+                + ",\"total_bytes\":" + totalBytes
+                + ",\"total_estimated\":" + (totalEstimated ? "true" : "false")
+                + ",\"current_file\":\"" + escapeJson(currentFile) + "\"}");
             writer.close();
         } catch (Exception e) {
             Log.w(TAG, "Failed to write progress marker", e);
         }
+    }
+    
+    private String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
     
     private void writeCompletionMarkers(String extractDir, boolean success, String markerBase) {

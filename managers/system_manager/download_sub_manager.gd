@@ -2834,10 +2834,14 @@ func _start_extraction(item: QueueItem):
 		extract_dir,
 		item.name,
 		item.delete_after_extract,
-		func(extracted: int, total: int):
+		func(info: Dictionary):
+			var extracted: int = int(info.get("extracted_files", 0))
+			var total: int = int(info.get("total_files", 0))
 			item.extracted_count = extracted
 			item.total_count = total
-			if total > 0:
+			if int(info.get("total_bytes", 0)) > 0:
+				item.progress = clampf(float(info.get("extracted_bytes", 0)) / float(info.get("total_bytes", 1)), 0.0, 1.0)
+			elif total > 0:
 				item.progress = float(extracted) / float(total)
 			extraction_progress.emit(item.id, item.progress)
 			queue_changed.emit(),
@@ -2876,7 +2880,7 @@ func _finish_download_completion(item: QueueItem):
 		# Extract TitleID in background if needed
 		if item.game_resource.get_active_title_id() == "" and _needs_title_id(item.game_resource):
 			var game = item.game_resource
-			var notify_id = SystemManager.notifications.show_notification("Extracting TitleID for " + game.title + "...", SystemManager.notifications.Type.INFO, null, 3.0, Callable(), Callable(), true)
+			var notify_id = SystemManager.notifications.show_notification("Extracting TitleID for " + game.title + "...", SystemManager.notifications.Type.INFO, null, 3.0, Callable(), Callable(), true, true)
 			SystemManager.memory.queue_extraction_task(func():
 				var title_id = TitleIDParser.extract_for_game(game)
 				return title_id

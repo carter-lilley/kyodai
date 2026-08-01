@@ -1706,7 +1706,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 					
 					# Async extraction with completion callback
 					FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
-						func(_extracted, _total): pass,
+						func(_info: Dictionary): pass,
 						func(extract_success: bool, _error):
 							if not extract_success:
 								state.failed += 1
@@ -2213,7 +2213,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							if is_folder_save:
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 								FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
-									func(_extracted, _total): pass,
+									func(_info: Dictionary): pass,
 									func(extract_success: bool, _error):
 										if not extract_success:
 											state.failed += 1
@@ -2226,7 +2226,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 								print("[GameSaveSubManager] Extracting non-folder zip save for " + emulator_id + " to: " + extract_dest)
 								FSM.extract_archive_async(local_path, extract_dest, "Save data", true,
-									func(_extracted, _total): pass,
+									func(_info: Dictionary): pass,
 									func(extract_success: bool, _error):
 										if not extract_success:
 											state.failed += 1

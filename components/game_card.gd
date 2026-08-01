@@ -809,7 +809,13 @@ func _update_status_badge_layout():
 	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
 	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
 
-	var pos = Vector2(size.x - badge_size - margin, size.y - badge_size - margin)
+	var pos: Vector2
+	if _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
+		# Anchor to the media bounds so the badge hugs the artwork even when
+		# the card rect is larger (list/carousel media-only modes).
+		pos = _media_bounds.position + _media_bounds.size - Vector2(badge_size + margin, badge_size + margin)
+	else:
+		pos = Vector2(size.x - badge_size - margin, size.y - badge_size - margin)
 	var rect = Rect2(pos, Vector2(badge_size, badge_size))
 	_status_badge_rect = rect
 

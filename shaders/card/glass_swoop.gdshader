@@ -6,6 +6,7 @@ uniform float border_inset_ratio = 0.0;
 
 // Swoop parameters
 uniform vec4 glass_color : source_color = vec4(0.2, 0.4, 1.0, 0.3);
+uniform vec4 swoop_color : source_color = vec4(0.06, 0.12, 0.3, 1.0);
 uniform float swoop_intensity : hint_range(0.0, 1.0) = 0.3;
 uniform float swoop_height : hint_range(0.0, 0.8) = 0.5;  // Y position of the line (0 = bottom, 1 = top)
 uniform float swoop_curve : hint_range(0.0, 1.0) = 0.3;  // Curve amount: 0 = flat, 1 = maximum dip
@@ -81,10 +82,9 @@ void fragment() {
 	// Apply intensity
 	float alpha = is_in_swoop * vertical_fade * swoop_intensity;
 	
-	// Output darkened glass color (much darker version of glass_color)
-	vec3 dark_glass = glass_color.rgb * 0.3;  // Darken to 30% of original brightness
-	vec3 final_color = dark_glass;
-	float final_alpha = alpha * edge_alpha;
-	
+	// Output the configured swoop color
+	vec3 final_color = swoop_color.rgb;
+	float final_alpha = alpha * edge_alpha * swoop_color.a;
+
 	COLOR = vec4(final_color, final_alpha);
 }

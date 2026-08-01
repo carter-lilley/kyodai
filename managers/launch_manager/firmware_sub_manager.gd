@@ -147,7 +147,7 @@ func _on_firmware_download_complete(success: bool, download_error: String, _noti
 		firmware_dir,
 		"Firmware for " + platform_slug,
 		true,
-		func(_e, _t): pass,
+		func(_info: Dictionary): pass,
 		func(extract_success: bool, error_msg: String):
 			if not extract_success:
 				push_error("[FirmwareManager] Failed to extract firmware to: " + firmware_dir + ": " + error_msg)

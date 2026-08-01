@@ -240,6 +240,30 @@ func update_notification_text(id: int, text: String) -> void:
 		if _progress_entry:
 			_progress_entry.base_text = text
 
+## Switches the active progress notification between indeterminate (pulsing)
+## and determinate (fraction-driven) modes.
+func set_notification_pulsing(id: int, pulsing: bool) -> void:
+	if id != _current_progress_id:
+		return
+	if not _current_progress_snackbar or not is_instance_valid(_current_progress_snackbar):
+		return
+	_current_progress_snackbar.set_pulsing(pulsing)
+	if _progress_entry:
+		_progress_entry.is_pulsing = pulsing
+
+## Forces one progress/text refresh cycle for the active progress notification.
+## Used to show final totals before the notification is dismissed.
+func refresh_progress_notification() -> void:
+	if not _progress_entry or not _current_progress_snackbar or not is_instance_valid(_current_progress_snackbar):
+		return
+	if _progress_entry.text_formatter.is_valid():
+		var progress := 0.0
+		if _progress_entry.progress_callable.is_valid():
+			progress = float(_progress_entry.progress_callable.call())
+		_current_progress_snackbar.set_message(_progress_entry.text_formatter.call(progress))
+	if not _progress_entry.is_pulsing and _progress_entry.progress_callable.is_valid():
+		_current_progress_snackbar.set_progress_fraction(clampf(float(_progress_entry.progress_callable.call()), 0.0, 1.0))
+
 func _check_notifications() -> void:
 	if not _progress_entry or not _current_progress_snackbar or not is_instance_valid(_current_progress_snackbar):
 		return

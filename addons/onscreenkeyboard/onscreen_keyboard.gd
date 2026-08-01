@@ -6,6 +6,10 @@ extends PanelContainer
 ###########################
 
 @export var auto_show:bool = true
+## When true, controller focus alone never opens the keyboard: the user must
+## press ui_accept on the focused text field to open it. Touch taps still open
+## the keyboard directly.
+@export var open_on_accept:bool = true
 @export var animate:bool = true
 @export var use_m3_theme:bool = false
 
@@ -145,6 +149,10 @@ func _on_viewport_focus_changed(control: Control) -> void:
 		
 		# If keyboard is hidden, open it for the newly focused LineEdit
 		if not visible:
+			# open_on_accept: controller focus alone must not open the keyboard;
+			# the explicit ui_accept hook in _input() handles opening instead.
+			if open_on_accept:
+				return
 			_previous_focus_object = control
 			_active_line_edit = control
 			_passthrough_caret_column = control.caret_column
@@ -182,6 +190,19 @@ func reconnect_viewport() -> void:
 
 
 func _input(event):
+	# open_on_accept: ui_accept on a focused text field is the explicit "click"
+	# that opens the keyboard for controller users.
+	if open_on_accept and not visible and _controller_connected and event.is_action_pressed("ui_accept"):
+		var accept_focus = get_viewport().gui_get_focus_owner()
+		if accept_focus != null and is_keyboard_focus_object(accept_focus):
+			_active_line_edit = accept_focus
+			_previous_focus_object = accept_focus
+			_passthrough_caret_column = accept_focus.caret_column
+			_dismissed_line_edit = null
+			_show_keyboard()
+			get_viewport().set_input_as_handled()
+			return
+
 	# If keyboard is hidden and user taps/clicks anywhere, clear the dismissal
 	# so that if the tap lands on a LineEdit it can reopen. We defer the actual
 	# check because _gui_input() (where LineEdit grabs focus) runs AFTER _input().
@@ -330,7 +351,12 @@ func _update_auto_display_on_input(event):
 			# Don't reopen if focus is returning to the LineEdit we just dismissed from.
 			if focus_object == _dismissed_line_edit:
 				return
-			
+
+			# open_on_accept: controller focus alone must not open the keyboard;
+			# the explicit ui_accept hook in _input() handles opening instead.
+			if open_on_accept and not visible:
+				return
+
 			_active_line_edit = focus_object
 			_passthrough_caret_column = _active_line_edit.caret_column
 			_show_keyboard()

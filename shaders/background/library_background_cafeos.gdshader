@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 // CafeOS - TRUE 3D Alpha Extrusion with Flat Shading
 
-uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
+uniform sampler2D icon_atlas : source_color, repeat_disable, filter_linear_mipmap;
 uniform float time_scale : hint_range(0.0, 2.0) = 0.5;
 uniform float orbit_radius : hint_range(1.0, 5.0) = 2.358;
 uniform float icon_scale : hint_range(0.1, 1.0) = 0.7;
@@ -14,14 +14,21 @@ uniform float rotation_speed : hint_range(0.0, 2.0) = 0.3;
 
 // 3D Extrusion & Raymarching Settings
 uniform float extrusion_depth : hint_range(0.001, 0.1) = 0.03;
-uniform int max_ray_steps : hint_range(16, 256) = 128;
+uniform int max_ray_steps : hint_range(16, 256) = 16;
 uniform float ray_step_size : hint_range(0.0001, 0.01) = 0.002;
 uniform float alpha_threshold : hint_range(0.0, 1.0) = 0.9;
 uniform float edge_softness : hint_range(0.0, 1.0) = 1.0;
 
-// Blur Settings
+// Blur Settings (implemented as capped LOD bias, not a re-raymarch kernel)
 uniform float blur_amount : hint_range(0.0, 0.02) = 0.004;
-uniform int blur_kernel_size : hint_range(1, 7) = 6;
+uniform int blur_kernel_size : hint_range(1, 7) = 6;  // UNUSED (kept for preset compat)
+
+// Weighted silhouette test: pixels below alpha_threshold stay fully culled
+// (matching the original hard cutoff), fading in only above it.
+float hit_weight(float alpha) {
+    return smoothstep(alpha_threshold,
+                      alpha_threshold + max(edge_softness * 0.1, 0.01), alpha);
+}
 
 // Background gradient derived from a single user color
 uniform vec4 background_color : source_color = vec4(0.05, 0.08, 0.18, 1.0);
@@ -56,38 +63,16 @@ vec3 spherical_to_cartesian(float theta, float phi, float radius) {
     );
 }
 
-vec4 sample_icon(int icon_index, vec2 uv) {
+vec4 sample_icon(int icon_index, vec2 uv, float lod_bias) {
     float row = floor(float(icon_index) / ICONS_PER_ROW);
     float icon_col = mod(float(icon_index), ICONS_PER_ROW);
     vec2 pixel_pos = vec2(
         icon_col * ICON_SIZE + uv.x * ICON_SIZE,
         row * (ICON_SIZE + 1.0) + uv.y * ICON_SIZE
     );
-    vec4 col = texture(icon_atlas, pixel_pos / vec2(ATLAS_WIDTH, ATLAS_HEIGHT));
+    vec4 col = textureLod(icon_atlas, pixel_pos / vec2(ATLAS_WIDTH, ATLAS_HEIGHT), lod_bias);
     // Premultiply alpha to fix dark halos from transparent black pixels
     return vec4(col.rgb * col.a, col.a);
-}
-
-float get_height(int icon_index, vec2 uv) {
-    return sample_icon(icon_index, uv).a * extrusion_depth;
-}
-
-float get_height_smooth(int icon_index, vec2 uv) {
-    vec2 texel = uv * ICON_SIZE;
-    vec2 texel_floor = floor(texel);
-    vec2 texel_frac = texel - texel_floor;
-    
-    vec2 uv00 = texel_floor / ICON_SIZE;
-    vec2 uv10 = (texel_floor + vec2(1.0, 0.0)) / ICON_SIZE;
-    vec2 uv01 = (texel_floor + vec2(0.0, 1.0)) / ICON_SIZE;
-    vec2 uv11 = (texel_floor + vec2(1.0, 1.0)) / ICON_SIZE;
-    
-    float h00 = get_height(icon_index, uv00);
-    float h10 = get_height(icon_index, uv10);
-    float h01 = get_height(icon_index, uv01);
-    float h11 = get_height(icon_index, uv11);
-    
-    return mix(mix(h00, h10, texel_frac.x), mix(h01, h11, texel_frac.x), texel_frac.y);
 }
 
 mat3 rotate_x(float angle) {
@@ -105,56 +90,41 @@ mat3 rotate_z(float angle) {
     return mat3(vec3(c, -s, 0.0), vec3(s, c, 0.0), vec3(0.0, 0.0, 1.0));
 }
 
-vec3 calc_normal(int icon_index, vec2 uv, float scale,
-                 vec3 icon_right, vec3 icon_up, vec3 icon_normal) {
-    float eps = 1.0 / ICON_SIZE;
-    
-    float h_c = get_height_smooth(icon_index, uv);
-    float h_r = get_height_smooth(icon_index, uv + vec2(eps, 0.0));
-    float h_l = get_height_smooth(icon_index, uv - vec2(eps, 0.0));
-    float h_u = get_height_smooth(icon_index, uv + vec2(0.0, eps));
-    float h_d = get_height_smooth(icon_index, uv - vec2(0.0, eps));
-    
-    float dx = (h_r - h_l) * 0.5;
-    float dy = (h_u - h_d) * 0.5;
-    
-    return normalize(icon_normal + icon_right * (dx / eps) + icon_up * (dy / eps));
-}
-
-// Improved render_ray with continuous alpha sampling and adaptive stepping
-vec4 render_ray(vec2 uv, float aspect) {
+// Optimized render_ray: analytic front-face intersection per icon (one sample)
+// plus a short depth-slab march for extrusion side walls (<= max_ray_steps).
+vec4 render_ray(vec2 uv, float aspect, float lod_bias) {
     vec3 camera_pos = vec3(0.0, 0.0, -4.0);
-    vec3 ray_dir = normalize(vec3(uv, 1.5));
-    
+    vec3 ray_dir = normalize(vec3(uv.x * aspect, uv.y, 1.5));
+
     float time = TIME * orbit_speed * time_scale;
     vec3 light = normalize(light_direction);
-    
+
     float closest_t = 9999.0;
     vec3 closest_normal = vec3(0.0, 0.0, 1.0);
     vec3 closest_color = vec3(0.0);
     float closest_alpha = 0.0;
     bool hit = false;
-    
+
     for (int i = 0; i < num_icons && i < 12; i++) {
         float fi = float(i);
         vec3 seed_vec = hash3(vec2(fi, 0.0));
-        
+
         float orbit_angle = time * (0.5 + seed_vec.x * 0.5) + fi * 6.28318 / float(num_icons);
         vec3 icon_center = spherical_to_cartesian(orbit_angle, 1.57 + sin(time * 0.3 + fi) * 0.5, orbit_radius);
-        
+
         float rot_time = time * rotation_speed;
         mat3 rot_mat = rotate_z(seed_vec.z * 6.28318 + rot_time * 0.15) *
                       rotate_y(seed_vec.y * 6.28318 + rot_time * 0.25) *
                       rotate_x(seed_vec.x * 6.28318 + rot_time * 0.35);
-        
+
         vec3 icon_right = rot_mat * vec3(1.0, 0.0, 0.0);
         vec3 icon_up = rot_mat * vec3(0.0, 1.0, 0.0);
         vec3 icon_normal = rot_mat * vec3(0.0, 0.0, 1.0);
-        
+
         float size_variation = 0.6 + hash(seed_vec.xy) * 0.4;
         float scale = icon_scale * size_variation;
         int icon_index = int(floor(seed_vec.x * 72.0)) % 72;
-        
+
         vec3 local_origin = vec3(
             dot(camera_pos - icon_center, icon_right),
             dot(camera_pos - icon_center, icon_up),
@@ -165,10 +135,10 @@ vec4 render_ray(vec2 uv, float aspect) {
             dot(ray_dir, icon_up),
             dot(ray_dir, icon_normal)
         );
-        
+
         vec3 box_min = vec3(-scale * 0.5, -scale * 0.5, -extrusion_depth);
         vec3 box_max = vec3(scale * 0.5, scale * 0.5, 0.0);
-        
+
         vec3 inv_rd = 1.0 / local_dir;
         vec3 t1 = (box_min - local_origin) * inv_rd;
         vec3 t2 = (box_max - local_origin) * inv_rd;
@@ -176,92 +146,128 @@ vec4 render_ray(vec2 uv, float aspect) {
         vec3 t_far = max(t1, t2);
         float t_start = max(max(t_near.x, t_near.y), t_near.z);
         float t_end = min(min(t_far.x, t_far.y), t_far.z);
-        
+
         if (t_end <= max(t_start, 0.0)) continue;
-        
-        float t = max(t_start, 0.0);
-        float prev_alpha = 0.0;
-        vec2 prev_uv = vec2(0.0);
-        
-        for (int step = 0; step < max_ray_steps; step++) {
-            vec3 pos = local_origin + local_dir * t;
-            vec2 uv_local = vec2(pos.x / scale + 0.5, pos.y / scale + 0.5);
-            
-            bool in_uv = uv_local.x >= 0.0 && uv_local.x <= 1.0 && 
-                        uv_local.y >= 0.0 && uv_local.y <= 1.0;
-            
-            if (!in_uv) {
-                prev_alpha = 0.0;
-                t += ray_step_size;
-                if (t > t_end) break;
-                continue;
-            }
-            
-            vec4 col = sample_icon(icon_index, clamp(uv_local, 0.0, 1.0));
-            float height = col.a * extrusion_depth;
-            bool inside = pos.z >= -height && pos.z <= 0.0;
-            
-            // Check if we're entering the volume (alpha transition from low to high)
-            if (inside && col.a > alpha_threshold) {
-                vec3 world_pos = icon_center + icon_right * pos.x + icon_up * pos.y + icon_normal * pos.z;
-                float world_t = length(world_pos - camera_pos);
-                
-                if (world_t < closest_t) {
-                    closest_t = world_t;
-                    closest_normal = calc_normal(icon_index, uv_local, scale, icon_right, icon_up, icon_normal);
-                    closest_color = col.rgb;
-                    closest_alpha = col.a;
-                    hit = true;
-                    
-                    // Don't break - we want to find the closest hit across all icons
+
+        float t0 = max(t_start, 0.0);
+        bool icon_hit = false;
+
+        // --- Analytic front face (z = 0 plane): one sample, one alpha test ---
+        if (abs(local_dir.z) > 1e-5) {
+            float t_plane = -local_origin.z / local_dir.z;
+            if (t_plane >= t0 && t_plane <= t_end) {
+                vec3 pos = local_origin + local_dir * t_plane;
+                vec2 uv_local = pos.xy / scale + 0.5;
+                if (uv_local.x >= 0.0 && uv_local.x <= 1.0 &&
+                    uv_local.y >= 0.0 && uv_local.y <= 1.0) {
+                    vec4 col = sample_icon(icon_index, uv_local, lod_bias);
+                    float w = hit_weight(col.a);
+                    if (w > 0.0) {
+                        float world_t = length(icon_center + icon_right * pos.x + icon_up * pos.y - camera_pos);
+                        if (world_t < closest_t) {
+                            closest_t = world_t;
+                            closest_normal = icon_normal;
+                            closest_color = col.rgb * w;
+                            closest_alpha = col.a * w;
+                            hit = true;
+                        }
+                        icon_hit = true;
+                    }
                 }
             }
-            
-            // Adaptive step size: smaller steps when near the surface
-            float dist_to_surface = abs(pos.z + height);
-            float adaptive_step = mix(ray_step_size * 0.25, ray_step_size, smoothstep(0.0, 0.01, dist_to_surface));
-            
-            prev_alpha = col.a;
-            prev_uv = uv_local;
-            t += adaptive_step;
-            if (t > t_end) break;
+        }
+
+        // --- Extrusion side walls: short march through the depth slab only ---
+        if (icon_hit) continue;
+
+        float slab_start = t0;
+        float slab_end = t_end;
+        if (abs(local_dir.z) > 1e-5) {
+            float tz0 = -local_origin.z / local_dir.z;
+            float tzd = -(local_origin.z + extrusion_depth) / local_dir.z;
+            slab_start = max(t0, min(tz0, tzd));
+            slab_end = min(t_end, max(tz0, tzd));
+        }
+        if (slab_end <= slab_start) continue;
+
+        float slab_len = slab_end - slab_start;
+        int steps = clamp(int(ceil(slab_len / ray_step_size)), 1, max_ray_steps);
+        float step_size = slab_len / float(steps);
+        float t = slab_start;
+
+        for (int s = 0; s < steps; s++) {
+            vec3 pos = local_origin + local_dir * t;
+            vec2 uv_local = pos.xy / scale + 0.5;
+
+            if (uv_local.x >= 0.0 && uv_local.x <= 1.0 &&
+                uv_local.y >= 0.0 && uv_local.y <= 1.0) {
+                vec4 col = sample_icon(icon_index, uv_local, lod_bias);
+                float height = col.a * extrusion_depth;
+                if (pos.z >= -height && pos.z <= 0.0) {
+                    float w = hit_weight(col.a);
+                    if (w > 0.0) {
+                        vec3 world_pos = icon_center + icon_right * pos.x + icon_up * pos.y + icon_normal * pos.z;
+                        float world_t = length(world_pos - camera_pos);
+                        if (world_t < closest_t) {
+                            closest_t = world_t;
+                            // Flat-shaded wall normal from the dominant axis
+                            closest_normal = abs(pos.x) > abs(pos.y) ? icon_right * sign(pos.x) : icon_up * sign(pos.y);
+                            closest_color = col.rgb * w;
+                            closest_alpha = col.a * w;
+                            hit = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            t += step_size;
         }
     }
-    
+
     if (hit && closest_alpha > 0.0) {
         float NdotL = max(0.0, dot(closest_normal, light));
         float diffuse = light_ambient + light_diffuse * NdotL;
         vec3 final_color = closest_color * diffuse * front_face_brightness;
         return vec4(final_color * closest_alpha, closest_alpha);
     }
-    
+
     return vec4(0.0);
 }
 
 void fragment() {
     vec2 uv = UV * 2.0 - 1.0;
-    // Stretch vertically by ~10% (divide by 1.1 = multiply by 0.909)
-    uv.y *= 0.909;
     float aspect = (1.0 / SCREEN_PIXEL_SIZE).x / (1.0 / SCREEN_PIXEL_SIZE).y;
-    
+
     // Calculate pixel size for supersampling
     vec2 pixel_size = SCREEN_PIXEL_SIZE * 2.0; // UV range is -1 to 1
-    
+
     // Derive subtle tonal variations from single user color
     vec3 base_color = background_color.rgb;
     vec3 left_color  = mix(base_color, vec3(1.0), 0.08);  // 8% lighter
     vec3 right_color = mix(base_color, vec3(0.0), 0.08);  // 8% darker
-    
+
     // Horizontal gradient with a soft ease
     vec3 bg_gradient = mix(left_color, right_color, smoothstep(0.0, 1.0, UV.x));
-    
+
     vec4 final_color = vec4(0.0);
-    
-    // Supersampling anti-aliasing
-    // Sample at subpixel offsets and average
-    if (supersample_level <= 1) {
-        // No supersampling - single sample
-        final_color = render_ray(uv, aspect);
+
+    if (blur_amount > 0.0) {
+        // Depth-of-field: 6x6 kernel of (now cheap, analytic) rays with proper
+        // premultiplied blending to avoid dark fringes. Same offsets/width as
+        // the original blur; affordable now that each ray costs ~2 fetches.
+        float kernel_half = float(blur_kernel_size - 1) / 2.0;
+        float kernel_samples = float(blur_kernel_size * blur_kernel_size);
+        for (float x = -kernel_half; x <= kernel_half; x += 1.0) {
+            for (float y = -kernel_half; y <= kernel_half; y += 1.0) {
+                vec2 offset = vec2(x, y) * blur_amount * 0.5;
+                vec4 sample = render_ray(uv + offset, aspect, 0.0);
+                final_color += vec4(sample.rgb * sample.a, sample.a);
+            }
+        }
+        final_color /= kernel_samples;
+    } else if (supersample_level <= 1) {
+        // No blur, no supersampling - single sharp sample
+        final_color = render_ray(uv, aspect, 0.0);
     } else if (supersample_level == 2) {
         // 2x2 supersampling (4 samples)
         vec2 offsets[4] = vec2[](
@@ -270,10 +276,9 @@ void fragment() {
             vec2(-0.25,  0.25),
             vec2( 0.25,  0.25)
         );
-        
         for (int i = 0; i < 4; i++) {
             vec2 sample_uv = uv + offsets[i] * pixel_size;
-            vec4 sample = render_ray(sample_uv, aspect);
+            vec4 sample = render_ray(sample_uv, aspect, 0.0);
             final_color += vec4(sample.rgb * sample.a, sample.a);
         }
         final_color /= 4.0;
@@ -282,7 +287,7 @@ void fragment() {
         for (float x = -1.0; x <= 1.0; x += 1.0) {
             for (float y = -1.0; y <= 1.0; y += 1.0) {
                 vec2 sample_uv = uv + vec2(x, y) * pixel_size / 3.0;
-                vec4 sample = render_ray(sample_uv, aspect);
+                vec4 sample = render_ray(sample_uv, aspect, 0.0);
                 final_color += vec4(sample.rgb * sample.a, sample.a);
             }
         }
@@ -292,46 +297,18 @@ void fragment() {
         for (float x = -1.5; x <= 1.5; x += 1.0) {
             for (float y = -1.5; y <= 1.5; y += 1.0) {
                 vec2 sample_uv = uv + vec2(x, y) * pixel_size / 4.0;
-                vec4 sample = render_ray(sample_uv, aspect);
+                vec4 sample = render_ray(sample_uv, aspect, 0.0);
                 final_color += vec4(sample.rgb * sample.a, sample.a);
             }
         }
         final_color /= 16.0;
     }
-    
-    // Blur for out-of-focus depth-of-field effect
-    vec4 blurred_color = vec4(0.0);
-    float total_weight = 0.0;
-    
-    // Calculate kernel bounds based on blur_kernel_size
-    float kernel_half = float(blur_kernel_size - 1) / 2.0;
-    float kernel_samples = float(blur_kernel_size * blur_kernel_size);
-    
-    // Dynamic kernel sampling with proper alpha-premultiplied blending
-    // This prevents dark halos by properly handling transparent regions
-    for(float x = -kernel_half; x <= kernel_half; x += 1.0) {
-        for(float y = -kernel_half; y <= kernel_half; y += 1.0) {
-            vec2 offset = vec2(x, y) * blur_amount * 0.5;
-            vec4 sample = render_ray(uv + offset, aspect);
-            // Accumulate premultiplied: (RGB * A, A)
-            blurred_color += vec4(sample.rgb * sample.a, sample.a);
-            total_weight += sample.a;
-        }
-    }
-    
-    // Normalize by sample count (not by weight) to preserve alpha
-    // This ensures transparent areas stay transparent without dark fringes
-    blurred_color /= kernel_samples;
-    
-    // Full blur - no mixing with original
-    // Output is already premultiplied: (RGB * A, A)
-    final_color = blurred_color;
-    
-    // Composite icons over the gradient background
-    // final_color is premultiplied (RGB * A), so:
+
+    // Composite icons over the gradient background.
+    // render_ray output is premultiplied (RGB * A), so:
     // result = background * (1 - A) + RGB
     vec3 composited = bg_gradient * (1.0 - final_color.a) + final_color.rgb;
-    
+
     // Output opaque
     COLOR = vec4(composited, 1.0);
 }

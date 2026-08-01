@@ -14,10 +14,13 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 
 var _left_pane: VBoxContainer
 var _right_pane: MarginContainer
+var _right_scroll: ScrollContainer
 var _right_content: Control
 var _category_buttons: Dictionary[String, M3Button] = {}
 var _category_contents: Dictionary[String, Control] = {}
 var _current_category: String = ""
+
+const DEBUG_LAYOUT: bool = true
 
 # Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
 var _snapshot: Dictionary = {}
@@ -29,6 +32,8 @@ func _init():
 	title_text = "Settings"
 	persistent = true
 	fill_viewport_height = true
+	# Content must never resize the dialog: tall pages scroll inside it.
+	fixed_size = true
 	super._init()
 	if UIManager:
 		set_focus_restore_fallback(UIManager.get_focus_restore_fallback_to_home())
@@ -43,10 +48,6 @@ func _ready():
 			_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		if _bottom_actions:
 			_bottom_actions.visible = false
-	# Make content slot expand to fill the dialog interior
-	if content_slot:
-		content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_build_two_pane_layout()
 	await _build_categories()
 
@@ -71,6 +72,11 @@ func _build_two_pane_layout() -> void:
 	for child in content_slot.get_children():
 		child.queue_free()
 
+	# Make content slot expand to fill the dialog interior. Done here, before any
+	# positioning pass, so the dialog never measures against the default flags.
+	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
 	var hbox = HBoxContainer.new()
 	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -79,10 +85,12 @@ func _build_two_pane_layout() -> void:
 	# natural content height does not propagate to the dialog's minimum size.
 	# The HBox fills the wrapper via anchors; the wrapper fills the dialog via
 	# size flags, and the dialog clamps its own height to the viewport.
+	# clip_contents guarantees page content can never paint outside the slot.
 	var content_wrapper = Control.new()
 	content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content_wrapper.custom_minimum_size = Vector2(0, 0)
+	content_wrapper.clip_contents = true
 	content_slot.add_child(content_wrapper)
 	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	hbox.offset_left = 0
@@ -93,7 +101,12 @@ func _build_two_pane_layout() -> void:
 
 	var compact := _is_compact_sidebar()
 
-	# Left sidebar
+	# Left sidebar. Category buttons shrink-to-fit (EXPAND_FILL + zero height
+	# floor in _add_category_button), so the sidebar's combined minimum height
+	# collapses. Without that, its natural height (768px at dp 2.31) becomes
+	# the hbox's minimum, which exceeds the dialog interior (599px) - and since
+	# a Control's rect can never go below its minimum size, the whole pane
+	# chain overflows the slot and pages clip without ever scrolling.
 	_left_pane = VBoxContainer.new()
 	_left_pane.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(160), 0)
 	_left_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -116,7 +129,10 @@ func _build_two_pane_layout() -> void:
 	divider.add_theme_stylebox_override("separator", divider_sb)
 	hbox.add_child(divider)
 
-	# Right content pane
+	# Right content pane. All category pages live inside ONE ScrollContainer so
+	# every page (generated or scene) is clipped to the dialog and scrollable.
+	# A ScrollContainer reports ~0 minimum height, so page content can never
+	# inflate the dialog's measured size.
 	_right_pane = MarginContainer.new()
 	_right_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_right_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -124,6 +140,13 @@ func _build_two_pane_layout() -> void:
 	_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
 	_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
 	_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
+
+	_right_scroll = ScrollContainer.new()
+	_right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_right_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_right_scroll.follow_focus = true
+	_right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_right_pane.add_child(_right_scroll)
 	hbox.add_child(_right_pane)
 
 func _is_compact_sidebar() -> bool:
@@ -180,10 +203,8 @@ func _build_categories() -> void:
 		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
 		_category_contents["gamenative"] = gamenative
 
-	# Spacer at bottom of sidebar
-	var spacer = Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_left_pane.add_child(spacer)
+	# No spacer at the bottom of the sidebar: category buttons divide the full
+	# sidebar height evenly (shrink-to-fit, see _add_category_button).
 
 	# Select first category that has content
 	for btn_id in _category_buttons.keys():
@@ -213,20 +234,18 @@ func _add_category_button(id: String, label: String, icon: String) -> void:
 		text_btn.pressed.connect(_on_category_selected.bind(id))
 		_left_pane.add_child(text_btn)
 		btn = text_btn
+	# Shrink-to-fit: buttons evenly divide the sidebar height and may compress
+	# below their natural height when space is tight. The zero height floor
+	# keeps the sidebar's combined minimum height from overflowing the dialog.
+	btn.custom_minimum_size.y = 0
+	btn.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_category_buttons[id] = btn
 
 func _create_settings_menu_content(setting_name: String, settings_vars: Array) -> Control:
-	"""Create a SettingsMenu wrapped in ScrollContainer + MarginContainer + VBoxContainer for the right pane."""
-	var scroll = ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	scroll.follow_focus = true
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-
+	"""Create a SettingsMenu in a MarginContainer + VBoxContainer. Scrolling is
+	provided by the shared pane-level ScrollContainer (_right_scroll)."""
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
 	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
 	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
@@ -244,8 +263,7 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	vbox.add_child(menu)
 
 	margin.add_child(vbox)
-	scroll.add_child(margin)
-	return scroll
+	return margin
 
 func _on_category_selected(id: String) -> void:
 	select_category(id)
@@ -255,10 +273,10 @@ func select_category(id: String) -> void:
 		return
 
 	# Hide previous content
-	if _right_content and _right_content.get_parent() == _right_pane:
+	if _right_content and _right_content.get_parent() == _right_scroll:
 		if _right_content.has_method("on_view_hide"):
 			_right_content.on_view_hide()
-		_right_pane.remove_child(_right_content)
+		_right_scroll.remove_child(_right_content)
 
 	_current_category = id
 
@@ -273,9 +291,52 @@ func select_category(id: String) -> void:
 	# Show new content
 	if _category_contents.has(id):
 		_right_content = _category_contents[id]
-		_right_pane.add_child(_right_content)
+		# ScrollContainer sizes children by combined minimum size unless they
+		# carry EXPAND_FILL - scene roots default to FILL and would collapse
+		# to (0,0), so force the flags on every page before adding.
+		_right_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_right_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_right_scroll.add_child(_right_content)
+		_right_scroll.scroll_vertical = 0
 		if _right_content.has_method("on_view_show"):
 			_right_content.on_view_show()
+		if DEBUG_LAYOUT:
+			_dump_layout_metrics.call_deferred(id)
+
+func _dump_layout_metrics(id: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	var viewport_size := Vector2.ZERO
+	if get_viewport():
+		viewport_size = get_viewport().get_visible_rect().size
+	var window_size := Vector2i.ZERO
+	if get_window():
+		window_size = get_window().size
+	print("[SettingsDialog] layout dump for category '%s': viewport=%s window=%s dp_scale=%.2f" % [id, viewport_size, window_size, M3Units.dp(1.0)])
+	var wrapper: Control = null
+	if content_slot and content_slot.get_child_count() > 0:
+		wrapper = content_slot.get_child(0) as Control
+	var hbox_node: Control = null
+	if wrapper and wrapper.get_child_count() > 0:
+		hbox_node = wrapper.get_child(0) as Control
+	var layers: Array = [
+		["dialog_container", _dialog_container],
+		["content_slot", content_slot],
+		["content_wrapper", wrapper],
+		["hbox", hbox_node],
+		["right_pane", _right_pane],
+		["right_scroll", _right_scroll],
+		["right_content", _right_content],
+	]
+	for layer in layers:
+		var c: Control = layer[1]
+		if not is_instance_valid(c):
+			print("  %s: <invalid>" % layer[0])
+			continue
+		print("  %s: size.y=%.1f min_size.y=%.1f" % [layer[0], c.size.y, c.get_combined_minimum_size().y])
+	if is_instance_valid(_right_content) and _right_content.get_child_count() > 0:
+		var inner = _right_content.get_child(0)
+		if inner is Control:
+			print("  right_content[0]: size.y=%.1f min_size.y=%.1f" % [inner.size.y, inner.get_combined_minimum_size().y])
 
 func get_current_category() -> String:
 	return _current_category

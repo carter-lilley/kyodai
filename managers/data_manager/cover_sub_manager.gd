@@ -235,7 +235,8 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 		0.0,
 		Callable(),
 		Callable(),
-		true  # pulsing
+		true,  # pulsing
+		true  # pinned
 	)
 
 	MemorySubManager.queue_db_task(

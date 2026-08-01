@@ -69,7 +69,7 @@ const MAX_DB_QUEUE_SIZE = 500
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 const MAX_DOWNLOAD_QUEUE_SIZE = 500
 const MAX_SYNC_QUEUE_SIZE = 10
-const OS_EXECUTE_THREAD_COUNT: int = 2
+const OS_EXECUTE_THREAD_COUNT: int = 4
 const MAX_OS_EXECUTE_QUEUE_SIZE = 100
 
 ## Returns the number of download threads for the current platform

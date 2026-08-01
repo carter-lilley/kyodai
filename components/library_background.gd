@@ -3,6 +3,7 @@ extends Control
 
 var _current_effect: BackgroundEffect = null
 var _solid_bg: ColorRect = null
+var _effect_viewport: SubViewport = null
 var _effect_id: String = "gradient"
 var _effect_settings: Dictionary = {}
 
@@ -12,9 +13,17 @@ func _ready():
 
 func _on_resized() -> void:
 	if _current_effect:
-		_current_effect.size = size
+		if _effect_viewport:
+			_effect_viewport.size = _get_scaled_effect_size()
+			_current_effect.size = Vector2(_effect_viewport.size)
+		else:
+			_current_effect.size = size
 	if _solid_bg:
 		_solid_bg.size = size
+
+func _get_scaled_effect_size() -> Vector2i:
+	var scale_factor = _current_effect.render_scale if _current_effect else 1.0
+	return Vector2i(maxi(1, int(size.x * scale_factor)), maxi(1, int(size.y * scale_factor)))
 
 func refresh_theme() -> void:
 	# When dark/light mode changes, update the solid background color
@@ -52,6 +61,9 @@ func _apply_background_state() -> void:
 	if _current_effect:
 		_current_effect.queue_free()
 		_current_effect = null
+	if _effect_viewport:
+		_effect_viewport.queue_free()
+		_effect_viewport = null
 	
 	# Remove solid background if present
 	if _solid_bg:
@@ -71,11 +83,30 @@ func _apply_background_state() -> void:
 	# Create and add new effect
 	_current_effect = _create_effect(_effect_id)
 	if _current_effect:
-		add_child(_current_effect)
-		_current_effect.position = Vector2.ZERO
-		_current_effect.size = size
-		_current_effect.visible = true
-		_current_effect.initialize(_effect_settings)
+		if _current_effect.render_scale < 1.0:
+			# GPU-heavy effect: render into a scaled-down SubViewport and stretch
+			# it back to full size via the container.
+			_effect_viewport = SubViewport.new()
+			_effect_viewport.size = _get_scaled_effect_size()
+			_effect_viewport.transparent_bg = false
+			_effect_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+			_effect_viewport.add_child(_current_effect)
+			_current_effect.position = Vector2.ZERO
+			_current_effect.size = Vector2(_effect_viewport.size)
+			_current_effect.visible = true
+			_current_effect.initialize(_effect_settings)
+			var container := SubViewportContainer.new()
+			container.stretch = true
+			container.set_anchors_preset(Control.PRESET_FULL_RECT)
+			container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			add_child(container)
+			container.add_child(_effect_viewport)
+		else:
+			add_child(_current_effect)
+			_current_effect.position = Vector2.ZERO
+			_current_effect.size = size
+			_current_effect.visible = true
+			_current_effect.initialize(_effect_settings)
 
 func _create_effect(effect_id: String) -> BackgroundEffect:
 	match effect_id:

@@ -870,7 +870,8 @@ static func read_file_bytes(path: String) -> PackedByteArray:
 ## Auto-detects format (.zip, .7z) and platform (Android/desktop).
 ## On desktop: always uses 7-Zip binary for consistent behavior.
 ## On Android: uses native ExtractorService for ZIP files.
-## progress_callback(extracted_count: int, total_count: int) is called periodically.
+## progress_callback(info: Dictionary) is called periodically with keys:
+## extracted_files, total_files, extracted_bytes, total_bytes, total_estimated, current_file
 static func extract_archive(archive_path: String, extract_dir: String, progress_callback: Callable = Callable()) -> bool:
 	if not file_exists(archive_path):
 		push_error("[SystemManager.filesystem] Archive file not found: " + archive_path)
@@ -896,7 +897,8 @@ static func extract_archive(archive_path: String, extract_dir: String, progress_
 
 ## Async extraction with notification management.
 ## Queues to SystemManager.memory and handles progress notifications automatically.
-## on_progress(extracted: int, total: int)
+## on_progress(info: Dictionary) — keys: extracted_files, total_files,
+## extracted_bytes, total_bytes, total_estimated, current_file
 ## on_complete(success: bool, error_msg: String)
 static func extract_archive_async(
 	archive_path: String,
@@ -909,18 +911,42 @@ static func extract_archive_async(
 	var display_name = archive_name if archive_name != "" else archive_path.get_file().get_basename()
 	
 	# Use Dictionary so closures capture by reference (not by value)
-	var counts = {"extracted": 0, "total": 0}
+	var counts := {
+		"extracted_files": 0,
+		"total_files": 0,
+		"extracted_bytes": 0,
+		"total_bytes": 0,
+		"total_estimated": false,
+		"current_file": "",
+	}
 	
 	var progress_callable = func() -> float:
-		if counts.total > 0:
-			return float(counts.extracted) / float(counts.total)
+		if counts.total_bytes > 0:
+			return clampf(float(counts.extracted_bytes) / float(counts.total_bytes), 0.0, 1.0)
+		if counts.total_files > 0:
+			return clampf(float(counts.extracted_files) / float(counts.total_files), 0.0, 1.0)
 		return 0.0
 	
 	var text_formatter = func(_progress: float) -> String:
-		if counts.total > 0:
-			return display_name + "... (" + str(counts.extracted) + "/" + str(counts.total) + " files)"
-		elif counts.extracted > 0:
-			return display_name + "... (" + str(counts.extracted) + " files)"
+		var file_part := ""
+		if counts.current_file != "":
+			file_part = " — " + String(counts.current_file).get_file()
+		
+		if counts.total_bytes > 0:
+			var estimate_prefix := "~" if counts.total_estimated else ""
+			return "%s... (%s / %s%s)%s" % [
+				display_name,
+				format_bytes(counts.extracted_bytes),
+				estimate_prefix,
+				format_bytes(counts.total_bytes),
+				file_part,
+			]
+		if counts.extracted_bytes > 0:
+			return "%s... (%s extracted)%s" % [display_name, format_bytes(counts.extracted_bytes), file_part]
+		if counts.total_files > 0:
+			return "%s... (%d/%d files)%s" % [display_name, counts.extracted_files, counts.total_files, file_part]
+		if counts.extracted_files > 0:
+			return "%s... (%d files)%s" % [display_name, counts.extracted_files, file_part]
 		return display_name + "..."
 	
 	var notification_id = SystemManager.notifications.show_notification_safe(
@@ -930,16 +956,29 @@ static func extract_archive_async(
 		0.0,
 		progress_callable,
 		text_formatter,
-		false
+		true,  # pulsing (indeterminate until byte totals are known)
+		true  # pinned
 	)
 	
-	var progress_callback = func(extracted: int, total: int):
-		counts.extracted = extracted
-		counts.total = total
+	var progress_callback = func(info: Dictionary):
+		counts.extracted_files = int(info.get("extracted_files", counts.extracted_files))
+		counts.total_files = int(info.get("total_files", counts.total_files))
+		counts.extracted_bytes = int(info.get("extracted_bytes", counts.extracted_bytes))
+		counts.total_bytes = int(info.get("total_bytes", counts.total_bytes))
+		counts.total_estimated = bool(info.get("total_estimated", counts.total_estimated))
+		counts.current_file = str(info.get("current_file", counts.current_file))
+		
+		# Once real totals are known, switch from indeterminate pulsing to a
+		# determinate progress bar. This callback runs on the extraction worker
+		# thread, so route UI changes through the main-thread queue.
+		if counts.total_bytes > 0 or counts.total_files > 0:
+			SystemManager.memory.queue_main_thread_callback(func():
+				SystemManager.notifications.set_notification_pulsing(notification_id, false)
+			)
 		
 		# Forward to caller
 		if on_progress.is_valid():
-			on_progress.call_deferred(extracted, total)
+			on_progress.call_deferred(info.duplicate())
 	
 	var extraction_callable = func() -> bool:
 		var success = extract_archive(archive_path, extract_dir, progress_callback)
@@ -950,6 +989,16 @@ static func extract_archive_async(
 		return success
 	
 	SystemManager.memory.queue_extraction_task(extraction_callable, func(success: bool):
+		if success:
+			# Snap the notification to the actual final totals (the fallback total
+			# may have been an estimate) and show it briefly before dismissing.
+			counts.total_estimated = false
+			if counts.total_bytes > 0:
+				counts.extracted_bytes = counts.total_bytes
+			if counts.total_files > 0:
+				counts.extracted_files = counts.total_files
+			SystemManager.notifications.refresh_progress_notification()
+		
 		SystemManager.notifications.dismiss_notification_safe(notification_id)
 		
 		var error_msg = ""
@@ -963,7 +1012,7 @@ static func extract_archive_async(
 ## Uses the ExtractorService (separate process) for all Android ZIP extractions.
 ## This prevents OOM kills by running extraction outside Godot's memory budget.
 ## Works for any ZIP extraction: games, firmware, emulator assets, saves, etc.
-## progress_callback(extracted_count: int, total_count: int) is called when progress file updates.
+## progress_callback(info: Dictionary) is called when the progress file updates.
 static func _extract_zip_native_streaming(zip_path: String, extract_dir: String, game_name: String = "", progress_callback: Callable = Callable()) -> bool:
 	print("[SystemManager.filesystem] Using ExtractorService for: " + zip_path)
 	
@@ -1036,21 +1085,17 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 		
 		# Poll progress file every ~2 seconds
 		if progress_callback.is_valid() and elapsed - last_progress_read >= 2.0:
-			if FileAccess.file_exists(progress_marker):
-				var progress_file = FileAccess.open(progress_marker, FileAccess.READ)
-				if progress_file:
-					var json_text = progress_file.get_as_text()
-					progress_file.close()
-					var json = JSON.new()
-					var error = json.parse(json_text)
-					if error == OK and json.data is Dictionary:
-						var extracted = json.data.get("extracted", 0)
-						var total = json.data.get("total", 0)
-						progress_callback.call(extracted, total)
-				last_progress_read = elapsed
-		
-		OS.delay_msec(100)
-		elapsed += 0.1
+			var info := _read_extraction_progress(progress_marker)
+			if not info.is_empty():
+				progress_callback.call(info)
+			last_progress_read = elapsed
+	
+	# Read the final progress marker (written just before completion markers) so
+	# the callback receives the real totals rather than the estimated fallback.
+	if progress_callback.is_valid():
+		var final_info := _read_extraction_progress(progress_marker)
+		if not final_info.is_empty():
+			progress_callback.call(final_info)
 	
 	# Clean up markers
 	for marker in [completion_marker, success_marker, progress_marker]:
@@ -1064,10 +1109,57 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	print("[SystemManager.filesystem] ExtractorService result for " + marker_base + ": " + str(success))
 	return success
 
+## Reads the ExtractorService progress marker and normalizes it to a Dictionary:
+## {extracted_files, total_files, extracted_bytes, total_bytes, total_estimated, current_file}
+static func _read_extraction_progress(progress_marker: String) -> Dictionary:
+	if not FileAccess.file_exists(progress_marker):
+		return {}
+	var progress_file = FileAccess.open(progress_marker, FileAccess.READ)
+	if not progress_file:
+		return {}
+	var json_text = progress_file.get_as_text()
+	progress_file.close()
+	var json = JSON.new()
+	if json.parse(json_text) != OK or not (json.data is Dictionary):
+		return {}
+	var data: Dictionary = json.data
+	return {
+		"extracted_files": int(data.get("extracted", 0)),
+		"total_files": int(data.get("total", 0)),
+		"extracted_bytes": int(data.get("extracted_bytes", 0)),
+		"total_bytes": int(data.get("total_bytes", 0)),
+		"total_estimated": bool(data.get("total_estimated", false)),
+		"current_file": str(data.get("current_file", "")),
+	}
+
+## Builds a normalized extraction progress Dictionary for paths that only know
+## file counts (e.g. the 7-Zip desktop fallback).
+static func _make_extraction_progress_info(extracted_files: int, total_files: int) -> Dictionary:
+	return {
+		"extracted_files": extracted_files,
+		"total_files": total_files,
+		"extracted_bytes": 0,
+		"total_bytes": 0,
+		"total_estimated": false,
+		"current_file": "",
+	}
+
+## Formats a byte count as a human-readable string (e.g. "4.2 GB").
+static func format_bytes(byte_count: int) -> String:
+	if byte_count < 1024:
+		return str(byte_count) + " B"
+	var units := ["KB", "MB", "GB", "TB"]
+	var value := float(byte_count)
+	var unit_index := -1
+	while value >= 1024.0 and unit_index < units.size() - 1:
+		value /= 1024.0
+		unit_index += 1
+	return "%.1f %s" % [value, units[unit_index]]
+
 ## Extracts an archive using the bundled 7-Zip binary.
 ## Handles both ZIP and 7z archives on desktop platforms.
-## progress_callback(extracted_count: int, total_count: int) is called every 2 seconds.
-## total_count will always be 0 (unknown) since 7z does not provide file counts.
+## progress_callback(info: Dictionary) is called every ~500ms.
+## total_files will be 0 (unknown) if counting the archive listing failed.
 ## Returns true on success
 static func _extract_with_7z(archive_path: String, extract_dir: String, progress_callback: Callable = Callable()) -> bool:
 	var binary_path = _get_7z_binary_path()
@@ -1119,7 +1211,7 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 		
 		var current_count = count_files_recursive(abs_extract_dir)
 		if current_count != last_count and progress_callback.is_valid():
-			progress_callback.call(current_count, total_files)
+			progress_callback.call(_make_extraction_progress_info(current_count, total_files))
 			last_count = current_count
 	
 	thread.wait_to_finish()
@@ -1127,7 +1219,7 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 	# Final callback with actual file count
 	var final_count = count_files_recursive(abs_extract_dir)
 	if progress_callback.is_valid():
-		progress_callback.call(final_count, total_files)
+		progress_callback.call(_make_extraction_progress_info(final_count, total_files))
 	
 	var success = result.success and final_count > 0
 	if success:

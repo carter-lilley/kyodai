@@ -4,10 +4,7 @@ xemu save sync
 tst emulator app update flow on android
 gamenative out of view on android
 downloading core android notif stuck
-platform cards take longer on android
-some settings screens not scrollable?
-better extraction notifications
-need to 'click' on text fields to open keyboard. 
+x make status badge less stupid (esp in list and carosel view)
 
 romm;
 - mark 'played' if played
@@ -21,6 +18,7 @@ romm;
 	check if save is modified
 
 ## general UI
+	see 'next page' faintly in pagination view
 	"case wrap" card effect (spine + label, maybe varying by platform?)
 	remove platform from game title option
 	option for text centering 

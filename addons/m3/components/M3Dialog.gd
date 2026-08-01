@@ -66,6 +66,14 @@ const FULLSCREEN_ACTIONS_HEIGHT := 64.0
 @export var fill_viewport_height: bool = false
 @export var disable_default_action: bool = false
 @export var dialog_max_width: float = BASIC_MAX_WIDTH
+## When true, the dialog's computed size is a hard cap: any layout pass that
+## re-sizes the container from content minimum size is overridden, and content
+## is clipped to the dialog interior. Use for dialogs whose content can be
+## taller than the viewport (content should scroll, not grow the dialog).
+@export var fixed_size: bool = false:
+	set(value):
+		fixed_size = value
+		_update_fixed_size_enforcement()
 
 # ============================================
 # SIGNALS
@@ -105,6 +113,10 @@ var _ready_called: bool = false
 var _cached_fonts: Dictionary = {}
 var _font_icon_template: FontIconSettings = null
 var _cached_divider_sb: StyleBoxLine = null
+
+# Fixed-size enforcement: last computed BASIC dialog size, re-applied whenever
+# content minimum size pressure tries to grow the container past it.
+var _fixed_size_px: Vector2 = Vector2.ZERO
 var _cached_bg_sb: StyleBoxFlat = null
 var _cached_top_bar_sb: StyleBoxFlat = null
 var _cached_bottom_actions_sb: StyleBoxFlat = null
@@ -478,12 +490,45 @@ func _position_dialog():
 		_dialog_wrapper.set_anchors_preset(Control.PRESET_TOP_LEFT, false)
 		_dialog_wrapper.size = Vector2(dialog_width, dialog_height)
 		_dialog_wrapper.position = viewport_pos + (viewport_size - Vector2(dialog_width, dialog_height)) / 2.0
+		_fixed_size_px = Vector2(dialog_width, dialog_height)
+		_update_fixed_size_enforcement()
 	else:
 		# Fullscreen: wrapper fills the full viewport (including any cutout areas).
 		var full_viewport_size = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1920, 1080)
 		_dialog_wrapper.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_dialog_wrapper.position = Vector2.ZERO
 		_dialog_wrapper.size = full_viewport_size
+
+
+func _update_fixed_size_enforcement() -> void:
+	if not is_instance_valid(_dialog_container) or not is_instance_valid(_vbox):
+		return
+	if fixed_size:
+		# Clip the inner content column (not the container itself, so the panel's
+		# shadow and rounded stylebox still render outside its rect).
+		_vbox.clip_contents = true
+		if not _dialog_container.minimum_size_changed.is_connected(_enforce_fixed_size):
+			_dialog_container.minimum_size_changed.connect(_enforce_fixed_size)
+		_enforce_fixed_size.call_deferred()
+	else:
+		_vbox.clip_contents = false
+		if _dialog_container.minimum_size_changed.is_connected(_enforce_fixed_size):
+			_dialog_container.minimum_size_changed.disconnect(_enforce_fixed_size)
+
+## Re-applies the last computed BASIC dialog size. Content minimum size is a
+## floor, never a cap: without this, a tall page grows the dialog past the
+## viewport on every layout pass.
+func _enforce_fixed_size() -> void:
+	if not fixed_size or _fixed_size_px == Vector2.ZERO:
+		return
+	if dialog_variant != Variant.BASIC:
+		return
+	if not is_instance_valid(_dialog_container) or not is_instance_valid(_dialog_wrapper):
+		return
+	_dialog_container.size = _fixed_size_px
+	_dialog_wrapper.size = _fixed_size_px
+	var usable_rect = _get_usable_rect()
+	_dialog_wrapper.position = usable_rect.position + (usable_rect.size - _fixed_size_px) / 2.0
 
 
 # ============================================

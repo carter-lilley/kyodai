@@ -486,18 +486,18 @@ func _configure_view_mode() -> void:
 	match view_mode:
 		ViewMode.GRID:
 			_scroll_container.vertical = grid_vertical
-			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if grid_vertical else ScrollContainer.SCROLL_MODE_DISABLED
-			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if grid_vertical else ScrollContainer.SCROLL_MODE_AUTO
+			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER if grid_vertical else ScrollContainer.SCROLL_MODE_DISABLED
+			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if grid_vertical else ScrollContainer.SCROLL_MODE_SHOW_NEVER
 			_flow_container.vertical = not grid_vertical
 		ViewMode.LIST:
 			_scroll_container.vertical = true
-			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 			_flow_container.vertical = false
 		ViewMode.CAROUSEL:
 			_scroll_container.vertical = false
 			_scroll_container.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+			_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 			_flow_container.vertical = true
 	_update_center_container_flags()
 	_update_flow_container_flags()

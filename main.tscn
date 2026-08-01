@@ -540,6 +540,7 @@ grow_horizontal = 2
 grow_vertical = 0
 theme_override_styles/panel = SubResource("StyleBoxFlat_jq2sk")
 script = ExtResource("6_onscreenkeyboard")
+open_on_accept = null
 use_m3_theme = true
 background = SubResource("StyleBoxFlat_jq2sk")
 normal = SubResource("StyleBoxFlat_4k2k6")

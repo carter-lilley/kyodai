@@ -12,6 +12,9 @@ var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
 var _is_fetching_platforms: bool = false
 var _fetch_generation: int = 0  # incremented each fetch to discard stale async callbacks
+var _render_generation: int = 0  # incremented each render to discard stale precompute callbacks
+var _platforms_data_dirty: bool = true  # true when cached data should be refreshed from network
+var _platforms_data_loaded: bool = false  # true once we've loaded from DB or network at least once
 
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
@@ -20,6 +23,7 @@ var _was_narrow: bool = false
 var _is_initializing: bool = false
 
 var _romm_connection_panel: RommConnectionPanel = null
+var _loading_indicator: Control = null
 
 # Shared timer for polling platform card install/download state. Each card used
 # to create its own Timer, which added overhead when dozens of cards were built.
@@ -103,12 +107,13 @@ func _ready():
 	_update_settings_row_layout()
 
 	# Create a single shared timer to refresh all platform cards' status
-	# indicators, replacing per-card timers.
+	# indicators, replacing per-card timers. Use autostart so it restarts itself
+	# whenever the view re-enters the scene tree.
 	_status_poll_timer = Timer.new()
 	_status_poll_timer.wait_time = 1.0
+	_status_poll_timer.autostart = true
 	_status_poll_timer.timeout.connect(_refresh_all_card_status)
 	add_child(_status_poll_timer)
-	_status_poll_timer.start()
 
 	super._ready()
 
@@ -119,44 +124,28 @@ func _fetch_platforms():
 	_fetch_generation += 1
 	var current_generation = _fetch_generation
 
-	# Clear existing platform cards and any transient error UI (keep UI controls)
-	_clear_error_ui()
-	for child in _platforms_container.get_children():
-		if child.name in ["InfoLabel", "HboxSettingsRow", "HboxButtonRow", "CardsHBox"]:
-			continue
-		# Remove any other dynamically added widgets that didn't get cleaned up
-		child.queue_free()
-	_return_all_cards()
-	if _active_batch_id != -1:
-		MemorySubManager.cancel_batch(_active_batch_id)
-		_active_batch_id = -1
+	# Load platforms from the local database first so the UI appears instantly,
+	# even on a slow or unavailable network.
+	var db_platforms = _get_platforms_from_database()
+	if not db_platforms.is_empty():
+		_platforms_data = db_platforms
+		_platforms_data_loaded = true
+		_render_platform_cards_from_data(_platforms_data)
+	elif not _platforms_data_loaded:
+		# No DB platforms yet; show a loading indicator while the network request runs.
+		_show_loading_indicator()
 
-	# Show loading indicator
-	var loading_label = M3Label.new()
-	loading_label.text = "Loading platforms..."
-	loading_label.name = "LoadingLabel"
-	_platforms_container.add_child(loading_label)
-
-	# Make sure the loading label sits right above the cards
-	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
-	_platforms_container.move_child(loading_label, cards_index)
-
+	# Refresh from the network in the background. Use the response cache so
+	# unchanged platform lists return immediately without rebuilding the UI.
 	SystemManager.network.fetch_platforms(func(data, error):
 		# Guard against callbacks from a fetch that was started before the view
 		# was removed from the tree (e.g. user closed settings quickly).
 		if current_generation != _fetch_generation or not is_inside_tree():
 			_is_fetching_platforms = false
-			for child in _platforms_container.get_children():
-				if child.name == "LoadingLabel":
-					child.queue_free()
-					break
+			_hide_loading_indicator()
 			return
 
-		# Remove loading label
-		for child in _platforms_container.get_children():
-			if child.name == "LoadingLabel":
-				child.queue_free()
-				break
+		_hide_loading_indicator()
 
 		if error != "":
 			push_error("[PlatformsSettingsView] Failed to fetch platforms: " + error)
@@ -175,7 +164,6 @@ func _fetch_platforms():
 			retry_button.pressed.connect(_fetch_platforms)
 			_platforms_container.add_child(retry_button)
 
-			_load_platforms_from_database()
 			_is_fetching_platforms = false
 			return
 
@@ -184,122 +172,339 @@ func _fetch_platforms():
 			_is_fetching_platforms = false
 			return
 
-		_platforms_data = data
-		var enabled_platforms = _get_enabled_platforms()
-		var fetched_slugs: Array[String] = []
+		# Normalize the network response so it can be compared to the cached DB
+		# data without false positives from extra RomM fields.
+		var normalized_data = _normalize_platforms_data(data)
 
-		# Collect unique emulators and pre-validate them once.
-		# Also cache emulator lists per platform and default core ids so cards
-		# don't re-query the registry.
-		var unique_emulators: Array[String] = []
-		var emulator_platforms: Dictionary = {}  # emulator_id -> Array[slug]
-		var platform_emulator_cache: Dictionary = {}
-		var platform_default_core_cache: Dictionary = {}
-
-		for platform_data in data:
-			if not platform_data is Dictionary:
-				continue
-
-			var slug = platform_data.get("slug", "")
-			if slug == "":
-				continue
-
-			# Get emulators for this platform and cache the result
-			var platform_emulators = LaunchManager.get_emulators_for_platform(slug)
-			platform_emulator_cache[slug] = platform_emulators
-			# Cache the default RetroArch core id for this platform
-			platform_default_core_cache[slug] = LaunchManager.get_default_core_id_for_platform("retroarch", slug)
-			for emulator in platform_emulators:
-				var emu_id = emulator.get("id", "")
-				if emu_id != "" and not unique_emulators.has(emu_id):
-					unique_emulators.append(emu_id)
-					emulator_platforms[emu_id] = []
-				if emu_id != "":
-					emulator_platforms[emu_id].append(slug)
-
-		# Pre-validate each unique emulator once
-		print_verbose("[PlatformsSettingsView] Pre-validating " + str(unique_emulators.size()) + " unique emulators for " + str(data.size()) + " platforms")
-		var precomputed_status: Dictionary = {}
-		for emu_id in unique_emulators:
-			var progress = LaunchManager.get_install_progress(emu_id)
-			precomputed_status[emu_id] = progress["status"] == "complete"
-
-		# Prepare card creation payloads so the work can be batched across frames.
-		var card_payloads: Array[Dictionary] = []
-		for platform_data in data:
-			if not platform_data is Dictionary:
-				continue
-			var slug = platform_data.get("slug", "")
-			var platform_name = platform_data.get("name", slug)
-			var romm_id = platform_data.get("id", 0)
-			if slug == "" or romm_id == 0:
-				continue
-			fetched_slugs.append(slug)
-			card_payloads.append({
-				"slug": slug,
-				"platform_name": platform_name,
-				"romm_id": romm_id,
-				"icon_url": platform_data.get("icon_url", "")
-			})
-		
-		# Spread card creation across frames to avoid stuttering the UI.
-		# Use SystemManager.memory's batch worker for smooth per-frame processing.
-		_active_batch_id = MemorySubManager.start_batch(
-			card_payloads,
-			func(payload: Dictionary, _index: int) -> PlatformCard:
-				return _create_platform_card(
-					payload.slug,
-					payload.platform_name,
-					payload.romm_id,
-					payload.icon_url,
-					enabled_platforms,
-					precomputed_status,
-					platform_emulator_cache,
-					platform_default_core_cache
-				),
-			SystemManager.memory.BatchMode.SYNC,
-			3,
-			func(_processed: int, _total: int):
-				pass,
-			func(_results: Array):
-				_active_batch_id = -1
-				if not is_inside_tree():
-					_is_fetching_platforms = false
-					_return_all_cards()
-					return
-
-				# Remove loading label now that the first batch has rendered.
-				for child in _platforms_container.get_children():
-					if child.name == "LoadingLabel":
-						child.queue_free()
-						break
-				
-				# Remove platforms that no longer exist on RomM
-				_remove_deleted_platforms(fetched_slugs)
-				
-				# Update select all button text
-				_update_select_all_button_text()
-				
+		# Only re-render if the platform list actually changed.
+		if not _platforms_data_equal(_platforms_data, normalized_data):
+			_platforms_data = normalized_data
+			_platforms_data_loaded = true
+			_render_platform_cards_from_data(_platforms_data, func():
 				_is_fetching_platforms = false
-				
-				# Populate emulator dropdowns in a second batch so the cards appear first
-				# and the heavy dropdown rebuild is spread across frames.
-				_active_batch_id = MemorySubManager.start_batch(
-					_platform_cards.values(),
-					_populate_card_dropdown,
-					SystemManager.memory.BatchMode.SYNC,
-					3,
-					func(_processed: int, _total: int):
-						pass,
-					func(_dropdown_results: Array):
-						_active_batch_id = -1
-				)
+				_platforms_data_dirty = false
+			)
+		else:
+			_is_fetching_platforms = false
+			_platforms_data_dirty = false
+	, true)  # use cache for background refresh
 
+func _normalize_platforms_data(data: Array) -> Array:
+	"""Normalize a RomM platform response to the same shape used for DB data."""
+	var result: Array = []
+	for platform_data in data:
+		if not platform_data is Dictionary:
+			continue
+		var slug = platform_data.get("slug", "")
+		var platform_name = platform_data.get("name", slug)
+		var romm_id = platform_data.get("id", 0)
+		if slug == "" or romm_id == 0:
+			continue
+		result.append({
+			"slug": slug,
+			"name": platform_name,
+			"id": romm_id,
+			"icon_url": platform_data.get("icon_url", "")
+		})
+	return result
+
+func _platforms_data_equal(a: Array, b: Array) -> bool:
+	"""Deep-compare two platform data arrays by the fields the UI cares about."""
+	if a.size() != b.size():
+		return false
+	for i in range(a.size()):
+		if not a[i] is Dictionary or not b[i] is Dictionary:
+			return false
+		var ad = a[i] as Dictionary
+		var bd = b[i] as Dictionary
+		if ad.get("slug", "") != bd.get("slug", ""):
+			return false
+		if ad.get("name", "") != bd.get("name", ""):
+			return false
+		if ad.get("id", 0) != bd.get("id", 0):
+			return false
+	return true
+
+func _get_platforms_from_database() -> Array:
+	"""Return platforms stored in the local DB, normalized to the same format
+	used by the live RomM response."""
+	var result: Array = []
+	var platforms = DataManager.get_all_platforms()
+	for platform in platforms:
+		var slug = platform.slug
+		if slug == "":
+			continue
+		result.append({
+			"slug": slug,
+			"name": platform.name,
+			"id": platform.romm_id,
+			"icon_url": platform.icon_url
+		})
+	return result
+
+func _show_loading_indicator() -> void:
+	_hide_loading_indicator()
+	var wrapper = CenterContainer.new()
+	wrapper.name = "LoadingIndicator"
+	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapper.custom_minimum_size = Vector2(0, M3Units.dp(120))
+	var spinner = M3Progress.new()
+	spinner.mode = M3Progress.Mode.CIRCULAR
+	spinner.progress_size = M3Progress.Size.LARGE
+	spinner.indeterminate = true
+	wrapper.add_child(spinner)
+	_platforms_container.add_child(wrapper)
+	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
+	_platforms_container.move_child(wrapper, cards_index)
+	_loading_indicator = wrapper
+
+func _hide_loading_indicator() -> void:
+	if is_instance_valid(_loading_indicator):
+		_loading_indicator.queue_free()
+	_loading_indicator = null
+	# Sweep any stragglers. queue_free() is deferred, so a same-frame hide+show
+	# can leave an auto-renamed duplicate ("@LoadingIndicator@2") that an exact
+	# name match would never find.
+	for child in _platforms_container.get_children():
+		if child.name.contains("LoadingIndicator") or child.name == "LoadingLabel":
+			child.queue_free()
+
+func _render_platform_cards_from_data(data: Array, on_complete: Callable = Callable()) -> void:
+	"""Build platform cards from the given data and add them to the tree."""
+	# Cancel any active batch before rebuilding.
+	if _active_batch_id != -1:
+		MemorySubManager.cancel_batch(_active_batch_id)
+		_active_batch_id = -1
+
+	# Cards are kept alive across view hides. If the incoming data matches the
+	# cards we already have, skip the rebuild entirely.
+	if not _platform_cards.is_empty() and _cards_match_data(data):
+		_update_column_visibility()
+		_update_settings_row_layout()
+		# Re-balance columns if the narrow/wide state changed while hidden.
+		_on_viewport_size_changed(Vector2.ZERO)
+		_hide_loading_indicator()
+		_update_select_all_button_text()
+		if on_complete.is_valid():
+			on_complete.call()
+		return
+
+	_return_all_cards()
+	_clear_error_ui()
+	_show_loading_indicator()
+
+	_render_generation += 1
+	var render_generation = _render_generation
+	var enabled_platforms = _get_enabled_platforms()
+
+	# Precompute emulator lists, defaults, firmware state, and install status on
+	# the DB thread so the main thread stays free while the registry/filesystem
+	# lookups run.
+	var data_copy: Array = data.duplicate(true)
+	SystemManager.memory.queue_db_task(
+		func(): return _precompute_card_data(data_copy),
+		func(precomputed: Dictionary):
+			if render_generation != _render_generation or not is_inside_tree():
+				if on_complete.is_valid():
+					on_complete.call()
+				return
+			_start_card_batches(data, enabled_platforms, precomputed, on_complete)
 	)
-, false)  # bypass cache for explicit user-driven fetches
 
-func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}) -> PlatformCard:
+func _cards_match_data(data: Array) -> bool:
+	"""True if the currently kept-alive cards fully represent the given data."""
+	var valid_count := 0
+	for platform_data in data:
+		if not platform_data is Dictionary:
+			continue
+		var slug = platform_data.get("slug", "")
+		var romm_id = platform_data.get("id", 0)
+		if slug == "" or romm_id == 0:
+			continue
+		valid_count += 1
+		var card: PlatformCard = _platform_cards.get(slug)
+		if card == null or not is_instance_valid(card):
+			return false
+		# Cards from a cancelled batch are unparented or have unpopulated
+		# dropdowns; treat those as stale and rebuild.
+		if card.get_parent() == null or card._defer_dropdown:
+			return false
+		if card.platform_name != platform_data.get("name", slug):
+			return false
+	return valid_count == _platform_cards.size() and valid_count > 0
+
+func _precompute_card_data(data: Array) -> Dictionary:
+	"""Runs on the DB thread: gather emulator lists, defaults, firmware state,
+	and install status for every platform so the main thread only does UI work."""
+	var platform_emulator_cache: Dictionary = {}
+	var platform_default_core_cache: Dictionary = {}
+	var platform_default_emulator_cache: Dictionary = {}
+	var unique_emulators: Array[String] = []
+
+	for platform_data in data:
+		if not platform_data is Dictionary:
+			continue
+		var slug = platform_data.get("slug", "")
+		if slug == "":
+			continue
+		var platform_emulators = LaunchManager.get_emulators_for_platform(slug)
+		platform_emulator_cache[slug] = platform_emulators
+		var default_core_id = LaunchManager.get_default_core_id_for_platform("retroarch", slug)
+		platform_default_core_cache[slug] = default_core_id
+		var default_emulator = LaunchManager.get_default_emulator_for_platform(slug)
+		platform_default_emulator_cache[slug] = default_emulator
+		# Warm the firmware caches so the per-card firmware indicator refresh on
+		# the main thread hits cache instead of touching the filesystem.
+		LaunchManager.get_platform_firmware_expected_files(slug)
+		if default_emulator != "":
+			LaunchManager.is_platform_firmware_ready(slug, default_emulator, default_core_id if default_emulator == "retroarch" else "")
+		for emulator in platform_emulators:
+			var emu_id = emulator.get("id", "")
+			if emu_id != "" and not unique_emulators.has(emu_id):
+				unique_emulators.append(emu_id)
+
+	# Pre-validate each unique emulator once (filesystem scans; cached after).
+	var precomputed_status: Dictionary = {}
+	for emu_id in unique_emulators:
+		var progress = LaunchManager.get_install_progress(emu_id)
+		precomputed_status[emu_id] = progress["status"] == "complete"
+
+	return {
+		"emulator_cache": platform_emulator_cache,
+		"default_core_cache": platform_default_core_cache,
+		"default_emulator_cache": platform_default_emulator_cache,
+		"install_status": precomputed_status,
+	}
+
+func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed: Dictionary, on_complete: Callable) -> void:
+	"""Main-thread entry point once precomputed data is ready: create cards in
+	batched chunks, then populate dropdowns in a second batch."""
+	var platform_emulator_cache: Dictionary = precomputed["emulator_cache"]
+	var platform_default_core_cache: Dictionary = precomputed["default_core_cache"]
+	var platform_default_emulator_cache: Dictionary = precomputed["default_emulator_cache"]
+	var precomputed_status: Dictionary = precomputed["install_status"]
+
+	# Prepare card creation payloads so the work can be batched across frames.
+	var fetched_slugs: Array[String] = []
+	var card_payloads: Array[Dictionary] = []
+	for platform_data in data:
+		if not platform_data is Dictionary:
+			continue
+		var slug = platform_data.get("slug", "")
+		var platform_name = platform_data.get("name", slug)
+		var romm_id = platform_data.get("id", 0)
+		if slug == "" or romm_id == 0:
+			continue
+		fetched_slugs.append(slug)
+		card_payloads.append({
+			"slug": slug,
+			"platform_name": platform_name,
+			"romm_id": romm_id,
+			"icon_url": platform_data.get("icon_url", "")
+		})
+
+	if card_payloads.is_empty():
+		_hide_loading_indicator()
+		var no_platforms_label = M3Label.new()
+		no_platforms_label.name = "NoPlatformsLabel"
+		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
+		_cards_left.add_child(no_platforms_label)
+		if on_complete.is_valid():
+			on_complete.call()
+		return
+
+	# Create cards off-tree in batched chunks, then bulk-add them to the columns.
+	# begin_bulk_layout()/end_bulk_layout() suppresses per-card layout/appearance
+	# updates so the main UI doesn't hitch while dozens of cards are built.
+	var batched_cards: Array[PlatformCard] = []
+	var cards_added_to_tree: int = 0
+	var card_batch_size = _get_card_batch_size()
+	var dropdown_batch_size = _get_dropdown_batch_size()
+
+	_active_batch_id = MemorySubManager.start_batch(
+		card_payloads,
+		func(payload: Dictionary, _index: int) -> PlatformCard:
+			var card = _create_platform_card(
+				payload.slug,
+				payload.platform_name,
+				payload.romm_id,
+				payload.icon_url,
+				enabled_platforms,
+				precomputed_status,
+				platform_emulator_cache,
+				platform_default_core_cache,
+				platform_default_emulator_cache
+			)
+			_register_card(card, payload.slug)
+			batched_cards.append(card)
+			return card,
+		SystemManager.memory.BatchMode.SYNC,
+		card_batch_size,
+		func(_processed: int, _total: int):
+			# Add this frame's chunk to the tree in one pass and then apply layout.
+			for i in range(batched_cards.size()):
+				_add_card_to_column(batched_cards[i], cards_added_to_tree + i)
+			for card in batched_cards:
+				card.end_bulk_layout()
+			cards_added_to_tree += batched_cards.size()
+			batched_cards.clear(),
+		func(_results: Array):
+			_active_batch_id = -1
+			# Add any remaining cards from the final chunk.
+			for i in range(batched_cards.size()):
+				_add_card_to_column(batched_cards[i], cards_added_to_tree + i)
+			for card in batched_cards:
+				card.end_bulk_layout()
+			cards_added_to_tree += batched_cards.size()
+			batched_cards.clear()
+
+			if not is_inside_tree():
+				_return_all_cards()
+				if on_complete.is_valid():
+					on_complete.call()
+				return
+
+			# Remove loading label now that the first batch has rendered.
+			_hide_loading_indicator()
+
+			# Remove platforms that no longer exist on RomM
+			_remove_deleted_platforms(fetched_slugs)
+
+			# Update select all button text
+			_update_select_all_button_text()
+
+			# Populate emulator dropdowns in a second batch so the cards appear first
+			# and the heavy dropdown rebuild is spread across frames.
+			var dropdown_cards: Array[PlatformCard] = []
+			_active_batch_id = MemorySubManager.start_batch(
+				_platform_cards.values(),
+				func(card: PlatformCard, _index: int) -> PlatformCard:
+					card.begin_bulk_layout()
+					card.populate_dropdown()
+					dropdown_cards.append(card)
+					return card,
+				SystemManager.memory.BatchMode.SYNC,
+				dropdown_batch_size,
+				func(_processed: int, _total: int):
+					for card in dropdown_cards:
+						card.end_bulk_layout()
+					dropdown_cards.clear(),
+				func(_dropdown_results: Array):
+					_active_batch_id = -1
+					for card in dropdown_cards:
+						card.end_bulk_layout()
+					dropdown_cards.clear()
+					if on_complete.is_valid():
+						on_complete.call()
+			)
+	)
+
+func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}, default_emulator_cache: Dictionary = {}) -> PlatformCard:
 	var card = PlatformCardPool.get_card(PlatformCardPool.POOL_PLATFORM_SETTINGS)
+	# Suppress per-setter display/dropdown/status rebuilds while the card is
+	# being configured; the card is refreshed once at the end instead.
+	card._bulk_reset = true
+	card.begin_bulk_layout()
 	card.shuffler_mode = false
 	card.platform_slug = slug
 	card.platform_name = platform_name
@@ -325,9 +530,8 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 	card.selected_emulator = emulator_id
 	card.selected_core_id = core_id
 
-	# Set registry default emulator for "Auto" display
-	var registry_default = LaunchManager.get_default_emulator_for_platform(slug)
-	card.registry_default_emulator = registry_default
+	# Set registry default emulator for "Auto" display (precomputed on DB thread)
+	card.registry_default_emulator = default_emulator_cache.get(slug, "")
 
 	# Load available emulators for this platform (use cached lookup when available)
 	var available_emulators: Array[Dictionary]
@@ -351,6 +555,8 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 				var progress = LaunchManager.get_install_progress(emu_id)
 				install_status[emu_id] = progress["status"] == "complete"
 	card.set_emulator_install_status(install_status)
+	card._bulk_reset = false
+	card.refresh_basic_ui()
 
 	# Connect signals
 	card.sync_toggled.connect(func(enabled: bool):
@@ -367,18 +573,25 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		_on_emulator_download_requested(emu_id, card)
 	)
 
-	# Add to the tree immediately so cards appear progressively as they're created.
+	# Cards are now registered and added to the tree in bulk chunks by the caller
+	# to avoid per-card layout/appearance passes and UI hitches.
 	card.visible = true
+
+	return card
+
+func _register_card(card: PlatformCard, slug: String) -> void:
+	"""Register a card in the slug map without adding it to a column yet."""
+	_platform_cards[slug] = card
+
+func _add_card_to_column(card: PlatformCard, index: int) -> void:
+	"""Add an already-registered card to the left or right column based on index."""
 	if _is_narrow_screen():
 		_cards_left.add_child(card)
 	else:
-		if _platform_cards.size() % 2 == 0:
+		if index % 2 == 0:
 			_cards_left.add_child(card)
 		else:
 			_cards_right.add_child(card)
-	_platform_cards[slug] = card
-
-	return card
 
 func _return_all_cards() -> void:
 	for slug in _platform_cards.keys():
@@ -387,21 +600,32 @@ func _return_all_cards() -> void:
 			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
 	_platform_cards.clear()
 
+func _get_card_batch_size() -> int:
+	# One card per frame on Android keeps each frame under budget; desktop can
+	# afford larger chunks.
+	return 1 if SystemManager.platform.is_android() else 8
+
+func _get_dropdown_batch_size() -> int:
+	return 1 if SystemManager.platform.is_android() else 6
+
 func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
 	card.populate_dropdown()
 
 func _exit_tree() -> void:
-	_return_all_cards()
+	# Cards are intentionally kept alive (not returned to the pool) so reopening
+	# the settings screen is instant; they are reused if the platform data is
+	# unchanged, or returned/rebuilt by the next _render_platform_cards_from_data.
 	if _active_batch_id != -1:
 		MemorySubManager.cancel_batch(_active_batch_id)
 		_active_batch_id = -1
 	if _status_poll_timer:
 		_status_poll_timer.stop()
 	
-	# Invalidate any in-flight fetch from this view session so stale network or
-	# batch callbacks don't resurrect cards after we're removed from the tree.
+	# Invalidate any in-flight fetch or precompute from this view session so
+	# stale callbacks don't touch cards after we're removed from the tree.
 	_is_fetching_platforms = false
 	_fetch_generation += 1
+	_render_generation += 1
 	
 	# Disconnect global signals so a pooled/reused view doesn't fire handlers while off-screen
 	if SystemManager.network.network_status_changed.is_connected(_on_network_status_changed):
@@ -412,14 +636,16 @@ func _exit_tree() -> void:
 		LaunchManager.emulator_extraction_completed.disconnect(_on_emulator_extraction_completed)
 	if LaunchManager.firmware_download_completed.is_connected(_on_firmware_download_completed):
 		LaunchManager.firmware_download_completed.disconnect(_on_firmware_download_completed)
+	if DataManager.sync_completed.is_connected(_on_sync_completed):
+		DataManager.sync_completed.disconnect(_on_sync_completed)
 	if get_viewport().gui_focus_changed.is_connected(_on_focus_changed):
 		get_viewport().gui_focus_changed.disconnect(_on_focus_changed)
 	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
 		SystemManager.display.viewport_size_changed.disconnect(_on_viewport_size_changed)
 
 func _enter_tree() -> void:
-	if _status_poll_timer:
-		_status_poll_timer.start()
+	# _status_poll_timer is restarted automatically via autostart when this view
+	# (and its children) re-enter the scene tree, so we don't start it manually here.
 	
 	# Reconnect global signals if this view instance was repooled/reparented
 	if not SystemManager.network.network_status_changed.is_connected(_on_network_status_changed):
@@ -430,6 +656,8 @@ func _enter_tree() -> void:
 		LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
 	if not LaunchManager.firmware_download_completed.is_connected(_on_firmware_download_completed):
 		LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
+	if not DataManager.sync_completed.is_connected(_on_sync_completed):
+		DataManager.sync_completed.connect(_on_sync_completed)
 	
 	var viewport = get_viewport()
 	if viewport and not viewport.gui_focus_changed.is_connected(_on_focus_changed):
@@ -441,7 +669,7 @@ func _enter_tree() -> void:
 func _clear_error_ui():
 	"""Remove transient platform-fetch UI (loading, error, retry, no-platforms) so they don't accumulate."""
 	for child in _platforms_container.get_children():
-		if child.name in ["LoadingLabel", "ErrorLabel", "RetryButton"]:
+		if child.name.contains("LoadingIndicator") or child.name in ["LoadingLabel", "ErrorLabel", "RetryButton"]:
 			child.queue_free()
 	
 	# NoPlatformsLabel is added to the card columns, not the platforms container
@@ -449,80 +677,6 @@ func _clear_error_ui():
 		for child in column.get_children():
 			if child.name == "NoPlatformsLabel":
 				child.queue_free()
-
-func _load_platforms_from_database():
-	# Remove transient UI that may have been shown by a previous failed fetch
-	_clear_error_ui()
-
-	var platforms = DataManager.get_all_platforms()
-	var enabled_platforms = _get_enabled_platforms()
-
-	# Clear existing cards
-	_return_all_cards()
-	if _active_batch_id != -1:
-		MemorySubManager.cancel_batch(_active_batch_id)
-		_active_batch_id = -1
-
-	# Cache emulator lists to avoid duplicate registry queries during batch creation
-	var emulator_cache: Dictionary = {}
-	for platform in platforms:
-		var slug = platform.slug
-		if slug == "":
-			continue
-		emulator_cache[slug] = LaunchManager.get_emulators_for_platform(slug)
-
-	var platform_payloads: Array[Dictionary] = []
-	for platform in platforms:
-		var slug = platform.slug
-		var platform_name = platform.name
-		var icon_url = platform.icon_url
-
-		if slug == "":
-			continue
-
-		platform_payloads.append({
-			"slug": slug,
-			"platform_name": platform_name,
-			"icon_url": icon_url
-		})
-
-	# Spread offline card creation across frames
-	_active_batch_id = MemorySubManager.start_batch(
-		platform_payloads,
-		func(payload: Dictionary, _index: int) -> PlatformCard:
-			var card = _create_platform_card(payload.slug, payload.platform_name, 0, payload.icon_url, enabled_platforms, {}, emulator_cache)
-			card.disabled = true
-			card.tooltip_text = "Connect to RomM to configure this platform"
-			return card,
-		SystemManager.memory.BatchMode.SYNC,
-		5,
-		func(_processed: int, _total: int):
-			pass,
-		func(_results: Array):
-			_active_batch_id = -1
-			if not is_inside_tree():
-				_return_all_cards()
-				return
-
-			if platforms.size() == 0:
-				var no_platforms_label = M3Label.new()
-				no_platforms_label.name = "NoPlatformsLabel"
-				no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
-				_cards_left.add_child(no_platforms_label)
-			
-			# Populate emulator dropdowns in a second batch so the cards appear first
-			# and the heavy dropdown rebuild is spread across frames.
-			_active_batch_id = MemorySubManager.start_batch(
-				_platform_cards.values(),
-				_populate_card_dropdown,
-				SystemManager.memory.BatchMode.SYNC,
-				5,
-				func(_processed: int, _total: int):
-					pass,
-				func(_dropdown_results: Array):
-					_active_batch_id = -1
-			)
-	)
 
 func _remove_deleted_platforms(current_slugs: Array[String]):
 	var enabled_platforms = _get_enabled_platforms()
@@ -896,9 +1050,13 @@ func on_view_show():
 	# Take snapshot of current enabled state before user makes changes
 	_sync_triggered = false
 
-	# Refresh platform list every time the view is shown
 	if not _is_fetching_platforms:
-		_fetch_platforms()
+		if _platforms_data_loaded and not _platforms_data_dirty:
+			# Fast path: we already have fresh data, just render the cards again.
+			_render_platform_cards_from_data(_platforms_data)
+		else:
+			# Load from the local DB first, then refresh from RomM in the background.
+			_fetch_platforms()
 	super.on_view_show()
 
 func on_view_hide():
@@ -932,6 +1090,15 @@ func _on_logo_detection_toggled(enabled: bool) -> void:
 	var setting = DataManager.get_setting("logo_detection_enabled")
 	if setting:
 		DataManager.set_setting(enabled, setting)
+
+func _on_sync_completed(success: bool, _message: String) -> void:
+	"""When a library sync finishes, mark the cached platform list dirty so the
+	platforms settings screen refreshes the next time it is visible."""
+	if not success:
+		return
+	_platforms_data_dirty = true
+	if is_inside_tree() and not _is_fetching_platforms:
+		_fetch_platforms()
 
 func _on_network_status_changed(online: bool) -> void:
 	if online and not _is_fetching_platforms:

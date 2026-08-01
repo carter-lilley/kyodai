@@ -46,7 +46,7 @@ var registry_default_core_id: String = ""
 var registry_default_emulator: String = "":
 	set(value):
 		registry_default_emulator = value
-		if is_node_ready():
+		if is_node_ready() and not _bulk_reset:
 			_update_emulator_dropdown()
 			refresh_firmware_indicator()
 
@@ -532,7 +532,7 @@ func _update_firmware_indicator() -> void:
 
 func set_emulator_install_status(status: Dictionary):
 	_emulator_install_status = status
-	if is_node_ready():
+	if is_node_ready() and not _bulk_reset:
 		_update_status_indicator()
 
 func _update_shuffler_mode() -> void:
@@ -640,9 +640,13 @@ func _connect_sync_toggle() -> void:
 		_sync_toggle_connected = true
 
 func _connect_emulator_dropdown() -> void:
-	if not _emulator_dropdown_connected and _emulator_dropdown:
+	if not _emulator_dropdown:
+		return
+	# Guard against reconnecting a signal that is already connected (can happen
+	# if _update_emulator_dropdown reconnects while the card is not borrowed).
+	if not _emulator_dropdown.item_selected.is_connected(_on_emulator_selected):
 		_emulator_dropdown.item_selected.connect(_on_emulator_selected)
-		_emulator_dropdown_connected = true
+	_emulator_dropdown_connected = true
 
 func _connect_download_button() -> void:
 	if not _download_button_connected and _download_button:

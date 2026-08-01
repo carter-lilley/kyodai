@@ -256,10 +256,13 @@ func _ready():
 	_show_oobe_wizard_if_needed()
 	print("[Main] _show_oobe_wizard_if_needed elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
-	# Focus the first Home card on startup once data is loaded
+	# Focus the first Home card on startup once data is loaded, and pre-create the
+	# settings dialog in the background so opening it later (especially the RomM
+	# platform cards screen) is instant.
 	var first_run_setting = DataManager.get_setting("first_run_completed")
 	if first_run_setting and first_run_setting.value:
 		call_deferred("_focus_first_home_card_on_startup")
+		call_deferred("_pre_create_settings_dialog")
 
 	# Connect the slider's value_changed now that startup sync is complete; this
 	# prevents any slider-initiated zoom change from overriding the saved zoom.
@@ -337,6 +340,12 @@ func _on_oobe_wizard_completed():
 	UIManager.rebuild_game_grid()
 	# Restore focus to the home button
 	call_deferred("reset_focus_to_home_button")
+
+func _pre_create_settings_dialog() -> void:
+	"""Build the settings dialog eagerly while the home screen is visible so the
+	platform cards screen can appear instantly when opened."""
+	if UIManager:
+		UIManager.pre_create_settings_dialog()
 
 func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()

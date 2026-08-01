@@ -37,9 +37,13 @@ func build_candidates(platforms: Array[String]) -> void:
 		all.append_array(DataManager.get_games_by_platform(platform_slug))
 
 	var bag_ids := get_bag_ids()
+	var seen_ids: Array[int] = []
 	for game in all:
 		if game.romm_id in bag_ids:
 			continue
+		if game.romm_id in seen_ids:
+			continue
+		seen_ids.append(game.romm_id)
 		candidates.append(game)
 	candidates.shuffle()
 
@@ -83,10 +87,12 @@ func pick_random_ready(exclude_index: int = -1) -> int:
 
 
 func pick_reroll_candidate(existing_ids: Array[int]) -> GameResource:
-	if candidates.is_empty():
-		return null
-	for game in candidates:
-		if not game.romm_id in existing_ids:
+	for i in range(candidates.size()):
+		if not candidates[i].romm_id in existing_ids:
+			var game = candidates[i]
+			# Consume the pick: a game that has been in the bag must never
+			# become eligible again, even after being rerolled away.
+			candidates.remove_at(i)
 			return game
 	return null
 

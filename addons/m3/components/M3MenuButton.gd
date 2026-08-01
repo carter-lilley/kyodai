@@ -14,7 +14,30 @@ func _ready():
 	button_mask = 0
 
 func _gui_input(event: InputEvent):
+	# Native touch handling. Events are never accept_event()'d here so the
+	# parent ScrollContainer still receives them for drag scrolling.
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_press_start_pos = event.position
+			_is_dragging = false
+			grab_focus()
+			button_down.emit()
+		else:
+			button_up.emit()
+			if not _is_dragging and not disabled:
+				pressed.emit()
+			_is_dragging = false
+		return
+	
+	if event is InputEventScreenDrag:
+		if not _is_dragging and event.position.distance_to(_press_start_pos) > M3Units.dp(DRAG_THRESHOLD_DP):
+			_is_dragging = true
+		return
+	
 	if event is InputEventMouseButton:
+		# Emulated mouse events from touch are already handled above.
+		if event.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				_press_start_pos = event.position
@@ -30,6 +53,8 @@ func _gui_input(event: InputEvent):
 		return
 	
 	if event is InputEventMouseMotion:
+		if event.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		if event.button_mask == MOUSE_BUTTON_MASK_LEFT and not _is_dragging:
 			if event.position.distance_to(_press_start_pos) > M3Units.dp(DRAG_THRESHOLD_DP):
 				_is_dragging = true

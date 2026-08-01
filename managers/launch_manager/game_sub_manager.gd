@@ -505,7 +505,8 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 		0.0,  # Never auto-dismiss
 		Callable(),
 		Callable(),
-		true  # Pulsing
+		true,  # Pulsing
+		true  # pinned
 	)
 	print("[GameManager] Vita3K: Extracting ZIP to: " + extract_parent)
 	
@@ -904,7 +905,8 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		0.0,
 		Callable(),
 		Callable(),
-		true
+		true,  # pulsing
+		true  # pinned
 	)
 	
 	# Determine extraction target
@@ -1155,7 +1157,8 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		0.0,
 		Callable(),
 		Callable(),
-		true
+		true,  # pulsing
+		true  # pinned
 	)
 	print("[GameManager] shadPS4: Extracting ZIP to: " + extract_path)
 	

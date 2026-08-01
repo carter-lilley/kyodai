@@ -4,6 +4,11 @@ extends ColorRect
 @export var effect_name: String = "Effect"
 @export var effect_id: String = ""
 
+## Fraction of the host size to render at (1.0 = full res). Values below 1.0
+## make library_background host the effect inside a scaled-down SubViewport
+## and stretch it back up — for GPU-heavy effects that are soft by design.
+var render_scale: float = 1.0
+
 var _settings: Dictionary = {}
 
 func _ready():
