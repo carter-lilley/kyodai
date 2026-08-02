@@ -1,0 +1,3 @@
+[submodule "addons/m3"]
+	path = addons/m3
+	url = https://github.com/carter-lilley/M3Godot.git
