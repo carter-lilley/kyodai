@@ -240,13 +240,18 @@ func _create_sparse_file(path: String, size: int) -> bool:
 	if SystemManager.platform.is_windows():
 		var native_path = FSM.resolve_native_path(path)
 		var exit_code = OS.execute("fsutil", ["sparse", "setflag", native_path, "1"])
+		if exit_code == 0:
+			exit_code = OS.execute("fsutil", ["file", "seteof", native_path, str(size)])
 		if exit_code != 0:
-			push_error("[SystemManager.download] fsutil sparse setflag failed for: " + native_path)
-			return false
-		exit_code = OS.execute("fsutil", ["file", "seteof", native_path, str(size)])
-		if exit_code != 0:
-			push_error("[SystemManager.download] fsutil file seteof failed for: " + native_path)
-			return false
+			# fsutil requires elevation on many systems; fall back to seek+write sizing
+			push_warning("[SystemManager.download] fsutil failed (exit=" + str(exit_code) + "), falling back to seek+write sizing: " + native_path)
+			file = FileAccess.open(path, FileAccess.WRITE_READ)
+			if file == null:
+				push_error("[SystemManager.download] Failed to open destination file for sizing: " + path)
+				return false
+			file.seek(size - 1)
+			file.store_8(0)
+			file.close()
 	else:
 		# On Linux/macOS/Android, seeking past EOF and writing creates a sparse
 		# hole on filesystems that support it (ext4, btrfs, apfs, etc.).

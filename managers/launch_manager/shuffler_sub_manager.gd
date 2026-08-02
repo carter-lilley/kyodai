@@ -68,8 +68,16 @@ const PCSX2_MEMORY_CARD_VALUES := {
 
 func _ready():
 	_main_window = get_tree().root
-	_tools_dir = ProjectSettings.globalize_path("res://bin/shuffler_tools/")
-	_ahk_path = ProjectSettings.globalize_path("res://bin/ahk/AutoHotkey64.exe")
+	if SystemManager.platform.is_packaged():
+		# Packaged builds cannot execute tools from inside the PCK; use extracted copies
+		_tools_dir = ProjectSettings.globalize_path(AndroidBinaryExtractor.BIN_DIR)
+		_ahk_path = AndroidBinaryExtractor.extract_binary("res://bin/ahk/AutoHotkey64.exe", "AutoHotkey64.exe")
+		AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/pssuspend.exe", "pssuspend.exe")
+		AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/minimize_window.ahk", "minimize_window.ahk")
+		AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/maximize_process.ahk", "maximize_process.ahk")
+	else:
+		_tools_dir = ProjectSettings.globalize_path("res://bin/shuffler_tools/")
+		_ahk_path = ProjectSettings.globalize_path("res://bin/ahk/AutoHotkey64.exe")
 	_pssuspend_path = _tools_dir + "pssuspend.exe"
 
 func _exit_tree():

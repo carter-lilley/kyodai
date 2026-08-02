@@ -941,14 +941,15 @@ static func _iso_extract_ps2_serial(rom_path: String) -> String:
 
 static func _get_chd_reader_path() -> String:
 	var base_path = "res://bin/libchdr/"
+	# On packaged builds, extract_binary copies the tool to user://bin/ since
+	# binaries inside the PCK cannot be executed; in the editor it returns res://
 	if SystemManager.platform.is_windows():
-		return base_path + "win/chd_reader.exe"
+		return _AndroidBinaryExtractor.extract_binary(base_path + "win/chd_reader.exe", "chd_reader.exe")
 	elif SystemManager.platform.is_linux():
-		return base_path + "linux/chd_reader"
+		return _AndroidBinaryExtractor.extract_binary(base_path + "linux/chd_reader", "chd_reader")
 	elif SystemManager.platform.is_macos():
-		return base_path + "macos/chd_reader"
+		return _AndroidBinaryExtractor.extract_binary(base_path + "macos/chd_reader", "chd_reader")
 	elif SystemManager.platform.is_android():
-		# Extract binary to internal storage on first use
 		return _AndroidBinaryExtractor.extract_binary(base_path + "android/chd_reader-arm64.bin", "chd_reader")
 	else:
 		push_error("[TitleIDParser] Unsupported platform for CHD reading")
@@ -1587,14 +1588,15 @@ static func _iso_extract_psp_game_id(rom_path: String) -> String:
 
 static func _get_cso_reader_path() -> String:
 	var base_path = "res://bin/cso_reader/"
+	# On packaged builds, extract_binary copies the tool to user://bin/ since
+	# binaries inside the PCK cannot be executed; in the editor it returns res://
 	if SystemManager.platform.is_windows():
-		return base_path + "win/cso_reader.exe"
+		return _AndroidBinaryExtractor.extract_binary(base_path + "win/cso_reader.exe", "cso_reader.exe")
 	elif SystemManager.platform.is_linux():
-		return base_path + "linux/cso_reader"
+		return _AndroidBinaryExtractor.extract_binary(base_path + "linux/cso_reader", "cso_reader")
 	elif SystemManager.platform.is_macos():
-		return base_path + "macos/cso_reader"
+		return _AndroidBinaryExtractor.extract_binary(base_path + "macos/cso_reader", "cso_reader")
 	elif SystemManager.platform.is_android():
-		# Extract binary to internal storage on first use
 		return _AndroidBinaryExtractor.extract_binary(base_path + "android/cso_reader-arm64.bin", "cso_reader")
 	else:
 		push_error("[TitleIDParser] Unsupported platform for CSO reading")

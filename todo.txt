@@ -2,7 +2,6 @@
 
 xemu save sync
 tst emulator app update flow on android
-gamenative out of view on android
 downloading core android notif stuck
 
 romm;
@@ -39,7 +38,6 @@ romm;
 	hero fx (screenshots/cropping/shadows/etc)
 	
 ## performance & sync:
-	x Options: flip fold_romm_siblings default to false (matches RomM exactly, near-zero effort), add per-group unfold, or use RomM's is_main_sibling for representative selection + fix the batch bug.
 	cache image colors on sync
 	
 ## launch:

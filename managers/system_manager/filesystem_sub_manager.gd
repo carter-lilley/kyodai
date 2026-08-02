@@ -1303,19 +1303,22 @@ static func _count_files_in_7z_archive(binary_path: String, archive_path: String
 	print("[SystemManager.filesystem] Counted files from entries: " + str(file_count))
 	return file_count if file_count > 0 else -1
 
-## Gets the bundled 7z binary path for the current platform
+## Gets the bundled 7z binary path for the current platform.
+## Packaged builds return the extracted copy under user://bin/ since
+## binaries inside the PCK cannot be executed.
 static func _get_7z_binary_path() -> String:
-	var platform_name = ""
+	var res_path = ""
 	match OS.get_name():
 		"Windows":
-			platform_name = "windows"
+			res_path = "res://bin/7z/windows/7za.exe"
 		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
-			platform_name = "linux"
+			res_path = "res://bin/7z/linux/7z"
 		_:
 			return ""
-	
-	var binary_name = "7za.exe" if OS.get_name() == "Windows" else "7z"
-	return ProjectSettings.globalize_path("res://bin/7z/" + platform_name + "/" + binary_name)
+
+	# Runtime load avoids a cyclic preload with utils/android_binary_extractor.gd
+	var extractor = load("res://utils/android_binary_extractor.gd")
+	return extractor.extract_binary(res_path, res_path.get_file())
 
 ## Gets the directory portion of a path
 static func get_dir(path: String) -> String:

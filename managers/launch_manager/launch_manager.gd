@@ -113,6 +113,57 @@ func get_default_emulator_for_platform(platform_slug: String) -> String:
 func get_emulator_install_path(emulator_id: String) -> String:
 	return registry.get_emulator_install_path(emulator_id)
 
+## Launches an emulator app directly with no game, for testing emulator configs.
+## Android: launches the app by package name (opens the emulator's own UI).
+## Desktop: starts the executable with no ROM arguments (emulators open to their menus).
+## Returns true if a launch was attempted successfully.
+func launch_emulator_standalone(emulator_id: String) -> bool:
+	if emulator_id == "":
+		return false
+
+	var progress = get_install_progress(emulator_id)
+	if progress.get("status", "") != "complete":
+		SystemManager.notifications.show_notification(
+			"Emulator is not fully installed yet",
+			SystemManager.notifications.Type.ERROR,
+			null,
+			5.0
+		)
+		return false
+
+	if SystemManager.platform.is_android():
+		var emulator = get_emulator(emulator_id)
+		var android_cfg: Dictionary = emulator.get("launch", {}).get("platforms", {}).get("android", {})
+		var package_name: String = android_cfg.get("package", "")
+		if package_name == "":
+			push_error("[LaunchManager] No Android package configured for emulator: " + emulator_id)
+			return false
+		if not Engine.has_singleton("PackageChecker"):
+			push_error("[LaunchManager] PackageChecker plugin not available")
+			return false
+		var plugin = Engine.get_singleton("PackageChecker")
+		var success: bool = plugin.call("launchAppByPackageName", package_name)
+		if success and process:
+			process.enter_background_state_android(null)
+		return success
+
+	# Desktop: launch the executable directly with no ROM arguments.
+	var install_path = get_emulator_install_path(emulator_id)
+	if install_path == "":
+		push_error("[LaunchManager] Could not resolve install path for emulator: " + emulator_id)
+		return false
+	var exe_path = FSM.resolve_native_path(install_path)
+	var emulator_info = get_emulator(emulator_id)
+	var intent = LaunchIntent.new()
+	intent.emulator_id = emulator_id
+	intent.emulator_name = emulator_info.get("meta", {}).get("name", emulator_id)
+	var args: Array[String] = [exe_path]
+	intent.launch_args = args
+	if emulator_info.get("requires_working_dir", false) or emulator_id.begins_with("vita3k"):
+		intent.working_directory = exe_path.get_base_dir().replace("//", "/")
+	var pid = await process._create_desktop_process(intent)
+	return pid > 0
+
 func _get_emulator_directory(emulator_id: String) -> String:
 	return registry._get_emulator_directory(emulator_id)
 

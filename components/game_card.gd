@@ -1354,4 +1354,3 @@ func _notification(what: int):
 		if _focus_stack:
 			_focus_stack.free_rids()
 			_focus_stack = null
-

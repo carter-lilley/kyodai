@@ -82,6 +82,11 @@ func is_macos() -> bool:
 func is_android() -> bool:
 	return current_platform == Platform.ANDROID
 
+## Returns true when running an exported build (not the editor).
+## Packaged builds cannot execute or stat files stored inside the PCK.
+func is_packaged() -> bool:
+	return not OS.has_feature("editor")
+
 func get_platform_name() -> String:
 	match current_platform:
 		Platform.WINDOWS:

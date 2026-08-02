@@ -1,0 +1,70 @@
+name: Export Windows
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GODOT_VERSION: 4.7
+  GODOT_EXE: Godot_v4.7-stable_win64.exe
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  export-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Cache Godot editor
+      id: cache-godot
+      uses: actions/cache@v4
+      with:
+        path: godot
+        key: godot-editor-v${{ env.GODOT_VERSION }}-stable
+
+    - name: Download Godot
+      if: steps.cache-godot.outputs.cache-hit != 'true'
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/${{ env.GODOT_EXE }}.zip" -OutFile godot.zip
+        Expand-Archive godot.zip -DestinationPath godot
+
+    - name: Cache export templates
+      id: cache-templates
+      uses: actions/cache@v4
+      with:
+        path: ~/AppData/Roaming/Godot/export_templates
+        key: godot-templates-v${{ env.GODOT_VERSION }}-stable
+
+    - name: Install Export Templates
+      if: steps.cache-templates.outputs.cache-hit != 'true'
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz" -OutFile templates.tpz
+        Expand-Archive templates.tpz -DestinationPath templates
+        $dest = "$env:APPDATA\Godot\export_templates\${{ env.GODOT_VERSION }}.stable"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Copy-Item templates\templates\* $dest -Recurse
+
+    - name: Import Project
+      run: |
+        # Run twice: headless --import can exit before the first full scan completes
+        & ".\godot\${{ env.GODOT_EXE }}" --headless --path . --import
+        & ".\godot\${{ env.GODOT_EXE }}" --headless --path . --import
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Export Windows Desktop
+      run: |
+        New-Item -ItemType Directory -Force -Path build\windows | Out-Null
+        & ".\godot\${{ env.GODOT_EXE }}" --headless --path . --export-release "Windows Desktop" build\windows\Kyodai.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kyodai-windows-x64
+        path: build/windows/

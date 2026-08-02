@@ -216,7 +216,7 @@ func suspend_process_async(pid: int, pssuspend_path: String) -> void:
 	if not SystemManager.platform.is_windows():
 		push_warning("[ProcessManager] suspend_process_async is only supported on Windows")
 		return
-	MemorySubManager.queue_os_execute(pssuspend_path, [str(pid)])
+	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)])
 
 ## Resumes a suspended process via pssuspend (Windows only; path supplied by caller).
 func resume_process_async(pid: int, pssuspend_path: String) -> void:
@@ -225,7 +225,7 @@ func resume_process_async(pid: int, pssuspend_path: String) -> void:
 	if not SystemManager.platform.is_windows():
 		push_warning("[ProcessManager] resume_process_async is only supported on Windows")
 		return
-	MemorySubManager.queue_os_execute(pssuspend_path, ["-r", str(pid)])
+	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)])
 
 ## Check if a process is running by PID (platform-specific, BLOCKS the calling thread)
 func _is_process_running(pid: int) -> bool:

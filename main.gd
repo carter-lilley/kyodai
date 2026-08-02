@@ -247,8 +247,8 @@ func _ready():
 		_update_controlbar_mask_color()
 	print("[Main] mask setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
-	# Extract native binaries on Android (non-blocking, happens in background)
-	if SystemManager.platform.is_android():
+	# Extract bundled tools on packaged builds (binaries inside the PCK cannot be executed)
+	if SystemManager.platform.is_packaged():
 		AndroidBinaryExtractor.extract_all_binaries()
 
 	# Check if first-run wizard needs to be shown

@@ -566,6 +566,11 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		_on_emulator_download_requested(emu_id, card)
 	)
 
+	# Connect standalone launch button (test emulator without a game)
+	card.launch_requested.connect(func(emu_id: String, _core_id: String):
+		LaunchManager.launch_emulator_standalone(emu_id)
+	)
+
 	# Cards are now registered and added to the tree in bulk chunks by the caller
 	# to avoid per-card layout/appearance passes and UI hitches.
 	card.visible = true
