@@ -192,8 +192,22 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 	})
 	sibling_dropdown.add_item(game.file_name if game.file_name else game.title)
 
-	# Add siblings
-	for sibling in game.siblings:
+	# Add siblings, ordered by RomM's sort_comparator when available
+	var sorted_siblings = game.siblings.duplicate()
+	var has_comparator := false
+	for sibling in sorted_siblings:
+		if str(sibling.get("sort_comparator", "")) != "":
+			has_comparator = true
+			break
+	if has_comparator:
+		sorted_siblings.sort_custom(func(a, b):
+			var ca := str(a.get("sort_comparator", ""))
+			var cb := str(b.get("sort_comparator", ""))
+			if ca == cb:
+				return str(a.get("name", "")) < str(b.get("name", ""))
+			return ca < cb
+		)
+	for sibling in sorted_siblings:
 		if sibling is Dictionary:
 			_sibling_options.append(sibling)
 			sibling_dropdown.add_item(sibling.get("name", "Unknown"))
@@ -207,10 +221,6 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 
 	# Show/hide dropdown based on whether there are siblings
 	sibling_dropdown.visible = _sibling_options.size() > 1
-
-	# Debug: force visible to check if it's a visibility issue
-	if _sibling_options.size() > 1:
-		sibling_dropdown.visible = true
 
 func _on_sibling_selected(index: int) -> void:
 	if index < 0 or index >= _sibling_options.size():

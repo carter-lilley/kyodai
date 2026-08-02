@@ -21,7 +21,7 @@ void fragment() {
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
 	
 	// Match the effect-stack base shader: the visible image lives in the inner
-	// media area (after insets), and may be shifted/zoomed by logo include/exclude.
+	// media area (after insets).
 	vec2 inner_size = card_size - vec2(total_inset_pixels * 2.0);
 	vec2 inner_uv = (UV * card_size - vec2(total_inset_pixels)) / max(inner_size, vec2(1.0));
 	vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;

@@ -71,13 +71,6 @@ func _ready():
 	m3_siblings.set_block_signals(false)
 	m3_siblings.toggled.connect(_on_fold_romm_siblings_toggled)
 
-	var m3_logo: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_LogoDetection")
-	var logo_detection_setting = DataManager.get_setting("logo_detection_enabled")
-	m3_logo.set_block_signals(true)
-	m3_logo.button_pressed = logo_detection_setting.value if logo_detection_setting else false
-	m3_logo.set_block_signals(false)
-	m3_logo.toggled.connect(_on_logo_detection_toggled)
-
 	# Add reusable RomM connection panel to the settings row
 	_romm_connection_panel = RommConnectionPanel.new()
 	_romm_connection_panel.test_button_text = "Test"
@@ -1081,13 +1074,6 @@ func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
 	if _is_initializing:
 		return
 	var setting = DataManager.get_setting("fold_romm_siblings")
-	if setting:
-		DataManager.set_setting(enabled, setting)
-
-func _on_logo_detection_toggled(enabled: bool) -> void:
-	if _is_initializing:
-		return
-	var setting = DataManager.get_setting("logo_detection_enabled")
 	if setting:
 		DataManager.set_setting(enabled, setting)
 

@@ -79,7 +79,7 @@ void fragment() {
 	vec2 warped_uv = spherical_distort(zoomed_uv, distortion, card_size);
 	
 	// Apply precomputed UV transforms from MediaContainer so the distorted texture
-	// aligns with the base image even when the logo mode shifts the visible crop.
+	// aligns with the base image's visible crop.
 	warped_uv = warped_uv * uv_transform_scale + uv_transform_offset;
 	warped_uv.y -= vertical_offset;
 	

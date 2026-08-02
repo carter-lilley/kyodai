@@ -38,7 +38,6 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 @onready var cover: CoverSubManager = $CoverSubManager
 @onready var save: SaveSyncSubManager = $SaveSyncSubManager
 @onready var collections: CollectionSubManager = $CollectionSubManager
-@onready var logo_box: LogoBoxSubManager = $LogoBoxSubManager
 var settings: SettingsSubManager
 var game_save: GameSaveSubManager
 
@@ -69,7 +68,6 @@ func _ready():
 				SystemManager.notifications.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", SystemManager.notifications.Type.ERROR)
 	)
 	cover._ensure_cache_folder()
-	logo_box.start_worker()
 	database_ready.connect(_on_database_ready_for_collections)
 
 	# Wire settings sub-manager signals through the DataManager facade
@@ -113,18 +111,17 @@ func _on_setting_changed(value, setting):
 		print("[DataManager] Fold RomM siblings setting changed to %s" % value)
 		# Filter clause changed; count may be different even without data changes.
 		database.invalidate_downloaded_games_count_cache()
+		var folded_count = database.count_folded_sibling_entries()
 		# Trigger grid refresh so library view updates filtering
-		sync_completed.emit(true, "RomM sibling folding %s" % ("enabled" if value else "disabled"))
+		if value:
+			sync_completed.emit(true, "RomM sibling folding enabled - %d entries folded" % folded_count)
+		else:
+			sync_completed.emit(true, "RomM sibling folding disabled - %d entries restored" % folded_count)
 	elif setting.property_name == "enabled_platforms":
 		# Platform filter changed; count may be different. Do NOT emit sync_completed
 		# here because PlatformsSettingsView updates this setting for each platform
 		# during initialization and emitting sync_completed would spam scans.
 		database.invalidate_downloaded_games_count_cache()
-	elif setting.property_name == "logo_detection_enabled":
-		print("[DataManager] Logo detection %s" % ("enabled" if value else "disabled"))
-		# Cards must re-resolve logo rects (logo-aware crop vs plain center crop)
-		if UIManager and UIManager.card_settings_state:
-			UIManager.card_settings_state.force_display_refresh()
 
 
 # ==================== DATABASE READY ====================

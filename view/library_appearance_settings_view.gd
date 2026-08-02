@@ -430,8 +430,6 @@ func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
 		return false
 	if a.card_media_aspect_ratio != b.card_media_aspect_ratio:
 		return false
-	if a.library_card_logo_mode != b.library_card_logo_mode:
-		return false
 	if a.library_focus_centering != b.library_focus_centering:
 		return false
 	if a.library_pagination_view != b.library_pagination_view:

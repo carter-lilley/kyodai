@@ -137,13 +137,9 @@ func _create_tables():
 			title_id TEXT DEFAULT '',
 			cover_group_id TEXT DEFAULT '',
 			cover_group_master INTEGER DEFAULT 1,
-			igdb_metadata TEXT DEFAULT '{}',
-			logo_box TEXT DEFAULT '{}',
-			crop_transforms TEXT DEFAULT '{}'
+			igdb_metadata TEXT DEFAULT '{}'
 		)
 	""")
-	_ensure_logo_box_column()
-	_ensure_crop_transforms_column()
 
 	query_bool("""
 		CREATE TABLE IF NOT EXISTS platforms (
@@ -211,23 +207,6 @@ func _create_tables():
 	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_romm ON collection_roms(romm_id)")
 
 
-func _ensure_logo_box_column() -> void:
-	"""Add logo_box column to existing databases that predate the feature."""
-	var info = query_array("PRAGMA table_info(games)")
-	for row in info:
-		if row.get("name", "") == "logo_box":
-			return
-	query_bool("ALTER TABLE games ADD COLUMN logo_box TEXT DEFAULT '{}'")
-
-func _ensure_crop_transforms_column() -> void:
-	"""Add crop_transforms column to existing databases that predate the feature."""
-	var info = query_array("PRAGMA table_info(games)")
-	for row in info:
-		if row.get("name", "") == "crop_transforms":
-			return
-	query_bool("ALTER TABLE games ADD COLUMN crop_transforms TEXT DEFAULT '{}'")
-
-
 func is_database_ready() -> bool:
 	return _is_db_ready
 
@@ -265,6 +244,16 @@ func _get_has_cover_art_clause() -> String:
 
 func _get_is_master_entry_clause() -> String:
 	return " AND is_master_entry = 1" if _should_fold_romm_siblings() else ""
+
+
+func count_folded_sibling_entries() -> int:
+	"""Number of library entries currently hidden by RomM sibling folding."""
+	if not is_database_ready():
+		return 0
+	var result = query_array("SELECT COUNT(*) as count FROM games WHERE is_master_entry = 0")
+	if result.size() > 0:
+		return result[0].get("count", 0)
+	return 0
 
 
 func _row_to_game(row: Dictionary) -> GameResource:
@@ -362,28 +351,6 @@ func _row_to_game(row: Dictionary) -> GameResource:
 			game.igdb_metadata = {}
 	else:
 		game.igdb_metadata = {}
-
-	# Restore cached logo box data
-	if row.has("logo_box") and row["logo_box"] != "" and row["logo_box"] != "{}":
-		var json_logo = JSON.new()
-		var err_logo = json_logo.parse(row["logo_box"])
-		if err_logo == OK and json_logo.data is Dictionary:
-			game.logo_box = json_logo.data
-		else:
-			game.logo_box = {}
-	else:
-		game.logo_box = {}
-
-	# Restore precomputed crop transforms
-	if row.has("crop_transforms") and row["crop_transforms"] != "" and row["crop_transforms"] != "{}":
-		var json_crop = JSON.new()
-		var err_crop = json_crop.parse(row["crop_transforms"])
-		if err_crop == OK and json_crop.data is Dictionary:
-			game.crop_transforms = json_crop.data
-		else:
-			game.crop_transforms = {}
-	else:
-		game.crop_transforms = {}
 
 	return game
 
@@ -759,12 +726,10 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					last_played = ?,
 					title_id = ?,
 					cover_group_id = ?,
-					cover_group_master = ?,
-					igdb_metadata = ?,
-					logo_box = ?,
-					crop_transforms = ?
-				WHERE romm_id = ?
-			"""
+				cover_group_master = ?,
+				igdb_metadata = ?
+			WHERE romm_id = ?
+		"""
 			var bindings = [
 				game.title,
 				game.platform,
@@ -788,11 +753,9 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.title_id,
 				game.cover_group_id,
 				1 if game.cover_group_master else 0,
-				JSON.stringify(game.igdb_metadata),
-				JSON.stringify(game.logo_box),
-				JSON.stringify(game.crop_transforms),
-				game.romm_id
-			]
+			JSON.stringify(game.igdb_metadata),
+			game.romm_id
+		]
 			var success = query_bool_unlocked(query, bindings)
 			_db_unlock()
 			return success,
@@ -852,75 +815,6 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 		return false
 
 	return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
-
-
-func update_game_logo_box(romm_id: int, logo_box_json: String, callback: Callable = Callable()) -> bool:
-	"""Update the cached logo_box JSON for a single game."""
-	if not _is_db_ready:
-		return false
-
-	MemorySubManager.queue_db_task(
-		func():
-			_db_lock()
-			var success = query_bool_unlocked("UPDATE games SET logo_box = ? WHERE romm_id = ?", [logo_box_json, romm_id])
-			_db_unlock()
-			return success,
-
-		func(success: bool):
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
-
-
-func update_games_logo_box(romm_ids: Array[int], logo_box_json: String, callback: Callable = Callable()) -> bool:
-	"""Update the cached logo_box JSON for many games in one query."""
-	if not _is_db_ready or romm_ids.is_empty():
-		return false
-
-	MemorySubManager.queue_db_task(
-		func():
-			_db_lock()
-			var placeholders: Array[String] = []
-			for i in range(romm_ids.size()):
-				placeholders.append("?")
-			var query = "UPDATE games SET logo_box = ? WHERE romm_id IN (" + ",".join(placeholders) + ")"
-			var bindings: Array = [logo_box_json]
-			bindings.append_array(romm_ids)
-			var success = query_bool_unlocked(query, bindings)
-			_db_unlock()
-			return success,
-
-		func(success: bool):
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
-
-
-func update_games_crop_transforms(romm_ids: Array[int], crop_transforms_json: String, callback: Callable = Callable()) -> bool:
-	"""Update the precomputed crop_transforms JSON for many games in one query."""
-	if not _is_db_ready or romm_ids.is_empty():
-		return false
-
-	MemorySubManager.queue_db_task(
-		func():
-			_db_lock()
-			var placeholders: Array[String] = []
-			for i in range(romm_ids.size()):
-				placeholders.append("?")
-			var query = "UPDATE games SET crop_transforms = ? WHERE romm_id IN (" + ",".join(placeholders) + ")"
-			var bindings: Array = [crop_transforms_json]
-			bindings.append_array(romm_ids)
-			var success = query_bool_unlocked(query, bindings)
-			_db_unlock()
-			return success,
-
-		func(success: bool):
-			if callback.is_valid():
-				callback.call(success)
-	)
-	return true
 
 
 func get_game_by_id(romm_id: int) -> GameResource:

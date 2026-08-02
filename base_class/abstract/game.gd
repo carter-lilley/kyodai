@@ -29,7 +29,7 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var preferred_core_id: String = ""
 
 ## Sibling ROMs - variants of the same game (different regions, versions, etc.)
-@export var siblings: Array[Dictionary] = []  # [{id, name, file_name, file_size, title_id}, ...]
+@export var siblings: Array[Dictionary] = []  # [{id, name, file_name, file_size, title_id, is_main_sibling, sort_comparator}, ...]
 @export var selected_sibling_id: int = 0  # 0 means use this game itself
 
 ## Whether this is the "master" entry shown in the library view
@@ -53,13 +53,6 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var cover_group_id: String = ""  # Empty if no duplicate covers, otherwise hash of cover_url
 @export var cover_group_master: bool = true  # Is this the master of its cover group?
 
-## Cached logo box detection result (normalized texture-space coords + metadata)
-@export var logo_box: Dictionary = {}
-
-## Precomputed cover-crop UV transforms per ratio index ("1"-"4") x logo mode
-## ("include"/"exclude"), with aspect/tex_aspect/logo_rect provenance.
-@export var crop_transforms: Dictionary = {}
-
 ## Game source type: "romm" (default), "gamenative", etc.
 @export var source: String = "romm"
 
@@ -76,6 +69,10 @@ var _sync_cover_done: bool = false
 var _sync_db_success: bool = false
 @warning_ignore("unused_private_class_variable")
 var _sync_processed: bool = false  # Guard to prevent double-processing
+
+## Transient: RomM's own "main sibling" flag for this rom (rom_user.is_main_sibling),
+## captured during sync to pick the canonical master entry for a sibling group.
+var romm_is_main_sibling: bool = false
 
 ## Returns the ID of the game/sibling that should be used (for downloads, etc.)
 func get_active_game_id() -> int:

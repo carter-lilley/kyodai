@@ -33,7 +33,6 @@ var focus_scale_ratio: float = 0.09
 var display_mode: int = 0
 var content_alignment: int = 0
 var media_aspect_ratio: int = 0
-var logo_mode: int = 0
 var show_title_mode: int = 0
 var card_effect_config: Dictionary = {}
 var dark_mode: bool = true
@@ -65,11 +64,6 @@ func _mark(mask: int) -> void:
 		pending_mask |= mask
 	else:
 		changed.emit(mask)
-
-## Forces a DISPLAY refresh from outside card settings (e.g. the global
-## logo_detection_enabled toggle changed how cards resolve logo rects).
-func force_display_refresh() -> void:
-	_mark(ChangeMask.DISPLAY)
 
 # ---------------------------------------------------------------------------
 # Setters (return true when value changed)
@@ -158,13 +152,6 @@ func set_media_aspect_ratio(value: int) -> bool:
 	_mark(ChangeMask.MEDIA_SHAPE)
 	return true
 
-func set_logo_mode(value: int) -> bool:
-	if logo_mode == value:
-		return false
-	logo_mode = value
-	_mark(ChangeMask.DISPLAY)
-	return true
-
 func set_card_effect_config(value: Dictionary) -> bool:
 	# Compare by hash to avoid redundant emissions when dictionaries are identical
 	if card_effect_config.hash() == value.hash():
@@ -240,7 +227,6 @@ func sync_from_settings_manager() -> int:
 	set_display_mode(_get_int_setting("library_card_display_mode", 0))
 	set_content_alignment(_get_int_setting("library_card_content_alignment", 0))
 	set_media_aspect_ratio(_get_int_setting("card_media_aspect_ratio", 0))
-	set_logo_mode(_get_int_setting("library_card_logo_mode", 0))
 	set_show_title_mode(_get_int_setting("library_show_title_mode", 0))
 	set_card_effect_config(_get_dict_setting("card_effect_config", {}))
 	set_dark_mode(_get_bool_setting("dark_mode", true))
@@ -275,8 +261,6 @@ func apply_setting(property_name: String, value: Variant) -> int:
 			return ChangeMask.DISPLAY if set_content_alignment(_coerce_int(value, 0)) else ChangeMask.NONE
 		"card_media_aspect_ratio":
 			return ChangeMask.MEDIA_SHAPE if set_media_aspect_ratio(_coerce_int(value, 0)) else ChangeMask.NONE
-		"library_card_logo_mode":
-			return ChangeMask.DISPLAY if set_logo_mode(_coerce_int(value, 0)) else ChangeMask.NONE
 		"library_show_title_mode":
 			return ChangeMask.DISPLAY if set_show_title_mode(_coerce_int(value, 0)) else ChangeMask.NONE
 		"card_effect_config":

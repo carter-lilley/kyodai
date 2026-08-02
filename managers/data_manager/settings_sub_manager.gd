@@ -109,7 +109,6 @@ func create_preset_from_settings(source_settings: Settings) -> ThemePreset:
 	preset.library_card_content_alignment = _preset_value_from(source_settings, "library_card_content_alignment", 0)
 	preset.library_grid_vertical = _preset_value_from(source_settings, "library_grid_vertical", true)
 	preset.card_media_aspect_ratio = _preset_value_from(source_settings, "card_media_aspect_ratio", 0)
-	preset.library_card_logo_mode = _preset_value_from(source_settings, "library_card_logo_mode", 0)
 	preset.library_focus_centering = _preset_value_from(source_settings, "library_focus_centering", 0)
 	preset.library_pagination_view = _preset_value_from(source_settings, "library_pagination_view", false)
 	preset.library_background_config = _preset_value_from(source_settings, "library_background_config", {
@@ -427,7 +426,6 @@ func apply_preset(preset: ThemePreset) -> bool:
 		"library_card_content_alignment": preset.library_card_content_alignment,
 		"library_grid_vertical": preset.library_grid_vertical,
 		"card_media_aspect_ratio": preset.card_media_aspect_ratio,
-		"library_card_logo_mode": preset.library_card_logo_mode,
 		"library_focus_centering": preset.library_focus_centering,
 		"library_pagination_view": preset.library_pagination_view,
 		"library_background_config": preset.library_background_config.duplicate(true),

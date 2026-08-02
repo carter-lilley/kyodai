@@ -22,7 +22,6 @@ const EFFECT_REGISTRY: Dictionary = {
 	"gradient_overlay": "res://effects/shared/gradient_overlay_effect.gd",
 	"hsl": "res://effects/shared/hsl_effect.gd",
 	"blur": "res://effects/shared/blur_effect.gd",
-	"logo_box": "res://effects/shared/logo_box_effect.gd",
 }
 
 const EFFECT_LAYER_ORDER: Array = [
@@ -36,7 +35,6 @@ const EFFECT_LAYER_ORDER: Array = [
 	"border",
 	"glass",
 	"badge",
-	"logo_box",
 ]
 
 func free_rids() -> void:
@@ -110,24 +108,6 @@ func set_game_texture(texture: Texture2D) -> void:
 		var effect = _effects[effect_id]
 		if effect:
 			effect._mark_shader_params_dirty()
-
-func set_logo_rect(rect: Vector4) -> void:
-	if media_container:
-		media_container.logo_rect = rect
-	for effect_id in _effects:
-		var effect = _effects[effect_id]
-		if effect:
-			effect.set_logo_rect(rect)
-
-## Passes precomputed crop transforms (for the current ratio) through to the
-## media container. Empty dict = runtime crop math.
-func set_crop_transforms(transforms: Dictionary) -> void:
-	if media_container:
-		media_container.crop_transforms = transforms
-
-func set_logo_mode(mode: int) -> void:
-	if media_container:
-		media_container.logo_mode = mode
 
 func _rebuild_effects():
 	var active_effect_ids: Array[String] = []

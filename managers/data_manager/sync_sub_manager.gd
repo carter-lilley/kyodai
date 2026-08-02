@@ -63,12 +63,11 @@ const COVER_DISPATCH_INTERVAL_MS: int = 2000
 var _sync_last_cover_dispatch_ms: int = 0
 var _sync_covers_counted_set: Dictionary = {}
 
-# Map of cover URL to games that share it, used for logo box caching during sync
-var _sync_cover_url_to_games: Dictionary = {}  # String -> Array[GameResource]
-var _sync_cover_url_to_games_mutex: Mutex = Mutex.new()
+# Every cover URL collected during this sync (pending, dispatched, or done)
+var _sync_covers_seen_set: Dictionary = {}
 
-# Tracks cover downloads and logo box detections that are still in flight so
-# the sync can wait for them before completing.
+# Tracks cover downloads that are still in flight so the sync can wait for
+# them before completing.
 var _sync_pending_downloads: int = 0
 var _sync_pending_downloads_mutex: Mutex = Mutex.new()
 var _sync_pending_downloads_semaphore: Semaphore = Semaphore.new()
@@ -221,7 +220,7 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_force_full = force_full_sync
 	_sync_current_updated_after = ""
 
-	# Reset cover download tracking and logo box mapping
+	# Reset cover download tracking
 	_sync_covers_mutex.lock()
 	_sync_covers_pending.clear()
 	_sync_covers_pending_set.clear()
@@ -232,10 +231,8 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_covers_failed_count = 0
 	_sync_last_cover_dispatch_ms = 0
 	_sync_covers_counted_set.clear()
+	_sync_covers_seen_set.clear()
 	_sync_covers_mutex.unlock()
-	_sync_cover_url_to_games_mutex.lock()
-	_sync_cover_url_to_games.clear()
-	_sync_cover_url_to_games_mutex.unlock()
 	_sync_pending_downloads_mutex.lock()
 	_sync_pending_downloads = 0
 	_sync_pending_downloads_mutex.unlock()
@@ -491,10 +488,10 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 		print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
 
-	# 7. Cache logo boxes for all covers collected during sync (and backfill
-	#    existing covers) as a visible sync phase with its own progress.
-	print("[SyncThread] All platforms processed, starting logo box caching phase...")
-	_process_cover_work_phase()
+	# 7. Download any remaining covers collected during sync (and backfill
+	#    existing uncached covers) as a visible sync phase with its own progress.
+	print("[SyncThread] All platforms processed, starting cover download phase...")
+	_process_cover_download_phase()
 
 	# 8. Complete sync - defer ALL UI work to main thread
 	print("[SyncThread] All platforms complete, finishing...")
@@ -541,27 +538,23 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 	)
 
 
-func _process_cover_work_phase() -> void:
-	"""Cache logo boxes for all collected and backfill covers as a sync phase.
+func _process_cover_download_phase() -> void:
+	"""Download all collected and backfill covers as a sync phase.
 
-	Runs on the sync thread. Downloads happen on the main thread, detection on the
-	background worker thread, and progress is updated as each cover completes.
+	Runs on the sync thread. Downloads happen on the main thread and progress
+	is updated as each cover completes.
 	"""
-	if not _is_logo_detection_enabled():
-		return
-	if not data_manager.logo_box:
-		return
 	if not data_manager.database.is_database_ready():
 		return
 
-	# 1. Query existing games with covers but no cached logo box. This is the
-	#    backfill portion of the phase; covers collected during the sync were
-	#    already dispatched incrementally by _process_batch_sync.
+	# 1. Query distinct cover URLs already in the library whose image files are
+	#    not cached on disk. Covers collected during the sync were already
+	#    dispatched incrementally by _process_batch_sync.
 	var rows = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
 				return data_manager.database.query_array(
-					"SELECT romm_id, cover_url, title FROM games WHERE cover_url != '' AND cover_url IS NOT NULL AND (logo_box = '' OR logo_box = '{}' OR crop_transforms = '' OR crop_transforms = '{}')"
+					"SELECT DISTINCT cover_url FROM games WHERE cover_url != '' AND cover_url IS NOT NULL"
 				),
 			func(result: Array):
 				callback.call(result)
@@ -571,66 +564,48 @@ func _process_cover_work_phase() -> void:
 	if rows == null:
 		rows = []
 
-	# Group backfill rows by cover URL. Only count URLs not already collected
-	# during the sync toward the progress total. Games are merged into the
-	# shared map so mid-sync dispatch snapshots stay complete.
-	var backfill_url_to_games: Dictionary = {}  # cover_url -> Array[GameResource]
-	_sync_cover_url_to_games_mutex.lock()
+	# Only count URLs not already collected during the sync toward the
+	# progress total.
+	var backfill_urls: Array[String] = []
+	_sync_covers_mutex.lock()
 	for row in rows:
 		var url = row.get("cover_url", "")
-		var title = row.get("title", "")
-		var romm_id = row.get("romm_id", 0)
-		if url == "" or romm_id <= 0:
+		if url == "" or not url.begins_with("http"):
 			continue
-		if not backfill_url_to_games.has(url):
-			backfill_url_to_games[url] = [] as Array[GameResource]
-			if not _sync_cover_url_to_games.has(url):
-				_sync_cover_url_to_games[url] = [] as Array[GameResource]
-				_sync_total += 1  # Each unique backfill cover is also a work unit
-		var already_present = false
-		for g in _sync_cover_url_to_games[url]:
-			if g.romm_id == romm_id:
-				already_present = true
-				break
-		var game = GameResource.new()
-		game.romm_id = romm_id
-		game.title = title
-		game.cover_url = url
-		backfill_url_to_games[url].append(game)
-		if not already_present:
-			_sync_cover_url_to_games[url].append(game)
-	_sync_cover_url_to_games_mutex.unlock()
+		if _sync_covers_seen_set.has(url):
+			continue
+		var cache_path = data_manager.cover.get_cached_image_path(url)
+		if FSM.file_exists(cache_path):
+			continue
+		_sync_covers_seen_set[url] = true
+		_sync_total += 1  # Each unique backfill cover is also a work unit
+		backfill_urls.append(url)
+	_sync_covers_mutex.unlock()
 
-	var cover_total = backfill_url_to_games.size()
+	var cover_total = backfill_urls.size()
 
-	_sync_platform = "Logo boxes"
+	_sync_platform = "Covers"
 	_sync_platform_index = _sync_platform_count + 1
-	print("[SyncThread] Logo box phase: %d backfill covers to process" % cover_total)
+	print("[SyncThread] Cover download phase: %d backfill covers to process" % cover_total)
 
 	# Emit progress so the total includes the new cover work.
 	var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
 	call_deferred("_update_sync_fg_service", _sync_platform, _sync_current, _sync_total)
 	call_deferred("_emit_sync_progress", progress_pct * 0.01, _sync_current, _sync_total)
 
-	# 2. Process already-cached covers immediately and queue missing covers for
-	#    download on the main thread. Each cover calls back as it finishes.
-	for url in backfill_url_to_games.keys():
-		var games: Array[GameResource] = backfill_url_to_games[url]
-		var cache_path = data_manager.cover.get_cached_image_path(url)
-		if FSM.file_exists(cache_path):
-			data_manager.logo_box.process_cover_url(url, games, _make_cover_counted_callback(url, _on_cover_processed))
-		else:
-			_sync_covers_mutex.lock()
-			if not _sync_covers_pending_set.has(url):
-				_sync_covers_pending.append(url)
-				_sync_covers_pending_set[url] = true
-			_sync_covers_mutex.unlock()
+	# 2. Queue missing covers for download on the main thread.
+	_sync_covers_mutex.lock()
+	for url in backfill_urls:
+		if not _sync_covers_pending_set.has(url):
+			_sync_covers_pending.append(url)
+			_sync_covers_pending_set[url] = true
+	_sync_covers_mutex.unlock()
 
 	_dispatch_covers_to_main_thread()
 
-	# 3. Block the sync thread until all downloads and detections complete.
-	#    The main thread and worker thread handle the actual work.
-	_wait_for_all_cover_processing()
+	# 3. Block the sync thread until all downloads complete.
+	#    The main thread handles the actual work.
+	_wait_for_all_cover_downloads()
 
 
 const COVER_PROGRESS_EVERY: int = 5
@@ -644,12 +619,12 @@ func _on_cover_processed() -> void:
 		_update_sync_fg_service(_sync_platform, _sync_current, _sync_total)
 
 
-func _wait_for_all_cover_processing() -> void:
-	"""Wait for all cover downloads and queued logo box detections to finish.
+func _wait_for_all_cover_downloads() -> void:
+	"""Wait for all cover downloads to finish.
 
 	Blocks the sync thread but leaves the main thread and UI responsive.
 	"""
-	print("[SyncThread] Waiting for cover downloads and logo box detections to finish...")
+	print("[SyncThread] Waiting for cover downloads to finish...")
 
 	# Wait for any remaining cover downloads to dispatch and complete.
 	while true:
@@ -676,10 +651,7 @@ func _wait_for_all_cover_processing() -> void:
 
 		_sync_pending_downloads_semaphore.wait()
 
-	if data_manager.logo_box:
-		data_manager.logo_box.wait_for_all()
-
-	print("[SyncThread] Cover processing complete: %d cached, %d downloaded, %d FAILED, %d detect tasks remaining" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, data_manager.logo_box._get_pending_task_count() if data_manager.logo_box else -1])
+	print("[SyncThread] Cover downloads complete: %d cached, %d downloaded, %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count])
 
 
 func _dispatch_covers_to_main_thread():
@@ -696,35 +668,24 @@ func _dispatch_covers_to_main_thread():
 	_sync_last_cover_dispatch_ms = Time.get_ticks_msec()
 	_sync_covers_mutex.unlock()
 
-	# Capture the game mapping for these URLs while we hold the mutex
-	var url_to_games := {}
-	_sync_cover_url_to_games_mutex.lock()
-	for url in urls:
-		if _sync_cover_url_to_games.has(url):
-			url_to_games[url] = _sync_cover_url_to_games[url].duplicate()
-	_sync_cover_url_to_games_mutex.unlock()
-
-	call_deferred("_download_covers_on_main_thread", urls, url_to_games, _on_cover_processed)
-	print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d detect_queue=%s)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads, str(data_manager.logo_box._get_pending_task_count() if data_manager.logo_box else "?")])
+	call_deferred("_download_covers_on_main_thread", urls, _on_cover_processed)
+	print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads])
 
 
-func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictionary = {}, on_complete: Callable = Callable()):
+func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable = Callable()):
 	"""Download covers on main thread using existing async infrastructure.
 
 	Called via call_deferred from sync thread. Queues each cover to
-	SystemManager.download for parallel async download. After each download
-	finishes, the cover is handed to the logo box cache manager.
+	SystemManager.download for parallel async download.
 	"""
 
 	for url in urls:
 		var counted_cb := _make_cover_counted_callback(url, on_complete)
 		var cache_path = data_manager.cover.get_cached_image_path(url)
 		if FSM.file_exists(cache_path):
-			# Already cached: send directly to logo box worker; no network wait.
+			# Already cached: no network wait.
 			_sync_covers_cached_count += 1
-			var cached_games: Array[GameResource] = url_to_games.get(url, [] as Array[GameResource])
-			if cached_games:
-				data_manager.logo_box.process_cover_url(url, cached_games, counted_cb)
+			counted_cb.call()
 			continue
 
 		# Track pending download
@@ -740,9 +701,7 @@ func _download_covers_on_main_thread(urls: Array[String], url_to_games: Dictiona
 			else:
 				_sync_covers_failed_count += 1
 				push_error("[SyncThread] Cover download FAILED: %s" % DownloadSubManager._redact_url(url))
-			var downloaded_games: Array[GameResource] = url_to_games.get(url, [] as Array[GameResource])
-			if downloaded_games:
-				data_manager.logo_box.process_cover_url(url, downloaded_games, counted_cb)
+			counted_cb.call()
 
 			_sync_pending_downloads_mutex.lock()
 			_sync_pending_downloads -= 1
@@ -889,44 +848,35 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var inserted = _check_and_insert_games_sync(games)
 	var _db_time = Time.get_ticks_msec() - db_start
 
-	# Phase 3: Collect unique cover URLs for logo box caching and queue them
-	# for interleaved dispatch during the sync.
-	if _is_logo_detection_enabled():
-		var cover_start = Time.get_ticks_msec()
-		_sync_cover_url_to_games_mutex.lock()
-		var new_urls: Array[String] = []
-		for game in games:
-			if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
-				if not _sync_cover_url_to_games.has(game.cover_url):
-					_sync_cover_url_to_games[game.cover_url] = [] as Array[GameResource]
-					_sync_total += 1  # Each unique cover is a logo box work unit
-					new_urls.append(game.cover_url)
-				_sync_cover_url_to_games[game.cover_url].append(game)
-		_sync_cover_url_to_games_mutex.unlock()
-		if new_urls.size() > 0:
-			_sync_covers_mutex.lock()
-			for url in new_urls:
-				if not _sync_covers_pending_set.has(url):
-					_sync_covers_pending.append(url)
-					_sync_covers_pending_set[url] = true
-			_sync_covers_mutex.unlock()
-		var _cover_time = Time.get_ticks_msec() - cover_start
+	# Phase 3: Collect unique cover URLs and queue them for interleaved
+	# dispatch during the sync.
+	var cover_start = Time.get_ticks_msec()
+	var new_urls: Array[String] = []
+	_sync_covers_mutex.lock()
+	for game in games:
+		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
+			if not _sync_covers_seen_set.has(game.cover_url):
+				_sync_covers_seen_set[game.cover_url] = true
+				_sync_total += 1  # Each unique cover is a download work unit
+				new_urls.append(game.cover_url)
+	for url in new_urls:
+		if not _sync_covers_pending_set.has(url):
+			_sync_covers_pending.append(url)
+			_sync_covers_pending_set[url] = true
+	_sync_covers_mutex.unlock()
+	var _cover_time = Time.get_ticks_msec() - cover_start
 
-		# Interleave cover downloads/detection with the sync instead of doing it
-		# all at the end: dispatch pending covers every few seconds so network
-		# and detection work overlap the sync's network waits.
-		if Time.get_ticks_msec() - _sync_last_cover_dispatch_ms > COVER_DISPATCH_INTERVAL_MS:
-			_dispatch_covers_to_main_thread()
+	# Interleave cover downloads with the sync instead of doing it all at the
+	# end: dispatch pending covers every few seconds so network work overlaps
+	# the sync's network waits.
+	if Time.get_ticks_msec() - _sync_last_cover_dispatch_ms > COVER_DISPATCH_INTERVAL_MS:
+		_dispatch_covers_to_main_thread()
 
 	var _total_time = Time.get_ticks_msec() - batch_start
 	# Batch timing logging removed for cleaner sync output
 
 	return inserted
 
-
-func _is_logo_detection_enabled() -> bool:
-	var setting = DataManager.get_setting("logo_detection_enabled")
-	return setting != null and setting.value == true
 
 ## Wraps the per-cover completion callback so sync progress is counted at most
 ## once per unique cover URL, even if a cover is processed more than once
@@ -954,11 +904,11 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 	var result = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
-				# Step 1: Check siblings for all games
-				for game in games:
-					if game.siblings.size() > 0:
-						var has_sibling = _check_siblings_in_db(game.romm_id, game.siblings)
-						game.is_master_entry = not has_sibling
+				# Step 1: Assign master entries per sibling group. Siblings in the
+				# same batch must see each other - checking everything before
+				# inserting made every same-batch sibling a master, so folding
+				# only worked for groups split across batches.
+				_assign_sibling_masters(games)
 
 				# Step 2: Insert all games in one transaction
 				var insert_success = _insert_games_transaction(games)
@@ -1002,7 +952,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if romm_ids.size() > 0:
 		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box, crop_transforms FROM games WHERE romm_id IN (%s)" % placeholders,
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id FROM games WHERE romm_id IN (%s)" % placeholders,
 			romm_ids
 		)
 		for row in existing_result:
@@ -1101,6 +1051,129 @@ func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
 	return false
 
 
+func _assign_sibling_masters(games: Array[GameResource]) -> void:
+	"""Pick exactly one master entry per sibling group in this batch.
+
+	Master preference: RomM's own is_main_sibling flag, then an existing DB
+	master from the same group, then the lowest romm_id. All other members
+	are folded (is_master_entry = false). To be run on the DB thread."""
+	var parent := {}
+	var games_by_id := {}
+
+	for game in games:
+		if game == null or game.siblings.is_empty():
+			continue
+		games_by_id[game.romm_id] = game
+		_uf_add(parent, game.romm_id)
+		for sibling in game.siblings:
+			var sid: int = sibling.get("id", 0)
+			if sid != 0:
+				_uf_add(parent, sid)
+				_uf_union(parent, game.romm_id, sid)
+
+	# Bucket batch games by group root
+	var groups := {}
+	for game in games_by_id.values():
+		var root := _uf_find(parent, game.romm_id)
+		if not groups.has(root):
+			groups[root] = []
+		groups[root].append(game)
+
+	for root in groups:
+		_assign_group_master(groups[root], parent, root)
+
+
+func _assign_group_master(members: Array, parent: Dictionary, root: int) -> void:
+	# All romm_ids belonging to this group, including siblings not in this batch
+	var member_ids: Array = []
+	for id in parent.keys():
+		if _uf_find(parent, id) == root:
+			member_ids.append(id)
+
+	# 1) RomM-flagged main sibling among batch members wins
+	var master: GameResource = null
+	for game in members:
+		if game.romm_is_main_sibling:
+			master = game
+			break
+
+	# 2) Otherwise keep an existing DB master from this group, if any
+	if master == null:
+		var db_master_id := _get_db_master_id(member_ids)
+		if db_master_id != 0:
+			for game in members:
+				if game.romm_id == db_master_id:
+					master = game
+					break
+			if master == null:
+				# Master lives in the DB but isn't in this batch - fold all members under it
+				for game in members:
+					game.is_master_entry = false
+				return
+
+	# 3) Fallback: deterministic pick (lowest romm_id)
+	if master == null:
+		master = members[0]
+		for game in members:
+			if game.romm_id < master.romm_id:
+				master = game
+
+	for game in members:
+		game.is_master_entry = (game == master)
+
+	# Demote any stale DB master in this group that disagrees with our pick
+	# (repairs groups folded incorrectly by older sync logic on re-sync)
+	_demote_stale_db_masters(member_ids, master.romm_id)
+
+
+func _get_db_master_id(member_ids: Array) -> int:
+	"""Return the romm_id of an existing DB master in this group, or 0."""
+	if member_ids.is_empty() or not data_manager.database.is_database_ready():
+		return 0
+	var placeholders = ", ".join(member_ids.map(func(_id): return "?"))
+	var query = "SELECT romm_id FROM games WHERE romm_id IN (%s) AND is_master_entry = 1 LIMIT 1" % placeholders
+	var result = data_manager.database.query_array(query, member_ids)
+	if result.size() > 0:
+		return result[0].get("romm_id", 0)
+	return 0
+
+
+func _demote_stale_db_masters(member_ids: Array, keep_master_id: int) -> void:
+	"""Clear is_master_entry on any DB row in this group that isn't the chosen master."""
+	if member_ids.is_empty() or not data_manager.database.is_database_ready():
+		return
+	var placeholders = ", ".join(member_ids.map(func(_id): return "?"))
+	var query = "UPDATE games SET is_master_entry = 0 WHERE romm_id IN (%s) AND is_master_entry = 1 AND romm_id != ?" % placeholders
+	var bindings = member_ids.duplicate()
+	bindings.append(keep_master_id)
+	data_manager.database.query_bool(query, bindings)
+
+
+func _uf_add(parent: Dictionary, id: int) -> void:
+	if not parent.has(id):
+		parent[id] = id
+
+
+func _uf_find(parent: Dictionary, id: int) -> int:
+	var root := id
+	while parent.get(root, root) != root:
+		root = parent[root]
+	# Path compression
+	var cur := id
+	while parent.get(cur, cur) != cur:
+		var next: int = parent[cur]
+		parent[cur] = root
+		cur = next
+	return root
+
+
+func _uf_union(parent: Dictionary, a: int, b: int) -> void:
+	var ra := _uf_find(parent, a)
+	var rb := _uf_find(parent, b)
+	if ra != rb:
+		parent[rb] = ra
+
+
 func _create_game_from_data(data: Dictionary, platform_slug: String, check_siblings: bool = true) -> GameResource:
 	var game = GameResource.new()
 	game.id = str(data.get("id", ""))
@@ -1143,31 +1216,41 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 		game.igdb_metadata = {}
 
 	# Extract siblings from API response
+	# Current RomM versions expose this as "sibling_roms" (SiblingRomSchema);
+	# older versions used "siblings". Support both.
 	var siblings: Array[Dictionary] = []
-	if data.has("siblings") and data["siblings"] is Array:
-		for sibling_data in data["siblings"]:
-			if sibling_data is Dictionary:
-				# Note: Sibling data from API only has basic info (id, name, fs_name_no_ext, etc.)
-				# Full details (including proper file name with extension) will be fetched on-demand
-				# when the user selects the sibling in the game details view
+	var siblings_raw: Array = []
+	if data.has("sibling_roms") and data["sibling_roms"] is Array:
+		siblings_raw = data["sibling_roms"]
+	elif data.has("siblings") and data["siblings"] is Array:
+		siblings_raw = data["siblings"]
+	for sibling_data in siblings_raw:
+		if sibling_data is Dictionary:
+			# Note: Sibling data from API only has basic info (id, name, fs_name_no_ext, etc.)
+			# Full details (including proper file name with extension) will be fetched on-demand
+			# when the user selects the sibling in the game details view
 
-				var sibling = {
-					"id": sibling_data.get("id", 0),
-					"name": str(sibling_data.get("name", "")),
-					"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
-					"file_size": sibling_data.get("fs_size_bytes", 0),
-					"title_id": ""  # Will be extracted on launch
-				}
-				siblings.append(sibling)
-	else:
-		pass
+			var sibling = {
+				"id": sibling_data.get("id", 0),
+				"name": str(sibling_data.get("name", "")),
+				"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
+				"file_size": sibling_data.get("fs_size_bytes", 0),
+				"title_id": "",  # Will be extracted on launch
+				"is_main_sibling": sibling_data.get("is_main_sibling", false) == true,
+				"sort_comparator": str(sibling_data.get("sort_comparator", ""))
+			}
+			siblings.append(sibling)
 	game.siblings = siblings
 
+	# RomM marks the representative rom of a sibling group via rom_user.is_main_sibling
+	var rom_user = data.get("rom_user", {})
+	game.romm_is_main_sibling = rom_user is Dictionary and rom_user.get("is_main_sibling", false) == true
+
 	# Determine if this should be a master entry
-	# A game is a master if none of its siblings already exist in our database
-	# This will be checked in batch during sync, or set to true for individual adds
+	# A game is a master if RomM flags it as the main sibling, or if none of
+	# its siblings already exist in our database as a master entry
 	if check_siblings:
-		game.is_master_entry = not _check_siblings_in_db(game.romm_id, siblings)
+		game.is_master_entry = game.romm_is_main_sibling or not _check_siblings_in_db(game.romm_id, siblings)
 	else:
 		# During batch sync, we'll check siblings separately
 		game.is_master_entry = true  # Default, will be updated by batch check
@@ -1183,7 +1266,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	"""Build SQL INSERT query and bindings for a game - used for batch processing.
 
 	PRESERVES existing has_local_copy, downloaded_sibling_ids, file_path,
-	last_played, title_id, and logo_box if the game already exists in the
+	last_played, and title_id if the game already exists in the
 	database. This prevents downloaded games and local progress from
 	disappearing after a re-sync. Pass existing_row (batch-prefetched) to
 	avoid a per-game SELECT; direct callers fall back to fetching on demand."""
@@ -1194,12 +1277,10 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	var file_path = game.file_path
 	var last_played = game.last_played
 	var title_id = game.title_id
-	var logo_box_json = JSON.stringify(game.logo_box)
-	var crop_transforms_json = JSON.stringify(game.crop_transforms)
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, logo_box, crop_transforms FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -1228,19 +1309,13 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		var existing_title_id = existing.get("title_id", "")
 		if existing_title_id != "":
 			title_id = existing_title_id
-		var existing_logo_box = existing.get("logo_box", "{}")
-		if existing_logo_box != "" and existing_logo_box != "{}":
-			logo_box_json = existing_logo_box
-		var existing_crop_transforms = existing.get("crop_transforms", "{}")
-		if existing_crop_transforms != "" and existing_crop_transforms != "{}":
-			crop_transforms_json = existing_crop_transforms
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, logo_box, crop_transforms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1268,9 +1343,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		title_id,
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
-		JSON.stringify(game.igdb_metadata),
-		logo_box_json,
-		crop_transforms_json
+		JSON.stringify(game.igdb_metadata)
 	]
 
 	return {"query": query, "bindings": bindings}

@@ -354,8 +354,5 @@ func _flush_shader_params() -> void:
 func set_game_texture(_texture: Texture2D) -> void:
 	pass
 
-func set_logo_rect(_rect: Vector4) -> void:
-	pass
-
 func set_alpha(value: float) -> void:
 	_set_shader_param("alpha", value)

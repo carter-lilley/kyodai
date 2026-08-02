@@ -293,18 +293,12 @@ func _build_media_stack(force_full_rebuild: bool = true):
 			_media_stack.set_parent_rid(_media_canvas_item)
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
-		_media_stack.set_logo_rect(_get_logo_rect_from_game())
-		_media_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
-		_sync_logo_mode()
 		_media_stack.update_draw_rects()
 	else:
 		_media_stack = EffectStack.new()
 		_media_stack.initialize(_media_container, effect_settings, "base_card")
 		if _current_texture:
 			_media_stack.set_game_texture(_current_texture)
-		_media_stack.set_logo_rect(_get_logo_rect_from_game())
-		_media_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
-		_sync_logo_mode()
 		if _media_canvas_item.is_valid():
 			_media_stack.set_parent_rid(_media_canvas_item)
 		# The base card shader handles rounded corners; don't clip on the
@@ -369,9 +363,6 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
-			_focus_stack.set_logo_rect(_get_logo_rect_from_game())
-			_focus_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
-		_sync_logo_mode()
 		_link_overlapping_effects()
 		return
 
@@ -389,8 +380,6 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	_update_focus_stack_bounds()
 	if _current_texture:
 		_focus_stack.set_game_texture(_current_texture)
-		_focus_stack.set_logo_rect(_get_logo_rect_from_game())
-		_focus_stack.set_crop_transforms(_get_crop_transforms_for_current_ratio())
 
 	# Hide base effect in focus stack — focus effects are overlays only
 	var focus_base = _focus_stack.get_effect("base")
@@ -407,7 +396,6 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	if preview_mode:
 		_focus_stack.set_visible(preview_show_focus)
 
-	_sync_logo_mode()
 	_link_overlapping_effects()
 
 func _link_overlapping_effects() -> void:
@@ -592,16 +580,6 @@ func _update_card_state_from_settings():
 
 	_apply_display_mode()
 	_sync_focus_container_properties()
-	_sync_logo_mode()
-
-func _sync_logo_mode() -> void:
-	var mode := 0
-	if UIManager and UIManager.card_settings_state:
-		mode = UIManager.card_settings_state.logo_mode
-	if _media_stack:
-		_media_stack.set_logo_mode(mode)
-	if _focus_stack:
-		_focus_stack.set_logo_mode(mode)
 
 func _apply_effect_insets_to_media_container(effects: Array) -> void:
 	"""Scan base effects and set media-container insets from their settings."""
@@ -998,15 +976,6 @@ func _set_texture(tex: Texture2D) -> void:
 	if game:
 		_current_texture_game_id = game.id
 
-	var logo_rect := _get_logo_rect_from_game()
-	var crop_transforms := _get_crop_transforms_for_current_ratio()
-	if _media_stack:
-		_media_stack.set_logo_rect(logo_rect)
-		_media_stack.set_crop_transforms(crop_transforms)
-	if _focus_stack:
-		_focus_stack.set_logo_rect(logo_rect)
-		_focus_stack.set_crop_transforms(crop_transforms)
-
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
 	# rebuild it now so the texture actually has somewhere to render.
 	if not _media_stack:
@@ -1025,57 +994,6 @@ func _set_texture(tex: Texture2D) -> void:
 	_update_media()
 	# Ensure the card redraws so the RS canvas items are submitted to the render tree.
 	queue_redraw()
-
-func _get_crop_transforms_for_current_ratio() -> Dictionary:
-	"""Precomputed crop transforms for the current media ratio, normalized from
-	the game's DB metadata into the MediaContainer entry format. Empty when
-	unavailable (Fill mode, no cache entry) — runtime math is the fallback."""
-	if not game or game.crop_transforms.is_empty():
-		return {}
-	var ratio_idx := CropTransform.index_for_ratio(media_aspect_ratio)
-	if ratio_idx <= 0:
-		return {}
-	var per_ratio: Dictionary = game.crop_transforms.get(str(ratio_idx), {})
-	if per_ratio.is_empty():
-		return {}
-	return {
-		"include": _normalize_crop_entry(per_ratio.get("include", {})),
-		"exclude": _normalize_crop_entry(per_ratio.get("exclude", {})),
-	}
-
-func _normalize_crop_entry(entry: Dictionary) -> Dictionary:
-	if entry.is_empty():
-		return {}
-	var lr: Array = entry.get("logo_rect", [0.0, 0.0, 0.0, 0.0])
-	var sc: Array = entry.get("scale", [1.0, 1.0])
-	var of: Array = entry.get("offset", [0.0, 0.0])
-	return {
-		"aspect": float(entry.get("aspect", 0.0)),
-		"tex_aspect": float(entry.get("tex_aspect", 0.0)),
-		"logo_rect": Vector4(float(lr[0]), float(lr[1]), float(lr[2]), float(lr[3])),
-		"scale": Vector2(float(sc[0]), float(sc[1])),
-		"offset": Vector2(float(of[0]), float(of[1])),
-	}
-
-func _get_logo_rect_from_game() -> Vector4:
-	# Logo detection disabled: always use the plain center-crop default.
-	var detection_setting = DataManager.get_setting("logo_detection_enabled")
-	if detection_setting == null or detection_setting.value != true:
-		return Vector4.ZERO
-	if not game or not game.logo_box is Dictionary:
-		return Vector4.ZERO
-	var logo_box: Dictionary = game.logo_box
-	if not logo_box.get("detected", false):
-		return Vector4.ZERO
-	var x1 := float(logo_box.get("x1", 0.0))
-	var y1 := float(logo_box.get("y1", 0.0))
-	var x2 := float(logo_box.get("x2", 0.0))
-	var y2 := float(logo_box.get("y2", 0.0))
-	var w := x2 - x1
-	var h := y2 - y1
-	if w <= 0.0 or h <= 0.0:
-		return Vector4.ZERO
-	return Vector4(x1, y1, w, h)
 
 func _on_card_pressed():
 	if not game:
@@ -1391,13 +1309,6 @@ func _update_media_panel_size(force: bool = false) -> void:
 		# The media stack is parented to _media_canvas_item, so its bounds are
 		# expressed in media-local coordinates rather than card coords.
 		_media_container.bounds = Rect2(Vector2.ZERO, _media_bounds.size)
-
-	# Refresh the cached crop transforms whenever geometry/ratio may have changed.
-	var crop_transforms := _get_crop_transforms_for_current_ratio()
-	if _media_stack:
-		_media_stack.set_crop_transforms(crop_transforms)
-	if _focus_stack:
-		_focus_stack.set_crop_transforms(crop_transforms)
 
 	# _media_canvas_item is recreated by M3Card._rebuild_layout() when layout mode,
 	# content alignment, or media aspect ratio changed. The node-less effect stack

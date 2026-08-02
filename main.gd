@@ -441,27 +441,6 @@ func _on_more_button_pressed() -> void:
 	align_submenu.add_check_item("Right / Bottom", content_alignment == 2, func(): _set_content_alignment(2))
 	menu.add_submenu_item("Content Alignment", align_submenu, "format-align-center")
 
-	# Logo Mode submenu
-	var logo_mode = 0
-	var logo_detection_off = false
-	if DataManager:
-		var logo_setting = DataManager.get_setting("library_card_logo_mode")
-		if logo_setting and logo_setting.value is int:
-			logo_mode = logo_setting.value
-		var detection_setting = DataManager.get_setting("logo_detection_enabled")
-		logo_detection_off = detection_setting == null or detection_setting.value != true
-
-	var logo_submenu = M3Menu.new()
-	logo_submenu.auto_free = false
-	logo_submenu.radio_group = true
-	logo_submenu.add_check_item("Include Logo", logo_mode == 0, func(): _set_card_logo_mode(0))
-	logo_submenu.add_check_item("Exclude Logo", logo_mode == 1, func(): _set_card_logo_mode(1))
-	if logo_detection_off:
-		# Logo detection is disabled: cards center-crop, so gray out the options.
-		logo_submenu.get_item(0).disabled = true
-		logo_submenu.get_item(1).disabled = true
-	menu.add_submenu_item("Logo", logo_submenu, "image-area")
-
 	var more_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3IconButton_More")
 	if more_button:
 		menu.popup(more_button)
@@ -485,13 +464,6 @@ func _set_content_alignment(alignment: int) -> void:
 		var setting = DataManager.get_setting("library_card_content_alignment")
 		if setting:
 			DataManager.set_setting(alignment, setting)
-			DataManager.save_settings()
-
-func _set_card_logo_mode(mode: int) -> void:
-	if DataManager:
-		var setting = DataManager.get_setting("library_card_logo_mode")
-		if setting:
-			DataManager.set_setting(mode, setting)
 			DataManager.save_settings()
 
 func _set_focus_centering(mode: int) -> void:
