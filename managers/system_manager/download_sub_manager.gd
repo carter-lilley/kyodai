@@ -2927,6 +2927,9 @@ var _active_image_downloads: Dictionary = {}  # url -> {callbacks: [], completed
 
 # Cap concurrent image HTTP requests to avoid exhausting the OS DNS resolver.
 const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 16
+# Bound the pending queue: an unbounded backlog pins recycled cards via
+# captured callbacks and delays fresh covers behind long-irrelevant ones.
+const MAX_PENDING_IMAGE_DOWNLOADS: int = 256
 var _active_image_download_count: int = 0
 var _pending_image_downloads: Array = []
 var _pending_image_downloads_mutex: Mutex = Mutex.new()
@@ -2955,6 +2958,30 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 
 	# Throttle: queue if too many downloads are in flight.
 	if _active_image_download_count >= MAX_CONCURRENT_IMAGE_DOWNLOADS:
+		if _pending_image_downloads.size() >= MAX_PENDING_IMAGE_DOWNLOADS:
+			if high_priority:
+				# Make room by evicting the oldest low-priority item (tail).
+				var evicted_idx := -1
+				for i in range(_pending_image_downloads.size() - 1, -1, -1):
+					if not _pending_image_downloads[i].get("high_priority", false):
+						evicted_idx = i
+						break
+				if evicted_idx >= 0:
+					var evicted = _pending_image_downloads[evicted_idx]
+					_pending_image_downloads.remove_at(evicted_idx)
+					_pending_image_downloads_mutex.unlock()
+					if evicted.callback.is_valid():
+						evicted.callback.call(false)
+					# Retry now that a slot freed up.
+					return download_image(url, cache_path, callback, high_priority)
+				_pending_image_downloads_mutex.unlock()
+				callback.call(false)
+				return true
+			_pending_image_downloads_mutex.unlock()
+			# Dropped low-priority request: report failure so the caller records
+			# its failure-TTL instead of waiting on a callback forever.
+			callback.call(false)
+			return true
 		var item = {
 			"url": url,
 			"cache_path": cache_path,

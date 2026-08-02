@@ -134,6 +134,9 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 		return
 	MemorySubManager.queue_db_task(
 		func():
+			if not is_instance_valid(games_grid) or not games_grid.is_load_pending(offset):
+				var stale: Array[GameResource] = []
+				return stale
 			var games = DataManager.get_games_for_collection_paginated(collection_id, offset, limit)
 			return games,
 		func(games: Array[GameResource]):

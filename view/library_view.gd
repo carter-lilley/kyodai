@@ -464,6 +464,9 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	if _is_search_active:
 		SystemManager.memory.queue_db_task(
 			func():
+				if not is_instance_valid(games_grid) or not games_grid.is_load_pending(offset):
+					var stale: Array[GameResource] = []
+					return stale
 				var db_start_us := Time.get_ticks_usec()
 				var games = DataManager.search_games_paginated(_search_query, offset, limit)
 				if DEBUG_LOG: print("[LibraryView] DB task (search): offset=", offset, " limit=", limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
@@ -476,6 +479,9 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	else:
 		SystemManager.memory.queue_db_task(
 			func():
+				if not is_instance_valid(games_grid) or not games_grid.is_load_pending(offset):
+					var stale: Array[GameResource] = []
+					return stale
 				var db_start_us := Time.get_ticks_usec()
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
 				if DEBUG_LOG: print("[LibraryView] DB task: offset=", offset, " limit=", limit, " platform=", _current_platform_slug, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)

@@ -22,9 +22,14 @@ const MAX_IMAGE_RETRIES: int = 3
 const MAX_DOWNLOAD_RETRIES: int = 2
 const MAX_COVER_TEXTURE_SIZE: int = 512
 const FAILURE_RETRY_TTL_SEC: int = 300
+# Bound the static failure-TTL map so permanently-failing URLs don't grow it forever.
+const MAX_FAILED_DOWNLOADS: int = 512
 const DEBUG_LOG: bool = true
 
 static var _failed_downloads: Dictionary = {}
+
+static func clear_failed_downloads() -> void:
+	_failed_downloads.clear()
 
 func _init(card: GameCard) -> void:
 	_card = card
@@ -163,6 +168,9 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)
 		else:
+			# Insertion-ordered: front key is the oldest failure.
+			while _failed_downloads.size() >= MAX_FAILED_DOWNLOADS:
+				_failed_downloads.erase(_failed_downloads.keys()[0])
 			_failed_downloads[cover_url] = Time.get_unix_time_from_system()
 			_set_loading_texture()
 	, high_priority)

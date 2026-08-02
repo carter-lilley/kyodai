@@ -203,6 +203,9 @@ func _build_categories() -> void:
 		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
 		_category_contents["gamenative"] = gamenative
 
+	# Exit — closes the app via the shared shutdown path in main.gd
+	_add_category_button("exit", "Exit", "logout")
+
 	# No spacer at the bottom of the sidebar: category buttons divide the full
 	# sidebar height evenly (shrink-to-fit, see _add_category_button).
 
@@ -266,6 +269,9 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	return margin
 
 func _on_category_selected(id: String) -> void:
+	if id == "exit":
+		get_tree().root.propagate_notification(NOTIFICATION_WM_CLOSE_REQUEST)
+		return
 	select_category(id)
 
 func select_category(id: String) -> void:

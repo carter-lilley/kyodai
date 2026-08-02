@@ -60,6 +60,7 @@ static func _estimate_texture_memory(texture: Texture2D) -> int:
 	return texture.get_width() * texture.get_height() * 4  # RGBA8 estimate
 
 var _lp_callbacks: Array = []
+var _lp_callback_head: int = 0  # Unconsumed items start here; avoids O(n) re-slicing per frame
 var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
@@ -253,7 +254,7 @@ func _get_db_queue_size() -> int:
 
 func _get_lp_callback_backlog() -> int:
 	_lp_callback_mutex.lock()
-	var size = _lp_callbacks.size()
+	var size = _lp_callbacks.size() - _lp_callback_head
 	_lp_callback_mutex.unlock()
 	return size
 
@@ -284,13 +285,29 @@ func _process(_delta):
 	_drain_lp_callbacks()
 
 func _drain_lp_callbacks():
-	if _lp_callbacks.is_empty():
+	_lp_callback_mutex.lock()
+	var backlog := _lp_callbacks.size() - _lp_callback_head
+	if backlog <= 0:
+		if not _lp_callbacks.is_empty():
+			_lp_callbacks.clear()
+			_lp_callback_head = 0
+		_lp_callback_mutex.unlock()
 		return
 
-	_lp_callback_mutex.lock()
-	var to_process = mini(_lp_callbacks.size(), MAX_LP_CALLBACKS_PER_FRAME)
-	var batch = _lp_callbacks.slice(0, to_process)
-	_lp_callbacks = _lp_callbacks.slice(to_process)
+	var to_process = mini(backlog, MAX_LP_CALLBACKS_PER_FRAME)
+	var batch: Array = []
+	batch.resize(to_process)
+	for i in range(to_process):
+		batch[i] = _lp_callbacks[_lp_callback_head + i]
+	_lp_callback_head += to_process
+
+	if _lp_callback_head >= _lp_callbacks.size():
+		_lp_callbacks.clear()
+		_lp_callback_head = 0
+	elif _lp_callback_head >= 256 and _lp_callback_head * 2 >= _lp_callbacks.size():
+		# Amortized compaction so a long-lived backlog doesn't grow the array.
+		_lp_callbacks = _lp_callbacks.slice(_lp_callback_head)
+		_lp_callback_head = 0
 	_lp_callback_mutex.unlock()
 
 	for item in batch:
@@ -549,11 +566,12 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 				_instance._image_tasks.erase(evicted.id)
 				if evicted.callback.is_valid():
 					_instance.call_deferred("_execute_callback", evicted.callback, null)
-		elif not high_priority:
-			_instance._image_mutex.unlock()
-			return -1
 		else:
+			# Never drop silently: fire a null callback (same as the eviction
+			# path above) so callers run their retry/fallback logic instead of
+			# waiting on a callback that would never arrive.
 			_instance._image_mutex.unlock()
+			_instance.call_deferred("_execute_callback", callback, null)
 			return -1
 
 	_instance._image_task_counter += 1
@@ -961,6 +979,7 @@ static func shutdown():
 
 	_instance._lp_callback_mutex.lock()
 	_instance._lp_callbacks.clear()
+	_instance._lp_callback_head = 0
 	_instance._lp_callback_mutex.unlock()
 
 	# Wake all threads so they can observe the exit flag and terminate.
@@ -992,6 +1011,7 @@ static func shutdown():
 	# Release static caches held by UI components so their Texture/CanvasItem RIDs
 	# are not leaked when the rendering server finalizes.
 	GameCard.clear_platform_icon_cache()
+	CardMediaLoader.clear_failed_downloads()
 	EffectStack.clear_script_cache()
 	_instance = null
 

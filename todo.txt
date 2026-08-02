@@ -4,7 +4,6 @@ xemu save sync
 tst emulator app update flow on android
 gamenative out of view on android
 downloading core android notif stuck
-x make status badge less stupid (esp in list and carosel view)
 
 romm;
 - mark 'played' if played

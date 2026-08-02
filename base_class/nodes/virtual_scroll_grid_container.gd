@@ -465,13 +465,16 @@ var _last_margin_virtual_end: int = -1
 
 var _data_cache: Dictionary = {}
 var _pending_loads: Dictionary = {}
+# Guards _pending_loads: DB worker threads check is_load_pending() to skip
+# stale queries superseded by jumps/refreshes while they were queued.
+var _pending_loads_mutex: Mutex = Mutex.new()
 
 # Deduplication tracking - prevents duplicate game entries
 var _cached_game_ids: Dictionary = {}  # romm_id -> cache_key
 
 const MAX_CACHE_SIZE: int = 5000
-var _cache_lru_tick: Dictionary[int, int] = {}
-var _lru_counter: int = 0
+# Insertion-ordered LRU: front = least recently used, back = most recent.
+var _cache_lru_tick: Dictionary[int, bool] = {}
 
 # When settings change, layout must settle before effect rebuilds run against
 # final card bounds. This flag defers refresh_all_card_effects until after the
@@ -2446,6 +2449,10 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	# If buffer was fully recycled (e.g. scrolled to a completely different range),
 	# populate the target range from scratch
 	if _active_cards.size() == 0:
+		# Full jump (e.g. random-game teleport): in-flight requests for the old
+		# window are useless now. Prune them so stale DB results are ignored and
+		# queued DB tasks can skip themselves via is_load_pending().
+		_prune_pending_loads_outside(_buffer_target_start, _buffer_target_end)
 		for i in range(_buffer_target_start, _buffer_target_end):
 			_add_card_at_end(i)
 	elif _active_cards.size() > 0:
@@ -2953,11 +2960,31 @@ func _update_margin():
 			_last_flow_height = 0
 
 func _is_index_pending(idx: int) -> bool:
+	_pending_loads_mutex.lock()
 	for offset in _pending_loads.keys():
 		var limit = _pending_loads[offset]
 		if idx >= offset and idx < offset + limit:
+			_pending_loads_mutex.unlock()
 			return true
+	_pending_loads_mutex.unlock()
 	return false
+
+## Thread-safe check used by DB worker tasks to skip queries whose results
+## would be discarded anyway (superseded by a jump or buffer refresh).
+func is_load_pending(offset: int) -> bool:
+	_pending_loads_mutex.lock()
+	var pending := _pending_loads.has(offset)
+	_pending_loads_mutex.unlock()
+	return pending
+
+func _prune_pending_loads_outside(range_start: int, range_end: int) -> void:
+	_pending_loads_mutex.lock()
+	for offset in _pending_loads.keys():
+		var limit: int = _pending_loads[offset]
+		# Keep requests that still overlap the new buffer window.
+		if offset + limit <= range_start or offset >= range_end:
+			_pending_loads.erase(offset)
+	_pending_loads_mutex.unlock()
 
 func _request_missing_data():
 	if _active_cards.size() == 0:
@@ -2999,14 +3026,14 @@ func _check_preload_needed():
 		var distance_to_end = _source_total_items - 1 - _virtual_end
 		if distance_to_end > 0 and distance_to_end <= preload_distance:
 			var next_batch_start = _virtual_end + 1
-			if not _pending_loads.has(next_batch_start) and not _data_cache.has(next_batch_start):
+			if not is_load_pending(next_batch_start) and not _data_cache.has(next_batch_start):
 				_request_data(next_batch_start, min(buffer_size, _source_total_items - next_batch_start))
 
 	if _virtual_start > 0:
 		var distance_to_start = _virtual_start
 		if distance_to_start > 0 and distance_to_start <= preload_distance:
 			var prev_batch_start = max(0, _virtual_start - buffer_size)
-			if not _pending_loads.has(prev_batch_start) and not _data_cache.has(prev_batch_start):
+			if not is_load_pending(prev_batch_start) and not _data_cache.has(prev_batch_start):
 				_request_data(prev_batch_start, min(buffer_size, _virtual_start - prev_batch_start))
 
 func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
@@ -3191,14 +3218,25 @@ func _request_data(offset: int, limit: int):
 		return
 
 	limit = min(limit, _total_items - offset)
+	_pending_loads_mutex.lock()
 	_pending_loads[offset] = limit
+	_pending_loads_mutex.unlock()
 
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
 	if debug_mode:
 		print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
+	_pending_loads_mutex.lock()
+	var was_pending := _pending_loads.has(offset)
 	_pending_loads.erase(offset)
+	_pending_loads_mutex.unlock()
+
+	# Stale result: the request was superseded by a jump or buffer refresh
+	# while its DB task was in flight. Applying it would refill the cache with
+	# windows nobody is looking at and re-trigger pointless cover loads.
+	if not was_pending:
+		return
 
 	if items.is_empty():
 		return
@@ -3281,7 +3319,9 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	_data_cache.clear()
 	_cached_game_ids.clear()
 	_cache_lru_tick.clear()
+	_pending_loads_mutex.lock()
 	_pending_loads.clear()
+	_pending_loads_mutex.unlock()
 	_active_cards_by_index.clear()
 	_pending_effect_rebuilds.clear()
 	_pending_effect_rebuild_set.clear()
@@ -3320,8 +3360,10 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	# saved raw scroll offset if no focus target exists. scroll_to_index_and_focus
 	# waits for the target card to exist and suppresses the smooth-scroll
 	# response, so the jump is instantaneous.
+	# Never grab card focus while an overlay (e.g. the settings dialog) is
+	# showing: the steal would fight the overlay's focus pull-back.
 	if preserve_scroll:
-		if saved_focus_index >= 0:
+		if saved_focus_index >= 0 and M3Overlay._get_topmost_overlay() == null:
 			call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 		elif _scroll_container:
 			# Clamp to valid range after the new layout is known.
@@ -3814,32 +3856,25 @@ func refresh_all_card_displays() -> void:
 			card.update_display()
 
 func _update_cache_access_order(cache_key: int):
-	_lru_counter += 1
-	_cache_lru_tick[cache_key] = _lru_counter
+	# Dictionary preserves insertion order: erase + re-insert moves the key to
+	# the back (most recently used), keeping eviction O(1).
+	_cache_lru_tick.erase(cache_key)
+	_cache_lru_tick[cache_key] = true
 
 func _evict_oldest_cache_entries(count: int):
 	var to_evict = mini(count, _data_cache.size())
 	if to_evict <= 0:
 		return
 
-	# Linear scan for oldest entry, repeated to_evict times.
-	# Avoids allocating an Array[Array] of all entries (~5000 sub-arrays).
-	for i in range(to_evict):
-		var oldest_key = -1
-		var oldest_tick = INF
-
-		for key in _cache_lru_tick.keys():
-			var tick = _cache_lru_tick[key]
-			if tick < oldest_tick:
-				oldest_tick = tick
-				oldest_key = key
-
-		if oldest_key < 0:
+	# Front of the insertion-ordered LRU is the least recently used entry.
+	var evicted := 0
+	for oldest_key in _cache_lru_tick.keys():
+		if evicted >= to_evict:
 			break
-
 		_cache_lru_tick.erase(oldest_key)
 		if _data_cache.has(oldest_key):
 			var game = _data_cache[oldest_key]
 			if game and game.romm_id != 0:
 				_cached_game_ids.erase(game.romm_id)
 			_data_cache.erase(oldest_key)
+		evicted += 1

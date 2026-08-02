@@ -314,6 +314,12 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	var request_start_us := Time.get_ticks_usec()
 	SystemManager.memory.queue_db_task(
 		func():
+			if not is_instance_valid(games_grid) or not games_grid.is_load_pending(offset):
+				return {
+					"games": [] as Array[GameResource],
+					"offset": offset,
+					"gamenative_indices": {}
+				}
 			var db_start_us := Time.get_ticks_usec()
 			var request_end = offset + limit
 			# The cache must FULLY contain the requested range, not just overlap.
