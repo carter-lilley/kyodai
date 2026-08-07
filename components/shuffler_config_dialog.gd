@@ -6,6 +6,9 @@ signal start_session_requested(config: Dictionary)
 
 var _platform_grid: VBoxContainer
 var _cards_right: VBoxContainer
+var _cards_hbox: HBoxContainer
+var _loading_indicator: Control
+var _loading_platforms: bool = false
 var _platform_cards: Dictionary[String, PlatformCard] = {}
 var _selected_platforms: Array[String] = []
 var _pending_cards: Array[PlatformCard] = []
@@ -142,6 +145,7 @@ func _build_content() -> void:
 	cards_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cards_hbox.add_theme_constant_override("separation", int(M3Units.dp(8)))
 	vbox.add_child(cards_hbox)
+	_cards_hbox = cards_hbox
 
 	_platform_grid = VBoxContainer.new()
 	_platform_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -163,7 +167,42 @@ func _build_actions() -> void:
 	add_action("Start Session", _on_start_pressed, true)
 	add_action("Cancel", dismiss)
 
+func _show_loading_indicator() -> void:
+	_hide_loading_indicator()
+	var wrapper = CenterContainer.new()
+	wrapper.name = "LoadingIndicator"
+	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapper.custom_minimum_size = Vector2(0, M3Units.dp(120))
+	var spinner = M3Progress.new()
+	spinner.mode = M3Progress.Mode.CIRCULAR
+	spinner.progress_size = M3Progress.Size.LARGE
+	spinner.indeterminate = true
+	wrapper.add_child(spinner)
+	_cards_hbox.add_child(wrapper)
+	_cards_hbox.move_child(wrapper, 0)
+	_loading_indicator = wrapper
+
+func _hide_loading_indicator() -> void:
+	if is_instance_valid(_loading_indicator):
+		_loading_indicator.queue_free()
+		_loading_indicator = null
+	if _cards_hbox:
+		for child in _cards_hbox.get_children():
+			if child.name.contains("LoadingIndicator"):
+				child.queue_free()
+
 func _load_platforms() -> void:
+	if _loading_platforms:
+		return
+	_loading_platforms = true
+	_show_loading_indicator()
+	# Defer the heavy precompute so the spinner draws before the main thread blocks.
+	call_deferred("_load_platforms_deferred")
+
+func _load_platforms_deferred() -> void:
+	if not is_inside_tree():
+		_loading_platforms = false
+		return
 	var platforms = DataManager.get_platforms_with_games()
 	var enabled_platforms = _get_enabled_platforms()
 	var platform_emulator_cache: Dictionary = {}
@@ -211,10 +250,12 @@ func _load_platforms() -> void:
 			pass,
 		func(results: Array):
 			_active_batch_id = -1
+			_loading_platforms = false
 			if not is_inside_tree():
 				_return_all_cards()
 				return
 
+			_hide_loading_indicator()
 			var column_index := 0
 			var created_cards: Array[PlatformCard] = []
 			for card in results:
@@ -364,6 +405,8 @@ func _exit_tree() -> void:
 	_return_all_cards()
 
 func _return_all_cards() -> void:
+	_hide_loading_indicator()
+	_loading_platforms = false
 	if _active_batch_id != -1:
 		MemorySubManager.cancel_batch(_active_batch_id)
 		_active_batch_id = -1

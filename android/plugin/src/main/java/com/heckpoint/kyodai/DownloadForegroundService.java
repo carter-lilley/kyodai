@@ -167,6 +167,13 @@ public class DownloadForegroundService extends Service {
             Log.e(TAG, "Error stopping foreground: " + e.getMessage());
         }
         
+        // Explicitly cancel the notification as a safety net in case
+        // stopForeground fails silently on newer Android versions.
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.cancel(NOTIFICATION_ID);
+        }
+        
         stopSelf();
     }
     

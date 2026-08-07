@@ -6,7 +6,6 @@
 	"3do": {
 		"name": "3Do",
 		"default_emulator": "retroarch",
-		"retroarch_core": "opera",
 		"firmware": {
 			"expected_files": [
 				"panafz1.bin",
@@ -20,7 +19,6 @@
 	"arcade": {
 		"name": "Arcade",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mame2003_plus",
 		"firmware": {
 
 		}
@@ -28,7 +26,6 @@
 	"atari2600": {
 		"name": "Atari2600",
 		"default_emulator": "retroarch",
-		"retroarch_core": "stella",
 		"firmware": {
 
 		}
@@ -36,7 +33,6 @@
 	"lynx": {
 		"name": "Lynx",
 		"default_emulator": "retroarch",
-		"retroarch_core": "handy",
 		"firmware": {
 			"expected_files": [
 				"lynxboot.img"
@@ -46,7 +42,6 @@
 	"atomiswave": {
 		"name": "Atomiswave",
 		"default_emulator": "retroarch",
-		"retroarch_core": "flycast",
 		"firmware": {
 			"expected_files": [
 				"dc/awbios.zip"
@@ -56,7 +51,6 @@
 	"c64": {
 		"name": "C64",
 		"default_emulator": "retroarch",
-		"retroarch_core": "vice_x64",
 		"firmware": {
 			"expected_files": [
 				"JiffyDOS_C64.bin",
@@ -69,7 +63,6 @@
 	"dos": {
 		"name": "Dos",
 		"default_emulator": "retroarch",
-		"retroarch_core": "dosbox_pure",
 		"firmware": {
 			"expected_files": [
 				"MT32_CONTROL.ROM",
@@ -80,7 +73,6 @@
 	"dc": {
 		"name": "Dc",
 		"default_emulator": "retroarch",
-		"retroarch_core": "flycast",
 		"firmware": {
 			"expected_files": [
 				"dc/dc_boot.bin"
@@ -90,7 +82,6 @@
 	"fds": {
 		"name": "Fds",
 		"default_emulator": "retroarch",
-		"retroarch_core": "nestopia",
 		"firmware": {
 			"expected_files": [
 				"disksys.rom"
@@ -100,7 +91,6 @@
 	"g-and-w": {
 		"name": "G And W",
 		"default_emulator": "retroarch",
-		"retroarch_core": "gw",
 		"firmware": {
 
 		}
@@ -108,7 +98,6 @@
 	"gb": {
 		"name": "Gb",
 		"default_emulator": "retroarch",
-		"retroarch_core": "gambatte",
 		"firmware": {
 			"expected_files": [
 				"gb_bios.bin",
@@ -120,7 +109,6 @@
 	"gba": {
 		"name": "Gba",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mgba",
 		"firmware": {
 			"expected_files": [
 				"gba_bios.bin"
@@ -130,7 +118,6 @@
 	"gbc": {
 		"name": "Gbc",
 		"default_emulator": "retroarch",
-		"retroarch_core": "gambatte",
 		"firmware": {
 			"expected_files": [
 				"gbc_bios.bin",
@@ -141,7 +128,6 @@
 	"msx": {
 		"name": "Msx",
 		"default_emulator": "retroarch",
-		"retroarch_core": "bluemsx",
 		"firmware": {
 			"expected_files": [
 				"MSX.ROM",
@@ -153,7 +139,6 @@
 	"naomi": {
 		"name": "Naomi",
 		"default_emulator": "retroarch",
-		"retroarch_core": "flycast",
 		"firmware": {
 			"expected_files": [
 				"dc/naomi.zip"
@@ -163,7 +148,6 @@
 	"naomi2": {
 		"name": "Naomi2",
 		"default_emulator": "retroarch",
-		"retroarch_core": "flycast",
 		"firmware": {
 			"expected_files": [
 				"dc/naomi.zip"
@@ -173,7 +157,6 @@
 	"neogeoaes": {
 		"name": "Neogeoaes",
 		"default_emulator": "retroarch",
-		"retroarch_core": "fbneo",
 		"firmware": {
 
 		}
@@ -181,7 +164,6 @@
 	"neo-geo-pocket-color": {
 		"name": "Neo Geo Pocket Color",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mednafen_ngp",
 		"firmware": {
 
 		}
@@ -189,7 +171,6 @@
 	"3ds": {
 		"name": "3Ds",
 		"default_emulator": "azahar",
-		"retroarch_core": "citra",
 		"firmware": {
 
 		}
@@ -197,7 +178,6 @@
 	"n64": {
 		"name": "N64",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mupen64plus_next",
 		"firmware": {
 
 		}
@@ -216,7 +196,6 @@
 	"nes": {
 		"name": "Nes",
 		"default_emulator": "retroarch",
-		"retroarch_core": "nestopia",
 		"firmware": {
 
 		}
@@ -224,7 +203,6 @@
 	"ngc": {
 		"name": "Ngc",
 		"default_emulator": "dolphin",
-		"retroarch_core": "dolphin_ngc",
 		"firmware": {
 
 		}
@@ -232,7 +210,6 @@
 	"win3x": {
 		"name": "Win3X",
 		"default_emulator": "retroarch",
-		"retroarch_core": "dosbox_pure",
 		"firmware": {
 			"expected_files": [
 				"MT32_CONTROL.ROM",
@@ -243,7 +220,6 @@
 	"pico8": {
 		"name": "Pico8",
 		"default_emulator": "retroarch",
-		"retroarch_core": "pico8",
 		"firmware": {
 
 		}
@@ -251,7 +227,6 @@
 	"psx": {
 		"name": "Psx",
 		"default_emulator": "retroarch",
-		"retroarch_core": "pcsx_rearmed",
 		"firmware": {
 			"expected_files": [
 				"scph5500.bin",
@@ -267,7 +242,6 @@
 	"ps2": {
 		"name": "Ps2",
 		"default_emulator": "pcsx2",
-		"retroarch_core": "pcsx2",
 		"firmware": {
 			"expected_files": [
 				"bios/ps2-0200a-20040614.bin",
@@ -295,7 +269,6 @@
 	"psp": {
 		"name": "Psp",
 		"default_emulator": "ppsspp",
-		"retroarch_core": "ppsspp",
 		"firmware": {
 
 		}
@@ -312,7 +285,6 @@
 	"sega32": {
 		"name": "Sega32",
 		"default_emulator": "retroarch",
-		"retroarch_core": "picodrive",
 		"firmware": {
 
 		}
@@ -320,7 +292,6 @@
 	"segacd": {
 		"name": "Segacd",
 		"default_emulator": "retroarch",
-		"retroarch_core": "genesis_plus_gx",
 		"firmware": {
 			"expected_files": [
 				"bios_CD_U.bin",
@@ -332,7 +303,6 @@
 	"gamegear": {
 		"name": "Gamegear",
 		"default_emulator": "retroarch",
-		"retroarch_core": "genesis_plus_gx",
 		"firmware": {
 			"expected_files": [
 				"bios.gg"
@@ -342,7 +312,6 @@
 	"sms": {
 		"name": "Sms",
 		"default_emulator": "retroarch",
-		"retroarch_core": "genesis_plus_gx",
 		"firmware": {
 			"expected_files": [
 				"bios_U.sms",
@@ -354,7 +323,6 @@
 	"genesis": {
 		"name": "Genesis",
 		"default_emulator": "retroarch",
-		"retroarch_core": "genesis_plus_gx",
 		"firmware": {
 			"expected_files": [
 				"bios_MD.bin"
@@ -364,7 +332,6 @@
 	"saturn": {
 		"name": "Saturn",
 		"default_emulator": "retroarch",
-		"retroarch_core": "yabasanshiro",
 		"firmware": {
 			"expected_files": [
 				"saturn_bios.bin",
@@ -377,7 +344,6 @@
 	"sg1000": {
 		"name": "Sg1000",
 		"default_emulator": "retroarch",
-		"retroarch_core": "genesis_plus_gx",
 		"firmware": {
 
 		}
@@ -385,7 +351,6 @@
 	"snes": {
 		"name": "Snes",
 		"default_emulator": "retroarch",
-		"retroarch_core": "snes9x",
 		"firmware": {
 			"expected_files": [
 				"BS-X.bin",
@@ -396,7 +361,6 @@
 	"tg16": {
 		"name": "Tg16",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mednafen_pce",
 		"firmware": {
 			"expected_files": [
 				"syscard3.pce",
@@ -409,7 +373,6 @@
 	"turbografx-cd": {
 		"name": "Turbografx Cd",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mednafen_pce",
 		"firmware": {
 			"expected_files": [
 				"syscard3.pce",
@@ -422,7 +385,6 @@
 	"virtualboy": {
 		"name": "Virtualboy",
 		"default_emulator": "retroarch",
-		"retroarch_core": "mednafen_vb",
 		"firmware": {
 
 		}
@@ -430,7 +392,6 @@
 	"wii": {
 		"name": "Wii",
 		"default_emulator": "dolphin",
-		"retroarch_core": "dolphin_wii",
 		"firmware": {
 
 		}

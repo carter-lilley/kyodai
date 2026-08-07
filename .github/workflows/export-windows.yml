@@ -9,8 +9,6 @@ env:
   GODOT_EXE: Godot_v4.7-stable_win64.exe
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:

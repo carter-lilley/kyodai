@@ -162,6 +162,8 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 	if emulator_info.get("requires_working_dir", false) or emulator_id.begins_with("vita3k"):
 		intent.working_directory = exe_path.get_base_dir().replace("//", "/")
 	var pid = await process._create_desktop_process(intent)
+	if pid > 0:
+		process.enter_background_state(pid, null)
 	return pid > 0
 
 func _get_emulator_directory(emulator_id: String) -> String:

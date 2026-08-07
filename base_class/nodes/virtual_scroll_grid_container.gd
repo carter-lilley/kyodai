@@ -10,6 +10,11 @@ static var startup_layout_suppressed: bool = true
 # edge cases. Above this threshold only visible cards plus a buffer are created.
 const SMALL_LIBRARY_THRESHOLD: int = 50
 
+# Upper bound for a single data request. Legitimate batches cover one buffer
+# window or a preload span (tens of items); anything larger indicates a
+# pathological state and would stall the DB worker.
+const MAX_DATA_REQUEST_ITEMS: int = 500
+
 signal items_requested(offset, limit)
 signal visible_range_changed(start, end, total)
 signal item_created(item, index)
@@ -259,6 +264,23 @@ const ZOOM_SINGLE_STEP_MAX := 6
 # Source of truth for GRID-mode zoom: the exact number of items per line.
 # 0 = unset; derived from target_card_width_ratio on the next valid layout.
 var _grid_items_per_line: int = 0
+
+# Scroll anchor snapshot (x = virtual index, y = intra-line fraction; x < 0 =
+# unset). Captured by _set_grid_n_silent BEFORE items-per-line changes so
+# _recalculate_layout can restore the view in index space; capturing after the
+# N change would compute the anchor against the NEW items-per-line, which
+# preserves the line number instead of the content (teleport on zoom).
+var _scroll_anchor: Vector2 = Vector2(-1.0, 0.0)
+
+# Target of a guarded scroll write made during a layout recalc (< 0 = none).
+# The ScrollContainer's scrollbar range is stale mid-frame (it updates at the
+# end-of-frame sort), so a write beyond the old range gets clamped; the clamp
+# emits value_changed with the clamped value, which would rebuild the buffer
+# window at the wrong offset. While this is set, the scroll handler ignores
+# values that are clearly the clamp echo rather than the intended position.
+var _guarded_scroll_target: float = -1.0
+var _guarded_scroll_attempts: int = 0
+const MAX_GUARDED_SCROLL_ATTEMPTS: int = 3
 
 # Zoom-stop caches (rebuilt when the cache key changes)
 var _snap_levels_cache: Array[int] = []
@@ -609,6 +631,30 @@ func set_focused_card(virtual_index: int) -> void:
 	_focused_virtual_index = virtual_index
 	_update_layout()
 	_update_margin()
+
+## Captures the current scroll position as an index-space anchor:
+## Vector2(x = anchor virtual index, y = intra-line fraction), or x = -1 when
+## no valid anchor exists. The anchor is the focused card when there is one,
+## else the first slot of the top visible line. MUST be called before any
+## geometry change (items-per-line / card size) it is meant to survive.
+func _capture_scroll_anchor(focus_index: int) -> Vector2:
+	if not _scroll_container or _source_total_items <= 0:
+		return Vector2(-1.0, 0.0)
+	var scroll_pos: float = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
+	var stride: float = _get_normal_stride()
+	var items_per_line: int = _get_items_per_line()
+	if stride <= 0.0 or items_per_line <= 0:
+		return Vector2(-1.0, 0.0)
+	if focus_index >= 0:
+		var anchor_index = mini(focus_index, _source_total_items - 1)
+		var frac = (scroll_pos - _get_slot_position_for_index(anchor_index, items_per_line, stride)) / stride
+		print("[ZoomBug] capture: focus=", focus_index, " scroll=", scroll_pos, " stride=", stride, " ipl=", items_per_line, " -> anchor=(", anchor_index, ", ", frac, ")")
+		return Vector2(anchor_index, frac)
+	var top_line = int(floor(scroll_pos / stride))
+	var anchor_index2 = clampi(top_line * items_per_line, 0, _source_total_items - 1)
+	var frac2 = (scroll_pos - top_line * stride) / stride
+	print("[ZoomBug] capture: focus=-1 scroll=", scroll_pos, " stride=", stride, " ipl=", items_per_line, " -> anchor=(", anchor_index2, ", ", frac2, ")")
+	return Vector2(anchor_index2, frac2)
 
 func _ready():
 	_setup_ui()
@@ -1058,11 +1104,20 @@ func _process_pending_visual_setup() -> void:
 		if not is_instance_valid(card) or not _active_cards.has(card):
 			_pending_visual_setup.erase(idx)
 			continue
+		# Count ATTEMPTS toward the per-frame budget, not just successes:
+		# cards whose data hasn't arrived yet stay pending, and without an
+		# attempt cap the loop iterates the entire pending dict every frame
+		# (livelock when many cards are waiting on the DB).
+		processed += 1
 		var setup_ok = _apply_card_visual_setup(card, idx)
 		if debug_mode: print("[Grid] _process_pending_visual_setup: idx=", idx, " setup_ok=", setup_ok)
 		if setup_ok:
 			_pending_visual_setup.erase(idx)
-			processed += 1
+		else:
+			# Re-queue at the end (dicts iterate in insertion order) so a run
+			# of data-starved cards at the front can't block the rest.
+			_pending_visual_setup.erase(idx)
+			_pending_visual_setup[idx] = card
 	if debug_mode:
 		print("[Grid] _process_pending_visual_setup: processed=", processed, " remaining=", _pending_visual_setup.size())
 
@@ -1236,6 +1291,24 @@ func set_zoom_level(level: int) -> bool:
 		return false
 	return _set_grid_items_per_line(levels[clampi(level, 0, levels.size() - 1)])
 
+## Stamps a zoom level without recalculating layout. Intended for hidden views:
+## the layout settles when the view is next shown (View.on_view_show runs
+## recalculate_layout_with_size). Returns true if N changed.
+func stamp_zoom_level(level: int) -> bool:
+	var levels = get_snap_levels()
+	if levels.is_empty():
+		return false
+	return _set_grid_n_silent(levels[clampi(level, 0, levels.size() - 1)])
+
+## Stamps a LIST/CAROUSEL zoom ratio without recalculating layout (hidden views
+## settle on show).
+func stamp_zoom_ratio(p_ratio: float) -> void:
+	var max_ratio = _calculate_max_ratio()
+	var clamped = clampf(p_ratio, 0.05, max_ratio)
+	_batching_layout = true
+	target_card_width_ratio = clamped
+	_batching_layout = false
+
 ## Applies the given zoom level without triggering a layout recalculation
 ## (batch contexts recalculate once at the end). Returns true if N changed.
 func _apply_zoom_level(p_level: int) -> bool:
@@ -1253,6 +1326,8 @@ func _set_grid_items_per_line(n: int) -> bool:
 func _set_grid_n_silent(n: int) -> bool:
 	if _grid_items_per_line == n:
 		return false
+	# Snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
+	_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
 	_grid_items_per_line = n
 	# Keep the derived ratio in sync for persistence/UI without re-entering
 	# the snapping path.
@@ -1650,6 +1725,17 @@ func _recalculate_layout():
 	# cards are recycled and recreated.
 	var saved_focus_index: int = _get_focused_virtual_index()
 
+	# Resolve the scroll anchor for this recalc. Prefer the snapshot taken by
+	# _set_grid_n_silent BEFORE items-per-line changed (zoom path); otherwise
+	# capture inline, which is correct because N is unchanged in that case.
+	var anchor: Vector2 = _scroll_anchor
+	_scroll_anchor = Vector2(-1.0, 0.0)
+	if anchor.x < 0.0:
+		anchor = _capture_scroll_anchor(saved_focus_index)
+	var anchor_index: int = int(anchor.x)
+	var anchor_frac: float = anchor.y
+	print("[ZoomBug] recalc: saved_focus=", saved_focus_index, " anchor=(", anchor_index, ", ", anchor_frac, ") N=", _grid_items_per_line, " source_items=", _source_total_items)
+
 	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions_for_mode()
 
@@ -1782,6 +1868,40 @@ func _recalculate_layout():
 	_update_layout()
 	_update_margin()
 	_flow_container.queue_sort()
+
+	# Restore the scroll position from the pre-recalc anchor so a zoom change
+	# keeps the same content in view instead of re-interpreting the old pixel
+	# offset against the new stride (which teleports the buffer window and
+	# forces a full card rebuild). The clamp uses computed content-end math,
+	# never the live scrollbar range (which is stale until end-of-frame sort).
+	var restored_scroll: float = -1.0
+	if anchor_index >= 0:
+		var new_stride: float = _cached_normal_stride
+		var new_ipl: int = _cached_items_per_line
+		if new_stride > 0.0 and new_ipl > 0:
+			var new_scroll: float = _get_slot_position_for_index(anchor_index, new_ipl, new_stride) + anchor_frac * new_stride
+			var overflow_axis: float = _get_focus_overflow().y if vertical else _get_focus_overflow().x
+			var viewport_axis: float = available.y if vertical else available.x
+			var max_scroll: float = maxf(0.0, _get_content_end_position() + 2.0 * overflow_axis - viewport_axis)
+			new_scroll = clampf(new_scroll, 0.0, max_scroll)
+			# Keep the focused card inside the viewport in the NEW geometry. The
+			# anchor preserves its scroll-relative position, which can strand it
+			# fully offscreen when the stride grows past the viewport (zoom-in).
+			# Computed math only — never the live scrollbar range.
+			if saved_focus_index >= 0 and saved_focus_index < _source_total_items:
+				var focus_slot := _get_slot_position_for_index(saved_focus_index, new_ipl, new_stride)
+				var edge_margin := float(grid_separation)
+				if focus_slot - edge_margin < new_scroll:
+					new_scroll = focus_slot - edge_margin
+				elif focus_slot + new_stride + edge_margin > new_scroll + viewport_axis:
+					new_scroll = focus_slot + new_stride + edge_margin - viewport_axis
+				new_scroll = clampf(new_scroll, 0.0, max_scroll)
+			restored_scroll = new_scroll
+			var zb_cur: float = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
+			print("[ZoomBug] restore: idx=", anchor_index, " frac=", anchor_frac, " ipl=", new_ipl, " stride=", new_stride, " scroll ", zb_cur, " -> ", new_scroll, " max=", max_scroll)
+			if debug_mode:
+				print("[Grid] anchor restore: idx=", anchor_index, " frac=", anchor_frac, " ipl=", new_ipl, " stride=", new_stride, " scroll ", zb_cur, " -> ", new_scroll, " max=", max_scroll)
+
 	var _active_before: int = _active_cards.size()
 	var _first_before: int = -1
 	var _last_before: int = -1
@@ -1794,17 +1914,32 @@ func _recalculate_layout():
 	# grid prepends a large range of stale blank cards instead of rebuilding the
 	# correct visible range. The end-of-frame ScrollContainer clamp signal is still
 	# suppressed by _suppress_recycle_until_frame, so this does not cause extra
-	# recycling from that deferred signal.
-	if vertical:
-		_on_scroll_value_changed(_scroll_container.scroll_vertical, true)
-	else:
-		_on_scroll_value_changed(_scroll_container.scroll_horizontal, true)
+	# recycling from that deferred signal. force_recycle=true bypasses the
+	# suppression for this synchronous call only.
+	#
+	# IMPORTANT: the window is built against the COMPUTED anchor position, not
+	# the scrollbar value. The scrollbar range is stale mid-frame and clamps
+	# writes beyond the old max (zoom-in at deep positions), which previously
+	# rebuilt the window at the clamped offset and recycled the focused card.
+	var recycle_pos: float = restored_scroll
+	if recycle_pos < 0.0:
+		recycle_pos = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
+	_on_scroll_value_changed(recycle_pos, true, true)
 	var _active_after: int = _active_cards.size()
 	var _first_after: int = -1
 	var _last_after: int = -1
 	if _active_cards.size() > 0:
 		_first_after = _active_cards[0].get_meta("virtual_index", -1)
 		_last_after = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+	if debug_mode:
+		print("[Grid] recalc recycle: active ", _active_before, " -> ", _active_after, " (", _first_before, "-", _last_before, " -> ", _first_after, "-", _last_after, ")")
+
+	# Sync the scrollbar to the restored position via the guarded writer (the
+	# window above was built from the computed position, so even if the stale
+	# scrollbar range clamps this write, the view and focus stay correct; the
+	# deferred corrective write repairs the scrollbar itself).
+	if restored_scroll >= 0.0:
+		_set_scroll_position_guarded(restored_scroll)
 
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
@@ -1840,10 +1975,12 @@ func _recalculate_layout():
 	call_deferred("_sync_and_mark_card_visual_transforms")
 
 	# Restore focus to the card that was focused before layout recalculation.
-	# scroll_to_index_and_focus waits for the target card to exist and suppresses
-	# the smooth-scroll response, avoiding focus loss during long centering tweens.
-	if saved_focus_index >= 0:
-		call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
+	# The anchor restore above already placed it in view, so this must NOT
+	# scroll (re-centering would fight the anchor and, worse, its clamp reads
+	# the stale scrollbar range mid-frame, which could strand the target
+	# offscreen and lose focus entirely on zoom-in).
+	if saved_focus_index >= 0 and saved_focus_index < _source_total_items:
+		call_deferred("_restore_focus_only", saved_focus_index)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -2401,9 +2538,17 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	if _buffer_target_end < _total_items and (_total_items - _buffer_target_end) < items_per_line:
 		_buffer_target_end = _total_items
 
-func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
+func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_recycle: bool = false):
 	if _is_processing_scroll:
 		return
+	# Ignore the clamp echo from a guarded recalc-time scroll write: the stale
+	# scrollbar range can clamp the write, and acting on the clamped value
+	# would rebuild the buffer window at the wrong offset. The deferred
+	# corrective write restores the intended position.
+	if _guarded_scroll_target >= 0.0 and not force_recycle:
+		if absf(value - _guarded_scroll_target) > maxf(_get_normal_stride(), 1.0):
+			print("[ZoomBug] echo-skip: value=", value, " target=", _guarded_scroll_target)
+			return
 	_is_processing_scroll = true
 
 	if _total_items == 0 or not _scroll_container:
@@ -2413,7 +2558,10 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	# Suppress recycling during the frame(s) after a layout recalculation.
 	# ScrollContainer may clamp its scroll value at end-of-frame and emit a
 	# signal that would otherwise recycle cards with allow_recycle=true.
-	if Engine.get_process_frames() <= _suppress_recycle_until_frame:
+	# force_recycle bypasses this for the explicit synchronous recycle call
+	# inside _recalculate_layout() itself; without the bypass, zooming in
+	# never trims the active set and cards accumulate across zoom ticks.
+	if not force_recycle and Engine.get_process_frames() <= _suppress_recycle_until_frame:
 		allow_recycle = false
 
 	var scroll_pos = int(value)
@@ -2424,8 +2572,22 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	var viewport_size = available.y if vertical else available.x
 	_compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
 
-	# Batch recycle from top — skip during layout recalculations (zoom changes)
-	# so cards are not reset and their images stay loaded.
+	# Teleport guard: if the new buffer window doesn't overlap the active
+	# window at all, this is a jump (random-game button, focus restore), not a
+	# small correction. The recycle suppression above exists for tiny
+	# end-of-frame clamp wiggles after a recalc — the windows still overlap in
+	# that case. Applying it to a teleport would bridge the entire gap with
+	# adds (thousands of cards), so force recycling and rebuild from scratch.
+	if _active_cards.size() > 0:
+		var active_first: int = _active_cards[0].get_meta("virtual_index", -1)
+		var active_last: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+		if active_last < _buffer_target_start or active_first >= _buffer_target_end:
+			allow_recycle = true
+
+	# Batch recycle from top. Runs for organic scroll signals and for the
+	# explicit synchronous recycle in _recalculate_layout() (force_recycle);
+	# skipped for the deferred ScrollContainer clamp signal in the frames
+	# right after a layout recalculation (see _suppress_recycle_until_frame).
 	if allow_recycle:
 		var recycle_top_count = 0
 		for card in _active_cards:
@@ -2470,6 +2632,8 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true):
 	if _active_cards.size() > 0:
 		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
 		_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
+	elif _total_items > 0:
+		print("[ZoomBug] BLANK: active=0 scroll_pos=", scroll_pos, " buffer=", _buffer_target_start, "-", _buffer_target_end, " total=", _total_items, " ipl=", items_per_line, " stride=", stride)
 
 	_request_missing_data()
 
@@ -3194,7 +3358,13 @@ func _release_focus_if_inside(card: Control) -> void:
 		return
 	var focused := viewport.gui_get_focus_owner()
 	if focused and (focused == card or card.is_ancestor_of(focused)):
+		print("[ZoomBug] release_focus_if_inside: card_idx=", card.get_meta("virtual_index", -1))
 		viewport.gui_release_focus()
+		# gui_focus_changed ignores the null owner, so the lock taken when the
+		# card was focused would persist with no focus owner (swallowing input)
+		# if the deferred focus restore fails. Release it; the restore re-locks.
+		if UIManager:
+			UIManager.exit_focus_lock(self)
 
 func _release_focus_inside_grid() -> void:
 	"""Release focus if it currently belongs to any card inside this grid."""
@@ -3217,6 +3387,10 @@ func _request_data(offset: int, limit: int):
 	if limit <= 0 or offset < 0 or offset >= _total_items:
 		return
 
+	# Cap batch size: legitimate requests cover one buffer window (a few dozen
+	# items) or a preload span. Multi-thousand-item queries only ever come from
+	# a pathological active-set state and can stall the DB worker for seconds.
+	limit = mini(limit, MAX_DATA_REQUEST_ITEMS)
 	limit = min(limit, _total_items - offset)
 	_pending_loads_mutex.lock()
 	_pending_loads[offset] = limit
@@ -3437,6 +3611,59 @@ func _get_current_scroll_pos() -> float:
 		return 0.0
 	return float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
 
+## Writes a scroll position during a layout recalc. Use this for ALL scroll
+## writes issued while the layout is mid-recalculation: the scrollbar's
+## max_value is stale until the end-of-frame sort, so a plain write beyond the
+## old range is clamped and the clamp's value_changed rebuilds the buffer
+## window at the wrong offset (previously: zoom-in at deep scroll positions
+## teleported the view and recycled the focused card).
+##
+## Strategy: pre-raise max_value (to what the sort will compute anyway), guard
+## the scroll handler against the clamp echo, write, then queue a deferred
+## corrective write. The corrective RE-ARMS the guard (a plain write there
+## clamped again and destroyed the window) and is attempt-capped.
+func _set_scroll_position_guarded(pos: float) -> void:
+	if not _scroll_container:
+		return
+	_guarded_scroll_attempts = 0
+	_apply_guarded_scroll(pos)
+
+func _apply_guarded_scroll(pos: float) -> void:
+	var scrollbar: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+	var viewport_axis: float = _get_available_size().y if vertical else _get_available_size().x
+	if scrollbar:
+		# scrollbar.page is 0 before the first sort; fall back to the viewport.
+		var page: float = maxf(scrollbar.page, viewport_axis)
+		if pos > scrollbar.max_value - page:
+			scrollbar.max_value = pos + page
+	_guarded_scroll_target = pos
+	_scroll_container.scroll_to(int(pos), false)
+	print("[ZoomBug] guarded-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0)
+	call_deferred("_correct_guarded_scroll")
+
+func _correct_guarded_scroll() -> void:
+	if _guarded_scroll_target < 0.0:
+		return
+	var target := _guarded_scroll_target
+	if not is_inside_tree() or not _scroll_container:
+		_guarded_scroll_target = -1.0
+		return
+	var current := _get_current_scroll_pos()
+	print("[ZoomBug] corrective: current=", current, " target=", target, " attempt=", _guarded_scroll_attempts)
+	if absf(current - target) <= 1.0:
+		# Write stuck (Range emits nothing when the value doesn't change).
+		_guarded_scroll_target = -1.0
+		return
+	_guarded_scroll_attempts += 1
+	if _guarded_scroll_attempts >= MAX_GUARDED_SCROLL_ATTEMPTS:
+		# The range persistently rejects the target (our computed max was wrong
+		# or the sort hasn't run). Accept the engine's position rather than
+		# loop; subsequent scroll signals process normally with the guard clear.
+		push_warning("[Grid] guarded scroll write did not stick after %d attempts (target=%f)" % [MAX_GUARDED_SCROLL_ATTEMPTS, target])
+		_guarded_scroll_target = -1.0
+		return
+	_apply_guarded_scroll(target)
+
 func get_centered_scroll_for_index(idx: int) -> float:
 	"""Scroll position that places the center of slot `idx` at the viewport
 	center (clamped to the scrollable range). Cards grow around their center
@@ -3525,6 +3752,7 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 	"""Scroll to an item and focus it, honoring the focus-centering mode."""
 	if not _scroll_container:
 		return
+	print("[ZoomBug] scroll_to_index_and_focus: idx=", index, " animate=", animate, " cur_scroll=", _get_current_scroll_pos(), " active=", _active_cards.size())
 	_focus_request_id += 1
 	var request_id := _focus_request_id
 	# Defocus the grid before scrolling so the currently focused card is not
@@ -3574,6 +3802,20 @@ func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:
 		_deferred_focus_index(index, request_id, attempt + 1)
 	else:
 		_pending_focus_index = -1
+
+func _restore_focus_only(index: int) -> void:
+	"""Re-grab focus on the card for `index` without changing the scroll
+	position. Used after layout recalcs, where the scroll anchor already
+	positioned the focused card. Falls back to the pending-focus path (applied
+	by the next scroll rebuild) if the card hasn't been created yet."""
+	if not is_inside_tree():
+		return
+	var card := get_card_at_index(index)
+	print("[ZoomBug] restore_focus_only: idx=", index, " card_found=", card != null, " active=", _active_cards.size(), " first=", _active_cards[0].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1, " last=", _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1)
+	if card and is_instance_valid(card) and card.is_inside_tree():
+		_apply_focus_to_card(card)
+	else:
+		_pending_focus_index = index
 
 func _apply_focus_to_card(card: Control) -> void:
 	"""Focus a card and suppress the container's follow-focus auto-scroll.

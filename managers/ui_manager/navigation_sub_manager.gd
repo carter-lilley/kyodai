@@ -68,6 +68,10 @@ func _setup_timers() -> void:
 	add_child(_repeat_timer)
 
 func _process(_delta: float) -> void:
+	# Block all navigation during background state (emulator running)
+	if LaunchManager and LaunchManager.is_in_background_state():
+		return
+
 	# Let the on-screen keyboard handle its own controller navigation.
 	if UIManager and UIManager.is_onscreen_keyboard_visible():
 		# Safety trap: a held analog direction from before the keyboard opened may

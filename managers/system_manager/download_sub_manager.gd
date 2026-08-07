@@ -2823,8 +2823,9 @@ func _start_extraction(item: QueueItem):
 	if not _active_items.has(item.id):
 		_active_items[item.id] = item
 
-	# Start foreground service on Android to prevent app kill during extraction
-	_start_foreground_service(item.name)
+	# Foreground service is already running from _start_download() — do not
+	# call _start_foreground_service() here or the active-download count will
+	# never reach 0 and the Android notification will persist after extraction.
 
 	extraction_started.emit(item.id)
 

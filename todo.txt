@@ -2,7 +2,6 @@
 
 xemu save sync
 tst emulator app update flow on android
-downloading core android notif stuck
 
 romm;
 - mark 'played' if played

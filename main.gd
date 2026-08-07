@@ -810,6 +810,10 @@ func _on_zoom_changed(value: float):
 
 		# Apply the same level to ALL grid views. Each grid resolves the level
 		# to its own items-per-line stop so the zoom level stays consistent.
+		# Hidden views only get the level stamped; running their full layout
+		# (card adds, effect rebuilds, data requests) while invisible multiplies
+		# the zoom cost by every instantiated view. They settle on next show
+		# via View.on_view_show -> recalculate_layout_with_size.
 		if UIManager:
 			for view_name in UIManager.view._views.keys():
 				if not _is_grid_view(view_name):
@@ -818,7 +822,10 @@ func _on_zoom_changed(value: float):
 				if view:
 					var games_grid = _get_view_grid(view)
 					if games_grid:
-						games_grid.set_zoom_level(level)
+						if view.is_visible_in_tree():
+							games_grid.set_zoom_level(level)
+						else:
+							games_grid.stamp_zoom_level(level)
 		else:
 			return
 		return
@@ -837,8 +844,11 @@ func _on_zoom_changed(value: float):
 			if view:
 				var games_grid = _get_view_grid(view)
 				if games_grid:
-					if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
-						games_grid.target_card_width_ratio = actual_zoom
+					if view.is_visible_in_tree():
+						if not is_equal_approx(actual_zoom, games_grid.target_card_width_ratio):
+							games_grid.target_card_width_ratio = actual_zoom
+					else:
+						games_grid.stamp_zoom_ratio(actual_zoom)
 
 func _on_zoom_changed_finished(value_changed: bool):
 	"""Called when drag ends - saves the current slider value to settings."""
@@ -1249,6 +1259,7 @@ func _adjust_zoom(delta: float) -> void:
 		var new_index = clampi(current_index + sign(delta), 0, _current_snap_ratios.size() - 1)
 		if new_index != current_index:
 			var focused_index = _get_focused_card_index()
+			print("[ZoomBug] _adjust_zoom: delta=", delta, " current=", current_index, " new=", new_index, " focused_index=", focused_index)
 			zoom_slider.set_value_no_signal(new_index)
 			_on_zoom_changed(new_index)
 			if focused_index >= 0:
@@ -1327,8 +1338,12 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	if not card:
 		return
 
-	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node)
+	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node).
+	# Suppress the container's follow-focus smooth scroll: the grid already ran
+	# scroll_to_index_and_focus for this zoom tick, and an unsuppressed provider
+	# scroll here overrides in-flight wheel scrolling and spams value_changed.
 	if card is Control and card.focus_mode != Control.FOCUS_NONE:
+		card.set_meta("_suppress_smooth_scroll", true)
 		card.grab_focus()
 
 func _on_screens_swapped(_is_swapped: bool) -> void:

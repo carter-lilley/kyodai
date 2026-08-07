@@ -16,6 +16,11 @@ signal scroll_completed()
 ## the target and restart the tween, so a longer fixed duration keeps repeated
 ## ticks chasing the target smoothly instead of stuttering.
 @export var wheel_scroll_duration: float = 1.0
+## Chase velocity (px/sec) for free-scroll wheel ticks. Each tick restarts the
+## tween from the current position, so duration must scale with remaining
+## distance: a fixed long duration only ever covers a small fraction of each
+## step before being killed, which made wheel scrolling crawl and halt.
+@export var wheel_scroll_speed: float = 3000.0
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:
@@ -215,6 +220,12 @@ func _get_scrollbar():
 	return get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
+	# Re-sync the wheel/tween target when the scroll position changes with no
+	# tween in flight (engine end-of-frame clamps, guarded writes during layout
+	# recalcs). Without this the next wheel tick accumulates from a stale
+	# target and jumps to a far position.
+	if not _is_smooth_scrolling:
+		_target_scroll = value
 	scroll_value_changed.emit(value)
 
 func _get_centered_scroll_for_control(p_control: Control) -> float:
@@ -300,13 +311,22 @@ func _on_gui_input(event: InputEvent):
 			if step <= 0:
 				step = scrollbar.page / 10.0
 
+			var zb_before := _target_scroll
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_target_scroll -= step
 			else:
 				_target_scroll += step
 
 			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
-			_start_smooth_scroll(1.0, wheel_scroll_duration)
+			print("[ZoomBug] wheel: actual=", _get_current_scroll(), " target ", zb_before, " -> ", _target_scroll, " step=", step, " sb_max=", scrollbar.max_value, " page=", scrollbar.page)
+			# Chase the accumulated target at a fixed velocity: each tick kills
+			# and restarts the tween from the current position, so the duration
+			# must scale with the remaining distance. A fixed long duration
+			# (former wheel_scroll_duration=1.0s) meant every tween died after
+			# covering ~30% of its step — the scroll crawled and stalled.
+			var remaining := absf(_target_scroll - _get_current_scroll())
+			var wheel_dur := clampf(remaining / wheel_scroll_speed, 0.05, 0.35)
+			_start_smooth_scroll(1.0, wheel_dur)
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):

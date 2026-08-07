@@ -295,11 +295,10 @@ func get_app_data_path(emulator_id: String) -> String:
 	
 	return "/storage/emulated/0/Android/data/" + package + "/files/"
 
-## Gets the RetroArch core id for a platform from platforms.json
-## This is the default core id used when no user/game override exists.
+## Gets the RetroArch core id for a platform.
+## Returns the default core id from retroarch.json (single source of truth).
 func get_retroarch_core_name(platform_slug: String) -> String:
-	var platform = _platforms_data.get(platform_slug, {})
-	return platform.get("retroarch_core", "")
+	return get_default_core_id_for_platform("retroarch", platform_slug)
 
 ## Checks for updates across all installed emulators
 ## callback(updated: Array, up_to_date: Array, failed: Array, failed_details: Dictionary)
