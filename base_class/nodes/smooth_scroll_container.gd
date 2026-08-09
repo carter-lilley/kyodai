@@ -16,11 +16,12 @@ signal scroll_completed()
 ## the target and restart the tween, so a longer fixed duration keeps repeated
 ## ticks chasing the target smoothly instead of stuttering.
 @export var wheel_scroll_duration: float = 1.0
-## Chase velocity (px/sec) for free-scroll wheel ticks. Each tick restarts the
-## tween from the current position, so duration must scale with remaining
-## distance: a fixed long duration only ever covers a small fraction of each
-## step before being killed, which made wheel scrolling crawl and halt.
-@export var wheel_scroll_speed: float = 3000.0
+## Tick interval (ms) below which wheel scrolling is treated as a burst and
+## the tween duration is shortened toward the tick rate.
+const WHEEL_BURST_INTERVAL_MS: int = 250
+const WHEEL_BURST_MIN_DURATION: float = 0.08
+const WHEEL_BURST_MAX_DURATION: float = 0.3
+var _last_wheel_tick_msec: int = -10000
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:
@@ -125,6 +126,7 @@ func _on_focus_changed(control: Control) -> void:
 	if not is_ancestor_of(control):
 		return
 
+	print("[WheelTrace] focus-changed: idx=", control.get_meta("virtual_index", -1), " hover_meta=", control.has_meta("mouse_hover_focus"), " suppress_meta=", control.has_meta("_suppress_smooth_scroll"), " t=", Time.get_ticks_msec())
 	# Consume one-shot metas even while suppressed so a stale meta can't leak
 	# into a later, legitimate focus change.
 	if control.has_meta("mouse_hover_focus"):
@@ -145,6 +147,7 @@ func _on_focus_changed(control: Control) -> void:
 		if is_equal_approx(provided_target, _get_current_scroll()):
 			return
 		_target_scroll = provided_target
+		print("[WheelTrace] follow-focus scroll: provided=", provided_target, " idx=", control.get_meta("virtual_index", -1), " t=", Time.get_ticks_msec())
 		_start_smooth_scroll()
 		return
 
@@ -226,6 +229,8 @@ func _on_internal_scroll_changed(value: float):
 	# target and jumps to a far position.
 	if not _is_smooth_scrolling:
 		_target_scroll = value
+		var sb: ScrollBar = _get_scrollbar()
+		print("[WheelTrace] external-write: value=", value, " sb_max=", sb.max_value if sb else -1.0, " page=", sb.page if sb else -1.0, " t=", Time.get_ticks_msec())
 	scroll_value_changed.emit(value)
 
 func _get_centered_scroll_for_control(p_control: Control) -> float:
@@ -269,6 +274,8 @@ func _is_control_fully_visible(p_control: Control) -> bool:
 
 func _on_gui_input(event: InputEvent):
 	if not smooth_scrolling or scroll_paused:
+		if event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			print("[WheelTrace] DROPPED wheel btn=", event.button_index, " smooth_scrolling=", smooth_scrolling, " scroll_paused=", scroll_paused, " t=", Time.get_ticks_msec())
 		return
 	
 	if event is InputEventMouseButton and event.pressed:
@@ -310,23 +317,29 @@ func _on_gui_input(event: InputEvent):
 			var step = scrollbar.custom_step
 			if step <= 0:
 				step = scrollbar.page / 10.0
+			if event.factor > 1.0:
+				step *= event.factor
 
 			var zb_before := _target_scroll
-			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				_target_scroll -= step
-			else:
-				_target_scroll += step
-
+			var current := _get_current_scroll()
+			var dir := -1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
+			# Reversing direction discards any accumulated backlog so the view
+			# responds immediately instead of unwinding the old target first.
+			if signf(_target_scroll - current) == -dir:
+				_target_scroll = current
+			_target_scroll += dir * step
 			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
-			print("[ZoomBug] wheel: actual=", _get_current_scroll(), " target ", zb_before, " -> ", _target_scroll, " step=", step, " sb_max=", scrollbar.max_value, " page=", scrollbar.page)
-			# Chase the accumulated target at a fixed velocity: each tick kills
-			# and restarts the tween from the current position, so the duration
-			# must scale with the remaining distance. A fixed long duration
-			# (former wheel_scroll_duration=1.0s) meant every tween died after
-			# covering ~30% of its step — the scroll crawled and stalled.
-			var remaining := absf(_target_scroll - _get_current_scroll())
-			var wheel_dur := clampf(remaining / wheel_scroll_speed, 0.05, 0.35)
-			_start_smooth_scroll(1.0, wheel_dur)
+			# Burst-adaptive duration: isolated ticks get the full glide; rapid
+			# bursts shorten toward the tick rate so the wheel tracks ~1:1
+			# instead of the restarted tween crawling far behind the target.
+			var now_ms := Time.get_ticks_msec()
+			var tick_interval := now_ms - _last_wheel_tick_msec
+			_last_wheel_tick_msec = now_ms
+			var dur := wheel_scroll_duration
+			if tick_interval < WHEEL_BURST_INTERVAL_MS:
+				dur = clampf(float(tick_interval) / 1000.0 * 4.0, WHEEL_BURST_MIN_DURATION, WHEEL_BURST_MAX_DURATION)
+			print("[WheelTrace] tick: actual=", _get_current_scroll(), " target ", zb_before, " -> ", _target_scroll, " step=", step, " dur=", dur, " sb_max=", scrollbar.max_value, " page=", scrollbar.page, " t=", Time.get_ticks_msec())
+			_start_smooth_scroll(1.0, dur)
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):
@@ -382,6 +395,7 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 		_focus_timer = null
 
 	if _scroll_tween and _scroll_tween.is_valid():
+		print("[WheelTrace] tween-killed (restart): pos=", _get_current_scroll(), " old_target=", _target_scroll, " t=", Time.get_ticks_msec())
 		_scroll_tween.kill()
 
 	var start_value = _get_current_scroll()
@@ -406,6 +420,7 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	duration = clampf(duration * duration_multiplier, 0.0, smooth_scroll_max_duration)
 	
 	_is_smooth_scrolling = true
+	print("[WheelTrace] tween-start: start=", start_value, " target=", target_value, " dur=", duration)
 	
 	# DISABLED: Focus callback logic causing HSL flicker during scroll
 	# This was added for the "random game" feature but causes focus conflicts
@@ -435,6 +450,7 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	_scroll_tween.finished.connect(func():
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
+		print("[WheelTrace] tween-finished: pos=", _get_current_scroll(), " target=", _target_scroll, " t=", Time.get_ticks_msec())
 		scroll_completed.emit()
 	)
 
@@ -473,6 +489,7 @@ func _on_native_scroll_ended() -> void:
 func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
+		print("[WheelTrace] tween-killed (scroll_to): pos=", _get_current_scroll(), " old_target=", _target_scroll, " new_target=", target, " t=", Time.get_ticks_msec())
 		_scroll_tween.kill()
 	_is_smooth_scrolling = false
 	_page_scroll_in_flight = false
@@ -483,6 +500,9 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 		_start_smooth_scroll(duration_multiplier)
 	else:
 		_target_scroll = target
+		var sb: ScrollBar = _get_scrollbar()
+		if sb and target > sb.max_value - sb.page:
+			sb.max_value = target + sb.page
 		_set_current_scroll(target)
 
 func stop_smooth_scroll() -> void:

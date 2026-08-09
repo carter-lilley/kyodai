@@ -1166,6 +1166,8 @@ func _handle_ui_cancel() -> void:
 	call_deferred("reset_focus_to_home_button")
 
 func _input(event: InputEvent):
+	if event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		print("[WheelTrace] main._input wheel btn=", event.button_index, " device=", event.device, " factor=", event.factor, " global=", event.global_position, " t=", Time.get_ticks_msec())
 	# Block all input during background state (emulator running)
 	if LaunchManager and LaunchManager.is_in_background_state():
 		get_viewport().set_input_as_handled()

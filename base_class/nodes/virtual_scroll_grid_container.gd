@@ -28,6 +28,10 @@ signal item_created(item, index)
 		if debug_mode != value:
 			debug_mode = value
 			_update_debug_mode()
+## Gates the high-frequency per-pass trace prints ([GridTrace] pass/pass-end,
+## [VisSync]) so diagnostics stop inflating frame time. Violation logs
+## ([GridInv], [VisHole], [CardApply], [RsAudit], [LayerAudit]) always print.
+var trace_verbose: bool = true
 enum ViewMode { GRID, LIST, CAROUSEL }
 enum FocusCentering { MARGIN, CENTER }
 
@@ -281,6 +285,10 @@ var _scroll_anchor: Vector2 = Vector2(-1.0, 0.0)
 var _guarded_scroll_target: float = -1.0
 var _guarded_scroll_attempts: int = 0
 const MAX_GUARDED_SCROLL_ATTEMPTS: int = 3
+var _grid_trace_stuck_count: int = 0
+var _last_pass_scroll: float = -1.0
+var _last_pass_time_ms: int = 0
+var _scroll_velocity: float = 0.0
 
 # Zoom-stop caches (rebuilt when the cache key changes)
 var _snap_levels_cache: Array[int] = []
@@ -408,6 +416,7 @@ var _card_has_refresh_effects: bool = false
 var _card_has_update_card_state_from_settings: bool = false
 var _card_has_sync_visual_transform: bool = false
 var _card_has_mark_visuals_position_synced: bool = false
+var _card_has_unmark_visuals_position_synced: bool = false
 var _card_has_begin_bulk_layout: bool = false
 var _card_has_end_bulk_layout: bool = false
 
@@ -899,6 +908,10 @@ const RESIZE_IGNORE_DELTA: float = 2.0
 const RESIZE_FRAME_DELAY: int = 1
 
 func _process(_delta: float):
+	if _is_processing_scroll:
+		_is_processing_scroll = false
+		push_warning("[Grid] _is_processing_scroll was left set between frames; force-cleared")
+
 	if _resize_debounce_frames > 0:
 		_resize_debounce_frames -= 1
 		if _resize_debounce_frames == 0:
@@ -1083,7 +1096,7 @@ func _process_buffer_expansion() -> void:
 		# Newly added off-screen cards need their visual-layer positions synced
 		# after the FlowContainer sort runs, otherwise the visual layer stays at
 		# the origin until a scroll/recycle forces a sync.
-		call_deferred("_sync_and_mark_card_visual_transforms")
+		call_deferred("_sync_and_mark_card_visual_transforms", "buffer-expansion")
 
 	if current_first <= _buffer_target_start and current_last >= _buffer_target_end - 1:
 		_pending_buffer_expansion = false
@@ -1972,7 +1985,7 @@ func _recalculate_layout():
 	_update_page_snap_state()
 	# Sync and reveal visual items after the deferred FlowContainer sort has run.
 	# Relying only on NOTIFICATION_TRANSFORM_CHANGED misses some rebuild paths.
-	call_deferred("_sync_and_mark_card_visual_transforms")
+	call_deferred("_sync_and_mark_card_visual_transforms", "recalc")
 
 	# Restore focus to the card that was focused before layout recalculation.
 	# The anchor restore above already placed it in view, so this must NOT
@@ -2282,6 +2295,7 @@ func _instantiate_card_pool():
 	_card_has_update_card_state_from_settings = probe.has_method("_update_card_state_from_settings")
 	_card_has_sync_visual_transform = probe.has_method("sync_visual_transform")
 	_card_has_mark_visuals_position_synced = probe.has_method("_mark_visuals_position_synced")
+	_card_has_unmark_visuals_position_synced = probe.has_method("_unmark_visuals_position_synced")
 	_card_has_begin_bulk_layout = probe.has_method("begin_bulk_layout")
 	_card_has_end_bulk_layout = probe.has_method("end_bulk_layout")
 	print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
@@ -2540,16 +2554,22 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 
 func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_recycle: bool = false):
 	if _is_processing_scroll:
+		_grid_trace_stuck_count += 1
+		if _grid_trace_stuck_count <= 3 or _grid_trace_stuck_count % 100 == 0:
+			print("[GridTrace] HANDLER BLOCKED (_is_processing_scroll stuck): value=", value, " count=", _grid_trace_stuck_count, " t=", Time.get_ticks_msec())
 		return
+	_grid_trace_stuck_count = 0
 	# Ignore the clamp echo from a guarded recalc-time scroll write: the stale
 	# scrollbar range can clamp the write, and acting on the clamped value
 	# would rebuild the buffer window at the wrong offset. The deferred
 	# corrective write restores the intended position.
 	if _guarded_scroll_target >= 0.0 and not force_recycle:
 		if absf(value - _guarded_scroll_target) > maxf(_get_normal_stride(), 1.0):
-			print("[ZoomBug] echo-skip: value=", value, " target=", _guarded_scroll_target)
+			print("[GridTrace] echo-skip: value=", value, " target=", _guarded_scroll_target, " t=", Time.get_ticks_msec())
 			return
 	_is_processing_scroll = true
+	if trace_verbose:
+		print("[GridTrace] pass: value=", value, " recycle=", allow_recycle, " force=", force_recycle, " guarded_target=", _guarded_scroll_target, " suppress_until=", _suppress_recycle_until_frame, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 	if _total_items == 0 or not _scroll_container:
 		_is_processing_scroll = false
@@ -2567,6 +2587,14 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	var scroll_pos = int(value)
 	var items_per_line = _get_items_per_line()
 	var stride = _get_normal_stride()
+
+	var now_ms := Time.get_ticks_msec()
+	if _last_pass_time_ms > 0:
+		var dt: float = float(now_ms - _last_pass_time_ms) / 1000.0
+		if dt > 0.0005:
+			_scroll_velocity = lerpf(_scroll_velocity, (value - _last_pass_scroll) / dt, 0.3)
+	_last_pass_scroll = value
+	_last_pass_time_ms = now_ms
 
 	var available := _get_available_size()
 	var viewport_size = available.y if vertical else available.x
@@ -2588,9 +2616,12 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	# explicit synchronous recycle in _recalculate_layout() (force_recycle);
 	# skipped for the deferred ScrollContainer clamp signal in the frames
 	# right after a layout recalculation (see _suppress_recycle_until_frame).
+	var structure_changed := false
 	if allow_recycle:
 		var recycle_top_count = 0
 		for card in _active_cards:
+			if not is_instance_valid(card):
+				continue
 			var idx = card.get_meta("virtual_index", -1)
 			if idx < _buffer_target_start:
 				recycle_top_count += 1
@@ -2598,13 +2629,18 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 				break
 		if recycle_top_count > 0:
 			_batch_recycle_from_start(recycle_top_count)
+			structure_changed = true
 
 		while _active_cards.size() > 0:
 			var last_card = _active_cards[_active_cards.size() - 1]
+			if not is_instance_valid(last_card):
+				_active_cards.remove_at(_active_cards.size() - 1)
+				continue
 			var last_idx = last_card.get_meta("virtual_index", -1)
 
 			if last_idx >= _buffer_target_end:
 				_recycle_card_at_index(_active_cards.size() - 1)
+				structure_changed = true
 			else:
 				break
 
@@ -2615,19 +2651,30 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 		# window are useless now. Prune them so stale DB results are ignored and
 		# queued DB tasks can skip themselves via is_load_pending().
 		_prune_pending_loads_outside(_buffer_target_start, _buffer_target_end)
+		_pending_buffer_expansion = false
+		structure_changed = true
 		for i in range(_buffer_target_start, _buffer_target_end):
 			_add_card_at_end(i)
 	elif _active_cards.size() > 0:
-		var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-		while current_last < _buffer_target_end - 1 and current_last < _total_items - 1:
-			_add_card_at_end(current_last + 1)
-			current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
+		var back_card = _active_cards[_active_cards.size() - 1]
+		if not is_instance_valid(back_card):
+			_active_cards.remove_at(_active_cards.size() - 1)
+		else:
+			var current_last = back_card.get_meta("virtual_index", 0)
+			while current_last < _buffer_target_end - 1 and current_last < _total_items - 1:
+				_add_card_at_end(current_last + 1)
+				structure_changed = true
+				back_card = _active_cards[_active_cards.size() - 1]
+				if not is_instance_valid(back_card):
+					break
+				current_last = back_card.get_meta("virtual_index", 0)
 
-		if _active_cards.size() > 0:
+		if _active_cards.size() > 0 and is_instance_valid(_active_cards[0]):
 			var current_first = _active_cards[0].get_meta("virtual_index", 0)
 			if current_first > _buffer_target_start and current_first > 0:
 				var add_start_count = mini(current_first - _buffer_target_start, current_first)
 				_batch_add_at_start(_buffer_target_start, add_start_count)
+				structure_changed = true
 
 	if _active_cards.size() > 0:
 		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
@@ -2636,6 +2683,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 		print("[ZoomBug] BLANK: active=0 scroll_pos=", scroll_pos, " buffer=", _buffer_target_start, "-", _buffer_target_end, " total=", _total_items, " ipl=", items_per_line, " stride=", stride)
 
 	_request_missing_data()
+	_prefetch_scroll_lead(stride, items_per_line)
 
 	var should_update_margin = true
 	if _active_cards.size() > 0:
@@ -2651,8 +2699,16 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	# visible zone; finish them immediately so the user doesn't see blanks.
 	_flush_pending_effect_rebuilds_for_visible_zone()
 	_flush_pending_visual_setup_for_visible_zone()
-	_sync_and_mark_card_visual_transforms()
+	_sync_and_mark_card_visual_transforms("pass-end", false)
+	# Re-stamp visual transforms after the end-of-frame sort on EVERY pass, not
+	# just structural ones: steady-state healing otherwise relies solely on
+	# NOTIFICATION_TRANSFORM_CHANGED being armed and firing for every card.
+	call_deferred("_sync_and_mark_card_visual_transforms", "deferred")
+	if structure_changed:
+		call_deferred("_audit_visual_holes")
+	call_deferred("_audit_render_state", "post-pass")
 	_update_visual_draw_order()
+	_audit_structure("pass-end")
 
 	visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
 
@@ -2661,6 +2717,13 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 
 	if debug_mode:
 		_update_debug_visuals(_visible_start_idx, _visible_end_idx)
+
+	if trace_verbose:
+		var gt_first: int = _active_cards[0].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
+		var gt_last: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
+		var gt_expected_pos := -float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
+		var gt_actual_pos: float = _margin_container.position.y if vertical else _margin_container.position.x
+		print("[GridTrace] pass-end: scroll=", scroll_pos, " active=", _active_cards.size(), " window=", gt_first, "-", gt_last, " buffer=", _buffer_target_start, "-", _buffer_target_end, " pending_setup=", _pending_visual_setup.size(), " margin_pos=", gt_actual_pos, " expected_pos=", gt_expected_pos, " margin_delta=", gt_actual_pos - gt_expected_pos, " t=", Time.get_ticks_msec())
 
 	_is_processing_scroll = false
 
@@ -2763,22 +2826,81 @@ func _sync_card_visual_transforms() -> void:
 	for card in _active_cards:
 		card.sync_visual_transform()
 
-func _sync_and_mark_card_visual_transforms() -> void:
-	var marked: int = 0
+func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) -> void:
+	var newly_marked: int = 0
+	var not_ready: int = 0
+	var max_delta: float = 0.0
+	var worst_idx: int = -1
+	var margin_origin: float = float(_last_margin_top if vertical else _last_margin_left)
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
 		# Don't mark cards before _ready() has run; _setup_rs_items() resets the
 		# synced flag, so marking earlier would be silently undone.
 		if not card.is_node_ready():
+			not_ready += 1
 			continue
 		if _card_has_sync_visual_transform:
 			card.sync_visual_transform()
-		if _card_has_mark_visuals_position_synced:
+		# When mark=false (pre-sort passes), newly added cards keep their RS
+		# items hidden until the deferred post-sort mark, so a stale pooled
+		# position can never reach the screen even if the heal slips a frame.
+		if mark and _card_has_mark_visuals_position_synced:
+			if card.get("_visuals_position_synced") == false:
+				newly_marked += 1
 			card._mark_visuals_position_synced()
-			marked += 1
-	if debug_mode:
-		print("[Grid] _sync_and_mark_card_visual_transforms: marked=", marked, " active=", _active_cards.size())
+		var vidx: int = card.get_meta("virtual_index", -1)
+		if vidx >= 0:
+			var expected_local: float = _get_slot_position_for_index(vidx) - margin_origin
+			var actual_local: float = card.position.y if vertical else card.position.x
+			var d: float = absf(actual_local - expected_local)
+			if d > max_delta:
+				max_delta = d
+				worst_idx = vidx
+	if trace_verbose or newly_marked > 0 or max_delta > 20.0:
+		print("[VisSync] tag=", tag, " active=", _active_cards.size(), " newly_marked=", newly_marked, " not_ready=", not_ready, " max_slot_delta=", max_delta, " worst_idx=", worst_idx, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+
+func _audit_structure(tag: String) -> void:
+	var prev_idx := -2
+	var dup := -1
+	var nonmono := -1
+	var seen := {}
+	for c in _active_cards:
+		if not is_instance_valid(c):
+			continue
+		var m: int = c.get_meta("virtual_index", -1)
+		if seen.has(m):
+			dup = m
+			break
+		seen[m] = true
+		if m <= prev_idx:
+			nonmono = m
+			break
+		prev_idx = m
+	var flow_cards := 0
+	var spacers := 0
+	for ch in _flow_container.get_children():
+		if ch.has_meta("page_spacer"):
+			spacers += 1
+		else:
+			flow_cards += 1
+	if dup >= 0 or nonmono >= 0 or flow_cards != _active_cards.size():
+		var first: int = _active_cards[0].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
+		print("[GridInv] VIOLATION tag=", tag, " dup=", dup, " nonmono=", nonmono, " active=", _active_cards.size(), " flow_cards=", flow_cards, " spacers=", spacers, " first=", first, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+
+func _audit_visual_holes() -> void:
+	var unsynced: Array = []
+	var invisible: Array = []
+	for card in _active_cards:
+		if not is_instance_valid(card):
+			continue
+		var vidx: int = card.get_meta("virtual_index", -1)
+		if not card.visible:
+			invisible.append(vidx)
+		if _card_has_mark_visuals_position_synced and card.get("_visuals_position_synced") == false:
+			unsynced.append(vidx)
+	if unsynced.size() > 0 or invisible.size() > 0:
+		print("[VisHole] unsynced=", unsynced, " invisible=", invisible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 func _update_visual_draw_order() -> void:
 	var focused_idx = _get_focused_virtual_index()
@@ -2790,6 +2912,46 @@ func _update_visual_draw_order() -> void:
 		if idx == focused_idx:
 			base_index += 1000000
 		card.set_visual_draw_index(base_index)
+
+func _audit_render_state(tag: String) -> void:
+	"""Compare what is actually rendered (RS canvas item transforms, visual
+	layer state, scroll content offset) against the layout truth. Runs deferred
+	(post-sort, post-sync) so any divergence here is a genuine render bug."""
+	if not _visual_layer or not _scroll_container:
+		return
+	var layer_pos := _visual_layer.global_position
+	if _visual_layer.position != Vector2.ZERO or not _visual_layer.top_level or not _visual_layer.visible:
+		print("[LayerAudit] tag=", tag, " pos=", _visual_layer.position, " global=", layer_pos, " top_level=", _visual_layer.top_level, " visible=", _visual_layer.visible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+	var mc_pos: float = _margin_container.position.y if vertical else _margin_container.position.x
+	var scroll_now: float = float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
+	var mc_delta: float = absf(mc_pos + scroll_now)
+	var worst := 0.0
+	var worst_idx := -1
+	var worst_rs := Vector2.ZERO
+	var worst_exp := Vector2.ZERO
+	var worst_cs := Vector2.ONE
+	for card in _active_cards:
+		if not is_instance_valid(card) or not card.is_node_ready():
+			continue
+		var lt_v = card.get("_last_visual_transform")
+		if not lt_v is Transform2D:
+			continue
+		var rs_origin: Vector2 = lt_v.origin
+		var exp_origin: Vector2 = card.global_position - layer_pos
+		var cs_v = card.get("content_scale")
+		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
+		if not cs.is_equal_approx(Vector2.ONE):
+			var pivot: Vector2 = card.size * 0.5
+			exp_origin += pivot - cs * pivot
+		var d: float = rs_origin.distance_to(exp_origin)
+		if d > worst:
+			worst = d
+			worst_idx = card.get_meta("virtual_index", -1)
+			worst_rs = rs_origin
+			worst_exp = exp_origin
+			worst_cs = cs
+	if worst > 2.0 or mc_delta > 2.0:
+		print("[RsAudit] tag=", tag, " worst=", worst, " idx=", worst_idx, " rs=", worst_rs, " exp=", worst_exp, " cs=", worst_cs, " margin_lag=", mc_delta, " scroll=", scroll_now, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 func _add_card_at_end(virtual_index: int):
 	var card = _acquire_card()
@@ -2854,6 +3016,17 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	if not card.is_node_ready():
 		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " not ready, keeping pending")
 		return false
+	var actual_idx: int = card.get_meta("virtual_index", -1)
+	if actual_idx != virtual_index:
+		# Stale pending entry: the card was recycled and now shows a different
+		# index. Never apply the wrong game's data; re-queue under the card's
+		# current index so it still gets set up.
+		print("[CardApply] MISMATCH: card_meta=", actual_idx, " arg=", virtual_index, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if actual_idx >= 0 and _active_cards_by_index.get(actual_idx) == card:
+			_pending_visual_setup[actual_idx] = card
+		else:
+			card.remove_meta("needs_visual_setup")
+		return true
 	# Placeholder slots (index beyond the source count): no data to apply;
 	# render as a blank, non-interactive card shape.
 	if virtual_index >= _source_total_items:
@@ -2898,7 +3071,11 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	# leaving the card invisible until it is recycled.
 	if _card_has_sync_visual_transform:
 		card.sync_visual_transform()
-	if _card_has_mark_visuals_position_synced:
+	# When called from inside a scroll pass the FlowContainer hasn't sorted yet,
+	# so marking here would reveal the card at a stale position; the deferred
+	# post-sort mark handles those. Outside a pass the layout is settled and
+	# marking immediately is both safe and required (async data arrivals).
+	if not _is_processing_scroll and _card_has_mark_visuals_position_synced:
 		card._mark_visuals_position_synced()
 	if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " applied")
 	return true
@@ -2929,6 +3106,9 @@ func _batch_recycle_from_start(count: int) -> void:
 			card.visible = false
 			card.set_meta("pooled", true)
 			card.set_meta("virtual_index", -1)
+			if _pending_effect_rebuild_set.has(card):
+				_pending_effect_rebuilds.erase(card)
+				_pending_effect_rebuild_set.erase(card)
 			if _card_has_reset:
 				card.reset(true)
 			elif _card_has_game_prop:
@@ -3009,6 +3189,8 @@ func _acquire_card() -> Control:
 			# manual disabling) may leave these in a non-focusable state.
 			card.disabled = false
 			card.focus_mode = Control.FOCUS_ALL
+			if _card_has_unmark_visuals_position_synced:
+				card._unmark_visuals_position_synced()
 			card.visible = true
 			return card
 
@@ -3076,6 +3258,7 @@ func _update_margin():
 			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
 			_last_margin_top = int(margin_top)
 			_last_margin_bottom = int(margin_bottom)
+			print("[GridTrace] margin: top=", _last_margin_top, " bottom=", _last_margin_bottom, " flow_h=", flow_height, " first=", first_idx, " last=", last_idx, " t=", Time.get_ticks_msec())
 
 		if not is_equal_approx(flow_height, _last_flow_height):
 			_flow_container.custom_minimum_size.y = flow_height
@@ -3143,12 +3326,16 @@ func is_load_pending(offset: int) -> bool:
 
 func _prune_pending_loads_outside(range_start: int, range_end: int) -> void:
 	_pending_loads_mutex.lock()
+	var gt_pruned: int = 0
 	for offset in _pending_loads.keys():
 		var limit: int = _pending_loads[offset]
 		# Keep requests that still overlap the new buffer window.
 		if offset + limit <= range_start or offset >= range_end:
 			_pending_loads.erase(offset)
+			gt_pruned += 1
+	var gt_remaining: int = _pending_loads.size()
 	_pending_loads_mutex.unlock()
+	print("[GridTrace] prune-loads: pruned=", gt_pruned, " remaining=", gt_remaining, " window=", range_start, "-", range_end, " t=", Time.get_ticks_msec())
 
 func _request_missing_data():
 	if _active_cards.size() == 0:
@@ -3163,6 +3350,7 @@ func _request_missing_data():
 
 	if missing_indices.size() == 0:
 		return
+	print("[GridTrace] missing-data: count=", missing_indices.size(), " first=", missing_indices[0], " t=", Time.get_ticks_msec())
 
 	var batches: Array[Array] = []
 	var current_batch: Array[int] = [missing_indices[0]]
@@ -3180,6 +3368,35 @@ func _request_missing_data():
 			var offset = batch[0]
 			var limit = batch.size()
 			_request_data(offset, limit)
+
+func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
+	"""Prefetch data beyond the buffer edge in the current scroll direction so
+	incoming rows already have data when they enter the viewport (~150ms lead).
+	Without this, every window shift leaves the entering rows blank for the
+	~100ms DB round-trip, visible as flickering/disappearing rows."""
+	if stride <= 0.0 or _total_items <= 0 or absf(_scroll_velocity) < stride * 2.0:
+		return
+	var lead_px: float = clampf(absf(_scroll_velocity) * 0.15, stride * 2.0, stride * 8.0)
+	var lead_items: int = int(ceil(lead_px / stride)) * items_per_line
+	var start: int
+	var end: int
+	if _scroll_velocity > 0.0:
+		start = _buffer_target_end
+		end = mini(_total_items, start + lead_items)
+	else:
+		end = _buffer_target_start
+		start = maxi(0, end - lead_items)
+	if end <= start:
+		return
+	var missing: Array[int] = []
+	for idx in range(start, end):
+		if idx < _source_total_items and not _data_cache.has(idx) and not _is_index_pending(idx):
+			missing.append(idx)
+	if missing.size() == 0:
+		return
+	if trace_verbose:
+		print("[GridTrace] prefetch-lead: count=", missing.size(), " first=", missing[0], " vel=", _scroll_velocity, " t=", Time.get_ticks_msec())
+	_request_data(missing[0], missing.size())
 
 func _check_preload_needed():
 	var visible_count = _get_visible_count()
@@ -3392,6 +3609,7 @@ func _request_data(offset: int, limit: int):
 	# a pathological active-set state and can stall the DB worker for seconds.
 	limit = mini(limit, MAX_DATA_REQUEST_ITEMS)
 	limit = min(limit, _total_items - offset)
+	print("[GridTrace] request-data: offset=", offset, " limit=", limit, " t=", Time.get_ticks_msec())
 	_pending_loads_mutex.lock()
 	_pending_loads[offset] = limit
 	_pending_loads_mutex.unlock()
@@ -3399,6 +3617,7 @@ func _request_data(offset: int, limit: int):
 	items_requested.emit(offset, limit)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
+	print("[GridTrace] items-loaded: offset=", offset, " count=", items.size(), " t=", Time.get_ticks_msec())
 	if debug_mode:
 		print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
 	_pending_loads_mutex.lock()
@@ -3520,6 +3739,8 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	# Only zero the scroll when not preserving it. View-mode switches remember
 	# the focused item (or raw offset) and restore it after the rebuild.
 	if not preserve_scroll and _scroll_container:
+		_guarded_scroll_target = -1.0
+		_guarded_scroll_attempts = 0
 		_scroll_container.scroll_vertical = 0
 		_scroll_container.scroll_horizontal = 0
 		_scroll_container._target_scroll = 0.0
@@ -3540,6 +3761,8 @@ func _refresh_buffer(preserve_scroll: bool = false):
 		if saved_focus_index >= 0 and M3Overlay._get_topmost_overlay() == null:
 			call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 		elif _scroll_container:
+			_guarded_scroll_target = -1.0
+			_guarded_scroll_attempts = 0
 			# Clamp to valid range after the new layout is known.
 			var scrollbar = (_scroll_container.get_v_scroll_bar() as ScrollBar) if vertical else (_scroll_container.get_h_scroll_bar() as ScrollBar)
 			var max_scroll: float = scrollbar.max_value - scrollbar.page if scrollbar else 0.0
@@ -3638,7 +3861,7 @@ func _apply_guarded_scroll(pos: float) -> void:
 			scrollbar.max_value = pos + page
 	_guarded_scroll_target = pos
 	_scroll_container.scroll_to(int(pos), false)
-	print("[ZoomBug] guarded-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0)
+	print("[GridTrace] guarded-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0, " t=", Time.get_ticks_msec())
 	call_deferred("_correct_guarded_scroll")
 
 func _correct_guarded_scroll() -> void:
@@ -3646,12 +3869,14 @@ func _correct_guarded_scroll() -> void:
 		return
 	var target := _guarded_scroll_target
 	if not is_inside_tree() or not _scroll_container:
+		print("[GridTrace] corrective: guard cleared (not in tree) target=", target, " t=", Time.get_ticks_msec())
 		_guarded_scroll_target = -1.0
 		return
 	var current := _get_current_scroll_pos()
-	print("[ZoomBug] corrective: current=", current, " target=", target, " attempt=", _guarded_scroll_attempts)
+	print("[GridTrace] corrective: current=", current, " target=", target, " attempt=", _guarded_scroll_attempts, " t=", Time.get_ticks_msec())
 	if absf(current - target) <= 1.0:
 		# Write stuck (Range emits nothing when the value doesn't change).
+		print("[GridTrace] corrective: guard cleared (stuck ok) target=", target, " t=", Time.get_ticks_msec())
 		_guarded_scroll_target = -1.0
 		return
 	_guarded_scroll_attempts += 1
@@ -3746,6 +3971,8 @@ func _on_follow_focus_target_request(control: Control) -> float:
 
 func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
 	if _scroll_container:
+		_guarded_scroll_target = -1.0
+		_guarded_scroll_attempts = 0
 		_scroll_container.scroll_to(int(get_centered_scroll_for_index(index)), animate, duration_multiplier, focus_callback)
 
 func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multiplier: float = 1.0) -> void:
@@ -3762,9 +3989,12 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 	_pending_focus_index = index
 	_programmatic_focus_index = -1
 	_scroll_container.follow_focus_suppressed = false
+	_guarded_scroll_target = -1.0
+	_guarded_scroll_attempts = 0
 
 	var target := get_follow_focus_scroll_target(index)
 	var current := _get_current_scroll_pos()
+	print("[Jump] idx=", index, " target=", target, " current=", current, " animate=", animate, " active=", _active_cards.size(), " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 	var needs_scroll := not is_equal_approx(target, current)
 
 	if not needs_scroll or not animate:

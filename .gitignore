@@ -27,3 +27,5 @@ android/plugins/
 
 # Local headless smoke-test artifacts
 .kimi/smoke/
+addons/godot-sqlite/bin/~libgdsqlite.windows.template_debug.x86_64.dll
+addons/AynThor/bin/~libaynthor_native.dll
