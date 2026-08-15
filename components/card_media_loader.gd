@@ -31,6 +31,30 @@ static var _failed_downloads: Dictionary = {}
 static func clear_failed_downloads() -> void:
 	_failed_downloads.clear()
 
+## Warm the texture memory cache for a game with no card attached. Used by the
+## grid's directional prefetch so cover art is decoded before rows scroll into
+## view. Only reads files already on disk; never triggers downloads.
+static func preload_cover(game: GameResource) -> void:
+	if not game or not SystemManager.memory:
+		return
+	var cache_path := ""
+	if game.cover_path and FSM.file_exists(game.cover_path):
+		cache_path = game.cover_path
+	elif game.cover_url != "" and game.cover_url.begins_with("http"):
+		var p: String = DataManager.get_cached_image_path(game.cover_url)
+		if FSM.file_exists(p):
+			cache_path = p
+	if cache_path == "" or SystemManager.memory.get_cached_texture(cache_path):
+		return
+	var load_callable = func():
+		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
+	var callback_callable = func(image):
+		if image and not image.is_empty():
+			var texture = SystemManager.memory.create_texture_from_image(image)
+			if texture:
+				SystemManager.memory.cache_texture(cache_path, texture)
+	SystemManager.memory.queue_image_task(load_callable, callback_callable, false, cache_path)
+
 func _init(card: GameCard) -> void:
 	_card = card
 
@@ -175,7 +199,7 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 			_set_loading_texture()
 	, high_priority)
 
-func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
+static func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:
 		return null
 

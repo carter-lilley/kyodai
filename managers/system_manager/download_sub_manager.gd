@@ -604,7 +604,7 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 
 	# Store expected file size for progress tracking
 	item.expected_file_size = expected_file_size
-	if game:
+	if item.expected_file_size <= 0 and game:
 		item.expected_file_size = game.get_active_file_size()
 
 	# Pre-flight disk space check (10% margin) when the expected size is known
@@ -637,6 +637,64 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	_process_queue()
 
 	return item_id
+
+## Queues downloads for a game. Multi-disc games on m3u-capable platforms queue
+## every missing disc so an m3u playlist can be generated once the set is
+## complete; all other games queue only the active variant.
+func queue_game_download(game: GameResource) -> void:
+	var root_folder = DataManager.get_setting("games_root_folder")
+	if not root_folder or root_folder.value == "":
+		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
+		return
+	var root_path: String = root_folder.value
+
+	if M3USubManager.supports_m3u(game.platform_slug) and game.is_multi_disc():
+		var queued := 0
+		for entry in game.get_disc_entries():
+			if entry["downloaded"]:
+				continue
+			queued += 1
+			_queue_disc_entry(game, entry, root_path)
+		if queued > 0:
+			SystemManager.notifications.show_notification("Queued " + str(queued) + " disc(s) for " + game.get_display_name(), SystemManager.notifications.Type.INFO)
+		return
+
+	_queue_disc_entry(game, {
+		"id": game.get_active_game_id(),
+		"file_name": game.get_active_file_name(),
+		"file_size": game.get_active_file_size(),
+	}, root_path)
+
+func _queue_disc_entry(game: GameResource, entry: Dictionary, root_path: String) -> void:
+	var disc_id: int = entry["id"]
+	var file_name: String = entry["file_name"]
+	# Sibling file names from sync lack an extension (fs_name_no_ext) until full
+	# details are fetched; resolve the real file name before queueing.
+	if file_name != "" and file_name.contains("."):
+		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), root_path)
+		return
+	SystemManager.network.fetch_game_details(disc_id, func(data: Dictionary, error: String):
+		if error != "" or not data.has("fs_name"):
+			SystemManager.notifications.show_notification("Failed to fetch disc info for " + game.get_display_name() + ": " + error, SystemManager.notifications.Type.ERROR)
+			return
+		var full_file_name := str(data.get("fs_name", ""))
+		var file_size := int(data.get("fs_size_bytes", 0))
+		# Persist the resolved name/size so m3u resolution and future downloads use it
+		for i in range(game.siblings.size()):
+			if game.siblings[i].get("id", 0) == disc_id:
+				game.siblings[i]["file_name"] = full_file_name
+				game.siblings[i]["file_size"] = file_size
+				DataManager.update_game_siblings(game.romm_id, game.siblings)
+				break
+		_do_queue_disc(game, disc_id, full_file_name, file_size, root_path)
+	)
+
+func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, root_path: String) -> void:
+	var download_url = SystemManager.network.get_romm_download_url(disc_id, file_name)
+	var destination_path = root_path + "/" + game.platform_slug + "/" + file_name
+	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, false, file_size)
+	if item_id == "":
+		SystemManager.notifications.show_notification("Failed to queue download: " + file_name, SystemManager.notifications.Type.ERROR)
 
 ## Queues an extraction task (for already-downloaded archives)
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true)
@@ -2880,8 +2938,14 @@ func _finish_download_completion(item: QueueItem):
 	if item.game_resource and item.update_game_resource:
 		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
 		item.game_resource.mark_sibling_downloaded(downloaded_id)
-		item.game_resource.file_path = item.destination_path
+		# Only the main rom owns file_path; sibling discs resolve via get_disc_entries()
+		if downloaded_id == item.game_resource.romm_id:
+			item.game_resource.file_path = item.destination_path
 		DataManager.update_game(item.game_resource)
+
+		# Generate an m3u playlist once every disc of a multi-disc game is present
+		if M3USubManager.supports_m3u(item.game_resource.platform_slug) and item.game_resource.is_multi_disc():
+			LaunchManager.m3u.generate_m3u_if_complete(item.game_resource)
 
 		# Extract TitleID in background if needed
 		if item.game_resource.get_active_title_id() == "" and _needs_title_id(item.game_resource):

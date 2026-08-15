@@ -6,51 +6,82 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 var data_manager: Node
 
 const CACHE_FOLDER = "user://cache/covers/"
+const VALIDATION_MARKER = "user://cache/covers_validated.txt"
+# Bump this whenever the validation rules change so the full cache scan runs
+# once more after an upgrade instead of on every launch.
+const CACHE_VALIDATION_VERSION := 1
+# Skip files modified within this window so covers being downloaded right now
+# are never mistaken for corrupt cache entries by the background scan.
+const RECENT_FILE_GRACE_SECONDS := 10
 
 
 func _ready():
 	data_manager = get_parent()
 	_ensure_cache_folder()
-	_clean_invalid_cover_cache.call_deferred()
+	if _cache_validation_needed():
+		WorkerThreadPool.add_task(_scan_cover_cache)
 
 
 func _ensure_cache_folder():
 	FSM.make_dir_recursive(CACHE_FOLDER)
 
 
-func _clean_invalid_cover_cache():
-	"""Remove cached covers that are not valid images (e.g. HTML error pages)."""
-	if not FSM.dir_exists(CACHE_FOLDER):
-		return
+func _cache_validation_needed() -> bool:
+	var file = FSM.open_file_read(VALIDATION_MARKER)
+	if not file:
+		return true
+	var version := file.get_as_text().strip_edges().to_int()
+	file.close()
+	return version < CACHE_VALIDATION_VERSION
 
+
+func _scan_cover_cache():
+	"""Worker thread: flag cached covers that are not valid images.
+
+	Only the first 16 bytes of each file are read (enough for magic-byte
+	detection), so this is a metadata pass rather than a full read of every
+	cover image. Uses raw DirAccess/FileAccess because the FSM helpers reach
+	the SystemManager autoload, which is not safe to touch from a worker
+	thread (and may already be freed if the app quits mid-scan).
+	user://cache is app-private storage, so the Android restricted-path
+	plugin is never needed here.
+	"""
 	var total := 0
-	var deleted := 0
-	for file_name in FSM.list_dir(CACHE_FOLDER):
-		var path = FSM.join_paths(CACHE_FOLDER, file_name)
-		if not FSM.file_exists(path):
-			continue
-		total += 1
+	var deleted: Array[String] = []
+	var dir := DirAccess.open(CACHE_FOLDER)
+	if dir:
+		var now := int(Time.get_unix_time_from_system())
+		dir.list_dir_begin()
+		var file_name := dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				var path := CACHE_FOLDER + file_name
+				if now - int(FileAccess.get_modified_time(path)) >= RECENT_FILE_GRACE_SECONDS:
+					var file := FileAccess.open(path, FileAccess.READ)
+					if file:
+						total += 1
+						var size := file.get_length()
+						var buffer := file.get_buffer(mini(size, 16))
+						file.close()
+						if size < 64 or buffer.size() < 16 or FSM.detect_image_format(buffer) == FSM.ImageFormat.UNKNOWN:
+							if DirAccess.remove_absolute(path) == OK:
+								deleted.append(path)
+			file_name = dir.get_next()
+		dir.list_dir_end()
 
-		var size = FSM.get_file_size(path)
-		if size < 64:
-			deleted += 1
-			print("[CoverCache] Deleting %s: too small (%d bytes)" % [file_name, size])
-			FSM.delete_file(path)
-			continue
+	# Mark the cache as validated from the worker so short sessions (e.g. the
+	# startup benchmark, which quits immediately) don't rescan on every launch.
+	var marker := FileAccess.open(VALIDATION_MARKER, FileAccess.WRITE)
+	if marker:
+		marker.store_string(str(CACHE_VALIDATION_VERSION))
+		marker.close()
+	call_deferred("_report_cover_cache_scan", total, deleted)
 
-		var buffer = FSM.read_file_bytes(path)
-		if buffer.size() < 16:
-			deleted += 1
-			print("[CoverCache] Deleting %s: unreadable/empty (%d bytes read of %d)" % [file_name, buffer.size(), size])
-			FSM.delete_file(path)
-			continue
-		if FSM.detect_image_format(buffer) == FSM.ImageFormat.UNKNOWN:
-			deleted += 1
-			var preview = buffer.slice(0, 16).hex_encode()
-			print("[CoverCache] Deleting %s: unknown magic bytes (%d bytes, first16=%s)" % [file_name, size, preview])
-			FSM.delete_file(path)
 
-	print("[CoverCache] Startup cache check: %d files, %d deleted as invalid" % [total, deleted])
+func _report_cover_cache_scan(total: int, deleted: Array[String]) -> void:
+	for path in deleted:
+		print("[CoverCache] Deleted invalid cached cover: ", path)
+	print("[CoverCache] Startup cache check: %d files, %d deleted as invalid" % [total, deleted.size()])
 
 
 func get_cached_image_path(url: String) -> String:

@@ -222,6 +222,10 @@ func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: C
 	return database.update_game_siblings(romm_id, siblings, callback)
 
 
+func update_game_m3u_path(romm_id: int, m3u_path: String, callback: Callable = Callable()) -> bool:
+	return database.update_game_m3u_path(romm_id, m3u_path, callback)
+
+
 func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 	return database.update_game_last_played(romm_id, timestamp)
 

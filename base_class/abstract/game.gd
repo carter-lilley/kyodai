@@ -56,6 +56,9 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Game source type: "romm" (default), "gamenative", etc.
 @export var source: String = "romm"
 
+## Path to the generated .m3u playlist for multi-disc games (empty if none)
+@export var m3u_path: String = ""
+
 ## Steam App ID for GameNative games
 @export var steam_app_id: int = 0
 
@@ -143,6 +146,60 @@ func get_sibling_file_path(sibling_id: int, root_folder: String) -> String:
 
 func get_display_name() -> String:
 	return title if title else file_name
+
+## Parses a disc number from a "(Disc N)" tag in a file name. Returns 0 if none.
+static func parse_disc_number(p_name: String) -> int:
+	var regex := RegEx.new()
+	regex.compile("(?i)\\(disc\\s*(\\d+)\\)")
+	var m := regex.search(p_name)
+	if m:
+		return m.get_string(1).to_int()
+	return 0
+
+## Returns true if this game has 2+ disc-tagged entries (main rom + siblings)
+func is_multi_disc() -> bool:
+	return get_disc_entries().size() >= 2
+
+## Returns all disc entries (main rom + disc-tagged siblings), sorted by disc number.
+## Each entry: {id, file_name, disc_number, downloaded}
+func get_disc_entries() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	var main_disc := parse_disc_number(file_name)
+	if main_disc > 0:
+		entries.append({
+			"id": romm_id,
+			"file_name": file_name,
+			"file_size": file_size,
+			"disc_number": main_disc,
+			"downloaded": has_local_copy
+		})
+	for sibling in siblings:
+		var disc_number: int = sibling.get("disc_number", 0)
+		if disc_number <= 0:
+			disc_number = parse_disc_number(str(sibling.get("file_name", "")))
+		if disc_number <= 0:
+			disc_number = parse_disc_number(str(sibling.get("name", "")))
+		if disc_number > 0:
+			var sibling_id: int = sibling.get("id", 0)
+			entries.append({
+				"id": sibling_id,
+				"file_name": str(sibling.get("file_name", "")),
+				"file_size": int(sibling.get("file_size", 0)),
+				"disc_number": disc_number,
+				"downloaded": sibling_id in downloaded_sibling_ids
+			})
+	entries.sort_custom(func(a, b): return a["disc_number"] < b["disc_number"])
+	return entries
+
+## Returns true if every disc of a multi-disc game has been downloaded
+func are_all_discs_downloaded() -> bool:
+	var entries := get_disc_entries()
+	if entries.size() < 2:
+		return false
+	for entry in entries:
+		if not entry["downloaded"]:
+			return false
+	return true
 
 func get_cover_image() -> Texture2D:
 	if cover_path and FSM.file_exists(cover_path):

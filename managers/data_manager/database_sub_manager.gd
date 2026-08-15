@@ -135,10 +135,11 @@ func _create_tables():
 			has_cover_art INTEGER DEFAULT 1,
 			last_played TEXT DEFAULT '',
 			title_id TEXT DEFAULT '',
-			cover_group_id TEXT DEFAULT '',
-			cover_group_master INTEGER DEFAULT 1,
-			igdb_metadata TEXT DEFAULT '{}'
-		)
+		cover_group_id TEXT DEFAULT '',
+		cover_group_master INTEGER DEFAULT 1,
+		igdb_metadata TEXT DEFAULT '{}',
+		m3u_path TEXT DEFAULT ''
+	)
 	""")
 
 	query_bool("""
@@ -351,6 +352,9 @@ func _row_to_game(row: Dictionary) -> GameResource:
 			game.igdb_metadata = {}
 	else:
 		game.igdb_metadata = {}
+
+	# Restore m3u playlist path
+	game.m3u_path = row.get("m3u_path", "")
 
 	return game
 
@@ -725,11 +729,12 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					has_cover_art = ?,
 					last_played = ?,
 					title_id = ?,
-					cover_group_id = ?,
-				cover_group_master = ?,
-				igdb_metadata = ?
-			WHERE romm_id = ?
-		"""
+				cover_group_id = ?,
+			cover_group_master = ?,
+			igdb_metadata = ?,
+			m3u_path = ?
+		WHERE romm_id = ?
+	"""
 			var bindings = [
 				game.title,
 				game.platform,
@@ -753,9 +758,10 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				game.title_id,
 				game.cover_group_id,
 				1 if game.cover_group_master else 0,
-			JSON.stringify(game.igdb_metadata),
-			game.romm_id
-		]
+		JSON.stringify(game.igdb_metadata),
+		game.m3u_path,
+		game.romm_id
+	]
 			var success = query_bool_unlocked(query, bindings)
 			_db_unlock()
 			return success,
@@ -803,6 +809,24 @@ func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: C
 		func(success: bool):
 			if success:
 				pass
+			if callback.is_valid():
+				callback.call(success)
+	)
+	return true
+
+
+func update_game_m3u_path(romm_id: int, m3u_path: String, callback: Callable = Callable()) -> bool:
+	if not _is_db_ready:
+		return false
+
+	MemorySubManager.queue_db_task(
+		func():
+			_db_lock()
+			var success = query_bool_unlocked("UPDATE games SET m3u_path = ? WHERE romm_id = ?", [m3u_path, romm_id])
+			_db_unlock()
+			return success,
+
+		func(success: bool):
 			if callback.is_valid():
 				callback.call(success)
 	)

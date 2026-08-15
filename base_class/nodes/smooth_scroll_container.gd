@@ -16,11 +16,12 @@ signal scroll_completed()
 ## the target and restart the tween, so a longer fixed duration keeps repeated
 ## ticks chasing the target smoothly instead of stuttering.
 @export var wheel_scroll_duration: float = 1.0
-## Tick interval (ms) below which wheel scrolling is treated as a burst and
-## the tween duration is shortened toward the tick rate.
-const WHEEL_BURST_INTERVAL_MS: int = 250
-const WHEEL_BURST_MIN_DURATION: float = 0.08
-const WHEEL_BURST_MAX_DURATION: float = 0.3
+## Time constant (seconds) for the wheel chase: the scroll position glides
+## toward the accumulated target exponentially (velocity proportional to the
+## remaining distance), so any tick cadence stays smooth — no tween restarts.
+@export var wheel_chase_tau: float = 0.2
+var _wheel_chase_active: bool = false
+var _chase_pos: float = 0.0
 var _last_wheel_tick_msec: int = -10000
 @export var vertical: bool = true:
 	set(value):
@@ -72,15 +73,31 @@ var scroll_paused: bool = false:
 	set(value):
 		scroll_paused = value
 		if scroll_paused:
+			_wheel_chase_active = false
 			if _scroll_tween and _scroll_tween.is_valid():
 				_scroll_tween.kill()
 			_is_smooth_scrolling = false
 			_page_scroll_in_flight = false
 
+func _process(delta: float) -> void:
+	if not _wheel_chase_active:
+		return
+	# _chase_pos carries the sub-pixel position the int scrollbar can't hold, so
+	# the exponential tail glides to rest instead of stalling in 1px steps.
+	var diff := _target_scroll - _chase_pos
+	if absf(diff) < 0.05:
+		_set_current_scroll(_target_scroll)
+		_wheel_chase_active = false
+		_is_smooth_scrolling = false
+		_page_scroll_in_flight = false
+		scroll_completed.emit()
+		return
+	_chase_pos += diff * (1.0 - exp(-delta / wheel_chase_tau))
+	_set_current_scroll(_chase_pos)
+
 func _ready():
 	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
 	follow_focus = false
-	
 	await get_tree().process_frame
 
 	_connect_scrollbar()
@@ -126,7 +143,6 @@ func _on_focus_changed(control: Control) -> void:
 	if not is_ancestor_of(control):
 		return
 
-	print("[WheelTrace] focus-changed: idx=", control.get_meta("virtual_index", -1), " hover_meta=", control.has_meta("mouse_hover_focus"), " suppress_meta=", control.has_meta("_suppress_smooth_scroll"), " t=", Time.get_ticks_msec())
 	# Consume one-shot metas even while suppressed so a stale meta can't leak
 	# into a later, legitimate focus change.
 	if control.has_meta("mouse_hover_focus"):
@@ -147,7 +163,6 @@ func _on_focus_changed(control: Control) -> void:
 		if is_equal_approx(provided_target, _get_current_scroll()):
 			return
 		_target_scroll = provided_target
-		print("[WheelTrace] follow-focus scroll: provided=", provided_target, " idx=", control.get_meta("virtual_index", -1), " t=", Time.get_ticks_msec())
 		_start_smooth_scroll()
 		return
 
@@ -229,8 +244,6 @@ func _on_internal_scroll_changed(value: float):
 	# target and jumps to a far position.
 	if not _is_smooth_scrolling:
 		_target_scroll = value
-		var sb: ScrollBar = _get_scrollbar()
-		print("[WheelTrace] external-write: value=", value, " sb_max=", sb.max_value if sb else -1.0, " page=", sb.page if sb else -1.0, " t=", Time.get_ticks_msec())
 	scroll_value_changed.emit(value)
 
 func _get_centered_scroll_for_control(p_control: Control) -> float:
@@ -274,8 +287,6 @@ func _is_control_fully_visible(p_control: Control) -> bool:
 
 func _on_gui_input(event: InputEvent):
 	if not smooth_scrolling or scroll_paused:
-		if event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
-			print("[WheelTrace] DROPPED wheel btn=", event.button_index, " smooth_scrolling=", smooth_scrolling, " scroll_paused=", scroll_paused, " t=", Time.get_ticks_msec())
 		return
 	
 	if event is InputEventMouseButton and event.pressed:
@@ -320,8 +331,9 @@ func _on_gui_input(event: InputEvent):
 			if event.factor > 1.0:
 				step *= event.factor
 
-			var zb_before := _target_scroll
-			var current := _get_current_scroll()
+			if not _wheel_chase_active:
+				_chase_pos = _get_current_scroll()
+			var current := _chase_pos
 			var dir := -1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
 			# Reversing direction discards any accumulated backlog so the view
 			# responds immediately instead of unwinding the old target first.
@@ -329,17 +341,14 @@ func _on_gui_input(event: InputEvent):
 				_target_scroll = current
 			_target_scroll += dir * step
 			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
-			# Burst-adaptive duration: isolated ticks get the full glide; rapid
-			# bursts shorten toward the tick rate so the wheel tracks ~1:1
-			# instead of the restarted tween crawling far behind the target.
-			var now_ms := Time.get_ticks_msec()
-			var tick_interval := now_ms - _last_wheel_tick_msec
-			_last_wheel_tick_msec = now_ms
-			var dur := wheel_scroll_duration
-			if tick_interval < WHEEL_BURST_INTERVAL_MS:
-				dur = clampf(float(tick_interval) / 1000.0 * 4.0, WHEEL_BURST_MIN_DURATION, WHEEL_BURST_MAX_DURATION)
-			print("[WheelTrace] tick: actual=", _get_current_scroll(), " target ", zb_before, " -> ", _target_scroll, " step=", step, " dur=", dur, " sb_max=", scrollbar.max_value, " page=", scrollbar.page, " t=", Time.get_ticks_msec())
-			_start_smooth_scroll(1.0, dur)
+			# Chase the target with exponential smoothing in _process() instead of
+			# restarting a tween per tick: velocity stays proportional to the
+			# remaining distance, so bursts track the wheel without jitter and
+			# isolated ticks keep the same glide shape.
+			if _scroll_tween and _scroll_tween.is_valid():
+				_scroll_tween.kill()
+			_wheel_chase_active = true
+			_is_smooth_scrolling = true
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):
@@ -355,7 +364,7 @@ func _on_scrollbar_input(event: InputEvent):
 			if event.pressed:
 				_is_dragging_scrollbar = true
 				_scrollbar_drag_start_mouse_pos = event.global_position.y if vertical else event.global_position.x
-				
+				_wheel_chase_active = false
 				if _scroll_tween and _scroll_tween.is_valid():
 					_scroll_tween.kill()
 				_is_smooth_scrolling = false
@@ -395,8 +404,8 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 		_focus_timer = null
 
 	if _scroll_tween and _scroll_tween.is_valid():
-		print("[WheelTrace] tween-killed (restart): pos=", _get_current_scroll(), " old_target=", _target_scroll, " t=", Time.get_ticks_msec())
 		_scroll_tween.kill()
+	_wheel_chase_active = false
 
 	var start_value = _get_current_scroll()
 	var target_value = _target_scroll
@@ -420,8 +429,7 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	duration = clampf(duration * duration_multiplier, 0.0, smooth_scroll_max_duration)
 	
 	_is_smooth_scrolling = true
-	print("[WheelTrace] tween-start: start=", start_value, " target=", target_value, " dur=", duration)
-	
+
 	# DISABLED: Focus callback logic causing HSL flicker during scroll
 	# This was added for the "random game" feature but causes focus conflicts
 	# during smooth scrolling, making HSL effects flicker.
@@ -450,7 +458,6 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	_scroll_tween.finished.connect(func():
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
-		print("[WheelTrace] tween-finished: pos=", _get_current_scroll(), " target=", _target_scroll, " t=", Time.get_ticks_msec())
 		scroll_completed.emit()
 	)
 
@@ -489,8 +496,8 @@ func _on_native_scroll_ended() -> void:
 func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
-		print("[WheelTrace] tween-killed (scroll_to): pos=", _get_current_scroll(), " old_target=", _target_scroll, " new_target=", target, " t=", Time.get_ticks_msec())
 		_scroll_tween.kill()
+	_wheel_chase_active = false
 	_is_smooth_scrolling = false
 	_page_scroll_in_flight = false
 	
@@ -507,6 +514,7 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 
 func stop_smooth_scroll() -> void:
 	"""Stop any active smooth-scroll tween without changing the target."""
+	_wheel_chase_active = false
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
 	_is_smooth_scrolling = false

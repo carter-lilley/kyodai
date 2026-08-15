@@ -1149,15 +1149,17 @@ func _reparent_visual_items() -> void:
 		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, parent_rid)
 
 func sync_visual_transform() -> void:
+	# The badge is stamped by the sync_visual_transform_with_offset() override
+	# below; the base implementation funnels here with the grid-preferred
+	# offset, so a second stamp here would fight it with a measured one.
 	super.sync_visual_transform()
+
+func sync_visual_transform_with_offset(base_offset: Vector2) -> void:
+	super.sync_visual_transform_with_offset(base_offset)
 	if not _visual_layer or not _visual_layer.is_inside_tree():
 		return
 	if not _status_badge_canvas_item.is_valid():
 		return
-
-	var layer_global := _visual_layer.global_position
-	var card_global := global_position
-	var base_offset := card_global - layer_global
 
 	var base_transform := Transform2D().translated(base_offset)
 	if not content_scale.is_equal_approx(Vector2.ONE):

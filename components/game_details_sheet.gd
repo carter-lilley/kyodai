@@ -184,13 +184,17 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 	_sibling_options = []
 
 	# Add the main game as the first option
+	var main_label := game.file_name if game.file_name else game.title
+	var main_disc := GameResource.parse_disc_number(game.file_name)
+	if main_disc > 0 and not main_label.to_lower().contains("(disc"):
+		main_label = "Disc %d: %s" % [main_disc, main_label]
 	_sibling_options.append({
 		"id": game.romm_id,
 		"name": game.file_name if game.file_name else game.title,
 		"file_name": game.file_name,
 		"file_size": game.file_size
 	})
-	sibling_dropdown.add_item(game.file_name if game.file_name else game.title)
+	sibling_dropdown.add_item(main_label)
 
 	# Add siblings, ordered by RomM's sort_comparator when available
 	var sorted_siblings = game.siblings.duplicate()
@@ -210,7 +214,11 @@ func _setup_sibling_dropdown(game: GameResource) -> void:
 	for sibling in sorted_siblings:
 		if sibling is Dictionary:
 			_sibling_options.append(sibling)
-			sibling_dropdown.add_item(sibling.get("name", "Unknown"))
+			var sibling_label := str(sibling.get("name", "Unknown"))
+			var disc_number: int = sibling.get("disc_number", 0)
+			if disc_number > 0 and not sibling_label.to_lower().contains("(disc"):
+				sibling_label = "Disc %d: %s" % [disc_number, sibling_label]
+			sibling_dropdown.add_item(sibling_label)
 
 	# Select the currently active sibling
 	var active_id = game.selected_sibling_id if game.selected_sibling_id != 0 else game.romm_id
@@ -449,24 +457,7 @@ func _setup_launch_transition_source() -> void:
 func _queue_download() -> void:
 	if not _current_game:
 		return
-
-	# Use the selected sibling's ID and file name if one is selected
-	var active_game_id = _current_game.get_active_game_id()
-	var active_file_name = _current_game.get_active_file_name()
-
-	var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
-	var root_folder = DataManager.get_setting("games_root_folder")
-	if not root_folder or root_folder.value == "":
-		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
-		return
-
-	var destination_path = root_folder.value + "/" + _current_game.platform_slug + "/" + active_file_name
-	var item_id = SystemManager.download.queue_download(download_url, destination_path, "game", _current_game.get_display_name(), false, "", _current_game, {}, active_game_id)
-
-	if item_id != "":
-		SystemManager.notifications.show_notification("Queued: " + _current_game.get_display_name(), SystemManager.notifications.Type.INFO)
-	else:
-		SystemManager.notifications.show_notification("Failed to queue download", SystemManager.notifications.Type.ERROR)
+	SystemManager.download.queue_game_download(_current_game)
 
 func _on_download_completed(item_id: String, success: bool, message: String) -> void:
 	# Check if this download is for our current game

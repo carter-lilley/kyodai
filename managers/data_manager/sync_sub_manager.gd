@@ -952,7 +952,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if romm_ids.size() > 0:
 		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id FROM games WHERE romm_id IN (%s)" % placeholders,
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path FROM games WHERE romm_id IN (%s)" % placeholders,
 			romm_ids
 		)
 		for row in existing_result:
@@ -1236,9 +1236,10 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 				"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
 				"file_size": sibling_data.get("fs_size_bytes", 0),
 				"title_id": "",  # Will be extracted on launch
-				"is_main_sibling": sibling_data.get("is_main_sibling", false) == true,
-				"sort_comparator": str(sibling_data.get("sort_comparator", ""))
-			}
+			"is_main_sibling": sibling_data.get("is_main_sibling", false) == true,
+			"sort_comparator": str(sibling_data.get("sort_comparator", "")),
+			"disc_number": GameResource.parse_disc_number(str(sibling_data.get("fs_name_no_ext", "")))
+		}
 			siblings.append(sibling)
 	game.siblings = siblings
 
@@ -1280,7 +1281,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -1309,13 +1310,17 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		var existing_title_id = existing.get("title_id", "")
 		if existing_title_id != "":
 			title_id = existing_title_id
+		# Preserve locally generated m3u playlist (the server payload never provides it)
+		var existing_m3u_path = existing.get("m3u_path", "")
+		if existing_m3u_path != "":
+			game.m3u_path = existing_m3u_path
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1343,7 +1348,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		title_id,
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
-		JSON.stringify(game.igdb_metadata)
+		JSON.stringify(game.igdb_metadata),
+		game.m3u_path
 	]
 
 	return {"query": query, "bindings": bindings}

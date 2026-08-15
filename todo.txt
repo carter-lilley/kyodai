@@ -2,6 +2,7 @@
 
 xemu save sync
 tst emulator app update flow on android
+touch-to-hold for context menu on android not working
 
 romm;
 - mark 'played' if played

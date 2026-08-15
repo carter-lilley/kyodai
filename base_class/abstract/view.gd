@@ -225,23 +225,7 @@ func _on_card_created(card: Control, _index: int):
 		card.download_requested.connect(_on_download_requested)
 
 func _on_download_requested(game: GameResource):
-	# Use the selected sibling's ID and file name if one is selected
-	var active_game_id = game.get_active_game_id()
-	var active_file_name = game.get_active_file_name()
-	
-	var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
-	var root_folder = DataManager.get_setting("games_root_folder")
-	if not root_folder or root_folder.value == "":
-		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
-		return
-	
-	var destination_path = root_folder.value + "/" + game.platform_slug + "/" + active_file_name
-	var item_id = SystemManager.download.queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, active_game_id)
-	
-	if item_id != "":
-		pass  # Status updates removed; notifications handled by SystemManager.download
-	else:
-		SystemManager.notifications.show_notification("Failed to queue download", SystemManager.notifications.Type.ERROR)
+	SystemManager.download.queue_game_download(game)
 
 # Status bar removed — kept as no-op so subclasses don't need to override
 func _update_status(_text: String = "") -> void:
