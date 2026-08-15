@@ -488,6 +488,7 @@ var _thread_chunk_finish_times: Dictionary = {}  # "item_id_thread_index" -> fin
 func _ready():
 	if DataManager:
 		DataManager.setting_changed.connect(_on_setting_changed)
+	download_completed.connect(_on_completion_watcher)
 	Performance.add_custom_monitor("download/image_active", _get_image_active_count)
 	Performance.add_custom_monitor("download/image_pending", _get_image_pending_count)
 
@@ -641,41 +642,71 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 ## Queues downloads for a game. Multi-disc games on m3u-capable platforms queue
 ## every missing disc so an m3u playlist can be generated once the set is
 ## complete; all other games queue only the active variant.
-func queue_game_download(game: GameResource) -> void:
+## on_all_complete(success) fires once every queued download has settled.
+func queue_game_download(game: GameResource, on_all_complete: Callable = Callable()) -> void:
 	var root_folder = DataManager.get_setting("games_root_folder")
 	if not root_folder or root_folder.value == "":
 		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
+		if on_all_complete.is_valid():
+			on_all_complete.call(false)
 		return
-	var root_path: String = root_folder.value
+	var platform_dir: String = root_folder.value + "/" + game.platform_slug
 
 	if M3USubManager.supports_m3u(game.platform_slug) and game.is_multi_disc():
-		var queued := 0
+		var missing: Array[Dictionary] = []
 		for entry in game.get_disc_entries():
-			if entry["downloaded"]:
-				continue
-			queued += 1
-			_queue_disc_entry(game, entry, root_path)
-		if queued > 0:
-			SystemManager.notifications.show_notification("Queued " + str(queued) + " disc(s) for " + game.get_display_name(), SystemManager.notifications.Type.INFO)
+			if not entry["downloaded"]:
+				missing.append(entry)
+		if missing.is_empty():
+			if on_all_complete.is_valid():
+				on_all_complete.call(true)
+			return
+		SystemManager.notifications.show_notification("Queued " + str(missing.size()) + " disc(s) for " + game.get_display_name(), SystemManager.notifications.Type.INFO)
+		queue_disc_files(game, missing, platform_dir, true, false, Callable(), on_all_complete)
 		return
 
 	_queue_disc_entry(game, {
 		"id": game.get_active_game_id(),
 		"file_name": game.get_active_file_name(),
 		"file_size": game.get_active_file_size(),
-	}, root_path)
+	}, platform_dir, true, false, func(success: bool):
+		if on_all_complete.is_valid():
+			on_all_complete.call(success)
+	)
 
-func _queue_disc_entry(game: GameResource, entry: Dictionary, root_path: String) -> void:
+## Queues downloads for a set of disc entries (from GameResource.get_disc_entries)
+## into dest_dir. on_entry_done(entry, success) fires per disc;
+## on_all_done(success) fires once when every disc has settled.
+func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: String, update_game_resource: bool, suppress_notification: bool = false, on_entry_done: Callable = Callable(), on_all_done: Callable = Callable()) -> void:
+	if entries.is_empty():
+		if on_all_done.is_valid():
+			on_all_done.call(true)
+		return
+	var state := {"pending": entries.size(), "failed": false}
+	for entry in entries:
+		var on_done := func(success: bool):
+			state.pending -= 1
+			if not success:
+				state.failed = true
+			if on_entry_done.is_valid():
+				on_entry_done.call(entry, success)
+			if state.pending <= 0 and on_all_done.is_valid():
+				on_all_done.call(not state.failed)
+		_queue_disc_entry(game, entry, dest_dir, update_game_resource, suppress_notification, on_done)
+
+func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable = Callable()) -> void:
 	var disc_id: int = entry["id"]
 	var file_name: String = entry["file_name"]
 	# Sibling file names from sync lack an extension (fs_name_no_ext) until full
 	# details are fetched; resolve the real file name before queueing.
 	if file_name != "" and file_name.contains("."):
-		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), root_path)
+		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), dest_dir, update_game_resource, suppress_notification, on_done)
 		return
 	SystemManager.network.fetch_game_details(disc_id, func(data: Dictionary, error: String):
 		if error != "" or not data.has("fs_name"):
 			SystemManager.notifications.show_notification("Failed to fetch disc info for " + game.get_display_name() + ": " + error, SystemManager.notifications.Type.ERROR)
+			if on_done.is_valid():
+				on_done.call(false)
 			return
 		var full_file_name := str(data.get("fs_name", ""))
 		var file_size := int(data.get("fs_size_bytes", 0))
@@ -686,15 +717,34 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, root_path: String)
 				game.siblings[i]["file_size"] = file_size
 				DataManager.update_game_siblings(game.romm_id, game.siblings)
 				break
-		_do_queue_disc(game, disc_id, full_file_name, file_size, root_path)
+		_do_queue_disc(game, disc_id, full_file_name, file_size, dest_dir, update_game_resource, suppress_notification, on_done)
 	)
 
-func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, root_path: String) -> void:
+func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable) -> void:
 	var download_url = SystemManager.network.get_romm_download_url(disc_id, file_name)
-	var destination_path = root_path + "/" + game.platform_slug + "/" + file_name
-	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, false, file_size)
+	var destination_path = dest_dir + "/" + file_name
+	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource)
 	if item_id == "":
-		SystemManager.notifications.show_notification("Failed to queue download: " + file_name, SystemManager.notifications.Type.ERROR)
+		if not suppress_notification:
+			SystemManager.notifications.show_notification("Failed to queue download: " + file_name, SystemManager.notifications.Type.ERROR)
+		if on_done.is_valid():
+			on_done.call(false)
+		return
+	if on_done.is_valid():
+		_completion_watchers[item_id] = on_done
+
+# Item completion watchers for batched disc downloads (queue_disc_files). The
+# download_completed signal fires after game-resource updates and the m3u hook
+# on success, and on every failure path, so watchers always settle.
+var _completion_watchers: Dictionary = {}  # item_id -> Callable
+
+func _on_completion_watcher(item_id: String, success: bool, _message: String) -> void:
+	if not _completion_watchers.has(item_id):
+		return
+	var watcher: Callable = _completion_watchers[item_id]
+	_completion_watchers.erase(item_id)
+	if watcher.is_valid():
+		watcher.call(success)
 
 ## Queues an extraction task (for already-downloaded archives)
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true)

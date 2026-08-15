@@ -451,7 +451,14 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	if not game.is_active_variant_downloaded():
 		_queue_game_download_then_launch(game)
 		return
-	
+
+	# Multi-disc games on m3u-capable platforms need every disc on disk so an
+	# m3u playlist can be generated; force-download the missing discs, then
+	# launch. A specific disc (2+) selected by the user still launches directly.
+	if M3USubManager.supports_m3u(game.platform_slug) and game.is_multi_disc() and game.get_active_disc_number() <= 1 and not game.are_all_discs_downloaded():
+		_queue_game_download_then_launch(game)
+		return
+
 	# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
 	_launch_with_emulator_check(game)
 
@@ -471,50 +478,20 @@ func _launch_gamenative_game(game: GameResource) -> void:
 		SystemManager.notifications.show_notification("Failed to launch GameNative. Is the app installed?", SystemManager.notifications.Type.ERROR)
 	_end_launch(game.romm_id)
 
-## If game is not downloaded, queue the download first then proceed
+## If game is not downloaded, queue the download first then proceed.
+## Multi-disc games on m3u-capable platforms queue every missing disc.
 func _queue_game_download_then_launch(game: GameResource) -> void:
-	var active_game_id = game.get_active_game_id()
-	var active_file_name = game.get_active_file_name()
-	
-	var download_url = SystemManager.network.get_romm_download_url(active_game_id, active_file_name)
-	var root_folder = DataManager.get_setting("games_root_folder")
-	if not root_folder or root_folder.value == "":
-		SystemManager.notifications.show_notification("Error: Games folder not set", SystemManager.notifications.Type.ERROR)
-		_end_launch(game.romm_id)
-		return
-	
-	var destination_path = FSM.join_paths(root_folder.value, game.platform_slug, active_file_name)
-	
 	SystemManager.notifications.show_notification("Downloading " + game.get_display_name() + "...", SystemManager.notifications.Type.INFO)
-	
-	# Define callback for when download completes
-	var on_download_complete = func(success: bool, _path: String):
-		if success:
-			var updated_game = DataManager.get_game_by_id(game.romm_id)
-			var game_to_launch = updated_game if updated_game else game
 
-			# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
-			_launch_with_emulator_check(game_to_launch)
+	SystemManager.download.queue_game_download(game, func(success: bool):
+		if success:
+			# The in-memory game is mutated by download completion (disc flags,
+			# m3u path) ahead of the async DB write, so it is the freshest copy.
+			_launch_with_emulator_check(game)
 		else:
 			SystemManager.notifications.show_notification("Download failed for " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
 			_end_launch(game.romm_id)
-	
-	# Queue download with callback to continue launch flow
-	var item_id = SystemManager.download.queue_download(
-		download_url,
-		destination_path,
-		"game",
-		game.get_display_name(),
-		false,
-		"",
-		game,
-		{"on_complete": on_download_complete},
-		active_game_id
 	)
-	
-	if item_id == "":
-		SystemManager.notifications.show_notification("Failed to queue download", SystemManager.notifications.Type.ERROR)
-		_end_launch(game.romm_id)
 
 ## Ensures emulator is installed, firmware is ready, and game is prepared.
 ## Returns true if everything is ready and on_ready was called.

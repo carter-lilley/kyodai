@@ -161,18 +161,13 @@ func is_multi_disc() -> bool:
 	return get_disc_entries().size() >= 2
 
 ## Returns all disc entries (main rom + disc-tagged siblings), sorted by disc number.
-## Each entry: {id, file_name, disc_number, downloaded}
+## Only disc-tagged entries are included - untagged siblings (regional variants
+## etc.) are never treated as discs. If the main rom lacks a disc tag but at
+## least one sibling has one, the main rom counts as disc 1.
+## Each entry: {id, file_name, file_size, disc_number, downloaded}
 func get_disc_entries() -> Array[Dictionary]:
 	var entries: Array[Dictionary] = []
 	var main_disc := parse_disc_number(file_name)
-	if main_disc > 0:
-		entries.append({
-			"id": romm_id,
-			"file_name": file_name,
-			"file_size": file_size,
-			"disc_number": main_disc,
-			"downloaded": has_local_copy
-		})
 	for sibling in siblings:
 		var disc_number: int = sibling.get("disc_number", 0)
 		if disc_number <= 0:
@@ -188,8 +183,34 @@ func get_disc_entries() -> Array[Dictionary]:
 				"disc_number": disc_number,
 				"downloaded": sibling_id in downloaded_sibling_ids
 			})
+	if main_disc > 0:
+		entries.append({
+			"id": romm_id,
+			"file_name": file_name,
+			"file_size": file_size,
+			"disc_number": main_disc,
+			"downloaded": has_local_copy
+		})
+	elif not entries.is_empty():
+		# Untagged main rom alongside disc-tagged siblings: implicitly disc 1
+		entries.append({
+			"id": romm_id,
+			"file_name": file_name,
+			"file_size": file_size,
+			"disc_number": 1,
+			"downloaded": has_local_copy
+		})
 	entries.sort_custom(func(a, b): return a["disc_number"] < b["disc_number"])
 	return entries
+
+## Returns the disc number of the currently selected variant (1 if main/none)
+func get_active_disc_number() -> int:
+	if selected_sibling_id == 0:
+		return 1
+	for entry in get_disc_entries():
+		if entry["id"] == selected_sibling_id:
+			return entry["disc_number"]
+	return 1
 
 ## Returns true if every disc of a multi-disc game has been downloaded
 func are_all_discs_downloaded() -> bool:

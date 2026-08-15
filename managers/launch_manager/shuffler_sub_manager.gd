@@ -412,6 +412,32 @@ func remove_game() -> void:
 	_bag.replace_entry(index, candidate, "")
 	var new_entry = _bag.entries[index]
 
+	var library_m3u := _get_library_m3u(candidate)
+	if library_m3u != "":
+		new_entry.temp_path = library_m3u
+		await _prepare_entry(index, new_entry)
+		_finish_reroll(index)
+		return
+
+	if _is_multi_disc_m3u(candidate):
+		# Incomplete multi-disc set: temp-download the missing discs, then
+		# shuffle through a temp m3u playlist
+		_download_discs_to_temp(candidate, Callable(), func(m3u_path: String):
+			if _state != State.ACTIVE and _state != State.PAUSED:
+				print("[ShufflerSubManager] Reroll disc downloads finished but session is no longer active; discarding result")
+				_reset_reroll_state()
+				return
+			if m3u_path == "" or index < 0 or index >= _bag.size():
+				push_warning("[ShufflerSubManager] Reroll disc downloads failed for " + candidate.title + "; relaunching previous game")
+				_reset_reroll_state()
+				_switch_to_game(index)
+				return
+			_bag.entries[index].temp_path = m3u_path
+			await _prepare_entry(index, _bag.entries[index])
+			_finish_reroll(index)
+		)
+		return
+
 	if candidate.is_active_variant_downloaded() and FileAccess.file_exists(candidate.file_path):
 		new_entry.temp_path = candidate.file_path
 		await _prepare_entry(index, new_entry)
@@ -521,7 +547,38 @@ func _start_bag_preparation() -> void:
 		var entry = _bag.entries[i]
 		var game = entry.game
 		print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(entry))
-		if game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
+		var library_m3u := _get_library_m3u(game)
+		if library_m3u != "":
+			entry.temp_path = library_m3u
+			_prepare_entry(i, entry)
+		elif _is_multi_disc_m3u(game):
+			# Multi-disc m3u game with an incomplete set: temp-download the
+			# missing discs and shuffle through a temp m3u playlist
+			var missing_count := 0
+			for e in game.get_disc_entries():
+				if not e["downloaded"]:
+					missing_count += 1
+					_total_download_bytes += int(e.get("file_size", 0))
+			_total_downloads += missing_count
+			_pending_downloads += missing_count
+			entry.status = ShufflerBag.EntryStatus.DOWNLOADING
+			_download_discs_to_temp(game,
+				func(success: bool):
+					_pending_downloads -= 1
+					download_progress.emit(_total_downloads - _pending_downloads, _total_downloads)
+					if not success:
+						entry.status = ShufflerBag.EntryStatus.FAILED
+						push_error("[ShufflerSubManager] Disc download failed for " + game.title)
+					_check_all_preparations_complete(),
+				func(m3u_path: String):
+					if m3u_path == "":
+						entry.status = ShufflerBag.EntryStatus.FAILED
+						_check_all_preparations_complete()
+						return
+					entry.temp_path = m3u_path
+					_prepare_entry(i, entry)
+			)
+		elif game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
 			entry.temp_path = game.file_path
 			_prepare_entry(i, entry)
 		else:
@@ -529,6 +586,56 @@ func _start_bag_preparation() -> void:
 			_pending_downloads += 1
 			_total_download_bytes += game.get_active_file_size()
 			_download_entry(i, entry)
+
+## Multi-disc games on m3u-capable platforms shuffle through an m3u playlist
+func _is_multi_disc_m3u(game: GameResource) -> bool:
+	return M3USubManager.supports_m3u(game.platform_slug) and game.is_multi_disc()
+
+## Returns the library m3u path when the full disc set is on disk ("" otherwise)
+func _get_library_m3u(game: GameResource) -> String:
+	if not _is_multi_disc_m3u(game) or not game.are_all_discs_downloaded():
+		return ""
+	var m3u_path: String = LaunchManager.m3u.ensure_m3u(game)
+	if m3u_path != "" and FileAccess.file_exists(m3u_path):
+		return m3u_path
+	return ""
+
+## Temp-downloads the missing discs of a multi-disc game, then writes a temp m3u
+## (library discs are referenced by absolute path, temp discs by file name).
+## on_one_done(success) fires per disc; on_done(m3u_path or "") fires once.
+func _download_discs_to_temp(game: GameResource, on_one_done: Callable, on_done: Callable) -> void:
+	var temp_dir = TEMP_DIR + str(game.romm_id)
+	FSM.make_dir_recursive(temp_dir)
+	var missing: Array[Dictionary] = []
+	for e in game.get_disc_entries():
+		if not e["downloaded"]:
+			missing.append(e)
+	print("[ShufflerSubManager] Queueing " + str(missing.size()) + " missing disc(s) for " + game.title + " to " + temp_dir)
+	if missing.is_empty():
+		on_done.call(_write_temp_m3u(game, temp_dir))
+		return
+	SystemManager.download.queue_disc_files(game, missing, temp_dir, false, true,
+		func(_entry: Dictionary, success: bool):
+			if on_one_done.is_valid():
+				on_one_done.call(success),
+		func(success: bool):
+			if not success:
+				on_done.call("")
+				return
+			on_done.call(_write_temp_m3u(game, temp_dir))
+	)
+
+func _write_temp_m3u(game: GameResource, temp_dir: String) -> String:
+	var root_folder = DataManager.get_setting("games_root_folder")
+	var platform_dir: String = (root_folder.value + "/" + game.platform_slug) if root_folder else ""
+	var lines: Array[String] = []
+	for e in game.get_disc_entries():
+		if e["downloaded"]:
+			lines.append(platform_dir + "/" + e["file_name"])
+		else:
+			# Temp-downloaded disc, relative to the m3u
+			lines.append(e["file_name"])
+	return M3USubManager.write_m3u(temp_dir, game.title, lines)
 
 func _download_entry(index: int, entry: Dictionary) -> void:
 	entry.status = ShufflerBag.EntryStatus.DOWNLOADING

@@ -92,19 +92,26 @@ func _generate_m3u(game: GameResource, disc_files: Array[String]) -> String:
 		return disc_files[0]
 
 	var parent_dir := FSM.get_dir(disc_files[0])
-	var m3u_file := FSM.join_paths(parent_dir, _sanitize_file_name(game.title) + ".m3u")
-
 	var lines: Array[String] = []
 	for disc_path in disc_files:
 		lines.append(disc_path.get_file())
 
-	if not FSM.write_file(m3u_file, "\n".join(lines)):
-		push_error("[M3UManager] Failed to write m3u: " + m3u_file)
+	var m3u_file := write_m3u(parent_dir, game.title, lines)
+	if m3u_file == "":
 		return ""
 
 	game.m3u_path = m3u_file
 	DataManager.update_game_m3u_path(game.romm_id, m3u_file)
 	print("[M3UManager] Generated m3u: " + m3u_file)
+	return m3u_file
+
+## Writes an m3u playlist listing file_names (one per line) into dir_path,
+## named after the sanitized title. Returns the m3u path, or "" on failure.
+static func write_m3u(dir_path: String, title: String, file_names: Array[String]) -> String:
+	var m3u_file := FSM.join_paths(dir_path, _sanitize_file_name(title) + ".m3u")
+	if not FSM.write_file(m3u_file, "\n".join(file_names)):
+		push_error("[M3UManager] Failed to write m3u: " + m3u_file)
+		return ""
 	return m3u_file
 
 func _validate_m3u(m3u_path: String, expected_disc_count: int) -> bool:
@@ -129,7 +136,7 @@ func _parse_m3u_lines(m3u_path: String) -> Array[String]:
 		lines.append(line)
 	return lines
 
-func _sanitize_file_name(p_name: String) -> String:
+static func _sanitize_file_name(p_name: String) -> String:
 	var regex := RegEx.new()
 	regex.compile("[<>:\"/\\\\|?*]")
 	var sanitized := regex.sub(p_name, "", true)

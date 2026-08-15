@@ -63,21 +63,13 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 
 	# Multi-disc games on m3u-capable platforms launch through a generated
 	# playlist so the emulator can swap discs. A specific disc sibling selected
-	# by the user (disc 2+) still launches that disc file directly.
+	# by the user (disc 2+) still launches that disc file directly. LaunchManager
+	# force-downloads missing discs before launch, so the set is complete here.
 	if rom_path_override == "" and M3USubManager.supports_m3u(game.platform_slug) and game.is_multi_disc():
-		var active_disc := 1
-		if game.selected_sibling_id != 0:
-			for entry in game.get_disc_entries():
-				if entry["id"] == game.selected_sibling_id:
-					active_disc = entry["disc_number"]
-					break
-		if active_disc <= 1:
+		if game.get_active_disc_number() <= 1:
 			var m3u_path: String = launch_manager.m3u.ensure_m3u(game)
 			if m3u_path != "":
-				if m3u_path.get_extension() == "m3u":
-					print("[GameManager] _prepare_game_for_launch: Multi-disc launch via m3u = " + m3u_path)
-				else:
-					print("[GameManager] _prepare_game_for_launch: Multi-disc set incomplete, launching single disc = " + m3u_path)
+				print("[GameManager] _prepare_game_for_launch: Multi-disc launch via m3u = " + m3u_path)
 				temp_intent.rom_path = m3u_path
 
 	var result = true

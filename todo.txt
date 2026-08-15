@@ -3,6 +3,8 @@
 xemu save sync
 tst emulator app update flow on android
 touch-to-hold for context menu on android not working
+cant close details when snackbar is present
+prewarm covers on random jump
 
 romm;
 - mark 'played' if played

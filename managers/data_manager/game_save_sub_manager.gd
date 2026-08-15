@@ -473,6 +473,47 @@ func _search_directory_for_saves(dir_path: String, rom_name_no_ext: String, exte
 						"extension": dot_ext
 					})
 
+## Returns the base name emulators use for this game's save files. Multi-disc
+## games launched via an m3u playlist produce saves named after the playlist
+## (RetroArch names saves after the loaded content, not individual discs).
+func _get_save_base_name(game: GameResource) -> String:
+	if game.m3u_path != "":
+		return game.m3u_path.get_file().get_basename()
+	return game.get_active_file_name().get_basename()
+
+## Discovers local saves for a game, migrating pre-m3u disc-named saves to the
+## m3u base name so the emulator keeps reading them and sync matching works.
+func _discover_game_saves(save_dir: String, game: GameResource, extensions: Array[String]) -> Array[Dictionary]:
+	var results := discover_local_saves(save_dir, _get_save_base_name(game), extensions)
+	if results.is_empty():
+		results = _migrate_legacy_disc_saves(save_dir, game, extensions)
+	return results
+
+## Renames saves named after the main rom (written by disc-1 launches before the
+## m3u existed) to the m3u base name. Returns the migrated save entries.
+func _migrate_legacy_disc_saves(save_dir: String, game: GameResource, extensions: Array[String]) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if game.m3u_path == "":
+		return results
+	var new_base := _get_save_base_name(game)
+	var legacy_base := game.file_name.get_basename()
+	if legacy_base == new_base:
+		return results
+	var legacy := discover_local_saves(save_dir, legacy_base, extensions)
+	for save in legacy:
+		var new_path: String = save["file_path"].get_base_dir() + "/" + new_base + "." + save["file_path"].get_extension()
+		if FSM.file_exists(new_path):
+			continue
+		if FSM.move(save["file_path"], new_path):
+			print("[GameSaveSubManager] Migrated legacy disc save: " + save["file_path"] + " -> " + new_path)
+			results.append({
+				"file_name": new_path.get_file(),
+				"file_path": new_path,
+				"modified_time": save["modified_time"],
+				"extension": save["extension"]
+			})
+	return results
+
 func uses_folder_saves(emulator_id: String, platform_slug: String = "", core_id: String = "") -> bool:
 	var config: Dictionary = _get_save_config(emulator_id, platform_slug, core_id)
 	return config.get("uses_folder_saves", false)
@@ -1064,7 +1105,7 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 				push_error("[GameSaveSubManager] No save_name for platform: " + platform_slug)
 				return ""
 			
-			var rom_name_no_ext = game.get_active_file_name().get_basename()
+			var rom_name_no_ext = _get_save_base_name(game)
 			return FSM.join_paths(save_dir, core_save_name, rom_name_no_ext + ".srm")
 
 ## Discovers local saves for a RetroArch core, dispatching by platform.
@@ -1091,8 +1132,7 @@ func _discover_retroarch_save(dir: String, game: GameResource) -> Array[Dictiona
 		_:
 			var core_id = LaunchManager.resolve_core_for_game(game)
 			var extensions = get_save_extensions("retroarch", platform_slug, core_id)
-			var rom_name_no_ext = game.get_active_file_name().get_basename()
-			return discover_local_saves(dir, rom_name_no_ext, extensions)
+			return _discover_game_saves(dir, game, extensions)
 
 ## Discovers GameCube saves for the RetroArch Dolphin core.
 ## Returns the Card A directory as a single folder save (GCI files are bundled on upload).
@@ -1182,7 +1222,7 @@ func _get_retroarch_extract_dest(save_dir: String, record_path: String, game: Ga
 func _get_retroarch_save_name(game: GameResource, local_file_path: String) -> String:
 	if local_file_path != "":
 		return local_file_path.get_file()
-	return game.get_active_file_name().get_basename() + ".srm"
+	return _get_save_base_name(game) + ".srm"
 
 ## Creates a ZIP archive for a RetroArch save, dispatching by platform.
 func _zip_retroarch_save(src: String, dst: String, game: GameResource) -> bool:
@@ -1469,8 +1509,7 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 	var scan_work := func() -> Array[Dictionary]:
 		if is_folder_save_flow:
 			return _discover_emulator_saves(emulator_id, save_dir, game)
-		var rom_name_no_ext = game.get_active_file_name().get_basename()
-		return discover_local_saves(save_dir, rom_name_no_ext, extensions)
+		return _discover_game_saves(save_dir, game, extensions)
 	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
 		_ensure_device_registered(func(success: bool, error: String):
 			if not success:
@@ -1817,8 +1856,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	var scan_work := func() -> Array[Dictionary]:
 		if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 			return _discover_emulator_saves(emulator_id, save_dir, game)
-		var rom_name_no_ext = game.get_active_file_name().get_basename()
-		return discover_local_saves(save_dir, rom_name_no_ext, extensions)
+		return _discover_game_saves(save_dir, game, extensions)
 	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
 		if local_saves.is_empty():
 			print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
@@ -2086,8 +2124,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			var scan_work := func() -> Array[Dictionary]:
 				if is_folder_save:
 					return _discover_emulator_saves(emulator_id, save_dir, game)
-				var rom_name_no_ext = game.get_active_file_name().get_basename()
-				return discover_local_saves(save_dir, rom_name_no_ext, extensions)
+				return _discover_game_saves(save_dir, game, extensions)
 			var scan_state := {"done": false, "result": []}
 			_run_io_task(save_dir, scan_work, func(scan_result: Array[Dictionary]):
 				scan_state["result"] = scan_result
