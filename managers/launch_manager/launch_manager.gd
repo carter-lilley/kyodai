@@ -803,6 +803,10 @@ func _update_last_played(game: GameResource) -> void:
 	
 	# Update in database
 	DataManager.update_game_last_played(game.romm_id, timestamp)
+
+	# Sync "now playing" + server-side last-played back to RomM (silent, queued if offline)
+	DataManager.set_game_user_props(game, {"now_playing": true}, true, false)
+
 	game_launched.emit(game)
 
 

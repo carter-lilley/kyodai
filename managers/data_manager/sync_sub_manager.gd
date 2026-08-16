@@ -952,7 +952,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if romm_ids.size() > 0:
 		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path FROM games WHERE romm_id IN (%s)" % placeholders,
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite FROM games WHERE romm_id IN (%s)" % placeholders,
 			romm_ids
 		)
 		for row in existing_result:
@@ -1247,6 +1247,14 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	var rom_user = data.get("rom_user", {})
 	game.romm_is_main_sibling = rom_user is Dictionary and rom_user.get("is_main_sibling", false) == true
 
+	# RomM per-user play state (rom_user); status may be null when unset
+	if rom_user is Dictionary:
+		var raw_status = rom_user.get("status", null)
+		game.status = str(raw_status) if raw_status != null else ""
+		game.now_playing = rom_user.get("now_playing", false) == true
+		game.backlogged = rom_user.get("backlogged", false) == true
+		game.hidden = rom_user.get("hidden", false) == true
+
 	# Determine if this should be a master entry
 	# A game is a master if RomM flags it as the main sibling, or if none of
 	# its siblings already exist in our database as a master entry
@@ -1278,10 +1286,11 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	var file_path = game.file_path
 	var last_played = game.last_played
 	var title_id = game.title_id
+	var is_favorite = 1 if game.is_favorite else 0
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -1314,13 +1323,15 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		var existing_m3u_path = existing.get("m3u_path", "")
 		if existing_m3u_path != "":
 			game.m3u_path = existing_m3u_path
+		# Preserve favorite flag (synced separately via the favourites virtual collection)
+		is_favorite = 1 if existing.get("is_favorite", 0) == 1 else 0
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path, status, now_playing, backlogged, hidden, is_favorite)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1349,7 +1360,12 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
 		JSON.stringify(game.igdb_metadata),
-		game.m3u_path
+		game.m3u_path,
+		game.status,
+		1 if game.now_playing else 0,
+		1 if game.backlogged else 0,
+		1 if game.hidden else 0,
+		is_favorite
 	]
 
 	return {"query": query, "bindings": bindings}

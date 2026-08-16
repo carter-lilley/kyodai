@@ -27,9 +27,25 @@ const MAX_HEIGHT_DP := 760.0
 @onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/TitleIdLabel
 @onready var description_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/DescriptionLabel
 @onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SiblingDropdown
+@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/StatusDropdown
 @onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/ActionButton
 @onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/SyncButton
+@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/FavoriteButton
 @onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SyncStatusLabel
+
+## RomM play-status options. The first five map to the mutually exclusive
+## rom_user.status enum; the last three are independent boolean flags.
+const STATUS_OPTIONS := [
+	{"key": "incomplete", "label": "Incomplete", "icon": "timer-sand"},
+	{"key": "finished", "label": "Finished", "icon": "check-bold"},
+	{"key": "completed_100", "label": "Completed 100%", "icon": "trophy"},
+	{"key": "retired", "label": "Retired", "icon": "flag"},
+	{"key": "never_playing", "label": "Never Playing", "icon": "cancel"},
+	{"key": "now_playing", "label": "Now Playing", "icon": "play"},
+	{"key": "backlogged", "label": "Backlogged", "icon": "bookmark"},
+	{"key": "hidden", "label": "Hidden", "icon": "eye-off"},
+]
+const STATUS_FLAG_KEYS := ["now_playing", "backlogged", "hidden"]
 
 var _current_game: GameResource = null
 var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
@@ -67,6 +83,10 @@ func _connect_signals() -> void:
 		action_button.pressed.connect(_on_action_button_pressed)
 	if sync_button:
 		sync_button.pressed.connect(_on_sync_button_pressed)
+	if status_dropdown:
+		status_dropdown.item_selected.connect(_on_status_item_selected)
+	if favorite_button:
+		favorite_button.pressed.connect(_on_favorite_button_pressed)
 	SystemManager.download.download_completed.connect(_on_download_completed)
 
 func _set_sheet_height() -> void:
@@ -141,6 +161,8 @@ func _populate_basic_info(game: GameResource) -> void:
 		rating_label.text = "No rating"
 
 	_setup_sibling_dropdown(game)
+	_setup_status_dropdown(game)
+	_update_favorite_button()
 	_update_file_info_display(game)
 	_update_action_button()
 	description_label.text = game.description if game.description else "No description available."
@@ -289,6 +311,78 @@ func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 			_update_sync_ui()
 			DataManager.update_game(_current_game)
 	)
+
+func _setup_status_dropdown(game: GameResource) -> void:
+	if not status_dropdown:
+		return
+
+	# Status/favorites are RomM features; hide for other sources (e.g. gamenative)
+	var is_romm_game := game.source == "romm"
+	status_dropdown.visible = is_romm_game
+	if favorite_button:
+		favorite_button.visible = is_romm_game
+	if not is_romm_game:
+		return
+
+	status_dropdown.clear_items()
+	for opt in STATUS_OPTIONS:
+		status_dropdown.add_icon_item(opt["icon"], opt["label"])
+	_update_status_selection()
+
+func _update_status_selection() -> void:
+	if not status_dropdown or not _current_game:
+		return
+	var indices: Array[int] = []
+	for i in range(STATUS_OPTIONS.size()):
+		var key: String = STATUS_OPTIONS[i]["key"]
+		match key:
+			"now_playing":
+				if _current_game.now_playing:
+					indices.append(i)
+			"backlogged":
+				if _current_game.backlogged:
+					indices.append(i)
+			"hidden":
+				if _current_game.hidden:
+					indices.append(i)
+			_:
+				if _current_game.status == key:
+					indices.append(i)
+	status_dropdown.set_selected_indices(indices)
+
+func _on_status_item_selected(index: int) -> void:
+	if not _current_game or index < 0 or index >= STATUS_OPTIONS.size():
+		return
+
+	var key: String = STATUS_OPTIONS[index]["key"]
+	var selected := status_dropdown.is_selected(index)
+	var props: Dictionary = {}
+
+	if key in STATUS_FLAG_KEYS:
+		props[key] = selected
+	else:
+		# The status enum is mutually exclusive: clear the other enum items
+		for i in range(STATUS_OPTIONS.size()):
+			var other_key: String = STATUS_OPTIONS[i]["key"]
+			if other_key in STATUS_FLAG_KEYS or i == index:
+				continue
+			if status_dropdown.is_selected(i):
+				status_dropdown.deselect_option(i)
+		props["status"] = key if selected else null
+
+	DataManager.set_game_user_props(_current_game, props)
+
+func _update_favorite_button() -> void:
+	if not favorite_button or not _current_game:
+		return
+	favorite_button.icon_name = "heart" if _current_game.is_favorite else "heart-outline"
+	favorite_button.tooltip_text = "Remove from favorites" if _current_game.is_favorite else "Add to favorites"
+
+func _on_favorite_button_pressed() -> void:
+	if not _current_game:
+		return
+	DataManager.set_game_favorite(_current_game, not _current_game.is_favorite)
+	_update_favorite_button()
 
 func _update_file_info_display(game: GameResource) -> void:
 	# Get the active file info (either main game or selected sibling)

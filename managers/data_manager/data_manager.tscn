@@ -8,6 +8,7 @@
 [ext_resource type="Script" path="res://managers/data_manager/settings_sub_manager.gd" id="6_settings"]
 [ext_resource type="Script" path="res://managers/data_manager/game_save_sub_manager.gd" id="7_save"]
 [ext_resource type="Script" path="res://managers/data_manager/collection_sub_manager.gd" id="8_collections"]
+[ext_resource type="Script" path="res://managers/data_manager/user_props_sub_manager.gd" id="9_user_props"]
 
 [node name="DataManager" type="Node"]
 script = ExtResource("1_8k3jr")
@@ -32,3 +33,6 @@ script = ExtResource("7_save")
 
 [node name="CollectionSubManager" type="Node" parent="."]
 script = ExtResource("8_collections")
+
+[node name="UserPropsSubManager" type="Node" parent="."]
+script = ExtResource("9_user_props")

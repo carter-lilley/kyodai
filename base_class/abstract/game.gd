@@ -41,6 +41,16 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Timestamp of when this game was last played (ISO format)
 @export var last_played: String = ""
 
+## RomM per-user play state (rom_user): status is one of "", "incomplete",
+## "finished", "completed_100", "retired", "never_playing"
+@export var status: String = ""
+@export var now_playing: bool = false
+@export var backlogged: bool = false
+@export var hidden: bool = false
+
+## Whether this game is in the user's RomM "favourites" virtual collection
+@export var is_favorite: bool = false
+
 ## Platform-specific Title ID (for Vita, PS3, etc.)
 @export var title_id: String = ""
 

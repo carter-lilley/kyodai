@@ -1290,6 +1290,143 @@ func register_device(_device_name: String, platform: String, client: String, cli
 			callback.call(response_data, "")
 	)
 
+# ==================== ROM USER PROPS / FAVOURITES ====================
+
+## Generic JSON-body request helper (PUT/POST/DELETE), modeled on register_device.
+## callback(data: Variant, error: String)
+func _make_json_request(endpoint: String, method: HTTPClient.Method, body_dict: Dictionary, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+
+	var url = _base_url.rstrip("/") + "/api" + endpoint
+	var headers = [
+		"Content-Type: application/json",
+		"Authorization: " + _get_auth_header()
+	]
+
+	var http = _create_http_request()
+	_active_request_count += 1
+	var error = http.request(url, headers, method, JSON.stringify(body_dict))
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start request: " + str(error))
+		_finish_pooled_request(http)
+		return
+
+	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
+		_finish_pooled_request(http)
+
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Request failed: " + str(result))
+			return
+
+		if response_code < 200 or response_code >= 300:
+			if callback.is_valid():
+				callback.call({}, "HTTP error: " + str(response_code))
+			return
+
+		var body_text = response_body.get_string_from_utf8()
+		var json = JSON.new()
+		var response_data: Variant = {}
+		if json.parse(body_text) == OK:
+			response_data = json.data
+
+		if callback.is_valid():
+			callback.call(response_data, "")
+	)
+
+## Update per-user rom props (status, now_playing, backlogged, hidden, rating, etc.)
+## callback(data: Variant, error: String) - data is the updated RomUserSchema
+func update_rom_user_props(romm_id: int, props: Dictionary, update_last_played: bool = false, callback: Callable = Callable()) -> void:
+	var endpoint = "/roms/%d/props" % romm_id
+	if update_last_played:
+		endpoint += "?update_last_played=true"
+	_make_json_request(endpoint, HTTPClient.METHOD_PUT, props, callback)
+
+## Generic urlencoded-form request helper (for RomM endpoints that take Form()
+## params instead of a JSON body). callback(data: Variant, error: String)
+func _make_form_request(endpoint: String, method: HTTPClient.Method, fields: Dictionary, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+
+	var url = _base_url.rstrip("/") + "/api" + endpoint
+	var headers = [
+		"Content-Type: application/x-www-form-urlencoded",
+		"Authorization: " + _get_auth_header()
+	]
+
+	var pairs: Array[String] = []
+	for key in fields.keys():
+		pairs.append(str(key).uri_encode() + "=" + str(fields[key]).uri_encode())
+
+	var http = _create_http_request()
+	_active_request_count += 1
+	var error = http.request(url, headers, method, "&".join(pairs))
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start request: " + str(error))
+		_finish_pooled_request(http)
+		return
+
+	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
+		_finish_pooled_request(http)
+
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Request failed: " + str(result))
+			return
+
+		if response_code < 200 or response_code >= 300:
+			if callback.is_valid():
+				callback.call({}, "HTTP error: " + str(response_code))
+			return
+
+		var body_text = response_body.get_string_from_utf8()
+		var json = JSON.new()
+		var response_data: Variant = {}
+		if json.parse(body_text) == OK:
+			response_data = json.data
+
+		if callback.is_valid():
+			callback.call(response_data, "")
+	)
+
+## Create the per-user "Favourites" collection (is_favorite=true) when the
+## server doesn't have one yet. RomM takes Form params for collection creation.
+## callback(data: Variant, error: String) - data is the created CollectionSchema
+func create_favorite_collection(callback: Callable = Callable()) -> void:
+	_make_form_request(
+		"/collections?is_public=false&is_favorite=true",
+		HTTPClient.METHOD_POST,
+		{"name": "Favourites", "description": "", "url_cover": ""},
+		callback
+	)
+
+## Add roms to a collection (e.g. the favorites collection)
+func add_roms_to_collection(collection_id: int, rom_ids: Array, callback: Callable = Callable()) -> void:
+	_make_json_request("/collections/%d/roms" % collection_id, HTTPClient.METHOD_POST, {"rom_ids": rom_ids}, callback)
+
+## Remove roms from a collection
+func remove_roms_from_collection(collection_id: int, rom_ids: Array, callback: Callable = Callable()) -> void:
+	_make_json_request("/collections/%d/roms" % collection_id, HTTPClient.METHOD_DELETE, {"rom_ids": rom_ids}, callback)
+
 # ==================== FIRMWARE DOWNLOAD ====================
 ## Fetches firmware information for a platform from RomM
 ## callback(data: Dictionary, error: String)

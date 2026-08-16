@@ -133,8 +133,13 @@ func _create_tables():
 			is_master_entry INTEGER DEFAULT 1,
 			downloaded_sibling_ids TEXT DEFAULT '[]',
 			has_cover_art INTEGER DEFAULT 1,
-			last_played TEXT DEFAULT '',
-			title_id TEXT DEFAULT '',
+		last_played TEXT DEFAULT '',
+		status TEXT DEFAULT '',
+		now_playing INTEGER DEFAULT 0,
+		backlogged INTEGER DEFAULT 0,
+		hidden INTEGER DEFAULT 0,
+		is_favorite INTEGER DEFAULT 0,
+		title_id TEXT DEFAULT '',
 			save_id TEXT DEFAULT '',
 			save_usage TEXT DEFAULT '',
 		cover_group_id TEXT DEFAULT '',
@@ -211,6 +216,18 @@ func _create_tables():
 	""")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_collection ON collection_roms(collection_id)")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_collection_roms_romm ON collection_roms(romm_id)")
+
+	# Queued RomM user-prop writes that failed (offline etc.) and retry on reconnect.
+	# kind: "props" (PUT /roms/{id}/props) or "fav" (favourites collection membership)
+	query_bool("""
+		CREATE TABLE IF NOT EXISTS pending_props_sync (
+			romm_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			payload TEXT DEFAULT '{}',
+			queued_at TEXT DEFAULT '',
+			PRIMARY KEY (romm_id, kind)
+		)
+	""")
 
 
 func is_database_ready() -> bool:
@@ -332,6 +349,13 @@ func _row_to_game(row: Dictionary) -> GameResource:
 
 	# Restore last_played timestamp
 	game.last_played = row.get("last_played", "")
+
+	# Restore RomM per-user play state
+	game.status = row.get("status", "")
+	game.now_playing = row.get("now_playing", 0) == 1
+	game.backlogged = row.get("backlogged", 0) == 1
+	game.hidden = row.get("hidden", 0) == 1
+	game.is_favorite = row.get("is_favorite", 0) == 1
 
 	# Restore title_id
 	game.title_id = row.get("title_id", "")
@@ -874,6 +898,94 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 	return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
 
 
+## Whitelist of user-prop columns that update_game_user_props may write.
+const USER_PROP_COLUMNS := {
+	"status": "status",
+	"now_playing": "now_playing",
+	"backlogged": "backlogged",
+	"hidden": "hidden",
+	"is_favorite": "is_favorite",
+	"last_played": "last_played",
+}
+
+func update_game_user_props(romm_id: int, props: Dictionary) -> bool:
+	"""Update one or more RomM per-user prop columns for a game.
+	props keys: status, now_playing, backlogged, hidden, is_favorite, last_played"""
+	if not _is_db_ready or props.is_empty():
+		return false
+
+	var sets: Array[String] = []
+	var bindings: Array = []
+	for key in props.keys():
+		if not USER_PROP_COLUMNS.has(key):
+			continue
+		var value = props[key]
+		if value == null:
+			value = ""
+		elif value is bool:
+			value = 1 if value else 0
+		sets.append(USER_PROP_COLUMNS[key] + " = ?")
+		bindings.append(value)
+
+	if sets.is_empty():
+		return false
+
+	bindings.append(romm_id)
+	return query_bool("UPDATE games SET %s WHERE romm_id = ?" % ", ".join(sets), bindings)
+
+
+func set_all_favorites(favorite_romm_ids: Array) -> bool:
+	"""Reset is_favorite for all games, then mark the given romm_ids as favorites."""
+	if not _is_db_ready:
+		return false
+	var success = query_bool("UPDATE games SET is_favorite = 0", [])
+	if favorite_romm_ids.is_empty():
+		return success
+	var placeholders: Array[String] = []
+	for id in favorite_romm_ids:
+		placeholders.append("?")
+	success = query_bool("UPDATE games SET is_favorite = 1 WHERE romm_id IN (%s)" % ",".join(placeholders), favorite_romm_ids) and success
+	return success
+
+
+# ==================== PENDING PROPS SYNC QUEUE ====================
+
+func queue_pending_props(romm_id: int, kind: String, payload: Dictionary) -> bool:
+	"""Queue a failed RomM user-prop write for retry (latest state wins per rom+kind)."""
+	if not _is_db_ready:
+		return false
+	var timestamp = Time.get_datetime_string_from_system(false, true)
+	return query_bool(
+		"INSERT OR REPLACE INTO pending_props_sync (romm_id, kind, payload, queued_at) VALUES (?, ?, ?, ?)",
+		[romm_id, kind, JSON.stringify(payload), timestamp]
+	)
+
+
+func get_pending_props_sync() -> Array[Dictionary]:
+	"""Return all queued writes: [{romm_id, kind, payload}, ...] oldest first."""
+	var result: Array[Dictionary] = []
+	if not _is_db_ready:
+		return result
+	var rows = query_array("SELECT romm_id, kind, payload FROM pending_props_sync ORDER BY queued_at ASC")
+	for row in rows:
+		var json = JSON.new()
+		var payload: Dictionary = {}
+		if json.parse(str(row.get("payload", "{}"))) == OK and json.data is Dictionary:
+			payload = json.data
+		result.append({
+			"romm_id": int(row.get("romm_id", 0)),
+			"kind": str(row.get("kind", "")),
+			"payload": payload,
+		})
+	return result
+
+
+func clear_pending_props(romm_id: int, kind: String) -> bool:
+	if not _is_db_ready:
+		return false
+	return query_bool("DELETE FROM pending_props_sync WHERE romm_id = ? AND kind = ?", [romm_id, kind])
+
+
 func get_game_by_id(romm_id: int) -> GameResource:
 	if not _is_db_ready:
 		return null
@@ -1104,6 +1216,23 @@ func clear_collection_roms(collection_id: int) -> void:
 	if not _is_db_ready:
 		return
 	query_bool("DELETE FROM collection_roms WHERE collection_id = ?", [collection_id])
+
+
+func remove_collection_rom(collection_id: int, romm_id: int) -> void:
+	"""Remove a single ROM link from a collection."""
+	if not _is_db_ready:
+		return
+	query_bool("DELETE FROM collection_roms WHERE collection_id = ? AND romm_id = ?", [collection_id, romm_id])
+
+
+func get_favorite_collection_id() -> int:
+	"""Return the romm_id of the user's favorite collection (is_favorite=1), or 0."""
+	if not _is_db_ready:
+		return 0
+	var query_result = query_array("SELECT romm_id FROM collections WHERE is_favorite = 1 LIMIT 1")
+	if query_result.size() > 0:
+		return int(query_result[0].get("romm_id", 0))
+	return 0
 
 
 func add_collection_roms(collection_id: int, rom_ids: Array) -> void:

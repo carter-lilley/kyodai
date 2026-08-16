@@ -38,6 +38,7 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 @onready var cover: CoverSubManager = $CoverSubManager
 @onready var save: SaveSyncSubManager = $SaveSyncSubManager
 @onready var collections: CollectionSubManager = $CollectionSubManager
+@onready var user_props: UserPropsSubManager = $UserPropsSubManager
 var settings: SettingsSubManager
 var game_save: GameSaveSubManager
 
@@ -182,7 +183,11 @@ func _on_database_ready_for_collections() -> void:
 	"""Sync collections from RomM once the database is ready and RomM is configured."""
 	if SystemManager.network and SystemManager.network.is_configured():
 		print("[DataManager] Syncing collections at startup...")
-		sync_collections()
+		# Favorites are derived from the favorite collection, so sync them after it
+		sync_collections(func(_success, _msg):
+			user_props.sync_favourites()
+		)
+		user_props.flush_pending()
 
 func sync_collections(callback: Callable = Callable()) -> void:
 	collections.sync_collections(callback)
@@ -232,6 +237,19 @@ func update_game_m3u_path(romm_id: int, m3u_path: String, callback: Callable = C
 
 func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 	return database.update_game_last_played(romm_id, timestamp)
+
+
+# ==================== ROMM USER PROPS / FAVORITES ====================
+
+## Apply RomM per-user props (status/now_playing/backlogged/hidden) locally and
+## push to the server. Set notify=false for silent background updates (launches).
+func set_game_user_props(game: GameResource, props: Dictionary, update_last_played: bool = false, notify: bool = true, callback: Callable = Callable()) -> void:
+	user_props.set_game_props(game, props, update_last_played, notify, callback)
+
+
+## Toggle a game's membership in the RomM "favourites" virtual collection.
+func set_game_favorite(game: GameResource, favorite: bool, notify: bool = true, callback: Callable = Callable()) -> void:
+	user_props.set_favorite(game, favorite, notify, callback)
 
 
 func delete_game_download(game: GameResource, callback: Callable = Callable(), force_db_update: bool = false) -> bool:
