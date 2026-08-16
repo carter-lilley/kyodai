@@ -7,10 +7,8 @@ cant close details when snackbar is present
 prewarm covers on random jump
 
 romm;
-- mark 'played' if played
-- 'add to collection'
 - sort by played
-- sort by favorite? wishlist?
+- sort by favorite
 
 ## saves
 	check emulator config for save/user folder(s) at synctime

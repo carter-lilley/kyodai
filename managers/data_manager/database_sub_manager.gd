@@ -171,16 +171,19 @@ func _create_tables():
 
 	# Create save_sync table for tracking save file sync state
 	query_bool("""
-		CREATE TABLE IF NOT EXISTS save_sync (
-			id INTEGER PRIMARY KEY,
-			romm_id INTEGER NOT NULL,
-			emulator_id TEXT NOT NULL,
-			file_name TEXT NOT NULL,
-			file_path TEXT NOT NULL,
-			last_synced_at TEXT DEFAULT '',
-			remote_save_id INTEGER DEFAULT 0,
-			slot TEXT
-		)
+	CREATE TABLE IF NOT EXISTS save_sync (
+		id INTEGER PRIMARY KEY,
+		romm_id INTEGER NOT NULL,
+		emulator_id TEXT NOT NULL,
+		file_name TEXT NOT NULL,
+		file_path TEXT NOT NULL,
+		last_synced_at TEXT DEFAULT '',
+		remote_save_id INTEGER DEFAULT 0,
+		slot TEXT,
+		local_hash TEXT DEFAULT '',
+		server_hash TEXT DEFAULT '',
+		local_size INTEGER DEFAULT 0
+	)
 	""")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_save_sync_romm_emulator ON save_sync(romm_id, emulator_id)")
 

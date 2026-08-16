@@ -428,8 +428,8 @@ func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dict
 
 
 
-func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
-	return save.update_save_sync_record(romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot)
+func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "", local_hash: String = "", server_hash: String = "", local_size: int = 0) -> bool:
+	return save.update_save_sync_record(romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot, local_hash, server_hash, local_size)
 
 
 func delete_save_sync_record(romm_id: int, emulator_id: String, file_name: String, slot: String = "") -> bool:

@@ -6,6 +6,8 @@ class_name GameSaveSubManager
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const _ContentHash = preload("res://utils/content_hash.gd")
+const Gavel = preload("res://utils/gavel.gd")
 const SLOT_DEFAULT := ""
 const MAX_FILE_SIZE := 100 * 1024 * 1024
 
@@ -684,6 +686,89 @@ func _get_save_identity(game: GameResource) -> Dictionary:
 			return {"id": title_id, "usage": "folder-split"}
 		_:
 			return {"id": title_id, "usage": ""}
+
+## Computes the RomM-parity content hash + logical size for a local save
+## record. Folder saves hash as the zip _zip_emulator_save would produce
+## (per-emulator root naming); file saves hash the file directly.
+## Returns {"hash": String, "size": int}; hash is "" when uncomputable.
+func _compute_local_save_hash(emulator_id: String, game: GameResource, local_save: Dictionary) -> Dictionary:
+	var path: String = local_save.get("file_path", "")
+	if path == "":
+		return {"hash": "", "size": 0}
+	if FSM.dir_exists(path):
+		var root_name = _get_upload_zip_root_name(emulator_id, game, path)
+		return {"hash": _ContentHash.compute_folder_zip_hash(path, root_name), "size": _folder_content_size(path)}
+	if FSM.file_exists(path):
+		return {"hash": _ContentHash.compute_content_hash(path), "size": int(FSM.get_file_size(path))}
+	return {"hash": "", "size": 0}
+
+## Root folder name used by the emulator's upload zip. Must mirror the
+## strategy "zip" lambdas so simulated hashes match the uploaded bytes.
+func _get_upload_zip_root_name(emulator_id: String, game: GameResource, src_path: String) -> String:
+	match emulator_id:
+		"cemu":
+			return _get_save_identity(game).id
+		"pcsx2", "ppsspp":
+			return src_path.rstrip("/").get_file()
+		_:
+			return ""
+
+func _folder_content_size(dir_path: String) -> int:
+	var total = 0
+	var dir = DirAccess.open(dir_path)
+	if dir == null:
+		return 0
+	dir.list_dir_begin()
+	var filename = dir.get_next()
+	while filename != "":
+		if filename != "." and filename != "..":
+			var full_path = dir_path + "/" + filename
+			if dir.current_is_dir():
+				total += _folder_content_size(full_path)
+			else:
+				total += int(FSM.get_file_size(full_path))
+		filename = dir.get_next()
+	dir.list_dir_end()
+	return total
+
+## Builds the gavel bookkeeping record from a save_sync DB row.
+func _gavel_files_state(db_rec) -> Dictionary:
+	var files_state := {}
+	if db_rec == null:
+		return files_state
+	if db_rec.get("local_hash", "") != "":
+		files_state["last_sync_hash"] = db_rec.local_hash
+	if db_rec.get("server_hash", "") != "":
+		files_state["last_sync_server_hash"] = db_rec.server_hash
+	if int(db_rec.get("local_size", 0)) > 0:
+		files_state["last_sync_local_size"] = int(db_rec.local_size)
+	return files_state
+
+## Runs the gavel decision for one (game, file_name) pair.
+## local_save: discovery record or null. remote: server save dict or null.
+func _gavel_decide(emulator_id: String, game: GameResource, local_save, remote, db_rec, device_id: String) -> Dictionary:
+	var hash_info := {"hash": "", "size": 0}
+	var local_file = null
+	if local_save != null:
+		hash_info = _compute_local_save_hash(emulator_id, game, local_save)
+		local_file = {"filename": local_save.file_name, "size": hash_info.size, "mtime": local_save.get("modified_time", 0)}
+	var server_saves: Array = [remote] if remote != null else []
+	var decision = Gavel.compute_sync_action(local_file, server_saves, _gavel_files_state(db_rec), device_id, hash_info.hash if hash_info.hash != "" else null)
+	return {"decision": decision, "hash_info": hash_info}
+
+## Slot-wide parity check: finds a remote save whose server-stamped
+## content_hash equals the local hash, regardless of file_name. Catches
+## saves uploaded under artifact-suffixed names by other/older clients
+## (e.g. BASLUS-20152AC04.zip vs BASLUS-20152.zip) so identical content is
+## never re-uploaded as a duplicate record.
+func _find_slot_parity_remote(remotes: Array, local_hash: String) -> Dictionary:
+	if local_hash == "":
+		return {}
+	for remote in remotes:
+		var ch = remote.get("content_hash", "")
+		if ch != null and ch != "" and ch == local_hash:
+			return remote
+	return {}
 
 func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
@@ -1600,11 +1685,11 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 
 func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remote_saves: Array, device_id: String, callback: Callable) -> void:
 	var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
-	
+
 	var local_by_name: Dictionary = {}
 	for save in local_saves:
 		local_by_name[save.file_name] = save
-	
+
 	var remote_by_name: Dictionary = {}
 	for save in remote_saves:
 		var slot = save.get("slot", "")
@@ -1612,56 +1697,71 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 			slot = ""
 		if slot == SLOT_DEFAULT:
 			remote_by_name[save.file_name] = save
-	
+
 	var db_by_name: Dictionary = {}
 	for rec in db_records:
 		db_by_name[rec.file_name] = rec
-	
+
 	var pending_uploads: Array[Dictionary] = []
 	var pending_downloads: Array[Dictionary] = []
 	var sync_aborted = false
-	
+
+	# Detection via the gavel decision table (hash identity + bookkeeping),
+	# falling back to its timestamp branch only when hashes prove nothing.
 	for local in local_saves:
 		var file_name = local.file_name
 		var remote = remote_by_name.get(file_name)
 		var db_rec = db_by_name.get(file_name)
-		var last_synced_unix = 0
 		var local_mtime = local.modified_time
-		if db_rec:
-			last_synced_unix = parse_iso_timestamp(db_rec.last_synced_at)
-		
-		if remote:
-			var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", ""))
-			
-			if local_mtime > last_synced_unix and remote_updated_unix > last_synced_unix:
-				# CONFLICT: Both changed since last sync - show dialog
+
+		var verdict = _gavel_decide(emulator_id, game, local, remote, db_rec, device_id)
+		local["_hash_info"] = verdict.hash_info
+		var action: String = verdict.decision.action
+
+		# Slot-wide parity: identical content exists under a different server
+		# file_name - adopt the baseline instead of POSTing a duplicate.
+		if action == "upload" and remote == null:
+			var parity = _find_slot_parity_remote(remote_by_name.values(), verdict.hash_info.hash)
+			if not parity.is_empty():
+				var ts = Time.get_datetime_string_from_system(true, true)
+				DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, local.file_path, ts, parity.get("id", 0), SLOT_DEFAULT, verdict.hash_info.hash, parity.get("content_hash", ""), verdict.hash_info.size)
+				continue
+
+		match action:
+			"upload":
+				pending_uploads.append({"local": local, "remote": remote})
+			"download":
+				if remote:
+					pending_downloads.append({"local": local, "remote": remote})
+			"conflict":
+				var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", "")) if remote else 0
 				var choice = await _show_conflict_dialog(game, local_mtime, remote_updated_unix)
 				match choice:
 					"local":
-						pending_uploads.append({"local": local, "remote": remote})
+						pending_uploads.append({"local": local, "remote": remote, "force": true})
 					"server":
-						pending_downloads.append({"local": local, "remote": remote})
+						if remote:
+							pending_downloads.append({"local": local, "remote": remote})
 					"cancel", "":
 						sync_aborted = true
 						break
-			elif local_mtime > last_synced_unix:
-				pending_uploads.append({"local": local, "remote": remote})
-			elif remote_updated_unix > last_synced_unix:
-				pending_downloads.append({"local": local, "remote": remote})
-		else:
-			if local_mtime > last_synced_unix or last_synced_unix == 0:
-				pending_uploads.append({"local": local, "remote": null})
-	
+			"skip":
+				if verdict.decision.get("adopt_baseline", false) and remote:
+					var ts = Time.get_datetime_string_from_system(true, true)
+					DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, local.file_path, ts, remote.get("id", 0), SLOT_DEFAULT, verdict.hash_info.hash, remote.get("content_hash", ""), verdict.hash_info.size)
+
 	if sync_aborted:
 		save_sync_completed.emit(game, false, "Save sync cancelled by user")
 		if callback.is_valid():
 			callback.call(false, "Save sync cancelled by user")
 		return
-	
+
 	for remote in remote_by_name.values():
 		var file_name = remote.file_name
 		if not local_by_name.has(file_name):
-			pending_downloads.append({"local": null, "remote": remote})
+			var verdict = _gavel_decide(emulator_id, game, null, remote, db_by_name.get(file_name), device_id)
+			if verdict.decision.action == "download":
+				pending_downloads.append({"local": null, "remote": remote})
 	
 	var total_ops = pending_uploads.size() + pending_downloads.size()
 	if total_ops == 0:
@@ -1671,7 +1771,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 	
 	var state = {"completed": 0, "failed": 0}
 	var current_timestamp = Time.get_datetime_string_from_system(true, true)
-	
+
 	var check_complete = func():
 		state.completed += 1
 		if state.completed >= total_ops:
@@ -1683,167 +1783,248 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 				save_sync_completed.emit(game, true, "Save sync completed")
 				if callback.is_valid():
 					callback.call(true, "Save sync completed")
-	
-	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-	
-	for upload in pending_uploads:
-		var upload_file_name = upload.local.file_name
-		var original_path = upload.local.file_path
-		
-		if is_folder_save:
-			var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
-			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
-			print("[GameSaveSubManager] Preparing folder save upload for " + save_name + " from base: " + original_path)
-			FSM.make_dir_recursive(zip_path.get_base_dir())
-			# Zip off the main thread when the source path allows it
-			var zip_state := {"done": false, "success": false}
-			_run_io_task(original_path,
-				func():
-					return _zip_emulator_save(emulator_id, original_path, zip_path, game),
-				func(zip_success: bool):
-					zip_state["success"] = zip_success
-					zip_state["done"] = true
-			)
-			while not zip_state["done"]:
-				await get_tree().process_frame
-			if not zip_state["success"]:
-				state.failed += 1
-				push_error("[GameSaveSubManager] Failed to zip folder for upload: " + original_path)
-				check_complete.call()
-				continue
 
-			SystemManager.network.upload_save(
-				game.romm_id,
-				zip_path,
-				emulator_id,
-				SLOT_DEFAULT,
-				device_id,
-				true,
-				func(data: Dictionary, error: String):
-					if FSM.file_exists(zip_path):
-						FSM.delete_file(zip_path)
-					# Clean up empty parent directories
-					_cleanup_temp_dir(zip_path)
-					if error != "":
-						state.failed += 1
-						push_error("[GameSaveSubManager] Upload failed for " + original_path + ": " + error)
-					else:
-						var remote_id = data.get("id", 0)
-						DataManager.update_save_sync_record(game.romm_id, emulator_id, upload_file_name, original_path, current_timestamp, remote_id, SLOT_DEFAULT)
-					check_complete.call()
-			)
-		else:
-			SystemManager.network.upload_save(
-				game.romm_id,
-				original_path,
-				emulator_id,
-				SLOT_DEFAULT,
-				device_id,
-				true,
-				func(data: Dictionary, error: String):
-					# Clean up temp GCI zip files after upload
-					if original_path.contains("user://temp_saves/") and FSM.file_exists(original_path):
-						FSM.delete_file(original_path)
-					if error != "":
-						state.failed += 1
-						push_error("[GameSaveSubManager] Upload failed for " + original_path + ": " + error)
-					else:
-						var remote_id = data.get("id", 0)
-						DataManager.update_save_sync_record(game.romm_id, emulator_id, upload_file_name, original_path, current_timestamp, remote_id, SLOT_DEFAULT)
-					check_complete.call()
-			)
-	
-	for download in pending_downloads:
-		var remote = download.remote
-		var save_id = remote.get("id", 0)
-		var file_name = remote.get("file_name", "save")
-		var local_path = ""
-		var record_path = ""
-		var zip_path = ""
-		
-		if download.local:
-			record_path = download.local.file_path
-		else:
-			if emulator_id == "retroarch":
-				record_path = _resolve_emulator_save_path(emulator_id, resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game)), game)
-			else:
-				record_path = FSM.join_paths(resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game)), file_name)
-		
-		if is_folder_save:
-			zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
-			FSM.make_dir_recursive(zip_path.get_base_dir())
-			local_path = zip_path
-			var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-			
-			if not download.local:
-				record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
-				print("[GameSaveSubManager] Folder save record_path for " + emulator_id + ": " + record_path)
-				if record_path == "":
-					var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
-					if result.error != "":
-						state.failed += 1
-						push_error("[GameSaveSubManager] Cannot download folder save: no " + result.error + " folder found")
-						check_complete.call()
-						continue
-					record_path = result.path
-		else:
-			local_path = record_path
-			# Ensure parent directory exists for RetroArch core-specific saves
-			if emulator_id == "retroarch":
-				var parent_dir = record_path.get_base_dir()
-				FSM.make_dir_recursive(parent_dir)
-		
-		# Ensure save directory exists before downloading
-		_ensure_save_directory_exists(emulator_id)
-		
-		SystemManager.network.download_save(save_id, device_id, local_path, func(_success: bool, _status_code: int, error_msg: String):
-			if not _success:
+	for upload in pending_uploads:
+		_execute_save_upload(game, emulator_id, upload, device_id, current_timestamp, upload.get("force", false), func(success: bool):
+			if not success:
 				state.failed += 1
-				push_error("[GameSaveSubManager] Download failed for save " + str(save_id) + ": " + error_msg)
-				check_complete.call()
-				return
-			
-			SystemManager.network.confirm_save_downloaded(save_id, device_id, func(_data, confirm_error):
-				if confirm_error != "":
-					push_warning("[GameSaveSubManager] Failed to confirm download: " + confirm_error)
-				
-				if is_folder_save:
-					var extract_dest = _get_extract_dest(emulator_id, resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game)), record_path, game)
-					print("[GameSaveSubManager] Extracting folder save for " + emulator_id + " to: " + extract_dest)
-					print("[GameSaveSubManager] record_path was: " + record_path)
-					
-					# Async extraction with completion callback
-					FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
-						func(_info: Dictionary): pass,
-						func(extract_success: bool, _error):
-							if not extract_success:
-								state.failed += 1
-								push_error("[GameSaveSubManager] Failed to extract downloaded zip: " + zip_path)
-							
-							# Clean up empty parent directories
-							_cleanup_temp_dir(zip_path)
-							
-							# Ensure PCSX2 superblock is valid after extracting saves
-							if emulator_id == "pcsx2":
-								print("[GameSaveSubManager] Ensuring PCSX2 superblock is valid after save sync...")
-								var memcard_path = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-								ensure_pcsx2_superblock(memcard_path)
-							
-							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
-							check_complete.call()
-					)
-					return  # Exit callback, completion handled by async
-				else:
-					# Non-folder save, no extraction needed
-					if emulator_id == "pcsx2":
-						print("[GameSaveSubManager] Ensuring PCSX2 superblock is valid after save sync...")
-						var memcard_path = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-						ensure_pcsx2_superblock(memcard_path)
-					
-					DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
-					check_complete.call()
-			)
+			check_complete.call()
 		)
+
+	for download in pending_downloads:
+		_execute_save_download(game, emulator_id, download.remote, download.local, device_id, current_timestamp, func(success: bool):
+			if not success:
+				state.failed += 1
+			check_complete.call()
+		)
+
+## Records the gavel bookkeeping after a successful boundary only.
+## remote_hash is stored verbatim (the server-stamped content_hash).
+func _record_sync_boundary(game: GameResource, emulator_id: String, file_name: String, record_path: String, timestamp: String, remote_id: int, remote_hash: String) -> void:
+	var hash_info := {"hash": "", "size": 0}
+	if FSM.dir_exists(record_path):
+		var root_name = _get_upload_zip_root_name(emulator_id, game, record_path)
+		hash_info = {"hash": _ContentHash.compute_folder_zip_hash(record_path, root_name), "size": _folder_content_size(record_path)}
+	elif FSM.file_exists(record_path):
+		hash_info = {"hash": _ContentHash.compute_content_hash(record_path), "size": int(FSM.get_file_size(record_path))}
+	DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, timestamp, remote_id, SLOT_DEFAULT, hash_info.hash, remote_hash, hash_info.size)
+
+## Executes one upload operation. Automatic uploads always POST with
+## overwrite=false; force=true only when the user chose keep-local on a
+## surfaced conflict. A 409 re-decides via the gavel ladder.
+func _execute_save_upload(game: GameResource, emulator_id: String, upload: Dictionary, device_id: String, current_timestamp: String, force: bool, on_done: Callable) -> void:
+	var upload_file_name = upload.local.file_name
+	var original_path = upload.local.file_path
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+
+	if is_folder_save:
+		var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
+		var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
+		FSM.make_dir_recursive(zip_path.get_base_dir())
+		var zip_state := {"done": false, "success": false}
+		_run_io_task(original_path,
+			func():
+				return _zip_emulator_save(emulator_id, original_path, zip_path, game),
+			func(zip_success: bool):
+				zip_state["success"] = zip_success
+				zip_state["done"] = true
+		)
+		while not zip_state["done"]:
+			await get_tree().process_frame
+		if not zip_state["success"]:
+			push_error("[GameSaveSubManager] Failed to zip folder for upload: " + original_path)
+			on_done.call(false)
+			return
+
+		SystemManager.network.upload_save(
+			game.romm_id, zip_path, emulator_id, SLOT_DEFAULT, device_id, force,
+			func(data: Dictionary, error: String):
+				if FSM.file_exists(zip_path):
+					FSM.delete_file(zip_path)
+				_cleanup_temp_dir(zip_path)
+				_on_upload_response(game, emulator_id, upload, data, error, device_id, current_timestamp, on_done)
+		)
+	else:
+		SystemManager.network.upload_save(
+			game.romm_id, original_path, emulator_id, SLOT_DEFAULT, device_id, force,
+			func(data: Dictionary, error: String):
+				if original_path.contains("user://temp_saves/") and FSM.file_exists(original_path):
+					FSM.delete_file(original_path)
+				_on_upload_response(game, emulator_id, upload, data, error, device_id, current_timestamp, on_done)
+		)
+
+## Handles the upload response: records the boundary on success, runs the
+## 409 resolution ladder on a stale-snapshot rejection.
+func _on_upload_response(game: GameResource, emulator_id: String, upload: Dictionary, data: Dictionary, error: String, device_id: String, current_timestamp: String, on_done: Callable) -> void:
+	var original_path = upload.local.file_path
+	if error == "":
+		_record_sync_boundary(game, emulator_id, upload.local.file_name, original_path, current_timestamp, data.get("id", 0), data.get("content_hash", ""))
+		on_done.call(true)
+		return
+
+	if "409" in error:
+		print("[GameSaveSubManager] Upload 409 for " + upload.local.file_name + " - running gavel ladder")
+		_handle_upload_409(game, emulator_id, upload, device_id, current_timestamp, on_done)
+		return
+
+	push_error("[GameSaveSubManager] Upload failed for " + original_path + ": " + error)
+	on_done.call(false)
+
+## 409 fallback: the slot head moved past this device's snapshot. Refetch the
+## head, re-decide from hashes alone (gavel L1/L2/L3), then download or
+## surface the conflict. Never retries the POST unchanged, never escalates
+## to overwrite=true on its own.
+func _handle_upload_409(game: GameResource, emulator_id: String, upload: Dictionary, device_id: String, current_timestamp: String, on_done: Callable) -> void:
+	var local_save = upload.local
+	_fetch_saves_with_device_retry(game, func(remote_saves: Array, fetch_error: String, resolved_device_id: String):
+		if fetch_error != "":
+			push_warning("[GameSaveSubManager] 409 refetch failed: " + fetch_error)
+			on_done.call(false)
+			return
+
+		var file_name = local_save.file_name
+		var head = null
+		var head_epoch = -1
+		for save in remote_saves:
+			var slot = save.get("slot", "")
+			if slot == null:
+				slot = ""
+			if slot != SLOT_DEFAULT or save.get("file_name", "") != file_name:
+				continue
+			var epoch = parse_iso_timestamp(save.get("updated_at", ""))
+			if epoch > head_epoch:
+				head = save
+				head_epoch = epoch
+		if head == null:
+			push_warning("[GameSaveSubManager] 409 but no server head found for " + file_name)
+			on_done.call(false)
+			return
+
+		var db_rec = null
+		for rec in DataManager.get_save_sync_records(game.romm_id, emulator_id):
+			if rec.file_name == file_name:
+				db_rec = rec
+				break
+
+		var hash_info = local_save.get("_hash_info", {"hash": "", "size": 0})
+		if hash_info.get("hash", "") == "":
+			hash_info = _compute_local_save_hash(emulator_id, game, local_save)
+
+		var outcome = Gavel.resolve_upload_conflict(
+			hash_info.hash if hash_info.hash != "" else null,
+			db_rec.get("local_hash") if db_rec else null,
+			head.get("content_hash"),
+			db_rec.get("server_hash") if db_rec else null)
+
+		if outcome == "download":
+			_execute_save_download(game, emulator_id, head, local_save, resolved_device_id, current_timestamp, on_done)
+			return
+
+		# L3: genuine two-sided divergence - the user decides
+		var choice = await _show_conflict_dialog(game, local_save.get("modified_time", 0), parse_iso_timestamp(head.get("updated_at", "")))
+		match choice:
+			"local":
+				_execute_save_upload(game, emulator_id, upload, resolved_device_id, current_timestamp, true, on_done)
+			"server":
+				_execute_save_download(game, emulator_id, head, local_save, resolved_device_id, current_timestamp, on_done)
+			_:
+				on_done.call(false)
+	)
+
+## Executes one download operation: fetch, confirm, extract (folder saves and
+## zip-packaged file saves), and record the gavel bookkeeping boundary.
+func _execute_save_download(game: GameResource, emulator_id: String, remote: Dictionary, local, device_id: String, current_timestamp: String, on_done: Callable) -> void:
+	var save_id = remote.get("id", 0)
+	var file_name = remote.get("file_name", "save")
+	var local_path = ""
+	var record_path = ""
+	var boundary_path = ""
+	var zip_path = ""
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+
+	if local:
+		record_path = local.file_path
+	else:
+		if emulator_id == "retroarch":
+			record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
+		else:
+			record_path = FSM.join_paths(save_dir, file_name)
+
+	if is_folder_save:
+		zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
+		FSM.make_dir_recursive(zip_path.get_base_dir())
+		local_path = zip_path
+
+		if not local:
+			record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
+			if record_path == "":
+				var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
+				if result.error != "":
+					push_error("[GameSaveSubManager] Cannot download folder save: no " + result.error + " folder found")
+					on_done.call(false)
+					return
+				record_path = result.path
+	else:
+		local_path = record_path
+		if emulator_id == "retroarch":
+			FSM.make_dir_recursive(record_path.get_base_dir())
+
+	_ensure_save_directory_exists(emulator_id)
+
+	boundary_path = record_path
+
+	SystemManager.network.download_save(save_id, device_id, local_path, func(_success: bool, _status_code: int, error_msg: String):
+		if not _success:
+			push_error("[GameSaveSubManager] Download failed for save " + str(save_id) + ": " + error_msg)
+			on_done.call(false)
+			return
+
+		SystemManager.network.confirm_save_downloaded(save_id, device_id, func(_data, confirm_error):
+			if confirm_error != "":
+				push_warning("[GameSaveSubManager] Failed to confirm download: " + confirm_error)
+
+			var post_extraction = func(extract_success: bool):
+				if not extract_success:
+					on_done.call(false)
+					return
+				if emulator_id == "pcsx2":
+					ensure_pcsx2_superblock(save_dir)
+				_record_sync_boundary(game, emulator_id, file_name, boundary_path, current_timestamp, save_id, remote.get("content_hash", ""))
+				# Small delay to let the filesystem settle before emulator launch
+				await get_tree().create_timer(0.1).timeout
+				on_done.call(true)
+
+			if is_folder_save:
+				var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
+				# Some strategies resolve record_path to a parent dir (pcsx2's
+				# resolve_path returns the memcard root); when the extract dest
+				# is a child of record_path, the save actually lands there and
+				# the boundary must hash that folder, not the parent.
+				if record_path != "" and extract_dest != "" and extract_dest.get_base_dir().rstrip("/") == record_path.rstrip("/"):
+					boundary_path = extract_dest
+				FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
+					func(_info: Dictionary): pass,
+					func(extract_success: bool, _error):
+						if not extract_success:
+							push_error("[GameSaveSubManager] Failed to extract downloaded zip: " + zip_path)
+						_cleanup_temp_dir(zip_path)
+						post_extraction.call(extract_success)
+				)
+			elif local_path.to_lower().ends_with(".zip"):
+				# Non-folder save downloaded as zip (e.g. GameCube .gci bundle)
+				var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
+				FSM.extract_archive_async(local_path, extract_dest, "Save data", true,
+					func(_info: Dictionary): pass,
+					func(extract_success: bool, _error):
+						if not extract_success:
+							push_error("[GameSaveSubManager] Failed to extract downloaded zip: " + local_path)
+						post_extraction.call(extract_success)
+				)
+			else:
+				post_extraction.call(true)
+		)
+	)
 
 ## Parses an ISO 8601 timestamp string to Unix seconds.
 ## Handles trailing timezone offsets (Z, +HH:MM, -HH:MM) and converts to UTC.
@@ -1932,10 +2113,10 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			return
 
 		_begin_save_sync(sync_key)
-		_auto_upload_after_scan(game, emulator_id, local_saves, is_folder_save, sync_key)
+		_auto_upload_after_scan(game, emulator_id, local_saves, sync_key)
 	)
 
-func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_saves: Array[Dictionary], is_folder_save: bool, sync_key: String) -> void:
+func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_saves: Array[Dictionary], sync_key: String) -> void:
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
 			push_error("[GameSaveSubManager] Auto-upload aborted: " + error)
@@ -1947,38 +2128,44 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 			if fetch_error != "":
 				push_warning("[GameSaveSubManager] Auto-upload conflict check failed: " + fetch_error)
 				# Continue with upload anyway if we can't check
-				_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, is_folder_save)
+				_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id)
 				return
-			
-			# Check if any local save conflicts with remote
+
+			# Check if any local save conflicts with remote (gavel decision per record)
 			var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
 			var db_by_name: Dictionary = {}
 			for rec in db_records:
 				db_by_name[rec.file_name] = rec
-			
+
+			var remote_by_name: Dictionary = {}
+			for save in remote_saves:
+				var slot = save.get("slot", "")
+				if slot == null:
+					slot = ""
+				if slot == SLOT_DEFAULT:
+					remote_by_name[save.file_name] = save
+
 			var has_conflict = false
 			var conflict_local_time = 0
 			var conflict_server_time = 0
-			
+			var upload_list: Array = []
+
 			for local in local_saves:
-				var file_name = local.file_name
-				var db_rec = db_by_name.get(file_name)
-				var last_synced_unix = 0
-				if db_rec:
-					last_synced_unix = parse_iso_timestamp(db_rec.last_synced_at)
-				
-				for remote in remote_saves:
-					if remote.file_name == file_name:
-						var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", ""))
-						if local.modified_time > last_synced_unix and remote_updated_unix > last_synced_unix:
-							has_conflict = true
-							conflict_local_time = local.modified_time
-							conflict_server_time = remote_updated_unix
-							break
-				
-				if has_conflict:
+				var remote = remote_by_name.get(local.file_name)
+				var verdict = _gavel_decide(emulator_id, game, local, remote, db_by_name.get(local.file_name), resolved_device_id)
+				local["_hash_info"] = verdict.hash_info
+				if verdict.decision.action == "upload":
+					# Slot-wide parity: don't POST a duplicate of identical
+					# content living under a different server file_name
+					if remote == null and not _find_slot_parity_remote(remote_by_name.values(), verdict.hash_info.hash).is_empty():
+						continue
+					upload_list.append(local)
+				elif verdict.decision.action == "conflict":
+					has_conflict = true
+					conflict_local_time = local.modified_time
+					conflict_server_time = parse_iso_timestamp(remote.get("updated_at", ""))
 					break
-			
+
 			if has_conflict:
 				# Show conflict dialog
 				print("[GameSaveSubManager] Auto-upload detected conflict, showing dialog")
@@ -1986,9 +2173,10 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 
 				match choice:
 					"local":
-						# User chose to keep local, proceed with upload
+						# User chose to keep local, proceed with upload (force is
+						# legitimate only here: explicit user keep-local)
 						print("[GameSaveSubManager] User chose to keep local save, proceeding with upload")
-						_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, is_folder_save)
+						_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, true)
 					"server":
 						# User chose to keep server, skip upload (will download on next launch)
 						print("[GameSaveSubManager] User chose to keep server save, skipping upload")
@@ -2000,99 +2188,35 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 						SystemManager.notifications.show_notification("Save sync cancelled", SystemManager.notifications.Type.INFO)
 						_end_save_sync(sync_key)
 			else:
-				# No conflict, proceed with upload
-				_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, is_folder_save)
+				# No conflict, upload only records gavel marked as changed
+				_perform_auto_upload(game, emulator_id, upload_list, resolved_device_id)
 		)
 	)
 
 
 ## Internal function to perform the actual auto-upload after conflict checks
-func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: Array, device_id: String, is_folder_save: bool) -> void:
+func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: Array, device_id: String, force: bool = false) -> void:
+	if local_saves.is_empty():
+		SystemManager.notifications.show_notification("Saves already in sync", SystemManager.notifications.Type.INFO)
+		_end_save_sync(_save_sync_key(game, emulator_id))
+		return
+
 	var current_timestamp = Time.get_datetime_string_from_system(true, true)
 	var state = {"pending": local_saves.size(), "failed": 0}
-	
+
+	var on_one_done = func(success: bool):
+		if not success:
+			state.failed += 1
+		state.pending -= 1
+		if state.pending <= 0:
+			if state.failed > 0:
+				SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
+			else:
+				SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
+			_end_save_sync(_save_sync_key(game, emulator_id))
+
 	for local in local_saves:
-		var local_file_name = local.file_name
-		var local_file_path = local.file_path
-		
-		if is_folder_save:
-			var save_name = _get_save_name_for_upload(emulator_id, game, local_file_path)
-			var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
-			FSM.make_dir_recursive(zip_path.get_base_dir())
-			# Zip off the main thread when the source path allows it
-			var zip_state := {"done": false, "success": false}
-			_run_io_task(local_file_path,
-				func():
-					return _zip_emulator_save(emulator_id, local_file_path, zip_path, game),
-				func(zip_success: bool):
-					zip_state["success"] = zip_success
-					zip_state["done"] = true
-			)
-			while not zip_state["done"]:
-				await get_tree().process_frame
-			if not zip_state["success"]:
-				state.failed += 1
-				push_error("[GameSaveSubManager] Failed to zip folder for auto-upload: " + local_file_path)
-				state.pending -= 1
-				if state.pending <= 0:
-					if state.failed > 0:
-						SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
-					else:
-						SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
-					_end_save_sync(_save_sync_key(game, emulator_id))
-				continue
-			
-			SystemManager.network.upload_save(
-				game.romm_id,
-				zip_path,
-				emulator_id,
-				SLOT_DEFAULT,
-				device_id,
-				true,
-				func(data: Dictionary, error: String):
-					if FSM.file_exists(zip_path):
-						FSM.delete_file(zip_path)
-					# Clean up empty parent directories
-					_cleanup_temp_dir(zip_path)
-					if error != "":
-						state.failed += 1
-						push_error("[GameSaveSubManager] Auto-upload failed: " + error)
-					else:
-						var remote_id = data.get("id", 0)
-						print("[GameSaveSubManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
-						DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
-					state.pending -= 1
-					if state.pending <= 0:
-						if state.failed > 0:
-							SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
-						else:
-							SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
-						_end_save_sync(_save_sync_key(game, emulator_id))
-			)
-		else:
-			SystemManager.network.upload_save(
-				game.romm_id,
-				local_file_path,
-				emulator_id,
-				SLOT_DEFAULT,
-				device_id,
-				true,
-			func(data: Dictionary, error: String):
-				if error != "":
-					state.failed += 1
-					push_error("[GameSaveSubManager] Auto-upload failed: " + error)
-				else:
-					var remote_id = data.get("id", 0)
-					print("[GameSaveSubManager] Auto-upload success for " + local_file_name + " -> remote save id: " + str(remote_id))
-					DataManager.update_save_sync_record(game.romm_id, emulator_id, local_file_name, local_file_path, current_timestamp, remote_id, SLOT_DEFAULT)
-				state.pending -= 1
-				if state.pending <= 0:
-					if state.failed > 0:
-						SystemManager.notifications.show_notification("Save sync failed for some files", SystemManager.notifications.Type.ERROR)
-					else:
-						SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
-					_end_save_sync(_save_sync_key(game, emulator_id))
-			)
+		_execute_save_upload(game, emulator_id, {"local": local, "remote": null}, device_id, current_timestamp, force, on_one_done)
 
 ## Auto-download saves before launch (pre-launch hook)
 ## If on_complete callback is provided, it will be called when sync finishes
@@ -2204,6 +2328,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			var local_by_name: Dictionary = {}
 			for save in local_saves:
 				local_by_name[save.file_name] = save
+				save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
 			
 			var current_timestamp = Time.get_datetime_string_from_system(true, true)
 			var state = {"pending": 0, "failed": 0}
@@ -2219,127 +2344,51 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					slot = ""
 				if slot != SLOT_DEFAULT:
 					continue
-				
+
 				var file_name = remote.get("file_name", "save")
 				var save_id = remote.get("id", 0)
-				var remote_updated_unix = parse_iso_timestamp(remote.get("updated_at", ""))
-				
-				print("[GameSaveSubManager] auto_download: checking remote save id=" + str(save_id) + " file_name='" + file_name + "' updated=" + str(remote_updated_unix))
-				
 				var local = local_by_name.get(file_name)
 				var db_rec = db_by_name.get(file_name)
-				var last_synced_unix = 0
-				if db_rec:
-					last_synced_unix = parse_iso_timestamp(db_rec.last_synced_at)
-				
-				var should_download = false
-				if not local:
-					should_download = true
-					print("[GameSaveSubManager] auto_download: no local save for '" + file_name + "', will download")
-				elif remote_updated_unix > last_synced_unix and remote_updated_unix > local.modified_time:
-					should_download = true
-					print("[GameSaveSubManager] auto_download: remote is newer for '" + file_name + "', will download")
-				else:
-					print("[GameSaveSubManager] auto_download: skipping '" + file_name + "' (local is up to date)")
-				
-				if should_download:
-					state.pending += 1
-					var _local = local_by_name.get(file_name)
-					var record_path = ""
-					var local_path = ""
-					var zip_path = ""
-					
-					if _local:
-						record_path = _local.file_path
-					else:
-						if emulator_id == "retroarch":
-							record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
-							print("[GameSaveSubManager] auto_download: resolved retroarch save path: " + record_path)
+
+				var verdict = _gavel_decide(emulator_id, game, local, remote, db_rec, resolved_device_id)
+				var action: String = verdict.decision.action
+				print("[GameSaveSubManager] auto_download: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")")
+
+				match action:
+					"download":
+						# Slot-wide parity: identical content already exists
+						# locally under a different file_name - adopt the
+						# baseline instead of downloading a duplicate.
+						var ch = remote.get("content_hash", "")
+						var parity_local = null
+						if local == null and ch != null and ch != "":
+							for l in local_saves:
+								if l.get("_hash_info", {}).get("hash", "") == ch:
+									parity_local = l
+									break
+						if parity_local != null:
+							DataManager.update_save_sync_record(game.romm_id, emulator_id, parity_local.file_name, parity_local.file_path, current_timestamp, save_id, SLOT_DEFAULT, ch, ch, parity_local._hash_info.size)
 						else:
-							record_path = save_dir + file_name
-					
-					if is_folder_save:
-						zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
-						FSM.make_dir_recursive(zip_path.get_base_dir())
-						local_path = zip_path
-						
-						if not _local:
-							record_path = _resolve_emulator_save_path(emulator_id, save_dir, game)
-							if record_path == "":
-								var result = _resolve_default_save_path(save_dir, game.get_active_title_id())
-								if result.error != "":
+							state.pending += 1
+							_execute_save_download(game, emulator_id, remote, local, resolved_device_id, current_timestamp, func(success: bool):
+								if not success:
 									state.failed += 1
-									push_error("[GameSaveSubManager] Cannot auto-download folder save: no " + result.error + " folder found")
-									state.pending -= 1
-									check_complete.call()
-									continue
-								record_path = result.path
-					else:
-						local_path = record_path
-						# Ensure parent directory exists for RetroArch core-specific saves
-						if emulator_id == "retroarch":
-							var parent_dir = record_path.get_base_dir()
-							FSM.make_dir_recursive(parent_dir)
-					
-					# Ensure save directory exists before downloading
-					_ensure_save_directory_exists(emulator_id, save_dir)
-					
-					print("[GameSaveSubManager] auto_download: downloading save '" + file_name + "' to: " + local_path)
-					
-					SystemManager.network.download_save(save_id, resolved_device_id, local_path, func(success: bool, _status_code: int, error_msg: String):
-						if not success:
-							state.failed += 1
-							push_error("[GameSaveSubManager] Pre-launch download failed: " + error_msg)
-							state.pending -= 1
-							check_complete.call()
-							return
-						
-						SystemManager.network.confirm_save_downloaded(save_id, resolved_device_id, func(_data, confirm_error):
-							if confirm_error != "":
-								push_warning("[GameSaveSubManager] Failed to confirm download: " + confirm_error)
-							
-							var _post_extraction = func():
-								# Ensure PCSX2 superblock is valid after extracting saves
-								if emulator_id == "pcsx2":
-									print("[GameSaveSubManager] Ensuring PCSX2 superblock is valid after save sync...")
-									var memcard_path = save_dir
-									ensure_pcsx2_superblock(memcard_path)
-								# Small delay to let filesystem settle before emulator launch
-								await get_tree().create_timer(0.1).timeout
-								DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT)
 								state.pending -= 1
 								if state.pending <= 0 and state.failed == 0:
 									SystemManager.notifications.show_notification("Saves downloaded from RomM", SystemManager.notifications.Type.INFO)
 								check_complete.call()
-							
-							if is_folder_save:
-								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
-								FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
-									func(_info: Dictionary): pass,
-									func(extract_success: bool, _error):
-										if not extract_success:
-											state.failed += 1
-											push_error("[GameSaveSubManager] Failed to extract downloaded zip: " + zip_path)
-										_cleanup_temp_dir(zip_path)
-										_post_extraction.call()
-								)
-							elif local_path.to_lower().ends_with(".zip"):
-								# Non-folder save but downloaded as zip (e.g., GameCube .gci in zip)
-								var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
-								print("[GameSaveSubManager] Extracting non-folder zip save for " + emulator_id + " to: " + extract_dest)
-								FSM.extract_archive_async(local_path, extract_dest, "Save data", true,
-									func(_info: Dictionary): pass,
-									func(extract_success: bool, _error):
-										if not extract_success:
-											state.failed += 1
-											push_error("[GameSaveSubManager] Failed to extract downloaded zip: " + local_path)
-										_post_extraction.call()
-								)
-							else:
-								# No extraction needed
-								_post_extraction.call()
-						)
-					)
+							)
+					"conflict":
+						# Pre-launch never prompts: keep local work, warn, skip
+						push_warning("[GameSaveSubManager] auto_download: conflict for '" + file_name + "' - keeping local, skipping download")
+						SystemManager.notifications.show_notification("Save conflict for " + game.get_display_name() + " - open the game page to resolve", SystemManager.notifications.Type.WARNING)
+					"skip":
+						if verdict.decision.get("adopt_baseline", false):
+							var hash_info = verdict.hash_info
+							var record_path = local.file_path if local else FSM.join_paths(save_dir, file_name)
+							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT, hash_info.hash, remote.get("content_hash", ""), hash_info.size)
+					# "upload": pre-launch never uploads; local work is picked up post-launch
+
 			# If no downloads were queued, call completion immediately
 			if state.pending == 0:
 				check_complete.call()

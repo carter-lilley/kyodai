@@ -1,0 +1,48 @@
+name: Test Gavel Vectors
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'utils/gavel.gd'
+      - 'tools/run_gavel_vectors.gd'
+      - 'bin/src/romm-gavel/**'
+      - '.github/workflows/test-gavel.yml'
+  pull_request:
+    paths:
+      - 'utils/gavel.gd'
+      - 'tools/run_gavel_vectors.gd'
+      - 'bin/src/romm-gavel/**'
+      - '.github/workflows/test-gavel.yml'
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7
+
+jobs:
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Cache Godot editor
+      id: cache-godot
+      uses: actions/cache@v4
+      with:
+        path: godot
+        key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Download Godot
+      if: steps.cache-godot.outputs.cache-hit != 'true'
+      run: |
+        curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+        unzip godot.zip -d godot
+        chmod +x godot/*
+
+    - name: Import project
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . --import
+
+    - name: Run gavel conformance vectors
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . -s tools/run_gavel_vectors.gd

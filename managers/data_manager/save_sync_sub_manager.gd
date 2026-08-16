@@ -21,7 +21,7 @@ func get_save_sync_records(romm_id: int, emulator_id: String = "") -> Array[Dict
 	return query_result.duplicate()
 
 
-func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "") -> bool:
+func update_save_sync_record(romm_id: int, emulator_id: String, file_name: String, file_path: String, last_synced_at: String, remote_save_id: int, slot: String = "", local_hash: String = "", server_hash: String = "", local_size: int = 0) -> bool:
 	"""Insert or update a save sync record (atomic DELETE+INSERT in one transaction)."""
 	if not data_manager.database.is_database_ready():
 		return false
@@ -34,13 +34,13 @@ func update_save_sync_record(romm_id: int, emulator_id: String, file_name: Strin
 	else:
 		delete_query += " AND (slot IS NULL OR slot = '')"
 
-	var insert_bindings: Array = [romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id]
+	var insert_bindings: Array = [romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, local_hash, server_hash, local_size]
 	var insert_query = """
-		INSERT INTO save_sync (romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot)
-		VALUES (?, ?, ?, ?, ?, ?, %s)
+		INSERT INTO save_sync (romm_id, emulator_id, file_name, file_path, last_synced_at, remote_save_id, slot, local_hash, server_hash, local_size)
+		VALUES (?, ?, ?, ?, ?, ?, %s, ?, ?, ?)
 	""" % ("?" if slot != "" else "NULL")
 	if slot != "":
-		insert_bindings.append(slot)
+		insert_bindings.insert(6, slot)
 
 	data_manager.database.lock()
 	if not data_manager.database.query_bool_unlocked("BEGIN IMMEDIATE TRANSACTION"):

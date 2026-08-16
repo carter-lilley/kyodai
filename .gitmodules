@@ -6,3 +6,7 @@
 	path = bin/src/argosy-sigil
 	url = https://github.com/rommforge/argosy-sigil
 	ignore = dirty
+[submodule "bin/src/romm-gavel"]
+	path = bin/src/romm-gavel
+	url = https://github.com/danielcopper/romm-gavel
+	ignore = dirty
