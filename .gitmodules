@@ -5,3 +5,4 @@
 [submodule "bin/src/argosy-sigil"]
 	path = bin/src/argosy-sigil
 	url = https://github.com/rommforge/argosy-sigil
+	ignore = dirty
