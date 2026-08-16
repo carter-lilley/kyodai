@@ -1,0 +1,199 @@
+name: Build Sigil
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'bin/src/argosy-sigil/**'
+      - '.github/workflows/build-sigil.yml'
+  pull_request:
+    paths:
+      - 'bin/src/argosy-sigil/**'
+      - '.github/workflows/build-sigil.yml'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup CMake
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: '3.28'
+
+    - name: Build x64
+      working-directory: bin/src/argosy-sigil
+      run: |
+        cmake -B build-x64 -G "Visual Studio 17 2022" -A x64 -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake --build build-x64 --config Release
+
+    - name: Build ARM64
+      working-directory: bin/src/argosy-sigil
+      run: |
+        cmake -B build-arm64 -G "Visual Studio 17 2022" -A ARM64 -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake --build build-arm64 --config Release
+
+    - name: Copy Binaries
+      run: |
+        mkdir -p bin/sigil/win
+        cp bin/src/argosy-sigil/build-x64/Release/sigil.exe bin/sigil/win/sigil.exe
+        cp bin/src/argosy-sigil/build-arm64/Release/sigil.exe bin/sigil/win/sigil-arm64.exe
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sigil-windows
+        path: bin/sigil/win/*
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Build
+      working-directory: bin/src/argosy-sigil
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake --build build --parallel
+
+    - name: Copy Binary
+      run: |
+        mkdir -p bin/sigil/linux
+        cp bin/src/argosy-sigil/build/sigil bin/sigil/linux/
+        chmod +x bin/sigil/linux/sigil
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sigil-linux-x64
+        path: bin/sigil/linux/sigil
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Build
+      working-directory: bin/src/argosy-sigil
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake --build build --parallel
+
+    - name: Copy Binary
+      run: |
+        mkdir -p bin/sigil/macos
+        cp bin/src/argosy-sigil/build/sigil bin/sigil/macos/
+        chmod +x bin/sigil/macos/sigil
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sigil-macos
+        path: bin/sigil/macos/sigil
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      id: setup-ndk
+      with:
+        ndk-version: r25c
+        add-to-path: true
+
+    - name: Build ARM64
+      working-directory: bin/src/argosy-sigil
+      run: |
+        cmake -B build-android \
+          -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake --build build-android --parallel
+
+    - name: Build ARMv7
+      working-directory: bin/src/argosy-sigil
+      run: |
+        cmake -B build-android-armv7 \
+          -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=armeabi-v7a \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake --build build-android-armv7 --parallel
+
+    - name: Copy Binaries
+      run: |
+        mkdir -p bin/sigil/android
+        cp bin/src/argosy-sigil/build-android/sigil bin/sigil/android/sigil-arm64.bin
+        cp bin/src/argosy-sigil/build-android-armv7/sigil bin/sigil/android/sigil-armv7.bin
+        chmod +x bin/sigil/android/*
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sigil-android
+        path: bin/sigil/android/*
+
+  commit-binaries:
+    needs: [build-windows, build-linux, build-macos, build-android]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Organize binaries
+      run: |
+        mkdir -p bin/sigil/win
+        mkdir -p bin/sigil/linux
+        mkdir -p bin/sigil/macos
+        mkdir -p bin/sigil/android
+
+        cp artifacts/sigil-windows/sigil.exe bin/sigil/win/ || true
+        cp artifacts/sigil-windows/sigil-arm64.exe bin/sigil/win/ || true
+        cp artifacts/sigil-linux-x64/sigil bin/sigil/linux/ || true
+        cp artifacts/sigil-macos/sigil bin/sigil/macos/ || true
+        cp artifacts/sigil-android/sigil-arm64.bin bin/sigil/android/ || true
+        cp artifacts/sigil-android/sigil-armv7.bin bin/sigil/android/ || true
+
+        chmod +x bin/sigil/linux/sigil || true
+        chmod +x bin/sigil/macos/sigil || true
+        chmod +x bin/sigil/android/* || true
+
+    - name: Commit and push
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add bin/sigil/
+        git diff --staged --quiet || git commit -m "Update sigil binaries"
+        git push

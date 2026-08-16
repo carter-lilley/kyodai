@@ -50,13 +50,11 @@ static func extract_all_binaries() -> void:
 
 	if SystemManager.platform.is_android():
 		_extract_tools({
-			"res://bin/libchdr/android/chd_reader-arm64.bin": "chd_reader",
-			"res://bin/cso_reader/android/cso_reader-arm64.bin": "cso_reader",
+			"res://bin/sigil/android/sigil-arm64.bin": "sigil",
 		})
 	elif SystemManager.platform.is_windows():
 		_extract_tools({
-			"res://bin/libchdr/win/chd_reader.exe": "chd_reader.exe",
-			"res://bin/cso_reader/win/cso_reader.exe": "cso_reader.exe",
+			"res://bin/sigil/win/sigil.exe": "sigil.exe",
 			"res://bin/7z/windows/7za.exe": "7za.exe",
 			"res://bin/ahk/AutoHotkey64.exe": "AutoHotkey64.exe",
 			"res://bin/shuffler_tools/pssuspend.exe": "pssuspend.exe",
@@ -65,14 +63,12 @@ static func extract_all_binaries() -> void:
 		})
 	elif SystemManager.platform.is_linux():
 		_extract_tools({
-			"res://bin/libchdr/linux/chd_reader": "chd_reader",
-			"res://bin/cso_reader/linux/cso_reader": "cso_reader",
+			"res://bin/sigil/linux/sigil": "sigil",
 			"res://bin/7z/linux/7z": "7z",
 		})
 	elif SystemManager.platform.is_macos():
 		_extract_tools({
-			"res://bin/libchdr/macos/chd_reader": "chd_reader",
-			"res://bin/cso_reader/macos/cso_reader": "cso_reader",
+			"res://bin/sigil/macos/sigil": "sigil",
 		})
 
 	print("[AndroidBinaryExtractor] Tool extraction complete")

@@ -218,6 +218,10 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 	return database.update_game_title_id(romm_id, title_id, callback)
 
 
+func update_game_save_info(romm_id: int, save_id: String, save_usage: String, callback: Callable = Callable()) -> bool:
+	return database.update_game_save_info(romm_id, save_id, save_usage, callback)
+
+
 func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: Callable = Callable()) -> bool:
 	return database.update_game_siblings(romm_id, siblings, callback)
 

@@ -44,6 +44,14 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Platform-specific Title ID (for Vita, PS3, etc.)
 @export var title_id: String = ""
 
+## On-disk save folder/file name (from sigil; equals title_id on most platforms,
+## diverges for PS2 region prefixes and 3DS nested paths)
+@export var save_id: String = ""
+
+## How save_id is laid out on disk: folder-exact, folder-prefix, file-exact,
+## file-prefix, folder-split (sigil usage classification)
+@export var save_usage: String = ""
+
 ## Tracks which sibling IDs have been downloaded locally
 ## Array of sibling IDs that have local copies
 @export var downloaded_sibling_ids: Array[int] = []
@@ -99,6 +107,34 @@ func set_sibling_title_id(sibling_id: int, new_title_id: String) -> void:
 	for sibling in siblings:
 		if sibling.get("id", 0) == sibling_id:
 			sibling["title_id"] = new_title_id
+			return
+
+## Returns the save_id of the active game/sibling
+func get_active_save_id() -> String:
+	if selected_sibling_id != 0:
+		for sibling in siblings:
+			if sibling.get("id", 0) == selected_sibling_id:
+				return sibling.get("save_id", "")
+	return save_id
+
+## Returns the save usage classification of the active game/sibling
+func get_active_save_usage() -> String:
+	if selected_sibling_id != 0:
+		for sibling in siblings:
+			if sibling.get("id", 0) == selected_sibling_id:
+				return sibling.get("save_usage", "")
+	return save_usage
+
+## Sets the save_id/save_usage for a specific sibling
+func set_sibling_save_info(sibling_id: int, new_save_id: String, new_save_usage: String) -> void:
+	if sibling_id == romm_id:
+		save_id = new_save_id
+		save_usage = new_save_usage
+		return
+	for sibling in siblings:
+		if sibling.get("id", 0) == sibling_id:
+			sibling["save_id"] = new_save_id
+			sibling["save_usage"] = new_save_usage
 			return
 
 ## Returns the file name of the active game/sibling

@@ -69,37 +69,37 @@ func _init_strategies() -> void:
 	_emulator_strategies = {
 		"cemu": {
 			"validate": func(tid: String) -> String:
-				return "" if tid.length() == 16 else "Invalid Title ID for Cemu game.",
+				return "" if tid.length() == 16 or tid.length() == 8 else "Invalid Title ID for Cemu game.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
-				return discover_local_cemu_save(dir, game.get_active_title_id()),
+				return discover_local_cemu_save(dir, _get_save_identity(game).id),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
-				return FSM.join_paths(dir, game.get_active_title_id().substr(8, 8)),
+				return FSM.join_paths(dir, _get_save_identity(game).id),
 			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
 				return record_path.get_base_dir(),
 			"save_name": func(game: GameResource, _path: String) -> String:
-				return game.get_active_title_id().substr(8, 8),
+				return _get_save_identity(game).id,
 			"zip": func(src: String, dst: String, game: GameResource) -> bool:
-				return FSM.zip_directory(src, dst, -1, game.get_active_title_id().substr(8, 8)),
+				return FSM.zip_directory(src, dst, -1, _get_save_identity(game).id),
 		},
 		"dolphin": {
 			"validate": func(tid: String) -> String:
 				return "" if tid != "" else "No game ID available for this Dolphin game.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
 				if game.platform_slug == "wii":
-					return discover_local_dolphin_wii_save(dir, game.get_active_title_id())
-				return discover_local_dolphin_gc_save(dir, game.get_active_title_id()),
+					return discover_local_dolphin_wii_save(dir, _get_save_identity(game).id)
+				return discover_local_dolphin_gc_save(dir, _get_save_identity(game).id),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
 				if game.platform_slug == "wii":
-					return FSM.join_paths(dir, _game_id_to_hex(game.get_active_title_id()))
+					return FSM.join_paths(dir, _get_save_identity(game).id)
 				return dir,
 			"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, _zip: String) -> String:
 				if game.platform_slug == "wii":
-					return FSM.join_paths(save_dir, _game_id_to_hex(game.get_active_title_id()))
+					return FSM.join_paths(save_dir, _get_save_identity(game).id)
 				return save_dir,
 			"save_name": func(game: GameResource, _path: String) -> String:
 				if game.platform_slug == "wii":
-					return _game_id_to_hex(game.get_active_title_id())
-				return game.get_active_title_id(),
+					return _get_save_identity(game).id
+				return _gc_ascii_id(_get_save_identity(game).id),
 			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
 				return FSM.zip_directory(src, dst),
 		},
@@ -108,15 +108,15 @@ func _init_strategies() -> void:
 				return "" if tid.length() == 16 else "Invalid Title ID for Eden game.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
 				var emu_dir = LaunchManager._get_emulator_directory("eden")
-				return discover_local_eden_save(dir, game.get_active_title_id(), emu_dir),
+				return discover_local_eden_save(dir, _get_save_identity(game).id, emu_dir),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
 				var emu_dir = LaunchManager._get_emulator_directory("eden")
 				var profile_result = _discover_eden_profile(emu_dir)
-				return FSM.join_paths(dir, "0000000000000000", profile_result.profile_id, game.get_active_title_id()),
+				return FSM.join_paths(dir, "0000000000000000", profile_result.profile_id, _get_save_identity(game).id),
 			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
 				return record_path,
 			"save_name": func(game: GameResource, _path: String) -> String:
-				return game.get_active_title_id(),
+				return _get_save_identity(game).id,
 			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
 				return FSM.zip_directory(src, dst),
 		},
@@ -124,7 +124,7 @@ func _init_strategies() -> void:
 			"validate": func(tid: String) -> String:
 				return "" if tid != "" else "No serial available for this PS2 game. Launch it once to extract the serial.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
-				return discover_local_pcsx2_save(dir, game.get_active_title_id()),
+				return discover_local_pcsx2_save(dir, _get_save_identity(game).id),
 			"resolve_path": func(dir: String, _game: GameResource) -> String:
 				return dir,
 			"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, zip_file_name: String) -> String:
@@ -132,10 +132,10 @@ func _init_strategies() -> void:
 				if zip_file_name != "":
 					folder_name = zip_file_name.get_basename()
 				else:
-					folder_name = game.get_active_title_id()
+					folder_name = _get_save_identity(game).id
 				return FSM.join_paths(save_dir, folder_name),
 			"save_name": func(game: GameResource, local_file_path: String) -> String:
-				return local_file_path.get_file() if local_file_path != "" else game.get_active_title_id(),
+				return local_file_path.get_file() if local_file_path != "" else _get_save_identity(game).id,
 			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
 				return FSM.zip_directory(src, dst),
 		},
@@ -143,13 +143,13 @@ func _init_strategies() -> void:
 			"validate": func(tid: String) -> String:
 				return "" if tid != "" else "No game ID available for this PSP game. Launch it once to extract the ID.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
-				return discover_local_psp_save(dir, game.get_active_title_id()),
+				return discover_local_psp_save(dir, _get_save_identity(game).id),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
-				return FSM.join_paths(dir, game.get_active_title_id()),
+				return FSM.join_paths(dir, _get_save_identity(game).id),
 			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
 				return _save_dir,
 			"save_name": func(game: GameResource, local_file_path: String) -> String:
-				return local_file_path.get_file() if local_file_path != "" else game.get_active_title_id(),
+				return local_file_path.get_file() if local_file_path != "" else _get_save_identity(game).id,
 			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
 				var folder_name = src.get_file()
 				return FSM.zip_directory(src, dst, MAX_FILE_SIZE, folder_name),
@@ -231,7 +231,8 @@ func _init_strategies() -> void:
 		},
 		"azahar": {
 			"resolve_path": func(dir: String, game: GameResource) -> String:
-				var short_title_id = game.get_active_title_id().substr(8, 8)
+				var save_id = _get_save_identity(game).id
+				var short_title_id = save_id.get_slice("/", save_id.get_slice_count("/") - 1) if "/" in save_id else save_id
 				return FSM.join_paths(dir, short_title_id),
 			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
 				return record_path,
@@ -553,13 +554,13 @@ func discover_local_folder_save(directory: String, title_id: String) -> Array[Di
 
 func discover_local_cemu_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
-	if directory == "" or title_id == "" or title_id.length() != 16:
+	if directory == "" or title_id == "" or (title_id.length() != 16 and title_id.length() != 8):
 		return results
-	
+
 	if not FSM.dir_exists(directory):
 		return results
-	
-	var short_title_id = title_id.substr(8, 8)
+
+	var short_title_id = _short_title_id(title_id)
 	var save_path = FSM.join_paths(directory, short_title_id)
 	if FSM.dir_exists(save_path):
 		var mtime = _get_folder_mtime(save_path)
@@ -577,7 +578,9 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 	var results: Array[Dictionary] = []
 	if directory == "" or game_id == "":
 		return results
-	
+
+	game_id = _gc_ascii_id(game_id)
+
 	if not FSM.dir_exists(directory):
 		return results
 	
@@ -638,6 +641,50 @@ func _game_id_to_hex(game_id: String) -> String:
 		hex += "%02x" % c.unicode_at(0)
 	return hex
 
+## Returns the last-8 short form of a 16-char title ID; passes through IDs
+## that are already short (sigil emits wiiu IDs in short form).
+func _short_title_id(title_id: String) -> String:
+	return title_id.substr(8, 8) if title_id.length() == 16 else title_id
+
+## Returns the Dolphin NAND hex form of a Wii/GC game ID. Legacy stored IDs
+## are 4-char ASCII (converted); sigil-stored IDs are already 8-char hex.
+func _wii_hex_id(game_id: String) -> String:
+	if game_id.length() == 8 and game_id.is_valid_hex_number(false):
+		return game_id
+	return _game_id_to_hex(game_id)
+
+## Returns the 4-char ASCII form of a GC/Wii game ID (GCI naming form).
+func _gc_ascii_id(game_id: String) -> String:
+	if game_id.length() == 8 and game_id.is_valid_hex_number(false):
+		var bytes := PackedByteArray()
+		for i in range(0, 8, 2):
+			bytes.append(game_id.substr(i, 2).hex_to_int())
+		return bytes.get_string_from_ascii()
+	return game_id
+
+## Returns the on-disk save identity for a game: {"id": ..., "usage": ...}.
+## Prefers the sigil-persisted save_id/save_usage; falls back to deriving
+## from title_id for records extracted before save_id persistence existed.
+## For folder-split platforms (3DS) the id is a "/"-separated nested path.
+func _get_save_identity(game: GameResource) -> Dictionary:
+	var save_id = game.get_active_save_id()
+	if save_id != "":
+		return {"id": save_id, "usage": game.get_active_save_usage()}
+	var title_id = game.get_active_title_id()
+	match game.platform_slug:
+		"wii":
+			return {"id": _wii_hex_id(title_id), "usage": "folder-exact"}
+		"ngc":
+			return {"id": _gc_ascii_id(title_id), "usage": "file-prefix"}
+		"wiiu":
+			return {"id": _short_title_id(title_id), "usage": "folder-exact"}
+		"3ds":
+			if title_id.length() == 16:
+				return {"id": title_id.substr(0, 8) + "/" + title_id.substr(8, 8), "usage": "folder-split"}
+			return {"id": title_id, "usage": "folder-split"}
+		_:
+			return {"id": title_id, "usage": ""}
+
 func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or game_id == "":
@@ -646,9 +693,9 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	if not FSM.dir_exists(directory):
 		return results
 	
-	var hex_id = _game_id_to_hex(game_id)
+	var hex_id = _wii_hex_id(game_id)
 	var game_path = FSM.join_paths(directory, hex_id)
-	
+
 	if FSM.dir_exists(game_path):
 		var mtime = _get_folder_mtime(game_path)
 		results.append({
@@ -658,7 +705,7 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 			"extension": ".zip"
 		})
 		return results
-	
+
 	return results
 
 ## Discovers the Eden profile ID from profiles.dat
@@ -1046,7 +1093,7 @@ func _discover_emulator_saves(emulator_id: String, save_dir: String, game: GameR
 ## Resolves the save path for the default emulator folder structure
 ## Returns a dictionary with "path" and "error" keys
 func _resolve_default_save_path(save_dir: String, title_id: String) -> Dictionary:
-	var short_title_id = title_id.substr(8, 8)
+	var short_title_id = _short_title_id(title_id)
 	var id0 = _find_first_subdir(save_dir)
 	if id0 == "":
 		return {"path": "", "error": "no_id0"}
@@ -1091,11 +1138,11 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 		"wii":
 			if title_id == "":
 				return ""
-			return FSM.join_paths(save_dir, _game_id_to_hex(title_id))
+			return FSM.join_paths(save_dir, _wii_hex_id(title_id))
 		"3ds":
 			if title_id == "":
 				return ""
-			var short_title_id = title_id.substr(8, 8) if title_id.length() == 16 else title_id
+			var short_title_id = _short_title_id(title_id)
 			return FSM.join_paths(save_dir, short_title_id)
 		_:
 			var core_id = LaunchManager.resolve_core_for_game(game)
@@ -1175,9 +1222,9 @@ func _discover_retroarch_wii_save(directory: String, game_id: String) -> Array[D
 	if not FSM.dir_exists(directory):
 		return results
 	
-	var hex_id = _game_id_to_hex(game_id)
+	var hex_id = _wii_hex_id(game_id)
 	var game_path = FSM.join_paths(directory, hex_id)
-	
+
 	if FSM.dir_exists(game_path):
 		var mtime = _get_folder_mtime(game_path)
 		results.append({
@@ -1228,7 +1275,7 @@ func _get_retroarch_save_name(game: GameResource, local_file_path: String) -> St
 func _zip_retroarch_save(src: String, dst: String, game: GameResource) -> bool:
 	match game.platform_slug:
 		"psp":
-			return _zip_psp_save(src, game.get_active_title_id(), dst, MAX_FILE_SIZE)
+			return _zip_psp_save(src, _get_save_identity(game).id, dst, MAX_FILE_SIZE)
 		"ps2", "ngc", "wii", "3ds":
 			return FSM.zip_directory(src, dst)
 		_:
@@ -1251,7 +1298,7 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 	if strategy.is_valid():
 		return strategy.call(game, local_file_path)
 	# Default: use the short Title ID (last 8 characters of the 16-character Title ID)
-	return game.get_active_title_id().substr(8, 8)
+	return _short_title_id(game.get_active_title_id())
 
 ## Creates a ZIP archive for a specific emulator's save
 ## Returns true on success
@@ -1342,6 +1389,29 @@ func _ensure_device_registered(callback: Callable) -> void:
 		DataManager.set_romm_device_id(new_device_id)
 		print("[GameSaveSubManager] Registered device with RomM: " + new_device_id)
 		callback.call(true, "")
+	)
+
+## Fetches remote saves with one recovery attempt for a stale device id.
+## RomM 404s when the stored device_id no longer exists server-side (device
+## deleted in RomM, server reset/upgrade); re-register and retry once.
+## on_result(remote_saves: Array, error: String, device_id: String)
+func _fetch_saves_with_device_retry(game: GameResource, on_result: Callable) -> void:
+	var device_id = DataManager.get_romm_device_id()
+	SystemManager.network.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+		if fetch_error == "" or not "404" in fetch_error:
+			on_result.call(remote_saves, fetch_error, device_id)
+			return
+		print("[GameSaveSubManager] fetch_saves 404 - device id stale, re-registering and retrying")
+		DataManager.clear_romm_device_id()
+		_ensure_device_registered(func(reg_ok: bool, _reg_error: String):
+			if not reg_ok:
+				on_result.call([], fetch_error, "")
+				return
+			var new_device_id = DataManager.get_romm_device_id()
+			SystemManager.network.fetch_saves(game.romm_id, new_device_id, func(retry_saves: Array, retry_error: String):
+				on_result.call(retry_saves, retry_error, new_device_id)
+			)
+		)
 	)
 
 ## Shows the save conflict dialog and waits for user choice
@@ -1517,14 +1587,13 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 					callback.call(false, error)
 				return
 
-			var device_id = DataManager.get_romm_device_id()
-			SystemManager.network.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+			_fetch_saves_with_device_retry(game, func(remote_saves: Array, fetch_error: String, resolved_device_id: String):
 				if fetch_error != "":
 					if callback.is_valid():
 						callback.call(false, "Failed to fetch remote saves: " + fetch_error)
 					return
 
-				_run_sync(game, emulator_id, local_saves, remote_saves, device_id, callback)
+				_run_sync(game, emulator_id, local_saves, remote_saves, resolved_device_id, callback)
 			)
 		)
 	)
@@ -1873,14 +1942,12 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 			_end_save_sync(sync_key)
 			return
 
-		var device_id = DataManager.get_romm_device_id()
-		
 		# Check for conflicts with remote saves before uploading
-		SystemManager.network.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+		_fetch_saves_with_device_retry(game, func(remote_saves: Array, fetch_error: String, resolved_device_id: String):
 			if fetch_error != "":
 				push_warning("[GameSaveSubManager] Auto-upload conflict check failed: " + fetch_error)
 				# Continue with upload anyway if we can't check
-				_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
+				_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, is_folder_save)
 				return
 			
 			# Check if any local save conflicts with remote
@@ -1921,7 +1988,7 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 					"local":
 						# User chose to keep local, proceed with upload
 						print("[GameSaveSubManager] User chose to keep local save, proceeding with upload")
-						_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
+						_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, is_folder_save)
 					"server":
 						# User chose to keep server, skip upload (will download on next launch)
 						print("[GameSaveSubManager] User chose to keep server save, skipping upload")
@@ -1934,7 +2001,7 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 						_end_save_sync(sync_key)
 			else:
 				# No conflict, proceed with upload
-				_perform_auto_upload(game, emulator_id, local_saves, device_id, is_folder_save)
+				_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, is_folder_save)
 		)
 	)
 
@@ -2082,9 +2149,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				on_complete.call()
 			return
 		
-		var device_id = DataManager.get_romm_device_id()
-		
-		SystemManager.network.fetch_saves(game.romm_id, device_id, func(remote_saves: Array, fetch_error: String):
+		_fetch_saves_with_device_retry(game, func(remote_saves: Array, fetch_error: String, resolved_device_id: String):
 			if fetch_error != "":
 				push_warning("[GameSaveSubManager] Pre-launch fetch failed: " + fetch_error)
 				if on_complete.is_valid():
@@ -2221,7 +2286,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					
 					print("[GameSaveSubManager] auto_download: downloading save '" + file_name + "' to: " + local_path)
 					
-					SystemManager.network.download_save(save_id, device_id, local_path, func(success: bool, _status_code: int, error_msg: String):
+					SystemManager.network.download_save(save_id, resolved_device_id, local_path, func(success: bool, _status_code: int, error_msg: String):
 						if not success:
 							state.failed += 1
 							push_error("[GameSaveSubManager] Pre-launch download failed: " + error_msg)
@@ -2229,7 +2294,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 							check_complete.call()
 							return
 						
-						SystemManager.network.confirm_save_downloaded(save_id, device_id, func(_data, confirm_error):
+						SystemManager.network.confirm_save_downloaded(save_id, resolved_device_id, func(_data, confirm_error):
 							if confirm_error != "":
 								push_warning("[GameSaveSubManager] Failed to confirm download: " + confirm_error)
 							

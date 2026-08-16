@@ -135,6 +135,8 @@ func _create_tables():
 			has_cover_art INTEGER DEFAULT 1,
 			last_played TEXT DEFAULT '',
 			title_id TEXT DEFAULT '',
+			save_id TEXT DEFAULT '',
+			save_usage TEXT DEFAULT '',
 		cover_group_id TEXT DEFAULT '',
 		cover_group_master INTEGER DEFAULT 1,
 		igdb_metadata TEXT DEFAULT '{}',
@@ -330,6 +332,10 @@ func _row_to_game(row: Dictionary) -> GameResource:
 
 	# Restore title_id
 	game.title_id = row.get("title_id", "")
+
+	# Restore sigil save identity
+	game.save_id = row.get("save_id", "")
+	game.save_usage = row.get("save_usage", "")
 
 	# Restore cover group fields
 	if row.has("cover_group_id"):
@@ -727,9 +733,11 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					is_master_entry = ?,
 					downloaded_sibling_ids = ?,
 					has_cover_art = ?,
-					last_played = ?,
-					title_id = ?,
-				cover_group_id = ?,
+				last_played = ?,
+				title_id = ?,
+				save_id = ?,
+				save_usage = ?,
+			cover_group_id = ?,
 			cover_group_master = ?,
 			igdb_metadata = ?,
 			m3u_path = ?
@@ -754,9 +762,11 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.is_master_entry else 0,
 				JSON.stringify(game.downloaded_sibling_ids),
 				1 if game.has_cover_art else 0,
-				game.last_played,
-				game.title_id,
-				game.cover_group_id,
+			game.last_played,
+			game.title_id,
+			game.save_id,
+			game.save_usage,
+			game.cover_group_id,
 				1 if game.cover_group_master else 0,
 		JSON.stringify(game.igdb_metadata),
 		game.m3u_path,
@@ -783,6 +793,26 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 		func():
 			_db_lock()
 			var success = query_bool_unlocked("UPDATE games SET title_id = ? WHERE romm_id = ?", [title_id, romm_id])
+			_db_unlock()
+			return success,
+
+		func(success: bool):
+			if success:
+				pass
+			if callback.is_valid():
+				callback.call(success)
+	)
+	return true
+
+
+func update_game_save_info(romm_id: int, save_id: String, save_usage: String, callback: Callable = Callable()) -> bool:
+	if not _is_db_ready:
+		return false
+
+	MemorySubManager.queue_db_task(
+		func():
+			_db_lock()
+			var success = query_bool_unlocked("UPDATE games SET save_id = ?, save_usage = ? WHERE romm_id = ?", [save_id, save_usage, romm_id])
 			_db_unlock()
 			return success,
 

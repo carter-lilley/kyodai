@@ -4,6 +4,7 @@ class_name GameSubManager
 ## Per-emulator/per-platform game preparation
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const _SigilRunner = preload("res://utils/sigil_runner.gd")
 
 var launch_manager: Node
 
@@ -24,18 +25,29 @@ func _store_file_path(game: GameResource, file_path: String) -> void:
 	else:
 		print("[GameManager] _store_file_path: path already correct, no update needed")
 
-func _store_title_id(game: GameResource, title_id: String) -> void:
+func _store_title_id(game: GameResource, title_id: String, sigil_result: Dictionary = {}) -> void:
+	var save_id: String = sigil_result.get("save_id", "")
+	var save_usage: String = sigil_result.get("usage", "")
 	var active_id = game.get_active_game_id()
 	if active_id == game.romm_id:
 		# Main game
 		if game.title_id != title_id:
 			game.title_id = title_id
 			DataManager.update_game_title_id(game.romm_id, title_id)
+		if save_id != "" and (game.save_id != save_id or game.save_usage != save_usage):
+			game.save_id = save_id
+			game.save_usage = save_usage
+			DataManager.update_game_save_info(game.romm_id, save_id, save_usage)
 	else:
 		# Sibling - update in the siblings array
-		var current_title_id = game.get_active_title_id()
-		if current_title_id != title_id:
+		var changed = false
+		if game.get_active_title_id() != title_id:
 			game.set_sibling_title_id(active_id, title_id)
+			changed = true
+		if save_id != "" and (game.get_active_save_id() != save_id or game.get_active_save_usage() != save_usage):
+			game.set_sibling_save_info(active_id, save_id, save_usage)
+			changed = true
+		if changed:
 			# Persist the updated siblings array to DB
 			DataManager.update_game_siblings(game.romm_id, game.siblings)
 
@@ -131,7 +143,8 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[GameManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
-	var title_id = TitleIDParser.extract_3ds_title_id(rom_path)
+	var sigil_result = _SigilRunner.extract(rom_path, "3ds")
+	var title_id = sigil_result.get("title_id", "")
 	if title_id == "":
 		push_error("[GameManager] Azahar: Failed to extract TitleID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract 3DS game TitleID", SystemManager.notifications.Type.ERROR)
@@ -145,7 +158,7 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] Azahar: Updating to correct TitleID from ROM")
 	
 	if active_title_id != title_id:
-		_store_title_id(game, title_id)
+		_store_title_id(game, title_id, sigil_result)
 		print("[GameManager] Azahar: Updated database with TitleID: " + title_id)
 	
 	return true
@@ -156,7 +169,8 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[GameManager] Cemu: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
-	var title_id = TitleIDParser.extract_wiiu_title_id(rom_path)
+	var sigil_result = _SigilRunner.extract(rom_path, "wiiu")
+	var title_id = sigil_result.get("title_id", "")
 	if title_id == "":
 		push_error("[GameManager] Cemu: Failed to extract TitleID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract Wii U game TitleID", SystemManager.notifications.Type.ERROR)
@@ -170,7 +184,7 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] Cemu: Updating to correct TitleID from WUA")
 	
 	if active_title_id != title_id:
-		_store_title_id(game, title_id)
+		_store_title_id(game, title_id, sigil_result)
 		print("[GameManager] Cemu: Updated database with TitleID: " + title_id)
 	
 	return true
@@ -270,7 +284,8 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	var rom_path = intent.rom_path
 	var title_id = ""
-	
+	var sigil_result := {}
+
 	# Use existing title_id from database/RomM if it's already valid
 	if game.title_id.length() == 16:
 		var valid = true
@@ -283,7 +298,9 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 			print("[GameManager] Eden: Using stored TitleID from database: " + title_id)
 	
 	if title_id == "":
-		title_id = TitleIDParser.extract_switch_title_id(rom_path, launch_manager.registry._get_emulator_directory("eden"))
+		var prod_keys = TitleIDParser._get_prod_keys_path(launch_manager.registry._get_emulator_directory("eden"))
+		sigil_result = _SigilRunner.extract(rom_path, "switch", prod_keys)
+		title_id = sigil_result.get("title_id", "")
 	if title_id == "":
 		print("[GameManager] Eden: ROM extraction failed, trying game_list.db lookup...")
 		title_id = _resolve_eden_title_id_from_db(game.get_display_name(), intent.emulator_id)
@@ -301,7 +318,7 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] Eden: Updating to correct TitleID")
 	
 	if active_title_id != title_id:
-		_store_title_id(game, title_id)
+		_store_title_id(game, title_id, sigil_result)
 		print("[GameManager] Eden: Updated database with TitleID: " + title_id)
 	
 	return true
@@ -312,7 +329,8 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	print("[GameManager] Dolphin: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
-	var game_id = TitleIDParser.extract_gamecube_game_id(rom_path)
+	var sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
+	var game_id = sigil_result.get("title_id", "")
 	
 	if game_id == "":
 		print("[GameManager] Dolphin: Could not extract Game ID from ROM, trying existing saves...")
@@ -332,7 +350,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] Dolphin: Updating to correct Game ID")
 	
 	if active_title_id != game_id:
-		_store_title_id(game, game_id)
+		_store_title_id(game, game_id, sigil_result)
 		print("[GameManager] Dolphin: Updated database with Game ID: " + game_id)
 	
 	return true
@@ -369,10 +387,12 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	var rom_path = intent.rom_path
 	var serial = ""
-	
+	var sigil_result := {}
+
 	# Try extracting serial from ROM
 	if FSM.file_exists(rom_path):
-		serial = TitleIDParser.extract_ps2_serial(rom_path)
+		sigil_result = _SigilRunner.extract(rom_path, "ps2")
+		serial = sigil_result.get("title_id", "")
 		if serial != "":
 			print("[GameManager] PCSX2: Serial from ROM: " + serial)
 	
@@ -387,7 +407,7 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] PCSX2: Updating to correct serial")
 	
 	if active_title_id != serial:
-		_store_title_id(game, serial)
+		_store_title_id(game, serial, sigil_result)
 		print("[GameManager] PCSX2: Updated database with serial: " + serial)
 	
 	return true
@@ -401,10 +421,12 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	var rom_path = intent.rom_path
 	var game_id = ""
-	
+	var sigil_result := {}
+
 	# Try extracting game ID from ROM
 	if FSM.file_exists(rom_path):
-		game_id = TitleIDParser.extract_psp_game_id(rom_path)
+		sigil_result = _SigilRunner.extract(rom_path, "psp")
+		game_id = sigil_result.get("title_id", "")
 		if game_id != "":
 			print("[GameManager] PPSSPP: Game ID from ROM: " + game_id)
 	
@@ -419,7 +441,7 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] PPSSPP: Updating to correct ID")
 	
 	if active_title_id != game_id:
-		_store_title_id(game, game_id)
+		_store_title_id(game, game_id, sigil_result)
 		print("[GameManager] PPSSPP: Updated database with game ID: " + game_id)
 	
 	return true

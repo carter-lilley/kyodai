@@ -2,3 +2,6 @@
 	path = addons/m3
 	url = https://github.com/carter-lilley/M3Godot.git
 	branch = main
+[submodule "bin/src/argosy-sigil"]
+	path = bin/src/argosy-sigil
+	url = https://github.com/rommforge/argosy-sigil

@@ -13,7 +13,6 @@ romm;
 - sort by favorite? wishlist?
 
 ## saves
-	x implement argosy sigil
 	check emulator config for save/user folder(s) at synctime
 	check if save is modified
 

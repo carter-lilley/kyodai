@@ -1229,12 +1229,19 @@ func register_device(_device_name: String, platform: String, client: String, cli
 			callback.call({}, "Not connected")
 		return
 
+	# Hostname lets RomM's fingerprint dedupe (mac/hostname/platform) recognize
+	# this device on re-registration instead of creating a new entry each time
+	var hostname = OS.get_environment("COMPUTERNAME")
+	if hostname == "":
+		hostname = OS.get_environment("HOSTNAME")
+
 	var url = _base_url.rstrip("/") + "/api/devices"
 	var body = JSON.stringify({
 		"name": _device_name,
 		"platform": platform,
 		"client": client,
 		"client_version": client_version,
+		"hostname": hostname,
 		"allow_existing": true,
 		"allow_duplicate": false
 	})
@@ -1281,7 +1288,6 @@ func register_device(_device_name: String, platform: String, client: String, cli
 
 		if callback.is_valid():
 			callback.call(response_data, "")
-		http.queue_free()
 	)
 
 # ==================== FIRMWARE DOWNLOAD ====================
@@ -1356,7 +1362,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 			callback.call(false, "Not connected")
 		return
 
-	var url = _base_url.rstrip("/") + "/api/firmware/" + str(firmware_id) + "/content/" + file_name
+	var url = _base_url.rstrip("/") + "/api/firmware/" + str(firmware_id) + "/content/" + file_name.uri_encode()
 	var headers = [
 		"Authorization: " + _get_auth_header()
 	]

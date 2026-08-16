@@ -1054,7 +1054,7 @@ func _invalidate_pool_connection(http: HTTPClient, item_id: String, thread_index
 ## Checks if a platform needs TitleID extraction for save sync
 func _needs_title_id(game: GameResource) -> bool:
 	match game.platform_slug:
-		"3ds", "wiiu", "ngc", "wii", "ps2", "psp", "ps3", "ps4", "switch", "vita", "xbox360":
+		"3ds", "wiiu", "ngc", "wii", "ps2", "psp", "ps3", "ps4", "switch", "vita", "xbox360", "psx":
 			return true
 		_:
 			return false
@@ -3002,12 +3002,16 @@ func _finish_download_completion(item: QueueItem):
 			var game = item.game_resource
 			var notify_id = SystemManager.notifications.show_notification("Extracting TitleID for " + game.title + "...", SystemManager.notifications.Type.INFO, null, 3.0, Callable(), Callable(), true, true)
 			SystemManager.memory.queue_extraction_task(func():
-				var title_id = TitleIDParser.extract_for_game(game)
-				return title_id
-			, func(title_id: String):
+				return TitleIDParser.extract_for_game_result(game)
+			, func(result: Dictionary):
 				SystemManager.notifications.dismiss_notification(notify_id)
+				var title_id = result.get("title_id", "")
 				if title_id != "":
 					DataManager.update_game_title_id(game.romm_id, title_id)
+					if result.get("save_id", "") != "":
+						game.save_id = result.save_id
+						game.save_usage = result.get("usage", "")
+						DataManager.update_game_save_info(game.romm_id, game.save_id, game.save_usage)
 					SystemManager.notifications.show_notification("TitleID " + title_id + " found for " + game.title + "!", SystemManager.notifications.Type.SUCCESS, null, 3.0)
 					print("[SystemManager.download] TitleID extracted post-download: " + title_id + " for " + game.title)
 				else:

@@ -135,6 +135,8 @@ func _on_firmware_download_complete(success: bool, download_error: String, _noti
 	
 	if not success:
 		push_error("[FirmwareManager] Failed to download firmware: " + download_error)
+		if FSM.file_exists(temp_path):
+			FSM.delete_file(temp_path)
 		if callback.is_valid():
 			callback.call(false, download_error)
 		return
@@ -223,6 +225,8 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		# Download to temp location first
 		var temp_path = "user://temp_firmware/" + file_name
 		FSM.make_dir_recursive("user://temp_firmware")
+		if FSM.file_exists(temp_path):
+			FSM.delete_file(temp_path)
 
 		# Pre-flight disk space check (10% margin) when RomM reports the file size
 		var firmware_size: int = firmware.get("file_size_bytes", 0)
