@@ -88,20 +88,21 @@ func _load_games() -> void:
 	else:
 		_games_data = []
 
-func _save_games() -> void:
+func _save_games(notify: bool = true) -> void:
 	"""Save GameNative games to Settings."""
 	# Create a deep copy of the array to ensure it gets saved properly
 	var games_array: Array = []
 	for game in _games_data:
 		games_array.append(game.duplicate())
-	
+
 	var setting = DataManager.get_setting("gamenative_games")
 	if setting:
 		# Use set_setting so the dirty flag is set and save_settings actually persists.
 		DataManager.set_setting(games_array, setting)
 		DataManager.save_settings()
-	
-	games_updated.emit()
+
+	if notify:
+		games_updated.emit()
 
 func add_game(app_id: int, callback: Callable = Callable()) -> void:
 	"""Add a new GameNative game by Steam App ID.
@@ -260,11 +261,13 @@ func update_last_played(app_id: int, timestamp: String) -> void:
 			return
 
 func update_unwrapped(app_id: int, unwrapped: bool) -> void:
-	"""Persist the present-wrap unwrapped flag for a GameNative game."""
+	"""Persist the present-wrap unwrapped flag for a GameNative game.
+	Silent save: the flag doesn't affect grid order/contents, so skip the
+	games_updated emit (it triggers a full grid reload mid-unwrap-animation)."""
 	for game in _games_data:
 		if game.get("app_id", 0) == app_id:
 			game["unwrapped"] = unwrapped
-			_save_games()
+			_save_games(false)
 			return
 
 func get_game_count() -> int:

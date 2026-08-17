@@ -2,12 +2,15 @@
 
 xemu save sync
 tst emulator app update flow on android
-touch-to-hold for context menu on android not working
-cant close details when snackbar is present
 prewarm covers on random jump
 touch to open kb txtedits
 cant always reach settings cog after ds rbuild
-cant touch some buttons after ds rebuild(?) - select/deselect all in romm menu
+touch is weird (bottom)
+- cant touch some buttons after ds rebuild(?) - select/deselect all in romm menu
+- touch-to-hold for context menu on android not working
+romm loading cirlce not seen visually on small screens  (less space for top controls in romm menu)
+remove add to steam on android
+home focus even after gamenative adds
 
 romm;
 - sort by played
@@ -15,26 +18,29 @@ romm;
 
 ## saves
 	check emulator config for save/user folder(s) at synctime
-	check if save is modified
+	https://github.com/danielcopper/emu-atlas
 
 ## general UI
 	user profile? name & icon?
 	widgets (snap to screen regions? snap to grid?)
+		- clock, battery, wifi, game title, etc
 	screen transitions, animation juice, etc..
-	better focus, configurable shapes, size, animations (chase, breathe, etc)
+	better focus, configurable shapes (corners vs box), size, color (glow, mirror) animations (chase, breathe, etc)
 	see 'next page' faintly in pagination view
 	"case wrap" card effect (spine + label, maybe varying by platform?)
-	remove platform from game title option
-	option for text centering 
-	option for scrolling trunaction in game title?
+	3d case effect
+	shine/glimmer effect
+	text
+		- remove platform from game title option
+		- option for text centering 
+		- scroll truncation if focused
+		- only game title for focused option (speech bubble?)
 	m3 master color sync with game/platform?
 	draggable ui elements? (split containers?)
 	color presets (platform/game/custom)
 	'controls/info bar'
-	focus indicator effects (glow, mirror, chase, etc)
 	add letters to library navigation?
 	badge effect placement opts
-	game title "speech bubble option"
 	
 ## hero <- currently depreciated
 	postcard-style [[img] name ]

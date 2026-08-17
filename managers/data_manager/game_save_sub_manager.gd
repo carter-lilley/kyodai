@@ -22,6 +22,11 @@ var _save_sync_in_flight: Dictionary = {}  # "romm_id:emulator_id" -> true
 var _conflict_dialog_open: bool = false
 signal _conflict_dialog_closed
 
+# Session-scoped conflict choices from the pre-launch dialog, honored by the
+# post-launch auto-upload: "local" = force upload without re-asking,
+# "cancel" = skip post-launch sync entirely.
+var _sync_choice_overrides: Dictionary = {}  # "romm_id:emulator_id" -> "local"|"cancel"
+
 func _save_sync_key(game: GameResource, emulator_id: String) -> String:
 	return str(game.romm_id) + ":" + emulator_id
 
@@ -2082,7 +2087,15 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if _save_sync_in_flight.has(sync_key):
 		print("[GameSaveSubManager] Auto-upload aborted: save sync already in progress for this game")
 		return
-	
+
+	# Honor a pre-launch conflict choice without re-asking
+	var choice_override = _sync_choice_overrides.get(sync_key, "")
+	if choice_override != "":
+		_sync_choice_overrides.erase(sync_key)
+	if choice_override == "cancel":
+		print("[GameSaveSubManager] Auto-upload skipped: user cancelled save sync pre-launch")
+		return
+	var force_all = choice_override == "local"
 	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	var extensions = get_save_extensions(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	if save_dir == "" or extensions.is_empty():
@@ -2113,14 +2126,23 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 			return
 
 		_begin_save_sync(sync_key)
-		_auto_upload_after_scan(game, emulator_id, local_saves, sync_key)
+		_auto_upload_after_scan(game, emulator_id, local_saves, sync_key, force_all)
 	)
 
-func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_saves: Array[Dictionary], sync_key: String) -> void:
+func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_saves: Array[Dictionary], sync_key: String, force_all: bool = false) -> void:
 	_ensure_device_registered(func(_success: bool, error: String):
 		if not _success:
 			push_error("[GameSaveSubManager] Auto-upload aborted: " + error)
 			_end_save_sync(sync_key)
+			return
+
+		if force_all:
+			# User chose keep-local on the pre-launch conflict dialog: force the
+			# upload without re-asking (explicit choice = legitimate overwrite)
+			var force_ops: Array = []
+			for local in local_saves:
+				force_ops.append({"local": local, "force": true})
+			_perform_auto_upload(game, emulator_id, force_ops, DataManager.get_romm_device_id())
 			return
 
 		# Check for conflicts with remote saves before uploading
@@ -2128,7 +2150,10 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 			if fetch_error != "":
 				push_warning("[GameSaveSubManager] Auto-upload conflict check failed: " + fetch_error)
 				# Continue with upload anyway if we can't check
-				_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id)
+				var fallback_ops: Array = []
+				for local in local_saves:
+					fallback_ops.append({"local": local})
+				_perform_auto_upload(game, emulator_id, fallback_ops, resolved_device_id)
 				return
 
 			# Check if any local save conflicts with remote (gavel decision per record)
@@ -2145,10 +2170,8 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 				if slot == SLOT_DEFAULT:
 					remote_by_name[save.file_name] = save
 
-			var has_conflict = false
-			var conflict_local_time = 0
-			var conflict_server_time = 0
-			var upload_list: Array = []
+			var conflict_pairs: Array = []
+			var upload_ops: Array = []
 
 			for local in local_saves:
 				var remote = remote_by_name.get(local.file_name)
@@ -2159,29 +2182,43 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 					# content living under a different server file_name
 					if remote == null and not _find_slot_parity_remote(remote_by_name.values(), verdict.hash_info.hash).is_empty():
 						continue
-					upload_list.append(local)
+					upload_ops.append({"local": local})
 				elif verdict.decision.action == "conflict":
-					has_conflict = true
-					conflict_local_time = local.modified_time
-					conflict_server_time = parse_iso_timestamp(remote.get("updated_at", ""))
-					break
+					conflict_pairs.append({"local": local, "remote": remote})
 
-			if has_conflict:
+			if not conflict_pairs.is_empty():
 				# Show conflict dialog
 				print("[GameSaveSubManager] Auto-upload detected conflict, showing dialog")
-				var choice = await _show_conflict_dialog(game, conflict_local_time, conflict_server_time)
+				var first = conflict_pairs[0]
+				var choice = await _show_conflict_dialog(game, first.local.modified_time, parse_iso_timestamp(first.remote.get("updated_at", "")))
 
 				match choice:
 					"local":
 						# User chose to keep local, proceed with upload (force is
 						# legitimate only here: explicit user keep-local)
 						print("[GameSaveSubManager] User chose to keep local save, proceeding with upload")
-						_perform_auto_upload(game, emulator_id, local_saves, resolved_device_id, true)
+						for pair in conflict_pairs:
+							upload_ops.append({"local": pair.local, "force": true})
+						_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)
 					"server":
-						# User chose to keep server, skip upload (will download on next launch)
-						print("[GameSaveSubManager] User chose to keep server save, skipping upload")
-						SystemManager.notifications.show_notification("Save sync: keeping server version", SystemManager.notifications.Type.INFO)
-						_end_save_sync(sync_key)
+						# User chose the server copy: download it now so the
+						# choice takes effect immediately and the baseline is
+						# recorded for future syncs
+						print("[GameSaveSubManager] User chose server save, downloading now")
+						var current_timestamp = Time.get_datetime_string_from_system(true, true)
+						var dl_state = {"pending": conflict_pairs.size(), "failed": 0}
+						for pair in conflict_pairs:
+							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, current_timestamp, func(success: bool):
+								if not success:
+									dl_state.failed += 1
+								dl_state.pending -= 1
+								if dl_state.pending <= 0:
+									if dl_state.failed > 0:
+										SystemManager.notifications.show_notification("Save sync: server download failed", SystemManager.notifications.Type.ERROR)
+									else:
+										SystemManager.notifications.show_notification("Save sync: server version applied", SystemManager.notifications.Type.INFO)
+									_end_save_sync(sync_key)
+							)
 					"cancel", "":
 						# User cancelled
 						print("[GameSaveSubManager] User cancelled auto-upload")
@@ -2189,20 +2226,21 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 						_end_save_sync(sync_key)
 			else:
 				# No conflict, upload only records gavel marked as changed
-				_perform_auto_upload(game, emulator_id, upload_list, resolved_device_id)
+				_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)
 		)
 	)
 
 
 ## Internal function to perform the actual auto-upload after conflict checks
-func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: Array, device_id: String, force: bool = false) -> void:
-	if local_saves.is_empty():
+## upload_ops: [{"local": save record, "force": bool (default false)}]
+func _perform_auto_upload(game: GameResource, emulator_id: String, upload_ops: Array, device_id: String) -> void:
+	if upload_ops.is_empty():
 		SystemManager.notifications.show_notification("Saves already in sync", SystemManager.notifications.Type.INFO)
 		_end_save_sync(_save_sync_key(game, emulator_id))
 		return
 
 	var current_timestamp = Time.get_datetime_string_from_system(true, true)
-	var state = {"pending": local_saves.size(), "failed": 0}
+	var state = {"pending": upload_ops.size(), "failed": 0}
 
 	var on_one_done = func(success: bool):
 		if not success:
@@ -2215,8 +2253,8 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, local_saves: 
 				SystemManager.notifications.show_notification("Saves synced to RomM", SystemManager.notifications.Type.INFO)
 			_end_save_sync(_save_sync_key(game, emulator_id))
 
-	for local in local_saves:
-		_execute_save_upload(game, emulator_id, {"local": local, "remote": null}, device_id, current_timestamp, force, on_one_done)
+	for op in upload_ops:
+		_execute_save_upload(game, emulator_id, {"local": op.local, "remote": null}, device_id, current_timestamp, op.get("force", false), on_one_done)
 
 ## Auto-download saves before launch (pre-launch hook)
 ## If on_complete callback is provided, it will be called when sync finishes
@@ -2338,6 +2376,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					if on_complete.is_valid():
 						on_complete.call()
 			
+			var conflict_pairs: Array = []
 			for remote in remote_saves:
 				var slot = remote.get("slot", "")
 				if slot == null:
@@ -2379,15 +2418,35 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								check_complete.call()
 							)
 					"conflict":
-						# Pre-launch never prompts: keep local work, warn, skip
-						push_warning("[GameSaveSubManager] auto_download: conflict for '" + file_name + "' - keeping local, skipping download")
-						SystemManager.notifications.show_notification("Save conflict for " + game.get_display_name() + " - open the game page to resolve", SystemManager.notifications.Type.WARNING)
+						conflict_pairs.append({"local": local, "remote": remote})
 					"skip":
 						if verdict.decision.get("adopt_baseline", false):
 							var hash_info = verdict.hash_info
 							var record_path = local.file_path if local else FSM.join_paths(save_dir, file_name)
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, file_name, record_path, current_timestamp, save_id, SLOT_DEFAULT, hash_info.hash, remote.get("content_hash", ""), hash_info.size)
 					# "upload": pre-launch never uploads; local work is picked up post-launch
+
+			# Surface conflicts BEFORE launching: the choice is respected this
+			# session (keep-local force-uploads post-launch without re-asking,
+			# cancel suppresses the post-launch sync entirely)
+			if not conflict_pairs.is_empty():
+				var first = conflict_pairs[0]
+				var local_mtime = first.local.modified_time if first.local else 0
+				var choice = await _show_conflict_dialog(game, local_mtime, parse_iso_timestamp(first.remote.get("updated_at", "")))
+				match choice:
+					"server":
+						for pair in conflict_pairs:
+							state.pending += 1
+							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, current_timestamp, func(success: bool):
+								if not success:
+									state.failed += 1
+								state.pending -= 1
+								check_complete.call()
+							)
+					"local":
+						_sync_choice_overrides[sync_key] = "local"
+					_:
+						_sync_choice_overrides[sync_key] = "cancel"
 
 			# If no downloads were queued, call completion immediately
 			if state.pending == 0:

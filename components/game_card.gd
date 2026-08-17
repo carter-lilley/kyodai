@@ -1330,7 +1330,7 @@ func _on_focus_entered():
 	if _focus_tween:
 		_focus_tween.kill()
 	_focus_tween = create_tween()
-	_focus_tween.set_trans(Tween.TRANS_QUAD)
+	_focus_tween.set_trans(Tween.TRANS_BACK)
 	_focus_tween.set_ease(Tween.EASE_OUT)
 	if focus_scale_enabled:
 		var start_scale = content_scale
