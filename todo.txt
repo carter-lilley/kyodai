@@ -17,7 +17,6 @@ romm;
 ## general UI
 	user profile? name & icon?
 	widgets (snap to screen regions? snap to grid?)
-	present for downloaded games
 	screen transitions, animation juice, etc..
 	better focus, configurable shapes, size, animations (chase, breathe, etc)
 	see 'next page' faintly in pagination view

@@ -239,6 +239,10 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 	return database.update_game_last_played(romm_id, timestamp)
 
 
+func update_game_unwrapped(romm_id: int, unwrapped: bool) -> bool:
+	return database.update_game_unwrapped(romm_id, unwrapped)
+
+
 # ==================== ROMM USER PROPS / FAVORITES ====================
 
 ## Apply RomM per-user props (status/now_playing/backlogged/hidden) locally and

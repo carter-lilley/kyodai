@@ -952,7 +952,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if romm_ids.size() > 0:
 		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite FROM games WHERE romm_id IN (%s)" % placeholders,
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped FROM games WHERE romm_id IN (%s)" % placeholders,
 			romm_ids
 		)
 		for row in existing_result:
@@ -1287,10 +1287,11 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	var last_played = game.last_played
 	var title_id = game.title_id
 	var is_favorite = 1 if game.is_favorite else 0
+	var unwrapped = 1 if game.unwrapped else 0
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -1325,13 +1326,15 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 			game.m3u_path = existing_m3u_path
 		# Preserve favorite flag (synced separately via the favourites virtual collection)
 		is_favorite = 1 if existing.get("is_favorite", 0) == 1 else 0
+		# Preserve present-wrap state (the server payload never provides it)
+		unwrapped = 1 if existing.get("unwrapped", 0) == 1 else 0
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path, status, now_playing, backlogged, hidden, is_favorite)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1365,7 +1368,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		1 if game.now_playing else 0,
 		1 if game.backlogged else 0,
 		1 if game.hidden else 0,
-		is_favorite
+		is_favorite,
+		unwrapped
 	]
 
 	return {"query": query, "bindings": bindings}

@@ -48,6 +48,14 @@ var _focus_effect_tweens: Array[Tween] = []
 # the media stack, which lives in media-panel-local space.
 var _focus_media_container: MediaContainer = null
 
+# Present wrap overlay: internal layer above the media stack for
+# downloaded-but-never-played games. Unwraps on first focus.
+var _present_wrap: PresentWrapEffect = null
+var _present_tween: Tween = null
+const PRESENT_UNWRAP_DURATION: float = 0.6
+const PRESENT_WRAP_DRAW_INDEX: int = 40
+const GAMENATIVE_NEVER_PLAYED: String = "1970-01-01T00:00:00"
+
 func _remove_focus_tween(tween: Tween) -> void:
 	_focus_effect_tweens.erase(tween)
 
@@ -122,6 +130,8 @@ func _sync_focus_state_from_viewport() -> void:
 	if _is_focused and not _focus_stack:
 		_build_focus_stack(false)
 		_update_platform_badge()
+	if _is_focused:
+		_try_unwrap_present()
 
 # Android touch-and-hold
 const LONG_PRESS_DURATION: float = 0.6
@@ -202,6 +212,7 @@ func _exit_tree():
 
 	# Kill any focus effect tweens
 	_kill_focus_tweens()
+	_kill_present_tween()
 
 	# Keep the node-less effect stacks allocated while the card is pooled. They
 	# are only freed in NOTIFICATION_PREDELETE when the card is truly destroyed.
@@ -307,6 +318,8 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		_media_stack.update_draw_rects()
 
 	_update_media()
+	_ensure_present_wrap()
+	_sync_present_wrap_geometry()
 
 	# Focus stack is built lazily when this card becomes focused (or in preview mode).
 	# Only one card is focused at a time, so building the stack for every card is
@@ -737,6 +750,76 @@ func reset(for_pooling: bool = false) -> void:
 			_focus_stack.free_rids()
 			_focus_stack = null
 
+func _ensure_present_wrap() -> void:
+	if _present_wrap or not _media_container or preview_mode:
+		return
+	_present_wrap = PresentWrapEffect.new()
+	_present_wrap.initialize(_media_container, {})
+	_present_wrap.set_visible(false)
+	_sync_present_wrap_geometry()
+
+func _sync_present_wrap_geometry() -> void:
+	if not _present_wrap:
+		return
+	if _media_canvas_item.is_valid():
+		_present_wrap.set_parent_rid(_media_canvas_item)
+	_present_wrap.set_z_index(PRESENT_WRAP_DRAW_INDEX)
+	_present_wrap.set_offset_rect(Rect2(Vector2.ZERO, _media_container.size))
+
+func _is_present_wrapped() -> bool:
+	if preview_mode or not game:
+		return false
+	if game.unwrapped or not game.is_active_variant_downloaded():
+		return false
+	var lp: String = game.last_played
+	return lp.is_empty() or lp == GAMENATIVE_NEVER_PLAYED
+
+func _update_present_wrap() -> void:
+	_ensure_present_wrap()
+	if not _present_wrap:
+		return
+	_kill_present_tween()
+	var wrapped := _is_present_wrapped()
+	if wrapped:
+		_present_wrap.set_unwrap_progress(0.0)
+		_sync_present_wrap_geometry()
+	_present_wrap.set_visible(wrapped)
+
+func _kill_present_tween() -> void:
+	if _present_tween and _present_tween.is_valid():
+		_present_tween.kill()
+	_present_tween = null
+
+func _try_unwrap_present() -> void:
+	if not _present_wrap or not _present_wrap.is_visible():
+		return
+	if not game or game.unwrapped:
+		return
+	game.unwrapped = true
+	_persist_unwrapped()
+	_kill_present_tween()
+	var effect := _present_wrap
+	_present_tween = create_tween()
+	_present_tween.set_trans(Tween.TRANS_QUAD)
+	_present_tween.set_ease(Tween.EASE_OUT)
+	_present_tween.tween_method(
+		func(t: float):
+			if is_instance_valid(effect):
+				effect.set_unwrap_progress(t),
+		0.0, 1.0, PRESENT_UNWRAP_DURATION
+	)
+	_present_tween.finished.connect(func():
+		if is_instance_valid(effect):
+			effect.set_visible(false)
+	)
+
+func _persist_unwrapped() -> void:
+	if game.source == "gamenative":
+		if LaunchManager and LaunchManager.gamenative:
+			LaunchManager.gamenative.update_unwrapped(game.steam_app_id, true)
+	elif DataManager:
+		DataManager.update_game_unwrapped(game.romm_id, true)
+
 func set_placeholder(enabled: bool) -> void:
 	super.set_placeholder(enabled)
 	# Placeholders render only the blank media panel: no badge, no effect stacks.
@@ -747,12 +830,15 @@ func set_placeholder(enabled: bool) -> void:
 	# The focus stack is only ever re-shown by focus logic; never restore it here.
 	if enabled and _focus_stack:
 		_focus_stack.set_visible(false)
+	if _present_wrap:
+		_present_wrap.set_visible(not enabled and _is_present_wrapped())
 
 func _update_display():
 	if not game or not is_node_ready():
 		return
 	_update_status_icon()
 	_update_platform_badge()
+	_update_present_wrap()
 	_load_cover(false)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
@@ -762,6 +848,7 @@ func _update_display_with_priority(high_priority: bool):
 		return
 	_update_status_icon()
 	_update_platform_badge()
+	_update_present_wrap()
 	# If the texture is already cached and the game hasn't changed, reuse it
 	# synchronously to avoid the empty-card flash during recycling.
 	if _current_texture and _current_texture != _loading_texture and _current_texture_game_id == game.id:
@@ -1256,6 +1343,7 @@ func _on_focus_entered():
 			0.0, 1.0, FOCUS_TWEEN_DURATION
 		)
 	_show_focus_effects(true)
+	_try_unwrap_present()
 
 func _on_focus_exited():
 	_is_focused = false
@@ -1329,6 +1417,9 @@ func _update_media_panel_size(force: bool = false) -> void:
 			_media_stack.force_refresh()
 			_last_refreshed_media_bounds = _media_bounds
 
+	if _present_wrap:
+		_sync_present_wrap_geometry()
+
 	if _focus_stack:
 		_update_focus_stack_bounds()
 
@@ -1356,3 +1447,6 @@ func _notification(what: int):
 		if _focus_stack:
 			_focus_stack.free_rids()
 			_focus_stack = null
+		if _present_wrap:
+			_present_wrap.free_rid()
+			_present_wrap = null

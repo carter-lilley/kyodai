@@ -145,7 +145,8 @@ func _create_tables():
 		cover_group_id TEXT DEFAULT '',
 		cover_group_master INTEGER DEFAULT 1,
 		igdb_metadata TEXT DEFAULT '{}',
-		m3u_path TEXT DEFAULT ''
+		m3u_path TEXT DEFAULT '',
+		unwrapped INTEGER DEFAULT 0
 	)
 	""")
 
@@ -349,6 +350,9 @@ func _row_to_game(row: Dictionary) -> GameResource:
 
 	# Restore last_played timestamp
 	game.last_played = row.get("last_played", "")
+
+	# Restore present-wrap state
+	game.unwrapped = row.get("unwrapped", 0) == 1
 
 	# Restore RomM per-user play state
 	game.status = row.get("status", "")
@@ -896,6 +900,14 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 		return false
 
 	return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
+
+
+func update_game_unwrapped(romm_id: int, unwrapped: bool) -> bool:
+	"""Update the present-wrap unwrapped flag for a game."""
+	if not _is_db_ready:
+		return false
+
+	return query_bool("UPDATE games SET unwrapped = ? WHERE romm_id = ?", [1 if unwrapped else 0, romm_id])
 
 
 ## Whitelist of user-prop columns that update_game_user_props may write.

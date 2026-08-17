@@ -69,17 +69,17 @@ theme_override_constants/separation = 8
 [node name="PlatformLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 10
+label_style = 9
 
 [node name="GenresLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 10
+label_style = 9
 
 [node name="RatingLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 10
+label_style = 9
 
 [node name="ButtonRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
 layout_mode = 2
@@ -111,7 +111,7 @@ icon_button_size = 1
 [node name="SyncStatusLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 11
+label_style = 10
 
 [node name="FileInfoRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
 layout_mode = 2
@@ -120,22 +120,22 @@ theme_override_constants/separation = 8
 [node name="FileInfoLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 13
+label_style = 10
 
 [node name="FileSizeLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 13
+label_style = 10
 
 [node name="StatusLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 13
+label_style = 10
 
 [node name="TitleIdLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 13
+label_style = 10
 
 [node name="SiblingDropdown" type="LineEdit" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
 script = ExtResource("m3optionbutton")

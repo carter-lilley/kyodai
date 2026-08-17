@@ -8,7 +8,11 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## instead of a full-screen tab.
 
 const CONTENT_MARGIN_PATH := ^"MarginContainer"
-const MAX_HEIGHT_DP := 760.0
+const HEIGHT_FRACTION := 0.85
+const WIDTH_FRACTION := 0.75
+const MAX_WIDTH_DP := 1200.0
+const H_MARGIN_DP := 32.0
+const DESCRIPTION_SIZE_DP := 20.0
 
 
 # NOTE: The scene root is a CanvasLayer (M3BottomSheet base). The MarginContainer
@@ -64,6 +68,37 @@ func _ready():
 	_connect_signals()
 	_set_sheet_height()
 	_reduce_top_padding()
+	_apply_content_scaling()
+
+func refresh_theme():
+	super.refresh_theme()
+	if is_node_ready():
+		_apply_content_scaling()
+
+func _apply_content_scaling() -> void:
+	if not is_instance_valid(_content_root):
+		return
+	var edge := M3Units.dpi(24.0)
+	var margin := _content_root as MarginContainer
+	if margin:
+		margin.add_theme_constant_override("margin_left", edge)
+		margin.add_theme_constant_override("margin_top", edge)
+		margin.add_theme_constant_override("margin_right", edge)
+		margin.add_theme_constant_override("margin_bottom", edge)
+	var hbox := _content_root.get_node_or_null(^"HBoxContainer") as HBoxContainer
+	if hbox:
+		hbox.add_theme_constant_override("separation", edge)
+	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentScroll/ContentVBox") as VBoxContainer
+	if vbox:
+		vbox.add_theme_constant_override("separation", M3Units.dpi(12.0))
+	if is_instance_valid(metadata_row):
+		metadata_row.add_theme_constant_override("separation", M3Units.dpi(8.0))
+	if is_instance_valid(file_info_label):
+		var file_row := file_info_label.get_parent() as HBoxContainer
+		if file_row:
+			file_row.add_theme_constant_override("separation", M3Units.dpi(8.0))
+	if is_instance_valid(description_label):
+		description_label.add_theme_font_size_override("font_size", M3Units.dpi(DESCRIPTION_SIZE_DP))
 
 func _reparent_content() -> void:
 	var content_root := get_node_or_null(CONTENT_MARGIN_PATH) as Control
@@ -94,7 +129,7 @@ func _set_sheet_height() -> void:
 	if not viewport:
 		return
 	var screen_dp := viewport.get_visible_rect().size.y / M3Units.get_scale()
-	peek_height = min(MAX_HEIGHT_DP, screen_dp * 0.75)
+	peek_height = screen_dp * HEIGHT_FRACTION
 
 func _reduce_top_padding() -> void:
 	# Tighten the default M3BottomSheet top padding.
@@ -106,9 +141,11 @@ func _reduce_top_padding() -> void:
 		margin.add_theme_constant_override("margin_top", int(M3Units.dp(4.0)))
 
 func _get_sheet_width(screen_width: float) -> float:
-	# Make the details sheet wider than the default 640 dp bottom sheet.
-	var max_width_px := M3Units.dp(1200.0)
-	return min(screen_width - M3Units.dp(32.0), max_width_px)
+	var ui_scale := M3Units.get_scale()
+	var screen_dp := screen_width / ui_scale
+	var legacy_dp := minf(MAX_WIDTH_DP, screen_dp - H_MARGIN_DP)
+	var width_dp := maxf(legacy_dp, screen_dp * WIDTH_FRACTION)
+	return minf(width_dp, screen_dp - H_MARGIN_DP) * ui_scale
 
 func set_game(game: GameResource) -> void:
 	_current_game = game

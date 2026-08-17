@@ -245,6 +245,7 @@ func create_game_resources() -> Array[GameResource]:
 		game.steam_app_id = app_id
 		# Use persisted last_played so the recent order survives app restarts.
 		game.last_played = game_data.get("last_played", "1970-01-01T00:00:00")
+		game.unwrapped = game_data.get("unwrapped", false)
 		
 		games.append(game)
 	
@@ -255,6 +256,14 @@ func update_last_played(app_id: int, timestamp: String) -> void:
 	for game in _games_data:
 		if game.get("app_id", 0) == app_id:
 			game["last_played"] = timestamp
+			_save_games()
+			return
+
+func update_unwrapped(app_id: int, unwrapped: bool) -> void:
+	"""Persist the present-wrap unwrapped flag for a GameNative game."""
+	for game in _games_data:
+		if game.get("app_id", 0) == app_id:
+			game["unwrapped"] = unwrapped
 			_save_games()
 			return
 

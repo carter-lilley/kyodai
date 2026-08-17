@@ -21,7 +21,7 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
     - uses: actions/checkout@v4
       with:
@@ -71,7 +71,7 @@ jobs:
     - name: Build
       working-directory: bin/src/argosy-sigil
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-DZSTD_DISABLE_ASM -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
         cmake --build build --parallel
 
     - name: Copy Binary
