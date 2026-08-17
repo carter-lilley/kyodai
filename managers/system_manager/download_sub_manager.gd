@@ -3058,6 +3058,24 @@ var _active_image_download_count: int = 0
 var _pending_image_downloads: Array = []
 var _pending_image_downloads_mutex: Mutex = Mutex.new()
 
+# Rate-limited logging for dropped image downloads: mass drops (e.g. a sync
+# flooding the queue) must not spam thousands of warnings, but must not be
+# silent either - silent drops previously surfaced only as unexplained
+# "Cover download FAILED" errors downstream.
+const IMAGE_DROP_LOG_LIMIT: int = 5
+const IMAGE_DROP_SUMMARY_EVERY: int = 250
+var _image_drop_logged: int = 0
+var _image_drops_suppressed: int = 0
+
+func _log_image_drop(url: String) -> void:
+	if _image_drop_logged < IMAGE_DROP_LOG_LIMIT:
+		_image_drop_logged += 1
+		push_warning("[SystemManager.download] Image download dropped (queue full): %s" % _redact_url(url))
+	else:
+		_image_drops_suppressed += 1
+		if _image_drops_suppressed % IMAGE_DROP_SUMMARY_EVERY == 0:
+			push_warning("[SystemManager.download] %d further image downloads dropped (queue full)" % _image_drops_suppressed)
+
 ## Downloads an image with caching, deduplication, and limited concurrency.
 ## callback(success: bool). High-priority downloads jump ahead of queued
 ## low-priority downloads (FIFO order is kept within each tier).
@@ -3094,16 +3112,19 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 					var evicted = _pending_image_downloads[evicted_idx]
 					_pending_image_downloads.remove_at(evicted_idx)
 					_pending_image_downloads_mutex.unlock()
+					_log_image_drop(evicted.url)
 					if evicted.callback.is_valid():
 						evicted.callback.call(false)
 					# Retry now that a slot freed up.
 					return download_image(url, cache_path, callback, high_priority)
 				_pending_image_downloads_mutex.unlock()
+				_log_image_drop(url)
 				callback.call(false)
 				return true
 			_pending_image_downloads_mutex.unlock()
 			# Dropped low-priority request: report failure so the caller records
 			# its failure-TTL instead of waiting on a callback forever.
+			_log_image_drop(url)
 			callback.call(false)
 			return true
 		var item = {

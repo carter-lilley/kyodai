@@ -46,7 +46,7 @@ jobs:
 
     - name: Copy Binaries
       run: |
-        mkdir -p bin/sigil/win
+        New-Item -ItemType Directory -Force -Path bin/sigil/win | Out-Null
         cp bin/src/argosy-sigil/build-x64/Release/sigil.exe bin/sigil/win/sigil.exe
         cp bin/src/argosy-sigil/build-arm64/Release/sigil.exe bin/sigil/win/sigil-arm64.exe
 

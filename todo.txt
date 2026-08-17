@@ -5,6 +5,9 @@ tst emulator app update flow on android
 touch-to-hold for context menu on android not working
 cant close details when snackbar is present
 prewarm covers on random jump
+touch to open kb txtedits
+cant always reach settings cog after ds rbuild
+cant touch some buttons after ds rebuild(?) - select/deselect all in romm menu
 
 romm;
 - sort by played

@@ -60,6 +60,10 @@ var _sync_covers_failed_count: int = 0
 
 # Interleaved cover dispatch: throttle and once-per-URL progress counting
 const COVER_DISPATCH_INTERVAL_MS: int = 2000
+# Max sync covers allowed in the download queue at once. Kept well below
+# DownloadSubManager's pending cap so onscreen card loads (high priority)
+# always have headroom and sync covers are never dropped by the queue limit.
+const COVER_DISPATCH_MAX_IN_FLIGHT: int = 128
 var _sync_last_cover_dispatch_ms: int = 0
 var _sync_covers_counted_set: Dictionary = {}
 
@@ -634,8 +638,9 @@ func _wait_for_all_cover_downloads() -> void:
 		var processed = _sync_covers_processed_count
 		_sync_covers_mutex.unlock()
 		if still_pending:
+			# Self-throttled: no-op while the in-flight cap is reached.
 			_dispatch_covers_to_main_thread()
-			OS.delay_msec(10)
+			OS.delay_msec(50)
 			continue
 
 		# Wait until all deferred main-thread download calls have finished scheduling.
@@ -655,15 +660,31 @@ func _wait_for_all_cover_downloads() -> void:
 
 
 func _dispatch_covers_to_main_thread():
-	"""Dispatch collected cover URLs to main thread for async download."""
+	"""Dispatch collected cover URLs to main thread for async download.
+
+	Self-throttles to COVER_DISPATCH_MAX_IN_FLIGHT outstanding downloads so a
+	large backfill can't flood the download queue past its pending cap and get
+	covers silently dropped. Leftover URLs stay pending for the next dispatch
+	once in-flight downloads settle.
+	"""
+	_sync_pending_downloads_mutex.lock()
+	var headroom: int = COVER_DISPATCH_MAX_IN_FLIGHT - _sync_pending_downloads
+	_sync_pending_downloads_mutex.unlock()
+	if headroom <= 0:
+		return
+
 	_sync_covers_mutex.lock()
 	if _sync_covers_pending.is_empty():
 		_sync_covers_mutex.unlock()
 		return
 
-	var urls = _sync_covers_pending.duplicate()
-	_sync_covers_pending.clear()
-	_sync_covers_pending_set.clear()
+	var take: int = mini(headroom, _sync_covers_pending.size())
+	var urls: Array[String] = []
+	for i in range(take):
+		var url := _sync_covers_pending[i]
+		urls.append(url)
+		_sync_covers_pending_set.erase(url)
+	_sync_covers_pending = _sync_covers_pending.slice(take)
 	_sync_covers_dispatched_count += 1
 	_sync_last_cover_dispatch_ms = Time.get_ticks_msec()
 	_sync_covers_mutex.unlock()
@@ -693,8 +714,10 @@ func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable 
 		_sync_pending_downloads += 1
 		_sync_pending_downloads_mutex.unlock()
 
-		# Use existing async download path. Sync covers outrank card-visible
-		# cover loads (high priority) so the grid doesn't starve the pipeline.
+		# Use existing async download path. Sync covers queue at normal priority:
+		# high priority is reserved for on/near-screen card loads, and dispatch
+		# throttling (COVER_DISPATCH_MAX_IN_FLIGHT) keeps the queue from
+		# dropping these.
 		data_manager.cover.download_cover(url, func(ok):
 			if ok:
 				_sync_covers_downloaded_count += 1
@@ -712,7 +735,7 @@ func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable 
 				# Also wake the dispatch wait path; without this a wait that
 				# started while downloads were in flight never gets re-signaled.
 				_sync_covers_dispatch_semaphore.post()
-		, true)
+		)
 
 	# Mark this dispatch batch as processed and signal waiters if everything is done.
 	_sync_covers_mutex.lock()
