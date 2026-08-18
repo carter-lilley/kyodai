@@ -50,6 +50,25 @@ func setup(tab_container: TabContainer) -> void:
 	# Background-load the Library scene so the first tab switch is instant
 	ResourceLoader.load_threaded_request(_library_scene_path)
 
+	# Pre-instantiate lazily created views once startup has settled. The first
+	# tab switch plays a fullscreen transition animation, and instantiating the
+	# view mid-animation stalls the main thread and breaks the tween timing.
+	call_deferred("_pre_instantiate_lazy_views")
+
+func _pre_instantiate_lazy_views() -> void:
+	# Wait for startup to settle; this is the same work the first tab visit
+	# would pay, just moved off the user's first switch.
+	await get_tree().create_timer(0.5).timeout
+	if not is_inside_tree():
+		return
+	if not _views.has("Library"):
+		_ensure_library_setup()
+	for collection_id in _collection_tabs.keys():
+		if not is_inside_tree():
+			return
+		_ensure_collection_setup(collection_id)
+		await get_tree().process_frame
+
 func _setup_home_tab():
 	var setup_start_us := Time.get_ticks_usec()
 

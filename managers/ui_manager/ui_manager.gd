@@ -10,6 +10,7 @@ const DEBUG_LOG: bool = false
 @onready var overlay = $OverlaySubManager
 @onready var theme = $ThemeSubManager
 @onready var dual_screen = $DualScreenSubManager
+@onready var focus: FocusSubManager = $FocusSubManager
 
 func _ready() -> void:
 	PlatformCardPool.process(0.0)
@@ -167,6 +168,20 @@ func initialize(
 	if primary_color_setting and primary_color_setting.value is Color:
 		M3Theme.set_primary_seed(primary_color_setting.value)
 
+	# Apply focus ring animation settings on startup
+	var focus_movement_setting = DataManager.get_setting("library_focus_movement_anim")
+	if focus_movement_setting and focus_movement_setting.value is int:
+		focus.movement_anim = focus_movement_setting.value
+	var focus_idle_setting = DataManager.get_setting("library_focus_idle_anim")
+	if focus_idle_setting and focus_idle_setting.value is int:
+		focus.idle_anim = focus_idle_setting.value
+	var focus_thickness_setting = DataManager.get_setting("library_focus_ring_thickness")
+	if focus_thickness_setting and (focus_thickness_setting.value is float or focus_thickness_setting.value is int):
+		focus.stroke_width_dp = focus_thickness_setting.value
+	var focus_shape_setting = DataManager.get_setting("library_focus_ring_shape")
+	if focus_shape_setting and focus_shape_setting.value is int:
+		_apply_focus_ring_shape(focus_shape_setting.value)
+
 	theme._request_theme_refresh()
 
 # ============================================================================
@@ -279,7 +294,23 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 # ============================================================================
 
 func switch_to_tab(tab_name: String):
-	view.switch_to_tab(tab_name)
+	var current: View = view.get_current_view()
+	if current == null or current.view_name == tab_name:
+		view.switch_to_tab(tab_name)
+		return
+	var icon_name: String = navigation.get_transition_icon_for_view(tab_name)
+	var transition := _get_view_transition_overlay()
+	if icon_name.is_empty() or transition == null or transition.is_animating():
+		view.switch_to_tab(tab_name)
+		return
+	transition.play(icon_name, func(): view.switch_to_tab(tab_name))
+
+var _view_transition_overlay: ViewTransitionOverlay = null
+
+func _get_view_transition_overlay() -> ViewTransitionOverlay:
+	if _view_transition_overlay == null or not is_instance_valid(_view_transition_overlay):
+		_view_transition_overlay = get_tree().get_first_node_in_group("view_transition_overlay") as ViewTransitionOverlay
+	return _view_transition_overlay
 
 func get_current_view() -> View:
 	return view.get_current_view()
@@ -360,6 +391,9 @@ func show_alert(title: String, body: String, on_ok: Callable = Callable(), on_di
 
 func show_custom_dialog(build_fn: Callable, on_dismissed: Callable = Callable(), options: Dictionary = {}) -> M3Dialog:
 	return overlay.show_custom_dialog(build_fn, on_dismissed, options)
+
+func has_active_dialog() -> bool:
+	return overlay.has_active_dialog()
 
 func find_home_button() -> Control:
 	return navigation.find_home_button()
@@ -541,6 +575,11 @@ func _gather_focusable_controls(node: Node) -> Array[Control]:
 		result.append_array(_gather_focusable_controls(child))
 	return result
 
+## Maps the library_focus_ring_shape option index onto the manager's Shape
+## enum (the dropdown is a subset: 0 = Full, 1 = Corners).
+func _apply_focus_ring_shape(index: int) -> void:
+	focus.ring_shape = FocusSubManager.Shape.CORNERS if index == 1 else FocusSubManager.Shape.BOX
+
 # ============================================================================
 # High-level setting-change dispatcher
 # ============================================================================
@@ -605,6 +644,20 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 		"library_primary_color":
 			M3Theme.set_primary_seed(_value)
 			theme._request_theme_refresh()
+			if focus:
+				focus.refresh()
+		"library_focus_movement_anim":
+			if focus and _value is int:
+				focus.movement_anim = _value
+		"library_focus_idle_anim":
+			if focus and _value is int:
+				focus.idle_anim = _value
+		"library_focus_ring_thickness":
+			if focus and (_value is float or _value is int):
+				focus.stroke_width_dp = _value
+		"library_focus_ring_shape":
+			if focus and _value is int:
+				_apply_focus_ring_shape(_value)
 		# Card/grid specific settings (layout_mode, grid_vertical, card_zoom,
 		# grid_padding, focus_scale, display_mode, content_alignment, media_ratio,
 		# show_title_mode, card_effect_config, focus_lock) are owned by

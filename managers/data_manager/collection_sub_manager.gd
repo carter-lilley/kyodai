@@ -63,15 +63,22 @@ func _save_collection(collection: Dictionary) -> void:
 		return
 
 	var collection_name: String = collection.get("name", "")
+	var is_favorite: bool = collection.get("is_favorite", false)
 	if collection_name.strip_edges() == "":
-		return
+		# Favorites collections can exist server-side with an empty name (e.g.
+		# created via the API without a name); give it the canonical display name
+		# so it persists locally and sync_favourites can resolve it.
+		if is_favorite:
+			collection_name = "Favourites"
+		else:
+			return
 
 	data_manager.database.save_collection({
 		"id": id,
-		"name": collection.get("name", ""),
+		"name": collection_name,
 		"description": collection.get("description", ""),
 		"is_public": collection.get("is_public", false),
-		"is_favorite": collection.get("is_favorite", false),
+		"is_favorite": is_favorite,
 		"rom_count": collection.get("rom_count", 0),
 		"updated_at": collection.get("updated_at", "")
 	})

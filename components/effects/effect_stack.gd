@@ -22,6 +22,7 @@ const EFFECT_REGISTRY: Dictionary = {
 	"gradient_overlay": "res://effects/shared/gradient_overlay_effect.gd",
 	"hsl": "res://effects/shared/hsl_effect.gd",
 	"blur": "res://effects/shared/blur_effect.gd",
+	"shine": "res://effects/shared/shine_effect.gd",
 }
 
 const EFFECT_LAYER_ORDER: Array = [
@@ -34,6 +35,7 @@ const EFFECT_LAYER_ORDER: Array = [
 	"gradient_overlay",
 	"border",
 	"glass",
+	"shine",
 	"badge",
 ]
 

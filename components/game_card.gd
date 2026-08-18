@@ -735,9 +735,6 @@ func reset(for_pooling: bool = false) -> void:
 			for effect in _focus_stack.get_effects():
 				if effect is EffectBase and effect._material is ShaderMaterial:
 					effect._material.set_shader_parameter("effect_alpha", 0.0)
-		# Ensure the inherited M3Card focus ring is never carried into reuse.
-		if _focus_ring_canvas_item.is_valid():
-			RenderingServer.canvas_item_set_visible(_focus_ring_canvas_item, false)
 	else:
 		_current_texture = null
 		_current_texture_game_id = ""

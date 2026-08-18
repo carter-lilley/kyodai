@@ -91,6 +91,13 @@ var _effect_defaults: Dictionary = {
 	"blur": {
 		"blur_strength": 4.0,
 		"blur_samples": 8
+	},
+	"shine": {
+		"speed": 1.0,
+		"line_width": 0.15,
+		"line_color": Color(1.0, 1.0, 1.0, 0.6),
+		"pause_duration": 0.5,
+		"angle_degrees": 45.0
 	}
 }
 

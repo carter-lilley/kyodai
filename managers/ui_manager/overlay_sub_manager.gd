@@ -25,6 +25,13 @@ var _last_menu_anchor: WeakRef = null
 # the last dialog has closed.
 var _active_dialogs: Array[M3Dialog] = []
 
+## Emitted when the number of tracked dialogs changes; the launch transition
+## overlay uses this to stop blocking input while a dialog is up.
+signal active_dialog_count_changed(count: int)
+
+func has_active_dialog() -> bool:
+	return not _active_dialogs.is_empty()
+
 var _root_control: Control = null
 
 func _ready():
@@ -164,9 +171,11 @@ func _track_dialog(dialog: M3Dialog) -> void:
 		return
 	_active_dialogs.append(dialog)
 	dialog.dismissed.connect(_on_generic_dialog_dismissed.bind(dialog))
+	active_dialog_count_changed.emit(_active_dialogs.size())
 
 func _on_generic_dialog_dismissed(dialog: M3Dialog) -> void:
 	_active_dialogs.erase(dialog)
+	active_dialog_count_changed.emit(_active_dialogs.size())
 	# Only flush deferred rebuilds once all tracked dialogs are closed.
 	if _active_dialogs.is_empty():
 		ui_manager.view.flush_pending_rebuilds_if_no_dialog()

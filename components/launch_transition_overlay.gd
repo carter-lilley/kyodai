@@ -58,8 +58,17 @@ func _ready():
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
 
+	# While a dialog (e.g. the pre-launch save conflict prompt) is open, this
+	# overlay must neither cover it nor eat its input: it sits in UILayer
+	# (canvas layer 1000, above all dialogs) and would otherwise deadlock the
+	# launch against an unclickable dialog.
+	UIManager.overlay.active_dialog_count_changed.connect(_on_dialog_count_changed)
+
+func _on_dialog_count_changed(count: int) -> void:
+	mouse_filter = Control.MOUSE_FILTER_IGNORE if count > 0 else Control.MOUSE_FILTER_STOP
+
 func _input(_event: InputEvent) -> void:
-	if _is_animating and visible:
+	if _is_animating and visible and not UIManager.has_active_dialog():
 		get_viewport().set_input_as_handled()
 
 func _on_game_launch_initiated(launched_game: GameResource, _focus_index: int):

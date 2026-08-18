@@ -253,11 +253,14 @@ func create_game_resources() -> Array[GameResource]:
 	return games
 
 func update_last_played(app_id: int, timestamp: String) -> void:
-	"""Persist the last_played timestamp for a GameNative game."""
+	"""Persist the last_played timestamp for a GameNative game.
+	Silent save: HomeView._on_game_launched already re-sorts and reloads the
+	grid on game_launched, so the games_updated emit would cause a redundant
+	second full grid reload per launch."""
 	for game in _games_data:
 		if game.get("app_id", 0) == app_id:
 			game["last_played"] = timestamp
-			_save_games()
+			_save_games(false)
 			return
 
 func update_unwrapped(app_id: int, unwrapped: bool) -> void:

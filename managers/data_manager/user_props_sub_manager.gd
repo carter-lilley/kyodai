@@ -88,6 +88,7 @@ func sync_favourites(callback: Callable = Callable()) -> void:
 		return
 	var fav_id = data_manager.database.get_favorite_collection_id()
 	if fav_id == 0:
+		print("[UserPropsSubManager] sync_favourites: no favorites collection in local DB - skipping")
 		if callback.is_valid():
 			callback.call(false)
 		return

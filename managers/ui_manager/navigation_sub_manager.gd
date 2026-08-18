@@ -457,6 +457,16 @@ func _on_nav_node_ready() -> void:
 
 	_setup_nav_focus_neighbors()
 
+func get_transition_icon_for_view(view_name: String) -> String:
+	"""Icon to show in the fullscreen view transition, or "" if the view
+	should switch instantly without a transition."""
+	for dest in NAV_DESTINATIONS:
+		if dest.get("view", "") == view_name:
+			return dest.get("icon", "")
+	if view_name.begins_with("Collection_"):
+		return "star"
+	return ""
+
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	"""Handle M3 nav destination selection."""
 	var nav_dests = _get_nav_destinations()

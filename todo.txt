@@ -5,12 +5,11 @@ tst emulator app update flow on android
 prewarm covers on random jump
 touch to open kb txtedits
 cant always reach settings cog after ds rbuild
-touch is weird (bottom)
-- cant touch some buttons after ds rebuild(?) - select/deselect all in romm menu
-- touch-to-hold for context menu on android not working
 romm loading cirlce not seen visually on small screens  (less space for top controls in romm menu)
 remove add to steam on android
 home focus even after gamenative adds
+focus lost on settings open via mouse
+focus ring under UI when in-grid
 
 romm;
 - sort by played
@@ -24,12 +23,10 @@ romm;
 	user profile? name & icon?
 	widgets (snap to screen regions? snap to grid?)
 		- clock, battery, wifi, game title, etc
-	screen transitions, animation juice, etc..
-	better focus, configurable shapes (corners vs box), size, color (glow, mirror) animations (chase, breathe, etc)
+	x focus color (glow, mirror)
 	see 'next page' faintly in pagination view
 	"case wrap" card effect (spine + label, maybe varying by platform?)
 	3d case effect
-	shine/glimmer effect
 	text
 		- remove platform from game title option
 		- option for text centering 
