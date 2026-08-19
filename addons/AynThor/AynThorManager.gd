@@ -53,6 +53,12 @@ var original_second_size: Vector2i
 var is_android: bool = false
 var second_size_confirmed: bool = false
 var last_touch_positions: Dictionary = {}
+var touch_down_positions: Dictionary = {}
+
+# Finger jitter on the touchscreen produces tiny MOVE events between down/up;
+# forwarded as mouse drags they turn taps into ScrollContainer scrolls and
+# break clicks. Don't forward motion until it leaves this deadzone (physical px).
+const TOUCH_MOVE_DEADZONE_PX: float = 12.0
 
 signal screens_swapped(swapped: bool)
 
@@ -78,15 +84,40 @@ func refresh_screens() -> void:
 
 	if _main_viewport:
 		_main_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		_main_viewport.size = original_main_size
 	if _second_viewport:
 		_second_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		_second_viewport.size = original_second_size
 
-	if _main_container:
-		_main_container.position = Vector2.ZERO
-	if _second_container:
-		_second_container.position = Vector2(-10000, 0)
+	_apply_screen_geometry()
+
+func _apply_screen_geometry() -> void:
+	"""Apply container/viewport sizes and positions for the current swap state.
+	Must stay swap-aware: refresh_screens() runs on every DualScreenSetup
+	rebuild and previously reset geometry to the unswapped layout even while
+	is_swapped was true, desyncing rendering from touch coordinate mapping."""
+	if original_main_size.x <= 0 or original_second_size.x <= 0:
+		return
+	if is_swapped:
+		if _main_container:
+			_main_container.position = Vector2(-10000, 0)
+			_main_container.size = original_second_size
+		if _second_container:
+			_second_container.position = Vector2.ZERO
+			_second_container.size = original_main_size
+		if _second_viewport:
+			_second_viewport.size = original_main_size
+		if _main_viewport:
+			_main_viewport.size = original_second_size
+	else:
+		if _main_container:
+			_main_container.position = Vector2.ZERO
+			_main_container.size = original_main_size
+		if _second_container:
+			_second_container.position = Vector2(-10000, 0)
+			_second_container.size = original_second_size
+		if _main_viewport:
+			_main_viewport.size = original_main_size
+		if _second_viewport:
+			_second_viewport.size = original_second_size
 
 func _ready():
 	is_android = OS.get_name() == "Android"
@@ -156,38 +187,13 @@ func _try_update_second_screen_size():
 
 func swap_screens():
 	is_swapped = !is_swapped
-	
-	var second_size = original_second_size
+
 	if renderer and renderer.is_window_available():
 		var s = renderer.get_second_screen_size()
 		if s != Vector2i.ZERO:
-			second_size = s
 			original_second_size = s
 
-	if is_swapped:
-		if _main_container:
-			_main_container.position = Vector2(-10000, 0)
-			_main_container.size = second_size
-		if _second_container:
-			_second_container.position = Vector2.ZERO
-			_second_container.size = original_main_size
-		
-		if _second_viewport:
-			_second_viewport.size = original_main_size
-		if _main_viewport:
-			_main_viewport.size = second_size
-	else:
-		if _main_container:
-			_main_container.position = Vector2.ZERO
-			_main_container.size = original_main_size
-		if _second_container:
-			_second_container.position = Vector2(-10000, 0)
-			_second_container.size = second_size
-		
-		if _main_viewport:
-			_main_viewport.size = original_main_size
-		if _second_viewport:
-			_second_viewport.size = second_size
+	_apply_screen_geometry()
 
 	screens_swapped.emit(is_swapped)
 	skip_frames = 2
@@ -230,17 +236,18 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 	
 	if action == 0 or action == 5:
 		last_touch_positions[pid] = current_pos
+		touch_down_positions[pid] = current_pos
 		var mouse_event = InputEventMouseButton.new()
 		mouse_event.button_index = MOUSE_BUTTON_LEFT
 		mouse_event.pressed = true
 		mouse_event.position = scaled_pos
 		mouse_event.global_position = scaled_pos
 		mouse_event.device = InputEvent.DEVICE_ID_EMULATION
-		print("[AynThor] pushing touch DOWN to ", target_vp.name, " at ", scaled_pos, " (screen: ", current_pos, ")")
 		target_vp.push_input(mouse_event)
-		
+
 	elif action == 1 or action == 6:
 		last_touch_positions.erase(pid)
+		touch_down_positions.erase(pid)
 		var mouse_event = InputEventMouseButton.new()
 		mouse_event.pressed = false
 		mouse_event.button_index = MOUSE_BUTTON_LEFT
@@ -248,8 +255,12 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		mouse_event.global_position = scaled_pos
 		mouse_event.device = InputEvent.DEVICE_ID_EMULATION
 		target_vp.push_input(mouse_event)
-		
+
 	elif action == 2:
+		# Suppress sub-deadzone jitter so taps aren't reinterpreted as drags.
+		var down_pos = touch_down_positions.get(pid, current_pos)
+		if current_pos.distance_to(down_pos) < TOUCH_MOVE_DEADZONE_PX:
+			return
 		var prev_pos = last_touch_positions.get(pid, current_pos)
 		var scaled_prev = Vector2(prev_pos.x * scale_x, prev_pos.y * scale_y)
 		var mouse_event = InputEventMouseMotion.new()
@@ -257,6 +268,7 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		mouse_event.global_position = scaled_pos
 		mouse_event.relative = scaled_pos - scaled_prev
 		mouse_event.button_mask = MOUSE_BUTTON_MASK_LEFT
+		mouse_event.device = InputEvent.DEVICE_ID_EMULATION
 		target_vp.push_input(mouse_event)
 		last_touch_positions[pid] = current_pos
 

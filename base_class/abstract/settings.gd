@@ -3,6 +3,13 @@ extends Resource
 class_name Settings
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
+
+## Marks a SettingsVar as part of theme presets (ThemePreset.values). This is
+## the single source of truth for what themes capture — flag it here and save/
+## apply/match all follow automatically.
+static func _preset(s: SettingsVar) -> SettingsVar:
+	s.include_in_preset = true
+	return s
 # DEFAULTS....................................................................
 
 @export_group("Settings")
@@ -54,7 +61,7 @@ const Type = SettingsVar.SettingType
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
 
 # Internal card effect configuration (managed by Card Designer)
-@export var card_effect_config := SettingsVar.new(Type.DICTIONARY, {
+@export var card_effect_config := _preset(SettingsVar.new(Type.DICTIONARY, {
 	"card_orientation": 2,
 	"card_rounding": 0.24,
 	"effects": [{
@@ -79,37 +86,37 @@ const Type = SettingsVar.SettingType
 		}
 	}],
 	"hero_height": 4
-}, State.INTERNAL, "Card Effect Configuration")
+}, State.INTERNAL, "Card Effect Configuration"))
 
 # Internal hero effect configuration (managed by Hero Designer)
-@export var hero_effect_config := SettingsVar.new(Type.DICTIONARY, {
+@export var hero_effect_config := _preset(SettingsVar.new(Type.DICTIONARY, {
 	"effects": [],
 	"corner_radius": 0.06,
 	"hero_height": 0
-}, State.INTERNAL, "Hero Effect Configuration")
+}, State.INTERNAL, "Hero Effect Configuration"))
 
 @export_subgroup("Library Appearance")
 # General layout settings (always visible)
-@export var dark_mode := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface")
-@export var library_layout_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"])
-@export var library_grid_vertical := SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)")
-@export var library_pagination_view := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Pagination View", "Split the grid into viewport-sized pages with a gap in the scroll direction instead of a continuous scrolling list")
-@export var library_focus_centering := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Focus Centering", "How the view scrolls when focus nears a screen edge: Margin slides the card just back on screen, Center brings it to the center of the screen", 0.0, 1.0, 1.0, ["Margin", "Center"])
-@export var library_navigation_type := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"])
-@export var library_grid_padding := SettingsVar.new(Type.INT, 22, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0)
-@export var library_card_zoom := SettingsVar.new(Type.FLOAT, 0.25, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01)
-@export var library_card_zoom_level := SettingsVar.new(Type.INT, -1, State.INTERNAL, "Card Zoom Level", "Discrete zoom level for grid mode (index into snap ratios)", -1.0, 11.0, 1.0)
-@export var library_card_zoom_list := SettingsVar.new(Type.FLOAT, 0.25, State.INTERNAL, "Card Zoom (List)", "Card size as ratio of viewport for list/carousel modes", 0.05, 0.5, 0.01)
-@export var library_show_title_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"])
-@export var library_focus_scale := SettingsVar.new(Type.FLOAT, 0.09, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01)
-@export var library_focus_movement_anim := SettingsVar.new(Type.ARRAY, 2, State.ENABLED, "Focus Movement", "How the focus ring moves between controls: None snaps instantly, Pop snaps with a quick scale-down settle, Follow tweens to the new control", 0.0, 2.0, 1.0, ["None", "Pop", "Follow"])
-@export var library_focus_idle_anim := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Focus Idle Animation", "Looping animation shown on the focus ring while focus is stationary", 0.0, 2.0, 1.0, ["None", "Breathe", "Chase"])
-@export var library_focus_ring_thickness := SettingsVar.new(Type.FLOAT, 3.0, State.ENABLED, "Focus Ring Thickness", "Stroke width of the focus ring in dp", 1.0, 8.0, 0.5)
-@export var library_focus_ring_shape := SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Focus Ring Shape", "Full draws the complete rounded ring; Corners draws only crosshair-style corner ticks", 0.0, 1.0, 1.0, ["Full", "Corners"])
-@export var library_card_content_alignment := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Content Alignment", "How card content is positioned within the card cell", 0.0, 2.0, 1.0, ["Left/Top", "Center/Middle", "Right/Bottom"])
-@export var card_media_aspect_ratio := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Media Ratio", "Aspect ratio of the card's media panel", 0.0, 4.0, 1.0, ["Fill", "2:3", "3:4", "1:1", "16:11"])
-@export var library_card_display_mode := SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Display Mode", "How game cards appear in the library", 0.0, 2.0, 1.0, ["Standard", "Transparent", "Media Only"])
-@export var library_primary_color := SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Accent Color", "Primary color for the Material 3 interface theme")
+@export var dark_mode := _preset(SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface"))
+@export var library_layout_mode := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"]))
+@export var library_grid_vertical := _preset(SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)"))
+@export var library_pagination_view := _preset(SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Pagination View", "Split the grid into viewport-sized pages with a gap in the scroll direction instead of a continuous scrolling list"))
+@export var library_focus_centering := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Focus Centering", "How the view scrolls when focus nears a screen edge: Margin slides the card just back on screen, Center brings it to the center of the screen", 0.0, 1.0, 1.0, ["Margin", "Center"]))
+@export var library_navigation_type := _preset(SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"]))
+@export var library_grid_padding := _preset(SettingsVar.new(Type.INT, 22, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0))
+@export var library_card_zoom := _preset(SettingsVar.new(Type.FLOAT, 0.25, State.INTERNAL, "Card Zoom", "Card size as ratio of viewport", 0.05, 0.5, 0.01))
+@export var library_card_zoom_level := _preset(SettingsVar.new(Type.INT, -1, State.INTERNAL, "Card Zoom Level", "Discrete zoom level for grid mode (index into snap ratios)", -1.0, 11.0, 1.0))
+@export var library_card_zoom_list := _preset(SettingsVar.new(Type.FLOAT, 0.25, State.INTERNAL, "Card Zoom (List)", "Card size as ratio of viewport for list/carousel modes", 0.05, 0.5, 0.01))
+@export var library_show_title_mode := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Gamecard Titles", "When to display game titles on cards", 0.0, 2.0, 1.0, ["None", "Focused", "All"]))
+@export var library_focus_scale := _preset(SettingsVar.new(Type.FLOAT, 0.09, State.ENABLED, "Focus Scale", "How much larger the focused card appears (0% to 50%)", 0.0, 0.5, 0.01))
+@export var library_focus_movement_anim := _preset(SettingsVar.new(Type.ARRAY, 2, State.ENABLED, "Focus Movement", "How the focus ring moves between controls: None snaps instantly, Pop snaps with a quick scale-down settle, Follow tweens to the new control", 0.0, 2.0, 1.0, ["None", "Pop", "Follow"]))
+@export var library_focus_idle_anim := _preset(SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Focus Idle Animation", "Looping animation shown on the focus ring while focus is stationary", 0.0, 2.0, 1.0, ["None", "Breathe", "Chase"]))
+@export var library_focus_ring_thickness := _preset(SettingsVar.new(Type.FLOAT, 3.0, State.ENABLED, "Focus Ring Thickness", "Stroke width of the focus ring in dp", 1.0, 8.0, 0.5))
+@export var library_focus_ring_shape := _preset(SettingsVar.new(Type.ARRAY, 0, State.ENABLED, "Focus Ring Shape", "Full draws the complete rounded ring; Corners draws only crosshair-style corner ticks", 0.0, 1.0, 1.0, ["Full", "Corners"]))
+@export var library_card_content_alignment := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Content Alignment", "How card content is positioned within the card cell", 0.0, 2.0, 1.0, ["Left/Top", "Center/Middle", "Right/Bottom"]))
+@export var card_media_aspect_ratio := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Media Ratio", "Aspect ratio of the card's media panel", 0.0, 4.0, 1.0, ["Fill", "2:3", "3:4", "1:1", "16:11"]))
+@export var library_card_display_mode := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Card Display Mode", "How game cards appear in the library", 0.0, 2.0, 1.0, ["Standard", "Transparent", "Media Only"]))
+@export var library_primary_color := _preset(SettingsVar.new(Type.COLOR, Color.WHITE, State.ENABLED, "Accent Color", "Primary color for the Material 3 interface theme"))
 
 
 # Internal first-run flag (tracks if OOBE wizard has been completed)
@@ -122,10 +129,10 @@ const Type = SettingsVar.SettingType
 @export var installed_emulator_versions := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Installed Emulator Versions")
 
 # Internal background effect configuration (managed by Library Appearance settings)
-@export var library_background_config := SettingsVar.new(Type.DICTIONARY, {
+@export var library_background_config := _preset(SettingsVar.new(Type.DICTIONARY, {
 	"effect_id": "none",
 	"settings": {}
-}, State.INTERNAL, "Background Effect Configuration")
+}, State.INTERNAL, "Background Effect Configuration"))
 
 # Internal pinned navigation shortcuts (managed by NavigationSubManager)
 @export var nav_pinned_shortcuts := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "Pinned Navigation Shortcuts")

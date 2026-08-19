@@ -25,6 +25,12 @@ const DEBUG_LOG: bool = false
 ## CanvasLayer-equivalent stacking layer for the ring canvas (max is 128).
 const CANVAS_LAYER: int = 128
 
+## Draw index used when the ring is parented into a grid's visual layer.
+## Cards max out at virtual_index*10 + 1_000_000 (focus boost) + 3, so this
+## parks the ring above every card and effect but still below chrome (the
+## visual layer lives in the TabContainer subtree; navbar/mask draw later).
+const GRID_DRAW_INDEX: int = 2_000_000
+
 enum Shape { BOX, PILL, CIRCLE, CORNERS }
 enum ColorMode { PRIMARY, MIRROR, CUSTOM }
 enum MovementAnim { NONE, POP, FOLLOW }
@@ -112,13 +118,19 @@ var corner_tick_dp: float = 10.0:
 		_on_config_changed()
 
 const BREATHE_PERIOD: float = 1.6
-const BREATHE_MIN_ALPHA: float = 0.55
+const BREATHE_MIN_ALPHA: float = 0.3
 const ORBIT_PERIOD: float = 2.0
 ## Fraction of the perimeter covered by the CHASE comet (head + fading tail).
 const ORBIT_WINDOW: float = 0.15
 const ORBIT_POINTS: int = 16
 ## Base ring alpha multiplier while the CHASE comet orbits over it.
 const ORBIT_BASE_ALPHA: float = 0.35
+
+## Frames spent re-resolving geometry after each focus change. Covers dialog
+## open animations and lazy layout, which move controls without firing
+## item_rect_changed (ancestor transforms don't signal). Bounded — the manager
+## returns to pure signal-driven mode once the window expires.
+const SETTLE_FRAMES: int = 18
 
 ## POP movement: the ring snaps to the new target slightly enlarged, then
 ## eases back down to its exact pose.
@@ -133,6 +145,9 @@ var _canvas: RID
 var _ring_item: RID
 var _ring_style: StyleBoxFlat = null
 var _attached_viewport: Viewport = null
+## Grid visual layer RID when the focused control is inside a grid; invalid
+## RID means the ring is on the always-on-top viewport canvas.
+var _ring_parent_grid: RID
 
 # ============================================================================
 # Target state. _dest_* is the resolved destination pose; _ring_* is the
@@ -154,6 +169,7 @@ var _idle_tween: Tween = null
 var _orbit_t: float = 0.0
 var _pop_tween: Tween = null
 var _pop_scale: float = 1.0
+var _settle_frames: int = 0
 
 # ============================================================================
 # Lifecycle
@@ -162,6 +178,7 @@ var _pop_scale: float = 1.0
 func _ready() -> void:
 	ui_manager = get_parent()
 	_instance = self
+	set_process(false)
 
 	_ring_style = StyleBoxFlat.new()
 	_ring_style.bg_color = Color.TRANSPARENT
@@ -192,6 +209,7 @@ func _exit_tree() -> void:
 	_kill_chase_tween()
 	_kill_pop_tween()
 	_stop_idle()
+	_ring_parent_grid = RID()
 	if _attached_viewport and is_instance_valid(_attached_viewport):
 		RenderingServer.viewport_remove_canvas(_attached_viewport.get_viewport_rid(), _canvas)
 		_attached_viewport = null
@@ -233,7 +251,20 @@ func _on_gui_focus_changed(control: Control) -> void:
 	if vp and vp != _attached_viewport:
 		_attach_to_viewport(vp)
 	_track_target(control)
+	_update_ring_parent(control)
 	_show_target(true)
+	_settle_frames = SETTLE_FRAMES
+	set_process(true)
+
+func _process(_delta: float) -> void:
+	if not _ring_visible:
+		_settle_frames = 0
+		set_process(false)
+		return
+	_on_target_moved()
+	_settle_frames -= 1
+	if _settle_frames <= 0:
+		set_process(false)
 
 func _get_target() -> Control:
 	if _target_ref == null:
@@ -267,6 +298,11 @@ func _on_target_moved() -> void:
 	var t := _get_target()
 	if t == null or not _ring_visible:
 		return
+	# Grid visual layers can be recreated on view rebuilds; re-resolve if the
+	# one we're parented to was freed.
+	if _ring_parent_grid != RID() and not _ring_parent_grid.is_valid():
+		_ring_parent_grid = RID()
+		_update_ring_parent(t)
 	var geo := _resolve_geometry(t)
 	# Dedupe: pre-draw stampers push every frame; only react to real change.
 	if geo.rect.is_equal_approx(_dest_rect) and is_equal_approx(geo.radius, _dest_radius) and geo.shape == _dest_shape:
@@ -344,6 +380,8 @@ func _hide_ring() -> void:
 	_kill_pop_tween()
 	_pop_scale = 1.0
 	_stop_idle()
+	_settle_frames = 0
+	set_process(false)
 	_set_ring_visible(false)
 
 func _set_ring_visible(value: bool) -> void:
@@ -361,6 +399,35 @@ func _attach_to_viewport(vp: Viewport) -> void:
 	_attached_viewport = vp
 	RenderingServer.viewport_attach_canvas(vp.get_viewport_rid(), _canvas)
 	RenderingServer.viewport_set_canvas_stacking(vp.get_viewport_rid(), _canvas, CANVAS_LAYER, 0)
+
+## Inside a grid the ring re-parents into the grid's visual layer (above all
+## cards/effects via GRID_DRAW_INDEX, below chrome via tree order). Outside a
+## grid it lives on the always-on-top viewport canvas.
+func _update_ring_parent(control: Control) -> void:
+	var grid_rid := _find_grid_ring_parent(control)
+	if grid_rid == _ring_parent_grid:
+		return
+	_ring_parent_grid = grid_rid
+	if not _ring_item.is_valid():
+		return
+	if _ring_parent_grid.is_valid():
+		RenderingServer.canvas_item_set_parent(_ring_item, _ring_parent_grid)
+		RenderingServer.canvas_item_set_draw_index(_ring_item, GRID_DRAW_INDEX)
+	else:
+		RenderingServer.canvas_item_set_parent(_ring_item, _canvas)
+		RenderingServer.canvas_item_set_draw_index(_ring_item, 0)
+
+## Walks ancestors for a VirtualScrollGridContainer (duck-typed via its public
+## visual layer accessor). Returns an invalid RID when not inside a grid.
+func _find_grid_ring_parent(control: Control) -> RID:
+	var node := control.get_parent()
+	while node:
+		if node.has_method("get_visual_layer_rid"):
+			var rid: RID = node.get_visual_layer_rid()
+			if rid.is_valid():
+				return rid
+		node = node.get_parent()
+	return RID()
 
 func _apply_style() -> void:
 	_ring_style.set_border_width_all(M3Units.dpi(stroke_width_dp))

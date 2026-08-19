@@ -80,6 +80,15 @@ func set_setting(value: Variant, setting: SettingsVar, force: bool = false):
 	if not settings:
 		push_error("No settings loaded, cannot change setting '%s'" % setting.property_name)
 		return
+	# Coerce to the declared type: SettingsVar.value is an untyped Variant and
+	# UI controls (e.g. sliders) emit floats even for INT settings.
+	match setting.type:
+		SettingsVar.SettingType.INT:
+			if value is float or value is int:
+				value = int(round(value))
+		SettingsVar.SettingType.FLOAT:
+			if value is float or value is int:
+				value = float(value)
 	var changed = force or setting.value != value
 	setting.value = value
 	if changed:
@@ -91,71 +100,31 @@ func create_preset_from_current() -> ThemePreset:
 	return create_preset_from_settings(settings)
 
 ## Builds a ThemePreset from the given Settings object.
+## Captures every SettingsVar flagged include_in_preset in settings.gd.
 func create_preset_from_settings(source_settings: Settings) -> ThemePreset:
-	var preset := ThemePreset.new()
-	preset.name = "New Preset"
-	preset.description = ""
-	preset.created_at = Time.get_datetime_string_from_system()
-	preset.version = 2
-	
-	preset.library_layout_mode = _preset_value_from(source_settings, "library_layout_mode", 0)
-	preset.library_navigation_type = _preset_value_from(source_settings, "library_navigation_type", 1)
-	preset.library_grid_padding = _preset_value_from(source_settings, "library_grid_padding", 22)
-	preset.library_card_zoom = _preset_value_from(source_settings, "library_card_zoom", 0.25)
-	preset.library_card_zoom_level = _preset_value_from(source_settings, "library_card_zoom_level", -1)
-	preset.library_show_title_mode = _preset_value_from(source_settings, "library_show_title_mode", 0)
-	preset.library_card_display_mode = _preset_value_from(source_settings, "library_card_display_mode", 0)
-	preset.library_focus_scale = _preset_value_from(source_settings, "library_focus_scale", 0.09)
-	preset.library_card_content_alignment = _preset_value_from(source_settings, "library_card_content_alignment", 0)
-	preset.library_grid_vertical = _preset_value_from(source_settings, "library_grid_vertical", true)
-	preset.card_media_aspect_ratio = _preset_value_from(source_settings, "card_media_aspect_ratio", 0)
-	preset.library_focus_centering = _preset_value_from(source_settings, "library_focus_centering", 0)
-	preset.library_pagination_view = _preset_value_from(source_settings, "library_pagination_view", false)
-	preset.library_background_config = _preset_value_from(source_settings, "library_background_config", {
-		"effect_id": "none",
-		"settings": {}
-	}).duplicate(true)
-	preset.library_primary_color = _preset_value_from(source_settings, "library_primary_color", Color.WHITE)
-	preset.dark_mode = _preset_value_from(source_settings, "dark_mode", true)
-	preset.card_effect_config = _preset_value_from(source_settings, "card_effect_config", {
-		"card_orientation": 2,
-		"card_rounding": 0.24,
-		"effects": [{
-			"effect_id": "drop_shadow",
-			"settings": {
-				"shadow_color": Color(0, 0, 0, 0.5),
-				"shadow_expand": 0.066,
-				"shadow_offset_x": 0.0,
-				"shadow_offset_y": 0.043,
-				"shadow_softness": 0.15,
-				"shadow_spread": 0.0
-			}
-		}],
-		"focus_effects": [{
-			"effect_id": "glow",
-			"settings": {
-				"blur_amount": 6.5,
-				"glow_intensity": 0.3,
-				"glow_radius": 0.14,
-				"glow_spread": 0.06,
-				"threshold": 0.41
-			}
-		}],
-		"hero_height": 4
-	}).duplicate(true)
-	
-	return preset
+	return ThemePreset.build_from_settings(source_settings)
 
-func _preset_value_from(source_settings: Settings, setting_name: String, default: Variant) -> Variant:
-	if source_settings == null:
-		return default
-	var setting: SettingsVar = source_settings.get(setting_name)
-	if setting == null:
-		return default
-	var value = setting.value
-	if value == null:
-		return default
-	return value
+## Every setting flagged for theme presets — the single iteration used by
+## save, apply, and preset-match so the three can never drift apart.
+func get_presettable_settings() -> Array[SettingsVar]:
+	var out: Array[SettingsVar] = []
+	if not settings:
+		return out
+	for prop in settings.get_property_list():
+		var s = settings.get(prop.name)
+		if s is SettingsVar and s.include_in_preset:
+			out.append(s)
+	return out
+
+var _defaults_cache: Settings = null
+
+func get_setting_default(_name: String) -> Variant:
+	if _defaults_cache == null:
+		_defaults_cache = Settings.new()
+	var s = _defaults_cache.get(_name)
+	if s is SettingsVar:
+		return s.value
+	return null
 
 func get_setting(_name:String) -> SettingsVar:
 	var settingsvar: SettingsVar = null
@@ -207,6 +176,7 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 		saved_var.step = default_var.step
 		saved_var.options = default_var.options.duplicate()
 		saved_var.encrypted = default_var.encrypted
+		saved_var.include_in_preset = default_var.include_in_preset
 		
 		# Clamp value to new valid range/options if needed
 		if default_var.type == SettingsVar.SettingType.ARRAY:
@@ -335,6 +305,7 @@ func list_presets() -> Array[ThemePreset]:
 			if ResourceLoader.exists(preset_path):
 				var preset = ResourceLoader.load(preset_path) as ThemePreset
 				if preset and preset.name not in loaded_names:
+					preset.migrate_legacy()
 					presets.append(preset)
 					loaded_names.append(preset.name)
 	else:
@@ -350,17 +321,26 @@ func list_presets() -> Array[ThemePreset]:
 				var loaded_resource = ResourceLoader.load(preset_path)
 				var preset = loaded_resource as ThemePreset
 				if preset and preset.name not in loaded_names:
+					preset.migrate_legacy()
 					presets.append(preset)
 					loaded_names.append(preset.name)
 	
-	# Load user presets (from user://) - these can override built-ins
+	# Load user presets (from user://) - these override built-ins of the same name
 	for file_name in FSM.list_dir(PRESETS_FOLDER):
 		if FSM.is_dir(FSM.join_paths(PRESETS_FOLDER, file_name)):
 			continue
 		if file_name.ends_with(".tres") or file_name.ends_with(".tres.remap"):
 			var user_preset_path = FSM.join_paths(PRESETS_FOLDER, file_name)
-			var user_preset = ResourceLoader.load(user_preset_path) as ThemePreset
-			if user_preset and user_preset.name not in loaded_names:
+			# REPLACE mode: bypass (and refresh) any stale cached copy so
+			# freshly overwritten exports show their new content.
+			var user_preset = ResourceLoader.load(user_preset_path, "", ResourceLoader.CACHE_MODE_REPLACE) as ThemePreset
+			if not user_preset:
+				continue
+			user_preset.migrate_legacy()
+			var existing := loaded_names.find(user_preset.name)
+			if existing >= 0:
+				presets[existing] = user_preset
+			else:
 				presets.append(user_preset)
 				loaded_names.append(user_preset.name)
 	
@@ -382,7 +362,11 @@ func save_preset(preset: ThemePreset) -> bool:
 	if err != OK:
 		push_error("Failed to save preset: %s" % err)
 		return false
-	
+
+	# ResourceLoader caches by path; without this, reloading after an overwrite
+	# returns the stale instance from a previous load of the same path.
+	ResourceLoader.load(preset_path, "", ResourceLoader.CACHE_MODE_REPLACE)
+
 	return true
 
 func load_preset(preset_path: String) -> ThemePreset:
@@ -394,57 +378,43 @@ func load_preset(preset_path: String) -> ThemePreset:
 	if not preset:
 		push_error("Failed to load preset from: %s" % preset_path)
 		return null
-	
+
+	preset.migrate_legacy()
 	return preset
 
 func apply_preset(preset: ThemePreset) -> bool:
 	if not preset:
 		push_error("[SettingsSubManager] Cannot apply null preset")
 		return false
-	
+
 	if not settings:
 		push_error("[SettingsSubManager] No settings loaded, cannot apply preset")
 		return false
-	
-	# Create a default preset for merging missing values
-	var default_preset = create_preset_from_settings(Settings.new())
-	preset.merge_with_defaults(default_preset)
-	
+
+	# Fold pre-v4 typed fields into the values dictionary.
+	preset.migrate_legacy()
+
 	emit_signal("apply_preset_begin")
-	
-	# Apply every preset field through the public setter so dirty flags and
-	# setting_changed signals are emitted consistently.
-	var mapping := {
-		"library_layout_mode": preset.library_layout_mode,
-		"library_navigation_type": preset.library_navigation_type,
-		"library_grid_padding": preset.library_grid_padding,
-		"library_card_zoom": preset.library_card_zoom,
-		"library_card_zoom_level": preset.library_card_zoom_level,
-		"library_show_title_mode": preset.library_show_title_mode,
-		"library_card_display_mode": preset.library_card_display_mode,
-		"library_focus_scale": preset.library_focus_scale,
-		"library_card_content_alignment": preset.library_card_content_alignment,
-		"library_grid_vertical": preset.library_grid_vertical,
-		"card_media_aspect_ratio": preset.card_media_aspect_ratio,
-		"library_focus_centering": preset.library_focus_centering,
-		"library_pagination_view": preset.library_pagination_view,
-		"library_background_config": preset.library_background_config.duplicate(true),
-		"library_primary_color": preset.library_primary_color,
-		"dark_mode": preset.dark_mode,
-		"card_effect_config": preset.card_effect_config.duplicate(true),
-		# NOTE: nav_pinned_shortcuts is intentionally excluded from presets so
-		# theme changes never wipe the user’s pinned navigation items.
-	}
-	
-	for key in mapping:
-		var setting := get_setting(key)
-		if setting:
-			set_setting(mapping[key], setting, true)
-	
+
+	# Snapshot semantics: every presettable setting is applied; keys missing
+	# from the preset fall back to declared defaults. dark_mode is applied
+	# LAST — the preset's effect configs already carry colors for their saved
+	# (main) mode, so the dark/light adapter swap must not run mid-apply.
+	var dark_mode_var: SettingsVar = null
+	for s in get_presettable_settings():
+		if s.property_name == "dark_mode":
+			dark_mode_var = s
+			continue
+		var value: Variant = preset.values.get(s.property_name, get_setting_default(s.property_name))
+		set_setting(ThemePreset.deep_dup_value(value), s, true)
+	if dark_mode_var:
+		var dark_value: Variant = preset.values.get("dark_mode", get_setting_default("dark_mode"))
+		set_setting(dark_value, dark_mode_var, true)
+
 	emit_signal("apply_preset_end")
-	
+
 	save_settings()
-	
+
 	return true
 
 func export_preset(preset: ThemePreset, export_path: String) -> bool:
@@ -467,7 +437,9 @@ func import_preset(import_path: String) -> ThemePreset:
 	if not preset:
 		push_error("Failed to import preset from: %s" % import_path)
 		return null
-	
+
+	preset.migrate_legacy()
+
 	# Save to presets folder
 	if save_preset(preset):
 		return preset

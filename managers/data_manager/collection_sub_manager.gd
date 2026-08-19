@@ -105,6 +105,13 @@ func get_romm_ids_for_collection(romm_id: int) -> Array[int]:
 	return data_manager.database.get_romm_ids_for_collection(romm_id)
 
 
+func get_favorite_collection_id() -> int:
+	"""Return the locally synced favorites collection id, or 0 if unavailable."""
+	if not data_manager or not data_manager.database.is_database_ready():
+		return 0
+	return data_manager.database.get_favorite_collection_id()
+
+
 func get_games_for_collection_count(romm_id: int) -> int:
 	if not data_manager or not data_manager.database.is_database_ready():
 		return 0

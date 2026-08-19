@@ -546,7 +546,7 @@ func _toggle_horizontal_grid() -> void:
 		call_deferred("_restore_focus_to_card", focused_index, true)
 
 func _is_grid_view(view_name: String) -> bool:
-	return view_name == "Home" or view_name == "Library" or view_name.begins_with("Collection_")
+	return view_name == "Home" or view_name == "Library" or view_name == "Favorites" or view_name.begins_with("Collection_")
 
 func _on_tab_changed(view_name: String):
 	# Sync slider to the current view's grid; do not re-apply saved zoom here,

@@ -139,6 +139,7 @@ const LONG_PRESS_TOLERANCE_DP: float = 20.0
 var _touch_start_time: float = 0.0
 var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
+var _suppress_next_press: bool = false
 
 func _on_rs_items_recreated() -> void:
 	# Rebuild the node-less effect stacks as soon as the RenderingServer items
@@ -1080,6 +1081,9 @@ func _set_texture(tex: Texture2D) -> void:
 	queue_redraw()
 
 func _on_card_pressed():
+	if _suppress_next_press:
+		_suppress_next_press = false
+		return
 	if not game:
 		return
 
@@ -1165,35 +1169,57 @@ func _input(event: InputEvent) -> void:
 
 	if SystemManager.platform.is_android() and event is InputEventScreenTouch:
 		if event.pressed:
-			var touch_pos = event.position
-			var inside := false
-			if _display_mode == 1 or _display_mode == 2:
-				if _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
-					var local_pos: Vector2 = get_global_transform().affine_inverse() * touch_pos
-					inside = _media_bounds.has_point(local_pos)
-			else:
-				inside = get_global_rect().has_point(touch_pos)
-			if inside:
-				_touch_start_time = Time.get_ticks_msec() / 1000.0
-				_touch_start_pos = touch_pos
-				_touch_is_holding = true
+			_try_begin_hold(event.position)
 		else:
-			if _touch_is_holding:
-				# Check if this release qualifies as a long press
-				if _is_long_press_elapsed():
-					_trigger_long_press()
-				_touch_is_holding = false
+			_end_hold()
 
 	if SystemManager.platform.is_android() and event is InputEventScreenDrag:
-		if _touch_is_holding:
-			var current_pos = event.position
-			var distance = _touch_start_pos.distance_to(current_pos)
-			if distance > M3Units.dp(LONG_PRESS_TOLERANCE_DP):
-				_touch_is_holding = false
-			else:
-				# Check if we've held long enough during drag
-				if _is_long_press_elapsed():
-					_trigger_long_press()
+		_update_hold_drag(event.position)
+
+	# Dual-screen bottom touches arrive as emulated mouse events — treat them
+	# like touch so hold-for-context-menu works on the second screen too.
+	if SystemManager.platform.is_android() and event is InputEventMouseButton \
+			and event.device == InputEvent.DEVICE_ID_EMULATION \
+			and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_try_begin_hold(event.position)
+		else:
+			_end_hold()
+
+	if SystemManager.platform.is_android() and event is InputEventMouseMotion \
+			and event.device == InputEvent.DEVICE_ID_EMULATION \
+			and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		_update_hold_drag(event.position)
+
+func _try_begin_hold(pos: Vector2) -> void:
+	var inside := false
+	if _display_mode == 1 or _display_mode == 2:
+		if _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
+			var local_pos: Vector2 = get_global_transform().affine_inverse() * pos
+			inside = _media_bounds.has_point(local_pos)
+	else:
+		inside = get_global_rect().has_point(pos)
+	if inside:
+		_touch_start_time = Time.get_ticks_msec() / 1000.0
+		_touch_start_pos = pos
+		_touch_is_holding = true
+
+func _end_hold() -> void:
+	if _touch_is_holding:
+		# Check if this release qualifies as a long press
+		if _is_long_press_elapsed():
+			_trigger_long_press()
+		_touch_is_holding = false
+
+func _update_hold_drag(pos: Vector2) -> void:
+	if not _touch_is_holding:
+		return
+	if _touch_start_pos.distance_to(pos) > M3Units.dp(LONG_PRESS_TOLERANCE_DP):
+		_touch_is_holding = false
+	else:
+		# Check if we've held long enough during drag
+		if _is_long_press_elapsed():
+			_trigger_long_press()
 
 func _is_long_press_elapsed() -> bool:
 	if not _touch_is_holding:
@@ -1205,6 +1231,9 @@ func _trigger_long_press() -> void:
 	if not _touch_is_holding or not game or not UIManager:
 		return
 	_touch_is_holding = false
+	# M3Card emits `pressed` on the release that ends a hold; swallow it so the
+	# game doesn't launch while the context menu opens.
+	_suppress_next_press = true
 	if SystemManager.audio:
 		SystemManager.audio.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())

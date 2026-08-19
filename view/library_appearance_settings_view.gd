@@ -408,47 +408,14 @@ func _check_preset_match() -> void:
 			_preset_dropdown.selected = 0
 
 func _presets_equal(a: ThemePreset, b: ThemePreset) -> bool:
-	if a.library_layout_mode != b.library_layout_mode:
-		return false
-	if a.library_focus_scale != b.library_focus_scale:
-		return false
-	if a.library_navigation_type != b.library_navigation_type:
-		return false
-	if a.library_grid_padding != b.library_grid_padding:
-		return false
-	if a.library_card_zoom != b.library_card_zoom:
-		return false
-	if a.library_card_zoom_level != b.library_card_zoom_level:
-		return false
-	if a.library_show_title_mode != b.library_show_title_mode:
-		return false
-	if a.library_card_display_mode != b.library_card_display_mode:
-		return false
-	if a.library_card_content_alignment != b.library_card_content_alignment:
-		return false
-	if a.library_grid_vertical != b.library_grid_vertical:
-		return false
-	if a.card_media_aspect_ratio != b.card_media_aspect_ratio:
-		return false
-	if a.library_focus_centering != b.library_focus_centering:
-		return false
-	if a.library_pagination_view != b.library_pagination_view:
-		return false
-	if a.library_primary_color != b.library_primary_color:
-		return false
-	if a.dark_mode != b.dark_mode:
-		return false
-	
-	var card_a = JSON.stringify(a.card_effect_config)
-	var card_b = JSON.stringify(b.card_effect_config)
-	if card_a != card_b:
-		return false
-	
-	var bg_a = JSON.stringify(a.library_background_config)
-	var bg_b = JSON.stringify(b.library_background_config)
-	if bg_a != bg_b:
-		return false
-	
+	# Compare over the same flagged setting list that save/apply use; keys
+	# missing from a preset mean its declared default (snapshot semantics).
+	for s in DataManager.get_presettable_settings():
+		var default: Variant = DataManager.get_setting_default(s.property_name)
+		var va: Variant = a.values.get(s.property_name, default)
+		var vb: Variant = b.values.get(s.property_name, default)
+		if not EffectThemeAdapter.values_equal_approx(va, vb):
+			return false
 	return true
 
 func _on_load_preset_pressed() -> void:

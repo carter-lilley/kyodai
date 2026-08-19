@@ -13,7 +13,7 @@ static var is_transition_active: bool = false
 
 const COVER_DURATION: float = 0.26
 const ICON_DURATION: float = 0.34
-const HOLD_DURATION: float = 0.4
+const HOLD_DURATION: float = 0.05
 const REVEAL_DURATION: float = 0.3
 const ICON_HEIGHT_RATIO: float = 0.22
 const TILT_IN: float = 9.0
@@ -127,11 +127,15 @@ func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_r
 	entrance.tween_property(_icon, "scale", Vector2.ONE, ICON_DURATION)
 	entrance.tween_property(_icon, "rotation_degrees", 0.0, ICON_DURATION)
 	entrance.tween_property(_icon, "modulate:a", 1.0, ICON_DURATION * 0.5)
-	await entrance.finished
+
+	# Start the exit just before the icon fully settles so the whole sequence
+	# stays in motion; the reveal takes over from the icon's current position.
+	await get_tree().create_timer(ICON_DURATION * 0.8).timeout
 	if not is_inside_tree():
 		return
+	entrance.kill()
 
-	# Hold a beat so the icon reads.
+	# Barely a beat at the top of the bounce.
 	await get_tree().create_timer(HOLD_DURATION).timeout
 	if not is_inside_tree():
 		return

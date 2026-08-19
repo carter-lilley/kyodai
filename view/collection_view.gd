@@ -6,6 +6,9 @@ extends View
 
 @export var collection_id: int = 0
 @export var collection_name: String = ""
+## When true, this view shows the RomM favorites collection. The collection id
+## is resolved dynamically (it can appear/change after collections sync).
+@export var favorites_mode: bool = false
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -31,6 +34,8 @@ func _connect_signals() -> void:
 		DataManager.games_removed.connect(_on_games_removed)
 	if not DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.connect(_on_sync_completed)
+	if favorites_mode and DataManager.user_props and not DataManager.user_props.game_props_updated.is_connected(_on_game_props_updated):
+		DataManager.user_props.game_props_updated.connect(_on_game_props_updated)
 	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
@@ -47,15 +52,19 @@ func _disconnect_signals() -> void:
 		DataManager.games_removed.disconnect(_on_games_removed)
 	if DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.disconnect(_on_sync_completed)
+	if DataManager.user_props and DataManager.user_props.game_props_updated.is_connected(_on_game_props_updated):
+		DataManager.user_props.game_props_updated.disconnect(_on_game_props_updated)
 	if UIManager and UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
 
 func _ready():
-	if collection_name.is_empty() and collection_id != 0:
+	if favorites_mode:
+		_refresh_favorites_collection_id()
+	elif collection_name.is_empty() and collection_id != 0:
 		var collection = DataManager.get_collection(collection_id)
 		if collection:
 			collection_name = collection.get("name", "")
-	view_name = _collection_view_name(collection_id)
+		view_name = _collection_view_name(collection_id)
 	
 	if title_label:
 		title_label.text = collection_name
@@ -80,6 +89,23 @@ func _ready():
 
 static func _collection_view_name(id: int) -> String:
 	return "Collection_%d" % id
+
+func _refresh_favorites_collection_id() -> void:
+	"""Re-resolve the favorites collection id; reloads the grid if it changed."""
+	if not favorites_mode or not DataManager:
+		return
+	var resolved := DataManager.get_favorite_collection_id()
+	if resolved != collection_id:
+		collection_id = resolved
+		_load_total_count(false)
+
+func _on_game_props_updated(game: GameResource) -> void:
+	# A favorite toggle adds/removes the game from this view.
+	if game:
+		_load_total_count(false)
+
+func _get_empty_status_text() -> String:
+	return "No favorites yet" if favorites_mode else "No games in this collection"
 
 func _on_database_ready() -> void:
 	_load_total_count()
@@ -107,6 +133,11 @@ func _refresh_grid_dimensions() -> void:
 
 func _load_total_count(preserve_cache: bool = false) -> void:
 	if collection_id == 0:
+		if favorites_mode:
+			_total_games = 0
+			if games_grid:
+				games_grid.set_total_count(0)
+			_update_status(_get_empty_status_text())
 		return
 	_is_loading = true
 	_update_status("Loading collection...")
@@ -123,7 +154,7 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 			if count == 0:
-				_update_status("No games in this collection")
+				_update_status(_get_empty_status_text())
 			else:
 				_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
@@ -147,7 +178,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 
 func _on_visible_range_changed(start_index: int, end_index: int, total_count: int) -> void:
 	if total_count == 0:
-		_update_status("No games in this collection")
+		_update_status(_get_empty_status_text())
 	else:
 		var start_num = start_index + 1
 		var end_num = mini(end_index, total_count)
@@ -168,6 +199,8 @@ func _focus_random_card() -> void:
 
 func on_view_show() -> void:
 	super.on_view_show()
+	if favorites_mode:
+		_refresh_favorites_collection_id()
 	if title_label:
 		title_label.text = collection_name
 	if games_grid:

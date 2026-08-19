@@ -87,6 +87,76 @@ static func on_dark_mode_changed(to_dark: bool) -> void:
 	if hero and hero.value is Dictionary:
 		DataManager.set_setting(swap_effect_list(hero.value, to_dark), hero)
 
+# ============================================================================
+# Preset save-time stripping
+# Only authored light/dark variants belong in theme files. A cached variant
+# that matches either the canonical settings or the deterministic conversion
+# of them is regenerated on demand by swap_settings_mode(), so it is stripped.
+# The canonical "settings" block (the mode active at save time) is never
+# converted or removed.
+# ============================================================================
+
+static func strip_generated_from_config(config: Dictionary) -> Dictionary:
+	var out := config.duplicate(true)
+	for list_key in ["effects", "focus_effects"]:
+		if not out.has(list_key) or not out[list_key] is Array:
+			continue
+		var new_list: Array = []
+		for entry in out[list_key]:
+			if entry is Dictionary:
+				new_list.append(strip_generated_variants(entry))
+			else:
+				new_list.append(entry)
+		out[list_key] = new_list
+	return out
+
+static func strip_generated_variants(holder: Dictionary) -> Dictionary:
+	var out := holder.duplicate(true)
+	var settings: Dictionary = out.get("settings", {})
+	for key in [LIGHT_CACHE_KEY, DARK_CACHE_KEY]:
+		if not out.has(key) or not out[key] is Dictionary:
+			continue
+		var cached: Dictionary = out[key]
+		# Round-trip swaps can leave a duplicate of the canonical settings
+		# under the active mode's own cache key.
+		if values_equal_approx(cached, settings):
+			out.erase(key)
+			continue
+		var generated := adapt_settings_dict(settings, key == DARK_CACHE_KEY)
+		if values_equal_approx(cached, generated):
+			out.erase(key)
+	return out
+
+static func values_equal_approx(a: Variant, b: Variant) -> bool:
+	if a is Color and b is Color:
+		return a.is_equal_approx(b)
+	if a is Gradient and b is Gradient:
+		if a.get_point_count() != b.get_point_count():
+			return false
+		for i in a.get_point_count():
+			if not is_equal_approx(a.get_offset(i), b.get_offset(i)):
+				return false
+			if not a.get_color(i).is_equal_approx(b.get_color(i)):
+				return false
+		return true
+	if a is Dictionary and b is Dictionary:
+		if a.size() != b.size():
+			return false
+		for k in a:
+			if not b.has(k) or not values_equal_approx(a[k], b[k]):
+				return false
+		return true
+	if a is Array and b is Array:
+		if a.size() != b.size():
+			return false
+		for i in a.size():
+			if not values_equal_approx(a[i], b[i]):
+				return false
+		return true
+	if (a is float or a is int) and (b is float or b is int):
+		return is_equal_approx(float(a), float(b))
+	return a == b
+
 static func _cbrt(x: float) -> float:
 	return signf(x) * pow(absf(x), 1.0 / 3.0)
 

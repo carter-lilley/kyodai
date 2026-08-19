@@ -4,12 +4,9 @@ xemu save sync
 tst emulator app update flow on android
 prewarm covers on random jump
 touch to open kb txtedits
-cant always reach settings cog after ds rbuild
 romm loading cirlce not seen visually on small screens  (less space for top controls in romm menu)
 remove add to steam on android
 home focus even after gamenative adds
-focus lost on settings open via mouse
-focus ring under UI when in-grid
 
 romm;
 - sort by played

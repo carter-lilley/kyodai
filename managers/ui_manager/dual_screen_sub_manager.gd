@@ -412,6 +412,10 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	# Reconnect feedback handlers to new viewport
 	ui_manager.navigation._reconnect_feedback_viewport()
 
+	# Reparenting changed absolute node paths, so focus_neighbor NodePaths are
+	# stale. Re-wire them once the tree has settled.
+	ui_manager.navigation.call_deferred("_setup_nav_focus_neighbors")
+
 func _restore_ui_to_original_parents() -> void:
 	"""Restore RootLayout to its original parent.
 
@@ -470,6 +474,10 @@ func _restore_ui_to_original_parents() -> void:
 
 	# Reconnect feedback handlers to original viewport
 	ui_manager.navigation._reconnect_feedback_viewport()
+
+	# Reparenting changed absolute node paths, so focus_neighbor NodePaths are
+	# stale. Re-wire them once the tree has settled.
+	ui_manager.navigation.call_deferred("_setup_nav_focus_neighbors")
 
 # ==================== DUAL SCREEN DESKTOP FALLBACK ====================
 

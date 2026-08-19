@@ -205,6 +205,10 @@ func get_romm_ids_for_collection(romm_id: int) -> Array[int]:
 	return collections.get_romm_ids_for_collection(romm_id)
 
 
+func get_favorite_collection_id() -> int:
+	return collections.get_favorite_collection_id()
+
+
 func get_games_for_collection_count(romm_id: int) -> int:
 	return collections.get_games_for_collection_count(romm_id)
 
@@ -513,6 +517,12 @@ func create_preset_from_current() -> ThemePreset:
 
 func create_preset_from_settings(source_settings: Settings) -> ThemePreset:
 	return settings.create_preset_from_settings(source_settings)
+
+func get_presettable_settings() -> Array[SettingsVar]:
+	return settings.get_presettable_settings()
+
+func get_setting_default(_name: String) -> Variant:
+	return settings.get_setting_default(_name)
 
 
 # ==================== GAME SAVE FACADE ====================

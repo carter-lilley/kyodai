@@ -278,8 +278,10 @@ func apply_setting(property_name: String, value: Variant) -> int:
 # ---------------------------------------------------------------------------
 func _get_int_setting(name: String, default: int) -> int:
 	var setting = DataManager.get_setting(name)
-	if setting and setting.value is int:
-		return setting.value
+	# Tolerate floats: prefs saved before the set_setting type coercion may
+	# hold float values for INT settings.
+	if setting and (setting.value is int or setting.value is float):
+		return int(setting.value)
 	return default
 
 func _get_float_setting(name: String, default: float) -> float:

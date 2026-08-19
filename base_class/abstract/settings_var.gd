@@ -21,6 +21,9 @@ var property_name: String = ""
 # Optional for dropdowns or enum-style choices
 @export var options: Array = []
 @export var encrypted: bool = false
+## When true, this setting is captured into theme presets (ThemePreset.values).
+## Set at the declaration site in settings.gd via the _preset() wrapper.
+@export var include_in_preset: bool = false
 @export var metadata: Dictionary = {}
 
 func _init(

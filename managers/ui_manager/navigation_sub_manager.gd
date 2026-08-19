@@ -288,6 +288,10 @@ func refresh_for_screen_swap() -> void:
 	_refresh_nav_layout()
 	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
 		_inner_layout.queue_sort()
+	# Reparenting into/out of the dual-screen SubViewport changes absolute node
+	# paths, so the stored focus_neighbor NodePaths go stale. Re-wire them once
+	# the tree has settled.
+	call_deferred("_setup_nav_focus_neighbors")
 
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	"""Create the inner layout container (VBox or HBox)."""
@@ -414,7 +418,7 @@ func _get_pinned_shortcuts() -> Array[Dictionary]:
 	for item in setting.value:
 		if item is Dictionary:
 			var type = item.get("type", "")
-			if type == current_type or type == "collection":
+			if type == current_type or type == "collection" or type == "favorites":
 				result.append(item)
 	return result
 
@@ -427,7 +431,7 @@ func _get_nav_destinations() -> Array[Dictionary]:
 	return result
 
 func _is_pinned_destination(dest: Dictionary) -> bool:
-	return dest.get("type") in ["app", "program", "collection"]
+	return dest.get("type") in ["app", "program", "collection", "favorites"]
 
 func _on_nav_node_ready() -> void:
 	"""Apply deferred nav node config now that _ready() has created internal UI."""
@@ -465,6 +469,8 @@ func get_transition_icon_for_view(view_name: String) -> String:
 			return dest.get("icon", "")
 	if view_name.begins_with("Collection_"):
 		return "star"
+	if view_name == "Favorites":
+		return "heart"
 	return ""
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
@@ -491,7 +497,7 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	if index >= static_count and index < static_count + pin_count:
 		# Pinned shortcut selected; keep static selection highlighted.
 		_set_nav_selected_index_no_signal(_last_nav_index)
-		if dest.get("type") == "collection":
+		if dest.get("type") == "collection" or dest.get("type") == "favorites":
 			ui_manager.switch_to_tab(dest.view)
 		else:
 			_launch_pinned_shortcut(dest)
@@ -511,6 +517,8 @@ func _show_add_menu(anchor: Control) -> void:
 	_add_menu = M3Menu.new()
 	_add_menu.add_item("Shortcut", _on_add_menu_item_selected, "expand-all")
 	_add_menu.add_item("Collection", _on_add_collection_selected, "star")
+	if not _has_favorites_pin():
+		_add_menu.add_item("Favorites", _on_add_favorites_selected, "heart")
 	_add_menu.popup(anchor)
 
 func _on_add_menu_item_selected() -> void:
@@ -526,6 +534,36 @@ func _on_add_collection_selected() -> void:
 	picker.set_pinned_ids(_get_pinned_collection_ids())
 	picker.collection_selected.connect(_on_collection_pin_selected)
 	picker.show_overlay()
+
+func _has_favorites_pin() -> bool:
+	if not DataManager:
+		return false
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting or not (setting.value is Array):
+		return false
+	for item in setting.value:
+		if item is Dictionary and item.get("type", "") == "favorites":
+			return true
+	return false
+
+func _on_add_favorites_selected() -> void:
+	"""Pin the RomM favorites collection to the navigation bar."""
+	if _has_favorites_pin():
+		return
+
+	if ui_manager and ui_manager.view:
+		ui_manager.view._add_favorites_tab()
+
+	var pin := {
+		"id": "favorites",
+		"type": "favorites",
+		"label": "Favorites",
+		"icon": "heart",
+		"view": "Favorites",
+		"data": {}
+	}
+	_add_pinned_shortcut(pin)
+	ui_manager.switch_to_tab(pin.view)
 
 func _get_pinned_collection_ids() -> Array[int]:
 	var ids: Array[int] = []
@@ -645,6 +683,9 @@ func _on_remove_pin_selected(dest: Dictionary) -> void:
 		var collection_id = dest.get("data", {}).get("collection_id", 0)
 		if collection_id != 0 and ui_manager and ui_manager.view:
 			ui_manager.view._remove_collection_tab(collection_id)
+	elif dest.get("type") == "favorites":
+		if ui_manager and ui_manager.view:
+			ui_manager.view._remove_favorites_tab()
 	
 	_rebuild_nav_and_layout()
 
@@ -830,7 +871,7 @@ func _reconnect_feedback_viewport() -> void:
 		if _feedback_connected_viewport.gui_focus_changed.is_connected(_on_feedback_focus_changed):
 			_feedback_connected_viewport.gui_focus_changed.disconnect(_on_feedback_focus_changed)
 
-	var viewport = get_viewport()
+	var viewport = _get_active_viewport()
 	if is_instance_valid(viewport):
 		if viewport.gui_focus_changed.is_connected(_on_feedback_focus_changed):
 			viewport.gui_focus_changed.disconnect(_on_feedback_focus_changed)
@@ -873,10 +914,18 @@ func _control_is_game_card(control: Control) -> bool:
 		ancestor = ancestor.get_parent()
 	return false
 
+func _get_active_viewport() -> Viewport:
+	"""Resolve the viewport that actually owns GUI focus for the nav UI.
+	In dual-screen mode the UI is reparented into a SubViewport, so this
+	manager's own root viewport has no focus owner."""
+	if _nav_node and is_instance_valid(_nav_node) and _nav_node.is_inside_tree():
+		return _nav_node.get_viewport()
+	return get_viewport()
+
 func _unhandled_input(event: InputEvent) -> void:
 	"""Play activation sound on ui_accept for non-game card elements."""
 	if event.is_action_pressed("ui_accept"):
-		var focused = get_viewport().gui_get_focus_owner()
+		var focused = _get_active_viewport().gui_get_focus_owner()
 		if focused and is_instance_valid(focused) and not _control_is_game_card(focused):
 			if SystemManager.audio:
 				SystemManager.audio.play_sfx("click_03")
@@ -960,7 +1009,7 @@ func _dispatch_direction(dir: String) -> bool:
 
 	var grid := _get_current_grid()
 	if grid:
-		var focused := get_viewport().gui_get_focus_owner()
+		var focused := _get_active_viewport().gui_get_focus_owner()
 		var focus_in_grid := focused != null and grid.is_ancestor_of(focused)
 		if grid.is_focus_locked_and_active() or focus_in_grid:
 			# The lock can be dropped while focus is still inside the grid (e.g. a
@@ -1026,7 +1075,7 @@ func _get_current_grid() -> VirtualScrollGridContainer:
 func _try_nav_to_grid(dir: String) -> bool:
 	"""Handle manual focus navigation between nav, settings, and grid.
 	Avoids NodePaths which break when nodes are reparented (dual screen mode)."""
-	var focused := get_viewport().gui_get_focus_owner()
+	var focused := _get_active_viewport().gui_get_focus_owner()
 	if not focused:
 		return false
 

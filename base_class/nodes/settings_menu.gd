@@ -244,7 +244,10 @@ func match_var_type(settingsvar : SettingsVar):
 			_apply_accent(slider)
 			
 			slider.value_changed.connect(func(display_value: float):
-				emit_signal("setting_changed", display_value / display_scale, settingsvar)
+				var new_value: Variant = display_value / display_scale
+				if settingsvar.type == Type.INT:
+					new_value = int(round(new_value))
+				emit_signal("setting_changed", new_value, settingsvar)
 			)
 		Type.STRING:
 			var text_field = M3TextField.new()

@@ -16,6 +16,9 @@ var _downloads_scene_path: String = "res://view/downloads_view.tscn"
 var _collection_scene_path: String = "res://view/collection_view.tscn"
 var _collection_tabs: Dictionary[int, Control] = {}
 
+const FAVORITES_TAB_TITLE := "Favorites"
+var _favorites_tab: Control = null
+
 func _ready():
 	ui_manager = get_parent()
 
@@ -63,6 +66,8 @@ func _pre_instantiate_lazy_views() -> void:
 		return
 	if not _views.has("Library"):
 		_ensure_library_setup()
+	if _favorites_tab and is_instance_valid(_favorites_tab):
+		_ensure_favorites_setup()
 	for collection_id in _collection_tabs.keys():
 		if not is_inside_tree():
 			return
@@ -195,7 +200,11 @@ func _setup_collection_tabs() -> void:
 	for item in setting.value:
 		if not (item is Dictionary):
 			continue
-		if item.get("type", "") != "collection":
+		var item_type: String = item.get("type", "")
+		if item_type == "favorites":
+			_add_favorites_tab()
+			continue
+		if item_type != "collection":
 			continue
 		var collection_id = item.get("data", {}).get("collection_id", 0)
 		if collection_id == 0:
@@ -259,6 +268,50 @@ func _remove_collection_tab(collection_id: int) -> void:
 			_tab_container.remove_child(tab)
 			tab.queue_free()
 
+func _add_favorites_tab() -> void:
+	if _favorites_tab and is_instance_valid(_favorites_tab):
+		return
+	var tab = Control.new()
+	tab.name = FAVORITES_TAB_TITLE
+	tab.visible = false
+	_tab_container.add_child(tab)
+	_favorites_tab = tab
+
+func _ensure_favorites_setup() -> bool:
+	if _views.has(FAVORITES_TAB_TITLE):
+		return true
+	if not _favorites_tab or not is_instance_valid(_favorites_tab):
+		return false
+
+	var scene = load(_collection_scene_path)
+	var favorites_view = scene.instantiate()
+	favorites_view.favorites_mode = true
+	favorites_view.collection_name = "Favorites"
+	favorites_view.view_name = FAVORITES_TAB_TITLE
+	_favorites_tab.add_child(favorites_view)
+	_views[FAVORITES_TAB_TITLE] = favorites_view
+
+	if favorites_view.has_signal("hero_game_changed"):
+		favorites_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
+
+	return true
+
+func _remove_favorites_tab() -> void:
+	if _current_view and _current_view.view_name == FAVORITES_TAB_TITLE:
+		switch_to_tab("Home")
+
+	if _views.has(FAVORITES_TAB_TITLE):
+		var view = _views[FAVORITES_TAB_TITLE]
+		_views.erase(FAVORITES_TAB_TITLE)
+		if view and is_instance_valid(view):
+			view.queue_free()
+
+	if _favorites_tab and is_instance_valid(_favorites_tab):
+		if _favorites_tab.get_parent() == _tab_container:
+			_tab_container.remove_child(_favorites_tab)
+		_favorites_tab.queue_free()
+	_favorites_tab = null
+
 func _collection_tab_title(collection_id: int) -> String:
 	return "Collection_%d" % collection_id
 
@@ -278,6 +331,8 @@ func _sync_current_view_from_tab() -> void:
 		_ensure_library_setup()
 	if current_tab_title == "Downloads":
 		_ensure_downloads_setup()
+	if current_tab_title == FAVORITES_TAB_TITLE:
+		_ensure_favorites_setup()
 	if _is_collection_tab_title(current_tab_title):
 		_ensure_collection_setup(_get_collection_id_from_tab_title(current_tab_title))
 	if _views.has(current_tab_title):
@@ -300,6 +355,8 @@ func _on_tab_changed(tab_idx: int):
 		_ensure_library_setup()
 	if tab_title == "Downloads":
 		_ensure_downloads_setup()
+	if tab_title == FAVORITES_TAB_TITLE:
+		_ensure_favorites_setup()
 	if _is_collection_tab_title(tab_title):
 		_ensure_collection_setup(_get_collection_id_from_tab_title(tab_title))
 	if _views.has(tab_title):
