@@ -15,27 +15,32 @@ const H_MARGIN_DP := 32.0
 const DESCRIPTION_SIZE_DP := 20.0
 
 
+const TAB_MARGIN_TOP_DP := 12.0
+const CARD_PADDING_DP := 16.0
+const CARD_GAP_DP := 8.0
+const STAR_SIZE_DP := 20.0
+
+
 # NOTE: The scene root is a CanvasLayer (M3BottomSheet base). The MarginContainer
 # and its children are direct children of the root in the .tscn file, then
 # _reparent_content() moves MarginContainer into the sheet's _content_slot.
 @onready var _content_root: Control = $MarginContainer
-@onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverTexture
-@onready var title_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/TitleLabel
-@onready var metadata_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow
-@onready var platform_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow/PlatformLabel
-@onready var genres_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow/GenresLabel
-@onready var rating_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow/RatingLabel
-@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow/FileInfoLabel
-@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow/FileSizeLabel
-@onready var status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/FileInfoRow/StatusLabel
-@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/TitleIdLabel
-@onready var description_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/DescriptionLabel
-@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SiblingDropdown
-@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/StatusDropdown
-@onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/ActionButton
-@onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/SyncButton
-@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/FavoriteButton
-@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/SyncStatusLabel
+@onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverClip/CoverTexture
+@onready var title_label: Label = $MarginContainer/HBoxContainer/ContentVBox/TitleLabel
+@onready var metadata_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/MetadataRow
+@onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs
+@onready var description_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewScroll/DescriptionLabel
+@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard
+@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
+@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
+@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
+@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
+@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
+@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/SiblingDropdown
+@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/StatusDropdown
+@onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/ButtonRow/ActionButton
+@onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/ButtonRow/SyncButton
+@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentVBox/ButtonRow/FavoriteButton
 
 ## RomM play-status options. The first five map to the mutually exclusive
 ## rom_user.status enum; the last three are independent boolean flags.
@@ -65,6 +70,8 @@ var _prepared_cover: Texture2D = null
 func _ready():
 	super._ready()
 	_reparent_content()
+	_setup_tabs()
+	_setup_focus_neighbors()
 	_connect_signals()
 	_set_sheet_height()
 	_reduce_top_padding()
@@ -74,6 +81,29 @@ func refresh_theme():
 	super.refresh_theme()
 	if is_node_ready():
 		_apply_content_scaling()
+		if _current_game:
+			_populate_metadata_chips(_current_game)
+
+func _setup_tabs() -> void:
+	if not content_tabs:
+		return
+	# Let the sheet background show through instead of the themed opaque panel.
+	content_tabs.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	var tab_margin := M3Units.dpi(TAB_MARGIN_TOP_DP)
+	for tab_name in [&"Overview", &"Files"]:
+		var tab := content_tabs.get_node_or_null(NodePath(tab_name)) as MarginContainer
+		if tab:
+			tab.add_theme_constant_override("margin_top", tab_margin)
+
+func _setup_focus_neighbors() -> void:
+	if not content_tabs or not action_button:
+		return
+	action_button.focus_neighbor_bottom = action_button.get_path_to(content_tabs)
+	if sync_button:
+		sync_button.focus_neighbor_bottom = sync_button.get_path_to(content_tabs)
+	if favorite_button:
+		favorite_button.focus_neighbor_bottom = favorite_button.get_path_to(content_tabs)
+	content_tabs.focus_neighbor_top = content_tabs.get_path_to(action_button)
 
 func _apply_content_scaling() -> void:
 	if not is_instance_valid(_content_root):
@@ -88,17 +118,34 @@ func _apply_content_scaling() -> void:
 	var hbox := _content_root.get_node_or_null(^"HBoxContainer") as HBoxContainer
 	if hbox:
 		hbox.add_theme_constant_override("separation", edge)
-	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentScroll/ContentVBox") as VBoxContainer
+	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentVBox") as VBoxContainer
 	if vbox:
 		vbox.add_theme_constant_override("separation", M3Units.dpi(12.0))
 	if is_instance_valid(metadata_row):
 		metadata_row.add_theme_constant_override("separation", M3Units.dpi(8.0))
-	if is_instance_valid(file_info_label):
-		var file_row := file_info_label.get_parent() as HBoxContainer
-		if file_row:
-			file_row.add_theme_constant_override("separation", M3Units.dpi(8.0))
+	if is_instance_valid(files_card):
+		files_card.add_theme_stylebox_override("panel", _build_files_card_style())
+		var card_margin := files_card.get_node_or_null(^"CardMargin") as MarginContainer
+		if card_margin:
+			var pad := M3Units.dpi(CARD_PADDING_DP)
+			card_margin.add_theme_constant_override("margin_left", pad)
+			card_margin.add_theme_constant_override("margin_top", pad)
+			card_margin.add_theme_constant_override("margin_right", pad)
+			card_margin.add_theme_constant_override("margin_bottom", pad)
+		var card_vbox := files_card.get_node_or_null(^"CardMargin/CardVBox") as VBoxContainer
+		if card_vbox:
+			card_vbox.add_theme_constant_override("separation", M3Units.dpi(CARD_GAP_DP))
 	if is_instance_valid(description_label):
 		description_label.add_theme_font_size_override("font_size", M3Units.dpi(DESCRIPTION_SIZE_DP))
+
+func _build_files_card_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.border_color = M3Theme.get_outline_variant()
+	style.set_border_width_all(maxi(1, M3Units.dpi(1.0)))
+	style.set_corner_radius_all(M3Units.dpi(M3Theme.RADIUS_LARGE))
+	style.anti_aliasing = true
+	return style
 
 func _reparent_content() -> void:
 	var content_root := get_node_or_null(CONTENT_MARGIN_PATH) as Control
@@ -178,24 +225,13 @@ func clear_content() -> void:
 	_current_game = null
 	if is_instance_valid(_content_root):
 		_content_root.visible = false
-	if is_instance_valid(cover_texture):
-		cover_texture.texture = null
+	_set_cover_texture(null)
+	if is_instance_valid(content_tabs):
+		content_tabs.current_tab = 0
 
 func _populate_basic_info(game: GameResource) -> void:
 	title_label.text = game.title if game.title else "Unknown Game"
-	platform_label.text = game.platform if game.platform else "Unknown Platform"
-
-	if game.genres.size() > 0:
-		genres_label.text = "• " + ", ".join(game.genres)
-	else:
-		genres_label.text = ""
-
-	if game.rating > 0:
-		var stars = clamp(round(game.rating * 5), 1, 5)
-		var empty_stars = 5 - stars
-		rating_label.text = "★".repeat(stars) + ("☆".repeat(empty_stars) if empty_stars > 0 else "")
-	else:
-		rating_label.text = "No rating"
+	_populate_metadata_chips(game)
 
 	_setup_sibling_dropdown(game)
 	_setup_status_dropdown(game)
@@ -203,6 +239,56 @@ func _populate_basic_info(game: GameResource) -> void:
 	_update_file_info_display(game)
 	_update_action_button()
 	description_label.text = game.description if game.description else "No description available."
+
+func _populate_metadata_chips(game: GameResource) -> void:
+	if not is_instance_valid(metadata_row):
+		return
+	for child in metadata_row.get_children():
+		child.queue_free()
+	_add_metadata_chip(game.platform if game.platform else "Unknown Platform", "gamepad-variant", true)
+	if game.release_date > 0:
+		_add_metadata_chip(_format_release_date(game.release_date), "calendar", false)
+	for genre in game.genres:
+		_add_metadata_chip(str(genre), "", false)
+	_populate_rating_stars(game)
+
+func _populate_rating_stars(game: GameResource) -> void:
+	if game.rating <= 0:
+		var label := M3Label.new()
+		label.label_style = M3Label.Style.BODY_MEDIUM
+		label.use_on_surface_variant = true
+		label.text = "No rating"
+		metadata_row.add_child(label)
+		return
+
+	var stars := clampi(int(round(game.rating * 5.0)), 1, 5)
+	for i in range(5):
+		var star := FontIcon.new()
+		var settings := FontIconSettings.new()
+		settings.icon_name = "star" if i < stars else "star-outline"
+		settings.icon_size = clampi(M3Units.dpi(STAR_SIZE_DP), 16, 128)
+		settings.icon_color = M3Theme.get_primary() if i < stars else M3Theme.get_on_surface_variant()
+		star.icon_settings = settings
+		star.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		metadata_row.add_child(star)
+
+func _add_metadata_chip(text: String, icon: String, elevated: bool) -> void:
+	var chip := M3Chip.new()
+	chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
+	chip.text = text
+	chip.elevated = elevated
+	chip.focus_mode = Control.FOCUS_NONE
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if icon != "":
+		chip.leading_icon = icon
+	metadata_row.add_child(chip)
+
+const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+func _format_release_date(epoch_ms: int) -> String:
+	var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000))
+	var month: String = MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)]
+	return "%s %d, %d" % [month, dict.day, dict.year]
 
 func show_for_game(game: GameResource) -> GameDetailsSheet:
 	clear_content()
@@ -431,11 +517,11 @@ func _update_file_info_display(game: GameResource) -> void:
 
 	# Check if the selected variant has a local copy
 	if game.is_active_variant_downloaded():
-		status_label.text = "✓ Downloaded"
-		status_label.modulate = Color.GREEN
+		status_chip.text = "Downloaded"
+		status_chip.leading_icon = "check-circle"
 	else:
-		status_label.text = "☐ Not downloaded"
-		status_label.modulate = Color.GRAY
+		status_chip.text = "Not downloaded"
+		status_chip.leading_icon = "download"
 
 	# Show Title ID for platforms that use it
 	if title_id_label:
@@ -447,19 +533,19 @@ func _update_file_info_display(game: GameResource) -> void:
 			title_id_label.visible = false
 
 func _load_cover(game: GameResource) -> void:
-	if is_instance_valid(cover_texture):
-		cover_texture.texture = null
+	_set_cover_texture(null)
 
 	# Use a cover that was decoded while the context menu was open.
 	if _prepared_romm_id == game.romm_id and _prepared_cover:
-		if is_instance_valid(cover_texture):
-			cover_texture.texture = _prepared_cover
+		_set_cover_texture(_prepared_cover)
 		_prepared_cover = null
 		_prepared_romm_id = 0
 		return
 
 	# Local file: decode on a background thread.
 	if game.cover_path and FSM.file_exists(game.cover_path):
+		if is_instance_valid(cover_texture):
+			M3Shimmer.attach(cover_texture, 0.0)
 		MemorySubManager.queue_image_task(
 			func() -> Image:
 				var img := Image.new()
@@ -467,19 +553,29 @@ func _load_cover(game: GameResource) -> void:
 					return img
 				return null,
 			func(img: Image):
-				if is_instance_valid(cover_texture) and img and not img.is_empty():
-					cover_texture.texture = MemorySubManager.create_texture_from_image(img)
+				if is_instance_valid(cover_texture):
+					M3Shimmer.detach(cover_texture)
+					if img and not img.is_empty():
+						_set_cover_texture(MemorySubManager.create_texture_from_image(img))
 		)
 		return
 
 	# Remote URL: keep the existing async path.
 	if game.cover_url and game.cover_url.begins_with("http"):
+		if is_instance_valid(cover_texture):
+			M3Shimmer.attach(cover_texture, 0.0)
 		DataManager.load_image(game.cover_url, func(texture):
 			if not is_instance_valid(cover_texture):
 				return
+			M3Shimmer.detach(cover_texture)
 			if texture and _current_game and _current_game.romm_id == game.romm_id:
-				cover_texture.texture = texture
+				_set_cover_texture(texture)
 		)
+
+func _set_cover_texture(texture: Texture2D) -> void:
+	if not is_instance_valid(cover_texture):
+		return
+	cover_texture.texture = texture
 
 func _format_file_size(bytes: int) -> String:
 	if bytes < 1024:

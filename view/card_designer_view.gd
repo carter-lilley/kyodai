@@ -87,41 +87,30 @@ func _setup_ui():
 	
 	var left_vbox = VBoxContainer.new()
 	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	scroll.add_child(left_vbox)
-	
-	var title_label = M3Label.new()
-	title_label.text = "Card Designer"
-	title_label.label_style = M3Label.Style.HEADLINE_SMALL
-	left_vbox.add_child(title_label)
-	
-	var subtitle_label = M3Label.new()
-	subtitle_label.text = "Customize card appearance"
-	subtitle_label.label_style = M3Label.Style.BODY_SMALL
-	subtitle_label.use_on_surface_variant = true
-	left_vbox.add_child(subtitle_label)
-	
-	left_vbox.add_child(HSeparator.new())
-	
-	var global_label = M3Label.new()
-	global_label.text = "Global Settings"
-	global_label.label_style = M3Label.Style.TITLE_MEDIUM
-	left_vbox.add_child(global_label)
-	
+
+	var global_section := SettingsSection.new("Global Settings", "tune")
+	left_vbox.add_child(global_section)
+
+	var rounding_block := VBoxContainer.new()
+	rounding_block.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rounding_block.add_theme_constant_override("separation", int(M3Units.dp(4)))
+	global_section.add_content(rounding_block, false)
+
 	var card_rounding_label = M3Label.new()
 	card_rounding_label.text = "Card Rounding (0-1)"
 	card_rounding_label.label_style = M3Label.Style.BODY_MEDIUM
-	left_vbox.add_child(card_rounding_label)
-	
+	rounding_block.add_child(card_rounding_label)
+
 	_card_rounding_slider = M3Slider.new()
 	_card_rounding_slider.min_value = 0.0
 	_card_rounding_slider.max_value = 1.0
 	_card_rounding_slider.step = 0.01
 	_card_rounding_slider.value = 0.12
 	_card_rounding_slider.value_changed.connect(_on_card_rounding_changed)
-	left_vbox.add_child(_card_rounding_slider)
-	
-	left_vbox.add_child(HSeparator.new())
-	
+	rounding_block.add_child(_card_rounding_slider)
+
 	# Base effects designer
 	_base_effect_designer = EffectDesignerUI.new()
 	_base_effect_designer.use_internal_scroll = false

@@ -169,15 +169,26 @@ func _build_actions() -> void:
 
 func _show_loading_indicator() -> void:
 	_hide_loading_indicator()
-	var wrapper = CenterContainer.new()
+	# Skeleton rows stand in for the platform cards while the precompute runs.
+	var wrapper = HBoxContainer.new()
 	wrapper.name = "LoadingIndicator"
 	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	wrapper.custom_minimum_size = Vector2(0, M3Units.dp(120))
-	var spinner = M3Progress.new()
-	spinner.mode = M3Progress.Mode.CIRCULAR
-	spinner.progress_size = M3Progress.Size.LARGE
-	spinner.indeterminate = true
-	wrapper.add_child(spinner)
+	wrapper.add_theme_constant_override("separation", int(M3Units.dp(8)))
+	for c in range(2):
+		var column := VBoxContainer.new()
+		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		column.add_theme_constant_override("separation", int(M3Units.dp(8)))
+		var row_count := 3 if c == 0 else 2
+		for i in range(row_count):
+			var skeleton := Panel.new()
+			skeleton.custom_minimum_size = Vector2(0, M3Units.dp(80))
+			skeleton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var style := StyleBoxFlat.new()
+			style.bg_color = Color.WHITE
+			skeleton.add_theme_stylebox_override("panel", style)
+			M3Shimmer.attach(skeleton, 0.12)
+			column.add_child(skeleton)
+		wrapper.add_child(column)
 	_cards_hbox.add_child(wrapper)
 	_cards_hbox.move_child(wrapper, 0)
 	_loading_indicator = wrapper

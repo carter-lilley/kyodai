@@ -4,7 +4,7 @@ xemu save sync
 tst emulator app update flow on android
 prewarm covers on random jump
 touch to open kb txtedits
-romm loading cirlce not seen visually on small screens  (less space for top controls in romm menu)
+x romm loading cirlce not seen visually on small screens  (less space for top controls in romm menu)
 remove add to steam on android
 home focus even after gamenative adds
 

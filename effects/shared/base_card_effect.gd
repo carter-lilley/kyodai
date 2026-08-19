@@ -33,5 +33,12 @@ func _update_shader_params() -> void:
 
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
+	# Skeleton shimmer state + theme-driven colors (re-pushed on every refresh
+	# so theme changes are picked up).
+	_set_shader_param("loading_active", 1.0 if media_container.loading_active else 0.0)
+	var shimmer_base := M3Theme.get_elevation_surface(5)
+	_set_shader_param("loading_base_color", shimmer_base)
+	_set_shader_param("loading_shimmer_color", shimmer_base.lightened(0.18))
+
 func get_settings_schema() -> Array[SettingsVar]:
 	return []

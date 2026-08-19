@@ -128,6 +128,7 @@ func _create_tables():
 			description TEXT,
 			genres TEXT,
 			rating REAL DEFAULT 0.0,
+		release_date INTEGER DEFAULT 0,
 			siblings TEXT DEFAULT '[]',
 			selected_sibling_id INTEGER DEFAULT 0,
 			is_master_entry INTEGER DEFAULT 1,
@@ -301,6 +302,7 @@ func _row_to_game(row: Dictionary) -> GameResource:
 			genres.append(g)
 	game.genres = genres
 	game.rating = row.get("rating", "")
+	game.release_date = int(row.get("release_date", 0) or 0)
 
 	# Restore sibling data
 	if row.has("siblings") and row["siblings"] != "":
@@ -757,9 +759,10 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 					has_local_copy = ?,
 					last_updated = ?,
 					description = ?,
-					genres = ?,
-					rating = ?,
-					siblings = ?,
+				genres = ?,
+				rating = ?,
+				release_date = ?,
+				siblings = ?,
 					selected_sibling_id = ?,
 					is_master_entry = ?,
 					downloaded_sibling_ids = ?,
@@ -786,9 +789,10 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				1 if game.has_local_copy else 0,
 				game.last_updated,
 				game.description,
-				",".join(game.genres),
-				game.rating,
-				JSON.stringify(game.siblings),
+			",".join(game.genres),
+			game.rating,
+			game.release_date,
+			JSON.stringify(game.siblings),
 				game.selected_sibling_id,
 				1 if game.is_master_entry else 0,
 				JSON.stringify(game.downloaded_sibling_ids),

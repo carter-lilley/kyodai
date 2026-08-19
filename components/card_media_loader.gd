@@ -77,7 +77,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		if not FSM.file_exists(cache_path):
 			if DataManager.is_sync_in_progress():
 				if DEBUG_LOG: print("[CardMediaLoader] No cached cover, waiting for sync: %s" % cover_url)
-				_set_loading_texture()
+				_set_loading_texture(true)
 				return
 			else:
 				var fail_time: float = _failed_downloads.get(cover_url, 0.0)
@@ -101,7 +101,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 
 	# No memory cache: show the loading texture immediately, then queue the
 	# async file read so cards never render blank while waiting.
-	_set_loading_texture()
+	_set_loading_texture(true)
 	_load_cached_cover(cache_path, high_priority)
 
 func cancel() -> void:
@@ -120,8 +120,12 @@ func set_priority(high_priority: bool, current_game: GameResource = null) -> voi
 		# No task in flight and no texture - retry load with high priority
 		load_cover(current_game, true)
 
-func _set_loading_texture() -> void:
+## Emits the placeholder texture. `animated` marks whether a fetch/decode is
+## genuinely in flight (shimmer) or the card is settling for a static blank
+## (no cover, failed download, retry cooldown).
+func _set_loading_texture(animated: bool = false) -> void:
 	if is_instance_valid(_card):
+		_card._media_loading = animated
 		emit_signal("texture_loaded", _card._loading_texture)
 
 func _emit_texture(texture: Texture2D) -> void:
@@ -173,7 +177,7 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		_set_loading_texture()
 		return
 
-	_set_loading_texture()
+	_set_loading_texture(true)
 
 	var download_id = _current_download_id + 1
 	_current_download_id = download_id

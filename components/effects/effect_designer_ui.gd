@@ -345,7 +345,9 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 				else:
 					setting.value = saved_value
 		
-		settings_menu.build_controls_from_settingsvars(schema, "Settings")
+		# Untitled section: a plain card groups the effect's settings without
+		# adding a header inside the collapsible row.
+		settings_menu.build_controls_from_settingsvars(schema)
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _get_effect_schema(effect_id: String) -> Array[SettingsVar]:

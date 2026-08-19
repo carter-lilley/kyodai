@@ -34,6 +34,9 @@ static func _create_placeholder_texture() -> Texture2D:
 var _loading_texture: Texture2D = _placeholder_texture
 var _current_texture: Texture2D = null
 var _current_texture_game_id: String = ""
+# Set by CardMediaLoader: true while a cover fetch/decode is genuinely in
+# flight (media panel shimmers), false for static blanks (no art, failures).
+var _media_loading: bool = false
 
 # Track the last media bounds we refreshed effects against so we can skip
 # redundant force_refresh calls during fast scroll/recycling.
@@ -704,6 +707,7 @@ func reset(for_pooling: bool = false) -> void:
 	avoids the empty-card flash when the grid recycles during zoom/resize."""
 	game = null
 	_is_focused = false
+	_media_loading = false
 	set_placeholder(false)
 	# Reset the refresh gate so the next texture load always re-pushes crop UVs.
 	_last_refreshed_media_bounds = Rect2()
@@ -727,8 +731,10 @@ func reset(for_pooling: bool = false) -> void:
 		_current_texture = null
 		_current_texture_game_id = ""
 		if _media_stack:
+			_media_stack.set_loading(false)
 			_media_stack.set_game_texture(null)
 		if _focus_stack:
+			_focus_stack.set_loading(false)
 			_focus_stack.set_game_texture(null)
 			_focus_stack.set_visible(false)
 			# Reset any shader alphas left mid-tween so the next focus-in fades cleanly
@@ -1055,6 +1061,13 @@ func _set_texture(tex: Texture2D) -> void:
 	# Use the placeholder for any null texture so cards never render the default
 	# white fallback texture in the shader.
 	var resolved_tex: Texture2D = tex if tex else _loading_texture
+	var is_loading := resolved_tex == _loading_texture and _media_loading
+	# Apply the shimmer state even when the texture itself is unchanged (the
+	# loader may re-emit the placeholder with a different loading state).
+	if _media_stack:
+		_media_stack.set_loading(is_loading)
+	if _focus_stack:
+		_focus_stack.set_loading(is_loading)
 	if _current_texture == resolved_tex and _media_stack:
 		return
 	_current_texture = resolved_tex
@@ -1066,6 +1079,7 @@ func _set_texture(tex: Texture2D) -> void:
 	if not _media_stack:
 		_build_media_stack(false)
 	if _media_stack:
+		_media_stack.set_loading(is_loading)
 		_media_stack.set_game_texture(resolved_tex)
 		# Only pay for a full force_refresh when the media geometry changed.
 		# set_game_texture() already marks shader params dirty, so if bounds are

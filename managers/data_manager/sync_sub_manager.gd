@@ -1238,6 +1238,17 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	else:
 		game.igdb_metadata = {}
 
+	# Release date: RomM exposes first_release_date as unix ms; fall back to
+	# the IGDB blob (unix seconds) when the top-level field is missing.
+	game.release_date = 0
+	var raw_release = data.get("first_release_date", 0)
+	if raw_release != null:
+		game.release_date = int(raw_release)
+	if game.release_date <= 0 and game.igdb_metadata.has("first_release_date"):
+		var igdb_release = game.igdb_metadata.get("first_release_date", 0)
+		if igdb_release != null:
+			game.release_date = int(igdb_release) * 1000
+
 	# Extract siblings from API response
 	# Current RomM versions expose this as "sibling_roms" (SiblingRomSchema);
 	# older versions used "siblings". Support both.
@@ -1356,8 +1367,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1376,6 +1387,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		game.description,
 		",".join(game.genres),
 		game.rating,
+		game.release_date,
 		JSON.stringify(game.siblings),
 		game.selected_sibling_id,
 		1 if game.is_master_entry else 0,

@@ -1,304 +1,8 @@
 [gd_scene format=3 uid="uid://ba47b3as0h6ls"]
 
 [ext_resource type="Script" uid="uid://ddec4id7tpgk3" path="res://view/platforms_settings_view.gd" id="1_psview"]
-[ext_resource type="FontFile" uid="uid://cpvn61qwhfdj4" path="res://addons/m3/fonts/Roboto/Roboto-Regular.ttf" id="2_pdj8p"]
-[ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="3_cuggk"]
-[ext_resource type="Script" uid="uid://fmt3itosrqu4" path="res://addons/m3/components/M3Checkbox.gd" id="3_lo3qa"]
-[ext_resource type="Script" uid="uid://dc5stkkoubv5o" path="res://addons/m3/components/M3ButtonGroup.gd" id="3_n4rs8"]
-[ext_resource type="Script" uid="uid://dv82iypo8etp8" path="res://addons/m3/components/M3Button.gd" id="4_cuggk"]
-[ext_resource type="Script" uid="uid://dxu4u734ecmxi" path="res://addons/m3/components/M3TextField.gd" id="4_lo3qa"]
-[ext_resource type="FontFile" uid="uid://bj7f788kpislk" path="res://addons/m3/fonts/Roboto/Roboto-Medium.ttf" id="4_n5l8y"]
 
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_lo3qa"]
-
-[sub_resource type="Image" id="Image_n5l8y"]
-data = {
-"data": PackedByteArray(255, 255, 255, 0),
-"format": "RGBA8",
-"height": 1,
-"mipmaps": false,
-"width": 1
-}
-
-[sub_resource type="ImageTexture" id="ImageTexture_klweo"]
-image = SubResource("Image_n5l8y")
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_f1e5o"]
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_4rsul"]
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_crkbm"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_aavty"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_3e8q1"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_wx6lo"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_4wukb"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_vgv63"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_8g2nn"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_3td0o"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_w1hk4"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_51w8a"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.97019607, 0.9507843, 0.97843134, 1)
-shadow_color = Color(0, 0, 0, 0.15)
-shadow_size = 2
-shadow_offset = Vector2(0, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7r1iw"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.90224314, 0.87433726, 0.93819606, 1)
-shadow_color = Color(0, 0, 0, 0.15)
-shadow_offset = Vector2(0, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_32gxc"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.9248941, 0.8998196, 0.9516078, 1)
-shadow_color = Color(0, 0, 0, 0.15)
-shadow_size = 2
-shadow_offset = Vector2(0, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_w04ni"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v0qxi"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(1, 0.9843137, 0.99607843, 0.38)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3j0xk"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.97019607, 0.9507843, 0.97843134, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.40392157, 0.3137255, 0.6431373, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_44cik"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_iytk3"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ep3f8"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_boxsh"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_u4tgy"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_31d4u"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.12941177, 0, 0.3647059, 1)
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_trt52"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_f2ju3"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_h1hkk"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_82p76"]
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_aybkc"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_c6lrq"]
-content_margin_left = 1.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.12941177, 0, 0.3647059, 1)
-corner_radius_top_left = 11
-corner_radius_bottom_left = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4lo4p"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_gr7se"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.82305884, 0.7626667, 0.9237647, 1)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dhuxk"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.85458827, 0.79733336, 0.9491765, 1)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_j7e14"]
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jf211"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.28627452, 0.27058825, 0.30980393, 0.38)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_t1x7y"]
-content_margin_left = 0.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.91764706, 0.8666667, 1, 1)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.12941177, 0, 0.3647059, 1)
-corner_radius_top_right = 11
-corner_radius_bottom_right = 11
-shadow_color = Color(1, 1, 1, 0)
-
-[node name="PlatformsSettingsView" type="Control" unique_id=136304419]
+[node name="PlatformsSettingsView" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -307,7 +11,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_psview")
 
-[node name="ScrollContainer" type="ScrollContainer" parent="." unique_id=1634810027]
+[node name="ScrollContainer" type="ScrollContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -317,7 +21,7 @@ grow_vertical = 2
 follow_focus = true
 horizontal_scroll_mode = 0
 
-[node name="MarginContainer" type="MarginContainer" parent="ScrollContainer" unique_id=423608699]
+[node name="MarginContainer" type="MarginContainer" parent="ScrollContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
@@ -326,138 +30,21 @@ theme_override_constants/margin_top = 20
 theme_override_constants/margin_right = 20
 theme_override_constants/margin_bottom = 20
 
-[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer/MarginContainer" unique_id=1697923102]
+[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer/MarginContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 0
+
+[node name="CardsHBox" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="Spacer" type="Control" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=1036150649]
-custom_minimum_size = Vector2(0, 10)
-layout_mode = 2
-mouse_filter = 1
-
-[node name="HboxSettingsRow" type="HFlowContainer" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=2068645645]
-layout_mode = 2
-
-[node name="VboxCoverSettings" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow" unique_id=744018749]
-layout_mode = 2
-
-[node name="M3Checkbox_DuplicateCovers" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1839931523]
-script = ExtResource("3_lo3qa")
-layout_mode = 2
-size_flags_horizontal = 0
-size_flags_vertical = 4
-text = "Fold duplicate covers"
-flat = true
-metadata/_custom_type_script = "uid://fmt3itosrqu4"
-
-[node name="M3Checkbox_Hide" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=1162553171]
-script = ExtResource("3_lo3qa")
-layout_mode = 2
-size_flags_horizontal = 0
-size_flags_vertical = 4
-text = "Hide games with cover"
-flat = true
-metadata/_custom_type_script = "uid://fmt3itosrqu4"
-
-[node name="M3Checkbox_Siblings" type="CheckBox" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow/VboxCoverSettings" unique_id=333737005]
-script = ExtResource("3_lo3qa")
-layout_mode = 2
-size_flags_horizontal = 0
-size_flags_vertical = 4
-text = "Fold Romm siblings"
-flat = true
-metadata/_custom_type_script = "uid://fmt3itosrqu4"
-
-[node name="HboxButtonRow" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=890940306]
-layout_mode = 2
-
-[node name="M3Button_CheckUpdates" type="Button" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=1743914587]
-script = ExtResource("4_cuggk")
-layout_mode = 2
-size_flags_vertical = 0
-text = "Update"
-alignment = 0
-button_variant = 0
-button_size = 1
-button_shape = 1
-icon_name = "cloud-refresh"
-m3_tooltip_text = "Check for emulator updates."
-metadata/_custom_type_script = "uid://dv82iypo8etp8"
-metadata/m3_tooltip_text = "Check for emulator updates."
-metadata/m3_tooltip_variant = 0
-
-[node name="M3Button_SelectAll" type="Button" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=1487232430]
-script = ExtResource("4_cuggk")
-layout_mode = 2
-size_flags_vertical = 0
-text = "Select All"
-button_size = 1
-m3_tooltip_text = "Bulk select platforms."
-metadata/_custom_type_script = "uid://dv82iypo8etp8"
-metadata/m3_tooltip_text = "Bulk select platforms."
-metadata/m3_tooltip_variant = 0
-
-[node name="Control" type="Control" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=347424575]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="M3Label" type="Label" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=2128696601]
-script = ExtResource("3_cuggk")
-layout_mode = 2
-text = "Sync:"
-vertical_alignment = 1
-label_style = 12
-
-[node name="M3ButtonGroup" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow" unique_id=332985959]
-layout_mode = 2
-script = ExtResource("3_n4rs8")
-mode = 1
-select_mode = 2
-shape = 0
-metadata/_custom_type_script = "uid://dc5stkkoubv5o"
-
-[node name="M3Button_Sync" type="Button" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow/M3ButtonGroup" unique_id=1693256104]
-script = ExtResource("4_cuggk")
-layout_mode = 2
-size_flags_vertical = 0
-text = "Quick"
-alignment = 0
-button_size = 1
-icon_name = "sync"
-m3_tooltip_text = "Fetch new games and updates since last sync"
-metadata/_custom_type_script = "uid://dv82iypo8etp8"
-metadata/m3_tooltip_text = "Fetch new games and updates since last sync"
-metadata/m3_tooltip_variant = 0
-
-[node name="M3Button_FullSync" type="Button" parent="ScrollContainer/MarginContainer/VBoxContainer/HboxButtonRow/M3ButtonGroup" unique_id=843799757]
-script = ExtResource("4_cuggk")
-layout_mode = 2
-size_flags_vertical = 0
-text = "Full"
-button_size = 1
-m3_tooltip_text = "Clear library for full metadata refresh."
-metadata/_custom_type_script = "uid://dv82iypo8etp8"
-metadata/m3_tooltip_text = "Clear library for full metadata refresh."
-metadata/m3_tooltip_variant = 0
-
-[node name="Spacer2" type="Control" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=602410741]
-custom_minimum_size = Vector2(0, 10)
-layout_mode = 2
-mouse_filter = 1
-
-[node name="CardsHBox" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer" unique_id=553846245]
+[node name="CardsLeft" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/CardsHBox"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 10
 
-[node name="CardsLeft" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/CardsHBox" unique_id=1012705608]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 10
-
-[node name="CardsRight" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/CardsHBox" unique_id=1368569779]
+[node name="CardsRight" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/CardsHBox"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 10

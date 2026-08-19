@@ -11,6 +11,9 @@ var _media_container: MediaContainer = null
 
 var _current_image_task_id: int = -1
 var _loading_game_id: String = ""
+# True while a hero texture decode is in flight and no previous cover is on
+# screen; drives the effect stack's skeleton shimmer.
+var _is_loading: bool = false
 
 func _ready():
 	# Create gray fallback texture
@@ -46,6 +49,7 @@ func _load_effect_config():
 	_media_container.corner_radius_ratio = config.get("corner_radius", 0.06)
 	_media_container.effect_settings = config.get("effects", [])
 	_effect_stack.initialize(_media_container, _media_container.effect_settings, "hero")
+	_effect_stack.set_loading(_is_loading)
 	_effect_stack.update_draw_rects()
 
 func _notification(what: int) -> void:
@@ -67,6 +71,7 @@ func _notification(what: int) -> void:
 				_effect_stack.update_draw_rects()
 			if _current_texture:
 				_effect_stack.set_game_texture(_current_texture)
+			_effect_stack.set_loading(_is_loading)
 		elif _effect_stack:
 			_effect_stack.set_parent_rid(get_canvas_item())
 			_effect_stack.update_draw_rects()
@@ -118,6 +123,13 @@ func set_game(game: GameResource):
 
 	_loading_game_id = game.id if game else ""
 
+	# Only shimmer when nothing is on screen yet; otherwise keep showing the
+	# previous cover until the new one is ready.
+	if _current_texture == null or _current_texture == _gray_texture:
+		_is_loading = true
+		if _effect_stack:
+			_effect_stack.set_loading(true)
+
 	const MAX_HERO_TEXTURE_SIZE: int = 1024
 
 	var load_callable = func() -> Image:
@@ -167,8 +179,10 @@ func set_game(game: GameResource):
 	_current_image_task_id = MemorySubManager.queue_image_task(load_callable, callback_callable, true)
 
 func _set_texture(tex: Texture2D):
+	_is_loading = false
 	_current_texture = tex
 	if _effect_stack:
+		_effect_stack.set_loading(false)
 		_effect_stack.set_game_texture(tex)
 
 func clear():

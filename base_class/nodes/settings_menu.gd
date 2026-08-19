@@ -7,30 +7,61 @@ var variables: Array
 
 var accent_color: Color = Color.TRANSPARENT
 
+# Rows are rendered into SettingsSection cards (header + rounded surface card
+# with separators). Reused when no new title is given.
+var _current_section: SettingsSection = null
+
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 signal setting_changed(value: Variant, setting: SettingsVar)
 
-func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar]):
-	var menu_name_label = M3Label.new()
-	menu_name_label.text = subgroup
-	menu_name_label.label_style = M3Label.Style.HEADLINE_SMALL
-	menu_name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(menu_name_label)
+func _init() -> void:
+	add_theme_constant_override("separation", int(M3Units.dp(16)))
+
+func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar], icon : String = ""):
+	_current_section = SettingsSection.new(subgroup, icon)
+	add_child(_current_section)
 	build_controls_from_settingsvars(settingsvars)
 
-func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: String = "") -> void:
-	if title:
-		var title_label = M3Label.new()
-		title_label.text = title
-		title_label.label_style = M3Label.Style.TITLE_MEDIUM
-		title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		add_child(title_label)
-	
+func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: String = "", icon: String = "") -> void:
+	if not title.is_empty() or _current_section == null:
+		_current_section = SettingsSection.new(title, icon)
+		add_child(_current_section)
+
 	for settingsvar in settingsvars:
 		if settingsvar.state != State.INTERNAL:
 			match_var_type(settingsvar)
+
+func _add_setting_row(content: Control, trailing: Array[Control] = []) -> void:
+	_current_section.add_row(content, trailing)
+
+func _add_setting_content(content: Control) -> void:
+	_current_section.add_content(content)
+
+## Title + optional description block used at the leading edge of rows.
+func _make_label_block(settingsvar: SettingsVar) -> VBoxContainer:
+	var block := VBoxContainer.new()
+	block.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	block.add_theme_constant_override("separation", int(M3Units.dp(2)))
+
+	var title := M3Label.new()
+	title.text = settingsvar.display_name
+	title.label_style = M3Label.Style.BODY_LARGE
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	block.add_child(title)
+
+	if not settingsvar.description.is_empty():
+		var description := M3Label.new()
+		description.text = settingsvar.description
+		description.label_style = M3Label.Style.BODY_SMALL
+		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		# M3Label owns font_color; use its variant-color switch rather than an
+		# override (which _apply_style would clobber).
+		description.use_on_surface_variant = true
+		block.add_child(description)
+
+	return block
 
 func update_control_value(property_name: String, value: Variant) -> void:
 	var control = controls.get(property_name)
@@ -85,6 +116,7 @@ func clear_controls() -> void:
 	for child in get_children():
 		child.queue_free()
 	controls.clear()
+	_current_section = null
 
 func refresh_all_control_values() -> void:
 	for property_name in controls.keys():
@@ -149,21 +181,14 @@ func _apply_accent(control: Control) -> void:
 	if control is M3Slider or control is M3Switch or control is M3TextField or control is M3ColorPicker:
 		control.accent_color = accent_color
 
+## Trailing control width in px; overridable per-setting via the
+## "control_width" metadata key (dp).
+func _trailing_width(settingsvar: SettingsVar, default_dp: float) -> float:
+	return M3Units.dp(settingsvar.metadata.get("control_width", default_dp))
+
 func match_var_type(settingsvar : SettingsVar):
 	match settingsvar.type:
 		Type.BOOL:
-			var hbox = HBoxContainer.new()
-			hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			add_child(hbox)
-			
-			var label = M3Label.new()
-			label.text = settingsvar.display_name
-			label.label_style = M3Label.Style.BODY_MEDIUM
-			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			hbox.add_child(label)
-			
 			var switch = M3Switch.new()
 			switch.button_pressed = settingsvar.value
 			# For dual_screen_mode, disable the switch if no second display is available
@@ -175,7 +200,7 @@ func match_var_type(settingsvar : SettingsVar):
 				switch.focus_mode = Control.FOCUS_NONE
 			switch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			hbox.add_child(switch)
+			_add_setting_row(_make_label_block(settingsvar), [switch])
 			controls[settingsvar.property_name] = switch
 			_apply_metadata(switch, settingsvar.metadata)
 			_apply_accent(switch)
@@ -190,8 +215,11 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		Type.ENUM, Type.ARRAY:
 			var option_button = M3OptionButton.new()
-			option_button.label_text = settingsvar.display_name
+			# Row carries the label; keep the field's floating label empty.
+			option_button.label_text = ""
 			option_button.fit_to_longest_item = false
+			option_button.custom_minimum_size.x = _trailing_width(settingsvar, 220.0)
+			option_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 			var id = 0
 			var matched_index = 0
 			for option in settingsvar.options:
@@ -205,7 +233,7 @@ func match_var_type(settingsvar : SettingsVar):
 			option_button.editable = settingsvar.state == 0
 			# Store options for reverse lookup when refreshing values
 			option_button.set_meta("options", settingsvar.options.duplicate())
-			add_child(option_button)
+			_add_setting_row(_make_label_block(settingsvar), [option_button])
 			controls[settingsvar.property_name] = option_button
 			_apply_metadata(option_button, settingsvar.metadata)
 			_apply_accent(option_button)
@@ -213,15 +241,9 @@ func match_var_type(settingsvar : SettingsVar):
 				emit_signal("setting_changed", value, settingsvar)
 			)
 		Type.FLOAT, Type.INT:
-			var slider_label = M3Label.new()
-			slider_label.text = settingsvar.display_name
-			slider_label.label_style = M3Label.Style.BODY_MEDIUM
-			slider_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			add_child(slider_label)
-			
 			var display_scale = settingsvar.metadata.get("display_scale", 1.0)
 			var display_unit = settingsvar.metadata.get("display_unit", "")
-			
+
 			var slider = M3Slider.new()
 			slider.slider_size = M3Slider.Size.EXTRA_SMALL
 			# Set cached properties before add_child so _ready() picks them up
@@ -230,11 +252,13 @@ func match_var_type(settingsvar : SettingsVar):
 			slider.step = settingsvar.step * display_scale
 			slider.show_stops = false
 			slider.set_meta("display_scale", display_scale)
-			
+			slider.custom_minimum_size.x = _trailing_width(settingsvar, 220.0)
+			slider.size_flags_horizontal = Control.SIZE_SHRINK_END
+
 			if not display_unit.is_empty():
 				slider.label_formatter = "%.0f" + display_unit.replace("%", "%%")
-			
-			add_child(slider)
+
+			_add_setting_row(_make_label_block(settingsvar), [slider])
 			controls[settingsvar.property_name] = slider
 			
 			# Properties that need the internal slider to exist must be set after add_child
@@ -251,11 +275,14 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		Type.STRING:
 			var text_field = M3TextField.new()
-			text_field.label_text = settingsvar.display_name
+			# Row carries the label; keep the field's floating label empty.
+			text_field.label_text = ""
 			text_field.text = settingsvar.value if settingsvar.value else ""
 			text_field.editable = settingsvar.state == 0
 			text_field.secret = settingsvar.encrypted
-			add_child(text_field)
+			text_field.custom_minimum_size.x = _trailing_width(settingsvar, 240.0)
+			text_field.size_flags_horizontal = Control.SIZE_SHRINK_END
+			_add_setting_row(_make_label_block(settingsvar), [text_field])
 			controls[settingsvar.property_name] = text_field
 			_apply_metadata(text_field, settingsvar.metadata)
 			_apply_accent(text_field)
@@ -265,7 +292,7 @@ func match_var_type(settingsvar : SettingsVar):
 		
 		Type.PATH:
 			var path_field = M3TextField.new()
-			path_field.label_text = settingsvar.display_name
+			path_field.label_text = ""
 			path_field.text = settingsvar.value if settingsvar.value else ""
 			path_field.editable = settingsvar.state == 0
 			path_field.focus_mode = Control.FOCUS_NONE
@@ -274,19 +301,20 @@ func match_var_type(settingsvar : SettingsVar):
 			controls[settingsvar.property_name] = path_field
 			_apply_metadata(path_field, settingsvar.metadata)
 			_apply_accent(path_field)
-			
+
 			var browse_button = M3Button.new()
 			browse_button.text = "Browse..."
 			browse_button.icon_name = "folder-open"
 			browse_button.button_variant = M3Button.Variant.OUTLINED
 			browse_button.disabled = settingsvar.state != 0
 			browse_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			
-			var path_row = HBoxContainer.new()
-			path_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			path_row.add_child(path_field)
-			path_row.add_child(browse_button)
-			add_child(path_row)
+
+			var path_controls = HBoxContainer.new()
+			path_controls.add_theme_constant_override("separation", int(M3Units.dp(8)))
+			path_field.custom_minimum_size.x = _trailing_width(settingsvar, 240.0)
+			path_controls.add_child(path_field)
+			path_controls.add_child(browse_button)
+			_add_setting_row(_make_label_block(settingsvar), [path_controls])
 			
 			browse_button.pressed.connect(func():
 				UIManager.show_folder_dialog("Select " + settingsvar.display_name, path_field.text, func(dir: String):
@@ -301,32 +329,21 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		
 		Type.VECTOR2:
-			var rangeslider_label = M3Label.new()
-			rangeslider_label.text = settingsvar.display_name
-			rangeslider_label.label_style = M3Label.Style.BODY_MEDIUM
-			rangeslider_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			add_child(rangeslider_label)
-			
 			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, settingsvar.step, settingsvar.min_value, settingsvar.max_value)
-			rangeslider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rangeslider.custom_minimum_size.x = _trailing_width(settingsvar, 220.0)
+			rangeslider.size_flags_horizontal = Control.SIZE_SHRINK_END
 			rangeslider.editable = settingsvar.state == 0
-			add_child(rangeslider)
+			_add_setting_row(_make_label_block(settingsvar), [rangeslider])
 			controls[settingsvar.property_name] = rangeslider
 			rangeslider.value_changed.connect(func(value: Vector2):
 				emit_signal("setting_changed", value, settingsvar)
 			)
 		
 		Type.COLOR:
-			var color_label = M3Label.new()
-			color_label.text = settingsvar.display_name
-			color_label.label_style = M3Label.Style.BODY_MEDIUM
-			color_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			add_child(color_label)
-			
 			var color_picker = M3ColorPicker.new()
 			color_picker.color = settingsvar.value if settingsvar.value is Color else Color.WHITE
 			color_picker.disabled = settingsvar.state != 0
-			add_child(color_picker)
+			_add_setting_row(_make_label_block(settingsvar), [color_picker])
 			controls[settingsvar.property_name] = color_picker
 			_apply_accent(color_picker)
 			color_picker.color_changed.connect(func(color: Color):
@@ -334,17 +351,12 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		
 		Type.GRADIENT:
-			var gradient_label = M3Label.new()
-			gradient_label.text = settingsvar.display_name
-			gradient_label.label_style = M3Label.Style.BODY_MEDIUM
-			gradient_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			add_child(gradient_label)
-			
 			var gradient_edit = GradientEdit.new()
 			if settingsvar.value is Gradient:
 				gradient_edit.set_gradient(settingsvar.value)
-			gradient_edit.custom_minimum_size = Vector2(0, 24)
-			add_child(gradient_edit)
+			gradient_edit.custom_minimum_size = Vector2(_trailing_width(settingsvar, 220.0), 24)
+			gradient_edit.size_flags_horizontal = Control.SIZE_SHRINK_END
+			_add_setting_row(_make_label_block(settingsvar), [gradient_edit])
 			controls[settingsvar.property_name] = gradient_edit
 			gradient_edit.gradient_changed.connect(func(gradient: Gradient):
 				emit_signal("setting_changed", gradient, settingsvar)
@@ -354,7 +366,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var button = M3Button.new()
 			button.text = settingsvar.display_name
 			button.button_variant = M3Button.Variant.TEXT
-			add_child(button)
+			_add_setting_content(button)
 
 func _on_dual_screen_availability_changed(available: bool) -> void:
 	"""Update the dual_screen_mode switch when display availability changes."""

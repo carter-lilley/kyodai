@@ -83,46 +83,42 @@ func _setup_ui() -> void:
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	margin.add_child(vbox)
-	
-	# Title
-	var title_label = M3Label.new()
-	title_label.text = "Library Appearance"
-	title_label.label_style = M3Label.Style.HEADLINE_SMALL
-	vbox.add_child(title_label)
-	
+
 	# General layout settings (excluding internal ones)
 	_library_general_menu = SettingsMenu.new()
 	vbox.add_child(_library_general_menu)
-	
-	# Background Effect dropdown
+
+	# Background section: effect picker + dynamic effect settings
+	var background_section := SettingsSection.new("Background", "image-outline")
+	vbox.add_child(background_section)
+
 	_library_effect_dropdown = M3OptionButton.new()
 	_library_effect_dropdown.label_text = "Background Effect"
 	_library_effect_dropdown.fit_to_longest_item = false
 	_library_effect_dropdown.item_selected.connect(_on_library_effect_selected)
-	vbox.add_child(_library_effect_dropdown)
-	
-	# Dynamic settings menu for the selected effect
+	background_section.add_content(_library_effect_dropdown, false)
+
+	# Dynamic settings menu for the selected effect (renders its own section)
 	_library_effect_menu = SettingsMenu.new()
 	vbox.add_child(_library_effect_menu)
-	
+
 	# Theme Presets section
 	_create_preset_section(vbox)
-	
+
 	# Bottom buffer
 	var bottom_buffer = Control.new()
 	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
 	vbox.add_child(bottom_buffer)
 
 func _create_preset_section(vbox: VBoxContainer) -> void:
-	var preset_label = M3Label.new()
-	preset_label.text = "Theme Presets"
-	preset_label.label_style = M3Label.Style.TITLE_MEDIUM
-	vbox.add_child(preset_label)
-	
+	var preset_section := SettingsSection.new("Theme Presets", "palette")
+	vbox.add_child(preset_section)
+
 	var preset_container = HBoxContainer.new()
 	preset_container.custom_minimum_size = Vector2(0, M3Units.dp(30))
-	vbox.add_child(preset_container)
+	preset_section.add_content(preset_container, false)
 	
 	_preset_dropdown = M3OptionButton.new()
 	_preset_dropdown.label_text = "Theme Preset"
@@ -158,7 +154,7 @@ func _refresh_all_settings_ui() -> void:
 				if sv.state != SettingsVar.SettingState.INTERNAL:
 					general_settings.append(sv)
 		if general_settings.size() > 0:
-			_library_general_menu.build_controls_from_settingsvars(general_settings)
+			_library_general_menu.build_controls_from_settingsvars(general_settings, "General", "tune")
 			if not _library_general_menu.setting_changed.is_connected(_on_setting_changed):
 				_library_general_menu.setting_changed.connect(_on_setting_changed)
 	
@@ -319,7 +315,7 @@ func _rebuild_library_effect_controls(effect_id: String) -> void:
 		if current_settings.has(setting.property_name):
 			setting.value = current_settings[setting.property_name]
 	
-	_library_effect_menu.build_controls_from_settingsvars(schema, "Effect Settings")
+	_library_effect_menu.build_controls_from_settingsvars(schema, "Effect Settings", "auto-fix")
 	if not _library_effect_menu.setting_changed.is_connected(_on_library_effect_setting_changed):
 		_library_effect_menu.setting_changed.connect(_on_library_effect_setting_changed)
 

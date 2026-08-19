@@ -10,6 +10,9 @@ signal connection_failed
 @export var test_button_size: M3Button.Size = M3Button.Size.MEDIUM
 @export var show_description: bool = true
 @export var description_text: String = "Connect to your RomM server to browse and download games."
+## Draw a rule under the description. Disable when the panel lives inside a
+## SettingsSection card, which already provides visual separation.
+@export var show_separator: bool = true
 
 var _description_label: M3Label = null
 var _url_field: M3TextField = null
@@ -29,7 +32,8 @@ func _build_ui() -> void:
 		_description_label.text = description_text
 		_description_label.label_style = M3Label.Style.BODY_MEDIUM
 		add_child(_description_label)
-		add_child(HSeparator.new())
+		if show_separator:
+			add_child(HSeparator.new())
 
 	_url_field = M3TextField.new()
 	_url_field.label_text = "RomM URL"

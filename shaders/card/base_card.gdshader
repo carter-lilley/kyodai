@@ -7,6 +7,17 @@ uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float glass_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width (additional inset from glass effect)
 uniform float alpha = 1.0;  // Global alpha multiplier for fade animations
 
+// Skeleton shimmer: replaces the texture sample while media is loading.
+// Colors are pushed from M3Theme by BaseCardEffect so they track dark/light.
+uniform float loading_active : hint_range(0.0, 1.0) = 0.0;
+uniform vec4 loading_base_color : source_color = vec4(0.13, 0.125, 0.14, 1.0);
+uniform vec4 loading_shimmer_color : source_color = vec4(0.32, 0.31, 0.34, 1.0);
+uniform float loading_speed : hint_range(0.1, 5.0) = 2.2;
+uniform float loading_angle_degrees : hint_range(-180.0, 180.0) = 25.0;
+uniform float loading_shimmer_width : hint_range(0.02, 0.4) = 0.3;
+uniform float loading_intensity : hint_range(0.0, 2.0) = 0.8;
+uniform float loading_base_pulse : hint_range(0.0, 0.4) = 0.25;
+
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
@@ -59,11 +70,28 @@ void fragment() {
 	}
 	
 	vec2 inner_uv = inner_pixel_pos / inner_size;
-	
-	// Use the precomputed UV transform from MediaContainer. The transform maps
-	// inner media UV -> texture UV.
-	vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;
-	vec4 tex_color = texture(game_texture, tex_uv);
+
+	vec4 tex_color;
+	if (loading_active > 0.5) {
+		// Skeleton shimmer: gentle base pulse plus a Gaussian glint sweep,
+		// evaluated in media-local UV space so the sweep spans the panel.
+		float pulse = (sin(TIME * loading_speed * 1.5) * 0.5 + 0.5) * loading_base_pulse;
+		vec3 dynamic_base = mix(loading_base_color.rgb, loading_shimmer_color.rgb, pulse);
+
+		vec2 sweep_dir = vec2(cos(radians(loading_angle_degrees)), sin(radians(loading_angle_degrees)));
+		float proj = dot(inner_uv - vec2(0.5), sweep_dir);
+		float period = 2.2;
+		float sweep_pos = mod(TIME * loading_speed, period) - 1.1;
+		float norm_dist = (proj - sweep_pos) / loading_shimmer_width;
+		float wave = exp(-0.5 * norm_dist * norm_dist) * loading_intensity;
+
+		tex_color = vec4(mix(dynamic_base, loading_shimmer_color.rgb, wave), 1.0);
+	} else {
+		// Use the precomputed UV transform from MediaContainer. The transform maps
+		// inner media UV -> texture UV.
+		vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;
+		tex_color = texture(game_texture, tex_uv);
+	}
 	
 	// Combine outer edge alpha with inner inset alpha
 	float final_alpha = edge_alpha;

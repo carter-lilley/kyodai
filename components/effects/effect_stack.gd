@@ -111,6 +111,15 @@ func set_game_texture(texture: Texture2D) -> void:
 		if effect:
 			effect._mark_shader_params_dirty()
 
+## Toggle the base shader's skeleton shimmer (media loading placeholder). The
+## state lives on the MediaContainer so it survives stack rebuilds.
+func set_loading(value: bool) -> void:
+	if media_container:
+		media_container.loading_active = value
+
+func is_loading() -> bool:
+	return media_container != null and media_container.loading_active
+
 func _rebuild_effects():
 	var active_effect_ids: Array[String] = []
 	for config in _effect_configs:

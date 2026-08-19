@@ -19,6 +19,10 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var genres: Array[String] = []
 @export var rating: float = 0.0
 
+## Release date as unix epoch milliseconds (from RomM first_release_date /
+## IGDB first_release_date). 0 means unknown.
+@export var release_date: int = 0
+
 ## Raw IGDB metadata blob from RomM (includes multiplayer_modes, related games, etc.)
 @export var igdb_metadata: Dictionary = {}
 

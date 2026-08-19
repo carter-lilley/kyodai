@@ -4,7 +4,7 @@ extends View
 
 @onready var _scroll_container: ScrollContainer = $ScrollContainer
 @onready var _platforms_container: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer
-@onready var _settings_row: HFlowContainer = $ScrollContainer/MarginContainer/VBoxContainer/HboxSettingsRow
+@onready var _cards_hbox: HBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox
 @onready var _cards_left: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsLeft
 @onready var _cards_right: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsRight
 
@@ -20,10 +20,15 @@ var _platforms_data_loaded: bool = false  # true once we've loaded from DB or ne
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
 var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
 var _was_narrow: bool = false
-var _is_initializing: bool = false
 
 var _romm_connection_panel: RommConnectionPanel = null
 var _loading_indicator: Control = null
+
+# Action row buttons (built in code by _build_sections)
+var _check_updates_button: M3Button = null
+var _select_all_button: M3Button = null
+var _sync_button: M3Button = null
+var _full_sync_button: M3Button = null
 
 # Shared timer for polling platform card install/download state. Each card used
 # to create its own Timer, which added overhead when dozens of cards were built.
@@ -47,57 +52,13 @@ func _is_narrow_screen() -> bool:
 
 func _ready():
 	view_name = "RomM"
-	_is_initializing = true
 
-	# Connect M3 checkbox signals and set initial values from settings
-	var m3_dup_covers: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_DuplicateCovers")
-	var fold_covers_setting = DataManager.get_setting("fold_duplicate_covers")
-	m3_dup_covers.set_block_signals(true)
-	m3_dup_covers.button_pressed = fold_covers_setting.value if fold_covers_setting else false
-	m3_dup_covers.set_block_signals(false)
-	m3_dup_covers.toggled.connect(_on_fold_covers_toggled)
-
-	var m3_hide: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Hide")
-	var hide_no_covers_setting = DataManager.get_setting("hide_games_without_covers")
-	m3_hide.set_block_signals(true)
-	m3_hide.button_pressed = hide_no_covers_setting.value if hide_no_covers_setting else true
-	m3_hide.set_block_signals(false)
-	m3_hide.toggled.connect(_on_hide_no_covers_toggled)
-
-	var m3_siblings: M3Checkbox = _platforms_container.get_node("HboxSettingsRow/VboxCoverSettings/M3Checkbox_Siblings")
-	var fold_romm_setting = DataManager.get_setting("fold_romm_siblings")
-	m3_siblings.set_block_signals(true)
-	m3_siblings.button_pressed = fold_romm_setting.value if fold_romm_setting else true
-	m3_siblings.set_block_signals(false)
-	m3_siblings.toggled.connect(_on_fold_romm_siblings_toggled)
-
-	# Add reusable RomM connection panel to the settings row
-	_romm_connection_panel = RommConnectionPanel.new()
-	_romm_connection_panel.test_button_text = "Test"
-	_romm_connection_panel.test_button_size = M3Button.Size.SMALL
-	_romm_connection_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_romm_connection_panel.connection_succeeded.connect(_on_romm_connection_succeeded)
-	_settings_row.add_child(_romm_connection_panel)
-
-	_is_initializing = false
-
-	# Connect button signals
-	var check_updates_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
-	check_updates_button.pressed.connect(_on_check_updates_pressed)
-
-	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
-	select_all_button.pressed.connect(_on_select_all_pressed)
-
-	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
-	sync_button.pressed.connect(_on_sync_pressed)
-
-	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
-	full_sync_button.pressed.connect(_on_full_sync_pressed)
+	_platforms_container.add_theme_constant_override("separation", int(M3Units.dp(16)))
+	_build_sections()
 
 	# Set initial column visibility
 	_was_narrow = _is_narrow_screen()
 	_update_column_visibility()
-	_update_settings_row_layout()
 
 	# Create a single shared timer to refresh all platform cards' status
 	# indicators, replacing per-card timers. Use autostart so it restarts itself
@@ -109,6 +70,96 @@ func _ready():
 	add_child(_status_poll_timer)
 
 	super._ready()
+
+func _build_sections() -> void:
+	"""Compose the page from SettingsSection cards: connection credentials,
+	library display switches, and the platforms grid with its action row."""
+	# --- Connection ---
+	var connection_section := SettingsSection.new("Connection", "cloud-sync")
+	_romm_connection_panel = RommConnectionPanel.new()
+	_romm_connection_panel.test_button_text = "Test"
+	_romm_connection_panel.test_button_size = M3Button.Size.SMALL
+	_romm_connection_panel.show_separator = false
+	_romm_connection_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_romm_connection_panel.connection_succeeded.connect(_on_romm_connection_succeeded)
+	connection_section.add_content(_romm_connection_panel, false)
+	_platforms_container.add_child(connection_section)
+	_platforms_container.move_child(connection_section, 0)
+
+	# --- Library display ---
+	var library_menu := SettingsMenu.new()
+	library_menu.add_theme_constant_override("separation", 0)
+	_platforms_container.add_child(library_menu)
+	_platforms_container.move_child(library_menu, 1)
+	var library_vars: Array[SettingsVar] = []
+	for prop in ["fold_duplicate_covers", "hide_games_without_covers", "fold_romm_siblings"]:
+		var sv = DataManager.get_setting(prop)
+		if sv:
+			library_vars.append(sv)
+	library_menu.build_controls_from_settingsvars(library_vars, "Library", "image-outline")
+	library_menu.setting_changed.connect(func(value, setting): DataManager.set_setting(value, setting))
+
+	# --- Platforms ---
+	var platforms_section := SettingsSection.new("Platforms", "gamepad")
+	platforms_section.add_content(_build_action_row(), false)
+	_platforms_container.add_child(platforms_section)
+	_platforms_container.move_child(platforms_section, _cards_hbox.get_index())
+
+func _build_action_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", int(M3Units.dp(8)))
+
+	_check_updates_button = M3Button.new()
+	_check_updates_button.text = "Update"
+	_check_updates_button.icon_name = "cloud-refresh"
+	_check_updates_button.button_variant = M3Button.Variant.ELEVATED
+	_check_updates_button.button_size = M3Button.Size.SMALL
+	_check_updates_button.button_shape = M3Button.Shape.PILL
+	_check_updates_button.m3_tooltip_text = "Check for emulator updates."
+	_check_updates_button.pressed.connect(_on_check_updates_pressed)
+	row.add_child(_check_updates_button)
+
+	_select_all_button = M3Button.new()
+	_select_all_button.text = "Select All"
+	_select_all_button.button_variant = M3Button.Variant.TONAL
+	_select_all_button.button_size = M3Button.Size.SMALL
+	_select_all_button.m3_tooltip_text = "Bulk select platforms."
+	_select_all_button.pressed.connect(_on_select_all_pressed)
+	row.add_child(_select_all_button)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+
+	var sync_label := M3Label.new()
+	sync_label.text = "Sync:"
+	sync_label.label_style = M3Label.Style.BODY_MEDIUM
+	sync_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(sync_label)
+
+	var group := M3ButtonGroup.new()
+	group.mode = M3ButtonGroup.Mode.CONNECTED
+	group.select_mode = M3ButtonGroup.SelectMode.NONE
+	group.shape = M3ButtonGroup.Shape.ROUND
+
+	_sync_button = M3Button.new()
+	_sync_button.text = "Quick"
+	_sync_button.icon_name = "sync"
+	_sync_button.button_size = M3Button.Size.SMALL
+	_sync_button.m3_tooltip_text = "Fetch new games and updates since last sync"
+	_sync_button.pressed.connect(_on_sync_pressed)
+	group.add_child(_sync_button)
+
+	_full_sync_button = M3Button.new()
+	_full_sync_button.text = "Full"
+	_full_sync_button.button_size = M3Button.Size.SMALL
+	_full_sync_button.m3_tooltip_text = "Clear library for full metadata refresh."
+	_full_sync_button.pressed.connect(_on_full_sync_pressed)
+	group.add_child(_full_sync_button)
+
+	row.add_child(group)
+	return row
 
 func _fetch_platforms():
 	if _is_fetching_platforms:
@@ -237,15 +288,28 @@ func _get_platforms_from_database() -> Array:
 
 func _show_loading_indicator() -> void:
 	_hide_loading_indicator()
-	var wrapper = CenterContainer.new()
+	# Skeleton rows mimic the platform card layout (two columns when wide) so
+	# the list feels populated while the fetch/precompute runs.
+	var wrapper = HBoxContainer.new()
 	wrapper.name = "LoadingIndicator"
 	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	wrapper.custom_minimum_size = Vector2(0, M3Units.dp(120))
-	var spinner = M3Progress.new()
-	spinner.mode = M3Progress.Mode.CIRCULAR
-	spinner.progress_size = M3Progress.Size.LARGE
-	spinner.indeterminate = true
-	wrapper.add_child(spinner)
+	wrapper.add_theme_constant_override("separation", 10)
+	var column_count := 1 if _is_narrow_screen() else 2
+	for c in range(column_count):
+		var column := VBoxContainer.new()
+		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		column.add_theme_constant_override("separation", 10)
+		var row_count := 4 if c == 0 else 3
+		for i in range(row_count):
+			var skeleton := Panel.new()
+			skeleton.custom_minimum_size = Vector2(0, 80)
+			skeleton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var style := StyleBoxFlat.new()
+			style.bg_color = Color.WHITE
+			skeleton.add_theme_stylebox_override("panel", style)
+			M3Shimmer.attach(skeleton, 0.12)
+			column.add_child(skeleton)
+		wrapper.add_child(column)
 	_platforms_container.add_child(wrapper)
 	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
 	_platforms_container.move_child(wrapper, cards_index)
@@ -273,7 +337,6 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 	# cards we already have, skip the rebuild entirely.
 	if not _platform_cards.is_empty() and _cards_match_data(data):
 		_update_column_visibility()
-		_update_settings_row_layout()
 		# Re-balance columns if the narrow/wide state changed while hidden.
 		_on_viewport_size_changed(Vector2.ZERO)
 		_hide_loading_indicator()
@@ -829,9 +892,8 @@ func _refresh_all_card_status() -> void:
 			card.refresh_ui()
 
 func _on_check_updates_pressed():
-	var check_button: Button = _platforms_container.get_node("HboxButtonRow/M3Button_CheckUpdates")
-	if check_button:
-		check_button.disabled = true
+	if _check_updates_button:
+		_check_updates_button.disabled = true
 
 	var checking_notification = SystemManager.notifications.show_notification(
 		"Checking emulator updates...", SystemManager.notifications.Type.INFO,
@@ -842,8 +904,8 @@ func _on_check_updates_pressed():
 	LaunchManager.check_for_updates(func(_updated: Array, _up_to_date: Array, _failed: Array, _failed_details: Dictionary):
 		SystemManager.notifications.dismiss_notification(checking_notification)
 
-		if check_button:
-			check_button.disabled = false
+		if _check_updates_button:
+			_check_updates_button.disabled = false
 
 		if _updated.size() > 0:
 			SystemManager.notifications.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), SystemManager.notifications.Type.SUCCESS)
@@ -896,19 +958,16 @@ func _on_full_sync_pressed():
 	)
 
 func _run_sync(force_full_sync: bool) -> void:
-	var sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_Sync")
-	var full_sync_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3ButtonGroup/M3Button_FullSync")
-
-	if sync_button:
-		sync_button.disabled = true
-	if full_sync_button:
-		full_sync_button.disabled = true
+	if _sync_button:
+		_sync_button.disabled = true
+	if _full_sync_button:
+		_full_sync_button.disabled = true
 
 	DataManager.sync_enabled_platforms(func(_success: bool, _message: String, _synced: int, _total: int):
-		if sync_button:
-			sync_button.disabled = false
-		if full_sync_button:
-			full_sync_button.disabled = false
+		if _sync_button:
+			_sync_button.disabled = false
+		if _full_sync_button:
+			_full_sync_button.disabled = false
 
 		if _success:
 			if force_full_sync:
@@ -923,8 +982,7 @@ func _run_sync(force_full_sync: bool) -> void:
 	, force_full_sync)
 
 func _update_select_all_button_text():
-	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
-	if not select_all_button:
+	if not _select_all_button:
 		return
 
 	# Check if all platforms are currently selected
@@ -937,14 +995,13 @@ func _update_select_all_button_text():
 			break
 
 	if not has_platforms:
-		select_all_button.text = "Select All"
+		_select_all_button.text = "Select All"
 		return
 
-	select_all_button.text = "Deselect All" if all_selected else "Select All"
+	_select_all_button.text = "Deselect All" if all_selected else "Select All"
 
 func _on_select_all_pressed():
-	var select_all_button: M3Button = _platforms_container.get_node("HboxButtonRow/M3Button_SelectAll")
-	if not select_all_button:
+	if not _select_all_button:
 		return
 
 	# Check if all platforms are currently selected
@@ -975,14 +1032,7 @@ func _on_select_all_pressed():
 		_set_platform_enabled(slug, platform_id, new_state)
 
 	# Update button text
-	select_all_button.text = "Deselect All" if new_state else "Select All"
-
-func _update_settings_row_layout() -> void:
-	"""Ensure the settings row flows and the RomM panel fills available width."""
-	if _settings_row:
-		_settings_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if _romm_connection_panel:
-		_romm_connection_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_select_all_button.text = "Deselect All" if new_state else "Select All"
 
 func _update_column_visibility() -> void:
 	var is_narrow = _is_narrow_screen()
@@ -999,7 +1049,6 @@ func _on_viewport_size_changed(_new_size: Vector2) -> void:
 	SystemManager.display debounces this signal, so this only runs after the user
 	stops resizing."""
 	_update_column_visibility()
-	_update_settings_row_layout()
 
 	if _platform_cards.is_empty():
 		return
@@ -1060,27 +1109,6 @@ func on_view_show():
 func on_view_hide():
 	_save_settings()
 	super.on_view_hide()
-
-func _on_fold_covers_toggled(enabled: bool) -> void:
-	if _is_initializing:
-		return
-	var setting = DataManager.get_setting("fold_duplicate_covers")
-	if setting:
-		DataManager.set_setting(enabled, setting)
-
-func _on_hide_no_covers_toggled(enabled: bool) -> void:
-	if _is_initializing:
-		return
-	var setting = DataManager.get_setting("hide_games_without_covers")
-	if setting:
-		DataManager.set_setting(enabled, setting)
-
-func _on_fold_romm_siblings_toggled(enabled: bool) -> void:
-	if _is_initializing:
-		return
-	var setting = DataManager.get_setting("fold_romm_siblings")
-	if setting:
-		DataManager.set_setting(enabled, setting)
 
 func _on_sync_completed(success: bool, _message: String) -> void:
 	"""When a library sync finishes, mark the cached platform list dirty so the

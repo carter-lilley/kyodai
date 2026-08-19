@@ -47,6 +47,14 @@ var vertical_offset: float = 0.0:
 			changed.emit()
 var edge_aa_enabled: bool = false
 
+## When true, the base card shader renders an animated skeleton shimmer
+## instead of the source texture (used while cover art is loading).
+var loading_active: bool = false:
+	set(value):
+		if loading_active != value:
+			loading_active = value
+			changed.emit()
+
 # --- Effect configuration (for saving/loading themes) ---
 var effect_settings: Array = []
 var focus_effect_settings: Array = []

@@ -46,27 +46,19 @@ func _build_view():
 	# KEY: Use SHRINK_BEGIN so the VBox reports its true content height
 	# to the ScrollContainer instead of trying to fill the viewport.
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	vbox.add_theme_constant_override("separation", M3Units.dp(12))
+	vbox.add_theme_constant_override("separation", M3Units.dp(16))
 	margin.add_child(vbox)
-	
-	# Title
-	var title = M3Label.new()
-	title.text = "GameNative Steam Games"
-	title.label_style = M3Label.Style.HEADLINE_SMALL
-	vbox.add_child(title)
-	
-	# Description
+
+	# Add game section
+	var add_section := SettingsSection.new("Add Game", "plus")
+	vbox.add_child(add_section)
+
 	var desc = M3Label.new()
 	desc.text = "Add Steam games installed via GameNative to show in your library."
 	desc.label_style = M3Label.Style.BODY_MEDIUM
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(desc)
-	
-	# Spacer
-	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(0, M3Units.dp(8))
-	vbox.add_child(spacer)
-	
+	add_section.add_content(desc, false)
+
 	# Check GameNative status
 	if not LaunchManager.gamenative_is_installed():
 		var warning = M3Label.new()
@@ -74,54 +66,47 @@ func _build_view():
 		warning.label_style = M3Label.Style.BODY_MEDIUM
 		warning.use_on_surface_variant = true
 		warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		vbox.add_child(warning)
-	
-	# Add game section
-	var add_section = HBoxContainer.new()
-	add_section.add_theme_constant_override("separation", M3Units.dp(10))
-	vbox.add_child(add_section)
-	
+		add_section.add_content(warning)
+
+	var add_row = HBoxContainer.new()
+	add_row.add_theme_constant_override("separation", M3Units.dp(10))
+	add_section.add_content(add_row)
+
 	_app_id_input = M3TextField.new()
 	_app_id_input.label_text = "Steam App ID"
 	_app_id_input.placeholder_text = "e.g., 480"
 	_app_id_input.custom_minimum_size = Vector2(M3Units.dp(200), 0)
 	_app_id_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_app_id_input.text_submitted.connect(_on_add_submitted)
-	add_section.add_child(_app_id_input)
-	
+	add_row.add_child(_app_id_input)
+
 	_add_button = M3Button.new()
 	_add_button.text = "Add Game"
 	_add_button.button_variant = M3Button.Variant.FILLED
 	_add_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_add_button.pressed.connect(_on_add_pressed)
-	add_section.add_child(_add_button)
-	
+	add_row.add_child(_add_button)
+
 	# Status label
 	_status_label = M3Label.new()
 	_status_label.text = ""
 	_status_label.label_style = M3Label.Style.BODY_SMALL
 	_status_label.use_on_surface_variant = true
-	vbox.add_child(_status_label)
-	
-	# Separator
-	var separator = HSeparator.new()
-	vbox.add_child(separator)
-	
+	add_section.add_content(_status_label, false)
+
 	# Games list
-	var list_label = M3Label.new()
-	list_label.text = "Configured Games"
-	list_label.label_style = M3Label.Style.TITLE_MEDIUM
-	vbox.add_child(list_label)
-	
+	var games_section := SettingsSection.new("Configured Games", "controller")
+	vbox.add_child(games_section)
+
 	_games_container = VBoxContainer.new()
 	_games_container.add_theme_constant_override("separation", M3Units.dp(10))
-	vbox.add_child(_games_container)
-	
+	games_section.add_content(_games_container, false)
+
 	# Bottom buffer so content isn't clipped by Android keyboard / nav bar
 	var bottom_buffer = Control.new()
 	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
 	vbox.add_child(bottom_buffer)
-	
+
 	# Force recalculation now that all children are added
 	vbox.queue_sort()
 

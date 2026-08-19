@@ -13,6 +13,7 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 }
 
 var _left_pane: VBoxContainer
+var _left_column: VBoxContainer
 var _right_pane: MarginContainer
 var _right_scroll: ScrollContainer
 var _right_content: Control
@@ -101,24 +102,35 @@ func _build_two_pane_layout() -> void:
 
 	var compact := _is_compact_sidebar()
 
-	# Left sidebar. Category buttons shrink-to-fit (EXPAND_FILL + zero height
-	# floor in _add_category_button), so the sidebar's combined minimum height
-	# collapses. Without that, its natural height (768px at dp 2.31) becomes
-	# the hbox's minimum, which exceeds the dialog interior (599px) - and since
-	# a Control's rect can never go below its minimum size, the whole pane
-	# chain overflows the slot and pages clip without ever scrolling.
+	# Left sidebar. The category list lives in a ScrollContainer so its natural
+	# height can never inflate the dialog's minimum size (a Control's rect can
+	# never go below its minimum, which previously forced shrink-to-fit buttons).
+	# The Exit button sits outside the scroll, pinned to the sidebar bottom.
 	_left_pane = VBoxContainer.new()
-	_left_pane.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(160), 0)
-	_left_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_left_pane.alignment = BoxContainer.ALIGNMENT_CENTER if compact else BoxContainer.ALIGNMENT_BEGIN
+	_left_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_left_pane.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_left_pane.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
+
+	var left_scroll := ScrollContainer.new()
+	left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	left_scroll.follow_focus = true
+	left_scroll.add_child(_left_pane)
+
+	_left_column = VBoxContainer.new()
+	_left_column.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(200), 0)
+	_left_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_left_column.add_theme_constant_override("separation", int(M3Units.dp(4)))
+	_left_column.add_child(left_scroll)
 
 	var left_margin = MarginContainer.new()
 	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(4) if compact else M3Units.dp(8)))
 	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(4) if compact else M3Units.dp(8)))
 	left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
 	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
-	left_margin.add_child(_left_pane)
+	left_margin.add_child(_left_column)
 	hbox.add_child(left_margin)
 
 	# Divider
@@ -183,7 +195,7 @@ func _build_categories() -> void:
 			_category_contents[id] = preload("res://view/library_appearance_settings_view.gd").new()
 		else:
 			# Regular subgroup: SettingsMenu in a scrollable wrapper
-			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars)
+			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars, icon)
 
 	# RomM — platform settings scene
 	_add_category_button("romm", "RomM", "cloud-sync")
@@ -203,11 +215,10 @@ func _build_categories() -> void:
 		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
 		_category_contents["gamenative"] = gamenative
 
-	# Exit — closes the app via the shared shutdown path in main.gd
-	_add_category_button("exit", "Exit", "logout")
-
-	# No spacer at the bottom of the sidebar: category buttons divide the full
-	# sidebar height evenly (shrink-to-fit, see _add_category_button).
+	# Exit — closes the app via the shared shutdown path in main.gd. Added to
+	# the column (outside the scrolling category list) so it stays pinned to
+	# the bottom of the sidebar.
+	_add_category_button("exit", "Exit", "logout", _left_column)
 
 	# Select first category that has content
 	for btn_id in _category_buttons.keys():
@@ -215,7 +226,8 @@ func _build_categories() -> void:
 			select_category(btn_id)
 			break
 
-func _add_category_button(id: String, label: String, icon: String) -> void:
+func _add_category_button(id: String, label: String, icon: String, target: Container = null) -> void:
+	var parent: Container = target if target else _left_pane
 	var btn: M3Button
 	if _is_compact_sidebar():
 		var icon_btn = M3IconButton.new()
@@ -224,27 +236,27 @@ func _add_category_button(id: String, label: String, icon: String) -> void:
 		icon_btn.icon_button_size = M3IconButton.IconSize.SMALL
 		icon_btn.tooltip_text = label
 		icon_btn.pressed.connect(_on_category_selected.bind(id))
-		_left_pane.add_child(icon_btn)
+		parent.add_child(icon_btn)
 		btn = icon_btn
 	else:
 		var text_btn = M3Button.new()
 		text_btn.text = label
 		text_btn.icon_name = icon
 		text_btn.button_variant = M3Button.Variant.TEXT
-		text_btn.button_size = M3Button.Size.SMALL
+		text_btn.button_shape = M3Button.Shape.PILL
+		text_btn.button_size = M3Button.Size.MEDIUM
 		text_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		text_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		text_btn.pressed.connect(_on_category_selected.bind(id))
-		_left_pane.add_child(text_btn)
+		parent.add_child(text_btn)
 		btn = text_btn
-	# Shrink-to-fit: buttons evenly divide the sidebar height and may compress
-	# below their natural height when space is tight. The zero height floor
-	# keeps the sidebar's combined minimum height from overflowing the dialog.
-	btn.custom_minimum_size.y = 0
-	btn.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Fixed pill height, top-stacked: the sidebar scrolls instead of compressing
+	# buttons when space is tight.
+	btn.custom_minimum_size.y = M3Units.dp(48)
+	btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_category_buttons[id] = btn
 
-func _create_settings_menu_content(setting_name: String, settings_vars: Array) -> Control:
+func _create_settings_menu_content(setting_name: String, settings_vars: Array, icon: String = "") -> Control:
 	"""Create a SettingsMenu in a MarginContainer + VBoxContainer. Scrolling is
 	provided by the shared pane-level ScrollContainer (_right_scroll)."""
 	var margin = MarginContainer.new()
@@ -261,7 +273,7 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array) -
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 
 	var menu = SettingsMenu.new()
-	menu.initialize_settings_menu(setting_name, settings_vars)
+	menu.initialize_settings_menu(setting_name, settings_vars, icon)
 	menu.setting_changed.connect(func(value, setting): DataManager.set_setting(value, setting))
 	vbox.add_child(menu)
 
