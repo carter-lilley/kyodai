@@ -812,6 +812,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		else:
 			# Directory exists but is empty - files were deleted. Look for ZIP.
 			print("[GameManager] RPCS3: Extracted folder is empty, looking for original ZIP...")
+			zip_path = ""
 			var parent_dir = rom_path.get_base_dir()
 			var zip_files = _find_zip_files_in_dir(parent_dir)
 			if zip_files.size() > 0:
@@ -837,6 +838,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	elif not FSM.file_exists(rom_path):
 		# Path doesn't exist at all (deleted extracted folder). Look for ZIP in parent.
 		print("[GameManager] RPCS3: ROM path does not exist, looking for original ZIP...")
+		zip_path = ""
 		
 		# First try the parent directory of the deleted folder
 		var parent_dir = rom_path.get_base_dir()
@@ -955,6 +957,18 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		extract_target = extract_path + "_tmp"
 		print("[GameManager] RPCS3: Android - extracting to temp: " + extract_target)
 	
+	# Remove stale/partial game folders so re-extraction starts clean and the
+	# unwrap/move steps don't collide with leftover files (e.g. a PARAM.SFO left
+	# behind after the user deleted the rest of the game).
+	if is_desktop:
+		for stale_path in [desktop_disc_path, desktop_digital_path]:
+			if FSM.dir_exists(stale_path):
+				print("[GameManager] RPCS3: Removing stale game folder: " + stale_path)
+				FSM.delete_dir_recursive(stale_path)
+	elif FSM.dir_exists(extract_path):
+		print("[GameManager] RPCS3: Removing stale game folder: " + extract_path)
+		FSM.delete_dir_recursive(extract_path)
+	
 	var extract_success := await _extract_ps3_zip(zip_path, extract_target)
 	
 	# Dismiss the extraction notification
@@ -967,9 +981,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		return false
 	
 	# Step 5: Find PARAM.SFO and determine format
-	var sfo_path = FSM.find_file_recursive(extract_target, "PARAM.SFO")
-	if sfo_path == "":
-		sfo_path = FSM.find_file_recursive(extract_target, "PARAM.sfo")
+	var sfo_path = _find_ps3_param_sfo(extract_target)
 	
 	if sfo_path == "":
 		push_error("[GameManager] RPCS3: PARAM.SFO not found after extraction at: " + extract_target)
@@ -1018,6 +1030,15 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			return false
 		FSM.delete_dir_recursive(extract_target)
 	
+	# Remove any leftover empty wrapper shells of arbitrary depth
+	# (e.g. "Game Name/" left behind after unwrapping "Game Name/PS3_GAME/")
+	FSM.prune_empty_dirs(final_extract_path)
+	if is_desktop and extract_target != final_extract_path:
+		# Digital games stage into the disc path first; drop the empty staging shell
+		FSM.prune_empty_dirs(extract_target)
+		if FSM.dir_exists(extract_target) and FSM.list_dir(extract_target).is_empty():
+			FSM.delete_dir_recursive(extract_target)
+	
 	# Step 7: Verify extracted files
 	if not _ps3_game_has_files(final_extract_path):
 		push_error("[GameManager] RPCS3: Game files missing after extraction at: " + final_extract_path)
@@ -1037,6 +1058,19 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	return true
 
 
+## Finds the game PARAM.SFO, preferring the disc layout (PS3_GAME/PARAM.SFO).
+## Repacks often contain extra PARAM.SFO files (update data, loose copies) whose
+## parent isn't PS3_GAME; a first-match search would misclassify disc games as
+## digital. The PARAM.SFO inside PS3_GAME is the authoritative disc marker.
+func _find_ps3_param_sfo(root: String) -> String:
+	var all = FSM.find_files_recursive(root, "PARAM.SFO")
+	all.append_array(FSM.find_files_recursive(root, "PARAM.sfo"))
+	for p in all:
+		if p.get_base_dir().get_file().to_upper() == "PS3_GAME":
+			return p
+	return all[0] if all.size() > 0 else ""
+
+
 ## Checks if a PS3 game directory has a valid game structure
 ## Validates by looking for PARAM.SFO, which is required for both disc and HDD formats
 func _ps3_game_has_files(game_path: String) -> bool:
@@ -1049,9 +1083,17 @@ func _ps3_game_has_files(game_path: String) -> bool:
 		# Try lowercase fallback
 		sfo_path = FSM.find_file_recursive(game_path, "PARAM.sfo")
 	
-	var has_sfo = sfo_path != ""
-	print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO found=" + str(has_sfo) + " in " + game_path)
-	return has_sfo
+	if sfo_path == "":
+		print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO not found in " + game_path)
+		return false
+	
+	# PARAM.SFO alone isn't enough - a partially deleted game folder still has it.
+	# Require the main executable (USRDIR/EBOOT.BIN, a sibling of PARAM.SFO in both
+	# disc and digital layouts) so broken folders trigger re-extraction.
+	var usrdir = FSM.join_paths(sfo_path.get_base_dir(), "USRDIR")
+	var has_eboot = FSM.file_exists(FSM.join_paths(usrdir, "EBOOT.BIN")) or FSM.file_exists(FSM.join_paths(usrdir, "eboot.bin"))
+	print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO found, EBOOT.BIN present=" + str(has_eboot) + " in " + game_path)
+	return has_eboot
 
 
 ## Finds ZIP files in a directory (for re-extraction when extracted files are deleted)

@@ -612,9 +612,11 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			print("[LaunchManager] Firmware ready for " + game.platform_slug + ", continuing launch...")
 			for i in matching_indices:
 				var pending = _pending_firmware_launches[i]
+				var pending_game: GameResource = pending.game
 				var pending_callback = pending.callback
-				if pending_callback.is_valid():
-					pending_callback.call()
+				# Re-enter _ensure_prerequisites so game preparation (e.g. PS3 ZIP
+				# extraction) runs before on_ready performs the actual launch.
+				await _ensure_prerequisites(pending_game, pending.emulator_id, pending_callback)
 			for i in range(matching_indices.size() - 1, -1, -1):
 				_pending_firmware_launches.remove_at(matching_indices[i])
 		, core_id_for_firmware)
@@ -701,7 +703,9 @@ func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 
 			print("[LaunchManager] _on_emulator_installed_for_launch: Calling ready callback for emulator: " + emulator_id)
 			if pending_callback.is_valid():
-				pending_callback.call()
+				# Re-enter _ensure_prerequisites so game preparation (e.g. PS3 ZIP
+				# extraction) runs before on_ready performs the actual launch.
+				await _ensure_prerequisites(pending_game, emulator_id, pending_callback)
 			else:
 				_end_launch(pending_game.romm_id)
 

@@ -1386,6 +1386,47 @@ static func find_file_recursive(dir_path: String, filename: String) -> String:
 	
 	return ""
 
+## Recursively finds ALL files matching filename under dir_path.
+static func find_files_recursive(dir_path: String, filename: String) -> Array[String]:
+	var results: Array[String] = []
+	if dir_path.is_empty() or filename.is_empty():
+		return results
+	
+	if not dir_exists(dir_path):
+		return results
+	
+	var items = list_dir(dir_path)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		
+		var item_path = join_paths(dir_path, item)
+		
+		if item == filename:
+			results.append(item_path)
+		
+		if is_dir(item_path):
+			results.append_array(find_files_recursive(item_path, filename))
+	
+	return results
+
+## Recursively removes empty directories under dir_path (bottom-up).
+## dir_path itself is never removed. Used to clean up leftover wrapper folder
+## shells (e.g. "Game Name/TitleID/") after unwrapping extracted games.
+static func prune_empty_dirs(dir_path: String) -> void:
+	if dir_path.is_empty() or not dir_exists(dir_path):
+		return
+	
+	var items = list_dir(dir_path)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		var item_path = join_paths(dir_path, item)
+		if is_dir(item_path):
+			prune_empty_dirs(item_path)
+			if list_dir(item_path).is_empty():
+				delete_dir_recursive(item_path)
+
 ## Recursively counts files (not directories) in a directory
 ## Returns the total file count
 static func count_files_recursive(dir_path: String) -> int:

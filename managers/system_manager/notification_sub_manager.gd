@@ -168,7 +168,7 @@ func _show_progress_snackbar(id: int, text: String, type: Type, progress_callabl
 	snackbar.show_progress(true)
 	if pulsing:
 		snackbar.set_pulsing(true)
-	snackbar.dismissed.connect(_on_progress_snackbar_dismissed)
+	snackbar.dismissed.connect(_on_progress_snackbar_dismissed.bind(snackbar))
 	get_tree().root.add_child(snackbar)
 	snackbar.show_overlay()
 	_current_progress_snackbar = snackbar
@@ -182,7 +182,11 @@ func _show_progress_snackbar(id: int, text: String, type: Type, progress_callabl
 	_progress_entry.is_progress_linked = true
 	_progress_entry.is_pinned = pinned
 
-func _on_progress_snackbar_dismissed() -> void:
+func _on_progress_snackbar_dismissed(snackbar: M3Snackbar) -> void:
+	# Ignore stale dismissals from a previous progress snackbar whose exit
+	# tween finished after a newer progress snackbar already replaced it.
+	if snackbar != _current_progress_snackbar:
+		return
 	var dismissed_id = _current_progress_id
 	_current_progress_snackbar = null
 	_current_progress_id = -1

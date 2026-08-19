@@ -12,6 +12,9 @@ signal scroll_completed()
 @export var smooth_scroll_reference_distance: float = 1000.0
 @export var smooth_scroll_min_duration: float = 0.15
 @export var smooth_scroll_max_duration: float = 2.5
+## Duration multiplier for follow-focus scrolls only (ui/kb focus tracking).
+## > 1 stretches the distance-scaled duration so focus hops glide instead of snap.
+@export var focus_scroll_duration_multiplier: float = 1.6
 ## Fixed tween duration for mouse-wheel scrolling. Wheel ticks accumulate into
 ## the target and restart the tween, so a longer fixed duration keeps repeated
 ## ticks chasing the target smoothly instead of stuttering.
@@ -163,7 +166,7 @@ func _on_focus_changed(control: Control) -> void:
 		if is_equal_approx(provided_target, _get_current_scroll()):
 			return
 		_target_scroll = provided_target
-		_start_smooth_scroll()
+		_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Callable(), Tween.TRANS_CUBIC, Tween.EASE_OUT)
 		return
 
 	# If the control is already fully visible, don't re-center it. This prevents
@@ -174,7 +177,7 @@ func _on_focus_changed(control: Control) -> void:
 
 	# Calculate and smoothly scroll to centered position
 	_target_scroll = _get_centered_scroll_for_control(control)
-	_start_smooth_scroll()
+	_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Callable(), Tween.TRANS_CUBIC, Tween.EASE_OUT)
 
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.
@@ -392,7 +395,7 @@ func _on_scrollbar_input(event: InputEvent):
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
-func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, _focus_callback: Callable = Callable()):
+func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, _focus_callback: Callable = Callable(), trans_type: Tween.TransitionType = Tween.TRANS_EXPO, ease_type: Tween.EaseType = Tween.EASE_OUT):
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
@@ -444,8 +447,8 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	#   _focus_timer.start()
 	
 	_scroll_tween = create_tween()
-	_scroll_tween.set_trans(Tween.TRANS_EXPO)
-	_scroll_tween.set_ease(Tween.EASE_OUT)
+	_scroll_tween.set_trans(trans_type)
+	_scroll_tween.set_ease(ease_type)
 	
 	_scroll_tween.tween_method(
 		func(val: float): 

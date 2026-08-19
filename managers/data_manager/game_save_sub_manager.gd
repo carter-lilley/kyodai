@@ -713,7 +713,7 @@ func _get_upload_zip_root_name(emulator_id: String, game: GameResource, src_path
 	match emulator_id:
 		"cemu":
 			return _get_save_identity(game).id
-		"pcsx2", "ppsspp":
+		"pcsx2", "ppsspp", "vita3k", "rpcs3", "shadps4", "xenia":
 			return src_path.rstrip("/").get_file()
 		_:
 			return ""
@@ -1030,33 +1030,28 @@ func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Di
 	return results
 
 ## Discovers local RPCS3 saves for a PS3 game
-## RPCS3 saves are folders in dev_hdd0/home/00000001/savedata/ named by TitleID (e.g., BLUS12345)
+## RPCS3 saves are folders in dev_hdd0/home/00000001/savedata/ whose names are the
+## TitleID plus a game-chosen suffix (e.g., BLUS30721-BCSAVEDATA) - sigil classifies
+## this as folder-prefix, so fuzzy-match on the TitleID like PSP.
 func discover_local_rpcs3_save(directory: String, title_id: String) -> Array[Dictionary]:
-	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "":
 		print("[GameSaveSubManager] discover_local_rpcs3_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
-		return results
+		return []
 	
 	var savedata_dir = directory.rstrip("/") + "/"
 	print("[GameSaveSubManager] discover_local_rpcs3_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
 	if not FSM.dir_exists(savedata_dir):
 		print("[GameSaveSubManager] discover_local_rpcs3_save: savedata dir doesn't exist yet")
-		return results
+		return []
 	
-	# Look for exact match folder
-	var save_path = savedata_dir + title_id
-	if FSM.dir_exists(save_path):
-		var mtime = _get_folder_mtime(save_path)
-		results.append({
-			"file_name": title_id + ".zip",
-			"file_path": save_path,
-			"modified_time": mtime,
-			"extension": ".zip"
-		})
-		print("[GameSaveSubManager] discover_local_rpcs3_save: found save at " + save_path)
-	else:
+	var results = discover_local_fuzzy_folder_save(savedata_dir, title_id, false, true)
+	
+	if results.is_empty():
 		print("[GameSaveSubManager] discover_local_rpcs3_save: no save found for " + title_id)
+	else:
+		for save in results:
+			print("[GameSaveSubManager] discover_local_rpcs3_save: found save at " + save.file_path)
 	
 	return results
 

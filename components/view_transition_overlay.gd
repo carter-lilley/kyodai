@@ -74,11 +74,15 @@ func play(icon_name: String, midpoint: Callable) -> void:
 	is_transition_active = true
 
 	# Refresh colors at play time so theme changes are picked up automatically.
-	_panel.color = M3Theme.get_primary()
-	_icon.icon_settings.icon_color = M3Theme.get_on_primary()
+	# Container colors are the muted M3 tonal pair: a colored dim in dark mode
+	# rather than a fullscreen bright flash.
+	_panel.color = M3Theme.get_primary_container()
+	_icon.icon_settings.icon_color = M3Theme.get_on_primary_container()
 	_icon.icon_settings.icon_name = icon_name
 
-	var icon_px: float = maxf(48.0, viewport_size.y * ICON_HEIGHT_RATIO)
+	# Cap the icon in dp so it stays charming-sized on large displays instead
+	# of scaling unbounded with viewport height.
+	var icon_px: float = maxf(48.0, minf(viewport_size.y * ICON_HEIGHT_RATIO, M3Units.dp(160.0)))
 	_icon.icon_settings.icon_size = int(icon_px)
 	_icon.custom_minimum_size = Vector2(icon_px, icon_px)
 	_icon.size = Vector2(icon_px, icon_px)
@@ -101,14 +105,21 @@ func play(icon_name: String, midpoint: Callable) -> void:
 	if SystemManager.audio:
 		SystemManager.audio.play_sfx_stream(SNAP_SFX)
 
-	_animate(midpoint, viewport_size, icon_px, icon_rest_y)
+	_animate(midpoint, viewport_size, icon_px, icon_rest_y, _travel_duration_scale())
 
-func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_rest_y: float) -> void:
+func _travel_duration_scale() -> float:
+	# Large screens: the panel travels farther, so compress the cover/reveal
+	# to keep the flash duration consistent with small screens.
+	if SystemManager.display and not SystemManager.display.is_narrow_viewport():
+		return 0.85
+	return 1.0
+
+func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_rest_y: float, travel_scale: float = 1.0) -> void:
 	# Phase 1: panel sweeps up and covers the screen.
 	var cover := create_tween()
 	cover.set_trans(Tween.TRANS_CUBIC)
 	cover.set_ease(Tween.EASE_OUT)
-	cover.tween_property(_panel, "position:y", 0.0, COVER_DURATION)
+	cover.tween_property(_panel, "position:y", 0.0, COVER_DURATION * travel_scale)
 	await cover.finished
 	if not is_inside_tree():
 		return
@@ -140,20 +151,15 @@ func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_r
 	if not is_inside_tree():
 		return
 
-	# Hold a beat so the icon reads.
-	await get_tree().create_timer(HOLD_DURATION).timeout
-	if not is_inside_tree():
-		return
-
 	# Phase 3: panel and icon accelerate off the top together, revealing the
 	# new view underneath.
 	var reveal := create_tween()
 	reveal.set_parallel(true)
 	reveal.set_trans(Tween.TRANS_CUBIC)
 	reveal.set_ease(Tween.EASE_IN)
-	reveal.tween_property(_panel, "position:y", -viewport_size.y, REVEAL_DURATION)
-	reveal.tween_property(_icon, "offset_top", icon_rest_y - viewport_size.y * 0.75, REVEAL_DURATION)
-	reveal.tween_property(_icon, "offset_bottom", icon_rest_y + icon_px - viewport_size.y * 0.75, REVEAL_DURATION)
+	reveal.tween_property(_panel, "position:y", -viewport_size.y, REVEAL_DURATION * travel_scale)
+	reveal.tween_property(_icon, "offset_top", icon_rest_y - viewport_size.y * 0.75, REVEAL_DURATION * travel_scale)
+	reveal.tween_property(_icon, "offset_bottom", icon_rest_y + icon_px - viewport_size.y * 0.75, REVEAL_DURATION * travel_scale)
 	await reveal.finished
 
 	_on_transition_finished()

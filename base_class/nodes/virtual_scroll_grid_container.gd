@@ -4233,7 +4233,6 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 
 	var target := get_follow_focus_scroll_target(index)
 	var current := _get_current_scroll_pos()
-	print("[Jump] idx=", index, " target=", target, " current=", current, " animate=", animate, " active=", _active_cards.size(), " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 	var needs_scroll := not is_equal_approx(target, current)
 
 	if not needs_scroll or not animate:

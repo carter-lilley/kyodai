@@ -19,6 +19,9 @@ extends Manager
 ##
 ## Controls that move without a local rect change (e.g. RenderingServer-stamped
 ## grid slots) push updates via FocusSubManager.notify_geometry_changed(self).
+## Controls should also forward NOTIFICATION_TRANSFORM_CHANGED the same way —
+## the manager enables transform notifications on whatever it tracks, so
+## ancestor motion (sheet slides, dialog scale-ins) reaches the ring.
 
 const DEBUG_LOG: bool = false
 
@@ -126,12 +129,6 @@ const ORBIT_POINTS: int = 16
 ## Base ring alpha multiplier while the CHASE comet orbits over it.
 const ORBIT_BASE_ALPHA: float = 0.35
 
-## Frames spent re-resolving geometry after each focus change. Covers dialog
-## open animations and lazy layout, which move controls without firing
-## item_rect_changed (ancestor transforms don't signal). Bounded — the manager
-## returns to pure signal-driven mode once the window expires.
-const SETTLE_FRAMES: int = 18
-
 ## POP movement: the ring snaps to the new target slightly enlarged, then
 ## eases back down to its exact pose.
 const POP_START_SCALE: float = 1.12
@@ -169,7 +166,7 @@ var _idle_tween: Tween = null
 var _orbit_t: float = 0.0
 var _pop_tween: Tween = null
 var _pop_scale: float = 1.0
-var _settle_frames: int = 0
+var _target_prev_notify: bool = false
 
 # ============================================================================
 # Lifecycle
@@ -178,7 +175,6 @@ var _settle_frames: int = 0
 func _ready() -> void:
 	ui_manager = get_parent()
 	_instance = self
-	set_process(false)
 
 	_ring_style = StyleBoxFlat.new()
 	_ring_style.bg_color = Color.TRANSPARENT
@@ -253,18 +249,6 @@ func _on_gui_focus_changed(control: Control) -> void:
 	_track_target(control)
 	_update_ring_parent(control)
 	_show_target(true)
-	_settle_frames = SETTLE_FRAMES
-	set_process(true)
-
-func _process(_delta: float) -> void:
-	if not _ring_visible:
-		_settle_frames = 0
-		set_process(false)
-		return
-	_on_target_moved()
-	_settle_frames -= 1
-	if _settle_frames <= 0:
-		set_process(false)
 
 func _get_target() -> Control:
 	if _target_ref == null:
@@ -276,6 +260,11 @@ func _get_target() -> Control:
 
 func _track_target(control: Control) -> void:
 	_target_ref = weakref(control)
+	# Enable global-transform notifications while tracked so ancestor motion
+	# (sheet slides, dialog scale-ins, overlay moves) reaches the control and
+	# is forwarded to us via the protocol. Restored on untrack.
+	_target_prev_notify = control.is_transform_notification_enabled()
+	control.set_notify_transform(true)
 	control.item_rect_changed.connect(_on_target_moved)
 	control.resized.connect(_on_target_moved)
 	control.visibility_changed.connect(_on_target_visibility_changed)
@@ -284,6 +273,7 @@ func _track_target(control: Control) -> void:
 func _untrack_target() -> void:
 	var t := _get_target()
 	if t:
+		t.set_notify_transform(_target_prev_notify)
 		if t.item_rect_changed.is_connected(_on_target_moved):
 			t.item_rect_changed.disconnect(_on_target_moved)
 		if t.resized.is_connected(_on_target_moved):
@@ -380,8 +370,6 @@ func _hide_ring() -> void:
 	_kill_pop_tween()
 	_pop_scale = 1.0
 	_stop_idle()
-	_settle_frames = 0
-	set_process(false)
 	_set_ring_visible(false)
 
 func _set_ring_visible(value: bool) -> void:
