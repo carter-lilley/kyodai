@@ -10,11 +10,20 @@ var title: String = "Effects":
 		title = value
 		if _title_label:
 			_title_label.text = value
-var context: String = "hero"  # "hero", "base_card", or "focus_card"
+var context: String = "hero"  # "hero", "base_card", "focus_card", or "" to skip context filtering
 var inherit_from_base: bool = false  # For focus effects - copy defaults from base effects
 var config_key: String = "effects"  # Key in config dict ("effects" or "focus_effects")
 var hide_disabled_effects: bool = false  # If true, dropdown omits already-active effects entirely
 @export var use_internal_scroll: bool = true  # If false, no internal ScrollContainer is created (useful when parent provides scrolling)
+## Custom effect registry (effect_id -> script path). Empty = EffectStack.EFFECT_REGISTRY.
+var effect_registry: Dictionary = {}
+## Display name overrides (effect_id -> name); falls back to capitalized id.
+var display_names: Dictionary = {}
+## When true, per-effect rows get up/down buttons (config order = draw order).
+var allow_reorder: bool = false
+## When true, new-effect defaults are derived from the schema's SettingsVar
+## values instead of the hardcoded card _effect_defaults table.
+var use_schema_defaults: bool = false
 
 # State
 var _current_config: Dictionary = {}
@@ -127,27 +136,26 @@ func _discover_effects():
 	_effect_id_map.clear()
 	
 	var dropdown_id = 0
-	for effect_id in EffectStack.EFFECT_REGISTRY.keys():
+	var registry: Dictionary = effect_registry if not effect_registry.is_empty() else EffectStack.EFFECT_REGISTRY
+	for effect_id in registry.keys():
 		# Skip auto-managed base effect — it has no user settings and is always injected by EffectStack
 		if effect_id == "base":
 			continue
-		
-		var script_path = EffectStack.EFFECT_REGISTRY[effect_id]
+
+		var script_path = registry[effect_id]
 		var script = load(script_path)
 		if not script:
 			continue
-		
-		# Check if effect supports this context
-		var supports_context = false
-		if script.has_method("get_allowed_contexts"):
-			var contexts = script.get_allowed_contexts()
-			supports_context = context in contexts
-		else:
-			# Default: support all contexts
-			supports_context = true
-		
+
+		# Check if effect supports this context (empty context = no filtering)
+		var supports_context = true
+		if not context.is_empty():
+			if script.has_method("get_allowed_contexts"):
+				var contexts = script.get_allowed_contexts()
+				supports_context = context in contexts
+
 		if supports_context:
-			var display_name = effect_id.replace("_", " ").capitalize()
+			var display_name = display_names.get(effect_id, effect_id.replace("_", " ").capitalize())
 			_available_effects[effect_id] = display_name
 			_effect_id_map[dropdown_id] = effect_id
 			dropdown_id += 1
@@ -342,7 +350,8 @@ func _apply_focus_styling() -> void:
 
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()
-	container.title = effect_data.get("effect_id", "Unknown").capitalize()
+	var effect_id_for_title = effect_data.get("effect_id", "Unknown")
+	container.title = _available_effects.get(effect_id_for_title, effect_id_for_title.replace("_", " ").capitalize())
 	container.collapsed = false
 	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	container.header_variant = M3Button.Variant.TONAL if _is_focus_designer() else M3Button.Variant.TEXT
@@ -354,6 +363,26 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	remove_btn.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
 	remove_btn.pressed.connect(func(): _on_remove_effect(index))
 	container.add_header_button(remove_btn)
+
+	if allow_reorder:
+		var effects_count = _current_config.get(config_key, []).size()
+		var up_btn = M3IconButton.new()
+		up_btn.icon_name = "arrow-up"
+		up_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
+		up_btn.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
+		up_btn.disabled = index == 0
+		up_btn.tooltip_text = "Move up (draws later)"
+		up_btn.pressed.connect(func(): _on_move_effect(index, -1))
+		container.add_header_button(up_btn)
+
+		var down_btn = M3IconButton.new()
+		down_btn.icon_name = "arrow-down"
+		down_btn.icon_button_variant = M3IconButton.IconVariant.STANDARD
+		down_btn.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
+		down_btn.disabled = index >= effects_count - 1
+		down_btn.tooltip_text = "Move down (draws earlier)"
+		down_btn.pressed.connect(func(): _on_move_effect(index, 1))
+		container.add_header_button(down_btn)
 	
 	var content = container.get_content_container()
 	var effect_id = effect_data.get("effect_id", "")
@@ -383,18 +412,23 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 
 func _get_effect_schema(effect_id: String) -> Array[SettingsVar]:
 	# Load the effect class and get its schema
-	var script_path = EffectStack.EFFECT_REGISTRY.get(effect_id, "")
+	var registry: Dictionary = effect_registry if not effect_registry.is_empty() else EffectStack.EFFECT_REGISTRY
+	var script_path = registry.get(effect_id, "")
 	if script_path == "":
 		return []
-	
+
 	var script = load(script_path)
 	if not script:
 		return []
-	
+
 	var effect = script.new()
 	var schema = effect.get_settings_schema()
-	effect.free_rid()
-	
+	# Card effects are RefCounted (RID cleanup); background effects are Nodes
+	if effect is Node:
+		effect.free()
+	else:
+		effect.free_rid()
+
 	return schema
 
 func _get_base_effect_settings(effect_id: String) -> Dictionary:
@@ -406,21 +440,30 @@ func _get_base_effect_settings(effect_id: String) -> Dictionary:
 
 func _get_default_settings(effect_id: String) -> Dictionary:
 	"""Get default settings, inheriting from base if applicable."""
-	var defaults = _effect_defaults.get(effect_id, {}).duplicate(true)
-	
+	var defaults: Dictionary
+	if use_schema_defaults:
+		defaults = {}
+		for setting in _get_effect_schema(effect_id):
+			if setting.value is Resource:
+				defaults[setting.property_name] = setting.value.duplicate()
+			else:
+				defaults[setting.property_name] = setting.value
+	else:
+		defaults = _effect_defaults.get(effect_id, {}).duplicate(true)
+
 	# Handle special case for gradient_overlay default gradient
 	if effect_id == "gradient_overlay" and defaults.get("gradient") == null:
 		var default_gradient = Gradient.new()
 		default_gradient.offsets = [0.0, 1.0]
 		default_gradient.colors = [Color.WHITE, Color.BLACK]
 		defaults["gradient"] = default_gradient
-	
+
 	# If inheriting from base, merge base settings
 	if inherit_from_base:
 		var base_settings = _get_base_effect_settings(effect_id)
 		for key in base_settings.keys():
 			defaults[key] = base_settings[key]
-	
+
 	return defaults
 
 func _on_effect_toggled(_index: int):
@@ -460,6 +503,17 @@ func _on_remove_effect(index: int):
 	var effects = _current_config.get(config_key, [])
 	if index >= 0 and index < effects.size():
 		effects.remove_at(index)
+		_current_config[config_key] = effects
+		_rebuild_effects_ui()
+		config_changed.emit(_current_config.duplicate(true))
+
+func _on_move_effect(index: int, delta: int):
+	var effects = _current_config.get(config_key, [])
+	var target = index + delta
+	if index >= 0 and index < effects.size() and target >= 0 and target < effects.size():
+		var entry = effects[index]
+		effects.remove_at(index)
+		effects.insert(target, entry)
 		_current_config[config_key] = effects
 		_rebuild_effects_ui()
 		config_changed.emit(_current_config.duplicate(true))

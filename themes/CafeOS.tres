@@ -9,6 +9,9 @@ colors = PackedColorArray(0.97878, 0.99, 0.9702, 1, 0.97878, 0.99, 0.9702, 1)
 offsets = PackedFloat32Array(0.12044818, 0.8053221)
 colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
 
+[sub_resource type="Gradient" id="Gradient_basebg"]
+colors = PackedColorArray(0.93652, 0.954, 0.94089, 1, 0.85652, 0.874, 0.86089, 1)
+
 [resource]
 script = ExtResource("1_rp5om")
 name = "CafeOS"
@@ -98,17 +101,24 @@ values = {
 "hero_height": 0
 },
 "library_background_config": {
-"background_gradient": SubResource("Gradient_jpx8s"),
-"effect_id": "cafeos",
-"gradient_angle": 90.0,
+"base": {
 "settings": {
-"background_color": Color(0.931, 0.95, 0.93575, 1),
+"gradient": SubResource("Gradient_basebg"),
+"gradient_angle": 90.0,
+"gradient_radial": false
+}
+},
+"effects": [{
+"effect_id": "cafeos",
+"settings": {
 "icon_scale": 0.7,
 "num_icons": 21.0,
 "orbit_radius": 2.4,
 "orbit_speed": 0.15000000000000002,
 "time_scale": 0.4
 }
+}],
+"overlays": []
 },
 "library_card_content_alignment": 0,
 "library_card_display_mode": 2,

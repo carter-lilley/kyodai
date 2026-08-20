@@ -128,10 +128,11 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Internal installed emulator versions (tracked for update checking)
 @export var installed_emulator_versions := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Installed Emulator Versions")
 
-# Internal background effect configuration (managed by Library Appearance settings)
+# Internal background effect configuration (managed by the Background Designer)
 @export var library_background_config := _preset(SettingsVar.new(Type.DICTIONARY, {
-	"effect_id": "none",
-	"settings": {}
+	"base": {"settings": {}},
+	"effects": [],
+	"overlays": []
 }, State.INTERNAL, "Background Effect Configuration"))
 
 # Internal pinned navigation shortcuts (managed by NavigationSubManager)

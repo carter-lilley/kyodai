@@ -62,7 +62,7 @@ static func swap_settings_mode(holder: Dictionary, to_dark: bool) -> Dictionary:
 
 static func swap_effect_list(config: Dictionary, to_dark: bool) -> Dictionary:
 	var out := config.duplicate(true)
-	for list_key in ["effects", "focus_effects"]:
+	for list_key in ["effects", "focus_effects", "overlays"]:
 		if not out.has(list_key) or not out[list_key] is Array:
 			continue
 		var new_list: Array = []
@@ -74,12 +74,20 @@ static func swap_effect_list(config: Dictionary, to_dark: bool) -> Dictionary:
 		out[list_key] = new_list
 	return out
 
+# Layered background configs keep their base gradient in a settings-holder
+# shaped like an effect entry, so swap_settings_mode applies directly.
+static func swap_background_config(config: Dictionary, to_dark: bool) -> Dictionary:
+	var out := swap_effect_list(config, to_dark)
+	if out.has("base") and out["base"] is Dictionary:
+		out["base"] = swap_settings_mode(out["base"], to_dark)
+	return out
+
 static func on_dark_mode_changed(to_dark: bool) -> void:
 	if not DataManager:
 		return
 	var bg = DataManager.get_setting("library_background_config")
 	if bg and bg.value is Dictionary:
-		DataManager.set_setting(swap_settings_mode(bg.value, to_dark), bg)
+		DataManager.set_setting(swap_background_config(LibraryBackground.normalize_config(bg.value), to_dark), bg)
 	var card = DataManager.get_setting("card_effect_config")
 	if card and card.value is Dictionary:
 		DataManager.set_setting(swap_effect_list(card.value, to_dark), card)
@@ -98,7 +106,7 @@ static func on_dark_mode_changed(to_dark: bool) -> void:
 
 static func strip_generated_from_config(config: Dictionary) -> Dictionary:
 	var out := config.duplicate(true)
-	for list_key in ["effects", "focus_effects"]:
+	for list_key in ["effects", "focus_effects", "overlays"]:
 		if not out.has(list_key) or not out[list_key] is Array:
 			continue
 		var new_list: Array = []
@@ -108,6 +116,8 @@ static func strip_generated_from_config(config: Dictionary) -> Dictionary:
 			else:
 				new_list.append(entry)
 		out[list_key] = new_list
+	if out.has("base") and out["base"] is Dictionary:
+		out["base"] = strip_generated_variants(out["base"])
 	return out
 
 static func strip_generated_variants(holder: Dictionary) -> Dictionary:

@@ -9,6 +9,9 @@ colors = PackedColorArray(0, 0, 0, 0.14901961, 0, 0, 0, 0.14901961)
 offsets = PackedFloat32Array(0.12044818, 0.8053221)
 colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
 
+[sub_resource type="Gradient" id="Gradient_basebg"]
+colors = PackedColorArray(0.042000007, 0.07738499, 0.52163994, 1, 0.042000007, 0.28139997, 0.84, 1)
+
 [resource]
 script = ExtResource("1_icu0t")
 name = "LiveArea"
@@ -22,24 +25,27 @@ library_card_content_alignment = 1
 library_grid_vertical = true
 card_media_aspect_ratio = 3
 library_background_config = {
-"background_gradient": SubResource("Gradient_3yjc8"),
-"effect_id": "xmb",
-"gradient_angle": 90.0,
+"base": {
 "settings": {
-"color_bottom_left": Color(0.45, 0.1, 0.1, 1),
-"color_bottom_right": Color(0.8, 0.3, 0.5, 1),
-"color_top_left": Color(0.7, 0.2, 0.2, 1),
-"color_top_right": Color(0.4, 0.1, 0.1, 1),
+"gradient": SubResource("Gradient_basebg"),
+"gradient_angle": 180.0,
+"gradient_radial": false
+}
+},
+"effects": [{
+"effect_id": "xmb",
+"settings": {
 "show_dust": false,
 "star_threshold": 0.99,
 "time_scale": 0.9,
 "wave_amplitude": 0.3,
-"wave_blend_color": Color(1, 1, 1, 1),
 "wave_color": Color(0.042000007, 0.28139997, 0.84, 1),
 "wave_intensity": 0.6,
 "wave_thickness": 0.6,
 "wave_vertical_offset": -0.75
 }
+}],
+"overlays": []
 }
 library_primary_color = Color(0.14117648, 0.38431373, 0.9490196, 1)
 library_navigation_type = 0

@@ -302,9 +302,8 @@ var _last_stamp_generation: int = -1
 var _layout_generation: int = 0
 var _layout_settled_with_valid_size: bool = false
 ## Forces the next _recalculate_layout past its input-cache early-exit (set
-## when a valid size first arrives after an invalid settle, or by the fit audit).
+## when a valid size first arrives after an invalid settle).
 var _force_layout_once: bool = false
-var _layout_fit_retries: int = 0
 
 # Zoom-stop caches (rebuilt when the cache key changes)
 var _snap_levels_cache: Array[int] = []
@@ -596,6 +595,8 @@ func _get_focus_overflow() -> Vector2:
 				maxf(0.0, (focused_card_size.y - card_size.y) / 2.0)
 			)
 		ViewMode.LIST:
+			# Inverted focus: focused_card_size == card_size, so this is zero;
+			# unfocused cards shrink inward and never overflow.
 			return Vector2(0.0, maxf(0.0, (focused_card_size.y - card_size.y) / 2.0))
 		ViewMode.CAROUSEL:
 			return Vector2(maxf(0.0, (focused_card_size.x - card_size.x) / 2.0), 0.0)
@@ -685,8 +686,7 @@ func _ready():
 
 	if not RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
 		RenderingServer.frame_pre_draw.connect(_on_frame_pre_draw)
-	if not RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
-		RenderingServer.frame_post_draw.connect(_on_frame_post_draw_audit)
+	# frame_post_draw (DrawAudit) connects in _update_debug_mode — debug-only.
 
 	# Use SystemManager.display as the single source of resize truth when available.
 	# It debounces viewport changes so we don't recalculate layout on every pixel.
@@ -1838,17 +1838,19 @@ func _recalculate_layout():
 				card_size = base_dims * current_zoom
 			focused_card_size = card_size * focus_scale
 		ViewMode.LIST:
-			# LIST: normal card is smaller so focused card fills viewport exactly.
-			# Focus overflow = (focused - normal) / 2, and focused width = available.x.
-			var card_width = _get_available_size().x / focus_scale
+			# LIST (inverted focus): the cell is the FOCUSED size, so focused width
+			# fills the viewport exactly; unfocused cards shrink by 1/focus_scale
+			# centered in their cells. Nothing exceeds the cell, so no overflow.
+			var card_width = _get_available_size().x
 			card_size = Vector2(card_width, base_dims.y * current_zoom)
-			focused_card_size = card_size * focus_scale
+			focused_card_size = card_size
 		ViewMode.CAROUSEL:
-			# CAROUSEL: normal card is smaller so focused card fills viewport exactly.
-			# Focus overflow = (focused - normal) / 2, and focused height = available.y.
-			var card_height = _get_available_size().y / focus_scale
+			# CAROUSEL (inverted focus): the cell is the FOCUSED size, so focused
+			# height fills the viewport exactly; unfocused cards shrink by
+			# 1/focus_scale centered in their cells. No overflow is reserved.
+			var card_height = _get_available_size().y
 			card_size = Vector2(base_dims.x * current_zoom, card_height)
-			focused_card_size = card_size * focus_scale
+			focused_card_size = card_size
 
 	var available = _get_available_size()
 
@@ -1910,7 +1912,8 @@ func _recalculate_layout():
 	if debug_mode:
 		print("[Grid] _recalculate_layout: available=", available, " card_size=", card_size, " item_width=", item_width, " item_height=", item_height, " items_per_line=", _cached_items_per_line, " normal_stride=", _cached_normal_stride)
 
-	if _cached_items_per_line == 1:
+	# items_per_line is by design 1 for LIST/CAROUSEL; only GRID can collapse.
+	if debug_mode and _cached_items_per_line == 1 and view_mode == ViewMode.GRID:
 		push_warning("[Grid] COLLAPSE DETECTED: items_per_line=1, available=%s, card_size=%s, item_width=%s, item_height=%s" % [available, card_size, item_width, item_height])
 
 	# Only override separation theme constants when the value actually changed
@@ -2437,9 +2440,9 @@ func _compute_expected_card_size(available: Vector2) -> Vector2:
 		ViewMode.GRID:
 			return base_dims * current_zoom
 		ViewMode.LIST:
-			return Vector2(available.x / focus_scale, base_dims.y * current_zoom)
+			return Vector2(available.x, base_dims.y * current_zoom)
 		ViewMode.CAROUSEL:
-			return Vector2(base_dims.x * current_zoom, available.y / focus_scale)
+			return Vector2(base_dims.x * current_zoom, available.y)
 	return base_dims
 
 # Deterministic sizing: callers (Main, UIManager, views) compute the expected
@@ -2945,6 +2948,8 @@ func _on_frame_pre_draw() -> void:
 func _on_frame_post_draw_audit() -> void:
 	# Render-time truth check: after the frame was drawn, the stamped origins
 	# must equal the arithmetic offsets computed from the final frame state.
+	if not debug_mode:
+		return
 	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
 		return
 	if _active_cards.size() == 0:
@@ -2964,7 +2969,7 @@ func _on_frame_post_draw_audit() -> void:
 		var cs_v = card.get("content_scale")
 		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
 		if not cs.is_equal_approx(Vector2.ONE):
-			var pivot: Vector2 = card.size * 0.5
+			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
 			exp += pivot - cs * pivot
 		var d := stamp.distance_to(exp)
 		if d > worst:
@@ -3028,42 +3033,10 @@ func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) 
 
 func _on_flow_sorted() -> void:
 	_layout_generation += 1
-	call_deferred("_audit_layout_fit")
-
-func _audit_layout_fit() -> void:
-	"""Self-healing layout check: after every FlowContainer sort, the number of
-	cards sharing the first row must equal the slot model's items-per-line. A
-	mismatch means the flow is laid out under a different model than the scroll
-	math (the 'collapsed grid' state) — log the full layout state and force a
-	full relayout past the input-cache early-exit."""
-	if _is_recalculating_layout or _active_cards.size() == 0 or _is_pagination_active():
-		return
-	if not _flow_container or _flow_container.get_child_count() == 0:
-		return
-	var first_pos: float = -1.0
-	var actual_ipl := 0
-	for child in _flow_container.get_children():
-		if child.has_meta("page_spacer"):
-			continue
-		var cpos: float = child.position.y if vertical else child.position.x
-		if first_pos < 0.0:
-			first_pos = cpos
-			actual_ipl = 1
-			continue
-		if absf(cpos - first_pos) < 1.0:
-			actual_ipl += 1
-		else:
-			break
-	var expected_ipl := _get_items_per_line()
-	if actual_ipl != expected_ipl:
-		_layout_fit_retries += 1
-		if _layout_fit_retries <= 2:
-			_force_layout_once = true
-			_recalculate_layout()
-	else:
-		_layout_fit_retries = 0
 
 func _audit_structure(tag: String) -> void:
+	if not debug_mode:
+		return
 	var prev_idx := -2
 	var dup := -1
 	var nonmono := -1
@@ -3092,6 +3065,8 @@ func _audit_structure(tag: String) -> void:
 		print("[GridInv] VIOLATION tag=", tag, " dup=", dup, " nonmono=", nonmono, " active=", _active_cards.size(), " flow_cards=", flow_cards, " spacers=", spacers, " first=", first, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 func _audit_visual_holes() -> void:
+	if not debug_mode:
+		return
 	var unsynced: Array = []
 	var invisible: Array = []
 	for card in _active_cards:
@@ -3138,6 +3113,8 @@ func _audit_render_state(tag: String) -> void:
 	"""Compare what is actually rendered (RS canvas item transforms, visual
 	layer state, scroll content offset) against the layout truth. Runs deferred
 	(post-sort, post-sync) so any divergence here is a genuine render bug."""
+	if not debug_mode:
+		return
 	if not _visual_layer or not _scroll_container:
 		return
 	var layer_pos := _visual_layer.global_position
@@ -3162,7 +3139,7 @@ func _audit_render_state(tag: String) -> void:
 		var cs_v = card.get("content_scale")
 		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
 		if not cs.is_equal_approx(Vector2.ONE):
-			var pivot: Vector2 = card.size * 0.5
+			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
 			exp_origin += pivot - cs * pivot
 		var d: float = rs_origin.distance_to(exp_origin)
 		if d > worst:
@@ -3925,6 +3902,10 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 func _refresh_buffer(preserve_scroll: bool = false):
 	# Capture live focus state before recycling so we can restore it after rebuild.
 	var saved_focus_index: int = _get_focused_virtual_index()
+	# Only a live in-grid focus may trigger a focus restore after the rebuild;
+	# the _last_focused fallback below is memory only, and must not let a
+	# background rebuild steal focus back from the nav rail or other views.
+	var focus_was_in_grid: bool = saved_focus_index >= 0
 	# Remember the last focused index for fallback restoration even if focus is
 	# not currently owned by this grid.
 	if saved_focus_index < 0 and _last_focused_virtual_index >= 0:
@@ -4010,6 +3991,11 @@ func _refresh_buffer(preserve_scroll: bool = false):
 			else:
 				_scroll_container.scroll_horizontal = clamped_offset
 			_scroll_container._target_scroll = clamped_offset
+	elif focus_was_in_grid and M3Overlay._get_topmost_overlay() == null:
+		# Non-preserve rebuilds (e.g. GameNative adds, post-sync reload) recycle
+		# the focused card; restore focus to it so controller users aren't
+		# stranded. Scroll position still resets as before.
+		call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 
 func get_target_scroll() -> float:
 	return _scroll_container.get_target_scroll() if _scroll_container else 0.0
@@ -4372,11 +4358,15 @@ func _update_debug_mode():
 	if debug_mode:
 		_setup_debug_camera()
 		_setup_debug_flow_panel()
+		if not RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
+			RenderingServer.frame_post_draw.connect(_on_frame_post_draw_audit)
 		if _active_cards.size() > 0:
 			var first_idx = _active_cards[0].get_meta("virtual_index", 0)
 			var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 			_update_debug_visuals(first_idx, last_idx)
 	else:
+		if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
+			RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_audit)
 		if _debug_camera:
 			_debug_camera.queue_free()
 			_debug_camera = null

@@ -108,9 +108,9 @@ var _focus_tween: Tween = null
 var _is_focused: bool = false
 var focus_scale: float = 1.08
 var focus_scale_enabled: bool = true
-# If true, card starts at 1.0/focus_scale and grows to 1.0 when focused (LIST/CAROUSEL).
-# If false, card starts at 1.0 and grows to focus_scale when focused (GRID).
-var focus_scale_inverted: bool = false
+# focus_scale_inverted is declared on M3Card: if true, card starts at
+# 1.0/focus_scale and grows to 1.0 when focused (LIST/CAROUSEL); if false,
+# card starts at 1.0 and grows to focus_scale when focused (GRID).
 
 func _has_real_focus() -> bool:
 	# A card is focused if it or any of its descendants currently owns viewport focus.
@@ -1290,7 +1290,7 @@ func sync_visual_transform_with_offset(base_offset: Vector2) -> void:
 
 	var base_transform := Transform2D().translated(base_offset)
 	if not content_scale.is_equal_approx(Vector2.ONE):
-		var pivot := size * 0.5
+		var pivot := _get_content_scale_pivot()
 		base_transform = base_transform * Transform2D().translated(pivot) * Transform2D().scaled(content_scale) * Transform2D().translated(-pivot)
 
 	RenderingServer.canvas_item_set_transform(_status_badge_canvas_item, base_transform)

@@ -3,12 +3,8 @@ extends Control
 
 ## Library Appearance settings page.
 ## Replaces the Library Appearance tab extracted from SettingsView.
-## Builds controls directly from DataManager and owns background effect + preset UI.
+## Builds controls directly from DataManager and owns preset UI.
 
-var _library_appearance_config: Dictionary = {}
-var _library_effect_menu: SettingsMenu = null
-var _library_effect_dropdown: M3OptionButton = null
-var _effect_ids: Array[String] = []
 var _library_general_menu: SettingsMenu = null
 
 # Theme preset UI
@@ -20,49 +16,17 @@ var _loaded_preset: ThemePreset = null
 # Init guard: block feedback signals while building the initial UI.
 var _is_initializing: bool = true
 
-# Suppress guard: skip reacting to DataManager signals that originated here.
-var _suppress_config_signal: bool = false
-
 func _ready():
 	_setup_ui()
-	_load_library_background_config()
 	_refresh_all_settings_ui()
 	_is_initializing = false
 
-func _enter_tree():
-	if DataManager and not DataManager.setting_changed.is_connected(_on_data_manager_setting_changed):
-		DataManager.setting_changed.connect(_on_data_manager_setting_changed)
-
-func _exit_tree():
-	if DataManager and DataManager.setting_changed.is_connected(_on_data_manager_setting_changed):
-		DataManager.setting_changed.disconnect(_on_data_manager_setting_changed)
-
 func on_view_show():
 	# The dialog calls this every time the category is shown (category switch or
-	# dialog reopen). The view is disconnected from DataManager while removed from
-	# the tree, so reload in case settings changed while hidden.
+	# dialog reopen). Reload in case presets changed while hidden.
 	if _is_initializing:
 		return
-	_refresh_background_config_ui()
-
-func _refresh_background_config_ui() -> void:
-	_load_library_background_config()
-	var current_effect_id = _library_appearance_config.get("effect_id", "gradient")
-	if _library_effect_dropdown:
-		for i in range(_effect_ids.size()):
-			if _effect_ids[i] == current_effect_id:
-				_library_effect_dropdown.selected = i
-				break
-	_suppress_config_signal = true
-	_rebuild_library_effect_controls(current_effect_id)
-	_suppress_config_signal = false
-
-func _on_data_manager_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if _suppress_config_signal or _is_initializing:
-		return
-	if setting.property_name != "library_background_config":
-		return
-	_refresh_background_config_ui()
+	_refresh_preset_dropdown()
 
 func _setup_ui() -> void:
 	var scroll = ScrollContainer.new()
@@ -90,19 +54,19 @@ func _setup_ui() -> void:
 	_library_general_menu = SettingsMenu.new()
 	vbox.add_child(_library_general_menu)
 
-	# Background section: effect picker + dynamic effect settings
+	# Background section: entry point to the Background Designer
 	var background_section := SettingsSection.new("Background", "image-outline")
 	vbox.add_child(background_section)
 
-	_library_effect_dropdown = M3OptionButton.new()
-	_library_effect_dropdown.label_text = "Background Effect"
-	_library_effect_dropdown.fit_to_longest_item = false
-	_library_effect_dropdown.item_selected.connect(_on_library_effect_selected)
-	background_section.add_content(_library_effect_dropdown, false)
-
-	# Dynamic settings menu for the selected effect (renders its own section)
-	_library_effect_menu = SettingsMenu.new()
-	vbox.add_child(_library_effect_menu)
+	var designer_button = M3Button.new()
+	designer_button.text = "Open Background Designer"
+	designer_button.icon_name = "image-outline"
+	designer_button.button_variant = M3Button.Variant.TONAL
+	designer_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	designer_button.pressed.connect(func():
+		UIManager.show_settings_dialog_with_category("background_designer")
+	)
+	background_section.add_content(designer_button, false)
 
 	# Theme Presets section
 	_create_preset_section(vbox)
@@ -142,8 +106,6 @@ func _create_preset_section(vbox: VBoxContainer) -> void:
 	preset_container.add_child(export_button)
 
 func _refresh_all_settings_ui() -> void:
-	_load_library_background_config()
-	
 	# Refresh general settings menu
 	if _library_general_menu:
 		_library_general_menu.clear_controls()
@@ -157,25 +119,7 @@ func _refresh_all_settings_ui() -> void:
 			_library_general_menu.build_controls_from_settingsvars(general_settings, "General", "tune")
 			if not _library_general_menu.setting_changed.is_connected(_on_setting_changed):
 				_library_general_menu.setting_changed.connect(_on_setting_changed)
-	
-	# Refresh background effect dropdown
-	if _library_effect_dropdown:
-		_library_effect_dropdown.clear_items()
-		_effect_ids.clear()
-		var effects = LibraryBackground.get_available_effects()
-		for i in range(effects.size()):
-			var effect_id = effects[i]
-			var display_name = LibraryBackground.get_effect_display_name(effect_id)
-			_library_effect_dropdown.add_item(display_name, i)
-			_effect_ids.append(effect_id)
-		
-		var current_effect_id = _library_appearance_config.get("effect_id", "gradient")
-		for i in range(effects.size()):
-			if effects[i] == current_effect_id:
-				_library_effect_dropdown.selected = i
-				break
-		_rebuild_library_effect_controls(current_effect_id)
-	
+
 	# Refresh preset dropdown
 	_refresh_preset_dropdown()
 
@@ -183,151 +127,6 @@ func _on_setting_changed(value: Variant, setting: SettingsVar) -> void:
 	if _is_initializing:
 		return
 	DataManager.set_setting(value, setting)
-
-func _load_library_background_config() -> void:
-	var config_setting = DataManager.get_setting("library_background_config")
-	if config_setting and config_setting.value is Dictionary:
-		_library_appearance_config = config_setting.value.duplicate(true)
-	else:
-		var default_gradient = Gradient.new()
-		default_gradient.offsets = [0.0, 1.0]
-		default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
-		_library_appearance_config = {
-			"effect_id": "gradient",
-			"settings": {
-				"background_gradient": default_gradient,
-				"gradient_angle": 90.0
-			}
-		}
-
-func _on_library_effect_selected(index: int) -> void:
-	if _is_initializing:
-		return
-	
-	var effect_id = _effect_ids[index] if index >= 0 and index < _effect_ids.size() else ""
-	_library_appearance_config["effect_id"] = effect_id
-	
-	match effect_id:
-		"none":
-			_library_appearance_config["settings"] = {}
-		"gradient":
-			var default_gradient = Gradient.new()
-			default_gradient.offsets = [0.0, 1.0]
-			default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
-			_library_appearance_config["settings"] = {
-				"background_gradient": default_gradient,
-				"gradient_angle": 90.0
-			}
-		"xmb":
-			_library_appearance_config["settings"] = {
-				"time_scale": 1.0,
-				"show_dust": true,
-				"wave_intensity": 1.0,
-				"star_threshold": 0.99,
-				"color_top_left": Color(0.7, 0.2, 0.2, 1.0),
-				"color_top_right": Color(0.4, 0.1, 0.1, 1.0),
-				"color_bottom_left": Color(0.45, 0.1, 0.1, 1.0),
-				"color_bottom_right": Color(0.8, 0.3, 0.5, 1.0),
-				"wave_blend_color": Color.WHITE
-			}
-		"xmb_classic":
-			_library_appearance_config["settings"] = {
-				"wave_color": Color(0.04, 0.69, 0.87, 1.0),
-				"time_scale": 1.0,
-				"frequency": 4.29,
-				"outer_amplitude": 0.5,
-				"inner_amplitude": 0.18,
-				"outer_speed": 0.044,
-				"inner_speed": 0.064
-			}
-		"motes":
-			_library_appearance_config["settings"] = {}
-		"osdsys":
-			_library_appearance_config["settings"] = {}
-		"cafeos":
-			_library_appearance_config["settings"] = {
-				"time_scale": 0.5,
-				"orbit_radius": 2.358,
-				"icon_scale": 0.7,
-				"orbit_speed": 0.15,
-				"num_icons": 21,
-				"background_color": Color(0.05, 0.08, 0.18, 1.0)
-			}
-		"isolines":
-			_library_appearance_config["settings"] = {
-				"time_scale": 1.0,
-				"zoom": 0.3,
-				"line_width": 0.6,
-				"lighting_strength": 0.35,
-				"background_color": Color(0.07, 0.07, 0.129, 1.0),
-				"line_color": Color(1.0, 1.0, 1.0, 1.0)
-			}
-		"dotgrid":
-			_library_appearance_config["settings"] = {
-				"time_scale": 1.0,
-				"dot_spacing": 30.0,
-				"dot_size": 0.15,
-				"noise_scale": 1.0,
-				"size_modulation": 0.35,
-				"opacity_modulation": 0.9,
-				"color_a": Color(1.0, 0.082, 0.621, 1.0),
-				"color_b": Color(1.0, 0.152, 0.009, 1.0),
-				"background_color": Color(0.05, 0.05, 0.08, 1.0)
-			}
-		"horizon3d":
-			_library_appearance_config["settings"] = {
-				"time_scale": 0.1,
-				"rotation_speed": 0.35,
-				"axis_tilt": 0.0,
-				"diagonal_ratio": 0.4,
-				"curvature": 0.25,
-				"rows_visible": 4.0,
-				"tile_scale": 0.8,
-				"corner_radius": 0.18,
-				"tile_opacity": 0.45,
-				"border_opacity": 0.25,
-				"parallax_factor": 0.15,
-				"back_layer_dim": 0.1,
-				"tile_color_top": Color(1.0, 1.0, 1.0, 1.0),
-				"tile_color_bottom": Color(0.88, 0.88, 0.93, 1.0),
-				"bg_color_top": Color(0.93, 0.93, 0.96, 1.0),
-				"bg_color_bottom": Color(0.8, 0.8, 0.87, 1.0)
-			}
-	
-	var config_setting = DataManager.get_setting("library_background_config")
-	if config_setting:
-		_suppress_config_signal = true
-		DataManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
-		_suppress_config_signal = false
-
-	_rebuild_library_effect_controls(effect_id)
-
-func _rebuild_library_effect_controls(effect_id: String) -> void:
-	if not _library_effect_menu:
-		return
-	
-	_library_effect_menu.clear_controls()
-	
-	var schema = LibraryBackground.get_effect_schema(effect_id)
-	var current_settings = _library_appearance_config.get("settings", {})
-	
-	for setting in schema:
-		if current_settings.has(setting.property_name):
-			setting.value = current_settings[setting.property_name]
-	
-	_library_effect_menu.build_controls_from_settingsvars(schema, "Effect Settings", "auto-fix")
-	if not _library_effect_menu.setting_changed.is_connected(_on_library_effect_setting_changed):
-		_library_effect_menu.setting_changed.connect(_on_library_effect_setting_changed)
-
-func _on_library_effect_setting_changed(value: Variant, setting: SettingsVar) -> void:
-	if _is_initializing or _suppress_config_signal:
-		return
-	_library_appearance_config["settings"][setting.property_name] = value
-	var config_setting = DataManager.get_setting("library_background_config")
-	if config_setting:
-		_suppress_config_signal = true
-		DataManager.set_setting(_library_appearance_config.duplicate(true), config_setting)
-		_suppress_config_signal = false
 
 func _refresh_preset_dropdown() -> void:
 	if not _preset_dropdown:

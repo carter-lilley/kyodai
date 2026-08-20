@@ -92,7 +92,8 @@ static func build_from_settings(source: Settings) -> ThemePreset:
 		if preset.values.has(key) and preset.values[key] is Dictionary:
 			preset.values[key] = EffectThemeAdapter.strip_generated_from_config(preset.values[key])
 	if preset.values.has("library_background_config") and preset.values["library_background_config"] is Dictionary:
-		preset.values["library_background_config"] = EffectThemeAdapter.strip_generated_variants(preset.values["library_background_config"])
+		preset.values["library_background_config"] = EffectThemeAdapter.strip_generated_from_config(
+			LibraryBackground.normalize_config(preset.values["library_background_config"]))
 	return preset
 
 static func deep_dup_value(v: Variant) -> Variant:

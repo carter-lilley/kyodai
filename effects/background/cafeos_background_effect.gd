@@ -24,7 +24,6 @@ func _apply_settings() -> void:
 	_set_shader_param("icon_scale", _settings.get("icon_scale", 0.7))
 	_set_shader_param("orbit_speed", _settings.get("orbit_speed", 0.15))
 	_set_shader_param("num_icons", _settings.get("num_icons", 21))
-	_set_shader_param("background_color", _settings.get("background_color", Color(0.05, 0.08, 0.18, 1.0)))
 	
 	# Light direction as normalized vec3
 	var light_dir = _settings.get("light_direction", Vector3(1.0, 1.0, 0.0))
@@ -53,11 +52,7 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
 	var Type = SettingsVar.SettingType
 	var State = SettingsVar.SettingState
-	
-	var bg_color_var = SettingsVar.new(Type.COLOR, Color(0.05, 0.08, 0.18, 1.0), State.ENABLED, "Background Color", "Base color for the gradient background")
-	bg_color_var.property_name = "background_color"
-	schema.append(bg_color_var)
-	
+
 	var time_var = SettingsVar.new(Type.FLOAT, 0.5, State.ENABLED, "Time Scale", "Animation speed", 0.0, 2.0, 0.1)
 	time_var.property_name = "time_scale"
 	schema.append(time_var)

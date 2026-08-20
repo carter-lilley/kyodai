@@ -10,7 +10,6 @@ uniform float size_modulation : hint_range(0.0, 1.0, 0.05) = 0.35;
 uniform float opacity_modulation : hint_range(0.0, 1.0, 0.05) = 0.9;
 uniform vec4 color_a : source_color = vec4(1.0, 0.082, 0.621, 1.0);
 uniform vec4 color_b : source_color = vec4(1.0, 0.152, 0.009, 1.0);
-uniform vec4 background_color : source_color = vec4(0.05, 0.05, 0.08, 1.0);
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -46,8 +45,10 @@ void fragment() {
 
 	float alpha = mix(1.0, smoothstep(0.15, 0.85, n), opacity_modulation);
 
-	vec3 dot_color = mix(color_a.rgb, color_b.rgb, st.x / (res.x / res.y));
-	vec3 color = mix(background_color.rgb, dot_color, dot_mask * alpha);
+	float mix_t = st.x / (res.x / res.y);
+	vec3 dot_color = mix(color_a.rgb, color_b.rgb, mix_t);
+	float dot_alpha = mix(color_a.a, color_b.a, mix_t);
 
-	COLOR = vec4(color, 1.0);
+	// Transparent between dots so layers beneath show through
+	COLOR = vec4(dot_color, dot_alpha * dot_mask * alpha);
 }

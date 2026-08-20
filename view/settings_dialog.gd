@@ -209,6 +209,12 @@ func _build_categories() -> void:
 	card_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["card_designer"] = card_designer
 
+	# Background Designer
+	_add_category_button("background_designer", "Background Designer", "image-outline")
+	var background_designer = BackgroundDesignerView.new()
+	background_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_category_contents["background_designer"] = background_designer
+
 	# GameNative (Android only)
 	if SystemManager.platform.is_android():
 		_add_category_button("gamenative", "GameNative", "android")

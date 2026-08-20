@@ -190,6 +190,27 @@ func reconnect_viewport() -> void:
 
 
 func _input(event):
+	# open_on_accept: touch taps on a text field are an explicit "click" and
+	# still open the keyboard directly (unlike controller focus alone).
+	if open_on_accept and not visible:
+		var tap_pos = null
+		if event is InputEventScreenTouch and event.pressed:
+			tap_pos = event.position
+		elif SystemManager.platform.is_android() and event is InputEventMouseButton \
+				and event.pressed and event.button_index == MOUSE_BUTTON_LEFT \
+				and event.device == InputEvent.DEVICE_ID_EMULATION:
+			# Dual-screen Android delivers touches as emulated mouse events
+			tap_pos = event.position
+		if tap_pos != null:
+			var tapped_field = _find_line_edit_at_position(tap_pos)
+			if tapped_field != null:
+				_active_line_edit = tapped_field
+				_previous_focus_object = tapped_field
+				_passthrough_caret_column = tapped_field.caret_column
+				_dismissed_line_edit = null
+				_show_keyboard()
+				return
+
 	# open_on_accept: ui_accept on a focused text field is the explicit "click"
 	# that opens the keyboard for controller users.
 	if open_on_accept and not visible and _controller_connected and event.is_action_pressed("ui_accept"):

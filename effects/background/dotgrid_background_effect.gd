@@ -19,7 +19,6 @@ func _apply_settings() -> void:
 	_set_shader_param("opacity_modulation", _settings.get("opacity_modulation", 0.9))
 	_set_shader_param("color_a", _settings.get("color_a", Color(1.0, 0.082, 0.621, 1.0)))
 	_set_shader_param("color_b", _settings.get("color_b", Color(1.0, 0.152, 0.009, 1.0)))
-	_set_shader_param("background_color", _settings.get("background_color", Color(0.05, 0.05, 0.08, 1.0)))
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
@@ -57,9 +56,5 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var color_b_var = SettingsVar.new(Type.COLOR, Color(1.0, 0.152, 0.009, 1.0), State.ENABLED, "Color B", "Dot color on the right side")
 	color_b_var.property_name = "color_b"
 	schema.append(color_b_var)
-
-	var bg_color_var = SettingsVar.new(Type.COLOR, Color(0.05, 0.05, 0.08, 1.0), State.ENABLED, "Background Color", "Color behind the dots")
-	bg_color_var.property_name = "background_color"
-	schema.append(bg_color_var)
 
 	return schema

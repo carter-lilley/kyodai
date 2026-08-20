@@ -3,14 +3,9 @@
 xemu save sync
 tst emulator app update flow on android
 prewarm covers on random jump
-touch to open kb txtedits
-remove add to steam on android
-home focus even after gamenative adds
 startup stutter
 
-unify gradient controls (radial vs linear with angle control)
--gradient overlay....., new 'gradient fade?' effect
-x rework background & hero effects to also accept effect stacks
+x rework hero to also accept effect stacks
 
 romm;
 - sort by played

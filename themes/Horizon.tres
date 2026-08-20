@@ -32,17 +32,20 @@ values = {
 "hero_height": 0
 },
 "library_background_config": {
-"background_gradient": SubResource("Gradient_3yjc8"),
-"effect_id": "gradient",
-"gradient_angle": 90.0,
+"base": {
 "light_settings": {
-"background_gradient": SubResource("Gradient_rgwmd"),
-"gradient_angle": 90.0
+"gradient": SubResource("Gradient_rgwmd"),
+"gradient_angle": 90.0,
+"gradient_radial": false
 },
 "settings": {
-"background_gradient": SubResource("Gradient_ww3ry"),
-"gradient_angle": 90.0
+"gradient": SubResource("Gradient_ww3ry"),
+"gradient_angle": 90.0,
+"gradient_radial": false
 }
+},
+"effects": [],
+"overlays": []
 },
 "library_card_content_alignment": 1,
 "library_card_display_mode": 1,

@@ -70,10 +70,15 @@ func _process_scan_queue() -> void:
 	if _is_validating:
 		return
 	var app_id: int = _pending_scan_app_ids.pop_front()
+	# Suppress per-add games_updated emits during the scan; emit once when the
+	# queue drains so the grid rebuilds a single time instead of N times.
 	add_game(app_id, func(_success: bool, _message: String):
-		# Continue to the next .steam file once this one finishes.
-		call_deferred("_process_scan_queue")
-	)
+		if _pending_scan_app_ids.is_empty():
+			games_updated.emit()
+		else:
+			# Continue to the next .steam file once this one finishes.
+			call_deferred("_process_scan_queue")
+	, false)
 
 func _load_games() -> void:
 	"""Load GameNative games from Settings."""
@@ -104,7 +109,7 @@ func _save_games(notify: bool = true) -> void:
 	if notify:
 		games_updated.emit()
 
-func add_game(app_id: int, callback: Callable = Callable()) -> void:
+func add_game(app_id: int, callback: Callable = Callable(), notify: bool = true) -> void:
 	"""Add a new GameNative game by Steam App ID.
 	
 	Validates the App ID by checking Steam store, fetches game name from Steam API.
@@ -120,6 +125,7 @@ func add_game(app_id: int, callback: Callable = Callable()) -> void:
 	_is_validating = true
 	_validation_callback = callback
 	_validation_app_id = app_id
+	_validation_notify = notify
 	
 	# Check Steam store page exists (HEAD request)
 	var store_url = "https://store.steampowered.com/app/%d" % app_id
@@ -132,6 +138,7 @@ func add_game(app_id: int, callback: Callable = Callable()) -> void:
 var _is_validating: bool = false
 var _validation_callback: Callable
 var _validation_app_id: int
+var _validation_notify: bool = true
 
 func _on_http_request_completed(_result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray):
 	if not _is_validating:
@@ -145,9 +152,9 @@ func _on_http_request_completed(_result: int, response_code: int, _headers: Pack
 		return
 	
 	# App ID is valid, fetch game name from Steam API
-	_fetch_game_name(_validation_app_id, _validation_callback)
+	_fetch_game_name(_validation_app_id, _validation_callback, _validation_notify)
 
-func _fetch_game_name(app_id: int, callback: Callable) -> void:
+func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> void:
 	"""Fetch game name from Steam Store API."""
 	# Steam Store API endpoint for app details
 	var api_url = "https://store.steampowered.com/api/appdetails?appids=%d&filters=basic" % app_id
@@ -190,7 +197,7 @@ func _fetch_game_name(app_id: int, callback: Callable) -> void:
 				"cover_path": cover_path_ref[0],
 				"last_played": "1970-01-01T00:00:00"
 			})
-			_save_games()
+			_save_games(notify)
 			
 			if callback.is_valid():
 				callback.call(true, game_name)

@@ -7,7 +7,6 @@ uniform float time_scale : hint_range(0.0, 2.0, 0.05) = 1.0;
 uniform float zoom : hint_range(0.05, 1.0, 0.01) = 0.3;
 uniform float line_width : hint_range(0.1, 2.0, 0.05) = 0.6;
 uniform float lighting_strength : hint_range(0.0, 1.0, 0.05) = 0.35;
-uniform vec4 background_color : source_color = vec4(0.07, 0.07, 0.129, 1.0);
 uniform vec4 line_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
 float smootherstep_g(float t) {
@@ -77,5 +76,6 @@ void fragment() {
 	float light = (I * I) * (I * I);
 	c *= mix(1.0, light, lighting_strength);
 
-	COLOR = vec4(background_color.rgb + line_color.rgb * c, 1.0);
+	// Lines composite over whatever is beneath (transparent elsewhere)
+	COLOR = vec4(line_color.rgb, clamp(c, 0.0, 1.0) * line_color.a);
 }

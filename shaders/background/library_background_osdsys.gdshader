@@ -85,7 +85,7 @@ void fragment() {
     
     // Calculate alpha based on particle intensity
     float alpha = max(drawing.r, max(drawing.g, drawing.b));
-    
-    // Output opaque
-    COLOR = vec4(drawing * alpha, 1.0);
+
+    // Transparent where no particles — layers beneath show through
+    COLOR = vec4(drawing, alpha);
 }

@@ -433,8 +433,8 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	if show_delete and game and game.is_active_variant_downloaded():
 		items.append({"id": "delete", "text": "Delete", "icon": "trash-can"})
 
-	# Add "Add to Steam" option if game is downloaded
-	if game and game.is_active_variant_downloaded():
+	# Add "Add to Steam" option if game is downloaded (desktop only)
+	if game and game.is_active_variant_downloaded() and (SystemManager.platform.is_windows() or SystemManager.platform.is_linux()):
 		items.append({"id": "add_to_steam", "text": "Add to Steam"})
 
 	items.append({"id": "card_designer", "text": "Card Designer", "icon": "cards-outline"})

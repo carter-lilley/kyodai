@@ -15,7 +15,6 @@ func _apply_settings() -> void:
 	_set_shader_param("zoom", _settings.get("zoom", 0.3))
 	_set_shader_param("line_width", _settings.get("line_width", 0.6))
 	_set_shader_param("lighting_strength", _settings.get("lighting_strength", 0.35))
-	_set_shader_param("background_color", _settings.get("background_color", Color(0.07, 0.07, 0.129, 1.0)))
 	_set_shader_param("line_color", _settings.get("line_color", Color(1.0, 1.0, 1.0, 1.0)))
 
 func get_settings_schema() -> Array[SettingsVar]:
@@ -38,10 +37,6 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var light_var = SettingsVar.new(Type.FLOAT, 0.35, State.ENABLED, "Lighting Strength", "Intensity of the cloud-like lighting modulation", 0.0, 1.0, 0.05)
 	light_var.property_name = "lighting_strength"
 	schema.append(light_var)
-
-	var bg_color_var = SettingsVar.new(Type.COLOR, Color(0.07, 0.07, 0.129, 1.0), State.ENABLED, "Background Color", "Base color behind the lines")
-	bg_color_var.property_name = "background_color"
-	schema.append(bg_color_var)
 
 	var line_color_var = SettingsVar.new(Type.COLOR, Color(1.0, 1.0, 1.0, 1.0), State.ENABLED, "Line Color", "Color of the contour lines")
 	line_color_var.property_name = "line_color"

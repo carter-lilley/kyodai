@@ -25,8 +25,6 @@ func _apply_settings() -> void:
 	_set_shader_param("back_layer_dim", _settings.get("back_layer_dim", 0.1))
 	_set_shader_param("tile_color_top", _settings.get("tile_color_top", Color(1.0, 1.0, 1.0, 1.0)))
 	_set_shader_param("tile_color_bottom", _settings.get("tile_color_bottom", Color(0.88, 0.88, 0.93, 1.0)))
-	_set_shader_param("bg_color_top", _settings.get("bg_color_top", Color(0.93, 0.93, 0.96, 1.0)))
-	_set_shader_param("bg_color_bottom", _settings.get("bg_color_bottom", Color(0.8, 0.8, 0.87, 1.0)))
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []
@@ -88,13 +86,5 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var tile_bottom_var = SettingsVar.new(Type.COLOR, Color(0.88, 0.88, 0.93, 1.0), State.ENABLED, "Tile Color Bottom", "Tile gradient bottom color")
 	tile_bottom_var.property_name = "tile_color_bottom"
 	schema.append(tile_bottom_var)
-
-	var bg_top_var = SettingsVar.new(Type.COLOR, Color(0.93, 0.93, 0.96, 1.0), State.ENABLED, "Background Top", "Background gradient top color")
-	bg_top_var.property_name = "bg_color_top"
-	schema.append(bg_top_var)
-
-	var bg_bottom_var = SettingsVar.new(Type.COLOR, Color(0.8, 0.8, 0.87, 1.0), State.ENABLED, "Background Bottom", "Background gradient bottom color")
-	bg_bottom_var.property_name = "bg_color_bottom"
-	schema.append(bg_bottom_var)
 
 	return schema

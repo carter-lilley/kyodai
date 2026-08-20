@@ -6,6 +6,9 @@
 offsets = PackedFloat32Array(0.12044818, 0.8053221)
 colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
 
+[sub_resource type="Gradient" id="Gradient_basebg"]
+colors = PackedColorArray(0.04, 0.18975, 0.54027, 1, 0.04, 0.69, 0.87, 1)
+
 [resource]
 script = ExtResource("1_j3sqm")
 name = "XMB"
@@ -46,9 +49,15 @@ values = {
 "hero_height": 0
 },
 "library_background_config": {
-"background_gradient": SubResource("Gradient_3yjc8"),
+"base": {
+"settings": {
+"gradient": SubResource("Gradient_basebg"),
+"gradient_angle": 180.0,
+"gradient_radial": false
+}
+},
+"effects": [{
 "effect_id": "xmb_classic",
-"gradient_angle": 90.0,
 "settings": {
 "frequency": 4.3,
 "inner_amplitude": 0.2,
@@ -58,6 +67,8 @@ values = {
 "time_scale": 1.0,
 "wave_color": Color(0.04, 0.69, 0.87, 1)
 }
+}],
+"overlays": []
 },
 "library_card_content_alignment": 1,
 "library_card_display_mode": 1,

@@ -17,8 +17,6 @@ uniform float parallax_factor : hint_range(0.1, 1.0, 0.05) = 0.15;
 uniform float back_layer_dim : hint_range(0.0, 1.0, 0.05) = 0.1;
 uniform vec4 tile_color_top : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec4 tile_color_bottom : source_color = vec4(0.88, 0.88, 0.93, 1.0);
-uniform vec4 bg_color_top : source_color = vec4(0.93, 0.93, 0.96, 1.0);
-uniform vec4 bg_color_bottom : source_color = vec4(0.8, 0.8, 0.87, 1.0);
 
 const float BORDER_W = 0.035;
 
@@ -75,13 +73,12 @@ void fragment() {
 	float s = res.y / rows_visible;
 	float ang = TIME * time_scale * rotation_speed * 0.6;
 
-	vec3 col = mix(bg_color_bottom.rgb, bg_color_top.rgb, FRAGCOORD.y / res.y);
-
 	vec4 back = tile_layer(FRAGCOORD.xy, res, s, ang * parallax_factor + 1.5, 0.9, 0.5, back_layer_dim);
-	col = mix(col, back.rgb, back.a);
-
 	vec4 front = tile_layer(FRAGCOORD.xy, res, s, ang, 1.0, 0.0, 1.0);
-	col = mix(col, front.rgb, front.a);
 
-	COLOR = vec4(col, 1.0);
+	// "Over" composite of the two tile layers onto transparent, so the
+	// stack base (or other layers) shows through between tiles.
+	float a = front.a + back.a * (1.0 - front.a);
+	vec3 col = (front.rgb * front.a + back.rgb * back.a * (1.0 - front.a)) / max(a, 1e-4);
+	COLOR = vec4(col, a);
 }

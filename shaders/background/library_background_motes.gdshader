@@ -91,7 +91,7 @@ void fragment() {
     
     // Clamp alpha
     alpha = clamp(alpha, 0.0, 1.0);
-    
-    // Output opaque
-    COLOR = vec4(color * alpha, 1.0);
+
+    // Straight-alpha output so motes composite over layers beneath
+    COLOR = vec4(color, alpha);
 }

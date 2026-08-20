@@ -30,9 +30,6 @@ float hit_weight(float alpha) {
                       alpha_threshold + max(edge_softness * 0.1, 0.01), alpha);
 }
 
-// Background gradient derived from a single user color
-uniform vec4 background_color : source_color = vec4(0.05, 0.08, 0.18, 1.0);
-
 // Lighting Settings
 uniform float light_ambient : hint_range(0.0, 5.0) = 0.85;
 uniform float light_diffuse : hint_range(0.0, 5.0) = 0.275;
@@ -241,14 +238,7 @@ void fragment() {
     // Calculate pixel size for supersampling
     vec2 pixel_size = SCREEN_PIXEL_SIZE * 2.0; // UV range is -1 to 1
 
-    // Derive subtle tonal variations from single user color
-    vec3 base_color = background_color.rgb;
-    vec3 left_color  = mix(base_color, vec3(1.0), 0.08);  // 8% lighter
-    vec3 right_color = mix(base_color, vec3(0.0), 0.08);  // 8% darker
-
-    // Horizontal gradient with a soft ease
-    vec3 bg_gradient = mix(left_color, right_color, smoothstep(0.0, 1.0, UV.x));
-
+    // Premultiplied accumulation of icon rays; composited over layers beneath
     vec4 final_color = vec4(0.0);
 
     if (blur_amount > 0.0) {
@@ -267,7 +257,8 @@ void fragment() {
         final_color /= kernel_samples;
     } else if (supersample_level <= 1) {
         // No blur, no supersampling - single sharp sample
-        final_color = render_ray(uv, aspect, 0.0);
+        vec4 sample0 = render_ray(uv, aspect, 0.0);
+        final_color = vec4(sample0.rgb * sample0.a, sample0.a);
     } else if (supersample_level == 2) {
         // 2x2 supersampling (4 samples)
         vec2 offsets[4] = vec2[](
@@ -304,11 +295,9 @@ void fragment() {
         final_color /= 16.0;
     }
 
-    // Composite icons over the gradient background.
-    // render_ray output is premultiplied (RGB * A), so:
-    // result = background * (1 - A) + RGB
-    vec3 composited = bg_gradient * (1.0 - final_color.a) + final_color.rgb;
-
-    // Output opaque
-    COLOR = vec4(composited, 1.0);
+    // Un-premultiply and output with alpha so icons composite over the
+    // layers beneath (transparent where no icon was hit).
+    float out_a = clamp(final_color.a, 0.0, 1.0);
+    vec3 out_rgb = final_color.rgb / max(final_color.a, 1e-4);
+    COLOR = vec4(clamp(out_rgb, vec3(0.0), vec3(1.0)), out_a);
 }

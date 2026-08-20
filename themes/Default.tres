@@ -6,6 +6,9 @@
 offsets = PackedFloat32Array(0.12044818, 0.8053221)
 colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
 
+[sub_resource type="Gradient" id="Gradient_basebg"]
+colors = PackedColorArray(0.078, 0.071, 0.094, 1, 0.078, 0.071, 0.094, 1)
+
 [resource]
 script = ExtResource("1_5r1m0")
 name = "Default"
@@ -18,10 +21,15 @@ library_card_display_mode = 0
 library_focus_scale = 0.09
 library_grid_vertical = true
 library_background_config = {
-"background_gradient": SubResource("Gradient_3yjc8"),
-"effect_id": "none",
-"gradient_angle": 90.0,
-"settings": {}
+"base": {
+"settings": {
+"gradient": SubResource("Gradient_basebg"),
+"gradient_angle": 180.0,
+"gradient_radial": false
+}
+},
+"effects": [],
+"overlays": []
 }
 library_primary_color = Color(1, 1, 1, 1)
 dark_mode = true
