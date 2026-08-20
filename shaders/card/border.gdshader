@@ -7,16 +7,21 @@ uniform float border_fade_in_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform bool use_gradient = false;
 uniform sampler2D gradient_texture : filter_linear, repeat_disable;
-uniform int gradient_direction = 0;
+uniform float border_gradient_angle = 180.0;  // degrees, 0 = up, clockwise
+uniform bool border_gradient_radial = false;
 
 uniform float inner_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool use_inner_stroke_gradient = false;
 uniform sampler2D inner_stroke_gradient_texture : filter_linear, repeat_disable;
 uniform vec4 inner_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float inner_stroke_gradient_angle = 180.0;
+uniform bool inner_stroke_gradient_radial = false;
 uniform float outer_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool use_outer_stroke_gradient = false;
 uniform sampler2D outer_stroke_gradient_texture : filter_linear, repeat_disable;
 uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float outer_stroke_gradient_angle = 180.0;
+uniform bool outer_stroke_gradient_radial = false;
 
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
@@ -73,15 +78,7 @@ void fragment() {
 	
 	vec4 color;
 	if (use_gradient) {
-		float gradient_t;
-		if (gradient_direction == 0) {
-			gradient_t = UV.x;
-		} else if (gradient_direction == 1) {
-			gradient_t = UV.y;
-		} else {
-			gradient_t = (UV.x + UV.y) * 0.5;
-		}
-		gradient_t = clamp(gradient_t, 0.0, 1.0);
+		float gradient_t = gradient_coord(UV, border_gradient_angle, border_gradient_radial);
 		color = texture(gradient_texture, vec2(gradient_t, 0.0));
 	} else {
 		color = border_color;
@@ -113,15 +110,7 @@ void fragment() {
 		if (stroke_alpha > 0.0) {
 			vec4 stroke_color;
 			if (use_inner_stroke_gradient) {
-				float gradient_t;
-				if (gradient_direction == 0) {
-					gradient_t = UV.x;
-				} else if (gradient_direction == 1) {
-					gradient_t = UV.y;
-				} else {
-					gradient_t = (UV.x + UV.y) * 0.5;
-				}
-				gradient_t = clamp(gradient_t, 0.0, 1.0);
+				float gradient_t = gradient_coord(UV, inner_stroke_gradient_angle, inner_stroke_gradient_radial);
 				stroke_color = texture(inner_stroke_gradient_texture, vec2(gradient_t, 0.0));
 			} else {
 				stroke_color = inner_stroke_color;
@@ -149,15 +138,7 @@ void fragment() {
 		if (stroke_alpha > 0.0) {
 			vec4 stroke_color;
 			if (use_outer_stroke_gradient) {
-				float gradient_t;
-				if (gradient_direction == 0) {
-					gradient_t = UV.x;
-				} else if (gradient_direction == 1) {
-					gradient_t = UV.y;
-				} else {
-					gradient_t = (UV.x + UV.y) * 0.5;
-				}
-				gradient_t = clamp(gradient_t, 0.0, 1.0);
+				float gradient_t = gradient_coord(UV, outer_stroke_gradient_angle, outer_stroke_gradient_radial);
 				stroke_color = texture(outer_stroke_gradient_texture, vec2(gradient_t, 0.0));
 			} else {
 				stroke_color = outer_stroke_color;

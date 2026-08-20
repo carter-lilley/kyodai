@@ -196,7 +196,7 @@ func _load_library_background_config() -> void:
 			"effect_id": "gradient",
 			"settings": {
 				"background_gradient": default_gradient,
-				"gradient_direction": 0
+				"gradient_angle": 90.0
 			}
 		}
 
@@ -216,7 +216,7 @@ func _on_library_effect_selected(index: int) -> void:
 			default_gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
 			_library_appearance_config["settings"] = {
 				"background_gradient": default_gradient,
-				"gradient_direction": 0
+				"gradient_angle": 90.0
 			}
 		"xmb":
 			_library_appearance_config["settings"] = {

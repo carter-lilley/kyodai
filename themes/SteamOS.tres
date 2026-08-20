@@ -71,13 +71,13 @@ values = {
 "background_gradient": SubResource("Gradient_nikuc"),
 "dark_settings": {
 "background_gradient": SubResource("Gradient_yyatg"),
-"gradient_direction": 0
+"gradient_angle": 90.0
 },
 "effect_id": "gradient",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "settings": {
 "background_gradient": SubResource("Gradient_jpx8s"),
-"gradient_direction": 0
+"gradient_angle": 90.0
 }
 },
 "library_card_content_alignment": 1,

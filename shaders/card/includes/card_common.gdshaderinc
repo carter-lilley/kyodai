@@ -44,3 +44,17 @@ vec2 aspect_covered_uv(vec2 uv, vec2 card, vec2 tex) {
 	}
 	return (uv - 0.5) * scale + 0.5;
 }
+
+// Gradient sampling coordinate.
+// Linear: 0 degrees = up, clockwise. Projection is normalized corner-to-corner
+// so the ramp spans the full 0..1 range at any angle (exactly reproduces the
+// old H/V/diagonal behavior at 90/180/135 degrees).
+// Radial: vignette — t=0 at center, t=1 at corners (center -> edge).
+float gradient_coord(vec2 uv, float angle_deg, bool radial) {
+	if (radial) {
+		return clamp(length(uv - 0.5) * 1.41421356, 0.0, 1.0);
+	}
+	float r = radians(angle_deg);
+	vec2 dir = vec2(sin(r), -cos(r));
+	return clamp(dot(uv - 0.5, dir) / (abs(dir.x) + abs(dir.y)) + 0.5, 0.0, 1.0);
+}

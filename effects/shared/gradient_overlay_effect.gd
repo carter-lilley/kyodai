@@ -25,11 +25,13 @@ func _update_shader_params() -> void:
 	_ensure_shared_material()
 
 	var gradient = _settings.get("gradient")
-	var gradient_direction = _settings.get("gradient_direction", 0)
+	var gradient_angle = get_gradient_angle(_settings, "gradient_angle")
+	var gradient_radial = _settings.get("gradient_radial", false)
 
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
-	_set_shader_param("gradient_direction", gradient_direction)
+	_set_shader_param("gradient_angle", gradient_angle)
+	_set_shader_param("gradient_radial", gradient_radial)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
 	if gradient is Gradient:
@@ -52,8 +54,12 @@ func get_settings_schema() -> Array[SettingsVar]:
 	gradient_var.property_name = "gradient"
 	schema.append(gradient_var)
 
-	var direction_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Gradient Direction", "", 0.0, 0.0, 0.0, ["Horizontal", "Vertical", "Diagonal"])
-	direction_var.property_name = "gradient_direction"
-	schema.append(direction_var)
+	var angle_var = SettingsVar.new(Type.ANGLE, 90.0, State.ENABLED, "Gradient Angle", "", 0.0, 360.0, 15.0)
+	angle_var.property_name = "gradient_angle"
+	schema.append(angle_var)
+
+	var radial_var = SettingsVar.new(Type.BOOL, false, State.ENABLED, "Radial (Vignette)")
+	radial_var.property_name = "gradient_radial"
+	schema.append(radial_var)
 
 	return schema

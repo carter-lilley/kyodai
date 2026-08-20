@@ -23,6 +23,7 @@ var _effects_list: VBoxContainer
 var _add_effect_button: M3OptionButton
 var _scroll_container: ScrollContainer
 var _title_label: M3Label
+var _focus_badge: M3Chip
 
 # Discovered effects for this context
 var _available_effects: Dictionary = {}  # Maps effect_id -> display_name
@@ -81,7 +82,7 @@ var _effect_defaults: Dictionary = {
 	},
 	"gradient_overlay": {
 		"gradient": null,  # Will create default gradient
-		"gradient_direction": 0
+		"gradient_angle": 90.0
 	},
 	"hsl": {
 		"hue_shift": 0.0,
@@ -189,9 +190,22 @@ func _setup_ui():
 	_title_label.text = title
 	_title_label.label_style = M3Label.Style.TITLE_MEDIUM
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	target.add_child(_title_label)
-	if context == "focus_card":
-		_title_label.add_theme_color_override("font_color", M3Theme.get_secondary())
+	if _is_focus_designer():
+		var title_row := HBoxContainer.new()
+		title_row.add_theme_constant_override("separation", int(M3Units.dp(8)))
+		target.add_child(title_row)
+		title_row.add_child(_title_label)
+		_focus_badge = M3Chip.new()
+		_focus_badge.text = "Focus"
+		_focus_badge.chip_variant = M3Chip.ChipVariant.FILTER
+		_focus_badge.checked_icon_name = "crosshairs"
+		_focus_badge.focus_mode = Control.FOCUS_NONE
+		_focus_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		title_row.add_child(_focus_badge)
+		_focus_badge.checked = true
+	else:
+		target.add_child(_title_label)
+	_apply_focus_styling()
 	
 	_add_effect_button = M3OptionButton.new()
 	_add_effect_button.multi_select = true
@@ -254,7 +268,7 @@ func _rebuild_effects_ui():
 		no_effects_label.text = "No effects added. Click 'Add Effect' to get started."
 		no_effects_label.label_style = M3Label.Style.BODY_MEDIUM
 		no_effects_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		no_effects_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		no_effects_label.use_on_surface_variant = true
 		_effects_list.add_child(no_effects_label)
 	
 	for i in range(effects.size()):
@@ -310,6 +324,22 @@ func _sync_option_button() -> void:
 func _is_focus_designer() -> bool:
 	return context == "focus_card"
 
+func refresh_theme() -> void:
+	# Child M3Labels re-apply their own colors during the global theme walk,
+	# clobbering our overrides — re-apply focus styling deferred so it wins.
+	call_deferred("_apply_focus_styling")
+
+func _apply_focus_styling() -> void:
+	if not _is_focus_designer():
+		return
+	if _title_label:
+		_title_label.add_theme_color_override("font_color", M3Theme.get_secondary())
+	if not is_instance_valid(_effects_list):
+		return
+	for row in _effects_list.get_children():
+		for section in row.find_children("*", "SettingsSection", true, false):
+			section.surface_tint = M3Theme.get_secondary()
+
 func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	var container = CollapsableVBoxContainer.new()
 	container.title = effect_data.get("effect_id", "Unknown").capitalize()
@@ -335,7 +365,6 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		if _is_focus_designer():
 			settings_menu.accent_color = M3Theme.get_secondary()
 		content.add_child(settings_menu)
-		
 		var current_settings = effect_data.get("settings", {})
 		for setting in schema:
 			if current_settings.has(setting.property_name):
@@ -348,6 +377,8 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		# Untitled section: a plain card groups the effect's settings without
 		# adding a header inside the collapsible row.
 		settings_menu.build_controls_from_settingsvars(schema)
+		if _is_focus_designer() and settings_menu._current_section:
+			settings_menu._current_section.surface_tint = M3Theme.get_secondary()
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _get_effect_schema(effect_id: String) -> Array[SettingsVar]:

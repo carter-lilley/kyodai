@@ -52,7 +52,7 @@ func _get_initial_config() -> Dictionary:
 		"effect_id": "gradient",
 		"settings": {
 			"background_gradient": default_gradient,
-			"gradient_direction": 0
+			"gradient_angle": 90.0
 		}
 	}
 

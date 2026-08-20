@@ -1,26 +1,21 @@
 shader_type canvas_item;
 
 uniform sampler2D gradient_texture : source_color;
-uniform int gradient_direction = 0; // 0 = horizontal, 1 = vertical, 2 = diagonal
+uniform float gradient_angle = 180.0; // degrees, 0 = up, clockwise
+uniform bool gradient_radial = false; // vignette: center -> edge
+
+// Linear: projection normalized corner-to-corner (matches old H/V/diagonal at
+// 90/180/135 degrees). Radial: t=0 at center, t=1 at corners.
+float gradient_coord(vec2 uv, float angle_deg, bool radial) {
+    if (radial) {
+        return clamp(length(uv - 0.5) * 1.41421356, 0.0, 1.0);
+    }
+    float r = radians(angle_deg);
+    vec2 dir = vec2(sin(r), -cos(r));
+    return clamp(dot(uv - 0.5, dir) / (abs(dir.x) + abs(dir.y)) + 0.5, 0.0, 1.0);
+}
 
 void fragment() {
-    vec2 uv = UV;
-    
-    // Calculate gradient coordinate based on direction
-    float gradient_coord;
-    if (gradient_direction == 0) {
-        // Horizontal
-        gradient_coord = uv.x;
-    } else if (gradient_direction == 1) {
-        // Vertical
-        gradient_coord = uv.y;
-    } else {
-        // Diagonal
-        gradient_coord = (uv.x + uv.y) * 0.5;
-    }
-    
-    // Sample gradient texture
-    vec4 color = texture(gradient_texture, vec2(gradient_coord, 0.0));
-    
-    COLOR = color;
+    float t = gradient_coord(UV, gradient_angle, gradient_radial);
+    COLOR = texture(gradient_texture, vec2(t, 0.0));
 }

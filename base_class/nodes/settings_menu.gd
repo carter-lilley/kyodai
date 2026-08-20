@@ -92,6 +92,14 @@ func update_control_value(property_name: String, value: Variant) -> void:
 		control.color = value
 	elif control is RangeSlider:
 		control.set_range(value.x, value.y)
+	elif control is GradientEdit:
+		if value is Gradient:
+			control.set_gradient(value)
+	elif control is AngleDial:
+		control.set_angle(value)
+		var spinbox = control.get_meta("spinbox", null)
+		if spinbox:
+			spinbox.value = value
 
 func get_control_value(property_name: String) -> Variant:
 	var control = controls.get(property_name)
@@ -110,6 +118,10 @@ func get_control_value(property_name: String) -> Variant:
 		return control.color
 	elif control is RangeSlider:
 		return Vector2(control.range_start, control.range_end)
+	elif control is GradientEdit:
+		return control.get_gradient()
+	elif control is AngleDial:
+		return control.get_angle()
 	return null
 
 func clear_controls() -> void:
@@ -361,7 +373,54 @@ func match_var_type(settingsvar : SettingsVar):
 			gradient_edit.gradient_changed.connect(func(gradient: Gradient):
 				emit_signal("setting_changed", gradient, settingsvar)
 			)
-		
+
+		Type.ANGLE:
+			var dial = AngleDial.new()
+			var initial_angle = settingsvar.value if settingsvar.value is float or settingsvar.value is int else 0.0
+			dial.set_angle(initial_angle)
+			dial.default_angle = initial_angle
+			dial.editable = settingsvar.state == 0
+			dial.custom_minimum_size = Vector2(48, 48)
+			dial.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+			var spinbox = SpinBox.new()
+			spinbox.min_value = settingsvar.min_value
+			spinbox.max_value = settingsvar.max_value
+			spinbox.step = settingsvar.step
+			spinbox.value = initial_angle
+			spinbox.editable = settingsvar.state == 0
+			spinbox.suffix = "°"
+			spinbox.custom_minimum_size.x = M3Units.dp(90.0)
+			spinbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+			var angle_controls = HBoxContainer.new()
+			angle_controls.add_theme_constant_override("separation", int(M3Units.dp(8)))
+			angle_controls.add_child(dial)
+			angle_controls.add_child(spinbox)
+			angle_controls.size_flags_horizontal = Control.SIZE_SHRINK_END
+
+			_add_setting_row(_make_label_block(settingsvar), [angle_controls])
+			controls[settingsvar.property_name] = dial
+			dial.set_meta("spinbox", spinbox)
+
+			var updating := {"active": false}
+			dial.angle_changed.connect(func(value: float):
+				if updating.active:
+					return
+				updating.active = true
+				spinbox.value = value
+				updating.active = false
+				emit_signal("setting_changed", value, settingsvar)
+			)
+			spinbox.value_changed.connect(func(value: float):
+				if updating.active:
+					return
+				updating.active = true
+				dial.set_angle(value)
+				updating.active = false
+				emit_signal("setting_changed", value, settingsvar)
+			)
+
 		_:
 			var button = M3Button.new()
 			button.text = settingsvar.display_name

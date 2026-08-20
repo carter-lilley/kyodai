@@ -39,6 +39,20 @@ static func gradient_content_hash(gradient: Gradient) -> String:
 		h += str(gradient.get_offset(i)) + ":" + gradient.get_color(i).to_html() + ";"
 	return h
 
+# Resolves a gradient angle in degrees (0 = up, clockwise). Falls back to the
+# legacy "gradient_direction" enum (0 = Horizontal, 1 = Vertical, 2 = Diagonal)
+# when the new angle key is absent, so old saved settings keep working.
+static func get_gradient_angle(settings: Dictionary, angle_key: String, legacy_direction: Variant = null) -> float:
+	if settings.has(angle_key):
+		return float(settings[angle_key])
+	if legacy_direction == null:
+		legacy_direction = settings.get("gradient_direction")
+	if legacy_direction is int or legacy_direction is float:
+		match int(legacy_direction):
+			1: return 180.0
+			2: return 135.0
+	return 90.0
+
 static func get_shared_gradient_texture(gradient: Gradient) -> ImageTexture:
 	if gradient == null:
 		return null

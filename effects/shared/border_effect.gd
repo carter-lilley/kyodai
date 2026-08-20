@@ -31,7 +31,7 @@ func _update_shader_params() -> void:
 	var border_size = _settings.get("border_size", 0.0)
 	var border_fade_in = _settings.get("border_fade_in", 0.0)
 	var border_gradient = _settings.get("border_gradient")
-	var gradient_direction = _settings.get("gradient_direction", 0)
+	var legacy_direction = _settings.get("gradient_direction")
 	var inner_stroke_width = _settings.get("inner_stroke_width", 0.0)
 	var inner_stroke_gradient = _settings.get("inner_stroke_gradient")
 	var outer_stroke_width = _settings.get("outer_stroke_width", 0.0)
@@ -42,7 +42,12 @@ func _update_shader_params() -> void:
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("border_width_ratio", border_size)
 	_set_shader_param("border_fade_in_ratio", border_fade_in)
-	_set_shader_param("gradient_direction", gradient_direction)
+	_set_shader_param("border_gradient_angle", get_gradient_angle(_settings, "border_gradient_angle", legacy_direction))
+	_set_shader_param("border_gradient_radial", _settings.get("border_gradient_radial", false))
+	_set_shader_param("inner_stroke_gradient_angle", get_gradient_angle(_settings, "inner_stroke_gradient_angle", legacy_direction))
+	_set_shader_param("inner_stroke_gradient_radial", _settings.get("inner_stroke_gradient_radial", false))
+	_set_shader_param("outer_stroke_gradient_angle", get_gradient_angle(_settings, "outer_stroke_gradient_angle", legacy_direction))
+	_set_shader_param("outer_stroke_gradient_radial", _settings.get("outer_stroke_gradient_radial", false))
 
 	if inner_stroke_gradient is Gradient:
 		var inner_key = gradient_content_hash(inner_stroke_gradient)
@@ -101,9 +106,13 @@ func get_settings_schema() -> Array[SettingsVar]:
 	gradient_var.property_name = "border_gradient"
 	schema.append(gradient_var)
 
-	var direction_var = SettingsVar.new(Type.ENUM, 0, State.ENABLED, "Gradient Direction", "", 0.0, 0.0, 0.0, ["Horizontal", "Vertical", "Diagonal"])
-	direction_var.property_name = "gradient_direction"
-	schema.append(direction_var)
+	var angle_var = SettingsVar.new(Type.ANGLE, 90.0, State.ENABLED, "Gradient Angle", "", 0.0, 360.0, 15.0)
+	angle_var.property_name = "border_gradient_angle"
+	schema.append(angle_var)
+
+	var radial_var = SettingsVar.new(Type.BOOL, false, State.ENABLED, "Radial (Vignette)")
+	radial_var.property_name = "border_gradient_radial"
+	schema.append(radial_var)
 
 	var inner_stroke_width_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Inner Stroke Width", "", 0.0, 0.1, 0.001)
 	inner_stroke_width_var.property_name = "inner_stroke_width"
@@ -116,6 +125,14 @@ func get_settings_schema() -> Array[SettingsVar]:
 	inner_stroke_gradient_var.property_name = "inner_stroke_gradient"
 	schema.append(inner_stroke_gradient_var)
 
+	var inner_angle_var = SettingsVar.new(Type.ANGLE, 90.0, State.ENABLED, "Inner Stroke Angle", "", 0.0, 360.0, 15.0)
+	inner_angle_var.property_name = "inner_stroke_gradient_angle"
+	schema.append(inner_angle_var)
+
+	var inner_radial_var = SettingsVar.new(Type.BOOL, false, State.ENABLED, "Inner Stroke Radial")
+	inner_radial_var.property_name = "inner_stroke_gradient_radial"
+	schema.append(inner_radial_var)
+
 	var outer_stroke_width_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Outer Stroke Width", "", 0.0, 0.1, 0.001)
 	outer_stroke_width_var.property_name = "outer_stroke_width"
 	schema.append(outer_stroke_width_var)
@@ -126,5 +143,13 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var outer_stroke_gradient_var = SettingsVar.new(Type.GRADIENT, outer_stroke_gradient, State.ENABLED, "Outer Stroke Gradient")
 	outer_stroke_gradient_var.property_name = "outer_stroke_gradient"
 	schema.append(outer_stroke_gradient_var)
+
+	var outer_angle_var = SettingsVar.new(Type.ANGLE, 90.0, State.ENABLED, "Outer Stroke Angle", "", 0.0, 360.0, 15.0)
+	outer_angle_var.property_name = "outer_stroke_gradient_angle"
+	schema.append(outer_angle_var)
+
+	var outer_radial_var = SettingsVar.new(Type.BOOL, false, State.ENABLED, "Outer Stroke Radial")
+	outer_radial_var.property_name = "outer_stroke_gradient_radial"
+	schema.append(outer_radial_var)
 
 	return schema

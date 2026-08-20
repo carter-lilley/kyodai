@@ -34,14 +34,14 @@ values = {
 "library_background_config": {
 "background_gradient": SubResource("Gradient_3yjc8"),
 "effect_id": "gradient",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "light_settings": {
 "background_gradient": SubResource("Gradient_rgwmd"),
-"gradient_direction": 0
+"gradient_angle": 90.0
 },
 "settings": {
 "background_gradient": SubResource("Gradient_ww3ry"),
-"gradient_direction": 0
+"gradient_angle": 90.0
 }
 },
 "library_card_content_alignment": 1,

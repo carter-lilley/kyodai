@@ -33,10 +33,10 @@ card_media_aspect_ratio = 3
 library_background_config = {
 "background_gradient": SubResource("Gradient_3yjc8"),
 "effect_id": "gradient",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "settings": {
 "background_gradient": SubResource("Gradient_vktvg"),
-"gradient_direction": 0
+"gradient_angle": 90.0
 }
 }
 library_primary_color = Color(0.22352941, 0.92156863, 0.654902, 1)
@@ -53,7 +53,9 @@ card_effect_config = {
 "border_fade_in": 0.0,
 "border_gradient": SubResource("Gradient_rgwmd"),
 "border_size": 0.14,
-"gradient_direction": 1,
+"border_gradient_angle": 180.0,
+"inner_stroke_gradient_angle": 180.0,
+"outer_stroke_gradient_angle": 180.0,
 "inner_stroke_gradient": SubResource("Gradient_5arxv"),
 "inner_stroke_width": 0.055,
 "outer_stroke_gradient": SubResource("Gradient_hjtwh"),
@@ -77,7 +79,9 @@ card_effect_config = {
 "border_fade_in": 0.0,
 "border_gradient": SubResource("Gradient_rgwmd"),
 "border_size": 0.09,
-"gradient_direction": 1,
+"border_gradient_angle": 180.0,
+"inner_stroke_gradient_angle": 180.0,
+"outer_stroke_gradient_angle": 180.0,
 "inner_stroke_gradient": SubResource("Gradient_5arxv"),
 "inner_stroke_width": 0.01,
 "outer_stroke_gradient": SubResource("Gradient_hjtwh"),

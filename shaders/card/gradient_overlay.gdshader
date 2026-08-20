@@ -3,7 +3,8 @@ shader_type canvas_item;
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
 uniform sampler2D gradient_texture : filter_linear, repeat_disable;
-uniform int gradient_direction = 0;  // 0 = Horizontal, 1 = Vertical, 2 = Diagonal
+uniform float gradient_angle = 180.0;  // degrees, 0 = up, clockwise
+uniform bool gradient_radial = false;  // vignette: center -> edge
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 void fragment() {
@@ -25,21 +26,8 @@ void fragment() {
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	
-	// Calculate gradient coordinate based on direction
-	float gradient_t;
-	if (gradient_direction == 0) {
-		// Horizontal: left to right
-		gradient_t = UV.x;
-	} else if (gradient_direction == 1) {
-		// Vertical: top to bottom
-		gradient_t = UV.y;
-	} else {
-		// Diagonal: average of X and Y
-		gradient_t = (UV.x + UV.y) * 0.5;
-	}
-	
-	// Clamp to valid range
-	gradient_t = clamp(gradient_t, 0.0, 1.0);
+	// Calculate gradient coordinate from angle (or radial vignette)
+	float gradient_t = gradient_coord(UV, gradient_angle, gradient_radial);
 	
 	// Sample gradient
 	vec4 gradient_color = texture(gradient_texture, vec2(gradient_t, 0.0));

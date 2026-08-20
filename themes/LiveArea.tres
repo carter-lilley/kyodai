@@ -24,7 +24,7 @@ card_media_aspect_ratio = 3
 library_background_config = {
 "background_gradient": SubResource("Gradient_3yjc8"),
 "effect_id": "xmb",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "settings": {
 "color_bottom_left": Color(0.45, 0.1, 0.1, 1),
 "color_bottom_right": Color(0.8, 0.3, 0.5, 1),

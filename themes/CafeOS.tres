@@ -74,7 +74,7 @@ values = {
 "border_fade_in": 0.0,
 "border_gradient": SubResource("Gradient_3yjc8"),
 "border_size": 0.02,
-"gradient_direction": 0
+"border_gradient_angle": 90.0
 }
 }, {
 "effect_id": "drop_shadow",
@@ -100,7 +100,7 @@ values = {
 "library_background_config": {
 "background_gradient": SubResource("Gradient_jpx8s"),
 "effect_id": "cafeos",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "settings": {
 "background_color": Color(0.931, 0.95, 0.93575, 1),
 "icon_scale": 0.7,

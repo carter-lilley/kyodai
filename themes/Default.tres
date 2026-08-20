@@ -20,7 +20,7 @@ library_grid_vertical = true
 library_background_config = {
 "background_gradient": SubResource("Gradient_3yjc8"),
 "effect_id": "none",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "settings": {}
 }
 library_primary_color = Color(1, 1, 1, 1)

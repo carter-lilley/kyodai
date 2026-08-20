@@ -14,6 +14,16 @@ var _rows: VBoxContainer = null
 var _rules: Array[Control] = []
 var _header_cluster: HBoxContainer = null
 
+## Optional M3 surface tint (e.g. secondary) blended over the card background
+## and reused as a subtle border, marking the section as a distinct color family.
+var surface_tint: Color = Color.TRANSPARENT:
+	set(value):
+		if surface_tint == value:
+			return
+		surface_tint = value
+		if _card:
+			refresh_theme()
+
 func _init(title: String = "", icon_name: String = "") -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", int(M3Units.dp(8)))
@@ -78,7 +88,16 @@ func get_card() -> PanelContainer:
 func refresh_theme() -> void:
 	var card_style := _card.get_theme_stylebox("panel") as StyleBoxFlat
 	if card_style:
-		card_style.bg_color = M3Theme.get_surface_container_low()
+		var bg := M3Theme.get_surface_container_low()
+		if surface_tint != Color.TRANSPARENT:
+			bg = M3Theme.state_overlay(bg, surface_tint, 0.12)
+			var border := surface_tint
+			border.a = 0.5
+			card_style.border_color = border
+			card_style.set_border_width_all(maxi(1, M3Units.dpi(1)))
+		else:
+			card_style.set_border_width_all(0)
+		card_style.bg_color = bg
 	var rule_color := M3Theme.get_outline()
 	rule_color.a = 0.35
 	for rule in _rules:

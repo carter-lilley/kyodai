@@ -48,7 +48,7 @@ values = {
 "library_background_config": {
 "background_gradient": SubResource("Gradient_3yjc8"),
 "effect_id": "xmb_classic",
-"gradient_direction": 0,
+"gradient_angle": 90.0,
 "settings": {
 "frequency": 4.3,
 "inner_amplitude": 0.2,
