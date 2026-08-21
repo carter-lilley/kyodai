@@ -3,9 +3,8 @@
 xemu save sync
 tst emulator app update flow on android
 prewarm covers on random jump
-startup stutter
-
-x rework hero to also accept effect stacks
+rework hero to also accept effect stacks
+platform indiciator  &favorites reload after sync finish
 
 romm;
 - sort by played
@@ -21,7 +20,7 @@ romm;
 		- clock, battery, wifi, game title, etc
 	x focus color (glow, mirror)
 	see 'next page' faintly in pagination view
-	"case wrap" card effect (spine + label, maybe varying by platform?)
+	x "case wrap" card effect (spine + label, maybe varying by platform?)
 	3d case effect
 	text
 		- remove platform from game title option

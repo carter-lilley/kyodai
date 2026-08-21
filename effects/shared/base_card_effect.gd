@@ -25,6 +25,8 @@ func _update_shader_params() -> void:
 	_set_shader_param("game_texture", media_container.texture)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
+	_set_shader_param("wrap_inset_top_pixels", media_container.get_wrap_inset_top_pixels())
+	_set_shader_param("wrap_inset_left_pixels", media_container.get_wrap_inset_left_pixels())
 
 	_set_shader_param("uv_transform_scale", uv["uv_transform_scale"])
 	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])

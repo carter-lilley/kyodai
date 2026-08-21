@@ -21,7 +21,7 @@ var _category_buttons: Dictionary[String, M3Button] = {}
 var _category_contents: Dictionary[String, Control] = {}
 var _current_category: String = ""
 
-const DEBUG_LAYOUT: bool = true
+const DEBUG_LAYOUT: bool = false
 
 # Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
 var _snapshot: Dictionary = {}
@@ -41,6 +41,7 @@ func _init():
 
 func _ready():
 	super._ready()
+	var phase_start_us := Time.get_ticks_usec()
 	# Fullscreen variant has an outer scroll; BASIC does not. Each category page
 	# already scrolls independently, so only touch fullscreen-specific nodes.
 	if dialog_variant == Variant.FULL_SCREEN:
@@ -50,7 +51,10 @@ func _ready():
 		if _bottom_actions:
 			_bottom_actions.visible = false
 	_build_two_pane_layout()
+	print("[SettingsDialog] two-pane layout elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	await _build_categories()
+	print("[SettingsDialog] _build_categories (first burst) elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Categories are built asynchronously; re-position now that the real content
 	# minimum size is known so the first summon matches subsequent summons.
@@ -190,30 +194,45 @@ func _build_categories() -> void:
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
 		_add_category_button(id, subgroup_name, icon)
 
+		var cat_start_us := Time.get_ticks_usec()
 		if subgroup_name == "Library Appearance":
 			# Library Appearance has complex custom UI — build it directly.
 			_category_contents[id] = preload("res://view/library_appearance_settings_view.gd").new()
 		else:
 			# Regular subgroup: SettingsMenu in a scrollable wrapper
 			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars, icon)
+		print("[SettingsDialog] category '", id, "' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
+
+		# The dialog is pre-created at startup; spread category builds over
+		# frames so the whole dialog doesn't land in one synchronous burst.
+		await get_tree().process_frame
 
 	# RomM — platform settings scene
+	var cat_start_us := Time.get_ticks_usec()
 	_add_category_button("romm", "RomM", "cloud-sync")
 	var platforms_view = preload("res://view/platforms_settings_view.tscn").instantiate()
 	platforms_view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["romm"] = platforms_view
+	print("[SettingsDialog] category 'romm' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
+	await get_tree().process_frame
 
 	# Card Designer
+	cat_start_us = Time.get_ticks_usec()
 	_add_category_button("card_designer", "Card Designer", "cards-outline")
 	var card_designer = preload("res://view/card_designer_view.tscn").instantiate()
 	card_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["card_designer"] = card_designer
+	print("[SettingsDialog] category 'card_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
+	await get_tree().process_frame
 
 	# Background Designer
+	cat_start_us = Time.get_ticks_usec()
 	_add_category_button("background_designer", "Background Designer", "image-outline")
 	var background_designer = BackgroundDesignerView.new()
 	background_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["background_designer"] = background_designer
+	print("[SettingsDialog] category 'background_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
+	await get_tree().process_frame
 
 	# GameNative (Android only)
 	if SystemManager.platform.is_android():

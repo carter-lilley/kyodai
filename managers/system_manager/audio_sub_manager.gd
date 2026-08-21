@@ -1,6 +1,8 @@
 extends Manager
 class_name AudioSubManager
 
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+
 # SystemManager.audio - Handles music and SFX playback with pool-based SFX players
 # Simple API: play_sfx(), play_music(), stop_music()
 
@@ -8,6 +10,7 @@ const SFX_POOL_SIZE := 4
 const DEFAULT_FADE_DURATION := 0.5
 const MUSIC_BUS := "Music"
 const SFX_BUS := "SFX"
+const BGM_BUS := "BGM"
 
 # SFX Assets - Preloaded for instant playback
 var _sfx_library: Dictionary[String, AudioStream] = {}
@@ -15,6 +18,7 @@ var _sfx_library: Dictionary[String, AudioStream] = {}
 # Audio Players
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _music_player: AudioStreamPlayer
+var _bgm_player: AudioStreamPlayer
 var _loop_player: AudioStreamPlayer
 var _loop_check_timer: Timer
 var _loop_should_continue: Callable
@@ -22,6 +26,8 @@ var _current_loop_stream: AudioStream = null
 
 # State
 var _current_music_stream: AudioStream = null
+var _current_bgm_path: String = ""
+var _persisting_bgm_path := false
 var _is_muted := false
 var _sfx_volume := 1.0
 var _music_volume := 1.0
@@ -31,6 +37,7 @@ func _ready() -> void:
 	_load_sfx_library()
 	_setup_sfx_pool()
 	_setup_music_player()
+	_setup_bgm_player()
 	_setup_loop_player()
 	_connect_settings()
 	_apply_initial_volumes()
@@ -44,18 +51,27 @@ func _setup_audio_buses() -> void:
 	if music_idx == -1:
 		AudioServer.add_bus(-1)
 		AudioServer.set_bus_name(AudioServer.bus_count - 1, MUSIC_BUS)
-	
+
 	var sfx_idx = AudioServer.get_bus_index(SFX_BUS)
 	if sfx_idx == -1:
 		AudioServer.add_bus(-1)
 		AudioServer.set_bus_name(AudioServer.bus_count - 1, SFX_BUS)
-	
+
+	var bgm_idx = AudioServer.get_bus_index(BGM_BUS)
+	if bgm_idx == -1:
+		AudioServer.add_bus(-1)
+		AudioServer.set_bus_name(AudioServer.bus_count - 1, BGM_BUS)
+
 	# Move players to their respective buses
 	var music_bus_idx = AudioServer.get_bus_index(MUSIC_BUS)
 	var sfx_bus_idx = AudioServer.get_bus_index(SFX_BUS)
-	
+	var bgm_bus_idx = AudioServer.get_bus_index(BGM_BUS)
+
 	if music_bus_idx != -1:
 		AudioServer.set_bus_send(music_bus_idx, "Master")
+	# Route BGM through the Music bus so the music volume slider controls both
+	if bgm_bus_idx != -1:
+		AudioServer.set_bus_send(bgm_bus_idx, MUSIC_BUS)
 	if sfx_bus_idx != -1:
 		AudioServer.set_bus_send(sfx_bus_idx, "Master")
 		# Add subtle reverb to SFX bus
@@ -111,6 +127,20 @@ func _setup_music_player() -> void:
 	if music_bus_idx != -1:
 		_music_player.bus = MUSIC_BUS
 	add_child(_music_player)
+
+func _setup_bgm_player() -> void:
+	# Create dedicated background music player (user-selected looping track)
+	_bgm_player = AudioStreamPlayer.new()
+	_bgm_player.name = "BGMPlayer"
+	var bgm_bus_idx = AudioServer.get_bus_index(BGM_BUS)
+	if bgm_bus_idx != -1:
+		_bgm_player.bus = BGM_BUS
+	add_child(_bgm_player)
+	# Manual looping (stream loop flags are unreliable for runtime-loaded files)
+	_bgm_player.finished.connect(func():
+		if not _current_bgm_path.is_empty() and not _bgm_player.stream_paused:
+			_bgm_player.play()
+	)
 
 func _setup_loop_player() -> void:
 	# Create dedicated loop player (separate from SFX pool for long-running loops)
@@ -267,11 +297,21 @@ func _apply_initial_volumes() -> void:
 	if DataManager:
 		var music_setting = DataManager.get_setting("dblevel_music")
 		var sfx_setting = DataManager.get_setting("dblevel_sfx")
-		
+		var bgm_setting = DataManager.get_setting("music_file")
+
 		if music_setting:
 			set_music_volume(music_setting.value / 100.0)
 		if sfx_setting:
 			set_sfx_volume(sfx_setting.value / 100.0)
+		if bgm_setting and not str(bgm_setting.value).is_empty():
+			play_background_music_file(bgm_setting.value)
+
+	# Pause background music while a game is running (menus-only playback)
+	if LaunchManager:
+		if not LaunchManager.background_state_entered.is_connected(_on_game_background_entered):
+			LaunchManager.background_state_entered.connect(_on_game_background_entered)
+		if not LaunchManager.background_state_exited.is_connected(_on_game_background_exited):
+			LaunchManager.background_state_exited.connect(_on_game_background_exited)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	# Update volumes when settings change
@@ -280,6 +320,18 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			set_music_volume(setting.value / 100.0)
 		"dblevel_sfx":
 			set_sfx_volume(setting.value / 100.0)
+		"music_file":
+			var path := str(setting.value)
+			if path.is_empty():
+				stop_background_music()
+			else:
+				play_background_music_file(path)
+
+func _on_game_background_entered(_pid: int, _game: GameResource) -> void:
+	pause_background_music()
+
+func _on_game_background_exited(_game: GameResource, _exit_code: int) -> void:
+	resume_background_music()
 
 func _play_startup_sound() -> void:
 	play_sfx("affirm_01")
@@ -439,13 +491,105 @@ func _create_volume_tween(player: AudioStreamPlayer, target_db: float, duration:
 	var tween = create_tween()
 	tween.tween_property(player, "volume_db", target_db, duration)
 	if stop_after:
-		tween.finished.connect(func(): 
+		tween.finished.connect(func():
 			player.stop()
-			if player != _music_player:
+			if player != _music_player and player != _bgm_player and player != _loop_player and not _sfx_pool.has(player):
 				player.queue_free()
-			else:
+			elif player == _music_player:
 				_current_music_stream = null
 		)
+
+# ==================== BACKGROUND MUSIC API ====================
+
+func play_background_music_file(path: String, fade_duration: float = DEFAULT_FADE_DURATION) -> bool:
+	"""Load and loop a user-selected audio file as background music."""
+	if path.is_empty():
+		stop_background_music(fade_duration)
+		return false
+
+	# Resolve/import content:// URIs (Android file picker) to a durable real path
+	var effective_path: String = FSM.import_content_file(path, "user://background_music/")
+	if effective_path != path and not _persisting_bgm_path:
+		# Persist the usable path back to the setting (re-emits setting_changed)
+		_persisting_bgm_path = true
+		DataManager.set_setting("music_file", effective_path)
+		_persisting_bgm_path = false
+
+	var stream := _load_audio_stream_from_file(effective_path)
+	if not stream:
+		push_warning("[SystemManager.audio]: Failed to load background music: ", effective_path)
+		return false
+
+	_current_bgm_path = effective_path
+	_bgm_player.stop()
+	_bgm_player.stream_paused = false
+	_bgm_player.stream = stream
+	_bgm_player.play()
+	if fade_duration > 0.0:
+		_bgm_player.volume_db = -80.0
+		_create_volume_tween(_bgm_player, 0.0, fade_duration)
+	else:
+		_bgm_player.volume_db = 0.0
+	return true
+
+func stop_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> void:
+	"""Stop the background music track."""
+	_current_bgm_path = ""
+	if not _bgm_player.playing:
+		_bgm_player.stream = null
+		return
+	if fade_duration > 0.0:
+		_create_volume_tween(_bgm_player, -80.0, fade_duration, true)
+	else:
+		_bgm_player.stop()
+		_bgm_player.stream = null
+
+func pause_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> void:
+	"""Pause background music (e.g., while a game is running)."""
+	if not _bgm_player.playing or _bgm_player.stream_paused:
+		return
+	if fade_duration > 0.0:
+		var tween = create_tween()
+		tween.tween_property(_bgm_player, "volume_db", -80.0, fade_duration)
+		tween.finished.connect(func():
+			if _bgm_player.playing:
+				_bgm_player.stream_paused = true
+		)
+	else:
+		_bgm_player.stream_paused = true
+
+func resume_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> void:
+	"""Resume background music after a pause."""
+	if _current_bgm_path.is_empty() or not _bgm_player.stream or not _bgm_player.stream_paused:
+		return
+	_bgm_player.stream_paused = false
+	if fade_duration > 0.0:
+		_bgm_player.volume_db = -80.0
+		_create_volume_tween(_bgm_player, 0.0, fade_duration)
+	else:
+		_bgm_player.volume_db = 0.0
+
+func is_background_music_playing() -> bool:
+	"""Check if background music is currently playing."""
+	return _bgm_player.playing and not _bgm_player.stream_paused
+
+func _load_audio_stream_from_file(path: String) -> AudioStream:
+	"""Load an audio stream from a filesystem path based on file extension."""
+	if path.begins_with("res://") or path.begins_with("user://"):
+		var res_stream = load(path)
+		if res_stream is AudioStream:
+			return res_stream
+		return null
+
+	match path.get_extension().to_lower():
+		"ogg":
+			return AudioStreamOggVorbis.load_from_file(path)
+		"mp3":
+			return AudioStreamMP3.load_from_file(path)
+		"wav":
+			return AudioStreamWAV.load_from_file(path)
+	push_warning("[SystemManager.audio]: Unsupported audio format: ", path)
+	return null
 
 # ==================== VOLUME CONTROL ====================
 

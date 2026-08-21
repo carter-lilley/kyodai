@@ -40,6 +40,20 @@ var glass_inset_ratio: float = 0.0:
 			glass_inset_ratio = value
 			_shape_cache_valid = false
 			changed.emit()
+var wrap_inset_top_ratio: float = 0.0:
+	set(value):
+		if not is_equal_approx(wrap_inset_top_ratio, value):
+			wrap_inset_top_ratio = value
+			_shape_cache_valid = false
+			_uv_cache_valid = false
+			changed.emit()
+var wrap_inset_left_ratio: float = 0.0:
+	set(value):
+		if not is_equal_approx(wrap_inset_left_ratio, value):
+			wrap_inset_left_ratio = value
+			_shape_cache_valid = false
+			_uv_cache_valid = false
+			changed.emit()
 var vertical_offset: float = 0.0:
 	set(value):
 		if not is_equal_approx(vertical_offset, value):
@@ -78,6 +92,8 @@ var position: Vector2:
 var _corner_radius_px: float = 0.0
 var _total_inset_px: float = 0.0
 var _inner_corner_radius_px: float = 0.0
+var _wrap_inset_top_px: float = 0.0
+var _wrap_inset_left_px: float = 0.0
 var _shape_cache_valid: bool = false
 
 func _recompute_shape_cache() -> void:
@@ -86,6 +102,8 @@ func _recompute_shape_cache() -> void:
 	_corner_radius_px = round(corner_radius_ratio * min(w, h) / 2.0)
 	_total_inset_px = (border_inset_ratio + glass_inset_ratio) * w
 	_inner_corner_radius_px = max(0.0, _corner_radius_px - _total_inset_px)
+	_wrap_inset_top_px = wrap_inset_top_ratio * h
+	_wrap_inset_left_px = wrap_inset_left_ratio * w
 	_shape_cache_valid = true
 
 func get_corner_radius_pixels() -> float:
@@ -102,6 +120,16 @@ func get_inner_corner_radius_pixels() -> float:
 	if not _shape_cache_valid:
 		_recompute_shape_cache()
 	return _inner_corner_radius_px
+
+func get_wrap_inset_top_pixels() -> float:
+	if not _shape_cache_valid:
+		_recompute_shape_cache()
+	return _wrap_inset_top_px
+
+func get_wrap_inset_left_pixels() -> float:
+	if not _shape_cache_valid:
+		_recompute_shape_cache()
+	return _wrap_inset_left_px
 
 # --- Cached UV transforms (invalidated on bounds/texture change) ---
 var _uv_scale: Vector2 = Vector2.ONE
@@ -122,7 +150,17 @@ func _recompute_uv_cache() -> void:
 		# Same: leave the cache invalid so a later valid state recomputes.
 		return
 
-	var card_aspect = card_size.x / card_size.y
+	# Case wrap insets shrink the media panel asymmetrically; crop against the
+	# inner panel so the art center-crops into the remaining space.
+	var panel_size = card_size
+	var wrap_left = get_wrap_inset_left_pixels()
+	var wrap_top = get_wrap_inset_top_pixels()
+	if wrap_left > 0.0 or wrap_top > 0.0:
+		panel_size = card_size - Vector2(get_total_inset_pixels() * 2.0 + wrap_left, get_total_inset_pixels() * 2.0 + wrap_top)
+		if panel_size.x <= 0 or panel_size.y <= 0:
+			return
+
+	var card_aspect = panel_size.x / panel_size.y
 	var tex_aspect = tex_size.x / tex_size.y
 
 	# Plain center crop: scale so the texture covers the panel, center it.

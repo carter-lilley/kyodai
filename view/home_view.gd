@@ -19,6 +19,10 @@ var _total_count_load_pending: bool = false
 # Last total-games value we logged; used to avoid repeating identical debug lines.
 var _last_logged_total_games: int = -1
 
+# One-shot guard: the manual is_database_ready() path in _ready() and the
+# database_ready signal can both fire for the same view.
+var _database_ready_handled: bool = false
+
 # GameNative games storage - kept separate but merged by last_played
 var _gamenative_games: Array[GameResource] = []
 var _gamenative_loaded: bool = false
@@ -121,10 +125,11 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		_load_gamenative_games()
 		print("[HomeView] _load_gamenative_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
-	# If the database is already ready, set the count synchronously so the grid
-	# can settle with the correct total on the first frame instead of waiting for
-	# a background task to return.
-	if DataManager and DataManager.is_database_ready():
+	# If the database is already ready AND the count cache is warm, set the count
+	# synchronously so the grid can settle with the correct total on the first
+	# frame. A cold cache would run a full-table scan on the main thread here
+	# (~90ms) — fall through to the async path and let the grid show skeletons.
+	if DataManager and DataManager.is_database_ready() and DataManager.has_cached_downloaded_count():
 		var phase_start_us := Time.get_ticks_usec()
 		var count = DataManager.get_downloaded_games_count()
 		print("[HomeView] get_downloaded_games_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
@@ -480,11 +485,28 @@ func _on_download_completed(_item_id: String, success: bool, _message: String):
 
 func _on_database_ready():
 	print("[DEBUG] _on_database_ready called")
+	# One-shot: the manual is_database_ready() path in _ready() and the signal
+	# can BOTH fire when the signal is emitted after this view connects (e.g.
+	# delayed by startup cache warm-up). A second _load_total_count would force
+	# a redundant buffer refresh on the settled grid.
+	if _database_ready_handled:
+		print("[DEBUG] _on_database_ready already handled, skipping duplicate")
+		return
+	_database_ready_handled = true
 	_load_total_count()
 	# Warm the merged-games cache for the first page in the background so the
-	# grid's initial items_request can hit the cache instead of waiting on the DB.
+	# grid's initial items_request can hit the cache instead of waiting on the
+	# DB. Deferred a few frames: the prefetch hogs the DB worker for ~100ms,
+	# which stalls the startup settle if it runs inside that window.
 	if _total_games > 0 and _db_games_count > 0:
-		_prefetch_first_page()
+		_prefetch_first_page_deferred()
+
+func _prefetch_first_page_deferred() -> void:
+	for i in range(3):
+		await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	_prefetch_first_page()
 
 func _on_database_failed(_error: String):
 	_is_loading = false
@@ -572,10 +594,13 @@ func _validate_cached_data() -> bool:
 		push_warning("[HomeView] GameNative count mismatch: cached=%d, current=%d" % [_gamenative_games_count, current_gamenative_count])
 		return false
 	
-	# Check if we have the expected number of games cached
+	# Check if we have the expected number of games cached. Compare against the
+	# grid's SOURCE count — "total" is padded with placeholder slots to fill the
+	# last row, which would always mismatch and force a spurious reload.
 	var range_info = games_grid.get_visible_range()
-	if range_info.total != _total_games:
-		push_warning("[HomeView] Total games mismatch: cached=%d, expected=%d" % [range_info.total, _total_games])
+	var grid_total: int = range_info.get("source_total", range_info.total)
+	if grid_total != _total_games:
+		push_warning("[HomeView] Total games mismatch: cached=%d, expected=%d" % [grid_total, _total_games])
 		return false
 	
 	return true

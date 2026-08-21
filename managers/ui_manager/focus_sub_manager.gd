@@ -320,7 +320,10 @@ func _on_target_visibility_changed() -> void:
 		_hide_ring()
 
 func _on_target_tree_exiting() -> void:
-	_target_ref = null
+	# Targets can leave the tree without being freed (grid cards recycled into
+	# the pool via remove_child). Disconnect through the guarded teardown so a
+	# reused card doesn't accumulate duplicate connections on re-track.
+	_untrack_target()
 	_hide_ring()
 
 # ============================================================================

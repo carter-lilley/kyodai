@@ -24,10 +24,11 @@ void fragment() {
 	float aa_width = fwidth(pixel_pos.x) + fwidth(pixel_pos.y);
 	aa_width = max(aa_width, 0.5);
 	
-	// The media area is inset by the total of border + glass insets.
-	// total_inset_pixels (from MediaContainer) already combines both.
-	vec2 inner_size = card_size - vec2(total_inset_pixels * 2.0);
-	vec2 inner_offset = vec2(total_inset_pixels);
+	// The media area is inset by the total of border + glass insets (uniform)
+	// plus case wrap insets (top/left only, asymmetric).
+	vec2 inner_size = card_size - vec2(total_inset_pixels * 2.0 + wrap_inset_left_pixels, total_inset_pixels * 2.0 + wrap_inset_top_pixels);
+	vec2 inner_offset = vec2(total_inset_pixels + wrap_inset_left_pixels, total_inset_pixels + wrap_inset_top_pixels);
+	bool has_insets = total_inset_pixels > 0.0 || wrap_inset_top_pixels > 0.0 || wrap_inset_left_pixels > 0.0;
 	
 	// Safety: extreme insets could collapse the inner area.
 	if (inner_size.x <= 0.0 || inner_size.y <= 0.0) {
@@ -55,17 +56,25 @@ void fragment() {
 	
 	// Calculate the inner edge (media area after border + glass insets)
 	float inner_radius_pixels = max(0.0, corner_radius_pixels - total_inset_pixels);
-	float inner_radius_ratio = 0.0;
-	if (min(inner_size.x, inner_size.y) > 0.0) {
-		inner_radius_ratio = inner_radius_pixels / (min(inner_size.x, inner_size.y) / 2.0);
-	}
-	
+
+	// Corners made interior by a case wrap inset go square: the banner's bottom
+	// edge and spine's right edge are hard straight lines. Untouched corners
+	// keep the concentric inner radius.
+	bool wrap_top = wrap_inset_top_pixels > 0.0;
+	bool wrap_left = wrap_inset_left_pixels > 0.0;
+	vec4 inner_radii = vec4(
+		(wrap_top || wrap_left) ? 0.0 : inner_radius_pixels,  // top-left
+		wrap_top ? 0.0 : inner_radius_pixels,  // top-right
+		inner_radius_pixels,  // bottom-right
+		wrap_left ? 0.0 : inner_radius_pixels  // bottom-left
+	);
+
 	vec2 inner_pixel_pos = pixel_pos - inner_offset;
-	float inner_sdf_dist = rounded_rect_sdf_ratio(inner_pixel_pos, inner_size, inner_radius_ratio);
+	float inner_sdf_dist = rounded_rect_sdf_corners(inner_pixel_pos, inner_size, inner_radii);
 	float inner_edge_alpha = 1.0 - smoothstep(-aa_width, 0.0, inner_sdf_dist);
 	
 	// Clip the base card to the inset media shape
-	if (total_inset_pixels > 0.0 && inner_edge_alpha <= 0.0) {
+	if (has_insets && inner_edge_alpha <= 0.0) {
 		discard;
 	}
 	
@@ -95,7 +104,7 @@ void fragment() {
 	
 	// Combine outer edge alpha with inner inset alpha
 	float final_alpha = edge_alpha;
-	if (total_inset_pixels > 0.0) {
+	if (has_insets) {
 		final_alpha = min(edge_alpha, inner_edge_alpha);
 	}
 	

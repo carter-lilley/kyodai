@@ -17,6 +17,11 @@ var _db_mutex: Mutex = Mutex.new()
 # game/download state changes (add, update, delete, sync, scan, cover folding).
 var _downloaded_games_count_cache: int = -1
 
+# Cached platforms-with-games list (Library platform indicator). Same
+# invalidation rule as the count cache above.
+var _platforms_with_games_cache: Array[Dictionary] = []
+var _platforms_with_games_cache_valid: bool = false
+
 
 func _ready():
 	data_manager = get_parent()
@@ -247,6 +252,14 @@ func _escape_sql(text: String) -> String:
 func invalidate_downloaded_games_count_cache() -> void:
 	"""Invalidate the cached downloaded-games count so the next query reads fresh data."""
 	_downloaded_games_count_cache = -1
+	_platforms_with_games_cache_valid = false
+	_platforms_with_games_cache.clear()
+
+
+## True when the downloaded-games count is already cached, so a synchronous
+## call won't trigger a full-table scan on the caller's thread.
+func has_cached_downloaded_count() -> bool:
+	return _downloaded_games_count_cache >= 0
 
 
 func _should_hide_no_cover_games() -> bool:
@@ -1060,6 +1073,8 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 
 func get_platforms_with_games() -> Array[Dictionary]:
 	"""Get list of platforms that have games, sorted alphabetically with game counts."""
+	if _platforms_with_games_cache_valid:
+		return _platforms_with_games_cache.duplicate(true)
 	var platforms: Array[Dictionary] = []
 	if not _is_db_ready:
 		return platforms
@@ -1085,6 +1100,8 @@ func get_platforms_with_games() -> Array[Dictionary]:
 			"count": _count
 		})
 
+	_platforms_with_games_cache = platforms.duplicate(true)
+	_platforms_with_games_cache_valid = true
 	return platforms
 
 

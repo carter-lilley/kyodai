@@ -10,6 +10,10 @@ const DEBUG_LOG: bool = false
 var _total_games: int = 0
 var _is_loading: bool = false
 
+# One-shot guard: the manual is_database_ready() path and the database_ready
+# signal can both fire for the same view.
+var _database_ready_handled: bool = false
+
 # Platform cycling state
 var _platforms: Array[Dictionary] = []  # [{slug, name, count}, ...]
 var _current_platform_index: int = -1  # -1 = All Games, 0+ = specific platform
@@ -87,16 +91,22 @@ func _ready():
 	if UIManager and UIManager.card_settings_state:
 		var zoom_state = UIManager.card_settings_state
 		initial_zoom = zoom_state.card_zoom_ratio if zoom_state.layout_mode == 0 else zoom_state.card_zoom_list_ratio
+	var phase_start_us := Time.get_ticks_usec()
 	games_grid.setup(card_scene, 0, initial_zoom)
+	print("[LibraryView] grid setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
-	
+
 	# Setup vertical layout from settings
+	phase_start_us = Time.get_ticks_usec()
 	_update_grid_orientation()
-	
+	print("[LibraryView] _update_grid_orientation elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
 	# Load platforms list for indicator
+	phase_start_us = Time.get_ticks_usec()
 	_load_platforms_list()
+	print("[LibraryView] _load_platforms_list elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	# Connect platform indicator signals
 	if platform_indicator:
@@ -566,6 +576,11 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 				_load_total_count(false)
 
 func _on_database_ready():
+	# One-shot: the manual is_database_ready() path and the signal can both
+	# fire when the signal is emitted after this view connects.
+	if _database_ready_handled:
+		return
+	_database_ready_handled = true
 	_load_total_count()
 
 func _on_database_failed(_error: String):

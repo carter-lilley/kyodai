@@ -13,6 +13,10 @@ extends View
 var _total_games: int = 0
 var _is_loading: bool = false
 
+# One-shot guard: the manual is_database_ready() path and the database_ready
+# signal can both fire for the same view.
+var _database_ready_handled: bool = false
+
 func _exit_tree() -> void:
 	_disconnect_signals()
 
@@ -108,6 +112,11 @@ func _get_empty_status_text() -> String:
 	return "No favorites yet" if favorites_mode else "No games in this collection"
 
 func _on_database_ready() -> void:
+	# One-shot: the manual is_database_ready() path and the signal can both
+	# fire when the signal is emitted after this view connects.
+	if _database_ready_handled:
+		return
+	_database_ready_handled = true
 	_load_total_count()
 
 func _on_games_removed(_platform_slug: String) -> void:

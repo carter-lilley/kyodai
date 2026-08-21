@@ -187,9 +187,12 @@ func _ready():
 			var grid_settle_start_us := Time.get_ticks_usec()
 			var available_size := UIManager.compute_grid_available_size(grid, current_view)
 			grid.set_deterministic_available_size(available_size)
-			grid._instantiate_card_pool()
-			grid.settle_startup_with_buffer(0)
-			print("[Main] Settled grid for ", current_view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - grid_settle_start_us)
+			print("[Main] settle: set_deterministic_available_size elapsed_us=", Time.get_ticks_usec() - grid_settle_start_us)
+			# The total count arrives asynchronously when the DB cache is cold.
+			# Settling with 0 items sizes the card pool to 0 and forces a full
+			# post-settle relayout when data lands (collapsed layout + a burst of
+			# synchronous card instantiations). Wait for the count first.
+			_settle_grid_when_data_ready(grid, current_view, available_size, grid_settle_start_us)
 	else:
 		print("[Main] No current view to settle")
 
@@ -281,7 +284,14 @@ func _ready():
 	# If the startup benchmark flag is set, log startup and exit through the close
 	# handler so we get a clean shutdown and no leaked background threads.
 	if startup_benchmark:
-		print("[Main] --benchmark-startup: startup complete, triggering shutdown")
+		var delay_sec := 0.0
+		for arg in args:
+			if arg.begins_with("--benchmark-startup-delay="):
+				delay_sec = arg.split("=")[1].to_float()
+		print("[Main] --benchmark-startup: startup complete, shutdown in ", delay_sec, "s")
+		if delay_sec > 0.0:
+			await get_tree().create_timer(delay_sec).timeout
+			_dump_grid_debug_state()
 		call_deferred("_benchmark_shutdown")
 		return
 
@@ -289,6 +299,23 @@ func _ready():
 	# startup so we can measure shutdown time in an automated way.
 	if shutdown_benchmark:
 		call_deferred("_benchmark_shutdown")
+
+func _dump_grid_debug_state() -> void:
+	"""Benchmark diagnostic: dump the Home grid's layout state after startup."""
+	var home_view = UIManager.get_view("Home") if UIManager else null
+	if not home_view or not home_view.games_grid:
+		print("[GridDump] no home grid")
+		return
+	var grid = home_view.games_grid
+	var info = grid.get_visible_range()
+	print("[GridDump] ipl=", grid._get_items_per_line(), " card_size=", grid.card_size, " source_total=", info.get("source_total", -1), " total=", info.get("total", -1))
+	var flow = grid._flow_container
+	print("[GridDump] flow min_size=", flow.custom_minimum_size, " size=", flow.size, " children=", flow.get_child_count(), " active=", grid._active_cards.size())
+	var xs: Array = []
+	for i in range(mini(8, flow.get_child_count())):
+		var c = flow.get_child(i)
+		xs.append(str(int(c.position.x), ",", int(c.position.y)))
+	print("[GridDump] first children pos(x,y)=", xs)
 
 func _benchmark_shutdown() -> void:
 	"""Trigger the close notification so we can measure shutdown time automatically."""
@@ -343,9 +370,15 @@ func _on_oobe_wizard_completed():
 
 func _pre_create_settings_dialog() -> void:
 	"""Build the settings dialog eagerly while the home screen is visible so the
-	platform cards screen can appear instantly when opened."""
+	platform cards screen can appear instantly when opened. Delayed a few frames
+	so the build doesn't stack onto the collection-sync/startup frame; the
+	category builds themselves spread over frames inside the dialog."""
+	for i in range(3):
+		await get_tree().process_frame
 	if UIManager:
+		var start_us := Time.get_ticks_usec()
 		UIManager.pre_create_settings_dialog()
+		print("[Main] pre_create_settings_dialog (initial burst) elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
@@ -370,13 +403,16 @@ func _on_more_button_pressed() -> void:
 		if pagination_setting and pagination_setting.value is bool:
 			pagination_enabled = pagination_setting.value
 
-	menu.add_check_item("Horizontal Grid", is_horizontal, _toggle_horizontal_grid)
+	# Grid Settings submenu (independent toggles — no radio group)
+	var grid_settings = M3Menu.new()
+	grid_settings.auto_free = false
+	grid_settings.add_check_item("Horizontal Grid", is_horizontal, _toggle_horizontal_grid)
 	if not is_grid:
-		menu.get_item(menu.get_item_count() - 1).disabled = true
-
-	menu.add_check_item("Pagination View", pagination_enabled, _toggle_pagination_view)
+		grid_settings.get_item(grid_settings.get_item_count() - 1).disabled = true
+	grid_settings.add_check_item("Pagination View", pagination_enabled, _toggle_pagination_view)
 	if not is_grid:
-		menu.get_item(menu.get_item_count() - 1).disabled = true
+		grid_settings.get_item(grid_settings.get_item_count() - 1).disabled = true
+	menu.add_submenu_item("Grid Settings", grid_settings, "view-grid")
 
 	# Focus Centering submenu
 	var focus_centering = 0
@@ -1064,6 +1100,34 @@ func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 
 	print("[Main] Startup focus: focusing first Home card")
 	grid.scroll_to_index_and_focus(0, false)
+
+func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, available_size: Vector2, settle_start_us: int, attempts: int = 0) -> void:
+	"""Defer the pool build + startup settle until the grid's total count is
+	known (it arrives asynchronously when the DB cache is cold at startup)."""
+	if not is_instance_valid(grid):
+		return
+	var source_total: int = grid.get_visible_range().get("source_total", 0)
+	# Empty-library case: the view's count load has resolved with 0 items —
+	# settle empty rather than polling forever.
+	var count_resolved_empty := false
+	if source_total <= 0:
+		var pending = view.get("_total_count_load_pending")
+		var loading = view.get("_is_loading")
+		if pending is bool and not pending and loading is bool and not loading:
+			count_resolved_empty = true
+	if source_total <= 0 and not count_resolved_empty and attempts < 120:
+		await get_tree().process_frame
+		_settle_grid_when_data_ready(grid, view, available_size, settle_start_us, attempts + 1)
+		return
+	if attempts > 0:
+		print("[Main] settle waited ", attempts, " frames for grid data (source_total=", source_total, ", count_resolved_empty=", count_resolved_empty, ")")
+	var sub_start_us := Time.get_ticks_usec()
+	grid._instantiate_card_pool()
+	print("[Main] settle: _instantiate_card_pool elapsed_us=", Time.get_ticks_usec() - sub_start_us)
+	sub_start_us = Time.get_ticks_usec()
+	grid.settle_startup_with_buffer(0)
+	print("[Main] settle: settle_startup_with_buffer elapsed_us=", Time.get_ticks_usec() - sub_start_us)
+	print("[Main] Settled grid for ", view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - settle_start_us)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""

@@ -754,6 +754,15 @@ func reset(for_pooling: bool = false) -> void:
 			_focus_stack.free_rids()
 			_focus_stack = null
 
+## Show the shimmer skeleton while the card has no data yet. The grid calls
+## this when a card enters the flow before its game is cached; the media
+## loader takes over the loading state once data arrives.
+func show_loading_skeleton() -> void:
+	if game or _is_placeholder:
+		return
+	_media_loading = true
+	_set_texture(_loading_texture)
+
 func _ensure_present_wrap() -> void:
 	if _present_wrap or not _media_container or preview_mode:
 		return

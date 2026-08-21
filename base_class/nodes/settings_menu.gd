@@ -18,6 +18,7 @@ signal setting_changed(value: Variant, setting: SettingsVar)
 
 func _init() -> void:
 	add_theme_constant_override("separation", int(M3Units.dp(16)))
+	setting_changed.connect(func(_value, _setting): _update_visibility())
 
 func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar], icon : String = ""):
 	_current_section = SettingsSection.new(subgroup, icon)
@@ -32,9 +33,12 @@ func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: S
 	for settingsvar in settingsvars:
 		if settingsvar.state != State.INTERNAL:
 			match_var_type(settingsvar)
+	_update_visibility()
 
 func _add_setting_row(content: Control, trailing: Array[Control] = []) -> void:
-	_current_section.add_row(content, trailing)
+	var row = _current_section.add_row(content, trailing)
+	if not _building_property.is_empty():
+		_rows_by_property[_building_property] = {"section": _current_section, "row": row}
 
 func _add_setting_content(content: Control) -> void:
 	_current_section.add_content(content)
@@ -128,6 +132,8 @@ func clear_controls() -> void:
 	for child in get_children():
 		child.queue_free()
 	controls.clear()
+	_rows_by_property.clear()
+	_visibility_rules.clear()
 	_current_section = null
 
 func refresh_all_control_values() -> void:
@@ -146,6 +152,26 @@ func _refresh_theme_recursive(node: Node) -> void:
 		_refresh_theme_recursive(child)
 
 var controls: Dictionary[String, Control] = {}
+
+# Conditional row visibility: SettingsVar metadata key "visible_if" with
+# {"property": <controlling property_name>, "values": [<allowed values>]}.
+# Rows without the key are always visible; values persist while hidden.
+var _rows_by_property: Dictionary = {}
+var _visibility_rules: Array = []
+var _building_property: String = ""
+
+func _update_visibility() -> void:
+	for rule in _visibility_rules:
+		var entry = _rows_by_property.get(rule["target"])
+		if entry == null:
+			continue
+		var controlling = get_control_value(rule["property"])
+		var visible = false
+		for allowed in rule["values"]:
+			if str(controlling) == str(allowed):
+				visible = true
+				break
+		entry["section"].set_row_visible(entry["row"], visible)
 
 func _apply_metadata(control: Control, metadata: Dictionary) -> void:
 	"""Apply M3 component-specific properties from SettingsVar metadata."""
@@ -199,6 +225,14 @@ func _trailing_width(settingsvar: SettingsVar, default_dp: float) -> float:
 	return M3Units.dp(settingsvar.metadata.get("control_width", default_dp))
 
 func match_var_type(settingsvar : SettingsVar):
+	_building_property = settingsvar.property_name
+	var rule = settingsvar.metadata.get("visible_if", {})
+	if rule is Dictionary and not rule.is_empty():
+		_visibility_rules.append({
+			"target": settingsvar.property_name,
+			"property": rule.get("property", ""),
+			"values": rule.get("values", []),
+		})
 	match settingsvar.type:
 		Type.BOOL:
 			var switch = M3Switch.new()
@@ -303,6 +337,7 @@ func match_var_type(settingsvar : SettingsVar):
 			)
 		
 		Type.PATH:
+			var is_file_dialog = settingsvar.metadata.get("dialog", "folder") == "file"
 			var path_field = M3TextField.new()
 			path_field.label_text = ""
 			path_field.text = settingsvar.value if settingsvar.value else ""
@@ -316,7 +351,7 @@ func match_var_type(settingsvar : SettingsVar):
 
 			var browse_button = M3Button.new()
 			browse_button.text = "Browse..."
-			browse_button.icon_name = "folder-open"
+			browse_button.icon_name = "file" if is_file_dialog else "folder-open"
 			browse_button.button_variant = M3Button.Variant.OUTLINED
 			browse_button.disabled = settingsvar.state != 0
 			browse_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -326,17 +361,48 @@ func match_var_type(settingsvar : SettingsVar):
 			path_field.custom_minimum_size.x = _trailing_width(settingsvar, 240.0)
 			path_controls.add_child(path_field)
 			path_controls.add_child(browse_button)
-			_add_setting_row(_make_label_block(settingsvar), [path_controls])
-			
-			browse_button.pressed.connect(func():
-				UIManager.show_folder_dialog("Select " + settingsvar.display_name, path_field.text, func(dir: String):
-					path_field.text = dir
+
+			var clear_button: M3Button = null
+			if is_file_dialog:
+				clear_button = M3Button.new()
+				clear_button.icon_name = "close"
+				clear_button.button_variant = M3Button.Variant.TEXT
+				clear_button.disabled = settingsvar.state != 0
+				clear_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+				clear_button.visible = not path_field.text.is_empty()
+				path_controls.add_child(clear_button)
+				clear_button.pressed.connect(func():
+					path_field.text = ""
 					path_field.refresh_visuals()
-					emit_signal("setting_changed", dir, settingsvar)
+					clear_button.visible = false
+					emit_signal("setting_changed", "", settingsvar)
 				)
-			)
-			
+
+			_add_setting_row(_make_label_block(settingsvar), [path_controls])
+
+			if is_file_dialog:
+				var filters: PackedStringArray = settingsvar.metadata.get("filters", [])
+				browse_button.pressed.connect(func():
+					UIManager.show_file_dialog("Select " + settingsvar.display_name, filters, path_field.text.get_base_dir(), func(file: String):
+						path_field.text = file
+						path_field.refresh_visuals()
+						if clear_button:
+							clear_button.visible = true
+						emit_signal("setting_changed", file, settingsvar)
+					)
+				)
+			else:
+				browse_button.pressed.connect(func():
+					UIManager.show_folder_dialog("Select " + settingsvar.display_name, path_field.text, func(dir: String):
+						path_field.text = dir
+						path_field.refresh_visuals()
+						emit_signal("setting_changed", dir, settingsvar)
+					)
+				)
+
 			path_field.text_changed.connect(func(text: String):
+				if clear_button:
+					clear_button.visible = not text.is_empty()
 				emit_signal("setting_changed", text, settingsvar)
 			)
 		

@@ -68,7 +68,6 @@ func _setup_ui():
 	_effects_designer.effect_registry = LibraryBackground.EFFECT_REGISTRY
 	_effects_designer.display_names = LibraryBackground.EFFECT_DISPLAY_NAMES
 	_effects_designer.allow_reorder = true
-	_effects_designer.use_schema_defaults = true
 	_effects_designer.setup("Background Layers", "", "effects", false)
 	_effects_designer.config_changed.connect(_on_effects_config_changed)
 	left_vbox.add_child(_effects_designer)
@@ -77,7 +76,6 @@ func _setup_ui():
 	_overlay_designer = EffectDesignerUI.new()
 	_overlay_designer.use_internal_scroll = false
 	_overlay_designer.effect_registry = LibraryBackground.OVERLAY_REGISTRY
-	_overlay_designer.use_schema_defaults = true
 	_overlay_designer.setup("Overlay", "", "overlays", false)
 	_overlay_designer.config_changed.connect(_on_overlay_config_changed)
 	left_vbox.add_child(_overlay_designer)

@@ -52,27 +52,51 @@ func setup(tab_container: TabContainer) -> void:
 
 	# Background-load the Library scene so the first tab switch is instant
 	ResourceLoader.load_threaded_request(_library_scene_path)
+	# The collection scene is shared by Favorites and every collection tab;
+	# warm it on the loader thread too so the prewarm below never decodes it
+	# synchronously on the main thread.
+	ResourceLoader.load_threaded_request(_collection_scene_path)
 
 	# Pre-instantiate lazily created views once startup has settled. The first
 	# tab switch plays a fullscreen transition animation, and instantiating the
 	# view mid-animation stalls the main thread and breaks the tween timing.
 	call_deferred("_pre_instantiate_lazy_views")
 
+## Idle-driven view prewarm: starts well after the startup critical path
+## (settle, collections sync, first paint) and builds one view per spacing
+## window so hidden-view construction never lands in the launch frame budget.
+const PREWARM_START_DELAY_SEC := 2.0
+const PREWARM_VIEW_SPACING_SEC := 0.15
+## Cap on the per-view idle wait so a busy UI can't starve the prewarm forever.
+const PREWARM_IDLE_TIMEOUT_US := 5000000
+
 func _pre_instantiate_lazy_views() -> void:
-	# Wait for startup to settle; this is the same work the first tab visit
-	# would pay, just moved off the user's first switch.
-	await get_tree().create_timer(0.5).timeout
+	await get_tree().create_timer(PREWARM_START_DELAY_SEC).timeout
 	if not is_inside_tree():
 		return
-	if not _views.has("Library"):
-		_ensure_library_setup()
-	if _favorites_tab and is_instance_valid(_favorites_tab):
-		_ensure_favorites_setup()
+	await _prewarm_step("Library", _ensure_library_setup, not _views.has("Library"))
+	if not is_inside_tree():
+		return
+	await _prewarm_step(FAVORITES_TAB_TITLE, _ensure_favorites_setup, _favorites_tab != null and is_instance_valid(_favorites_tab) and not _views.has(FAVORITES_TAB_TITLE))
 	for collection_id in _collection_tabs.keys():
 		if not is_inside_tree():
 			return
-		_ensure_collection_setup(collection_id)
+		await _prewarm_step(_collection_tab_title(collection_id), _ensure_collection_setup.bind(collection_id), not _views.has(_collection_tab_title(collection_id)))
+
+func _prewarm_step(label: String, ensure: Callable, needed: bool) -> void:
+	if not needed or not is_inside_tree():
+		return
+	# Never build a view mid-transition or while a dialog owns the screen —
+	# that stall is exactly what the transition cover exists to hide.
+	var waited_us := Time.get_ticks_usec()
+	while (ViewTransitionOverlay.is_transition_active or M3Overlay.is_showing("dialog")) and Time.get_ticks_usec() - waited_us < PREWARM_IDLE_TIMEOUT_US:
 		await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	var step_start_us := Time.get_ticks_usec()
+	ensure.call()
+	print("[ViewSubManager] prewarm ", label, " elapsed_us=", Time.get_ticks_usec() - step_start_us)
+	await get_tree().create_timer(PREWARM_VIEW_SPACING_SEC).timeout
 
 func _setup_home_tab():
 	var setup_start_us := Time.get_ticks_usec()
@@ -137,13 +161,19 @@ func _ensure_library_setup() -> bool:
 	var library_scene: PackedScene = null
 	# setup() kicks a background threaded load of the Library scene after the
 	# Home tab is up; consume it here, or load synchronously as fallback.
+	var phase_start_us := Time.get_ticks_usec()
 	if ResourceLoader.load_threaded_get_status(_library_scene_path) != ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
 		library_scene = ResourceLoader.load_threaded_get(_library_scene_path)
 	if library_scene == null:
 		library_scene = load(_library_scene_path)
+	print("[ViewSubManager] Library scene get/load elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	var library_view = library_scene.instantiate()
+	print("[ViewSubManager] Library scene instantiate elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	library_view.view_name = "Library"
 	_library_tab.add_child(library_view)
+	print("[ViewSubManager] Library add_child/_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	_views["Library"] = library_view
 
 	# Connect hero image signal
@@ -225,6 +255,15 @@ func _add_collection_tab(collection_id: int, _collection_name: String = "") -> v
 	_tab_container.add_child(tab)
 	_collection_tabs[collection_id] = tab
 
+func _load_collection_scene() -> PackedScene:
+	# Consume the threaded load kicked in setup(); load synchronously as fallback.
+	var scene: PackedScene = null
+	if ResourceLoader.load_threaded_get_status(_collection_scene_path) != ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
+		scene = ResourceLoader.load_threaded_get(_collection_scene_path)
+	if scene == null:
+		scene = load(_collection_scene_path)
+	return scene
+
 func _ensure_collection_setup(collection_id: int) -> bool:
 	var tab_title = _collection_tab_title(collection_id)
 	if _views.has(tab_title):
@@ -235,8 +274,8 @@ func _ensure_collection_setup(collection_id: int) -> bool:
 	var tab = _collection_tabs[collection_id]
 	var collection = DataManager.get_collection(collection_id)
 	var collection_name = collection.get("name", "") if collection else ""
-	
-	var scene = load(_collection_scene_path)
+
+	var scene := _load_collection_scene()
 	var collection_view = scene.instantiate()
 	collection_view.collection_id = collection_id
 	collection_view.collection_name = collection_name
@@ -283,12 +322,18 @@ func _ensure_favorites_setup() -> bool:
 	if not _favorites_tab or not is_instance_valid(_favorites_tab):
 		return false
 
-	var scene = load(_collection_scene_path)
+	var phase_start_us := Time.get_ticks_usec()
+	var scene := _load_collection_scene()
+	print("[ViewSubManager] Favorites scene get/load elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	var favorites_view = scene.instantiate()
+	print("[ViewSubManager] Favorites scene instantiate elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	phase_start_us = Time.get_ticks_usec()
 	favorites_view.favorites_mode = true
 	favorites_view.collection_name = "Favorites"
 	favorites_view.view_name = FAVORITES_TAB_TITLE
 	_favorites_tab.add_child(favorites_view)
+	print("[ViewSubManager] Favorites add_child/_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	_views[FAVORITES_TAB_TITLE] = favorites_view
 
 	if favorites_view.has_signal("hero_game_changed"):

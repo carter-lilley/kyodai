@@ -8,6 +8,8 @@ var ui_manager: Node
 # Settings dialog
 var _settings_dialog = null
 
+const SETTINGS_DIALOG_SCRIPT_PATH := "res://view/settings_dialog.gd"
+
 # Shuffler dialog
 var _shuffler_dialog: ShufflerConfigDialog = null
 
@@ -39,6 +41,10 @@ func _ready():
 
 func setup(root_control: Control) -> void:
 	_root_control = root_control
+	# The settings dialog script drags ~300ms of preload dependencies onto
+	# whichever thread loads it first; warm it on the loader thread so the
+	# pre-create (and first open) never pay it on the main thread.
+	ResourceLoader.load_threaded_request(SETTINGS_DIALOG_SCRIPT_PATH)
 
 func pre_create_settings_dialog(force: bool = false) -> void:
 	"""Eagerly build the settings dialog in the background.
@@ -51,11 +57,20 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 		_settings_dialog = null
 
 	# Use script .new() instead of scene instantiation to avoid CanvasLayer script attachment issues in SubViewports
-	var settings_script = load("res://view/settings_dialog.gd")
+	var phase_start_us := Time.get_ticks_usec()
+	# Consume the threaded load kicked in setup(); load synchronously as fallback.
+	var settings_script: GDScript = null
+	if ResourceLoader.load_threaded_get_status(SETTINGS_DIALOG_SCRIPT_PATH) != ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
+		settings_script = ResourceLoader.load_threaded_get(SETTINGS_DIALOG_SCRIPT_PATH)
+	if settings_script == null:
+		settings_script = load(SETTINGS_DIALOG_SCRIPT_PATH)
+	print("[OverlayManager] settings dialog script load elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	if not settings_script:
 		push_error("[OverlayManager] Failed to load SettingsDialog script")
 		return
+	phase_start_us = Time.get_ticks_usec()
 	_settings_dialog = settings_script.new()
+	print("[OverlayManager] settings dialog new() elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):
 		push_error("[OverlayManager] Failed to instantiate SettingsDialog")
 		return
@@ -65,7 +80,9 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 	_settings_dialog.dismissed.connect(_on_settings_dialog_dismissed)
 
 	if not _settings_dialog.is_inside_tree():
+		phase_start_us = Time.get_ticks_usec()
 		_add_settings_dialog_to_correct_parent()
+		print("[OverlayManager] settings dialog add-to-parent (_ready burst) elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 func show_settings_dialog() -> void:
 	"""Show the settings popup dialog."""
@@ -225,7 +242,7 @@ func show_file_dialog(title: String, filters: PackedStringArray, initial_dir: St
 
 	dialog.file_selected.connect(func(path: String):
 		if on_file_selected.is_valid():
-			on_file_selected.call(path)
+			on_file_selected.call(FSM.resolve_content_uri(path))
 		dialog.queue_free()
 	)
 	dialog.canceled.connect(dialog.queue_free)

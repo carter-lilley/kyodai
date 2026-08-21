@@ -433,6 +433,7 @@ var _card_has_sync_visual_transform: bool = false
 var _card_has_sync_visual_offset: bool = false
 var _card_has_mark_visuals_position_synced: bool = false
 var _card_has_unmark_visuals_position_synced: bool = false
+var _card_has_show_loading_skeleton: bool = false
 var _card_has_begin_bulk_layout: bool = false
 var _card_has_end_bulk_layout: bool = false
 
@@ -1888,6 +1889,12 @@ func _recalculate_layout():
 		print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed, " pagination=", pagination_changed)
 
 	if not _force_layout_once and not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed and not pagination_changed:
+		# Resets (_refresh_buffer, refresh_dimensions) can zero the flow
+		# container's min size outside a recalc, and the CenterContainer sizes
+		# the flow to its minimum — skipping here would leave the grid wrapped
+		# to one column. Both calls are idempotent and write-cached.
+		_update_layout()
+		_update_margin()
 		_is_recalculating_layout = false
 		return
 
@@ -2326,10 +2333,12 @@ func _instantiate_card_pool():
 	# Instantiate only the first visible screen synchronously so startup paints
 	# sooner; the rest of the pool is topped up a few per frame by
 	# _process_pool_growth (off-screen buffer cards don't need to exist yet).
-	# If the pool size wasn't computed from a valid layout, build the full pool.
-	var sync_count = _max_pool_size
+	# When no layout has run yet (hidden views, pre-settle), the visible count is
+	# unknown — seed a small handful rather than the full pool in one burst.
+	var sync_count = POOL_STARTUP_SEED
 	if _last_computed_visible_count > 0:
 		sync_count = mini(_max_pool_size, _last_computed_visible_count)
+	sync_count = mini(sync_count, _max_pool_size)
 	for i in range(sync_count):
 		var card = _card_scene.instantiate()
 		card.visible = false
@@ -2359,6 +2368,7 @@ func _instantiate_card_pool():
 	_card_has_sync_visual_offset = probe.has_method("sync_visual_transform_with_offset")
 	_card_has_mark_visuals_position_synced = probe.has_method("_mark_visuals_position_synced")
 	_card_has_unmark_visuals_position_synced = probe.has_method("_unmark_visuals_position_synced")
+	_card_has_show_loading_skeleton = probe.has_method("show_loading_skeleton")
 	_card_has_begin_bulk_layout = probe.has_method("begin_bulk_layout")
 	_card_has_end_bulk_layout = probe.has_method("end_bulk_layout")
 	print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
@@ -2366,6 +2376,9 @@ func _instantiate_card_pool():
 var _pending_pool_growth: int = 0
 var _last_computed_visible_count: int = 0
 const POOL_GROWTH_PER_FRAME: int = 4
+## Cards built synchronously when no layout has computed a visible count yet
+## (hidden views, pre-settle). The pool tops up via _process_pool_growth.
+const POOL_STARTUP_SEED: int = 8
 
 ## Recomputes the required pool size for the current layout. Grows _max_pool_size
 ## immediately (so buffer math sees the new cap) and queues frame-spread card
@@ -3151,6 +3164,17 @@ func _audit_render_state(tag: String) -> void:
 	if worst > 2.0 or mc_delta > 2.0:
 		print("[RsAudit] tag=", tag, " worst=", worst, " idx=", worst_idx, " rs=", worst_rs, " exp=", worst_exp, " cs=", worst_cs, " margin_lag=", mc_delta, " scroll=", scroll_now, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
+func _show_skeleton_if_unloaded(card: Control, virtual_index: int) -> void:
+	# Cards entering the flow before their data is cached would render blank
+	# until setup lands; show the shimmer skeleton in the meantime.
+	if not _card_has_show_loading_skeleton:
+		return
+	if virtual_index >= _source_total_items:
+		return  # Placeholder slots render a blank panel, not shimmer.
+	if _data_cache.has(virtual_index):
+		return  # Data ready; setup applies it this pass.
+	card.show_loading_skeleton()
+
 func _add_card_at_end(virtual_index: int):
 	var card = _acquire_card()
 	if not card:
@@ -3176,6 +3200,7 @@ func _add_card_at_end(virtual_index: int):
 
 	card.set_meta("needs_visual_setup", true)
 	_pending_visual_setup[virtual_index] = card
+	_show_skeleton_if_unloaded(card, virtual_index)
 
 	item_created.emit(card, virtual_index)
 
@@ -3204,6 +3229,7 @@ func _add_card_at_start(virtual_index: int):
 
 	card.set_meta("needs_visual_setup", true)
 	_pending_visual_setup[virtual_index] = card
+	_show_skeleton_if_unloaded(card, virtual_index)
 
 	item_created.emit(card, virtual_index)
 
@@ -3236,6 +3262,7 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 		# Data not loaded yet; keep the card pending so it gets finished once
 		# the items_requested callback populates the cache.
 		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data missing, keeping pending")
+		_show_skeleton_if_unloaded(card, virtual_index)
 		return false
 	card.remove_meta("needs_visual_setup")
 
@@ -3348,6 +3375,7 @@ func _batch_add_at_start(target_start: int, count: int) -> void:
 			card.set_focus_scale(focus_scale)
 		card.set_meta("needs_visual_setup", true)
 		_pending_visual_setup[virtual_index] = card
+		_show_skeleton_if_unloaded(card, virtual_index)
 		item_created.emit(card, virtual_index)
 		_active_cards_by_index[virtual_index] = card
 		new_cards.append(card)
@@ -3473,9 +3501,10 @@ func _update_margin():
 			_margin_container.add_theme_constant_override("margin_right", 0)
 			_last_margin_left = 0
 			_last_margin_right = 0
-		if _last_flow_width != 0:
-			_flow_container.custom_minimum_size.x = 0
-			_last_flow_width = 0
+		# NOTE: custom_minimum_size.x is owned by _update_layout() (row width for
+		# centering). This pass must NOT zero it — the CenterContainer sizes the
+		# flow to its minimum, so zeroing here wraps the grid to one column.
+		_last_flow_width = 0
 	else:
 		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
 		var after_last_pos = _get_slot_position_for_index(last_idx + 1, items_per_line, stride)
@@ -3503,9 +3532,9 @@ func _update_margin():
 			_margin_container.add_theme_constant_override("margin_bottom", 0)
 			_last_margin_top = 0
 			_last_margin_bottom = 0
-		if _last_flow_height != 0:
-			_flow_container.custom_minimum_size.y = 0
-			_last_flow_height = 0
+		# NOTE: custom_minimum_size.y is owned by _update_layout() for GRID
+		# horizontal (column height for centering); see the vertical branch.
+		_last_flow_height = 0
 
 func _is_index_pending(idx: int) -> bool:
 	_pending_loads_mutex.lock()
@@ -4016,6 +4045,7 @@ func get_visible_range() -> Dictionary:
 			"start": visible_start,
 			"end": visible_end,
 			"total": _total_items,
+			"source_total": _source_total_items,
 			"buffer_start": _virtual_start,
 			"buffer_size": _active_cards.size(),
 			"active_cards_count": _active_cards.size()
@@ -4031,6 +4061,7 @@ func get_visible_range() -> Dictionary:
 			"start": visible_start,
 			"end": visible_end,
 			"total": _total_items,
+			"source_total": _source_total_items,
 			"buffer_start": _virtual_start,
 			"buffer_size": _active_cards.size(),
 			"active_cards_count": _active_cards.size()

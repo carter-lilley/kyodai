@@ -6,6 +6,10 @@ uniform float corner_radius_pixels = 0.0;
 uniform float corner_radius_ratio = 0.06;
 uniform float total_inset_pixels = 0.0;
 
+// Case wrap insets: asymmetric strips claimed by the wrap (top banner, left spine)
+uniform float wrap_inset_top_pixels = 0.0;
+uniform float wrap_inset_left_pixels = 0.0;
+
 // UV transform chain precomputed by BaseCardEffect (avoids re-deriving aspect math)
 uniform vec2 uv_transform_scale = vec2(1.0, 1.0);
 uniform vec2 uv_transform_offset = vec2(0.0, 0.0);
@@ -30,6 +34,17 @@ float rounded_rect_sdf_ratio(vec2 pos, vec2 size, float radius_ratio) {
 	radius_pixels = clamp(radius_pixels, 0.0, min(half_size.x, half_size.y));
 	vec2 d = abs(pos - half_size) - (half_size - vec2(radius_pixels));
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius_pixels;
+}
+
+// Per-corner rounded rect SDF. radii: x = top-left, y = top-right,
+// z = bottom-right, w = bottom-left (pixel units, y-down canvas space).
+float rounded_rect_sdf_corners(vec2 pos, vec2 size, vec4 radii) {
+	vec2 half_size = size * 0.5;
+	vec2 q = pos - half_size;
+	float radius = q.x < 0.0 ? (q.y < 0.0 ? radii.x : radii.w) : (q.y < 0.0 ? radii.y : radii.z);
+	radius = clamp(radius, 0.0, min(half_size.x, half_size.y));
+	vec2 d = abs(q) - (half_size - vec2(radius));
+	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
 
 // Aspect-ratio preserving UV transform: fits `tex` inside `card` using cover semantics

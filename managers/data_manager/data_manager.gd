@@ -58,10 +58,15 @@ func _ready():
 			if success:
 				print("[DatabaseManager] Database ready - emitting signal")
 				database_ready.emit()
-				# Warm the downloaded-games count cache so the first HomeView
-				# call returns the cached value instead of running COUNT(*).
+				# Warm the hot startup caches on the DB thread so view _ready
+				# paths hit cache instead of scanning on the main thread.
+				# Queued AFTER the signal: inside the init task it starved the
+				# worker queue through the startup settle window.
 				MemorySubManager.queue_db_task(func():
+					var warm_start_us := Time.get_ticks_usec()
 					database.get_downloaded_games_count()
+					database.get_platforms_with_games()
+					print("[DatabaseManager] startup cache warm elapsed_us=", Time.get_ticks_usec() - warm_start_us)
 				)
 			else:
 				var err_msg = "Failed to initialize database at " + database.DB_PATH
@@ -167,6 +172,11 @@ func get_search_results_count(query: String) -> int:
 
 func get_downloaded_games_count() -> int:
 	return database.get_downloaded_games_count()
+
+
+## True when the count is cached, i.e. get_downloaded_games_count() won't scan.
+func has_cached_downloaded_count() -> bool:
+	return database.has_cached_downloaded_count()
 
 
 func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResource]:

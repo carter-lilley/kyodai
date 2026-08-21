@@ -333,6 +333,32 @@ static func _get_plugin():
 		return Engine.get_singleton("PackageChecker")
 	return null
 
+## Resolves a content:// URI to a real path if possible; otherwise imports it
+## into dest_dir via the plugin (bytes survive permission loss and reboots).
+## Returns the usable real path, or the original path on failure.
+static func import_content_file(path: String, dest_dir: String) -> String:
+	var resolved = resolve_content_uri(path)
+	if not resolved.begins_with("content://"):
+		return resolved
+
+	if not is_android():
+		return path
+
+	var plugin = _get_plugin()
+	if plugin == null:
+		push_warning("[SystemManager.filesystem] Plugin not available to import content URI: " + path)
+		return path
+
+	var dest = dest_dir
+	if dest.begins_with("user://") or dest.begins_with("res://"):
+		dest = ProjectSettings.globalize_path(dest)
+	var imported = plugin.call("importContentUri", path, dest)
+	if imported != "" and not str(imported).begins_with("content://"):
+		return str(imported)
+
+	push_warning("[SystemManager.filesystem] Failed to import content URI: " + path)
+	return path
+
 ## Checks if running on Android platform
 static func is_android() -> bool:
 	return SystemManager.platform.is_android() if is_instance_valid(SystemManager.platform) else OS.get_name() == "Android"

@@ -21,9 +21,6 @@ var effect_registry: Dictionary = {}
 var display_names: Dictionary = {}
 ## When true, per-effect rows get up/down buttons (config order = draw order).
 var allow_reorder: bool = false
-## When true, new-effect defaults are derived from the schema's SettingsVar
-## values instead of the hardcoded card _effect_defaults table.
-var use_schema_defaults: bool = false
 
 # State
 var _current_config: Dictionary = {}
@@ -39,78 +36,6 @@ var _available_effects: Dictionary = {}  # Maps effect_id -> display_name
 var _effect_id_map: Dictionary = {}  # Maps dropdown_id -> effect_id
 
 # Effect default settings
-var _effect_defaults: Dictionary = {
-	"border": {
-		"border_size": 0.0,
-		"border_fade_in": 0.0,
-		"border_color": Color.WHITE
-	},
-	"badge": {
-		"hide_background": false,
-		"badge_size": 1.0,
-		"badge_inner_radius": 0.0,
-		"badge_color": Color.WHITE,
-		"icon_padding": 0.5,
-		"icon_color": Color.WHITE
-	},
-	"drop_shadow": {
-		"shadow_color": Color(0, 0, 0, 0.5),
-		"shadow_offset_x": 0.0,
-		"shadow_offset_y": 0.05,
-		"shadow_softness": 0.04,
-		"shadow_spread": 0.0,
-		"shadow_expand": 0.02
-	},
-	"glow": {
-		"glow_radius": 0.1,
-		"glow_intensity": 1.5,
-		"blur_amount": 12.0,
-		"threshold": 0.1,
-		"glow_spread": 0.05
-	},
-	"glass": {
-		"distortion": 0.5,
-		"glass_color": Color(0.2, 0.4, 1.0, 0.3),
-		"additional_inset_ratio": 0.0,
-		"specular_power": 32.0,
-		"specular_intensity": 0.8,
-		"light_angle": 45.0,
-		"light_height": 0.5,
-		"bounce_intensity": 0.4,
-		"bounce_softness": 3.0,
-		"rim_intensity": 1.0,
-		"rim_sharpness": 5.0,
-		"swoop_intensity": 0.3,
-		"swoop_height": 0.25,
-		"swoop_curve": 0.5,
-		"swoop_tilt": 0.0
-	},
-	"distort": {
-		"distortion": 0.5,
-		"opacity": 1.0
-	},
-	"gradient_overlay": {
-		"gradient": null,  # Will create default gradient
-		"gradient_angle": 90.0
-	},
-	"hsl": {
-		"hue_shift": 0.0,
-		"saturation_scale": 1.0,
-		"lightness_scale": 1.0
-	},
-	"blur": {
-		"blur_strength": 4.0,
-		"blur_samples": 8
-	},
-	"shine": {
-		"speed": 1.0,
-		"line_width": 0.15,
-		"line_color": Color(1.0, 1.0, 1.0, 0.6),
-		"pause_duration": 0.5,
-		"angle_degrees": 45.0
-	}
-}
-
 func setup(p_title: String, p_context: String, p_config_key: String = "effects", p_inherit_from_base: bool = false):
 	title = p_title
 	context = p_context
@@ -439,24 +364,13 @@ func _get_base_effect_settings(effect_id: String) -> Dictionary:
 	return {}
 
 func _get_default_settings(effect_id: String) -> Dictionary:
-	"""Get default settings, inheriting from base if applicable."""
-	var defaults: Dictionary
-	if use_schema_defaults:
-		defaults = {}
-		for setting in _get_effect_schema(effect_id):
-			if setting.value is Resource:
-				defaults[setting.property_name] = setting.value.duplicate()
-			else:
-				defaults[setting.property_name] = setting.value
-	else:
-		defaults = _effect_defaults.get(effect_id, {}).duplicate(true)
-
-	# Handle special case for gradient_overlay default gradient
-	if effect_id == "gradient_overlay" and defaults.get("gradient") == null:
-		var default_gradient = Gradient.new()
-		default_gradient.offsets = [0.0, 1.0]
-		default_gradient.colors = [Color.WHITE, Color.BLACK]
-		defaults["gradient"] = default_gradient
+	"""Get default settings from the effect schema, inheriting from base if applicable."""
+	var defaults: Dictionary = {}
+	for setting in _get_effect_schema(effect_id):
+		if setting.value is Resource:
+			defaults[setting.property_name] = setting.value.duplicate()
+		else:
+			defaults[setting.property_name] = setting.value
 
 	# If inheriting from base, merge base settings
 	if inherit_from_base:

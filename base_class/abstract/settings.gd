@@ -16,6 +16,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export_subgroup("Audio")
 @export var dblevel_music := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "Music Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "SMALL", "display_unit": "%"})
 @export var dblevel_sfx := SettingsVar.new(Type.FLOAT, 100.0, State.ENABLED, "SFX Level", "", 0.0, 100.0, 1.0, [], false, {"show_stops": false, "slider_size": "SMALL", "display_unit": "%"})
+@export var music_file := SettingsVar.new(Type.PATH, "", State.ENABLED, "Background Music", "Audio file to loop in the background", 0.0, 1.0, 0.1, [], false, {"dialog": "file", "filters": ["*.ogg ; OGG Vorbis", "*.mp3 ; MP3", "*.wav ; WAV"]})
 
 @export_subgroup("Display")
 @export var windowed := SettingsVar.new(Type.BOOL,true,State.ENABLED,"Windowed")

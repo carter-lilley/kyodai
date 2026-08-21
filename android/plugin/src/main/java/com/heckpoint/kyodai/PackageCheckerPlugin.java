@@ -827,7 +827,84 @@ public class PackageCheckerPlugin extends GodotPlugin {
         // Return original if we couldn't resolve it
         return contentUri;
     }
-    
+
+    /**
+     * Imports a content:// URI into app storage by streaming its bytes through
+     * the ContentResolver. Used for URIs that cannot be resolved to a real
+     * filesystem path (e.g. Downloads provider "msf:" documents) and whose
+     * temporary read permission would not survive an app restart.
+     *
+     * @param contentUri The content:// URI to import
+     * @param destDir    Absolute destination directory (created if missing)
+     * @return The absolute path of the imported file, or "" on failure
+     */
+    @UsedByGodot
+    public String importContentUri(String contentUri, String destDir) {
+        if (contentUri == null || !contentUri.startsWith("content://")) {
+            return "";
+        }
+        if (activity == null || destDir == null || destDir.isEmpty()) {
+            return "";
+        }
+
+        InputStream inputStream = null;
+        OutputStream outputStream = null;
+        try {
+            Uri uri = Uri.parse(contentUri);
+
+            // Query the display name so the imported file keeps its name/extension
+            String displayName = null;
+            try (android.database.Cursor cursor = activity.getContentResolver().query(
+                    uri, new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                    if (idx != -1) {
+                        displayName = cursor.getString(idx);
+                    }
+                }
+            }
+            if (displayName == null || displayName.isEmpty()) {
+                displayName = "imported_file";
+            }
+            // Sanitize path separators out of the display name
+            displayName = displayName.replace("/", "_").replace("\\", "_");
+
+            File dir = new File(destDir);
+            if (!dir.exists() && !dir.mkdirs()) {
+                Log.e(TAG, "importContentUri: could not create dest dir: " + destDir);
+                return "";
+            }
+
+            File destFile = new File(dir, displayName);
+            inputStream = activity.getContentResolver().openInputStream(uri);
+            if (inputStream == null) {
+                Log.e(TAG, "importContentUri: could not open input stream for: " + contentUri);
+                return "";
+            }
+            outputStream = new FileOutputStream(destFile);
+
+            byte[] buffer = new byte[65536];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
+            outputStream.flush();
+
+            Log.d(TAG, "importContentUri: imported " + contentUri + " -> " + destFile.getAbsolutePath());
+            return destFile.getAbsolutePath();
+
+        } catch (Exception e) {
+            Log.e(TAG, "importContentUri: error importing " + contentUri + " - " + e.getMessage());
+            return "";
+        } finally {
+            try {
+                if (outputStream != null) outputStream.close();
+                if (inputStream != null) inputStream.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     // ==================== FOREGROUND SERVICE FOR DOWNLOADS ====================
     
     /**
