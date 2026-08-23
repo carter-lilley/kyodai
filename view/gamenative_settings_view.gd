@@ -223,12 +223,18 @@ func _load_cover_async(url: String, texture_rect: TextureRect) -> void:
 	add_child(http)
 	http.request_completed.connect(func(_result, response_code, _headers, body):
 		if response_code == 200 and body.size() > 0:
-			var image = Image.new()
-			var err = image.load_jpg_from_buffer(body)
-			if err == OK and not image.is_empty():
-				var texture = SystemManager.memory.create_texture_from_image(image)
-				if texture:
-					texture_rect.texture = texture
+			MemorySubManager.queue_image_task(
+				func() -> Image:
+					var image = Image.new()
+					if image.load_jpg_from_buffer(body) == OK and not image.is_empty():
+						return MemorySubManager.prepare_image_for_texture(image)
+					return null,
+				func(img: Image):
+					if is_instance_valid(texture_rect) and img and not img.is_empty():
+						var texture = SystemManager.memory.create_texture_from_image(img)
+						if texture:
+							texture_rect.texture = texture
+			)
 		http.queue_free()
 	)
 	

@@ -144,6 +144,10 @@ var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
 var _suppress_next_press: bool = false
 
+# Cached on _enter_tree so _can_accept_focus() doesn't walk the parent chain
+# for every input event (hundreds of pooled cards x every event adds up).
+var _cached_home_view: Node = null
+
 func _on_rs_items_recreated() -> void:
 	# Rebuild the node-less effect stacks as soon as the RenderingServer items
 	# are recreated (called from M3Card._enter_tree before _update_media_panel_size).
@@ -157,6 +161,7 @@ func _on_rs_items_recreated() -> void:
 
 func _enter_tree():
 	super._enter_tree()
+	_cached_home_view = _find_home_view()
 	if not _ready_called:
 		return
 	# The media stack is rebuilt in _on_rs_items_recreated() before bounds are
@@ -1172,12 +1177,8 @@ func _has_point(point: Vector2) -> bool:
 		return Rect2(Vector2.ZERO, size).has_point(point)
 	return _media_bounds.has_point(point)
 
-func _input(event: InputEvent) -> void:
-	# Early-out for non-Android touch events — avoids _can_accept_focus() cost
-	# for the vast majority of input events on desktop/console.
-	var is_touch_event = (event is InputEventScreenTouch or event is InputEventScreenDrag)
-	if is_touch_event and not SystemManager.platform.is_android():
-		return
+func _gui_input(event: InputEvent) -> void:
+	super._gui_input(event)
 
 	if not _can_accept_focus():
 		return
@@ -1188,7 +1189,7 @@ func _input(event: InputEvent) -> void:
 			if SystemManager.audio:
 				SystemManager.audio.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
 			UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
-			get_viewport().set_input_as_handled()
+			accept_event()
 
 	if SystemManager.platform.is_android() and event is InputEventScreenTouch:
 		if event.pressed:
@@ -1213,6 +1214,18 @@ func _input(event: InputEvent) -> void:
 			and event.device == InputEvent.DEVICE_ID_EMULATION \
 			and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
 		_update_hold_drag(event.position)
+
+func _input(event: InputEvent) -> void:
+	# Releases outside the card never reach _gui_input, but a hold that began
+	# here must still end or the long-press state sticks. _touch_is_holding is
+	# only ever set on Android touch paths, so on desktop this is a single
+	# bool check per event per card.
+	if not _touch_is_holding:
+		return
+	if event is InputEventScreenTouch and not event.pressed:
+		_end_hold()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_end_hold()
 
 func _try_begin_hold(pos: Vector2) -> void:
 	var inside := false
@@ -1262,9 +1275,8 @@ func _trigger_long_press() -> void:
 	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
 
 func _can_accept_focus() -> bool:
-	var home_view = _find_home_view()
-	if home_view and home_view.has_method("are_intro_animations_complete"):
-		if not home_view.are_intro_animations_complete():
+	if is_instance_valid(_cached_home_view) and _cached_home_view.has_method("are_intro_animations_complete"):
+		if not _cached_home_view.are_intro_animations_complete():
 			return false
 	if LaunchTransitionOverlay.is_transition_active:
 		return false

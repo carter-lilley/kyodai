@@ -1,6 +1,7 @@
 extends Control
 
 const DEBUG_LOG: bool = false
+const ShaderPrewarmer := preload("res://utils/shader_prewarmer.gd")
 
 # UI Nodes - initialized in _ready()
 var tab_container: TabContainer
@@ -228,6 +229,11 @@ func _ready():
 				else:
 					_save_zoom_ratio(grid.target_card_width_ratio)
 	print("[Main] Settle block total elapsed_us=", Time.get_ticks_usec() - settle_start_us)
+
+	# Compile all shader pipelines in the background so the first scroll/focus
+	# doesn't pay lazy-compile hitches. Deferred + internally delayed so first
+	# paint and grid settle win the main thread.
+	call_deferred("_prewarm_shader_pipelines")
 
 	# Sync the top background mask height to match the control bar.
 	# The mask covers the area behind the toolbar so cards scrolling up
@@ -1191,6 +1197,14 @@ func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 
 	print("[Main] Startup focus: focusing first Home card")
 	grid.scroll_to_index_and_focus(0, false)
+
+func _prewarm_shader_pipelines() -> void:
+	# Wait out the startup critical path (first paint, grid settle, focus
+	# restore) before spending frames on pipeline compilation.
+	await get_tree().create_timer(1.0).timeout
+	if not is_inside_tree():
+		return
+	ShaderPrewarmer.prewarm(get_tree())
 
 func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, available_size: Vector2, settle_start_us: int, attempts: int = 0) -> void:
 	"""Defer the pool build + startup settle until the grid's total count is

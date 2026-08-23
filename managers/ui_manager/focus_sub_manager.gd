@@ -645,6 +645,7 @@ func _restart_idle() -> void:
 	_stop_idle()
 	if not _ring_visible:
 		return
+	_orbit_last_redraw_ms = 0
 	match idle_anim:
 		IdleAnim.BREATHE:
 			_idle_tween = create_tween().set_loops()
@@ -669,8 +670,17 @@ func _set_ring_alpha(alpha: float) -> void:
 	if _ring_item.is_valid():
 		RenderingServer.canvas_item_set_modulate(_ring_item, Color(1.0, 1.0, 1.0, alpha))
 
+var _orbit_last_redraw_ms: int = 0
+## The idle comet re-tessellates the whole ring on each tween tick; ~30Hz is
+## visually indistinguishable and halves the per-frame PackedArray churn.
+const ORBIT_REDRAW_INTERVAL_MS: int = 33
+
 func _set_orbit_t(t: float) -> void:
 	_orbit_t = t
+	var now := Time.get_ticks_msec()
+	if now - _orbit_last_redraw_ms < ORBIT_REDRAW_INTERVAL_MS:
+		return
+	_orbit_last_redraw_ms = now
 	_redraw_ring()
 
 # ============================================================================
