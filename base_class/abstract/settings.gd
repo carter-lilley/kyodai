@@ -102,6 +102,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export var library_layout_mode := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"]))
 @export var library_grid_vertical := _preset(SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)"))
 @export var library_pagination_view := _preset(SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Pagination View", "Split the grid into viewport-sized pages with a gap in the scroll direction instead of a continuous scrolling list"))
+@export var library_grid_staggered := _preset(SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Staggered Grid", "Offset every other row by half a card width in a brick pattern; offset rows show one fewer card"))
 @export var library_focus_centering := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Focus Centering", "How the view scrolls when focus nears a screen edge: Margin slides the card just back on screen, Center brings it to the center of the screen", 0.0, 1.0, 1.0, ["Margin", "Center"]))
 @export var library_navigation_type := _preset(SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Navigation Type", "Use a bottom bar or side rail for navigation", 0.0, 1.0, 1.0, ["Bar", "Rail"]))
 @export var library_grid_padding := _preset(SettingsVar.new(Type.INT, 22, State.ENABLED, "Grid Padding", "Space between game cards in pixels", 0.0, 50.0, 1.0))

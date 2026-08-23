@@ -30,7 +30,23 @@ static func _get_sigil_path() -> String:
 	elif SystemManager.platform.is_macos():
 		return _AndroidBinaryExtractor.extract_binary(base_path + "macos/sigil", "sigil")
 	elif SystemManager.platform.is_android():
-		return _AndroidBinaryExtractor.extract_binary(base_path + "android/sigil-arm64.bin", "sigil")
+		# Android 10+ (targetSdk 29+) SELinux policy denies executing binaries from
+		# the app's private data dir. Sigil is shipped as a fake native library
+		# (libsigil.so in jniLibs) so the package manager extracts it to
+		# nativeLibraryDir, where execution is allowed.
+		var plugin = Engine.get_singleton("PackageChecker") if Engine.has_singleton("PackageChecker") else null
+		if plugin == null:
+			push_error("[SigilRunner] PackageChecker plugin not available")
+			return ""
+		var lib_dir: String = plugin.call("getNativeLibraryDir")
+		if lib_dir == "":
+			push_error("[SigilRunner] Failed to resolve nativeLibraryDir")
+			return ""
+		var sigil_path = lib_dir + "/libsigil.so"
+		if not FileAccess.file_exists(sigil_path):
+			push_error("[SigilRunner] libsigil.so not found in nativeLibraryDir: " + sigil_path)
+			return ""
+		return sigil_path
 	else:
 		push_error("[SigilRunner] Unsupported platform for sigil")
 		return ""
@@ -52,7 +68,9 @@ static func extract(rom_path: String, platform_slug: String, prod_keys_path: Str
 
 	var args = ["--platform=" + slug]
 	if prod_keys_path != "":
-		args.append("--prod-keys=" + FSM.resolve_path(prod_keys_path, {"format": FSM.PathFormat.ABSOLUTE}))
+		var usable_keys = _stage_prod_keys_if_needed(prod_keys_path)
+		if usable_keys != "":
+			args.append("--prod-keys=" + FSM.resolve_path(usable_keys, {"format": FSM.PathFormat.ABSOLUTE}))
 	args.append(abs_rom)
 
 	var output = []
@@ -90,6 +108,26 @@ static func _parse_output(lines: Array, rom_path: String, slug: String) -> Dicti
 		print("[SigilRunner] title_id derived from filename (low confidence): " + rom_path)
 
 	return result
+
+## Sigil runs as an external process, which cannot read SAF-protected
+## /Android/data/ paths (e.g. prod.keys inside an emulator's data dir).
+## Stage a copy under user:// (directly readable) in that case.
+static func _stage_prod_keys_if_needed(prod_keys_path: String) -> String:
+	if prod_keys_path == "":
+		return ""
+	var normalized = prod_keys_path.replace("\\", "/")
+	if not (normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")):
+		return prod_keys_path
+
+	var staged_path = "user://temp_sigil_prod.keys"
+	var data = FSM.read_file_bytes(prod_keys_path)
+	if data.is_empty():
+		push_warning("[SigilRunner] Failed to read prod keys for staging: " + prod_keys_path)
+		return ""
+	if not FSM.write_file_bytes(staged_path, data):
+		push_warning("[SigilRunner] Failed to stage prod keys to: " + staged_path)
+		return ""
+	return staged_path
 
 ## Sigil emits hex-format IDs uppercase; kyodai's stored case differs per
 ## platform: switch legacy IDs are uppercase hex, everything else lowercase.

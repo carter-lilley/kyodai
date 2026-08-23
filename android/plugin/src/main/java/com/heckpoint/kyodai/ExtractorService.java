@@ -8,6 +8,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Environment;
 import android.os.IBinder;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
@@ -25,6 +26,10 @@ import java.util.Enumeration;
 /**
  * Extraction service that runs in a separate process to avoid sharing memory with Godot.
  * This prevents OOM kills during large game extractions on low-RAM devices.
+ *
+ * Destinations under another app's /Android/data/ (or /Android/obb/) are written
+ * via DocumentsContract (persisted tree grant, or manage=true for
+ * MANAGE_EXTERNAL_STORAGE holders) when direct File I/O is denied.
  * 
  * Usage:
  * Intent intent = new Intent(context, ExtractorService.class);
@@ -42,6 +47,7 @@ public class ExtractorService extends Service {
     private static final String CHANNEL_ID = "kyodai_extractor";
     private static final int NOTIFICATION_ID = 2001;
     private static final String ACTION_EXTRACTION_COMPLETE = "com.heckpoint.kyodai.EXTRACTION_COMPLETE";
+    private static final String DOCS_AUTHORITY = "com.android.externalstorage.documents";
     
     @Override
     public void onCreate() {
@@ -226,7 +232,7 @@ public class ExtractorService extends Service {
      */
     private boolean extractZipStreaming(String zipPath, String extractDir, String gameName, String markerBase) {
         Log.d(TAG, "Starting streaming extraction: " + zipPath + " -> " + extractDir + " (markerBase=" + markerBase + ")");
-        
+
         ZipInputStream zis = null;
         InputStream fis = null;
         byte[] buffer = new byte[131072]; // 128KB buffer for better throughput
@@ -239,12 +245,13 @@ public class ExtractorService extends Service {
         String currentFile = "";
         long lastLogTime = System.currentTimeMillis();
         long lastProgressWrite = System.currentTimeMillis();
-        
+
         try {
-            File destDir = new File(extractDir);
-            if (!destDir.exists()) {
-                destDir.mkdirs();
+            if (!ensureDir(extractDir)) {
+                Log.e(TAG, "Could not create extraction directory: " + extractDir);
+                return false;
             }
+            File destDir = new File(extractDir);
             
             // Count total files and uncompressed size first using ZipFile (random access, doesn't stream)
             try {
@@ -273,14 +280,17 @@ public class ExtractorService extends Service {
             // Write an initial progress marker so the host app immediately sees totals.
             writeProgressMarker(extractDir, extractedCount, totalFiles, extractedBytes, totalUncompressedBytes, totalEstimated, currentFile, markerBase);
             
-            fis = new FileInputStream(zipPath);
+            fis = openInputFor(zipPath);
+            if (fis == null) {
+                throw new java.io.IOException("Could not open zip: " + zipPath);
+            }
             zis = new ZipInputStream(fis);
             
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 String entryName = entry.getName();
                 File outputFile = new File(destDir, entryName);
-                
+
                 // Security check
                 String canonicalDest = destDir.getCanonicalPath();
                 String canonicalOutput = outputFile.getCanonicalPath();
@@ -288,22 +298,25 @@ public class ExtractorService extends Service {
                     Log.e(TAG, "ZIP entry tried to escape destination: " + entryName);
                     continue;
                 }
-                
+
                 if (entry.isDirectory()) {
-                    outputFile.mkdirs();
+                    ensureDir(outputFile.getPath());
                     continue;
                 }
-                
+
                 currentFile = entryName;
                 File parentDir = outputFile.getParentFile();
-                if (parentDir != null && !parentDir.exists()) {
-                    parentDir.mkdirs();
+                if (parentDir != null && !ensureDir(parentDir.getPath())) {
+                    throw new java.io.IOException("Could not create directory: " + parentDir.getPath());
                 }
-                
-                // Extract with streaming
-                FileOutputStream fos = null;
+
+                // Extract with streaming (DocumentsContract for restricted destinations)
+                OutputStream fos = null;
                 try {
-                    fos = new FileOutputStream(outputFile);
+                    fos = openOutputFor(outputFile.getPath());
+                    if (fos == null) {
+                        throw new java.io.IOException("Could not open output: " + outputFile.getPath());
+                    }
                     int count;
                     while ((count = zis.read(buffer)) != -1) {
                         fos.write(buffer, 0, count);
@@ -322,7 +335,7 @@ public class ExtractorService extends Service {
                     
                     if (extractedCount % 100 == 0) {
                         try {
-                            fos.getFD().sync();
+                            fos.flush();
                         } catch (Exception ignored) {}
                     }
                     
@@ -383,19 +396,14 @@ public class ExtractorService extends Service {
     
     private void writeProgressMarker(String extractDir, int extractedCount, int totalFiles, long extractedBytes, long totalBytes, boolean totalEstimated, String currentFile, String markerBase) {
         try {
-            java.io.File dir = new java.io.File(extractDir);
-            if (!dir.exists()) {
-                dir.mkdirs();
-            }
-            java.io.File progressMarker = new java.io.File(dir, ".extraction_progress_" + markerBase);
-            java.io.FileWriter writer = new java.io.FileWriter(progressMarker);
-            writer.write("{\"extracted\":" + extractedCount
+            ensureDir(extractDir);
+            writeTextFile(extractDir + "/.extraction_progress_" + markerBase,
+                "{\"extracted\":" + extractedCount
                 + ",\"total\":" + totalFiles
                 + ",\"extracted_bytes\":" + extractedBytes
                 + ",\"total_bytes\":" + totalBytes
                 + ",\"total_estimated\":" + (totalEstimated ? "true" : "false")
                 + ",\"current_file\":\"" + escapeJson(currentFile) + "\"}");
-            writer.close();
         } catch (Exception e) {
             Log.w(TAG, "Failed to write progress marker", e);
         }
@@ -407,27 +415,319 @@ public class ExtractorService extends Service {
         }
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
+
+    // ========================================================================
+    // Restricted path support (/Android/data/, /Android/obb/ of other apps).
+    // Primary: AltAccess — direct File I/O through storage-root symlinks
+    // (KyodaiUC/data -> Android/data), which bypasses the FUSE path filter
+    // with only MANAGE_EXTERNAL_STORAGE (same trick as argosy-launcher).
+    // Fallback: DocumentsContract (persisted SAF tree grant, or manage=true
+    // honored for MANAGE_EXTERNAL_STORAGE holders on some ROMs).
+    // ========================================================================
+
+    private static final String ALT_ACCESS_DIR = "KyodaiUC";
+
+    private volatile Boolean altAccessSupported = null;
+
+    private boolean isAltAccessSupported() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
+        boolean hasManageStorage = Environment.isExternalStorageManager();
+        if (hasManageStorage) {
+            Boolean cached = altAccessSupported;
+            if (cached != null) return cached;
+        }
+        synchronized (this) {
+            if (hasManageStorage) {
+                Boolean cached = altAccessSupported;
+                if (cached != null) return cached;
+            }
+            boolean anySupported = false;
+            for (String root : getAltStorageRoots()) {
+                if (setupAndVerifyAltAccess(root, hasManageStorage)) {
+                    anySupported = true;
+                }
+            }
+            if (hasManageStorage) {
+                altAccessSupported = anySupported;
+            }
+            return anySupported;
+        }
+    }
+
+    private java.util.List<String> getAltStorageRoots() {
+        java.util.List<String> roots = new java.util.ArrayList<>();
+        roots.add(Environment.getExternalStorageDirectory().getAbsolutePath());
+        try {
+            File[] vols = new File("/storage").listFiles();
+            if (vols != null) {
+                for (File vol : vols) {
+                    if (vol.isDirectory() && !vol.getName().equals("emulated") && !vol.getName().equals("self")) {
+                        String path = vol.getAbsolutePath();
+                        if (!roots.contains(path) && new File(vol, "Android/data").exists()) {
+                            roots.add(path);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[AltAccess] Failed to enumerate storage volumes: " + e.getMessage());
+        }
+        return roots;
+    }
+
+    private boolean setupAndVerifyAltAccess(String storageRoot, boolean hasManageStorage) {
+        try {
+            File altDir = new File(storageRoot, ALT_ACCESS_DIR);
+            File dataLink = new File(altDir, "data");
+            if (hasManageStorage && !dataLink.exists()) {
+                setupAltAccess(storageRoot, altDir, dataLink);
+            }
+            return altDir.exists() && dataLink.canRead();
+        } catch (Exception e) {
+            Log.w(TAG, "[AltAccess] Path check failed for " + storageRoot + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void setupAltAccess(String storageRoot, File altDir, File dataLink) {
+        try {
+            if (!altDir.exists()) altDir.mkdirs();
+            if (!dataLink.exists()) {
+                android.system.Os.symlink(storageRoot + "/Android/data", dataLink.getAbsolutePath());
+            }
+            File obbLink = new File(altDir, "obb");
+            if (!obbLink.exists()) {
+                android.system.Os.symlink(storageRoot + "/Android/obb", obbLink.getAbsolutePath());
+            }
+            Log.i(TAG, "[AltAccess] Symlinks created for " + storageRoot);
+        } catch (Exception e) {
+            Log.w(TAG, "[AltAccess] Setup failed for " + storageRoot + ": " + e.getMessage());
+        }
+    }
+
+    /** Returns the restricted-path alias for direct I/O, or the original path. */
+    private String transformPath(String path) {
+        if (path == null || !isAltAccessSupported()) return path;
+        for (String root : getAltStorageRoots()) {
+            if (path.startsWith(root + "/Android/data/")) {
+                return root + "/" + ALT_ACCESS_DIR + "/data/" + path.substring((root + "/Android/data/").length());
+            }
+            if (path.startsWith(root + "/Android/obb/")) {
+                return root + "/" + ALT_ACCESS_DIR + "/obb/" + path.substring((root + "/Android/obb/").length());
+            }
+        }
+        return path;
+    }
+
+    /** File to use for direct I/O: the symlink-aliased path when restricted. */
+    private File directFile(String path) {
+        return new File(transformPath(path));
+    }
+
+    private boolean requiresDocumentsContract(String path) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
+        return path.contains("/Android/data/") || path.contains("/Android/obb/");
+    }
+
+    private String[] splitVolumePath(String path) {
+        if (path == null) return null;
+        if (path.startsWith("/storage/emulated/0/")) {
+            return new String[]{"primary", path.substring("/storage/emulated/0/".length())};
+        }
+        if (path.startsWith("/sdcard/")) {
+            return new String[]{"primary", path.substring("/sdcard/".length())};
+        }
+        if (path.startsWith("/storage/")) {
+            String[] parts = path.split("/");
+            if (parts.length >= 4) {
+                String volumeId = parts[2];
+                return new String[]{volumeId, path.substring(("/storage/" + volumeId + "/").length())};
+            }
+        }
+        return null;
+    }
+
+    private android.net.Uri applyManagedParameter(android.net.Uri uri, String relativePath) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return uri;
+        boolean needsManaged = relativePath.startsWith("Android/data")
+                || relativePath.startsWith("Android/obb")
+                || relativePath.equals("Android");
+        return needsManaged ? uri.buildUpon().appendQueryParameter("manage", "true").build() : uri;
+    }
+
+    /** Finds a persisted read+write tree grant whose tree covers the given path. */
+    private android.net.Uri treeUriForPath(String path) {
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return null;
+        String targetDocId = vp[0] + ":" + vp[1];
+        for (android.content.UriPermission p : getContentResolver().getPersistedUriPermissions()) {
+            if (!p.isReadPermission() || !p.isWritePermission()) continue;
+            android.net.Uri uri = p.getUri();
+            if (!uri.toString().startsWith("content://" + DOCS_AUTHORITY + "/tree/")) continue;
+            try {
+                String treeDocId = android.provider.DocumentsContract.getTreeDocumentId(uri);
+                if (targetDocId.equals(treeDocId) || targetDocId.startsWith(treeDocId + "/")) {
+                    return uri;
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    private android.net.Uri documentUriFor(String path) {
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return null;
+        String docId = vp[0] + ":" + vp[1];
+        android.net.Uri treeUri = treeUriForPath(path);
+        if (treeUri != null) {
+            try {
+                return android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+            } catch (Exception e) {
+                Log.w(TAG, "buildDocumentUriUsingTree failed: " + e.getMessage());
+            }
+        }
+        return applyManagedParameter(
+                android.provider.DocumentsContract.buildDocumentUri(DOCS_AUTHORITY, docId), vp[1]);
+    }
+
+    /** Creates a directory (and parents), falling back to DocumentsContract. */
+    private boolean ensureDir(String path) {
+        File dir = directFile(path);
+        if (dir.exists() && dir.isDirectory()) return true;
+        if (dir.mkdirs()) return true;
+
+        if (!requiresDocumentsContract(path)) return false;
+        return createDirViaSaf(path);
+    }
+
+    /**
+     * Creates a directory under a granted SAF tree. Only walks/creates segments
+     * BELOW the granted tree root — segments at or above it are outside the
+     * grant's coverage and would be denied (they already exist anyway).
+     */
+    private boolean createDirViaSaf(String path) {
+        android.net.Uri treeUri = treeUriForPath(path);
+        if (treeUri == null) return false;
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return false;
+        String targetDocId = vp[0] + ":" + vp[1];
+        String treeDocId;
+        try {
+            treeDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri);
+        } catch (Exception e) {
+            return false;
+        }
+        if (!targetDocId.equals(treeDocId) && !targetDocId.startsWith(treeDocId + "/")) return false;
+
+        String remainder = targetDocId.equals(treeDocId) ? "" : targetDocId.substring(treeDocId.length() + 1);
+        String currentDocId = treeDocId;
+        for (String segment : remainder.split("/")) {
+            if (segment.isEmpty()) continue;
+            String nextDocId = currentDocId + "/" + segment;
+            if (!safDocExists(treeUri, nextDocId)) {
+                try {
+                    android.net.Uri parentUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocId);
+                    android.provider.DocumentsContract.createDocument(
+                            getContentResolver(), parentUri,
+                            android.provider.DocumentsContract.Document.MIME_TYPE_DIR, segment);
+                } catch (Exception e) {
+                    Log.w(TAG, "createDirViaSaf failed for " + nextDocId + ": " + e.getMessage());
+                }
+                if (!safDocExists(treeUri, nextDocId)) {
+                    Log.w(TAG, "createDirViaSaf: could not create " + nextDocId);
+                    return false;
+                }
+            }
+            currentDocId = nextDocId;
+        }
+        return true;
+    }
+
+    private boolean safDocExists(android.net.Uri treeUri, String docId) {
+        try {
+            android.net.Uri docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+            android.database.Cursor cursor = getContentResolver().query(
+                    docUri,
+                    new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                    null, null, null);
+            if (cursor != null) {
+                boolean exists = cursor.moveToFirst();
+                cursor.close();
+                return exists;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /** Opens a truncating write stream: direct File first (AltAccess symlink for
+     *  restricted paths), then DocumentsContract with create-if-missing. */
+    private OutputStream openOutputFor(String path) throws Exception {
+        File file = directFile(path);
+        File parent = file.getParentFile();
+        if (parent != null && parent.canWrite()) {
+            return new FileOutputStream(file);
+        }
+        if (requiresDocumentsContract(path)) {
+            android.net.Uri uri = documentUriFor(path);
+            if (uri != null) {
+                try {
+                    OutputStream out = getContentResolver().openOutputStream(uri, "wt");
+                    if (out != null) return out;
+                } catch (Exception e) {
+                    Log.d(TAG, "openOutputFor: existing doc open failed, creating: " + e.getMessage());
+                }
+                String parentPath = path.substring(0, path.lastIndexOf('/'));
+                String name = path.substring(path.lastIndexOf('/') + 1);
+                android.net.Uri parentUri = documentUriFor(parentPath);
+                if (parentUri != null) {
+                    android.net.Uri created = android.provider.DocumentsContract.createDocument(
+                            getContentResolver(), parentUri, "application/octet-stream", name);
+                    if (created != null) {
+                        return getContentResolver().openOutputStream(created, "wt");
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Opens a read stream: direct File first (AltAccess symlink for restricted
+     *  paths), then DocumentsContract. */
+    private InputStream openInputFor(String path) throws Exception {
+        File file = directFile(path);
+        if (file.exists() && file.canRead()) {
+            return new FileInputStream(file);
+        }
+        if (requiresDocumentsContract(path)) {
+            android.net.Uri uri = documentUriFor(path);
+            if (uri != null) {
+                return getContentResolver().openInputStream(uri);
+            }
+        }
+        return null;
+    }
+
+    private void writeTextFile(String path, String content) throws Exception {
+        OutputStream out = openOutputFor(path);
+        if (out == null) {
+            throw new java.io.IOException("Could not open for write: " + path);
+        }
+        out.write(content.getBytes("UTF-8"));
+        out.flush();
+        out.close();
+    }
     
     private void writeCompletionMarkers(String extractDir, boolean success, String markerBase) {
         try {
-            java.io.File dir = new java.io.File(extractDir);
-            if (!dir.exists()) {
-                dir.mkdirs();
-            }
-            
+            ensureDir(extractDir);
+
             // Write completion marker
-            java.io.File completeMarker = new java.io.File(dir, ".extraction_complete_" + markerBase);
-            java.io.FileWriter writer = new java.io.FileWriter(completeMarker);
-            writer.write("complete");
-            writer.close();
-            Log.d(TAG, "Wrote completion marker: " + completeMarker.getAbsolutePath());
-            
+            writeTextFile(extractDir + "/.extraction_complete_" + markerBase, "complete");
+            Log.d(TAG, "Wrote completion marker: " + extractDir + "/.extraction_complete_" + markerBase);
+
             // Write success/failure marker
-            java.io.File successMarker = new java.io.File(dir, ".extraction_success_" + markerBase);
-            writer = new java.io.FileWriter(successMarker);
-            writer.write(success ? "true" : "false");
-            writer.close();
-            Log.d(TAG, "Wrote success marker: " + successMarker.getAbsolutePath() + " = " + success);
+            writeTextFile(extractDir + "/.extraction_success_" + markerBase, success ? "true" : "false");
+            Log.d(TAG, "Wrote success marker: " + extractDir + "/.extraction_success_" + markerBase + " = " + success);
         } catch (Exception e) {
             Log.e(TAG, "Failed to write completion markers", e);
         }

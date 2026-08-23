@@ -568,7 +568,12 @@ func _draw_corners(rect: Rect2, radius: float) -> void:
 		[r.end - Vector2(radius, radius), 0.0, Vector2(0, -1), Vector2(-1, 0)],
 		[Vector2(r.position.x, r.end.y) + Vector2(radius, -radius), PI * 0.5, Vector2(1, 0), Vector2(0, -1)],
 	]
-	const SEGMENTS := 5
+	# Tessellate arcs by arc length (physical px) so large corners stay smooth
+	# while small ones stay cheap.
+	const SEGMENT_TARGET_PX := 4.0
+	const SEGMENTS_MIN := 4
+	const SEGMENTS_MAX := 48
+	var segments := clampi(int(ceil(radius * sweep / SEGMENT_TARGET_PX)), SEGMENTS_MIN, SEGMENTS_MAX)
 	var cap_color: Color = colors[0]
 	for c in corners:
 		var center: Vector2 = c[0]
@@ -579,8 +584,8 @@ func _draw_corners(rect: Rect2, radius: float) -> void:
 		var p1 := center + Vector2(cos(a1), sin(a1)) * radius
 		var points := PackedVector2Array()
 		points.append(p0 + c[2] * tick)
-		for i in range(SEGMENTS + 1):
-			var a := lerpf(a0, a1, float(i) / float(SEGMENTS))
+		for i in range(segments + 1):
+			var a := lerpf(a0, a1, float(i) / float(segments))
 			points.append(center + Vector2(cos(a), sin(a)) * radius)
 		points.append(p1 + c[3] * tick)
 		RenderingServer.canvas_item_add_polyline(_ring_item, points, colors, width, true)

@@ -512,7 +512,9 @@ func play_background_music_file(path: String, fade_duration: float = DEFAULT_FAD
 	if effective_path != path and not _persisting_bgm_path:
 		# Persist the usable path back to the setting (re-emits setting_changed)
 		_persisting_bgm_path = true
-		DataManager.set_setting("music_file", effective_path)
+		var music_file_setting = DataManager.get_setting("music_file")
+		if music_file_setting:
+			DataManager.set_setting(effective_path, music_file_setting)
 		_persisting_bgm_path = false
 
 	var stream := _load_audio_stream_from_file(effective_path)

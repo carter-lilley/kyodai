@@ -31,6 +31,7 @@ const CURRENT_VERSION: int = 4
 @export var card_media_aspect_ratio: int = 0
 @export var library_focus_centering: int = 0
 @export var library_pagination_view: bool = false
+@export var library_grid_staggered: bool = false
 @export var library_background_config: Dictionary = {
 	"effect_id": "none",
 	"settings": {}
@@ -70,7 +71,7 @@ const LEGACY_FIELDS: Array[String] = [
 	"library_card_display_mode", "library_focus_scale", "library_card_content_alignment",
 	"library_grid_vertical", "card_media_aspect_ratio", "library_focus_centering",
 	"library_pagination_view", "library_background_config", "library_primary_color",
-	"dark_mode", "card_effect_config",
+	"library_grid_staggered", "dark_mode", "card_effect_config",
 ]
 
 ## Builds a v4 preset from a Settings resource: captures every setting flagged

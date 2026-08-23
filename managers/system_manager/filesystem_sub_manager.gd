@@ -266,7 +266,13 @@ static func _is_absolute_path(path: String) -> bool:
 static func get_file_size(path: String) -> int:
 	if path.is_empty():
 		return -1
-	
+
+	if _is_restricted_android_path(path):
+		var plugin = _get_plugin()
+		if plugin == null:
+			return -1
+		return int(plugin.call("androidGetFileSize", resolve_native_path(path)))
+
 	if not file_exists(path):
 		return -1
 	
@@ -434,6 +440,27 @@ static func _plugin_delete_file(path: String) -> bool:
 		return false
 	return plugin.call("androidDeleteFile", path)
 
+## Delegates dir creation to plugin for restricted paths
+static func _plugin_create_dir(path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	return plugin.call("androidCreateDir", path)
+
+## Delegates rename/move to plugin for restricted paths (streaming, SAF-aware)
+static func _plugin_rename(source_path: String, dest_path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	return plugin.call("androidRename", resolve_native_path(source_path), resolve_native_path(dest_path))
+
+## Delegates file copy to plugin for restricted paths (streaming, SAF-aware)
+static func _plugin_copy_file(source_path: String, dest_path: String) -> bool:
+	var plugin = _get_plugin()
+	if plugin == null:
+		return false
+	return plugin.call("androidCopyFile", resolve_native_path(source_path), resolve_native_path(dest_path))
+
 ## Delegates get modified time to plugin for restricted paths
 ## Note: Android plugin returns milliseconds, Godot expects seconds
 static func _plugin_get_modified_time(path: String) -> int:
@@ -485,16 +512,21 @@ static func dir_exists(path: String) -> bool:
 static func make_dir_recursive(path: String) -> bool:
 	if path.is_empty():
 		return false
-	
+
 	# Convert content:// URIs to real paths
 	path = resolve_content_uri(path)
-	
+
 	# Handle Godot virtual paths
 	if path.begins_with("user://") or path.begins_with("res://"):
 		if DirAccess.dir_exists_absolute(path):
 			return true
 		return DirAccess.make_dir_recursive_absolute(path) == OK
-	
+
+	# Check if restricted Android path (Godot's DirAccess is storage-scope gated
+	# and refuses other apps' /Android/data/ paths even when the OS allows us)
+	if _is_restricted_android_path(path):
+		return _plugin_create_dir(path)
+
 	# For real paths
 	if DirAccess.dir_exists_absolute(path):
 		return true
@@ -504,11 +536,18 @@ static func make_dir_recursive(path: String) -> bool:
 static func delete_dir_recursive(path: String) -> bool:
 	if path.is_empty():
 		return false
-	
+
+	# Restricted paths go through the plugin (SAF deleteDocument removes subtrees)
+	if _is_restricted_android_path(path):
+		var plugin = _get_plugin()
+		if plugin == null:
+			return false
+		return plugin.call("androidDeleteRecursive", resolve_native_path(path))
+
 	# Handle Godot virtual paths
 	if path.begins_with("user://") or path.begins_with("res://"):
 		return _delete_dir_recursive_internal(path)
-	
+
 	# For real paths
 	return _delete_dir_recursive_internal(path)
 
@@ -593,28 +632,38 @@ static func list_dir(path: String) -> Array[String]:
 static func rename(source_path: String, dest_name: String) -> bool:
 	if source_path.is_empty() or dest_name.is_empty():
 		return false
-	
+
 	var dest_path = join_paths(source_path.get_base_dir(), dest_name)
+	if _is_restricted_android_path(source_path) or _is_restricted_android_path(dest_path):
+		return _plugin_rename(source_path, dest_path)
 	return DirAccess.rename_absolute(source_path, dest_path) == OK
 
 ## Moves a file or directory to a new location
 static func move(source_path: String, dest_path: String) -> bool:
 	if source_path.is_empty() or dest_path.is_empty():
 		return false
-	
+
+	# Restricted paths go through the plugin (handles cross-dir move as copy+delete)
+	if _is_restricted_android_path(source_path) or _is_restricted_android_path(dest_path):
+		return _plugin_rename(source_path, dest_path)
+
 	# Ensure destination directory exists
 	var dest_dir = dest_path.get_base_dir()
 	if not dest_dir.is_empty() and not dir_exists(dest_dir):
 		if not make_dir_recursive(dest_dir):
 			return false
-	
+
 	return DirAccess.rename_absolute(source_path, dest_path) == OK
 
 ## Copies a file from source to destination
 static func copy_file(source_path: String, dest_path: String) -> bool:
 	if source_path.is_empty() or dest_path.is_empty():
 		return false
-	
+
+	# Restricted paths go through the plugin's streaming copy (SAF-aware)
+	if _is_restricted_android_path(source_path) or _is_restricted_android_path(dest_path):
+		return _plugin_copy_file(source_path, dest_path)
+
 	# Ensure destination directory exists
 	var dest_dir = dest_path.get_base_dir()
 	if not dest_dir.is_empty() and not dir_exists(dest_dir):
@@ -641,41 +690,40 @@ static func copy_file(source_path: String, dest_path: String) -> bool:
 	return true
 
 ## Recursively copies a directory to another location
+## Uses routed helpers throughout so restricted /Android/data/ paths work
 ## Returns true on success
 static func copy_dir(source: String, dest: String) -> bool:
 	print("[SystemManager.filesystem] copy_dir: START " + source + " -> " + dest)
-	if not DirAccess.dir_exists_absolute(dest):
+	if not dir_exists(dest):
 		print("[SystemManager.filesystem] copy_dir: Creating destination directory: " + dest)
-		DirAccess.make_dir_recursive_absolute(dest)
-	
-	var dir = DirAccess.open(source)
-	if dir == null:
+		if not make_dir_recursive(dest):
+			push_error("[SystemManager.filesystem] Failed to create destination directory: " + dest)
+			return false
+
+	if not dir_exists(source):
 		push_error("[SystemManager.filesystem] Failed to open source directory: " + source)
 		return false
-	
-	dir.list_dir_begin()
-	var item = dir.get_next()
+
 	var success = true
 	var copied_count = 0
 	var failed_count = 0
-	
-	while item != "":
-		if item != "." and item != "..":
-			var src_path = source.rstrip("/") + "/" + item
-			var dst_path = dest.rstrip("/") + "/" + item
-			if dir.current_is_dir():
-				if not copy_dir(src_path, dst_path):
-					success = false
-					failed_count += 1
+
+	for item in list_dir(source):
+		if item == "." or item == "..":
+			continue
+		var src_path = source.rstrip("/") + "/" + item
+		var dst_path = dest.rstrip("/") + "/" + item
+		if dir_exists(src_path):
+			if not copy_dir(src_path, dst_path):
+				success = false
+				failed_count += 1
+		else:
+			if not copy_file(src_path, dst_path):
+				success = false
+				failed_count += 1
 			else:
-				if not copy_file(src_path, dst_path):
-					success = false
-					failed_count += 1
-				else:
-					copied_count += 1
-		item = dir.get_next()
-	
-	dir.list_dir_end()
+				copied_count += 1
+
 	print("[SystemManager.filesystem] copy_dir: END " + source + " -> " + dest + " (success=" + str(success) + ", copied=" + str(copied_count) + ", failed=" + str(failed_count) + ")")
 	return success
 
@@ -728,50 +776,45 @@ static func zip_directory(source_dir: String, dest_zip: String, max_file_size: i
 	return success
 
 ## Internal: Recursively adds directory contents to a ZIPPacker
+## Uses routed helpers so restricted /Android/data/ source trees work
 static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_prefix: String, max_file_size: int = -1) -> bool:
-	var dir = DirAccess.open(dir_path)
-	if dir == null:
+	if not dir_exists(dir_path):
 		push_error("[SystemManager.filesystem] Failed to open directory for zipping: " + dir_path)
 		return false
-	
-	dir.list_dir_begin()
-	var filename = dir.get_next()
+
 	var success = true
-	
-	while filename != "":
-		if filename != "." and filename != "..":
-			var full_path = dir_path + "/" + filename
-			var zip_path = zip_prefix + filename
-			
-			if dir.current_is_dir():
-				packer.start_file(zip_path + "/")
-				packer.close_file()
-				if not _zip_directory_recursive(packer, full_path, zip_path + "/", max_file_size):
-					success = false
+
+	for filename in list_dir(dir_path):
+		if filename == "." or filename == "..":
+			continue
+		var full_path = dir_path + "/" + filename
+		var zip_path = zip_prefix + filename
+
+		if dir_exists(full_path):
+			packer.start_file(zip_path + "/")
+			packer.close_file()
+			if not _zip_directory_recursive(packer, full_path, zip_path + "/", max_file_size):
+				success = false
+		else:
+			var file_size = get_file_size(full_path)
+			if file_size < 0:
+				push_error("[SystemManager.filesystem] Failed to read file for zipping: " + full_path)
+				success = false
+			elif max_file_size > 0 and file_size > max_file_size:
+				print("[SystemManager.filesystem] Skipping oversized file (" + str(file_size) + " bytes): " + full_path)
 			else:
-				# Check file size if max_file_size is set
-				var file = FileAccess.open(full_path, FileAccess.READ)
-				if file == null:
+				var data = read_file_bytes(full_path)
+				if data.is_empty() and file_size > 0:
 					push_error("[SystemManager.filesystem] Failed to read file for zipping: " + full_path)
 					success = false
 				else:
-					var file_size = file.get_length()
-					if max_file_size > 0 and file_size > max_file_size:
-						print("[SystemManager.filesystem] Skipping oversized file (" + str(file_size) + " bytes): " + full_path)
-						file.close()
-					else:
-						var data = file.get_buffer(file_size)
-						file.close()
-						packer.start_file(zip_path)
-						packer.write_file(data)
-						packer.close_file()
-			
-			if not success:
-				break
-		
-		filename = dir.get_next()
-	
-	dir.list_dir_end()
+					packer.start_file(zip_path)
+					packer.write_file(data)
+					packer.close_file()
+
+		if not success:
+			break
+
 	return success
 
 ## Deletes a file
@@ -1069,12 +1112,14 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	var progress_marker = abs_extract_dir + "/.extraction_progress_" + marker_base
 	
 	# Clean up any old markers (both legacy shared markers and this archive's markers)
+	# Marker files may live under restricted /Android/data/ paths, so go through
+	# the routed FSM helpers instead of raw FileAccess/DirAccess.
 	var legacy_completion_marker = abs_extract_dir + "/.extraction_complete"
 	var legacy_success_marker = abs_extract_dir + "/.extraction_success"
 	var legacy_progress_marker = abs_extract_dir + "/.extraction_progress"
 	for marker in [completion_marker, success_marker, progress_marker, legacy_completion_marker, legacy_success_marker, legacy_progress_marker]:
-		if FileAccess.file_exists(marker):
-			DirAccess.remove_absolute(marker)
+		if file_exists(marker):
+			delete_file(marker)
 	
 	# Start the extraction service
 	var started = plugin.startExtractorService(abs_zip, abs_extract_dir, display_name)
@@ -1096,25 +1141,25 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 			print("[SystemManager.filesystem] Extraction wait aborted: shutting down")
 			return false
 		# Check for completion marker (most reliable method)
-		if FileAccess.file_exists(completion_marker):
+		if file_exists(completion_marker):
 			completed = true
 			# Read success marker content ("true" or "false")
-			var success_file = FileAccess.open(success_marker, FileAccess.READ)
-			if success_file:
-				var success_text = success_file.get_as_text().strip_edges()
-				success = success_text == "true"
-				success_file.close()
-			else:
-				success = false
+			var success_text = read_file(success_marker).strip_edges()
+			success = success_text == "true"
 			print("[SystemManager.filesystem] Extraction complete marker found, success=" + str(success))
 			break
-		
+
 		# Poll progress file every ~2 seconds
 		if progress_callback.is_valid() and elapsed - last_progress_read >= 2.0:
 			var info := _read_extraction_progress(progress_marker)
 			if not info.is_empty():
 				progress_callback.call(info)
 			last_progress_read = elapsed
+
+		# Runs on the extraction worker thread; safe to sleep. Keeps the marker
+		# polls from hammering the SAF provider and lets the timeout fire.
+		OS.delay_msec(500)
+		elapsed += 0.5
 	
 	# Read the final progress marker (written just before completion markers) so
 	# the callback receives the real totals rather than the estimated fallback.
@@ -1125,8 +1170,8 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 	
 	# Clean up markers
 	for marker in [completion_marker, success_marker, progress_marker]:
-		if FileAccess.file_exists(marker):
-			DirAccess.remove_absolute(marker)
+		if file_exists(marker):
+			delete_file(marker)
 	
 	if not completed:
 		push_error("[SystemManager.filesystem] Extraction service timed out")
@@ -1138,13 +1183,11 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 ## Reads the ExtractorService progress marker and normalizes it to a Dictionary:
 ## {extracted_files, total_files, extracted_bytes, total_bytes, total_estimated, current_file}
 static func _read_extraction_progress(progress_marker: String) -> Dictionary:
-	if not FileAccess.file_exists(progress_marker):
+	if not file_exists(progress_marker):
 		return {}
-	var progress_file = FileAccess.open(progress_marker, FileAccess.READ)
-	if not progress_file:
+	var json_text = read_file(progress_marker)
+	if json_text.is_empty():
 		return {}
-	var json_text = progress_file.get_as_text()
-	progress_file.close()
 	var json = JSON.new()
 	if json.parse(json_text) != OK or not (json.data is Dictionary):
 		return {}

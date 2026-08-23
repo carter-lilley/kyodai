@@ -152,18 +152,51 @@ func _on_firmware_download_complete(success: bool, download_error: String, _noti
 		func(_info: Dictionary): pass,
 		func(extract_success: bool, error_msg: String):
 			if not extract_success:
-				push_error("[FirmwareManager] Failed to extract firmware to: " + firmware_dir + ": " + error_msg)
-				launch_manager.firmware_download_completed.emit(platform_slug, false)
-				if callback.is_valid():
-					callback.call(false, error_msg)
-				return
-			
-			print("[FirmwareManager] Firmware successfully installed for " + platform_slug)
-			clear_firmware_cache(platform_slug, emulator_id)
-			launch_manager.firmware_download_completed.emit(platform_slug, true)
-			if callback.is_valid():
-				callback.call(true, "Firmware installed")
+				_retry_or_fail_firmware_extract(temp_path, firmware_dir, platform_slug, emulator_id, callback, error_msg)
+			else:
+				_finish_firmware_extract(true, error_msg, firmware_dir, platform_slug, emulator_id, callback)
 	)
+
+## Finishes the firmware extraction flow (shared by initial attempt and SAF retry)
+func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable) -> void:
+	if not extract_success:
+		push_error("[FirmwareManager] Failed to extract firmware to: " + firmware_dir + ": " + error_msg)
+		launch_manager.firmware_download_completed.emit(platform_slug, false)
+		if callback.is_valid():
+			callback.call(false, error_msg)
+		return
+
+	print("[FirmwareManager] Firmware successfully installed for " + platform_slug)
+	clear_firmware_cache(platform_slug, emulator_id)
+	launch_manager.firmware_download_completed.emit(platform_slug, true)
+	if callback.is_valid():
+		callback.call(true, "Firmware installed")
+
+## Android blocks other apps' /Android/data even with all-files access; a
+## one-time document-tree grant unlocks it. Prompt just-in-time and retry once.
+func _retry_or_fail_firmware_extract(temp_path: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable, error_msg: String) -> void:
+	var normalized = firmware_dir.replace("\\", "/")
+	var is_restricted = normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
+	if not SystemManager.platform.is_android() or not is_restricted \
+			or SystemManager.platform.has_android_data_access(firmware_dir):
+		_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback)
+		return
+
+	print("[FirmwareManager] Extraction into restricted path needs folder access grant, prompting...")
+	SystemManager.platform.ensure_android_data_access(func(granted: bool):
+		if granted:
+			FSM.extract_archive_async(
+				temp_path,
+				firmware_dir,
+				"Firmware for " + platform_slug,
+				true,
+				func(_info: Dictionary): pass,
+				func(retry_success: bool, retry_error: String):
+					_finish_firmware_extract(retry_success, retry_error, firmware_dir, platform_slug, emulator_id, callback)
+			)
+		else:
+			_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback)
+	, firmware_dir)
 
 ## Returns the list of expected firmware files for a platform (empty if none).
 func get_platform_firmware_expected_files(platform_slug: String) -> Array:

@@ -8,6 +8,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.content.UriPermission;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
 import android.content.pm.ResolveInfo;
@@ -21,7 +23,9 @@ import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Looper;
+import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -53,6 +57,11 @@ public class PackageCheckerPlugin extends GodotPlugin {
     
     private static final String TAG = "PackageChecker";
     private static final String ACTION_EXTRACTION_COMPLETE = "com.heckpoint.kyodai.EXTRACTION_COMPLETE";
+    private static final String SAF_PREFS = "kyodai_saf";
+    private static final String SAF_TREE_URIS_KEY = "android_data_tree_uris";
+    private static final int REQUEST_SAF_TREE = 0x5AF1;
+    private static final String DOCS_AUTHORITY = "com.android.externalstorage.documents";
+    private static final String ALT_ACCESS_DIR = "KyodaiUC";
     private Activity activity;
     private BroadcastReceiver extractionReceiver;
     
@@ -75,6 +84,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         signals.add(new SignalInfo("extraction_complete", Boolean.class, String.class, String.class));
         signals.add(new SignalInfo("copy_progress", String.class, Long.class, Long.class));
         signals.add(new SignalInfo("copy_complete", String.class, Boolean.class, String.class, String.class));
+        signals.add(new SignalInfo("saf_grant_result", Boolean.class));
         return signals;
     }
     
@@ -1044,7 +1054,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
             java.io.OutputStream outputStream = null;
             
             try {
-                java.io.File sourceFile = new java.io.File(sourcePath);
+                java.io.File sourceFile = directFile(sourcePath);
                 if (!sourceFile.exists()) {
                     throw new Exception("Source file not found: " + sourcePath);
                 }
@@ -1055,8 +1065,16 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 
                 inputStream = new java.io.FileInputStream(sourceFile);
                 
-                // Create output stream, using DocumentsContract for restricted paths
-                if (requiresDocumentsContract(destPath)) {
+                // Create output stream: direct File first (AltAccess symlink for
+                // restricted paths), DocumentsContract as fallback
+                java.io.File outputFile = directFile(destPath);
+                java.io.File parentDir = outputFile.getParentFile();
+                if (parentDir != null && !parentDir.exists()) {
+                    parentDir.mkdirs();
+                }
+                if (parentDir != null && parentDir.canWrite()) {
+                    outputStream = new java.io.FileOutputStream(outputFile);
+                } else if (requiresDocumentsContract(destPath)) {
                     Uri docUri = pathToDocumentUri(destPath);
                     if (docUri == null) {
                         throw new Exception("Could not create document URI for: " + destPath);
@@ -1066,11 +1084,6 @@ public class PackageCheckerPlugin extends GodotPlugin {
                         throw new Exception("Could not open output stream for: " + destPath);
                     }
                 } else {
-                    java.io.File outputFile = new java.io.File(destPath);
-                    java.io.File parentDir = outputFile.getParentFile();
-                    if (parentDir != null && !parentDir.exists()) {
-                        parentDir.mkdirs();
-                    }
                     outputStream = new java.io.FileOutputStream(outputFile);
                 }
                 
@@ -1110,7 +1123,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
                     if (inputStream != null) inputStream.close();
                     // Clean up partial destination file
                     if (!requiresDocumentsContract(destPath)) {
-                        java.io.File outputFile = new java.io.File(destPath);
+                        java.io.File outputFile = directFile(destPath);
                         if (outputFile.exists()) {
                             outputFile.delete();
                         }
@@ -1204,7 +1217,378 @@ public class PackageCheckerPlugin extends GodotPlugin {
         // Check if path is in restricted directories
         return path.contains("/Android/data/") || path.contains("/Android/obb/");
     }
+
+    // ========================================================================
+    // AltAccess: direct File I/O for restricted paths via storage-root symlinks.
+    // Mirrors argosy-launcher's AndroidDataAccessor. The FUSE daemon filters
+    // /Android/data|obb by path prefix; a symlink from an unfiltered location
+    // (e.g. <storage>/KyodaiUC/data -> /storage/emulated/0/Android/data) is
+    // served without re-checking the target, giving full direct access with
+    // only MANAGE_EXTERNAL_STORAGE. Falls through to SAF when unsupported.
+    // ========================================================================
+
+    private volatile Boolean altAccessSupported = null;
+
+    /** Returns the restricted-path alias for direct I/O, or the original path. */
+    private String transformPath(String path) {
+        if (path == null || !isAltAccessSupported()) return path;
+        for (String root : getAltStorageRoots()) {
+            if (path.startsWith(root + "/Android/data/")) {
+                return root + "/" + ALT_ACCESS_DIR + "/data/" + path.substring((root + "/Android/data/").length());
+            }
+            if (path.startsWith(root + "/Android/obb/")) {
+                return root + "/" + ALT_ACCESS_DIR + "/obb/" + path.substring((root + "/Android/obb/").length());
+            }
+        }
+        return path;
+    }
+
+    /** File to use for direct I/O: the symlink-aliased path when restricted. */
+    private File directFile(String path) {
+        return new File(transformPath(path));
+    }
+
+    @UsedByGodot
+    public boolean isAltAccessSupported() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
+        boolean hasManageStorage = Environment.isExternalStorageManager();
+        Log.d(TAG, "[AltAccess] isExternalStorageManager=" + hasManageStorage);
+        if (hasManageStorage) {
+            Boolean cached = altAccessSupported;
+            if (cached != null) return cached;
+        }
+        synchronized (this) {
+            if (hasManageStorage) {
+                Boolean cached = altAccessSupported;
+                if (cached != null) return cached;
+            }
+            boolean anySupported = false;
+            for (String root : getAltStorageRoots()) {
+                if (setupAndVerifyAltAccess(root, hasManageStorage)) {
+                    anySupported = true;
+                }
+            }
+            Log.i(TAG, "[AltAccess] supported=" + anySupported);
+            if (hasManageStorage) {
+                altAccessSupported = anySupported;
+            }
+            return anySupported;
+        }
+    }
+
+    private List<String> getAltStorageRoots() {
+        List<String> roots = new java.util.ArrayList<>();
+        roots.add(Environment.getExternalStorageDirectory().getAbsolutePath());
+        try {
+            File[] vols = new File("/storage").listFiles();
+            if (vols != null) {
+                for (File vol : vols) {
+                    if (vol.isDirectory() && !vol.getName().equals("emulated") && !vol.getName().equals("self")) {
+                        String path = vol.getAbsolutePath();
+                        if (!roots.contains(path) && new File(vol, "Android/data").exists()) {
+                            roots.add(path);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[AltAccess] Failed to enumerate storage volumes: " + e.getMessage());
+        }
+        return roots;
+    }
+
+    private boolean setupAndVerifyAltAccess(String storageRoot, boolean hasManageStorage) {
+        try {
+            File altDir = new File(storageRoot, ALT_ACCESS_DIR);
+            File dataLink = new File(altDir, "data");
+            if (hasManageStorage && !dataLink.exists()) {
+                setupAltAccess(storageRoot, altDir, dataLink);
+            }
+            boolean ok = altDir.exists() && dataLink.canRead();
+            Log.d(TAG, "[AltAccess] verify " + storageRoot + ": altDir.exists=" + altDir.exists()
+                    + " dataLink.exists=" + dataLink.exists() + " dataLink.canRead=" + dataLink.canRead());
+            return ok;
+        } catch (Exception e) {
+            Log.w(TAG, "[AltAccess] Path check failed for " + storageRoot + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void setupAltAccess(String storageRoot, File altDir, File dataLink) {
+        try {
+            if (!altDir.exists()) altDir.mkdirs();
+            if (!dataLink.exists()) {
+                android.system.Os.symlink(storageRoot + "/Android/data", dataLink.getAbsolutePath());
+            }
+            File obbLink = new File(altDir, "obb");
+            if (!obbLink.exists()) {
+                android.system.Os.symlink(storageRoot + "/Android/obb", obbLink.getAbsolutePath());
+            }
+            Log.i(TAG, "[AltAccess] Symlinks created for " + storageRoot);
+        } catch (Exception e) {
+            Log.w(TAG, "[AltAccess] Setup failed for " + storageRoot + ": " + e.getMessage());
+        }
+    }
     
+    // ========================================================================
+    // SAF tree grant for /Android/data/ and /Android/obb/
+    // Mirrors argosy-launcher's ManagedStorageAccessor: a persisted document-tree
+    // grant (user picks the "Android" or "Android/data" folder once) is preferred;
+    // without it we fall back to bare document URIs with the manage=true query
+    // parameter, which ExternalStorageProvider honors for MANAGE_EXTERNAL_STORAGE
+    // holders.
+    // ========================================================================
+
+    /**
+     * Launches the system folder picker so the user can grant access to an
+     * emulator's app-data folder. When targetPath is under Android/data/<pkg>
+     * (or obb), the picker is pointed at that package subfolder — subfolders
+     * are not on DocumentsUI's blocklist even though the data/obb roots are.
+     * Result arrives via the saf_grant_result signal.
+     */
+    @UsedByGodot
+    public void requestAndroidDataAccess(String targetPath) {
+        if (activity == null) {
+            emitSignal("saf_grant_result", false);
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        String docId = targetPath != null ? packageDocIdFor(targetPath) : null;
+        if (docId == null) {
+            docId = "primary:Android/data";
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Uri initial = DocumentsContract.buildDocumentUri(DOCS_AUTHORITY, docId);
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+        }
+        try {
+            activity.startActivityForResult(intent, REQUEST_SAF_TREE);
+        } catch (Exception e) {
+            Log.e(TAG, "requestAndroidDataAccess failed: " + e.getMessage());
+            emitSignal("saf_grant_result", false);
+        }
+    }
+
+    @Override
+    public void onMainActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != REQUEST_SAF_TREE) return;
+        boolean granted = false;
+        if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+            Uri treeUri = data.getData();
+            try {
+                activity.getContentResolver().takePersistableUriPermission(
+                        treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                Set<String> uris = new HashSet<>(getStoredTreeUriStrings());
+                uris.add(treeUri.toString());
+                activity.getSharedPreferences(SAF_PREFS, Context.MODE_PRIVATE)
+                        .edit().putStringSet(SAF_TREE_URIS_KEY, uris).apply();
+                granted = true;
+                Log.d(TAG, "SAF tree grant persisted: " + treeUri);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to persist SAF grant: " + e.getMessage());
+            }
+        }
+        emitSignal("saf_grant_result", granted);
+    }
+
+    /** Returns true if any persisted read+write document-tree grant exists. */
+    @UsedByGodot
+    public boolean hasSafGrant() {
+        if (activity == null) return false;
+        for (UriPermission p : activity.getContentResolver().getPersistedUriPermissions()) {
+            if (p.isReadPermission() && p.isWritePermission()
+                    && p.getUri().toString().startsWith("content://" + DOCS_AUTHORITY + "/tree/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Returns true if a persisted tree grant covers the given path. */
+    @UsedByGodot
+    public boolean hasSafGrantFor(String path) {
+        return treeUriForPath(path) != null;
+    }
+
+    private Set<String> getStoredTreeUriStrings() {
+        if (activity == null) return new HashSet<>();
+        return activity.getSharedPreferences(SAF_PREFS, Context.MODE_PRIVATE)
+                .getStringSet(SAF_TREE_URIS_KEY, new HashSet<String>());
+    }
+
+    /**
+     * Extracts the Android/data|obb package subfolder docId for a path.
+     * e.g. /storage/emulated/0/Android/data/com.foo/files/x -> "primary:Android/data/com.foo"
+     */
+    private String packageDocIdFor(String path) {
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return null;
+        String[] segs = vp[1].split("/");
+        if (segs.length >= 3 && segs[0].equals("Android")
+                && (segs[1].equals("data") || segs[1].equals("obb"))) {
+            return vp[0] + ":" + segs[0] + "/" + segs[1] + "/" + segs[2];
+        }
+        return null;
+    }
+
+    /** Finds a persisted read+write tree grant whose tree covers the given path. */
+    private Uri treeUriForPath(String path) {
+        if (activity == null) return null;
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return null;
+        String targetDocId = vp[0] + ":" + vp[1];
+        for (UriPermission p : activity.getContentResolver().getPersistedUriPermissions()) {
+            if (!p.isReadPermission() || !p.isWritePermission()) continue;
+            Uri uri = p.getUri();
+            if (!uri.toString().startsWith("content://" + DOCS_AUTHORITY + "/tree/")) continue;
+            try {
+                String treeDocId = DocumentsContract.getTreeDocumentId(uri);
+                if (targetDocId.equals(treeDocId) || targetDocId.startsWith(treeDocId + "/")) {
+                    return uri;
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    /**
+     * Splits an absolute path into {volumeId, relativePath}.
+     * /storage/emulated/0/... -> volume "primary"; /storage/XXXX-XXXX/... -> that id.
+     */
+    private String[] splitVolumePath(String path) {
+        if (path == null) return null;
+        if (path.startsWith("/storage/emulated/0/")) {
+            return new String[]{"primary", path.substring("/storage/emulated/0/".length())};
+        }
+        if (path.startsWith("/sdcard/")) {
+            return new String[]{"primary", path.substring("/sdcard/".length())};
+        }
+        if (path.startsWith("/storage/")) {
+            String[] parts = path.split("/");
+            if (parts.length >= 4) {
+                String volumeId = parts[2];
+                return new String[]{volumeId, path.substring(("/storage/" + volumeId + "/").length())};
+            }
+        }
+        return null;
+    }
+
+    /** Appends manage=true for /Android/data|obb paths (honored by ExternalStorageProvider for MES holders). */
+    private Uri applyManagedParameter(Uri uri, String relativePath) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return uri;
+        boolean needsManaged = relativePath.startsWith("Android/data")
+                || relativePath.startsWith("Android/obb")
+                || relativePath.equals("Android");
+        return needsManaged ? uri.buildUpon().appendQueryParameter("manage", "true").build() : uri;
+    }
+
+    /**
+     * Builds a document URI for an absolute path. Order: covering persisted
+     * tree grant, legacy tree/<volume>-scoped URI (served by some providers
+     * for MANAGE_EXTERNAL_STORAGE holders), bare URI + manage=true.
+     */
+    private Uri documentUriFor(String path) {
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return null;
+        String docId = vp[0] + ":" + vp[1];
+        Uri treeUri = treeUriForPath(path);
+        if (treeUri != null) {
+            try {
+                return DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+            } catch (Exception e) {
+                Log.w(TAG, "buildDocumentUriUsingTree failed: " + e.getMessage());
+            }
+        }
+        // Legacy tree-scoped form (no grant required on lenient providers)
+        try {
+            return DocumentsContract.buildDocumentUriUsingTree(
+                    Uri.parse("content://" + DOCS_AUTHORITY + "/tree/" + vp[0]), docId);
+        } catch (Exception e) {
+            Log.w(TAG, "legacy tree-scoped URI failed: " + e.getMessage());
+        }
+        return applyManagedParameter(DocumentsContract.buildDocumentUri(DOCS_AUTHORITY, docId), vp[1]);
+    }
+
+    /** Builds a children-listing URI for an absolute directory path. */
+    private Uri childrenUriFor(String path) {
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return null;
+        String docId = vp[0] + ":" + vp[1];
+        Uri treeUri = treeUriForPath(path);
+        if (treeUri != null) {
+            try {
+                Uri dirDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                return DocumentsContract.buildChildDocumentsUriUsingTree(dirDocUri, docId);
+            } catch (Exception e) {
+                Log.w(TAG, "buildChildDocumentsUriUsingTree failed: " + e.getMessage());
+            }
+        }
+        // Legacy tree-scoped form
+        try {
+            Uri legacyTree = Uri.parse("content://" + DOCS_AUTHORITY + "/tree/" + vp[0]);
+            return DocumentsContract.buildChildDocumentsUriUsingTree(legacyTree, docId);
+        } catch (Exception e) {
+            Log.w(TAG, "legacy children URI failed: " + e.getMessage());
+        }
+        return applyManagedParameter(
+                DocumentsContract.buildChildDocumentsUri(DOCS_AUTHORITY, docId), vp[1]);
+    }
+
+    /** Opens a read stream: direct File first, then DocumentsContract. */
+    private InputStream openInputFor(String path) throws Exception {
+        File file = directFile(path);
+        if (file.exists() && file.canRead()) {
+            return new FileInputStream(file);
+        }
+        if (requiresDocumentsContract(path)) {
+            Uri uri = documentUriFor(path);
+            if (uri != null) {
+                return activity.getContentResolver().openInputStream(uri);
+            }
+        }
+        return null;
+    }
+
+    /** Opens a write stream (truncating): direct File first, then DocumentsContract with create-if-missing. */
+    private OutputStream openOutputFor(String path) throws Exception {
+        File file = directFile(path);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        if (parent != null && parent.canWrite()) {
+            return new FileOutputStream(file);
+        }
+        if (requiresDocumentsContract(path)) {
+            Uri uri = documentUriFor(path);
+            if (uri != null) {
+                try {
+                    OutputStream out = activity.getContentResolver().openOutputStream(uri, "wt");
+                    if (out != null) return out;
+                } catch (Exception e) {
+                    Log.d(TAG, "openOutputFor: existing doc open failed, creating: " + e.getMessage());
+                }
+                // File doesn't exist yet: create it under its parent document
+                String parentPath = path.substring(0, path.lastIndexOf('/'));
+                String name = path.substring(path.lastIndexOf('/') + 1);
+                Uri parentUri = documentUriFor(parentPath);
+                if (parentUri != null) {
+                    Uri created = DocumentsContract.createDocument(
+                            activity.getContentResolver(), parentUri, "application/octet-stream", name);
+                    if (created != null) {
+                        return activity.getContentResolver().openOutputStream(created, "wt");
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     /**
      * Converts a file path to a DocumentsContract URI for accessing /Android/data/.
      * Format: content://com.android.externalstorage.documents/document/primary:Android/data/...
@@ -1213,36 +1597,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         if (path == null || path.isEmpty()) {
             return null;
         }
-        
-        try {
-            // Handle primary storage
-            if (path.startsWith("/storage/emulated/0/")) {
-                String relativePath = path.substring("/storage/emulated/0/".length());
-                String docId = "primary:" + relativePath;
-                return android.provider.DocumentsContract.buildDocumentUriUsingTree(
-                    Uri.parse("content://com.android.externalstorage.documents/tree/primary"),
-                    docId
-                );
-            }
-            
-            // Handle SD cards: /storage/XXXX-XXXX/...
-            if (path.startsWith("/storage/")) {
-                String[] parts = path.split("/");
-                if (parts.length >= 3) {
-                    String storageId = parts[2];
-                    String relativePath = path.substring(("/storage/" + storageId + "/").length());
-                    String docId = storageId + ":" + relativePath;
-                    return android.provider.DocumentsContract.buildDocumentUriUsingTree(
-                        Uri.parse("content://com.android.externalstorage.documents/tree/" + storageId),
-                        docId
-                    );
-                }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error converting path to document URI: " + e.getMessage());
-        }
-        
-        return null;
+        return documentUriFor(path);
     }
     
     /**
@@ -1255,7 +1610,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = new File(path);
+        File file = directFile(path);
         if (file.exists()) {
             return true;
         }
@@ -1276,9 +1631,15 @@ public class PackageCheckerPlugin extends GodotPlugin {
                         return exists;
                     }
                 }
-            } catch (Exception e) {
-                Log.w(TAG, "DocumentsContract fileExists failed: " + e.getMessage());
-            }
+                } catch (Exception e) {
+                    String msg = String.valueOf(e.getMessage());
+                    if (msg.contains("FileNotFoundException") || msg.contains("Missing file")
+                            || msg.contains("No such file")) {
+                        // Expected during marker polling — file simply doesn't exist yet
+                        return false;
+                    }
+                    Log.w(TAG, "DocumentsContract fileExists failed: " + msg);
+                }
         }
         
         return false;
@@ -1295,7 +1656,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = new File(path);
+        File file = directFile(path);
         if (file.exists() && file.isDirectory()) {
             return true;
         }
@@ -1350,7 +1711,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
             java.io.InputStream inputStream = null;
             
             // Try direct access first
-            File file = new File(path);
+            File file = directFile(path);
             if (file.exists() && file.canRead()) {
                 inputStream = new java.io.FileInputStream(file);
             } else if (requiresDocumentsContract(path)) {
@@ -1398,7 +1759,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
             byte[] data = android.util.Base64.decode(base64Data, android.util.Base64.NO_WRAP);
             
             // Try direct access first
-            File file = new File(path);
+            File file = directFile(path);
             File parentDir = file.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
                 parentDir.mkdirs();
@@ -1413,14 +1774,11 @@ public class PackageCheckerPlugin extends GodotPlugin {
             
             // Fall back to DocumentsContract for restricted paths
             if (requiresDocumentsContract(path)) {
-                Uri docUri = pathToDocumentUri(path);
-                if (docUri != null) {
-                    java.io.OutputStream outputStream = activity.getContentResolver().openOutputStream(docUri, "w");
-                    if (outputStream != null) {
-                        outputStream.write(data);
-                        outputStream.close();
-                        return true;
-                    }
+                java.io.OutputStream outputStream = openOutputFor(path);
+                if (outputStream != null) {
+                    outputStream.write(data);
+                    outputStream.close();
+                    return true;
                 }
             }
             
@@ -1445,7 +1803,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         java.util.List<String> files = new java.util.ArrayList<>();
         
         // Try direct access first
-        File dir = new File(path);
+        File dir = directFile(path);
         if (dir.exists() && dir.isDirectory() && dir.canRead()) {
             String[] children = dir.list();
             if (children != null) {
@@ -1459,18 +1817,17 @@ public class PackageCheckerPlugin extends GodotPlugin {
         // Fall back to DocumentsContract for restricted paths
         if (requiresDocumentsContract(path)) {
             try {
-                Uri dirUri = pathToDocumentUri(path);
-                if (dirUri != null) {
+                Uri childrenUri = childrenUriFor(path);
+                if (childrenUri != null) {
                     android.database.Cursor cursor = activity.getContentResolver().query(
-                        android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(dirUri, 
-                            android.provider.DocumentsContract.getDocumentId(dirUri)),
+                        childrenUri,
                         new String[]{
                             android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                             android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
                         },
                         null, null, null
                     );
-                    
+
                     if (cursor != null) {
                         while (cursor.moveToNext()) {
                             String name = cursor.getString(0);
@@ -1498,7 +1855,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = new File(path);
+        File file = directFile(path);
         if (file.exists()) {
             return file.lastModified();
         }
@@ -1528,28 +1885,248 @@ public class PackageCheckerPlugin extends GodotPlugin {
     }
     
     /**
-     * Creates a directory (and parents) using DocumentsContract for restricted paths.
+     * Creates a directory (and parents), using direct File first and
+     * DocumentsContract segment-by-segment creation for restricted paths.
      */
     @UsedByGodot
     public boolean androidCreateDir(String path) {
         if (path == null || path.isEmpty()) {
             return false;
         }
-        
+
         // Try direct access first
-        File dir = new File(path);
+        File dir = directFile(path);
         if (dir.exists() && dir.isDirectory()) {
             return true;
         }
         if (dir.mkdirs()) {
             return true;
         }
-        
-        // For restricted paths, DocumentsContract doesn't support directory creation well
-        // Return false - caller should handle this differently
+
+        // DocumentsContract fallback: create under the covering SAF tree grant,
+        // walking only segments BELOW the granted tree root (segments at or
+        // above it are outside the grant's coverage and already exist).
+        if (requiresDocumentsContract(path)) {
+            return createDirViaSaf(path);
+        }
         return false;
     }
-    
+
+    private boolean createDirViaSaf(String path) {
+        Uri treeUri = treeUriForPath(path);
+        if (treeUri == null) return false;
+        String[] vp = splitVolumePath(path);
+        if (vp == null) return false;
+        String targetDocId = vp[0] + ":" + vp[1];
+        String treeDocId;
+        try {
+            treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
+        } catch (Exception e) {
+            return false;
+        }
+        if (!targetDocId.equals(treeDocId) && !targetDocId.startsWith(treeDocId + "/")) return false;
+
+        String remainder = targetDocId.equals(treeDocId) ? "" : targetDocId.substring(treeDocId.length() + 1);
+        String currentDocId = treeDocId;
+        for (String segment : remainder.split("/")) {
+            if (segment.isEmpty()) continue;
+            String nextDocId = currentDocId + "/" + segment;
+            if (!safDocExists(treeUri, nextDocId)) {
+                try {
+                    Uri parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocId);
+                    DocumentsContract.createDocument(
+                            activity.getContentResolver(), parentUri,
+                            DocumentsContract.Document.MIME_TYPE_DIR, segment);
+                } catch (Exception e) {
+                    Log.w(TAG, "createDirViaSaf failed for " + nextDocId + ": " + e.getMessage());
+                }
+                if (!safDocExists(treeUri, nextDocId)) {
+                    Log.w(TAG, "createDirViaSaf: could not create " + nextDocId);
+                    return false;
+                }
+            }
+            currentDocId = nextDocId;
+        }
+        return true;
+    }
+
+    private boolean safDocExists(Uri treeUri, String docId) {
+        try {
+            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+            android.database.Cursor cursor = activity.getContentResolver().query(
+                    docUri,
+                    new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                    null, null, null);
+            if (cursor != null) {
+                boolean exists = cursor.moveToFirst();
+                cursor.close();
+                return exists;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /**
+     * Recursively deletes a file or directory. DocumentsContract's deleteDocument
+     * removes directory subtrees on ExternalStorageProvider.
+     */
+    @UsedByGodot
+    public boolean androidDeleteRecursive(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+
+        // Try direct access first
+        File file = directFile(path);
+        if (file.exists()) {
+            return deleteRecursively(file);
+        }
+
+        if (requiresDocumentsContract(path)) {
+            Uri uri = documentUriFor(path);
+            if (uri != null) {
+                try {
+                    return DocumentsContract.deleteDocument(activity.getContentResolver(), uri);
+                } catch (Exception e) {
+                    Log.w(TAG, "androidDeleteRecursive failed: " + e.getMessage());
+                }
+            }
+            return false;
+        }
+        // Nothing existed to delete
+        return true;
+    }
+
+    private boolean deleteRecursively(File f) {
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        return f.delete();
+    }
+
+    /**
+     * Streams a file copy, using DocumentsContract streams for whichever side is
+     * restricted. Works for large files (no base64 / in-memory buffering).
+     */
+    @UsedByGodot
+    public boolean androidCopyFile(String sourcePath, String destPath) {
+        if (sourcePath == null || sourcePath.isEmpty() || destPath == null || destPath.isEmpty()) {
+            return false;
+        }
+        try {
+            InputStream in = openInputFor(sourcePath);
+            if (in == null) {
+                Log.w(TAG, "androidCopyFile: cannot open source: " + sourcePath);
+                return false;
+            }
+            OutputStream out = openOutputFor(destPath);
+            if (out == null) {
+                in.close();
+                Log.w(TAG, "androidCopyFile: cannot open dest: " + destPath);
+                return false;
+            }
+            byte[] buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            out.flush();
+            out.close();
+            in.close();
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "androidCopyFile failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Renames/moves a file or directory. Uses direct rename, then
+     * DocumentsContract.renameDocument for same-parent renames, then
+     * copy+delete for cross-directory moves involving restricted paths.
+     */
+    @UsedByGodot
+    public boolean androidRename(String sourcePath, String destPath) {
+        if (sourcePath == null || sourcePath.isEmpty() || destPath == null || destPath.isEmpty()) {
+            return false;
+        }
+
+        File src = directFile(sourcePath);
+        if (src.exists()) {
+            File dst = directFile(destPath);
+            File dstParent = dst.getParentFile();
+            if (dstParent != null && !dstParent.exists()) {
+                dstParent.mkdirs();
+            }
+            if (src.renameTo(dst)) {
+                return true;
+            }
+        }
+
+        if (requiresDocumentsContract(sourcePath) || requiresDocumentsContract(destPath)) {
+            // Same-parent rename via renameDocument
+            String srcParent = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+            String dstParentPath = destPath.substring(0, destPath.lastIndexOf('/'));
+            if (srcParent.equals(dstParentPath)) {
+                Uri uri = documentUriFor(sourcePath);
+                String newName = destPath.substring(destPath.lastIndexOf('/') + 1);
+                if (uri != null) {
+                    try {
+                        Uri renamed = DocumentsContract.renameDocument(
+                                activity.getContentResolver(), uri, newName);
+                        if (renamed != null) return true;
+                    } catch (Exception e) {
+                        Log.w(TAG, "androidRename renameDocument failed: " + e.getMessage());
+                    }
+                }
+            }
+            // Cross-directory move: copy + delete
+            if (androidCopyFile(sourcePath, destPath)) {
+                return androidDeleteRecursive(sourcePath);
+            }
+            return false;
+        }
+        return false;
+    }
+
+    /**
+     * Gets a file's size in bytes. Returns -1 if unknown/inaccessible.
+     */
+    @UsedByGodot
+    public long androidGetFileSize(String path) {
+        if (path == null || path.isEmpty()) {
+            return -1;
+        }
+        File file = directFile(path);
+        if (file.exists()) {
+            return file.length();
+        }
+        if (requiresDocumentsContract(path)) {
+            Uri uri = documentUriFor(path);
+            if (uri != null) {
+                try {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                            uri,
+                            new String[]{DocumentsContract.Document.COLUMN_SIZE},
+                            null, null, null);
+                    if (cursor != null) {
+                        long size = cursor.moveToFirst() ? cursor.getLong(0) : -1;
+                        cursor.close();
+                        return size;
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "androidGetFileSize failed: " + e.getMessage());
+                }
+            }
+        }
+        return -1;
+    }
+
     /**
      * Deletes a file using DocumentsContract for restricted paths.
      */
@@ -1560,7 +2137,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = new File(path);
+        File file = directFile(path);
         if (file.exists() && file.isFile()) {
             return file.delete();
         }
@@ -1593,7 +2170,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         try {
-            File file = new File(path);
+            File file = directFile(path);
             if (!file.exists()) {
                 Log.w(TAG, "chmodExecutable: file does not exist: " + path);
                 return false;
@@ -1612,6 +2189,21 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
     }
     
+    /**
+     * Returns the app's native library directory (nativeLibraryDir).
+     * Binaries shipped as jniLibs are extracted here by the package manager
+     * and — unlike files in the private data dir — may be executed under
+     * SELinux policy for targetSdk 29+.
+     */
+    @UsedByGodot
+    public String getNativeLibraryDir() {
+        if (activity == null) {
+            Log.w(TAG, "getNativeLibraryDir: activity is null");
+            return "";
+        }
+        return activity.getApplicationInfo().nativeLibraryDir;
+    }
+
     /**
      * Launches an Android intent with the specified parameters.
      * Uses FileProvider for content:// URIs when needed.

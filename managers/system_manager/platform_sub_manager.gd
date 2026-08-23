@@ -181,13 +181,81 @@ func has_storage_permission() -> bool:
 func open_manage_storage_settings():
 	if not is_android():
 		return
-	
+
 	# Use the PackageChecker plugin to launch with the correct intent action
 	# (ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION + package: URI).
 	# OS.shell_open uses ACTION_VIEW which many OEMs don't handle for settings pages.
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin:
 		plugin.requestManageExternalStoragePermission()
+
+# ============================================================================
+# ANDROID APP-DATA (SAF) ACCESS — just-in-time grant
+# Direct File I/O (with MANAGE_EXTERNAL_STORAGE) is our primary path for all
+# storage. Other apps' /Android/data/ and /Android/obb/ are the one exception:
+# Android blocks them per-app regardless of MES, so they require a one-time
+# document-tree grant. This guard prompts only when access is actually needed
+# (argosy-style), calls back with true once usable access exists.
+# ============================================================================
+
+var _saf_grant_pending_callback: Callable = Callable()
+
+func has_android_data_access(path: String = "") -> bool:
+	if not is_android():
+		return true
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	# AltAccess (storage-root symlink, direct File I/O with just MES) counts
+	if bool(plugin.isAltAccessSupported()):
+		return true
+	if path != "":
+		return bool(plugin.hasSafGrantFor(path))
+	return bool(plugin.hasSafGrant())
+
+## Calls on_ready(granted: bool). If a document-tree grant already exists, calls
+## back immediately with true. Otherwise shows a prompt and launches the system
+## folder picker; the callback fires when the flow resolves.
+## path: the restricted path that needs access (grant targets its package folder).
+func ensure_android_data_access(on_ready: Callable, path: String = "") -> void:
+	if not is_android():
+		on_ready.call(true)
+		return
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		on_ready.call(false)
+		return
+	if bool(plugin.isAltAccessSupported()) or has_android_data_access(path):
+		on_ready.call(true)
+		return
+	# A grant flow is already in flight; queue behind it
+	if _saf_grant_pending_callback.is_valid():
+		on_ready.call(false)
+		return
+
+	_saf_grant_pending_callback = on_ready
+	if not plugin.is_connected("saf_grant_result", _on_saf_grant_result):
+		plugin.connect("saf_grant_result", _on_saf_grant_result)
+
+	UIManager.show_confirm(
+		"Folder Access Required",
+		"This needs access to an emulator's app-data folder (Android/data), which Android protects separately.\n\nThe picker will open at the right folder — just tap \"Use this folder\".",
+		func():
+			plugin.requestAndroidDataAccess(path),
+		func():
+			_resolve_saf_grant(false),
+		Callable(),
+		{"overlay_layer": 1101}  # above UILayer (1000) so it stays visible over the launch transition overlay
+	)
+
+func _on_saf_grant_result(granted: bool) -> void:
+	_resolve_saf_grant(granted)
+
+func _resolve_saf_grant(granted: bool) -> void:
+	var callback = _saf_grant_pending_callback
+	_saf_grant_pending_callback = Callable()
+	if callback.is_valid():
+		callback.call(granted)
 
 ## Opens Android Settings to enable install permissions
 ## Called when user tries to install an emulator without the required permission

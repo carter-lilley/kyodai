@@ -68,6 +68,9 @@ const PCSX2_MEMORY_CARD_VALUES := {
 
 func _ready():
 	_main_window = get_tree().root
+	# Shuffler is Windows-only; skip tool extraction on other platforms
+	if not SystemManager.platform.is_windows():
+		return
 	if SystemManager.platform.is_packaged():
 		# Packaged builds cannot execute tools from inside the PCK; use extracted copies
 		_tools_dir = ProjectSettings.globalize_path(AndroidBinaryExtractor.BIN_DIR)

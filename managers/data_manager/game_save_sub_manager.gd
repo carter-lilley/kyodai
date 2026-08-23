@@ -1628,6 +1628,22 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 		if callback.is_valid():
 			callback.call(false, "Save sync already in progress")
 		return
+
+	# Android: emulator save dirs under /Android/data/ need a one-time folder
+	# grant. Prompt just-in-time (before marking the sync in flight) and retry.
+	if SystemManager.platform.is_android():
+		var probe_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+		var normalized_dir = probe_dir.replace("\\", "/")
+		var restricted_dir = normalized_dir.contains("/Android/data/") or normalized_dir.contains("/Android/obb/")
+		if restricted_dir and not SystemManager.platform.has_android_data_access(probe_dir):
+			SystemManager.platform.ensure_android_data_access(func(granted: bool):
+				if granted:
+					sync_saves_for_game(game, emulator_id, callback)
+				elif callback.is_valid():
+					callback.call(false, "Folder access required to sync saves from this emulator")
+			, probe_dir)
+			return
+
 	_begin_save_sync(sync_key)
 	var user_callback = callback
 	callback = func(success: bool, message: String):

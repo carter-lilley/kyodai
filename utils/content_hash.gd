@@ -13,8 +13,19 @@ static func _md5_bytes(data: PackedByteArray) -> String:
 		return ""
 	return ctx.finish().hex_encode()
 
+## Restricted Android paths (other apps' Android/data|obb) are invisible to
+## Godot's raw FileAccess/DirAccess; they must go through the FSM helpers.
+static func _is_restricted(path: String) -> bool:
+	var normalized = path.replace("\\", "/")
+	return normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
+
 ## MD5 of raw file bytes, streamed.
 static func compute_file_hash(path: String) -> String:
+	if _is_restricted(path):
+		var data = FSM.read_file_bytes(path)
+		if data.is_empty():
+			return ""
+		return _md5_bytes(data)
 	var f = FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return ""
@@ -31,11 +42,15 @@ static func compute_file_hash(path: String) -> String:
 	return ctx.finish().hex_encode()
 
 static func _is_zip_file(path: String) -> bool:
-	var f = FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return false
-	var magic = f.get_buffer(4)
-	f.close()
+	var magic: PackedByteArray
+	if _is_restricted(path):
+		magic = FSM.read_file_bytes(path)
+	else:
+		var f = FileAccess.open(path, FileAccess.READ)
+		if f == null:
+			return false
+		magic = f.get_buffer(4)
+		f.close()
 	if magic.size() < 4:
 		return false
 	return magic[0] == 0x50 and magic[1] == 0x4B and (magic[2] == 0x03 or magic[2] == 0x05 or magic[2] == 0x07)
@@ -74,22 +89,16 @@ static func compute_folder_zip_hash(dir_path: String, root_name: String = "") ->
 	return _md5_bytes("\n".join(lines).to_utf8_buffer())
 
 static func _collect_folder_hash_lines(dir_path: String, zip_prefix: String, lines: Array[String]) -> void:
-	var dir = DirAccess.open(dir_path)
-	if dir == null:
+	if not FSM.dir_exists(dir_path):
 		return
-	dir.list_dir_begin()
-	var filename = dir.get_next()
-	while filename != "":
-		if filename != "." and filename != "..":
-			var full_path = dir_path + "/" + filename
-			var zip_path = zip_prefix + filename
-			if dir.current_is_dir():
-				_collect_folder_hash_lines(full_path, zip_path + "/", lines)
-			else:
-				var f = FileAccess.open(full_path, FileAccess.READ)
-				if f != null:
-					var data = f.get_buffer(f.get_length())
-					f.close()
-					lines.append(zip_path + ":" + _md5_bytes(data))
-		filename = dir.get_next()
-	dir.list_dir_end()
+	for filename in FSM.list_dir(dir_path):
+		if filename == "." or filename == "..":
+			continue
+		var full_path = dir_path + "/" + filename
+		var zip_path = zip_prefix + filename
+		if FSM.dir_exists(full_path):
+			_collect_folder_hash_lines(full_path, zip_path + "/", lines)
+		else:
+			var data = FSM.read_file_bytes(full_path)
+			if not data.is_empty():
+				lines.append(zip_path + ":" + _md5_bytes(data))
