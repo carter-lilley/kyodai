@@ -69,6 +69,17 @@ const PREWARM_START_DELAY_SEC := 2.0
 const PREWARM_VIEW_SPACING_SEC := 0.15
 ## Cap on the per-view idle wait so a busy UI can't starve the prewarm forever.
 const PREWARM_IDLE_TIMEOUT_US := 5000000
+## Prewarm also waits for a gap in user input so hidden-view construction
+## never lands mid-interaction.
+const PREWARM_INPUT_IDLE_MS := 500
+
+var _last_input_msec: int = 0
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey or event is InputEventJoypadButton \
+			or event is InputEventMouseButton or event is InputEventMouseMotion \
+			or event is InputEventScreenTouch or event is InputEventScreenDrag:
+		_last_input_msec = Time.get_ticks_msec()
 
 func _pre_instantiate_lazy_views() -> void:
 	await get_tree().create_timer(PREWARM_START_DELAY_SEC).timeout
@@ -86,10 +97,11 @@ func _pre_instantiate_lazy_views() -> void:
 func _prewarm_step(label: String, ensure: Callable, needed: bool) -> void:
 	if not needed or not is_inside_tree():
 		return
-	# Never build a view mid-transition or while a dialog owns the screen —
-	# that stall is exactly what the transition cover exists to hide.
+	# Never build a view mid-transition, while a dialog owns the screen, or
+	# while the user is actively interacting — that stall is exactly what the
+	# transition cover exists to hide.
 	var waited_us := Time.get_ticks_usec()
-	while (ViewTransitionOverlay.is_transition_active or M3Overlay.is_showing("dialog")) and Time.get_ticks_usec() - waited_us < PREWARM_IDLE_TIMEOUT_US:
+	while (ViewTransitionOverlay.is_transition_active or M3Overlay.is_showing("dialog") or Time.get_ticks_msec() - _last_input_msec < PREWARM_INPUT_IDLE_MS) and Time.get_ticks_usec() - waited_us < PREWARM_IDLE_TIMEOUT_US:
 		await get_tree().process_frame
 	if not is_inside_tree():
 		return

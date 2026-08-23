@@ -67,6 +67,9 @@ const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 const IMAGE_THREAD_COUNT: int = 6
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 500
+## Extra headroom main-thread producers get past the soft cap before tasks
+## are dropped (with a null callback) instead of growing the queue forever.
+const MAX_DB_QUEUE_MAIN_OVERFLOW = 500
 const MAX_EXTRACTION_QUEUE_SIZE = 5
 const MAX_DOWNLOAD_QUEUE_SIZE = 500
 const MAX_SYNC_QUEUE_SIZE = 10
@@ -511,8 +514,10 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	_instance._db_mutex.unlock()
 
 	# If queue is full, wait with thread-safe sleep (background threads cannot access SceneTree).
-	# Main-thread callers bypass the cap: freezing the UI on backpressure is worse
-	# than letting the queue grow, and queued task dicts are tiny.
+	# Main-thread callers get headroom past the cap (freezing the UI on
+	# backpressure is worse), but not unlimited headroom: past the overflow
+	# limit we drop with a null callback, the same contract as the image queue,
+	# so callers run their fallback instead of queueing unboundedly.
 	if not is_main_thread:
 		if current_size >= MAX_DB_QUEUE_SIZE:
 			print("[SystemManager.memory] WARNING: DB queue saturated (%d), throttling background producer" % current_size)
@@ -521,8 +526,13 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 			_instance._db_mutex.lock()
 			current_size = _instance._db_queue.size()
 			_instance._db_mutex.unlock()
+	elif current_size >= MAX_DB_QUEUE_SIZE + MAX_DB_QUEUE_MAIN_OVERFLOW:
+		push_error("[SystemManager.memory] DB queue overflow (%d); dropping main-thread task" % current_size)
+		if callback.is_valid():
+			_instance.call_deferred("_execute_callback", callback, null)
+		return
 	elif current_size >= MAX_DB_QUEUE_SIZE and current_size % 100 == 0:
-		print("[SystemManager.memory] WARNING: DB queue at %d tasks (main-thread producer bypasses cap)" % current_size)
+		print("[SystemManager.memory] WARNING: DB queue at %d tasks (main-thread producer past soft cap)" % current_size)
 
 	_instance._db_mutex.lock()
 	_instance._db_queue.append({"callable": callable, "callback": callback})

@@ -227,41 +227,6 @@ func resume_process_async(pid: int, pssuspend_path: String) -> void:
 		return
 	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)])
 
-## Check if a process is running by PID (platform-specific, BLOCKS the calling thread)
-func _is_process_running(pid: int) -> bool:
-	if pid <= 0:
-		return false
-	
-	if SystemManager.platform.is_windows():
-		return _is_process_running_windows(pid)
-	else:
-		return _is_process_running_unix(pid)
-
-## Windows: Check if process is running using tasklist
-func _is_process_running_windows(pid: int) -> bool:
-	var output = []
-	var exit_code = OS.execute("tasklist", ["/FI", "PID eq " + str(pid), "/NH"], output, true)
-	
-	if exit_code != 0:
-		return false
-	
-	if output.size() > 0:
-		var result = output[0].strip_edges()
-		return result != "" and not result.begins_with("INFO:")
-	
-	return false
-
-## Unix (Linux/Mac): Check if process is running using /proc or ps
-func _is_process_running_unix(pid: int) -> bool:
-	if SystemManager.platform.is_linux():
-		var dir = DirAccess.open("/proc/" + str(pid))
-		if dir:
-			return true
-	
-	var output = []
-	var exit_code = OS.execute("ps", ["-p", str(pid)], output, true)
-	return exit_code == 0
-
 ## Force exit background state (for crashes/emergencies)
 func force_exit_background_state() -> void:
 	print("[ProcessManager] Force exiting background state")

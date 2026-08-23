@@ -219,6 +219,22 @@ func _get_partial_file_path(destination_path: String) -> String:
 ## Creates a sparse file of the given size on supported filesystems.
 ## Returns true if the file was created and sized successfully.
 ## On Windows this uses fsutil; on Linux/macOS it relies on seek+write holes.
+## NOTE: spawns fsutil/stat subprocesses — call via _create_sparse_file_async
+## so they never run on the main thread.
+var _fsutil_unavailable: bool = false
+
+func _create_sparse_file_async(path: String, size: int) -> bool:
+	var state := {"done": false, "ok": false}
+	MemorySubManager.queue_extraction_task(
+		func(): return _create_sparse_file(path, size),
+		func(result):
+			state["done"] = true
+			state["ok"] = result == true
+	)
+	while not state["done"]:
+		await get_tree().process_frame
+	return state["ok"]
+
 func _create_sparse_file(path: String, size: int) -> bool:
 	if size <= 0:
 		return false
@@ -237,13 +253,15 @@ func _create_sparse_file(path: String, size: int) -> bool:
 		return false
 	file.close()
 
-	if SystemManager.platform.is_windows():
+	if SystemManager.platform.is_windows() and not _fsutil_unavailable:
 		var native_path = FSM.resolve_native_path(path)
 		var exit_code = OS.execute("fsutil", ["sparse", "setflag", native_path, "1"])
 		if exit_code == 0:
 			exit_code = OS.execute("fsutil", ["file", "seteof", native_path, str(size)])
 		if exit_code != 0:
-			# fsutil requires elevation on many systems; fall back to seek+write sizing
+			# fsutil requires elevation on many systems; remember the failure
+			# for the session and fall back to seek+write sizing from now on.
+			_fsutil_unavailable = true
 			push_warning("[SystemManager.download] fsutil failed (exit=" + str(exit_code) + "), falling back to seek+write sizing: " + native_path)
 			file = FileAccess.open(path, FileAccess.WRITE_READ)
 			if file == null:
@@ -266,30 +284,33 @@ func _create_sparse_file(path: String, size: int) -> bool:
 		# Probe whether the filesystem actually stored the file sparsely.
 		# If it allocated the whole file (e.g. FAT32/exFAT), sparse assembly
 		# would waste disk space, so fall back to sequential temp-file reassembly.
-		var native_path = FSM.resolve_native_path(path)
-		var stat_args = ["-c", "%b %B", native_path]
-		if SystemManager.platform.is_macos():
-			stat_args = ["-f", "%b %B", native_path]
-		var output: Array = []
-		var exit_code = OS.execute("stat", stat_args, output, true)
-		if exit_code == 0 and output.size() > 0:
-			var parts = output[0].strip_edges().split(" ")
-			if parts.size() >= 2:
-				var blocks = int(parts[0])
-				var block_size = int(parts[1])
-				var allocated = blocks * block_size
-				# Sparse filesystems should allocate only a few blocks for the
-				# one-byte probe. If the allocation is a large fraction of the
-				# logical size, assume sparse files are not supported.
-				# Use a floor of 64 KiB so that normal single-block allocation on
-				# sparse filesystems does not trigger the fallback.
-				var threshold = maxi(64 * 1024, int(size / float(2)))
-				if block_size > 0 and allocated > threshold:
-					push_error("[SystemManager.download] Filesystem does not appear to support sparse files: " + path + " (allocated " + str(allocated) + " bytes for " + str(size) + " byte file)")
-					FSM.delete_file(path)
-					return false
-		else:
-			push_warning("[SystemManager.download] Could not probe filesystem sparse support for: " + path)
+		# Windows has no stat; the fsutil path above (or its seek+write
+		# fallback) already decided the sizing strategy there.
+		if not SystemManager.platform.is_windows():
+			var native_path = FSM.resolve_native_path(path)
+			var stat_args = ["-c", "%b %B", native_path]
+			if SystemManager.platform.is_macos():
+				stat_args = ["-f", "%b %B", native_path]
+			var output: Array = []
+			var exit_code = OS.execute("stat", stat_args, output, true)
+			if exit_code == 0 and output.size() > 0:
+				var parts = output[0].strip_edges().split(" ")
+				if parts.size() >= 2:
+					var blocks = int(parts[0])
+					var block_size = int(parts[1])
+					var allocated = blocks * block_size
+					# Sparse filesystems should allocate only a few blocks for the
+					# one-byte probe. If the allocation is a large fraction of the
+					# logical size, assume sparse files are not supported.
+					# Use a floor of 64 KiB so that normal single-block allocation on
+					# sparse filesystems does not trigger the fallback.
+					var threshold = maxi(64 * 1024, int(size / float(2)))
+					if block_size > 0 and allocated > threshold:
+						push_error("[SystemManager.download] Filesystem does not appear to support sparse files: " + path + " (allocated " + str(allocated) + " bytes for " + str(size) + " byte file)")
+						FSM.delete_file(path)
+						return false
+			else:
+				push_warning("[SystemManager.download] Could not probe filesystem sparse support for: " + path)
 
 	# Verify the file reached the expected logical size
 	if not FSM.file_exists(path):
@@ -1202,7 +1223,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 			if partial_ok:
 				in_place_assembly = true
 				print("[SystemManager.download] Resuming in-place sparse assembly for: " + item.name)
-			elif _create_sparse_file(chunked_info.partial_path, file_size):
+			elif await _create_sparse_file_async(chunked_info.partial_path, file_size):
 				in_place_assembly = true
 				print("[SystemManager.download] Using in-place sparse assembly for: " + item.name)
 			else:

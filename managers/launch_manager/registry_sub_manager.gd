@@ -26,10 +26,19 @@ var _emulator_registry: Dictionary = {}
 var _platform_defaults: Dictionary = {}
 var _platforms_data: Dictionary = {}
 
+# Install-path memoization: the final fallback spawns where/which, which
+# blocks the calling thread for tens of milliseconds per lookup.
+var _install_path_cache: Dictionary = {}
+
 var launch_manager: Node
 
 func _ready():
 	launch_manager = get_parent()
+	if launch_manager.has_signal("emulator_extraction_completed"):
+		launch_manager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
+
+func _on_emulator_extraction_completed(_emulator_id: String, _success: bool) -> void:
+	_install_path_cache.clear()
 
 func _load_registry():
 	# Load platforms.json
@@ -182,26 +191,29 @@ func get_emulator_install_path(emulator_id: String) -> String:
 	if executable_name == "":
 		return ""
 	
+	var cache_key: String = emulator_id + "|" + executable_name
+	if _install_path_cache.has(cache_key):
+		return _install_path_cache[cache_key]
+
 	# First check direct path
 	var direct_path = FSM.join_paths(_get_emulator_directory(emulator_id), executable_name)
+	var found_path := ""
 	if FSM.file_exists(direct_path):
-		return direct_path
-	
-	# Search recursively up to 3 levels deep
-	var search_dir = _get_emulator_directory(emulator_id)
-	var found_path = _find_executable_recursive(search_dir, executable_name, 3)
-	
-	if found_path != "":
-		return found_path
-	
+		found_path = direct_path
+	else:
+		# Search recursively up to 3 levels deep
+		var search_dir = _get_emulator_directory(emulator_id)
+		found_path = _find_executable_recursive(search_dir, executable_name, 3)
+
 	# Also check system PATH (for Linux system installs)
-	if SystemManager.platform.is_linux() or SystemManager.platform.is_windows():
+	if found_path == "" and (SystemManager.platform.is_linux() or SystemManager.platform.is_windows()):
 		var output = []
 		var exit_code = OS.execute("which" if SystemManager.platform.is_linux() else "where", [executable_name], output, true)
 		if exit_code == 0 and output.size() > 0:
-			return output[0].strip_edges()
-	
-	return ""
+			found_path = output[0].strip_edges()
+
+	_install_path_cache[cache_key] = found_path
+	return found_path
 
 ## Returns the raw core array for a platform from an emulator's registry data.
 ## Each entry is a Dictionary with id/name/mapping/save_name/default etc.
